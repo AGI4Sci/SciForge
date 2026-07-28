@@ -19,9 +19,13 @@ describe('application domain composition', () => {
     const packages = catalog.listPackages()
 
     expect(packages.map((definition) => definition.packageName)).toEqual([
+      '@sciforge/core-controlled-process',
       '@sciforge/core-surface',
+      '@sciforge/core-version-control',
       '@sciforge/core-workspace-preview',
-      ...installedDomainPackages.definitions.map((definition) => definition.packageName)
+      ...installedDomainPackages.definitions
+        .filter((definition) => definition.entrypoints.some(({ process }) => process === 'main'))
+        .map((definition) => definition.packageName)
     ])
     const factories = catalog.listContributions(
       MAIN_CAPABILITY_FACTORY_CONTRIBUTION_KIND,

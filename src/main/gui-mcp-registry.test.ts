@@ -117,14 +117,12 @@ describe('GUI MCP runtime registry', () => {
     const servers = buildManagedGuiMcpServers({
       settings,
       scheduleMcp: { settings, launch },
-      workflowMcp: { settings, launch },
       workspaceIntelMcp: { settings, launch },
       remoteExecutorMcp: { launch }
     })
 
     expect(servers.map((server) => server.id)).toEqual([
       'gui_schedule',
-      'gui_workflow',
       'gui_workspace_intel',
       'remote_executor'
     ])
@@ -134,13 +132,6 @@ describe('GUI MCP runtime registry', () => {
         GUI_SCHEDULE_INTERNAL_SECRET: 'schedule-secret'
       },
       enabledTools: expect.arrayContaining(['gui_schedule_list', 'gui_schedule_run'])
-    })
-    expect(servers.find((server) => server.id === 'gui_workflow')).toMatchObject({
-      env: {
-        ELECTRON_RUN_AS_NODE: '1',
-        GUI_WORKFLOW_INTERNAL_SECRET: 'workflow-secret'
-      },
-      enabledTools: expect.arrayContaining(['gui_workflow_list', 'gui_workflow_run'])
     })
     expect(servers.find((server) => server.id === 'gui_workspace_intel')).toMatchObject({
       env: {
@@ -164,11 +155,10 @@ describe('GUI MCP runtime registry', () => {
       scientificSkillsMcp: { launch },
       scientificPlottingMcp: { launch },
       imageGenerationMcp: { launch },
-      pptMasterMcp: { launch },
-      visualDocumentMcp: { launch }
+      pptMasterMcp: { launch }
     })
 
-    for (const id of ['scientific_skills', 'scientific_plotting', 'image_generation', 'ppt_master', 'visual_document']) {
+    for (const id of ['scientific_skills', 'scientific_plotting', 'image_generation', 'ppt_master']) {
       expect(servers.find((server) => server.id === id)?.args).toEqual(
         expect.arrayContaining(['--workspace-root', '/tmp/project'])
       )
@@ -181,13 +171,6 @@ describe('GUI MCP runtime registry', () => {
     )
     const scientificPlottingTools = servers.find((server) => server.id === 'scientific_plotting')?.enabledTools
     expect(scientificPlottingTools).not.toContain('visual_generate')
-    expect(servers.find((server) => server.id === 'visual_document')).toMatchObject({
-      args: expect.arrayContaining(['--sciforge-visual-document-mcp-server']),
-      enabledTools: expect.arrayContaining([
-        'sciforge_visual_document_save_annotations',
-        'sciforge_visual_document_accept_candidate'
-      ])
-    })
   })
 
   it('returns no managed servers without launch input', () => {
@@ -201,6 +184,7 @@ describe('GUI MCP runtime registry', () => {
       'gui_computer_use',
       'gui_research_memory',
       'sciforge_canvas',
+      'visual_document',
       ['gui', 'paper', 'radar'].join('_')
     ]) {
       expect(buildManagedGuiMcpServers({}).find((server) => server.id === id)).toBeUndefined()

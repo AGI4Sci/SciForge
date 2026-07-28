@@ -427,18 +427,16 @@ describe('dev browser bridge server', () => {
       port: 0
     })
 
-    for (const channel of ['agentRuntime:connect', 'agentRuntime:startTurn', 'visual-document:open'] as const) {
+    for (const channel of ['agentRuntime:connect', 'agentRuntime:startTurn'] as const) {
       const response = await postJson('/invoke', {
         channel,
-        payload: channel === 'visual-document:open'
-          ? { workspaceRoot: '/tmp/workspace', documentId: 'thread-test' }
-          : { runtimeId: 'sciforge' }
+        payload: { runtimeId: 'sciforge' }
       })
 
       expect(response.status).toBe(200)
       expect(JSON.parse(response.body).ok).toBe(true)
     }
-    expect(invoke).toHaveBeenCalledTimes(3)
+    expect(invoke).toHaveBeenCalledTimes(2)
   })
 
   it('allows callers to explicitly opt into mutating channels', async () => {

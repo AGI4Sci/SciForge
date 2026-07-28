@@ -667,7 +667,6 @@ describe('electron-builder release packaging', () => {
       'out/main/plan-gateway-sidecar-node-entry.js',
       'out/main/schedule-mcp-node-entry.js',
       'out/main/research-search-mcp-node-entry.js',
-      'out/main/workflow-mcp-node-entry.js',
       'out/main/runtime-inspector-mcp-node-entry.js'
     ]))
 

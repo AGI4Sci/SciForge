@@ -75,7 +75,6 @@ import { AgentRuntimeTraceRecorder } from './services/agent-runtime-trace-servic
 import { CurrentTraceSensitiveSettings } from './trace-sensitive-settings'
 import { RuntimeContextStateService } from './services/runtime-context-state-service'
 import { RuntimeContextLedgerService } from './services/runtime-context-ledger-service'
-import { GitCheckpointService } from './services/git-checkpoint-service'
 import { SharedMemoryService } from './services/shared-memory-service'
 import { RuntimeGoalService } from './services/runtime-goal-service'
 import { ResearchCardService } from './services/research-card-service'
@@ -88,30 +87,21 @@ import {
   type SurfaceCaptureRequest,
   type SurfaceCaptureResult
 } from './services/visible-context-service'
+import { RegisteredTargetVisualCaptureService } from './services/registered-target-visual-capture-service'
 import type { VisibleContextBounds } from '../shared/visible-context'
 import { createModelRouterVisualInspector } from '../../packages/workers/workspace-intel/src/visual-inspection'
 import { AgentVisualRuntime } from './runtime/agent-runtime/agent-visual-runtime'
-import { AnchoredCommentService } from './services/anchored-comment-service'
-import { AnchoredCommentScreenshotService } from './services/anchored-comment-screenshot-service'
-import { AnchoredCommentFeedbackService } from './services/anchored-comment-feedback-service'
-import {
-  FeedbackGatewayClient,
-  configuredFeedbackGatewayToken,
-  configuredFeedbackGatewayUrl
-} from './services/feedback-gateway-client'
 import { workspaceHtmlPreviewService } from './services/workspace-html-preview-service'
 import { configureLogger, logError, logInfo, logWarn, pruneOnStartup } from './logger'
 import { createRemoteChannelRuntime, type RemoteChannelRuntime } from './remote-channel-runtime'
 import { createDiscordBotRuntime, type DiscordBotRuntime } from './discord-bot-runtime'
 import { createZulipBotRuntime, type ZulipBotRuntime } from './zulip-bot-runtime'
 import { createScheduleRuntime, type ScheduleRuntime } from './schedule-runtime'
-import { createWorkflowRuntime, type WorkflowRuntime } from './workflow-runtime'
 import {
   syncScheduleMcpConfig,
   type ScheduleMcpLaunchConfig
 } from './schedule-mcp-config'
 import type { ResearchSearchMcpLaunchConfig } from './research-search-mcp-config'
-import type { WorkflowMcpLaunchConfig } from './workflow-mcp-config'
 import type { WorkspaceIntelMcpLaunchConfig } from './workspace-intel-mcp-config'
 import type { WriteAssistMcpLaunchConfig } from './write-assist-mcp-config'
 import type { RuntimeInspectorMcpLaunchConfig } from './runtime-inspector-mcp-config'
@@ -122,7 +112,6 @@ import {
   type ImageGenerationMcpLaunchConfig
 } from './image-generation-mcp-config'
 import type { PptMasterMcpLaunchConfig } from './ppt-master-mcp-config'
-import type { VisualDocumentMcpLaunchConfig } from './visual-document-mcp-config'
 import {
   GUI_COMPUTER_USE_MCP_SERVER_NAME,
   isComputerUseMcpConfigured,
@@ -131,8 +120,8 @@ import {
 import { buildManagedGuiMcpServers } from './gui-mcp-registry'
 import { migrateLegacyKunGlobalConfig } from './legacy-kun-global-config-migration'
 import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
-import { registerAnchoredCommentIpc } from './ipc/register-anchored-comment-ipc'
-import { registerTerminalPtyIpc } from './terminal/terminal-pty-ipc'
+import { ControlledProcessService } from './processes/controlled-process-service'
+import { VersionControlWorkspaceService } from './services/version-control-workspace-service'
 import { WorkspacePreviewHost } from './services/workspace-preview'
 import { CapabilityBroker } from './capabilities/broker'
 import {
@@ -276,14 +265,6 @@ function getResearchSearchMcpLaunchConfig(): ResearchSearchMcpLaunchConfig {
   }
 }
 
-function getWorkflowMcpLaunchConfig(): WorkflowMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
-}
-
 function getWorkspaceIntelMcpLaunchConfig(): WorkspaceIntelMcpLaunchConfig {
   return {
     appPath: app.getAppPath(),
@@ -305,8 +286,7 @@ function getRuntimeInspectorMcpLaunchConfig(): RuntimeInspectorMcpLaunchConfig {
   return {
     appPath: app.getAppPath(),
     execPath: process.execPath,
-    isPackaged: app.isPackaged,
-    checkpointDataDir: app.getPath('userData')
+    isPackaged: app.isPackaged
   }
 }
 
@@ -351,14 +331,6 @@ function getPptMasterMcpLaunchConfig(): PptMasterMcpLaunchConfig {
   }
 }
 
-function getVisualDocumentMcpLaunchConfig(): VisualDocumentMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
-}
-
 function getComputerUseMcpLaunchConfig(): ComputerUseMcpLaunchConfig {
   return {
     appPath: app.getAppPath(),
@@ -372,7 +344,6 @@ function managedGuiMcpServers(settings: AppSettingsV1) {
     settings,
     scheduleMcp: { settings, launch: getScheduleMcpLaunchConfig() },
     researchMcp: { launch: getResearchSearchMcpLaunchConfig() },
-    workflowMcp: { settings, launch: getWorkflowMcpLaunchConfig() },
     workspaceIntelMcp: { settings, launch: getWorkspaceIntelMcpLaunchConfig() },
     writeAssistMcp: { settings, launch: getWriteAssistMcpLaunchConfig() },
     runtimeInspectorMcp: { settings, launch: getRuntimeInspectorMcpLaunchConfig() },
@@ -381,7 +352,6 @@ function managedGuiMcpServers(settings: AppSettingsV1) {
     bgcDiscoveryMcp: { settings, launch: getBgcDiscoveryMcpLaunchConfig() },
     imageGenerationMcp: { settings, launch: getImageGenerationMcpLaunchConfig() },
     pptMasterMcp: { settings, launch: getPptMasterMcpLaunchConfig() },
-    visualDocumentMcp: { settings, launch: getVisualDocumentMcpLaunchConfig() },
     computerUseMcp: { settings, launch: getComputerUseMcpLaunchConfig() }
   })
 }
@@ -417,7 +387,6 @@ let remoteChannelRuntime: RemoteChannelRuntime | null = null
 let discordBotRuntime: DiscordBotRuntime | null = null
 let zulipBotRuntime: ZulipBotRuntime | null = null
 let scheduleRuntime: ScheduleRuntime | null = null
-let workflowRuntime: WorkflowRuntime | null = null
 let codexRuntime: CodexRuntimeService | null = null
 let capabilityAgentTools: CapabilityAgentToolSurface | null = null
 let agentRuntimeHostForShutdown: AgentRuntimeHost | null = null
@@ -730,7 +699,6 @@ async function stopManagedRuntimes(): Promise<void> {
   if (!managedRuntimesStopPromise) {
     managedRuntimesStopPromise = (async () => {
       cancelCodexRuntimePrewarm()
-      workflowRuntime?.stop()
       scheduleRuntime?.stop()
       discordBotRuntime?.stop()
       zulipBotRuntime?.stop()
@@ -1064,13 +1032,46 @@ app.whenReady().then(async () => {
   codeNavigationService = new LspCodeNavigationService()
   const contextStateService = new RuntimeContextStateService()
   const contextLedgerService = new RuntimeContextLedgerService(app.getPath('userData'))
-  const gitCheckpointService = new GitCheckpointService(app.getPath('userData'))
   const sharedMemoryService = new SharedMemoryService(app.getPath('userData'))
   const runtimeGoalService = new RuntimeGoalService(app.getPath('userData'))
   const researchCardService = new ResearchCardService(app.getPath('userData'))
   const workspaceReferenceService = new WorkspaceReferenceService()
+  let domainSystemCapabilityInvoker:
+  ReturnType<typeof createMainSystemCapabilityInvoker> | null = null
+  const visibleContextService = new VisibleContextService(app.getPath('userData'), {
+    surfaceCaptureProvider: visibleContextSurfaceCaptureProvider,
+    requestSurfaceRefresh: (windowId) => {
+      emitVisibleContextRendererEvent('visibleContext:refresh-requested', undefined, windowId)
+    },
+    onCaptureState: (windowId, active) => {
+      emitVisibleContextRendererEvent('visibleContext:capture-state', active, windowId)
+    }
+  })
+  const registeredTargetVisualCapture = new RegisteredTargetVisualCaptureService({
+    resolveRegisteredTarget: (targetRef) =>
+      visibleContextService.resolveRegisteredTarget(targetRef),
+    captureWindow: async (surface) => {
+      const captured = await visibleContextSurfaceCaptureProvider.capture(surface)
+      if (!captured.ok) throw new Error(captured.reason.message)
+      return {
+        png: captured.page.png,
+        width: captured.page.width,
+        height: captured.page.height,
+        scaleFactor: captured.page.scaleFactor
+      }
+    }
+  })
   const catalog = createApplicationDomainCatalog({
-    getUserDataDir: () => app.getPath('userData')
+    getUserDataDir: () => app.getPath('userData'),
+    capabilities: {
+      invoke: (contract, input, options) => {
+        if (!domainSystemCapabilityInvoker) {
+          throw new Error('The Host capability broker is not ready.')
+        }
+        return domainSystemCapabilityInvoker.invoke(contract, input, options)
+      }
+    },
+    visualCapture: registeredTargetVisualCapture
   })
   let officialExtensionKeys
   let extensionInstallationBlockedReason: string | undefined
@@ -1129,22 +1130,21 @@ app.whenReady().then(async () => {
       model: router.model
     })
   }
-  const visibleContextService = new VisibleContextService(app.getPath('userData'), {
-    surfaceCaptureProvider: visibleContextSurfaceCaptureProvider,
-    requestSurfaceRefresh: (windowId) => {
-      emitVisibleContextRendererEvent('visibleContext:refresh-requested', undefined, windowId)
-    },
-    onCaptureState: (windowId, active) => {
-      emitVisibleContextRendererEvent('visibleContext:capture-state', active, windowId)
-    }
+  const controlledProcessService = new ControlledProcessService({
+    log: (message, detail) => logError('controlled-process', message, detail)
   })
+  const versionControlWorkspaceService = new VersionControlWorkspaceService()
+  app.once('will-quit', () => controlledProcessService.disposeAll())
   const appCapabilityDependencies: AppCapabilityDependencies = {
+    controlledProcessService,
     workspacePreviewHost,
-    visibleContextService
+    visibleContextService,
+    versionControlWorkspaceService
   }
   const capabilityBroker = new CapabilityBroker(
     createApplicationCapabilityRegistry(catalog, appCapabilityDependencies)
   )
+  domainSystemCapabilityInvoker = createMainSystemCapabilityInvoker(capabilityBroker)
   const visualSourceRegistry = new VisualSourceRegistry([
     {
       ownerId: 'sciforge.agent-runtime',
@@ -1246,8 +1246,10 @@ app.whenReady().then(async () => {
     )
   })
   installElectronDomainNativeVisualSmoke(capabilityAgentTools)
-  const capabilityIpcRegistration = registerCapabilityIpc({ broker: capabilityBroker })
-  const anchoredCommentService = new AnchoredCommentService(app.getPath('userData'))
+  const capabilityIpcRegistration = registerCapabilityIpc({
+    broker: capabilityBroker,
+    onCallerDestroyed: (callerId) => controlledProcessService.disposeOwner(callerId)
+  })
   const artifactConsumers = listMainAgentArtifactConsumers(catalog)
   const agentRuntimeHost = createAgentRuntimeHost({
     settings: async () => store.load(),
@@ -1262,7 +1264,6 @@ app.whenReady().then(async () => {
       trace: agentTraceRecorder,
       contextState: contextStateService,
       contextLedger: contextLedgerService,
-      gitCheckpoints: gitCheckpointService,
       memory: sharedMemoryService,
       workspaceReferences: workspaceReferenceService,
       visibleContext: visibleContextService,
@@ -1310,7 +1311,109 @@ app.whenReady().then(async () => {
       },
       hasActiveTurns: () => agentRuntimeHost.hasActiveTurns()
     },
-    capabilities: createMainSystemCapabilityInvoker(capabilityBroker),
+    turnEvents: {
+      subscribe: (listener) => agentRuntimeHost.subscribeTurnLifecycle(listener)
+    },
+    agentExecution: {
+      run: async (request) => {
+        const runtimeId = request.runtimeId.trim()
+        if (runtimeId !== 'codex' && runtimeId !== 'claude' && runtimeId !== 'sciforge') {
+          throw new Error(`Unsupported agent runtime: ${runtimeId}`)
+        }
+        if (request.signal?.aborted) throw request.signal.reason
+        const thread = await agentRuntimeHost.startThread({
+          runtimeId,
+          workspace: request.workspaceRoot,
+          mode: request.mode,
+          ...(request.model ? { model: request.model } : {}),
+          relation: 'side',
+          threadSource: 'domain-runtime',
+          sidebarVisibility: 'hidden'
+        })
+        let turnId = ''
+        let terminalState: 'completed' | 'failed' | 'cancelled' | null = null
+        let resolveTerminal!: () => void
+        const terminal = new Promise<void>((resolve) => {
+          resolveTerminal = resolve
+        })
+        const unsubscribe = agentRuntimeHost.subscribeTurnLifecycle((event) => {
+          if (
+            event.kind !== 'after-turn' ||
+            event.runtimeId !== runtimeId ||
+            event.threadId !== thread.id ||
+            (turnId && event.turnId !== turnId)
+          ) return
+          terminalState = event.state
+          resolveTerminal()
+        })
+        const abort = (): void => {
+          if (!turnId) return
+          void agentRuntimeHost.interruptTurn({
+            runtimeId,
+            threadId: thread.id,
+            turnId,
+            discard: false
+          }).catch(() => undefined)
+        }
+        request.signal?.addEventListener('abort', abort, { once: true })
+        try {
+          const handle = await agentRuntimeHost.startTurn({
+            runtimeId,
+            threadId: thread.id,
+            text: request.prompt,
+            workspace: request.workspaceRoot,
+            mode: request.mode,
+            ...(request.model ? { model: request.model } : {}),
+            ...(request.reasoningEffort
+              ? { reasoningEffort: request.reasoningEffort }
+              : {})
+          })
+          turnId = handle.turnId
+          if (request.signal?.aborted) abort()
+          await terminal
+          if (terminalState !== 'completed') {
+            throw new Error(`Agent execution ${terminalState ?? 'failed'}.`)
+          }
+          const detail = await agentRuntimeHost.readThread({
+            runtimeId,
+            threadId: thread.id
+          })
+          const items = detail.items?.length
+            ? detail.items
+            : (detail.turns ?? []).flatMap((turn) => turn.items ?? [])
+          return {
+            threadId: thread.id,
+            text: items
+              .filter((item) => (
+                item.turnId === turnId &&
+                item.kind === 'assistant_message'
+              ))
+              .map((item) => item.text?.trim() || item.summary?.trim() || '')
+              .filter(Boolean)
+              .join('\n\n')
+          }
+        } finally {
+          request.signal?.removeEventListener('abort', abort)
+          unsubscribe()
+        }
+      }
+    },
+    power: {
+      acquire: async () => {
+        const blockerId = powerSaveBlocker.start('prevent-app-suspension')
+        let released = false
+        return {
+          release: () => {
+            if (released) return
+            released = true
+            if (powerSaveBlocker.isStarted(blockerId)) {
+              powerSaveBlocker.stop(blockerId)
+            }
+          }
+        }
+      }
+    },
+    capabilities: domainSystemCapabilityInvoker,
     modelAccess: {
       textReasoner: async () => {
         const settings = await store.load()
@@ -1340,30 +1443,11 @@ app.whenReady().then(async () => {
       }
     }
   })
-  workflowRuntime = createWorkflowRuntime({
-    store,
-    agentRuntime: agentRuntimeHost,
-    logError,
-    powerSaveBlocker
-  })
-  workflowRuntime.sync(initial)
   scheduleRuntime = createScheduleRuntime({
     store,
     agentRuntime: agentRuntimeHost,
     logError,
     powerSaveBlocker
-  }, {
-    runWorkflow: (workflowId, input) => {
-      if (!workflowRuntime) return Promise.resolve({ ok: false as const, message: 'Workflow runtime is not initialized.' })
-      return workflowRuntime.runWorkflow(workflowId, input)
-    },
-    status: () => workflowRuntime?.status() ?? Promise.resolve({
-      runningWorkflowIds: [],
-      nodeStatus: {},
-      nodeResults: {},
-      powerSaveBlockerActive: false,
-      pendingApprovals: []
-    })
   })
   scheduleRuntime.sync(initial)
   discordBotRuntime = createDiscordBotRuntime({
@@ -1375,7 +1459,6 @@ app.whenReady().then(async () => {
     },
     onSettingsChanged: (settings) => {
       scheduleRuntime?.sync(settings)
-      workflowRuntime?.sync(settings)
       remoteChannelRuntime?.sync(settings)
       discordBotRuntime?.sync(settings)
       syncWeixinBridgeRuntime(settings)
@@ -1391,7 +1474,6 @@ app.whenReady().then(async () => {
     },
     onSettingsChanged: (settings) => {
       scheduleRuntime?.sync(settings)
-      workflowRuntime?.sync(settings)
       remoteChannelRuntime?.sync(settings)
       discordBotRuntime?.sync(settings)
       zulipBotRuntime?.sync(settings)
@@ -1431,54 +1513,6 @@ app.whenReady().then(async () => {
   syncWeixinBridgeRuntime(initial)
 
   traceStartup('ipc registration:start')
-  const terminalPtyBridge = registerTerminalPtyIpc({
-    ipcMain,
-    getMainWindow: () => mainWindow,
-    logError
-  })
-  let feedbackGatewayClient: FeedbackGatewayClient | null = null
-  try {
-    const gatewayUrl = configuredFeedbackGatewayUrl()
-    feedbackGatewayClient = gatewayUrl
-      ? new FeedbackGatewayClient({
-          baseUrl: gatewayUrl,
-          authToken: configuredFeedbackGatewayToken() ?? undefined
-        })
-      : null
-  } catch (error) {
-    logWarn('anchored-comments', 'Ignoring invalid feedback gateway configuration.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
-  }
-  const anchoredCommentScreenshotService = new AnchoredCommentScreenshotService({
-    captureWindow: async () => {
-      const captured = await captureMainWindowPage()
-      const window = mainWindow
-      if (!window || window.isDestroyed()) throw new Error('SciForge window is unavailable.')
-      const [width, height] = window.getContentSize()
-      return {
-        png: captured.png,
-        viewport: {
-          width: Math.max(1, width),
-          height: Math.max(1, height),
-          scaleFactor: captured.scaleFactor
-        }
-      }
-    },
-    assetWriter: anchoredCommentService,
-    getAppVersion: () => app.getVersion()
-  })
-  const anchoredCommentFeedbackService = new AnchoredCommentFeedbackService({
-    comments: anchoredCommentService,
-    gateway: feedbackGatewayClient
-  })
-  registerAnchoredCommentIpc({
-    ipcMain,
-    getMainWindow: () => mainWindow,
-    comments: anchoredCommentService,
-    screenshots: anchoredCommentScreenshotService,
-    feedback: anchoredCommentFeedbackService
-  })
   const applySettingsPatch = async (partial: AppSettingsPatch): Promise<AppSettingsV1> => {
     const prev = await store.load()
     const {
@@ -1552,7 +1586,6 @@ app.whenReady().then(async () => {
     }
     scheduleCodexRuntimePrewarm(saved, 'settings-switch')
     scheduleRuntime?.sync(saved)
-    workflowRuntime?.sync(saved)
     remoteChannelRuntime?.sync(saved)
     discordBotRuntime?.sync(saved)
     zulipBotRuntime?.sync(saved)
@@ -1621,7 +1654,6 @@ app.whenReady().then(async () => {
         : null
     },
     getScheduleRuntime: () => scheduleRuntime,
-    getWorkflowRuntime: () => workflowRuntime,
     startFeishuInstallQrcode,
     pollFeishuInstall,
     startWeixinInstallQrcode,
@@ -1632,7 +1664,6 @@ app.whenReady().then(async () => {
     readGuiUpdateState,
     loadGuiUpdaterModule,
     resolveLogDirectory,
-    terminalPtyBridge,
     getMainPerformanceSnapshot: () => mainPerformanceMonitor.snapshot(),
     logError,
     getScientificSkillsMcpLaunchConfig,

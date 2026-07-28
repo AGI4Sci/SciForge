@@ -45,8 +45,6 @@ import {
   traceExportPayloadSchema,
   traceReadPayloadSchema,
   traceSummariesPayloadSchema,
-  visualDocumentInsertArtifactPayloadSchema,
-  visualDocumentSaveAnnotationsPayloadSchema,
   skillListPayloadSchema,
   workspaceClipboardPastePayloadSchema,
   workspaceDirectoryCreatePayloadSchema,
@@ -271,44 +269,6 @@ describe('app-ipc-schemas', () => {
         text: ' '
       })
     ).toThrow()
-  })
-
-  it('accepts strict VisualDocument artifacts and normalized review annotations', () => {
-    expect(visualDocumentInsertArtifactPayloadSchema.parse({
-      workspaceRoot: ' /tmp/workspace ',
-      documentId: ' thread-1 ',
-      kind: 'generated_image',
-      sourcePath: ' .sciforge/images/cover.png ',
-      manifestPath: ' .sciforge/artifacts/cover.manifest.json '
-    })).toMatchObject({
-      workspaceRoot: '/tmp/workspace',
-      documentId: 'thread-1',
-      kind: 'generated_image',
-      sourcePath: '.sciforge/images/cover.png',
-      manifestPath: '.sciforge/artifacts/cover.manifest.json'
-    })
-
-    expect(visualDocumentInsertArtifactPayloadSchema.parse({
-      workspaceRoot: '/tmp/workspace',
-      kind: 'edited_image',
-      sourcePath: '.sciforge/images/cover-v2.png'
-    }).kind).toBe('edited_image')
-
-    expect(visualDocumentSaveAnnotationsPayloadSchema.parse({
-      workspaceRoot: '/tmp/workspace',
-      annotations: [{
-        geometry: { kind: 'box', bounds: { x: 0.1, y: 0.2, width: 0.5, height: 0.4 } },
-        instruction: ' Increase the whitespace. '
-      }]
-    }).annotations[0]?.instruction).toBe('Increase the whitespace.')
-
-    expect(() => visualDocumentSaveAnnotationsPayloadSchema.parse({
-      workspaceRoot: '/tmp/workspace',
-      annotations: [{
-        geometry: { kind: 'pin', point: { x: 1.2, y: 0.5 } },
-        instruction: 'Invalid coordinate'
-      }]
-    })).toThrow()
   })
 
   it('accepts bounded visual style extraction payloads', () => {

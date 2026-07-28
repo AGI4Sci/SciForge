@@ -188,7 +188,6 @@ export type AgentRuntimeCapabilityId =
   | 'context.ledger'
   | 'context.handoff'
   | 'context.goalResume'
-  | 'git.turnCheckpoint'
   | 'memory.shared'
   | 'workspace.references'
   | 'ui.visibleContext'
@@ -346,23 +345,6 @@ export type AgentRuntimeHandoffStartResult = {
   targetThread: AgentRuntimeThread
   turn: AgentRuntimeTurnHandle
   packet: AgentRuntimeHandoffPacket
-}
-
-export type AgentRuntimeGitCheckpointStatus = 'available' | 'restored' | 'blocked' | 'failed'
-
-export type AgentRuntimeGitCheckpoint = {
-  checkpointId: string
-  runtimeId: AgentRuntimeId
-  threadId: string
-  turnId?: string
-  workspaceRoot: string
-  repositoryRoot: string
-  branch: string | null
-  head: string
-  createdAt: string
-  diffStat: string
-  status: AgentRuntimeGitCheckpointStatus
-  restoreStatus?: string
 }
 
 export type AgentRuntimeMemoryScope = 'user' | 'project' | 'workspace'
@@ -865,10 +847,6 @@ export const AGENT_RUNTIME_AUXILIARY_OPERATIONS = [
   'startRuntimeHandoff',
   'recordContextCompaction',
   'updateGoalResumeState',
-  'listGitCheckpoints',
-  'createGitCheckpoint',
-  'previewGitCheckpoint',
-  'restoreGitCheckpoint',
   'listSkills',
   'uploadAttachment',
   'getAttachmentContent',
@@ -908,7 +886,6 @@ export const AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS = [
   'startRuntimeHandoff',
   'recordContextCompaction',
   'updateGoalResumeState',
-  'createGitCheckpoint',
   'updateThreadWorkspace',
   'archiveThread',
   'getThreadGoal',

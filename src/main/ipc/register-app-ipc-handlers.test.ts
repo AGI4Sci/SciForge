@@ -347,6 +347,7 @@ describe('registerAppIpcHandlers', () => {
     const visibleContext = {
       publish: vi.fn(),
       get: vi.fn(),
+      registeredTargetRef: vi.fn(),
       readCapturePreview
     }
     registerAppIpcHandlers(registerOptions({ visibleContext }))
@@ -368,6 +369,7 @@ describe('registerAppIpcHandlers', () => {
     const visibleContext = {
       publish,
       get: vi.fn(),
+      registeredTargetRef: vi.fn(),
       readCapturePreview: vi.fn()
     }
     registerAppIpcHandlers(registerOptions({ visibleContext }))
@@ -384,6 +386,32 @@ describe('registerAppIpcHandlers', () => {
     await handlers.get('visibleContext:publish')?.({ sender }, payload)
 
     expect(publish).toHaveBeenCalledWith({ ...payload, windowId: 'electron:41' })
+  })
+
+  it('issues registered target references through the native sender identity', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const registeredTargetRef = vi.fn(async () => 'target_ref')
+    const visibleContext = {
+      publish: vi.fn(),
+      get: vi.fn(),
+      registeredTargetRef,
+      readCapturePreview: vi.fn()
+    }
+    registerAppIpcHandlers(registerOptions({ visibleContext }))
+    const sender = { id: 42, capturePage: vi.fn() }
+
+    await expect(handlers.get('visibleContext:target-ref')?.({ sender }, {
+      componentId: 'chat.timeline',
+      targetId: 'message-1'
+    })).resolves.toEqual({ ok: true, targetRef: 'target_ref' })
+    expect(registeredTargetRef).toHaveBeenCalledWith('electron:42', {
+      componentId: 'chat.timeline',
+      targetId: 'message-1'
+    })
+    await expect(handlers.get('visibleContext:target-ref')?.({ sender }, {
+      componentId: '',
+      targetId: 'message-1'
+    })).rejects.toThrow(/Invalid payload for visibleContext:target-ref/)
   })
 
   it('rejects invalid settings patches at the handler boundary', async () => {
@@ -460,12 +488,12 @@ describe('registerAppIpcHandlers', () => {
     expect(applySettingsPatch).toHaveBeenCalledWith(payload)
   })
 
-  it('does not register Paper Radar domain-specific IPC channels', async () => {
+  it('does not register domain-specific Paper Radar or Visual Review IPC channels', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
     registerAppIpcHandlers(registerOptions())
 
-    expect(handlers.size).toBe(147)
     expect([...handlers.keys()].filter((channel) => channel.startsWith('paperRadar:'))).toEqual([])
+    expect([...handlers.keys()].filter((channel) => channel.startsWith('visual-document:'))).toEqual([])
   })
 
   it('routes visual style profile extraction through its single IPC command', async () => {
@@ -681,75 +709,6 @@ describe('registerAppIpcHandlers', () => {
     expect(handlers.get('settings:set')).toBeTypeOf('function')
   })
 
-  it('returns VisualDocument IPC validation errors instead of rejecting through Electron', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const openVisualDocument = vi.fn()
-    const sender = createSender(910)
-
-    const dispatcher = registerAppIpcHandlers(registerOptions({ openVisualDocument }))
-
-    await expect(
-      dispatcher.invoke('visual-document:open', { workspaceRoot: '' }, sender)
-    ).resolves.toMatchObject({
-      ok: false,
-      status: 'invalid_request'
-    })
-    expect(openVisualDocument).not.toHaveBeenCalled()
-  })
-
-  it('routes the complete VisualDocument lifecycle through one strict IPC surface', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const handlers = {
-      getVisualDocumentStatus: vi.fn(async () => ({ ok: true })),
-      openVisualDocument: vi.fn(async (request: unknown) => request),
-      insertVisualDocumentArtifact: vi.fn(async (request: unknown) => request),
-      updateVisualDocumentContext: vi.fn(async (request: unknown) => request),
-      saveVisualDocumentAnnotations: vi.fn(async (request: unknown) => request),
-      exportVisualReviewPacket: vi.fn(async (request: unknown) => request),
-      createVisualCandidateRevision: vi.fn(async (request: unknown) => request),
-      acceptVisualCandidateRevision: vi.fn(async (request: unknown) => request),
-      rejectVisualCandidateRevision: vi.fn(async (request: unknown) => request)
-    }
-    const dispatcher = registerAppIpcHandlers(registerOptions(handlers as never))
-    const sender = createSender(911)
-    const requests = [
-      ['visual-document:status', { workspaceRoot: '/tmp/project' }, handlers.getVisualDocumentStatus],
-      ['visual-document:open', { workspaceRoot: '/tmp/project', documentId: 'figure-1', createIfMissing: false }, handlers.openVisualDocument],
-      ['visual-document:insert-artifact', { workspaceRoot: '/tmp/project', kind: 'image', sourcePath: '/tmp/figure.png' }, handlers.insertVisualDocumentArtifact],
-      ['visual-document:update-context', { workspaceRoot: '/tmp/project', styleProfileRef: 'paper-style' }, handlers.updateVisualDocumentContext],
-      ['visual-document:save-annotations', { workspaceRoot: '/tmp/project', annotations: [] }, handlers.saveVisualDocumentAnnotations],
-      ['visual-document:export-review-packet', { workspaceRoot: '/tmp/project' }, handlers.exportVisualReviewPacket],
-      ['visual-document:create-candidate', {
-        workspaceRoot: '/tmp/project',
-        candidatePath: '/tmp/candidate.png',
-        summary: 'Improved layout',
-        reviewEvidence: {
-          tool: 'image_generation_review_candidate',
-          ok: true,
-          reviewedArtifactPath: '/tmp/candidate.png',
-          reviewedArtifactHash: 'a'.repeat(64),
-          reviewedAt: '2026-07-12T00:00:00.000Z',
-          score: { overall: 0.9, dimensions: 1, nonEmpty: 1, background: 1, semantic: 0.92, warnings: [] },
-          semantic: { pass: true, summary: 'Passed review.', violations: [], repairInstructions: [] },
-          repairable: false,
-          warnings: []
-        }
-      }, handlers.createVisualCandidateRevision],
-      ['visual-document:accept-candidate', { workspaceRoot: '/tmp/project', revisionId: 'revision-1' }, handlers.acceptVisualCandidateRevision],
-      ['visual-document:reject-candidate', { workspaceRoot: '/tmp/project', revisionId: 'revision-1' }, handlers.rejectVisualCandidateRevision]
-    ] as const
-
-    for (const [channel, payload, handler] of requests) {
-      await dispatcher.invoke(channel, payload, sender)
-      expect(handler).toHaveBeenCalledOnce()
-    }
-    expect(handlers.getVisualDocumentStatus).toHaveBeenCalledWith('/tmp/project')
-    expect(handlers.acceptVisualCandidateRevision).toHaveBeenCalledWith({
-      workspaceRoot: '/tmp/project',
-      revisionId: 'revision-1'
-    })
-  })
-
   it('does not register retired workspace surface business channels', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
     registerAppIpcHandlers(registerOptions())
@@ -775,7 +734,16 @@ describe('registerAppIpcHandlers', () => {
       'workspacePreview:export',
       'workspacePreview:invokeAction',
       'workspacePreview:watch',
-      'workspacePreview:unwatch'
+      'workspacePreview:unwatch',
+      'visual-document:status',
+      'visual-document:open',
+      'visual-document:insert-artifact',
+      'visual-document:update-context',
+      'visual-document:save-annotations',
+      'visual-document:export-review-packet',
+      'visual-document:create-candidate',
+      'visual-document:accept-candidate',
+      'visual-document:reject-candidate'
     ]
 
     for (const channel of retiredChannels) {

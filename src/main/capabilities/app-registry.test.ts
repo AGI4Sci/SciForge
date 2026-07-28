@@ -3,6 +3,13 @@ import {
   BIOLOGY_ROOM_CAPABILITY_IDS
 } from '@sciforge/domain-biology-room/contract'
 import { capabilityResourceHandleSchema } from '../../shared/capability-broker'
+import {
+  CONTROLLED_PROCESS_CREATE_ACTION_ID,
+  CONTROLLED_PROCESS_DISPOSE_ACTION_ID,
+  CONTROLLED_PROCESS_READ_ACTION_ID,
+  CONTROLLED_PROCESS_RESIZE_ACTION_ID,
+  CONTROLLED_PROCESS_WRITE_ACTION_ID
+} from '@sciforge/domain-sdk/controlled-process'
 import { CapabilityBroker } from './broker'
 import {
   APP_CAPABILITY_IDS,
@@ -102,6 +109,25 @@ function createDependencies() {
     }
   })
   const dependencies = {
+    controlledProcessService: {
+      create: vi.fn(async () => ({ resourceId: 'process-1', cursor: '0' })),
+      has: vi.fn((ownerId: string, resourceId: string) =>
+        ownerId === 'window-1' && resourceId === 'process-1'
+      ),
+      read: vi.fn(async (input: { ownerId: string }) => {
+        if (input.ownerId !== 'window-1') {
+          throw new Error('Controlled process session is unavailable to this caller.')
+        }
+        return {
+          cursor: '5',
+          chunks: [{ stream: 'stdout' as const, data: 'hello' }],
+          truncated: false
+        }
+      }),
+      write: vi.fn(() => 4),
+      resize: vi.fn(),
+      dispose: vi.fn(() => true)
+    },
     workspacePreviewHost: {
       listPlugins: () => [pluginManifest],
       getSession: (sessionId: string) => sessionId === session.id ? session : null,
@@ -140,6 +166,16 @@ describe('app capability registry', () => {
     }))
 
     expect(contributions).toEqual(expect.arrayContaining([
+      {
+        moduleId: 'sciforge.controlled-process',
+        capabilityIds: [
+          CONTROLLED_PROCESS_CREATE_ACTION_ID,
+          CONTROLLED_PROCESS_READ_ACTION_ID,
+          CONTROLLED_PROCESS_WRITE_ACTION_ID,
+          CONTROLLED_PROCESS_RESIZE_ACTION_ID,
+          CONTROLLED_PROCESS_DISPOSE_ACTION_ID
+        ]
+      },
       {
         moduleId: 'sciforge.surface',
         capabilityIds: [APP_CAPABILITY_IDS.surfaceCurrent]
@@ -190,10 +226,71 @@ describe('app capability registry', () => {
     expect(ids).toEqual(expect.arrayContaining(
       [
         ...Object.values(APP_CAPABILITY_IDS).filter((id) => !optionalWithoutProviders.has(id)),
+        CONTROLLED_PROCESS_CREATE_ACTION_ID,
+        CONTROLLED_PROCESS_READ_ACTION_ID,
+        CONTROLLED_PROCESS_WRITE_ACTION_ID,
+        CONTROLLED_PROCESS_RESIZE_ACTION_ID,
+        CONTROLLED_PROCESS_DISPOSE_ACTION_ID,
         ...Object.values(BIOLOGY_ROOM_CAPABILITY_IDS)
       ]
     ))
     expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('owns controlled process handles by UI caller and streams without resource revisions', async () => {
+    const { dependencies } = createDependencies()
+    const broker = new CapabilityBroker(createRegistry(dependencies))
+    const caller = {
+      audience: 'ui' as const,
+      callerId: 'window-1',
+      workspaceId: '/workspace'
+    }
+    const opened = await broker.invoke(caller, {
+      actionId: CONTROLLED_PROCESS_CREATE_ACTION_ID,
+      invocationId: 'process-create-1',
+      input: {
+        profile: 'system-shell',
+        terminal: { columns: 100, rows: 30 }
+      }
+    })
+    const resource = capabilityResourceHandleSchema.parse(record(opened.output).resource)
+    const observed = await broker.observe(caller, { resource })
+
+    expect(dependencies.controlledProcessService.create).toHaveBeenCalledWith({
+      ownerId: 'window-1',
+      workspaceRoot: '/workspace',
+      columns: 100,
+      rows: 30
+    })
+    expect(observed.operations.map(({ id }) => id)).toEqual([
+      CONTROLLED_PROCESS_READ_ACTION_ID,
+      CONTROLLED_PROCESS_WRITE_ACTION_ID,
+      CONTROLLED_PROCESS_RESIZE_ACTION_ID,
+      CONTROLLED_PROCESS_DISPOSE_ACTION_ID
+    ])
+    const read = await broker.invoke(caller, {
+      actionId: CONTROLLED_PROCESS_READ_ACTION_ID,
+      resource: observed.resource,
+      input: { cursor: '0', maxCharacters: 100, waitMilliseconds: 10 }
+    })
+    expect(read.output).toEqual({
+      cursor: '5',
+      chunks: [{ stream: 'stdout', data: 'hello' }],
+      truncated: false
+    })
+    expect(read.changed).toBe(false)
+    expect(dependencies.controlledProcessService.read).toHaveBeenCalledWith({
+      ownerId: 'window-1',
+      resourceId: 'process-1',
+      cursor: '0',
+      maxCharacters: 100,
+      waitMilliseconds: 10
+    })
+    expect(broker.discover({
+      audience: 'agent',
+      callerId: 'thread-1',
+      workspaceId: '/workspace'
+    }).map(({ id }) => id)).not.toContain(CONTROLLED_PROCESS_CREATE_ACTION_ID)
   })
 
   it('registers current-surface discovery without exposing legacy visual inspection operations', async () => {

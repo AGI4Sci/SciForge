@@ -18,6 +18,13 @@ export const REMOTE_SSH_CAPABILITY_FACTORY_CONTRIBUTION = contributionFor(
 export const REMOTE_SSH_RENDERER_RIGHT_PANEL_CONTRIBUTION = contributionFor(
   'renderer', 'renderer.workbench-right-panel'
 )
+export const REMOTE_SSH_RENDERER_RIGHT_PANEL_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    REMOTE_SSH_RENDERER_RIGHT_PANEL_CONTRIBUTION.id
+  ]!
+export const REMOTE_SSH_RENDERER_COMMAND_CONTRIBUTION = contributionFor(
+  'renderer', 'renderer.command'
+)
 export const REMOTE_SSH_RENDERER_TOOLBAR_ACTION_CONTRIBUTION = contributionFor(
   'renderer', 'renderer.workbench-toolbar-action'
 )

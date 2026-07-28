@@ -52,7 +52,6 @@ import {
   normalizeAgentRuntimeId,
   mergeWorkbenchToolbarSettings,
   normalizeWorkbenchToolbarSettings,
-  reconcileScheduleWorkflows,
   type AppSettingsPatch,
   type AppSettingsV1,
   type RemoteChannelV1,
@@ -307,10 +306,7 @@ function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
   const migrated = parsed
   const defaults = defaultSettings()
   const schedule = mergeScheduleSettings(defaults.schedule, migrated.schedule)
-  const workflow = reconcileScheduleWorkflows(
-    mergeWorkflowSettings(defaults.workflow, migrated.workflow),
-    schedule
-  )
+  const workflow = mergeWorkflowSettings(defaults.workflow, migrated.workflow)
   return {
     version: 1,
     installationId: migrated.installationId ?? defaults.installationId,
@@ -491,10 +487,7 @@ export class JsonSettingsStore {
       agentsPatch?.claude
     )
     const schedule = mergeScheduleSettings(cur.schedule, partial.schedule)
-    const workflow = reconcileScheduleWorkflows(
-      mergeWorkflowSettings(cur.workflow, partial.workflow),
-      schedule
-    )
+    const workflow = mergeWorkflowSettings(cur.workflow, partial.workflow)
     const next = withGeneratedLocalIds(normalizeStoredSettings({
       ...patchedRuntimeSettings,
       installationId: partial.installationId ?? cur.installationId,

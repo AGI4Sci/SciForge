@@ -16,7 +16,6 @@ export default defineConfig({
           ),
           'schedule-mcp-node-entry': resolve('src/main/schedule-mcp-node-entry.ts'),
           'research-search-mcp-node-entry': resolve('src/main/research-search-mcp-node-entry.ts'),
-          'workflow-mcp-node-entry': resolve('src/main/workflow-mcp-node-entry.ts'),
           'workspace-intel-mcp-node-entry': resolve('src/main/workspace-intel-mcp-node-entry.ts'),
           'remote-executor-mcp-node-entry': resolve('src/main/remote-executor-mcp-node-entry.ts'),
           'write-assist-mcp-node-entry': resolve('src/main/write-assist-mcp-node-entry.ts'),
@@ -26,7 +25,6 @@ export default defineConfig({
           'bgc-discovery-mcp-node-entry': resolve('src/main/bgc-discovery-mcp-node-entry.ts'),
           'image-generation-mcp-node-entry': resolve('src/main/image-generation-mcp-node-entry.ts'),
           'ppt-master-mcp-node-entry': resolve('src/main/ppt-master-mcp-node-entry.ts'),
-          'visual-document-mcp-node-entry': resolve('src/main/visual-document-mcp-node-entry.ts'),
           'computer-use-mcp-node-entry': resolve('src/main/computer-use-mcp-node-entry.ts')
         }
       }

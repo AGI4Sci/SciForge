@@ -7,17 +7,10 @@ export const SESSION_RIGHT_PANEL_DEFAULT_WIDTH = 360
 const RIGHT_PANEL_HISTORY_LIMIT = 50
 let fallbackWorkspaceInstanceSequence = 0
 
-export type SessionVisualReviewRequest = {
-  documentId: string
-  refreshKey: number
-  workspaceRoot?: string
-}
-
 export type SessionRightPanelHistoryEntry = {
   mode: Exclude<RightPanelMode, null>
   filePreviewTarget: WorkspaceFileTarget | null
   filePreviewReturnContext: WorkspaceFilePreviewReturnContext | null
-  visualReviewRequest: SessionVisualReviewRequest | null
   panelActivation: DomainWorkbenchRightPanelActivation | null
 }
 
@@ -33,7 +26,6 @@ export type SessionRightPanelWorkspace = {
   width: number
   filePreviewTarget: WorkspaceFileTarget | null
   filePreviewReturnContext: WorkspaceFilePreviewReturnContext | null
-  visualReviewRequest: SessionVisualReviewRequest | null
   panelActivation: DomainWorkbenchRightPanelActivation | null
   childPanelFocusRequest: { childId: string | null; key: number }
   fileTreeWorkspaceOverride: string | null
@@ -74,7 +66,6 @@ export function createSessionRightPanelWorkspace(
     width,
     filePreviewTarget: null,
     filePreviewReturnContext: null,
-    visualReviewRequest: null,
     panelActivation: null,
     childPanelFocusRequest: { childId: null, key: 0 },
     fileTreeWorkspaceOverride: null,
@@ -145,7 +136,6 @@ function historyEntryFromWorkspace(
     mode: workspace.mode,
     filePreviewTarget: workspace.mode === 'file' ? workspace.filePreviewTarget : null,
     filePreviewReturnContext: workspace.mode === 'file' ? workspace.filePreviewReturnContext : null,
-    visualReviewRequest: workspace.mode === 'visual-review' ? workspace.visualReviewRequest : null,
     panelActivation: workspace.panelActivation
   }
 }
@@ -201,7 +191,6 @@ export function navigateSessionRightPanelHistory(
       mode: entry.mode,
       filePreviewTarget: entry.filePreviewTarget,
       filePreviewReturnContext: entry.filePreviewReturnContext,
-      visualReviewRequest: entry.visualReviewRequest,
       panelActivation: entry.panelActivation,
       history
     }
@@ -211,7 +200,7 @@ export function navigateSessionRightPanelHistory(
 export function discardSessionRightPanelResource(
   workspaces: SessionRightPanelWorkspaceMap,
   sessionId: string | null | undefined,
-  mode: 'file' | 'visual-review',
+  mode: 'file',
   resourceId: string
 ): SessionRightPanelWorkspaceMap {
   const normalized = normalizedSessionId(sessionId)
@@ -221,22 +210,17 @@ export function discardSessionRightPanelResource(
   if (!current) return workspaces
   const entries = current.history.entries.filter((entry) => {
     if (entry.mode !== mode) return true
-    return mode === 'file'
-      ? entry.filePreviewTarget?.path.trim() !== normalizedResourceId
-      : entry.visualReviewRequest?.documentId.trim() !== normalizedResourceId
+    return entry.filePreviewTarget?.path.trim() !== normalizedResourceId
   })
-  const matchesCurrent = mode === 'file'
-    ? current.filePreviewTarget?.path.trim() === normalizedResourceId
-    : current.visualReviewRequest?.documentId.trim() === normalizedResourceId
+  const matchesCurrent = current.filePreviewTarget?.path.trim() === normalizedResourceId
   return {
     ...workspaces,
     [normalized]: {
       ...current,
       ...(matchesCurrent ? {
         mode: current.mode === mode ? null : current.mode,
-        ...(mode === 'file'
-          ? { filePreviewTarget: null, filePreviewReturnContext: null }
-          : { visualReviewRequest: null })
+        filePreviewTarget: null,
+        filePreviewReturnContext: null
       } : {}),
       history: { entries, index: entries.length - 1 }
     }

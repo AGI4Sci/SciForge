@@ -1108,23 +1108,6 @@ describe('AgentRuntimeProvider', () => {
       if (input.operation === 'getContextState') {
         return { runtimeId: 'codex', threadId: input.payload?.threadId, rawHistoryItems: 0, effectiveHistoryItems: 0, updatedAt: 'now' }
       }
-      if (input.operation === 'listGitCheckpoints') {
-        return [{
-          id: 'checkpoint-1',
-          runtimeId: input.runtimeId,
-          threadId: input.payload?.threadId,
-          workspaceRoot: input.payload?.workspaceRoot,
-          createdAt: '2026-06-20T00:00:00.000Z'
-        }]
-      }
-      if (input.operation === 'createGitCheckpoint') {
-        return {
-          id: 'checkpoint-2',
-          runtimeId: input.runtimeId,
-          threadId: input.payload?.threadId,
-          workspaceRoot: input.payload?.workspaceRoot
-        }
-      }
       if (input.operation === 'runCodeNavigation') {
         return { ok: true, locations: [{ relativePath: 'src/index.ts', line: 3, character: 8 }] }
       }
@@ -1242,25 +1225,6 @@ describe('AgentRuntimeProvider', () => {
       id: 'attachment-1',
       name: 'figure.png'
     })
-    await expect(provider.listGitCheckpoints?.({
-      threadId: 'codex-thread',
-      workspaceRoot: '/tmp/ws'
-    })).resolves.toEqual([
-      expect.objectContaining({
-        id: 'checkpoint-1',
-        runtimeId: 'codex',
-        threadId: 'codex-thread'
-      })
-    ])
-    await expect(provider.createGitCheckpoint?.({
-      workspaceRoot: '/tmp/ws',
-      threadId: 'codex-thread',
-      turnId: 'turn-1'
-    })).resolves.toEqual(expect.objectContaining({
-      id: 'checkpoint-2',
-      runtimeId: 'codex',
-      threadId: 'codex-thread'
-    }))
     await expect(provider.runCodeNavigation?.({
       workspaceRoot: '/tmp/ws',
       operation: 'goToDefinition',
@@ -1316,23 +1280,6 @@ describe('AgentRuntimeProvider', () => {
           threadId: 'codex-thread',
           workspace: '/tmp/ws'
         }
-      }
-    })
-    expect(auxiliary).toHaveBeenCalledWith({
-      runtimeId: 'codex',
-      operation: 'listGitCheckpoints',
-      payload: {
-        threadId: 'codex-thread',
-        workspaceRoot: '/tmp/ws'
-      }
-    })
-    expect(auxiliary).toHaveBeenCalledWith({
-      runtimeId: 'codex',
-      operation: 'createGitCheckpoint',
-      payload: {
-        workspaceRoot: '/tmp/ws',
-        threadId: 'codex-thread',
-        turnId: 'turn-1'
       }
     })
     expect(auxiliary).toHaveBeenCalledWith({

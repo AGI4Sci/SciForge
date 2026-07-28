@@ -860,37 +860,6 @@ export class AgentRuntimeProvider implements AgentProvider {
     return this.threadAuxiliary(threadId, 'getContextState')
   }
 
-  async listGitCheckpoints(
-    options?: Parameters<NonNullable<AgentProvider['listGitCheckpoints']>>[0]
-  ): ReturnType<NonNullable<AgentProvider['listGitCheckpoints']>> {
-    const { runtimeId, threadId, ...payload } = options ?? {}
-    const selectedRuntimeId = runtimeId ?? (threadId ? await this.runtimeIdForThread(threadId) : undefined)
-    return this.auxiliary('listGitCheckpoints', {
-      ...payload,
-      ...(threadId ? { threadId } : {})
-    }, selectedRuntimeId)
-  }
-
-  async createGitCheckpoint(
-    input: Parameters<NonNullable<AgentProvider['createGitCheckpoint']>>[0]
-  ): ReturnType<NonNullable<AgentProvider['createGitCheckpoint']>> {
-    const runtimeId = await this.runtimeIdForThread(input.threadId)
-    return this.auxiliary('createGitCheckpoint', input, runtimeId)
-  }
-
-  previewGitCheckpoint(
-    checkpointId: string
-  ): ReturnType<NonNullable<AgentProvider['previewGitCheckpoint']>> {
-    return this.auxiliary('previewGitCheckpoint', { checkpointId })
-  }
-
-  restoreGitCheckpoint(
-    checkpointId: string,
-    options?: Parameters<NonNullable<AgentProvider['restoreGitCheckpoint']>>[1]
-  ): ReturnType<NonNullable<AgentProvider['restoreGitCheckpoint']>> {
-    return this.auxiliary('restoreGitCheckpoint', { checkpointId, force: options?.force === true })
-  }
-
   async createMemory(
     input: Parameters<NonNullable<AgentProvider['createMemory']>>[0]
   ): ReturnType<NonNullable<AgentProvider['createMemory']>> {

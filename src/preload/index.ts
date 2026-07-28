@@ -81,19 +81,6 @@ const api = {
   getScheduleStatus: () => ipcRenderer.invoke('schedule:status'),
   runScheduleTask: (taskId) =>
     ipcRenderer.invoke('schedule:task:run', taskId),
-  getWorkflowStatus: () => ipcRenderer.invoke('workflow:status'),
-  runWorkflow: (workflowId, input) =>
-    ipcRenderer.invoke('workflow:run', { workflowId, input }),
-  stopWorkflow: (workflowId) =>
-    ipcRenderer.invoke('workflow:stop', workflowId),
-  runWorkflowNode: (workflowId, nodeId) =>
-    ipcRenderer.invoke('workflow:node:run', { workflowId, nodeId }),
-  testWorkflowNode: (workflowId, nodeId, mockJson) =>
-    ipcRenderer.invoke('workflow:node:test', { workflowId, nodeId, mockJson }),
-  resolveWorkflowApproval: (token, decision) =>
-    ipcRenderer.invoke('workflow:approval:resolve', { token, decision }),
-  checkWorkflowCode: (language, code) =>
-    ipcRenderer.invoke('workflow:code:check', { language, code }),
   startConnectPhoneInstallQr,
   pollConnectPhoneInstall,
   getDiscordBotStatus: () => ipcRenderer.invoke('discord:status'),
@@ -158,24 +145,6 @@ const api = {
     ipcRenderer.invoke('scientific-plotting:status', { workspaceRoot }),
   prepareScientificPlottingReference: (request) =>
     ipcRenderer.invoke('scientific-plotting:prepare-reference', request),
-  getVisualDocumentStatus: (workspaceRoot) =>
-    ipcRenderer.invoke('visual-document:status', { workspaceRoot }),
-  openVisualDocument: (request) =>
-    ipcRenderer.invoke('visual-document:open', request),
-  insertVisualDocumentArtifact: (request) =>
-    ipcRenderer.invoke('visual-document:insert-artifact', request),
-  updateVisualDocumentContext: (request) =>
-    ipcRenderer.invoke('visual-document:update-context', request),
-  saveVisualDocumentAnnotations: (request) =>
-    ipcRenderer.invoke('visual-document:save-annotations', request),
-  exportVisualReviewPacket: (request) =>
-    ipcRenderer.invoke('visual-document:export-review-packet', request),
-  createVisualCandidateRevision: (request) =>
-    ipcRenderer.invoke('visual-document:create-candidate', request),
-  acceptVisualCandidateRevision: (request) =>
-    ipcRenderer.invoke('visual-document:accept-candidate', request),
-  rejectVisualCandidateRevision: (request) =>
-    ipcRenderer.invoke('visual-document:reject-candidate', request),
   extractVisualStyleProfile: (request) =>
     ipcRenderer.invoke('visual-style:extract-profile', request),
   saveVisualStyleProfile: (request) =>
@@ -282,6 +251,8 @@ const api = {
   visibleContext: {
     publish: (snapshot) => ipcRenderer.invoke('visibleContext:publish', snapshot),
     get: () => ipcRenderer.invoke('visibleContext:get'),
+    registeredTargetRef: (request) =>
+      ipcRenderer.invoke('visibleContext:target-ref', request),
     readCapturePreview: (request) => ipcRenderer.invoke('visibleContext:capture:preview', request),
     onRefreshRequested: (handler) => {
       const wrapped = () => handler()
@@ -293,16 +264,6 @@ const api = {
       ipcRenderer.on('visibleContext:capture-state', wrapped)
       return () => ipcRenderer.removeListener('visibleContext:capture-state', wrapped)
     }
-  },
-  anchoredComments: {
-    list: (filter) => ipcRenderer.invoke('anchoredComments:list', filter),
-    get: (threadId) => ipcRenderer.invoke('anchoredComments:get', threadId),
-    upsert: (thread) => ipcRenderer.invoke('anchoredComments:upsert', thread),
-    delete: (threadId) => ipcRenderer.invoke('anchoredComments:delete', threadId),
-    readAsset: (asset) => ipcRenderer.invoke('anchoredComments:asset:read', asset),
-    capture: (request) => ipcRenderer.invoke('anchoredComments:capture', request),
-    submitFeedback: (request) => ipcRenderer.invoke('anchoredComments:feedback:submit', request),
-    feedbackStatus: (request) => ipcRenderer.invoke('anchoredComments:feedback:status', request)
   },
   agentRuntime: {
     connect: (runtimeId) => ipcRenderer.invoke('agentRuntime:connect', { runtimeId }),
@@ -391,26 +352,6 @@ const api = {
     ipcRenderer.invoke('log:error', { category, message, detail }),
   getLogPath: () => ipcRenderer.invoke('log:get-path'),
   openLogDir: () => ipcRenderer.invoke('log:open-dir'),
-  createTerminal: (payload) => ipcRenderer.invoke('terminal:create', payload),
-  writeToTerminal: (payload) => ipcRenderer.invoke('terminal:write', payload),
-  resizeTerminal: (payload) => ipcRenderer.invoke('terminal:resize', payload),
-  disposeTerminal: (sessionId) => ipcRenderer.invoke('terminal:dispose', sessionId),
-  onTerminalData: (handler) => {
-    const wrapped = (
-      _: Electron.IpcRendererEvent,
-      payload: Parameters<typeof handler>[0]
-    ) => handler(payload)
-    ipcRenderer.on('terminal:data', wrapped)
-    return () => ipcRenderer.removeListener('terminal:data', wrapped)
-  },
-  onTerminalExit: (handler) => {
-    const wrapped = (
-      _: Electron.IpcRendererEvent,
-      payload: Parameters<typeof handler>[0]
-    ) => handler(payload)
-    ipcRenderer.on('terminal:exit', wrapped)
-    return () => ipcRenderer.removeListener('terminal:exit', wrapped)
-  },
   getPathForFile: (file: File) => webUtils.getPathForFile(file)
 } satisfies SciForgeApi
 

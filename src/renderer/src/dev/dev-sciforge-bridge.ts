@@ -164,15 +164,6 @@ function createApi(): SciForgeApi {
     getConnectPhoneStatus,
     getScheduleStatus: () => invoke('schedule:status'),
     runScheduleTask: (taskId) => invoke('schedule:task:run', taskId),
-    getWorkflowStatus: () => invoke('workflow:status'),
-    runWorkflow: (workflowId, input) => invoke('workflow:run', { workflowId, input }),
-    stopWorkflow: (workflowId) => invoke('workflow:stop', workflowId),
-    runWorkflowNode: (workflowId, nodeId) => invoke('workflow:node:run', { workflowId, nodeId }),
-    testWorkflowNode: (workflowId, nodeId, mockJson) =>
-      invoke('workflow:node:test', { workflowId, nodeId, mockJson }),
-    resolveWorkflowApproval: (token, decision) =>
-      invoke('workflow:approval:resolve', { token, decision }),
-    checkWorkflowCode: (language, code) => invoke('workflow:code:check', { language, code }),
     startConnectPhoneInstallQr,
     pollConnectPhoneInstall,
     getDiscordBotStatus: () => invoke('discord:status'),
@@ -233,24 +224,6 @@ function createApi(): SciForgeApi {
       invoke('scientific-plotting:status', { workspaceRoot }),
     prepareScientificPlottingReference: (request) =>
       invoke('scientific-plotting:prepare-reference', request),
-    getVisualDocumentStatus: (workspaceRoot) =>
-      invoke('visual-document:status', { workspaceRoot }),
-    openVisualDocument: (request) =>
-      invoke('visual-document:open', request),
-    insertVisualDocumentArtifact: (request) =>
-      invoke('visual-document:insert-artifact', request),
-    updateVisualDocumentContext: (request) =>
-      invoke('visual-document:update-context', request),
-    saveVisualDocumentAnnotations: (request) =>
-      invoke('visual-document:save-annotations', request),
-    exportVisualReviewPacket: (request) =>
-      invoke('visual-document:export-review-packet', request),
-    createVisualCandidateRevision: (request) =>
-      invoke('visual-document:create-candidate', request),
-    acceptVisualCandidateRevision: (request) =>
-      invoke('visual-document:accept-candidate', request),
-    rejectVisualCandidateRevision: (request) =>
-      invoke('visual-document:reject-candidate', request),
     extractVisualStyleProfile: (request) =>
       invoke('visual-style:extract-profile', request),
     saveVisualStyleProfile: (request) =>
@@ -312,19 +285,11 @@ function createApi(): SciForgeApi {
     visibleContext: {
       publish: (snapshot) => invoke('visibleContext:publish', snapshot),
       get: () => invoke('visibleContext:get'),
+      registeredTargetRef: (request) =>
+        invoke('visibleContext:target-ref', request),
       readCapturePreview: (request) => invoke('visibleContext:capture:preview', request),
       onRefreshRequested: (handler) => onChannel('visibleContext:refresh-requested', handler),
       onCaptureStateChanged: (handler) => onChannel('visibleContext:capture-state', handler)
-    },
-    anchoredComments: {
-      list: (filter) => invoke('anchoredComments:list', filter),
-      get: (threadId) => invoke('anchoredComments:get', threadId),
-      upsert: (thread) => invoke('anchoredComments:upsert', thread),
-      delete: (threadId) => invoke('anchoredComments:delete', threadId),
-      readAsset: (asset) => invoke('anchoredComments:asset:read', asset),
-      capture: (request) => invoke('anchoredComments:capture', request),
-      submitFeedback: (request) => invoke('anchoredComments:feedback:submit', request),
-      feedbackStatus: (request) => invoke('anchoredComments:feedback:status', request)
     },
     speechToText: {
       transcribe: (payload) => invoke('speech:transcribe', payload)
@@ -388,12 +353,6 @@ function createApi(): SciForgeApi {
     logError: (category, message, detail) => invoke('log:error', { category, message, detail }),
     getLogPath: () => invoke('log:get-path'),
     openLogDir: () => invoke('log:open-dir'),
-    createTerminal: (payload) => invoke('terminal:create', payload),
-    writeToTerminal: (payload) => invoke('terminal:write', payload),
-    resizeTerminal: (payload) => invoke('terminal:resize', payload),
-    disposeTerminal: (sessionId) => invoke('terminal:dispose', sessionId),
-    onTerminalData: (handler) => onChannel('terminal:data', handler),
-    onTerminalExit: (handler) => onChannel('terminal:exit', handler),
     getPathForFile: (file) => (file as File & { path?: string }).path ?? file.name
   }
 }

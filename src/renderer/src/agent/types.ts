@@ -20,7 +20,6 @@ import type {
   AgentRuntimeContextState,
   AgentRuntimeExecutionIntent,
   AgentRuntimeFileReference,
-  AgentRuntimeGitCheckpoint,
   AgentRuntimeListThreadChildrenResponse,
   AgentRuntimeMemoryRecord,
   AgentRuntimePhase,
@@ -634,18 +633,6 @@ export interface AgentProvider {
     limit?: number
   }): Promise<AgentRuntimeListThreadChildrenResponse>
   readChildTranscript?(input: AgentRuntimeReadChildTranscriptInput): Promise<AgentRuntimeReadChildTranscriptResponse>
-  listGitCheckpoints?(options?: {
-    runtimeId?: AgentRuntimeId
-    threadId?: string
-    workspaceRoot?: string
-  }): Promise<AgentRuntimeGitCheckpoint[]>
-  createGitCheckpoint?(input: {
-    workspaceRoot: string
-    threadId: string
-    turnId?: string
-  }): Promise<unknown>
-  previewGitCheckpoint?(checkpointId: string): Promise<unknown>
-  restoreGitCheckpoint?(checkpointId: string, options?: { force?: boolean }): Promise<unknown>
   createMemory?(input: {
     content: string
     scope?: AgentRuntimeMemoryRecord['scope']

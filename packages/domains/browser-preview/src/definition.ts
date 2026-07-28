@@ -19,6 +19,14 @@ export const BROWSER_PREVIEW_RENDERER_RIGHT_PANEL_CONTRIBUTION = contributionFor
   'renderer',
   'renderer.workbench-right-panel'
 )
+export const BROWSER_PREVIEW_RENDERER_RIGHT_PANEL_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    BROWSER_PREVIEW_RENDERER_RIGHT_PANEL_CONTRIBUTION.id
+  ]!
+export const BROWSER_PREVIEW_RENDERER_COMMAND_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.command'
+)
 export const BROWSER_PREVIEW_RENDERER_TOOLBAR_ACTION_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.workbench-toolbar-action'

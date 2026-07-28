@@ -5,14 +5,10 @@ import type { CallToolResult, ReadResourceResult } from '@modelcontextprotocol/s
 
 import {
   GIT_BRANCHES_RESOURCE_URI,
-  GIT_CHECKPOINTS_RESOURCE_URI,
-  GIT_CHECKPOINT_RESOURCE_URI_TEMPLATE,
   GIT_DIFF_RESOURCE_URI,
   GIT_DIFF_RESOURCE_URI_TEMPLATE,
   GIT_STATUS_RESOURCE_URI,
   GitBranchesInputSchema,
-  GitCheckpointListInputSchema,
-  GitCheckpointPreviewInputSchema,
   GitDiffPreviewInputSchema,
   GitStatusInputSchema,
   LSP_STATUS_RESOURCE_URI,
@@ -31,7 +27,6 @@ import {
   RuntimeLocalStatusInputSchema,
   RuntimeModelRouterStatusInputSchema,
   RuntimePortsInputSchema,
-  gitCheckpointResourceUri,
   type RuntimeInspectorAnyResult,
   type RuntimeInspectorFailure
 } from './contract.js'
@@ -77,18 +72,6 @@ export function createRuntimeInspectorMcpServer(
     annotations: readOnlyAnnotations('Preview Git diff')
   }, async (args) => resultToToolResult(await service.gitDiffPreview(args), 'git diff preview'))
 
-  server.registerTool('gui_git_checkpoint_list', {
-    description: 'List saved Git turn checkpoints from the configured app data directory. This never creates, restores, or mutates checkpoints.',
-    inputSchema: GitCheckpointListInputSchema,
-    annotations: readOnlyAnnotations('List Git checkpoints')
-  }, async (args) => resultToToolResult(await service.gitCheckpointList(args), 'git checkpoint list'))
-
-  server.registerTool('gui_git_checkpoint_preview', {
-    description: 'Preview saved Git checkpoint metadata and bounded staged/unstaged patch chunks. Restore is intentionally not exposed.',
-    inputSchema: GitCheckpointPreviewInputSchema,
-    annotations: readOnlyAnnotations('Preview Git checkpoint')
-  }, async (args) => resultToToolResult(await service.gitCheckpointPreview(args), 'git checkpoint preview'))
-
   server.registerTool('gui_runtime_ports', {
     description: 'Report configured Model Router and local runtime ports, optionally checking local TCP reachability.',
     inputSchema: RuntimePortsInputSchema,
@@ -102,7 +85,7 @@ export function createRuntimeInspectorMcpServer(
   }, async (args) => resultToToolResult(await service.runtimeHealth(args), 'runtime health'))
 
   server.registerTool('gui_runtime_dependency_report', {
-    description: 'Build a read-only dependency report for Git, Node, checkpoint data, LSP binary availability, and optional runtime HTTP reachability.',
+    description: 'Build a read-only dependency report for Git, Node, LSP binary availability, and optional runtime HTTP reachability.',
     inputSchema: RuntimeDependencyReportInputSchema,
     annotations: readOnlyAnnotations('Inspect runtime dependencies')
   }, async (args) => resultToToolResult(await service.runtimeDependencyReport(args), 'runtime dependency report'))
@@ -186,47 +169,6 @@ function registerRuntimeInspectorResources(server: McpServer, service: RuntimeIn
     return jsonResource(uri.toString(), await service.gitDiffPreview({ path }))
   })
 
-  server.registerResource('git_checkpoints', GIT_CHECKPOINTS_RESOURCE_URI, {
-    title: 'Git checkpoints',
-    description: 'Saved Git turn checkpoints from the configured checkpoint data directory.',
-    mimeType: 'application/json'
-  }, async () => jsonResource(GIT_CHECKPOINTS_RESOURCE_URI, await service.gitCheckpointList({})))
-
-  server.registerResource('git_checkpoint', new ResourceTemplate(GIT_CHECKPOINT_RESOURCE_URI_TEMPLATE, {
-    list: async () => {
-      const result = await service.gitCheckpointList({})
-      return {
-        resources: result.ok
-          ? result.checkpoints.map((checkpoint) => ({
-              uri: gitCheckpointResourceUri(checkpoint.checkpointId),
-              name: `git_checkpoint_${checkpoint.checkpointId}`,
-              title: checkpoint.checkpointId,
-              description: `Git checkpoint for ${checkpoint.threadId}`,
-              mimeType: 'application/json'
-            }))
-          : []
-      }
-    },
-    complete: {
-      checkpointId: async (value) => {
-        const result = await service.gitCheckpointList({})
-        return result.ok
-          ? result.checkpoints
-              .map((checkpoint) => checkpoint.checkpointId)
-              .filter((id) => id.startsWith(value))
-              .slice(0, 50)
-          : []
-      }
-    }
-  }), {
-    title: 'Git checkpoint preview',
-    description: 'Read-only saved checkpoint metadata and bounded patch chunks.',
-    mimeType: 'application/json'
-  }, async (uri, variables) => {
-    const checkpointId = decodeUriVariable(firstVariable(variables.checkpointId))
-    return jsonResource(uri.toString(), await service.gitCheckpointPreview({ checkpoint_id: checkpointId }))
-  })
-
   server.registerResource('runtime_ports', RUNTIME_PORTS_RESOURCE_URI, {
     title: 'Runtime ports',
     description: 'Configured Model Router and local runtime ports.',
@@ -285,8 +227,6 @@ function renderSuccessSummary(result: Exclude<RuntimeInspectorAnyResult, Runtime
   if ('entries' in result) return `Git status has ${result.dirtyCount} changed path(s); returned ${result.entries.length}.`
   if ('branches' in result) return `Found ${result.total} Git branch(es); returned ${result.branches.length}.`
   if ('patch' in result) return `Git diff preview returned ${result.patch.bytesRead} byte(s)${result.patch.truncated ? '; more is available.' : '.'}`
-  if ('checkpoints' in result) return `Found ${result.total} Git checkpoint(s); returned ${result.checkpoints.length}.`
-  if ('checkpoint' in result) return `Git checkpoint preview loaded for ${result.checkpoint.checkpointId}.`
   if ('ports' in result) return `Runtime port report contains ${result.ports.length} endpoint(s).`
   if ('modelRouter' in result && 'localRuntime' in result) return `Runtime health is ${result.status}.`
   if ('dependencies' in result) return `Runtime dependency report contains ${result.dependencies.length} item(s).`

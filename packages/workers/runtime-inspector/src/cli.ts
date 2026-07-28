@@ -21,9 +21,6 @@ export async function main(argv: string[] = process.argv.slice(2), env: NodeJS.P
     if (options.serviceOptions.workspaceRoot) {
       console.error(`[sciforge-runtime-inspector] workspaceRoot=${options.serviceOptions.workspaceRoot}`)
     }
-    if (options.serviceOptions.checkpointDataDir) {
-      console.error(`[sciforge-runtime-inspector] checkpointDataDir=${options.serviceOptions.checkpointDataDir}`)
-    }
   }
   await startRuntimeInspectorMcpServer(service)
 }
@@ -45,14 +42,6 @@ export function resolveRuntimeInspectorCliOptions(
       const value = argv[index + 1]
       if (value) {
         serviceOptions.workspaceRoot = value
-        index += 1
-      }
-      continue
-    }
-    if (arg === '--checkpoint-data-dir') {
-      const value = argv[index + 1]
-      if (value) {
-        serviceOptions.checkpointDataDir = value
         index += 1
       }
       continue

@@ -31,14 +31,15 @@
     }
   },
   "contributionContracts": {
+    "project-dag.workbench-right-panel": {
+      "location": "workbench.right-panel",
+      "title": "Project DAG",
+      "resourceKind": "project-dag"
+    },
     "project-dag.workbench-toolbar-action": {
       "location": "workbench.topbar",
       "commandId": "project-dag.open",
-      "label": "rightPanelProjectDag",
-      "target": {
-        "kind": "workbench.right-panel",
-        "contributionId": "project-dag.workbench-right-panel"
-      }
+      "label": "rightPanelProjectDag"
     }
   },
   "entrypoints": [
@@ -67,6 +68,10 @@
         {
           "kind": "renderer.workbench-right-panel",
           "id": "project-dag.workbench-right-panel"
+        },
+        {
+          "kind": "renderer.command",
+          "id": "project-dag.open"
         },
         {
           "kind": "renderer.workbench-toolbar-action",

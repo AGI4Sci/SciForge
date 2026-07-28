@@ -36,7 +36,12 @@ describe('capability IPC adapter', () => {
         ipcHandlers.set(channel, callback)
       })
     }
-    const registration = registerCapabilityIpc({ broker, ipc: ipc as never })
+    const onCallerDestroyed = vi.fn()
+    const registration = registerCapabilityIpc({
+      broker,
+      ipc: ipc as never,
+      onCallerDestroyed
+    })
 
     const senderEvents = new EventEmitter()
     const sender = {
@@ -136,5 +141,8 @@ describe('capability IPC adapter', () => {
     }, sender)).resolves.toEqual(discovered)
     await expect(registration.invoke('workspacePreview:open', {}, sender))
       .rejects.toThrow('Unknown capability bridge channel')
+    senderEvents.emit('destroyed')
+    expect(onCallerDestroyed).toHaveBeenCalledOnce()
+    expect(onCallerDestroyed).toHaveBeenCalledWith('window:7')
   })
 })

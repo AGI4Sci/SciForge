@@ -17,14 +17,15 @@
     "priority": 100
   },
   "contributionContracts": {
+    "paper-radar.workbench-right-panel": {
+      "location": "workbench.right-panel",
+      "title": "Paper radar",
+      "resourceKind": "paper-radar"
+    },
     "paper-radar.workbench-toolbar-action": {
       "location": "workbench.topbar",
       "commandId": "paper-radar.open",
-      "label": "rightPanelPaperRadar",
-      "target": {
-        "kind": "workbench.right-panel",
-        "contributionId": "paper-radar.workbench-right-panel"
-      }
+      "label": "rightPanelPaperRadar"
     }
   },
   "entrypoints": [
@@ -40,6 +41,7 @@
       "export": "./renderer",
       "contributions": [
         { "kind": "renderer.workbench-right-panel", "id": "paper-radar.workbench-right-panel" },
+        { "kind": "renderer.command", "id": "paper-radar.open" },
         { "kind": "renderer.workbench-toolbar-action", "id": "paper-radar.workbench-toolbar-action" },
         { "kind": "renderer.i18n-resource", "id": "paper-radar.translations" }
       ]

@@ -19,11 +19,7 @@ import {
   type AppSettingsV1,
   type ScheduleRunResult,
   type ScheduleRuntimeStatus,
-  type ScheduleTaskFromTextResult,
-  type WorkflowCodeCheckResult,
-  type WorkflowNodeTestResult,
-  type WorkflowRunResult,
-  type WorkflowRuntimeStatus
+  type ScheduleTaskFromTextResult
 } from '../../shared/app-settings'
 import type {
   ConnectPhoneInstallPollResult,
@@ -88,14 +84,6 @@ import {
   visualStyleExtractPayloadSchema,
   visualStyleSaveProfilePayloadSchema,
   pptMasterMcpConfigPayloadSchema,
-  visualDocumentCreateCandidatePayloadSchema,
-  visualDocumentExportReviewPacketPayloadSchema,
-  visualDocumentInsertArtifactPayloadSchema,
-  visualDocumentOpenPayloadSchema,
-  visualDocumentRevisionDecisionPayloadSchema,
-  visualDocumentSaveAnnotationsPayloadSchema,
-  visualDocumentStatusPayloadSchema,
-  visualDocumentUpdateContextPayloadSchema,
   scientificPlottingPrepareReferencePayloadSchema,
   scientificPlottingMcpConfigPayloadSchema,
   scientificPlottingStatusPayloadSchema,
@@ -115,6 +103,7 @@ import {
   traceSummariesPayloadSchema,
   visibleContextCapturePreviewPayloadSchema,
   visibleContextPublishPayloadSchema,
+  visibleContextTargetRefPayloadSchema,
   rootPathSchema,
   scheduleTaskFromTextPayloadSchema,
   shellOpenExternalUrlSchema,
@@ -141,15 +130,12 @@ import {
   writeRichClipboardPayloadSchema,
   writeInlineCompletionPayloadSchema,
   writeRetrievalPayloadSchema,
-  workflowCodeCheckPayloadSchema,
-  workflowResolveApprovalPayloadSchema,
-  workflowRunNodePayloadSchema,
-  workflowTestNodePayloadSchema,
   workspaceRootSchema
 } from './app-ipc-schemas'
 import {
   emptyVisibleContextSnapshot,
-  type VisibleContextSnapshot
+  type VisibleContextSnapshot,
+  type VisibleContextTargetRefRequest
 } from '../../shared/visible-context'
 import {
   buildScientificSkillsMcpConfigFragment,
@@ -175,17 +161,6 @@ import {
   getScientificPlottingStatus,
   prepareScientificPlottingReference
 } from '../../../packages/workers/scientific-plotting/src/scientific-plotting-engine'
-import {
-  acceptVisualCandidateRevision,
-  createVisualCandidateRevision,
-  exportVisualReviewPacket,
-  getVisualDocumentStatus,
-  insertVisualDocumentArtifact,
-  openOrCreateVisualDocument,
-  rejectVisualCandidateRevision,
-  saveVisualDocumentAnnotations,
-  updateVisualDocumentContext
-} from '../../../packages/workers/visual-document/src/visual-document-engine'
 import {
   buildScientificSkillsIndex,
   buildScientificSkillsStatusSummary
@@ -249,7 +224,6 @@ import type { RemoteChannelRuntime } from '../remote-channel-runtime'
 import type { DiscordBotRuntime } from '../discord-bot-runtime'
 import type { ZulipBotRuntime } from '../zulip-bot-runtime'
 import type { ScheduleRuntime } from '../schedule-runtime'
-import { checkWorkflowCode, type WorkflowRuntime } from '../workflow-runtime'
 import { createAndSwitchGitBranch, getGitBranches, switchGitBranch } from '../services/git-service'
 import {
   createWorkspaceDirectory,
@@ -288,7 +262,6 @@ import {
 import { readComputerUseRuntimeStatus } from '../services/computer-use-status'
 import { copyWriteDocumentAsRichText, exportWriteDocument } from '../services/write-export-service'
 import { listGuiSkills } from '../services/skill-service'
-import type { TerminalPtyBridge } from '../terminal/terminal-pty-ipc'
 
 type GuiUpdaterModule = typeof import('../gui-updater')
 
@@ -375,6 +348,10 @@ export type RegisterAppIpcHandlersOptions = {
   visibleContext?: {
     publish: (snapshot: VisibleContextSnapshot) => Promise<VisibleContextSnapshot>
     get: () => Promise<VisibleContextSnapshot>
+    registeredTargetRef: (
+      windowId: string,
+      input: VisibleContextTargetRefRequest
+    ) => Promise<string | null>
     readCapturePreview: (path: string) => Promise<{
       ok: true
       path: string
@@ -389,7 +366,6 @@ export type RegisterAppIpcHandlersOptions = {
     workspaceRoot?: string
   } | null) => void
   getScheduleRuntime: () => ScheduleRuntime | null
-  getWorkflowRuntime?: () => WorkflowRuntime | null
   startFeishuInstallQrcode: (isLark: boolean) => Promise<ConnectPhoneInstallQrResult>
   pollFeishuInstall: (deviceCode: string) => Promise<ConnectPhoneInstallPollResult>
   startWeixinInstallQrcode: (weixinBridgeUrl?: string) => Promise<ConnectPhoneInstallQrResult>
@@ -402,7 +378,6 @@ export type RegisterAppIpcHandlersOptions = {
   readGuiUpdateState: () => Promise<GuiUpdateState>
   loadGuiUpdaterModule: () => Promise<GuiUpdaterModule>
   resolveLogDirectory: () => string
-  terminalPtyBridge?: TerminalPtyBridge
   getMainPerformanceSnapshot?: () => unknown
   getScientificSkillsMcpLaunchConfig?: () => ScientificSkillsMcpLaunchConfig
   getScientificPlottingMcpLaunchConfig?: () => ScientificPlottingMcpLaunchConfig
@@ -414,15 +389,6 @@ export type RegisterAppIpcHandlersOptions = {
   prepareScientificPlottingReference?: (
     request: ScientificPlottingPrepareReferenceRequest
   ) => Promise<ScientificPlottingPrepareReferenceResult>
-  getVisualDocumentStatus?: typeof getVisualDocumentStatus
-  openVisualDocument?: typeof openOrCreateVisualDocument
-  insertVisualDocumentArtifact?: typeof insertVisualDocumentArtifact
-  updateVisualDocumentContext?: typeof updateVisualDocumentContext
-  saveVisualDocumentAnnotations?: typeof saveVisualDocumentAnnotations
-  exportVisualReviewPacket?: typeof exportVisualReviewPacket
-  createVisualCandidateRevision?: typeof createVisualCandidateRevision
-  acceptVisualCandidateRevision?: typeof acceptVisualCandidateRevision
-  rejectVisualCandidateRevision?: typeof rejectVisualCandidateRevision
   extractVisualStyleProfile?: (request: VisualStyleExtractRequest) => Promise<VisualStyleExtractResult>
   saveVisualStyleProfile?: (request: VisualStyleSaveProfileRequest) => Promise<VisualStyleSaveProfileResult>
   logError: (category: string, message: string, detail?: unknown) => void
@@ -528,7 +494,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     getZulipBotRuntime,
     visibleContext,
     getScheduleRuntime,
-    getWorkflowRuntime = () => null,
     startFeishuInstallQrcode,
     pollFeishuInstall,
     startWeixinInstallQrcode,
@@ -538,7 +503,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     readGuiUpdateState,
     loadGuiUpdaterModule,
     resolveLogDirectory,
-    terminalPtyBridge,
     getMainPerformanceSnapshot,
     getScientificSkillsMcpLaunchConfig,
     getScientificPlottingMcpLaunchConfig,
@@ -548,15 +512,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     installScientificSkills: installScientificSkillsHandler = installScientificSkills,
     getScientificPlottingStatus: getScientificPlottingStatusHandler = getScientificPlottingStatus,
     prepareScientificPlottingReference: prepareScientificPlottingReferenceHandler = prepareScientificPlottingReference,
-    getVisualDocumentStatus: getVisualDocumentStatusHandler = getVisualDocumentStatus,
-    openVisualDocument: openVisualDocumentHandler = openOrCreateVisualDocument,
-    insertVisualDocumentArtifact: insertVisualDocumentArtifactHandler = insertVisualDocumentArtifact,
-    updateVisualDocumentContext: updateVisualDocumentContextHandler = updateVisualDocumentContext,
-    saveVisualDocumentAnnotations: saveVisualDocumentAnnotationsHandler = saveVisualDocumentAnnotations,
-    exportVisualReviewPacket: exportVisualReviewPacketHandler = exportVisualReviewPacket,
-    createVisualCandidateRevision: createVisualCandidateRevisionHandler = createVisualCandidateRevision,
-    acceptVisualCandidateRevision: acceptVisualCandidateRevisionHandler = acceptVisualCandidateRevision,
-    rejectVisualCandidateRevision: rejectVisualCandidateRevisionHandler = rejectVisualCandidateRevision,
     extractVisualStyleProfile: extractVisualStyleProfileHandler = extractVisualStyleProfile,
     saveVisualStyleProfile: saveVisualStyleProfileOverride,
     logError,
@@ -847,21 +802,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('settings:set', settingsPatchSchema, partial) as AppSettingsPatch
     )
   )
-  handleInvoke('terminal:create', async (event, payload: unknown) =>
-    terminalPtyBridge?.create(event.sender, payload) ?? {
-      ok: false as const,
-      message: 'The terminal backend is not available.'
-    }
-  )
-  handleInvoke('terminal:write', async (event, payload: unknown) =>
-    terminalPtyBridge?.write(event.sender, payload) ?? false
-  )
-  handleInvoke('terminal:resize', async (event, payload: unknown) =>
-    terminalPtyBridge?.resize(event.sender, payload) ?? false
-  )
-  handleInvoke('terminal:dispose', async (event, payload: unknown) =>
-    terminalPtyBridge?.dispose(event.sender, payload) ?? false
-  )
   handleInvoke('computer-use:permissions', async () => getComputerUsePermissions())
   handleInvoke('computer-use:request-permission', async (_, kind: unknown) =>
     requestComputerUsePermission(
@@ -933,6 +873,21 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   handleInvoke('visibleContext:get', async () => {
     if (!visibleContext) return emptyVisibleContextSnapshot()
     return visibleContext.get()
+  })
+  handleInvoke('visibleContext:target-ref', async (event, payload: unknown) => {
+    const request = parseIpcPayload(
+      'visibleContext:target-ref',
+      visibleContextTargetRefPayloadSchema,
+      payload
+    )
+    if (!visibleContext) return { ok: false as const }
+    const targetRef = await visibleContext.registeredTargetRef(
+      visibleContextWindowId(event.sender),
+      request
+    )
+    return targetRef
+      ? { ok: true as const, targetRef }
+      : { ok: false as const }
   })
   handleInvoke('visibleContext:capture:preview', async (_, payload: unknown) => {
     const request = parseIpcPayload(
@@ -1141,63 +1096,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     const scheduleRuntime = getScheduleRuntime()
     if (!scheduleRuntime) return { ok: false, message: 'Schedule runtime is not initialized.' }
     return scheduleRuntime.runTask(normalizedTaskId)
-  })
-
-  handleInvoke('workflow:status', async (): Promise<WorkflowRuntimeStatus> =>
-    getWorkflowRuntime()?.status() ?? {
-      runningWorkflowIds: [],
-      nodeStatus: {},
-      nodeResults: {},
-      powerSaveBlockerActive: false,
-      pendingApprovals: []
-    }
-  )
-
-  handleInvoke('workflow:run', async (_, payload: unknown): Promise<WorkflowRunResult> => {
-    const request = parseIpcPayload(
-      'workflow:run',
-      z.object({
-        workflowId: streamIdSchema,
-        input: z.unknown().optional()
-      }).strict(),
-      payload
-    )
-    const workflowRuntime = getWorkflowRuntime()
-    if (!workflowRuntime) return { ok: false, message: 'Workflow runtime is not initialized.' }
-    return workflowRuntime.runWorkflow(request.workflowId, request.input)
-  })
-
-  handleInvoke('workflow:stop', async (_, workflowId: unknown): Promise<WorkflowRunResult> => {
-    const normalizedWorkflowId = parseIpcPayload('workflow:stop', streamIdSchema, workflowId)
-    const workflowRuntime = getWorkflowRuntime()
-    if (!workflowRuntime) return { ok: false, message: 'Workflow runtime is not initialized.' }
-    return workflowRuntime.stopWorkflow(normalizedWorkflowId)
-  })
-
-  handleInvoke('workflow:node:run', async (_, payload: unknown): Promise<WorkflowRunResult> => {
-    const request = parseIpcPayload('workflow:node:run', workflowRunNodePayloadSchema, payload)
-    const workflowRuntime = getWorkflowRuntime()
-    if (!workflowRuntime) return { ok: false, message: 'Workflow runtime is not initialized.' }
-    return workflowRuntime.runSingleNode(request.workflowId, request.nodeId)
-  })
-
-  handleInvoke('workflow:node:test', async (_, payload: unknown): Promise<WorkflowNodeTestResult> => {
-    const request = parseIpcPayload('workflow:node:test', workflowTestNodePayloadSchema, payload)
-    const workflowRuntime = getWorkflowRuntime()
-    if (!workflowRuntime) return { ok: false, message: 'Workflow runtime is not initialized.' }
-    return workflowRuntime.testNode(request.workflowId, request.nodeId, request.mockJson)
-  })
-
-  handleInvoke('workflow:approval:resolve', async (_, payload: unknown): Promise<{ ok: boolean }> => {
-    const request = parseIpcPayload('workflow:approval:resolve', workflowResolveApprovalPayloadSchema, payload)
-    const workflowRuntime = getWorkflowRuntime()
-    if (!workflowRuntime) return { ok: false }
-    return { ok: workflowRuntime.resolveApproval(request.token, request.decision) }
-  })
-
-  handleInvoke('workflow:code:check', async (_, payload: unknown): Promise<WorkflowCodeCheckResult> => {
-    const request = parseIpcPayload('workflow:code:check', workflowCodeCheckPayloadSchema, payload)
-    return checkWorkflowCode(request.language, request.code)
   })
 
   handleInvoke(
@@ -1630,158 +1528,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     } catch (error) {
       return {
         ok: false as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('visual-document:status', async (_, payload: unknown) => {
-    try {
-      const request = parseIpcPayload(
-        'visual-document:status',
-        visualDocumentStatusPayloadSchema,
-        payload
-      )
-      return getVisualDocumentStatusHandler(request.workspaceRoot)
-    } catch (error) {
-      return {
-        ok: false as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('visual-document:open', async (_, payload: unknown) => {
-    try {
-      const request = parseIpcPayload(
-        'visual-document:open',
-        visualDocumentOpenPayloadSchema,
-        payload
-      )
-      return openVisualDocumentHandler(request)
-    } catch (error) {
-      return {
-        ok: false as const,
-        status: 'invalid_request' as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('visual-document:insert-artifact', async (_, payload: unknown) => {
-    try {
-      const request = parseIpcPayload(
-        'visual-document:insert-artifact',
-        visualDocumentInsertArtifactPayloadSchema,
-        payload
-      )
-      return insertVisualDocumentArtifactHandler(request)
-    } catch (error) {
-      return {
-        ok: false as const,
-        status: 'invalid_request' as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('visual-document:update-context', async (_, payload: unknown) => {
-    try {
-      const request = parseIpcPayload(
-        'visual-document:update-context',
-        visualDocumentUpdateContextPayloadSchema,
-        payload
-      )
-      return updateVisualDocumentContextHandler(request)
-    } catch (error) {
-      return {
-        ok: false as const,
-        status: 'invalid_request' as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('visual-document:save-annotations', async (_, payload: unknown) => {
-    try {
-      const request = parseIpcPayload(
-        'visual-document:save-annotations',
-        visualDocumentSaveAnnotationsPayloadSchema,
-        payload
-      )
-      return saveVisualDocumentAnnotationsHandler(request)
-    } catch (error) {
-      return {
-        ok: false as const,
-        status: 'invalid_request' as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('visual-document:export-review-packet', async (_, payload: unknown) => {
-    try {
-      const request = parseIpcPayload(
-        'visual-document:export-review-packet',
-        visualDocumentExportReviewPacketPayloadSchema,
-        payload
-      )
-      return exportVisualReviewPacketHandler(request)
-    } catch (error) {
-      return {
-        ok: false as const,
-        status: 'invalid_request' as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('visual-document:create-candidate', async (_, payload: unknown) => {
-    try {
-      const request = parseIpcPayload(
-        'visual-document:create-candidate',
-        visualDocumentCreateCandidatePayloadSchema,
-        payload
-      )
-      return createVisualCandidateRevisionHandler(request)
-    } catch (error) {
-      return {
-        ok: false as const,
-        status: 'invalid_request' as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('visual-document:accept-candidate', async (_, payload: unknown) => {
-    try {
-      const request = parseIpcPayload(
-        'visual-document:accept-candidate',
-        visualDocumentRevisionDecisionPayloadSchema,
-        payload
-      )
-      return acceptVisualCandidateRevisionHandler(request)
-    } catch (error) {
-      return {
-        ok: false as const,
-        status: 'invalid_request' as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('visual-document:reject-candidate', async (_, payload: unknown) => {
-    try {
-      const request = parseIpcPayload(
-        'visual-document:reject-candidate',
-        visualDocumentRevisionDecisionPayloadSchema,
-        payload
-      )
-      return rejectVisualCandidateRevisionHandler(request)
-    } catch (error) {
-      return {
-        ok: false as const,
-        status: 'invalid_request' as const,
         message: error instanceof Error ? error.message : String(error)
       }
     }

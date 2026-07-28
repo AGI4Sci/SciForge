@@ -3,7 +3,9 @@ import test from 'node:test'
 import type { ReactElement } from 'react'
 import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
+  EVIDENCE_DAG_RENDERER_COMMAND_CONTRIBUTION,
   EVIDENCE_DAG_RENDERER_I18N_CONTRIBUTION,
+  EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRACT,
   EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION,
   EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRACT,
   EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
@@ -27,37 +29,51 @@ test('contributes the package-owned Evidence panel and translations', () => {
       }
     },
     openExternal: () => undefined,
-    workspacePreview: { open: () => undefined }
+    workspacePreview: { open: () => undefined },
+    workbench: { openRightPanel: () => undefined }
   }
   const entry = createDomainRendererEntry(host)
   assert.equal(entry.process, 'renderer')
   assert.deepEqual(entry.definition, domainPackageDefinition)
-  assert.equal(entry.contributions.length, 3)
+  assert.equal(entry.contributions.length, 4)
 
-  const panel = entry.contributions.find(({ kind }) =>
+  const panelRuntime = entry.contributions.find(({ kind }) =>
     kind === EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION.kind
-  )?.value as EvidenceDagRightPanelContribution
-  assert.deepEqual({
-    id: panel.id,
-    mode: panel.mode,
-    title: panel.title,
-    resourceKind: panel.resourceKind
-  }, {
-    id: 'evidence-dag.workbench-right-panel',
-    mode: 'evidence-dag',
+  )!
+  const panel = panelRuntime.value as EvidenceDagRightPanelContribution
+  assert.deepEqual(panelRuntime.contract, EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRACT)
+  assert.deepEqual(EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRACT, {
+    location: 'workbench.right-panel',
     title: 'Evidence DAG',
     resourceKind: 'evidence-dag'
   })
+  assert.deepEqual(Object.keys(panel), ['render'])
   const rendered = panel.render({
     active: true,
     className: 'panel',
     onCollapse: () => undefined,
-    session: { id: 'thread-1', runtimeId: 'codex' }
+    session: { id: 'thread-1', runtimeId: 'codex' },
+    activation: {
+      revision: 3,
+      payload: { runtimeId: 'codex', threadId: 'thread-1' }
+    }
   })
   const props = (rendered as ReactElement<Record<string, unknown>>).props
   assert.equal(props.className, 'panel')
+  assert.deepEqual(props.activation, {
+    contributionId: 'evidence-dag.workbench-right-panel',
+    revision: 3,
+    payload: { runtimeId: 'codex', threadId: 'thread-1' }
+  })
   assert.equal(props.workspacePreview, host.workspacePreview)
   assert.equal(typeof props.client, 'object')
+
+  const command = entry.contributions.find(({ kind }) =>
+    kind === EVIDENCE_DAG_RENDERER_COMMAND_CONTRIBUTION.kind
+  )!.value as { execute: unknown; isAvailable?: unknown; isActive?: unknown }
+  assert.equal(typeof command.execute, 'function')
+  assert.equal(typeof command.isAvailable, 'function')
+  assert.equal(typeof command.isActive, 'function')
 
   const toolbarRuntime = entry.contributions.find(({ kind }) =>
     kind === EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION.kind
@@ -65,7 +81,6 @@ test('contributes the package-owned Evidence panel and translations', () => {
   const toolbar = toolbarRuntime.value as EvidenceDagToolbarActionContribution
   assert.deepEqual(toolbarRuntime.contract, EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRACT)
   assert.equal(typeof toolbar.icon, 'object')
-  assert.equal(toolbar.isAvailable(), true)
 
   const translations = entry.contributions.find(({ kind }) =>
     kind === EVIDENCE_DAG_RENDERER_I18N_CONTRIBUTION.kind

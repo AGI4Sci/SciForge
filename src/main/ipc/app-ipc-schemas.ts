@@ -29,15 +29,6 @@ import {
   type AgentRuntimeAuxiliaryActiveScopedOperation,
   type AgentRuntimeAuxiliaryOperation
 } from '../../shared/agent-runtime-contract'
-import {
-  TERMINAL_DEFAULT_COLS,
-  TERMINAL_DEFAULT_ROWS,
-  TERMINAL_MAX_COLS,
-  TERMINAL_MAX_CWD_LENGTH,
-  TERMINAL_MAX_DATA_WRITE_BYTES,
-  TERMINAL_MAX_ROWS,
-  TERMINAL_MAX_SESSION_ID_LENGTH
-} from '../../shared/terminal'
 import { WRITE_EXPORT_FORMATS } from '../../shared/write-export'
 import {
   RESEARCH_CARD_DECISIONS,
@@ -71,7 +62,8 @@ import {
 } from '@sciforge/domain-sdk'
 export {
   visibleContextCapturePreviewRequestSchema as visibleContextCapturePreviewPayloadSchema,
-  visibleContextPublishInputSchema as visibleContextPublishPayloadSchema
+  visibleContextPublishInputSchema as visibleContextPublishPayloadSchema,
+  visibleContextTargetRefRequestSchema as visibleContextTargetRefPayloadSchema
 } from '../../shared/visible-context'
 
 const MAX_BODY_BYTES = 2_000_000
@@ -344,33 +336,6 @@ export const agentRuntimeThreadRenamePayloadSchema = z.object({
   threadId: trimmedString(MAX_ID_LENGTH),
   title: z.string().trim().min(1).max(200)
 }).strict()
-
-export const terminalSessionIdSchema = trimmedString(TERMINAL_MAX_SESSION_ID_LENGTH)
-
-export const terminalCreatePayloadSchema = z
-  .object({
-    sessionId: terminalSessionIdSchema,
-    ownerToken: optionalTrimmedString(TERMINAL_MAX_SESSION_ID_LENGTH),
-    cwd: optionalTrimmedString(TERMINAL_MAX_CWD_LENGTH),
-    cols: z.number().int().min(1).max(TERMINAL_MAX_COLS).optional(),
-    rows: z.number().int().min(1).max(TERMINAL_MAX_ROWS).optional()
-  })
-  .strict()
-
-export const terminalWritePayloadSchema = z
-  .object({
-    sessionId: terminalSessionIdSchema,
-    data: z.string().min(1).max(TERMINAL_MAX_DATA_WRITE_BYTES)
-  })
-  .strict()
-
-export const terminalResizePayloadSchema = z
-  .object({
-    sessionId: terminalSessionIdSchema,
-    cols: z.number().int().min(1).max(TERMINAL_MAX_COLS).default(TERMINAL_DEFAULT_COLS),
-    rows: z.number().int().min(1).max(TERMINAL_MAX_ROWS).default(TERMINAL_DEFAULT_ROWS)
-  })
-  .strict()
 
 export const agentRuntimeThreadDeletePayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
@@ -1477,35 +1442,6 @@ const remoteExecutorSettingsPatchSchema = z.object({
   targets: z.array(remoteExecutorTargetPatchSchema).max(100).optional()
 }).strict()
 
-export const workflowRunNodePayloadSchema = z
-  .object({
-    workflowId: trimmedString(MAX_ID_LENGTH),
-    nodeId: trimmedString(MAX_ID_LENGTH)
-  })
-  .strict()
-
-export const workflowTestNodePayloadSchema = z
-  .object({
-    workflowId: trimmedString(MAX_ID_LENGTH),
-    nodeId: trimmedString(MAX_ID_LENGTH),
-    mockJson: z.string().max(MAX_BODY_BYTES)
-  })
-  .strict()
-
-export const workflowResolveApprovalPayloadSchema = z
-  .object({
-    token: trimmedString(MAX_ID_LENGTH),
-    decision: z.enum(['approved', 'rejected'])
-  })
-  .strict()
-
-export const workflowCodeCheckPayloadSchema = z
-  .object({
-    language: z.enum(['javascript', 'python', 'bash']),
-    code: z.string().max(MAX_BODY_BYTES)
-  })
-  .strict()
-
 const settingsPatchObjectSchema = z.object({
   version: z.literal(1).optional(),
   installationId: z.string().max(128).optional(),
@@ -1577,155 +1513,6 @@ export const scientificPlottingMcpConfigPayloadSchema = z
     workspaceRoot: z.string().trim().max(MAX_PATH_LENGTH).optional()
   })
   .strict()
-
-const visualDocumentIdSchema = trimmedString(120)
-const normalizedCoordinateSchema = z.number().finite().min(0).max(1)
-const normalizedPointSchema = z.object({
-  x: normalizedCoordinateSchema,
-  y: normalizedCoordinateSchema
-}).strict()
-const normalizedBoundsSchema = z.object({
-  x: normalizedCoordinateSchema,
-  y: normalizedCoordinateSchema,
-  width: z.number().finite().positive().max(1),
-  height: z.number().finite().positive().max(1)
-}).strict().refine(
-  ({ x, y, width, height }) => x + width <= 1 && y + height <= 1,
-  'Normalized bounds must remain inside the artifact.'
-)
-
-const visualAnnotationGeometrySchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('box'), bounds: normalizedBoundsSchema }).strict(),
-  z.object({ kind: z.literal('pin'), point: normalizedPointSchema }).strict(),
-  z.object({ kind: z.literal('arrow'), from: normalizedPointSchema, to: normalizedPointSchema }).strict(),
-  z.object({
-    kind: z.literal('freehand'),
-    points: z.array(normalizedPointSchema).min(2).max(10_000)
-  }).strict()
-])
-
-const visualNodeSchema = z.object({
-  id: trimmedString(MAX_ID_LENGTH),
-  kind: z.enum(['generated_asset', 'scientific_plot', 'text', 'shape', 'connector', 'group']),
-  bounds: normalizedBoundsSchema,
-  semanticRef: optionalTrimmedString(1_000),
-  sourceSpecRef: optionalTrimmedString(MAX_PATH_LENGTH),
-  assetPath: optionalTrimmedString(MAX_PATH_LENGTH),
-  maskPath: optionalTrimmedString(MAX_PATH_LENGTH),
-  parentId: optionalTrimmedString(MAX_ID_LENGTH),
-  childIds: z.array(trimmedString(MAX_ID_LENGTH)).max(10_000).optional(),
-  style: z.record(z.string(), z.unknown()).optional(),
-  editable: z.boolean(),
-  truthLocked: z.boolean()
-}).strict()
-
-const visualTruthLockSchema = z.object({
-  id: trimmedString(MAX_ID_LENGTH),
-  description: trimmedString(5_000),
-  nodeIds: z.array(trimmedString(MAX_ID_LENGTH)).max(10_000),
-  sourceRef: optionalTrimmedString(MAX_PATH_LENGTH)
-}).strict()
-
-export const visualDocumentStatusPayloadSchema = z.object({
-  workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH)
-}).strict()
-
-export const visualDocumentOpenPayloadSchema = z.object({
-  workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-  documentId: visualDocumentIdSchema.optional(),
-  createIfMissing: z.boolean().optional(),
-  canvas: z.object({
-    width: z.number().finite().positive().max(100_000).optional(),
-    height: z.number().finite().positive().max(100_000).optional(),
-    background: trimmedString(128).optional()
-  }).strict().optional(),
-  styleProfileRef: z.string().trim().max(MAX_PATH_LENGTH).nullable().optional()
-}).strict()
-
-export const visualDocumentInsertArtifactPayloadSchema = z.object({
-  workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-  documentId: visualDocumentIdSchema.optional(),
-  kind: z.enum(['image', 'generated_image', 'edited_image', 'scientific_plot', 'presentation_slide']),
-  sourcePath: trimmedString(MAX_PATH_LENGTH),
-  manifestPath: optionalTrimmedString(MAX_PATH_LENGTH),
-  title: optionalTrimmedString(300),
-  caption: optionalTrimmedString(5_000),
-  mimeType: optionalTrimmedString(MAX_MIME_TYPE_LENGTH),
-  width: z.number().finite().positive().max(100_000).optional(),
-  height: z.number().finite().positive().max(100_000).optional(),
-  nodes: z.array(visualNodeSchema).max(10_000).optional(),
-  truthLocks: z.array(visualTruthLockSchema).max(10_000).optional(),
-  styleProfileRef: z.string().trim().max(MAX_PATH_LENGTH).nullable().optional()
-}).strict()
-
-export const visualDocumentUpdateContextPayloadSchema = z.object({
-  workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-  documentId: visualDocumentIdSchema.optional(),
-  styleProfileRef: z.string().trim().max(MAX_PATH_LENGTH).nullable().optional(),
-  truthLocks: z.array(visualTruthLockSchema).max(10_000).optional(),
-  nodes: z.array(visualNodeSchema).max(10_000).optional()
-}).strict().refine(
-  ({ styleProfileRef, truthLocks, nodes }) => styleProfileRef !== undefined || truthLocks !== undefined || nodes !== undefined,
-  'At least one VisualDocument context field is required.'
-)
-
-export const visualDocumentSaveAnnotationsPayloadSchema = z.object({
-  workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-  documentId: visualDocumentIdSchema.optional(),
-  annotations: z.array(z.object({
-    id: visualDocumentIdSchema.optional(),
-    geometry: visualAnnotationGeometrySchema,
-    instruction: trimmedString(20_000),
-    targetNodeIds: z.array(trimmedString(MAX_ID_LENGTH)).max(10_000).optional(),
-    status: z.enum(['open', 'resolved']).optional()
-  }).strict()).max(10_000)
-}).strict()
-
-export const visualDocumentExportReviewPacketPayloadSchema = z.object({
-  workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-  documentId: visualDocumentIdSchema.optional(),
-  packetId: visualDocumentIdSchema.optional()
-}).strict()
-
-export const visualDocumentCreateCandidatePayloadSchema = z.object({
-  workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-  documentId: visualDocumentIdSchema.optional(),
-  candidatePath: trimmedString(MAX_PATH_LENGTH),
-  summary: trimmedString(20_000),
-  reviewEvidence: z.object({
-    tool: z.literal('image_generation_review_candidate'),
-    ok: z.literal(true),
-    reviewedArtifactPath: trimmedString(MAX_PATH_LENGTH),
-    reviewedArtifactHash: z.string().trim().regex(/^[a-f0-9]{64}$/i),
-    reviewedAt: z.string().datetime(),
-    score: z.object({
-      overall: z.number().min(0).max(1),
-      dimensions: z.number().min(0).max(1),
-      nonEmpty: z.number().min(0).max(1),
-      background: z.number().min(0).max(1),
-      reference: z.number().min(0).max(1).optional(),
-      semantic: z.number().min(0).max(1),
-      warnings: z.array(z.string().max(2_000)).max(100)
-    }).strict(),
-    semantic: z.object({
-      pass: z.literal(true),
-      summary: trimmedString(4_000),
-      violations: z.array(z.string().max(2_000)).max(0),
-      repairInstructions: z.array(z.string().max(2_000)).max(0)
-    }).strict(),
-    repairable: z.literal(false),
-    warnings: z.array(z.string().max(2_000)).max(100)
-  }).strict(),
-  expectedBaseHash: z.string().trim().regex(/^[a-f0-9]{64}$/i).optional(),
-  width: z.number().finite().positive().max(100_000).optional(),
-  height: z.number().finite().positive().max(100_000).optional()
-}).strict()
-
-export const visualDocumentRevisionDecisionPayloadSchema = z.object({
-  workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-  documentId: visualDocumentIdSchema.optional(),
-  revisionId: visualDocumentIdSchema
-}).strict()
 
 export const scientificPlottingStatusPayloadSchema = z
   .object({

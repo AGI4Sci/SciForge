@@ -1,7 +1,11 @@
 import type {
   DomainRendererWorkbenchHost,
+  DomainRendererWorkbenchSendMessageInput,
+  DomainRendererWorkbenchSendMessageResult,
   DomainRendererWorkspacePreviewHost,
   DomainWorkbenchOpenRightPanelInput,
+  DomainWorkbenchOpenSurfaceInput,
+  DomainWorkbenchToggleGlobalOverlayInput,
   DomainWorkspacePreviewTarget
 } from '@sciforge/domain-sdk/host'
 import {
@@ -11,6 +15,25 @@ import {
 
 export const DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT =
   'sciforge:domain-workbench-open-right-panel' as const
+export const DOMAIN_WORKBENCH_OPEN_BOTTOM_PANEL_EVENT =
+  'sciforge:domain-workbench-open-bottom-panel' as const
+export const DOMAIN_WORKBENCH_TOGGLE_GLOBAL_OVERLAY_EVENT =
+  'sciforge:domain-workbench-toggle-global-overlay' as const
+
+type DomainWorkbenchMessageSender = (
+  input: DomainRendererWorkbenchSendMessageInput
+) => Promise<DomainRendererWorkbenchSendMessageResult>
+
+let messageSender: DomainWorkbenchMessageSender | null = null
+
+export function setDomainWorkbenchMessageSender(
+  sender: DomainWorkbenchMessageSender
+): () => void {
+  messageSender = sender
+  return () => {
+    if (messageSender === sender) messageSender = null
+  }
+}
 
 export const domainRendererNavigationHost: Readonly<{
   workspacePreview: DomainRendererWorkspacePreviewHost
@@ -35,6 +58,26 @@ export const domainRendererNavigationHost: Readonly<{
         DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT,
         { detail: input }
       ))
-    }
+    },
+    openBottomPanel: (input: DomainWorkbenchOpenSurfaceInput) => {
+      window.dispatchEvent(new CustomEvent<DomainWorkbenchOpenSurfaceInput>(
+        DOMAIN_WORKBENCH_OPEN_BOTTOM_PANEL_EVENT,
+        { detail: input }
+      ))
+    },
+    toggleGlobalOverlay: (input: DomainWorkbenchToggleGlobalOverlayInput) => {
+      window.dispatchEvent(new CustomEvent<DomainWorkbenchToggleGlobalOverlayInput>(
+        DOMAIN_WORKBENCH_TOGGLE_GLOBAL_OVERLAY_EVENT,
+        { detail: input }
+      ))
+    },
+    sendMessage: (input: DomainRendererWorkbenchSendMessageInput) =>
+      messageSender?.(input) ?? Promise.resolve({
+        ok: false,
+        error: {
+          code: 'workbench-unavailable',
+          message: 'The Workbench message host is not available.'
+        }
+      })
   })
 })

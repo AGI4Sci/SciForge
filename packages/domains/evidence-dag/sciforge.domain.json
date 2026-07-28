@@ -29,14 +29,15 @@
     }
   },
   "contributionContracts": {
+    "evidence-dag.workbench-right-panel": {
+      "location": "workbench.right-panel",
+      "title": "Evidence DAG",
+      "resourceKind": "evidence-dag"
+    },
     "evidence-dag.workbench-toolbar-action": {
       "location": "workbench.topbar",
       "commandId": "evidence-dag.open",
-      "label": "rightPanelEvidenceDag",
-      "target": {
-        "kind": "workbench.right-panel",
-        "contributionId": "evidence-dag.workbench-right-panel"
-      }
+      "label": "rightPanelEvidenceDag"
     }
   },
   "entrypoints": [
@@ -73,6 +74,11 @@
         {
           "kind": "renderer.workbench-right-panel",
           "id": "evidence-dag.workbench-right-panel",
+          "priority": 160
+        },
+        {
+          "kind": "renderer.command",
+          "id": "evidence-dag.open",
           "priority": 160
         },
         {

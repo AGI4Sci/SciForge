@@ -20,7 +20,6 @@
     "packages/workers/plan-gateway",
     "packages/workers/schedule",
     "packages/workers/search",
-    "packages/workers/workflow",
     "packages/workers/workspace-bioimaging",
     "packages/workers/workspace-deck",
     "packages/workers/workspace-intel",
@@ -38,8 +37,7 @@
     "packages/workers/bgc-discovery",
     "packages/workers/image-generation",
     "packages/workers/multi-agent",
-    "packages/workers/ppt-master",
-    "packages/workers/visual-document"
+    "packages/workers/ppt-master"
   ],
   "scripts": {
     "prebuild": "npm run capability:check",
@@ -104,9 +102,6 @@
     "schedule:start": "npm --workspace @sciforge/schedule run start",
     "schedule:test": "npm --workspace @sciforge/schedule run test",
     "schedule:typecheck": "npm --workspace @sciforge/schedule run typecheck",
-    "workflow:start": "npm --workspace @sciforge/workflow run start",
-    "workflow:test": "npm --workspace @sciforge/workflow run test",
-    "workflow:typecheck": "npm --workspace @sciforge/workflow run typecheck",
     "workspace-bioimaging:test": "npm --workspace @sciforge/workspace-bioimaging run test",
     "workspace-bioimaging:typecheck": "npm --workspace @sciforge/workspace-bioimaging run typecheck",
     "workspace-deck:test": "npm --workspace @sciforge/workspace-deck run test",
@@ -153,9 +148,6 @@
     "ppt-master:start": "npm --workspace @sciforge/ppt-master run start",
     "ppt-master:test": "npm --workspace @sciforge/ppt-master run test",
     "ppt-master:typecheck": "npm --workspace @sciforge/ppt-master run typecheck",
-    "visual-document:start": "npm --workspace @sciforge/visual-document run start",
-    "visual-document:test": "npm --workspace @sciforge/visual-document run test",
-    "visual-document:typecheck": "npm --workspace @sciforge/visual-document run typecheck",
     "smoke:scientific-plotting-style": "node ./scripts/scientific-plotting-style-regression.mjs",
     "smoke:scientific-plotting-alphafold3": "node ./scripts/scientific-plotting-alphafold3-eval.mjs"
   },

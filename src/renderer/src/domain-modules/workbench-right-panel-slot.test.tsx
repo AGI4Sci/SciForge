@@ -1,82 +1,72 @@
 import { createElement } from 'react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
-  WorkbenchRightPanelContributionRegistry,
-  type WorkbenchRightPanelContribution
+  WorkbenchRightPanelContributionRegistry
 } from './workbench-right-panel-slot'
 
-function contribution(mode: WorkbenchRightPanelContribution['mode']): WorkbenchRightPanelContribution {
-  return {
-    id: `example.${mode}.workbench-right-panel`,
-    mode,
-    title: 'Example panel',
-    resourceKind: `example-${mode}`,
-    render: () => createElement('div')
-  }
-}
-
 describe('WorkbenchRightPanelContributionRegistry', () => {
-  it('resolves a namespaced contribution ID by its existing panel mode', () => {
+  it('registers and resolves owner-aware panels only by contribution ID', () => {
     const registry = new WorkbenchRightPanelContributionRegistry()
+    const render = vi.fn(() => createElement('div'))
     registry.register({
-      ownerId: 'sciforge.paper-radar',
-      contribution: {
-        ...contribution('paper'),
-        id: 'sciforge.paper-radar.workbench-right-panel'
-      }
+      id: 'fixture.right-panel',
+      ownerId: 'fixture.module',
+      order: 20,
+      contract: {
+        location: 'workbench.right-panel',
+        title: 'Fixture panel',
+        resourceKind: 'fixture-resource'
+      },
+      value: { render }
     })
 
-    expect(registry.resolve('paper')).toMatchObject({
-      id: 'sciforge.paper-radar.workbench-right-panel',
-      ownerId: 'sciforge.paper-radar'
+    expect(registry.resolve('fixture.right-panel')).toMatchObject({
+      id: 'fixture.right-panel',
+      ownerId: 'fixture.module',
+      contribution: {
+        id: 'fixture.right-panel',
+        location: 'workbench.right-panel',
+        title: 'Fixture panel',
+        resourceKind: 'fixture-resource'
+      }
     })
-    expect(registry.resolveById('sciforge.paper-radar.workbench-right-panel')).toMatchObject({
-      ownerId: 'sciforge.paper-radar',
-      contribution: { mode: 'paper' }
-    })
-    expect(registry.resolveById('missing.panel')).toBeNull()
+    expect(registry.resolve('paper')).toBeNull()
+    expect(registry.resolve(null)).toBeNull()
   })
 
-  it('rejects two contributions that claim the same panel mode', () => {
+  it('rejects duplicate contribution IDs without host-reserved modes', () => {
     const registry = new WorkbenchRightPanelContributionRegistry()
-    registry.register({
-      ownerId: 'sciforge.paper-radar',
-      contribution: {
-        ...contribution('paper'),
-        id: 'sciforge.paper-radar.workbench-right-panel'
-      }
-    })
-
-    expect(() => registry.register({
-      ownerId: 'example.other',
-      contribution: {
-        ...contribution('paper'),
-        id: 'example.other.workbench-right-panel'
-      }
-    })).toThrow('Duplicate Workbench right-panel mode "paper"')
-  })
-
-  it('rejects modes reserved for host-owned panels', () => {
-    const registry = new WorkbenchRightPanelContributionRegistry()
-    expect(() => registry.register({
-      ownerId: 'example.files',
-      contribution: contribution('file')
-    })).toThrow('Workbench right-panel mode "file" is reserved by the host')
-  })
-
-  it('passes session and activation data through the generic render contract', () => {
-    let renderedContext: Parameters<WorkbenchRightPanelContribution['render']>[0] | undefined
-    const registry = new WorkbenchRightPanelContributionRegistry()
-    const panel = {
-      ...contribution('paper'),
-      render: (context: Parameters<WorkbenchRightPanelContribution['render']>[0]) => {
-        renderedContext = context
-        return createElement('div')
-      }
+    const input = {
+      id: 'fixture.right-panel',
+      ownerId: 'fixture.module',
+      contract: {
+        location: 'workbench.right-panel' as const,
+        title: 'Fixture panel'
+      },
+      value: { render: () => createElement('div') }
     }
-    registry.register({ ownerId: 'example.panel', contribution: panel })
+    registry.register(input)
 
-    registry.resolve('paper')?.contribution.render({
+    expect(() => registry.register({
+      ...input,
+      ownerId: 'other.module'
+    })).toThrow('Duplicate renderer contribution "fixture.right-panel"')
+  })
+
+  it('passes session and activation data through the SDK render contract', () => {
+    const render = vi.fn(() => createElement('div'))
+    const registry = new WorkbenchRightPanelContributionRegistry()
+    registry.register({
+      id: 'fixture.right-panel',
+      ownerId: 'fixture.module',
+      contract: {
+        location: 'workbench.right-panel',
+        title: 'Fixture panel'
+      },
+      value: { render }
+    })
+
+    const context = {
       active: true,
       className: 'h-full',
       onCollapse: () => undefined,
@@ -86,23 +76,29 @@ describe('WorkbenchRightPanelContributionRegistry', () => {
         workspaceRoot: '/workspace/owner'
       },
       activation: {
-        contributionId: 'example.paper.workbench-right-panel',
         revision: 2,
         payload: { nodeId: 'node-2' }
       }
+    }
+    registry.resolve('fixture.right-panel')?.contribution.render(context)
+
+    expect(render).toHaveBeenCalledWith(context)
+  })
+
+  it('disposes all registered panels idempotently', () => {
+    const registry = new WorkbenchRightPanelContributionRegistry()
+    registry.register({
+      id: 'fixture.right-panel',
+      ownerId: 'fixture.module',
+      contract: {
+        location: 'workbench.right-panel',
+        title: 'Fixture panel'
+      },
+      value: { render: () => createElement('div') }
     })
 
-    expect(renderedContext).toMatchObject({
-      session: {
-        id: 'session-owner',
-        runtimeId: 'codex',
-        workspaceRoot: '/workspace/owner'
-      },
-      activation: {
-        contributionId: 'example.paper.workbench-right-panel',
-        revision: 2,
-        payload: { nodeId: 'node-2' }
-      }
-    })
+    registry.dispose()
+    registry.dispose()
+    expect(registry.list()).toEqual([])
   })
 })

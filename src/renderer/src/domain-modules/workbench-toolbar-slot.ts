@@ -1,44 +1,35 @@
 import type { LucideIcon } from 'lucide-react'
-import type { RightPanelMode } from '../components/chat/WorkbenchTopBar'
+import {
+  RENDERER_WORKBENCH_TOOLBAR_ACTION_CONTRIBUTION_KIND,
+  WORKBENCH_TOPBAR_LOCATION,
+  type DomainRendererCommandInvocation,
+  type DomainRendererWorkbenchToolbarActionContract,
+  type DomainRendererWorkbenchToolbarActionValue
+} from '@sciforge/domain-sdk/renderer'
 import {
   RendererSlotRegistry,
   type RegisteredRendererSlotContribution,
   type RendererSlotRegistrationDisposable
 } from './renderer-slot-registry'
 import {
-  type WorkbenchRightPanelContributionRegistry
-} from './workbench-right-panel-slot'
+  type WorkbenchCommandRegistry
+} from './workbench-command-registry'
 
-export const WORKBENCH_TOOLBAR_SLOT = 'workbench.topbar' as const
-export const RENDERER_WORKBENCH_TOOLBAR_ACTION_CONTRIBUTION_KIND =
-  'renderer.workbench-toolbar-action' as const
+export const WORKBENCH_TOOLBAR_SLOT = WORKBENCH_TOPBAR_LOCATION
+export { RENDERER_WORKBENCH_TOOLBAR_ACTION_CONTRIBUTION_KIND }
 
-export type WorkbenchToolbarContext = Readonly<{
-  activeRightPanelMode: RightPanelMode
-  workspaceRoot: string
-}>
-
-export type WorkbenchToolbarActionContract = Readonly<{
-  location: typeof WORKBENCH_TOOLBAR_SLOT
-  commandId: string
-  label: string
-  target: Readonly<{
-    kind: 'workbench.right-panel'
-    contributionId: string
-  }>
-}>
-
-export type WorkbenchToolbarActionValue = Readonly<{
-  icon: LucideIcon
-  isAvailable: (context: WorkbenchToolbarContext) => boolean
-}>
+export type WorkbenchToolbarActionContract =
+  DomainRendererWorkbenchToolbarActionContract
+export type WorkbenchToolbarActionValue =
+  DomainRendererWorkbenchToolbarActionValue<LucideIcon>
 
 export type WorkbenchToolbarActionContribution =
   WorkbenchToolbarActionContract &
   WorkbenchToolbarActionValue &
   Readonly<{
     id: string
-    isActive: (context: WorkbenchToolbarContext) => boolean
+    isAvailable: (context: DomainRendererCommandInvocation) => boolean
+    isActive: (context: DomainRendererCommandInvocation) => boolean
   }>
 
 type WorkbenchRendererToolbarSlots = {
@@ -52,15 +43,14 @@ export type RegisteredWorkbenchToolbarActionContribution =
   >
 
 /**
- * Registry for package-owned Workbench actions. Targets are resolved at
- * registration time so an invalid package batch cannot leave a dead button in
- * the toolbar.
+ * Registry for package-owned Workbench toolbar presentation. Toolbar items
+ * reference commands but never own command behavior.
  */
 export class WorkbenchToolbarActionContributionRegistry {
   private readonly slots = new RendererSlotRegistry<WorkbenchRendererToolbarSlots>()
 
   constructor(
-    private readonly rightPanels: WorkbenchRightPanelContributionRegistry
+    private readonly commands: WorkbenchCommandRegistry
   ) {}
 
   register(input: {
@@ -70,17 +60,17 @@ export class WorkbenchToolbarActionContributionRegistry {
     contract: WorkbenchToolbarActionContract
     value: WorkbenchToolbarActionValue
   }): RendererSlotRegistrationDisposable {
-    const panel = this.rightPanels.resolveById(input.contract.target.contributionId)
-    if (!panel) {
+    const command = this.commands.resolve(input.contract.commandId)
+    if (!command) {
       throw new Error(
-        `Workbench toolbar command "${input.contract.commandId}" targets unknown right-panel ` +
-        `contribution "${input.contract.target.contributionId}".`
+        `Workbench toolbar action "${input.id}" references unknown command ` +
+        `"${input.contract.commandId}".`
       )
     }
-    if (panel.ownerId !== input.ownerId) {
+    if (command.ownerId !== input.ownerId) {
       throw new Error(
-        `Workbench toolbar command "${input.contract.commandId}" from "${input.ownerId}" cannot ` +
-        `target right-panel contribution owned by "${panel.ownerId}".`
+        `Workbench toolbar action "${input.id}" from "${input.ownerId}" cannot reference ` +
+        `command owned by "${command.ownerId}".`
       )
     }
     const duplicateCommand = this.resolveCommand(input.contract.commandId)
@@ -95,10 +85,10 @@ export class WorkbenchToolbarActionContributionRegistry {
       id: input.id,
       ...input.contract,
       icon: input.value.icon,
-      isAvailable: (context: WorkbenchToolbarContext) =>
-        isSafelyAvailable(input.value, context),
-      isActive: (context: WorkbenchToolbarContext) =>
-        context.activeRightPanelMode === panel.contribution.mode
+      isAvailable: (context: DomainRendererCommandInvocation) =>
+        this.commands.isAvailable(input.contract.commandId, context),
+      isActive: (context: DomainRendererCommandInvocation) =>
+        this.commands.isActive(input.contract.commandId, context)
     })
     return this.slots.register({
       slot: WORKBENCH_TOOLBAR_SLOT,
@@ -113,7 +103,7 @@ export class WorkbenchToolbarActionContributionRegistry {
     return this.slots.list(WORKBENCH_TOOLBAR_SLOT)
   }
 
-  available(context: WorkbenchToolbarContext):
+  available(context: DomainRendererCommandInvocation):
   readonly RegisteredWorkbenchToolbarActionContribution[] {
     return this.list().filter(({ contribution }) => contribution.isAvailable(context))
   }
@@ -126,31 +116,7 @@ export class WorkbenchToolbarActionContributionRegistry {
     ) ?? null
   }
 
-  execute(
-    commandId: string,
-    context: WorkbenchToolbarContext,
-    toggleRightPanel: (mode: Exclude<RightPanelMode, null>) => void
-  ): boolean {
-    const action = this.resolveCommand(commandId)
-    if (!action || !action.contribution.isAvailable(context)) return false
-    const panel = this.rightPanels.resolveById(action.contribution.target.contributionId)
-    if (!panel || panel.ownerId !== action.ownerId) return false
-    toggleRightPanel(panel.contribution.mode)
-    return true
-  }
-
   dispose(): void {
     this.slots.dispose()
-  }
-}
-
-function isSafelyAvailable(
-  contribution: WorkbenchToolbarActionValue,
-  context: WorkbenchToolbarContext
-): boolean {
-  try {
-    return contribution.isAvailable(context) === true
-  } catch {
-    return false
   }
 }

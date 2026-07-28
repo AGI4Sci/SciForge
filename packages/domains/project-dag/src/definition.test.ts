@@ -5,6 +5,7 @@ import {
   PROJECT_DAG_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION,
   PROJECT_DAG_DOMAIN_MODULE_ID,
   PROJECT_DAG_DOMAIN_PACKAGE_NAME,
+  PROJECT_DAG_RENDERER_COMMAND_CONTRIBUTION,
   PROJECT_DAG_RENDERER_I18N_CONTRIBUTION,
   PROJECT_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION,
   PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
@@ -26,6 +27,7 @@ test('Project DAG manifest owns main lifecycle and renderer contributions', () =
       PROJECT_DAG_RUNTIME_LIFECYCLE_CONTRIBUTION,
       PROJECT_DAG_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION,
       PROJECT_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION,
+      PROJECT_DAG_RENDERER_COMMAND_CONTRIBUTION,
       PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
       PROJECT_DAG_RENDERER_I18N_CONTRIBUTION
     ].map(({ kind, id }) => ({ kind, id })),
@@ -47,6 +49,10 @@ test('Project DAG manifest owns main lifecycle and renderer contributions', () =
         id: 'project-dag.workbench-right-panel'
       },
       {
+        kind: 'renderer.command',
+        id: 'project-dag.open'
+      },
+      {
         kind: 'renderer.workbench-toolbar-action',
         id: 'project-dag.workbench-toolbar-action'
       },
@@ -58,17 +64,13 @@ test('Project DAG manifest owns main lifecycle and renderer contributions', () =
   )
 })
 
-test('Project DAG definition declares its stable toolbar command and target', () => {
+test('Project DAG definition declares its stable toolbar command reference', () => {
   assert.deepEqual(
     domainPackageDefinition.contributionContracts['project-dag.workbench-toolbar-action'],
     {
       location: 'workbench.topbar',
       commandId: 'project-dag.open',
-      label: 'rightPanelProjectDag',
-      target: {
-        kind: 'workbench.right-panel',
-        contributionId: 'project-dag.workbench-right-panel'
-      }
+      label: 'rightPanelProjectDag'
     }
   )
 })

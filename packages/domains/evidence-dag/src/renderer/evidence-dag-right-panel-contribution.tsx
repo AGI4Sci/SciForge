@@ -1,16 +1,17 @@
-import { lazy, type ReactElement } from 'react'
+import React, { lazy, type ReactElement } from 'react'
 import { Network } from 'lucide-react'
-import type {
-  DomainRendererHost,
-  DomainWorkbenchRightPanelRenderContext
-} from '@sciforge/domain-sdk/host'
+import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
   defineTrustedRendererDomainPackageEntry,
+  type DomainRendererCommandHandler,
+  type DomainRendererWorkbenchRightPanelValue,
+  type DomainRendererWorkbenchToolbarActionValue,
   type TrustedRendererDomainPackageEntry
 } from '@sciforge/domain-sdk/renderer'
-import { EVIDENCE_DAG_RESOURCE_KIND } from '../contract'
 import {
+  EVIDENCE_DAG_RENDERER_COMMAND_CONTRIBUTION,
   EVIDENCE_DAG_RENDERER_I18N_CONTRIBUTION,
+  EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRACT,
   EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION,
   EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRACT,
   EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
@@ -28,21 +29,15 @@ const EvidenceDagPanel = lazy(() =>
   }))
 )
 
-export type EvidenceDagRightPanelContribution = Readonly<{
-  id: string
-  mode: 'evidence-dag'
-  title: string
-  resourceKind: typeof EVIDENCE_DAG_RESOURCE_KIND
-  render: (context: DomainWorkbenchRightPanelRenderContext) => ReactElement
-}>
+export type EvidenceDagRightPanelContribution =
+  DomainRendererWorkbenchRightPanelValue<ReactElement>
 
-export type EvidenceDagToolbarActionContribution = Readonly<{
-  icon: typeof Network
-  isAvailable: () => boolean
-}>
+export type EvidenceDagToolbarActionContribution =
+  DomainRendererWorkbenchToolbarActionValue<typeof Network>
 
 export type EvidenceDagRendererContribution =
   | EvidenceDagRightPanelContribution
+  | DomainRendererCommandHandler
   | EvidenceDagToolbarActionContribution
   | EvidenceDagI18nResourceContribution
 
@@ -51,13 +46,17 @@ export function createEvidenceDagRightPanelContribution(
 ): EvidenceDagRightPanelContribution {
   const client = createEvidenceDagCapabilityClient(host.capabilityInvoker)
   return Object.freeze({
-    id: EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION.id,
-    mode: 'evidence-dag',
-    title: 'Evidence DAG',
-    resourceKind: EVIDENCE_DAG_RESOURCE_KIND,
-    render: (context) => (
+    render: ({ activation, ...context }) => (
       <EvidenceDagPanel
         {...context}
+        {...(activation
+          ? {
+              activation: {
+                contributionId: EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION.id,
+                ...activation
+              }
+            }
+          : {})}
         client={client}
         workspacePreview={host.workspacePreview}
       />
@@ -65,12 +64,15 @@ export function createEvidenceDagRightPanelContribution(
   })
 }
 
+export function createEvidenceDagCommand(
+  host: DomainRendererHost
+): DomainRendererCommandHandler {
+  return createOpenRightPanelCommand(host, EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION.id)
+}
+
 export function createEvidenceDagToolbarActionContribution():
 EvidenceDagToolbarActionContribution {
-  return Object.freeze({
-    icon: Network,
-    isAvailable: () => true
-  })
+  return Object.freeze({ icon: Network })
 }
 
 export function createDomainRendererEntry(
@@ -81,7 +83,12 @@ export function createDomainRendererEntry(
     contributions: [
       {
         ...EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION,
+        contract: EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRACT,
         value: createEvidenceDagRightPanelContribution(host)
+      },
+      {
+        ...EVIDENCE_DAG_RENDERER_COMMAND_CONTRIBUTION,
+        value: createEvidenceDagCommand(host)
       },
       {
         ...EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
@@ -93,5 +100,27 @@ export function createDomainRendererEntry(
         value: evidenceDagI18nResourceContribution
       }
     ]
+  })
+}
+
+function createOpenRightPanelCommand(
+  host: DomainRendererHost,
+  contributionId: string
+): DomainRendererCommandHandler {
+  return Object.freeze({
+    execute: ({ sessionId, payload }) => {
+      if (!sessionId || !host.workbench) return
+      host.workbench.openRightPanel({
+        contributionId,
+        sessionId,
+        ...(payload === undefined ? {} : {
+          activation: { contributionId, revision: 1, payload }
+        })
+      })
+    },
+    isAvailable: () => Boolean(host.workbench),
+    isActive: ({ activeSurface }) =>
+      activeSurface?.kind === 'right-panel' &&
+      activeSurface.contributionId === contributionId
   })
 }

@@ -10,8 +10,6 @@ export const GIT_STATUS_RESOURCE_URI = 'git://status'
 export const GIT_BRANCHES_RESOURCE_URI = 'git://branches'
 export const GIT_DIFF_RESOURCE_URI = 'git://diff'
 export const GIT_DIFF_RESOURCE_URI_TEMPLATE = 'git://diff/{+path}'
-export const GIT_CHECKPOINTS_RESOURCE_URI = 'git://checkpoints'
-export const GIT_CHECKPOINT_RESOURCE_URI_TEMPLATE = 'git://checkpoint/{checkpointId}'
 export const RUNTIME_PORTS_RESOURCE_URI = 'runtime://ports'
 export const RUNTIME_HEALTH_RESOURCE_URI = 'runtime://health'
 export const RUNTIME_DEPENDENCIES_RESOURCE_URI = 'runtime://dependencies'
@@ -23,8 +21,6 @@ export const RUNTIME_INSPECTOR_DEFAULT_LIMIT = 100
 export const RUNTIME_INSPECTOR_MAX_LIMIT = 500
 export const RUNTIME_INSPECTOR_DEFAULT_DIFF_BYTES = 64 * 1024
 export const RUNTIME_INSPECTOR_MAX_DIFF_BYTES = 200 * 1024
-export const RUNTIME_INSPECTOR_DEFAULT_PATCH_BYTES = 64 * 1024
-export const RUNTIME_INSPECTOR_MAX_PATCH_BYTES = 200 * 1024
 export const RUNTIME_INSPECTOR_DEFAULT_TIMEOUT_MS = 5_000
 export const RUNTIME_INSPECTOR_MAX_TIMEOUT_MS = 30_000
 export const RUNTIME_INSPECTOR_DEFAULT_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1'
@@ -34,8 +30,6 @@ export const RuntimeInspectorToolNames = [
   'gui_git_status',
   'gui_git_branches',
   'gui_git_diff_preview',
-  'gui_git_checkpoint_list',
-  'gui_git_checkpoint_preview',
   'gui_runtime_ports',
   'gui_runtime_health',
   'gui_runtime_dependency_report',
@@ -63,9 +57,6 @@ export type RuntimeInspectorErrorCode =
   | 'not_git_repo'
   | 'git_unavailable'
   | 'git_error'
-  | 'checkpoint_data_dir_required'
-  | 'checkpoint_not_found'
-  | 'checkpoint_read_failed'
   | 'runtime_unavailable'
   | 'runtime_http_error'
   | 'runtime_not_configured'
@@ -106,9 +97,6 @@ export const RuntimeInspectorErrorCodeSchema = z.enum([
   'not_git_repo',
   'git_unavailable',
   'git_error',
-  'checkpoint_data_dir_required',
-  'checkpoint_not_found',
-  'checkpoint_read_failed',
   'runtime_unavailable',
   'runtime_http_error',
   'runtime_not_configured',
@@ -142,7 +130,6 @@ const workspacePathSchema = z.string().trim().min(1).max(4096)
 const optionalWorkspacePathSchema = z.string().trim().max(4096).optional()
 const cursorSchema = z.string().trim().min(1).max(64).optional()
 const limitSchema = z.number().int().min(1).max(RUNTIME_INSPECTOR_MAX_LIMIT).optional()
-const boundedOffsetSchema = z.number().int().min(0).max(20_000_000).optional()
 
 export const RuntimeInspectorWorkspaceInputSchema = z.object({
   workspace_root: optionalWorkspacePathSchema.describe('Workspace directory. Defaults to the worker configured workspace root.')
@@ -168,26 +155,6 @@ export const GitDiffPreviewInputSchema = RuntimeInspectorWorkspaceInputSchema.ex
   context_lines: z.number().int().min(0).max(20).optional(),
   max_bytes: z.number().int().min(1).max(RUNTIME_INSPECTOR_MAX_DIFF_BYTES).optional(),
   cursor: cursorSchema
-}).strict()
-
-export const AgentRuntimeIdSchema = z.enum(['sciforge', 'codex', 'claude'])
-
-export const GitCheckpointListInputSchema = z.object({
-  checkpoint_data_dir: optionalWorkspacePathSchema.describe('App userData directory that contains git-checkpoints/. Defaults to worker configuration.'),
-  runtime_id: AgentRuntimeIdSchema.optional(),
-  thread_id: z.string().trim().min(1).max(512).optional(),
-  workspace_root: optionalWorkspacePathSchema,
-  limit: limitSchema,
-  cursor: cursorSchema
-}).strict()
-
-export const GitCheckpointPreviewInputSchema = z.object({
-  checkpoint_data_dir: optionalWorkspacePathSchema,
-  checkpoint_id: z.string().trim().min(1).max(160),
-  include_patches: z.boolean().optional(),
-  staged_offset: boundedOffsetSchema,
-  unstaged_offset: boundedOffsetSchema,
-  max_patch_bytes: z.number().int().min(1).max(RUNTIME_INSPECTOR_MAX_PATCH_BYTES).optional()
 }).strict()
 
 export const RuntimePortsInputSchema = z.object({
@@ -251,8 +218,6 @@ export const LspQueryInputSchema = z.object({
 export type GitStatusInput = z.infer<typeof GitStatusInputSchema>
 export type GitBranchesInput = z.infer<typeof GitBranchesInputSchema>
 export type GitDiffPreviewInput = z.infer<typeof GitDiffPreviewInputSchema>
-export type GitCheckpointListInput = z.infer<typeof GitCheckpointListInputSchema>
-export type GitCheckpointPreviewInput = z.infer<typeof GitCheckpointPreviewInputSchema>
 export type RuntimePortsInput = z.infer<typeof RuntimePortsInputSchema>
 export type RuntimeHealthInput = z.infer<typeof RuntimeHealthInputSchema>
 export type RuntimeDependencyReportInput = z.infer<typeof RuntimeDependencyReportInputSchema>
@@ -262,7 +227,6 @@ export type LspStatusInput = z.infer<typeof LspStatusInputSchema>
 export type LspQueryInput = z.infer<typeof LspQueryInputSchema>
 export type LspOperation = z.infer<typeof LspOperationSchema>
 export type GitDiffScope = z.infer<typeof GitDiffScopeSchema>
-export type AgentRuntimeId = z.infer<typeof AgentRuntimeIdSchema>
 
 export type GitStatusEntry = {
   index: string
@@ -323,42 +287,6 @@ export type GitDiffPreviewResult = RuntimeInspectorResult<{
   path?: string
   stat: string
   patch: TextChunk
-  resourceUri: string
-}>
-
-export type GitCheckpointSummary = {
-  checkpointId: string
-  runtimeId: AgentRuntimeId
-  threadId: string
-  turnId?: string
-  workspaceRoot: string
-  repositoryRoot: string
-  branch: string | null
-  head: string
-  createdAt: string
-  diffStat: string
-  status: 'available' | 'restored' | 'blocked' | 'failed'
-  restoreStatus?: string
-  resourceUri: string
-}
-
-export type GitCheckpointListResult = RuntimeInspectorResult<{
-  checkpointDataDir: string
-  checkpoints: GitCheckpointSummary[]
-  total: number
-  limit: number
-  cursor?: string
-  nextCursor?: string
-  truncated: boolean
-  resourceUri: string
-}>
-
-export type GitCheckpointPreviewResult = RuntimeInspectorResult<{
-  checkpointDataDir: string
-  checkpoint: GitCheckpointSummary
-  stagedPatch?: TextChunk
-  unstagedPatch?: TextChunk
-  untrackedFiles: string[]
   resourceUri: string
 }>
 
@@ -488,7 +416,6 @@ export type RuntimeInspectorDiagnosticsResult = RuntimeInspectorResult<{
   resources: string[]
   configured: {
     workspaceRoot?: string
-    checkpointDataDir?: string
     modelRouterBaseUrl: string
     runtimeBaseUrl: string
     runtimeTokenConfigured: boolean
@@ -499,8 +426,6 @@ export type RuntimeInspectorAnyResult =
   | GitStatusResult
   | GitBranchesResult
   | GitDiffPreviewResult
-  | GitCheckpointListResult
-  | GitCheckpointPreviewResult
   | RuntimePortsResult
   | RuntimeHealthResult
   | RuntimeDependencyReportResult
@@ -510,10 +435,6 @@ export type RuntimeInspectorAnyResult =
   | LspQueryResult
   | CompletionChecksResult
   | RuntimeInspectorDiagnosticsResult
-
-export function gitCheckpointResourceUri(checkpointId: string): string {
-  return `git://checkpoint/${encodeURIComponent(checkpointId)}`
-}
 
 export function gitDiffResourceUri(path?: string): string {
   const normalized = normalizeResourcePath(path)

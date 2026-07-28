@@ -3,7 +3,11 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
 import { ArrowLeft, ArrowRight, Bot, CircleAlert, Eye } from 'lucide-react'
-import type { DomainWorkbenchOpenRightPanelInput } from '@sciforge/domain-sdk/host'
+import type {
+  DomainWorkbenchOpenRightPanelInput,
+  DomainWorkbenchOpenSurfaceInput,
+  DomainWorkbenchToggleGlobalOverlayInput
+} from '@sciforge/domain-sdk/host'
 import { parseRemoteChannelCommand } from '@shared/remote-channel-commands'
 import { buildGuiPlanId, buildPlanRelativePath } from '@shared/gui-plan'
 import { sddDraftTraceRelativePath } from '@shared/sdd'
@@ -41,10 +45,8 @@ import { Sidebar } from './chat/Sidebar'
 import { WorkbenchTopBar, type RightPanelMode } from './chat/WorkbenchTopBar'
 import { ActiveRemoteBindingDetails } from './chat/RemoteBindingDetailsPill'
 import { MessageTimeline } from './chat/MessageTimeline'
-import type { TimelineVisualReviewArtifact } from './chat/message-timeline-media'
 import {
   FloatingComposer,
-  type ComposerCommentReference,
   type ComposerImageAttachmentInput,
   type ComposerFileReference,
   type ComposerSendIntent
@@ -145,28 +147,17 @@ import {
   setVisibleContextShell
 } from '../lib/visible-context'
 import {
-  buildAnchoredCommentContextPrompt,
-  type AnchoredCommentPromptReference
-} from '../lib/anchored-comment-chat'
-import {
-  ANCHORED_COMMENTS_ADD_TO_CONVERSATION_EVENT,
-  AnchoredCommentsLayer,
-  anchoredCommentStore,
-  type AnchoredCommentsAddToConversationDetail
-} from './anchored-comments'
-import {
   subscribeSessionRightPanelDisposals,
   subscribeSessionRightPanelRekeys
 } from '../lib/session-right-panel-lifecycle'
 import { installedRendererContributions } from '../domain-modules/installed-renderer-contributions'
-import { DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT } from '../domain-modules/domain-renderer-navigation'
+import {
+  DOMAIN_WORKBENCH_OPEN_BOTTOM_PANEL_EVENT,
+  DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT,
+  DOMAIN_WORKBENCH_TOGGLE_GLOBAL_OVERLAY_EVENT,
+  setDomainWorkbenchMessageSender
+} from '../domain-modules/domain-renderer-navigation'
 
-const ChangeInspector = lazy(() =>
-  import('./ChangeInspector').then((module) => ({ default: module.ChangeInspector }))
-)
-const GitCheckpointPanel = lazy(() =>
-  import('./GitCheckpointPanel').then((module) => ({ default: module.GitCheckpointPanel }))
-)
 const ChatFileTreePanel = lazy(() =>
   import('./chat/ChatFileTreePanel').then((module) => ({ default: module.ChatFileTreePanel }))
 )
@@ -187,19 +178,6 @@ const TodoPanel = lazy(() =>
 const ScheduleTasksView = lazy(() =>
   import('./schedule/ScheduleTasksView').then((module) => ({ default: module.ScheduleTasksView }))
 )
-const WorkflowView = lazy(() =>
-  import('./workflow/WorkflowView').then((module) => ({ default: module.WorkflowView }))
-)
-const WorkflowRunPanel = lazy(() =>
-  import('./workflow/WorkflowRunPanel').then((module) => ({ default: module.WorkflowRunPanel }))
-)
-const TerminalPanel = lazy(() =>
-  import('./terminal/TerminalPanel').then((module) => ({ default: module.TerminalPanel }))
-)
-const VisualReviewPanel = lazy(() =>
-  import('./visual-review/VisualReviewPanel').then((module) => ({ default: module.VisualReviewPanel }))
-)
-
 function rightPanelVisibleContextTitle(mode: Exclude<RightPanelMode, null>): string {
   const registeredTitle = installedRendererContributions.rightPanels.resolve(mode)?.contribution.title
   if (registeredTitle) return registeredTitle
@@ -208,16 +186,8 @@ function rightPanelVisibleContextTitle(mode: Exclude<RightPanelMode, null>): str
       return 'File preview'
     case 'child-agents':
       return 'Child agents'
-    case 'changes':
-      return 'Changes'
     case 'todo':
       return 'Todos'
-    case 'workflow':
-      return 'Create Loop'
-    case 'checkpoints':
-      return 'Git checkpoints'
-    case 'visual-review':
-      return 'Visual review'
     case 'plan':
       return 'Plan'
     case 'sdd-ai':
@@ -230,11 +200,7 @@ function rightPanelVisibleContextTitle(mode: Exclude<RightPanelMode, null>): str
 const CORE_RIGHT_PANEL_RESOURCE_KINDS: Partial<Record<Exclude<RightPanelMode, null>, string>> = {
   file: 'workspace-files',
   'child-agents': 'child-agents',
-  changes: 'session-changes',
   todo: 'session-todos',
-  workflow: 'workflow-builder',
-  checkpoints: 'git-checkpoints',
-  'visual-review': 'visual-document',
   plan: 'gui-plan',
   'sdd-ai': 'sdd-assistant'
 }
@@ -252,7 +218,6 @@ export type RightPanelVisibleContextInput = {
   filePreviewTarget?: { path: string; workspaceRoot?: string } | null
   childAgentCount?: number
   childAgentRunningCount?: number
-  visualDocumentId?: string | null
   planId?: string | null
   sddDraftId?: string | null
   updatedAt?: string
@@ -297,9 +262,6 @@ export function buildRightPanelVisibleContextComponent(
         runningCount: input.childAgentRunningCount ?? 0
       }
       break
-    case 'visual-review':
-      currentResource = { ...baseResource, documentId: input.visualDocumentId || null }
-      break
     case 'plan':
       currentResource = { ...baseResource, planId: input.planId || null }
       break
@@ -335,17 +297,6 @@ function stringField(record: Record<string, unknown> | null, key: string): strin
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
-function visualDocumentIdForArtifact(contextId: string, path: string): string {
-  const normalized = `${contextId}:${path.replace(/\\/g, '/')}`
-  let hash = 0x811c9dc5
-  for (let index = 0; index < normalized.length; index += 1) {
-    hash ^= normalized.charCodeAt(index)
-    hash = Math.imul(hash, 0x01000193)
-  }
-  const name = path.replace(/\\/g, '/').split('/').pop()?.replace(/[^a-zA-Z0-9._-]+/g, '-') || 'visual'
-  return `visual-${contextId.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 48)}-${name.slice(0, 48)}-${(hash >>> 0).toString(16)}`
-}
-
 type PendingSddPlanTarget = {
   planId: string
   relativePath: string
@@ -360,7 +311,6 @@ const SCIENTIFIC_ATTACHMENT_MAX_BYTES = 256 * 1024
 const SCIENTIFIC_ATTACHMENT_EXTENSIONS =
   /\.(?:fasta|fa|faa|fna|ffn|frn|fastq|fq|smi|smiles|mol|mol2|sdf|mgf|pdb|cif|gb|gbk|gff|gff3|gtf|vcf|bed|nwk|seq)$/i
 
-type AttachedComposerComment = ComposerCommentReference & AnchoredCommentPromptReference
 const DESKTOP_SHORTCUT_COMMANDS: Partial<Record<KeyboardShortcutCommandId, DesktopCommand>> = {
   quit: 'quit',
   undo: 'undo',
@@ -852,7 +802,6 @@ export function Workbench(): ReactElement {
       return { ...current, [ownerSessionId]: nextReferences }
     })
   }, [rightPanelOwnerId])
-  const [composerCommentReferences, setComposerCommentReferences] = useState<AttachedComposerComment[]>([])
   const [attachmentUploadBusy, setAttachmentUploadBusy] = useState(false)
   const [attachmentUploadError, setAttachmentUploadError] = useState<string | null>(null)
   const [runtimeLogPath, setRuntimeLogPath] = useState('')
@@ -876,42 +825,6 @@ export function Workbench(): ReactElement {
       if (hideTimer !== null) window.clearTimeout(hideTimer)
       unsubscribe()
     }
-  }, [])
-  useEffect(() => {
-    const onAddComments = (event: Event): void => {
-      const detail = (event as CustomEvent<AnchoredCommentsAddToConversationDetail>).detail
-      if (!detail?.threadIds?.length) return
-      const selectedIds = new Set(detail.threadIds)
-      const additions: AttachedComposerComment[] = anchoredCommentStore.getState().threads
-        .filter((thread) => selectedIds.has(thread.id))
-        .map((thread) => ({
-          id: thread.id,
-          label: thread.target.label,
-          comment: thread.comment,
-          createdAt: thread.createdAt,
-          route: thread.target.route,
-          anchor: {
-            kind: thread.target.resourceId ? 'research' : thread.target.componentId ? 'ui' : 'visual',
-            ...(thread.target.resourceType ? { resourceType: thread.target.resourceType } : {}),
-            ...(thread.target.resourceId ? { resourceId: thread.target.resourceId } : {}),
-            ...(thread.target.componentId ? { componentId: thread.target.componentId } : {}),
-            ...(thread.target.elementId ? { elementId: thread.target.elementId } : {}),
-            ...(thread.target.selection ? { selection: thread.target.selection } : {}),
-            bounds: thread.target.bounds,
-            domFingerprint: thread.target.domFingerprint
-          }
-        }))
-      setComposerCommentReferences((current) => {
-        const byId = new Map(current.map((reference) => [reference.id, reference]))
-        for (const addition of additions) byId.set(addition.id, addition)
-        return [...byId.values()]
-      })
-    }
-    window.addEventListener(ANCHORED_COMMENTS_ADD_TO_CONVERSATION_EVENT, onAddComments)
-    return () => window.removeEventListener(ANCHORED_COMMENTS_ADD_TO_CONVERSATION_EVENT, onAddComments)
-  }, [])
-  const removeComposerCommentReference = useCallback((id: string): void => {
-    setComposerCommentReferences((current) => current.filter((reference) => reference.id !== id))
   }, [])
   const annotationQuestionBridge = useMemo(() => ({
     sideConversations,
@@ -1111,11 +1024,14 @@ export function Workbench(): ReactElement {
     }),
     [agentFocusLineage, sideConversations]
   )
-  const activeVisualDocumentId = activeThreadId ? `visual-${activeThreadId}` : 'visual-default'
   const {
+    beginBottomPanelResize,
     beginLeftResize,
     beginRightResize,
-    beginTerminalResize,
+    bottomPanelActivation,
+    bottomPanelContributionId,
+    bottomPanelHeight,
+    closeBottomPanel,
     discardRightPanelResource,
     canNavigateRightPanelBack,
     canNavigateRightPanelForward,
@@ -1135,15 +1051,51 @@ export function Workbench(): ReactElement {
     setRightSidebarWidth,
     setRightSidebarWidthForSession,
     shellRef,
-    terminalHeight,
-    terminalOpen,
+    openBottomPanelForSession,
     toggleLeftSidebar,
     toggleRightPanelMode,
-    toggleTerminal,
     updateRightPanelWorkspace,
   } = useWorkbenchLayout({
     activeSessionId: rightPanelOwnerId
   })
+  const activeBottomPanel = installedRendererContributions.bottomPanels.resolve(
+    bottomPanelContributionId
+  )
+  const [globalOverlay, setGlobalOverlay] =
+    useState<DomainWorkbenchToggleGlobalOverlayInput | null>(null)
+  const activeGlobalOverlay = installedRendererContributions.globalOverlays.resolve(
+    globalOverlay?.contributionId
+  )
+  const toolbarCommandInvocation = {
+    ...(rightPanelOwnerId ? { sessionId: rightPanelOwnerId } : {}),
+    ...(activeThread?.runtimeId ? { runtimeId: activeThread.runtimeId } : {}),
+    ...(activeWorkspaceReferenceRoot
+      ? { workspaceRoot: activeWorkspaceReferenceRoot }
+      : {}),
+    ...(activeGlobalOverlay
+      ? {
+          activeSurface: {
+            kind: 'global-overlay' as const,
+            contributionId: activeGlobalOverlay.id
+          }
+        }
+      : activeBottomPanel
+      ? {
+          activeSurface: {
+            kind: 'bottom-panel' as const,
+            contributionId: activeBottomPanel.id
+          }
+        }
+      : installedRendererContributions.rightPanels.resolve(rightPanelMode)
+        ? {
+            activeSurface: {
+              kind: 'right-panel' as const,
+              contributionId:
+                installedRendererContributions.rightPanels.resolve(rightPanelMode)!.id
+            }
+          }
+        : {})
+  }
   const sessionRightPanelSnapshotsRef = useRef(new Map<string, SessionRightPanelRenderSnapshot>())
   const setFileTreeWorkspaceOverride = useCallback((value: string | null): void => {
     if (rightPanelOwnerId) updateRightPanelWorkspace(rightPanelOwnerId, { fileTreeWorkspaceOverride: value })
@@ -1309,9 +1261,6 @@ export function Workbench(): ReactElement {
 
   useEffect(() => {
     if (!rightPanelMode || !rightPanelOwnerId) return undefined
-    const ownerWorkspace = rightPanelWorkspaces.find(
-      (candidate) => candidate.sessionId === rightPanelOwnerId
-    )
     return registerVisibleContextComponent(buildRightPanelVisibleContextComponent({
       mode: rightPanelMode,
       sessionId: rightPanelOwnerId,
@@ -1320,7 +1269,6 @@ export function Workbench(): ReactElement {
       filePreviewTarget: rightPanelMode === 'file' ? filePreviewTarget : null,
       childAgentCount,
       childAgentRunningCount,
-      visualDocumentId: ownerWorkspace?.visualReviewRequest?.documentId,
       planId: activeGuiPlan?.id,
       sddDraftId: activeSddDraft?.id
     }))
@@ -1369,10 +1317,6 @@ export function Workbench(): ReactElement {
         void chooseWorkspace()
         return
       }
-      if (commandId === 'toggle-terminal') {
-        toggleTerminal()
-        return
-      }
       if (commandId === 'settings') {
         openSettings()
         return
@@ -1391,8 +1335,7 @@ export function Workbench(): ReactElement {
     keyboardShortcutBindings,
     mode,
     openSettings,
-    setMode,
-    toggleTerminal
+    setMode
   ])
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.sciforge?.getLogPath !== 'function') return
@@ -1477,14 +1420,14 @@ export function Workbench(): ReactElement {
       const contributionId = detail?.contributionId?.trim()
       if (!sessionId || !contributionId) return
       if (detail.activation && detail.activation.contributionId !== contributionId) return
-      const registered = installedRendererContributions.rightPanels.resolveById(contributionId)
+      const registered = installedRendererContributions.rightPanels.resolve(contributionId)
       if (!registered) return
       setRightSidebarWidthForSession(
         sessionId,
         (width) => Math.max(width, CODE_PANEL_PREFERRED)
       )
       updateRightPanelWorkspace(sessionId, {
-        mode: registered.contribution.mode,
+        mode: registered.id,
         panelActivation: detail.activation ?? null
       })
     }
@@ -1494,6 +1437,82 @@ export function Workbench(): ReactElement {
       openDomainRightPanel
     )
   }, [setRightSidebarWidthForSession, updateRightPanelWorkspace])
+
+  useEffect(() => {
+    const openDomainBottomPanel = (event: Event): void => {
+      const detail = (event as CustomEvent<DomainWorkbenchOpenSurfaceInput>).detail
+      const sessionId = detail?.sessionId?.trim()
+      const contributionId = detail?.contributionId?.trim()
+      if (!sessionId || !contributionId) return
+      if (!installedRendererContributions.bottomPanels.resolve(contributionId)) return
+      openBottomPanelForSession(sessionId, contributionId, detail.activation)
+    }
+    window.addEventListener(
+      DOMAIN_WORKBENCH_OPEN_BOTTOM_PANEL_EVENT,
+      openDomainBottomPanel
+    )
+    return () => window.removeEventListener(
+      DOMAIN_WORKBENCH_OPEN_BOTTOM_PANEL_EVENT,
+      openDomainBottomPanel
+    )
+  }, [openBottomPanelForSession])
+
+  useEffect(() => {
+    const toggleDomainGlobalOverlay = (event: Event): void => {
+      const detail = (event as CustomEvent<DomainWorkbenchToggleGlobalOverlayInput>).detail
+      const contributionId = detail?.contributionId?.trim()
+      if (!contributionId) return
+      if (!installedRendererContributions.globalOverlays.resolve(contributionId)) return
+      setGlobalOverlay((current) => {
+        if (detail.open === false) {
+          return current?.contributionId === contributionId ? null : current
+        }
+        if (detail.open !== true && current?.contributionId === contributionId) {
+          return null
+        }
+        return {
+          contributionId,
+          ...(detail.sessionId?.trim() ? { sessionId: detail.sessionId.trim() } : {}),
+          ...(detail.activation ? { activation: detail.activation } : {}),
+          open: true
+        }
+      })
+    }
+    window.addEventListener(
+      DOMAIN_WORKBENCH_TOGGLE_GLOBAL_OVERLAY_EVENT,
+      toggleDomainGlobalOverlay
+    )
+    return () => window.removeEventListener(
+      DOMAIN_WORKBENCH_TOGGLE_GLOBAL_OVERLAY_EVENT,
+      toggleDomainGlobalOverlay
+    )
+  }, [])
+
+  useEffect(() => setDomainWorkbenchMessageSender(async (request) => {
+    try {
+      const sent = await sendMessage(request.text, 'agent', {
+        targetThreadId: request.sessionId,
+        ...(request.displayText ? { displayText: request.displayText } : {})
+      })
+      return sent
+        ? { ok: true }
+        : {
+            ok: false,
+            error: {
+              code: 'message-not-sent',
+              message: 'The message could not be sent to the requested session.'
+            }
+          }
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          code: 'message-failed',
+          message: error instanceof Error ? error.message : String(error)
+        }
+      }
+    }
+  }), [sendMessage])
 
   const activeTodoItemCount = activeThreadTodos?.items.length ?? 0
   const activeTodoAutoOpenKey = activeThreadId && activeTodoItemCount > 0
@@ -1742,7 +1761,7 @@ export function Workbench(): ReactElement {
 
   const toggleTopBarRightPanelMode = (mode: Exclude<RightPanelMode, null>): void => {
     if (mode === 'file') setFileTreeWorkspaceOverride(null)
-    if (mode === 'workflow' || installedRendererContributions.rightPanels.resolve(mode)) {
+    if (installedRendererContributions.rightPanels.resolve(mode)) {
       setRightSidebarWidth((width) => Math.max(width, CODE_PANEL_PREFERRED))
     }
     toggleRightPanelMode(mode)
@@ -2360,12 +2379,9 @@ export function Workbench(): ReactElement {
     const attachments = route === 'chat' ? composerAttachments : []
     const attachmentIds = attachments.map((attachment) => attachment.id)
     const fileReferences = route === 'chat' ? composerFileReferences : []
-    const commentReferences = route === 'chat' && !activeThreadIsRemoteChannel
-      ? composerCommentReferences
-      : []
     const reasoningEffort = composerReasoningEffortRequestValue(composerReasoningEffort)
     const isImageGenerationIntent = intent?.kind === 'image-generation'
-    if (!v && attachmentIds.length === 0 && fileReferences.length === 0 && commentReferences.length === 0) return
+    if (!v && attachmentIds.length === 0 && fileReferences.length === 0) return
     const emptyPrompt =
       fileReferences.length > 0 && attachmentIds.length > 0
         ? t('composerFileAndImageOnlyPrompt')
@@ -2374,14 +2390,12 @@ export function Workbench(): ReactElement {
           : t('composerImageOnlyPrompt')
     const emptyDisplayText = v
       ? undefined
-      : commentReferences.length > 0
-        ? t('composerCommentOnlyDisplay', { count: commentReferences.length })
       : fileReferences.length > 0 && attachmentIds.length > 0
         ? t('composerFileAndImageOnlyDisplay', { count: fileReferences.length })
         : fileReferences.length > 0
           ? t('composerFileOnlyDisplay', { count: fileReferences.length })
           : t('composerImageOnlyDisplay')
-    const messageText = v || (commentReferences.length > 0 ? t('composerCommentOnlyPrompt') : emptyPrompt)
+    const messageText = v || emptyPrompt
     const shouldUsePlanPrompt =
       mode === 'plan' &&
       route === 'chat' &&
@@ -2411,9 +2425,36 @@ export function Workbench(): ReactElement {
           kind: reference.kind
         }))
       }).text
+      const contextController = new AbortController()
+      let contributedContext = ''
+      try {
+        const results = await Promise.all(
+          installedRendererContributions.composerContexts.list().map(
+            ({ contribution }) => contribution.provide({
+              ...(activeThreadId ? { sessionId: activeThreadId } : {}),
+              ...(activeThread?.runtimeId ? { runtimeId: activeThread.runtimeId } : {}),
+              ...(activeWorkspaceReferenceRoot
+                ? { workspaceRoot: activeWorkspaceReferenceRoot }
+                : {}),
+              draftText: v,
+              signal: contextController.signal
+            })
+          )
+        )
+        contributedContext = results.flatMap(({ items }) => items)
+          .map(({ content }) => content.trim())
+          .filter(Boolean)
+          .join('\n\n')
+      } catch (error) {
+        contextController.abort()
+        setError(error instanceof Error ? error.message : String(error))
+        return null
+      }
+      const withContributedContext = (text: string): string =>
+        contributedContext ? `${text}\n\n${contributedContext}` : text
       if (fileReferences.length === 0) {
         return {
-          text: buildAnchoredCommentContextPrompt(preparedRuntimeMessageText, commentReferences),
+          text: withContributedContext(preparedRuntimeMessageText),
           ...(userVisibleText ? { displayText: userVisibleText } : {})
         }
       }
@@ -2427,9 +2468,8 @@ export function Workbench(): ReactElement {
       try {
         const fileContext = await readComposerFileContextEntries(fileReferences, workspace)
         return {
-          text: buildAnchoredCommentContextPrompt(
-            buildComposerFileContextPrompt(preparedRuntimeMessageText, fileContext),
-            commentReferences
+          text: withContributedContext(
+            buildComposerFileContextPrompt(preparedRuntimeMessageText, fileContext)
           ),
           ...(userVisibleText ? { displayText: userVisibleText } : {})
         }
@@ -2558,7 +2598,6 @@ export function Workbench(): ReactElement {
       setInput('')
       clearComposerAttachments()
       clearComposerFileReferences()
-      setComposerCommentReferences([])
       void sendPlanTurn(prepared.text, {
         ...(prepared.displayText ? { displayText: prepared.displayText } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -2573,7 +2612,6 @@ export function Workbench(): ReactElement {
     setInput('')
     clearComposerAttachments()
     clearComposerFileReferences()
-    setComposerCommentReferences([])
     void sendMessage(prepared.text, isImageGenerationIntent ? 'agent' : mode === 'plan' ? 'plan' : 'agent', {
       ...(prepared.displayText ? { displayText: prepared.displayText } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -2581,74 +2619,6 @@ export function Workbench(): ReactElement {
       ...(attachmentIds.length ? { attachmentIds, attachments } : {}),
       ...(fileReferences.length ? { fileReferences } : {})
     })
-  }
-
-  const sendVisualReviewRequest = async (
-    text: string,
-    ownerSessionId: string
-  ): Promise<void> => {
-    const trimmed = text.trim()
-    if (!trimmed) return
-    const displayText = '请根据图片批注生成候选修改版，完成后让我对比确认。'
-    const reasoningEffort = composerReasoningEffortRequestValue(composerReasoningEffort)
-    const sent = await sendMessage(trimmed, 'agent', {
-      displayText,
-      targetThreadId: ownerSessionId,
-      ...(reasoningEffort ? { reasoningEffort } : {})
-    })
-    if (!sent && useChatStore.getState().activeThreadId === ownerSessionId) setInput(displayText)
-  }
-
-  const openImageArtifactInVisualReview = async (artifact: TimelineVisualReviewArtifact): Promise<void> => {
-    const ownerSessionId = artifact.threadId?.trim() || activeThreadId
-    const root = artifact.workspaceRoot || activeThread?.workspace || workspaceRoot
-    const sourcePath = [
-      artifact.outputPath,
-      artifact.sourcePath,
-      artifact.previewPath,
-      artifact.renderedPagePath,
-      artifact.svgPath
-    ].find((path) => path?.trim() && /\.(?:png|jpe?g|webp|svg)(?:[?#].*)?$/i.test(path))
-    if (!ownerSessionId || !root?.trim() || !sourcePath?.trim()) {
-      setError(t('visualReviewArtifactUnavailable'))
-      return
-    }
-
-    const documentId = artifact.visualDocumentId || visualDocumentIdForArtifact(ownerSessionId, sourcePath)
-    try {
-      const opened = await window.sciforge.openVisualDocument({ workspaceRoot: root, documentId })
-      if (!opened.document.artifact) {
-        const kind = artifact.artifactKind === 'scientific_plot'
-          ? 'scientific_plot'
-          : artifact.artifactKind === 'generated_image'
-            ? 'generated_image'
-            : artifact.artifactKind === 'edited_image'
-              ? 'edited_image'
-              : artifact.artifactKind === 'ppt_slide' || artifact.artifactKind === 'ppt_export'
-                ? 'presentation_slide'
-                : 'image'
-        await window.sciforge.insertVisualDocumentArtifact({
-          workspaceRoot: root,
-          documentId,
-          kind,
-          sourcePath,
-          ...(artifact.artifactManifestPath || artifact.manifestPath
-            ? { manifestPath: artifact.artifactManifestPath || artifact.manifestPath }
-            : {}),
-          ...(artifact.title ? { title: artifact.title } : {}),
-          ...(artifact.caption ? { caption: artifact.caption } : {})
-        })
-      }
-      updateRightPanelWorkspace(ownerSessionId, {
-        visualReviewRequest: { documentId, refreshKey: Date.now(), workspaceRoot: root },
-        mode: 'visual-review'
-      })
-      setRightSidebarWidthForSession(ownerSessionId, (width) => Math.max(width, 760))
-    } catch (error) {
-      if (useChatStore.getState().activeThreadId === ownerSessionId) {
-        setError(error instanceof Error ? error.message : String(error))
-      }
-    }
   }
 
   const openThread = (id: string, runtimeId?: AgentRuntimeId): void => {
@@ -2724,11 +2694,10 @@ export function Workbench(): ReactElement {
     const ownerSessionId = workspace.sessionId
     const workspaceMode = workspace.mode
     const installedRightPanel = installedRightPanels.find(
-      ({ contribution }) => contribution.mode === workspaceMode
+      ({ id }) => id === workspaceMode
     )?.contribution
     const ownerFilePreviewTarget = workspace.filePreviewTarget
     const ownerFilePreviewReturnContext = workspace.filePreviewReturnContext
-    const ownerVisualReviewRequest = workspace.visualReviewRequest
     const ownerThread = threads.find((thread) => thread.id === ownerSessionId) ?? snapshot.thread
     const ownerWorkspaceRoot = ownerThread?.workspace || snapshot.workspaceRoot
     const ownerStatus = ownerThread?.status?.toLowerCase()
@@ -2738,7 +2707,6 @@ export function Workbench(): ReactElement {
         ownerStatus === 'streaming' ||
         ownerStatus === 'busy' ||
         ownerStatus === 'queued'
-    const ownerVisualDocumentId = ownerVisualReviewRequest?.documentId || `visual-${ownerSessionId}`
     const closeOwnerRightPanel = (): void => {
       updateRightPanelWorkspace(ownerSessionId, {
         mode: null,
@@ -2754,7 +2722,7 @@ export function Workbench(): ReactElement {
         updateRightPanelWorkspace(ownerSessionId, {
           filePreviewTarget: null,
           filePreviewReturnContext: null,
-          mode: registered?.contribution.mode ?? null,
+          mode: registered?.id ?? null,
           panelActivation: registered ? ownerFilePreviewReturnContext.activation ?? null : null
         })
         return
@@ -2913,13 +2881,6 @@ export function Workbench(): ReactElement {
                 onCollapse={closeOwnerRightPanel}
                 className="h-full max-h-full w-full"
               />
-            ) : workspaceMode === 'changes' ? (
-              <ChangeInspector
-                blocks={snapshot.blocks}
-                workspaceRoot={ownerWorkspaceRoot}
-                className="h-full max-h-full w-full flex-col"
-                onCollapse={closeOwnerRightPanel}
-              />
             ) : workspaceMode === 'child-agents' ? (
               <SessionChildAgentsPanel
                 sessionId={ownerSessionId}
@@ -2952,35 +2913,6 @@ export function Workbench(): ReactElement {
                   ? { activation: workspace.panelActivation }
                   : {})
               })
-            ) : workspaceMode === 'workflow' ? (
-              <WorkflowView onCollapse={closeOwnerRightPanel} />
-            ) : workspaceMode === 'checkpoints' ? (
-              <GitCheckpointPanel
-                threadId={ownerSessionId}
-                runtimeId={ownerThread?.runtimeId}
-                workspaceRoot={ownerWorkspaceRoot}
-                className="h-full max-h-full w-full"
-                onCollapse={closeOwnerRightPanel}
-                onRestored={() => useChatStore.getState().refreshThreads()}
-              />
-            ) : workspaceMode === 'visual-review' ? (
-              <VisualReviewPanel
-                workspaceRoot={ownerVisualReviewRequest?.workspaceRoot || ownerWorkspaceRoot}
-                documentId={ownerVisualDocumentId}
-                className="h-full max-h-full w-full"
-                onCollapse={closeOwnerRightPanel}
-                onSendReviewRequest={(text) => {
-                  void sendVisualReviewRequest(text, ownerSessionId)
-                }}
-                refreshKey={ownerVisualReviewRequest?.refreshKey}
-                onAccepted={() => {
-                  void sendMessage(
-                    '我已在人类审改页面接受候选图片。请重新编译所有引用该图片的文档，并检查最终输出中的裁切、重叠、标签可读性和引用是否正确。',
-                    'agent',
-                    { displayText: '已接受图片，请重新编译并检查最终文档。', targetThreadId: ownerSessionId }
-                  )
-                }}
-              />
             ) : workspaceMode === 'plan' ? (
               <PlanPanel
                 workspaceRoot={ownerWorkspaceRoot}
@@ -3081,7 +3013,23 @@ export function Workbench(): ReactElement {
           {t('visualContextCaptureActive')}
         </div>
       ) : null}
-      <AnchoredCommentsLayer route={route} workspaceKey={workspaceRoot || 'global'} />
+      {activeGlobalOverlay && (globalOverlay?.sessionId || rightPanelOwnerId) ? (
+        activeGlobalOverlay.contribution.render({
+          active: true,
+          className: 'fixed inset-0',
+          session: {
+            id: globalOverlay?.sessionId || rightPanelOwnerId!,
+            ...(activeThread?.runtimeId ? { runtimeId: activeThread.runtimeId } : {}),
+            ...(activeWorkspaceReferenceRoot
+              ? { workspaceRoot: activeWorkspaceReferenceRoot }
+              : {})
+          },
+          ...(globalOverlay?.activation
+            ? { activation: globalOverlay.activation }
+            : {}),
+          onClose: () => setGlobalOverlay(null)
+        })
+      ) : null}
       {!leftSidebarCollapsed ? (
         <>
           <div className="min-h-0 shrink-0" style={{ width: leftSidebarWidth }}>
@@ -3207,18 +3155,13 @@ export function Workbench(): ReactElement {
                     workspaceRoot={activeWorkspaceReferenceRoot}
                     planPanelEnabled={Boolean(activeGuiPlan)}
                     toolbarActions={installedToolbarActions}
+                    toolbarCommandInvocation={toolbarCommandInvocation}
                     onExecuteToolbarCommand={(commandId) => {
-                      installedRendererContributions.toolbarActions.execute(
+                      void installedRendererContributions.commands.execute(
                         commandId,
-                        {
-                          activeRightPanelMode: rightPanelMode,
-                          workspaceRoot: activeWorkspaceReferenceRoot
-                        },
-                        toggleTopBarRightPanelMode
+                        toolbarCommandInvocation
                       )
                     }}
-                    terminalOpen={terminalOpen}
-                    onToggleTerminal={toggleTerminal}
                     sideChatCount={currentSideConversations.length}
                     sideChatRunningCount={currentSideRunningCount}
                     sideChatOpen={sidePanel.open}
@@ -3321,7 +3264,6 @@ export function Workbench(): ReactElement {
                   planActionsBusy={busy}
                   onBuildPlan={() => void buildGuiPlan()}
                   onOpenPlan={openGuiPlanPanel}
-                  onOpenImageArtifactInVisualReview={openImageArtifactInVisualReview}
                 />
                 <div className="ds-no-drag flex shrink-0 justify-center px-2 pb-3 pt-0 sm:px-4 md:px-6 lg:px-8">
                   <FloatingComposer
@@ -3364,7 +3306,6 @@ export function Workbench(): ReactElement {
                     attachmentUploadError={attachmentUploadError}
                     fileReferenceEnabled={route === 'chat' && !activeSddDraft && !activeThreadIsRemoteChannel}
                     fileReferences={composerFileReferences}
-                    commentReferences={activeThreadIsRemoteChannel ? [] : composerCommentReferences}
                     webAccessAvailable={webAccessAvailable}
                     changedFiles={composerChangeSummary?.files}
                     changedFileStats={composerChangeSummary}
@@ -3377,7 +3318,6 @@ export function Workbench(): ReactElement {
                     onAddFileReference={addComposerFileReference}
                     onPreviewFileReference={previewComposerFileReference}
                     onRemoveFileReference={removeComposerFileReference}
-                    onRemoveCommentReference={removeComposerCommentReference}
                     queuedMessages={activeQueuedMessages}
                     queuedMessagesPersistenceDegraded={chatSessionPersistenceDegraded}
                     onRemoveQueuedMessage={removeQueuedMessage}
@@ -3387,7 +3327,6 @@ export function Workbench(): ReactElement {
                     onInterrupt={(options) => void interrupt(options)}
                     onPlanCommand={() => void handleGuiPlanCommand()}
                     onReviewCommand={(target) => void reviewActiveThread(target)}
-                    onOpenChanges={() => setRightPanelMode('changes')}
                     onReviewChanges={() => void reviewActiveThread({ kind: 'uncommittedChanges' })}
                     reviewChangesDisabled={busy || runtimeConnection !== 'ready' || runtimeCapabilities?.review === false}
                     onBtwCommand={(seedText) => {
@@ -3401,21 +3340,31 @@ export function Workbench(): ReactElement {
                 </div>
                   </>
                 ) : null}
-                {terminalOpen ? (
+                {activeBottomPanel && rightPanelOwnerId ? (
                   <div className="ds-no-drag flex w-full shrink-0 flex-col px-0 pb-0">
                     <div
                       role="separator"
                       aria-orientation="horizontal"
                       className="relative z-20 h-1 shrink-0 cursor-row-resize bg-transparent transition hover:bg-ds-border-muted"
-                      onPointerDown={beginTerminalResize}
+                      onPointerDown={beginBottomPanelResize}
                     />
                     <Suspense fallback={<div className="ds-surface-strong h-full w-full" />}>
-                      <TerminalPanel
-                        workspaceRoot={activeSkillWorkspace || workspaceRoot}
-                        height={terminalHeight}
-                        className="w-full"
-                        onCollapse={toggleTerminal}
-                      />
+                      {activeBottomPanel.contribution.render({
+                        active: true,
+                        activation: bottomPanelActivation,
+                        className: 'w-full',
+                        height: bottomPanelHeight,
+                        onCollapse: closeBottomPanel,
+                        session: {
+                          id: rightPanelOwnerId,
+                          ...(activeThread?.runtimeId
+                            ? { runtimeId: activeThread.runtimeId }
+                            : {}),
+                          ...(activeWorkspaceReferenceRoot
+                            ? { workspaceRoot: activeWorkspaceReferenceRoot }
+                            : {})
+                        }
+                      })}
                     </Suspense>
                   </div>
                 ) : null}
@@ -3435,11 +3384,6 @@ export function Workbench(): ReactElement {
           </>
         )}
       </main>
-      {route === 'chat' ? (
-        <Suspense fallback={null}>
-          <WorkflowRunPanel enabled />
-        </Suspense>
-      ) : null}
     </div>
   )
 }

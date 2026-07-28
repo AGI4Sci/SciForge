@@ -2,7 +2,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type {
   DomainAgentArtifactConsumer,
-  DomainAgentArtifactEvent
+  DomainAgentArtifactEvent,
+  DomainMainTurnLifecycleEvent
 } from '@sciforge/domain-sdk/host'
 import {
   getActiveAgentRuntime,
@@ -82,7 +83,6 @@ import { AgentRuntimeContextCompactor } from './context-compactor'
 import type { LspCodeNavigationService } from '../../services/lsp-code-navigation-service'
 import type { AgentRuntimeTraceRecorder } from '../../services/agent-runtime-trace-service'
 import type { RuntimeContextStateService } from '../../services/runtime-context-state-service'
-import type { GitCheckpointService } from '../../services/git-checkpoint-service'
 import type { SharedMemoryService } from '../../services/shared-memory-service'
 import type { WorkspaceReferenceService } from '../../services/workspace-reference-service'
 import type { VisibleContextService } from '../../services/visible-context-service'
@@ -108,7 +108,6 @@ export type AgentRuntimeHostServices = {
   codeNavigation?: LspCodeNavigationService
   trace?: AgentRuntimeTraceRecorder
   contextState?: RuntimeContextStateService
-  gitCheckpoints?: GitCheckpointService
   memory?: SharedMemoryService
   workspaceReferences?: WorkspaceReferenceService
   visibleContext?: VisibleContextService
@@ -188,8 +187,10 @@ export class AgentRuntimeHost {
   private readonly terminalWaiters = new Map<string, Set<() => void>>()
   private readonly turnGovernanceProfiles = new Map<string, AgentRuntimeGovernanceProfile>()
   private readonly turnWorkspaces = new Map<string, string>()
-  private readonly postTurnCheckpoints = new Set<string>()
   private readonly artifactBroadcastTurns = new Set<string>()
+  private readonly turnLifecycleSubscribers = new Set<
+    (event: DomainMainTurnLifecycleEvent) => void | Promise<void>
+  >()
   private readonly traceCaptureTasks = new Map<string, Promise<void>>()
   private readonly capabilityApprovals = new Map<string, CapabilityApprovalRecord>()
   private readonly capabilityApprovalOrder: string[] = []
@@ -204,6 +205,15 @@ export class AgentRuntimeHost {
 
   hasActiveTurns(): boolean {
     return this.activeThreadTurns.size > 0
+  }
+
+  subscribeTurnLifecycle(
+    listener: (event: DomainMainTurnLifecycleEvent) => void | Promise<void>
+  ): () => void {
+    this.turnLifecycleSubscribers.add(listener)
+    return () => {
+      this.turnLifecycleSubscribers.delete(listener)
+    }
   }
 
   async connect(runtimeId?: AgentRuntimeId): Promise<void> {
@@ -302,7 +312,16 @@ export class AgentRuntimeHost {
     const visuallyGuardedInput = withVisualExecutionRequirement(sharedInput)
     const integrityGuardedInput = withExecutionIntegrityRequirement(visuallyGuardedInput)
     const turnInput = await this.withCanonicalVisibleState(adapter.id, integrityGuardedInput)
-    this.createPreTurnCheckpoint(adapter.id, context, turnInput)
+    await this.publishTurnLifecycle(Object.freeze({
+      kind: 'before-turn',
+      state: 'starting',
+      runtimeId: adapter.id,
+      threadId: turnInput.threadId.trim(),
+      ...(turnInput.workspace?.trim() || context.settings.workspaceRoot?.trim()
+        ? { workspaceRoot: turnInput.workspace?.trim() || context.settings.workspaceRoot?.trim() }
+        : {}),
+      occurredAt: new Date().toISOString()
+    }))
     const handle = await this.enqueueThreadTurnStart(adapter, context, turnInput)
     this.rememberTurnWorkspace(adapter.id, turnInput, handle)
     this.startTurnTraceCapture(adapter, context, handle)
@@ -471,7 +490,7 @@ export class AgentRuntimeHost {
       this.options.services?.contextState?.observeEvent(event)
       await this.options.services?.contextLedger?.observeEvent(event).catch(() => undefined)
       this.observeThreadTurnLifecycle(adapter.id, event)
-      this.createPostTurnCheckpoint(adapter.id, event)
+      await this.publishTerminalTurnLifecycle(adapter.id, context, event)
       this.broadcastCompletedTurnArtifacts(adapter, context, event)
     }
     const governEvent = (
@@ -1001,49 +1020,6 @@ export class AgentRuntimeHost {
           })
         }
       }
-      case 'listGitCheckpoints':
-        assertPayloadRuntimeIdMatchesOwner(payload, 'runtimeId', runtimeId)
-        return {
-          handled: true,
-          value: await this.options.services?.gitCheckpoints?.list({
-            runtimeId,
-            threadId: optionalString(payload.threadId),
-            workspaceRoot: optionalString(payload.workspaceRoot)
-          }) ?? []
-        }
-      case 'createGitCheckpoint': {
-        assertPayloadRuntimeIdMatchesOwner(payload, 'runtimeId', runtimeId)
-        const service = this.options.services?.gitCheckpoints
-        if (!service) return { handled: false }
-        return {
-          handled: true,
-          value: await service.create({
-            runtimeId,
-            threadId: requiredString(payload, 'threadId'),
-            workspaceRoot: requiredString(payload, 'workspaceRoot', context.settings.workspaceRoot || ''),
-            ...(optionalString(payload.turnId) ? { turnId: optionalString(payload.turnId) } : {})
-          })
-        }
-      }
-      case 'previewGitCheckpoint': {
-        const service = this.options.services?.gitCheckpoints
-        if (!service) return { handled: false }
-        return {
-          handled: true,
-          value: await service.preview(requiredString(payload, 'checkpointId'))
-        }
-      }
-      case 'restoreGitCheckpoint': {
-        const service = this.options.services?.gitCheckpoints
-        if (!service) return { handled: false }
-        return {
-          handled: true,
-          value: await service.restore({
-            checkpointId: requiredString(payload, 'checkpointId'),
-            force: payload.force === true
-          })
-        }
-      }
       case 'createMemory': {
         const service = this.options.services?.memory
         if (!service) return { handled: false }
@@ -1407,16 +1383,6 @@ export class AgentRuntimeHost {
         outputSchema: 'AgentRuntimeHandoffPacket'
       })
     }
-    if (services.gitCheckpoints) {
-      addDescriptor({
-        id: 'git.turnCheckpoint',
-        channel: 'host_service',
-        available: true,
-        inputSchema: 'workspaceRoot/threadId/turnId',
-        outputSchema: 'AgentRuntimeGitCheckpoint',
-        errorCodes: ['dirty_worktree', 'branch_changed', 'not_git_repo', 'git_unavailable']
-      })
-    }
     if (services.memory) {
       addDescriptor({
         id: 'memory.shared',
@@ -1526,9 +1492,7 @@ export class AgentRuntimeHost {
       storage: {
         ...capabilities.storage,
         memory: services.memory ? { available: true } : capabilities.storage.memory,
-        checkpoints: services.gitCheckpoints
-          ? { available: true }
-          : capabilities.storage.checkpoints ?? { available: false, reason: 'unsupported' },
+        checkpoints: capabilities.storage.checkpoints ?? { available: false, reason: 'unsupported' },
         workspaceReferences: services.workspaceReferences
           ? { available: true }
           : capabilities.storage.workspaceReferences ?? { available: false, reason: 'unsupported' }
@@ -2556,38 +2520,38 @@ export class AgentRuntimeHost {
     this.turnWorkspaces.set(turnGovernanceKey(runtimeId, threadId, turnId), workspace)
   }
 
-  private createPreTurnCheckpoint(
+  private async publishTerminalTurnLifecycle(
     runtimeId: AgentRuntimeId,
     context: AgentRuntimeAdapterContext,
-    input: AgentRuntimeTurnStartInput
-  ): void {
-    const service = this.options.services?.gitCheckpoints
-    const workspaceRoot = input.workspace?.trim() || context.settings.workspaceRoot?.trim()
-    if (!service || !workspaceRoot || !input.threadId.trim()) return
-    void service.create({
-      runtimeId,
-      threadId: input.threadId.trim(),
-      workspaceRoot
-    }).catch(() => undefined)
-  }
-
-  private createPostTurnCheckpoint(runtimeId: AgentRuntimeId, event: AgentRuntimeEvent): void {
+    event: AgentRuntimeEvent
+  ): Promise<void> {
     if (event.kind !== 'turn_lifecycle') return
-    if (!isAgentRuntimeTerminalTurnState(event.state)) return
+    const state = normalizeAgentRuntimeTurnState(event.state)
+    if (!state || !isAgentRuntimeTerminalTurnState(state)) return
     const turnId = event.turnId?.trim()
     if (!turnId) return
     const key = turnGovernanceKey(runtimeId, event.threadId, turnId)
-    if (this.postTurnCheckpoints.has(key)) return
-    const workspaceRoot = this.turnWorkspaces.get(key)
-    const service = this.options.services?.gitCheckpoints
-    if (!workspaceRoot || !service) return
-    this.postTurnCheckpoints.add(key)
-    void service.create({
+    const workspaceRoot = this.turnWorkspaces.get(key) || context.settings.workspaceRoot?.trim()
+    await this.publishTurnLifecycle(Object.freeze({
+      kind: 'after-turn',
+      state: state === 'completed'
+        ? 'completed'
+        : state === 'failed'
+          ? 'failed'
+          : 'cancelled',
       runtimeId,
       threadId: event.threadId,
       turnId,
-      workspaceRoot
-    }).catch(() => undefined)
+      ...(workspaceRoot ? { workspaceRoot } : {}),
+      occurredAt: new Date().toISOString()
+    }))
+  }
+
+  private async publishTurnLifecycle(event: DomainMainTurnLifecycleEvent): Promise<void> {
+    if (this.turnLifecycleSubscribers.size === 0) return
+    await Promise.allSettled(
+      [...this.turnLifecycleSubscribers].map((listener) => Promise.resolve(listener(event)))
+    )
   }
 
   private governanceProfileForEvent(

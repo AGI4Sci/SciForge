@@ -1,15 +1,17 @@
-import { lazy, type ReactElement } from 'react'
+import React, { lazy, type ReactElement } from 'react'
 import { Globe2 } from 'lucide-react'
-import type {
-  DomainRendererHost,
-  DomainWorkbenchRightPanelRenderContext
-} from '@sciforge/domain-sdk/host'
+import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
   defineTrustedRendererDomainPackageEntry,
+  type DomainRendererCommandHandler,
+  type DomainRendererWorkbenchRightPanelValue,
+  type DomainRendererWorkbenchToolbarActionValue,
   type TrustedRendererDomainPackageEntry
 } from '@sciforge/domain-sdk/renderer'
 import {
+  BROWSER_PREVIEW_RENDERER_COMMAND_CONTRIBUTION,
   BROWSER_PREVIEW_RENDERER_I18N_CONTRIBUTION,
+  BROWSER_PREVIEW_RENDERER_RIGHT_PANEL_CONTRACT,
   BROWSER_PREVIEW_RENDERER_RIGHT_PANEL_CONTRIBUTION,
   BROWSER_PREVIEW_RENDERER_TOOLBAR_ACTION_CONTRACT,
   BROWSER_PREVIEW_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
@@ -27,21 +29,15 @@ const BrowserPreviewPanel = lazy(() =>
   }))
 )
 
-export type BrowserPreviewRightPanelContribution = Readonly<{
-  id: string
-  mode: 'browser'
-  title: string
-  resourceKind: string
-  render: (context: DomainWorkbenchRightPanelRenderContext) => ReactElement
-}>
+export type BrowserPreviewRightPanelContribution =
+  DomainRendererWorkbenchRightPanelValue<ReactElement>
 
-export type BrowserPreviewToolbarActionContribution = Readonly<{
-  icon: typeof Globe2
-  isAvailable: () => boolean
-}>
+export type BrowserPreviewToolbarActionContribution =
+  DomainRendererWorkbenchToolbarActionValue<typeof Globe2>
 
 type BrowserPreviewRendererContribution =
   | BrowserPreviewRightPanelContribution
+  | DomainRendererCommandHandler
   | BrowserPreviewToolbarActionContribution
   | BrowserPreviewI18nResourceContribution
 
@@ -54,10 +50,6 @@ export function createBrowserPreviewRightPanelContribution(
   const client = createBrowserPreviewCapabilityClient(host.capabilityInvoker)
   const visibleContext = host.visibleContext
   return Object.freeze({
-    id: BROWSER_PREVIEW_RENDERER_RIGHT_PANEL_CONTRIBUTION.id,
-    mode: 'browser',
-    title: 'Playwright browser',
-    resourceKind: 'browser-page',
     render: ({ active, className, onCollapse, session }) => (
       <BrowserPreviewPanel
         active={active}
@@ -72,12 +64,18 @@ export function createBrowserPreviewRightPanelContribution(
   })
 }
 
+export function createBrowserPreviewCommand(
+  host: DomainRendererHost
+): DomainRendererCommandHandler {
+  return createOpenRightPanelCommand(
+    host,
+    BROWSER_PREVIEW_RENDERER_RIGHT_PANEL_CONTRIBUTION.id
+  )
+}
+
 export function createBrowserPreviewToolbarActionContribution():
 BrowserPreviewToolbarActionContribution {
-  return Object.freeze({
-    icon: Globe2,
-    isAvailable: () => true
-  })
+  return Object.freeze({ icon: Globe2 })
 }
 
 export function createDomainRendererEntry(
@@ -88,7 +86,12 @@ export function createDomainRendererEntry(
     contributions: [
       {
         ...BROWSER_PREVIEW_RENDERER_RIGHT_PANEL_CONTRIBUTION,
+        contract: BROWSER_PREVIEW_RENDERER_RIGHT_PANEL_CONTRACT,
         value: createBrowserPreviewRightPanelContribution(host)
+      },
+      {
+        ...BROWSER_PREVIEW_RENDERER_COMMAND_CONTRIBUTION,
+        value: createBrowserPreviewCommand(host)
       },
       {
         ...BROWSER_PREVIEW_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
@@ -100,5 +103,27 @@ export function createDomainRendererEntry(
         value: browserPreviewI18nResourceContribution
       }
     ]
+  })
+}
+
+function createOpenRightPanelCommand(
+  host: DomainRendererHost,
+  contributionId: string
+): DomainRendererCommandHandler {
+  return Object.freeze({
+    execute: ({ sessionId, payload }) => {
+      if (!sessionId || !host.workbench) return
+      host.workbench.openRightPanel({
+        contributionId,
+        sessionId,
+        ...(payload === undefined ? {} : {
+          activation: { contributionId, revision: 1, payload }
+        })
+      })
+    },
+    isAvailable: () => Boolean(host.workbench),
+    isActive: ({ activeSurface }) =>
+      activeSurface?.kind === 'right-panel' &&
+      activeSurface.contributionId === contributionId
   })
 }

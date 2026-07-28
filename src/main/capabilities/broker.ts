@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { z } from 'zod'
 import {
   capabilityAuditRecordSchema,
@@ -109,6 +110,15 @@ type EventSubscription = {
   listener: (event: CapabilityResourceChangeEvent) => void
 }
 
+export type ActiveCapabilityInvocation = Readonly<{
+  caller: CapabilityCallerContext
+  actionId: string
+  invocationId?: string
+  effect: CapabilityDefinition['descriptor']['effect']
+  approval: CapabilityDefinition['descriptor']['approval']
+  approved: boolean
+}>
+
 function opaqueId(prefix: 'cap' | 'res' | 'audit' | 'event'): string {
   return `${prefix}_${randomBytes(24).toString('base64url')}`
 }
@@ -159,6 +169,7 @@ export class CapabilityBroker {
   readonly #auditRecords: CapabilityAuditRecord[] = []
   readonly #events: CapabilityResourceChangeEvent[] = []
   readonly #subscriptions = new Set<EventSubscription>()
+  readonly #activeInvocation = new AsyncLocalStorage<ActiveCapabilityInvocation>()
 
   constructor(registry: CapabilityRegistry, options: CapabilityBrokerOptions = {}) {
     this.registry = registry
@@ -474,6 +485,15 @@ export class CapabilityBroker {
     }
   }
 
+  /**
+   * Returns the capability invocation currently executing on this async call
+   * chain. This is intentionally read-only and Host-private: nested trusted
+   * runtimes may inherit an existing approval, but cannot manufacture one.
+   */
+  currentInvocation(): ActiveCapabilityInvocation | undefined {
+    return this.#activeInvocation.getStore()
+  }
+
   async describeResourceContent(
     rawCaller: CapabilityCallerContextInput,
     rawHandle: CapabilityResourceHandle
@@ -612,12 +632,28 @@ export class CapabilityBroker {
     const { caller, definition, request, resource, beforeRevision, signal } = options
     let rawResult: Awaited<ReturnType<CapabilityDefinition['handler']>>
     try {
-      rawResult = await definition.handler(options.parsedInput, {
+      const approval = definition.descriptor.approval
+      const approved = approval === 'none' || Boolean(
+        request.invocationId &&
+        caller.approvals.some((grant) => (
+          grant.actionId === request.actionId &&
+          grant.invocationId === request.invocationId &&
+          grant.mode === approval
+        ))
+      )
+      rawResult = await this.#activeInvocation.run(Object.freeze({
+        caller,
+        actionId: request.actionId,
+        ...(request.invocationId ? { invocationId: request.invocationId } : {}),
+        effect: definition.descriptor.effect,
+        approval,
+        approved
+      }), () => definition.handler(options.parsedInput, {
         caller,
         resource: resource && this.#resolvedResource(resource),
         issueResource: (registration) => this.issueResourceHandle(caller, registration),
         signal
-      })
+      }))
     } catch (error) {
       throw new CapabilityBrokerError('handler_failed', `Handler for ${request.actionId} failed.`, {
         category: 'failed',

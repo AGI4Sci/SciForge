@@ -61,6 +61,26 @@ export const visualContextTargetSchema = z.object({
 
 export type VisualContextTarget = z.infer<typeof visualContextTargetSchema>
 
+export const visibleContextTargetRefRequestSchema = z.object({
+  componentId: z.string().trim().min(1).max(256),
+  targetId: z.string().trim().min(1).max(256)
+}).strict()
+
+export const visibleContextTargetRefResultSchema = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true),
+    targetRef: z.string().trim().min(1).max(512)
+  }).strict(),
+  z.object({ ok: z.literal(false) }).strict()
+])
+
+export type VisibleContextTargetRefRequest = z.infer<
+  typeof visibleContextTargetRefRequestSchema
+>
+export type VisibleContextTargetRefResult = z.infer<
+  typeof visibleContextTargetRefResultSchema
+>
+
 export const visibleContextCapabilityLocatorSchema = z.object({
   resourceRef: z.string().regex(/^res_[A-Za-z0-9_-]{20,}$/),
   operations: z.array(z.object({

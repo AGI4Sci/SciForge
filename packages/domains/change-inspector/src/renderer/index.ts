@@ -1,0 +1,7 @@
+export * from './ChangeInspectorPanel.js'
+export * from './UnifiedDiffView.js'
+export * from './change-inspector-capability-client.js'
+export * from './change-inspector-contributions.js'
+export { createDomainRendererEntry } from './change-inspector-contributions.js'
+export * from './change-inspector-messages.js'
+export * from './diff-utils.js'

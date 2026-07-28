@@ -9,10 +9,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 
 import {
-  GIT_CHECKPOINT_RESOURCE_URI_TEMPLATE,
   GIT_DIFF_RESOURCE_URI_TEMPLATE,
-  RUNTIME_HEALTH_RESOURCE_URI,
-  gitCheckpointResourceUri
+  RUNTIME_HEALTH_RESOURCE_URI
 } from './contract.js'
 import { createFakeLspServer } from './lsp-test-fixture.js'
 import { createRuntimeInspectorMcpServer } from './mcp-server.js'
@@ -39,13 +37,10 @@ test('serves runtime inspector tools, structured errors, and resources over MCP'
   const repoRealPath = await realpath(repo)
   await writeFile(join(repo, 'tracked.txt'), 'changed\n', 'utf8')
 
-  const dataDir = join(tempRoot, 'app-data')
-  await createCheckpointFixture(dataDir, repoRealPath)
   const fakeLsp = await createFakeLspServer(t)
 
   const service = createRuntimeInspectorService({
     workspaceRoot: repoRealPath,
-    checkpointDataDir: dataDir,
     runtimeToken: 'secret-token',
     fetch: fakeRuntimeFetch(),
     lspServerCommand: fakeLsp.command,
@@ -110,38 +105,13 @@ test('serves runtime inspector tools, structured errors, and resources over MCP'
 
   const templates = await client.listResourceTemplates()
   assert.ok(templates.resourceTemplates.some((template) => template.uriTemplate === GIT_DIFF_RESOURCE_URI_TEMPLATE))
-  assert.ok(templates.resourceTemplates.some((template) => template.uriTemplate === GIT_CHECKPOINT_RESOURCE_URI_TEMPLATE))
 
   const healthResource = await client.readResource({ uri: RUNTIME_HEALTH_RESOURCE_URI })
   const health = JSON.parse(textContent(healthResource.contents[0])) as Record<string, unknown>
   assert.equal(health.ok, true)
   assert.equal(health.status, 'healthy')
 
-  const checkpointResource = await client.readResource({ uri: gitCheckpointResourceUri('turn_test') })
-  const checkpoint = JSON.parse(textContent(checkpointResource.contents[0])) as Record<string, unknown>
-  assert.equal(checkpoint.ok, true)
-  assert.equal(asRecord(checkpoint.checkpoint).checkpointId, 'turn_test')
 })
-
-async function createCheckpointFixture(dataDir: string, repo: string): Promise<void> {
-  const checkpointDir = join(dataDir, 'git-checkpoints', 'turn_test')
-  await mkdir(checkpointDir, { recursive: true })
-  await writeFile(join(checkpointDir, 'metadata.json'), `${JSON.stringify({
-    checkpointId: 'turn_test',
-    runtimeId: 'sciforge',
-    threadId: 'thread-1',
-    workspaceRoot: repo,
-    repositoryRoot: repo,
-    branch: 'main',
-    head: 'abcdef123456',
-    createdAt: '2026-06-23T00:00:00.000Z',
-    diffStat: 'tracked.txt | 1 +',
-    status: 'available',
-    untrackedFiles: []
-  }, null, 2)}\n`, 'utf8')
-  await writeFile(join(checkpointDir, 'staged.patch'), 'staged patch text\n', 'utf8')
-  await writeFile(join(checkpointDir, 'unstaged.patch'), 'unstaged patch text\n', 'utf8')
-}
 
 async function git(cwd: string, args: string[]): Promise<void> {
   await execFileAsync('git', args, {

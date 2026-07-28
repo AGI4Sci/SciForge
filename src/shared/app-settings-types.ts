@@ -668,7 +668,7 @@ export type WorkflowVarType = (typeof WORKFLOW_VAR_TYPES)[number]
 /**
  * One advertised output field of a node, for the typed reference picker. `key` is
  * a dot-path relative to the node's json (or the literal 'text'). Derived metadata
- * only — see workflow-output-descriptors.ts. `children` cascades object types.
+ * only. `children` cascades object types.
  */
 export type WorkflowOutputVar = {
   key: string
@@ -1108,11 +1108,6 @@ export type WorkflowNodeRunResultV1 = {
   error: string
 }
 
-/** Result of a single-node test run (not persisted to history). */
-export type WorkflowNodeTestResult =
-  | { ok: true; result: WorkflowNodeRunResultV1 }
-  | { ok: false; message: string }
-
 /** A human-approval node that has paused a run and is awaiting a decision. */
 export type WorkflowPendingApprovalV1 = {
   token: string
@@ -1238,29 +1233,6 @@ export type WorkflowSettingsV1 = {
 export type WorkflowSettingsPatchV1 = Partial<Omit<WorkflowSettingsV1, 'workflows'>> & {
   /** Replaced wholesale when present. */
   workflows?: Array<Partial<WorkflowV1>>
-}
-
-export type WorkflowRunResult =
-  | { ok: true; runId: string; status: WorkflowRunStatus; message: string }
-  | { ok: false; message: string }
-
-/** Result of an editor-time syntax check on a Code node's script. */
-export type WorkflowCodeCheckResult =
-  | { status: 'ok' }
-  | { status: 'error'; message: string }
-  | { status: 'unavailable'; message: string }
-
-export type WorkflowNodeStatusMap = Record<string, WorkflowNodeRunStatus>
-
-export type WorkflowRuntimeStatus = {
-  runningWorkflowIds: string[]
-  /** workflowId -> nodeId -> live status, for lighting up the canvas during a run. */
-  nodeStatus: Record<string, WorkflowNodeStatusMap>
-  /** workflowId -> nodeId -> live per-node result (input/output/timing), for the run-log panel. */
-  nodeResults: Record<string, Record<string, WorkflowNodeRunResultV1>>
-  powerSaveBlockerActive: boolean
-  /** Human-approval nodes currently paused, awaiting an approve/reject decision. */
-  pendingApprovals: WorkflowPendingApprovalV1[]
 }
 
 export type WriteInlineCompletionSettingsV1 = {

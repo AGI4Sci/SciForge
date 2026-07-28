@@ -18,12 +18,6 @@ export const KEYBOARD_SHORTCUT_COMMANDS = [
     defaultBindings: ['Ctrl+O']
   },
   {
-    id: 'toggle-terminal',
-    labelKey: 'shortcutToggleTerminal',
-    descriptionKey: 'shortcutToggleTerminalDesc',
-    defaultBindings: ['Ctrl+`']
-  },
-  {
     id: 'settings',
     labelKey: 'shortcutSettings',
     descriptionKey: 'shortcutSettingsDesc',

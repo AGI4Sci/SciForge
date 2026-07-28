@@ -7,13 +7,19 @@
   "description": "Pure contracts for compile-time and sandboxed runtime SciForge domain packages.",
   "exports": {
     ".": "./src/index.ts",
+    "./agent-execution": "./src/agent-execution.ts",
     "./contract": "./src/contract.ts",
+    "./controlled-process": "./src/controlled-process.ts",
     "./host": "./src/host.ts",
     "./main": "./src/main.ts",
     "./node/electron-node-executable": "./src/node/electron-node-executable.ts",
     "./node/workspace-paths": "./src/node/workspace-paths.ts",
+    "./power": "./src/power.ts",
     "./renderer": "./src/renderer.ts",
+    "./renderer-contributions": "./src/renderer-contributions.ts",
     "./visual-source": "./src/visual-source.ts",
+    "./version-control": "./src/version-control.ts",
+    "./visual-capture": "./src/visual-capture.ts",
     "./workspace-preview": "./src/workspace-preview.ts"
   },
   "files": [

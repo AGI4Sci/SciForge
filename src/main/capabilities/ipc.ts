@@ -77,6 +77,7 @@ type CapabilityIpcMain = Pick<typeof ipcMain, 'handle' | 'removeHandler'>
 export type RegisterCapabilityIpcOptions = {
   broker: CapabilityBroker
   ipc?: CapabilityIpcMain
+  onCallerDestroyed?: (callerId: string) => void
 }
 
 export type CapabilityIpcRegistration = {
@@ -110,13 +111,26 @@ function parse<T>(schema: z.ZodType<T>, payload: unknown): T {
 export function registerCapabilityIpc(options: RegisterCapabilityIpcOptions): CapabilityIpcRegistration {
   const ipc = options.ipc ?? ipcMain
   const subscriptions = new Map<string, Subscription>()
+  const watchedCallerIds = new Set<number>()
   const invokeHandlers = new Map<string, CapabilityIpcHandler>()
   const channels = Object.values(CAPABILITY_IPC_CHANNELS).filter((channel) => channel !== CAPABILITY_IPC_CHANNELS.event)
 
   const handle = (channel: string, handler: CapabilityIpcHandler): void => {
     invokeHandlers.set(channel, handler)
     ipc.removeHandler(channel)
-    ipc.handle(channel, (event, payload) => handler(event, payload))
+    ipc.handle(channel, (event, payload) => {
+      watchCaller(event.sender)
+      return handler(event, payload)
+    })
+  }
+
+  const watchCaller = (sender: CapabilityIpcSender): void => {
+    if (watchedCallerIds.has(sender.id)) return
+    watchedCallerIds.add(sender.id)
+    sender.once('destroyed', () => {
+      watchedCallerIds.delete(sender.id)
+      options.onCallerDestroyed?.(`window:${sender.id}`)
+    })
   }
 
   handle(CAPABILITY_IPC_CHANNELS.discover, (event, payload) => {
@@ -218,6 +232,7 @@ export function registerCapabilityIpc(options: RegisterCapabilityIpcOptions): Ca
     invoke: async (channel, payload, sender) => {
       const handler = invokeHandlers.get(channel)
       if (!handler) throw new Error(`Unknown capability bridge channel: ${channel}`)
+      watchCaller(sender)
       return await handler({ sender }, payload)
     },
     resourceContent: {
@@ -241,6 +256,7 @@ export function registerCapabilityIpc(options: RegisterCapabilityIpcOptions): Ca
       for (const channel of channels) ipc.removeHandler(channel)
       for (const subscription of subscriptions.values()) subscription.dispose()
       subscriptions.clear()
+      watchedCallerIds.clear()
       invokeHandlers.clear()
     }
   }

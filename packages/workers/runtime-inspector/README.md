@@ -4,7 +4,7 @@ Read-only MCP worker for Git previews, runtime diagnostics, saved-file completio
 
 This package intentionally does not start or control long-lived runtimes. It can inspect:
 
-- Git status, branches, bounded diff previews, and read-only checkpoint metadata/previews.
+- Git status, branches, and bounded diff previews.
 - Runtime ports, health, dependency report, Model Router status, and local runtime status.
 - TypeScript/JavaScript LSP status and saved-file navigation queries backed by per-workspace language server sessions.
 - Configurable completion gates for documents, experiment reports, release artifacts, and other long-running scientific tasks.
@@ -75,7 +75,6 @@ npm --prefix packages/workers/runtime-inspector run start -- --workspace-root /p
 Useful environment variables:
 
 - `SCIFORGE_RUNTIME_INSPECTOR_WORKSPACE_ROOT`
-- `SCIFORGE_RUNTIME_INSPECTOR_CHECKPOINT_DATA_DIR`
 - `SCIFORGE_RUNTIME_INSPECTOR_MODEL_ROUTER_BASE_URL`
 - `SCIFORGE_RUNTIME_INSPECTOR_RUNTIME_BASE_URL`
 - `SCIFORGE_RUNTIME_INSPECTOR_RUNTIME_TOKEN`

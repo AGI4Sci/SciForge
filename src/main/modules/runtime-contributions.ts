@@ -124,13 +124,34 @@ export function createMainSystemCapabilityInvoker(
         ? undefined
         : invokeOptions?.idempotencyKey?.trim() || createInvocationId()
       const approval = definition.descriptor.approval
+      const inherited = invokeOptions?.authorization?.mode === 'inherit-current-action'
+        ? broker.currentInvocation()
+        : undefined
+      if (invokeOptions?.authorization?.mode === 'inherit-current-action') {
+        const inheritedWorkspace = inherited?.caller.workspaceId?.trim()
+        const requestedWorkspace = invokeOptions.workspaceId?.trim()
+        if (
+          !inherited ||
+          !inherited.approved ||
+          inherited.approval === 'none' ||
+          inherited.effect !== 'destructive' ||
+          definition.descriptor.effect !== 'destructive' ||
+          !inherited.invocationId ||
+          !inheritedWorkspace ||
+          inheritedWorkspace !== requestedWorkspace
+        ) {
+          throw new Error(
+            `Capability ${contract.actionId} cannot inherit approval outside a matching approved destructive action.`
+          )
+        }
+      }
       const result = await broker.invoke({
         audience: 'system',
         callerId,
         ...(invokeOptions?.workspaceId?.trim()
           ? { workspaceId: invokeOptions.workspaceId.trim() }
           : {}),
-        ...(approval === 'none'
+        ...(approval === 'none' || !inherited || !invocationId
           ? {}
           : {
               approvals: [{
@@ -142,6 +163,10 @@ export function createMainSystemCapabilityInvoker(
       }, {
         actionId: contract.actionId,
         ...(invocationId ? { invocationId } : {}),
+        ...(invokeOptions?.resource ? { resource: invokeOptions.resource } : {}),
+        ...(invokeOptions?.expectedRevision?.trim()
+          ? { expectedRevision: invokeOptions.expectedRevision.trim() }
+          : {}),
         input: parsedInput
       })
       return contract.outputSchema.parse(result.output)

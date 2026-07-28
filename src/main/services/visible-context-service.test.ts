@@ -151,6 +151,47 @@ describe('VisibleContextService capture', () => {
     expect((await service.currentSurface()).semanticRevision).not.toBe(first.semanticRevision)
   })
 
+  it('resolves only Host-issued target refs and carries the sensitive-target policy', async () => {
+    const service = new VisibleContextService(await temporaryUserData(), {
+      surfaceCaptureProvider: { capture: vi.fn() },
+      now: () => new Date('2026-07-11T03:00:01.000Z')
+    })
+    await service.publish(snapshot({
+      components: snapshot().components.map((component) => ({
+        ...component,
+        visualTargets: [
+          ...(component.visualTargets ?? []),
+          {
+            id: 'password',
+            kind: 'region' as const,
+            bounds: { x: 400, y: 40, width: 100, height: 30 },
+            redact: true
+          }
+        ]
+      }))
+    }))
+    const observed = await service.currentSurface()
+    const targets = (observed.state as {
+      targets: Array<{ targetRef: string }>
+    }).targets
+
+    await expect(service.resolveRegisteredTarget(
+      'right-sidebar.file-preview:current-page'
+    )).resolves.toBeNull()
+    await expect(service.resolveRegisteredTarget(targets[0]!.targetRef)).resolves.toMatchObject({
+      surface: {
+        windowId: 'electron:1',
+        revision: 1
+      },
+      sensitive: false,
+      bounds: { x: 10, y: 20, width: 300, height: 400 },
+      redactionBounds: [{ x: 400, y: 40, width: 100, height: 30 }]
+    })
+    await expect(service.resolveRegisteredTarget(targets[1]!.targetRef)).resolves.toMatchObject({
+      sensitive: true
+    })
+  })
+
   it('resolves an observed target against the latest surface atomically without a stale-read rejection', async () => {
     const capture = vi.fn(async () => ({
       png: whitePng(),

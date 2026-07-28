@@ -108,10 +108,7 @@ function installSciForge(activeAgentRuntime: AgentRuntimeId): {
     sessionId: 'session-1'
   }))
   const agentRuntimeUpdateThreadRelation = vi.fn(async () => undefined)
-  const agentRuntimeAuxiliary = vi.fn(async (input: { operation?: string }) => {
-    if (input.operation === 'listGitCheckpoints') return []
-    return { ok: true }
-  })
+  const agentRuntimeAuxiliary = vi.fn(async () => ({ ok: true }))
   vi.stubGlobal('window', {
     sciforge: {
       getSettings: vi.fn(async () => settings(activeAgentRuntime)),
@@ -282,44 +279,6 @@ describe('registry provider selector', () => {
       runtimeId: 'sciforge',
       threadId: 'thread-1',
       relation: 'primary'
-    })
-    expect(codexListThreads).not.toHaveBeenCalled()
-    expect(forbiddenDirectCall).not.toHaveBeenCalled()
-  })
-
-  it('passes checkpoint helpers through neutral auxiliary with top-level runtime routing', async () => {
-    const {
-      forbiddenDirectCall,
-      codexListThreads,
-      agentRuntimeAuxiliary
-    } = installSciForge('codex')
-    const provider = getProvider()
-
-    await expect(provider.listGitCheckpoints?.({
-      runtimeId: 'sciforge',
-      threadId: 'thread-1',
-      workspaceRoot: '/tmp/workspace'
-    })).resolves.toEqual([])
-    await expect(provider.previewGitCheckpoint?.('checkpoint-1')).resolves.toEqual({ ok: true })
-    await expect(provider.restoreGitCheckpoint?.('checkpoint-1', { force: true })).resolves.toEqual({ ok: true })
-
-    expect(agentRuntimeAuxiliary).toHaveBeenNthCalledWith(1, {
-      runtimeId: 'sciforge',
-      operation: 'listGitCheckpoints',
-      payload: {
-        threadId: 'thread-1',
-        workspaceRoot: '/tmp/workspace'
-      }
-    })
-    expect(agentRuntimeAuxiliary).toHaveBeenNthCalledWith(2, {
-      runtimeId: 'codex',
-      operation: 'previewGitCheckpoint',
-      payload: { checkpointId: 'checkpoint-1' }
-    })
-    expect(agentRuntimeAuxiliary).toHaveBeenNthCalledWith(3, {
-      runtimeId: 'codex',
-      operation: 'restoreGitCheckpoint',
-      payload: { checkpointId: 'checkpoint-1', force: true }
     })
     expect(codexListThreads).not.toHaveBeenCalled()
     expect(forbiddenDirectCall).not.toHaveBeenCalled()

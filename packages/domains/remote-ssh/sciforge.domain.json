@@ -17,14 +17,15 @@
     "priority": 100
   },
   "contributionContracts": {
+    "remote-ssh.workbench-right-panel": {
+      "location": "workbench.right-panel",
+      "title": "Remote targets",
+      "resourceKind": "remote-ssh-target"
+    },
     "remote-ssh.workbench-toolbar-action": {
       "location": "workbench.topbar",
       "commandId": "remote-ssh.open",
-      "label": "rightPanelRemoteSsh",
-      "target": {
-        "kind": "workbench.right-panel",
-        "contributionId": "remote-ssh.workbench-right-panel"
-      }
+      "label": "rightPanelRemoteSsh"
     }
   },
   "entrypoints": [
@@ -40,6 +41,7 @@
       "export": "./renderer",
       "contributions": [
         { "kind": "renderer.workbench-right-panel", "id": "remote-ssh.workbench-right-panel" },
+        { "kind": "renderer.command", "id": "remote-ssh.open" },
         { "kind": "renderer.workbench-toolbar-action", "id": "remote-ssh.workbench-toolbar-action" },
         { "kind": "renderer.i18n-resource", "id": "remote-ssh.translations" }
       ]

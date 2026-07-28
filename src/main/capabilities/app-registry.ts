@@ -1,4 +1,21 @@
 import { z } from 'zod'
+import {
+  CONTROLLED_PROCESS_CREATE_ACTION_ID,
+  CONTROLLED_PROCESS_DISPOSE_ACTION_ID,
+  CONTROLLED_PROCESS_READ_ACTION_ID,
+  CONTROLLED_PROCESS_RESIZE_ACTION_ID,
+  CONTROLLED_PROCESS_RESOURCE_KIND,
+  CONTROLLED_PROCESS_WRITE_ACTION_ID,
+  controlledProcessCreateInputSchema,
+  controlledProcessCreateOutputSchema,
+  controlledProcessDisposeInputSchema,
+  controlledProcessMutationOutputSchema,
+  controlledProcessReadInputSchema,
+  controlledProcessReadOutputSchema,
+  controlledProcessResizeInputSchema,
+  controlledProcessWriteInputSchema,
+  controlledProcessWriteOutputSchema
+} from '@sciforge/domain-sdk/controlled-process'
 import { WORKSPACE_PREVIEW_RESOURCE_KIND } from '@sciforge/domain-sdk/workspace-preview'
 import { capabilityJsonValueSchema } from '../../shared/capability-broker'
 import { SURFACE_RESOURCE_KIND } from '../../shared/visible-context'
@@ -26,6 +43,8 @@ import {
 } from '../ipc/app-ipc-schemas'
 import type { VisibleContextService } from '../services/visible-context-service'
 import type { WorkspacePreviewHost } from '../services/workspace-preview'
+import type { ControlledProcessService } from '../processes/controlled-process-service'
+import type { VersionControlWorkspaceService } from '../services/version-control-workspace-service'
 import {
   defineAppCapabilityContribution
 } from './app-contributions/composition'
@@ -55,6 +74,10 @@ export const APP_CAPABILITY_IDS = {
 } as const
 
 export type AppCapabilityDependencies = {
+  controlledProcessService: Pick<
+    ControlledProcessService,
+    'create' | 'dispose' | 'has' | 'read' | 'resize' | 'write'
+  >
   workspacePreviewHost: Pick<WorkspacePreviewHost,
     | 'listPlugins'
     | 'getSession'
@@ -77,6 +100,195 @@ export type AppCapabilityDependencies = {
     | 'releaseSession'
   >
   visibleContextService?: Pick<VisibleContextService, 'currentSurface'>
+  versionControlWorkspaceService: Pick<
+    VersionControlWorkspaceService,
+    | 'open'
+    | 'requireSession'
+    | 'status'
+    | 'createSnapshot'
+    | 'createReference'
+    | 'listSnapshots'
+    | 'diff'
+    | 'readFile'
+    | 'restore'
+  >
+}
+
+function controlledProcessResource(
+  dependencies: AppCapabilityDependencies,
+  ownerId: string,
+  resourceId: string,
+  workspaceId: string
+): CapabilityResourceRegistration {
+  return {
+    resourceId,
+    resourceKind: CONTROLLED_PROCESS_RESOURCE_KIND,
+    workspaceId,
+    audiences: ['ui'],
+    semanticRevision: '1',
+    observe: (caller) => {
+      if (
+        caller.callerId !== ownerId ||
+        !dependencies.controlledProcessService.has(ownerId, resourceId)
+      ) {
+        throw new Error('Controlled process session is unavailable to this caller.')
+      }
+      return {
+        semanticRevision: '1',
+        state: capabilityJsonValueSchema.parse({ profile: 'system-shell' }),
+        operationIds: [
+          CONTROLLED_PROCESS_READ_ACTION_ID,
+          CONTROLLED_PROCESS_WRITE_ACTION_ID,
+          CONTROLLED_PROCESS_RESIZE_ACTION_ID,
+          CONTROLLED_PROCESS_DISPOSE_ACTION_ID
+        ]
+      }
+    }
+  }
+}
+
+function controlledProcessCapabilities(dependencies: AppCapabilityDependencies) {
+  return [
+    defineCapability({
+      id: CONTROLLED_PROCESS_CREATE_ACTION_ID,
+      version: '1.0.0',
+      title: 'Create controlled process',
+      description: 'Starts a host-controlled system shell inside the active workspace.',
+      audiences: ['ui'],
+      scope: 'workspace',
+      effect: 'external-write',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      tags: ['process', 'terminal', 'workspace'],
+      inputSchema: controlledProcessCreateInputSchema,
+      outputSchema: controlledProcessCreateOutputSchema,
+      handler: async (input, context) => {
+        const workspaceId = context.caller.workspaceId
+        if (!workspaceId) throw new Error('Controlled process requires an active workspace.')
+        const created = await dependencies.controlledProcessService.create({
+          ownerId: context.caller.callerId,
+          workspaceRoot: workspaceId,
+          ...(input.cwd ? { cwd: input.cwd } : {}),
+          ...(input.terminal
+            ? {
+                columns: input.terminal.columns,
+                rows: input.terminal.rows
+              }
+            : {})
+        })
+        const resource = context.issueResource(controlledProcessResource(
+          dependencies,
+          context.caller.callerId,
+          created.resourceId,
+          workspaceId
+        ))
+        return {
+          output: {
+            resourceKind: CONTROLLED_PROCESS_RESOURCE_KIND,
+            resource,
+            cursor: created.cursor
+          },
+          changed: false
+        }
+      }
+    }),
+    defineCapability({
+      id: CONTROLLED_PROCESS_READ_ACTION_ID,
+      version: '1.0.0',
+      title: 'Read controlled process output',
+      description: 'Reads a bounded output stream from an owned controlled process.',
+      audiences: ['ui'],
+      scope: 'resource',
+      resourceKinds: [CONTROLLED_PROCESS_RESOURCE_KIND],
+      effect: 'read',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'none' },
+      tags: ['process', 'terminal', 'stream'],
+      inputSchema: controlledProcessReadInputSchema,
+      outputSchema: controlledProcessReadOutputSchema,
+      handler: async (input, context) => ({
+        output: await dependencies.controlledProcessService.read({
+          ownerId: context.caller.callerId,
+          resourceId: resourceSessionId(context.resource),
+          cursor: input.cursor,
+          maxCharacters: input.maxCharacters ?? 64 * 1024,
+          waitMilliseconds: input.waitMilliseconds ?? 0,
+          ...(context.signal ? { signal: context.signal } : {})
+        })
+      })
+    }),
+    defineCapability({
+      id: CONTROLLED_PROCESS_WRITE_ACTION_ID,
+      version: '1.0.0',
+      title: 'Write controlled process input',
+      description: 'Writes bounded input to an owned controlled process.',
+      audiences: ['ui'],
+      scope: 'resource',
+      resourceKinds: [CONTROLLED_PROCESS_RESOURCE_KIND],
+      effect: 'external-write',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      tags: ['process', 'terminal', 'input'],
+      inputSchema: controlledProcessWriteInputSchema,
+      outputSchema: controlledProcessWriteOutputSchema,
+      handler: (input, context) => ({
+        output: {
+          acceptedCharacters: dependencies.controlledProcessService.write(
+            context.caller.callerId,
+            resourceSessionId(context.resource),
+            input.data
+          )
+        },
+        changed: false
+      })
+    }),
+    defineCapability({
+      id: CONTROLLED_PROCESS_RESIZE_ACTION_ID,
+      version: '1.0.0',
+      title: 'Resize controlled process terminal',
+      description: 'Updates terminal dimensions for an owned controlled process.',
+      audiences: ['ui'],
+      scope: 'resource',
+      resourceKinds: [CONTROLLED_PROCESS_RESOURCE_KIND],
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      tags: ['process', 'terminal', 'layout'],
+      inputSchema: controlledProcessResizeInputSchema,
+      outputSchema: controlledProcessMutationOutputSchema,
+      handler: (input, context) => {
+        dependencies.controlledProcessService.resize(
+          context.caller.callerId,
+          resourceSessionId(context.resource),
+          input.columns,
+          input.rows
+        )
+        return { output: { ok: true as const }, changed: false }
+      }
+    }),
+    defineCapability({
+      id: CONTROLLED_PROCESS_DISPOSE_ACTION_ID,
+      version: '1.0.0',
+      title: 'Dispose controlled process',
+      description: 'Stops and releases an owned controlled process.',
+      audiences: ['ui'],
+      scope: 'resource',
+      resourceKinds: [CONTROLLED_PROCESS_RESOURCE_KIND],
+      effect: 'external-write',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      tags: ['process', 'terminal', 'lifecycle'],
+      inputSchema: controlledProcessDisposeInputSchema,
+      outputSchema: controlledProcessMutationOutputSchema,
+      handler: (_input, context) => {
+        dependencies.controlledProcessService.dispose(
+          context.caller.callerId,
+          resourceSessionId(context.resource)
+        )
+        return { output: { ok: true as const }, changed: false }
+      }
+    })
+  ]
 }
 
 const resourceActionInputSchema = z.object({}).strict()
@@ -690,6 +902,18 @@ export const SURFACE_CAPABILITY_CONTRIBUTION_FACTORY =
     {
       id: 'surface',
       title: 'Surface Context',
+      directTransportPrefixes: [],
+      allowedDirectTransports: []
+    }
+  )
+
+export const CONTROLLED_PROCESS_CAPABILITY_CONTRIBUTION_FACTORY =
+  defineAppCapabilityContribution<AppCapabilityDependencies>(
+    'sciforge.controlled-process',
+    controlledProcessCapabilities,
+    {
+      id: 'controlled-process',
+      title: 'Controlled Process',
       directTransportPrefixes: [],
       allowedDirectTransports: []
     }

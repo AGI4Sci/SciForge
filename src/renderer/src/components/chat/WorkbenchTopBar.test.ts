@@ -2,10 +2,6 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../i18n'
-import {
-  AnchoredCommentsTopBarActionsView,
-  useAnchoredCommentStore
-} from '../anchored-comments'
 import { installedRendererContributions } from '../../domain-modules/installed-renderer-contributions'
 import { WorkbenchTopBar } from './WorkbenchTopBar'
 
@@ -16,11 +12,6 @@ describe('WorkbenchTopBar toolbar contributions', () => {
       rightPanelEvidenceDag: 'Evidence DAG',
       rightPanelProjectDag: 'Project DAG'
     }, true, true)
-    useAnchoredCommentStore.setState({
-      commentMode: false,
-      threads: [],
-      panelOpen: false
-    })
   })
 
   it('does not invent a Paper Radar entry without a registered toolbar action', () => {
@@ -37,6 +28,12 @@ describe('WorkbenchTopBar toolbar contributions', () => {
       rightPanelMode: 'paper',
       onToggleRightPanelMode: vi.fn(),
       toolbarActions: installedRendererContributions.toolbarActions.list(),
+      toolbarCommandInvocation: {
+        activeSurface: {
+          kind: 'right-panel',
+          contributionId: 'paper-radar.workbench-right-panel'
+        }
+      },
       onExecuteToolbarCommand: vi.fn()
     }))
 
@@ -53,6 +50,7 @@ describe('WorkbenchTopBar toolbar contributions', () => {
       rightPanelMode: null,
       onToggleRightPanelMode: vi.fn(),
       workspaceRoot: '/workspace/lab',
+      toolbarCommandInvocation: { workspaceRoot: '/workspace/lab' },
       toolbarActions: [{
         ...registered,
         contribution: {
@@ -65,7 +63,6 @@ describe('WorkbenchTopBar toolbar contributions', () => {
 
     expect(html).not.toContain('Paper Radar')
     expect(isAvailable).toHaveBeenCalledWith({
-      activeRightPanelMode: null,
       workspaceRoot: '/workspace/lab'
     })
   })
@@ -75,6 +72,12 @@ describe('WorkbenchTopBar toolbar contributions', () => {
       rightPanelMode: 'evidence-dag',
       onToggleRightPanelMode: vi.fn(),
       toolbarActions: installedRendererContributions.toolbarActions.list(),
+      toolbarCommandInvocation: {
+        activeSurface: {
+          kind: 'right-panel',
+          contributionId: 'evidence-dag.workbench-right-panel'
+        }
+      },
       onExecuteToolbarCommand: vi.fn()
     }))
 
@@ -87,6 +90,12 @@ describe('WorkbenchTopBar toolbar contributions', () => {
       rightPanelMode: 'project-dag',
       onToggleRightPanelMode: vi.fn(),
       toolbarActions: installedRendererContributions.toolbarActions.list(),
+      toolbarCommandInvocation: {
+        activeSurface: {
+          kind: 'right-panel',
+          contributionId: 'project-dag.workbench-right-panel'
+        }
+      },
       onExecuteToolbarCommand: vi.fn()
     }))
 
@@ -94,36 +103,24 @@ describe('WorkbenchTopBar toolbar contributions', () => {
     expect(html).toContain('aria-pressed="true"')
   })
 
-  it('shows Create Loop as a right panel item', () => {
+  it('shows Create Loop only through its registered toolbar contribution', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: 'workflow',
-      onToggleRightPanelMode: vi.fn()
+      rightPanelMode: 'create-loop.workbench-right-panel',
+      onToggleRightPanelMode: vi.fn(),
+      toolbarActions: installedRendererContributions.toolbarActions.list(),
+      toolbarCommandInvocation: {
+        sessionId: 'thread-1',
+        workspaceRoot: '/workspace',
+        activeSurface: {
+          kind: 'right-panel',
+          contributionId: 'create-loop.workbench-right-panel'
+        }
+      },
+      onExecuteToolbarCommand: vi.fn()
     }))
 
     expect(html).toContain('Create Loop')
     expect(html).toContain('aria-pressed="true"')
-  })
-
-  it('keeps the global comment actions in the top row', () => {
-    const initial = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: null,
-      onToggleRightPanelMode: vi.fn()
-    }))
-    expect(initial).toContain('aria-label="Comment on anything"')
-    expect(initial).not.toContain('data-sciforge-comment-launcher')
-    expect(initial).not.toContain('aria-label="Open comments"')
-
-    const active = renderToStaticMarkup(createElement(AnchoredCommentsTopBarActionsView, {
-      commentMode: true,
-      panelOpen: true,
-      threadCount: 1,
-      onToggleCommentMode: vi.fn(),
-      onTogglePanel: vi.fn()
-    }))
-    expect(active).toContain('aria-label="Exit comment mode"')
-    expect(active).toContain('aria-label="Open comments"')
-    expect(active).toContain('aria-expanded="true"')
-    expect(active).toContain('>1</span>')
   })
 
   it('keeps right-panel controls reachable in narrow workbench widths', () => {

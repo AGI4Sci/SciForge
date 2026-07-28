@@ -6,13 +6,7 @@ import type {
   ComputerUseSettingsV1,
   ScheduleRunResult,
   ScheduleRuntimeStatus,
-  ScheduleTaskFromTextResult,
-  WorkflowApprovalDecision,
-  WorkflowCodeCheckResult,
-  WorkflowCodeLanguage,
-  WorkflowNodeTestResult,
-  WorkflowRunResult,
-  WorkflowRuntimeStatus
+  ScheduleTaskFromTextResult
 } from './app-settings'
 import type {
   TraceClearResult,
@@ -22,16 +16,6 @@ import type {
   TraceSummary,
   TraceSummaryQuery
 } from '@sciforge/full-trace'
-import type {
-  AnchoredCommentCaptureRequest,
-  AnchoredCommentCaptureResult,
-  AnchoredCommentThread,
-  CommentScreenshotAssetRef,
-  FeedbackSubmissionRequest,
-  FeedbackSubmissionResult,
-  FeedbackSubmissionStatusRequest,
-  FeedbackSubmissionStatusResult
-} from './anchored-comments'
 import type { EditorListResult, EditorOpenResult, OpenEditorPathOptions } from './editor'
 import type { GitBranchesResult } from './git-branches'
 import type {
@@ -147,18 +131,12 @@ import type {
   SpeechTranscriptionResult
 } from './speech-to-text'
 import type {
-  TerminalCreatePayload,
-  TerminalCreateResult,
-  TerminalDataPayload,
-  TerminalExitPayload,
-  TerminalResizePayload,
-  TerminalWritePayload
-} from './terminal'
-import type {
   VisibleContextCapturePreviewRequest,
   VisibleContextCapturePreviewResult,
   VisibleContextPublishInput,
-  VisibleContextSnapshot
+  VisibleContextSnapshot,
+  VisibleContextTargetRefRequest,
+  VisibleContextTargetRefResult
 } from './visible-context'
 import type {
   VisualStyleExtractRequest,
@@ -171,46 +149,6 @@ import type {
   ScientificPlottingPrepareReferenceResult,
   ScientificPlottingStatusResult
 } from './scientific-plotting'
-import type {
-  VisualDocument,
-  VisualDocumentCreateCandidateRequest,
-  VisualDocumentCreateCandidateResult,
-  VisualDocumentExportReviewPacketRequest,
-  VisualDocumentExportReviewPacketResult,
-  VisualDocumentInsertArtifactRequest,
-  VisualDocumentInsertArtifactResult,
-  VisualDocumentOpenRequest,
-  VisualDocumentOpenResult,
-  VisualDocumentRevisionDecisionRequest,
-  VisualDocumentRevisionDecisionResult,
-  VisualDocumentSaveAnnotationsRequest,
-  VisualDocumentSaveAnnotationsResult,
-  VisualDocumentStatusResult,
-  VisualDocumentUpdateContextRequest,
-  VisualDocumentUpdateContextResult,
-  VisualReviewAnnotation,
-  VisualReviewPacket
-} from '../../packages/workers/visual-document/src/types'
-export type {
-  VisualDocument,
-  VisualDocumentCreateCandidateRequest,
-  VisualDocumentCreateCandidateResult,
-  VisualDocumentExportReviewPacketRequest,
-  VisualDocumentExportReviewPacketResult,
-  VisualDocumentInsertArtifactRequest,
-  VisualDocumentInsertArtifactResult,
-  VisualDocumentOpenRequest,
-  VisualDocumentOpenResult,
-  VisualDocumentRevisionDecisionRequest,
-  VisualDocumentRevisionDecisionResult,
-  VisualDocumentSaveAnnotationsRequest,
-  VisualDocumentSaveAnnotationsResult,
-  VisualDocumentStatusResult,
-  VisualDocumentUpdateContextRequest,
-  VisualDocumentUpdateContextResult,
-  VisualReviewAnnotation,
-  VisualReviewPacket
-}
 import type {
   ResearchCard,
   ResearchCardArchiveInput,
@@ -850,13 +788,6 @@ export type SciForgeApi = {
   getConnectPhoneStatus: () => Promise<ConnectPhoneRuntimeStatus>
   getScheduleStatus: () => Promise<ScheduleRuntimeStatus>
   runScheduleTask: (taskId: string) => Promise<ScheduleRunResult>
-  getWorkflowStatus: () => Promise<WorkflowRuntimeStatus>
-  runWorkflow: (workflowId: string, input?: unknown) => Promise<WorkflowRunResult>
-  stopWorkflow: (workflowId: string) => Promise<WorkflowRunResult>
-  runWorkflowNode: (workflowId: string, nodeId: string) => Promise<WorkflowRunResult>
-  testWorkflowNode: (workflowId: string, nodeId: string, mockJson: string) => Promise<WorkflowNodeTestResult>
-  resolveWorkflowApproval: (token: string, decision: WorkflowApprovalDecision) => Promise<{ ok: boolean }>
-  checkWorkflowCode: (language: WorkflowCodeLanguage, code: string) => Promise<WorkflowCodeCheckResult>
   startConnectPhoneInstallQr: (
     provider: 'feishu' | 'weixin',
     options?: { isLark?: boolean }
@@ -932,29 +863,6 @@ export type SciForgeApi = {
   prepareScientificPlottingReference: (
     request: ScientificPlottingPrepareReferenceRequest
   ) => Promise<ScientificPlottingPrepareReferenceResult>
-  getVisualDocumentStatus: (workspaceRoot?: string) => Promise<VisualDocumentStatusResult>
-  openVisualDocument: (request: VisualDocumentOpenRequest) => Promise<VisualDocumentOpenResult>
-  insertVisualDocumentArtifact: (
-    request: VisualDocumentInsertArtifactRequest
-  ) => Promise<VisualDocumentInsertArtifactResult>
-  updateVisualDocumentContext: (
-    request: VisualDocumentUpdateContextRequest
-  ) => Promise<VisualDocumentUpdateContextResult>
-  saveVisualDocumentAnnotations: (
-    request: VisualDocumentSaveAnnotationsRequest
-  ) => Promise<VisualDocumentSaveAnnotationsResult>
-  exportVisualReviewPacket: (
-    request: VisualDocumentExportReviewPacketRequest
-  ) => Promise<VisualDocumentExportReviewPacketResult>
-  createVisualCandidateRevision: (
-    request: VisualDocumentCreateCandidateRequest
-  ) => Promise<VisualDocumentCreateCandidateResult>
-  acceptVisualCandidateRevision: (
-    request: VisualDocumentRevisionDecisionRequest
-  ) => Promise<VisualDocumentRevisionDecisionResult>
-  rejectVisualCandidateRevision: (
-    request: VisualDocumentRevisionDecisionRequest
-  ) => Promise<VisualDocumentRevisionDecisionResult>
   extractVisualStyleProfile: (request: VisualStyleExtractRequest) => Promise<VisualStyleExtractResult>
   saveVisualStyleProfile: (request: VisualStyleSaveProfileRequest) => Promise<VisualStyleSaveProfileResult>
   listSkills: (workspaceRoot?: string) => Promise<SkillListResult>
@@ -1061,33 +969,14 @@ export type SciForgeApi = {
   visibleContext: {
     publish: (snapshot: VisibleContextPublishInput) => Promise<VisibleContextSnapshot>
     get: () => Promise<VisibleContextSnapshot>
+    registeredTargetRef: (
+      request: VisibleContextTargetRefRequest
+    ) => Promise<VisibleContextTargetRefResult>
     readCapturePreview: (
       request: VisibleContextCapturePreviewRequest
     ) => Promise<VisibleContextCapturePreviewResult>
     onRefreshRequested: (handler: () => void) => () => void
     onCaptureStateChanged: (handler: (active: boolean) => void) => () => void
-  }
-  anchoredComments: {
-    list: (filter?: {
-      workspaceKey?: string
-      targetKey?: string
-      purpose?: AnchoredCommentThread['purpose']
-      status?: AnchoredCommentThread['status']
-      includeResolved?: boolean
-    }) => Promise<AnchoredCommentThread[]>
-    get: (threadId: string) => Promise<AnchoredCommentThread | null>
-    upsert: (thread: AnchoredCommentThread) => Promise<AnchoredCommentThread>
-    delete: (threadId: string) => Promise<boolean>
-    readAsset: (asset: CommentScreenshotAssetRef) => Promise<{
-      digest: string
-      mimeType: 'image/png'
-      dataUrl: string
-    }>
-    capture: (request: AnchoredCommentCaptureRequest) => Promise<AnchoredCommentCaptureResult>
-    submitFeedback: (request: FeedbackSubmissionRequest) => Promise<FeedbackSubmissionResult>
-    feedbackStatus: (
-      request: FeedbackSubmissionStatusRequest
-    ) => Promise<FeedbackSubmissionStatusResult>
   }
   agentRuntime: {
     connect: (runtimeId?: AgentRuntimeThreadListInput['runtimeId']) => Promise<void>
@@ -1150,11 +1039,5 @@ export type SciForgeApi = {
   logError: (category: string, message: string, detail?: unknown) => Promise<void>
   getLogPath: () => Promise<string>
   openLogDir: () => Promise<{ ok: boolean; message?: string }>
-  createTerminal: (payload: TerminalCreatePayload) => Promise<TerminalCreateResult>
-  writeToTerminal: (payload: TerminalWritePayload) => Promise<boolean>
-  resizeTerminal: (payload: TerminalResizePayload) => Promise<boolean>
-  disposeTerminal: (sessionId: string) => Promise<boolean>
-  onTerminalData: (handler: (payload: TerminalDataPayload) => void) => () => void
-  onTerminalExit: (handler: (payload: TerminalExitPayload) => void) => () => void
   getPathForFile: (file: File) => string
 }

@@ -1,6 +1,9 @@
 import type { PointerEvent as ReactPointerEvent, SetStateAction } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { WorkspaceFileTarget } from '@shared/workspace-file'
+import type {
+  DomainRendererWorkbenchSurfaceActivation
+} from '@sciforge/domain-sdk/renderer'
 import {
   subscribeSessionRightPanelDisposals,
   subscribeSessionRightPanelRekeys
@@ -33,7 +36,7 @@ import {
 
 const LEFT_PANEL_WIDTH_KEY = 'sciforge.layout.leftSidebarWidth'
 const LEFT_PANEL_COLLAPSED_KEY = 'sciforge.layout.leftSidebarCollapsed'
-const TERMINAL_HEIGHT_KEY = 'sciforge.layout.terminalHeight'
+const BOTTOM_PANEL_HEIGHT_KEY = 'sciforge.layout.bottomPanelHeight'
 const LEFT_PANEL_DEFAULT = 304
 export const CODE_PANEL_PREFERRED = 560
 const LEFT_PANEL_MIN = 280
@@ -43,9 +46,14 @@ const RIGHT_PANEL_MAX = Number.POSITIVE_INFINITY
 const SIDEBAR_HARD_MIN = 180
 const MAIN_MIN_WIDTH = 0
 const PANEL_RESIZE_HANDLE_WIDTH = 7
-const TERMINAL_HEIGHT_DEFAULT = 360
-const TERMINAL_HEIGHT_MIN = 220
-const TERMINAL_HEIGHT_MAX = 760
+const BOTTOM_PANEL_HEIGHT_DEFAULT = 360
+const BOTTOM_PANEL_HEIGHT_MIN = 220
+const BOTTOM_PANEL_HEIGHT_MAX = 760
+
+type SessionBottomPanelState = Readonly<{
+  contributionId: string
+  activation?: DomainRendererWorkbenchSurfaceActivation
+}>
 
 function clampWidth(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
@@ -168,9 +176,10 @@ export function useWorkbenchLayout({
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(() =>
     readStoredBoolean(LEFT_PANEL_COLLAPSED_KEY, false)
   )
-  const [terminalOpen, setTerminalOpen] = useState(false)
-  const [terminalHeight, setTerminalHeight] = useState(() =>
-    readStoredWidth(TERMINAL_HEIGHT_KEY, TERMINAL_HEIGHT_DEFAULT)
+  const [bottomPanelBySession, setBottomPanelBySession] =
+    useState<Record<string, SessionBottomPanelState>>({})
+  const [bottomPanelHeight, setBottomPanelHeight] = useState(() =>
+    readStoredWidth(BOTTOM_PANEL_HEIGHT_KEY, BOTTOM_PANEL_HEIGHT_DEFAULT)
   )
   const shellRef = useRef<HTMLDivElement | null>(null)
   const disposedSessionIdsRef = useRef(new Set<string>())
@@ -182,6 +191,11 @@ export function useWorkbenchLayout({
   const filePreviewReturnContext = activeRightPanelWorkspace?.filePreviewReturnContext ?? null
   const rightSidebarWidth = activeRightPanelWorkspace?.width ?? SESSION_RIGHT_PANEL_DEFAULT_WIDTH
   const rightPanelVisible = rightPanelMode !== null
+  const activeBottomPanelState = normalizedActiveSessionId
+    ? bottomPanelBySession[normalizedActiveSessionId]
+    : undefined
+  const bottomPanelContributionId = activeBottomPanelState?.contributionId ?? null
+  const bottomPanelActivation = activeBottomPanelState?.activation
   const rightPanelWorkspaces = useMemo(
     () => sessionRightPanelWorkspaceList(rightPanelWorkspaceMap),
     [rightPanelWorkspaceMap]
@@ -202,6 +216,12 @@ export function useWorkbenchLayout({
       delete next[sessionId]
       return next
     })
+    setBottomPanelBySession((current) => {
+      if (!current[sessionId]) return current
+      const next = { ...current }
+      delete next[sessionId]
+      return next
+    })
   }), [])
 
   useEffect(() => subscribeSessionRightPanelRekeys((previousSessionId, nextSessionId) => {
@@ -216,6 +236,13 @@ export function useWorkbenchLayout({
     setRightPanelWorkspaceMap((current) =>
       moveSessionRightPanelWorkspaceOwner(current, previousSessionId, nextSessionId)
     )
+    setBottomPanelBySession((current) => {
+      const panel = current[previousSessionId]
+      if (!panel || current[nextSessionId]) return current
+      const next = { ...current, [nextSessionId]: panel }
+      delete next[previousSessionId]
+      return next
+    })
   }), [])
 
   const updateRightPanelWorkspace = useCallback((
@@ -295,8 +322,8 @@ export function useWorkbenchLayout({
   }, [leftSidebarCollapsed])
 
   useEffect(() => {
-    persistWidth(TERMINAL_HEIGHT_KEY, terminalHeight)
-  }, [terminalHeight])
+    persistWidth(BOTTOM_PANEL_HEIGHT_KEY, bottomPanelHeight)
+  }, [bottomPanelHeight])
 
   useLayoutEffect(() => {
     const sync = (): void => {
@@ -336,7 +363,7 @@ export function useWorkbenchLayout({
 
   const discardRightPanelResourceForSession = useCallback((
     sessionId: string,
-    mode: 'file' | 'visual-review',
+    mode: 'file',
     resourceId: string
   ): void => {
     if (disposedSessionIdsRef.current.has(sessionId)) return
@@ -346,7 +373,7 @@ export function useWorkbenchLayout({
   }, [])
 
   const discardRightPanelResource = useCallback((
-    mode: 'file' | 'visual-review',
+    mode: 'file',
     resourceId: string
   ): void => {
     if (normalizedActiveSessionId) discardRightPanelResourceForSession(normalizedActiveSessionId, mode, resourceId)
@@ -458,12 +485,12 @@ export function useWorkbenchLayout({
     window.addEventListener('pointercancel', onUp)
   }
 
-  const beginTerminalResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (event.button !== 0 || !terminalOpen) return
+  const beginBottomPanelResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0 || !bottomPanelContributionId) return
     event.preventDefault()
     event.stopPropagation()
     const startY = event.clientY
-    const startHeight = terminalHeight
+    const startHeight = bottomPanelHeight
     const target = event.currentTarget
     const pointerId = event.pointerId
     try {
@@ -478,9 +505,18 @@ export function useWorkbenchLayout({
 
     const onMove = (moveEvent: PointerEvent): void => {
       const containerHeight = shellRef.current?.clientHeight ?? window.innerHeight
-      const maxHeight = Math.max(TERMINAL_HEIGHT_MIN, Math.min(TERMINAL_HEIGHT_MAX, containerHeight - 260))
-      const nextHeight = Math.min(Math.max(startHeight + startY - moveEvent.clientY, TERMINAL_HEIGHT_MIN), maxHeight)
-      setTerminalHeight(nextHeight)
+      const maxHeight = Math.max(
+        BOTTOM_PANEL_HEIGHT_MIN,
+        Math.min(BOTTOM_PANEL_HEIGHT_MAX, containerHeight - 260)
+      )
+      const nextHeight = Math.min(
+        Math.max(
+          startHeight + startY - moveEvent.clientY,
+          BOTTOM_PANEL_HEIGHT_MIN
+        ),
+        maxHeight
+      )
+      setBottomPanelHeight(nextHeight)
     }
 
     const onUp = (): void => {
@@ -501,16 +537,43 @@ export function useWorkbenchLayout({
     window.addEventListener('pointercancel', onUp)
   }
 
-  const toggleTerminal = (): void => {
-    setTerminalOpen((current) => !current)
-  }
+  const openBottomPanelForSession = useCallback((
+    sessionId: string,
+    contributionId: string,
+    activation?: DomainRendererWorkbenchSurfaceActivation
+  ): void => {
+    const normalizedSessionId = sessionId.trim()
+    const normalizedContributionId = contributionId.trim()
+    if (!normalizedSessionId || !normalizedContributionId) return
+    setBottomPanelBySession((current) => ({
+      ...current,
+      [normalizedSessionId]: {
+        contributionId: normalizedContributionId,
+        ...(activation ? { activation } : {})
+      }
+    }))
+  }, [])
+
+  const closeBottomPanel = useCallback((): void => {
+    if (!normalizedActiveSessionId) return
+    setBottomPanelBySession((current) => {
+      if (!current[normalizedActiveSessionId]) return current
+      const next = { ...current }
+      delete next[normalizedActiveSessionId]
+      return next
+    })
+  }, [normalizedActiveSessionId])
 
   const activeHistory = activeRightPanelWorkspace?.history ?? { entries: [], index: -1 }
 
   return {
     beginLeftResize,
     beginRightResize,
-    beginTerminalResize,
+    beginBottomPanelResize,
+    bottomPanelActivation,
+    bottomPanelContributionId,
+    bottomPanelHeight,
+    closeBottomPanel,
     discardRightPanelResource,
     discardRightPanelResourceForSession,
     filePreviewReturnContext,
@@ -536,11 +599,9 @@ export function useWorkbenchLayout({
     setRightSidebarWidth,
     setRightSidebarWidthForSession,
     shellRef,
-    terminalHeight,
-    terminalOpen,
+    openBottomPanelForSession,
     toggleLeftSidebar,
     toggleRightPanelMode,
-    toggleTerminal,
     updateRightPanelWorkspace
   }
 }

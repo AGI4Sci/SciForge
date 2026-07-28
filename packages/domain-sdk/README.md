@@ -119,6 +119,68 @@ After a process imports only its own package entrypoints, `defineInstalledMainDo
 by `kind:id`; missing, extra, duplicate, or mismatched entries fail before contributions are
 exposed. There is deliberately no cross-process runtime bundle and no dynamic package loader.
 
+## Renderer contributions
+
+`@sciforge/domain-sdk/renderer-contributions` is the public boundary for package-owned Workbench
+UI. It defines these generic contribution kinds:
+
+- `renderer.command`
+- `renderer.workbench-toolbar-action`
+- `renderer.workbench-right-panel`
+- `renderer.workbench-bottom-panel`
+- `renderer.workbench-global-overlay`
+- `renderer.composer-context-provider`
+
+A command declaration ID is its stable command ID. Its runtime value has the exact shape
+`{ execute, isAvailable?, isActive? }`. Every invocation carries only bounded process-neutral data:
+optional session, runtime and workspace identity, registered session resources, the active surface,
+and an optional JSON payload. Toolbar actions reference a command in their pure manifest contract;
+their runtime value supplies only presentation. This is the sole command execution path.
+
+Right panels, bottom panels, and global overlays likewise keep serializable metadata in the
+manifest contribution contract and bind one `{ render }` value in a trusted renderer entrypoint.
+The three slots use contribution IDs rather than host-private modes. Composer context providers
+return bounded text items and metadata through a strict result schema. These pure contracts also
+describe future sandboxed renderer contributions; a sandbox host supplies the view transport
+without changing the manifest data model.
+
+`DomainRendererHost` exposes only generic workbench navigation, bounded message sending,
+workspace file picking, registered visual-target inspection, and capability invocation. Visual
+inspection never accepts DOM selectors. Redacted targets return a denied inspection without target
+metadata. Successful target and text-selection inspection resolves asynchronously to an opaque,
+host-signed `targetRef`; packages pass it back to visual capture and must never derive a reference
+from component or target IDs.
+
+## Generic host capabilities
+
+Domain packages own their domain schemas and call the generic capability broker. Renderer sessions
+may publish `{ kind, resourceRef, resource }` handles. `observe` reads the current validated state,
+while `subscribe` receives only the canonical resource-change envelope
+`{ resourceRef, resourceKind, actionId, beforeRevision, afterRevision, changedAt }`; consumers
+re-observe after a change. It is not a second domain-event transport.
+
+Two host primitives are standardized because several independent packages need the same controlled
+operation:
+
+- `@sciforge/domain-sdk/controlled-process` starts only the host-owned `system-shell` profile and
+  uses bounded cursor reads plus write, resize, and dispose actions. It never accepts an arbitrary
+  executable.
+- `@sciforge/domain-sdk/version-control` models provider-neutral workspace status, snapshots,
+  references, diffs, file reads, restore previews, and destructive restore. It contains no Git
+  command or repository implementation.
+- `@sciforge/domain-sdk/visual-capture` captures only an explicitly registered visual target.
+  The host owns target lookup, sensitive-target policy, redaction, callout rendering, and PNG byte
+  limits; packages cannot submit DOM selectors or redaction bounds.
+- `@sciforge/domain-sdk/agent-execution` runs an agent thread through a host-owned runtime while
+  exposing only stable request and result data, plus optional cancellation.
+- `@sciforge/domain-sdk/power` acquires an application keep-awake lease whose release belongs to
+  the package lifecycle. Packages cannot choose native power-blocker implementations.
+
+Main runtime lifecycle contributions can subscribe to generic before-turn and terminal after-turn
+events. System capability invocation cannot manufacture user approval. A nested destructive
+operation may request `inherit-current-action`, which the host must reject unless execution is
+already inside a matching approved outer action.
+
 Node-only domain services use stable SDK subpaths for shared host-independent runtime behavior:
 
 - `@sciforge/domain-sdk/node/workspace-paths` provides workspace-confined path resolution and

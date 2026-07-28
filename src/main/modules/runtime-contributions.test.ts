@@ -241,7 +241,7 @@ describe('main runtime contributions', () => {
         audiences: ['system'],
         scope: 'workspace',
         effect: 'compute',
-        approval: 'confirmation',
+        approval: 'none',
         concurrency: { revision: 'none', idempotency: 'required' },
         inputSchema: z.object({ value: z.string() }).strict(),
         outputSchema: z.object({ echoed: z.string() }).strict(),
@@ -293,6 +293,102 @@ describe('main runtime contributions', () => {
         invocationId: 'stable-invocation'
       }
     ])
+  })
+
+  it('only propagates approval from a matching active destructive action', async () => {
+    const inner = defineCapability({
+      id: 'fixture.vcs.restore',
+      version: '1.0.0',
+      title: 'Restore snapshot',
+      description: 'Restores one resource revision.',
+      audiences: ['system'],
+      scope: 'resource',
+      resourceKinds: ['fixture.workspace'],
+      effect: 'destructive',
+      approval: 'confirmation',
+      concurrency: { revision: 'optimistic', idempotency: 'required' },
+      inputSchema: z.object({ snapshotId: z.string() }).strict(),
+      outputSchema: z.object({ restored: z.boolean() }).strict(),
+      handler: async () => ({
+        output: { restored: true },
+        changed: true,
+        semanticRevision: 'revision-2'
+      })
+    })
+    const registry = new CapabilityRegistry([inner])
+    const broker = new CapabilityBroker(registry)
+    const invoker = createMainSystemCapabilityInvoker(broker, {
+      callerId: 'fixture.package',
+      createInvocationId: () => 'inner-invocation'
+    })
+    const resource = broker.issueResourceHandle({
+      audience: 'system',
+      callerId: 'fixture.package',
+      workspaceId: '/workspace'
+    }, {
+      resourceId: '/workspace',
+      resourceKind: 'fixture.workspace',
+      workspaceId: '/workspace',
+      audiences: ['system'],
+      semanticRevision: 'revision-1',
+      observe: async () => ({
+        state: {},
+        semanticRevision: 'revision-1'
+      })
+    })
+    const contract = {
+      actionId: 'fixture.vcs.restore',
+      effect: 'destructive' as const,
+      inputSchema: z.object({ snapshotId: z.string() }).strict(),
+      outputSchema: z.object({ restored: z.boolean() }).strict()
+    }
+
+    await expect(invoker.invoke(contract, { snapshotId: 'snapshot-1' }, {
+      workspaceId: '/workspace',
+      resource,
+      expectedRevision: 'revision-1',
+      authorization: { mode: 'inherit-current-action' }
+    })).rejects.toThrow('cannot inherit approval')
+
+    registry.register(defineCapability({
+      id: 'fixture.checkpoints.restore',
+      version: '1.0.0',
+      title: 'Restore checkpoint',
+      description: 'Approved package operation wrapping the generic VCS restore.',
+      audiences: ['ui'],
+      scope: 'workspace',
+      effect: 'destructive',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({ snapshotId: z.string() }).strict(),
+      outputSchema: z.object({ restored: z.boolean() }).strict(),
+      handler: async (input) => ({
+        output: await invoker.invoke(contract, input, {
+          workspaceId: '/workspace',
+          idempotencyKey: 'inner-from-outer',
+          resource,
+          expectedRevision: 'revision-1',
+          authorization: { mode: 'inherit-current-action' }
+        })
+      })
+    }))
+
+    await expect(broker.invoke({
+      audience: 'ui',
+      callerId: 'renderer',
+      workspaceId: '/workspace',
+      approvals: [{
+        actionId: 'fixture.checkpoints.restore',
+        invocationId: 'outer-invocation',
+        mode: 'confirmation'
+      }]
+    }, {
+      actionId: 'fixture.checkpoints.restore',
+      invocationId: 'outer-invocation',
+      input: { snapshotId: 'snapshot-1' }
+    })).resolves.toMatchObject({
+      output: { restored: true }
+    })
   })
 })
 

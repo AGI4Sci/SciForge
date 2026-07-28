@@ -1,4 +1,12 @@
 import type { InstalledDomainProcessEntrySet } from '@sciforge/domain-sdk'
+import {
+  RENDERER_COMMAND_CONTRIBUTION_KIND,
+  RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND,
+  RENDERER_WORKBENCH_BOTTOM_PANEL_CONTRIBUTION_KIND,
+  RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND,
+  RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
+  type DomainRendererWorkbenchRightPanelContract
+} from '@sciforge/domain-sdk/renderer'
 import { describe, expect, it, vi } from 'vitest'
 vi.mock('../workspace-preview/PdfWorkspaceViewer', () => ({ PdfWorkspaceViewer: () => null }))
 import { installedRendererDomainEntrySet } from './installed-domain-renderer'
@@ -10,13 +18,8 @@ import {
 } from './installed-renderer-contributions'
 import { RENDERER_LIFECYCLE_CONTRIBUTION_KIND } from './renderer-lifecycle'
 import {
-  RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
-  type WorkbenchRightPanelContribution
-} from './workbench-right-panel-slot'
-import {
   RENDERER_WORKBENCH_TOOLBAR_ACTION_CONTRIBUTION_KIND,
-  type WorkbenchToolbarActionContract,
-  type WorkbenchToolbarActionValue
+  type WorkbenchToolbarActionContract
 } from './workbench-toolbar-slot'
 
 describe('installed renderer contributions', () => {
@@ -32,63 +35,69 @@ describe('installed renderer contributions', () => {
       )
       .map((installed) => ({
         installed,
-        contribution: installed.value as WorkbenchRightPanelContribution
+        contract: installed.contract as DomainRendererWorkbenchRightPanelContract
       }))
       .sort((left, right) =>
         left.installed.declaration.priority - right.installed.declaration.priority ||
         left.installed.owner.moduleId.localeCompare(right.installed.owner.moduleId) ||
         left.installed.declaration.id.localeCompare(right.installed.declaration.id)
       )
-      .map(({ installed, contribution }) => ({
+      .map(({ installed, contract }) => ({
         id: installed.declaration.id,
         ownerId: installed.owner.moduleId,
-        mode: contribution.mode,
-        title: contribution.title,
-        resourceKind: contribution.resourceKind
+        location: contract.location,
+        title: contract.title,
+        resourceKind: contract.resourceKind
       }))
 
     expect(runtime.rightPanels.list().map(({ id, ownerId, contribution }) => ({
       id,
       ownerId,
-      mode: contribution.mode,
+      location: contribution.location,
       title: contribution.title,
       resourceKind: contribution.resourceKind
     }))).toEqual(expectedPanels)
+    const expectedCommands = installedRendererDomainEntrySet.contributions
+      .filter(({ declaration }) =>
+        declaration.kind === RENDERER_COMMAND_CONTRIBUTION_KIND
+      )
+      .map(({ declaration, owner }) => ({
+        id: declaration.id,
+        ownerId: owner.moduleId,
+        order: declaration.priority
+      }))
+      .sort((left, right) =>
+        left.order - right.order ||
+        left.ownerId.localeCompare(right.ownerId) ||
+        left.id.localeCompare(right.id)
+      )
+      .map(({ id, ownerId }) => ({ id, ownerId }))
+    expect(runtime.commands.list().map(({ id, ownerId }) => ({ id, ownerId })))
+      .toEqual(expectedCommands)
     const expectedToolbarActions = installedRendererDomainEntrySet.contributions
       .filter(({ declaration }) =>
         declaration.kind === RENDERER_WORKBENCH_TOOLBAR_ACTION_CONTRIBUTION_KIND
       )
       .map((installed) => ({
         installed,
-        contract: installed.contract as WorkbenchToolbarActionContract,
-        value: installed.value as WorkbenchToolbarActionValue
+        contract: installed.contract as WorkbenchToolbarActionContract
       }))
       .sort((left, right) =>
         left.installed.declaration.priority - right.installed.declaration.priority ||
         left.installed.owner.moduleId.localeCompare(right.installed.owner.moduleId) ||
         left.installed.declaration.id.localeCompare(right.installed.declaration.id)
       )
-      .map(({ installed, contract, value }) => ({
+      .map(({ installed, contract }) => ({
         id: installed.declaration.id,
         ownerId: installed.owner.moduleId,
         commandId: contract.commandId,
-        label: contract.label,
-        target: contract.target,
-        available: value.isAvailable({
-          activeRightPanelMode: null,
-          workspaceRoot: '/workspace'
-        })
+        label: contract.label
       }))
     expect(runtime.toolbarActions.list().map(({ id, ownerId, contribution }) => ({
       id,
       ownerId,
       commandId: contribution.commandId,
-      label: contribution.label,
-      target: contribution.target,
-      available: contribution.isAvailable({
-        activeRightPanelMode: null,
-        workspaceRoot: '/workspace'
-      })
+      label: contribution.label
     }))).toEqual(expectedToolbarActions)
     const expectedEnglish = installedMessages('en')
     const expectedChinese = installedMessages('zh')
@@ -104,7 +113,11 @@ describe('installed renderer contributions', () => {
     runtime.dispose()
     runtime.dispose()
     expect(runtime.disposed).toBe(true)
+    expect(runtime.commands.list()).toEqual([])
     expect(runtime.rightPanels.list()).toEqual([])
+    expect(runtime.bottomPanels.list()).toEqual([])
+    expect(runtime.globalOverlays.list()).toEqual([])
+    expect(runtime.composerContexts.list()).toEqual([])
     expect(runtime.toolbarActions.list()).toEqual([])
     expect(translations.bundle('en', 'common')).toEqual({ coreTitle: 'Core' })
     expect(translations.bundle('zh', 'common')).toEqual({ coreTitle: '核心' })
@@ -128,7 +141,133 @@ describe('installed renderer contributions', () => {
     expect(translations.mutations).toEqual([])
   })
 
-  it('rejects an unknown toolbar target atomically before translations are installed', () => {
+  it('binds generic surface and composer contributions and disposes owners in reverse order', async () => {
+    const disposalOrder: string[] = []
+    const template = installedRendererDomainEntrySet.contributions[0]!
+    const entrySet = {
+      ...installedRendererDomainEntrySet,
+      contributions: [
+        ...installedRendererDomainEntrySet.contributions,
+        {
+          ...template,
+          owner: { moduleId: 'fixture.bottom', moduleVersion: '1.0.0' },
+          declaration: {
+            id: 'fixture.bottom.panel',
+            kind: RENDERER_WORKBENCH_BOTTOM_PANEL_CONTRIBUTION_KIND,
+            priority: 10
+          },
+          contract: {
+            location: 'workbench.bottom-panel',
+            title: 'Fixture bottom'
+          },
+          value: { render: () => null },
+          onDispose: () => disposalOrder.push('bottom')
+        },
+        {
+          ...template,
+          owner: { moduleId: 'fixture.overlay', moduleVersion: '1.0.0' },
+          declaration: {
+            id: 'fixture.overlay.dialog',
+            kind: RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND,
+            priority: 20
+          },
+          contract: {
+            location: 'workbench.global-overlay',
+            title: 'Fixture overlay'
+          },
+          value: { render: () => null },
+          onDispose: () => disposalOrder.push('overlay')
+        },
+        {
+          ...template,
+          owner: { moduleId: 'fixture.composer', moduleVersion: '1.0.0' },
+          declaration: {
+            id: 'fixture.composer.context',
+            kind: RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND,
+            priority: 30
+          },
+          contract: {
+            location: 'composer.context',
+            label: 'Fixture context'
+          },
+          value: {
+            provide: () => ({
+              items: [{
+                id: 'fixture.context.item',
+                title: 'Fixture',
+                content: 'Bound through the generic composer registry.'
+              }]
+            })
+          },
+          onDispose: () => disposalOrder.push('composer')
+        }
+      ]
+    } as unknown as InstalledDomainProcessEntrySet<'renderer', unknown>
+
+    const runtime = createInstalledRendererContributions({
+      entrySet,
+      translations: new MemoryTranslationHost()
+    })
+
+    expect(runtime.bottomPanels.resolve('fixture.bottom.panel')).toMatchObject({
+      ownerId: 'fixture.bottom'
+    })
+    expect(runtime.globalOverlays.resolve('fixture.overlay.dialog')).toMatchObject({
+      ownerId: 'fixture.overlay'
+    })
+    const composer = runtime.composerContexts.resolve('fixture.composer.context')
+    expect(composer).toMatchObject({ ownerId: 'fixture.composer' })
+    await expect(composer!.contribution.provide({
+      draftText: 'draft',
+      signal: new AbortController().signal
+    })).resolves.toEqual({
+      items: [{
+        id: 'fixture.context.item',
+        title: 'Fixture',
+        content: 'Bound through the generic composer registry.'
+      }]
+    })
+
+    runtime.dispose()
+    expect(disposalOrder).toEqual(['composer', 'overlay', 'bottom'])
+    expect(runtime.bottomPanels.list()).toEqual([])
+    expect(runtime.globalOverlays.list()).toEqual([])
+    expect(runtime.composerContexts.list()).toEqual([])
+  })
+
+  it('rejects an invalid composer provider before any renderer registration occurs', () => {
+    const translations = new MemoryTranslationHost()
+    const template = installedRendererDomainEntrySet.contributions[0]!
+    const entrySet = {
+      ...installedRendererDomainEntrySet,
+      contributions: [
+        ...installedRendererDomainEntrySet.contributions,
+        {
+          ...template,
+          owner: { moduleId: 'fixture.invalid-composer', moduleVersion: '1.0.0' },
+          declaration: {
+            id: 'fixture.invalid-composer.context',
+            kind: RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND,
+            priority: 10
+          },
+          contract: {
+            location: 'composer.context',
+            label: 'Invalid context'
+          },
+          value: {
+            provide: () => ({ items: [] }),
+            parallelImplementation: true
+          }
+        }
+      ]
+    } as unknown as InstalledDomainProcessEntrySet<'renderer', unknown>
+
+    expect(() => createInstalledRendererContributions({ entrySet, translations }))
+      .toThrow('failed host validation')
+    expect(translations.mutations).toEqual([])
+  })
+
+  it('rejects an unknown toolbar command atomically before translations are installed', () => {
     const translations = new MemoryTranslationHost()
     const template = installedRendererDomainEntrySet.contributions.find(
       ({ declaration }) =>
@@ -142,10 +281,7 @@ describe('installed renderer contributions', () => {
               ...contribution,
               contract: {
                 ...(contribution.contract as WorkbenchToolbarActionContract),
-                target: {
-                  kind: 'workbench.right-panel',
-                  contributionId: 'missing.workbench-right-panel'
-                }
+                commandId: 'missing.open'
               }
             }
           : contribution
@@ -153,7 +289,7 @@ describe('installed renderer contributions', () => {
     } as unknown as InstalledDomainProcessEntrySet<'renderer', unknown>
 
     expect(() => createInstalledRendererContributions({ entrySet, translations }))
-      .toThrow('targets unknown right-panel contribution')
+      .toThrow('references unknown command "missing.open"')
     expect(translations.mutations).toEqual([])
   })
 

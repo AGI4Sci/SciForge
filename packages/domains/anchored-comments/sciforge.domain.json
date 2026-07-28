@@ -1,0 +1,68 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-anchored-comments",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
+  "module": {
+    "id": "sciforge.anchored-comments",
+    "displayName": "Anchored Comments",
+    "version": "1.0.0",
+    "hostApi": {
+      "minimum": "1.0.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 180
+  },
+  "contributionContracts": {
+    "anchored-comments.workbench-toolbar-action": {
+      "location": "workbench.topbar",
+      "commandId": "anchored-comments.toggle-comment-mode",
+      "label": "Comment on anything"
+    },
+    "anchored-comments.overlay": {
+      "location": "workbench.global-overlay",
+      "title": "Anchored Comments"
+    },
+    "anchored-comments.composer-context": {
+      "location": "composer.context",
+      "label": "Anchored comments"
+    }
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        {
+          "kind": "main.capability-factory",
+          "id": "anchored-comments.capabilities"
+        }
+      ]
+    },
+    {
+      "process": "renderer",
+      "export": "./renderer",
+      "contributions": [
+        {
+          "kind": "renderer.command",
+          "id": "anchored-comments.toggle-comment-mode"
+        },
+        {
+          "kind": "renderer.workbench-toolbar-action",
+          "id": "anchored-comments.workbench-toolbar-action"
+        },
+        {
+          "kind": "renderer.workbench-global-overlay",
+          "id": "anchored-comments.overlay"
+        },
+        {
+          "kind": "renderer.composer-context-provider",
+          "id": "anchored-comments.composer-context"
+        }
+      ]
+    }
+  ]
+}

@@ -12,6 +12,7 @@ import {
   type VisibleContextComponentSnapshot,
   type VisibleContextResource,
   type VisibleContextSnapshot,
+  type VisibleContextTargetRefRequest,
   type VisibleContextVisualSnapshotResource,
   type VisualContextTarget
 } from '../../shared/visible-context'
@@ -81,6 +82,17 @@ export type VisibleContextCapturedFrame = Readonly<{
   width: number
   height: number
   targetRef?: string
+}>
+
+export type RegisteredVisibleContextTarget = Readonly<{
+  surface: Readonly<{
+    windowId: string
+    revision: number
+    activeThreadId: string | null
+  }>
+  bounds?: VisibleContextBounds
+  sensitive: boolean
+  redactionBounds: readonly VisibleContextBounds[]
 }>
 
 type BoundSurface = {
@@ -282,16 +294,10 @@ export class VisibleContextService {
       let componentId: string | undefined
       let target: VisualContextTarget | undefined
       if (input.targetRef) {
-        for (const component of snapshot.components) {
-          const match = component.visualTargets?.find((candidate) => (
-            this.surfaceTargetRef(snapshot.windowId, component.id, candidate.id) === input.targetRef
-          ))
-          if (!match) continue
-          componentId = component.id
-          target = match
-          break
-        }
-        if (!target || !componentId) throw new Error('The selected surface target is no longer visible.')
+        const match = this.findRegisteredTarget(snapshot, input.targetRef)
+        if (!match) throw new Error('The selected surface target is no longer visible.')
+        componentId = match.componentId
+        target = match.target
       }
       return this.captureSurfaceSnapshot(snapshot, {
         requestId: `surface-${randomBytes(12).toString('hex')}`,
@@ -307,6 +313,53 @@ export class VisibleContextService {
       height: captured.resource.height,
       ...(input.targetRef ? { targetRef: input.targetRef } : {})
     }
+  }
+
+  /**
+   * Resolves an opaque targetRef exclusively against the current Host registry.
+   * The returned geometry is for main-process visual-capture composition only;
+   * it is never exposed through DomainMainHost.
+   */
+  async resolveRegisteredTarget(
+    targetRef: string
+  ): Promise<RegisteredVisibleContextTarget | null> {
+    const normalizedTargetRef = targetRef.trim()
+    if (!normalizedTargetRef) return null
+    let snapshot = await this.get()
+    if (snapshot.windowId === 'unavailable') return null
+    snapshot = await this.refreshLayoutOnDemand(snapshot)
+    const match = this.findRegisteredTarget(snapshot, normalizedTargetRef)
+    if (!match) return null
+    return {
+      surface: {
+        windowId: snapshot.windowId,
+        revision: snapshot.revision,
+        activeThreadId: snapshot.activeThreadId ?? null
+      },
+      ...(match.target.bounds ? { bounds: match.target.bounds } : {}),
+      sensitive: match.target.redact === true,
+      redactionBounds: snapshot.components.flatMap((component) => (
+        (component.visualTargets ?? []).flatMap((target) => (
+          target.redact === true && target.bounds ? [target.bounds] : []
+        ))
+      ))
+    }
+  }
+
+  async registeredTargetRef(
+    windowId: string,
+    input: VisibleContextTargetRefRequest
+  ): Promise<string | null> {
+    const snapshot = await this.get()
+    if (snapshot.windowId !== windowId) return null
+    const component = snapshot.components.find((candidate) => (
+      candidate.id === input.componentId
+    ))
+    const target = component?.visualTargets?.find((candidate) => (
+      candidate.id === input.targetId
+    ))
+    if (!component || !target || target.redact === true) return null
+    return this.surfaceTargetRef(snapshot.windowId, component.id, target.id)
   }
 
   private async captureSurfaceSnapshot(
@@ -433,6 +486,19 @@ export class VisibleContextService {
     return `target_${createHmac('sha256', this.surfaceRefSecret)
       .update(`${windowId}\u0000${componentId}\u0000${targetId}`)
       .digest('base64url')}`
+  }
+
+  private findRegisteredTarget(
+    snapshot: VisibleContextSnapshot,
+    targetRef: string
+  ): { componentId: string; target: VisualContextTarget } | null {
+    for (const component of snapshot.components) {
+      const target = component.visualTargets?.find((candidate) => (
+        this.surfaceTargetRef(snapshot.windowId, component.id, candidate.id) === targetRef
+      ))
+      if (target) return { componentId: component.id, target }
+    }
+    return null
   }
 
   private surfaceObservationState(snapshot: VisibleContextSnapshot): CapabilityJsonValue {
