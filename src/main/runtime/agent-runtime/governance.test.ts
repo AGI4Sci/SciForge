@@ -65,6 +65,35 @@ describe('RuntimeGovernanceSupervisor', () => {
     }))
   })
 
+  it('isolates exact-repeat accounting between the parent and each child execution scope', () => {
+    const supervisor = new RuntimeGovernanceSupervisor()
+    const controls = controlsSpy()
+
+    supervisor.observe(toolEvent(1), baseCapabilities, strictBudgetSettings, controls)
+    supervisor.observe(childToolEvent(2, 'child-thread-a'), baseCapabilities, strictBudgetSettings, controls)
+    supervisor.observe(childToolEvent(3, 'child-thread-b'), baseCapabilities, strictBudgetSettings, controls)
+    supervisor.observe(childToolEvent(4, 'child-thread-c'), baseCapabilities, strictBudgetSettings, controls)
+
+    expect(controls.steerTurn).not.toHaveBeenCalled()
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
+  })
+
+  it('still governs repeated calls made by one child execution scope', () => {
+    const supervisor = new RuntimeGovernanceSupervisor()
+    const controls = controlsSpy()
+
+    for (let index = 1; index <= 3; index += 1) {
+      supervisor.observe(childToolEvent(index, 'child-thread-a'), baseCapabilities, strictBudgetSettings, controls)
+    }
+
+    expect(controls.steerTurn).toHaveBeenCalledTimes(1)
+    expect(controls.steerTurn).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: 'child-thread-a',
+      turnId: 'turn-child-thread-a'
+    }))
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
+  })
+
   it('synchronously queues threshold recovery with a complete bounded receipt', async () => {
     const supervisor = new RuntimeGovernanceSupervisor()
     const controls = controlsSpy()
@@ -521,7 +550,9 @@ function controlsSpy(governanceProfile?: 'remote_guard') {
   }
 }
 
-function toolEvent(index: number): AgentRuntimeEvent {
+function toolEvent(
+  index: number
+): Extract<AgentRuntimeEvent, { kind: 'tool_event' }> {
   return {
     kind: 'tool_event',
     runtimeId: 'codex',
@@ -537,6 +568,18 @@ function toolEvent(index: number): AgentRuntimeEvent {
       toolName: 'lookup',
       callId: `call-${index}`,
       arguments: { query: 'q' }
+    }
+  }
+}
+
+function childToolEvent(index: number, childThreadId: string): AgentRuntimeEvent {
+  const event = toolEvent(index)
+  return {
+    ...event,
+    meta: {
+      ...event.meta,
+      childThreadId,
+      childTurnId: `turn-${childThreadId}`
     }
   }
 }

@@ -27,6 +27,7 @@ import remarkGfm from 'remark-gfm'
 import { useChatStore } from '../../store/chat-store'
 import type { ChatBlock } from '../../agent/types'
 import { CopyTextButton } from '../CopyTextButton'
+import { AssistantMarkdown } from './AssistantMarkdown'
 
 type Props = {
   className?: string
@@ -133,11 +134,11 @@ function SideMessageBubble({ block }: { block: ChatBlock }): ReactElement | null
     return (
       <div className="group/side-message relative min-w-0 max-w-full pr-8">
         <div className="ds-markdown ds-chat-answer ds-selectable-text min-w-0 max-w-full text-[13px] leading-5 text-ds-ink">
-          {streaming ? (
-            <span>{block.text}</span>
-          ) : (
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.text}</ReactMarkdown>
-          )}
+          <AssistantMarkdown
+            text={block.text}
+            streaming={streaming}
+            className="text-[13px] leading-5 [overflow-wrap:anywhere]"
+          />
         </div>
         <CopyTextButton
           text={block.text}

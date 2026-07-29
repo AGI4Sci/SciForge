@@ -31,7 +31,10 @@ import type {
   CodexAppServerPendingRequestRegistryOptions
 } from './app-server/request-registry'
 import type { CodexThreadEventPayload } from './codex-runtime-api'
-import { FileMultiAgentStore } from '../../../../packages/workers/multi-agent/src'
+import {
+  DEFAULT_MULTI_AGENT_CHILD_TIMEOUT_MS,
+  FileMultiAgentStore
+} from '../../../../packages/workers/multi-agent/src'
 import { CodexPreToolUseGovernanceBridge } from './codex-pre-tool-use-governance'
 import {
   CAPABILITY_AGENT_TOOL_NAMES,
@@ -2290,9 +2293,16 @@ describe('CodexRuntimeService compatibility operations', () => {
     })
     expect(queued.client.startThread).toHaveBeenCalledWith(expect.objectContaining({
       dynamicTools: expect.arrayContaining([
-        expect.objectContaining({ name: 'delegate_task' })
+        expect.objectContaining({
+          name: 'delegate_task',
+          inputSchema: expect.objectContaining({
+            properties: expect.objectContaining({
+              tasks: expect.objectContaining({ type: 'array', maxItems: 2 })
+            })
+          })
+        })
       ]),
-      developerInstructions: expect.stringContaining('delegate_task')
+      developerInstructions: expect.stringContaining('tasks array')
     }))
 
     const pending = pendingServerRequests?.onToolCallRequest?.({
@@ -2491,6 +2501,108 @@ describe('CodexRuntimeService compatibility operations', () => {
     })
     queued.close()
   })
+
+  it('steers a timed-out Codex child for a progress summary before considering interruption', async () => {
+    const realSetTimeout = globalThis.setTimeout
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    timeoutSpy.mockImplementation((callback, delay, ...args) => realSetTimeout(
+      callback,
+      delay === DEFAULT_MULTI_AGENT_CHILD_TIMEOUT_MS ? 5_000 : delay,
+      ...args
+    ))
+    const queued = clientWithQueuedEvents()
+    try {
+      const storageRoot = await tempRoot()
+      let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
+      vi.mocked(queued.client.startThread)
+        .mockResolvedValueOnce({ thread: { id: 'parent-codex-thread' } })
+        .mockResolvedValueOnce({ thread: { id: 'child-codex-thread' } })
+      vi.mocked(queued.client.startTurn)
+        .mockResolvedValueOnce({ turn: { id: 'parent-turn' } })
+        .mockResolvedValueOnce({ turn: { id: 'child-turn' } })
+      const service = new CodexRuntimeService({
+        settings: async () => settings(),
+        sink: { send: vi.fn() },
+        storageRoot,
+        createClient: (options) => {
+          pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
+          return queued.client
+        }
+      })
+
+      await service.startThread({ threadId: 'parent-gui-thread', title: 'Parent' })
+      await service.startTurn({
+        threadId: 'parent-gui-thread',
+        text: 'Delegate a long-running review.'
+      })
+      const pending = pendingServerRequests?.onToolCallRequest?.({
+        requestId: 'multi-agent-timeout-request',
+        threadId: 'parent-codex-thread',
+        turnId: 'parent-turn',
+        tool: 'delegate_task',
+        arguments: {
+          label: 'Reviewer',
+          prompt: 'Review the papers and report progress if time expires.'
+        }
+      })
+
+      await vi.waitFor(() => {
+        expect(queued.client.startTurn).toHaveBeenCalledTimes(2)
+      }, { timeout: 12_000 })
+      await vi.waitFor(() => {
+        expect(queued.client.steerTurn).toHaveBeenCalledWith({
+          threadId: 'child-codex-thread',
+          expectedTurnId: 'child-turn',
+          input: [expect.objectContaining({
+            type: 'text',
+            text: expect.stringContaining('progress summary')
+          })]
+        }, expect.any(AbortSignal))
+      }, { timeout: 12_000 })
+      expect(queued.client.interruptTurn).not.toHaveBeenCalled()
+
+      queued.push({
+        type: 'event',
+        channel: CODEX_MAIN_IPC_CHANNELS.event,
+        payload: {
+          method: 'item/agentMessage/delta',
+          params: {
+            threadId: 'child-codex-thread',
+            turnId: 'child-turn',
+            text: 'Reviewed two papers; one remains.'
+          }
+        }
+      })
+      queued.push({
+        type: 'event',
+        channel: CODEX_MAIN_IPC_CHANNELS.event,
+        payload: {
+          method: 'turn/completed',
+          params: {
+            threadId: 'child-codex-thread',
+            turnId: 'child-turn'
+          }
+        }
+      })
+
+      await expect(pending).resolves.toEqual({
+        success: false,
+        contentItems: [{
+          type: 'inputText',
+          text: [
+            'multi-agent child run timed out',
+            '',
+            'Progress summary:',
+            'Reviewed two papers; one remains.'
+          ].join('\n')
+        }]
+      })
+      expect(queued.client.interruptTurn).not.toHaveBeenCalled()
+    } finally {
+      queued.close()
+      timeoutSpy.mockRestore()
+    }
+  }, 20_000)
 
   it('replays a persisted multi-agent app-server request after service restart without creating another child', async () => {
     const client = controllableClient()

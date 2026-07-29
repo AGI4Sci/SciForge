@@ -211,6 +211,39 @@ test('runtime enforces maxParallel while a child run is active', async () => {
   await first
 })
 
+test('runtime reserves concurrent starts atomically before enforcing child budgets', async () => {
+  const release = deferred<MultiAgentExecutorResult>()
+  const store = new InMemoryMultiAgentStore()
+  const runtime = new MultiAgentRuntime({
+    config: { maxParallel: 2, maxChildren: 1 },
+    store,
+    idGenerator: sequenceIds('child'),
+    executor: async () => release.promise
+  })
+
+  const first = runtime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-1',
+    prompt: 'First'
+  })
+  const second = runtime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-1',
+    prompt: 'Second'
+  })
+
+  await assert.rejects(
+    second,
+    (error) => error instanceof MultiAgentRuntimeError && error.code === 'child_budget_exhausted'
+  )
+  const diagnostics = await runtime.diagnostics('thread-1')
+  assert.equal(diagnostics.active, 1)
+  assert.equal(diagnostics.childRuns.length, 1)
+
+  release.resolve({ summary: 'First done' })
+  await first
+})
+
 test('runtime enforces maxChildren per parent turn without exhausting later turns', async () => {
   const store = new InMemoryMultiAgentStore()
   const runtime = new MultiAgentRuntime({
@@ -279,6 +312,37 @@ test('runtime reuses a persisted request before budget checks or executor startu
   assert.equal(replayed.id, first.id)
   assert.equal(replayed.summary, 'persisted result')
   assert.equal(replayExecutorCalls, 0)
+  assert.equal((await store.list()).length, 1)
+})
+
+test('runtime shares one in-flight execution for concurrent calls with the same request identity', async () => {
+  const release = deferred<MultiAgentExecutorResult>()
+  let executorCalls = 0
+  const store = new InMemoryMultiAgentStore()
+  const runtime = new MultiAgentRuntime({
+    config: { maxParallel: 2, maxChildren: 2 },
+    store,
+    idGenerator: sequenceIds('child'),
+    executor: async () => {
+      executorCalls += 1
+      return release.promise
+    }
+  })
+  const input = {
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-1',
+    requestId: 'request-1',
+    prompt: 'Run once'
+  }
+
+  const first = runtime.runChild(input)
+  const replay = runtime.runChild(input)
+  await Promise.resolve()
+  release.resolve({ summary: 'Done once' })
+
+  const [firstRecord, replayRecord] = await Promise.all([first, replay])
+  assert.equal(firstRecord.id, replayRecord.id)
+  assert.equal(executorCalls, 1)
   assert.equal((await store.list()).length, 1)
 })
 
@@ -414,6 +478,223 @@ test('runtime records executor failure, abort, and timeout as canonical error co
   })
   assert.equal(perChildTimedOut.status, 'failed')
   assert.equal(perChildTimedOut.error?.code, 'timeout')
+})
+
+test('timeout handshake requests and preserves a child progress summary before closing the run', async () => {
+  const result = deferred<MultiAgentExecutorResult>()
+  const summaryRequests: string[] = []
+  const terminationReasons: string[] = []
+  const runtime = new MultiAgentRuntime({
+    config: {
+      childTimeoutMs: 5,
+      timeoutHandshakeMs: 20,
+      timeoutSummaryGraceMs: 50
+    },
+    store: new InMemoryMultiAgentStore(),
+    idGenerator: () => 'child-timeout-summary',
+    executor: async (input) => {
+      input.registerLifecycleControl({
+        threadRef: {
+          runtime: 'codex',
+          threadId: 'codex-child-thread',
+          turnId: 'codex-child-turn'
+        },
+        requestProgressSummary: async (request) => {
+          summaryRequests.push(request.message)
+          setTimeout(() => {
+            result.resolve({
+              summary: 'Read three papers; the fourth remains unfinished.',
+              usage: { promptTokens: 10, completionTokens: 4, totalTokens: 14 },
+              threadRef: {
+                runtime: 'codex',
+                threadId: 'codex-child-thread',
+                turnId: 'codex-child-turn'
+              }
+            })
+          }, 0)
+          return { established: true }
+        },
+        terminate: async (request) => {
+          terminationReasons.push(request.reason)
+        }
+      })
+      return result.promise
+    }
+  })
+
+  const record = await runtime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-summary',
+    prompt: 'Read all papers'
+  })
+
+  assert.equal(record.status, 'failed')
+  assert.equal(record.error?.code, 'timeout')
+  assert.equal(record.summary, 'Read three papers; the fourth remains unfinished.')
+  assert.equal(record.usage.totalTokens, 14)
+  assert.equal(record.threadRef?.threadId, 'codex-child-thread')
+  assert.equal(summaryRequests.length, 1)
+  assert.match(summaryRequests[0] ?? '', /progress summary/u)
+  assert.deepEqual(terminationReasons, [])
+  assert.deepEqual(record.error?.details, {
+    disposition: 'progress_summary_received'
+  })
+  assert.equal(record.transcript.at(-2)?.kind, 'assistant_message')
+  assert.equal(record.transcript.at(-1)?.metadata?.code, 'timeout')
+})
+
+test('timeout handshake terminates immediately when the child channel cannot be established', async () => {
+  const terminationReasons: string[] = []
+  let executorSignal: AbortSignal | undefined
+  const runtime = new MultiAgentRuntime({
+    config: {
+      childTimeoutMs: 5,
+      timeoutHandshakeMs: 20,
+      timeoutSummaryGraceMs: 50
+    },
+    store: new InMemoryMultiAgentStore(),
+    idGenerator: () => 'child-timeout-no-channel',
+    executor: async (input) => {
+      executorSignal = input.signal
+      input.registerLifecycleControl({
+        requestProgressSummary: async () => ({ established: false }),
+        terminate: async (request) => {
+          terminationReasons.push(request.reason)
+        }
+      })
+      return new Promise(() => undefined)
+    }
+  })
+
+  const record = await runtime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-no-channel',
+    prompt: 'Hang without a channel'
+  })
+
+  assert.equal(record.error?.code, 'timeout')
+  assert.deepEqual(record.error?.details, { disposition: 'channel_unavailable' })
+  assert.deepEqual(terminationReasons, ['timeout_channel_unavailable'])
+  assert.equal(executorSignal?.aborted, true)
+})
+
+test('timeout handshake cannot deadlock on an unresponsive summary or termination channel', async () => {
+  const terminationReasons: string[] = []
+  let executorSignal: AbortSignal | undefined
+  const runtime = new MultiAgentRuntime({
+    config: {
+      childTimeoutMs: 5,
+      timeoutHandshakeMs: 10,
+      timeoutSummaryGraceMs: 50
+    },
+    store: new InMemoryMultiAgentStore(),
+    idGenerator: () => 'child-dead-channel',
+    executor: async (input) => {
+      executorSignal = input.signal
+      input.registerLifecycleControl({
+        requestProgressSummary: async () => new Promise(() => undefined),
+        terminate: async (request) => {
+          terminationReasons.push(request.reason)
+          return new Promise(() => undefined)
+        }
+      })
+      return new Promise(() => undefined)
+    }
+  })
+
+  const record = await runtime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-dead-channel',
+    prompt: 'Become unresponsive'
+  })
+
+  assert.equal(record.error?.code, 'timeout')
+  assert.deepEqual(record.error?.details, { disposition: 'channel_unavailable' })
+  assert.deepEqual(terminationReasons, ['timeout_channel_unavailable'])
+  assert.equal(executorSignal?.aborted, true)
+})
+
+test('timeout handshake grants a bounded summary window before terminating an unresponsive child', async () => {
+  const terminationReasons: string[] = []
+  let executorSignal: AbortSignal | undefined
+  const runtime = new MultiAgentRuntime({
+    config: {
+      childTimeoutMs: 5,
+      timeoutHandshakeMs: 20,
+      timeoutSummaryGraceMs: 10
+    },
+    store: new InMemoryMultiAgentStore(),
+    idGenerator: () => 'child-timeout-grace',
+    executor: async (input) => {
+      executorSignal = input.signal
+      input.registerLifecycleControl({
+        requestProgressSummary: async () => ({ established: true }),
+        terminate: async (request) => {
+          terminationReasons.push(request.reason)
+        }
+      })
+      try {
+        return await waitForAbort(input.signal)
+      } catch {
+        throw Object.assign(new Error('child stopped after the summary grace period'), {
+          multiAgentSummary: 'Completed indexing; synthesis was still running.'
+        })
+      }
+    }
+  })
+
+  const record = await runtime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-grace',
+    prompt: 'Ignore the summary request'
+  })
+
+  assert.equal(record.error?.code, 'timeout')
+  assert.deepEqual(record.error?.details, { disposition: 'summary_grace_expired' })
+  assert.equal(record.summary, 'Completed indexing; synthesis was still running.')
+  assert.deepEqual(terminationReasons, ['timeout_summary_grace_expired'])
+  assert.equal(executorSignal?.aborted, true)
+})
+
+test('parent abort preempts the timeout summary grace period and uses the same lifecycle termination control', async () => {
+  const parent = new AbortController()
+  const summaryRequested = deferred<void>()
+  const terminationReasons: string[] = []
+  const runtime = new MultiAgentRuntime({
+    config: {
+      childTimeoutMs: 5,
+      timeoutHandshakeMs: 20,
+      timeoutSummaryGraceMs: 60_000
+    },
+    store: new InMemoryMultiAgentStore(),
+    idGenerator: () => 'child-parent-abort-during-summary',
+    executor: async (input) => {
+      input.registerLifecycleControl({
+        requestProgressSummary: async () => {
+          summaryRequested.resolve()
+          return { established: true }
+        },
+        terminate: async (request) => {
+          terminationReasons.push(request.reason)
+        }
+      })
+      return waitForAbort(input.signal)
+    }
+  })
+
+  const running = runtime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-parent-abort',
+    prompt: 'Wait for parent abort',
+    signal: parent.signal
+  })
+  await summaryRequested.promise
+  parent.abort()
+  const record = await running
+
+  assert.equal(record.status, 'aborted')
+  assert.equal(record.error?.code, 'child_aborted')
+  assert.deepEqual(terminationReasons, ['parent_abort'])
 })
 
 function clock(): () => string {

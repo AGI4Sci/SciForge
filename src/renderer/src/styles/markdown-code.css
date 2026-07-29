@@ -16,6 +16,13 @@
   margin-bottom: 0;
 }
 
+.ds-markdown .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: 0.1rem;
+}
+
 .ds-markdown p,
 .ds-markdown ul,
 .ds-markdown ol,

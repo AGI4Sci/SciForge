@@ -242,6 +242,7 @@ const CODEX_TURN_STOPPED_MESSAGE = 'Codex runtime stopped before this turn compl
 const CODEX_MULTI_AGENT_DEVELOPER_INSTRUCTIONS = [
   'SciForge provides `delegate_task` for bounded child-agent work.',
   'Use it when parallel investigation or independent implementation subtasks materially help the user request.',
+  'When two or more independent subtasks are ready, put them in one `delegate_task` tasks array so they start concurrently; do not wait for separate delegation calls one by one.',
   'Give each child a concise label and a self-contained prompt; do not use it for trivial work or as a substitute for doing the main task.',
   'Treat the tool result as the child agent answer, the same way you would read an assistant response.'
 ].join('\n')
@@ -1776,6 +1777,7 @@ export class CodexRuntimeService {
   private async runCodexMultiAgentChild(input: MultiAgentExecutorInput): Promise<MultiAgentExecutorResult> {
     const settings = await this.options.settings()
     const { client } = await this.ensureModelUseClient(settings)
+    if (input.signal.aborted) throw new Error('Codex child turn was aborted before startup.')
     this.resolveParentCodexTurnGovernance({
       threadId: input.parentThreadId,
       turnId: input.parentTurnId
@@ -1802,6 +1804,7 @@ export class CodexRuntimeService {
         agentRole: 'subagent'
       }
     })
+    if (input.signal.aborted) throw new Error('Codex child turn was aborted during thread startup.')
     const childThread = normalizeThread(readThread(threadResponse))
     if (!childThread.id) throw new Error('Codex child thread did not return a thread id.')
     const title = input.label || childThreadTitle(input.prompt)
@@ -1827,6 +1830,20 @@ export class CodexRuntimeService {
     const startedAtMs = Date.now()
     let childTurnId = ''
     let preparedGovernance: CodexPreparedTurnGovernance | null = null
+    let terminationPromise: Promise<void> | null = null
+    const terminateChildTurn = (signal?: AbortSignal): Promise<void> => {
+      if (!childTurnId) return Promise.resolve()
+      if (terminationPromise) return terminationPromise
+      const pending = client.interruptTurn({
+        threadId: childCodexThreadId,
+        turnId: childTurnId
+      }, signal).then(() => undefined)
+      terminationPromise = pending
+      void pending.catch(() => {
+        if (terminationPromise === pending) terminationPromise = null
+      })
+      return pending
+    }
     try {
       const modelAccess = codexModelAccessThreadParams(settings)
       preparedGovernance = await this.prepareCodexTurnGovernance({
@@ -1847,6 +1864,10 @@ export class CodexRuntimeService {
       const turn = asRecord(asRecord(turnResponse)?.turn) ?? {}
       childTurnId = stringValue(turn.id) || ''
       if (!childTurnId) throw new Error('Codex child turn did not return a turn id.')
+      if (input.signal.aborted) {
+        await terminateChildTurn().catch(() => undefined)
+        throw new Error('Codex child turn was aborted during turn startup.')
+      }
       this.recordActiveTurn(
         childGuiThreadId,
         childTurnId,
@@ -1860,6 +1881,25 @@ export class CodexRuntimeService {
       })
       preparedGovernance = null
       this.recordTurnModelHint(childGuiThreadId, childTurnId, modelAccess.model)
+      input.registerLifecycleControl({
+        threadRef: {
+          runtime: 'codex',
+          threadId: childGuiThreadId,
+          turnId: childTurnId
+        },
+        requestProgressSummary: async (request) => {
+          if (this.activeTurns.get(childGuiThreadId) !== childTurnId) {
+            return { established: false }
+          }
+          await client.steerTurn({
+            threadId: childCodexThreadId,
+            expectedTurnId: childTurnId,
+            input: [textInput(request.message)]
+          }, request.signal)
+          return { established: true }
+        },
+        terminate: (request) => terminateChildTurn(request.signal)
+      })
       await input.appendTranscript({
         id: `${input.childId}-thread-start`,
         kind: 'event',
@@ -1871,11 +1911,11 @@ export class CodexRuntimeService {
       const result = await this.waitForCodexChildTurn({
         subscriber,
         threadId: childGuiThreadId,
-        codexThreadId: childCodexThreadId,
         turnId: childTurnId,
         parentThreadId: input.parentThreadId,
         parentTurnId: input.parentTurnId,
-        signal: input.signal
+        signal: input.signal,
+        terminateChildTurn
       })
       return {
         summary: result.summary || `Child agent ${childGuiThreadId} completed.`,
@@ -1901,11 +1941,11 @@ export class CodexRuntimeService {
   private async waitForCodexChildTurn(input: {
     subscriber: CodexRuntimeEventSubscriber
     threadId: string
-    codexThreadId: string
     turnId: string
     parentThreadId: string
     parentTurnId: string
     signal: AbortSignal
+    terminateChildTurn(signal?: AbortSignal): Promise<void>
   }): Promise<{
     summary: string
     usage?: Partial<MultiAgentUsage>
@@ -1955,8 +1995,14 @@ export class CodexRuntimeService {
         if (event.turnComplete) break
       }
       if (input.signal.aborted) {
-        await this.client?.interruptTurn({ threadId: input.codexThreadId, turnId: input.turnId }).catch(() => undefined)
-        throw new Error('Codex child turn was aborted.')
+        await input.terminateChildTurn().catch(() => undefined)
+        const error = Object.assign(new Error('Codex child turn was aborted.'), {
+          ...(assistantText.trim() ? { multiAgentSummary: assistantText.trim() } : {}),
+          multiAgentTranscript: transcript,
+          ...(usage ? { multiAgentUsage: usage } : {})
+        })
+        error.name = 'AbortError'
+        throw error
       }
       return {
         summary: assistantText.trim(),

@@ -492,7 +492,7 @@ export function WorkbenchTopBar({
           <Bot className="h-4 w-4" strokeWidth={1.75} />
           {childAgentCount > 0 ? (
             <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-white">
-              {Math.min(childAgentCount, 9)}
+              {childAgentCount}
             </span>
           ) : null}
           {childAgentAttentionCount > 0 ? (

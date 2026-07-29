@@ -19,13 +19,18 @@ describe('Codex multi-agent dynamic tools', () => {
       expect.objectContaining({
         type: 'function',
         name: CODEX_MULTI_AGENT_FLAT_TOOL_NAME,
-        description: 'Send a query to a bounded child agent and return the child agent output.',
+        description: expect.stringContaining('tasks array'),
         inputSchema: expect.objectContaining({
           type: 'object',
           properties: expect.objectContaining({
             prompt: expect.objectContaining({ type: 'string' }),
             task: expect.objectContaining({ type: 'string' }),
-            instructions: expect.objectContaining({ type: 'string' })
+            instructions: expect.objectContaining({ type: 'string' }),
+            tasks: expect.objectContaining({
+              type: 'array',
+              minItems: 1,
+              maxItems: 2
+            })
           })
         })
       })
@@ -65,6 +70,118 @@ describe('Codex multi-agent dynamic tools', () => {
       contentItems: [{ type: 'inputText', text: 'done: second' }]
     })
     expect(executor).toHaveBeenCalledTimes(2)
+  })
+
+  it('starts tasks from one delegate call concurrently and returns every child result', async () => {
+    let releaseFirst!: () => void
+    let releaseSecond!: () => void
+    const firstWaiting = new Promise<void>((resolve) => { releaseFirst = resolve })
+    const secondWaiting = new Promise<void>((resolve) => { releaseSecond = resolve })
+    const entered: string[] = []
+    const executor = vi.fn(async ({ prompt }) => {
+      entered.push(prompt)
+      await (prompt === 'first' ? firstWaiting : secondWaiting)
+      return { summary: `done: ${prompt}` }
+    })
+    const bridge = createCodexMultiAgentToolBridge({
+      maxParallel: 2,
+      store: new InMemoryMultiAgentStore(),
+      executor
+    })
+
+    const running = bridge.callTool({
+      requestId: 'parallel-batch',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn',
+      tool: CODEX_MULTI_AGENT_FLAT_TOOL_NAME,
+      arguments: {
+        workspace: '/workspace',
+        tasks: [
+          { label: 'A', prompt: 'first' },
+          { label: 'B', prompt: 'second' }
+        ]
+      }
+    })
+
+    await vi.waitFor(() => expect(executor).toHaveBeenCalledTimes(2))
+    expect(entered).toEqual(['first', 'second'])
+    expect(executor.mock.calls.map(([input]) => input.workspace)).toEqual(['/workspace', '/workspace'])
+    releaseSecond()
+    releaseFirst()
+
+    await expect(running).resolves.toMatchObject({
+      success: true,
+      contentItems: [{
+        type: 'inputText',
+        text: expect.stringContaining('A — completed')
+      }],
+      structuredContent: {
+        mode: 'parallel',
+        children: [
+          expect.objectContaining({ label: 'A', status: 'completed', text: 'done: first' }),
+          expect.objectContaining({ label: 'B', status: 'completed', text: 'done: second' })
+        ]
+      }
+    })
+  })
+
+  it('rejects a batch larger than the configured parallel budget before starting children', async () => {
+    const executor = vi.fn(async () => ({ summary: 'unused' }))
+    const bridge = createCodexMultiAgentToolBridge({
+      maxParallel: 2,
+      store: new InMemoryMultiAgentStore(),
+      executor
+    })
+
+    await expect(bridge.callTool({
+      requestId: 'oversized-batch',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn',
+      tool: CODEX_MULTI_AGENT_FLAT_TOOL_NAME,
+      arguments: {
+        tasks: [
+          { prompt: 'one' },
+          { prompt: 'two' },
+          { prompt: 'three' }
+        ]
+      }
+    })).resolves.toMatchObject({
+      success: false,
+      contentItems: [{
+        type: 'inputText',
+        text: 'delegate_task accepts at most 2 parallel tasks in one call.'
+      }]
+    })
+    expect(executor).not.toHaveBeenCalled()
+  })
+
+  it('rejects the whole batch when any child task has no prompt', async () => {
+    const executor = vi.fn(async () => ({ summary: 'unused' }))
+    const bridge = createCodexMultiAgentToolBridge({
+      maxParallel: 2,
+      store: new InMemoryMultiAgentStore(),
+      executor
+    })
+
+    await expect(bridge.callTool({
+      requestId: 'invalid-batch',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn',
+      tool: CODEX_MULTI_AGENT_FLAT_TOOL_NAME,
+      arguments: {
+        tasks: [
+          { prompt: 'valid' },
+          { label: 'missing prompt' }
+        ]
+      }
+    })).resolves.toMatchObject({
+      success: false,
+      contentItems: [{
+        type: 'inputText',
+        text: 'delegate_task tasks[1] requires a prompt, task, or instructions string.'
+      }]
+    })
+    expect(executor).not.toHaveBeenCalled()
   })
 
   it('reuses one child run when app-server replays the same request', async () => {
@@ -176,6 +293,36 @@ describe('Codex multi-agent dynamic tools', () => {
     expect(executor).toHaveBeenCalledTimes(1)
   })
 
+  it('returns a captured progress summary together with the terminal child error', async () => {
+    const bridge = createCodexMultiAgentToolBridge({
+      store: new InMemoryMultiAgentStore(),
+      executor: async () => {
+        throw Object.assign(new Error('multi-agent child run timed out'), {
+          multiAgentSummary: 'Parsed two papers; one report remains unfinished.'
+        })
+      }
+    })
+
+    await expect(bridge.callTool({
+      requestId: 'failed-with-progress',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn',
+      tool: CODEX_MULTI_AGENT_FLAT_TOOL_NAME,
+      arguments: { prompt: 'Read three papers' }
+    })).resolves.toMatchObject({
+      success: false,
+      contentItems: [{
+        type: 'inputText',
+        text: [
+          'multi-agent child run timed out',
+          '',
+          'Progress summary:',
+          'Parsed two papers; one report remains unfinished.'
+        ].join('\n')
+      }]
+    })
+  })
+
   it('reuses the persisted child result after the main/app-server bridge restarts', async () => {
     const storeRoot = await mkdtemp(join(tmpdir(), 'sciforge-codex-multi-agent-restart-'))
     try {
@@ -273,7 +420,7 @@ describe('Codex multi-agent dynamic tools', () => {
       success: false,
       contentItems: [{
         type: 'inputText',
-        text: 'delegate_task requires a prompt, task, or instructions string.'
+        text: 'delegate_task requires a prompt, task, or instructions string, or a non-empty tasks array.'
       }]
     })
     expect(executor).not.toHaveBeenCalled()

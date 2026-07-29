@@ -183,6 +183,18 @@ describe('WorkbenchTopBar toolbar contributions', () => {
     expect(html).toContain('animate-pulse')
   })
 
+  it('shows the exact child count instead of clamping counts above nine', () => {
+    const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
+      rightPanelMode: null,
+      onToggleRightPanelMode: vi.fn(),
+      childAgentCount: 27,
+      onOpenChildAgents: vi.fn()
+    }))
+
+    expect(html).toContain('>27</span>')
+    expect(html).not.toContain('>9</span>')
+  })
+
   it('marks deep child interactions that need the user', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       rightPanelMode: 'file',

@@ -2,6 +2,8 @@ import { z } from 'zod'
 
 export const MULTI_AGENT_CONTRACT_VERSION = 1
 export const DEFAULT_MULTI_AGENT_CHILD_TIMEOUT_MS = 10 * 60 * 1000
+export const DEFAULT_MULTI_AGENT_TIMEOUT_HANDSHAKE_MS = 5 * 1000
+export const DEFAULT_MULTI_AGENT_TIMEOUT_SUMMARY_GRACE_MS = 60 * 1000
 
 export const MultiAgentChildStatus = z.enum(['queued', 'running', 'completed', 'failed', 'aborted'])
 export type MultiAgentChildStatus = z.infer<typeof MultiAgentChildStatus>
@@ -119,6 +121,8 @@ export const MultiAgentRuntimeConfig = z
     maxParallel: z.number().int().nonnegative().default(2),
     maxChildren: z.number().int().nonnegative().default(16),
     childTimeoutMs: z.number().int().positive().default(DEFAULT_MULTI_AGENT_CHILD_TIMEOUT_MS),
+    timeoutHandshakeMs: z.number().int().positive().default(DEFAULT_MULTI_AGENT_TIMEOUT_HANDSHAKE_MS),
+    timeoutSummaryGraceMs: z.number().int().positive().default(DEFAULT_MULTI_AGENT_TIMEOUT_SUMMARY_GRACE_MS),
     maxTranscriptEntries: z.number().int().positive().default(1000)
   })
   .strict()
@@ -237,6 +241,34 @@ export type MultiAgentExecutorResult = {
   threadRef?: MultiAgentChildThreadRef
 }
 
+export type MultiAgentProgressSummaryRequest = {
+  reason: 'timeout'
+  message: string
+  signal: AbortSignal
+}
+
+export type MultiAgentProgressSummaryReceipt = {
+  established: boolean
+}
+
+export type MultiAgentTerminationReason =
+  | 'parent_abort'
+  | 'timeout_channel_unavailable'
+  | 'timeout_summary_grace_expired'
+
+export type MultiAgentTerminationRequest = {
+  reason: MultiAgentTerminationReason
+  signal: AbortSignal
+}
+
+export type MultiAgentLifecycleControl = {
+  threadRef?: MultiAgentChildThreadRef
+  requestProgressSummary(
+    request: MultiAgentProgressSummaryRequest
+  ): Promise<MultiAgentProgressSummaryReceipt>
+  terminate(request: MultiAgentTerminationRequest): Promise<void>
+}
+
 export type MultiAgentExecutorInput = {
   childId: string
   parentThreadId: string
@@ -251,6 +283,7 @@ export type MultiAgentExecutorInput = {
   filePathPolicy?: Record<string, unknown>
   maxToolCalls?: number
   signal: AbortSignal
+  registerLifecycleControl(control: MultiAgentLifecycleControl): void
   appendTranscript: (entry: MultiAgentTranscriptEntry) => Promise<void>
 }
 

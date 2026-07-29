@@ -25,6 +25,9 @@ export type CodexMultiAgentToolBridgeOptions = {
   enabled?: boolean
   maxParallel?: number
   maxChildren?: number
+  childTimeoutMs?: number
+  timeoutHandshakeMs?: number
+  timeoutSummaryGraceMs?: number
   store?: MultiAgentStore
   storeRoot?: string
   executor: MultiAgentExecutor
@@ -41,6 +44,21 @@ type CachedMultiAgentRequest = {
   promise: Promise<RuntimeToolCallResponse>
   settled: boolean
 }
+
+type DelegatedTaskInput = {
+  prompt: string
+  label?: string
+  workspace?: string
+  model?: string
+}
+
+type DelegatedTaskBatch = {
+  tasks: DelegatedTaskInput[]
+}
+
+type DelegatedTaskOutcome =
+  | { task: DelegatedTaskInput; record: MultiAgentChildRunRecord }
+  | { task: DelegatedTaskInput; error: unknown }
 
 export function createCodexMultiAgentToolBridge(
   options: CodexMultiAgentToolBridgeOptions
@@ -61,7 +79,14 @@ export class CodexMultiAgentToolBridge {
       config: {
         enabled: options.enabled ?? true,
         maxParallel: options.maxParallel ?? 2,
-        maxChildren: options.maxChildren ?? 4
+        maxChildren: options.maxChildren ?? 4,
+        ...(options.childTimeoutMs !== undefined ? { childTimeoutMs: options.childTimeoutMs } : {}),
+        ...(options.timeoutHandshakeMs !== undefined
+          ? { timeoutHandshakeMs: options.timeoutHandshakeMs }
+          : {}),
+        ...(options.timeoutSummaryGraceMs !== undefined
+          ? { timeoutSummaryGraceMs: options.timeoutSummaryGraceMs }
+          : {})
       },
       store: options.store ?? (options.storeRoot
         ? new FileMultiAgentStore(options.storeRoot)
@@ -73,21 +98,52 @@ export class CodexMultiAgentToolBridge {
 
   dynamicTools(): RuntimeToolDefinition[] {
     if (this.options.enabled === false) return []
+    const maxParallel = Math.max(1, this.options.maxParallel ?? 2)
+    const taskProperties = {
+      prompt: { type: 'string', description: 'The child agent task prompt.' },
+      task: { type: 'string', description: 'Alias for prompt.' },
+      instructions: { type: 'string', description: 'Alias for prompt.' },
+      label: { type: 'string', description: 'Short label for the child agent.' },
+      name: { type: 'string', description: 'Alias for label.' },
+      workspace: { type: 'string', description: 'Workspace root for the child task.' },
+      cwd: { type: 'string', description: 'Alias for workspace.' },
+      model: { type: 'string', description: 'Optional model override for the child agent.' }
+    }
     return [{
       type: 'function',
       name: CODEX_MULTI_AGENT_FLAT_TOOL_NAME,
-      description: 'Send a query to a bounded child agent and return the child agent output.',
+      description: [
+        'Delegate independent work to bounded child agents and return their outputs.',
+        `For parallel work, send one call with a tasks array containing up to ${maxParallel} tasks;`,
+        'do not issue independent delegate_task calls serially.'
+      ].join(' '),
       inputSchema: {
         type: 'object',
         properties: {
-          prompt: { type: 'string', description: 'The child agent task prompt.' },
-          task: { type: 'string', description: 'Alias for prompt.' },
-          instructions: { type: 'string', description: 'Alias for prompt.' },
-          label: { type: 'string', description: 'Short label for the child agent.' },
-          name: { type: 'string', description: 'Alias for label.' },
-          workspace: { type: 'string', description: 'Workspace root for the child task.' },
-          cwd: { type: 'string', description: 'Alias for workspace.' }
+          ...taskProperties,
+          tasks: {
+            type: 'array',
+            minItems: 1,
+            maxItems: maxParallel,
+            description: 'Independent child tasks to start concurrently in this single tool call.',
+            items: {
+              type: 'object',
+              properties: taskProperties,
+              anyOf: [
+                { required: ['prompt'] },
+                { required: ['task'] },
+                { required: ['instructions'] }
+              ],
+              additionalProperties: false
+            }
+          },
         },
+        anyOf: [
+          { required: ['prompt'] },
+          { required: ['task'] },
+          { required: ['instructions'] },
+          { required: ['tasks'] }
+        ],
         additionalProperties: false
       }
     }]
@@ -106,8 +162,24 @@ export class CodexMultiAgentToolBridge {
     if (!this.canHandle(request)) {
       return failedMultiAgentResponse(`Unsupported multi-agent tool: ${displayToolName(request)}.`)
     }
-    const input = parseSpawnAgentArguments(request.arguments)
-    if (!input.prompt) return failedMultiAgentResponse('delegate_task requires a prompt, task, or instructions string.')
+    const input = parseDelegateTaskArguments(request.arguments)
+    if (input.tasks.length === 0) {
+      return failedMultiAgentResponse(
+        'delegate_task requires a prompt, task, or instructions string, or a non-empty tasks array.'
+      )
+    }
+    const invalidTaskIndex = input.tasks.findIndex((task) => !task.prompt)
+    if (invalidTaskIndex >= 0) {
+      return failedMultiAgentResponse(
+        `delegate_task tasks[${invalidTaskIndex}] requires a prompt, task, or instructions string.`
+      )
+    }
+    const maxParallel = this.options.maxParallel ?? 2
+    if (input.tasks.length > maxParallel) {
+      return failedMultiAgentResponse(
+        `delegate_task accepts at most ${maxParallel} parallel tasks in one call.`
+      )
+    }
     if (!request.threadId) return failedMultiAgentResponse('delegate_task requires threadId.')
     if (!request.turnId) return failedMultiAgentResponse('delegate_task requires turnId.')
 
@@ -138,23 +210,31 @@ export class CodexMultiAgentToolBridge {
 
   private async executeToolCall(
     request: RuntimeToolCallRequest & { threadId: string; turnId: string },
-    input: ReturnType<typeof parseSpawnAgentArguments>
+    input: DelegatedTaskBatch
   ): Promise<RuntimeToolCallResponse> {
 
     const active = { controller: new AbortController(), threadId: request.threadId, turnId: request.turnId }
     this.activeRequests.add(active)
     try {
-      const record = await this.runtime.runChild({
-        parentThreadId: request.threadId,
-        parentTurnId: request.turnId,
-        requestId: String(request.requestId),
-        label: input.label,
-        prompt: input.prompt,
-        workspace: input.workspace,
-        model: input.model,
-        signal: active.controller.signal
-      })
-      return responseFromChildRecord(record)
+      const batch = input.tasks.length > 1
+      const outcomes = await Promise.all(input.tasks.map(async (task, index): Promise<DelegatedTaskOutcome> => {
+        try {
+          const record = await this.runtime.runChild({
+            parentThreadId: request.threadId,
+            parentTurnId: request.turnId,
+            requestId: batch ? `batch\u0000${String(request.requestId)}\u0000${index}` : String(request.requestId),
+            label: task.label,
+            prompt: task.prompt,
+            workspace: task.workspace,
+            model: task.model,
+            signal: active.controller.signal
+          })
+          return { task, record }
+        } catch (error) {
+          return { task, error }
+        }
+      }))
+      return responseFromDelegatedTaskOutcomes(outcomes)
     } finally {
       this.activeRequests.delete(active)
     }
@@ -244,9 +324,13 @@ export function codexChildFromMultiAgentRecord(
 
 function responseFromChildRecord(record: MultiAgentChildRunRecord): RuntimeToolCallResponse {
   const ok = record.status !== 'failed' && record.status !== 'aborted'
+  const errorText = record.error?.message?.trim()
+  const summaryText = record.summary?.trim()
   const text = ok
-    ? record.summary?.trim() || 'Child agent completed without textual output.'
-    : record.error?.message || record.summary?.trim() || 'Child agent failed.'
+    ? summaryText || 'Child agent completed without textual output.'
+    : errorText && summaryText && errorText !== summaryText
+      ? `${errorText}\n\nProgress summary:\n${summaryText}`
+      : errorText || summaryText || 'Child agent failed.'
   return {
     success: ok,
     contentItems: [{
@@ -256,17 +340,76 @@ function responseFromChildRecord(record: MultiAgentChildRunRecord): RuntimeToolC
   }
 }
 
-function parseSpawnAgentArguments(value: unknown): {
-  prompt: string
-  label?: string
-  workspace?: string
-  model?: string
-} {
+function responseFromDelegatedTaskOutcomes(
+  outcomes: readonly DelegatedTaskOutcome[]
+): RuntimeToolCallResponse {
+  if (outcomes.length === 1) {
+    const outcome = outcomes[0]
+    return 'record' in outcome
+      ? responseFromChildRecord(outcome.record)
+      : failedMultiAgentResponse(errorMessage(outcome.error))
+  }
+
+  const results = outcomes.map((outcome, index) => {
+    const label = outcome.task.label || `Task ${index + 1}`
+    if ('record' in outcome) {
+      const response = responseFromChildRecord(outcome.record)
+      return {
+        index,
+        label,
+        success: response.success,
+        childId: outcome.record.id,
+        status: outcome.record.status,
+        text: response.contentItems[0]?.type === 'inputText'
+          ? response.contentItems[0].text
+          : ''
+      }
+    }
+    return {
+      index,
+      label,
+      success: false,
+      status: 'failed',
+      text: errorMessage(outcome.error)
+    }
+  })
+  return {
+    success: results.every((result) => result.success),
+    contentItems: [{
+      type: 'inputText',
+      text: results.map((result) => [
+        `${result.label} — ${result.status}`,
+        result.text
+      ].filter(Boolean).join('\n')).join('\n\n')
+    }],
+    structuredContent: {
+      mode: 'parallel',
+      children: results
+    }
+  }
+}
+
+function parseDelegateTaskArguments(value: unknown): DelegatedTaskBatch {
   const args = recordArguments(value)
+  const defaults = parseDelegatedTask(args)
+  const values = Array.isArray(args.tasks) ? args.tasks : []
+  const tasks = values.length > 0
+    ? values
+        .map((task) => parseDelegatedTask(recordArguments(task), defaults))
+    : defaults.prompt
+      ? [defaults]
+      : []
+  return { tasks }
+}
+
+function parseDelegatedTask(
+  args: Record<string, unknown>,
+  defaults: Partial<DelegatedTaskInput> = {}
+): DelegatedTaskInput {
   const prompt = firstString(args.prompt, args.task, args.instructions, args.input, args.message)
   const label = firstString(args.label, args.name, args.agentName, args.agent)
-  const workspace = firstString(args.workspace, args.cwd, args.workspaceRoot)
-  const model = firstString(args.model)
+  const workspace = firstString(args.workspace, args.cwd, args.workspaceRoot, defaults.workspace)
+  const model = firstString(args.model, defaults.model)
   return {
     prompt,
     ...(label ? { label } : {}),
@@ -302,6 +445,10 @@ function firstString(...values: unknown[]): string {
     if (typeof value === 'string' && value.trim()) return value.trim()
   }
   return ''
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function agentUsageFromMultiAgentUsage(usage: MultiAgentUsage = EMPTY_MULTI_AGENT_USAGE): AgentRuntimeChild['usage'] | undefined {

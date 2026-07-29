@@ -1355,7 +1355,9 @@ describe('createCodexAgentRuntimeAdapter', () => {
         threads: [{
           id: 'native-child',
           title: 'Reviewer thread',
-          updatedAt: '2026-06-21T00:00:01.000Z',
+          // App-server thread snapshots can remain "running" and receive a
+          // later metadata timestamp after the canonical terminal child event.
+          updatedAt: '2026-06-21T00:00:03.000Z',
           model: 'gpt-5',
           mode: 'agent',
           status: 'running',
