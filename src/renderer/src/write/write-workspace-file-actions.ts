@@ -11,6 +11,10 @@ import {
   rememberActiveFile,
   writeDirnameFromPath
 } from './write-workspace-store-helpers'
+import {
+  pinWorkspaceLocator,
+  withPinnedWorkspaceLocator
+} from '../remote-workspace/placement'
 
 type WriteFileActions = Pick<
   WriteWorkspaceState,
@@ -63,11 +67,17 @@ export function createWriteFileActions({
         return
       }
       const current = get()
-      if (current.workspaceRoot === normalized && current.rootDirectory) return
+      const pinnedWorkspaceLocator = pinWorkspaceLocator(normalized)
+      if (
+        current.workspaceRoot === normalized &&
+        current.rootDirectory &&
+        current.pinnedWorkspaceLocator?.hostSessionId === pinnedWorkspaceLocator?.hostSessionId &&
+        current.pinnedWorkspaceLocator?.path === pinnedWorkspaceLocator?.path
+      ) return
 
       setLastSavedContent('')
       cancelExternalSyncAnimation()
-      set({ ...initialState(), workspaceRoot: normalized })
+      set({ ...initialState(), workspaceRoot: normalized, pinnedWorkspaceLocator })
       const root = await get().loadDirectory(normalized)
       if (!root) return
       set((state) => ({ rootDirectory: root, expandedDirs: new Set([...state.expandedDirs, root]) }))
@@ -85,7 +95,9 @@ export function createWriteFileActions({
       set((state) => ({ loadingDirs: { ...state.loadingDirs, [targetKey]: true } }))
       let result: Awaited<ReturnType<typeof window.sciforge.listWorkspaceDirectory>>
       try {
-        result = await window.sciforge.listWorkspaceDirectory({ workspaceRoot, path })
+        result = await window.sciforge.listWorkspaceDirectory(
+          withPinnedWorkspaceLocator({ workspaceRoot, path }, get().pinnedWorkspaceLocator)
+        )
       } catch (error) {
         set((state) => ({
           loadingDirs: withoutLoadingDirs(state.loadingDirs, [targetKey, requestedRoot]),
@@ -124,6 +136,12 @@ export function createWriteFileActions({
     },
 
     toggleDirectory: async (workspaceRoot, path) => {
+      try {
+        withPinnedWorkspaceLocator({ workspaceRoot }, get().pinnedWorkspaceLocator)
+      } catch (error) {
+        set({ treeError: formatActionError(error) })
+        return
+      }
       const expanded = get().expandedDirs.has(path)
       if (!expanded && !get().entriesByDir[path]) {
         await get().loadDirectory(workspaceRoot, path)
@@ -140,6 +158,12 @@ export function createWriteFileActions({
     },
 
     refreshWorkspace: async (workspaceRoot) => {
+      try {
+        withPinnedWorkspaceLocator({ workspaceRoot }, get().pinnedWorkspaceLocator)
+      } catch (error) {
+        set({ treeError: formatActionError(error) })
+        return
+      }
       const state = get()
       const root = state.rootDirectory || await get().loadDirectory(workspaceRoot)
       if (!root) return
@@ -153,6 +177,12 @@ export function createWriteFileActions({
 
     openFile: async (workspaceRoot, path) => {
       cancelExternalSyncAnimation()
+      try {
+        withPinnedWorkspaceLocator({ workspaceRoot }, get().pinnedWorkspaceLocator)
+      } catch (error) {
+        set({ fileError: formatActionError(error), fileLoading: false })
+        return
+      }
       const saved = await get().flushSave(workspaceRoot)
       if (!saved) return
       if (!isWriteWorkspaceFilePath(path)) {
@@ -165,7 +195,9 @@ export function createWriteFileActions({
       set({ fileLoading: true, fileError: null })
       try {
         if (isWriteImageFilePath(path)) {
-          const result = await window.sciforge.readWorkspaceImage({ path, workspaceRoot })
+          const result = await window.sciforge.readWorkspaceImage(
+            withPinnedWorkspaceLocator({ path, workspaceRoot }, get().pinnedWorkspaceLocator)
+          )
           if (!result.ok) {
             set({ fileLoading: false, fileError: result.message })
             return
@@ -183,6 +215,7 @@ export function createWriteFileActions({
             pdfMtimeMs: 0,
             fileSize: result.size,
             fileTruncated: false,
+            fileRevision: null,
             fileLoading: false,
             fileError: null,
             saveStatus: 'saved',
@@ -193,7 +226,9 @@ export function createWriteFileActions({
         }
 
         if (isWritePdfFilePath(path)) {
-          const result = await window.sciforge.readWorkspaceFile({ path, workspaceRoot })
+          const result = await window.sciforge.readWorkspaceFile(
+            withPinnedWorkspaceLocator({ path, workspaceRoot }, get().pinnedWorkspaceLocator)
+          )
           if (!result.ok) {
             set({ fileLoading: false, fileError: result.message })
             return
@@ -215,6 +250,7 @@ export function createWriteFileActions({
             pdfMtimeMs: result.mtimeMs,
             fileSize: result.size,
             fileTruncated: false,
+            fileRevision: result.revision,
             fileLoading: false,
             fileError: null,
             saveStatus: 'saved',
@@ -224,7 +260,9 @@ export function createWriteFileActions({
           return
         }
 
-        const result = await window.sciforge.readWorkspaceFile({ path, workspaceRoot })
+        const result = await window.sciforge.readWorkspaceFile(
+          withPinnedWorkspaceLocator({ path, workspaceRoot }, get().pinnedWorkspaceLocator)
+        )
         if (!result.ok) {
           set({ fileLoading: false, fileError: result.message })
           return
@@ -246,6 +284,7 @@ export function createWriteFileActions({
           pdfMtimeMs: 0,
           fileSize: result.size,
           fileTruncated: result.truncated,
+          fileRevision: result.revision,
           fileLoading: false,
           fileError: null,
           saveStatus: 'saved',
@@ -265,7 +304,12 @@ export function createWriteFileActions({
     createFile: async (workspaceRoot, path, content = '') => {
       let result: Awaited<ReturnType<typeof window.sciforge.createWorkspaceFile>>
       try {
-        result = await window.sciforge.createWorkspaceFile({ workspaceRoot, path, content })
+        result = await window.sciforge.createWorkspaceFile(
+          withPinnedWorkspaceLocator(
+            { workspaceRoot, path, content },
+            get().pinnedWorkspaceLocator
+          )
+        )
       } catch (error) {
         set({ fileError: formatActionError(error) })
         return null
@@ -282,7 +326,9 @@ export function createWriteFileActions({
     createDirectory: async (workspaceRoot, path) => {
       let result: Awaited<ReturnType<typeof window.sciforge.createWorkspaceDirectory>>
       try {
-        result = await window.sciforge.createWorkspaceDirectory({ workspaceRoot, path })
+        result = await window.sciforge.createWorkspaceDirectory(
+          withPinnedWorkspaceLocator({ workspaceRoot, path }, get().pinnedWorkspaceLocator)
+        )
       } catch (error) {
         set({ fileError: formatActionError(error) })
         return null
@@ -304,7 +350,12 @@ export function createWriteFileActions({
       cancelExternalSyncAnimation()
       let result: Awaited<ReturnType<typeof window.sciforge.renameWorkspaceEntry>>
       try {
-        result = await window.sciforge.renameWorkspaceEntry({ workspaceRoot, path, newName })
+        result = await window.sciforge.renameWorkspaceEntry(
+          withPinnedWorkspaceLocator(
+            { workspaceRoot, path, newName },
+            get().pinnedWorkspaceLocator
+          )
+        )
       } catch (error) {
         set({ fileError: formatActionError(error) })
         return null
@@ -345,6 +396,7 @@ export function createWriteFileActions({
           pdfMtimeMs: nextActiveFileKind === 'pdf' ? state.pdfMtimeMs : 0,
           fileSize: keepActiveFile ? state.fileSize : 0,
           fileTruncated: keepActiveFile ? state.fileTruncated : false,
+          fileRevision: keepActiveFile ? state.fileRevision : null,
           saveStatus: keepActiveFile ? state.saveStatus : 'saved',
           selection: nextActiveFileKind === 'text' || nextActiveFileKind === 'pdf' ? state.selection : emptySelection(),
           quotedSelections: nextActiveFileKind === 'text' || nextActiveFileKind === 'pdf' ? state.quotedSelections : [],
@@ -366,7 +418,9 @@ export function createWriteFileActions({
       cancelExternalSyncAnimation()
       let result: Awaited<ReturnType<typeof window.sciforge.deleteWorkspaceEntry>>
       try {
-        result = await window.sciforge.deleteWorkspaceEntry({ workspaceRoot, path })
+        result = await window.sciforge.deleteWorkspaceEntry(
+          withPinnedWorkspaceLocator({ workspaceRoot, path }, get().pinnedWorkspaceLocator)
+        )
       } catch (error) {
         set({ fileError: formatActionError(error) })
         return false
@@ -392,6 +446,7 @@ export function createWriteFileActions({
           pdfMtimeMs: 0,
           fileSize: 0,
           fileTruncated: false,
+          fileRevision: null,
           fileError: null,
           saveStatus: 'saved',
           selection: emptySelection(),

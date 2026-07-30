@@ -33,7 +33,7 @@ import {
 import {
   LIFE_SCIENCE_MOLECULAR_SELECTION_OPERATION_TYPE,
   createLifeScienceWorkspacePreviewProvider
-} from './main/providers.js'
+} from './backend/providers.js'
 
 const selectionCases: readonly LifeScienceStructuredSelection[] = [
   { kind: 'molecular', chains: ['A'], ligands: ['ATP'] },

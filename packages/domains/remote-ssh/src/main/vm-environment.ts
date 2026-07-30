@@ -6,6 +6,7 @@ import { isAbsolute, posix, win32 } from 'node:path'
 import type {
   RemoteSshLab,
   RemoteSshLabEnvironmentConfig,
+  RemoteSshLabEnvironmentGuidanceCode,
   RemoteSshLabEnvironmentLocatorConfig,
   RemoteSshLabEnvironmentResult,
   RemoteSshVirtualBoxMachine,
@@ -24,6 +25,7 @@ import type {
 } from './lab-environment.js'
 
 const COMMAND_TIMEOUT_MS = 30_000
+const GATEWAY_PROBE_TIMEOUT_MS = 8_000
 const VM_TRANSITION_ATTEMPTS = 60
 const VM_TRANSITION_POLL_MS = 500
 const TUNNEL_START_ATTEMPTS = 100
@@ -73,9 +75,15 @@ export type SpawnVmTunnel = (
   }
 ) => VmTunnelProcess
 
+export type OpenVirtualBoxManager = (input: Readonly<{
+  platform: NodeJS.Platform
+  vboxManageExecutable: string
+}>) => Promise<void>
+
 export type VirtualBoxLabEnvironmentProviderOptions = Readonly<{
   runner?: VmCommandRunner
   spawnTunnel?: SpawnVmTunnel
+  openVirtualBoxManager?: OpenVirtualBoxManager
   platform?: NodeJS.Platform
   environment?: NodeJS.ProcessEnv
   now?: () => Date
@@ -102,12 +110,21 @@ type ActiveTunnel = {
   startupFailure?: Error
 }
 
+type GatewayReadiness =
+  | Readonly<{ ready: true }>
+  | Readonly<{
+      ready: false
+      guidanceCode: RemoteSshLabEnvironmentGuidanceCode
+      message: string
+    }>
+
 export class VirtualBoxLabEnvironmentProvider
 implements RemoteSshLabEnvironmentProvider, RemoteSshVirtualBoxMachineCatalog {
   readonly provider = 'vm' as const
 
   private readonly runner: VmCommandRunner
   private readonly spawnTunnel: SpawnVmTunnel
+  private readonly openVirtualBoxManager: OpenVirtualBoxManager
   private readonly platform: NodeJS.Platform
   private readonly environment: NodeJS.ProcessEnv
   private readonly now: () => Date
@@ -130,6 +147,8 @@ implements RemoteSshLabEnvironmentProvider, RemoteSshVirtualBoxMachineCatalog {
     this.runner = options.runner ?? new SystemVmCommandRunner()
     this.spawnTunnel = options.spawnTunnel ?? ((executable, args, spawnOptions) =>
       spawn(executable, args, spawnOptions) as VmTunnelProcess)
+    this.openVirtualBoxManager = options.openVirtualBoxManager ??
+      launchVirtualBoxManager
     this.platform = options.platform ?? process.platform
     this.environment = options.environment ?? process.env
     this.now = options.now ?? (() => new Date())
@@ -211,7 +230,8 @@ implements RemoteSshLabEnvironmentProvider, RemoteSshVirtualBoxMachineCatalog {
     const executable = await this.virtualBoxExecutable()
     if (!executable) {
       return this.result(lab, 'provider-unavailable', false,
-        'VirtualBox is not installed or VBoxManage is unavailable.')
+        'VirtualBox is not installed or VBoxManage is unavailable.',
+        'install-provider')
     }
 
     return this.getWithSignal(lab, config, executable)
@@ -230,7 +250,8 @@ implements RemoteSshLabEnvironmentProvider, RemoteSshVirtualBoxMachineCatalog {
         lab,
         'configuration-required',
         false,
-        `VirtualBox virtual machine is not registered: ${config.vmId}`
+        `VirtualBox virtual machine is not registered: ${config.vmId}`,
+        'select-environment'
       )
     }
     if (machine.kind === 'failed') {
@@ -246,7 +267,19 @@ implements RemoteSshLabEnvironmentProvider, RemoteSshVirtualBoxMachineCatalog {
         tunnel.gatewaySshAlias === config.gatewaySshAlias &&
         await this.isSocksProxyReady(tunnel.port, signal)
       if (!ready && tunnel) this.terminateTunnel(lab.id)
-      return this.result(lab, ready ? 'ready' : 'login-required', true)
+      if (ready) {
+        return this.result(lab, 'ready', true, undefined, 'test-target')
+      }
+      const gateway = await this.gatewayReadiness(config, signal)
+      return gateway.ready
+        ? this.result(lab, 'ready', true, undefined, 'test-target')
+        : this.result(
+            lab,
+            'configuration-required',
+            true,
+            gateway.message,
+            gateway.guidanceCode
+          )
     }
     if (state === 'stopped') this.visibleConsoles.delete(lab.id)
     if (state === 'paused') {
@@ -254,7 +287,8 @@ implements RemoteSshLabEnvironmentProvider, RemoteSshVirtualBoxMachineCatalog {
         lab,
         'failed',
         true,
-        'The VirtualBox VM is paused. Resume or power it off in VirtualBox before continuing.'
+        'The VirtualBox VM is paused. Resume or power it off in VirtualBox before continuing.',
+        'resume-environment'
       )
     }
     if (state === 'failed') {
@@ -262,7 +296,8 @@ implements RemoteSshLabEnvironmentProvider, RemoteSshVirtualBoxMachineCatalog {
         lab,
         'failed',
         true,
-        `VirtualBox reported VM state "${machine.state}".`
+        `VirtualBox reported VM state "${machine.state}".`,
+        'retry'
       )
     }
     return this.result(
@@ -271,7 +306,8 @@ implements RemoteSshLabEnvironmentProvider, RemoteSshVirtualBoxMachineCatalog {
       true,
       state === 'stopping'
         ? `VirtualBox is completing the VM transition "${machine.state}".`
-        : undefined
+        : undefined,
+      state === 'stopped' ? 'start-environment' : 'wait-for-environment'
     )
   }
 
@@ -288,7 +324,13 @@ implements RemoteSshLabEnvironmentProvider, RemoteSshVirtualBoxMachineCatalog {
     const config = requireVirtualBoxConfig(lab)
     const executable = await this.requireVirtualBoxExecutable()
     const initial = await this.getWithSignal(lab, config, executable, signal)
-    if (initial.state === 'ready' || initial.state === 'login-required') return initial
+    if (
+      initial.state === 'ready' ||
+      initial.state === 'login-required' ||
+      (initial.state === 'configuration-required' && initial.consoleAvailable)
+    ) {
+      return initial
+    }
     if (initial.state !== 'stopped') throw environmentStateError(initial)
 
     this.assertOpen()
@@ -312,31 +354,35 @@ implements RemoteSshLabEnvironmentProvider, RemoteSshVirtualBoxMachineCatalog {
       lab,
       'starting',
       true,
-      'VirtualBox accepted the start request but the virtual machine is not ready yet.'
+      'VirtualBox accepted the start request but the virtual machine is not ready yet.',
+      'wait-for-environment'
     )
   }
 
   async openConsole(lab: RemoteSshLab) {
     this.assertOpen()
     const config = requireVirtualBoxConfig(lab)
+    const executable = await this.requireVirtualBoxExecutable()
     let current = await this.get(lab)
     if (current.state === 'stopped') {
       current = await this.ensure(lab)
     } else if (
       current.state === 'ready' ||
       current.state === 'login-required' ||
+      (current.state === 'configuration-required' && current.consoleAvailable) ||
       current.state === 'starting'
     ) {
       if (this.visibleConsoles.get(lab.id) !== config.vmId) {
-        throw new Error(
-          'VirtualBox cannot attach a new GUI console to an already-running virtual machine. ' +
-          'Stop the virtual machine, then open its console from SciForge.'
-        )
+        await this.openVirtualBoxManager({
+          platform: this.platform,
+          vboxManageExecutable: executable
+        })
       }
     }
     if (
       current.state !== 'ready' &&
       current.state !== 'login-required' &&
+      !(current.state === 'configuration-required' && current.consoleAvailable) &&
       current.state !== 'starting'
     ) {
       throw environmentStateError(current)
@@ -386,7 +432,8 @@ implements RemoteSshLabEnvironmentProvider, RemoteSshVirtualBoxMachineCatalog {
       lab,
       'starting',
       true,
-      'The guest shutdown request is still in progress.'
+      'The guest shutdown request is still in progress.',
+      'wait-for-environment'
     )
   }
 
@@ -629,12 +676,109 @@ implements RemoteSshLabEnvironmentProvider, RemoteSshVirtualBoxMachineCatalog {
   }
 
   private async requireOpenSshExecutable(): Promise<string> {
-    const executable = this.configuredOpenSshExecutable ??
-      systemOpenSshExecutable(this.platform, this.environment)
-    if (!await this.isExecutable(executable)) {
-      throw new Error(`Host OpenSSH executable is unavailable: ${executable}`)
+    const executable = await this.openSshExecutable()
+    if (!executable) {
+      const expected = this.configuredOpenSshExecutable ??
+        systemOpenSshExecutable(this.platform, this.environment)
+      throw new Error(`Host OpenSSH executable is unavailable: ${expected}`)
     }
     return executable
+  }
+
+  private async openSshExecutable(): Promise<string | undefined> {
+    const executable = this.configuredOpenSshExecutable ??
+      systemOpenSshExecutable(this.platform, this.environment)
+    return await this.isExecutable(executable) ? executable : undefined
+  }
+
+  private async gatewayReadiness(
+    config: RemoteSshVmEnvironmentConfig,
+    signal?: AbortSignal
+  ): Promise<GatewayReadiness> {
+    const executable = await this.openSshExecutable()
+    if (!executable) {
+      return {
+        ready: false,
+        guidanceCode: 'install-host-openssh',
+        message: 'The host OpenSSH client is unavailable.'
+      }
+    }
+    let probe: VmCommandResult
+    try {
+      probe = await this.runner.run({
+        executable,
+        args: [
+          '-T',
+          '-o', 'BatchMode=yes',
+          '-o', 'ClearAllForwardings=yes',
+          '-o', 'ConnectTimeout=5',
+          '-o', 'ConnectionAttempts=1',
+          '-o', 'ControlMaster=no',
+          '-o', 'ForwardAgent=no',
+          '-o', 'ForwardX11=no',
+          '-o', 'NumberOfPasswordPrompts=0',
+          '-o', 'PermitLocalCommand=no',
+          '-o', 'StrictHostKeyChecking=yes',
+          config.gatewaySshAlias,
+          'exit'
+        ],
+        timeoutMs: GATEWAY_PROBE_TIMEOUT_MS,
+        signal
+      })
+    } catch (error) {
+      if (isAbortError(error) || signal?.aborted) throw abortError()
+      return {
+        ready: false,
+        guidanceCode: 'retry',
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+    if (probe.exitCode === 0 && !probe.timedOut) return { ready: true }
+
+    const output = commandOutput(probe) || 'OpenSSH could not reach the VM gateway.'
+    if (
+      /could not resolve hostname|bad configuration option|terminating, \d+ bad configuration options|hostname contains invalid characters/iu
+        .test(output)
+    ) {
+      return {
+        ready: false,
+        guidanceCode: 'configure-gateway-alias',
+        message: output
+      }
+    }
+    if (
+      /host key verification failed|remote host identification has changed|no .* host key is known/iu
+        .test(output)
+    ) {
+      return {
+        ready: false,
+        guidanceCode: 'trust-gateway-host-key',
+        message: output
+      }
+    }
+    if (/permission denied|no more authentication methods to try/iu.test(output)) {
+      return {
+        ready: false,
+        guidanceCode: 'authorize-gateway-key',
+        message: output
+      }
+    }
+    if (
+      probe.timedOut ||
+      /connection (?:refused|timed out|closed|reset)|no route to host|network is unreachable|banner exchange|kex_exchange_identification/iu
+        .test(output)
+    ) {
+      return {
+        ready: false,
+        guidanceCode: 'enable-gateway-ssh',
+        message: output
+      }
+    }
+    return {
+      ready: false,
+      guidanceCode: 'retry',
+      message: output
+    }
   }
 
   private terminateTunnel(labId: string, expectedProcess?: VmTunnelProcess): void {
@@ -667,13 +811,15 @@ implements RemoteSshLabEnvironmentProvider, RemoteSshVirtualBoxMachineCatalog {
     lab: RemoteSshLab,
     state: RemoteSshLabEnvironmentResult['state'],
     consoleAvailable: boolean,
-    message?: string
+    message?: string,
+    guidanceCode?: RemoteSshLabEnvironmentGuidanceCode
   ): RemoteSshLabEnvironmentResult {
     return {
       labId: lab.id,
       provider: 'vm',
       state,
       consoleAvailable,
+      ...(guidanceCode ? { guidanceCode } : {}),
       ...(message ? { message: message.slice(0, 2_000) } : {}),
       checkedAt: this.now().toISOString()
     }
@@ -946,6 +1092,47 @@ function assertValidTcpPort(port: number): void {
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     throw new Error(`Invalid loopback TCP port: ${String(port)}`)
   }
+}
+
+export function virtualBoxManagerLaunchCommand(
+  platform: NodeJS.Platform,
+  vboxManageExecutable: string
+): Readonly<{ executable: string; args: readonly string[] }> {
+  if (platform === 'darwin') {
+    return { executable: '/usr/bin/open', args: ['-a', 'VirtualBox'] }
+  }
+  if (platform === 'win32') {
+    return {
+      executable: win32.join(win32.dirname(vboxManageExecutable), 'VirtualBox.exe'),
+      args: []
+    }
+  }
+  return {
+    executable: posix.join(posix.dirname(vboxManageExecutable), 'VirtualBox'),
+    args: []
+  }
+}
+
+async function launchVirtualBoxManager(
+  input: Parameters<OpenVirtualBoxManager>[0]
+): Promise<void> {
+  const command = virtualBoxManagerLaunchCommand(
+    input.platform,
+    input.vboxManageExecutable
+  )
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(command.executable, command.args, {
+      detached: true,
+      shell: false,
+      stdio: 'ignore',
+      windowsHide: false
+    })
+    child.once('error', reject)
+    child.once('spawn', () => {
+      child.unref()
+      resolve()
+    })
+  })
 }
 
 async function executableExists(path: string): Promise<boolean> {

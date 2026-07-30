@@ -4,6 +4,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  memo,
   useMemo,
   useRef,
   useState,
@@ -28,21 +29,30 @@ import { useTranslation } from 'react-i18next'
 import {
   resolveWriteMarkdownResource,
   resolveWriteMarkdownResourcePath,
+  resolveWriteMarkdownWorkspaceLinkPath,
   transformWriteMarkdownLinkUrl,
   transformWriteMarkdownMediaUrl
 } from '@shared/write-markdown-resource'
-import { normalizeSafeEmbeddedMediaUrl } from '@shared/external-url-policy'
 import { normalizeMarkdownMathDelimiters } from '@shared/write-markdown-math'
 import {
   highlightCodeHtml,
   renderFallbackCodeHtml
 } from '../../lib/code-highlighting'
 import { openSafeExternalUrl } from '../../lib/open-external'
+import { ImagePreviewLightbox } from '../ImagePreviewLightbox'
+import {
+  getCachedMarkdownWorkspaceImage,
+  loadCachedMarkdownWorkspaceImage,
+  markdownWorkspaceImageCacheKey,
+  type WriteMarkdownWorkspaceImageLoader
+} from './write-markdown-image-cache'
 
 export {
   resolveWriteMarkdownResource,
-  resolveWriteMarkdownResourcePath
+  resolveWriteMarkdownResourcePath,
+  resolveWriteMarkdownWorkspaceLinkPath
 } from '@shared/write-markdown-resource'
+export type { WriteMarkdownWorkspaceImageLoader } from './write-markdown-image-cache'
 
 type Props = {
   content: string
@@ -51,18 +61,13 @@ type Props = {
   workspaceRoot?: string | null
   previewErrorMessage?: string
   loadWorkspaceImage?: WriteMarkdownWorkspaceImageLoader
+  onOpenWorkspaceLink?: WriteMarkdownWorkspaceLinkOpener
 }
 
-export type WriteMarkdownWorkspaceImageLoader = (input: {
+export type WriteMarkdownWorkspaceLinkOpener = (input: {
   path: string
   workspaceRoot: string
-}) => Promise<{
-  ok: true
-  dataUrl: string
-} | {
-  ok: false
-  message?: string
-}>
+}) => void
 
 type CodeProps = DetailedHTMLProps<HTMLAttributes<HTMLElement>, HTMLElement> & {
   node?: MarkdownCodeNode
@@ -101,6 +106,11 @@ const LANGUAGE_REGEX = /language-([^\s]+)/
 const TRAILING_NEWLINES_REGEX = /\n+$/
 const COLLAPSE_HEIGHT = 200
 const COPY_RESET_MS = 2000
+
+type MarkdownImagePreview = {
+  src: string
+  alt: string
+}
 
 function writeMarkdownUrlTransform(value: string, key: string): string {
   if (key === 'src') return transformWriteMarkdownMediaUrl(value)
@@ -323,54 +333,107 @@ function PreviewCode({ className, children, node, ...props }: CodeProps): ReactN
 type ResolvedMarkdownImageProps = {
   src?: string
   alt?: string | null
+  node?: unknown
   filePath?: string | null
   workspaceRoot?: string | null
   loadWorkspaceImage?: WriteMarkdownWorkspaceImageLoader
+  onOpenPreview?: (image: MarkdownImagePreview) => void
 } & Omit<ComponentPropsWithoutRef<'img'>, 'src' | 'alt'>
+
+type ResolvedMarkdownImageState = {
+  resourceKey: string
+  resolvedSrc?: string
+  loadFailed: boolean
+}
 
 function ResolvedMarkdownImage({
   src,
   alt,
+  node: _node,
   filePath,
   workspaceRoot,
   loadWorkspaceImage,
+  onOpenPreview,
   ...props
 }: ResolvedMarkdownImageProps): ReactElement {
-  const [resolvedSrc, setResolvedSrc] = useState(() => resolveWriteMarkdownResource(src, filePath))
-  const [loadFailed, setLoadFailed] = useState(false)
+  const { t } = useTranslation('common')
+  const localPath = resolveWriteMarkdownResourcePath(src, filePath)
+  const externalSrc = resolveWriteMarkdownResource(src, filePath)
+  const root = workspaceRoot?.trim() ?? ''
+  const cacheKey = localPath && root
+    ? markdownWorkspaceImageCacheKey(root, localPath)
+    : ''
+  const resourceKey = localPath
+    ? `workspace:${cacheKey || localPath}`
+    : `embedded:${externalSrc ?? src ?? ''}`
+  const cachedSrc = cacheKey
+    ? getCachedMarkdownWorkspaceImage(cacheKey)
+    : externalSrc
+  const [imageState, setImageState] = useState<ResolvedMarkdownImageState>(() => ({
+    resourceKey,
+    ...(cachedSrc ? { resolvedSrc: cachedSrc } : {}),
+    loadFailed: false
+  }))
+  const resolvedSrc = imageState.resourceKey === resourceKey
+    ? imageState.resolvedSrc
+    : cachedSrc
+  const loadFailed = imageState.resourceKey === resourceKey && imageState.loadFailed
 
   useEffect(() => {
     let cancelled = false
-    setLoadFailed(false)
-    const localPath = resolveWriteMarkdownResourcePath(src, filePath)
-    const externalSrc = resolveWriteMarkdownResource(src, filePath)
-    setResolvedSrc(localPath ? undefined : externalSrc)
 
-    if (!localPath) return
-    const root = workspaceRoot?.trim()
-    if (!root || !loadWorkspaceImage) {
-      setLoadFailed(true)
+    if (!localPath) {
+      setImageState({
+        resourceKey,
+        ...(externalSrc ? { resolvedSrc: externalSrc } : {}),
+        loadFailed: false
+      })
       return
     }
 
-    void loadWorkspaceImage({ path: localPath, workspaceRoot: root })
-      .then((result) => {
-        if (cancelled) return
-        const safeDataUrl = result.ok ? normalizeSafeEmbeddedMediaUrl(result.dataUrl) : null
-        if (safeDataUrl) {
-          setResolvedSrc(safeDataUrl)
-        } else {
-          setLoadFailed(true)
+    if (!root || !loadWorkspaceImage) {
+      setImageState({
+        resourceKey,
+        loadFailed: true
+      })
+      return
+    }
+
+    const availableSrc = getCachedMarkdownWorkspaceImage(cacheKey)
+    setImageState({
+      resourceKey,
+      ...(availableSrc ? { resolvedSrc: availableSrc } : {}),
+      loadFailed: false
+    })
+
+    void loadCachedMarkdownWorkspaceImage({
+      cacheKey,
+      path: localPath,
+      workspaceRoot: root,
+      loadWorkspaceImage
+    }).then((dataUrl) => {
+      if (cancelled) return
+      setImageState((current) => {
+        if (current.resourceKey !== resourceKey) return current
+        if (dataUrl) {
+          return {
+            resourceKey,
+            resolvedSrc: dataUrl,
+            loadFailed: false
+          }
+        }
+        if (current.resolvedSrc) return current
+        return {
+          resourceKey,
+          loadFailed: true
         }
       })
-      .catch(() => {
-        if (!cancelled) setLoadFailed(true)
-      })
+    })
 
     return () => {
       cancelled = true
     }
-  }, [src, filePath, workspaceRoot, loadWorkspaceImage])
+  }, [cacheKey, externalSrc, loadWorkspaceImage, localPath, resourceKey, root])
 
   if (loadFailed) {
     return (
@@ -380,12 +443,31 @@ function ResolvedMarkdownImage({
     )
   }
 
-  return (
+  const altText = alt ?? ''
+  const image = (
     <img
       {...props}
-      alt={alt ?? ''}
+      alt={altText}
       {...(resolvedSrc ? { src: resolvedSrc } : {})}
     />
+  )
+
+  if (!resolvedSrc || !onOpenPreview) return image
+
+  return (
+    <button
+      type="button"
+      className="write-markdown-image-button"
+      aria-label={t('imagePreviewOpen', {
+        name: altText || t('imagePreviewTitle')
+      })}
+      title={t('imagePreviewOpen', {
+        name: altText || t('imagePreviewTitle')
+      })}
+      onClick={() => onOpenPreview({ src: resolvedSrc, alt: altText })}
+    >
+      {image}
+    </button>
   )
 }
 
@@ -429,8 +511,16 @@ class PreviewErrorBoundary extends Component<PreviewBoundaryProps, PreviewBounda
   }
 }
 
-function WriteMarkdownPreviewContent({ content, isMarkdown, filePath, workspaceRoot, loadWorkspaceImage }: Props): ReactElement {
+function WriteMarkdownPreviewContent({
+  content,
+  isMarkdown,
+  filePath,
+  workspaceRoot,
+  loadWorkspaceImage,
+  onOpenWorkspaceLink
+}: Props): ReactElement {
   const [expandedCodeBlocks, setExpandedCodeBlocks] = useState<Record<string, boolean>>({})
+  const [imagePreview, setImagePreview] = useState<MarkdownImagePreview | null>(null)
   const setCodeBlockExpanded = useCallback((key: string, expanded: boolean): void => {
     setExpandedCodeBlocks((current) => {
       if (current[key] === expanded) return current
@@ -440,6 +530,12 @@ function WriteMarkdownPreviewContent({ content, isMarkdown, filePath, workspaceR
       }
     })
   }, [])
+  const openImagePreview = useCallback((image: MarkdownImagePreview): void => {
+    setImagePreview(image)
+  }, [])
+  const closeImagePreview = useCallback((): void => {
+    setImagePreview(null)
+  }, [])
   const codeBlockExpansionContext = useMemo<CodeBlockExpansionContextValue>(() => ({
     expandedCodeBlocks,
     filePath,
@@ -448,7 +544,8 @@ function WriteMarkdownPreviewContent({ content, isMarkdown, filePath, workspaceR
 
   useEffect(() => {
     setExpandedCodeBlocks({})
-  }, [filePath])
+    closeImagePreview()
+  }, [closeImagePreview, filePath])
 
   const markdownContent = useMemo(() => normalizeMarkdownMathDelimiters(content), [content])
   const markdownComponents = useMemo(() => ({
@@ -458,6 +555,14 @@ function WriteMarkdownPreviewContent({ content, isMarkdown, filePath, workspaceR
         href={href}
         onClick={(event) => {
           if (!href) return
+          const localPath = resolveWriteMarkdownWorkspaceLinkPath(href, filePath, workspaceRoot)
+          const root = workspaceRoot?.trim()
+          if (localPath && root && onOpenWorkspaceLink) {
+            event.preventDefault()
+            onOpenWorkspaceLink({ path: localPath, workspaceRoot: root })
+            return
+          }
+          if (href.startsWith('#')) return
           event.preventDefault()
           void openSafeExternalUrl(href).catch(() => undefined)
         }}
@@ -473,6 +578,7 @@ function WriteMarkdownPreviewContent({ content, isMarkdown, filePath, workspaceR
         filePath={filePath}
         workspaceRoot={workspaceRoot}
         loadWorkspaceImage={loadWorkspaceImage}
+        onOpenPreview={openImagePreview}
       />
     ),
     code: ({ className, children, node, ...props }: CodeProps): ReactNode => (
@@ -484,22 +590,31 @@ function WriteMarkdownPreviewContent({ content, isMarkdown, filePath, workspaceR
         {children}
       </PreviewCode>
     )
-  }), [filePath, loadWorkspaceImage, workspaceRoot])
+  }), [filePath, loadWorkspaceImage, onOpenWorkspaceLink, openImagePreview, workspaceRoot])
 
   if (!isMarkdown) return plainTextFallback(content)
   return (
-    <div className="ds-markdown write-markdown-preview min-h-full text-ds-ink">
-      <CodeBlockExpansionContext.Provider value={codeBlockExpansionContext}>
-        <ReactMarkdown
-          remarkPlugins={remarkPlugins}
-          rehypePlugins={rehypePlugins}
-          urlTransform={writeMarkdownUrlTransform}
-          components={markdownComponents}
-        >
-          {markdownContent}
-        </ReactMarkdown>
-      </CodeBlockExpansionContext.Provider>
-    </div>
+    <>
+      <div className="ds-markdown write-markdown-preview min-h-full text-ds-ink">
+        <CodeBlockExpansionContext.Provider value={codeBlockExpansionContext}>
+          <ReactMarkdown
+            remarkPlugins={remarkPlugins}
+            rehypePlugins={rehypePlugins}
+            urlTransform={writeMarkdownUrlTransform}
+            components={markdownComponents}
+          >
+            {markdownContent}
+          </ReactMarkdown>
+        </CodeBlockExpansionContext.Provider>
+      </div>
+      <ImagePreviewLightbox
+        open={Boolean(imagePreview)}
+        src={imagePreview?.src ?? ''}
+        alt={imagePreview?.alt ?? ''}
+        title={imagePreview?.alt}
+        onClose={closeImagePreview}
+      />
+    </>
   )
 }
 
@@ -535,7 +650,7 @@ function stableStringHash(value: string): string {
   return (hash >>> 0).toString(36)
 }
 
-export function WriteMarkdownPreview(props: Props): ReactElement {
+export const WriteMarkdownPreview = memo(function WriteMarkdownPreview(props: Props): ReactElement {
   return (
     <PreviewErrorBoundary
       content={props.content}
@@ -545,4 +660,4 @@ export function WriteMarkdownPreview(props: Props): ReactElement {
       <WriteMarkdownPreviewContent {...props} />
     </PreviewErrorBoundary>
   )
-}
+})

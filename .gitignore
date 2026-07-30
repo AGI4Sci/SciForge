@@ -3,6 +3,7 @@ node_modules/
 out/
 dist/
 release/
+packages/workers/workspace-host/artifacts/
 .cache/
 .deepseek/
 .kunsdd/

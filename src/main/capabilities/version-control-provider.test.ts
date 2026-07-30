@@ -18,6 +18,15 @@ import {
   VERSION_CONTROL_CAPABILITY_CONTRIBUTION_FACTORY,
   type VersionControlCapabilityDependencies
 } from './version-control-provider'
+import type {
+  VersionControlWorkspaceSession
+} from '../services/version-control-workspace-service'
+
+const remoteWorkspaceLocator = {
+  contractVersion: 1 as const,
+  hostSessionId: 'remote-session-1',
+  path: '/workspace'
+}
 
 const uiCaller = {
   audience: 'ui' as const,
@@ -40,6 +49,7 @@ function createHarness() {
     workspaceRoot: uiCaller.workspaceId,
     repositoryRoot: uiCaller.workspaceId
   }
+  let openedSession: VersionControlWorkspaceSession = session
   let revision = 'revision-1'
   const restore = vi.fn(async () => {
     revision = 'revision-2'
@@ -49,15 +59,20 @@ function createHarness() {
     open: vi.fn(async (
       ownerId: string,
       ownerAudience: 'ui' | 'agent' | 'system',
-      workspaceId: string
-    ) => ({
-      ...session,
-      ownerId,
-      ownerAudience,
-      workspaceId,
-      workspaceRoot: workspaceId,
-      repositoryRoot: workspaceId
-    })),
+      workspaceId: string,
+      workspaceLocator?: typeof remoteWorkspaceLocator
+    ) => {
+      openedSession = {
+        ...session,
+        ownerId,
+        ownerAudience,
+        workspaceId,
+        workspaceRoot: workspaceId,
+        repositoryRoot: workspaceId,
+        ...(workspaceLocator ? { workspaceLocator } : {})
+      }
+      return openedSession
+    }),
     requireSession: vi.fn((
       ownerId: string,
       ownerAudience: 'ui' | 'agent' | 'system',
@@ -72,7 +87,7 @@ function createHarness() {
       ) {
         throw new Error('Version-control workspace is unavailable to this caller.')
       }
-      return session
+      return openedSession
     }),
     status: vi.fn(async () => ({
       revision,
@@ -177,6 +192,48 @@ describe('version-control capability provider', () => {
     }, { resource })).rejects.toSatisfy((error) =>
       expectBrokerCode(error, 'resource_scope_mismatch')
     )
+  })
+
+  it('passes remote placement into open and advertises only remote host operations', async () => {
+    const { broker, service } = createHarness()
+    const remoteCaller = { ...uiCaller, workspaceLocator: remoteWorkspaceLocator }
+    const opened = await broker.invoke(remoteCaller, {
+      actionId: VERSION_CONTROL_OPEN_WORKSPACE_ACTION_ID,
+      input: { workspaceRoot: uiCaller.workspaceId }
+    })
+    const resource = capabilityResourceHandleSchema.parse(
+      (opened.output as Record<string, unknown>).resource
+    )
+
+    const observation = await broker.observe(remoteCaller, { resource })
+    expect(observation.operations.map((operation) => operation.id)).toEqual([
+      VERSION_CONTROL_STATUS_ACTION_ID,
+      VERSION_CONTROL_DIFF_ACTION_ID,
+      VERSION_CONTROL_PREVIEW_RESTORE_ACTION_ID
+    ])
+    await expect(broker.invoke(remoteCaller, {
+      actionId: VERSION_CONTROL_STATUS_ACTION_ID,
+      resource,
+      input: {}
+    })).resolves.toMatchObject({ output: { revision: 'revision-1' } })
+    await expect(broker.invoke(remoteCaller, {
+      actionId: VERSION_CONTROL_DIFF_ACTION_ID,
+      resource,
+      input: { from: 'HEAD' }
+    })).resolves.toMatchObject({ output: { text: '' } })
+    await expect(broker.invoke(remoteCaller, {
+      actionId: VERSION_CONTROL_READ_FILE_ACTION_ID,
+      resource,
+      input: { revision: 'HEAD', path: 'notes.md' }
+    })).rejects.toBeInstanceOf(CapabilityBrokerError)
+
+    expect(service.open).toHaveBeenCalledWith(
+      uiCaller.callerId,
+      uiCaller.audience,
+      uiCaller.workspaceId,
+      remoteWorkspaceLocator
+    )
+    expect(service.readFile).not.toHaveBeenCalled()
   })
 
   it('enforces optimistic revision and confirmation policy before restore', async () => {

@@ -5,6 +5,8 @@ import {
   highlightCodeHtml,
   renderFallbackCodeHtml
 } from '../lib/code-highlighting'
+import { withPinnedWorkspaceLocator } from '../remote-workspace/placement'
+import { useWriteWorkspaceStore } from './write-workspace-store'
 
 export type BlockRange = {
   from: number
@@ -172,7 +174,18 @@ export class ImageWidget extends WidgetType {
     wrapper.appendChild(image)
     const root = this.workspaceRoot?.trim()
     if (this.localPath && root && typeof window.sciforge?.readWorkspaceImage === 'function') {
-      void window.sciforge.readWorkspaceImage({ path: this.localPath, workspaceRoot: root })
+      let input
+      try {
+        input = withPinnedWorkspaceLocator(
+          { path: this.localPath, workspaceRoot: root },
+          useWriteWorkspaceStore.getState().pinnedWorkspaceLocator
+        )
+      } catch (error) {
+        image.classList.add('cm-write-md-image-error')
+        image.title = error instanceof Error ? error.message : String(error)
+        return wrapper
+      }
+      void window.sciforge.readWorkspaceImage(input)
         .then((result) => {
           if (result.ok) image.src = result.dataUrl
         })

@@ -1,6 +1,7 @@
 import type { WorkspaceFileTarget } from '@shared/workspace-file'
 import type { WorkspacePreviewOpenInput } from '@shared/sciforge-api'
 import type { WorkspacePreviewAssetTransportDescriptor } from '@shared/workspace-preview'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 import {
   useCallback,
   useEffect,
@@ -35,6 +36,7 @@ export type WorkspacePreviewPanelShellContext = {
   assetError: string | null
   transport: WorkspacePreviewAssetTransportClient
   host: WorkspacePreviewHost
+  openFile?: (target: WorkspaceFileTarget) => void
   refresh: () => void
   toggleInspector?: () => void
   refreshing: boolean
@@ -43,17 +45,20 @@ export type WorkspacePreviewPanelShellContext = {
 export type WorkspacePreviewPanelShellProps = {
   target: WorkspaceFileTarget | null
   workspaceRoot: string
+  workspaceLocator?: WorkspaceLocator
   host?: WorkspacePreviewHost
   registry: RendererWorkspacePreviewRegistry
   initialState?: WorkspacePreviewHostState
   className?: string
   children?: ReactNode | ((context: WorkspacePreviewPanelShellContext) => ReactNode)
   onAction?: (action: WorkspacePreviewToolbarAction, context: WorkspacePreviewPanelShellContext) => void
+  onOpenFile?: (target: WorkspaceFileTarget) => void
 }
 
 export function workspacePreviewPanelTargetKey(
   target: WorkspaceFileTarget | null,
-  workspaceRoot: string
+  workspaceRoot: string,
+  workspaceLocator?: WorkspaceLocator
 ): string {
   if (!target) return ''
   const parts: Array<string | number> = [
@@ -65,16 +70,19 @@ export function workspacePreviewPanelTargetKey(
   if (target.selection) parts.push(JSON.stringify(target.selection))
   if (target.anchor) parts.push(JSON.stringify(target.anchor))
   if (target.integrity) parts.push(JSON.stringify(target.integrity))
+  if (workspaceLocator) parts.push(JSON.stringify(workspaceLocator))
   return parts.join('\u0000')
 }
 
 export function workspacePreviewOpenInputForPanelTarget(
   target: WorkspaceFileTarget,
-  workspaceRoot: string
+  workspaceRoot: string,
+  workspaceLocator?: WorkspaceLocator
 ): WorkspacePreviewOpenInput {
   return {
     path: target.path,
     workspaceRoot: target.workspaceRoot?.trim() || workspaceRoot,
+    ...(workspaceLocator ? { workspaceLocator } : {}),
     ...(target.line != null ? { line: target.line } : {}),
     ...(target.column != null ? { column: target.column } : {}),
     ...(target.selection ? { selection: target.selection } : {}),
@@ -86,12 +94,14 @@ export function workspacePreviewOpenInputForPanelTarget(
 export function WorkspacePreviewPanelShell({
   target,
   workspaceRoot,
+  workspaceLocator,
   host: providedHost,
   registry: providedRegistry,
   initialState,
   className,
   children,
-  onAction
+  onAction,
+  onOpenFile
 }: WorkspacePreviewPanelShellProps): ReactElement {
   const [registry] = useState(() => providedRegistry)
   const [host] = useState(() => providedHost ?? createWorkspacePreviewHost({ registry }))
@@ -119,7 +129,7 @@ export function WorkspacePreviewPanelShell({
           selection: targetSelection,
           anchor: targetAnchor,
           integrity: targetIntegrity
-        }, workspaceRoot)
+        }, workspaceRoot, workspaceLocator)
       : null
   ), [
     targetAnchor,
@@ -129,10 +139,11 @@ export function WorkspacePreviewPanelShell({
     targetPath,
     targetSelection,
     targetWorkspaceRoot,
+    workspaceLocator,
     workspaceRoot
   ])
   const openInputKey = openInput
-    ? workspacePreviewPanelTargetKey(openInput, workspaceRoot)
+    ? workspacePreviewPanelTargetKey(openInput, workspaceRoot, workspaceLocator)
     : ''
   const stableTarget = useMemo<WorkspaceFileTarget | null>(() => (
     targetPath
@@ -156,7 +167,11 @@ export function WorkspacePreviewPanelShell({
     targetWorkspaceRoot,
     workspaceRoot
   ])
-  const targetKey = workspacePreviewPanelTargetKey(stableTarget, workspaceRoot)
+  const targetKey = workspacePreviewPanelTargetKey(
+    stableTarget,
+    workspaceRoot,
+    workspaceLocator
+  )
 
   useEffect(() => host.subscribe((nextState) => setState({ ...nextState })), [host])
 
@@ -271,10 +286,11 @@ export function WorkspacePreviewPanelShell({
       readArtifactRange: (request) => host.readArtifactRange(request)
     }),
     host,
+    openFile: onOpenFile,
     refresh,
     toggleInspector,
     refreshing: assetStatus === 'loading'
-  }), [assetError, assetStatus, host, refresh, state, toggleInspector])
+  }), [assetError, assetStatus, host, onOpenFile, refresh, state, toggleInspector])
 
   return (
     <WorkspacePreviewChrome

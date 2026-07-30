@@ -21,7 +21,6 @@ import {
   defaultRuntimeGuardSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
-  defaultRemoteExecutorSettings,
   defaultImageGenerationSettings,
   getCodexRuntimeSettings,
   getClaudeRuntimeSettings,
@@ -42,7 +41,6 @@ import {
   mergeScheduleSettings,
   mergeSpeechToTextSettings,
   mergeWorkflowSettings,
-  mergeRemoteExecutorSettings,
   mergeWriteSettings,
   mergeImageGenerationSettings,
   normalizeAppBehaviorSettings,
@@ -298,8 +296,7 @@ const defaultSettings = (): AppSettingsV1 => ({
   remoteChannel: defaultRemoteChannelSettings(),
   connectPhone: defaultConnectPhoneSettings(),
   schedule: defaultScheduleSettings(),
-  workflow: defaultWorkflowSettings(),
-  remoteExecutor: defaultRemoteExecutorSettings()
+  workflow: defaultWorkflowSettings()
 })
 
 function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
@@ -347,7 +344,6 @@ function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
     connectPhone: mergeConnectPhoneSettings(defaults.connectPhone, migrated.connectPhone),
     schedule,
     workflow,
-    remoteExecutor: mergeRemoteExecutorSettings(defaults.remoteExecutor, migrated.remoteExecutor),
     guiUpdate: { ...defaults.guiUpdate, ...migrated.guiUpdate },
     codePromptPrefix: typeof migrated.codePromptPrefix === 'string' ? migrated.codePromptPrefix : ''
   }
@@ -451,7 +447,6 @@ export class JsonSettingsStore {
       normalized.schedule.internal.secret !== normalizedBeforeLocalIds.schedule.internal.secret ||
       normalized.workflow.webhookSecret !== normalizedBeforeLocalIds.workflow.webhookSecret ||
       parsed.activeAgentRuntime !== normalized.activeAgentRuntime ||
-      !('remoteExecutor' in parsed) ||
       !('agentCapabilities' in parsed)
     ) {
       await this.save(normalized)
@@ -480,7 +475,6 @@ export class JsonSettingsStore {
       imageGeneration: imageGenerationPatch,
       speechToText: speechToTextPatch,
       connectPhone: connectPhonePatch,
-      remoteExecutor: remoteExecutorPatch,
     } = partial
     const patchedRuntimeSettings = applyClaudeRuntimePatch(
       applyCodexRuntimePatch(applyLocalRuntimePatch(cur, agentsPatch?.sciforge), agentsPatch?.codex),
@@ -525,7 +519,6 @@ export class JsonSettingsStore {
       connectPhone: mergeConnectPhoneSettings(cur.connectPhone, connectPhonePatch),
       schedule,
       workflow,
-      remoteExecutor: mergeRemoteExecutorSettings(cur.remoteExecutor, remoteExecutorPatch),
       guiUpdate: { ...cur.guiUpdate, ...(partial.guiUpdate ?? {}) }
     }))
     await this.save(next)

@@ -43,6 +43,12 @@ const VERSION_CONTROL_RESOURCE_OPERATIONS = Object.freeze([
   VERSION_CONTROL_RESTORE_ACTION_ID
 ])
 
+const REMOTE_VERSION_CONTROL_RESOURCE_OPERATIONS = Object.freeze([
+  VERSION_CONTROL_STATUS_ACTION_ID,
+  VERSION_CONTROL_DIFF_ACTION_ID,
+  VERSION_CONTROL_PREVIEW_RESTORE_ACTION_ID
+])
+
 export type VersionControlCapabilityDependencies = Readonly<{
   versionControlWorkspaceService: Pick<
     VersionControlWorkspaceService,
@@ -80,7 +86,11 @@ function workspaceResource(
       return {
         state: capabilityJsonValueSchema.parse(status),
         semanticRevision: status.revision,
-        operationIds: [...VERSION_CONTROL_RESOURCE_OPERATIONS]
+        operationIds: [
+          ...(session.workspaceLocator
+            ? REMOTE_VERSION_CONTROL_RESOURCE_OPERATIONS
+            : VERSION_CONTROL_RESOURCE_OPERATIONS)
+        ]
       }
     }
   }
@@ -100,6 +110,18 @@ function requireSession(
     resource.resourceId,
     resource.workspaceId
   )
+}
+
+function requireLocalSession(
+  dependencies: VersionControlCapabilityDependencies,
+  context: CapabilityHandlerContext,
+  action: string
+): VersionControlWorkspaceSession {
+  const session = requireSession(dependencies, context)
+  if (session.workspaceLocator) {
+    throw new Error(`${action} is not supported by the Workspace Host contract.`)
+  }
+  return session
 }
 
 function versionControlCapabilities(dependencies: VersionControlCapabilityDependencies) {
@@ -122,13 +144,17 @@ function versionControlCapabilities(dependencies: VersionControlCapabilityDepend
         if (!workspaceId) {
           throw new Error('Version-control workspace requires a workspace-scoped caller.')
         }
-        if (resolve(input.workspaceRoot) !== resolve(workspaceId)) {
+        const workspaceMatches = context.caller.workspaceLocator
+          ? input.workspaceRoot.trim() === workspaceId
+          : resolve(input.workspaceRoot) === resolve(workspaceId)
+        if (!workspaceMatches) {
           throw new Error('Version-control workspace cannot open another workspace.')
         }
         const session = await dependencies.versionControlWorkspaceService.open(
           context.caller.callerId,
           context.caller.audience,
-          workspaceId
+          workspaceId,
+          context.caller.workspaceLocator
         )
         const status = await dependencies.versionControlWorkspaceService.status(session)
         const registration = workspaceResource(
@@ -185,7 +211,11 @@ function versionControlCapabilities(dependencies: VersionControlCapabilityDepend
       inputSchema: VERSION_CONTROL_CREATE_SNAPSHOT_CONTRACT.inputSchema,
       outputSchema: VERSION_CONTROL_CREATE_SNAPSHOT_CONTRACT.outputSchema,
       handler: async (input, context) => {
-        const session = requireSession(dependencies, context)
+        const session = requireLocalSession(
+          dependencies,
+          context,
+          'Creating remote snapshots'
+        )
         return {
           output: await dependencies.versionControlWorkspaceService.createSnapshot(
             session,
@@ -211,7 +241,11 @@ function versionControlCapabilities(dependencies: VersionControlCapabilityDepend
       inputSchema: VERSION_CONTROL_CREATE_REFERENCE_CONTRACT.inputSchema,
       outputSchema: VERSION_CONTROL_CREATE_REFERENCE_CONTRACT.outputSchema,
       handler: async (input, context) => {
-        const session = requireSession(dependencies, context)
+        const session = requireLocalSession(
+          dependencies,
+          context,
+          'Creating remote references'
+        )
         return {
           output: await dependencies.versionControlWorkspaceService.createReference(
             session,
@@ -238,7 +272,7 @@ function versionControlCapabilities(dependencies: VersionControlCapabilityDepend
       outputSchema: VERSION_CONTROL_LIST_SNAPSHOTS_CONTRACT.outputSchema,
       handler: async (input, context) => ({
         output: await dependencies.versionControlWorkspaceService.listSnapshots(
-          requireSession(dependencies, context),
+          requireLocalSession(dependencies, context, 'Listing remote snapshots'),
           input
         )
       })
@@ -280,7 +314,11 @@ function versionControlCapabilities(dependencies: VersionControlCapabilityDepend
       outputSchema: VERSION_CONTROL_READ_FILE_CONTRACT.outputSchema,
       handler: async (input, context) => ({
         output: await dependencies.versionControlWorkspaceService.readFile(
-          requireSession(dependencies, context),
+          requireLocalSession(
+            dependencies,
+            context,
+            'Reading files from remote revisions'
+          ),
           input
         )
       })
@@ -321,7 +359,11 @@ function versionControlCapabilities(dependencies: VersionControlCapabilityDepend
       inputSchema: VERSION_CONTROL_RESTORE_CONTRACT.inputSchema,
       outputSchema: VERSION_CONTROL_RESTORE_CONTRACT.outputSchema,
       handler: async (input, context) => {
-        const session = requireSession(dependencies, context)
+        const session = requireLocalSession(
+          dependencies,
+          context,
+          'Restoring remote version-control workspaces'
+        )
         const beforeRevision = context.resource!.semanticRevision
         const output = await dependencies.versionControlWorkspaceService.restore(
           session,

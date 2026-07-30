@@ -314,6 +314,42 @@
           "priority": 100
         }
       ]
+    },
+    {
+      "process": "workspace-server",
+      "export": "./workspace-server",
+      "contributions": [
+        {
+          "kind": "workspace-server.workspace-preview-plugin",
+          "id": "sciforge.life-science-preview.molecular",
+          "priority": 900
+        },
+        {
+          "kind": "workspace-server.workspace-preview-plugin",
+          "id": "sciforge.life-science-preview.sequence-genomics",
+          "priority": 820
+        },
+        {
+          "kind": "workspace-server.workspace-preview-plugin",
+          "id": "sciforge.life-science-preview.biology-index-transport",
+          "priority": 805
+        },
+        {
+          "kind": "workspace-server.workspace-preview-plugin",
+          "id": "sciforge.life-science-preview.omics-matrix",
+          "priority": 760
+        },
+        {
+          "kind": "workspace-server.workspace-preview-plugin",
+          "id": "sciforge.life-science-preview.bioimaging",
+          "priority": 740
+        },
+        {
+          "kind": "workspace-server.workspace-preview-plugin",
+          "id": "sciforge.life-science-preview.proteomics-spectra",
+          "priority": 700
+        }
+      ]
     }
   ]
 }

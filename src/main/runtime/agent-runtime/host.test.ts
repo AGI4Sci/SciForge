@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createExecutionReceipt } from '@sciforge/execution-governance'
 import type { DomainAgentArtifactEvent } from '@sciforge/domain-sdk/host'
+import { WORKSPACE_HOST_PROTOCOL_VERSION } from '@sciforge/domain-sdk/workspace-host'
 import {
   sanitizeTraceTextChunks,
   type TraceEvent,
@@ -63,6 +64,7 @@ import {
   type SettingsMemoryRecord,
   type SettingsMemoryRecordUpdater
 } from '../../../renderer/src/lib/settings-memory-actions'
+import type { WorkspaceHostPlacement } from '../../../shared/workspace-host-state'
 
 function visualExecutionIntent(requiresRegionRef = true): AgentRuntimeExecutionIntent {
   return {
@@ -5414,6 +5416,210 @@ describe('AgentRuntimeHost', () => {
     expect(local.usage).toHaveBeenCalledWith(
       { settings: expect.objectContaining({ activeAgentRuntime: 'codex' }) },
       query
+    )
+  })
+
+  it('passes placement-neutral Workspace Host metadata without changing runtime identity', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-30T00:00:00.000Z'
+    })
+    const locator = {
+      contractVersion: WORKSPACE_HOST_PROTOCOL_VERSION,
+      hostSessionId: 'workspace-session-1',
+      path: '/cluster/project'
+    }
+    const placement: WorkspaceHostPlacement = {
+      locator,
+      session: {
+        protocolVersion: WORKSPACE_HOST_PROTOCOL_VERSION,
+        serverVersion: '1.0.0',
+        serverInstanceId: 'server-instance-1',
+        sessionId: 'workspace-session-1',
+        lifecycleMode: 'persistent-daemon',
+        locator,
+        platform: { os: 'linux', architecture: 'x64' },
+        capabilities: [],
+        contributions: [],
+        eventSequence: 0,
+        replay: { earliestSequence: 0, latestSequence: 0 },
+        egress: { mode: 'none', status: 'disabled' }
+      }
+    }
+    const resolvePlacement = vi.fn(async () => placement)
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      services: {
+        workspaceHosts: { resolvePlacement }
+      }
+    })
+
+    await expect(host.listThreads({
+      runtimeId: 'codex',
+      workspaceLocator: locator
+    })).resolves.toEqual([
+      expect.objectContaining({
+        workspace: locator.path,
+        workspaceLocator: locator
+      })
+    ])
+    await expect(host.startThread({
+      runtimeId: 'codex',
+      workspace: '/must/not-select-local-placement',
+      workspaceLocator: locator
+    })).resolves.toEqual(expect.objectContaining({
+      workspace: locator.path,
+      workspaceLocator: locator
+    }))
+    await expect(host.readThread({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      workspaceLocator: locator
+    })).resolves.toEqual(expect.objectContaining({
+      workspace: locator.path,
+      workspaceLocator: locator
+    }))
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Inspect the remote workspace.',
+      workspaceLocator: locator
+    })
+
+    expect(resolvePlacement).toHaveBeenCalledWith(locator)
+    expect(codex.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceHost: placement }),
+      expect.objectContaining({
+        runtimeId: 'codex',
+        workspace: '/cluster/project',
+        workspaceLocator: locator
+      })
+    )
+  })
+
+  it('fails closed when a Workspace Host locator has no session manager', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-30T00:00:00.000Z'
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex]
+    })
+
+    await expect(host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Do not run locally.',
+      workspaceLocator: {
+        contractVersion: WORKSPACE_HOST_PROTOCOL_VERSION,
+        hostSessionId: 'workspace-session-1',
+        path: '/cluster/project'
+      }
+    })).rejects.toThrow(/attached Workspace Host session manager/u)
+    expect(codex.startTurn).not.toHaveBeenCalled()
+  })
+
+  it('restores explicit Workspace Host placement on every thread-scoped operation', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-30T00:00:00.000Z'
+    })
+    codex.resolveApproval = vi.fn(async () => undefined)
+    codex.resolveUserInput = vi.fn(async () => undefined)
+    codex.compactThread = vi.fn(async () => undefined)
+    codex.auxiliary = vi.fn(async () => ({ ok: true }))
+    codex.forkThread = vi.fn(async () => ({
+      id: 'fork-thread',
+      runtimeId: 'codex' as const,
+      title: 'Fork',
+      updatedAt: '2026-07-30T00:00:00.000Z'
+    }))
+    codex.capabilities = vi.fn(async () => ({
+      ...capabilities('codex'),
+      controls: {
+        ...capabilities('codex').controls,
+        compact: 'native' as const
+      }
+    }))
+    const locator = {
+      contractVersion: WORKSPACE_HOST_PROTOCOL_VERSION,
+      hostSessionId: 'workspace-session-restored',
+      path: '/cluster/restored'
+    }
+    const placement: WorkspaceHostPlacement = {
+      locator,
+      session: {
+        protocolVersion: WORKSPACE_HOST_PROTOCOL_VERSION,
+        serverVersion: '1.0.0',
+        serverInstanceId: 'server-restored',
+        sessionId: locator.hostSessionId,
+        lifecycleMode: 'persistent-daemon',
+        locator,
+        platform: { os: 'linux', architecture: 'x64' },
+        capabilities: [],
+        contributions: [],
+        eventSequence: 0,
+        replay: { earliestSequence: 0, latestSequence: 0 },
+        egress: { mode: 'none', status: 'disabled' }
+      }
+    }
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      services: {
+        workspaceHosts: {
+          resolvePlacement: vi.fn(async () => placement)
+        }
+      }
+    })
+    const threadInput = { runtimeId: 'codex' as const, threadId: 'codex-thread', workspaceLocator: locator }
+
+    await host.readThread(threadInput)
+    await host.readThreadSidebarProbe(threadInput)
+    await host.interruptTurn({ ...threadInput, turnId: 'turn-1' })
+    const events = host.subscribeEvents(threadInput)[Symbol.asyncIterator]()
+    await events.next()
+    await events.return?.()
+    await host.resolveApproval({ ...threadInput, approvalId: 'approval-1', decision: 'allowed' })
+    await host.resolveUserInput({ ...threadInput, requestId: 'request-1', answers: [] })
+    await host.renameThread({ ...threadInput, title: 'Renamed' })
+    await host.compactThread(threadInput)
+    await host.forkThread(threadInput)
+    await host.updateThreadRelation({ ...threadInput, relation: 'primary' })
+    await host.auxiliary({
+      runtimeId: 'codex',
+      operation: 'reviewThread',
+      payload: { threadId: 'codex-thread' },
+      workspaceLocator: locator
+    })
+    await host.deleteThread(threadInput)
+
+    const calledWithPlacedContext = (mock: ReturnType<typeof vi.fn>) =>
+      expect(mock).toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceHost: placement }),
+        expect.objectContaining({ workspaceLocator: locator })
+      )
+    calledWithPlacedContext(vi.mocked(codex.readThread))
+    calledWithPlacedContext(vi.mocked(codex.interruptTurn))
+    calledWithPlacedContext(vi.mocked(codex.resolveApproval))
+    calledWithPlacedContext(vi.mocked(codex.resolveUserInput))
+    calledWithPlacedContext(vi.mocked(codex.renameThread))
+    calledWithPlacedContext(vi.mocked(codex.compactThread))
+    calledWithPlacedContext(vi.mocked(codex.forkThread!))
+    calledWithPlacedContext(vi.mocked(codex.updateThreadRelation!))
+    calledWithPlacedContext(vi.mocked(codex.auxiliary!))
+    calledWithPlacedContext(vi.mocked(codex.deleteThread))
+    expect(codex.subscribeEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceHost: placement }),
+      expect.objectContaining({ workspaceLocator: locator })
     )
   })
 })

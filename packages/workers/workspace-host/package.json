@@ -1,0 +1,56 @@
+{
+  "name": "@sciforge/workspace-host",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "private": false,
+  "description": "Headless SciForge Workspace Host server and framed transport.",
+  "sciforge": {
+    "lifecycleLayer": "workers",
+    "skillFacing": false,
+    "sideEffects": "filesystem, process",
+    "publicContract": true,
+    "runtimeAdapter": false,
+    "mcpServer": false
+  },
+  "bin": {
+    "sciforge-workspace-host": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./artifact": "./src/artifact.ts",
+    "./client": "./src/client.ts",
+    "./composition": "./src/composition.ts",
+    "./daemon": "./src/daemon.ts",
+    "./journal": "./src/journal.ts",
+    "./process-service": "./src/process-service.ts",
+    "./preview-service": "./src/preview-service.ts",
+    "./protocol": "./src/protocol.ts",
+    "./server": "./src/server.ts",
+    "./service": "./src/service.ts"
+  },
+  "files": [
+    "src",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build:artifact": "node --import tsx scripts/build-artifact.ts",
+    "start": "node --import tsx src/cli.ts",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@sciforge/codex-runtime": "0.1.0",
+    "@sciforge/domain-sdk": "0.1.0",
+    "@sciforge/domain-life-science-preview": "0.1.0",
+    "@sciforge/workspace-egress": "0.1.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.2"
+  }
+}

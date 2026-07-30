@@ -17,6 +17,7 @@ import {
   controlledProcessWriteOutputSchema
 } from '@sciforge/domain-sdk/controlled-process'
 import { WORKSPACE_PREVIEW_RESOURCE_KIND } from '@sciforge/domain-sdk/workspace-preview'
+import { workspaceLocatorSchema } from '@sciforge/domain-sdk/workspace-host'
 import { capabilityJsonValueSchema } from '../../shared/capability-broker'
 import { SURFACE_RESOURCE_KIND } from '../../shared/visible-context'
 import {
@@ -43,7 +44,12 @@ import {
 } from '../ipc/app-ipc-schemas'
 import type { VisibleContextService } from '../services/visible-context-service'
 import type { WorkspacePreviewHost } from '../services/workspace-preview'
-import type { ControlledProcessService } from '../processes/controlled-process-service'
+import type {
+  ControlledProcessCreateInput,
+  ControlledProcessCreateResult,
+  ControlledProcessReadInput,
+  ControlledProcessReadResult
+} from '../processes/controlled-process-service'
 import type { VersionControlWorkspaceService } from '../services/version-control-workspace-service'
 import {
   defineAppCapabilityContribution
@@ -73,12 +79,23 @@ export const APP_CAPABILITY_IDS = {
   surfaceCurrent: 'surface.current'
 } as const
 
+type ControlledProcessCapabilityService = {
+  create(input: ControlledProcessCreateInput): Promise<ControlledProcessCreateResult>
+  read(input: ControlledProcessReadInput): Promise<ControlledProcessReadResult>
+  write(ownerId: string, resourceId: string, data: string): number | Promise<number>
+  resize(
+    ownerId: string,
+    resourceId: string,
+    columns: number,
+    rows: number
+  ): void | Promise<void>
+  dispose(ownerId: string, resourceId: string): boolean | Promise<boolean>
+  has(ownerId: string, resourceId: string): boolean
+}
+
 export type AppCapabilityDependencies = {
-  controlledProcessService: Pick<
-    ControlledProcessService,
-    'create' | 'dispose' | 'has' | 'read' | 'resize' | 'write'
-  >
-  workspacePreviewHost: Pick<WorkspacePreviewHost,
+  controlledProcessService: ControlledProcessCapabilityService
+  workspacePreviewHost: Omit<Pick<WorkspacePreviewHost,
     | 'listPlugins'
     | 'getSession'
     | 'open'
@@ -98,7 +115,9 @@ export type AppCapabilityDependencies = {
     | 'exportPreview'
     | 'invokeAction'
     | 'releaseSession'
-  >
+  >, 'releaseSession'> & {
+    releaseSession(sessionId: string): boolean | Promise<boolean>
+  }
   visibleContextService?: Pick<VisibleContextService, 'currentSurface'>
   versionControlWorkspaceService: Pick<
     VersionControlWorkspaceService,
@@ -168,6 +187,9 @@ function controlledProcessCapabilities(dependencies: AppCapabilityDependencies) 
         const created = await dependencies.controlledProcessService.create({
           ownerId: context.caller.callerId,
           workspaceRoot: workspaceId,
+          ...(context.caller.workspaceLocator
+            ? { workspaceLocator: context.caller.workspaceLocator }
+            : {}),
           ...(input.cwd ? { cwd: input.cwd } : {}),
           ...(input.terminal
             ? {
@@ -231,9 +253,9 @@ function controlledProcessCapabilities(dependencies: AppCapabilityDependencies) 
       tags: ['process', 'terminal', 'input'],
       inputSchema: controlledProcessWriteInputSchema,
       outputSchema: controlledProcessWriteOutputSchema,
-      handler: (input, context) => ({
+      handler: async (input, context) => ({
         output: {
-          acceptedCharacters: dependencies.controlledProcessService.write(
+          acceptedCharacters: await dependencies.controlledProcessService.write(
             context.caller.callerId,
             resourceSessionId(context.resource),
             input.data
@@ -256,8 +278,8 @@ function controlledProcessCapabilities(dependencies: AppCapabilityDependencies) 
       tags: ['process', 'terminal', 'layout'],
       inputSchema: controlledProcessResizeInputSchema,
       outputSchema: controlledProcessMutationOutputSchema,
-      handler: (input, context) => {
-        dependencies.controlledProcessService.resize(
+      handler: async (input, context) => {
+        await dependencies.controlledProcessService.resize(
           context.caller.callerId,
           resourceSessionId(context.resource),
           input.columns,
@@ -280,8 +302,8 @@ function controlledProcessCapabilities(dependencies: AppCapabilityDependencies) 
       tags: ['process', 'terminal', 'lifecycle'],
       inputSchema: controlledProcessDisposeInputSchema,
       outputSchema: controlledProcessMutationOutputSchema,
-      handler: (_input, context) => {
-        dependencies.controlledProcessService.dispose(
+      handler: async (_input, context) => {
+        await dependencies.controlledProcessService.dispose(
           context.caller.callerId,
           resourceSessionId(context.resource)
         )
@@ -295,6 +317,7 @@ const resourceActionInputSchema = z.object({}).strict()
 const workspacePreviewOpenWireSchema = z.object({
   path: z.string().min(1).max(4_096),
   workspaceRoot: z.string().min(1).max(4_096),
+  workspaceLocator: workspaceLocatorSchema.optional(),
   mimeType: z.string().min(1).max(256).optional(),
   mode: z.enum(['preview', 'edit', 'inspect']).optional(),
   line: z.number().int().positive().max(1_000_000).optional(),
@@ -875,8 +898,8 @@ function workspacePreviewCapabilities(dependencies: AppCapabilityDependencies) {
       tags: ['workspace', 'preview', 'lifecycle'],
       inputSchema: resourceActionInputSchema,
       outputSchema: capabilityOutputSchema,
-      handler: (_, context) => ({
-        output: dependencies.workspacePreviewHost.releaseSession(resourceSessionId(context.resource)),
+      handler: async (_, context) => ({
+        output: await dependencies.workspacePreviewHost.releaseSession(resourceSessionId(context.resource)),
         changed: false
       })
     })

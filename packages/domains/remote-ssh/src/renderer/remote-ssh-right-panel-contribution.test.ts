@@ -29,6 +29,10 @@ describe('Remote SSH right-panel contribution', () => {
         }
       },
       openExternal: () => undefined,
+      workspace: {
+        pickFile: async () => ({ canceled: true, path: null }),
+        openRemoteSession: async () => undefined
+      },
       workbench: { openRightPanel: () => undefined }
     }
 
@@ -63,6 +67,7 @@ describe('Remote SSH right-panel contribution', () => {
     expect(props.workspaceId).toBe('/workspace')
     expect(typeof props.capabilityClient).toBe('object')
     expect(props.openExternal).toBe(host.openExternal)
+    expect(props.openRemoteSession).toBe(host.workspace?.openRemoteSession)
 
     const command = entry.contributions.find(({ kind }) =>
       kind === REMOTE_SSH_RENDERER_COMMAND_CONTRIBUTION.kind

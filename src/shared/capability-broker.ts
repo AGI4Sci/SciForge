@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { workspaceLocatorSchema } from '@sciforge/domain-sdk/workspace-host'
 
 export const CAPABILITY_BROKER_CONTRACT_VERSION = 1
 
@@ -154,6 +155,7 @@ export const capabilityCallerContextSchema = z.object({
   audience: capabilityAudienceSchema,
   callerId: z.string().trim().min(1).max(256),
   workspaceId: z.string().trim().min(1).max(1_024).optional(),
+  workspaceLocator: workspaceLocatorSchema.optional(),
   approvals: z.array(capabilityApprovalGrantSchema).max(64).default([])
 }).strict()
 export type CapabilityCallerContext = z.infer<typeof capabilityCallerContextSchema>

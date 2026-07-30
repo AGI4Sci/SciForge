@@ -14,6 +14,7 @@ import type { ThreadTodoList } from '../agent/types'
 import { guiPlanSession, useGuiPlanStore } from '../plan/plan-store'
 import { selectSddDraftSession, useSddDraftStore } from './sdd-draft-store'
 import { computeSddTrace, type SddTraceResult } from './sdd-trace-compute'
+import { withActiveWorkspaceLocator } from '../remote-workspace/placement'
 
 function normalizeRoot(value: string): string {
   return value.trim().replaceAll('\\', '/').replace(/\/+$/, '')
@@ -83,19 +84,19 @@ export function useSddTrace(input: {
     const load = async (): Promise<void> => {
       if (typeof window.sciforge?.readWorkspaceFile !== 'function') return
       const requirement = await window.sciforge
-        .readWorkspaceFile({ workspaceRoot, path: draftRelativePath })
+        .readWorkspaceFile(withActiveWorkspaceLocator({ workspaceRoot, path: draftRelativePath }))
         .catch(() => null)
       if (!cancelled) setDiskRequirement(requirement?.ok ? requirement.content : null)
       if (!planIsActive) {
         const plan = await window.sciforge
-          .readWorkspaceFile({ workspaceRoot, path: planRelativePath })
+          .readWorkspaceFile(withActiveWorkspaceLocator({ workspaceRoot, path: planRelativePath }))
           .catch(() => null)
         if (!cancelled) setDiskPlan(plan?.ok ? plan.content : null)
       }
       const tracePath = sddDraftTraceRelativePath(draftRelativePath)
       if (tracePath) {
         const trace = await window.sciforge
-          .readWorkspaceFile({ workspaceRoot, path: tracePath })
+          .readWorkspaceFile(withActiveWorkspaceLocator({ workspaceRoot, path: tracePath }))
           .catch(() => null)
         if (!cancelled) setSnapshot(trace?.ok ? parseTraceSnapshot(trace.content) : null)
       } else if (!cancelled) {
@@ -150,11 +151,11 @@ export function useSddTrace(input: {
           return
         }
         if (typeof window.sciforge?.writeWorkspaceFile !== 'function') return
-        const written = await window.sciforge.writeWorkspaceFile({
+        const written = await window.sciforge.writeWorkspaceFile(withActiveWorkspaceLocator({
           workspaceRoot,
           path: draftRelativePath,
           content: next
-        })
+        }))
         if (written.ok) setDiskRequirement(next)
       } finally {
         writebackBusyRef.current = false

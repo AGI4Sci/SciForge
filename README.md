@@ -165,6 +165,7 @@ npm run build
 | [SciForge 论文](./paper/sciforge-report.pdf) | 系统定位、架构、真实界面与 8 个端到端 Showcase |
 | [开发指南](./docs/DEVELOPMENT.zh-CN.md) | 本地开发、测试与构建 |
 | [Runtime contract](./docs/agent-runtime-contract.md) | Codex、Claude Code 与 GUI 的统一适配边界 |
+| [Remote Workspace](./docs/remote-workspace.zh-CN.md) | VPN/SSH、远端目录、本地 UI、网络出口与科学预览 |
 | [架构说明](./DESIGN.md) | Agent runtime、GUI 与服务边界 |
 | [贡献指南](./docs/CONTRIBUTING.zh-CN.md) | 如何参与项目 |
 | [安全策略](./SECURITY.zh-CN.md) | 漏洞报告与安全说明 |

@@ -30,6 +30,14 @@ function normalizeJoinedPath(pathname: string): string {
   return `${prefix}${parts.join('/')}`
 }
 
+function decodePathname(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
 export function isExplicitWriteResourceUrl(value: string): boolean {
   return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)
 }
@@ -72,8 +80,23 @@ export function resolveWriteMarkdownResourcePath(
   const [pathname, suffix = ''] = value.split(/([?#].*)/, 2)
   const baseDir = dirnamePortable(filePath)
   if (!baseDir || suffix) return undefined
-  const resolved = pathname.startsWith('/')
-    ? normalizeJoinedPath(pathname)
-    : normalizeJoinedPath(`${baseDir}/${pathname}`)
+  const decodedPathname = decodePathname(pathname)
+  const resolved = decodedPathname.startsWith('/')
+    ? normalizeJoinedPath(decodedPathname)
+    : normalizeJoinedPath(`${baseDir}/${decodedPathname}`)
   return resolved
+}
+
+export function resolveWriteMarkdownWorkspaceLinkPath(
+  href: string | undefined,
+  filePath?: string | null,
+  workspaceRoot?: string | null
+): string | undefined {
+  const resolved = resolveWriteMarkdownResourcePath(href, filePath)
+  const root = workspaceRoot?.trim()
+  if (!resolved || !root) return undefined
+  const normalizedRoot = normalizeJoinedPath(root)
+  return resolved === normalizedRoot || resolved.startsWith(`${normalizedRoot}/`)
+    ? resolved
+    : undefined
 }

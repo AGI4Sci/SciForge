@@ -16,6 +16,7 @@ export * from './controlled-process.js'
 export * from './power.js'
 export * from './version-control.js'
 export * from './visual-capture.js'
+export * from './workspace-host.js'
 
 export type InstalledMainDomainContribution = InstalledDomainContribution<'main'>
 

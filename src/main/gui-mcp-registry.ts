@@ -46,15 +46,6 @@ import {
   type WorkspaceIntelMcpLaunchConfig
 } from './workspace-intel-mcp-config'
 import {
-  buildRemoteExecutorMcpArgs,
-  GUI_REMOTE_EXECUTOR_MCP_SERVER_NAME,
-  GUI_REMOTE_EXECUTOR_MCP_TIMEOUT_MS,
-  remoteExecutorMcpEnabledTools,
-  remoteExecutorMcpEnv,
-  resolveRemoteExecutorMcpCommand,
-  type RemoteExecutorMcpLaunchConfig
-} from './remote-executor-mcp-config'
-import {
   buildWriteAssistMcpArgs,
   GUI_WRITE_ASSIST_MCP_SERVER_NAME,
   resolveWriteAssistMcpCommand,
@@ -130,11 +121,6 @@ export type GuiMcpRegistryInput = {
   workspaceIntelMcp?: {
     settings?: AppSettingsV1
     launch: WorkspaceIntelMcpLaunchConfig
-  }
-  remoteExecutorMcp?: {
-    settings?: AppSettingsV1
-    launch: RemoteExecutorMcpLaunchConfig
-    enabled?: boolean
   }
   writeAssistMcp?: {
     settings?: AppSettingsV1
@@ -214,17 +200,6 @@ function managedRuntimeServerConfigs(
       env: workspaceIntelMcpEnv({}, workspaceIntelSettings),
       timeoutMs: WORKSPACE_INTEL_MCP_TIMEOUT_MS,
       enabledTools: workspaceIntelMcpEnabledTools()
-    })
-  }
-  if (input.remoteExecutorMcp?.launch && input.remoteExecutorMcp.enabled !== false) {
-    const remoteExecutorSettings = input.remoteExecutorMcp.settings ?? settings
-    servers.push({
-      id: GUI_REMOTE_EXECUTOR_MCP_SERVER_NAME,
-      command: resolveRemoteExecutorMcpCommand(input.remoteExecutorMcp.launch),
-      args: buildRemoteExecutorMcpArgs(input.remoteExecutorMcp.launch),
-      env: remoteExecutorMcpEnv({}, remoteExecutorSettings),
-      timeoutMs: GUI_REMOTE_EXECUTOR_MCP_TIMEOUT_MS,
-      enabledTools: remoteExecutorMcpEnabledTools()
     })
   }
   const writeAssistSettings = input.writeAssistMcp?.settings ?? settings

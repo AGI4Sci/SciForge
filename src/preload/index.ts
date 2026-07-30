@@ -155,12 +155,23 @@ const api = {
     ipcRenderer.invoke('skill:save-file', { rootPath, skillName, content }),
   openSkillRoot: (rootPath) =>
     ipcRenderer.invoke('skill:open-root', rootPath),
-  getGitBranches: (workspaceRoot) =>
-    ipcRenderer.invoke('git:branches', workspaceRoot),
-  switchGitBranch: (workspaceRoot, branch) =>
-    ipcRenderer.invoke('git:switch-branch', { workspaceRoot, branch }),
-  createAndSwitchGitBranch: (workspaceRoot, branch) =>
-    ipcRenderer.invoke('git:create-and-switch-branch', { workspaceRoot, branch }),
+  getGitBranches: (workspaceRoot, workspaceLocator) =>
+    ipcRenderer.invoke('git:branches', {
+      workspaceRoot,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    }),
+  switchGitBranch: (workspaceRoot, branch, workspaceLocator) =>
+    ipcRenderer.invoke('git:switch-branch', {
+      workspaceRoot,
+      branch,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    }),
+  createAndSwitchGitBranch: (workspaceRoot, branch, workspaceLocator) =>
+    ipcRenderer.invoke('git:create-and-switch-branch', {
+      workspaceRoot,
+      branch,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    }),
   listEditors: () => ipcRenderer.invoke('editor:list'),
   openEditorPath: (options) =>
     ipcRenderer.invoke('editor:open-path', options),
@@ -174,6 +185,10 @@ const api = {
     ipcRenderer.invoke('file:read-workspace-image', options),
   writeWorkspaceFile: (payload) =>
     ipcRenderer.invoke('file:write-workspace', payload),
+  readWorkspaceFileRange: (payload) =>
+    ipcRenderer.invoke('file:read-workspace-range', payload),
+  searchWorkspaceText: (payload) =>
+    ipcRenderer.invoke('file:search-workspace-text', payload),
   createWorkspaceFile: (payload) =>
     ipcRenderer.invoke('file:create-workspace', payload),
   createWorkspaceDirectory: (payload) =>
@@ -229,8 +244,6 @@ const api = {
   },
   exportWriteDocument: (payload) =>
     ipcRenderer.invoke('write:export', payload),
-  copyWriteDocumentAsRichText: (payload) =>
-    ipcRenderer.invoke('write:copy-rich-text', payload),
   requestWriteInlineCompletion: (payload) =>
     ipcRenderer.invoke('write:inline-completion', payload),
   retrieveWriteContext: (payload) =>
@@ -263,6 +276,22 @@ const api = {
       const wrapped = (_: Electron.IpcRendererEvent, active: boolean) => handler(active === true)
       ipcRenderer.on('visibleContext:capture-state', wrapped)
       return () => ipcRenderer.removeListener('visibleContext:capture-state', wrapped)
+    }
+  },
+  remoteWorkspace: {
+    list: () => ipcRenderer.invoke('remoteWorkspace:list'),
+    get: () => ipcRenderer.invoke('remoteWorkspace:get'),
+    attach: (input) => ipcRenderer.invoke('remoteWorkspace:attach', input),
+    select: (input) => ipcRenderer.invoke('remoteWorkspace:select', input),
+    reconnect: (input) => ipcRenderer.invoke('remoteWorkspace:reconnect', input),
+    close: (input) => ipcRenderer.invoke('remoteWorkspace:close', input),
+    onSnapshotChanged: (handler) => {
+      const wrapped = (
+        _: Electron.IpcRendererEvent,
+        snapshot: Parameters<typeof handler>[0]
+      ) => handler(snapshot)
+      ipcRenderer.on('remoteWorkspace:snapshot-changed', wrapped)
+      return () => ipcRenderer.removeListener('remoteWorkspace:snapshot-changed', wrapped)
     }
   },
   agentRuntime: {

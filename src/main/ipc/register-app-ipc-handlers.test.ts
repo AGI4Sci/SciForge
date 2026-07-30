@@ -14,6 +14,8 @@ import {
   type AppSettingsPatch,
   type AppSettingsV1
 } from '../../shared/app-settings'
+import { ControlledProcessService } from '../processes/controlled-process-service'
+import { WorkspacePlacementRouter } from '../services/workspace-placement-router'
 
 const handlers = new Map<string, (event: unknown, payload?: unknown) => Promise<unknown>>()
 const { showOpenDialog, showSaveDialog } = vi.hoisted(() => ({
@@ -47,10 +49,6 @@ const { writeExportServiceMock } = vi.hoisted(() => ({
       path: '/tmp/workspace/report.html',
       format: payload.format ?? 'html',
       exportedAt: '2026-07-07T01:00:00.000Z'
-    })),
-    copyWriteDocumentAsRichText: vi.fn(async () => ({
-      ok: true,
-      copiedAt: '2026-07-07T01:00:00.000Z'
     }))
   }
 }))
@@ -83,6 +81,14 @@ function settings(): AppSettingsV1 {
 
 function registerOptions(overrides: Partial<Parameters<typeof import('./register-app-ipc-handlers').registerAppIpcHandlers>[0]> = {}) {
   const applySettingsPatch = vi.fn(async () => settings())
+  const workspacePlacement = new WorkspacePlacementRouter({
+    sessionManager: {
+      portFor: () => {
+        throw new Error('Remote Workspace Host is unavailable in this test.')
+      }
+    },
+    localControlledProcesses: new ControlledProcessService()
+  })
   return {
     store: { load: vi.fn(async () => settings()) } as never,
     actionGuardEvaluator: {
@@ -116,6 +122,7 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
     loadGuiUpdaterModule: vi.fn() as never,
     resolveLogDirectory: () => '/tmp/logs',
     logError: vi.fn(),
+    workspacePlacement,
     ...overrides
   }
 }
@@ -1741,5 +1748,47 @@ describe('registerAppIpcHandlers', () => {
     expect(webContents.setZoomLevel).toHaveBeenCalledWith(1)
     expect(mainWindow.maximize).toHaveBeenCalledTimes(1)
     expect(mainWindow.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('exposes only attached Workspace Host session operations over trusted IPC', async () => {
+    const snapshot = {
+      activeWorkspaceHostId: 'session-1',
+      workspaces: [],
+      updatedAt: '2026-07-30T00:00:00.000Z'
+    }
+    const remoteWorkspace = {
+      list: vi.fn(() => []),
+      get: vi.fn(() => snapshot),
+      attach: vi.fn(async () => snapshot),
+      select: vi.fn(() => snapshot),
+      reconnect: vi.fn(async () => snapshot),
+      close: vi.fn(async () => snapshot),
+      subscribe: vi.fn(() => () => undefined)
+    }
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    registerAppIpcHandlers(registerOptions({
+      remoteWorkspace: remoteWorkspace as never
+    }))
+
+    await handlers.get('remoteWorkspace:list')?.({})
+    await handlers.get('remoteWorkspace:get')?.({})
+    await handlers.get('remoteWorkspace:attach')?.({}, {
+      providerId: 'remote-ssh.workspace-host-provider',
+      authorizedSessionId: 'authorized-session-1'
+    })
+    await handlers.get('remoteWorkspace:select')?.({}, { sessionId: 'session-1' })
+    await handlers.get('remoteWorkspace:reconnect')?.({}, { sessionId: 'session-1' })
+    await handlers.get('remoteWorkspace:close')?.({}, { sessionId: 'session-1' })
+
+    expect(remoteWorkspace.attach).toHaveBeenCalledWith({
+      providerId: 'remote-ssh.workspace-host-provider',
+      authorizedSessionId: 'authorized-session-1'
+    })
+    expect(remoteWorkspace.select).toHaveBeenCalledWith({ sessionId: 'session-1' })
+    await expect(handlers.get('remoteWorkspace:attach')?.({}, {
+      providerId: 'remote-ssh.workspace-host-provider',
+      authorizedSessionId: 'authorized-session-2',
+      workspaceRoot: '/must/not-cross-this-boundary'
+    })).rejects.toThrow(/Invalid payload/u)
   })
 })

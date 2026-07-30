@@ -91,8 +91,12 @@ function removeThreadFromMainLists(threadId: string, state: ChatState): Partial<
 function rememberSideThreadRuntime(
   provider: AgentProvider,
   sideId: string,
-  side: Pick<SideConversation, 'runtimeId'> | null | undefined
+  side: Pick<SideConversation, 'runtimeId' | 'workspaceLocator'> | null | undefined
 ): void {
+  if (side?.workspaceLocator) {
+    provider.rememberThreadRuntime?.(sideId, side.runtimeId, side.workspaceLocator)
+    return
+  }
   provider.rememberThreadRuntime?.(sideId, side?.runtimeId)
 }
 
@@ -371,6 +375,7 @@ async function drainNextSideMessage(sideId: string, ctx: SideContext): Promise<v
     rememberSideThreadRuntime(provider, sideId, side)
     const { turnId } = await provider.sendUserMessage(sideId, queued.text, {
       clientDirectiveId: queued.id,
+      ...(side.workspaceLocator ? { workspaceLocator: side.workspaceLocator } : {}),
       ...(queued.mode ? { mode: queued.mode } : {}),
       model: queued.model,
       ...(queued.reasoningEffort ? { reasoningEffort: queued.reasoningEffort } : {}),
@@ -521,7 +526,14 @@ export function createSideActions(ctx: SideContext): Pick<
       }
 
       const provider = ctx.getProvider()
-      if (input.runtimeId) provider.rememberThreadRuntime?.(threadId, input.runtimeId)
+      const attachedThread = state.threads.find((thread) => thread.id === threadId)
+      if (input.runtimeId) {
+        provider.rememberThreadRuntime?.(
+          threadId,
+          input.runtimeId,
+          attachedThread?.workspaceLocator
+        )
+      }
       let detail: Awaited<ReturnType<AgentProvider['getThreadDetail']>>
       try {
         detail = await provider.getThreadDetail(threadId)
@@ -531,12 +543,16 @@ export function createSideActions(ctx: SideContext): Pick<
       }
 
       const runtimeId = input.runtimeId ?? runtimeOwnerFromThreadDetail(detail)
-      if (runtimeId) provider.rememberThreadRuntime?.(threadId, runtimeId)
+      const workspaceLocator = detail.workspaceLocator ?? attachedThread?.workspaceLocator
+      if (runtimeId) {
+        provider.rememberThreadRuntime?.(threadId, runtimeId, workspaceLocator)
+      }
       const title = input.title?.trim() || threadId.slice(0, 8)
       const now = new Date().toISOString()
       const side: SideConversation = {
         threadId,
         ...(runtimeId ? { runtimeId } : {}),
+        ...(workspaceLocator ? { workspaceLocator } : {}),
         parentThreadId,
         source: input.source ?? 'side',
         title,
@@ -589,6 +605,8 @@ export function createSideActions(ctx: SideContext): Pick<
         providerSupportsCapability(provider, 'fork') &&
         providerSupportsCapability(provider, 'sideConversations')
       const parentThread = connectedState.threads.find((thread) => thread.id === connectedParentId)
+      const sideWorkspaceLocator =
+        parentThread?.workspaceLocator ?? connectedState.workspaceLocator
       const title = options?.title?.trim() || defaultSideTitle(parentThread?.title ?? '', connectedParentId)
       const source = options?.source ?? 'side'
       const openPanel = options?.openPanel ?? true
@@ -603,10 +621,15 @@ export function createSideActions(ctx: SideContext): Pick<
             title,
             mode: parentThread?.mode,
             workspace: parentThread?.workspace ?? connectedState.workspaceRoot,
+            ...(sideWorkspaceLocator ? { workspaceLocator: sideWorkspaceLocator } : {}),
             ...createMetadata
           })
         }
-        provider.rememberThreadRuntime?.(sideThread.id, sideThread.runtimeId)
+        provider.rememberThreadRuntime?.(
+          sideThread.id,
+          sideThread.runtimeId,
+          sideThread.workspaceLocator
+        )
       } catch (e) {
         ctx.set({
           error: ctx.formatRuntimeError(e),
@@ -620,6 +643,9 @@ export function createSideActions(ctx: SideContext): Pick<
       const side: SideConversation = {
         threadId: sideThread.id,
         ...(sideThread.runtimeId ? { runtimeId: sideThread.runtimeId } : {}),
+        ...(sideThread.workspaceLocator
+          ? { workspaceLocator: sideThread.workspaceLocator }
+          : {}),
         parentThreadId: connectedParentId,
         source,
         title: sideThread.title ?? title,
@@ -752,6 +778,7 @@ export function createSideActions(ctx: SideContext): Pick<
         rememberSideThreadRuntime(provider, sideId, side)
         const { turnId } = await provider.sendUserMessage(sideId, messageText, {
           clientDirectiveId,
+          ...(side.workspaceLocator ? { workspaceLocator: side.workspaceLocator } : {}),
           ...(overrides?.mode ? { mode: overrides.mode } : {}),
           model: side.model,
           ...(reasoningEffort ? { reasoningEffort } : {}),

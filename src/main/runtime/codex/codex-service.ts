@@ -62,13 +62,13 @@ import {
   type CodexAppServerThreadSandboxPolicy,
   type CodexAppServerTurnSandboxPolicy,
   type CodexAppServerThreadStartParams
-} from './app-server/json-rpc-client'
+} from '@sciforge/codex-runtime/app-server'
 import {
   codexAppServerApprovalMethodInfo,
   type CodexAppServerPendingRequest,
   type CodexAppServerResolveApprovalInput,
   type CodexAppServerResolveUserInputInput
-} from './app-server/request-registry'
+} from '@sciforge/codex-runtime/app-server'
 import {
   codexAppServerThreadReasoningConfig,
   codexAppServerTurnReasoningParams

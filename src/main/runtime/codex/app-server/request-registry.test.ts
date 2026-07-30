@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   createCodexAppServerPendingRequestRegistry,
   type CodexAppServerPendingRequest
-} from './request-registry'
+} from '@sciforge/codex-runtime/app-server'
 
 describe('Codex app-server pending request registry', () => {
   it('captures known approval and user-input request ids without resolving them', async () => {

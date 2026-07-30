@@ -17,6 +17,10 @@
     "priority": 100
   },
   "contributionContracts": {
+    "remote-ssh.workspace-host-provider": {
+      "authorizationCapabilityId": "remote-ssh.workspace-host-session.open",
+      "resourceKind": "remote-ssh-target"
+    },
     "remote-ssh.workbench-right-panel": {
       "location": "workbench.right-panel",
       "title": "Remote targets",
@@ -33,7 +37,8 @@
       "process": "main",
       "export": "./main",
       "contributions": [
-        { "kind": "main.capability-factory", "id": "remote-ssh.capabilities" }
+        { "kind": "main.capability-factory", "id": "remote-ssh.capabilities" },
+        { "kind": "main.workspace-host-provider", "id": "remote-ssh.workspace-host-provider" }
       ]
     },
     {

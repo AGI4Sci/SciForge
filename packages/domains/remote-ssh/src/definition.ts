@@ -15,6 +15,13 @@ export const REMOTE_SSH_DOMAIN_PACKAGE_NAME = domainPackageDefinition.packageNam
 export const REMOTE_SSH_CAPABILITY_FACTORY_CONTRIBUTION = contributionFor(
   'main', 'main.capability-factory'
 )
+export const REMOTE_SSH_WORKSPACE_HOST_PROVIDER_CONTRIBUTION = contributionFor(
+  'main', 'main.workspace-host-provider'
+)
+export const REMOTE_SSH_WORKSPACE_HOST_PROVIDER_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    REMOTE_SSH_WORKSPACE_HOST_PROVIDER_CONTRIBUTION.id
+  ]!
 export const REMOTE_SSH_RENDERER_RIGHT_PANEL_CONTRIBUTION = contributionFor(
   'renderer', 'renderer.workbench-right-panel'
 )

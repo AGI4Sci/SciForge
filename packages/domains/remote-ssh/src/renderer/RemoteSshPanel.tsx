@@ -1,5 +1,8 @@
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import type {
+  WorkspaceHostOpenRemoteSessionInput
+} from '@sciforge/domain-sdk/workspace-host'
 import {
   Check,
   CircleCheck,
@@ -7,6 +10,7 @@ import {
   Container,
   Copy,
   ExternalLink,
+  FolderOpen,
   Loader2,
   MonitorPlay,
   Network,
@@ -24,6 +28,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import type {
   RemoteSshLabEnvironmentResult,
+  RemoteSshLabEnvironmentGuidanceCode,
   RemoteSshLab,
   RemoteSshLabEnvironmentProvider,
   RemoteSshTargetProbeResult,
@@ -40,6 +45,12 @@ import type {
   RemoteSshCapabilityClient,
   RemoteSshMutationConfirmation
 } from './remote-ssh-capability-client'
+import {
+  normalizedRemoteWorkspaceRoot,
+  openRemoteSshWorkspace,
+  parseRemoteWorkspaceEgressAllowlist,
+  type RemoteSshWorkspaceEgressRequest
+} from './remote-workspace-flow'
 
 export type RemoteSshPanelProps = Readonly<{
   capabilityClient: RemoteSshCapabilityClient
@@ -47,6 +58,7 @@ export type RemoteSshPanelProps = Readonly<{
   className?: string
   onCollapse?: () => void
   openExternal?: (url: string) => void | Promise<void>
+  openRemoteSession?: (input: WorkspaceHostOpenRemoteSessionInput) => Promise<void>
 }>
 
 export type RemoteSshTargetGroup = Readonly<{
@@ -76,6 +88,14 @@ type TargetDraft = Readonly<{
   expectedRevision?: string
 }>
 
+type RemoteWorkspaceDraft = Readonly<{
+  targetId: string
+  workspaceRoot: string
+  egressMode: 'none' | 'local' | 'remote-target'
+  egressTargetId: string
+  egressAllowlist: string
+}>
+
 const USER_CONFIRMED_MUTATION = Object.freeze({
   approval: Object.freeze({ mode: 'confirmation' as const })
 }) satisfies RemoteSshMutationConfirmation
@@ -86,8 +106,33 @@ export type RemoteSshOnboardingAction =
   | 'create-lab'
   | 'ensure-environment'
   | 'open-console'
+  | 'open-config'
   | 'refresh'
   | 'add-target'
+
+export type RemoteSshWorkspaceOpenReadiness =
+  | 'unavailable'
+  | 'environment-required'
+  | 'target-check-required'
+  | 'ready'
+
+export function remoteSshWorkspaceOpenReadiness({
+  allowed,
+  resourceAvailable,
+  hostAvailable,
+  environment,
+  probe
+}: Readonly<{
+  allowed: boolean
+  resourceAvailable: boolean
+  hostAvailable: boolean
+  environment?: RemoteSshLabEnvironmentResult
+  probe?: RemoteSshTargetProbeResult
+}>): RemoteSshWorkspaceOpenReadiness {
+  if (!allowed || !resourceAvailable || !hostAvailable) return 'unavailable'
+  if (environment?.state !== 'ready') return 'environment-required'
+  return probe?.ready ? 'ready' : 'target-check-required'
+}
 
 export function remoteSshOnboardingAction(
   lab: RemoteSshLab | undefined,
@@ -96,12 +141,26 @@ export function remoteSshOnboardingAction(
   if (!lab) return 'create-lab'
   if (environment?.state === 'ready') return 'add-target'
   if (
-    environment?.state === 'login-required' &&
+    (environment?.state === 'login-required' ||
+      environment?.guidanceCode === 'open-vpn-login' ||
+      environment?.guidanceCode === 'authorize-gateway-key' ||
+      environment?.guidanceCode === 'enable-gateway-ssh' ||
+      environment?.guidanceCode === 'resume-environment') &&
     environment.consoleAvailable
   ) {
     return 'open-console'
   }
-  if (environment?.state === 'starting') return 'refresh'
+  if (environment?.guidanceCode === 'configure-gateway-alias') {
+    return 'open-config'
+  }
+  if (
+    environment?.state === 'starting' ||
+    environment?.guidanceCode === 'trust-gateway-host-key' ||
+    environment?.guidanceCode === 'install-host-openssh' ||
+    environment?.guidanceCode === 'retry'
+  ) {
+    return 'refresh'
+  }
   return 'ensure-environment'
 }
 
@@ -143,7 +202,8 @@ export function RemoteSshPanel({
   workspaceId,
   className = '',
   onCollapse,
-  openExternal
+  openExternal,
+  openRemoteSession
 }: RemoteSshPanelProps): ReactElement {
   const { t } = useTranslation('common')
   const normalizedWorkspaceId = workspaceId?.trim() || undefined
@@ -163,6 +223,9 @@ export function RemoteSshPanel({
   const [templateCopied, setTemplateCopied] = useState(false)
   const [labDraft, setLabDraft] = useState<LabDraft | null>(null)
   const [targetDraft, setTargetDraft] = useState<TargetDraft | null>(null)
+  const [remoteWorkspaceDraft, setRemoteWorkspaceDraft] =
+    useState<RemoteWorkspaceDraft | null>(null)
+  const [workspaceBlockerLabId, setWorkspaceBlockerLabId] = useState<string | null>(null)
 
   const groups = useMemo(() => groupRemoteSshTargets(labs, targets), [labs, targets])
   const onboardingLab = useMemo(
@@ -181,6 +244,8 @@ export function RemoteSshPanel({
   const refresh = useCallback(async (): Promise<void> => {
     setLoading(true)
     setMessage(null)
+    setRemoteWorkspaceDraft(null)
+    setWorkspaceBlockerLabId(null)
     try {
       const [labResult, catalogResult, targetResult, bindingResult, virtualBoxOutcome] = await Promise.all([
         capabilityClient.listLabs(),
@@ -425,6 +490,18 @@ export function RemoteSshPanel({
     }
   }
 
+  const openOpenSshConfig = async (): Promise<void> => {
+    setBusyKey('open-openssh-config')
+    setMessage(null)
+    try {
+      await capabilityClient.openOpenSshConfig(USER_CONFIRMED_MUTATION)
+    } catch (error) {
+      setMessage(errorMessage(error, t('remoteSshOpenConfigFailed')))
+    } finally {
+      setBusyKey(null)
+    }
+  }
+
   const startOnboarding = (): void => {
     const firstLab = [...labs].sort((left, right) => left.displayName.localeCompare(right.displayName))[0]
     const action = remoteSshOnboardingAction(
@@ -440,6 +517,9 @@ export function RemoteSshPanel({
         return
       case 'open-console':
         void openLabEnvironmentConsole(firstLab!)
+        return
+      case 'open-config':
+        void openOpenSshConfig()
         return
       case 'refresh':
         void refresh()
@@ -493,6 +573,197 @@ export function RemoteSshPanel({
     }
   }
 
+  const showRemoteWorkspaceEditor = (target: RemoteSshTarget): void => {
+    const firstEgressTarget = targets.find((candidate) =>
+      candidate.id !== target.id &&
+      allowedTargetIds.has(candidate.id) &&
+      Boolean(targetHandles[candidate.id])
+    )
+    setRemoteWorkspaceDraft({
+      targetId: target.id,
+      workspaceRoot: '',
+      egressMode: 'none',
+      egressTargetId: firstEgressTarget?.id ?? '',
+      egressAllowlist: ''
+    })
+    setMessage(null)
+    setWorkspaceBlockerLabId(null)
+  }
+
+  const prepareOpenRemoteWorkspace = async (target: RemoteSshTarget): Promise<void> => {
+    const resource = targetHandles[target.id]
+    const readiness = remoteSshWorkspaceOpenReadiness({
+      allowed: allowedTargetIds.has(target.id),
+      resourceAvailable: Boolean(resource),
+      hostAvailable: Boolean(openRemoteSession),
+      environment: labEnvironments[target.labId],
+      probe: probes[target.id]
+    })
+    if (readiness === 'unavailable') {
+      setWorkspaceBlockerLabId(null)
+      setMessage(t('remoteSshWorkspaceTargetUnavailable'))
+      return
+    }
+    if (readiness === 'environment-required') {
+      setRemoteWorkspaceDraft(null)
+      setWorkspaceBlockerLabId(target.labId)
+      setMessage(t('remoteSshWorkspaceEnvironmentRequired', {
+        lab: labs.find((lab) => lab.id === target.labId)?.displayName ?? target.labId
+      }))
+      return
+    }
+    if (readiness === 'ready') {
+      showRemoteWorkspaceEditor(target)
+      return
+    }
+    if (!normalizedWorkspaceId || !resource) return
+
+    setBusyKey(`prepare-workspace:${target.id}`)
+    setMessage(null)
+    setWorkspaceBlockerLabId(null)
+    try {
+      const result = await capabilityClient.probeTarget(resource, normalizedWorkspaceId)
+      setProbes((current) => ({ ...current, [target.id]: result }))
+      if (!result.ready) {
+        setRemoteWorkspaceDraft(null)
+        setMessage(t('remoteSshWorkspaceTargetCheckRequired'))
+        return
+      }
+      showRemoteWorkspaceEditor(target)
+    } catch (error) {
+      setMessage(errorMessage(error, t('remoteSshWorkspaceTargetCheckFailed')))
+    } finally {
+      setBusyKey(null)
+    }
+  }
+
+  const openRemoteWorkspace = async (): Promise<void> => {
+    if (!remoteWorkspaceDraft || !normalizedWorkspaceId || !openRemoteSession) return
+    const workspaceRoot = normalizedRemoteWorkspaceRoot(remoteWorkspaceDraft.workspaceRoot)
+    if (!workspaceRoot) {
+      setMessage(t('remoteSshWorkspaceRootInvalid'))
+      return
+    }
+    const target = targets.find((candidate) => candidate.id === remoteWorkspaceDraft.targetId)
+    const workspaceTargetResource = targetHandles[remoteWorkspaceDraft.targetId]
+    if (!target || !workspaceTargetResource) {
+      setMessage(t('remoteSshWorkspaceTargetUnavailable'))
+      return
+    }
+    const readiness = remoteSshWorkspaceOpenReadiness({
+      allowed: allowedTargetIds.has(target.id),
+      resourceAvailable: true,
+      hostAvailable: true,
+      environment: labEnvironments[target.labId],
+      probe: probes[target.id]
+    })
+    if (readiness === 'environment-required') {
+      setRemoteWorkspaceDraft(null)
+      setWorkspaceBlockerLabId(target.labId)
+      setMessage(t('remoteSshWorkspaceEnvironmentRequired', {
+        lab: labs.find((lab) => lab.id === target.labId)?.displayName ?? target.labId
+      }))
+      return
+    }
+    if (readiness !== 'ready') {
+      setRemoteWorkspaceDraft(null)
+      setMessage(t('remoteSshWorkspaceTargetCheckRequired'))
+      return
+    }
+
+    let egress: RemoteSshWorkspaceEgressRequest
+    if (remoteWorkspaceDraft.egressMode === 'none') {
+      egress = { mode: 'none' }
+    } else {
+      const allowlist = parseRemoteWorkspaceEgressAllowlist(
+        remoteWorkspaceDraft.egressAllowlist
+      )
+      if (!allowlist) {
+        setMessage(t('remoteSshWorkspaceEgressAllowlistInvalid'))
+        return
+      }
+      if (remoteWorkspaceDraft.egressMode === 'local') {
+        egress = { mode: 'local', allowlist }
+      } else {
+        const egressResource = targetHandles[remoteWorkspaceDraft.egressTargetId]
+        if (
+          !egressResource ||
+          !allowedTargetIds.has(remoteWorkspaceDraft.egressTargetId) ||
+          remoteWorkspaceDraft.egressTargetId === remoteWorkspaceDraft.targetId
+        ) {
+          setMessage(t('remoteSshWorkspaceEgressTargetUnavailable'))
+          return
+        }
+        egress = {
+          mode: 'remote-target',
+          targetId: remoteWorkspaceDraft.egressTargetId,
+          resource: egressResource,
+          allowlist
+        }
+      }
+    }
+
+    setBusyKey(`open-workspace:${target.id}`)
+    setMessage(null)
+    setWorkspaceBlockerLabId(null)
+    try {
+      const opened = await openRemoteSshWorkspace({
+        capabilityClient,
+        workspaceId: normalizedWorkspaceId,
+        workspaceTargetId: target.id,
+        workspaceTargetResource,
+        workspaceRoot,
+        egress,
+        confirmation: USER_CONFIRMED_MUTATION,
+        openRemoteSession
+      })
+      setRemoteWorkspaceDraft(null)
+      setMessage(t('remoteSshWorkspaceOpened', {
+        target: target.displayName,
+        path: opened.workspaceRoot
+      }))
+    } catch (error) {
+      setMessage(errorMessage(error, t('remoteSshWorkspaceOpenFailed')))
+    } finally {
+      setBusyKey(null)
+    }
+  }
+
+  const workspaceBlockerLab = workspaceBlockerLabId
+    ? labs.find((lab) => lab.id === workspaceBlockerLabId)
+    : undefined
+  const workspaceBlockerEnvironment = workspaceBlockerLab
+    ? labEnvironments[workspaceBlockerLab.id]
+    : undefined
+  const workspaceBlockerAction = workspaceBlockerEnvironment
+    ? labEnvironmentGuidanceAction(
+        labEnvironmentGuidanceCode(workspaceBlockerEnvironment),
+        targets.filter((target) => target.labId === workspaceBlockerLab?.id).length
+      )
+    : null
+  const runWorkspaceBlockerAction = (): void => {
+    if (!workspaceBlockerLab || !workspaceBlockerAction) return
+    switch (workspaceBlockerAction) {
+      case 'edit':
+        setLabDraft(labDraftFrom(workspaceBlockerLab))
+        return
+      case 'ensure':
+        void ensureLabEnvironment(workspaceBlockerLab)
+        return
+      case 'open-config':
+        void openOpenSshConfig()
+        return
+      case 'open-console':
+        void openLabEnvironmentConsole(workspaceBlockerLab)
+        return
+      case 'refresh':
+        void refresh()
+        return
+      case 'add-target':
+        setTargetDraft(emptyTargetDraft(workspaceBlockerLab.id))
+    }
+  }
+
   return (
     <section className={`ds-no-drag flex min-h-0 flex-col overflow-hidden bg-ds-sidebar ${className}`}>
       <header className="flex shrink-0 items-center gap-3 border-b border-ds-border px-4 py-3">
@@ -543,8 +814,26 @@ export function RemoteSshPanel({
       </div>
 
       {message ? (
-        <div className="shrink-0 border-b border-ds-border bg-red-500/8 px-4 py-2 text-[11.5px] leading-5 text-red-700 dark:text-red-300">
-          {message}
+        <div className="flex shrink-0 items-center gap-2 border-b border-ds-border bg-red-500/8 px-4 py-2 text-[11.5px] leading-5 text-red-700 dark:text-red-300">
+          <span className="min-w-0 flex-1">{message}</span>
+          {workspaceBlockerLab && workspaceBlockerAction ? (
+            <button
+              type="button"
+              onClick={runWorkspaceBlockerAction}
+              disabled={busyKey !== null}
+              className="shrink-0 rounded-md border border-red-500/25 bg-ds-panel px-2 py-1 text-[10.5px] font-semibold text-ds-ink transition hover:bg-ds-hover disabled:opacity-50"
+            >
+              {workspaceBlockerAction === 'open-console' &&
+              workspaceBlockerLab.environment.provider === 'vm'
+                ? t('remoteSshWorkspaceOpenVmAction', {
+                    lab: workspaceBlockerLab.displayName
+                  })
+                : t(labEnvironmentGuidanceActionTranslationKey(
+                    workspaceBlockerAction,
+                    workspaceBlockerLab.environment.provider
+                  ))}
+            </button>
+          ) : null}
         </div>
       ) : null}
 
@@ -572,8 +861,10 @@ export function RemoteSshPanel({
             draft={targetDraft}
             labs={labs}
             busy={busyKey === 'save-target'}
+            openingOpenSshConfig={busyKey === 'open-openssh-config'}
             setDraft={setTargetDraft}
             onSave={() => void saveTarget()}
+            onOpenSshConfig={() => void openOpenSshConfig()}
             onCancel={() => setTargetDraft(null)}
             t={t}
           />
@@ -612,7 +903,7 @@ export function RemoteSshPanel({
                           {labEnvironmentSummary(group.lab, t)}
                         </div>
                         <LabEnvironmentStatus environment={environment} t={t} />
-                        {environment?.message ? (
+                        {environment?.message && !environment.guidanceCode ? (
                           <div className="mt-1 line-clamp-2 text-[10px] leading-4 text-ds-faint">
                             {environment.message}
                           </div>
@@ -681,12 +972,33 @@ export function RemoteSshPanel({
                     </>
                   ) : null}
                 </div>
+                {group.lab && environment ? (
+                  <LabEnvironmentGuidance
+                    environment={environment}
+                    targetCount={group.targets.length}
+                    busy={busyKey !== null}
+                    onEdit={() => setLabDraft(labDraftFrom(group.lab!))}
+                    onEnsure={() => void ensureLabEnvironment(group.lab!)}
+                    onOpenConfig={() => void openOpenSshConfig()}
+                    onOpenConsole={() => void openLabEnvironmentConsole(group.lab!)}
+                    onRefresh={() => void refresh()}
+                    onAddTarget={() => setTargetDraft(emptyTargetDraft(group.lab!.id))}
+                    t={t}
+                  />
+                ) : null}
                 <div className="divide-y divide-ds-border">
                   {group.targets.map((target) => {
                     const probe = probes[target.id]
                     const status = probeDisplay(probe, t)
                     const allowed = allowedTargetIds.has(target.id)
                     const resource = targetHandles[target.id]
+                    const workspaceReadiness = remoteSshWorkspaceOpenReadiness({
+                      allowed,
+                      resourceAvailable: Boolean(resource),
+                      hostAvailable: Boolean(openRemoteSession),
+                      environment,
+                      probe
+                    })
                     return (
                       <div key={target.id} className="px-3 py-2.5">
                         <div className="flex min-w-0 items-start gap-2">
@@ -718,6 +1030,18 @@ export function RemoteSshPanel({
                             <div className={`mt-1 text-[10.5px] ${status.className}`}>{status.label}</div>
                           </div>
                           <IconButton
+                            label={workspaceReadiness === 'environment-required'
+                              ? t('remoteSshWorkspaceEnvironmentActionRequired')
+                              : busyKey === `prepare-workspace:${target.id}`
+                                ? t('remoteSshWorkspaceChecking')
+                                : t('remoteSshOpenWorkspace')}
+                            busy={busyKey === `prepare-workspace:${target.id}`}
+                            disabled={workspaceReadiness === 'unavailable'}
+                            onClick={() => void prepareOpenRemoteWorkspace(target)}
+                          >
+                            <FolderOpen className="h-3.5 w-3.5" />
+                          </IconButton>
+                          <IconButton
                             label={busyKey === `probe:${target.id}` ? t('remoteSshProbing') : t('remoteSshProbe')}
                             busy={busyKey === `probe:${target.id}`}
                             disabled={!resource}
@@ -740,6 +1064,23 @@ export function RemoteSshPanel({
                             <Trash2 className="h-3.5 w-3.5" />
                           </IconButton>
                         </div>
+                        {remoteWorkspaceDraft?.targetId === target.id &&
+                        workspaceReadiness === 'ready' ? (
+                          <RemoteWorkspaceEditor
+                            draft={remoteWorkspaceDraft}
+                            egressTargets={targets.filter((candidate) =>
+                              candidate.id !== target.id &&
+                              allowedTargetIds.has(candidate.id) &&
+                              Boolean(targetHandles[candidate.id])
+                            )}
+                            busy={busyKey === `open-workspace:${target.id}`}
+                            hostAvailable={Boolean(openRemoteSession)}
+                            setDraft={setRemoteWorkspaceDraft}
+                            onOpen={() => void openRemoteWorkspace()}
+                            onCancel={() => setRemoteWorkspaceDraft(null)}
+                            t={t}
+                          />
+                        ) : null}
                       </div>
                     )
                   })}
@@ -764,6 +1105,367 @@ export function RemoteSshPanel({
 }
 
 type Translate = (key: string, options?: Record<string, unknown>) => string
+
+type LabEnvironmentGuidanceAction =
+  | 'edit'
+  | 'ensure'
+  | 'open-config'
+  | 'open-console'
+  | 'refresh'
+  | 'add-target'
+
+export function labEnvironmentGuidanceCode(
+  environment: RemoteSshLabEnvironmentResult
+): RemoteSshLabEnvironmentGuidanceCode {
+  if (environment.guidanceCode) return environment.guidanceCode
+  switch (environment.state) {
+    case 'provider-unavailable': return 'install-provider'
+    case 'configuration-required': return 'retry'
+    case 'stopped': return 'start-environment'
+    case 'starting': return 'wait-for-environment'
+    case 'login-required': return 'open-vpn-login'
+    case 'ready': return 'test-target'
+    case 'failed': return 'retry'
+  }
+}
+
+export function labEnvironmentGuidanceAction(
+  code: RemoteSshLabEnvironmentGuidanceCode,
+  targetCount: number
+): LabEnvironmentGuidanceAction | null {
+  switch (code) {
+    case 'install-provider':
+    case 'select-environment':
+      return 'edit'
+    case 'start-environment':
+      return 'ensure'
+    case 'configure-gateway-alias':
+      return 'open-config'
+    case 'resume-environment':
+    case 'authorize-gateway-key':
+    case 'enable-gateway-ssh':
+    case 'open-vpn-login':
+      return 'open-console'
+    case 'test-target':
+      return targetCount === 0 ? 'add-target' : null
+    case 'install-host-openssh':
+    case 'trust-gateway-host-key':
+    case 'wait-for-environment':
+    case 'retry':
+      return 'refresh'
+  }
+}
+
+function labEnvironmentGuidanceActionTranslationKey(
+  action: LabEnvironmentGuidanceAction,
+  provider: RemoteSshLabEnvironmentProvider
+): string {
+  switch (action) {
+    case 'edit': return 'remoteSshGuidanceEdit'
+    case 'ensure': return 'remoteSshGuidanceStart'
+    case 'open-config': return 'remoteSshOpenConfig'
+    case 'open-console': return provider === 'vm'
+      ? 'remoteSshGuidanceOpenVm'
+      : 'remoteSshEnvironmentOpenVpnLogin'
+    case 'refresh': return 'remoteSshGuidanceCheckAgain'
+    case 'add-target': return 'remoteSshAddTarget'
+  }
+}
+
+function labEnvironmentGuidanceTranslationKeys(
+  code: RemoteSshLabEnvironmentGuidanceCode
+): Readonly<{ title: string; body: string }> {
+  switch (code) {
+    case 'install-provider':
+      return { title: 'remoteSshGuidanceInstallProviderTitle', body: 'remoteSshGuidanceInstallProviderBody' }
+    case 'select-environment':
+      return { title: 'remoteSshGuidanceSelectEnvironmentTitle', body: 'remoteSshGuidanceSelectEnvironmentBody' }
+    case 'start-environment':
+      return { title: 'remoteSshGuidanceStartEnvironmentTitle', body: 'remoteSshGuidanceStartEnvironmentBody' }
+    case 'wait-for-environment':
+      return { title: 'remoteSshGuidanceWaitEnvironmentTitle', body: 'remoteSshGuidanceWaitEnvironmentBody' }
+    case 'resume-environment':
+      return { title: 'remoteSshGuidanceResumeEnvironmentTitle', body: 'remoteSshGuidanceResumeEnvironmentBody' }
+    case 'install-host-openssh':
+      return { title: 'remoteSshGuidanceInstallOpenSshTitle', body: 'remoteSshGuidanceInstallOpenSshBody' }
+    case 'configure-gateway-alias':
+      return { title: 'remoteSshGuidanceConfigureAliasTitle', body: 'remoteSshGuidanceConfigureAliasBody' }
+    case 'trust-gateway-host-key':
+      return { title: 'remoteSshGuidanceTrustHostKeyTitle', body: 'remoteSshGuidanceTrustHostKeyBody' }
+    case 'authorize-gateway-key':
+      return { title: 'remoteSshGuidanceAuthorizeKeyTitle', body: 'remoteSshGuidanceAuthorizeKeyBody' }
+    case 'enable-gateway-ssh':
+      return { title: 'remoteSshGuidanceEnableSshTitle', body: 'remoteSshGuidanceEnableSshBody' }
+    case 'open-vpn-login':
+      return { title: 'remoteSshGuidanceVpnLoginTitle', body: 'remoteSshGuidanceVpnLoginBody' }
+    case 'test-target':
+      return { title: 'remoteSshGuidanceTestTargetTitle', body: 'remoteSshGuidanceTestTargetBody' }
+    case 'retry':
+      return { title: 'remoteSshGuidanceRetryTitle', body: 'remoteSshGuidanceRetryBody' }
+  }
+}
+
+function LabEnvironmentGuidance({
+  environment,
+  targetCount,
+  busy,
+  onEdit,
+  onEnsure,
+  onOpenConfig,
+  onOpenConsole,
+  onRefresh,
+  onAddTarget,
+  t
+}: Readonly<{
+  environment: RemoteSshLabEnvironmentResult
+  targetCount: number
+  busy: boolean
+  onEdit: () => void
+  onEnsure: () => void
+  onOpenConfig: () => void
+  onOpenConsole: () => void
+  onRefresh: () => void
+  onAddTarget: () => void
+  t: Translate
+}>): ReactElement {
+  const code = labEnvironmentGuidanceCode(environment)
+  const action = labEnvironmentGuidanceAction(code, targetCount)
+  const actions = [
+    action,
+    code === 'enable-gateway-ssh' ? 'open-config' as const : null
+  ].filter((candidate): candidate is LabEnvironmentGuidanceAction => candidate !== null)
+  const copy = labEnvironmentGuidanceTranslationKeys(code)
+  const ready = code === 'test-target'
+  const actionCallbacks: Record<LabEnvironmentGuidanceAction, () => void> = {
+    edit: onEdit,
+    ensure: onEnsure,
+    'open-config': onOpenConfig,
+    'open-console': onOpenConsole,
+    refresh: onRefresh,
+    'add-target': onAddTarget
+  }
+  return (
+    <div
+      className={`border-b px-3 py-2.5 ${
+        ready
+          ? 'border-emerald-500/20 bg-emerald-500/6'
+          : 'border-amber-500/20 bg-amber-500/6'
+      }`}
+    >
+      <div className="flex items-start gap-2">
+        {ready
+          ? <CircleCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+          : <Network className="mt-0.5 h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300" />}
+        <div className="min-w-0 flex-1">
+          <div className="text-[11.5px] font-semibold text-ds-ink">
+            {t(copy.title)}
+          </div>
+          <p className="mt-0.5 text-[10.5px] leading-4 text-ds-muted">
+            {t(copy.body)}
+          </p>
+          {environment.message ? (
+            <details className="mt-1.5 text-[10px] text-ds-faint">
+              <summary className="cursor-pointer select-none">
+                {t('remoteSshGuidanceTechnicalDetails')}
+              </summary>
+              <div className="mt-1 break-words rounded bg-ds-sidebar px-2 py-1.5 font-mono leading-4">
+                {environment.message}
+              </div>
+            </details>
+          ) : null}
+        </div>
+        {actions.length ? (
+          <div className="grid shrink-0 gap-1">
+            {actions.map((guidanceAction) => (
+              <button
+                key={guidanceAction}
+                type="button"
+                disabled={busy}
+                onClick={actionCallbacks[guidanceAction]}
+                className="inline-flex items-center justify-center gap-1 rounded-md border border-ds-border bg-ds-panel px-2 py-1.5 text-[10.5px] font-semibold text-ds-ink transition hover:bg-ds-hover disabled:opacity-50"
+              >
+                {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                {t(labEnvironmentGuidanceActionTranslationKey(
+                  guidanceAction,
+                  environment.provider
+                ))}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function RemoteWorkspaceEditor({
+  draft,
+  egressTargets,
+  busy,
+  hostAvailable,
+  setDraft,
+  onOpen,
+  onCancel,
+  t
+}: Readonly<{
+  draft: RemoteWorkspaceDraft
+  egressTargets: readonly RemoteSshTarget[]
+  busy: boolean
+  hostAvailable: boolean
+  setDraft: (draft: RemoteWorkspaceDraft | null) => void
+  onOpen: () => void
+  onCancel: () => void
+  t: Translate
+}>): ReactElement {
+  const rootValid = normalizedRemoteWorkspaceRoot(draft.workspaceRoot) !== null
+  const allowlistValid =
+    draft.egressMode === 'none' ||
+    parseRemoteWorkspaceEgressAllowlist(draft.egressAllowlist) !== null
+  const egressTargetValid =
+    draft.egressMode !== 'remote-target' ||
+    egressTargets.some((target) => target.id === draft.egressTargetId)
+  return (
+    <form
+      className="mt-2 grid gap-2 rounded-md border border-accent/25 bg-accent/5 p-2.5"
+      aria-label={t('remoteSshWorkspaceOpenTitle')}
+      onSubmit={(event) => {
+        event.preventDefault()
+        onOpen()
+      }}
+    >
+      <div className="flex items-center gap-1.5 text-[11.5px] font-semibold text-ds-ink">
+        <FolderOpen className="h-3.5 w-3.5 text-accent" />
+        {t('remoteSshWorkspaceOpenTitle')}
+      </div>
+      <label className="grid gap-1 text-[11px] font-medium text-ds-muted">
+        {t('remoteSshWorkspaceRoot')}
+        <input
+          type="text"
+          value={draft.workspaceRoot}
+          required
+          maxLength={4_096}
+          autoComplete="off"
+          spellCheck={false}
+          placeholder={t('remoteSshWorkspaceRootPlaceholder')}
+          onChange={(event) => setDraft({
+            ...draft,
+            workspaceRoot: event.target.value
+          })}
+          className={EDITOR_INPUT_CLASS}
+        />
+        <span className="font-normal leading-4 text-ds-faint">
+          {t('remoteSshWorkspaceRootHint')}
+        </span>
+      </label>
+      <label className="grid gap-1 text-[11px] font-medium text-ds-muted">
+        {t('remoteSshWorkspaceEgress')}
+        <select
+          value={draft.egressMode}
+          onChange={(event) => {
+            const egressMode = parseRemoteWorkspaceEgressMode(event.target.value)
+            setDraft({
+              ...draft,
+              egressMode,
+              egressTargetId: egressMode === 'remote-target'
+                ? draft.egressTargetId || egressTargets[0]?.id || ''
+                : ''
+            })
+          }}
+          className={EDITOR_INPUT_CLASS}
+        >
+          <option value="none">{t('remoteSshWorkspaceEgressNone')}</option>
+          <option value="local">{t('remoteSshWorkspaceEgressLocal')}</option>
+          <option value="remote-target">{t('remoteSshWorkspaceEgressRemoteTarget')}</option>
+        </select>
+      </label>
+      {draft.egressMode === 'remote-target' ? (
+        <label className="grid gap-1 text-[11px] font-medium text-ds-muted">
+          {t('remoteSshWorkspaceEgressTarget')}
+          <select
+            value={draft.egressTargetId}
+            required
+            onChange={(event) => setDraft({
+              ...draft,
+              egressTargetId: event.target.value
+            })}
+            className={EDITOR_INPUT_CLASS}
+          >
+            {!egressTargets.length ? (
+              <option value="">{t('remoteSshWorkspaceEgressTargetUnavailable')}</option>
+            ) : null}
+            {egressTargets.map((target) => (
+              <option key={target.id} value={target.id}>{target.displayName}</option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      {draft.egressMode !== 'none' ? (
+        <label className="grid gap-1 text-[11px] font-medium text-ds-muted">
+          {t('remoteSshWorkspaceEgressAllowlist')}
+          <textarea
+            value={draft.egressAllowlist}
+            required
+            rows={3}
+            maxLength={8_192}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={t('remoteSshWorkspaceEgressAllowlistPlaceholder')}
+            onChange={(event) => setDraft({
+              ...draft,
+              egressAllowlist: event.target.value
+            })}
+            className={`${EDITOR_INPUT_CLASS} resize-y font-mono`}
+          />
+          <span className="font-normal leading-4 text-ds-faint">
+            {t('remoteSshWorkspaceEgressAllowlistHint')}
+          </span>
+        </label>
+      ) : null}
+      {!hostAvailable ? (
+        <p className="text-[10.5px] leading-4 text-amber-700 dark:text-amber-300">
+          {t('remoteSshWorkspaceHostUnavailable')}
+        </p>
+      ) : null}
+      <div className="mt-1 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-md px-2 py-1.5 text-[11.5px] text-ds-muted hover:bg-ds-hover"
+        >
+          {t('remoteSshCancel')}
+        </button>
+        <button
+          type="submit"
+          disabled={
+            busy ||
+            !hostAvailable ||
+            !rootValid ||
+            !egressTargetValid ||
+            !allowlistValid
+          }
+          className="inline-flex items-center gap-1 rounded-md bg-accent px-2.5 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-50"
+        >
+          {busy
+            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            : <FolderOpen className="h-3.5 w-3.5" />}
+          {busy ? t('remoteSshWorkspaceOpening') : t('remoteSshOpenWorkspace')}
+        </button>
+      </div>
+    </form>
+  )
+}
+
+function parseRemoteWorkspaceEgressMode(
+  value: string
+): RemoteWorkspaceDraft['egressMode'] {
+  switch (value) {
+    case 'local':
+    case 'remote-target':
+      return value
+    default:
+      return 'none'
+  }
+}
 
 function RemoteSshOnboarding({
   action,
@@ -872,6 +1574,7 @@ function onboardingActionTranslationKey(
     case 'open-console': return environmentProvider === 'docker'
       ? 'remoteSshEnvironmentOpenVpnLogin'
       : 'remoteSshOnboardingOpenConsole'
+    case 'open-config': return 'remoteSshOpenConfig'
     case 'refresh': return 'remoteSshOnboardingRefresh'
     case 'add-target': return 'remoteSshOnboardingAddTarget'
   }
@@ -1068,16 +1771,20 @@ function TargetEditor({
   draft,
   labs,
   busy,
+  openingOpenSshConfig,
   setDraft,
   onSave,
+  onOpenSshConfig,
   onCancel,
   t
 }: Readonly<{
   draft: TargetDraft
   labs: readonly RemoteSshLab[]
   busy: boolean
+  openingOpenSshConfig: boolean
   setDraft: (draft: TargetDraft | null) => void
   onSave: () => void
+  onOpenSshConfig: () => void
   onCancel: () => void
   t: Translate
 }>): ReactElement {
@@ -1113,6 +1820,11 @@ function TargetEditor({
         value={draft.sshAlias}
         required
         description={t('remoteSshAliasHint')}
+        descriptionAction={{
+          label: t('remoteSshOpenConfig'),
+          onClick: onOpenSshConfig,
+          busy: openingOpenSshConfig
+        }}
         onChange={(sshAlias) => setDraft({ ...draft, sshAlias })}
       />
       <EditorInput
@@ -1152,7 +1864,8 @@ function EditorInput({
   type = 'text',
   required = false,
   min,
-  description
+  description,
+  descriptionAction
 }: Readonly<{
   label: string
   value: string
@@ -1161,20 +1874,44 @@ function EditorInput({
   required?: boolean
   min?: number
   description?: string
+  descriptionAction?: Readonly<{
+    label: string
+    onClick: () => void
+    busy?: boolean
+  }>
 }>): ReactElement {
   return (
-    <label className="grid gap-1 text-[11px] font-medium text-ds-muted">
-      {label}
-      <input
-        type={type}
-        value={value}
-        required={required}
-        min={min}
-        onChange={(event) => onChange(event.target.value)}
-        className={EDITOR_INPUT_CLASS}
-      />
-      {description ? <span className="font-normal leading-4 text-ds-faint">{description}</span> : null}
-    </label>
+    <div className="grid gap-1 text-[11px] font-medium text-ds-muted">
+      <label className="grid gap-1">
+        {label}
+        <input
+          type={type}
+          value={value}
+          required={required}
+          min={min}
+          onChange={(event) => onChange(event.target.value)}
+          className={EDITOR_INPUT_CLASS}
+        />
+      </label>
+      {description ? (
+        <div className="flex items-start justify-between gap-2">
+          <span className="font-normal leading-4 text-ds-faint">{description}</span>
+          {descriptionAction ? (
+            <button
+              type="button"
+              onClick={descriptionAction.onClick}
+              disabled={descriptionAction.busy}
+              className="inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 font-medium text-accent transition hover:bg-accent/10 disabled:opacity-50"
+            >
+              {descriptionAction.busy
+                ? <Loader2 className="h-3 w-3 animate-spin" />
+                : <ExternalLink className="h-3 w-3" />}
+              {descriptionAction.label}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   )
 }
 
@@ -1294,6 +2031,9 @@ function labEnvironmentSummary(lab: RemoteSshLab, t: Translate): string {
 function canEnsureLabEnvironment(
   environment: RemoteSshLabEnvironmentResult | undefined
 ): boolean {
+  if (environment?.state === 'configuration-required' && environment.consoleAvailable) {
+    return false
+  }
   return (
     !environment ||
     ['provider-unavailable', 'configuration-required', 'stopped', 'failed'].includes(
@@ -1376,6 +2116,12 @@ export function probeDisplay(
 ): Readonly<{ label: string; className: string }> {
   if (!result) return { label: t('remoteSshStatusUnknown'), className: 'text-ds-faint' }
   if (result.ready) return { label: t('remoteSshStatusReachable'), className: 'text-emerald-600 dark:text-emerald-400' }
+  if (result.target.status === 'not-tested') {
+    return { label: t('remoteSshStatusNotTested'), className: 'text-amber-600 dark:text-amber-400' }
+  }
+  if (result.target.status === 'not-configured') {
+    return { label: t('remoteSshStatusNotConfigured'), className: 'text-amber-600 dark:text-amber-400' }
+  }
   if (result.target.status === 'auth-failed' || result.target.status === 'host-key-rejected') {
     return { label: t('remoteSshStatusAuthRequired'), className: 'text-amber-600 dark:text-amber-400' }
   }

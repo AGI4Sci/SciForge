@@ -6,6 +6,7 @@ import {
   type SddDraft,
   type SddDraftSaveStatus
 } from './sdd-draft-store'
+import { withActiveWorkspaceLocator } from '../remote-workspace/placement'
 
 export type RestoredSddDraft = {
   kind: 'restored'
@@ -38,10 +39,10 @@ export async function restoreRememberedSddDraft({
   const remembered = readRememberedSddDraft(workspaceRoot)
   if (!remembered) return { kind: 'missing' }
 
-  const result = await readWorkspaceFile({
+  const result = await readWorkspaceFile(withActiveWorkspaceLocator({
     workspaceRoot: remembered.workspaceRoot,
     path: remembered.relativePath
-  })
+  }))
   if (!result.ok) {
     forgetRememberedSddDraft(remembered)
     return { kind: 'unreadable', draft: remembered, message: result.message }
@@ -71,10 +72,10 @@ export async function restoreSddDraft({
   draft: SddDraft
   readWorkspaceFile: RestoreRememberedSddDraftOptions['readWorkspaceFile']
 }): Promise<RestoreRememberedSddDraftResult> {
-  const result = await readWorkspaceFile({
+  const result = await readWorkspaceFile(withActiveWorkspaceLocator({
     workspaceRoot: draft.workspaceRoot,
     path: draft.relativePath
-  })
+  }))
   if (!result.ok) {
     return { kind: 'unreadable', draft, message: result.message }
   }

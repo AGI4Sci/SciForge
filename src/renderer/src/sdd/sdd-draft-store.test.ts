@@ -234,7 +234,12 @@ describe('session-owned sdd draft state', () => {
 
     const saving = saveSddDraftToDisk(SESSION_1)
     useSddDraftStore.getState().setSessionDraft(SESSION_1, replacement, '# Replacement')
-    finishWrite({ ok: true, path: '/tmp/app/draft.md', savedAt: '2026-01-01T00:00:00.000Z' })
+    finishWrite({
+      ok: true,
+      path: '/tmp/app/draft.md',
+      savedAt: '2026-01-01T00:00:00.000Z',
+      revision: 'revision-1'
+    })
     await saving
 
     expect(session(SESSION_1)).toMatchObject({
@@ -257,7 +262,12 @@ describe('session-owned sdd draft state', () => {
 
     const saving = saveSddDraftToDisk(SESSION_1)
     useSddDraftStore.getState().setSessionContent(SESSION_1, '# Newer edit')
-    finishWrite({ ok: true, path: '/tmp/app/draft.md', savedAt: '2026-01-01T00:00:00.000Z' })
+    finishWrite({
+      ok: true,
+      path: '/tmp/app/draft.md',
+      savedAt: '2026-01-01T00:00:00.000Z',
+      revision: 'revision-1'
+    })
     await saving
 
     expect(session(SESSION_1)).toMatchObject({

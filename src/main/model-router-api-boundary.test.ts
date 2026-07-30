@@ -163,6 +163,12 @@ function scanProductionTextInRoots(sourceRootsToScan: string[], pattern: RegExp)
 }
 
 function isAllowedBoundaryMarker(hit: DirectCallHit): boolean {
+  if (hit.file === 'packages/workers/workspace-egress/src/model-router-bridge.ts') {
+    return (
+      hit.marker === 'chat completions endpoint' ||
+      hit.marker === 'messages endpoint'
+    )
+  }
   if (hit.file === 'src/main/zulip-bot-runtime.ts') {
     return hit.marker === 'messages endpoint' && hit.text.includes("'/api/v1/messages'")
   }

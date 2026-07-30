@@ -8,8 +8,26 @@ export {
   type ProcessRequest,
   type ProcessResult,
   type RemoteSshProcessRunner,
+  type RemoteSshStreamingProcess,
+  type RemoteSshStreamingProcessRunner,
+  type StreamingProcessExit,
+  type StreamingProcessRequest,
   type SpawnProcess
 } from './process-runner.js'
+export {
+  createRemoteWorkspaceServerDeploymentPlan,
+  ensureRemoteWorkspaceServerDeployed,
+  parseRemoteWorkspaceServerPlatform,
+  RemoteWorkspaceSshError,
+  remoteWorkspaceServerArtifactManifestSchema,
+  verifyRemoteWorkspaceServerArtifact,
+  type RemoteWorkspaceServerArtifact,
+  type RemoteWorkspaceServerArtifactManifest,
+  type RemoteWorkspaceServerDeploymentPlan,
+  type RemoteWorkspaceServerDeploymentTransport,
+  type RemoteWorkspaceServerPlatform,
+  type RemoteWorkspaceSshFailureCode
+} from './workspace-server-deployment.js'
 export {
   RoutingRemoteSshLabEnvironmentManager,
   type RemoteSshLabEnvironmentManager,

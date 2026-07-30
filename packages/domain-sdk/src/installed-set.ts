@@ -13,7 +13,12 @@ export type InstalledDomainContribution<
 > = Readonly<{
   process: Process
   packageName: string
-  entrypoint: Process extends 'main' ? './main' : './renderer'
+  entrypoint:
+    Process extends 'main'
+      ? './main'
+      : Process extends 'renderer'
+        ? './renderer'
+        : './workspace-server'
   declaration: DomainPackageContributionDeclaration
   contract?: DomainPackageJsonValue
   owner: Readonly<{
@@ -45,7 +50,7 @@ export class InstalledDomainPackageSetError extends Error {
 }
 
 /**
- * Builds immutable main/renderer projections from one trusted compile-time set.
+ * Builds immutable process projections from one trusted compile-time set.
  * It resolves no paths and imports no implementation entrypoints.
  */
 export function defineInstalledDomainPackageSet(
@@ -60,7 +65,7 @@ export function defineInstalledDomainPackageSet(
     DomainPackageProcess,
     readonly InstalledDomainContribution[]
   >()
-  for (const process of ['main', 'renderer'] as const) {
+  for (const process of ['main', 'renderer', 'workspace-server'] as const) {
     contributionsByProcess.set(process, projectContributions(definitions, process))
   }
 

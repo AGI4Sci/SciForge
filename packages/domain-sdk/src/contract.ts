@@ -10,7 +10,7 @@ export const DOMAIN_PACKAGE_IMPLICIT_RUNTIME_PATHS = Object.freeze([
 const stableSemanticVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 const semanticVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
 
-export const domainPackageProcessSchema = z.enum(['main', 'renderer'])
+export const domainPackageProcessSchema = z.enum(['main', 'renderer', 'workspace-server'])
 export type DomainPackageProcess = z.infer<typeof domainPackageProcessSchema>
 
 export const domainPackageNameSchema = z.string()
@@ -158,9 +158,16 @@ const rendererEntrypointSchema = z.object({
   contributions: z.array(domainPackageContributionDeclarationSchema).max(1_000).default([])
 }).strict()
 
+const workspaceServerEntrypointSchema = z.object({
+  process: z.literal('workspace-server'),
+  export: z.literal('./workspace-server'),
+  contributions: z.array(domainPackageContributionDeclarationSchema).max(1_000).default([])
+}).strict()
+
 export const domainPackageEntrypointSchema = z.discriminatedUnion('process', [
   mainEntrypointSchema,
-  rendererEntrypointSchema
+  rendererEntrypointSchema,
+  workspaceServerEntrypointSchema
 ])
 
 const sandboxedMainEntrypointSchema = z.object({
@@ -186,7 +193,7 @@ export const sandboxedDomainPackageEntrypointSchema = z.discriminatedUnion('proc
 
 export const domainPackageRequestedPermissionSchema = z.object({
   id: domainPackagePermissionIdSchema,
-  process: domainPackageProcessSchema,
+  process: z.enum(['main', 'renderer']),
   reason: z.string().trim().min(1).max(500),
   required: z.boolean(),
   parameters: z.record(
@@ -253,7 +260,7 @@ export const trustedDomainPackageDefinitionSchema = z.object({
     domainPackageJsonValueSchema
   ).default({}),
   packaging: domainPackagePackagingSchema.optional(),
-  entrypoints: z.array(domainPackageEntrypointSchema).min(1).max(2)
+  entrypoints: z.array(domainPackageEntrypointSchema).min(1).max(3)
 }).strict().superRefine((definition, context) => {
   validateDomainDefinitionOwnership(definition, context)
   const dependencies = definition.packaging?.runtime?.dependencies ?? []

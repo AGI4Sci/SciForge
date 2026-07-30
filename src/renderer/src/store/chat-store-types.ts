@@ -26,6 +26,7 @@ import type {
   AgentRuntimeGovernanceProfile
 } from '@shared/agent-runtime-contract'
 import type { ModelProviderModelGroup } from '@shared/sciforge-api'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 
 export type QueuedUserMessage = {
   id: string
@@ -41,7 +42,7 @@ export type QueuedUserMessage = {
   model?: string
   modelLabel?: string
   reasoningEffort?: string
-  remoteTargetId?: string
+  workspaceLocator?: WorkspaceLocator
   attachmentIds?: string[]
   attachments?: AttachmentReference[]
   fileReferences?: AgentRuntimeFileReference[]
@@ -107,7 +108,7 @@ export type SendMessageOverrides = {
   model?: string
   modelLabel?: string
   reasoningEffort?: string
-  remoteTargetId?: string
+  workspaceLocator?: WorkspaceLocator
   displayText?: string
   sourceRoute?: AppRoute
   targetThreadId?: string
@@ -144,6 +145,7 @@ export type PluginHostRoute = 'chat'
 export type SideConversation = {
   threadId: string
   runtimeId?: AgentRuntimeId
+  workspaceLocator?: WorkspaceLocator
   parentThreadId: string
   source?: 'side' | 'child_agent' | 'pdf_annotation' | 'sdd_assistant'
   title: string
@@ -274,7 +276,7 @@ export type ChatState = {
   remoteChannels: RemoteChannelV1[]
   activeRemoteChannelId: string
   remoteGuardChannelId: string | null
-  remoteTargetId: string | null
+  workspaceLocator: WorkspaceLocator | null
   appendLocalRemoteChannelTurn: (userText: string, replyText: string) => void
   setError: (message: string | null) => void
   setComposerModel: (modelId: string) => void
@@ -289,7 +291,7 @@ export type ChatState = {
   openSchedule: () => void
   selectRemoteGuardChannel: (channelId: string) => void
   clearRemoteGuardChannel: () => void
-  setRemoteTargetId: (targetId: string | null) => void
+  setWorkspaceLocator: (locator: WorkspaceLocator | null) => void
   refreshRemoteChannels: () => Promise<void>
   addRemoteChannel: (
     provider: RemoteChannelProvider,
@@ -403,7 +405,12 @@ export type ChatState = {
   promoteSideConversation: (sideId: string) => Promise<void>
   resumeSessionIntoThread: (
     sessionId: string,
-    options?: { model?: string; mode?: string; maxResumeCount?: number }
+    options?: {
+      model?: string
+      mode?: string
+      maxResumeCount?: number
+      workspaceLocator?: WorkspaceLocator
+    }
   ) => Promise<string | null>
   deleteThread: (threadId: string) => Promise<void>
   resolveApproval: (blockId: string, decision: 'allow' | 'deny') => Promise<void>

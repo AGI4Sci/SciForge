@@ -27,4 +27,24 @@ describe('Remote SSH messages', () => {
     expect(remoteSshMessages.zh.remoteSshVmRequirements).toContain('OpenSSH server')
     expect(remoteSshMessages.zh.remoteSshOnboardingVpnBody).toContain('VM')
   })
+
+  it('describes explicit fail-closed workspace egress without exposing transport internals', () => {
+    const workspaceMessages = [
+      remoteSshMessages.en.remoteSshWorkspaceEgressNone,
+      remoteSshMessages.en.remoteSshWorkspaceEgressLocal,
+      remoteSshMessages.en.remoteSshWorkspaceEgressRemoteTarget,
+      remoteSshMessages.en.remoteSshWorkspaceEgressAllowlistHint,
+      remoteSshMessages.zh.remoteSshWorkspaceEgressNone,
+      remoteSshMessages.zh.remoteSshWorkspaceEgressLocal,
+      remoteSshMessages.zh.remoteSshWorkspaceEgressRemoteTarget,
+      remoteSshMessages.zh.remoteSshWorkspaceEgressAllowlistHint
+    ].join('\n')
+
+    expect(workspaceMessages).toMatch(/No internet|不使用互联网/u)
+    expect(workspaceMessages).toMatch(/another authorized target|另一台已授权机器/u)
+    expect(workspaceMessages).toMatch(/exact lowercase host|精确的小写主机/u)
+    expect(workspaceMessages).not.toMatch(
+      /authorizedSessionId|ssh_whs_|ssh_egs_|ProxyCommand|endpoint|credential/iu
+    )
+  })
 })

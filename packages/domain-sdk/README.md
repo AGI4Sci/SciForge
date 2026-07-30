@@ -15,16 +15,18 @@ A domain package publishes one shared definition plus process-separated implemen
 @sciforge/domain-example
 ├── definition   # pure DomainPackageDefinition
 ├── main         # privileged main/worker implementation
-└── renderer     # optional trusted renderer implementation
+├── renderer     # optional trusted renderer implementation
+└── workspace-server # optional trusted backend beside workspace data
 ```
 
-The definition declares fixed `./main` and optional `./renderer` exports. The application keeps one
-generated installed definition set and projects it through `@sciforge/domain-sdk/main` or
-`@sciforge/domain-sdk/renderer`. This lets each Electron build import only its own implementation
-entrypoints while both builds use the same package selection and ownership metadata.
+The definition declares conventional `./main`, `./renderer`, and `./workspace-server` exports for
+the processes it owns. The workspace-server entrypoint is available only to trusted compile-time
+packages. Generated composition projects each process independently, so the headless server never
+imports Electron main or renderer implementations.
 
 Every package exports the conventional names `domainPackageDefinition`, `createDomainMainEntry`,
-and, when declared, `createDomainRendererEntry`. The repository generator scans
+`createDomainRendererEntry`, and `createDomainWorkspaceServerEntry` for its declared processes.
+The repository generator scans
 `packages/domains/*/sciforge.domain.json`, sorts by package name, and emits static imports. It never
 imports a process entry that the manifest does not declare.
 
@@ -114,10 +116,10 @@ another installed bundled domain. The generated release target is always
 uninstalled or non-bundled dependencies, self-dependencies, and dependency cycles fail discovery.
 
 `defineInstalledDomainPackageSet` is the single process-neutral source of installed definitions.
-After a process imports only its own package entrypoints, `defineInstalledMainDomainEntrySet` or
-`defineInstalledRendererDomainEntrySet` binds the declarations to runtime values. Pairing is exact
-by `kind:id`; missing, extra, duplicate, or mismatched entries fail before contributions are
-exposed. There is deliberately no cross-process runtime bundle and no dynamic package loader.
+After a process imports only its own package entrypoints, the corresponding main, renderer, or
+workspace-server installed-entry helper binds declarations to runtime values. Pairing is exact by
+`kind:id`; missing, extra, duplicate, or mismatched entries fail before contributions are exposed.
+There is deliberately no cross-process runtime bundle and no dynamic package loader.
 
 ## Renderer contributions
 
@@ -175,6 +177,10 @@ operation:
   exposing only stable request and result data, plus optional cancellation.
 - `@sciforge/domain-sdk/power` acquires an application keep-awake lease whose release belongs to
   the package lifecycle. Packages cannot choose native power-blocker implementations.
+- `@sciforge/domain-sdk/workspace-host` defines the bounded, versioned locator, session,
+  request/result/event, reconnect, egress, provider, and built-in operation contracts used by local
+  and remote workspaces. A provider attaches only by a broker-authorized opaque session identity;
+  it never decodes a capability token or SSH target in the generic registry.
 
 Main runtime lifecycle contributions can subscribe to generic before-turn and terminal after-turn
 events. System capability invocation cannot manufacture user approval. A nested destructive
@@ -195,8 +201,9 @@ boundary instead of copied platform or security logic.
 Workspace Preview domains use `@sciforge/domain-sdk/workspace-preview` for the complete pure-data
 wire contract, canonical manifest schema and helpers, provider contract, contribution kind IDs, and
 process-neutral slot shapes. A preview package declares the same namespaced contribution ID in its
-main and renderer entrypoints, stores that manifest once in `contributionContracts`, and binds both
-runtime values to it. Generation, process-entry binding, and host activation all fail closed on drift.
+renderer and every declared backend entrypoint (`main` and/or `workspace-server`), stores that
+manifest once in `contributionContracts`, and binds all runtime values to it. Generation,
+process-entry binding, and host activation all fail closed on drift.
 
 The SDK deliberately exposes only generic built-in observation/selection shapes plus namespaced
 domain extension slots. A domain owns its concrete wire schema and encoder/decoder in its own

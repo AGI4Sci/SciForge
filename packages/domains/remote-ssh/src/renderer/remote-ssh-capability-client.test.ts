@@ -17,6 +17,10 @@ describe('Remote SSH renderer capability client', () => {
     expect(Object.fromEntries(Object.entries(remoteSshCapabilityContracts).map(
       ([key, contract]) => [key, { actionId: contract.actionId, effect: contract.effect }]
     ))).toEqual({
+      openOpenSshConfig: {
+        actionId: REMOTE_SSH_CAPABILITY_IDS.openOpenSshConfig,
+        effect: 'external-write'
+      },
       listLabs: { actionId: REMOTE_SSH_CAPABILITY_IDS.listLabs, effect: 'read' },
       listVirtualBoxMachines: {
         actionId: REMOTE_SSH_CAPABILITY_IDS.listVirtualBoxMachines,
@@ -33,6 +37,14 @@ describe('Remote SSH renderer capability client', () => {
       listTargetCatalog: { actionId: REMOTE_SSH_CAPABILITY_IDS.listTargetCatalog, effect: 'read' },
       listTargets: { actionId: REMOTE_SSH_CAPABILITY_IDS.listTargets, effect: 'read' },
       probeTarget: { actionId: REMOTE_SSH_CAPABILITY_IDS.probeTarget, effect: 'read' },
+      openEgressSession: {
+        actionId: REMOTE_SSH_CAPABILITY_IDS.openEgressSession,
+        effect: 'external-write'
+      },
+      openWorkspaceHostSession: {
+        actionId: REMOTE_SSH_CAPABILITY_IDS.openWorkspaceHostSession,
+        effect: 'external-write'
+      },
       saveTarget: { actionId: REMOTE_SSH_CAPABILITY_IDS.saveTarget, effect: 'external-write' },
       deleteTarget: { actionId: REMOTE_SSH_CAPABILITY_IDS.deleteTarget, effect: 'external-write' },
       executeCommand: { actionId: REMOTE_SSH_CAPABILITY_IDS.executeCommand, effect: 'destructive' },
@@ -75,8 +87,23 @@ describe('Remote SSH renderer capability client', () => {
         options?: Parameters<DomainRendererCapabilityInvoker['invoke']>[2]
       ): Promise<TOutput> => {
         calls.push({ actionId: contract.actionId, input, ...(options ? { options } : {}) })
+        if (contract.actionId === REMOTE_SSH_CAPABILITY_IDS.openOpenSshConfig) {
+          return { opened: true } as TOutput
+        }
         if (contract.actionId === REMOTE_SSH_CAPABILITY_IDS.getBinding) {
           return { binding: { workspaceId: '/workspace', allowedTargetIds: [] } } as TOutput
+        }
+        if (contract.actionId === REMOTE_SSH_CAPABILITY_IDS.openEgressSession) {
+          return {
+            authorizedSessionId: 'ssh_egs_123456789012345678901234',
+            expiresAt: '2026-07-23T00:00:00.000Z'
+          } as TOutput
+        }
+        if (contract.actionId === REMOTE_SSH_CAPABILITY_IDS.openWorkspaceHostSession) {
+          return {
+            providerId: 'remote-ssh.workspace-host-provider',
+            authorizedSessionId: 'ssh_whs_123456789012345678901234'
+          } as TOutput
         }
         return { targetId: 'gpu-a', target: { status: 'reachable' }, ready: true } as TOutput
       }
@@ -89,6 +116,7 @@ describe('Remote SSH renderer capability client', () => {
     const client = createRemoteSshCapabilityClient(invoker)
     const confirmation = { approval: { mode: 'confirmation' as const } }
 
+    await client.openOpenSshConfig(confirmation)
     await client.ensureLabEnvironment('lab-a', 'lab-r1', confirmation)
     await client.openLabEnvironmentConsole('lab-a', 'lab-r1', confirmation)
     await client.stopLabEnvironment('lab-a', 'lab-r1', confirmation)
@@ -96,6 +124,16 @@ describe('Remote SSH renderer capability client', () => {
     await client.listTargets('/workspace')
     await client.getBinding('/workspace')
     await client.probeTarget(resource, '/workspace')
+    await client.openEgressSession(resource, '/workspace', confirmation)
+    await client.openWorkspaceHostSession(resource, {
+      workspaceRoot: '/cluster/project',
+      egress: {
+        mode: 'local',
+        allowlist: {
+          rules: [{ host: 'api.example.org', ports: [443] }]
+        }
+      }
+    }, '/workspace', confirmation)
     await client.executeCommand(resource, {
       executionId: 'ssh_exec_1234567890abcdef',
       script: 'true'
@@ -115,6 +153,11 @@ describe('Remote SSH renderer capability client', () => {
     expect(observation.resource).toBe(resource)
 
     expect(calls).toEqual([
+      {
+        actionId: REMOTE_SSH_CAPABILITY_IDS.openOpenSshConfig,
+        input: {},
+        options: { approval: { mode: 'confirmation' } }
+      },
       {
         actionId: REMOTE_SSH_CAPABILITY_IDS.ensureLabEnvironment,
         input: { labId: 'lab-a', expectedRevision: 'lab-r1' },
@@ -148,6 +191,34 @@ describe('Remote SSH renderer capability client', () => {
         actionId: REMOTE_SSH_CAPABILITY_IDS.probeTarget,
         input: {},
         options: { resource, workspaceId: '/workspace' }
+      },
+      {
+        actionId: REMOTE_SSH_CAPABILITY_IDS.openEgressSession,
+        input: {},
+        options: {
+          approval: { mode: 'confirmation' },
+          expectedRevision: resource.semanticRevision,
+          resource,
+          workspaceId: '/workspace'
+        }
+      },
+      {
+        actionId: REMOTE_SSH_CAPABILITY_IDS.openWorkspaceHostSession,
+        input: {
+          workspaceRoot: '/cluster/project',
+          egress: {
+            mode: 'local',
+            allowlist: {
+              rules: [{ host: 'api.example.org', ports: [443] }]
+            }
+          }
+        },
+        options: {
+          approval: { mode: 'confirmation' },
+          expectedRevision: resource.semanticRevision,
+          resource,
+          workspaceId: '/workspace'
+        }
       },
       {
         actionId: REMOTE_SSH_CAPABILITY_IDS.executeCommand,

@@ -32,7 +32,8 @@ describe('composer file context', () => {
           mimeType: 'application/pdf' as const,
           size: 128,
           truncated: false as const,
-          mtimeMs: 0
+          mtimeMs: 0,
+          revision: 'revision-1'
         }
       }
       return {
@@ -42,7 +43,8 @@ describe('composer file context', () => {
         content: 'Use Vitest for runtime tests.',
         mimeType: 'text/plain; charset=utf-8',
         size: 30,
-        truncated: false
+        truncated: false,
+        revision: 'revision-1'
       }
     })
 
@@ -84,7 +86,8 @@ describe('composer file context', () => {
       content: `${workspaceRoot}:${path}`,
       mimeType: 'text/plain; charset=utf-8',
       size: 30,
-      truncated: false
+      truncated: false,
+      revision: 'revision-1'
     }))
 
     await expect(readComposerFileContextEntries([

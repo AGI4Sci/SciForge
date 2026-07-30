@@ -4,6 +4,7 @@ import { realpath } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { IPty } from 'node-pty'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 
 export const CONTROLLED_PROCESS_MAX_SESSIONS = 8
 export const CONTROLLED_PROCESS_RING_BUFFER_CHARACTERS = 64 * 1024
@@ -47,6 +48,7 @@ export type ControlledProcessCreateInput = Readonly<{
   cwd?: string
   columns?: number
   rows?: number
+  workspaceLocator?: WorkspaceLocator
 }>
 
 export type ControlledProcessCreateResult = Readonly<{

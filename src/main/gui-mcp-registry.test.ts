@@ -6,7 +6,6 @@ import {
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
-  defaultRemoteExecutorSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
@@ -65,7 +64,6 @@ function createSettings(): AppSettingsV1 {
       webhookPort: 9898,
       webhookSecret: 'workflow-secret'
     },
-    remoteExecutor: defaultRemoteExecutorSettings(),
     guiUpdate: {
       channel: 'stable'
     },
@@ -117,14 +115,12 @@ describe('GUI MCP runtime registry', () => {
     const servers = buildManagedGuiMcpServers({
       settings,
       scheduleMcp: { settings, launch },
-      workspaceIntelMcp: { settings, launch },
-      remoteExecutorMcp: { launch }
+      workspaceIntelMcp: { settings, launch }
     })
 
     expect(servers.map((server) => server.id)).toEqual([
       'gui_schedule',
-      'gui_workspace_intel',
-      'remote_executor'
+      'gui_workspace_intel'
     ])
     expect(servers.find((server) => server.id === 'gui_schedule')).toMatchObject({
       env: {
@@ -140,11 +136,6 @@ describe('GUI MCP runtime registry', () => {
         SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY: 'router-runtime-test-key',
         SCIFORGE_MODEL_ROUTER_VISUAL_MODEL: 'router-vision-model'
       }
-    })
-    expect(servers.find((server) => server.id === 'remote_executor')).toMatchObject({
-      env: { ELECTRON_RUN_AS_NODE: '1' },
-      args: expect.arrayContaining(['--gui-remote-executor-mcp-server']),
-      enabledTools: expect.arrayContaining(['remote_run'])
     })
   })
 
@@ -183,6 +174,7 @@ describe('GUI MCP runtime registry', () => {
     for (const id of [
       'gui_computer_use',
       'gui_research_memory',
+      'remote_executor',
       'sciforge_canvas',
       'visual_document',
       ['gui', 'paper', 'radar'].join('_')

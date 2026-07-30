@@ -1,5 +1,4 @@
 import { app, dialog, ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent, type WebContents } from 'electron'
-import { watch, type FSWatcher } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -33,6 +32,7 @@ import type {
   WorkspacePickResult
 } from '../../shared/sciforge-api'
 import type { DomainExtensionsApi } from '../../shared/domain-extensions'
+import type { RemoteWorkspaceController } from '../workspace-host/controller'
 import type { WorkspaceFileWatchResult } from '../../shared/workspace-file'
 import type { GuiUpdateDownloadResult, GuiUpdateInfo, GuiUpdateInstallResult, GuiUpdateState } from '../../shared/gui-update'
 import {
@@ -73,6 +73,9 @@ import {
   remoteChannelActiveThreadContextPayloadSchema,
   remoteChannelMirrorPayloadSchema,
   remoteChannelTaskFromTextPayloadSchema,
+  remoteWorkspaceAttachPayloadSchema,
+  remoteWorkspaceSelectPayloadSchema,
+  remoteWorkspaceSessionPayloadSchema,
   desktopCommandSchema,
   defaultPathSchema,
   domainExtensionInstallPayloadSchema,
@@ -90,6 +93,7 @@ import {
   scientificSkillsInstallPayloadSchema,
   scientificSkillsMcpConfigPayloadSchema,
   gitBranchPayloadSchema,
+  gitWorkspacePayloadSchema,
   guiUpdateChannelSchema,
   logErrorPayloadSchema,
   notificationPayloadSchema,
@@ -123,14 +127,14 @@ import {
   workspaceEntryRenamePayloadSchema,
   workspacePdfRenameSuggestionPayloadSchema,
   workspaceFileCreatePayloadSchema,
+  workspaceFileRangeReadPayloadSchema,
   workspaceFileTargetPayloadSchema,
   workspaceFileWatchPayloadSchema,
   workspaceFileWritePayloadSchema,
+  workspaceTextSearchPayloadSchema,
   writeExportPayloadSchema,
-  writeRichClipboardPayloadSchema,
   writeInlineCompletionPayloadSchema,
-  writeRetrievalPayloadSchema,
-  workspaceRootSchema
+  writeRetrievalPayloadSchema
 } from './app-ipc-schemas'
 import {
   emptyVisibleContextSnapshot,
@@ -206,6 +210,7 @@ import type {
   SpeechTranscriptionResult
 } from '../../shared/speech-to-text'
 import type { ResearchCardService } from '../services/research-card-service'
+import type { WorkspacePlacementRouter } from '../services/workspace-placement-router'
 import type { MainActionGuardEvaluator } from '../modules/runtime-contributions'
 import type {
   AgentRuntimeApprovalResolveInput,
@@ -224,28 +229,13 @@ import type { RemoteChannelRuntime } from '../remote-channel-runtime'
 import type { DiscordBotRuntime } from '../discord-bot-runtime'
 import type { ZulipBotRuntime } from '../zulip-bot-runtime'
 import type { ScheduleRuntime } from '../schedule-runtime'
-import { createAndSwitchGitBranch, getGitBranches, switchGitBranch } from '../services/git-service'
 import {
-  createWorkspaceDirectory,
-  createWorkspaceFile,
-  copyWorkspaceEntry,
-  deleteWorkspaceEntry,
   expandHomePath,
-  importWorkspaceEntries,
   listEditorsResult,
-  listWorkspaceDirectory,
   normalizeSkillFolderName,
   openEditorPath,
   openPathWithShell,
-  pasteWorkspaceClipboard,
   readClipboardImage,
-  readWorkspaceImage,
-  readWorkspaceFile,
-  moveWorkspaceEntry,
-  renameWorkspaceEntry,
-  suggestWorkspacePdfName,
-  resolveWorkspaceFile,
-  saveWorkspaceClipboardImage,
   writeWorkspaceFile
 } from '../services/workspace-service'
 import {
@@ -260,17 +250,13 @@ import {
   requestComputerUsePermission
 } from '../services/computer-use-permissions'
 import { readComputerUseRuntimeStatus } from '../services/computer-use-status'
-import { copyWriteDocumentAsRichText, exportWriteDocument } from '../services/write-export-service'
+import { exportWriteDocument } from '../services/write-export-service'
 import { listGuiSkills } from '../services/skill-service'
 
 type GuiUpdaterModule = typeof import('../gui-updater')
 
 type WorkspaceFileWatchRecord = {
-  watcher: FSWatcher
   sender: AppBridgeSender
-  path: string
-  workspaceRoot: string
-  timer: ReturnType<typeof setTimeout> | null
 }
 
 type AgentRuntimeEventStreamRecord = {
@@ -341,6 +327,8 @@ export type RegisterAppIpcHandlersOptions = {
     resolveApproval: (input: AgentRuntimeApprovalResolveInput) => Promise<void>
     resolveUserInput: (input: AgentRuntimeUserInputResolveInput) => Promise<void>
   }
+  remoteWorkspace?: RemoteWorkspaceController
+  workspacePlacement?: WorkspacePlacementRouter
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
   getRemoteChannelRuntime: () => RemoteChannelRuntime | null
   getDiscordBotRuntime?: () => DiscordBotRuntime | null
@@ -488,6 +476,8 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     traces,
     extensions,
     agentRuntime,
+    remoteWorkspace,
+    workspacePlacement,
     fetchUpstreamModels,
     getRemoteChannelRuntime,
     getDiscordBotRuntime,
@@ -528,6 +518,10 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     if (!extensions) throw new Error('Extension management is not initialized.')
     return extensions
   }
+  const requireWorkspacePlacement = (): WorkspacePlacementRouter => {
+    if (!workspacePlacement) throw new Error('Workspace placement router is not initialized.')
+    return workspacePlacement
+  }
   const runExtensionOperation = async <T>(
     operation: string,
     action: () => Promise<T>
@@ -566,6 +560,12 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       }
     })
   }
+
+  remoteWorkspace?.subscribe((snapshot) => {
+    const window = getMainWindow()
+    if (!window || window.isDestroyed()) return
+    window.webContents.send('remoteWorkspace:snapshot-changed', snapshot)
+  })
 
   const invoke = async (channel: string, payload: unknown, sender: AppBridgeSender): Promise<unknown> => {
     const startedAt = mainPerformanceMonitor.now()
@@ -690,12 +690,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     })
   })
 
-  const disposeWorkspaceFileWatch = (watchId: string): boolean => {
+  const disposeWorkspaceFileWatch = async (watchId: string): Promise<boolean> => {
     const record = workspaceFileWatchers.get(watchId)
     if (!record) return false
-    if (record.timer) clearTimeout(record.timer)
     try {
-      record.watcher.close()
+      await requireWorkspacePlacement().unwatchFile(watchId)
     } catch (error) {
       logError('workspace-watch', 'Failed to close workspace file watcher', {
         watchId,
@@ -732,67 +731,9 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   const disposeWorkspaceFileWatchesForSender = (sender: AppBridgeSender): void => {
     for (const [watchId, record] of workspaceFileWatchers) {
       if (record.sender.id === sender.id) {
-        disposeWorkspaceFileWatch(watchId)
+        void disposeWorkspaceFileWatch(watchId)
       }
     }
-  }
-
-  const emitWorkspaceFileChange = async (watchId: string): Promise<void> => {
-    const record = workspaceFileWatchers.get(watchId)
-    if (!record) return
-    const changedAt = new Date().toISOString()
-    try {
-      const result = await readWorkspaceFile({
-        path: record.path,
-        workspaceRoot: record.workspaceRoot
-      })
-      const latest = workspaceFileWatchers.get(watchId)
-      if (!latest || latest.sender.isDestroyed()) return
-      if (result.ok) {
-        latest.sender.send('file:workspace-changed', {
-          ok: true,
-          watchId,
-          workspaceRoot: latest.workspaceRoot,
-          path: result.path,
-          content: result.content,
-          size: result.size,
-          truncated: result.truncated,
-          changedAt
-        })
-        return
-      }
-      latest.sender.send('file:workspace-changed', {
-        ok: false,
-        watchId,
-        workspaceRoot: latest.workspaceRoot,
-        path: latest.path,
-        message: result.message,
-        changedAt
-      })
-    } catch (error) {
-      const latest = workspaceFileWatchers.get(watchId)
-      if (!latest || latest.sender.isDestroyed()) return
-      latest.sender.send('file:workspace-changed', {
-        ok: false,
-        watchId,
-        workspaceRoot: latest.workspaceRoot,
-        path: latest.path,
-        message: error instanceof Error ? error.message : String(error),
-        changedAt
-      })
-    }
-  }
-
-  const scheduleWorkspaceFileChange = (watchId: string): void => {
-    const record = workspaceFileWatchers.get(watchId)
-    if (!record) return
-    if (record.timer) clearTimeout(record.timer)
-    record.timer = setTimeout(() => {
-      const latest = workspaceFileWatchers.get(watchId)
-      if (!latest) return
-      latest.timer = null
-      void emitWorkspaceFileChange(watchId)
-    }, 90)
   }
 
   handleInvoke('settings:get', async () => store.load())
@@ -905,6 +846,43 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
     return agentRuntime
   }
+
+  const requireRemoteWorkspace =
+    (): NonNullable<RegisterAppIpcHandlersOptions['remoteWorkspace']> => {
+      if (!remoteWorkspace) throw new Error('Remote Workspace is not initialized.')
+      return remoteWorkspace
+    }
+
+  handleInvoke('remoteWorkspace:list', async () => requireRemoteWorkspace().list())
+  handleInvoke('remoteWorkspace:get', async () => requireRemoteWorkspace().get())
+  handleInvoke('remoteWorkspace:attach', async (_, payload: unknown) =>
+    requireRemoteWorkspace().attach(parseIpcPayload(
+      'remoteWorkspace:attach',
+      remoteWorkspaceAttachPayloadSchema,
+      payload
+    ))
+  )
+  handleInvoke('remoteWorkspace:select', async (_, payload: unknown) =>
+    requireRemoteWorkspace().select(parseIpcPayload(
+      'remoteWorkspace:select',
+      remoteWorkspaceSelectPayloadSchema,
+      payload
+    ))
+  )
+  handleInvoke('remoteWorkspace:reconnect', async (_, payload: unknown) =>
+    requireRemoteWorkspace().reconnect(parseIpcPayload(
+      'remoteWorkspace:reconnect',
+      remoteWorkspaceSessionPayloadSchema,
+      payload
+    ))
+  )
+  handleInvoke('remoteWorkspace:close', async (_, payload: unknown) =>
+    requireRemoteWorkspace().close(parseIpcPayload(
+      'remoteWorkspace:close',
+      remoteWorkspaceSessionPayloadSchema,
+      payload
+    ))
+  )
 
   const requireDiscordBotRuntime = (): DiscordBotRuntime => {
     const runtime = getDiscordBotRuntime?.()
@@ -1656,14 +1634,26 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
-  handleInvoke('git:branches', async (_, workspaceRoot: unknown) =>
-    getGitBranches(parseIpcPayload('git:branches', workspaceRootSchema, workspaceRoot))
-  )
+  handleInvoke('git:branches', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'git:branches',
+      gitWorkspacePayloadSchema,
+      typeof payload === 'string' ? { workspaceRoot: payload } : payload
+    )
+    return requireWorkspacePlacement().getGitBranches(
+      request.workspaceRoot,
+      request.workspaceLocator
+    )
+  })
   handleInvoke(
     'git:switch-branch',
     async (_, payload: unknown) => {
       const request = parseIpcPayload('git:switch-branch', gitBranchPayloadSchema, payload)
-      return switchGitBranch(request.workspaceRoot, request.branch)
+      return requireWorkspacePlacement().switchGitBranch(
+        request.workspaceRoot,
+        request.branch,
+        request.workspaceLocator
+      )
     }
   )
   handleInvoke(
@@ -1674,7 +1664,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         gitBranchPayloadSchema,
         payload
       )
-      return createAndSwitchGitBranch(request.workspaceRoot, request.branch)
+      return requireWorkspacePlacement().createAndSwitchGitBranch(
+        request.workspaceRoot,
+        request.branch,
+        request.workspaceLocator
+      )
     }
   )
 
@@ -1684,42 +1678,52 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   )
 
   handleInvoke('file:resolve-workspace', async (_, payload: unknown) =>
-    resolveWorkspaceFile(
+    requireWorkspacePlacement().resolveFile(
       parseIpcPayload('file:resolve-workspace', workspaceFileTargetPayloadSchema, payload)
     )
   )
   handleInvoke('file:list-workspace-directory', async (_, payload: unknown) =>
-    listWorkspaceDirectory(
+    requireWorkspacePlacement().listDirectory(
       parseIpcPayload('file:list-workspace-directory', workspaceDirectoryTargetPayloadSchema, payload)
     )
   )
   handleInvoke('file:read-workspace', async (_, payload: unknown) =>
-    readWorkspaceFile(
+    requireWorkspacePlacement().readFile(
       parseIpcPayload('file:read-workspace', workspaceFileTargetPayloadSchema, payload)
     )
   )
   handleInvoke('file:read-workspace-image', async (_, payload: unknown) =>
-    readWorkspaceImage(
+    requireWorkspacePlacement().readImage(
       parseIpcPayload('file:read-workspace-image', workspaceFileTargetPayloadSchema, payload)
     )
   )
   handleInvoke('file:write-workspace', async (_, payload: unknown) =>
-    writeWorkspaceFile(
+    requireWorkspacePlacement().writeFile(
       parseIpcPayload('file:write-workspace', workspaceFileWritePayloadSchema, payload)
     )
   )
+  handleInvoke('file:read-workspace-range', async (_, payload: unknown) =>
+    requireWorkspacePlacement().readRange(
+      parseIpcPayload('file:read-workspace-range', workspaceFileRangeReadPayloadSchema, payload)
+    )
+  )
+  handleInvoke('file:search-workspace-text', async (_, payload: unknown) =>
+    requireWorkspacePlacement().searchText(
+      parseIpcPayload('file:search-workspace-text', workspaceTextSearchPayloadSchema, payload)
+    )
+  )
   handleInvoke('file:create-workspace', async (_, payload: unknown) =>
-    createWorkspaceFile(
+    requireWorkspacePlacement().createFile(
       parseIpcPayload('file:create-workspace', workspaceFileCreatePayloadSchema, payload)
     )
   )
   handleInvoke('file:create-workspace-directory', async (_, payload: unknown) =>
-    createWorkspaceDirectory(
+    requireWorkspacePlacement().createDirectory(
       parseIpcPayload('file:create-workspace-directory', workspaceDirectoryCreatePayloadSchema, payload)
     )
   )
   handleInvoke('file:save-workspace-clipboard-image', async (_, payload: unknown) =>
-    saveWorkspaceClipboardImage(
+    requireWorkspacePlacement().saveClipboardImage(
       parseIpcPayload(
         'file:save-workspace-clipboard-image',
         workspaceClipboardImageSavePayloadSchema,
@@ -1729,17 +1733,17 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   )
   handleInvoke('clipboard:read-image', async () => readClipboardImage())
   handleInvoke('clipboard:paste-workspace', async (_, payload: unknown) =>
-    pasteWorkspaceClipboard(
+    requireWorkspacePlacement().pasteClipboard(
       parseIpcPayload('clipboard:paste-workspace', workspaceClipboardPastePayloadSchema, payload)
     )
   )
   handleInvoke('file:rename-workspace-entry', async (_, payload: unknown) =>
-    renameWorkspaceEntry(
+    requireWorkspacePlacement().renameEntry(
       parseIpcPayload('file:rename-workspace-entry', workspaceEntryRenamePayloadSchema, payload)
     )
   )
   handleInvoke('file:suggest-workspace-pdf-name', async (_, payload: unknown) =>
-    suggestWorkspacePdfName(
+    requireWorkspacePlacement().suggestPdfName(
       parseIpcPayload(
         'file:suggest-workspace-pdf-name',
         workspacePdfRenameSuggestionPayloadSchema,
@@ -1748,22 +1752,22 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     )
   )
   handleInvoke('file:copy-workspace-entry', async (_, payload: unknown) =>
-    copyWorkspaceEntry(
+    requireWorkspacePlacement().copyEntry(
       parseIpcPayload('file:copy-workspace-entry', workspaceEntryCopyPayloadSchema, payload)
     )
   )
   handleInvoke('file:import-workspace-entries', async (_, payload: unknown) =>
-    importWorkspaceEntries(
+    requireWorkspacePlacement().importEntries(
       parseIpcPayload('file:import-workspace-entries', workspaceEntryImportPayloadSchema, payload)
     )
   )
   handleInvoke('file:move-workspace-entry', async (_, payload: unknown) =>
-    moveWorkspaceEntry(
+    requireWorkspacePlacement().moveEntry(
       parseIpcPayload('file:move-workspace-entry', workspaceEntryMovePayloadSchema, payload)
     )
   )
   handleInvoke('file:delete-workspace-entry', async (_, payload: unknown) =>
-    deleteWorkspaceEntry(
+    requireWorkspacePlacement().deleteEntry(
       parseIpcPayload('file:delete-workspace-entry', workspaceEntryDeletePayloadSchema, payload)
     )
   )
@@ -1772,63 +1776,21 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     payload: unknown
   ): Promise<WorkspaceFileWatchResult> => {
     const request = parseIpcPayload('file:watch-workspace', workspaceFileWatchPayloadSchema, payload)
-    let watchedPath: string
-    let initialContent: string
-    let initialSize: number
-    let initialTruncated: boolean
-    let initialMtimeMs: number | undefined
-    const startedAt = new Date().toISOString()
-    const initial = await readWorkspaceFile(request)
-    if (initial.ok) {
-      initialContent = initial.content
-      initialSize = initial.size
-      initialTruncated = initial.truncated
-      initialMtimeMs = 'mtimeMs' in initial ? initial.mtimeMs : undefined
-      watchedPath = initial.path
-    } else {
-      const initialImage = await readWorkspaceImage(request)
-      if (!initialImage.ok) return initial
-      watchedPath = initialImage.path
-      initialContent = ''
-      initialSize = initialImage.size
-      initialTruncated = false
-    }
-
-    const watchId = randomUUID()
-    try {
-      const watcher = watch(watchedPath, { persistent: false }, () => {
-        scheduleWorkspaceFileChange(watchId)
-      })
-      workspaceFileWatchers.set(watchId, {
-        watcher,
-        sender: event.sender,
-        path: watchedPath,
-        workspaceRoot: request.workspaceRoot,
-        timer: null
-      })
-      event.sender.once('destroyed', () => disposeWorkspaceFileWatchesForSender(event.sender))
-      return {
-        ok: true as const,
-        watchId,
-        path: watchedPath,
-        content: initialContent,
-        size: initialSize,
-        truncated: initialTruncated,
-        ...(initialMtimeMs !== undefined ? { mtimeMs: initialMtimeMs } : {}),
-        startedAt
-      }
-    } catch (error) {
-      return {
-        ok: false as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
+    const result = await requireWorkspacePlacement().watchFile(request, (change) => {
+      if (!event.sender.isDestroyed()) event.sender.send('file:workspace-changed', change)
+    })
+    if (!result.ok) return result
+    workspaceFileWatchers.set(result.watchId, { sender: event.sender })
+    event.sender.once('destroyed', () => disposeWorkspaceFileWatchesForSender(event.sender))
+    return result
   }
   handleInvoke('file:watch-workspace', async (event, payload: unknown) =>
     startWorkspaceFileWatch(event, payload)
   )
   handleInvoke('file:unwatch-workspace', async (_, watchId: unknown) =>
-    disposeWorkspaceFileWatch(parseIpcPayload('file:unwatch-workspace', streamIdSchema, watchId))
+    await disposeWorkspaceFileWatch(
+      parseIpcPayload('file:unwatch-workspace', streamIdSchema, watchId)
+    )
   )
   handleInvoke('write:export', async (_, payload: unknown) => {
     const input = parseIpcPayload('write:export', writeExportPayloadSchema, payload)
@@ -1843,11 +1805,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
     return exportWriteDocument(writeExportServicePayload(input), { parentWindow: getMainWindow() })
   })
-  handleInvoke('write:copy-rich-text', async (_, payload: unknown) =>
-    copyWriteDocumentAsRichText(
-      parseIpcPayload('write:copy-rich-text', writeRichClipboardPayloadSchema, payload)
-    )
-  )
   handleInvoke('write:inline-completion', async (_, payload: unknown) =>
     requestWriteInlineCompletion(
       await store.load(),

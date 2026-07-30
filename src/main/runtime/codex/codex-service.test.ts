@@ -25,11 +25,11 @@ import {
   type CodexAppServerInitializeResponse,
   type CodexAppServerJsonRpcClient,
   type CodexAppServerJsonRpcClientOptions
-} from './app-server/json-rpc-client'
+} from '@sciforge/codex-runtime/app-server'
 import type {
   CodexAppServerPendingRequest,
   CodexAppServerPendingRequestRegistryOptions
-} from './app-server/request-registry'
+} from '@sciforge/codex-runtime/app-server'
 import type { CodexThreadEventPayload } from './codex-runtime-api'
 import {
   DEFAULT_MULTI_AGENT_CHILD_TIMEOUT_MS,

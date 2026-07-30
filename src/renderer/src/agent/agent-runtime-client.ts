@@ -28,6 +28,7 @@ import type {
   AgentRuntimeUserInputResolveInput
 } from '@shared/sciforge-api'
 import { runtimeErrorToError } from '@shared/runtime-error'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 
 type AgentRuntimePreloadBridge = Window['sciforge']['agentRuntime']
 
@@ -128,7 +129,8 @@ class AgentRuntimeClient {
     sinceSeq: number,
     onEvent: (event: AgentRuntimeEvent) => void,
     signal: AbortSignal,
-    runtimeId: AgentRuntimeId
+    runtimeId: AgentRuntimeId,
+    workspaceLocator?: WorkspaceLocator
   ): Promise<void> {
     if (signal.aborted) return
     const requestedStreamId = streamId()
@@ -179,6 +181,7 @@ class AgentRuntimeClient {
       const subscribeInput = {
         runtimeId,
         threadId,
+        ...(workspaceLocator ? { workspaceLocator } : {}),
         sinceSeq,
         streamId: requestedStreamId
       }

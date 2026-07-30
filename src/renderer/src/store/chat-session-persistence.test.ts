@@ -125,6 +125,35 @@ describe('chat session persistence', () => {
     expect(readPersistedChatSession()).toEqual({ activeThreadId: null, queuedMessages: [], persistenceDegraded: false })
   })
 
+  it('persists only schema-valid remote workspace locators for queued delivery', () => {
+    const queue = normalizePersistedQueuedMessages([{
+      id: 'remote-q',
+      text: 'continue on the remote workspace',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'host-session-1',
+        path: '/shared/project'
+      }
+    }, {
+      id: 'invalid-remote-q',
+      text: 'do not trust malformed placement',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: '',
+        path: 'relative/project'
+      }
+    }])
+
+    expect(queue[0]).toMatchObject({
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'host-session-1',
+        path: '/shared/project'
+      }
+    })
+    expect(queue[1]).not.toHaveProperty('workspaceLocator')
+  })
+
   it('restores an in-flight delivery journal as an explicit reconciliation barrier', () => {
     persistChatSession({
       activeThreadId: 'thread-in-flight',

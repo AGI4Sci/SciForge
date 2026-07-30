@@ -22,6 +22,8 @@ import type {
   DomainRendererCapabilityObservationContract
 } from '@sciforge/domain-sdk/host'
 import type { SciForgeApi } from '@shared/sciforge-api'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
+import { activeWorkspaceLocator } from '../remote-workspace/placement'
 
 export type RendererCapabilityContract<TInput, TOutput> = Readonly<{
   actionId: string
@@ -32,6 +34,7 @@ export type RendererCapabilityContract<TInput, TOutput> = Readonly<{
 
 export type RendererCapabilityInvokeOptions = Readonly<{
   workspaceId?: string
+  workspaceLocator?: WorkspaceLocator
   resource?: DomainCapabilityResourceHandle
   expectedRevision?: string
   approval?: { mode: 'confirmation' }
@@ -109,6 +112,8 @@ export class RendererCapabilityClient {
     const jsonInput = capabilityJsonValueSchema.parse(parsedInput)
     const readiness = await this.readiness([actionId], options.workspaceId)
     if (readiness.status !== 'ready') throw new Error(readiness.message)
+    const workspaceLocator = options.workspaceLocator ??
+      activeWorkspaceLocator(options.workspaceId)
 
     const request = capabilityInvocationRequestSchema.parse({
       actionId,
@@ -121,6 +126,7 @@ export class RendererCapabilityClient {
     })
     const result = capabilityInvocationResultSchema.parse(await this.getTransport().invoke({
       ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
+      ...(workspaceLocator ? { workspaceLocator } : {}),
       request,
       ...(options.approval ? { approval: options.approval } : {})
     }))

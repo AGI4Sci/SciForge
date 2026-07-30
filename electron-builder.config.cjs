@@ -117,6 +117,10 @@ module.exports = {
     { from: 'LICENSE', to: 'compliance/LICENSE' },
     { from: 'THIRD_PARTY_NOTICES.md', to: 'compliance/THIRD_PARTY_NOTICES.md' },
     { from: 'src/asset/img/README.md', to: 'compliance/ASSET_PROVENANCE.md' },
+    {
+      from: 'packages/workers/workspace-host/artifacts/workspace-host',
+      to: 'workspace-host'
+    },
     ...(officialExtensionKeysFile
       ? [{
           from: officialExtensionKeysFile,

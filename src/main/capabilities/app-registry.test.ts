@@ -326,7 +326,15 @@ describe('app capability registry', () => {
   it('uses the same Workspace Preview provider for UI and agent callers', async () => {
     const { dependencies, open } = createDependencies()
     const broker = new CapabilityBroker(createRegistry(dependencies))
-    const input = { path: '/workspace/paper.md', workspaceRoot: '/workspace' }
+    const input = {
+      path: '/workspace/paper.md',
+      workspaceRoot: '/workspace',
+      workspaceLocator: {
+        contractVersion: 1 as const,
+        hostSessionId: 'workspace-host-session-1',
+        path: '/workspace'
+      }
+    }
 
     const uiResult = await broker.invoke({ audience: 'ui', callerId: 'window-1', workspaceId: '/workspace' }, {
       actionId: APP_CAPABILITY_IDS.workspacePreviewOpen,
@@ -338,6 +346,8 @@ describe('app capability registry', () => {
     })
 
     expect(open).toHaveBeenCalledTimes(2)
+    expect(open).toHaveBeenNthCalledWith(1, input)
+    expect(open).toHaveBeenNthCalledWith(2, input)
     expect(capabilityResourceHandleSchema.parse(record(uiResult.output).resource)).toBeTruthy()
     expect(capabilityResourceHandleSchema.parse(record(agentResult.output).resource)).toBeTruthy()
   })

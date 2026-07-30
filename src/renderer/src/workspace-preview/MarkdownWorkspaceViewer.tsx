@@ -8,22 +8,28 @@ import {
 } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
+  Check,
   Clipboard,
+  ClipboardCopy,
   Columns2,
   Eye,
   HelpCircle,
   Highlighter,
   Languages,
+  LoaderCircle,
   MessageSquare,
-  PencilLine
+  PencilLine,
+  TriangleAlert
 } from 'lucide-react'
+import type { MarkdownWechatCopyResult } from '@shared/markdown-wechat'
 import type {
   WorkspaceObservation,
   WorkspacePreviewEditOperation
 } from '@shared/workspace-preview'
 import {
   WriteMarkdownPreview,
-  type WriteMarkdownWorkspaceImageLoader
+  type WriteMarkdownWorkspaceImageLoader,
+  type WriteMarkdownWorkspaceLinkOpener
 } from '../components/write/WriteMarkdownPreview'
 import {
   createTextReplaceAllOperation,
@@ -52,12 +58,17 @@ export type MarkdownWorkspaceViewerApplyEditHandler = (
   operation: Extract<WorkspacePreviewEditOperation, { kind: 'text.replaceRange' }>
 ) => void | Promise<void>
 
+export type MarkdownWorkspaceViewerCopyForWechatHandler =
+  () => Promise<MarkdownWechatCopyResult>
+
 export type MarkdownWorkspaceViewerProps = {
   observation?: WorkspaceObservation | null
   documentContentKey?: string
   className?: string
   onApplyEdit?: MarkdownWorkspaceViewerApplyEditHandler
+  onCopyForWechat?: MarkdownWorkspaceViewerCopyForWechatHandler
   loadWorkspaceImage?: WriteMarkdownWorkspaceImageLoader
+  onOpenWorkspaceLink?: WriteMarkdownWorkspaceLinkOpener
   initialMode?: MarkdownWorkspaceViewerMode
   annotationOverlays?: readonly DocumentTextAnnotationOverlay[]
   activeAnnotationId?: string | null
@@ -85,6 +96,33 @@ export type MarkdownWorkspaceViewerModel = {
 type MarkdownSelectionState = {
   selection: DocumentAnnotationSelection
   toolbarStyle: CSSProperties
+}
+
+export type MarkdownWechatCopyState =
+  | { kind: 'idle' }
+  | { kind: 'copying' }
+  | { kind: 'success'; result: MarkdownWechatCopyResult }
+  | { kind: 'error'; message: string }
+
+export type MarkdownWechatCopyFeedbackModel = {
+  phase: 'idle' | 'copying' | 'success' | 'warning' | 'error'
+  warningCount: number
+}
+
+export function buildMarkdownWechatCopyFeedbackModel(
+  state: MarkdownWechatCopyState
+): MarkdownWechatCopyFeedbackModel {
+  if (state.kind === 'success') {
+    const warningCount = state.result.warnings.length
+    return {
+      phase: warningCount > 0 ? 'warning' : 'success',
+      warningCount
+    }
+  }
+  return {
+    phase: state.kind,
+    warningCount: 0
+  }
 }
 
 export function buildMarkdownWorkspaceViewerModel(
@@ -143,7 +181,9 @@ export function MarkdownWorkspaceViewer({
   documentContentKey,
   className,
   onApplyEdit,
+  onCopyForWechat,
   loadWorkspaceImage,
+  onOpenWorkspaceLink,
   initialMode,
   annotationOverlays = EMPTY_MARKDOWN_ANNOTATION_OVERLAYS,
   activeAnnotationId = null,
@@ -164,15 +204,29 @@ export function MarkdownWorkspaceViewer({
   const previewScrollerRef = useRef<HTMLDivElement | null>(null)
   const previewTextRootRef = useRef<HTMLDivElement | null>(null)
   const handledNavigationRequestIdRef = useRef<string | null>(null)
+  const copyRequestRef = useRef(0)
+  const copyInFlightRef = useRef(false)
   const [selectionState, setSelectionState] = useState<MarkdownSelectionState | null>(null)
   const [resolvedAnnotationOverlays, setResolvedAnnotationOverlays] = useState<ResolvedDocumentTextOverlay[]>([])
+  const [wechatCopyState, setWechatCopyState] = useState<MarkdownWechatCopyState>({ kind: 'idle' })
 
   useEffect(() => {
     setMode(resolvedInitialMode)
   }, [resolvedInitialMode, observation?.file.path])
 
+  useEffect(() => {
+    copyRequestRef.current += 1
+    copyInFlightRef.current = false
+    setWechatCopyState({ kind: 'idle' })
+    return () => {
+      copyRequestRef.current += 1
+      copyInFlightRef.current = false
+    }
+  }, [documentContentKey, observation?.file.path])
+
   const showEditor = mode === 'edit' || mode === 'split'
   const showPreview = mode === 'preview' || mode === 'split'
+  const wechatCopyFeedback = buildMarkdownWechatCopyFeedbackModel(wechatCopyState)
 
   useEffect(() => {
     if (!showPreview) {
@@ -261,6 +315,36 @@ export function MarkdownWorkspaceViewer({
     setSelectionState(null)
   }, [onAnnotationAction, selectionState])
 
+  const copyForWechat = useCallback(async (): Promise<void> => {
+    if (
+      !onCopyForWechat ||
+      model.truncated ||
+      wechatCopyState.kind === 'copying' ||
+      copyInFlightRef.current
+    ) return
+    const requestId = copyRequestRef.current + 1
+    copyRequestRef.current = requestId
+    copyInFlightRef.current = true
+    setWechatCopyState({ kind: 'copying' })
+    try {
+      const result = await onCopyForWechat()
+      if (copyRequestRef.current !== requestId) return
+      setWechatCopyState({ kind: 'success', result })
+    } catch (error) {
+      if (copyRequestRef.current !== requestId) return
+      setWechatCopyState({
+        kind: 'error',
+        message: error instanceof Error && error.message.trim()
+          ? error.message
+          : String(error)
+      })
+    } finally {
+      if (copyRequestRef.current === requestId) {
+        copyInFlightRef.current = false
+      }
+    }
+  }, [model.truncated, onCopyForWechat, wechatCopyState.kind])
+
   return (
     <section
       className={compactClassName(
@@ -271,6 +355,7 @@ export function MarkdownWorkspaceViewer({
       data-status={model.status}
       data-editable={model.editable ? 'true' : 'false'}
       data-truncated={model.truncated ? 'true' : 'false'}
+      data-markdown-wechat-copy-state={wechatCopyFeedback.phase}
     >
       <header className="flex shrink-0 items-start justify-between gap-3 border-b border-ds-border px-4 py-3 pr-20">
         <div className="min-w-0 flex-1">
@@ -283,6 +368,13 @@ export function MarkdownWorkspaceViewer({
           {model.subtitle ? <p className="mt-1 text-xs text-ds-muted">{model.subtitle}</p> : null}
         </div>
         <div className="flex shrink-0 items-center gap-3">
+          {model.status === 'ready' && onCopyForWechat ? (
+            <MarkdownWechatCopyButton
+              state={wechatCopyState}
+              disabled={model.truncated}
+              onCopy={() => void copyForWechat()}
+            />
+          ) : null}
           {model.status === 'ready' && onOpenAnnotations ? (
             <button
               type="button"
@@ -303,6 +395,10 @@ export function MarkdownWorkspaceViewer({
           {model.summary}
         </p>
       </header>
+
+      {model.status === 'ready' && onCopyForWechat && wechatCopyState.kind !== 'idle' ? (
+        <MarkdownWechatCopyNotice state={wechatCopyState} />
+      ) : null}
 
       {model.status !== 'ready' ? (
         <div
@@ -354,6 +450,7 @@ export function MarkdownWorkspaceViewer({
                   filePath={observation?.file.path}
                   workspaceRoot={observation?.file.workspaceRoot}
                   loadWorkspaceImage={loadWorkspaceImage}
+                  onOpenWorkspaceLink={onOpenWorkspaceLink}
                 />
               </div>
               <MarkdownAnnotationOverlayLayer
@@ -372,6 +469,129 @@ export function MarkdownWorkspaceViewer({
         />
       ) : null}
     </section>
+  )
+}
+
+function MarkdownWechatCopyButton({
+  state,
+  disabled,
+  onCopy
+}: {
+  state: MarkdownWechatCopyState
+  disabled: boolean
+  onCopy: () => void
+}): ReactElement {
+  const { t } = useTranslation('common')
+  const feedback = buildMarkdownWechatCopyFeedbackModel(state)
+  const copying = feedback.phase === 'copying'
+  const label = copying
+    ? t('markdownWechatCopying')
+    : feedback.phase === 'success'
+      ? t('markdownWechatCopySuccessButton')
+      : feedback.phase === 'warning'
+        ? t('markdownWechatCopyWarningButton', { count: feedback.warningCount })
+        : feedback.phase === 'error'
+          ? t('markdownWechatCopyRetry')
+          : t('markdownWechatCopy')
+  const title = disabled ? t('markdownWechatCopyTruncated') : label
+  const toneClassName = feedback.phase === 'success'
+    ? 'text-emerald-600 dark:text-emerald-400'
+    : feedback.phase === 'warning'
+      ? 'text-amber-700 dark:text-amber-300'
+      : feedback.phase === 'error'
+        ? 'text-rose-600 dark:text-rose-400'
+        : 'text-ds-muted hover:text-ds-text'
+
+  return (
+    <button
+      type="button"
+      className={compactClassName(
+        'inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-xs font-medium transition',
+        'hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45',
+        toneClassName
+      )}
+      title={title}
+      aria-label={title}
+      aria-busy={copying ? 'true' : undefined}
+      disabled={disabled || copying}
+      onClick={onCopy}
+      data-markdown-copy-for-wechat
+      data-state={feedback.phase}
+    >
+      {copying ? (
+        <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+      ) : feedback.phase === 'success' || feedback.phase === 'warning' ? (
+        <Check className="h-3.5 w-3.5" aria-hidden="true" />
+      ) : feedback.phase === 'error' ? (
+        <TriangleAlert className="h-3.5 w-3.5" aria-hidden="true" />
+      ) : (
+        <ClipboardCopy className="h-3.5 w-3.5" aria-hidden="true" />
+      )}
+      <span>{label}</span>
+    </button>
+  )
+}
+
+function MarkdownWechatCopyNotice({
+  state
+}: {
+  state: Exclude<MarkdownWechatCopyState, { kind: 'idle' }>
+}): ReactElement {
+  const { t } = useTranslation('common')
+  const feedback = buildMarkdownWechatCopyFeedbackModel(state)
+  const toneClassName = feedback.phase === 'success'
+    ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/70 dark:bg-emerald-950/35 dark:text-emerald-200'
+    : feedback.phase === 'warning'
+      ? 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/70 dark:bg-amber-950/35 dark:text-amber-100'
+      : feedback.phase === 'error'
+        ? 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/35 dark:text-rose-200'
+        : 'border-ds-border bg-ds-panel text-ds-muted'
+
+  let body: ReactElement
+  if (state.kind === 'copying') {
+    body = <p>{t('markdownWechatCopyingDetail')}</p>
+  } else if (state.kind === 'error') {
+    body = <p>{t('markdownWechatCopyFailed', { message: state.message })}</p>
+  } else {
+    const result = state.result
+    body = (
+      <>
+        <p>
+          {feedback.phase === 'warning'
+            ? t('markdownWechatCopyWarning', { count: feedback.warningCount })
+            : t('markdownWechatCopySuccess')}
+        </p>
+        <p className="mt-0.5 opacity-80">
+          {t('markdownWechatCopySummary', {
+            formulas: result.counts.formulas,
+            images: result.counts.embeddedImages,
+            codeBlocks: result.counts.codeBlocks
+          })}
+        </p>
+        {result.warnings.length ? (
+          <ul className="mt-1 list-disc space-y-0.5 pl-4">
+            {result.warnings.map((warning, index) => (
+              <li key={`${warning.code}-${warning.index ?? index}`}>{warning.message}</li>
+            ))}
+          </ul>
+        ) : null}
+      </>
+    )
+  }
+
+  return (
+    <div
+      className={compactClassName(
+        'shrink-0 border-b px-4 py-2 text-xs leading-relaxed',
+        toneClassName
+      )}
+      role={feedback.phase === 'error' ? 'alert' : 'status'}
+      aria-live={feedback.phase === 'error' ? 'assertive' : 'polite'}
+      data-markdown-wechat-copy-notice
+      data-state={feedback.phase}
+    >
+      {body}
+    </div>
   )
 }
 

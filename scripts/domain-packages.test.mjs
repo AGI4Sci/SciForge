@@ -34,6 +34,57 @@ test('sorts packages by packageName and omits undeclared process imports', async
   assert.doesNotMatch(generated['src/main/modules/installed-domain-main.ts'], /a-renderer-only/)
   assert.match(generated['src/renderer/src/domain-modules/installed-domain-renderer.ts'], /@fixture\/a-renderer-only\/renderer/)
   assert.doesNotMatch(generated['src/renderer/src/domain-modules/installed-domain-renderer.ts'], /z-main-only/)
+  assert.match(
+    generated['src/renderer/src/domain-modules/installed-domain-renderer.ts'],
+    /remoteWorkspace\.attach\(input\)/
+  )
+  assert.doesNotMatch(
+    generated['packages/workers/workspace-host/src/generated/installed-domain-workspace-server.ts'],
+    /@fixture/
+  )
+})
+
+test('projects only workspace-server process entries into the server composition', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  await createFixture(root, 'remote-preview', {
+    packageName: '@fixture/remote-preview',
+    processes: ['main', 'renderer', 'workspace-server'],
+    contributionContracts: {
+      'fixture.remote-preview': { contractVersion: 1, id: 'fixture-preview' }
+    },
+    contributionsByProcess: {
+      main: [{
+        id: 'fixture.remote-preview',
+        kind: 'main.workspace-preview-plugin'
+      }],
+      renderer: [{
+        id: 'fixture.remote-preview',
+        kind: 'renderer.workspace-preview-plugin'
+      }],
+      'workspace-server': [{
+        id: 'fixture.remote-preview',
+        kind: 'workspace-server.workspace-preview-plugin'
+      }]
+    }
+  })
+  await createFixture(root, 'desktop-only', {
+    packageName: '@fixture/desktop-only',
+    process: 'main'
+  })
+
+  const packages = await discoverDomainPackages(root, {
+    parseDefinition: (definition) => definition
+  })
+  const server = renderGeneratedDomainPackageFiles(packages)[
+    'packages/workers/workspace-host/src/generated/installed-domain-workspace-server.ts'
+  ]
+
+  assert.match(server, /@fixture\/remote-preview\/workspace-server/)
+  assert.match(server, /createDomainWorkspaceServerEntry/)
+  assert.doesNotMatch(server, /@fixture\/desktop-only/)
+  assert.doesNotMatch(server, /\/main'/)
+  assert.doesNotMatch(server, /\/renderer'/)
 })
 
 test('fails closed when a process entry does not export its conventional factory', async (context) => {
@@ -69,6 +120,44 @@ test('fails closed when a preview contribution has no canonical contract', async
   )
 })
 
+test('fails closed when a workspace preview omits its renderer or backend boundary', async (context) => {
+  const serverOnlyRoot = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
+  const rendererOnlyRoot = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
+  context.after(() => Promise.all([
+    rm(serverOnlyRoot, { recursive: true, force: true }),
+    rm(rendererOnlyRoot, { recursive: true, force: true })
+  ]))
+  await createFixture(serverOnlyRoot, 'server-only-preview', {
+    packageName: '@fixture/server-only-preview',
+    process: 'workspace-server',
+    contributionContracts: {
+      'fixture.server-only-preview': { contractVersion: 1, id: 'fixture-preview' }
+    },
+    contributions: [{
+      id: 'fixture.server-only-preview',
+      kind: 'workspace-server.workspace-preview-plugin'
+    }]
+  })
+  await createFixture(rendererOnlyRoot, 'renderer-only-preview', {
+    packageName: '@fixture/renderer-only-preview',
+    process: 'renderer',
+    contributionContracts: {
+      'fixture.renderer-only-preview': { contractVersion: 1, id: 'fixture-preview' }
+    },
+    contributions: [{
+      id: 'fixture.renderer-only-preview',
+      kind: 'renderer.workspace-preview-plugin'
+    }]
+  })
+
+  for (const root of [serverOnlyRoot, rendererOnlyRoot]) {
+    await assert.rejects(
+      discoverDomainPackages(root, { parseDefinition: (definition) => definition }),
+      /require a renderer and at least one backend process/
+    )
+  }
+})
+
 test('fails closed when main and renderer preview slots do not share one contribution identity', async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
   context.after(() => rm(root, { recursive: true, force: true }))
@@ -93,7 +182,7 @@ test('fails closed when main and renderer preview slots do not share one contrib
 
   await assert.rejects(
     discoverDomainPackages(root, { parseDefinition: (definition) => definition }),
-    /must declare identical workspace preview contribution IDs in main and renderer/
+    /must declare identical workspace preview contribution IDs in every declared preview process/
   )
 })
 
@@ -301,7 +390,11 @@ async function createFixture(root, directoryName, options) {
   )
   for (const processName of processes) {
     const factoryName = options.factoryName ??
-      (processName === 'main' ? 'createDomainMainEntry' : 'createDomainRendererEntry')
+      (processName === 'main'
+        ? 'createDomainMainEntry'
+        : processName === 'renderer'
+          ? 'createDomainRendererEntry'
+          : 'createDomainWorkspaceServerEntry')
     await writeFile(
       path.join(packageRoot, `src/${processName}.ts`),
       `export function ${factoryName}() { return {} }\n`

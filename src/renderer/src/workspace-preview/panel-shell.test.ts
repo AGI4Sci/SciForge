@@ -96,6 +96,32 @@ describe('WorkspacePreviewPanelShell', () => {
     expect(workspacePreviewPanelTargetKey(target, '/fallback')).toContain('"kind":"domain"')
   })
 
+  it('includes the selected Workspace Host locator in the open input and target identity', () => {
+    const target = {
+      path: 'structures/protein.pdb',
+      workspaceRoot: '/cluster/workspace'
+    }
+    const workspaceLocator = {
+      contractVersion: 1 as const,
+      hostSessionId: 'workspace-host-session-1',
+      path: '/cluster/workspace'
+    }
+
+    expect(workspacePreviewOpenInputForPanelTarget(
+      target,
+      '/fallback',
+      workspaceLocator
+    )).toEqual({
+      ...target,
+      workspaceLocator
+    })
+    expect(workspacePreviewPanelTargetKey(
+      target,
+      '/fallback',
+      workspaceLocator
+    )).toContain('workspace-host-session-1')
+  })
+
   it('preserves a document anchor and integrity expectation in the host open input', () => {
     const target = {
       path: 'reports/evidence.pdf',

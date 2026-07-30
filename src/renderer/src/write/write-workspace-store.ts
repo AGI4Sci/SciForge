@@ -15,6 +15,10 @@ import { createWriteFileActions } from './write-workspace-file-actions'
 import i18n from '../i18n'
 import { writeBrowserStorageItem } from '../lib/browser-storage'
 import {
+  assertPinnedWorkspaceLocator,
+  withPinnedWorkspaceLocator
+} from '../remote-workspace/placement'
+import {
   WRITE_ASSISTANT_MODEL_KEY,
   WRITE_ASSISTANT_OPEN_KEY,
   WRITE_PREVIEW_MODE_KEY,
@@ -96,6 +100,15 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
     if (snapshot.activeFileKind !== 'text') return false
     if (!force && (snapshot.saveStatus === 'dirty' || snapshot.saveStatus === 'saving')) return false
     if (options.path && !pathsEqual(options.path, snapshot.activeFilePath)) return false
+    try {
+      assertPinnedWorkspaceLocator(workspaceRoot, snapshot.pinnedWorkspaceLocator)
+    } catch (error) {
+      set({
+        fileError: error instanceof Error ? error.message : String(error),
+        saveStatus: 'error'
+      })
+      return false
+    }
 
     if (options.message) {
       set({ fileError: options.message, saveStatus: 'error' })
@@ -106,13 +119,17 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
     let resolvedPath = options.path ?? snapshot.activeFilePath
     let size = options.size
     let truncated = options.truncated
+    let revision = options.revision
     if (typeof content !== 'string') {
       let result: Awaited<ReturnType<typeof window.sciforge.readWorkspaceFile>>
       try {
-        result = await window.sciforge.readWorkspaceFile({
-          path: snapshot.activeFilePath,
-          workspaceRoot
-        })
+        result = await window.sciforge.readWorkspaceFile(withPinnedWorkspaceLocator(
+          {
+            path: snapshot.activeFilePath,
+            workspaceRoot
+          },
+          snapshot.pinnedWorkspaceLocator
+        ))
       } catch (error) {
         if (pathsEqual(get().activeFilePath ?? '', snapshot.activeFilePath)) {
           set({
@@ -138,6 +155,7 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
       resolvedPath = result.path
       size = result.size
       truncated = result.truncated
+      revision = result.revision
     }
 
     const nextSize = typeof size === 'number' && Number.isFinite(size)
@@ -159,7 +177,8 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
         fileError: null,
         fileLoading: false,
         fileSize: nextSize,
-        fileTruncated: nextTruncated
+        fileTruncated: nextTruncated,
+        fileRevision: revision ?? latest.fileRevision
       })
       return true
     }
@@ -180,6 +199,7 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
         fileContent: content.slice(0, prefix),
         fileSize: nextSize,
         fileTruncated: nextTruncated,
+        fileRevision: revision ?? latest.fileRevision,
         saveStatus: 'saved',
         fileError: null,
         fileLoading: false
@@ -193,6 +213,7 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
           fileContent: content.slice(0, cursor),
           fileSize: nextSize,
           fileTruncated: nextTruncated,
+          fileRevision: revision ?? get().fileRevision,
           saveStatus: 'saved',
           fileError: null,
           fileLoading: false
@@ -211,6 +232,7 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
       fileContent: content,
       fileSize: nextSize,
       fileTruncated: nextTruncated,
+      fileRevision: revision ?? latest.fileRevision,
       saveStatus: 'saved',
       fileError: null,
       fileLoading: false
@@ -224,10 +246,13 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
     if (path && !pathsEqual(path, snapshot.activeFilePath)) return false
 
     try {
-      const result = await window.sciforge.readWorkspaceImage({
-        path: snapshot.activeFilePath,
-        workspaceRoot
-      })
+      const result = await window.sciforge.readWorkspaceImage(withPinnedWorkspaceLocator(
+        {
+          path: snapshot.activeFilePath,
+          workspaceRoot
+        },
+        snapshot.pinnedWorkspaceLocator
+      ))
       if (!result.ok) {
         if (pathsEqual(get().activeFilePath ?? '', snapshot.activeFilePath)) {
           set({ fileError: result.message })
@@ -263,6 +288,15 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
     if (!state.activeFilePath) return true
     if (state.activeFileKind !== 'text') return true
     if (state.fileTruncated) return false
+    try {
+      assertPinnedWorkspaceLocator(workspaceRoot, state.pinnedWorkspaceLocator)
+    } catch (error) {
+      set({
+        saveStatus: 'error',
+        fileError: error instanceof Error ? error.message : String(error)
+      })
+      return false
+    }
     if (externalSyncTimer !== null) {
       cancelExternalSyncAnimation()
       set({ fileContent: lastSavedContent, saveStatus: 'saved', fileError: null })
@@ -275,17 +309,21 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
     }
     set({ saveStatus: 'saving' })
     try {
-      const result = await window.sciforge.writeWorkspaceFile({
-        path: state.activeFilePath,
-        workspaceRoot,
-        content: state.fileContent
-      })
+      const result = await window.sciforge.writeWorkspaceFile(withPinnedWorkspaceLocator(
+        {
+          path: state.activeFilePath,
+          workspaceRoot,
+          content: state.fileContent,
+          ...(state.fileRevision ? { expectedRevision: state.fileRevision } : {})
+        },
+        state.pinnedWorkspaceLocator
+      ))
       if (!result.ok) {
         set({ saveStatus: 'error', fileError: result.message })
         return false
       }
       lastSavedContent = state.fileContent
-      set({ saveStatus: 'saved', fileError: null })
+      set({ saveStatus: 'saved', fileError: null, fileRevision: result.revision })
       return true
     } catch (error) {
       set({

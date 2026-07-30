@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, protocol, session, Tray, webContents, type WebContents } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, protocol, session, shell, Tray, webContents, type WebContents } from 'electron'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -20,7 +20,6 @@ import {
   getModelAccessSettings,
   mergeConnectPhoneSettings,
   mergeRemoteChannelSettings,
-  mergeRemoteExecutorSettings,
   mergeAgentCapabilitySettings,
   mergeComputerUseSettings,
   mergeModelRouterSettings,
@@ -61,11 +60,16 @@ import type { RuntimeToolDefinition } from './runtime/agent-runtime/runtime-tool
 import { createRuntimeCapabilityBroker } from './runtime/agent-runtime/runtime-capability-broker'
 import { createCodexAgentRuntimeAdapter } from './runtime/codex/codex-agent-runtime-adapter'
 import {
+  createPlacementAwareAgentRuntimeAdapter,
+  createWorkspaceHostCodexAgentRuntimeAdapter
+} from './runtime/agent-runtime/workspace-host-agent-runtime-adapter'
+import {
   ClaudeCodeRuntimeService,
   createClaudeCodeAgentRuntimeAdapter
 } from './runtime/claude-code'
 import { LspCodeNavigationService } from './services/lsp-code-navigation-service'
 import { LocalTraceStore } from '@sciforge/full-trace'
+import { WorkspaceEgressService } from '@sciforge/workspace-egress'
 import {
   VISUAL_SOURCE_CONTRACT_VERSION,
   defineVisualSourceProvider,
@@ -93,6 +97,14 @@ import { createModelRouterVisualInspector } from '../../packages/workers/workspa
 import { AgentVisualRuntime } from './runtime/agent-runtime/agent-visual-runtime'
 import { workspaceHtmlPreviewService } from './services/workspace-html-preview-service'
 import { configureLogger, logError, logInfo, logWarn, pruneOnStartup } from './logger'
+import { WorkspaceHostProviderRegistry } from './modules/workspace-host-contributions'
+import { WorkspaceHostSessionManager } from './workspace-host/session-manager'
+import { createApplicationWorkspaceModelAccessProvider } from './workspace-host/model-access'
+import { RemoteWorkspaceController } from './workspace-host/controller'
+import {
+  resolveApplicationWorkspaceHostArtifact,
+  resolveApplicationWorkspaceHostArtifactBaseDirectory
+} from './workspace-host/artifact-resolver'
 import { createRemoteChannelRuntime, type RemoteChannelRuntime } from './remote-channel-runtime'
 import { createDiscordBotRuntime, type DiscordBotRuntime } from './discord-bot-runtime'
 import { createZulipBotRuntime, type ZulipBotRuntime } from './zulip-bot-runtime'
@@ -122,7 +134,12 @@ import { migrateLegacyKunGlobalConfig } from './legacy-kun-global-config-migrati
 import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
 import { ControlledProcessService } from './processes/controlled-process-service'
 import { VersionControlWorkspaceService } from './services/version-control-workspace-service'
-import { WorkspacePreviewHost } from './services/workspace-preview'
+import { VersionControlPlacementFacade } from './services/version-control-placement-facade'
+import { WorkspacePlacementRouter } from './services/workspace-placement-router'
+import {
+  WorkspacePreviewHost,
+  WorkspacePreviewPlacementRouter
+} from './services/workspace-preview'
 import { CapabilityBroker } from './capabilities/broker'
 import {
   WORKSPACE_PREVIEW_RESOURCE_KIND,
@@ -395,6 +412,8 @@ let claudeCodeRuntime: ClaudeCodeRuntimeService | null = null
 let codeNavigationService: LspCodeNavigationService | null = null
 let domainModuleCatalog: DomainModuleCatalog | null = null
 let mainRuntimeContributions: ActivatedMainRuntimeContributions | null = null
+let workspaceHostSessionManagerForShutdown: WorkspaceHostSessionManager | null = null
+let workspaceEgressServiceForShutdown: WorkspaceEgressService | null = null
 let managedRuntimesStoppedForQuit = false
 let managedRuntimesStopPromise: Promise<void> | null = null
 let appBehavior: AppBehaviorConfigV1 = normalizeAppBehaviorSettings()
@@ -710,6 +729,16 @@ async function stopManagedRuntimes(): Promise<void> {
       })
       agentRuntimeHostForShutdown?.dispose()
       agentRuntimeHostForShutdown = null
+      const workspaceHostSessions = workspaceHostSessionManagerForShutdown
+      workspaceHostSessionManagerForShutdown = null
+      await workspaceHostSessions?.dispose().catch((error) => {
+        logWarn('workspace-host', 'Failed to close Workspace Host sessions.', error)
+      })
+      const workspaceEgress = workspaceEgressServiceForShutdown
+      workspaceEgressServiceForShutdown = null
+      await workspaceEgress?.close().catch((error) => {
+        logWarn('workspace-egress', 'Failed to close Workspace Host network leases.', error)
+      })
       codeNavigationService?.shutdown()
       const catalog = domainModuleCatalog
       domainModuleCatalog = null
@@ -1063,6 +1092,17 @@ app.whenReady().then(async () => {
   })
   const catalog = createApplicationDomainCatalog({
     getUserDataDir: () => app.getPath('userData'),
+    openPath: async (targetPath) => {
+      const error = await shell.openPath(targetPath)
+      if (error) throw new Error(error)
+    },
+    resolveWorkspaceServerArtifact: () => resolveApplicationWorkspaceHostArtifact({
+      baseDirectory: resolveApplicationWorkspaceHostArtifactBaseDirectory({
+        isPackaged: app.isPackaged,
+        appPath: app.getAppPath(),
+        resourcesPath: process.resourcesPath
+      })
+    }),
     capabilities: {
       invoke: (contract, input, options) => {
         if (!domainSystemCapabilityInvoker) {
@@ -1073,6 +1113,33 @@ app.whenReady().then(async () => {
     },
     visualCapture: registeredTargetVisualCapture
   })
+  const workspaceEgressService = new WorkspaceEgressService({
+    routeResolver: {
+      resolve: () => {
+        throw new Error(
+          'General workspace egress routes must be resolved by their owning domain package.'
+        )
+      }
+    }
+  })
+  workspaceEgressServiceForShutdown = workspaceEgressService
+  const workspaceModelAccess = createApplicationWorkspaceModelAccessProvider({
+    loadSettings: () => store.load(),
+    bridge: workspaceEgressService
+  })
+  const workspaceHostSessions = new WorkspaceHostSessionManager(
+    new WorkspaceHostProviderRegistry(catalog),
+    {
+      workspaceModelAccess,
+      log: ({ level, message, ...detail }) => {
+        if (level === 'error') logError('workspace-host', message, detail)
+        else if (level === 'warn') logWarn('workspace-host', message, detail)
+        else if (level === 'info') logInfo('workspace-host', message)
+      }
+    }
+  )
+  workspaceHostSessionManagerForShutdown = workspaceHostSessions
+  const remoteWorkspaceController = new RemoteWorkspaceController(workspaceHostSessions)
   let officialExtensionKeys
   let extensionInstallationBlockedReason: string | undefined
   try {
@@ -1117,9 +1184,13 @@ app.whenReady().then(async () => {
       : {})
   })
   const actionGuardEvaluator = createMainActionGuardEvaluator(catalog)
-  const workspacePreviewHost = new WorkspacePreviewHost({
+  const localWorkspacePreviewHost = new WorkspacePreviewHost({
     domainPlugins: listMainWorkspacePreviewPluginContributions(catalog),
     loadSettings: () => store.load()
+  })
+  const workspacePreviewHost = new WorkspacePreviewPlacementRouter({
+    local: localWorkspacePreviewHost,
+    resolveWorkspaceHostSessionPort: (locator) => workspaceHostSessions.portFor(locator)
   })
   const resolveVisualInspector = async () => {
     const router = resolveRuntimeModelRouterSettings(await store.load())
@@ -1133,13 +1204,23 @@ app.whenReady().then(async () => {
   const controlledProcessService = new ControlledProcessService({
     log: (message, detail) => logError('controlled-process', message, detail)
   })
+  const workspacePlacement = new WorkspacePlacementRouter({
+    sessionManager: workspaceHostSessions,
+    localControlledProcesses: controlledProcessService
+  })
   const versionControlWorkspaceService = new VersionControlWorkspaceService()
-  app.once('will-quit', () => controlledProcessService.disposeAll())
+  const versionControlPlacement = new VersionControlPlacementFacade({
+    local: versionControlWorkspaceService,
+    workspacePlacement
+  })
+  app.once('will-quit', () => {
+    void workspacePlacement.disposeAll()
+  })
   const appCapabilityDependencies: AppCapabilityDependencies = {
-    controlledProcessService,
+    controlledProcessService: workspacePlacement,
     workspacePreviewHost,
     visibleContextService,
-    versionControlWorkspaceService
+    versionControlWorkspaceService: versionControlPlacement
   }
   const capabilityBroker = new CapabilityBroker(
     createApplicationCapabilityRegistry(catalog, appCapabilityDependencies)
@@ -1248,7 +1329,9 @@ app.whenReady().then(async () => {
   installElectronDomainNativeVisualSmoke(capabilityAgentTools)
   const capabilityIpcRegistration = registerCapabilityIpc({
     broker: capabilityBroker,
-    onCallerDestroyed: (callerId) => controlledProcessService.disposeOwner(callerId)
+    onCallerDestroyed: (callerId) => {
+      void workspacePlacement.disposeOwner(callerId)
+    }
   })
   const artifactConsumers = listMainAgentArtifactConsumers(catalog)
   const agentRuntimeHost = createAgentRuntimeHost({
@@ -1256,7 +1339,15 @@ app.whenReady().then(async () => {
     nativeVisualToolsAvailable: () => Boolean(capabilityAgentTools),
     artifactConsumers,
     adapters: [
-      createCodexAgentRuntimeAdapter(getCodexRuntime()),
+      createPlacementAwareAgentRuntimeAdapter(
+        createCodexAgentRuntimeAdapter(getCodexRuntime()),
+        createWorkspaceHostCodexAgentRuntimeAdapter((context) => {
+          if (!context.workspaceHost) {
+            throw new Error('Workspace Host Codex requires resolved placement metadata.')
+          }
+          return workspaceHostSessions.portFor(context.workspaceHost.locator)
+        })
+      ),
       createClaudeCodeAgentRuntimeAdapter(getClaudeCodeRuntime())
     ],
     services: {
@@ -1267,7 +1358,8 @@ app.whenReady().then(async () => {
       memory: sharedMemoryService,
       workspaceReferences: workspaceReferenceService,
       visibleContext: visibleContextService,
-      goals: runtimeGoalService
+      goals: runtimeGoalService,
+      workspaceHosts: workspaceHostSessions
     }
   })
   agentRuntimeHostRef.current = agentRuntimeHost
@@ -1522,7 +1614,6 @@ app.whenReady().then(async () => {
       computerUse: computerUsePatch,
       speechToText: speechToTextPatch,
       connectPhone: connectPhonePatch,
-      remoteExecutor: remoteExecutorPatch,
       ...restPatch
     } = partial
     const next = normalizeAppSettings({
@@ -1552,7 +1643,6 @@ app.whenReady().then(async () => {
       connectPhone: mergeConnectPhoneSettings(prev.connectPhone, connectPhonePatch),
       schedule: mergeScheduleSettings(prev.schedule, partial.schedule),
       workflow: mergeWorkflowSettings(prev.workflow, partial.workflow),
-      remoteExecutor: mergeRemoteExecutorSettings(prev.remoteExecutor, remoteExecutorPatch),
       guiUpdate: { ...prev.guiUpdate, ...(partial.guiUpdate ?? {}) }
     } as AppSettingsV1)
     if (prev.log.enabled !== next.log.enabled || prev.log.retentionDays !== next.log.retentionDays) {
@@ -1640,6 +1730,8 @@ app.whenReady().then(async () => {
     getModelAccessStatus: readModelAccessStatus,
     traces: fullTraceStore,
     agentRuntime: agentRuntimeHost,
+    remoteWorkspace: remoteWorkspaceController,
+    workspacePlacement,
     fetchUpstreamModels: fetchModels,
     getRemoteChannelRuntime: () => remoteChannelRuntime,
     getDiscordBotRuntime: () => discordBotRuntime,

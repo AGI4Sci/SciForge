@@ -11,7 +11,11 @@ import { clearedAgentFocusState } from './chat-store-focus-actions'
 
 type ThreadDetailProviderLike = {
   getThreadDetail: (threadId: string) => Promise<{ blocks: ChatBlock[] }>
-  rememberThreadRuntime?: (threadId: string, runtimeId?: NormalizedThread['runtimeId']) => void
+  rememberThreadRuntime?: (
+    threadId: string,
+    runtimeId?: NormalizedThread['runtimeId'],
+    workspaceLocator?: NormalizedThread['workspaceLocator']
+  ) => void
 }
 
 type ThreadRuntimeRememberingProviderLike = Pick<ThreadDetailProviderLike, 'rememberThreadRuntime'>
@@ -19,12 +23,17 @@ type ThreadRuntimeRememberingProviderLike = Pick<ThreadDetailProviderLike, 'reme
 export function rememberProviderThreadRuntime(
   provider: ThreadRuntimeRememberingProviderLike,
   threadId: string | null | undefined,
-  threads: Array<Pick<NormalizedThread, 'id' | 'runtimeId'>>
+  threads: Array<Pick<NormalizedThread, 'id' | 'runtimeId' | 'workspaceLocator'>>
 ): void {
   const normalizedThreadId = threadId?.trim()
   if (!normalizedThreadId) return
-  const runtimeId = threads.find((thread) => thread.id === normalizedThreadId)?.runtimeId
+  const thread = threads.find((candidate) => candidate.id === normalizedThreadId)
+  const runtimeId = thread?.runtimeId
   if (!runtimeId) return
+  if (thread.workspaceLocator) {
+    provider.rememberThreadRuntime?.(normalizedThreadId, runtimeId, thread.workspaceLocator)
+    return
+  }
   provider.rememberThreadRuntime?.(normalizedThreadId, runtimeId)
 }
 

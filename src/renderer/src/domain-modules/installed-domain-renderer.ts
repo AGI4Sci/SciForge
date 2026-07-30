@@ -31,7 +31,10 @@ const domainHost: DomainRendererHost = {
     await openSafeExternalUrl(url)
   },
   workspace: {
-    pickFile: (request) => window.sciforge.pickFile(request)
+    pickFile: (request) => window.sciforge.pickFile(request),
+    openRemoteSession: async (input) => {
+      await window.sciforge.remoteWorkspace.attach(input)
+    }
   },
   ...domainRendererNavigationHost,
   visibleContext: {

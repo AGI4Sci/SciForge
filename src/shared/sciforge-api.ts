@@ -52,13 +52,18 @@ import type {
   WorkspaceFileChangePayload,
   WorkspaceFileCreatePayload,
   WorkspaceFileCreateResult,
+  WorkspaceFileRangeReadPayload,
+  WorkspaceFileRangeReadResult,
   WorkspaceFileResolveResult,
   WorkspaceFileTarget,
   WorkspaceFileWatchPayload,
   WorkspaceFileWatchResult,
   WorkspaceFileWritePayload,
-  WorkspaceFileWriteResult
+  WorkspaceFileWriteResult,
+  WorkspaceTextSearchPayload,
+  WorkspaceTextSearchResult
 } from './workspace-file'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 import type {
   WorkspaceObservation,
   WorkspacePreviewArtifactDescriptor,
@@ -104,9 +109,7 @@ import type {
 } from './write-retrieval'
 import type {
   WriteExportPayload,
-  WriteExportResult,
-  WriteRichClipboardPayload,
-  WriteRichClipboardResult
+  WriteExportResult
 } from './write-export'
 import type {
   AgentRuntimeAuxiliaryInput,
@@ -138,6 +141,7 @@ import type {
   VisibleContextTargetRefRequest,
   VisibleContextTargetRefResult
 } from './visible-context'
+import type { RemoteWorkspaceApi } from './remote-workspace'
 import type {
   VisualStyleExtractRequest,
   VisualStyleExtractResult,
@@ -172,32 +176,38 @@ export type PathOpenResult = { ok: boolean; message?: string }
 export type AgentRuntimeEventSubscribeInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
   sinceSeq?: number
   streamId?: string
 }
 export type AgentRuntimeThreadRenameInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
   title: string
 }
 export type AgentRuntimeThreadDeleteInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
 }
 export type AgentRuntimeThreadCompactInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
   reason?: string
 }
 export type AgentRuntimeThreadForkInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
   relation?: AgentRuntimeThreadRelation
   title?: string
 }
 export type AgentRuntimeSessionResumeInput = {
   runtimeId: AgentRuntimeId
   sessionId: string
+  workspaceLocator?: WorkspaceLocator
   model?: string
   mode?: string
   maxResumeCount?: number
@@ -209,11 +219,13 @@ export type AgentRuntimeSessionResumeHandle = {
 export type AgentRuntimeThreadRelationInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
   relation: AgentRuntimeThreadRelation
 }
 export type AgentRuntimeApprovalResolveInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
   approvalId: string
   decision: 'allowed' | 'denied'
   message?: string
@@ -221,6 +233,7 @@ export type AgentRuntimeApprovalResolveInput = {
 export type AgentRuntimeUserInputResolveInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
   requestId: string
   answers: Array<{ id: string; label?: string; value: string }>
 }
@@ -634,6 +647,7 @@ export type PerformanceSnapshotResult =
 export type WorkspacePreviewOpenInput = {
   path: string
   workspaceRoot: string
+  workspaceLocator?: WorkspaceLocator
   mimeType?: string
   mode?: WorkspacePreviewSession['mode']
   line?: number
@@ -868,9 +882,20 @@ export type SciForgeApi = {
   listSkills: (workspaceRoot?: string) => Promise<SkillListResult>
   saveSkillFile: (rootPath: string, skillName: string, content: string) => Promise<SkillSaveResult>
   openSkillRoot: (rootPath: string) => Promise<PathOpenResult>
-  getGitBranches: (workspaceRoot: string) => Promise<GitBranchesResult>
-  switchGitBranch: (workspaceRoot: string, branch: string) => Promise<GitBranchesResult>
-  createAndSwitchGitBranch: (workspaceRoot: string, branch: string) => Promise<GitBranchesResult>
+  getGitBranches: (
+    workspaceRoot: string,
+    workspaceLocator?: WorkspaceLocator
+  ) => Promise<GitBranchesResult>
+  switchGitBranch: (
+    workspaceRoot: string,
+    branch: string,
+    workspaceLocator?: WorkspaceLocator
+  ) => Promise<GitBranchesResult>
+  createAndSwitchGitBranch: (
+    workspaceRoot: string,
+    branch: string,
+    workspaceLocator?: WorkspaceLocator
+  ) => Promise<GitBranchesResult>
   listEditors: () => Promise<EditorListResult>
   openEditorPath: (options: OpenEditorPathOptions) => Promise<EditorOpenResult>
   listWorkspaceDirectory: (options: WorkspaceDirectoryTarget) => Promise<WorkspaceDirectoryListResult>
@@ -878,6 +903,12 @@ export type SciForgeApi = {
   readWorkspaceFile: (options: WorkspaceFileTarget) => Promise<WorkspaceFileReadResult>
   readWorkspaceImage: (options: WorkspaceFileTarget) => Promise<WorkspaceImageReadResult>
   writeWorkspaceFile: (payload: WorkspaceFileWritePayload) => Promise<WorkspaceFileWriteResult>
+  readWorkspaceFileRange: (
+    payload: WorkspaceFileRangeReadPayload
+  ) => Promise<WorkspaceFileRangeReadResult>
+  searchWorkspaceText: (
+    payload: WorkspaceTextSearchPayload
+  ) => Promise<WorkspaceTextSearchResult>
   createWorkspaceFile: (payload: WorkspaceFileCreatePayload) => Promise<WorkspaceFileCreateResult>
   createWorkspaceDirectory: (
     payload: WorkspaceDirectoryCreatePayload
@@ -926,6 +957,7 @@ export type SciForgeApi = {
     }) => Promise<CapabilityResourceHandle>
     invoke: (input: {
       workspaceId?: string
+      workspaceLocator?: WorkspaceLocator
       request: CapabilityInvocationRequest
       approval?: { mode: 'confirmation' }
     }) => Promise<CapabilityInvocationResult>
@@ -954,9 +986,6 @@ export type SciForgeApi = {
   listWriteInlineCompletionDebugEntries: () => Promise<WriteInlineCompletionDebugEntry[]>
   clearWriteInlineCompletionDebugEntries: () => Promise<boolean>
   exportWriteDocument: (payload: WriteExportPayload) => Promise<WriteExportResult>
-  copyWriteDocumentAsRichText: (
-    payload: WriteRichClipboardPayload
-  ) => Promise<WriteRichClipboardResult>
   speechToText: {
     transcribe: (payload: SpeechTranscriptionRequest) => Promise<SpeechTranscriptionResult>
   }
@@ -978,6 +1007,7 @@ export type SciForgeApi = {
     onRefreshRequested: (handler: () => void) => () => void
     onCaptureStateChanged: (handler: (active: boolean) => void) => () => void
   }
+  remoteWorkspace: RemoteWorkspaceApi
   agentRuntime: {
     connect: (runtimeId?: AgentRuntimeThreadListInput['runtimeId']) => Promise<void>
     capabilities: (runtimeId?: AgentRuntimeThreadListInput['runtimeId']) => Promise<AgentRuntimeCapabilities>

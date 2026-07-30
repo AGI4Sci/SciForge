@@ -24,6 +24,9 @@ import {
   agentRuntimeEventSubscribePayloadSchema,
   agentRuntimeUserInputResolvePayloadSchema,
   agentRuntimeStartTurnPayloadSchema,
+  remoteWorkspaceAttachPayloadSchema,
+  remoteWorkspaceSelectPayloadSchema,
+  remoteWorkspaceSessionPayloadSchema,
   connectPhoneInstallQrPayloadSchema,
   connectPhoneInstallPollPayloadSchema,
   domainExtensionInstallPayloadSchema,
@@ -57,7 +60,6 @@ import {
   workspacePdfRenameSuggestionPayloadSchema,
   workspacePreviewOpenPayloadSchema,
   writeExportPayloadSchema,
-  writeRichClipboardPayloadSchema,
   writeInlineCompletionPayloadSchema,
   writeRetrievalPayloadSchema
 } from './app-ipc-schemas'
@@ -167,6 +169,25 @@ describe('app-ipc-schemas', () => {
       threadSource: 'pdf_annotation',
       sidebarVisibility: 'hidden'
     })
+  })
+
+  it('accepts only opaque authorized and attached Workspace Host identities', () => {
+    expect(remoteWorkspaceAttachPayloadSchema.parse({
+      providerId: ' remote-ssh.workspace-host-provider ',
+      authorizedSessionId: ' authorized-session-1 '
+    })).toEqual({
+      providerId: 'remote-ssh.workspace-host-provider',
+      authorizedSessionId: 'authorized-session-1'
+    })
+    expect(remoteWorkspaceSelectPayloadSchema.parse({ sessionId: null }))
+      .toEqual({ sessionId: null })
+    expect(remoteWorkspaceSessionPayloadSchema.parse({ sessionId: ' session-1 ' }))
+      .toEqual({ sessionId: 'session-1' })
+    expect(() => remoteWorkspaceAttachPayloadSchema.parse({
+      providerId: 'remote-ssh.workspace-host-provider',
+      authorizedSessionId: 'authorized-session-1',
+      workspaceRoot: '/must/not-cross-this-boundary'
+    })).toThrow()
   })
 
   it('accepts neutral agent runtime turn payloads', () => {
@@ -676,11 +697,21 @@ describe('app-ipc-schemas', () => {
     expect(workspacePreviewOpenPayloadSchema.parse({
       path: ' protein.PDB ',
       workspaceRoot: ' /tmp/workspace ',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'remote-session-1',
+        path: '/tmp/workspace'
+      },
       mimeType: ' chemical/x-pdb ',
       mode: ' inspect '
     })).toEqual({
       path: 'protein.PDB',
       workspaceRoot: '/tmp/workspace',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'remote-session-1',
+        path: '/tmp/workspace'
+      },
       mimeType: 'chemical/x-pdb',
       mode: 'inspect'
     })
@@ -802,47 +833,6 @@ describe('app-ipc-schemas', () => {
         model: '',
         language: '',
         timeoutMs: 60000
-      },
-      remoteExecutor: {
-        enabled: true,
-        defaultTargetId: 'hpc-1',
-        targets: [{
-          id: 'hpc-1',
-          label: 'HPC',
-          enabled: true,
-          kind: 'slurm',
-          remoteWorkspaceRoot: '/remote/workspace',
-          ssh: {
-            host: 'login.example.edu',
-            user: 'alice',
-            port: 22,
-            pythonPath: '/usr/bin/python3',
-            identityFile: '/Users/alice/.ssh/id_ed25519'
-          },
-          slurm: {
-            defaults: {
-              partition: 'gpu',
-              account: 'lab',
-              qos: 'normal',
-              timeLimit: '01:00:00',
-              nodes: 1,
-              ntasks: 1,
-              cpusPerTask: 8,
-              gpus: 1,
-              memory: '32G',
-              constraint: 'a100',
-              gres: 'gpu:a100:1',
-              extraArgs: ['--exclusive']
-            }
-          },
-          trustedWorkspaces: [{
-            workspaceRoot: '/repo/project',
-            targetFingerprint: 'fp-1',
-            trustedAt: '2026-01-01T00:00:00.000Z',
-            trustedBy: 'user',
-            approvalBypass: true
-          }]
-        }]
       }
     })
 
@@ -858,8 +848,6 @@ describe('app-ipc-schemas', () => {
     expect(payload.write?.inlineCompletion?.maxTokens).toBe(128)
     expect(payload.speechToText?.baseUrl).toBe('')
     expect(payload.modelRouter?.profiles?.default?.imageGenerator?.model).toBe('image-model')
-    expect(payload.remoteExecutor?.defaultTargetId).toBe('hpc-1')
-    expect(payload.remoteExecutor?.targets?.[0]?.slurm?.defaults?.extraArgs).toEqual(['--exclusive'])
   })
 
   it('accepts bounded Workbench toolbar placement settings', () => {
@@ -1301,6 +1289,16 @@ describe('app-ipc-schemas', () => {
           sciforge: {
             mysteryFlag: true
           }
+        }
+      })
+    ).toThrow(/Unrecognized key/)
+  })
+
+  it('rejects the retired Remote Executor settings path', () => {
+    expect(() =>
+      settingsPatchSchema.parse({
+        remoteExecutor: {
+          enabled: true
         }
       })
     ).toThrow(/Unrecognized key/)
@@ -1768,14 +1766,4 @@ describe('app-ipc-schemas', () => {
     }).format).toBe('tex')
   })
 
-  it('accepts write rich clipboard payloads', () => {
-    const payload = writeRichClipboardPayloadSchema.parse({
-      path: '/tmp/workspace/draft.md',
-      workspaceRoot: '/tmp/workspace',
-      content: '# Draft'
-    })
-
-    expect(payload.path).toBe('/tmp/workspace/draft.md')
-    expect(payload.content).toBe('# Draft')
-  })
 })

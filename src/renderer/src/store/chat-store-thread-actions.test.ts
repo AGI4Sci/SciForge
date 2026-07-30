@@ -576,6 +576,58 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.threads[0]?.id).toBe('thr_created_on_send')
   })
 
+  it('uses the attached workspace locator for remote thread creation and turn delivery', async () => {
+    const { actions, state } = buildHarness()
+    const workspaceLocator = {
+      contractVersion: 1 as const,
+      hostSessionId: 'workspace-session-1',
+      path: '/shared/remote-project'
+    }
+    const createdThread = {
+      ...thread('thr_remote'),
+      title: 'inspect remote data',
+      workspace: workspaceLocator.path,
+      workspaceLocator,
+      status: 'idle'
+    }
+    const provider = {
+      createThread: vi.fn(async () => createdThread),
+      sendUserMessage: vi.fn(async () => ({
+        threadId: 'thr_remote',
+        turnId: 'turn-remote',
+        userMessageItemId: 'runtime-user-remote'
+      })),
+      subscribeThreadEvents: vi.fn(async () => undefined),
+      renameThread: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.activeThreadId = null
+    state.workspaceLocator = workspaceLocator
+    state.workspaceRoot = '/workspace/local-project'
+    state.busy = false
+    state.blocks = []
+
+    await expect(actions.sendMessage('inspect remote data', 'agent', {
+      workspaceLocator
+    })).resolves.toBe(true)
+
+    expect(provider.createThread).toHaveBeenCalledWith({
+      workspace: workspaceLocator.path,
+      workspaceLocator,
+      title: 'inspect remote data',
+      mode: 'agent'
+    })
+    expect(provider.sendUserMessage).toHaveBeenCalledWith(
+      'thr_remote',
+      'inspect remote data',
+      expect.objectContaining({
+        workspace: workspaceLocator.path,
+        workspaceLocator,
+        displayText: 'inspect remote data'
+      })
+    )
+  })
+
   it('renders the final assistant response and clears busy when the runtime completes', async () => {
     const { actions, state } = buildHarness()
     const captured: { sink: ThreadEventSink | null } = { sink: null }

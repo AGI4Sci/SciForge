@@ -70,7 +70,7 @@ import {
   remoteGuardChannelTitle,
   remoteGuardProviderLabel
 } from './chat/RemoteGuardDetailView'
-import { ThreadTargetSelector } from './chat/ThreadTargetSelector'
+import { RemoteWorkspaceSelector } from './chat/RemoteWorkspaceSelector'
 import { SessionHeader } from './SessionHeader'
 import {
   SessionSddAssistantPanel,
@@ -136,6 +136,7 @@ import {
   relativeWorkspacePath,
 } from '../lib/composer-file-references'
 import { readComposerFileContextEntries as readComposerFileContextEntriesFromReferences } from '../lib/composer-file-context'
+import { withActiveWorkspaceLocator } from '../remote-workspace/placement'
 import {
   buildWorkspaceReferenceGroups,
   type WorkspaceReferenceGroup
@@ -654,7 +655,7 @@ export function Workbench(): ReactElement {
     remoteChannels,
     activeRemoteChannelId,
     remoteGuardChannelId,
-    remoteTargetId,
+    workspaceLocator,
     selectRemoteChannel,
     resetRemoteChannelSession,
     setRemoteChannelModel,
@@ -734,7 +735,7 @@ export function Workbench(): ReactElement {
       remoteChannels: s.remoteChannels,
       activeRemoteChannelId: s.activeRemoteChannelId,
       remoteGuardChannelId: s.remoteGuardChannelId,
-      remoteTargetId: s.remoteTargetId,
+      workspaceLocator: s.workspaceLocator,
       selectRemoteChannel: s.selectRemoteChannel,
       resetRemoteChannelSession: s.resetRemoteChannelSession,
       setRemoteChannelModel: s.setRemoteChannelModel,
@@ -925,8 +926,8 @@ export function Workbench(): ReactElement {
     activeRemoteBinding ||
     (activeThread && isRemoteChannelThread(activeThread, remoteChannels))
   )
-  const selectedRemoteTargetId =
-    route === 'chat' && !activeThreadIsRemoteChannel ? remoteTargetId?.trim() ?? '' : ''
+  const selectedWorkspaceLocator =
+    route === 'chat' && !activeThreadIsRemoteChannel ? workspaceLocator ?? undefined : undefined
   const activeRemoteComposerChannel = activeRemoteBinding
     ? remoteChannels.find((channel) => channel.id === activeRemoteBinding.channelId) ?? activeRemoteChannel
     : activeRemoteChannel
@@ -1994,6 +1995,7 @@ export function Workbench(): ReactElement {
       const provider = getProvider()
       const thread = await provider.createThread({
         workspace: normalizedWorkspace,
+        ...(workspaceLocator?.path === normalizedWorkspace ? { workspaceLocator } : {}),
         title: t('sddAssistant'),
         mode: 'agent'
       })
@@ -2361,9 +2363,10 @@ export function Workbench(): ReactElement {
     listWorkspaceReferences: async (input) => {
       const provider = getProvider()
       if (!provider.listWorkspaceReferences) return { ok: false, message: t('workspaceReferenceUnavailable') }
-      return provider.listWorkspaceReferences(input)
+      return provider.listWorkspaceReferences(withActiveWorkspaceLocator(input))
     },
-    readWorkspaceFile: (input) => window.sciforge.readWorkspaceFile(input)
+    readWorkspaceFile: (input) =>
+      window.sciforge.readWorkspaceFile(withActiveWorkspaceLocator(input))
   }, {
     maxCharsPerFile: COMPOSER_FILE_CONTEXT_MAX_CHARS_PER_FILE,
     maxTotalChars: COMPOSER_FILE_CONTEXT_MAX_TOTAL_CHARS,
@@ -2601,7 +2604,7 @@ export function Workbench(): ReactElement {
       void sendPlanTurn(prepared.text, {
         ...(prepared.displayText ? { displayText: prepared.displayText } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
-        ...(selectedRemoteTargetId ? { remoteTargetId: selectedRemoteTargetId } : {}),
+        ...(selectedWorkspaceLocator ? { workspaceLocator: selectedWorkspaceLocator } : {}),
         ...(attachmentIds.length ? { attachmentIds, attachments } : {}),
         ...(fileReferences.length ? { fileReferences } : {})
       })
@@ -2615,7 +2618,7 @@ export function Workbench(): ReactElement {
     void sendMessage(prepared.text, isImageGenerationIntent ? 'agent' : mode === 'plan' ? 'plan' : 'agent', {
       ...(prepared.displayText ? { displayText: prepared.displayText } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
-      ...(selectedRemoteTargetId ? { remoteTargetId: selectedRemoteTargetId } : {}),
+      ...(selectedWorkspaceLocator ? { workspaceLocator: selectedWorkspaceLocator } : {}),
       ...(attachmentIds.length ? { attachmentIds, attachments } : {}),
       ...(fileReferences.length ? { fileReferences } : {})
     })
@@ -2839,6 +2842,12 @@ export function Workbench(): ReactElement {
                           annotationQuestionBridge={annotationQuestionBridge}
                           onClose={closeOwnerFilePreview}
                           onOpenDirectory={openOwnerFileTreeDirectory}
+                          onOpenFile={(nextTarget) => {
+                            updateRightPanelWorkspace(ownerSessionId, {
+                              filePreviewTarget: nextTarget,
+                              mode: 'file'
+                            })
+                          }}
                         />
                       </div>
                     </div>
@@ -3143,7 +3152,7 @@ export function Workbench(): ReactElement {
                   ) : null}
                 </div>
                 <div className="chat-topbar-actions flex min-w-0 flex-wrap items-center justify-end gap-2 self-start">
-                  {!remoteGuardChannel ? <ThreadTargetSelector /> : null}
+                  {!remoteGuardChannel ? <RemoteWorkspaceSelector /> : null}
                   {(focusedAgentSurface?.busy ?? busy) ? (
                     <span className="inline-flex shrink-0 rounded-full bg-amber-500/16 px-2.5 py-1 text-[11.5px] font-semibold text-amber-950 dark:text-amber-100">
                       {t('running')}

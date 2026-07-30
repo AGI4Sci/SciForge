@@ -40,7 +40,7 @@ type PlanTurnOverrides = Pick<
   | 'guiPlan'
   | 'model'
   | 'reasoningEffort'
-  | 'remoteTargetId'
+  | 'workspaceLocator'
 > & {
   workspaceRoot?: string
 }
@@ -265,8 +265,8 @@ export function useWorkbenchPlanController({
     const planOverrides = buildGuiPlanTurnOverrides(currentPlan, targetWorkspaceRoot, owner)
     const { workspaceRoot: _workspaceRoot, ...messageOverrides } = overrides ?? {}
     const chatAtStart = useChatStore.getState()
-    const remoteTargetId = messageOverrides.remoteTargetId ?? (
-      chatAtStart.activeThreadId === owner ? chatAtStart.remoteTargetId : undefined
+    const workspaceLocator = messageOverrides.workspaceLocator ?? (
+      chatAtStart.activeThreadId === owner ? chatAtStart.workspaceLocator : undefined
     )
     const sourceRequest = extractPlanModeOriginalRequest(text)
     const guiPlan = messageOverrides.guiPlan ?? planOverrides?.guiPlan ?? buildDraftGuiPlanTurnOverrides({
@@ -282,7 +282,7 @@ export function useWorkbenchPlanController({
     try {
       const sent = await sendMessage(text, 'plan', {
         ...messageOverrides,
-        ...(remoteTargetId?.trim() ? { remoteTargetId: remoteTargetId.trim() } : {}),
+        ...(workspaceLocator ? { workspaceLocator } : {}),
         ...buildOwnerPlanSendScope(owner, targetWorkspaceRoot),
         guiPlan
       })

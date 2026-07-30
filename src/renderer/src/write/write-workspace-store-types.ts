@@ -1,5 +1,6 @@
 import type { WriteInlineCompletionSettingsV1 } from '@shared/app-settings'
 import type { WorkspaceEntry } from '@shared/workspace-file'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 import type { WriteEditorSelectionState } from '../components/write/WriteMarkdownEditor'
 import type { WriteQuotedSelection } from './quoted-selection'
 import type { WriteRecentEdit } from './recent-edits'
@@ -16,6 +17,7 @@ export type WriteWorkspaceState = {
   settingsLoading: boolean
   settingsError: string | null
   workspaceRoot: string
+  pinnedWorkspaceLocator: WorkspaceLocator | null
   rootDirectory: string
   entriesByDir: Record<string, WorkspaceEntry[]>
   expandedDirs: Set<string>
@@ -31,6 +33,7 @@ export type WriteWorkspaceState = {
   pdfMtimeMs: number
   fileSize: number
   fileTruncated: boolean
+  fileRevision: string | null
   fileError: string | null
   fileLoading: boolean
   saveStatus: WriteSaveStatus
@@ -57,6 +60,7 @@ export type WriteWorkspaceState = {
       content?: string
       size?: number
       truncated?: boolean
+      revision?: string
       message?: string
       animate?: boolean
       force?: boolean

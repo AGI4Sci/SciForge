@@ -14,6 +14,10 @@ import type {
   DomainRendererWorkspacePickResult
 } from './renderer-contributions.js'
 import type { DomainMainVisualCaptureHost } from './visual-capture.js'
+import type {
+  WorkspaceHostArtifact,
+  WorkspaceHostOpenRemoteSessionInput
+} from './workspace-host.js'
 export * from './agent-execution.js'
 export * from './power.js'
 export * from './renderer-contributions.js'
@@ -321,6 +325,9 @@ export type DomainRendererWorkspaceHost = Readonly<{
   pickFile: (
     request: DomainRendererWorkspaceFilePickerRequest
   ) => Promise<DomainRendererWorkspacePickResult>
+  openRemoteSession?: (
+    input: WorkspaceHostOpenRemoteSessionInput
+  ) => Promise<void>
 }>
 
 export type DomainRendererWorkbenchHost = Readonly<{
@@ -342,6 +349,9 @@ export type DomainRendererWorkbenchHost = Readonly<{
 export type DomainMainHost = Readonly<{
   getUserDataDir: () => string
   defineCapability: (options: unknown) => unknown
+  /** Opens one absolute local path with the operating system's configured application. */
+  openPath?: (path: string) => Promise<void>
+  resolveWorkspaceServerArtifact?: () => Promise<WorkspaceHostArtifact>
   capabilities?: DomainMainSystemCapabilityInvoker
   visualCapture?: DomainMainVisualCaptureHost
 }>

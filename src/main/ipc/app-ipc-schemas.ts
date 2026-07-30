@@ -60,6 +60,11 @@ import {
   domainPackagePublisherIdSchema,
   domainPackageVersionSchema
 } from '@sciforge/domain-sdk'
+import {
+  WORKSPACE_HOST_LIMITS,
+  workspaceHostResumeSchema,
+  workspaceLocatorSchema
+} from '@sciforge/domain-sdk/workspace-host'
 export {
   visibleContextCapturePreviewRequestSchema as visibleContextCapturePreviewPayloadSchema,
   visibleContextPublishInputSchema as visibleContextPublishPayloadSchema,
@@ -251,8 +256,23 @@ export const agentRuntimeConnectPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema.optional()
 }).strict()
 
+export const remoteWorkspaceAttachPayloadSchema = z.object({
+  providerId: trimmedString(MAX_ID_LENGTH),
+  authorizedSessionId: trimmedString(MAX_ID_LENGTH),
+  resume: workspaceHostResumeSchema.optional()
+}).strict()
+
+export const remoteWorkspaceSelectPayloadSchema = z.object({
+  sessionId: trimmedString(MAX_ID_LENGTH).nullable()
+}).strict()
+
+export const remoteWorkspaceSessionPayloadSchema = z.object({
+  sessionId: trimmedString(MAX_ID_LENGTH)
+}).strict()
+
 export const agentRuntimeListThreadsPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema.optional(),
+  workspaceLocator: workspaceLocatorSchema.optional(),
   limit: z.number().int().positive().max(500).optional(),
   search: z.string().trim().max(256).optional(),
   includeArchived: z.boolean().optional(),
@@ -265,6 +285,7 @@ export const agentRuntimeStartThreadPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
   threadId: optionalTrimmedString(MAX_ID_LENGTH),
   workspace: defaultPathSchema,
+  workspaceLocator: workspaceLocatorSchema.optional(),
   title: z.string().trim().max(200).optional(),
   mode: z.string().trim().max(64).optional(),
   model: z.string().trim().max(128).optional(),
@@ -277,7 +298,8 @@ export const agentRuntimeStartThreadPayloadSchema = z.object({
 
 export const agentRuntimeReadThreadPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
-  threadId: trimmedString(MAX_ID_LENGTH)
+  threadId: trimmedString(MAX_ID_LENGTH),
+  workspaceLocator: workspaceLocatorSchema.optional()
 }).strict()
 
 export const agentRuntimeReadThreadSidebarProbePayloadSchema = agentRuntimeReadThreadPayloadSchema
@@ -289,10 +311,10 @@ export const agentRuntimeStartTurnPayloadSchema = z.object({
   clientDirectiveId: optionalTrimmedString(MAX_ID_LENGTH),
   executionIntent: agentRuntimeExecutionIntentSchema.optional(),
   workspace: defaultPathSchema,
+  workspaceLocator: workspaceLocatorSchema.optional(),
   mode: z.string().trim().max(64).optional(),
   model: z.string().trim().max(128).optional(),
   reasoningEffort: z.string().trim().max(64).optional(),
-  remoteTargetId: z.string().trim().max(MAX_ID_LENGTH).optional(),
   governanceProfile: agentRuntimeGovernanceProfileSchema.optional(),
   displayText: z.string().trim().max(MAX_CHANNEL_TEXT_LENGTH).optional(),
   visibleContextOwnerThreadId: optionalTrimmedString(MAX_ID_LENGTH),
@@ -312,6 +334,7 @@ export const agentRuntimeTurnTargetPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
   threadId: trimmedString(MAX_ID_LENGTH),
   turnId: trimmedString(MAX_ID_LENGTH),
+  workspaceLocator: workspaceLocatorSchema.optional(),
   discard: z.boolean().optional()
 }).strict()
 
@@ -319,6 +342,7 @@ export const agentRuntimeTurnSteerPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
   threadId: trimmedString(MAX_ID_LENGTH),
   turnId: trimmedString(MAX_ID_LENGTH),
+  workspaceLocator: workspaceLocatorSchema.optional(),
   text: z.string().trim().min(1).max(MAX_CHANNEL_TEXT_LENGTH),
   clientDirectiveId: optionalTrimmedString(MAX_ID_LENGTH),
   executionIntent: agentRuntimeExecutionIntentSchema.optional()
@@ -327,6 +351,7 @@ export const agentRuntimeTurnSteerPayloadSchema = z.object({
 export const agentRuntimeEventSubscribePayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
   threadId: trimmedString(MAX_ID_LENGTH),
+  workspaceLocator: workspaceLocatorSchema.optional(),
   sinceSeq: z.number().int().nonnegative().optional(),
   streamId: optionalTrimmedString(MAX_ID_LENGTH)
 }).strict()
@@ -334,23 +359,27 @@ export const agentRuntimeEventSubscribePayloadSchema = z.object({
 export const agentRuntimeThreadRenamePayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
   threadId: trimmedString(MAX_ID_LENGTH),
-  title: z.string().trim().min(1).max(200)
+  title: z.string().trim().min(1).max(200),
+  workspaceLocator: workspaceLocatorSchema.optional()
 }).strict()
 
 export const agentRuntimeThreadDeletePayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
-  threadId: trimmedString(MAX_ID_LENGTH)
+  threadId: trimmedString(MAX_ID_LENGTH),
+  workspaceLocator: workspaceLocatorSchema.optional()
 }).strict()
 
 export const agentRuntimeThreadCompactPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
   threadId: trimmedString(MAX_ID_LENGTH),
+  workspaceLocator: workspaceLocatorSchema.optional(),
   reason: z.string().trim().max(MAX_CHANNEL_TEXT_LENGTH).optional()
 }).strict()
 
 export const agentRuntimeThreadForkPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
   threadId: trimmedString(MAX_ID_LENGTH),
+  workspaceLocator: workspaceLocatorSchema.optional(),
   relation: agentRuntimeThreadRelationSchema.optional(),
   title: z.string().trim().max(200).optional()
 }).strict()
@@ -360,13 +389,15 @@ export const agentRuntimeSessionResumePayloadSchema = z.object({
   sessionId: trimmedString(MAX_ID_LENGTH),
   model: z.string().trim().max(128).optional(),
   mode: z.string().trim().max(64).optional(),
-  maxResumeCount: z.number().int().positive().max(1_000).optional()
+  maxResumeCount: z.number().int().positive().max(1_000).optional(),
+  workspaceLocator: workspaceLocatorSchema.optional()
 }).strict()
 
 export const agentRuntimeThreadRelationPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
   threadId: trimmedString(MAX_ID_LENGTH),
-  relation: agentRuntimeThreadRelationSchema
+  relation: agentRuntimeThreadRelationSchema,
+  workspaceLocator: workspaceLocatorSchema.optional()
 }).strict()
 
 export const agentRuntimeUsagePayloadSchema = z.object({
@@ -375,19 +406,22 @@ export const agentRuntimeUsagePayloadSchema = z.object({
   from: z.string().trim().max(64).optional(),
   to: z.string().trim().max(64).optional(),
   timezone: z.string().trim().max(128).optional(),
-  threadId: optionalTrimmedString(MAX_ID_LENGTH)
+  threadId: optionalTrimmedString(MAX_ID_LENGTH),
+  workspaceLocator: workspaceLocatorSchema.optional()
 }).strict()
 
 const agentRuntimeAuxiliaryRuntimeScopedPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
   operation: agentRuntimeAuxiliaryOperationSchema,
-  payload: agentRuntimeAuxiliaryPayloadRecordSchema
+  payload: agentRuntimeAuxiliaryPayloadRecordSchema,
+  workspaceLocator: workspaceLocatorSchema.optional()
 }).strict()
 
 const agentRuntimeAuxiliaryActiveScopedPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema.optional(),
   operation: agentRuntimeAuxiliaryActiveScopedOperationSchema,
-  payload: agentRuntimeAuxiliaryPayloadRecordSchema
+  payload: agentRuntimeAuxiliaryPayloadRecordSchema,
+  workspaceLocator: workspaceLocatorSchema.optional()
 }).strict()
 
 export const agentRuntimeAuxiliaryPayloadSchema = z.union([
@@ -400,13 +434,15 @@ export const agentRuntimeApprovalResolvePayloadSchema = z.object({
   threadId: trimmedString(MAX_ID_LENGTH),
   approvalId: trimmedString(MAX_ID_LENGTH),
   decision: z.enum(['allowed', 'denied']),
-  message: z.string().trim().max(MAX_CHANNEL_TEXT_LENGTH).optional()
+  message: z.string().trim().max(MAX_CHANNEL_TEXT_LENGTH).optional(),
+  workspaceLocator: workspaceLocatorSchema.optional()
 }).strict()
 
 export const agentRuntimeUserInputResolvePayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
   threadId: trimmedString(MAX_ID_LENGTH),
   requestId: trimmedString(MAX_ID_LENGTH),
+  workspaceLocator: workspaceLocatorSchema.optional(),
   answers: z.array(z.object({
     id: trimmedString(MAX_ID_LENGTH),
     label: z.string().trim().max(200).optional(),
@@ -1390,58 +1426,6 @@ const workflowSettingsPatchSchema = z
   })
   .strict()
 
-const remoteExecutorSshSettingsPatchSchema = z.object({
-  host: optionalTrimmedString(512),
-  user: optionalTrimmedString(256),
-  port: z.number().int().min(1).max(65_535).optional(),
-  pythonPath: defaultPathSchema,
-  identityFile: defaultPathSchema
-}).strict()
-
-const remoteExecutorSlurmDefaultsPatchSchema = z.object({
-  partition: optionalTrimmedString(256),
-  account: optionalTrimmedString(256),
-  qos: optionalTrimmedString(256),
-  timeLimit: optionalTrimmedString(128),
-  nodes: z.number().int().positive().max(1_000_000).optional(),
-  ntasks: z.number().int().positive().max(1_000_000).optional(),
-  cpusPerTask: z.number().int().positive().max(1_000_000).optional(),
-  gpus: z.number().int().positive().max(1_000_000).optional(),
-  memory: optionalTrimmedString(128),
-  constraint: optionalTrimmedString(512),
-  gres: optionalTrimmedString(512),
-  extraArgs: z.array(z.string().trim().max(512)).max(100).optional()
-}).strict()
-
-const remoteExecutorSlurmSettingsPatchSchema = z.object({
-  defaults: remoteExecutorSlurmDefaultsPatchSchema.optional()
-}).strict()
-
-const remoteExecutorTrustedWorkspacePatchSchema = z.object({
-  workspaceRoot: defaultPathSchema,
-  targetFingerprint: optionalTrimmedString(512),
-  trustedAt: optionalTrimmedString(128),
-  trustedBy: optionalTrimmedString(256),
-  approvalBypass: z.literal(true).optional()
-}).strict()
-
-const remoteExecutorTargetPatchSchema = z.object({
-  id: optionalTrimmedString(128),
-  label: optionalTrimmedString(256),
-  enabled: z.boolean().optional(),
-  kind: z.enum(['ssh', 'slurm']).optional(),
-  ssh: remoteExecutorSshSettingsPatchSchema.optional(),
-  remoteWorkspaceRoot: defaultPathSchema,
-  slurm: remoteExecutorSlurmSettingsPatchSchema.optional(),
-  trustedWorkspaces: z.array(remoteExecutorTrustedWorkspacePatchSchema).max(200).optional()
-}).strict()
-
-const remoteExecutorSettingsPatchSchema = z.object({
-  enabled: z.boolean().optional(),
-  defaultTargetId: optionalTrimmedString(128),
-  targets: z.array(remoteExecutorTargetPatchSchema).max(100).optional()
-}).strict()
-
 const settingsPatchObjectSchema = z.object({
   version: z.literal(1).optional(),
   installationId: z.string().max(128).optional(),
@@ -1479,7 +1463,6 @@ const settingsPatchObjectSchema = z.object({
   connectPhone: connectPhoneSettingsPatchSchema.optional(),
   schedule: scheduleSettingsPatchSchema.optional(),
   workflow: workflowSettingsPatchSchema.optional(),
-  remoteExecutor: remoteExecutorSettingsPatchSchema.optional(),
   guiUpdate: z.object({
     channel: z.enum(GUI_UPDATE_CHANNELS).optional()
   }).strict().optional(),
@@ -1692,10 +1675,17 @@ export const pptMasterMcpConfigPayloadSchema = z
 
 export const rootPathSchema = trimmedString(MAX_PATH_LENGTH)
 export const workspaceRootSchema = trimmedString(MAX_PATH_LENGTH)
+export const gitWorkspacePayloadSchema = z
+  .object({
+    workspaceRoot: workspaceRootSchema,
+    workspaceLocator: workspaceLocatorSchema.optional()
+  })
+  .strict()
 export const gitBranchPayloadSchema = z
   .object({
     workspaceRoot: workspaceRootSchema,
-    branch: trimmedString(MAX_BRANCH_LENGTH)
+    branch: trimmedString(MAX_BRANCH_LENGTH),
+    workspaceLocator: workspaceLocatorSchema.optional()
   })
   .strict()
 
@@ -1703,6 +1693,7 @@ export const openEditorPathPayloadSchema = z
   .object({
     path: trimmedString(MAX_PATH_LENGTH),
     workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
+    workspaceLocator: workspaceLocatorSchema.optional(),
     editorId: optionalTrimmedString(MAX_EDITOR_ID_LENGTH),
     line: z.number().int().positive().max(1_000_000).optional(),
     column: z.number().int().positive().max(1_000_000).optional(),
@@ -1716,6 +1707,7 @@ export const workspaceFileTargetPayloadSchema = z
   .object({
     path: trimmedString(MAX_PATH_LENGTH),
     workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
+    workspaceLocator: workspaceLocatorSchema.optional(),
     line: z.number().int().positive().max(1_000_000).optional(),
     column: z.number().int().positive().max(1_000_000).optional()
   })
@@ -1725,6 +1717,7 @@ export const workspacePreviewOpenPayloadSchema = z
   .object({
     path: trimmedString(MAX_PATH_LENGTH),
     workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    workspaceLocator: workspaceLocatorSchema.optional(),
     mimeType: optionalTrimmedString(MAX_MIME_TYPE_LENGTH),
     mode: z.string().trim().pipe(workspacePreviewModeSchema).optional(),
     line: z.number().int().positive().max(1_000_000).optional(),
@@ -1738,7 +1731,8 @@ export const workspacePreviewOpenPayloadSchema = z
 export const workspaceDirectoryTargetPayloadSchema = z
   .object({
     path: optionalTrimmedString(MAX_PATH_LENGTH),
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH)
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    workspaceLocator: workspaceLocatorSchema.optional()
   })
   .strict()
 
@@ -1747,7 +1741,9 @@ export const workspaceFileWritePayloadSchema = z
     path: trimmedString(MAX_PATH_LENGTH),
     workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
     content: z.string().max(MAX_BODY_BYTES).optional(),
-    contentBase64: z.string().max(MAX_WORKSPACE_BINARY_BODY_BASE64_CHARS).optional()
+    contentBase64: z.string().max(MAX_WORKSPACE_BINARY_BODY_BASE64_CHARS).optional(),
+    expectedRevision: z.string().trim().min(1).max(512).optional(),
+    workspaceLocator: workspaceLocatorSchema.optional()
   })
   .refine((payload) => payload.content !== undefined || payload.contentBase64 !== undefined, {
     message: 'Either content or contentBase64 is required.'
@@ -1758,14 +1754,16 @@ export const workspaceFileCreatePayloadSchema = z
   .object({
     path: trimmedString(MAX_PATH_LENGTH),
     workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    content: z.string().max(MAX_BODY_BYTES).optional()
+    content: z.string().max(MAX_BODY_BYTES).optional(),
+    workspaceLocator: workspaceLocatorSchema.optional()
   })
   .strict()
 
 export const workspaceDirectoryCreatePayloadSchema = z
   .object({
     path: trimmedString(MAX_PATH_LENGTH),
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH)
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    workspaceLocator: workspaceLocatorSchema.optional()
   })
   .strict()
 
@@ -1773,7 +1771,8 @@ export const workspaceClipboardImageSavePayloadSchema = z
   .object({
     workspaceRoot: trimmedString(MAX_PATH_LENGTH),
     currentFilePath: trimmedString(MAX_PATH_LENGTH),
-    imageDirectory: optionalTrimmedString(MAX_PATH_LENGTH)
+    imageDirectory: optionalTrimmedString(MAX_PATH_LENGTH),
+    workspaceLocator: workspaceLocatorSchema.optional()
   })
   .strict()
 
@@ -1781,7 +1780,8 @@ export const workspaceClipboardPastePayloadSchema = z
   .object({
     workspaceRoot: trimmedString(MAX_PATH_LENGTH),
     targetDirectory: z.string().trim().max(MAX_PATH_LENGTH),
-    conflictPolicy: workspaceFileConflictPolicySchema.optional()
+    conflictPolicy: workspaceFileConflictPolicySchema.optional(),
+    workspaceLocator: workspaceLocatorSchema.optional()
   })
   .strict()
 
@@ -1789,14 +1789,16 @@ export const workspaceEntryRenamePayloadSchema = z
   .object({
     path: trimmedString(MAX_PATH_LENGTH),
     workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    newName: trimmedString(255)
+    newName: trimmedString(255),
+    workspaceLocator: workspaceLocatorSchema.optional()
   })
   .strict()
 
 export const workspacePdfRenameSuggestionPayloadSchema = z
   .object({
     path: trimmedString(MAX_PATH_LENGTH),
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH)
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    workspaceLocator: workspaceLocatorSchema.optional()
   })
   .strict()
 
@@ -1806,7 +1808,8 @@ export const workspaceEntryCopyPayloadSchema = z
     sourceWorkspaceRoot: trimmedString(MAX_PATH_LENGTH),
     targetDirectory: z.string().trim().max(MAX_PATH_LENGTH),
     targetWorkspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    conflictPolicy: workspaceFileConflictPolicySchema.optional()
+    conflictPolicy: workspaceFileConflictPolicySchema.optional(),
+    workspaceLocator: workspaceLocatorSchema.optional()
   })
   .strict()
 
@@ -1815,7 +1818,8 @@ export const workspaceEntryImportPayloadSchema = z
     sourcePaths: z.array(trimmedString(MAX_PATH_LENGTH)).min(1).max(512),
     targetDirectory: z.string().trim().max(MAX_PATH_LENGTH),
     targetWorkspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    conflictPolicy: workspaceFileConflictPolicySchema.optional()
+    conflictPolicy: workspaceFileConflictPolicySchema.optional(),
+    workspaceLocator: workspaceLocatorSchema.optional()
   })
   .strict()
 
@@ -1825,23 +1829,44 @@ export const workspaceEntryMovePayloadSchema = z
     sourceWorkspaceRoot: trimmedString(MAX_PATH_LENGTH),
     targetDirectory: z.string().trim().max(MAX_PATH_LENGTH),
     targetWorkspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    conflictPolicy: workspaceFileConflictPolicySchema.optional()
+    conflictPolicy: workspaceFileConflictPolicySchema.optional(),
+    workspaceLocator: workspaceLocatorSchema.optional()
   })
   .strict()
 
 export const workspaceEntryDeletePayloadSchema = z
   .object({
     path: trimmedString(MAX_PATH_LENGTH),
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH)
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    workspaceLocator: workspaceLocatorSchema.optional()
   })
   .strict()
 
 export const workspaceFileWatchPayloadSchema = z
   .object({
     path: trimmedString(MAX_PATH_LENGTH),
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH)
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    workspaceLocator: workspaceLocatorSchema.optional()
   })
   .strict()
+
+export const workspaceFileRangeReadPayloadSchema = z.object({
+  path: trimmedString(MAX_PATH_LENGTH),
+  workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+  offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  length: z.number().int().positive().max(WORKSPACE_HOST_LIMITS.maxInlineBinaryBytes),
+  workspaceLocator: workspaceLocatorSchema.optional()
+}).strict()
+
+export const workspaceTextSearchPayloadSchema = z.object({
+  workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+  query: z.string().min(1).max(10_000),
+  path: optionalTrimmedString(MAX_PATH_LENGTH),
+  glob: z.string().min(1).max(1_024).optional(),
+  caseSensitive: z.boolean().optional(),
+  maxResults: z.number().int().min(1).max(10_000).optional(),
+  workspaceLocator: workspaceLocatorSchema.optional()
+}).strict()
 
 export const writeExportPayloadSchema = z
   .object({
@@ -1852,14 +1877,6 @@ export const writeExportPayloadSchema = z
     threadId: optionalTrimmedString(MAX_ID_LENGTH),
     runtimeId: agentRuntimeIdSchema.optional(),
     overrideConfirmed: z.boolean().optional()
-  })
-  .strict()
-
-export const writeRichClipboardPayloadSchema = z
-  .object({
-    path: trimmedString(MAX_PATH_LENGTH),
-    workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
-    content: z.string().max(MAX_BODY_BYTES)
   })
   .strict()
 

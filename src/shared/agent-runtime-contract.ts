@@ -1,4 +1,5 @@
 import type { ExecutionReceipt } from '@sciforge/execution-governance'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 
 export type AgentRuntimeId = 'sciforge' | 'codex' | 'claude'
 
@@ -424,6 +425,7 @@ export type AgentRuntimeThread = {
   model?: string
   mode?: string
   workspace?: string
+  workspaceLocator?: WorkspaceLocator
   status?: string
   archived?: boolean
   preview?: string
@@ -473,6 +475,7 @@ export type AgentRuntimeTurnHandle = {
 
 export type AgentRuntimeThreadListInput = {
   runtimeId?: AgentRuntimeId
+  workspaceLocator?: WorkspaceLocator
   limit?: number
   search?: string
   includeArchived?: boolean
@@ -485,6 +488,7 @@ export type AgentRuntimeThreadStartInput = {
   runtimeId: AgentRuntimeId
   threadId?: string
   workspace?: string
+  workspaceLocator?: WorkspaceLocator
   title?: string
   mode?: string
   model?: string
@@ -498,6 +502,7 @@ export type AgentRuntimeThreadStartInput = {
 export type AgentRuntimeThreadReadInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type AgentRuntimeThreadSidebarProbe = {
@@ -563,10 +568,10 @@ export type AgentRuntimeTurnStartInput = {
   executionIntent?: AgentRuntimeExecutionIntent
   metadata?: Record<string, unknown>
   workspace?: string
+  workspaceLocator?: WorkspaceLocator
   mode?: string
   model?: string
   reasoningEffort?: string
-  remoteTargetId?: string
   governanceProfile?: AgentRuntimeGovernanceProfile
   displayText?: string
   visibleContextOwnerThreadId?: string
@@ -594,6 +599,7 @@ export type AgentRuntimeTurnTargetInput = {
   runtimeId: AgentRuntimeId
   threadId: string
   turnId: string
+  workspaceLocator?: WorkspaceLocator
   discard?: boolean
 }
 
@@ -601,6 +607,7 @@ export type AgentRuntimeTurnSteerInput = {
   runtimeId: AgentRuntimeId
   threadId: string
   turnId: string
+  workspaceLocator?: WorkspaceLocator
   text: string
   clientDirectiveId?: string
   executionIntent?: AgentRuntimeExecutionIntent
@@ -626,6 +633,7 @@ export type AgentRuntimeUsageQuery = {
   to?: string
   timezone?: string
   threadId?: string
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type AgentRuntimeUsageResponse =
@@ -908,6 +916,7 @@ export type AgentRuntimeAuxiliaryActiveScopedOperation = Exclude<
 type AgentRuntimeAuxiliaryInputBase<Operation extends AgentRuntimeAuxiliaryOperation> = {
   operation: Operation
   payload?: Record<string, unknown>
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type AgentRuntimeAuxiliaryThreadBoundInput = {

@@ -37,6 +37,14 @@ const definition: TrustedDomainPackageDefinitionInput = {
         id: 'fixture.domain-process-probe.renderer',
         kind: 'fixture.callable-renderer'
       }]
+    },
+    {
+      process: 'workspace-server',
+      export: './workspace-server',
+      contributions: [{
+        id: 'fixture.domain-process-probe.workspace-server',
+        kind: 'fixture.callable-workspace-server'
+      }]
     }
   ]
 }
@@ -60,17 +68,33 @@ describe('process-separated installed domain entries', () => {
         value: (name: string) => ({ rendered: name })
       }]
     }])
+    const workspaceServer = defineInstalledDomainProcessEntrySet(installed, 'workspace-server', [{
+      definition,
+      contributions: [{
+        id: 'fixture.domain-process-probe.workspace-server',
+        kind: 'fixture.callable-workspace-server',
+        value: (path: string) => ({ observed: path })
+      }]
+    }])
 
     assert.equal(main.contributions[0]?.value(), 'main-called')
     assert.deepEqual(renderer.contributions[0]?.value('fixture'), { rendered: 'fixture' })
+    assert.deepEqual(workspaceServer.contributions[0]?.value('/remote/data'), {
+      observed: '/remote/data'
+    })
     assert.equal(main.entries[0]?.process, 'main')
     assert.equal(renderer.entries[0]?.process, 'renderer')
+    assert.equal(workspaceServer.entries[0]?.process, 'workspace-server')
   })
 
   it('removes each process projection when its authoritative definition is removed', () => {
     const removed = defineInstalledDomainPackageSet([])
     assert.deepEqual(defineInstalledDomainProcessEntrySet(removed, 'main', []).entries, [])
     assert.deepEqual(defineInstalledDomainProcessEntrySet(removed, 'renderer', []).entries, [])
+    assert.deepEqual(
+      defineInstalledDomainProcessEntrySet(removed, 'workspace-server', []).entries,
+      []
+    )
   })
 
   it('rejects missing, unexpected, or mismatched process entries', () => {

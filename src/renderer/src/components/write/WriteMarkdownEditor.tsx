@@ -20,6 +20,8 @@ import {
   buildWriteTermPropagationChanges,
   type WriteTermReplacementSeed
 } from '../../write/term-propagation'
+import { withPinnedWorkspaceLocator } from '../../remote-workspace/placement'
+import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
 
 export type {
   WriteEditorSelectionState,
@@ -345,14 +347,26 @@ export function WriteMarkdownEditor({
             if (typeof window.sciforge?.saveWorkspaceClipboardImage !== 'function') return false
 
             event.preventDefault()
+            let input
+            try {
+              input = withPinnedWorkspaceLocator(
+                {
+                  workspaceRoot: nextWorkspaceRoot,
+                  currentFilePath: nextFilePath,
+                  ...(imageDirectoryRef.current.trim()
+                    ? { imageDirectory: imageDirectoryRef.current.trim() }
+                    : {})
+                },
+                useWriteWorkspaceStore.getState().pinnedWorkspaceLocator
+              )
+            } catch (error) {
+              onImagePasteErrorRef.current?.(
+                error instanceof Error ? error.message : String(error)
+              )
+              return true
+            }
             void window.sciforge
-              .saveWorkspaceClipboardImage({
-                workspaceRoot: nextWorkspaceRoot,
-                currentFilePath: nextFilePath,
-                ...(imageDirectoryRef.current.trim()
-                  ? { imageDirectory: imageDirectoryRef.current.trim() }
-                  : {})
-              })
+              .saveWorkspaceClipboardImage(input)
               .then((result) => {
                 if (!result.ok) {
                   onImagePasteErrorRef.current?.(result.message)

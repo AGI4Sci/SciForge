@@ -20,7 +20,8 @@ describe('workspace PDF auto rename fallback', () => {
       mimeType: 'application/pdf',
       size: bytes.length,
       truncated: false,
-      mtimeMs: 1
+      mtimeMs: 1,
+      revision: 'revision-1'
     }, '2603.10165v2.pdf')
 
     expect(result).toEqual({

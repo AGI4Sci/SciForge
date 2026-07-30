@@ -146,6 +146,16 @@ function createApi(): SciForgeApi {
     getSettings: () => invoke('settings:get'),
     setSettings: (partial) => invoke('settings:set', partial),
     onSettingsChanged,
+    remoteWorkspace: {
+      list: () => invoke('remoteWorkspace:list'),
+      get: () => invoke('remoteWorkspace:get'),
+      attach: (input) => invoke('remoteWorkspace:attach', input),
+      select: (input) => invoke('remoteWorkspace:select', input),
+      reconnect: (input) => invoke('remoteWorkspace:reconnect', input),
+      close: (input) => invoke('remoteWorkspace:close', input),
+      onSnapshotChanged: (handler) =>
+        onChannel('remoteWorkspace:snapshot-changed', handler)
+    },
     getModelAccessStatus: () => invoke('modelAccess:status'),
     fetchUpstreamModels: () => invoke('upstream:models'),
     traces: {
@@ -232,11 +242,22 @@ function createApi(): SciForgeApi {
     saveSkillFile: (rootPath, skillName, content) =>
       invoke('skill:save-file', { rootPath, skillName, content }),
     openSkillRoot: (rootPath) => invoke('skill:open-root', rootPath),
-    getGitBranches: (workspaceRoot) => invoke('git:branches', workspaceRoot),
-    switchGitBranch: (workspaceRoot, branch) =>
-      invoke('git:switch-branch', { workspaceRoot, branch }),
-    createAndSwitchGitBranch: (workspaceRoot, branch) =>
-      invoke('git:create-and-switch-branch', { workspaceRoot, branch }),
+    getGitBranches: (workspaceRoot, workspaceLocator) => invoke('git:branches', {
+      workspaceRoot,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    }),
+    switchGitBranch: (workspaceRoot, branch, workspaceLocator) =>
+      invoke('git:switch-branch', {
+        workspaceRoot,
+        branch,
+        ...(workspaceLocator ? { workspaceLocator } : {})
+      }),
+    createAndSwitchGitBranch: (workspaceRoot, branch, workspaceLocator) =>
+      invoke('git:create-and-switch-branch', {
+        workspaceRoot,
+        branch,
+        ...(workspaceLocator ? { workspaceLocator } : {})
+      }),
     listEditors: () => invoke('editor:list'),
     openEditorPath: (options) => invoke('editor:open-path', options),
     listWorkspaceDirectory: (options) => invoke('file:list-workspace-directory', options),
@@ -244,6 +265,8 @@ function createApi(): SciForgeApi {
     readWorkspaceFile: (options) => invoke('file:read-workspace', options),
     readWorkspaceImage: (options) => invoke('file:read-workspace-image', options),
     writeWorkspaceFile: (payload) => invoke('file:write-workspace', payload),
+    readWorkspaceFileRange: (payload) => invoke('file:read-workspace-range', payload),
+    searchWorkspaceText: (payload) => invoke('file:search-workspace-text', payload),
     createWorkspaceFile: (payload) => invoke('file:create-workspace', payload),
     createWorkspaceDirectory: (payload) => invoke('file:create-workspace-directory', payload),
     saveWorkspaceClipboardImage: (payload) => invoke('file:save-workspace-clipboard-image', payload),
@@ -281,7 +304,6 @@ function createApi(): SciForgeApi {
     listWriteInlineCompletionDebugEntries: () => invoke('write:inline-completion-debug:list'),
     clearWriteInlineCompletionDebugEntries: () => invoke('write:inline-completion-debug:clear'),
     exportWriteDocument: (payload) => invoke('write:export', payload),
-    copyWriteDocumentAsRichText: (payload) => invoke('write:copy-rich-text', payload),
     visibleContext: {
       publish: (snapshot) => invoke('visibleContext:publish', snapshot),
       get: () => invoke('visibleContext:get'),

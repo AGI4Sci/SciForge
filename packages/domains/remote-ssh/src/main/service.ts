@@ -11,7 +11,9 @@ import {
   writeFile
 } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { Transform, type TransformCallback } from 'node:stream'
+import { connect as connectTcp } from 'node:net'
+import { homedir } from 'node:os'
+import { Duplex, Transform, Writable, type TransformCallback } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { isDeepStrictEqual } from 'node:util'
 import {
@@ -21,6 +23,20 @@ import {
 } from '@sciforge/domain-sdk/node/workspace-paths'
 import { resolveElectronRunAsNodeExecutable } from '@sciforge/domain-sdk/node/electron-node-executable'
 import { z } from 'zod'
+import {
+  workspaceHostProviderAttachInputSchema,
+  type WorkspaceHostClient,
+  type WorkspaceHostModelAccessLease,
+  type WorkspaceHostModelAccessProvider,
+  type WorkspaceHostProviderAttachInput,
+  type WorkspaceHostProviderContext
+} from '@sciforge/domain-sdk/workspace-host'
+import {
+  WorkspaceEgressService,
+  type ResolvedWorkspaceEgressRoute,
+  type WorkspaceEgressLease,
+  type WorkspaceEgressRouteResolver
+} from '@sciforge/workspace-egress'
 import {
   REMOTE_SSH_MAX_CAPTURED_OUTPUT_CHARACTERS,
   REMOTE_SSH_SCHEMA_VERSION,
@@ -48,6 +64,7 @@ import {
   type RemoteSshFileDownloadResult,
   type RemoteSshFileUploadInput,
   type RemoteSshFileUploadResult,
+  type RemoteSshEgressSessionOpenResult,
   type RemoteSshFileTransferResult,
   type RemoteSshLab,
   type RemoteSshLabDeleteInput,
@@ -57,6 +74,7 @@ import {
   type RemoteSshLabListResult,
   type RemoteSshLabSaveInput,
   type RemoteSshLabSaveResult,
+  type RemoteSshOpenConfigResult,
   type RemoteSshProbeEndpoint,
   type RemoteSshTarget,
   type RemoteSshTargetDeleteInput,
@@ -65,7 +83,9 @@ import {
   type RemoteSshTargetSaveInput,
   type RemoteSshTargetSaveResult,
   type RemoteSshVirtualBoxMachineListResult,
-  type RemoteSshWorkspaceBinding
+  type RemoteSshWorkspaceBinding,
+  type RemoteSshWorkspaceHostSessionOpenInput,
+  type RemoteSshWorkspaceHostSessionOpenResult
 } from '../contract.js'
 import { RemoteSshConcurrencyController } from './concurrency-controller.js'
 import {
@@ -83,7 +103,8 @@ import {
   SystemOpenSshProcessRunner,
   type ProcessRequest,
   type ProcessResult,
-  type RemoteSshProcessRunner
+  type RemoteSshProcessRunner,
+  type RemoteSshStreamingProcessRunner
 } from './process-runner.js'
 import {
   Socks5ProxyHelper,
@@ -107,6 +128,23 @@ import {
   requireTimeout,
   requireWorkspaceId
 } from './validation.js'
+import { RemoteSshWorkspaceHostAuthorizationStore } from './workspace-host-authorization.js'
+import { RemoteSshEgressAuthorizationStore } from './egress-authorization.js'
+import {
+  connectRemoteWorkspaceHostClient,
+  type RemoteWorkspaceHostSensitiveAccessController
+} from './workspace-host-client.js'
+import {
+  ensureRemoteWorkspaceServerDeployed,
+  RemoteWorkspaceSshError,
+  type RemoteWorkspaceServerArtifact,
+  type RemoteWorkspaceServerDeploymentPlan,
+  type RemoteWorkspaceServerDeploymentTransport
+} from './workspace-server-deployment.js'
+import {
+  prepareRemoteWorkspaceServerLifecycle,
+  type RemoteWorkspaceServerLifecyclePlan
+} from './workspace-server-lifecycle.js'
 
 const REGISTRY_DIRECTORY = 'remote-ssh'
 const REGISTRY_FILE = 'registry.json'
@@ -118,6 +156,10 @@ const DEFAULT_MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 const DEFAULT_GLOBAL_CONCURRENCY = 16
 const MAX_REMEMBERED_OPERATION_IDS = 10_000
 const MAX_REGISTRY_BYTES = 16 * 1024 * 1024
+const WORKSPACE_EGRESS_LEASE_TTL_MS = 60_000
+const WORKSPACE_EGRESS_HEARTBEAT_MS = 30_000
+const WORKSPACE_MODEL_ACCESS_LEASE_TTL_MS = 60_000
+const WORKSPACE_MODEL_ACCESS_HEARTBEAT_MS = 30_000
 
 const persistedStateSchema = z.object({
   schemaVersion: z.literal(REMOTE_SSH_SCHEMA_VERSION),
@@ -181,7 +223,11 @@ type PersistedState = z.infer<typeof persistedStateSchema>
 
 export type RemoteSshServiceOptions = Readonly<{
   userDataDir: string
+  homeDirectory?: string
+  openPath?: (path: string) => Promise<void>
   processRunner?: RemoteSshProcessRunner
+  streamingProcessRunner?: RemoteSshStreamingProcessRunner
+  workspaceServerArtifact?: () => Promise<RemoteWorkspaceServerArtifact>
   environmentManager?: RemoteSshLabEnvironmentManager
   virtualBoxMachineCatalog?: RemoteSshVirtualBoxMachineCatalog
   proxyHelper?: RemoteSshProxyHelper
@@ -229,7 +275,11 @@ type RemoteSshProbeOutcome = Readonly<{
 
 export class RemoteSshService {
   private readonly registryPath: string
+  private readonly homeDirectory: string
+  private readonly openPath?: (path: string) => Promise<void>
   private readonly processRunner: RemoteSshProcessRunner
+  private readonly streamingProcessRunner: RemoteSshStreamingProcessRunner
+  private readonly workspaceServerArtifact?: () => Promise<RemoteWorkspaceServerArtifact>
   private readonly environmentManager: RemoteSshLabEnvironmentManager
   private readonly virtualBoxMachineCatalog: RemoteSshVirtualBoxMachineCatalog
   private readonly closeVirtualBoxMachineCatalog: boolean
@@ -250,6 +300,10 @@ export class RemoteSshService {
   private readonly recentFailureByTarget = new Map<string, RemoteSshFailure>()
   private readonly rememberedOperationIds = new Set<string>()
   private readonly deletingTargetIds = new Set<string>()
+  private readonly workspaceHostAuthorizations: RemoteSshWorkspaceHostAuthorizationStore
+  private readonly egressAuthorizations: RemoteSshEgressAuthorizationStore
+  private readonly activeWorkspaceHostClients = new Set<WorkspaceHostClient>()
+  private readonly workspaceEgress: WorkspaceEgressService
   private loadPromise?: Promise<PersistedState>
   private state?: PersistedState
   private mutationQueue: Promise<void> = Promise.resolve()
@@ -261,7 +315,16 @@ export class RemoteSshService {
     const userDataDir = options.userDataDir.trim()
     if (!userDataDir) throw new Error('Remote SSH user data directory is required.')
     this.registryPath = join(userDataDir, REGISTRY_DIRECTORY, REGISTRY_FILE)
-    this.processRunner = options.processRunner ?? new SystemOpenSshProcessRunner()
+    this.homeDirectory = (options.homeDirectory ?? homedir()).trim()
+    if (!this.homeDirectory) throw new Error('Remote SSH home directory is required.')
+    this.openPath = options.openPath
+    const defaultProcessRunner = options.processRunner ?? new SystemOpenSshProcessRunner()
+    this.processRunner = defaultProcessRunner
+    this.streamingProcessRunner = options.streamingProcessRunner ??
+      (isStreamingProcessRunner(defaultProcessRunner)
+        ? defaultProcessRunner
+        : new SystemOpenSshProcessRunner())
+    this.workspaceServerArtifact = options.workspaceServerArtifact
     const defaultVirtualBoxProvider = new VirtualBoxLabEnvironmentProvider()
     this.environmentManager = options.environmentManager ??
       new RoutingRemoteSshLabEnvironmentManager([
@@ -279,6 +342,11 @@ export class RemoteSshService {
     })
     this.targetResolver = options.targetResolver ?? new SystemOpenSshTargetResolver(this.processRunner)
     this.now = options.now ?? (() => new Date())
+    this.workspaceHostAuthorizations = new RemoteSshWorkspaceHostAuthorizationStore(this.now)
+    this.egressAuthorizations = new RemoteSshEgressAuthorizationStore(this.now)
+    this.workspaceEgress = new WorkspaceEgressService({
+      routeResolver: this.workspaceEgressRouteResolver()
+    })
     this.defaultTimeoutMs = requireTimeout(options.defaultTimeoutMs, DEFAULT_TIMEOUT_MS)
     this.maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES
     if (!Number.isSafeInteger(this.maxOutputBytes) || this.maxOutputBytes < 1 || this.maxOutputBytes > 2_000_000) {
@@ -300,6 +368,19 @@ export class RemoteSshService {
   async listLabs(): Promise<RemoteSshLabListResult> {
     const state = await this.load()
     return { labs: state.labs.map(clone).sort(byDisplayNameThenId) }
+  }
+
+  async openOpenSshConfig(): Promise<RemoteSshOpenConfigResult> {
+    if (!this.openPath) {
+      throw new Error('Opening the local OpenSSH configuration is unavailable.')
+    }
+    const sshDirectory = join(this.homeDirectory, '.ssh')
+    const configPath = join(sshDirectory, 'config')
+    await mkdir(sshDirectory, { recursive: true, mode: 0o700 })
+    const config = await open(configPath, 'a', 0o600)
+    await config.close()
+    await this.openPath(configPath)
+    return { opened: true }
   }
 
   async listVirtualBoxMachines(): Promise<RemoteSshVirtualBoxMachineListResult> {
@@ -745,6 +826,216 @@ export class RemoteSshService {
     return { executionId: parsed.executionId, cancelled: true }
   }
 
+  async authorizeWorkspaceHostSession(
+    workspaceId: string,
+    targetId: string,
+    expectedRevision: string,
+    input: RemoteSshWorkspaceHostSessionOpenInput
+  ): Promise<RemoteSshWorkspaceHostSessionOpenResult> {
+    const normalizedWorkspaceId = requireWorkspaceId(workspaceId)
+    const { target } = await this.authorizedTarget(
+      normalizedWorkspaceId,
+      targetId,
+      expectedRevision
+    )
+    this.assertTargetAvailable(target.id)
+    requireCapability(target, 'shell')
+    requireCapability(target, 'file-transfer')
+    return this.workspaceHostAuthorizations.authorize({
+      workspaceId: normalizedWorkspaceId,
+      targetId: target.id,
+      targetRevision: target.revision,
+      targetDisplayName: target.displayName,
+      request: input
+    })
+  }
+
+  async authorizeEgressSession(
+    workspaceId: string,
+    targetId: string,
+    expectedRevision: string
+  ): Promise<RemoteSshEgressSessionOpenResult> {
+    const normalizedWorkspaceId = requireWorkspaceId(workspaceId)
+    const { target } = await this.authorizedTarget(
+      normalizedWorkspaceId,
+      targetId,
+      expectedRevision
+    )
+    this.assertTargetAvailable(target.id)
+    requireCapability(target, 'shell')
+    return this.egressAuthorizations.authorize({
+      workspaceId: normalizedWorkspaceId,
+      targetId: target.id,
+      targetRevision: target.revision
+    })
+  }
+
+  async attachWorkspaceHost(
+    input: WorkspaceHostProviderAttachInput,
+    context: WorkspaceHostProviderContext
+  ): Promise<WorkspaceHostClient> {
+    const parsed = workspaceHostProviderAttachInputSchema.parse(input)
+    const authorization = this.workspaceHostAuthorizations.acquire(
+      parsed.authorizedSessionId
+    )
+    if (!this.workspaceServerArtifact) {
+      this.workspaceHostAuthorizations.revoke(parsed.authorizedSessionId)
+      throw new RemoteWorkspaceSshError(
+        'workspace_server_incompatible',
+        'This SciForge build does not contain a Workspace Host server artifact.'
+      )
+    }
+
+    try {
+      const artifact = await this.workspaceServerArtifact()
+      const client = await connectRemoteWorkspaceHostClient({
+        clientVersion: context.owner.moduleVersion,
+        workspaceRoot: authorization.workspaceRoot,
+        contributions: artifact.manifest.contributions ?? [],
+        egressMode: authorization.egress.mode,
+        ...(parsed.resume ? { resume: parsed.resume } : {}),
+        signal: context.signal,
+        log: (entry) => context.log(entry),
+        connect: async ({ signal }) => {
+          const active = this.workspaceHostAuthorizations.requireActive(
+            parsed.authorizedSessionId
+          )
+          const current = await this.authorizedTarget(
+            active.workspaceId,
+            active.targetId,
+            active.targetRevision
+          )
+          this.assertTargetAvailable(current.target.id)
+          requireCapability(current.target, 'shell')
+          requireCapability(current.target, 'file-transfer')
+          const effectiveSignal = combineSignals(context.signal, signal)
+          const proxyCommand = await this.proxyCommand(
+            current.target.sshAlias,
+            current.lab,
+            true,
+            effectiveSignal
+          )
+          const transport = this.workspaceServerDeploymentTransport(
+            current.target.sshAlias,
+            proxyCommand
+          )
+          const plan = await ensureRemoteWorkspaceServerDeployed({
+            artifact,
+            transport,
+            ...(effectiveSignal ? { signal: effectiveSignal } : {})
+          })
+          const lifecycle = await prepareRemoteWorkspaceServerLifecycle({
+            transport,
+            plan,
+            workspaceRoot: active.workspaceRoot,
+            ...(effectiveSignal ? { signal: effectiveSignal } : {})
+          })
+          if (lifecycle.fallbackReason) {
+            context.log({
+              level: 'info',
+              message: 'Workspace Host is using connection-session lifecycle.',
+              detail: { reason: lifecycle.fallbackReason }
+            })
+          }
+          const egress = await this.acquireWorkspaceEgress(
+            active,
+            effectiveSignal
+          )
+          let modelAccess: Awaited<ReturnType<RemoteSshService['acquireWorkspaceModelAccess']>>
+          try {
+            modelAccess = active.egress.mode === 'none'
+              ? {}
+              : await this.acquireWorkspaceModelAccess(
+                  context.workspaceModelAccess,
+                  active.id,
+                  egress.remotePort === undefined ? [] : [egress.remotePort],
+                  effectiveSignal
+                )
+          } catch (error) {
+            this.revokeUnmanagedWorkspaceEgress(active.id, egress.lease)
+            throw error
+          }
+          let process: import('./process-runner.js').RemoteSshStreamingProcess
+          try {
+            process = this.streamingProcessRunner.open({
+              executable: 'ssh',
+              args: workspaceHostAttachArgs(
+                current.target.sshAlias,
+                proxyCommand,
+                plan,
+                active.workspaceRoot,
+                lifecycle,
+                [
+                  ...(egress.reverseForward ? [egress.reverseForward] : []),
+                  ...(modelAccess.reverseForward ? [modelAccess.reverseForward] : [])
+                ]
+              ),
+              ...(effectiveSignal ? { signal: effectiveSignal } : {})
+            })
+          } catch (error) {
+            this.revokeUnmanagedWorkspaceEgress(active.id, egress.lease)
+            await this.revokeUnmanagedWorkspaceModelAccess(
+              context.workspaceModelAccess,
+              active.id,
+              modelAccess.lease
+            )
+            throw error
+          }
+          const managedAccess = egress.lease || modelAccess.lease
+            ? this.manageWorkspaceSensitiveAccess(
+                process,
+                egress.lease
+                  ? { workspaceId: active.id, lease: egress.lease }
+                  : undefined,
+                modelAccess.lease
+                  ? {
+                      provider: context.workspaceModelAccess,
+                      workspaceId: active.id,
+                      lease: modelAccess.lease
+                    }
+                  : undefined
+              )
+            : undefined
+          return {
+            process: managedAccess?.process ?? process,
+            ...(managedAccess
+              ? { sensitiveAccess: managedAccess.sensitiveAccess }
+              : {}),
+            egressAccess: egress.lease
+              ? {
+                  mode: active.egress.mode,
+                  proxyEndpoint: `http://127.0.0.1:${egress.remotePort}/`,
+                  authorization: {
+                    scheme: 'bearer' as const,
+                    token: egress.lease.credential.token
+                  },
+                  expiresAt: egress.lease.expiresAt
+                }
+              : { mode: 'none' as const },
+            ...(modelAccess.lease
+              ? {
+                  modelAccess: {
+                    baseUrl: `http://127.0.0.1:${modelAccess.remotePort}/v1`,
+                    authorization: modelAccess.lease.authorization,
+                    expiresAt: modelAccess.lease.expiresAt
+                  }
+                }
+              : {})
+          }
+        }
+      })
+      const managed = managedWorkspaceHostClient(client, async () => {
+        this.activeWorkspaceHostClients.delete(managed)
+        this.workspaceHostAuthorizations.revoke(parsed.authorizedSessionId)
+      })
+      this.activeWorkspaceHostClients.add(managed)
+      return managed
+    } catch (error) {
+      this.workspaceHostAuthorizations.revoke(parsed.authorizedSessionId)
+      throw error
+    }
+  }
+
   async uploadFile(
     workspaceId: string,
     targetId: string,
@@ -904,6 +1195,13 @@ export class RemoteSshService {
     for (const active of this.activeExecutions.values()) active.controller.abort()
     for (const controller of this.activeTransferControllers.values()) controller.abort()
     for (const controller of this.activeProbeControllers) controller.abort()
+    for (const client of this.activeWorkspaceHostClients) {
+      void client.close('Remote SSH domain is shutting down.')
+    }
+    this.activeWorkspaceHostClients.clear()
+    this.workspaceHostAuthorizations.clear()
+    this.egressAuthorizations.clear()
+    void this.workspaceEgress.close()
     this.scheduler.close()
     this.environmentManager.close()
     if (this.closeVirtualBoxMachineCatalog) {
@@ -1007,6 +1305,327 @@ export class RemoteSshService {
       )
     } finally {
       limitMonitor?.stop()
+    }
+  }
+
+  private workspaceServerDeploymentTransport(
+    alias: string,
+    proxyCommand: string
+  ): RemoteWorkspaceServerDeploymentTransport {
+    return {
+      runCommand: async (script, options) => this.runOpenSsh({
+        executable: 'ssh',
+        args: commandArgs(alias, proxyCommand),
+        stdin: script,
+        timeoutMs: options?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        maxOutputBytes: this.maxOutputBytes,
+        ...(options?.signal ? { signal: options.signal } : {})
+      }),
+      uploadFile: async (localPath, remotePath, options) => this.runOpenSsh({
+        executable: 'sftp',
+        args: transferArgs(alias, proxyCommand),
+        stdin: `put ${quoteSftpPath(localPath)} ${quoteSftpPath(remotePath)}\n`,
+        timeoutMs: options?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        maxOutputBytes: this.maxOutputBytes,
+        ...(options?.signal ? { signal: options.signal } : {})
+      })
+    }
+  }
+
+  private async acquireWorkspaceEgress(
+    authorization: Readonly<{
+      id: string
+      workspaceId: string
+      egress: RemoteSshWorkspaceHostSessionOpenInput['egress']
+    }>,
+    signal?: AbortSignal
+  ): Promise<Readonly<{
+    lease?: WorkspaceEgressLease
+    remotePort?: number
+    reverseForward?: Readonly<{ remotePort: number; localHost: string; localPort: number }>
+  }>> {
+    if (authorization.egress.mode === 'none') return {}
+    if (signal?.aborted) {
+      throw new RemoteWorkspaceSshError(
+        'workspace_server_cancelled',
+        'Workspace egress connection was cancelled.'
+      )
+    }
+    const lease = await this.workspaceEgress.acquireLease({
+      workspaceId: authorization.id,
+      selection: authorization.egress,
+      ttlMs: WORKSPACE_EGRESS_LEASE_TTL_MS
+    })
+    const remotePort = randomWorkspaceForwardPort()
+    return {
+      lease,
+      remotePort,
+      reverseForward: {
+        remotePort,
+        localHost: lease.endpoint.host,
+        localPort: lease.endpoint.port
+      }
+    }
+  }
+
+  private async acquireWorkspaceModelAccess(
+    provider: WorkspaceHostModelAccessProvider,
+    workspaceId: string,
+    excludedRemotePorts: readonly number[],
+    signal?: AbortSignal
+  ): Promise<Readonly<{
+    lease?: WorkspaceHostModelAccessLease
+    remotePort?: number
+    reverseForward?: Readonly<{ remotePort: number; localHost: string; localPort: number }>
+  }>> {
+    const lease = await provider.acquire({
+      workspaceId,
+      ttlMs: WORKSPACE_MODEL_ACCESS_LEASE_TTL_MS,
+      ...(signal ? { signal } : {})
+    })
+    if (!lease) return {}
+    const remotePort = randomWorkspaceForwardPort(excludedRemotePorts)
+    return {
+      lease,
+      remotePort,
+      reverseForward: {
+        remotePort,
+        localHost: lease.endpoint.host,
+        localPort: lease.endpoint.port
+      }
+    }
+  }
+
+  private revokeUnmanagedWorkspaceEgress(
+    workspaceId: string,
+    lease?: WorkspaceEgressLease
+  ): void {
+    if (!lease) return
+    try {
+      this.workspaceEgress.revoke({
+        workspaceId,
+        leaseId: lease.leaseId,
+        token: lease.credential.token
+      })
+    } catch {
+      // Acquisition may have raced route loss or lease expiry.
+    }
+  }
+
+  private async revokeUnmanagedWorkspaceModelAccess(
+    provider: WorkspaceHostModelAccessProvider,
+    workspaceId: string,
+    lease?: WorkspaceHostModelAccessLease
+  ): Promise<void> {
+    if (!lease) return
+    try {
+      await provider.revoke({
+        workspaceId,
+        leaseId: lease.leaseId,
+        token: lease.authorization.token
+      })
+    } catch {
+      // Acquisition may have raced route loss or lease expiry.
+    }
+  }
+
+  private manageWorkspaceSensitiveAccess(
+    process: import('./process-runner.js').RemoteSshStreamingProcess,
+    egress?: Readonly<{ workspaceId: string; lease: WorkspaceEgressLease }>,
+    model?: Readonly<{
+      provider: WorkspaceHostModelAccessProvider
+      workspaceId: string
+      lease: WorkspaceHostModelAccessLease
+    }>
+  ): Readonly<{
+    process: import('./process-runner.js').RemoteSshStreamingProcess
+    sensitiveAccess: RemoteWorkspaceHostSensitiveAccessController
+  }> {
+    let closed = false
+    let controls: Parameters<RemoteWorkspaceHostSensitiveAccessController['bind']>[0] | undefined
+    const heartbeats: Array<ReturnType<typeof setInterval>> = []
+    const dispose = async () => {
+      if (closed) return
+      closed = true
+      for (const heartbeat of heartbeats) clearInterval(heartbeat)
+      if (egress) {
+        try {
+          await controls?.revokeEgress()
+        } catch {
+          // A closed SSH transport cannot receive a final revoke control.
+        }
+        try {
+          this.workspaceEgress.revoke({
+            workspaceId: egress.workspaceId,
+            leaseId: egress.lease.leaseId,
+            token: egress.lease.credential.token
+          })
+        } catch {
+          // The relay may already have revoked an expired or lost route.
+        }
+      }
+      if (model) {
+        try {
+          await controls?.revokeModelAccess()
+        } catch {
+          // A closed SSH transport cannot receive a final revoke control.
+        }
+        try {
+          await model.provider.revoke({
+            workspaceId: model.workspaceId,
+            leaseId: model.lease.leaseId,
+            token: model.lease.authorization.token
+          })
+        } catch {
+          // The bridge may already have revoked an expired or lost route.
+        }
+      }
+      await process.dispose()
+    }
+    if (egress) {
+      const heartbeat = setInterval(() => {
+        if (closed) return
+        void this.workspaceEgress.heartbeat({
+          workspaceId: egress.workspaceId,
+          leaseId: egress.lease.leaseId,
+          token: egress.lease.credential.token,
+          ttlMs: WORKSPACE_EGRESS_LEASE_TTL_MS
+        }).then(
+          async (state) => {
+            if (closed || !controls) return
+            await controls.renewEgress(state.expiresAt)
+          },
+          () => dispose()
+        ).catch(() => dispose())
+      }, WORKSPACE_EGRESS_HEARTBEAT_MS)
+      heartbeat.unref?.()
+      heartbeats.push(heartbeat)
+    }
+    if (model) {
+      const heartbeat = setInterval(() => {
+        if (closed) return
+        void model.provider.heartbeat({
+          workspaceId: model.workspaceId,
+          leaseId: model.lease.leaseId,
+          token: model.lease.authorization.token,
+          ttlMs: WORKSPACE_MODEL_ACCESS_LEASE_TTL_MS
+        }).then(
+          async (state) => {
+            if (closed || !controls) return
+            await controls.renewModelAccess(state.expiresAt)
+          },
+          () => dispose()
+        ).catch(() => dispose())
+      }, WORKSPACE_MODEL_ACCESS_HEARTBEAT_MS)
+      heartbeat.unref?.()
+      heartbeats.push(heartbeat)
+    }
+    void process.exit.then(dispose, dispose)
+    const managedProcess: import('./process-runner.js').RemoteSshStreamingProcess = {
+      stdout: process.stdout,
+      stderr: process.stderr,
+      exit: process.exit,
+      write: (data: string | Uint8Array) => process.write(data),
+      end: () => process.end(),
+      dispose
+    }
+    return {
+      process: managedProcess,
+      sensitiveAccess: {
+        bind: (nextControls) => {
+          if (controls) {
+            throw new RemoteWorkspaceSshError(
+              'workspace_server_incompatible',
+              'Workspace sensitive-access controls were bound more than once.'
+            )
+          }
+          controls = nextControls
+        }
+      }
+    }
+  }
+
+  private workspaceEgressRouteResolver(): WorkspaceEgressRouteResolver {
+    return {
+      resolve: async ({ workspaceId, selection, signal }) => {
+        const workspaceAuthorization =
+          this.workspaceHostAuthorizations.requireActive(workspaceId)
+        if (selection.mode === 'local') {
+          return localWorkspaceEgressRoute(signal)
+        }
+        const authorized = this.egressAuthorizations.acquire(
+          selection.authorizedSessionId,
+          workspaceAuthorization.workspaceId
+        )
+        try {
+          // Revalidate immediately so a stale target revision cannot mint a
+          // route even if its opaque egress authorization has not yet expired.
+          await this.authorizedTarget(
+            authorized.workspaceId,
+            authorized.targetId,
+            authorized.targetRevision
+          )
+          return this.remoteTargetWorkspaceEgressRoute(authorized, signal)
+        } catch (error) {
+          this.egressAuthorizations.revoke(authorized.id)
+          throw error
+        }
+      }
+    }
+  }
+
+  private remoteTargetWorkspaceEgressRoute(
+    authorized: Readonly<{
+      id: string
+      workspaceId: string
+      targetId: string
+      targetRevision: string
+    }>,
+    routeSignal: AbortSignal
+  ): ResolvedWorkspaceEgressRoute {
+    return {
+      routeId: `ssh-egress-route-${randomUUID()}`,
+      openTunnel: async ({ destination, signal }) => {
+        const effectiveSignal = combineSignals(routeSignal, signal)
+        const { target, lab } = await this.authorizedTarget(
+          authorized.workspaceId,
+          authorized.targetId,
+          authorized.targetRevision
+        )
+        const proxyCommand = await this.proxyCommand(
+          target.sshAlias,
+          lab,
+          true,
+          effectiveSignal
+        )
+        const process = this.streamingProcessRunner.open({
+          executable: 'ssh',
+          args: workspaceEgressTargetArgs(
+            target.sshAlias,
+            proxyCommand,
+            destination.hostname,
+            destination.port
+          ),
+          ...(effectiveSignal ? { signal: effectiveSignal } : {})
+        })
+        return streamingProcessDuplex(process)
+      },
+      probe: async () => {
+        try {
+          this.egressAuthorizations.requireActive(authorized.id, authorized.workspaceId)
+          await this.authorizedTarget(
+            authorized.workspaceId,
+            authorized.targetId,
+            authorized.targetRevision
+          )
+          return true
+        } catch {
+          return false
+        }
+      },
+      close: () => {
+        this.egressAuthorizations.revoke(authorized.id)
+      }
     }
   }
 
@@ -1347,6 +1966,70 @@ function commandArgs(alias: string, proxyCommand: string): string[] {
   ]
 }
 
+function workspaceHostAttachArgs(
+  alias: string,
+  proxyCommand: string,
+  plan: RemoteWorkspaceServerDeploymentPlan,
+  workspaceRoot: string,
+  lifecycle: RemoteWorkspaceServerLifecyclePlan,
+  reverseForwards: readonly Readonly<{
+    remotePort: number
+    localHost: string
+    localPort: number
+  }>[]
+): string[] {
+  const encodedWorkspaceRoot = Buffer.from(workspaceRoot, 'utf8').toString('base64url')
+  const encodedRuntimeDirectory = lifecycle.runtimeDirectory
+    ? Buffer.from(lifecycle.runtimeDirectory, 'utf8').toString('base64url')
+    : undefined
+  const entrypoint = plan.entrypointPath
+  if (
+    !/^[A-Za-z0-9.][A-Za-z0-9._/-]*$/.test(entrypoint) ||
+    entrypoint.split('/').some((segment) => segment === '.' || segment === '..')
+  ) {
+    throw new RemoteWorkspaceSshError(
+      'workspace_server_artifact_invalid',
+      'Workspace server entrypoint path is invalid.'
+    )
+  }
+  if (
+    lifecycle.mode === 'persistent-daemon' &&
+    encodedRuntimeDirectory === undefined
+  ) {
+    throw new RemoteWorkspaceSshError(
+      'workspace_server_attach_failed',
+      'Persistent Workspace Host lifecycle requires a runtime directory.'
+    )
+  }
+  const remoteCommand = [
+    `exec "$HOME/${entrypoint}"`,
+    'attach',
+    `--workspace-root-base64 '${encodedWorkspaceRoot}'`,
+    ...(encodedRuntimeDirectory
+      ? [`--runtime-dir-base64 '${encodedRuntimeDirectory}'`]
+      : []),
+    `--lifecycle-mode '${lifecycle.mode}'`
+  ].join(' ')
+  return [
+    '-T',
+    ...sshSafetyOptions(15, reverseForwards.length > 0),
+    '-o', 'ServerAliveInterval=15',
+    '-o', 'ServerAliveCountMax=3',
+    ...(reverseForwards.length > 0
+      ? [
+          '-o', 'ExitOnForwardFailure=yes',
+          '-o', 'GatewayPorts=no',
+          ...reverseForwards.flatMap((forward) => [
+            '-R', workspaceLoopbackReverseForward(forward)
+          ])
+        ]
+      : []),
+    '-o', `ProxyCommand=${proxyCommand}`,
+    '--', requireSshAlias(alias),
+    remoteCommand
+  ]
+}
+
 function probeArgs(alias: string, proxyCommand: string): string[] {
   return [
     '-T',
@@ -1366,7 +2049,10 @@ function transferArgs(alias: string, proxyCommand: string): string[] {
   ]
 }
 
-function sshSafetyOptions(connectTimeoutSeconds: number): string[] {
+function sshSafetyOptions(
+  connectTimeoutSeconds: number,
+  allowRemoteForwarding = false
+): string[] {
   return [
     '-o', 'BatchMode=yes',
     '-o', 'NumberOfPasswordPrompts=0',
@@ -1374,7 +2060,7 @@ function sshSafetyOptions(connectTimeoutSeconds: number): string[] {
     '-o', 'ForwardAgent=no',
     '-o', 'ForwardX11=no',
     '-o', 'PermitLocalCommand=no',
-    '-o', 'ClearAllForwardings=yes',
+    ...(allowRemoteForwarding ? [] : ['-o', 'ClearAllForwardings=yes']),
     '-o', 'ControlMaster=no',
     '-o', 'ControlPath=none',
     '-o', 'ControlPersist=no',
@@ -1382,6 +2068,162 @@ function sshSafetyOptions(connectTimeoutSeconds: number): string[] {
     '-o', `ConnectTimeout=${connectTimeoutSeconds}`,
     '-o', 'StrictHostKeyChecking=yes'
   ]
+}
+
+function workspaceLoopbackReverseForward(input: Readonly<{
+  remotePort: number
+  localHost: string
+  localPort: number
+}>): string {
+  const remotePort = requireTcpPort(input.remotePort)
+  const localPort = requireTcpPort(input.localPort)
+  if (input.localHost !== '127.0.0.1' && input.localHost !== '::1' &&
+    input.localHost !== 'localhost') {
+    throw new RemoteWorkspaceSshError(
+      'workspace_server_session_unauthorized',
+      'Workspace egress relay must bind to desktop loopback.'
+    )
+  }
+  const localHost = input.localHost === '::1' ? '[::1]' : input.localHost
+  return `127.0.0.1:${remotePort}:${localHost}:${localPort}`
+}
+
+function workspaceEgressTargetArgs(
+  alias: string,
+  proxyCommand: string,
+  hostname: string,
+  port: number
+): string[] {
+  const normalizedHost = hostname.trim().toLowerCase()
+  if (
+    !normalizedHost ||
+    normalizedHost.length > 253 ||
+    /[\0\r\n\s]/.test(normalizedHost) ||
+    normalizedHost.startsWith('-')
+  ) {
+    throw new RemoteWorkspaceSshError(
+      'workspace_server_session_unauthorized',
+      'Workspace egress destination is invalid.'
+    )
+  }
+  const destination = normalizedHost.includes(':')
+    ? `[${normalizedHost}]:${requireTcpPort(port)}`
+    : `${normalizedHost}:${requireTcpPort(port)}`
+  return [
+    '-T',
+    ...sshSafetyOptions(15),
+    '-o', 'ServerAliveInterval=15',
+    '-o', 'ServerAliveCountMax=3',
+    '-o', `ProxyCommand=${proxyCommand}`,
+    '-W', destination,
+    '--', requireSshAlias(alias)
+  ]
+}
+
+function randomWorkspaceForwardPort(excluded: readonly number[] = []): number {
+  const unavailable = new Set(excluded)
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const candidate = 40_000 + Math.floor(Math.random() * 20_000)
+    if (!unavailable.has(candidate)) return candidate
+  }
+  throw new RemoteWorkspaceSshError(
+    'workspace_server_attach_failed',
+    'Could not allocate a distinct remote loopback forwarding port.',
+    { retryable: true }
+  )
+}
+
+function requireTcpPort(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > 65_535) {
+    throw new RemoteWorkspaceSshError(
+      'workspace_server_session_unauthorized',
+      'Workspace egress port is invalid.'
+    )
+  }
+  return value
+}
+
+function localWorkspaceEgressRoute(routeSignal: AbortSignal): ResolvedWorkspaceEgressRoute {
+  return {
+    routeId: `local-egress-route-${randomUUID()}`,
+    openTunnel: ({ destination, signal }) => {
+      const effectiveSignal = combineSignals(routeSignal, signal)
+      return connectTcp({
+        host: destination.hostname,
+        port: destination.port,
+        ...(effectiveSignal ? { signal: effectiveSignal } : {})
+      })
+    },
+    probe: () => !routeSignal.aborted,
+    onLost: (listener) => {
+      routeSignal.addEventListener('abort', listener, { once: true })
+      return () => routeSignal.removeEventListener('abort', listener)
+    }
+  }
+}
+
+function streamingProcessDuplex(
+  process: import('./process-runner.js').RemoteSshStreamingProcess
+): Duplex {
+  const writable = new Writable({
+    write(chunk: Buffer | string, _encoding, callback) {
+      void process.write(chunk).then(() => callback(), callback)
+    },
+    destroy(error, callback) {
+      void process.dispose().then(() => callback(error), callback)
+    }
+  })
+  const duplex = Duplex.from({ readable: process.stdout, writable })
+  void process.exit.then(
+    () => {
+      if (!duplex.destroyed) duplex.destroy()
+    },
+    () => {
+      if (!duplex.destroyed) duplex.destroy()
+    }
+  )
+  return duplex
+}
+
+function isStreamingProcessRunner(
+  runner: RemoteSshProcessRunner
+): runner is RemoteSshProcessRunner & RemoteSshStreamingProcessRunner {
+  return typeof (runner as Partial<RemoteSshStreamingProcessRunner>).open === 'function'
+}
+
+function combineSignals(
+  first?: AbortSignal,
+  second?: AbortSignal
+): AbortSignal | undefined {
+  const signals = [first, second].filter(
+    (signal): signal is AbortSignal => signal !== undefined
+  )
+  if (signals.length === 0) return undefined
+  if (signals.length === 1) return signals[0]
+  return AbortSignal.any(signals)
+}
+
+function managedWorkspaceHostClient(
+  client: WorkspaceHostClient,
+  onClose: () => Promise<void>
+): WorkspaceHostClient {
+  let closed = false
+  return Object.freeze({
+    getSession: () => client.getSession(),
+    request: client.request.bind(client) as WorkspaceHostClient['request'],
+    subscribe: (listener) => client.subscribe(listener),
+    acknowledge: (sequence) => client.acknowledge(sequence),
+    reconnect: (input) => client.reconnect(input),
+    close: async (reason) => {
+      if (closed) return
+      closed = true
+      try {
+        await client.close(reason)
+      } finally {
+        await onClose()
+      }
+    }
+  })
 }
 
 function emptyBinding(workspaceId: string): RemoteSshWorkspaceBinding {

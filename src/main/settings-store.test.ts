@@ -119,11 +119,17 @@ describe('JsonSettingsStore', () => {
     await new JsonSettingsStore(userDataDir).load()
     const legacy = JSON.parse(await readFile(settingsPath, 'utf8')) as Record<string, unknown>
     legacy.evidenceDag = { enabled: false }
+    legacy.remoteExecutor = {
+      enabled: true,
+      defaultTargetId: 'retired-target',
+      targets: [{ id: 'retired-target' }]
+    }
     await writeFile(settingsPath, JSON.stringify(legacy), 'utf8')
 
     const loaded = await new JsonSettingsStore(userDataDir).load()
 
     expect('evidenceDag' in loaded).toBe(false)
+    expect('remoteExecutor' in loaded).toBe(false)
   })
 
   it('patches shared agent capability settings', async () => {

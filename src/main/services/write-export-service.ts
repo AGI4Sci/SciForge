@@ -1,4 +1,4 @@
-import { BrowserWindow, clipboard, dialog } from 'electron'
+import { BrowserWindow, dialog } from 'electron'
 import { createRequire } from 'node:module'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -17,9 +17,7 @@ import type { PluggableList } from 'unified'
 import type {
   WriteExportFormat,
   WriteExportPayload,
-  WriteExportResult,
-  WriteRichClipboardPayload,
-  WriteRichClipboardResult
+  WriteExportResult
 } from '../../shared/write-export'
 import { normalizeMarkdownMathDelimiters } from '../../shared/write-markdown-math'
 import { markdownToLatexDocument } from '../../shared/write-markdown-latex'
@@ -401,7 +399,7 @@ async function renderMarkdownFragment(
   )
 }
 
-export async function buildWriteClipboardHtmlFragment(options: {
+export async function buildWriteExportHtmlFragment(options: {
   sourcePath: string
   content: string
   workspaceRoot?: string
@@ -425,7 +423,7 @@ export async function buildWriteExportHtmlDocument(options: {
 }): Promise<string> {
   const title = options.title?.trim() || basenameWithoutExtension(options.sourcePath)
   const katexCss = await readKatexCss()
-  const body = await buildWriteClipboardHtmlFragment({
+  const body = await buildWriteExportHtmlFragment({
     sourcePath: options.sourcePath,
     content: options.content,
     workspaceRoot: options.workspaceRoot
@@ -463,44 +461,6 @@ export function buildWriteExportLatexDocument(options: {
   const title = options.title?.trim() || basenameWithoutExtension(options.sourcePath)
   if (/\.tex$/i.test(options.sourcePath)) return options.content
   return markdownToLatexDocument(options.content, { title })
-}
-
-export async function copyWriteDocumentAsRichText(
-  payload: WriteRichClipboardPayload
-): Promise<WriteRichClipboardResult> {
-  try {
-    const resolved = await resolveWorkspaceFile({
-      path: payload.path,
-      workspaceRoot: payload.workspaceRoot
-    })
-    if (!resolved.ok) {
-      return {
-        ok: false,
-        message: resolved.message
-      }
-    }
-
-    const html = await buildWriteClipboardHtmlFragment({
-      sourcePath: resolved.path,
-      content: payload.content,
-      workspaceRoot: payload.workspaceRoot
-    })
-
-    clipboard.write({
-      html,
-      text: payload.content
-    })
-
-    return {
-      ok: true,
-      copiedAt: new Date().toISOString()
-    }
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : String(error)
-    }
-  }
 }
 
 async function bufferFromDocxResult(result: ArrayBuffer | Blob): Promise<Buffer> {

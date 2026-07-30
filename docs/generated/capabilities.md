@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **120**
+Registered actions: **123**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -77,6 +77,7 @@ Registered actions: **120**
 | `remote-ssh.bindings.save` | 1.0.0 | ui | external-write | confirmation | workspace |
 | `remote-ssh.command.cancel` | 1.0.0 | ui, agent | external-write | confirmation | workspace |
 | `remote-ssh.command.execute` | 1.0.0 | ui, agent | destructive | confirmation | resource |
+| `remote-ssh.egress-session.open` | 1.0.0 | ui | external-write | confirmation | resource |
 | `remote-ssh.file.download` | 1.0.0 | ui, agent | workspace-write | confirmation | resource |
 | `remote-ssh.file.upload` | 1.0.0 | ui, agent | external-write | confirmation | resource |
 | `remote-ssh.lab-environment.console.open` | 1.0.0 | ui | external-write | confirmation | global |
@@ -86,12 +87,14 @@ Registered actions: **120**
 | `remote-ssh.labs.delete` | 1.0.0 | ui | external-write | confirmation | global |
 | `remote-ssh.labs.list` | 1.0.0 | ui | read | none | global |
 | `remote-ssh.labs.save` | 1.0.0 | ui | external-write | confirmation | global |
+| `remote-ssh.openssh-config.open` | 1.0.0 | ui | external-write | confirmation | global |
 | `remote-ssh.target.delete` | 1.0.0 | ui | external-write | confirmation | global |
 | `remote-ssh.target.probe` | 1.0.0 | ui, agent, system | read | none | resource |
 | `remote-ssh.target.save` | 1.0.0 | ui | external-write | confirmation | global |
 | `remote-ssh.targets.catalog` | 1.0.0 | ui | read | none | global |
 | `remote-ssh.targets.list` | 1.0.0 | ui, agent, system | read | none | workspace |
 | `remote-ssh.virtualbox-machines.list` | 1.0.0 | ui | read | none | global |
+| `remote-ssh.workspace-host-session.open` | 1.0.0 | ui | external-write | confirmation | resource |
 | `surface.current` | 2.0.0 | ui, agent, system | read | none | global |
 | `version-control.create-reference` | 1.0.0 | ui, agent, system | workspace-write | none | resource |
 | `version-control.create-snapshot` | 1.0.0 | ui, agent, system | workspace-write | none | resource |
@@ -15454,6 +15457,63 @@ Executes a confirmed script on the authorized target through system OpenSSH.
 }
 ```
 
+## `remote-ssh.egress-session.open`
+
+Authorizes this target as a network-egress hop for the caller workspace.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "authorizedSessionId": {
+        "pattern": "^ssh_egs_[A-Za-z0-9_-]{24,128}$",
+        "type": "string"
+      },
+      "expiresAt": {
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "authorizedSessionId",
+      "expiresAt"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [
+    "remote-ssh-target"
+  ],
+  "tags": [
+    "remote-ssh",
+    "workspace-egress",
+    "session"
+  ],
+  "title": "Authorize Remote SSH network egress"
+}
+```
+
 ## `remote-ssh.file.download`
 
 Downloads one remote file into a workspace-relative destination.
@@ -16014,6 +16074,24 @@ Ensures the configured VPN environment is available and running.
       "consoleAvailable": {
         "type": "boolean"
       },
+      "guidanceCode": {
+        "enum": [
+          "install-provider",
+          "select-environment",
+          "start-environment",
+          "wait-for-environment",
+          "resume-environment",
+          "install-host-openssh",
+          "configure-gateway-alias",
+          "trust-gateway-host-key",
+          "authorize-gateway-key",
+          "enable-gateway-ssh",
+          "open-vpn-login",
+          "test-target",
+          "retry"
+        ],
+        "type": "string"
+      },
       "labId": {
         "maxLength": 128,
         "minLength": 1,
@@ -16112,6 +16190,24 @@ Reads the configured VPN environment provider and connection state for one labor
       },
       "consoleAvailable": {
         "type": "boolean"
+      },
+      "guidanceCode": {
+        "enum": [
+          "install-provider",
+          "select-environment",
+          "start-environment",
+          "wait-for-environment",
+          "resume-environment",
+          "install-host-openssh",
+          "configure-gateway-alias",
+          "trust-gateway-host-key",
+          "authorize-gateway-key",
+          "enable-gateway-ssh",
+          "open-vpn-login",
+          "test-target",
+          "retry"
+        ],
+        "type": "string"
       },
       "labId": {
         "maxLength": 128,
@@ -16217,6 +16313,24 @@ Stops the configured VPN environment while retaining its persistent state.
       },
       "consoleAvailable": {
         "type": "boolean"
+      },
+      "guidanceCode": {
+        "enum": [
+          "install-provider",
+          "select-environment",
+          "start-environment",
+          "wait-for-environment",
+          "resume-environment",
+          "install-host-openssh",
+          "configure-gateway-alias",
+          "trust-gateway-host-key",
+          "authorize-gateway-key",
+          "enable-gateway-ssh",
+          "open-vpn-login",
+          "test-target",
+          "retry"
+        ],
+        "type": "string"
       },
       "labId": {
         "maxLength": 128,
@@ -16719,6 +16833,55 @@ Creates or updates one Remote SSH laboratory group.
     "configuration"
   ],
   "title": "Save Remote SSH lab"
+}
+```
+
+## `remote-ssh.openssh-config.open`
+
+Creates ~/.ssh/config when needed and opens it with the configured local editor.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "opened": {
+        "const": true,
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "opened"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "remote-ssh",
+    "openssh",
+    "configuration"
+  ],
+  "title": "Open the local OpenSSH configuration"
 }
 ```
 
@@ -17456,6 +17619,204 @@ Lists VirtualBox virtual machines available for Remote SSH laboratory isolation.
     "discovery"
   ],
   "title": "List VirtualBox machines"
+}
+```
+
+## `remote-ssh.workspace-host-session.open`
+
+Authorizes a private Remote Workspace host session on this target.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "egress": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "const": "none",
+                "type": "string"
+              }
+            },
+            "required": [
+              "mode"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "allowlist": {
+                "additionalProperties": false,
+                "properties": {
+                  "rules": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "host": {
+                          "maxLength": 253,
+                          "minLength": 1,
+                          "pattern": "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        "ports": {
+                          "items": {
+                            "maximum": 65535,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxItems": 32,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "host",
+                        "ports"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 128,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "rules"
+                ],
+                "type": "object"
+              },
+              "mode": {
+                "const": "local",
+                "type": "string"
+              }
+            },
+            "required": [
+              "mode",
+              "allowlist"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "allowlist": {
+                "additionalProperties": false,
+                "properties": {
+                  "rules": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "host": {
+                          "maxLength": 253,
+                          "minLength": 1,
+                          "pattern": "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        "ports": {
+                          "items": {
+                            "maximum": 65535,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxItems": 32,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "host",
+                        "ports"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 128,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "rules"
+                ],
+                "type": "object"
+              },
+              "authorizedSessionId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "mode": {
+                "const": "remote-target",
+                "type": "string"
+              }
+            },
+            "required": [
+              "mode",
+              "authorizedSessionId",
+              "allowlist"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "workspaceRoot": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "pattern": "^\\/(?:[^/\\0\\r\\n]+(?:\\/[^/\\0\\r\\n]+)*)?$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workspaceRoot",
+      "egress"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "authorizedSessionId": {
+        "pattern": "^ssh_whs_[A-Za-z0-9_-]{24,128}$",
+        "type": "string"
+      },
+      "providerId": {
+        "const": "remote-ssh.workspace-host-provider",
+        "type": "string"
+      }
+    },
+    "required": [
+      "providerId",
+      "authorizedSessionId"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [
+    "remote-ssh-target"
+  ],
+  "tags": [
+    "remote-ssh",
+    "workspace-host",
+    "session"
+  ],
+  "title": "Open Remote Workspace session"
 }
 ```
 
@@ -29164,6 +29525,31 @@ Opens a workspace file with the canonical Workspace Preview host and returns a s
         "type": "string"
       },
       "selection": {},
+      "workspaceLocator": {
+        "additionalProperties": false,
+        "properties": {
+          "contractVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "hostSessionId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "path": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "contractVersion",
+          "hostSessionId",
+          "path"
+        ],
+        "type": "object"
+      },
       "workspaceRoot": {
         "maxLength": 4096,
         "minLength": 1,

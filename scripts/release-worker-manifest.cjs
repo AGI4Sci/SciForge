@@ -37,6 +37,10 @@ const BUILTIN_PACKAGE_DEFINITIONS = {
   workspaceIntel: {
     dir: 'packages/workers/workspace-intel'
   },
+  workspaceEgress: {
+    dir: 'packages/workers/workspace-egress',
+    bundleTo: 'node_modules/@sciforge/workspace-egress'
+  },
   writeAssist: {
     dir: 'packages/workers/write-assist'
   },
@@ -45,9 +49,6 @@ const BUILTIN_PACKAGE_DEFINITIONS = {
   },
   runtimeInspector: {
     dir: 'packages/workers/runtime-inspector'
-  },
-  remoteExecutor: {
-    dir: 'packages/workers/remote-executor'
   },
   scientificPlotting: {
     dir: 'packages/workers/scientific-plotting'
@@ -341,11 +342,11 @@ const WORKSPACE_PACKAGE_IDS = [
   'planGateway',
   'schedule',
   'search',
+  'workspaceEgress',
   'workspaceIntel',
   'writeAssist',
   'sciModalityRouter',
   'runtimeInspector',
-  'remoteExecutor',
   'scientificPlotting',
   'bgcDiscovery',
   'imageGeneration',
@@ -359,8 +360,8 @@ const BUNDLED_PACKAGE_IDS = [
   'planGateway',
   'schedule',
   'search',
+  'workspaceEgress',
   'workspaceIntel',
-  'remoteExecutor',
   'writeAssist',
   'runtimeInspector',
   'scientificPlotting',
@@ -511,22 +512,6 @@ const RUNTIME_ENTRIES = [
     ]),
     executableNodeEntryPaths: [
       'out/main/workspace-intel-mcp-node-entry.js'
-    ]
-  },
-  {
-    id: 'remote-executor',
-    label: 'Remote Executor',
-    packageIds: ['remoteExecutor'],
-    requiredPathsExport: 'REMOTE_EXECUTOR_RUNTIME_REQUIRED_PATHS',
-    requiredPaths: packagePaths('remoteExecutor', [
-      'package.json',
-      'src/mcp-server.ts',
-      'src/service.ts',
-      'src/contract.ts',
-      'remote_worker.py'
-    ]),
-    executableNodeEntryPaths: [
-      'out/main/remote-executor-mcp-node-entry.js'
     ]
   },
   {

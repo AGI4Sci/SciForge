@@ -167,8 +167,8 @@ export const useChatStore = create<ChatState>((set, get) => {
   remoteChannels: [],
   activeRemoteChannelId: '',
   remoteGuardChannelId: null,
-  remoteTargetId: null,
-  setRemoteTargetId: (targetId) => trackedSet({ remoteTargetId: targetId?.trim() || null }),
+  workspaceLocator: null,
+  setWorkspaceLocator: (locator) => trackedSet({ workspaceLocator: locator }),
 
   ...createRemoteChannelActions({
     set: trackedSet,

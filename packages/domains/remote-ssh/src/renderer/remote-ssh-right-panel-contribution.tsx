@@ -56,6 +56,7 @@ export function createRemoteSshRightPanelContribution(
         className={className}
         onCollapse={onCollapse}
         openExternal={host.openExternal}
+        openRemoteSession={host.workspace?.openRemoteSession}
       />
     )
   })

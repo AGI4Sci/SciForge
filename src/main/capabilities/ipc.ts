@@ -2,6 +2,10 @@ import { createHash, randomUUID } from 'node:crypto'
 import { ipcMain } from 'electron'
 import { z } from 'zod'
 import {
+  workspaceLocatorSchema,
+  type WorkspaceLocator
+} from '@sciforge/domain-sdk/workspace-host'
+import {
   CAPABILITY_BROKER_CONTRACT_VERSION,
   capabilityDiscoveryQuerySchema,
   capabilityEventQuerySchema,
@@ -44,6 +48,7 @@ const capabilityBindIpcSchema = z.object({
 }).strict()
 const capabilityInvokeIpcSchema = z.object({
   workspaceId: workspaceIdSchema.optional(),
+  workspaceLocator: workspaceLocatorSchema.optional(),
   request: capabilityInvocationRequestSchema,
   approval: z.object({ mode: z.enum(['confirmation']) }).strict().optional()
 }).strict()
@@ -95,11 +100,17 @@ type Subscription = {
   dispose: () => void
 }
 
-function uiCaller(sender: CapabilityIpcSender, workspaceId?: string, approvals: CapabilityApprovalGrant[] = []): CapabilityCallerContextInput {
+function uiCaller(
+  sender: CapabilityIpcSender,
+  workspaceId?: string,
+  approvals: CapabilityApprovalGrant[] = [],
+  workspaceLocator?: WorkspaceLocator
+): CapabilityCallerContextInput {
   return {
     audience: 'ui',
     callerId: `window:${sender.id}`,
     ...(workspaceId ? { workspaceId } : {}),
+    ...(workspaceLocator ? { workspaceLocator } : {}),
     approvals
   }
 }
@@ -192,7 +203,10 @@ export function registerCapabilityIpc(options: RegisterCapabilityIpcOptions): Ca
           mode: input.approval.mode
         }]
       : []
-    return options.broker.invoke(uiCaller(event.sender, input.workspaceId, approvals), input.request)
+    return options.broker.invoke(
+      uiCaller(event.sender, input.workspaceId, approvals, input.workspaceLocator),
+      input.request
+    )
   })
   handle(CAPABILITY_IPC_CHANNELS.events, (event, payload) => {
     const input = parse(capabilityEventsIpcSchema, payload)

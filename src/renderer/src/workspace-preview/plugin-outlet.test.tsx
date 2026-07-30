@@ -6,6 +6,10 @@ import {
   type WorkspaceObservation,
   type WorkspacePreviewEditOperation
 } from '@shared/workspace-preview'
+import {
+  MARKDOWN_COPY_FOR_WECHAT_ACTION_ID,
+  type MarkdownWechatCopyResult
+} from '@shared/markdown-wechat'
 
 vi.mock('../components/write/WritePdfViewer', () => ({
   WritePdfViewer: (props: { onPresentationStateChange?: unknown }) => createElement('div', {
@@ -27,6 +31,8 @@ const pluginOutletMocks = vi.hoisted(() => ({
       ok: false
       message?: string
     }>
+    onCopyForWechat?: () => Promise<MarkdownWechatCopyResult>
+    onOpenWorkspaceLink?: (target: { path: string; workspaceRoot: string }) => void
   }
 }))
 
@@ -334,6 +340,170 @@ describe('WorkspacePreviewPluginOutlet', () => {
     expect(invokeAction).toHaveBeenCalledWith('session-1', {
       actionId: 'markdown.readImage',
       input: { path: '/workspace/lab/docs/figures/cell.png' }
+    })
+  })
+
+  it('copies Markdown for WeChat through the advertised workspace preview host action', async () => {
+    const copyResult: MarkdownWechatCopyResult = {
+      copiedAt: '2026-07-30T09:00:00.000Z',
+      outputBytes: 768,
+      counts: {
+        formulas: 2,
+        inlineFormulas: 1,
+        displayFormulas: 1,
+        codeBlocks: 1,
+        embeddedImages: 1,
+        remoteImages: 0
+      },
+      warnings: [],
+      effect: 'clipboard-write'
+    }
+    const observation = createObservation('document', {
+      file: {
+        path: '/workspace/lab/docs/notes.md',
+        workspaceRoot: '/workspace/lab',
+        mimeType: 'text/markdown'
+      },
+      view: {
+        pluginId: 'markdown',
+        modality: 'document',
+        mode: 'preview',
+        title: 'notes.md'
+      },
+      visibleText: '# Notes',
+      text: { lineCount: 1, characterCount: 7, truncated: false },
+      actions: [MARKDOWN_COPY_FOR_WECHAT_ACTION_ID]
+    })
+    const invokeAction = vi.fn(async (_sessionId: string, action: { actionId: string }) => ({
+      ok: true as const,
+      sessionId: 'session-1',
+      pluginId: 'markdown',
+      actionId: action.actionId,
+      invokedAt: '2026-07-30T09:00:00.000Z',
+      result: copyResult,
+      audit: {
+        pluginId: 'markdown',
+        path: '/workspace/lab/docs/notes.md',
+        actionId: action.actionId,
+        effect: 'host-action' as const
+      }
+    }))
+
+    renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
+      context: createContext(observation, { invokeAction }),
+      routeReason: 'registered-plugin',
+      rendererRegistry: rendererWorkspacePreviewRegistry
+    }))
+
+    await expect(pluginOutletMocks.latestMarkdownProps?.onCopyForWechat?.()).resolves.toEqual(copyResult)
+    expect(invokeAction).toHaveBeenCalledWith('session-1', {
+      actionId: MARKDOWN_COPY_FOR_WECHAT_ACTION_ID,
+      input: {}
+    })
+  })
+
+  it('does not expose WeChat copy when the observation does not advertise it', () => {
+    const observation = createObservation('document', {
+      file: {
+        path: '/workspace/lab/docs/notes.md',
+        workspaceRoot: '/workspace/lab',
+        mimeType: 'text/markdown'
+      },
+      view: {
+        pluginId: 'markdown',
+        modality: 'document',
+        mode: 'preview',
+        title: 'notes.md'
+      },
+      visibleText: '# Notes',
+      text: { lineCount: 1, characterCount: 7, truncated: false },
+      actions: ['markdown.readImage']
+    })
+
+    renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
+      context: createContext(observation),
+      routeReason: 'registered-plugin',
+      rendererRegistry: rendererWorkspacePreviewRegistry
+    }))
+
+    expect(pluginOutletMocks.latestMarkdownProps?.onCopyForWechat).toBeUndefined()
+  })
+
+  it('rejects malformed WeChat copy action results at the renderer boundary', async () => {
+    const observation = createObservation('document', {
+      file: {
+        path: '/workspace/lab/docs/notes.md',
+        workspaceRoot: '/workspace/lab',
+        mimeType: 'text/markdown'
+      },
+      view: {
+        pluginId: 'markdown',
+        modality: 'document',
+        mode: 'preview',
+        title: 'notes.md'
+      },
+      visibleText: '# Notes',
+      text: { lineCount: 1, characterCount: 7, truncated: false },
+      actions: [MARKDOWN_COPY_FOR_WECHAT_ACTION_ID]
+    })
+    const invokeAction = vi.fn(async () => ({
+      ok: true as const,
+      sessionId: 'session-1',
+      pluginId: 'markdown',
+      actionId: MARKDOWN_COPY_FOR_WECHAT_ACTION_ID,
+      invokedAt: '2026-07-30T09:00:00.000Z',
+      result: { copiedAt: 'not-a-valid-result' },
+      audit: {
+        pluginId: 'markdown',
+        path: '/workspace/lab/docs/notes.md',
+        actionId: MARKDOWN_COPY_FOR_WECHAT_ACTION_ID,
+        effect: 'host-action' as const
+      }
+    }))
+
+    renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
+      context: createContext(observation, { invokeAction }),
+      routeReason: 'registered-plugin',
+      rendererRegistry: rendererWorkspacePreviewRegistry
+    }))
+
+    await expect(pluginOutletMocks.latestMarkdownProps?.onCopyForWechat?.())
+      .rejects.toThrow('invalid result')
+  })
+
+  it('routes Markdown workspace links through the shell file opener', () => {
+    const observation = createObservation('document', {
+      file: {
+        path: '/workspace/lab/docs/survey.md',
+        workspaceRoot: '/workspace/lab',
+        mimeType: 'text/markdown'
+      },
+      view: {
+        pluginId: 'markdown',
+        modality: 'document',
+        mode: 'preview',
+        title: 'survey.md'
+      },
+      visibleText: '[OPSD](../OPSD/OPSD.md)',
+      text: { lineCount: 1, characterCount: 24, truncated: false }
+    })
+    const openFile = vi.fn()
+    const context = createContext(observation)
+    context.openFile = openFile
+
+    renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
+      context,
+      routeReason: 'registered-plugin',
+      rendererRegistry: rendererWorkspacePreviewRegistry
+    }))
+
+    pluginOutletMocks.latestMarkdownProps?.onOpenWorkspaceLink?.({
+      path: '/workspace/lab/OPSD/OPSD.md',
+      workspaceRoot: '/workspace/lab'
+    })
+    expect(openFile).toHaveBeenCalledWith({
+      path: '/workspace/lab/OPSD/OPSD.md',
+      workspaceRoot: '/workspace/lab'
     })
   })
 

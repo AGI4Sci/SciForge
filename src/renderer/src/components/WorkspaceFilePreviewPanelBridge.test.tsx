@@ -14,6 +14,7 @@ import {
   WorkspaceFilePreviewPanelBridge,
   buildWorkspacePreviewVisibleContextComponent,
   resolveWorkspaceFilePreviewPanelBridgeRoute,
+  resolveWorkspacePreviewWorkspaceLocator,
   workspacePreviewVisualContentType
 } from './WorkspaceFilePreviewPanelBridge'
 
@@ -526,6 +527,37 @@ vi.mock('../workspace-preview', async () => {
 })
 
 describe('WorkspaceFilePreviewPanelBridge', () => {
+  it('prefers the preview owner thread locator and only falls back to the active locator', () => {
+    const activeLocator = {
+      contractVersion: 1 as const,
+      hostSessionId: 'active-host',
+      path: '/cluster/active'
+    }
+    const ownerLocator = {
+      contractVersion: 1 as const,
+      hostSessionId: 'owner-host',
+      path: '/cluster/owner'
+    }
+    const input = {
+      activeThreadId: 'active-thread',
+      threads: [
+        { id: 'active-thread' },
+        { id: 'owner-thread', workspaceLocator: ownerLocator }
+      ],
+      workspaceLocator: activeLocator
+    }
+
+    expect(resolveWorkspacePreviewWorkspaceLocator({
+      ...input,
+      sessionId: 'owner-thread'
+    })).toEqual(ownerLocator)
+    expect(resolveWorkspacePreviewWorkspaceLocator(input)).toEqual(activeLocator)
+    expect(resolveWorkspacePreviewWorkspaceLocator({
+      ...input,
+      sessionId: 'unrelated-thread'
+    })).toBeUndefined()
+  })
+
   it('maps generic preview modalities onto visual content types', () => {
     expect(workspacePreviewVisualContentType({ modality: 'deck' })).toBe('slide')
     expect(workspacePreviewVisualContentType({ modality: 'image', mimeType: 'image/png' })).toBe('image')

@@ -76,6 +76,41 @@ const sandboxedDefinitionFixture: SandboxedDomainPackageDefinitionInput = {
 }
 
 describe('domain package packaging contract', () => {
+  it('allows only trusted packages to declare a conventional workspace-server entrypoint', () => {
+    const trusted = defineTrustedDomainPackage({
+      ...definitionFixture,
+      entrypoints: [
+        ...definitionFixture.entrypoints,
+        {
+          process: 'workspace-server',
+          export: './workspace-server',
+          contributions: [{
+            id: 'fixture.domain-runtime.remote-provider',
+            kind: 'workspace-server.fixture-provider'
+          }]
+        }
+      ]
+    })
+
+    assert.equal(trusted.entrypoints[1]?.process, 'workspace-server')
+    assert.throws(
+      () => defineDomainPackage({
+        ...sandboxedDefinitionFixture,
+        entrypoints: [
+          ...sandboxedDefinitionFixture.entrypoints,
+          {
+            process: 'workspace-server',
+            isolation: 'extension-host',
+            entry: 'dist/workspace-server.js',
+            format: 'module',
+            contributions: []
+          }
+        ]
+      } as unknown as DomainPackageDefinitionInput),
+      z.ZodError
+    )
+  })
+
   it('normalizes and freezes package-owned runtime metadata', () => {
     const definition = defineTrustedDomainPackage({
       ...definitionFixture,

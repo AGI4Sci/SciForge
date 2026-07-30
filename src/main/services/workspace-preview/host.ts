@@ -45,6 +45,10 @@ import {
   type PdfReviewImproveAnnotationActionInput
 } from '../../../shared/pdf-review'
 import {
+  markdownWechatCopyActionInputSchema,
+  markdownWechatCopyResultSchema
+} from '../../../shared/markdown-wechat'
+import {
   exportPdfAnnotationAdobePdf,
   exportPdfAnnotationSidecarPackage,
   importPdfAnnotationSidecarPackage,
@@ -55,6 +59,9 @@ import {
   generatePdfReviewAnnotations,
   improvePdfReviewAnnotation
 } from '../pdf-review-service'
+import {
+  copyMarkdownForWechat as copyMarkdownForWechatToClipboard
+} from '../markdown-wechat-clipboard-service'
 import {
   DOCX_WORKSPACE_PREVIEW_PLUGIN_ID,
   HTML_WORKSPACE_PREVIEW_PLUGIN_ID,
@@ -257,6 +264,7 @@ export type WorkspacePreviewHostOptions = {
   createSessionId?: () => string
   runtime?: WorkspacePreviewHostRuntime
   htmlPreviewService?: Pick<WorkspaceHtmlPreviewService, 'preview'>
+  copyMarkdownForWechat?: typeof copyMarkdownForWechatToClipboard
   loadSettings?: () => Promise<AppSettingsV1>
 }
 
@@ -341,6 +349,7 @@ export class WorkspacePreviewHost {
   private readonly createSessionId: () => string
   private readonly workerClient: WorkspacePreviewWorkerClient
   private readonly htmlPreviewService: Pick<WorkspaceHtmlPreviewService, 'preview'>
+  private readonly copyMarkdownForWechat: typeof copyMarkdownForWechatToClipboard
   private readonly loadSettings?: () => Promise<AppSettingsV1>
   private readonly sessions = new Map<string, WorkspacePreviewSessionRecord>()
 
@@ -350,6 +359,7 @@ export class WorkspacePreviewHost {
     }
     this.createSessionId = options.createSessionId ?? (() => `preview-${randomUUID()}`)
     this.htmlPreviewService = options.htmlPreviewService ?? workspaceHtmlPreviewService
+    this.copyMarkdownForWechat = options.copyMarkdownForWechat ?? copyMarkdownForWechatToClipboard
     this.loadSettings = options.loadSettings
     const runtime = options.runtime ?? WorkspacePreviewWorkerClient.compose({
       hostAdapters: this.builtInHostProviderAdapters(),
@@ -433,7 +443,11 @@ export class WorkspacePreviewHost {
         input.now
       ),
       invokeHtmlPreview: (input) => this.invokeHtmlPreviewUrlAction(this.providerSessionRecord(input), input),
-      invokeMarkdownImage: (input) => this.invokeMarkdownReadImageAction(this.providerSessionRecord(input), input)
+      invokeMarkdownImage: (input) => this.invokeMarkdownReadImageAction(this.providerSessionRecord(input), input),
+      invokeMarkdownCopyForWechat: (input) => this.invokeMarkdownCopyForWechatAction(
+        this.providerSessionRecord(input),
+        input
+      )
     }
   }
 
@@ -2052,6 +2066,27 @@ export class WorkspacePreviewHost {
         size: image.size
       },
       bytesRead: 0,
+      truncated: false,
+      effect: 'host-action'
+    }
+  }
+
+  private async invokeMarkdownCopyForWechatAction(
+    record: WorkspacePreviewSessionRecord,
+    input: WorkspacePreviewProviderActionInput
+  ): Promise<WorkspacePreviewProviderActionResult> {
+    markdownWechatCopyActionInputSchema.parse(input.action.input)
+    const markdown = await readFile(record.file.path, 'utf8')
+    const result = markdownWechatCopyResultSchema.parse(await this.copyMarkdownForWechat({
+      sourcePath: record.file.path,
+      workspaceRoot: record.file.workspaceRoot,
+      markdown
+    }))
+
+    return {
+      ok: true,
+      result,
+      bytesRead: Buffer.byteLength(markdown, 'utf8'),
       truncated: false,
       effect: 'host-action'
     }

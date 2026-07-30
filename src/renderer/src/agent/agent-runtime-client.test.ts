@@ -189,11 +189,16 @@ describe('agentRuntimeClient', () => {
     })
     const ac = new AbortController()
     const seen: AgentRuntimeEvent[] = []
+    const workspaceLocator = {
+      contractVersion: 1 as const,
+      hostSessionId: 'remote-session-1',
+      path: '/cluster/project'
+    }
 
     const subscription = agentRuntimeClient.subscribeEvents('thread-1', 4, (event) => {
       seen.push(event)
       ac.abort()
-    }, ac.signal, 'codex')
+    }, ac.signal, 'codex', workspaceLocator)
     await new Promise<void>((resolve) => setTimeout(resolve, 0))
     listeners[0]?.({
       streamId: 'stream-1',
@@ -204,6 +209,7 @@ describe('agentRuntimeClient', () => {
     expect(subscribeEvents).toHaveBeenCalledWith({
       runtimeId: 'codex',
       threadId: 'thread-1',
+      workspaceLocator,
       sinceSeq: 4,
       streamId: expect.stringMatching(/^agent-runtime-/u)
     })

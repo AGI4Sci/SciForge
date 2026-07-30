@@ -1,9 +1,10 @@
 import { EventEmitter } from 'node:events'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { PassThrough } from 'node:stream'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   REMOTE_SSH_MAX_CAPTURED_OUTPUT_CHARACTERS,
   type RemoteSshLab,
@@ -17,8 +18,16 @@ import {
 import type {
   ProcessRequest,
   ProcessResult,
-  RemoteSshProcessRunner
+  RemoteSshProcessRunner,
+  RemoteSshStreamingProcess,
+  RemoteSshStreamingProcessRunner,
+  StreamingProcessRequest
 } from './process-runner.js'
+import {
+  workspaceHostHandshakeRequestSchema,
+  workspaceHostSensitiveControlSchema,
+  type WorkspaceHostSession
+} from '@sciforge/domain-sdk/workspace-host'
 import type {
   RemoteSshLabEnvironmentManager,
   RemoteSshProxyEndpointOptions
@@ -45,12 +54,32 @@ class FakeProcessRunner implements RemoteSshProcessRunner {
 }
 
 afterEach(async () => {
+  vi.useRealTimers()
   await Promise.all(
     temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))
   )
 })
 
 describe('RemoteSshService registry and workspace authorization', () => {
+  it('creates a missing local OpenSSH config and opens the canonical path', async () => {
+    const userDataDir = await temporaryDirectory('sciforge-remote-ssh-data-')
+    const homeDirectory = await temporaryDirectory('sciforge-remote-ssh-home-')
+    const openPath = vi.fn(async () => undefined)
+    const service = new RemoteSshService({
+      userDataDir,
+      homeDirectory,
+      openPath,
+      processRunner: new FakeProcessRunner(),
+      environmentManager: createFakeEnvironmentManager()
+    })
+
+    await expect(service.openOpenSshConfig()).resolves.toEqual({ opened: true })
+    const configPath = join(homeDirectory, '.ssh', 'config')
+    await expect(readFile(configPath, 'utf8')).resolves.toBe('')
+    expect(openPath).toHaveBeenCalledWith(configPath)
+    service.close()
+  })
+
   it('persists labs, targets, and bindings without credentials', async () => {
     const userDataDir = await temporaryDirectory('sciforge-remote-ssh-data-')
     const workspace = await temporaryDirectory('sciforge-remote-ssh-workspace-')
@@ -1093,6 +1122,325 @@ describe('RemoteSshService workspace-scoped file transfer', () => {
   })
 })
 
+describe('RemoteSshService Workspace Host attachment', () => {
+  it('leases local egress, creates a loopback reverse forward, and sends access only in handshake stdin', async () => {
+    vi.useFakeTimers()
+    const artifactDirectory = await temporaryDirectory('sciforge-workspace-host-artifact-')
+    const server = Buffer.from('#!/bin/sh\nexec runtime/node server.mjs "$@"\n')
+    await writeFile(join(artifactDirectory, 'workspace-host'), server)
+    await chmod(join(artifactDirectory, 'workspace-host'), 0o700)
+    const manifest = {
+      schemaVersion: 1 as const,
+      protocolVersion: 1 as const,
+      serverVersion: '1.0.0',
+      platform: 'linux' as const,
+      arch: 'x64' as const,
+      runtime: 'bundled-node@22.18.0' as const,
+      entrypoint: 'workspace-host',
+      files: [{
+        path: 'workspace-host',
+        sha256: createHash('sha256').update(server).digest('hex'),
+        sizeBytes: server.byteLength,
+        executable: true
+      }],
+      readinessProbes: [],
+      contributions: []
+    }
+    await writeFile(
+      join(artifactDirectory, 'manifest.json'),
+      `${JSON.stringify(manifest)}\n`,
+      'utf8'
+    )
+    const runner = new FakeProcessRunner(async (request) => {
+      if (request.stdin === 'uname -s\nuname -m\n') {
+        return okResult({ stdout: 'Linux\nx86_64\n' })
+      }
+      if (request.stdin?.includes('printf \'%s\\n\' "$HOME"')) {
+        return okResult({ stdout: '/home/researcher\n' })
+      }
+      if (request.stdin?.includes("'probe-daemon'")) {
+        return okResult({
+          stdout: '{"supported":false,"reason":"daemon unavailable in test"}\n'
+        })
+      }
+      return okResult()
+    })
+    let attachRequest: StreamingProcessRequest | undefined
+    let attachProcess:
+      (RemoteSshStreamingProcess & Readonly<{ closed: boolean }>) | undefined
+    let handshake: ReturnType<typeof workspaceHostHandshakeRequestSchema.parse> | undefined
+    const sensitiveControls: Array<
+      ReturnType<typeof workspaceHostSensitiveControlSchema.parse>
+    > = []
+    const streaming: RemoteSshStreamingProcessRunner = {
+      open(request) {
+        attachRequest = request
+        attachProcess = fakeWorkspaceHostStreamingProcess((line, send) => {
+          const decoded: unknown = JSON.parse(line)
+          const control = workspaceHostSensitiveControlSchema.safeParse(decoded)
+          if (control.success) {
+            sensitiveControls.push(control.data)
+            return
+          }
+          handshake = workspaceHostHandshakeRequestSchema.parse(decoded)
+          send({
+            protocolVersion: 1,
+            ok: true,
+            session: workspaceHostSession('workspace-session', {
+              mode: 'local',
+              status: 'ready',
+              leaseExpiresAt: handshake.egressAccess?.mode === 'local'
+                ? handshake.egressAccess.expiresAt
+                : undefined
+            })
+          })
+        })
+        return attachProcess
+      }
+    }
+    const configured = await configuredService({
+      processRunner: runner,
+      streamingProcessRunner: streaming,
+      workspaceServerArtifact: async () => ({
+        directory: artifactDirectory,
+        manifest
+      })
+    })
+    let modelWorkspaceId = ''
+    let modelRouteAvailable = true
+    const modelHeartbeat = vi.fn(async () => {
+      if (!modelRouteAvailable) throw new Error('Model Router route was lost.')
+      return {
+        workspaceId: modelWorkspaceId,
+        leaseId: 'model-lease-1234567890',
+        expiresAt: new Date(Date.now() + 60_000).toISOString()
+      }
+    })
+    const modelRevoke = vi.fn()
+    const workspaceModelAccess = {
+      acquire: vi.fn(async (input: Readonly<{ workspaceId: string }>) => {
+        modelWorkspaceId = input.workspaceId
+        return {
+          leaseId: 'model-lease-1234567890',
+          workspaceId: input.workspaceId,
+          endpoint: {
+            protocol: 'http' as const,
+            host: '127.0.0.1' as const,
+            port: 38_765,
+            basePath: '/v1' as const
+          },
+          authorization: {
+            scheme: 'bearer' as const,
+            token: 'scoped-model-router-token-1234567890'
+          },
+          issuedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 60_000).toISOString()
+        }
+      }),
+      heartbeat: modelHeartbeat,
+      revoke: modelRevoke
+    }
+    const authorization = await configured.service.authorizeWorkspaceHostSession(
+      configured.workspace,
+      configured.targetId,
+      configured.targetRevision,
+      {
+        workspaceRoot: '/cluster/project',
+        egress: {
+          mode: 'local',
+          allowlist: {
+            rules: [{ host: 'api.openai.com', ports: [443] }]
+          }
+        }
+      }
+    )
+    const client = await configured.service.attachWorkspaceHost({
+      authorizedSessionId: authorization.authorizedSessionId
+    }, {
+      owner: { moduleId: 'sciforge.remote-ssh', moduleVersion: '1.0.0' },
+      signal: new AbortController().signal,
+      workspaceModelAccess,
+      log: () => undefined
+    })
+
+    const reverseForwards = attachRequest?.args.flatMap((argument, index, args) =>
+      argument === '-R' ? [args[index + 1]!] : []
+    ) ?? []
+    expect(reverseForwards).toHaveLength(2)
+    expect(reverseForwards).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^127\.0\.0\.1:\d+:127\.0\.0\.1:\d+$/),
+      expect.stringMatching(/^127\.0\.0\.1:\d+:127\.0\.0\.1:38765$/)
+    ]))
+    expect(new Set(reverseForwards.map((forward) => forward.split(':')[1])).size).toBe(2)
+    expect(handshake?.egressAccess).toMatchObject({
+      mode: 'local',
+      proxyEndpoint: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/$/),
+      authorization: {
+        scheme: 'bearer',
+        token: expect.stringMatching(/^[A-Za-z0-9._~-]{24,}$/)
+      }
+    })
+    const argv = JSON.stringify(attachRequest?.args)
+    expect(argv).not.toContain('exec node')
+    expect(argv).toContain('exec \\"$HOME/')
+    expect(argv).toContain("--lifecycle-mode 'connection-session'")
+    expect(argv).not.toContain(authorization.authorizedSessionId)
+    if (handshake?.egressAccess?.mode === 'local') {
+      expect(argv).not.toContain(handshake.egressAccess.authorization.token)
+    }
+    expect(handshake?.modelAccess).toMatchObject({
+      baseUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/v1$/),
+      authorization: {
+        scheme: 'bearer',
+        token: 'scoped-model-router-token-1234567890'
+      }
+    })
+    expect(modelWorkspaceId).toBe(authorization.authorizedSessionId)
+    expect(argv).not.toContain('scoped-model-router-token-1234567890')
+    expect(client.getSession().egress.status).toBe('ready')
+    await vi.advanceTimersByTimeAsync(WORKSPACE_EGRESS_HEARTBEAT_TEST_MS)
+    expect(attachProcess?.closed).toBe(false)
+    expect(sensitiveControls).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sessionId: 'workspace-session',
+        control: 'egress-renew',
+        expiresAt: expect.any(String)
+      }),
+      expect.objectContaining({
+        sessionId: 'workspace-session',
+        control: 'model-access-renew',
+        expiresAt: expect.any(String)
+      })
+    ]))
+    expect(modelHeartbeat).toHaveBeenCalledTimes(1)
+
+    modelRouteAvailable = false
+    await vi.advanceTimersByTimeAsync(WORKSPACE_EGRESS_HEARTBEAT_TEST_MS)
+    expect(attachProcess?.closed).toBe(true)
+    expect(sensitiveControls).toEqual(expect.arrayContaining([
+      {
+        protocolVersion: 1,
+        sessionId: 'workspace-session',
+        control: 'egress-revoke'
+      },
+      {
+        protocolVersion: 1,
+        sessionId: 'workspace-session',
+        control: 'model-access-revoke'
+      }
+    ]))
+    expect(modelRevoke).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId: authorization.authorizedSessionId,
+      leaseId: 'model-lease-1234567890',
+      token: 'scoped-model-router-token-1234567890'
+    }))
+    await client.close('test complete')
+    configured.service.close()
+  })
+
+  it('keeps no-egress sessions offline without minting a Model Router lease', async () => {
+    const artifactDirectory = await temporaryDirectory('sciforge-workspace-host-offline-')
+    const wrapper = Buffer.from('#!/bin/sh\nexec runtime/node server.mjs "$@"\n')
+    await writeFile(join(artifactDirectory, 'workspace-host'), wrapper)
+    await chmod(join(artifactDirectory, 'workspace-host'), 0o700)
+    const manifest = {
+      schemaVersion: 1 as const,
+      protocolVersion: 1 as const,
+      serverVersion: '1.0.0',
+      platform: 'linux' as const,
+      arch: 'x64' as const,
+      runtime: 'bundled-node@22.18.0' as const,
+      entrypoint: 'workspace-host',
+      files: [{
+        path: 'workspace-host',
+        sha256: createHash('sha256').update(wrapper).digest('hex'),
+        sizeBytes: wrapper.byteLength,
+        executable: true
+      }],
+      readinessProbes: [],
+      contributions: []
+    }
+    await writeFile(
+      join(artifactDirectory, 'manifest.json'),
+      `${JSON.stringify(manifest)}\n`,
+      'utf8'
+    )
+    const runner = new FakeProcessRunner(async (request) => {
+      if (request.stdin === 'uname -s\nuname -m\n') {
+        return okResult({ stdout: 'Linux\nx86_64\n' })
+      }
+      if (request.stdin?.includes('printf \'%s\\n\' "$HOME"')) {
+        return okResult({ stdout: '/home/researcher\n' })
+      }
+      if (request.stdin?.includes("'probe-daemon'")) {
+        return okResult({
+          stdout: '{"supported":false,"reason":"daemon unavailable in test"}\n'
+        })
+      }
+      return okResult()
+    })
+    let attachRequest: StreamingProcessRequest | undefined
+    let handshake: ReturnType<typeof workspaceHostHandshakeRequestSchema.parse> | undefined
+    const streaming: RemoteSshStreamingProcessRunner = {
+      open(request) {
+        attachRequest = request
+        return fakeWorkspaceHostStreamingProcess((line, send) => {
+          handshake = workspaceHostHandshakeRequestSchema.parse(JSON.parse(line))
+          send({
+            protocolVersion: 1,
+            ok: true,
+            session: workspaceHostSession('offline-session', {
+              mode: 'none',
+              status: 'disabled'
+            })
+          })
+        })
+      }
+    }
+    const configured = await configuredService({
+      processRunner: runner,
+      streamingProcessRunner: streaming,
+      workspaceServerArtifact: async () => ({
+        directory: artifactDirectory,
+        manifest
+      })
+    })
+    const authorization = await configured.service.authorizeWorkspaceHostSession(
+      configured.workspace,
+      configured.targetId,
+      configured.targetRevision,
+      {
+        workspaceRoot: '/cluster/project',
+        egress: { mode: 'none' }
+      }
+    )
+    const acquire = vi.fn(async () => {
+      throw new Error('No-egress mode must not acquire model access.')
+    })
+    const client = await configured.service.attachWorkspaceHost({
+      authorizedSessionId: authorization.authorizedSessionId
+    }, {
+      owner: { moduleId: 'sciforge.remote-ssh', moduleVersion: '1.0.0' },
+      signal: new AbortController().signal,
+      workspaceModelAccess: {
+        acquire,
+        heartbeat: async () => {
+          throw new Error('No model-access lease was acquired.')
+        },
+        revoke: () => undefined
+      },
+      log: () => undefined
+    })
+
+    expect(acquire).not.toHaveBeenCalled()
+    expect(handshake?.egressAccess).toEqual({ mode: 'none' })
+    expect(handshake?.modelAccess).toBeUndefined()
+    expect(attachRequest?.args).not.toContain('-R')
+    await client.close()
+    configured.service.close()
+  })
+})
+
 async function configuredService(options: Partial<RemoteSshServiceOptions & {
   targetConcurrency: number
   targetAlias: string
@@ -1112,7 +1460,13 @@ async function configuredService(options: Partial<RemoteSshServiceOptions & {
     targetResolver: options.targetResolver ?? fakeTargetResolver,
     ...(options.maxDownloadBytes ? { maxDownloadBytes: options.maxDownloadBytes } : {}),
     ...(options.maxUploadBytes ? { maxUploadBytes: options.maxUploadBytes } : {}),
-    ...(options.globalConcurrency ? { globalConcurrency: options.globalConcurrency } : {})
+    ...(options.globalConcurrency ? { globalConcurrency: options.globalConcurrency } : {}),
+    ...(options.streamingProcessRunner
+      ? { streamingProcessRunner: options.streamingProcessRunner }
+      : {}),
+    ...(options.workspaceServerArtifact
+      ? { workspaceServerArtifact: options.workspaceServerArtifact }
+      : {})
   })
   await service.saveLab({
     id: 'lab-a',
@@ -1143,6 +1497,66 @@ async function configuredService(options: Partial<RemoteSshServiceOptions & {
     targetRevision: target.revision
   }
 }
+
+function workspaceHostSession(
+  sessionId: string,
+  egress: WorkspaceHostSession['egress']
+): WorkspaceHostSession {
+  return {
+    protocolVersion: 1,
+    serverVersion: '1.0.0',
+    serverInstanceId: 'server-instance',
+    sessionId,
+    lifecycleMode: 'connection-session',
+    locator: {
+      contractVersion: 1,
+      hostSessionId: sessionId,
+      path: '/cluster/project'
+    },
+    platform: { os: 'linux', architecture: 'x64' },
+    capabilities: [],
+    contributions: [],
+    eventSequence: 0,
+    replay: { earliestSequence: 0, latestSequence: 0 },
+    egress
+  }
+}
+
+function fakeWorkspaceHostStreamingProcess(
+  onLine: (line: string, send: (value: unknown) => void) => void
+): RemoteSshStreamingProcess & Readonly<{ closed: boolean }> {
+  const stdout = new PassThrough()
+  const stderr = new PassThrough()
+  let resolveExit!: (exit: { exitCode: number | null; signal: NodeJS.Signals | null }) => void
+  const exit = new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    resolveExit = resolve
+  })
+  let closed = false
+  const process: RemoteSshStreamingProcess & Readonly<{ closed: boolean }> = {
+    stdout,
+    stderr,
+    exit,
+    get closed() {
+      return closed
+    },
+    write: async (data) => {
+      for (const line of Buffer.from(data).toString('utf8').split('\n').filter(Boolean)) {
+        onLine(line, (value) => stdout.write(`${JSON.stringify(value)}\n`))
+      }
+    },
+    end: () => undefined,
+    dispose: async () => {
+      if (closed) return
+      closed = true
+      resolveExit({ exitCode: null, signal: 'SIGTERM' })
+      stdout.end()
+      stderr.end()
+    }
+  }
+  return process
+}
+
+const WORKSPACE_EGRESS_HEARTBEAT_TEST_MS = 30_001
 
 const fakeEnvironmentManager = createFakeEnvironmentManager()
 

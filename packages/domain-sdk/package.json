@@ -20,6 +20,8 @@
     "./visual-source": "./src/visual-source.ts",
     "./version-control": "./src/version-control.ts",
     "./visual-capture": "./src/visual-capture.ts",
+    "./workspace-host": "./src/workspace-host.ts",
+    "./workspace-server": "./src/workspace-server.ts",
     "./workspace-preview": "./src/workspace-preview.ts"
   },
   "files": [

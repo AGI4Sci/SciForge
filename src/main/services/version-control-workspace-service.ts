@@ -5,6 +5,9 @@ import { isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { promisify } from 'node:util'
 import type {
+  WorkspaceLocator
+} from '@sciforge/domain-sdk/workspace-host'
+import type {
   VersionControlCreateReferenceInput,
   VersionControlCreateReferenceOutput,
   VersionControlCreateSnapshotInput,
@@ -37,6 +40,7 @@ export type VersionControlWorkspaceSession = Readonly<{
   workspaceId: string
   workspaceRoot: string
   repositoryRoot: string
+  workspaceLocator?: WorkspaceLocator
 }>
 
 type VersionControlChange = VersionControlStatusOutput['changes'][number]
@@ -68,8 +72,12 @@ export class VersionControlWorkspaceService {
   async open(
     ownerId: string,
     ownerAudience: 'ui' | 'agent' | 'system',
-    workspaceRoot: string
+    workspaceRoot: string,
+    workspaceLocator?: WorkspaceLocator
   ): Promise<VersionControlWorkspaceSession> {
+    if (workspaceLocator) {
+      throw new Error('Remote version-control workspaces require the workspace placement router.')
+    }
     const normalizedOwner = ownerId.trim()
     const normalizedWorkspace = workspaceRoot.trim()
     if (!normalizedOwner) throw new Error('Version-control workspace requires an owner.')

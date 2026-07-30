@@ -33,7 +33,6 @@ import {
   defaultLocalRuntimeSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
-  defaultRemoteExecutorSettings,
   defaultWriteSettings,
   defaultKeyboardShortcuts,
   getActiveAgentRuntime,
@@ -47,9 +46,6 @@ import {
   isLocalRuntimeInsecure,
   listModelRouterModelIds,
   mergeRemoteChannelSettings,
-  normalizeRemoteExecutorSettings,
-  remoteExecutorWorkspaceMatchesTrust,
-  isRemoteExecutorTargetTrustedForWorkspace,
   normalizeAppSettings,
   normalizeModelAccessSettings,
   normalizeModelRouterSettings,
@@ -88,7 +84,6 @@ function settings(): AppSettingsV1 {
     connectPhone: defaultConnectPhoneSettings(),
     schedule: defaultScheduleSettings(),
     workflow: defaultWorkflowSettings(),
-    remoteExecutor: defaultRemoteExecutorSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: ''
   }
@@ -372,131 +367,6 @@ describe('local runtime defaults', () => {
       exactRepeatThreshold: 3,
       semanticFailureThreshold: 2
     })
-  })
-})
-
-describe('remote executor settings', () => {
-  it('defaults and normalizes the top-level domain', () => {
-    expect(defaultRemoteExecutorSettings()).toEqual({
-      enabled: false,
-      defaultTargetId: '',
-      targets: []
-    })
-
-    const normalized = normalizeAppSettings({
-      ...settings(),
-      remoteExecutor: undefined
-    } as unknown as AppSettingsV1)
-
-    expect(normalized.remoteExecutor).toEqual(defaultRemoteExecutorSettings())
-  })
-
-  it('normalizes SSH and Slurm target fields while preserving trust fingerprints', () => {
-    const fingerprint = 'SHA256:remote-host/+abc='
-    const normalized = normalizeRemoteExecutorSettings({
-      enabled: true,
-      defaultTargetId: ' gpu-login ',
-      targets: [{
-        id: ' gpu-login ',
-        label: ' GPU Login ',
-        enabled: false,
-        kind: 'slurm',
-        ssh: {
-          host: ' login.example.edu ',
-          user: ' researcher ',
-          port: '2222' as unknown as number,
-          pythonPath: ' /opt/conda/bin/python ',
-          identityFile: ' ~/.ssh/gpu '
-        },
-        remoteWorkspaceRoot: ' /scratch/project ',
-        slurm: {
-          defaults: {
-            partition: ' gpu ',
-            account: ' lab ',
-            nodes: 2.8,
-            cpusPerTask: 8,
-            extraArgs: [' --gres=gpu:1 ', '', ' --gres=gpu:1 ']
-          }
-        },
-        trustedWorkspaces: [{
-          workspaceRoot: ' /repo/project ',
-          targetFingerprint: fingerprint,
-          trustedAt: '2026-06-01T00:00:00.000Z',
-          trustedBy: ' zxy ',
-          approvalBypass: true
-        }]
-      }]
-    })
-
-    expect(normalized.enabled).toBe(true)
-    expect(normalized.defaultTargetId).toBe('gpu-login')
-    expect(normalized.targets[0]).toMatchObject({
-      id: 'gpu-login',
-      label: 'GPU Login',
-      enabled: false,
-      kind: 'slurm',
-      remoteWorkspaceRoot: '/scratch/project',
-      ssh: {
-        host: 'login.example.edu',
-        user: 'researcher',
-        port: 2222,
-        pythonPath: '/opt/conda/bin/python',
-        identityFile: '~/.ssh/gpu'
-      },
-      slurm: {
-        defaults: {
-          partition: 'gpu',
-          account: 'lab',
-          nodes: 2,
-          cpusPerTask: 8,
-          extraArgs: ['--gres=gpu:1']
-        }
-      }
-    })
-    expect(normalized.targets[0].trustedWorkspaces[0]).toEqual({
-      workspaceRoot: '/repo/project',
-      targetFingerprint: fingerprint,
-      trustedAt: '2026-06-01T00:00:00.000Z',
-      trustedBy: 'zxy',
-      approvalBypass: true
-    })
-  })
-
-  it('deduplicates repeated target ids with stable suffixes', () => {
-    const normalized = normalizeRemoteExecutorSettings({
-      defaultTargetId: 'gpu',
-      targets: [
-        { id: 'gpu', label: 'A' },
-        { id: 'gpu', label: 'B' },
-        { id: 'gpu', label: 'C' }
-      ]
-    })
-
-    expect(normalized.defaultTargetId).toBe('gpu')
-    expect(normalized.targets.map((target) => target.id)).toEqual(['gpu', 'gpu-2', 'gpu-3'])
-    expect(normalized.targets.map((target) => target.label)).toEqual(['A', 'B', 'C'])
-  })
-
-  it('matches trusted workspaces exactly or by subpath for a target fingerprint', () => {
-    const target = normalizeRemoteExecutorSettings({
-      targets: [{
-        id: 'gpu',
-        label: 'GPU',
-        trustedWorkspaces: [{
-          workspaceRoot: '/repo/project',
-          targetFingerprint: 'fp-1',
-          trustedAt: '2026-06-01T00:00:00.000Z',
-          trustedBy: 'zxy',
-          approvalBypass: true
-        }]
-      }]
-    }).targets[0]
-
-    expect(remoteExecutorWorkspaceMatchesTrust('/repo/project', '/repo/project')).toBe(true)
-    expect(remoteExecutorWorkspaceMatchesTrust('/repo/project', '/repo/project/subdir')).toBe(true)
-    expect(remoteExecutorWorkspaceMatchesTrust('/repo/project', '/repo/project-other')).toBe(false)
-    expect(isRemoteExecutorTargetTrustedForWorkspace(target, '/repo/project/subdir', 'fp-1')).toBe(true)
-    expect(isRemoteExecutorTargetTrustedForWorkspace(target, '/repo/project/subdir', 'fp-2')).toBe(false)
   })
 })
 

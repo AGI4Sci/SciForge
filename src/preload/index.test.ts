@@ -78,6 +78,47 @@ describe('preload agentRuntime bridge', () => {
     expect(api.biologyRoom).toBeUndefined()
   })
 
+  it('exposes attached-session-only Remote Workspace IPC', async () => {
+    const api = exposedApi as {
+      remoteWorkspace: {
+        list(): Promise<unknown>
+        get(): Promise<unknown>
+        attach(input: unknown): Promise<unknown>
+        select(input: unknown): Promise<unknown>
+        reconnect(input: unknown): Promise<unknown>
+        close(input: unknown): Promise<unknown>
+        onSnapshotChanged(handler: (snapshot: unknown) => void): () => void
+      }
+    }
+    const attach = {
+      providerId: 'remote-ssh.workspace-host-provider',
+      authorizedSessionId: 'authorized-session-1'
+    }
+
+    await api.remoteWorkspace.list()
+    await api.remoteWorkspace.get()
+    await api.remoteWorkspace.attach(attach)
+    await api.remoteWorkspace.select({ sessionId: 'session-1' })
+    await api.remoteWorkspace.reconnect({ sessionId: 'session-1' })
+    await api.remoteWorkspace.close({ sessionId: 'session-1' })
+    const listener = vi.fn()
+    const unsubscribe = api.remoteWorkspace.onSnapshotChanged(listener)
+    const wrapped = on.mock.calls.find(
+      ([channel]) => channel === 'remoteWorkspace:snapshot-changed'
+    )?.[1] as ((event: unknown, snapshot: unknown) => void) | undefined
+    wrapped?.({}, { workspaces: [] })
+    unsubscribe()
+
+    expect(invoke).toHaveBeenCalledWith('remoteWorkspace:list')
+    expect(invoke).toHaveBeenCalledWith('remoteWorkspace:get')
+    expect(invoke).toHaveBeenCalledWith('remoteWorkspace:attach', attach)
+    expect(listener).toHaveBeenCalledWith({ workspaces: [] })
+    expect(removeListener).toHaveBeenCalledWith(
+      'remoteWorkspace:snapshot-changed',
+      wrapped
+    )
+  })
+
   it('exposes durable full-trace read, export, and clear IPC', async () => {
     const api = exposedApi as {
       traces: {
