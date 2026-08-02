@@ -1,11 +1,17 @@
 import type { SciForgeApi } from '@shared/sciforge-api'
+import type { VisibleContextSnapshot } from '@shared/visible-context'
 import { serializeCapabilityResourceContentAccess } from '@shared/workspace-preview-asset-url'
+import {
+  captureDevBrowserSurface,
+  type DevBrowserSurfaceCaptureRequest
+} from './dev-browser-surface-capture'
 
 const DEV_BRIDGE_PROXY_PATH = '/__sciforge-dev-bridge'
-const CLIENT_ID_STORAGE_KEY = 'sciforge.dev-browser-bridge.client-id'
 const DEV_INSTANCE_ID = typeof __SCIFORGE_DEV_INSTANCE_ID__ === 'string'
   ? __SCIFORGE_DEV_INSTANCE_ID__.trim()
   : ''
+const PAGE_INCARNATION_CLIENT_ID = globalThis.crypto?.randomUUID?.()
+  ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`
 
 type BridgeEnvelope<T> =
   | { ok: true; payload: T }
@@ -22,6 +28,7 @@ let installed = false
 let eventSource: EventSource | null = null
 let clientId = ''
 let bridgeUrl = ''
+let lastPublishedVisibleContextRevision: number | null = null
 const channelHandlers = new Map<string, Set<ChannelHandler>>()
 
 function defaultBridgeUrl(): string {
@@ -37,28 +44,8 @@ function detectPlatform(): string {
   return 'browser'
 }
 
-function storageGet(storage: Storage | undefined, key: string): string | null {
-  try {
-    return storage?.getItem(key) ?? null
-  } catch {
-    return null
-  }
-}
-
-function storageSet(storage: Storage | undefined, key: string, value: string): void {
-  try {
-    storage?.setItem(key, value)
-  } catch {
-    /* best effort only */
-  }
-}
-
 function resolveClientId(): string {
-  const existing = storageGet(globalThis.sessionStorage, CLIENT_ID_STORAGE_KEY)
-  if (existing) return existing
-  const created = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`
-  storageSet(globalThis.sessionStorage, CLIENT_ID_STORAGE_KEY, created)
-  return created
+  return PAGE_INCARNATION_CLIENT_ID
 }
 
 function ensureEventSource(): void {
@@ -119,7 +106,35 @@ async function invoke<T>(channel: string, payload?: unknown): Promise<T> {
   return envelope.payload
 }
 
+async function submitSurfaceCapture(request: DevBrowserSurfaceCaptureRequest): Promise<void> {
+  const capture = await captureDevBrowserSurface(
+    request,
+    () => lastPublishedVisibleContextRevision
+  )
+  const response = await fetch(`${bridgeUrl}/surface-capture`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-SciForge-Client': clientId,
+      ...(DEV_INSTANCE_ID ? { 'X-SciForge-Dev-Instance': DEV_INSTANCE_ID } : {})
+    },
+    body: JSON.stringify(capture)
+  })
+  if (!response.ok) {
+    const envelope = await response.json().catch(() => null) as { message?: unknown } | null
+    const message = typeof envelope?.message === 'string'
+      ? envelope.message
+      : `Bridge returned HTTP ${response.status}.`
+    throw new Error(`Browser pixel capture was rejected: ${message}`)
+  }
+}
+
 function createApi(): SciForgeApi {
+  const publishVisibleContext: SciForgeApi['visibleContext']['publish'] = async (snapshot) => {
+    const published = await invoke<VisibleContextSnapshot>('visibleContext:publish', snapshot)
+    lastPublishedVisibleContextRevision = published.revision
+    return published
+  }
   const getConnectPhoneStatus: SciForgeApi['getConnectPhoneStatus'] = () => invoke('connectPhone:status')
   const startConnectPhoneInstallQr: SciForgeApi['startConnectPhoneInstallQr'] = (provider, options) =>
     invoke('connectPhone:install:qrcode', { provider, isLark: options?.isLark })
@@ -305,7 +320,7 @@ function createApi(): SciForgeApi {
     clearWriteInlineCompletionDebugEntries: () => invoke('write:inline-completion-debug:clear'),
     exportWriteDocument: (payload) => invoke('write:export', payload),
     visibleContext: {
-      publish: (snapshot) => invoke('visibleContext:publish', snapshot),
+      publish: publishVisibleContext,
       get: () => invoke('visibleContext:get'),
       registeredTargetRef: (request) =>
         invoke('visibleContext:target-ref', request),
@@ -396,5 +411,11 @@ export function installDevSciForgeBridge(): void {
   bridgeUrl = defaultBridgeUrl()
   clientId = resolveClientId()
   window.sciforge = createApi()
+  onChannel<DevBrowserSurfaceCaptureRequest>(
+    'devBrowserBridge:surface-capture-requested',
+    (request) => {
+      void submitSurfaceCapture(request).catch(() => undefined)
+    }
+  )
   ensureEventSource()
 }

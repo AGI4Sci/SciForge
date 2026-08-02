@@ -18,6 +18,26 @@ SciForge SHALL expose stable discovery, observation, invocation, and event opera
 - **WHEN** an enabled capability is registered after an agent task was created
 - **THEN** the next discovery call returns it without rematerializing the task tool catalog
 
+#### Scenario: Exact capability lookup
+- **WHEN** an agent supplies a registered capability ID
+- **THEN** discovery returns that capability regardless of free-text token order
+
+#### Scenario: Tokenized ranked search
+- **WHEN** an agent searches with words that occur in a capability title, ID, description, or tags in a different order
+- **THEN** discovery returns a deterministic bounded ranking with exact and native registry matches ahead of broader results
+
+#### Scenario: Search includes descriptive surplus words
+- **WHEN** an agent search contains strong capability tokens plus unmatched format or presentation words
+- **THEN** the strong partial match remains eligible with a lower deterministic score while a zero-overlap search remains empty
+
+#### Scenario: Explicit discovery filters
+- **WHEN** an agent filters by scope, accepted resource kind, produced resource kind, or provider family
+- **THEN** each filter applies only its documented dimension and managed MCP capabilities are excluded unless their provider family is requested
+
+#### Scenario: Empty discovery result
+- **WHEN** no capability matches the applied query and filters
+- **THEN** discovery returns registry readiness, the applied filters, and suggested relaxed queries instead of an unqualified empty array
+
 ### Requirement: Capability readiness is fail-visible
 SciForge SHALL perform an explicit broker contract and required-operation readiness handshake before migrated callers treat discovery or facade results as authoritative.
 
@@ -117,3 +137,15 @@ SciForge SHALL enforce effect and approval policy before handler execution.
 #### Scenario: UI-only or confirmation action called by agent
 - **WHEN** an agent invokes an action whose audience excludes agents or whose approval has not been satisfied
 - **THEN** the broker rejects the request and the handler is not called
+
+### Requirement: Event reference liveness is explicit
+SciForge SHALL project historical resource references with their current
+liveness and SHALL NOT imply that an audit reference remains executable.
+
+#### Scenario: Historical live reference
+- **WHEN** an event page contains a reference that remains resolvable for the caller
+- **THEN** the event marks it `live` and the ordinary observe path may renew its short-lived handle
+
+#### Scenario: Historical retired reference
+- **WHEN** an event page contains a reference whose backing resource or scoped reference has been retired
+- **THEN** the event marks it `retired`, preserves it for audit, and invocation fails with `resource_ref_retired`

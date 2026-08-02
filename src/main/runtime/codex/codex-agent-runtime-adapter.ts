@@ -53,6 +53,12 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
   return {
     id: 'codex',
     transport: 'jsonrpc_stdio',
+    subagents: {
+      spawn: (_context, input) => service.spawnSubagent(input),
+      inspect: (_context, input) => service.inspectSubagent(input),
+      message: (_context, input) => service.messageSubagent(input),
+      cancel: (_context, input) => service.cancelSubagent(input)
+    },
 
     async connect() {
       const result = await service.connect()

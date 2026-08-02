@@ -39,6 +39,10 @@ import {
   renderFallbackCodeHtml
 } from '../../lib/code-highlighting'
 import { openSafeExternalUrl } from '../../lib/open-external'
+import {
+  openPathInSystemEditor,
+  watchForSystemEditorReturn
+} from '../../lib/system-editor'
 import { ImagePreviewLightbox } from '../ImagePreviewLightbox'
 import {
   getCachedMarkdownWorkspaceImage,
@@ -110,7 +114,23 @@ const COPY_RESET_MS = 2000
 type MarkdownImagePreview = {
   src: string
   alt: string
+  path?: string
+  workspaceRoot?: string
+  cacheKey?: string
 }
+
+type MarkdownImageRefreshRequest = {
+  cacheKey: string
+  revision: number
+}
+
+type MarkdownImageRefreshContextValue = {
+  request: MarkdownImageRefreshRequest | null
+  onResolved: (image: MarkdownImagePreview) => void
+  onSettled: (cacheKey: string) => void
+}
+
+const MarkdownImageRefreshContext = createContext<MarkdownImageRefreshContextValue | null>(null)
 
 function writeMarkdownUrlTransform(value: string, key: string): string {
   if (key === 'src') return transformWriteMarkdownMediaUrl(value)
@@ -357,6 +377,7 @@ function ResolvedMarkdownImage({
   ...props
 }: ResolvedMarkdownImageProps): ReactElement {
   const { t } = useTranslation('common')
+  const imageRefresh = useContext(MarkdownImageRefreshContext)
   const localPath = resolveWriteMarkdownResourcePath(src, filePath)
   const externalSrc = resolveWriteMarkdownResource(src, filePath)
   const root = workspaceRoot?.trim() ?? ''
@@ -378,6 +399,12 @@ function ResolvedMarkdownImage({
     ? imageState.resolvedSrc
     : cachedSrc
   const loadFailed = imageState.resourceKey === resourceKey && imageState.loadFailed
+  const refreshRevision = cacheKey && imageRefresh?.request?.cacheKey === cacheKey
+    ? imageRefresh.request.revision
+    : 0
+  const onImageResolved = imageRefresh?.onResolved
+  const onImageRefreshSettled = imageRefresh?.onSettled
+  const altText = alt ?? ''
 
   useEffect(() => {
     let cancelled = false
@@ -413,6 +440,15 @@ function ResolvedMarkdownImage({
       loadWorkspaceImage
     }).then((dataUrl) => {
       if (cancelled) return
+      if (dataUrl) {
+        onImageResolved?.({
+          src: dataUrl,
+          alt: altText,
+          path: localPath,
+          workspaceRoot: root,
+          cacheKey
+        })
+      }
       setImageState((current) => {
         if (current.resourceKey !== resourceKey) return current
         if (dataUrl) {
@@ -428,12 +464,24 @@ function ResolvedMarkdownImage({
           loadFailed: true
         }
       })
+      onImageRefreshSettled?.(cacheKey)
     })
 
     return () => {
       cancelled = true
     }
-  }, [cacheKey, externalSrc, loadWorkspaceImage, localPath, resourceKey, root])
+  }, [
+    altText,
+    cacheKey,
+    externalSrc,
+    loadWorkspaceImage,
+    localPath,
+    onImageRefreshSettled,
+    onImageResolved,
+    refreshRevision,
+    resourceKey,
+    root
+  ])
 
   if (loadFailed) {
     return (
@@ -443,7 +491,6 @@ function ResolvedMarkdownImage({
     )
   }
 
-  const altText = alt ?? ''
   const image = (
     <img
       {...props}
@@ -464,7 +511,17 @@ function ResolvedMarkdownImage({
       title={t('imagePreviewOpen', {
         name: altText || t('imagePreviewTitle')
       })}
-      onClick={() => onOpenPreview({ src: resolvedSrc, alt: altText })}
+      onClick={() => onOpenPreview({
+        src: resolvedSrc,
+        alt: altText,
+        ...(localPath && root && cacheKey
+          ? {
+              path: localPath,
+              workspaceRoot: root,
+              cacheKey
+            }
+          : {})
+      })}
     >
       {image}
     </button>
@@ -519,8 +576,12 @@ function WriteMarkdownPreviewContent({
   loadWorkspaceImage,
   onOpenWorkspaceLink
 }: Props): ReactElement {
+  const { t } = useTranslation('common')
   const [expandedCodeBlocks, setExpandedCodeBlocks] = useState<Record<string, boolean>>({})
   const [imagePreview, setImagePreview] = useState<MarkdownImagePreview | null>(null)
+  const [imageRefreshRequest, setImageRefreshRequest] = useState<MarkdownImageRefreshRequest | null>(null)
+  const [systemEditRefreshingCacheKey, setSystemEditRefreshingCacheKey] = useState<string | null>(null)
+  const systemEditorReturnCleanupRef = useRef<(() => void) | null>(null)
   const setCodeBlockExpanded = useCallback((key: string, expanded: boolean): void => {
     setExpandedCodeBlocks((current) => {
       if (current[key] === expanded) return current
@@ -530,12 +591,73 @@ function WriteMarkdownPreviewContent({
       }
     })
   }, [])
+  const stopWatchingSystemEditorReturn = useCallback((): void => {
+    systemEditorReturnCleanupRef.current?.()
+    systemEditorReturnCleanupRef.current = null
+  }, [])
   const openImagePreview = useCallback((image: MarkdownImagePreview): void => {
+    stopWatchingSystemEditorReturn()
     setImagePreview(image)
-  }, [])
+    setSystemEditRefreshingCacheKey(null)
+  }, [stopWatchingSystemEditorReturn])
   const closeImagePreview = useCallback((): void => {
+    stopWatchingSystemEditorReturn()
     setImagePreview(null)
+    setSystemEditRefreshingCacheKey(null)
+  }, [stopWatchingSystemEditorReturn])
+  const refreshSystemEditedImage = useCallback((image: MarkdownImagePreview): void => {
+    if (!image.cacheKey) return
+    const cacheKey = image.cacheKey
+    setSystemEditRefreshingCacheKey(cacheKey)
+    setImageRefreshRequest((current) => ({
+      cacheKey,
+      revision: current?.cacheKey === cacheKey ? current.revision + 1 : 1
+    }))
   }, [])
+  const handleResolvedImage = useCallback((image: MarkdownImagePreview): void => {
+    if (!image.cacheKey) return
+    setImagePreview((current) => {
+      if (!current || current.cacheKey !== image.cacheKey) return current
+      return { ...current, src: image.src }
+    })
+  }, [])
+  const handleImageRefreshSettled = useCallback((cacheKey: string): void => {
+    setSystemEditRefreshingCacheKey((current) => current === cacheKey ? null : current)
+  }, [])
+  const imageRefreshContext = useMemo<MarkdownImageRefreshContextValue>(() => ({
+    request: imageRefreshRequest,
+    onResolved: handleResolvedImage,
+    onSettled: handleImageRefreshSettled
+  }), [handleImageRefreshSettled, handleResolvedImage, imageRefreshRequest])
+  const openImageInSystemEditor = useCallback(async (): Promise<void> => {
+    const target = imagePreview
+    if (!target?.path || !target.workspaceRoot || !target.cacheKey) {
+      throw new Error(t('imagePreviewSystemEditorUnavailable'))
+    }
+    const openEditorPath = window.sciforge?.openEditorPath
+    if (typeof openEditorPath !== 'function') {
+      throw new Error(t('imagePreviewSystemEditorUnavailable'))
+    }
+
+    stopWatchingSystemEditorReturn()
+    systemEditorReturnCleanupRef.current = watchForSystemEditorReturn({
+      windowTarget: window,
+      documentTarget: document,
+      isDocumentHidden: () => document.visibilityState === 'hidden',
+      onReturn: () => refreshSystemEditedImage(target)
+    })
+
+    try {
+      await openPathInSystemEditor({
+        openPath: openEditorPath,
+        path: target.path,
+        workspaceRoot: target.workspaceRoot
+      })
+    } catch (error) {
+      stopWatchingSystemEditorReturn()
+      throw error
+    }
+  }, [imagePreview, refreshSystemEditedImage, stopWatchingSystemEditorReturn, t])
   const codeBlockExpansionContext = useMemo<CodeBlockExpansionContextValue>(() => ({
     expandedCodeBlocks,
     filePath,
@@ -546,6 +668,8 @@ function WriteMarkdownPreviewContent({
     setExpandedCodeBlocks({})
     closeImagePreview()
   }, [closeImagePreview, filePath])
+
+  useEffect(() => () => stopWatchingSystemEditorReturn(), [stopWatchingSystemEditorReturn])
 
   const markdownContent = useMemo(() => normalizeMarkdownMathDelimiters(content), [content])
   const markdownComponents = useMemo(() => ({
@@ -596,22 +720,32 @@ function WriteMarkdownPreviewContent({
   return (
     <>
       <div className="ds-markdown write-markdown-preview min-h-full text-ds-ink">
-        <CodeBlockExpansionContext.Provider value={codeBlockExpansionContext}>
-          <ReactMarkdown
-            remarkPlugins={remarkPlugins}
-            rehypePlugins={rehypePlugins}
-            urlTransform={writeMarkdownUrlTransform}
-            components={markdownComponents}
-          >
-            {markdownContent}
-          </ReactMarkdown>
-        </CodeBlockExpansionContext.Provider>
+        <MarkdownImageRefreshContext.Provider value={imageRefreshContext}>
+          <CodeBlockExpansionContext.Provider value={codeBlockExpansionContext}>
+            <ReactMarkdown
+              remarkPlugins={remarkPlugins}
+              rehypePlugins={rehypePlugins}
+              urlTransform={writeMarkdownUrlTransform}
+              components={markdownComponents}
+            >
+              {markdownContent}
+            </ReactMarkdown>
+          </CodeBlockExpansionContext.Provider>
+        </MarkdownImageRefreshContext.Provider>
       </div>
       <ImagePreviewLightbox
         open={Boolean(imagePreview)}
         src={imagePreview?.src ?? ''}
         alt={imagePreview?.alt ?? ''}
         title={imagePreview?.alt}
+        onEdit={imagePreview?.path && imagePreview.workspaceRoot && imagePreview.cacheKey
+          ? openImageInSystemEditor
+          : undefined}
+        editDisabled={systemEditRefreshingCacheKey === imagePreview?.cacheKey}
+        editLabel={t('imagePreviewOpenSystemEditor')}
+        statusMessage={systemEditRefreshingCacheKey === imagePreview?.cacheKey
+          ? t('imagePreviewRefreshingAfterEdit')
+          : undefined}
         onClose={closeImagePreview}
       />
     </>

@@ -53,6 +53,11 @@ import {
 } from './model-access-runtime-lifecycle'
 import { createAgentRuntimeHost, type AgentRuntimeHost } from './runtime/agent-runtime/host'
 import {
+  composeAgentRuntimeToolSurfaces,
+  createDeferredAgentRuntimeToolSurface,
+  type AgentRuntimeToolSurface
+} from './runtime/agent-runtime/agent-tool-surface'
+import {
   createRuntimeMcpToolGateway,
   type RuntimeMcpToolGateway
 } from './runtime/agent-runtime/runtime-mcp-tool-gateway'
@@ -406,6 +411,7 @@ let zulipBotRuntime: ZulipBotRuntime | null = null
 let scheduleRuntime: ScheduleRuntime | null = null
 let codexRuntime: CodexRuntimeService | null = null
 let capabilityAgentTools: CapabilityAgentToolSurface | null = null
+let agentRuntimeTools: AgentRuntimeToolSurface | null = null
 let agentRuntimeHostForShutdown: AgentRuntimeHost | null = null
 let runtimeMcpToolGateway: RuntimeMcpToolGateway | null = null
 let claudeCodeRuntime: ClaudeCodeRuntimeService | null = null
@@ -456,25 +462,35 @@ async function captureVisibleContextSurface(
   }
 
   if (surface?.kind === 'browser') {
-    if (!devBrowserBridgeServer?.hasClient(surface.numericId)) {
+    const bridge = devBrowserBridgeServer
+    if (!bridge?.hasClient(surface.numericId)) {
       return surfaceCaptureUnavailable(
         'capture_surface_unavailable',
         `Browser surface ${request.windowId} is no longer connected.`,
         true
       )
     }
-    // The development bridge transports semantic IPC and SSE events, but has no
-    // attested browser pixel source. Renderer-supplied image bytes would not be a
-    // trusted capture of the surface bound to this snapshot token.
-    return surfaceCaptureUnavailable(
-      'surface_capture_unsupported',
-      `Browser surface ${request.windowId} does not provide trusted pixel capture.`,
-      false
-    )
+    try {
+      return {
+        ok: true,
+        page: await bridge.captureSurface(surface.numericId, {
+          revision: request.revision,
+          ...(request.bounds ? { bounds: request.bounds } : {})
+        })
+      }
+    } catch (error) {
+      return surfaceCaptureUnavailable(
+        'capture_surface_unavailable',
+        error instanceof Error
+          ? error.message
+          : `Browser surface ${request.windowId} pixel capture failed.`,
+        true
+      )
+    }
   }
 
   return surfaceCaptureUnavailable(
-    'surface_capture_unsupported',
+    'capture_surface_unsupported',
     `Visible surface ${request.windowId} uses an unsupported surface identity.`,
     false
   )
@@ -498,11 +514,31 @@ const visibleContextSurfaceCaptureProvider: SurfaceCaptureProvider = {
 }
 
 function surfaceCaptureUnavailable(
-  code: 'surface_capture_unsupported' | 'capture_surface_unavailable',
+  code: 'capture_surface_unsupported' | 'capture_surface_unavailable',
   message: string,
   retryable: boolean
 ): SurfaceCaptureResult {
-  return { ok: false, reason: { code, message, retryable } }
+  return {
+    ok: false,
+    reason: {
+      code,
+      message,
+      failureClass: code === 'capture_surface_unsupported'
+        ? 'capability_unavailable'
+        : 'upstream_unavailable',
+      retryable,
+      recovery: code === 'capture_surface_unsupported'
+        ? {
+            action: 'stop',
+            instruction: 'Stop visual inspection because this surface has no trusted pixel-capture provider.'
+          }
+        : {
+            action: 'retry_visual_inspection',
+            instruction: 'Retry visual inspection after the visible surface reconnects.'
+          },
+      providerStage: 'surface_capture'
+    }
+  }
 }
 
 async function captureBrowserWindowPage(
@@ -613,8 +649,8 @@ function codexRuntimeEventKind(payload: unknown): string | undefined {
 
 function getCodexRuntime(): CodexRuntimeService {
   if (codexRuntime) return codexRuntime
-  if (!capabilityAgentTools) {
-    throw new Error('Capability agent tools must be registered before the Codex runtime starts.')
+  if (!agentRuntimeTools) {
+    throw new Error('AgentRuntime tools must be registered before the Codex runtime starts.')
   }
   const codexStorageRoot = join(app.getPath('userData'), 'codex-runtime')
   codexRuntime = new CodexRuntimeService({
@@ -632,15 +668,15 @@ function getCodexRuntime(): CodexRuntimeService {
       execPath: process.execPath,
       isPackaged: app.isPackaged
     },
-    capabilityAgentTools
+    capabilityAgentTools: agentRuntimeTools
   })
   return codexRuntime
 }
 
 function getClaudeCodeRuntime(): ClaudeCodeRuntimeService {
   if (claudeCodeRuntime) return claudeCodeRuntime
-  if (!capabilityAgentTools) {
-    throw new Error('Capability agent tools must be registered before the Claude runtime starts.')
+  if (!agentRuntimeTools) {
+    throw new Error('AgentRuntime tools must be registered before the Claude runtime starts.')
   }
   claudeCodeRuntime = new ClaudeCodeRuntimeService({
     settings: async () => store.load(),
@@ -648,7 +684,7 @@ function getClaudeCodeRuntime(): ClaudeCodeRuntimeService {
     managedConfigDir: app.isPackaged
       ? join(app.getPath('userData'), 'runtime-claude-code', 'config')
       : join(process.cwd(), '.claude-code-runtime', 'config'),
-    agentTools: capabilityAgentTools
+    agentTools: agentRuntimeTools
   })
   return claudeCodeRuntime
 }
@@ -1326,6 +1362,10 @@ app.whenReady().then(async () => {
       agentRuntimeHostRef.current?.cancelCapabilityApprovalTurn(identity, reason) ?? 0
     )
   })
+  agentRuntimeTools = composeAgentRuntimeToolSurfaces([
+    capabilityAgentTools,
+    createDeferredAgentRuntimeToolSurface(() => agentRuntimeHostForShutdown?.subagentTools())
+  ])
   installElectronDomainNativeVisualSmoke(capabilityAgentTools)
   const capabilityIpcRegistration = registerCapabilityIpc({
     broker: capabilityBroker,
@@ -1337,6 +1377,7 @@ app.whenReady().then(async () => {
   const agentRuntimeHost = createAgentRuntimeHost({
     settings: async () => store.load(),
     nativeVisualToolsAvailable: () => Boolean(capabilityAgentTools),
+    subagentStoreRoot: join(app.getPath('userData'), 'agent-runtime', 'subagents'),
     artifactConsumers,
     adapters: [
       createPlacementAwareAgentRuntimeAdapter(

@@ -17,6 +17,7 @@ import type {
   CapabilityAgentBroker,
   CapabilityAgentToolRequestContext
 } from '../../capabilities/agent-tools'
+import { discoverCapabilityDescriptors } from '../../capabilities/registry'
 import {
   type RuntimeMcpToolGateway
 } from './runtime-mcp-tool-gateway'
@@ -66,11 +67,10 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
     query?: CapabilityDiscoveryQuery,
     options: { context?: CapabilityAgentToolRequestContext } = {}
   ): Promise<CapabilityDescriptor[]> {
-    const [native, managed] = await Promise.all([
-      this.#broker.discover(caller, query),
-      this.#managedDescriptors(caller, query, options.context)
-    ])
-    return [...native, ...managed].sort((left, right) => left.id.localeCompare(right.id))
+    if (query?.providerFamily === 'managed-mcp') {
+      return this.#managedDescriptors(caller, query, options.context)
+    }
+    return this.#broker.discover(caller, query)
   }
 
   observe: CapabilityAgentBroker['observe'] = (caller, request) => this.#broker.observe(caller, request)
@@ -187,9 +187,8 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
     query: CapabilityDiscoveryQuery | undefined,
     context: CapabilityAgentToolRequestContext | undefined
   ): Promise<CapabilityDescriptor[]> {
-    const requestsManagedCatalog = Boolean(query?.text || query?.tags?.includes('managed-mcp'))
-    if (!requestsManagedCatalog || !context || !caller.workspaceId) return []
-    const tools = await this.#managedTools.tools(query?.text)
+    if (query?.providerFamily !== 'managed-mcp' || !context || !caller.workspaceId) return []
+    const tools = await this.#managedTools.tools(query.capabilityId ? undefined : query.text)
     const available = [] as RuntimeToolDefinition[]
     for (const tool of tools) {
       if (await this.#isToolAvailable(context, tool)) available.push(tool)
@@ -199,7 +198,7 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
       this.#operationsByActionId.set(descriptor.id, { tool, descriptor })
       return descriptor
     })
-    return descriptors.filter((descriptor) => matchesDiscoveryQuery(descriptor, query))
+    return discoverCapabilityDescriptors(descriptors, caller, query, 'managed-mcp')
   }
 }
 
@@ -295,20 +294,6 @@ function slug(value: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '') || 'tool'
-}
-
-function matchesDiscoveryQuery(
-  descriptor: CapabilityDescriptor,
-  query?: CapabilityDiscoveryQuery
-): boolean {
-  if (!query) return true
-  if (query.resourceKind) return false
-  if (query.effects && !query.effects.includes(descriptor.effect)) return false
-  if (query.tags && !query.tags.every((tag) => descriptor.tags.includes(tag))) return false
-  if (!query.text) return true
-  const text = query.text.toLocaleLowerCase()
-  const haystack = `${descriptor.id}\n${descriptor.title}\n${descriptor.description}\n${descriptor.tags.join(' ')}`.toLocaleLowerCase()
-  return haystack.includes(text)
 }
 
 function managedToolInput(

@@ -360,6 +360,68 @@ describe('AgentRuntimeHost', () => {
     )
   })
 
+  it('owns subagent tools and dispatches provider controls through the selected adapter', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-runtime-subagents-'))
+    const adapter = fakeAdapter('claude', {
+      id: 'parent-thread',
+      runtimeId: 'claude',
+      title: 'Parent',
+      updatedAt: '2026-08-02T00:00:00.000Z'
+    })
+    const subagents: NonNullable<AgentRuntimeAdapter['subagents']> = {
+      spawn: vi.fn(async (_context, input) => {
+        await input.onSpawned({ runtime: 'claude', threadId: 'child-thread', turnId: 'child-turn' })
+        return {
+          summary: 'child complete',
+          threadRef: { runtime: 'claude', threadId: 'child-thread', turnId: 'child-turn' }
+        }
+      }),
+      inspect: vi.fn(async () => ({ state: 'active' as const, observedAt: '2026-08-02T00:00:00.000Z' })),
+      message: vi.fn(async () => ({ established: true })),
+      cancel: vi.fn(async () => undefined)
+    }
+    adapter.subagents = subagents
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('claude'),
+      adapters: [adapter],
+      subagentStoreRoot: root
+    })
+    const tools = host.subagentTools()
+    expect(tools?.tools().map((tool) => tool.name)).toContain('delegate_task')
+    const started = await tools!.call({
+      name: 'delegate_task',
+      arguments: { prompt: 'Run a focused review.' },
+      context: {
+        requestId: 'spawn-1',
+        runtimeId: 'claude',
+        threadId: 'parent-thread',
+        turnId: 'parent-turn'
+      }
+    })
+    const childId = (started.value as { childId: string }).childId
+    await expect(tools!.call({
+      name: 'subagent_wait',
+      arguments: { childId, timeoutMs: 1_000 },
+      context: {
+        requestId: 'wait-1',
+        runtimeId: 'claude',
+        threadId: 'parent-thread',
+        turnId: 'parent-turn'
+      }
+    })).resolves.toMatchObject({
+      value: { status: 'completed', terminal: true }
+    })
+    expect(subagents.spawn).toHaveBeenCalledOnce()
+    expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ settings: expect.objectContaining({ activeAgentRuntime: 'claude' }) }),
+      expect.objectContaining({
+        kind: 'child_event',
+        runtimeId: 'claude',
+        child: expect.objectContaining({ runtimeId: 'claude', summary: 'child complete' })
+      })
+    )
+  })
+
   it('coordinates capability confirmations through neutral approval events and resolution', async () => {
     const thread = {
       id: 'codex-thread',
@@ -918,7 +980,7 @@ describe('AgentRuntimeHost', () => {
       ]
     }
     const visibleContext = {
-      bindCurrentSurface: vi.fn(async () => snapshot)
+      bindSurface: vi.fn(async () => snapshot)
     }
     const host = createAgentRuntimeHost({
       settings: async () => settings('codex'),
@@ -931,12 +993,17 @@ describe('AgentRuntimeHost', () => {
       runtimeId: 'codex',
       threadId: 'codex-side-thread',
       visibleContextOwnerThreadId: 'codex-thread',
+      visibleContextSurfaceId: 'browser:1',
       text: userText,
       displayText: userText
     })
 
     const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
-    expect(visibleContext.bindCurrentSurface).toHaveBeenCalledWith('codex:codex-side-thread', 'codex-thread')
+    expect(visibleContext.bindSurface).toHaveBeenCalledWith(
+      'codex:codex-side-thread',
+      'codex-thread',
+      'browser:1'
+    )
     expect(dispatched?.text).toContain('Canonical visible state bound atomically for this turn:')
     expect(dispatched?.text).toContain('"region": "left-sidebar"')
     expect(dispatched?.text).toContain('"region": "center"')
@@ -961,7 +1028,7 @@ describe('AgentRuntimeHost', () => {
       updatedAt: '2026-06-10T00:00:00.000Z'
     })
     const visibleContext = {
-      bindCurrentSurface: vi.fn(async () => { throw new Error('renderer unavailable') }),
+      bindSurface: vi.fn(async () => { throw new Error('renderer unavailable') }),
       get: vi.fn(),
       peek: vi.fn()
     }
@@ -983,7 +1050,7 @@ describe('AgentRuntimeHost', () => {
     })
 
     const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
-    expect(visibleContext.bindCurrentSurface).toHaveBeenCalledWith('codex:codex-thread', 'codex-thread')
+    expect(visibleContext.bindSurface).not.toHaveBeenCalled()
     expect(visibleContext.get).not.toHaveBeenCalled()
     expect(visibleContext.peek).not.toHaveBeenCalled()
     expect(dispatched?.text).toContain('Canonical visible state for this turn: unavailable.')
@@ -991,6 +1058,86 @@ describe('AgentRuntimeHost', () => {
     expect(dispatched?.text).not.toContain('surface.current')
     expect(dispatched?.text).toContain('Runtime-enforced execution integrity gate')
     expect(dispatched?.displayText).toBe('Run the unit tests.')
+  })
+
+  it('binds concurrent same-thread starts to their immutable sender surfaces inside the turn queue', async () => {
+    const adapter = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    const firstHandle = deferred<AgentRuntimeTurnHandle>()
+    vi.mocked(adapter.startTurn)
+      .mockReturnValueOnce(firstHandle.promise)
+      .mockResolvedValueOnce({ threadId: 'codex-thread', turnId: 'turn-2' })
+    const visibleContext = {
+      bindSurface: vi.fn(async (
+        _callerId: string,
+        activeThreadId: string,
+        windowId: string
+      ) => ({
+        schemaVersion: 3 as const,
+        windowId,
+        revision: 1,
+        publishedAt: '2026-07-31T00:00:00.000Z',
+        freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
+        activeThreadId,
+        route: `/${windowId}`,
+        components: []
+      }))
+    }
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter],
+      services: { visibleContext: visibleContext as never }
+    })
+
+    const browserStart = host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'from browser',
+      visibleContextSurfaceId: 'browser:1'
+    })
+    const electronStart = host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'from electron',
+      visibleContextSurfaceId: 'electron:9'
+    })
+    await vi.waitFor(() => {
+      expect(visibleContext.bindSurface).toHaveBeenCalledTimes(1)
+      expect(adapter.startTurn).toHaveBeenCalledTimes(1)
+    })
+    expect(visibleContext.bindSurface).toHaveBeenNthCalledWith(
+      1,
+      'codex:codex-thread',
+      'codex-thread',
+      'browser:1'
+    )
+
+    firstHandle.resolve({ threadId: 'codex-thread', turnId: 'turn-1' })
+    await expect(browserStart).resolves.toEqual({
+      threadId: 'codex-thread',
+      turnId: 'turn-1'
+    })
+    await expect(electronStart).resolves.toEqual({
+      threadId: 'codex-thread',
+      turnId: 'turn-2'
+    })
+
+    expect(visibleContext.bindSurface).toHaveBeenNthCalledWith(
+      2,
+      'codex:codex-thread',
+      'codex-thread',
+      'electron:9'
+    )
+    const firstInput = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
+    const secondInput = vi.mocked(adapter.startTurn).mock.calls[1]?.[1]
+    expect(firstInput?.text).toContain('"route": "/browser:1"')
+    expect(secondInput?.text).toContain('"route": "/electron:9"')
+    expect(firstInput).not.toHaveProperty('visibleContextSurfaceId')
+    expect(secondInput).not.toHaveProperty('visibleContextSurfaceId')
   })
 
   it.each(['sciforge', 'codex', 'claude'] as const)(
@@ -3965,8 +4112,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4046,8 +4192,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4090,8 +4235,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4133,8 +4277,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4204,8 +4347,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4246,8 +4388,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4297,8 +4438,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4350,8 +4490,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4404,8 +4543,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4455,8 +4593,7 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          execution: { enabled: true, windowSize: 8, exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2 }
+          execution: { enabled: true, windowSize: 8, exactRepeatThreshold: 2 }
         }
       }),
       adapters: [codex],
@@ -4516,8 +4653,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4551,6 +4687,33 @@ describe('AgentRuntimeHost', () => {
     )
   })
 
+  it('rejects a required native visual turn before runtime dispatch when the tools are unavailable', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      nativeVisualToolsAvailable: () => false
+    })
+
+    await expect(host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Inspect the current visual resource.',
+      executionIntent: visualExecutionIntent()
+    })).rejects.toMatchObject({
+      name: 'AgentRuntimeTurnPreflightError',
+      code: 'runtime_visual_capability_unavailable',
+      failureClass: 'capability_unavailable',
+      retryable: false
+    })
+    expect(codex.startTurn).not.toHaveBeenCalled()
+  })
+
   it('does not deny OS GUI automation when native visual tools are unavailable', async () => {
     const codex = fakeAdapter('codex', {
       id: 'codex-thread',
@@ -4580,8 +4743,7 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          execution: { enabled: true, windowSize: 8, exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2 }
+          execution: { enabled: true, windowSize: 8, exactRepeatThreshold: 2 }
         }
       }),
       adapters: [codex],

@@ -3077,7 +3077,7 @@ export function Workbench(): ReactElement {
       ) : null}
 
       <main
-        className={`ds-stage-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${
+        className={`ds-stage-surface relative flex min-h-0 min-w-0 flex-1 flex-col ${
           route === 'plugins' ? 'px-0' : ''
         }`}
       >

@@ -85,6 +85,10 @@ test('runs a multi-artifact visual task through Model Router with MIME-correct i
 
   assert.equal(capturedRequest?.url, 'http://127.0.0.1:3892/v1/responses')
   assert.equal(capturedRequest?.headers.get('authorization'), 'Bearer runtime-test-key')
+  assert.equal(
+    capturedRequest?.headers.get('x-sciforge-model-router-evidence-policy'),
+    'required'
+  )
   const body = await capturedRequest?.json() as {
     model: string
     input: Array<{ content: Array<{ type: string; text?: string; image_url?: string; mime_type?: string }> }>
@@ -130,11 +134,19 @@ test('fails closed when Model Router returns a claim for an unknown artifact', a
 
   assert.deepEqual(result, {
     status: 'visual_inspection_invalid',
-    message: 'Model Router visual inspection returned an invalid evidence payload.'
+    code: 'visual_inspection_invalid',
+    message: 'Model Router visual inspection returned an invalid evidence payload.',
+    failureClass: 'contract_violation',
+    retryable: false,
+    recovery: {
+      action: 'stop',
+      instruction: 'Stop retrying this result and inspect the Model Router visual evidence trace.'
+    },
+    providerStage: 'evidence_validation'
   })
 })
 
-test('fails closed when Model Router returns no structured visual evidence', async (t) => {
+test('fails closed with a contract violation when Model Router returns malformed final evidence', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'workspace-intel-visual-inspection-unstructured-'))
   t.after(async () => rm(root, { recursive: true, force: true }))
   const imagePath = join(root, 'capture.png')
@@ -153,7 +165,15 @@ test('fails closed when Model Router returns no structured visual evidence', asy
 
   assert.deepEqual(result, {
     status: 'visual_inspection_invalid',
-    message: 'Model Router visual inspection returned an invalid evidence payload.'
+    code: 'visual_inspection_invalid',
+    message: 'Model Router visual inspection returned an invalid evidence payload.',
+    failureClass: 'contract_violation',
+    retryable: false,
+    recovery: {
+      action: 'stop',
+      instruction: 'Stop retrying this result and inspect the Model Router visual evidence trace.'
+    },
+    providerStage: 'evidence_validation'
   })
 })
 
@@ -182,7 +202,105 @@ test('fails closed when Model Router masks an upstream visual failure as structu
 
   assert.deepEqual(result, {
     status: 'visual_inspection_invalid',
-    message: 'Model Router visual inspection returned an invalid evidence payload.'
+    code: 'visual_evidence_grounding_missing',
+    message: 'Model Router visual evidence is missing a grounded claim for an input artifact.',
+    failureClass: 'evidence_unverified',
+    retryable: false,
+    recovery: {
+      action: 'stop',
+      instruction: 'Stop retrying this result because the returned visual evidence could not be verified.'
+    },
+    providerStage: 'evidence_validation'
+  })
+})
+
+test('propagates the typed strict-evidence Router failure without inferring policy from provider prose', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'workspace-intel-visual-inspection-router-error-'))
+  t.after(async () => rm(root, { recursive: true, force: true }))
+  const imagePath = join(root, 'capture.png')
+  await writeFile(imagePath, PNG_BYTES)
+  const inspector = createModelRouterVisualInspector({
+    baseUrl: 'http://127.0.0.1:3892/v1',
+    apiKey: 'runtime-test-key',
+    model: 'sciforge-model-router',
+    fetchImpl: async () => new Response(JSON.stringify({
+      error: {
+        code: 'vision_evidence_unavailable',
+        message: 'Strict visual evidence is temporarily unavailable.',
+        stage: 'vision_translation',
+        failureClass: 'upstream_unavailable',
+        retryable: true,
+        recovery: {
+          action: 'retry_visual_inspection',
+          instruction: 'Retry visual inspection after the vision translator recovers.'
+        },
+        cause: {
+          code: 'upstream_timeout',
+          status: 504
+        }
+      }
+    }), { status: 503, headers: { 'content-type': 'application/json' } })
+  })
+
+  const result = await inspector({
+    task: 'Describe the image.',
+    artifacts: [{ id: 'capture', imagePath, mimeType: 'image/png' }]
+  })
+
+  assert.deepEqual(result, {
+    status: 'visual_inspection_unavailable',
+    code: 'vision_evidence_unavailable',
+    message: 'Strict visual evidence is temporarily unavailable.',
+    failureClass: 'upstream_unavailable',
+    retryable: true,
+    recovery: {
+      action: 'retry_visual_inspection',
+      instruction: 'Retry visual inspection after the vision translator recovers.'
+    },
+    providerStage: 'vision_translation'
+  })
+})
+
+test('preserves a typed text-reasoner evidence synthesis failure', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'workspace-intel-visual-inspection-synthesis-error-'))
+  t.after(async () => rm(root, { recursive: true, force: true }))
+  const imagePath = join(root, 'capture.png')
+  await writeFile(imagePath, PNG_BYTES)
+  const inspector = createModelRouterVisualInspector({
+    baseUrl: 'http://127.0.0.1:3892/v1',
+    apiKey: 'runtime-test-key',
+    model: 'sciforge-model-router',
+    fetchImpl: async () => new Response(JSON.stringify({
+      error: {
+        code: 'visual_evidence_synthesis_unavailable',
+        message: 'The text reasoner could not synthesize strict visual evidence.',
+        stage: 'text_reasoning',
+        failureClass: 'upstream_unavailable',
+        retryable: true,
+        recovery: {
+          action: 'retry_visual_inspection',
+          instruction: 'Retry visual inspection after text reasoning recovers.'
+        }
+      }
+    }), { status: 503 })
+  })
+
+  const result = await inspector({
+    task: 'Describe the image.',
+    artifacts: [{ id: 'capture', imagePath, mimeType: 'image/png' }]
+  })
+
+  assert.deepEqual(result, {
+    status: 'visual_inspection_unavailable',
+    code: 'visual_evidence_synthesis_unavailable',
+    message: 'The text reasoner could not synthesize strict visual evidence.',
+    failureClass: 'upstream_unavailable',
+    retryable: true,
+    recovery: {
+      action: 'retry_visual_inspection',
+      instruction: 'Retry visual inspection after text reasoning recovers.'
+    },
+    providerStage: 'text_reasoning'
   })
 })
 
@@ -218,7 +336,14 @@ test('rejects remote or malformed Model Router URLs before fetch', async (t) => 
     })
     assert.deepEqual(result, {
       status: 'visual_inspection_unavailable',
-      message: 'Visual understanding requires a local SciForge Model Router URL at http(s)://<loopback>/v1.'
+      code: 'visual_inspection_unavailable',
+      message: 'Visual understanding requires a local SciForge Model Router URL at http(s)://<loopback>/v1.',
+      failureClass: 'capability_unavailable',
+      retryable: false,
+      recovery: {
+        action: 'stop',
+        instruction: 'Configure the local SciForge Model Router and its vision translator before trying again.'
+      }
     })
   }
 

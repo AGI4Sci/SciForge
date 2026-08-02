@@ -191,6 +191,7 @@
     "electron-updater": "^6.8.9",
     "fractional-indexing": "^3.2.0",
     "html-to-docx": "^1.8.0",
+    "html2canvas-pro": "^2.3.3",
     "i18next": "^25.4.2",
     "jszip": "^3.10.1",
     "juice": "^12.1.1",

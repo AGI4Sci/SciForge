@@ -47,6 +47,13 @@ import {
   type AgentRuntimeToolSurface
 } from '../agent-runtime/agent-tool-surface'
 import type {
+  AgentRuntimeSubagentCancelInput,
+  AgentRuntimeSubagentInspectInput,
+  AgentRuntimeSubagentMessageInput,
+  AgentRuntimeSubagentResult,
+  AgentRuntimeSubagentSpawnInput,
+  AgentRuntimeSubagentTranscriptEntry,
+  AgentRuntimeSubagentUsage,
   AgentRuntimeTurnGovernanceSnapshot,
   AgentRuntimeTurnGovernanceSnapshotInput
 } from '../agent-runtime/adapter'
@@ -116,6 +123,15 @@ type ActiveClaudeTurn = {
   abortController: AbortController
   query: ClaudeAgentSdkQuery
   assistantItemId: string
+  inputStream?: ClaudeStreamingInput
+}
+
+type ActiveClaudeSubagent = {
+  childId: string
+  parentThreadId: string
+  parentTurnId: string
+  threadId: string
+  turnId: string
 }
 
 type ClaudeRuntimeEventSubscriber = {
@@ -145,6 +161,49 @@ type ClaudeToolResult = {
   payload?: Record<string, unknown>
   sessionId?: string
   fingerprint: string
+}
+
+class ClaudeStreamingInput implements AsyncIterable<SDKUserMessage> {
+  private readonly queued: SDKUserMessage[] = []
+  private readonly waiting: Array<(result: IteratorResult<SDKUserMessage>) => void> = []
+  private closed = false
+
+  constructor(initialPrompt: string) {
+    this.push(initialPrompt)
+  }
+
+  push(text: string): boolean {
+    if (this.closed || !text.trim()) return false
+    const message: SDKUserMessage = {
+      type: 'user',
+      message: { role: 'user', content: text },
+      parent_tool_use_id: null,
+      priority: 'now'
+    }
+    const waiter = this.waiting.shift()
+    if (waiter) waiter({ done: false, value: message })
+    else this.queued.push(message)
+    return true
+  }
+
+  close(): void {
+    if (this.closed) return
+    this.closed = true
+    for (const waiter of this.waiting.splice(0)) {
+      waiter({ done: true, value: undefined })
+    }
+  }
+
+  async next(): Promise<IteratorResult<SDKUserMessage>> {
+    const message = this.queued.shift()
+    if (message) return { done: false, value: message }
+    if (this.closed) return { done: true, value: undefined }
+    return new Promise((resolve) => this.waiting.push(resolve))
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
+    return this
+  }
 }
 
 function terminalExecutionReceipt<Status extends 'success' | 'error'>(
@@ -184,6 +243,7 @@ export class ClaudeCodeRuntimeService {
   private readonly turnGovernanceSnapshots = new Map<string, AgentRuntimeTurnGovernanceSnapshot>()
   private readonly eventSubscribers = new Set<ClaudeRuntimeEventSubscriber>()
   private readonly childState = new Map<string, AgentRuntimeChild>()
+  private readonly activeSubagents = new Map<string, ActiveClaudeSubagent>()
 
   constructor(private readonly options: ClaudeCodeRuntimeServiceOptions) {
     this.sdk = options.claudeAgentSdk ?? { query: claudeAgentSdkQuery }
@@ -295,6 +355,7 @@ export class ClaudeCodeRuntimeService {
     reasoningEffort?: string
     ownedVisualToolsAvailable?: boolean
     nativeVisualProofChainPending?: boolean
+    streamingInput?: boolean
   }): Promise<ClaudeCodeTurnStartResult> {
     try {
       const settings = await this.options.settings()
@@ -369,9 +430,10 @@ export class ClaudeCodeRuntimeService {
         nativeVisualProofChainPending: payload.nativeVisualProofChainPending === true
       }))
       let query: ClaudeAgentSdkQuery
+      const inputStream = payload.streamingInput ? new ClaudeStreamingInput(launch.prompt) : undefined
       try {
         query = this.sdk.query({
-          prompt: launch.prompt,
+          prompt: inputStream ?? launch.prompt,
           options: {
             ...launch.sdkOptions,
             hooks: appendClaudePreToolUseHook(
@@ -401,7 +463,8 @@ export class ClaudeCodeRuntimeService {
         turnId,
         abortController,
         query,
-        assistantItemId
+        assistantItemId,
+        ...(inputStream ? { inputStream } : {})
       })
       void this.runClaudeTurn({
         query,
@@ -425,6 +488,7 @@ export class ClaudeCodeRuntimeService {
       const active = this.activeTurns.get(threadId)
       if (!active || active.turnId !== turnId) return { ok: true }
       this.options.agentTools?.abortTurn?.({ runtimeId: 'claude', threadId, turnId }, 'user_stop')
+      active.inputStream?.close()
       active.abortController.abort()
       active.query.close?.()
       await this.completeTurn(threadId, turnId, 'aborted', 'Claude Code turn interrupted.')
@@ -436,13 +500,160 @@ export class ClaudeCodeRuntimeService {
     }
   }
 
-  async steerTurn(): Promise<ClaudeCodeTurnMutationResult> {
-    return {
-      ok: false,
-      message: 'Claude Code CLI runtime does not support steering an active turn.',
-      code: 'capability_unavailable',
-      recoverable: true
+  async steerTurn(payload?: {
+    threadId: string
+    turnId: string
+    text: string
+  }): Promise<ClaudeCodeTurnMutationResult> {
+    const active = payload ? this.activeTurns.get(payload.threadId) : undefined
+    if (!payload || !active || active.turnId !== payload.turnId || !active.inputStream) {
+      return {
+        ok: false,
+        message: 'Claude Code turn is not accepting streaming input.',
+        code: 'capability_unavailable',
+        recoverable: true
+      }
     }
+    return active.inputStream.push(payload.text)
+      ? { ok: true }
+      : {
+          ok: false,
+          message: 'Claude Code turn input stream is closed.',
+          code: 'turn_not_running',
+          recoverable: true
+        }
+  }
+
+  async spawnSubagent(input: AgentRuntimeSubagentSpawnInput): Promise<AgentRuntimeSubagentResult> {
+    const threadResult = await this.startThread({
+      workspace: input.workspace,
+      title: input.label || firstLineTitle(input.prompt)
+    })
+    if (!threadResult.ok) throw new Error(threadResult.message)
+    const turnResult = await this.startTurn({
+      threadId: threadResult.thread.id,
+      text: input.prompt,
+      displayText: input.prompt,
+      workspace: input.workspace,
+      streamingInput: true
+    })
+    if (!turnResult.ok) throw new Error(turnResult.message)
+    const active: ActiveClaudeSubagent = {
+      childId: input.childId,
+      parentThreadId: input.parentThreadId,
+      parentTurnId: input.parentTurnId,
+      threadId: turnResult.threadId,
+      turnId: turnResult.turnId
+    }
+    this.activeSubagents.set(input.childId, active)
+    await input.onSpawned({
+      runtime: 'claude',
+      threadId: active.threadId,
+      turnId: active.turnId
+    })
+    await input.appendTranscript({
+      id: `${input.childId}-thread-start`,
+      kind: 'event',
+      summary: 'Claude child thread started',
+      text: `Thread: ${active.threadId}`,
+      createdAt: new Date().toISOString(),
+      metadata: { threadId: active.threadId, turnId: active.turnId }
+    })
+
+    const transcript: AgentRuntimeSubagentTranscriptEntry[] = []
+    let summary = ''
+    let usage: AgentRuntimeSubagentUsage | undefined
+    try {
+      for await (const event of this.subscribeEvents(active.threadId, 0, input.signal)) {
+        if (event.turnId && event.turnId !== active.turnId) continue
+        let entry: AgentRuntimeSubagentTranscriptEntry | null = null
+        if (event.kind === 'assistant_delta') {
+          summary += event.text
+          entry = {
+            id: `${input.childId}-${event.seq ?? Date.now()}-assistant`,
+            kind: 'assistant_message',
+            text: event.text,
+            createdAt: event.createdAt
+          }
+        } else if (event.kind === 'reasoning_delta') {
+          entry = {
+            id: `${input.childId}-${event.seq ?? Date.now()}-reasoning`,
+            kind: 'reasoning',
+            text: event.text,
+            createdAt: event.createdAt
+          }
+        } else if (event.kind === 'tool_event') {
+          entry = {
+            id: event.itemId,
+            kind: 'tool',
+            summary: event.summary,
+            text: event.detail,
+            status: event.status,
+            createdAt: event.createdAt,
+            metadata: event.meta
+          }
+        } else if (event.kind === 'usage') {
+          usage = subagentUsageFromClaudeUsage(event.usage)
+        }
+        if (entry) {
+          transcript.push(entry)
+          await input.appendTranscript(entry)
+        }
+        if (event.kind !== 'turn_lifecycle') continue
+        if (event.state === 'completed') break
+        if (event.state === 'failed' || event.state === 'aborted') {
+          const error = new Error(event.message || `Claude child turn ${event.state}.`)
+          error.name = event.state === 'aborted' ? 'AbortError' : 'Error'
+          throw error
+        }
+      }
+      if (input.signal.aborted) {
+        await this.interruptTurn(active.threadId, active.turnId)
+        const error = new Error('Claude child turn was aborted.')
+        error.name = 'AbortError'
+        throw error
+      }
+      return {
+        summary: summary.trim() || `Child agent ${active.threadId} completed.`,
+        ...(usage ? { usage } : {}),
+        transcript,
+        threadRef: {
+          runtime: 'claude',
+          threadId: active.threadId,
+          turnId: active.turnId
+        }
+      }
+    } finally {
+      this.activeSubagents.delete(input.childId)
+    }
+  }
+
+  async inspectSubagent(input: AgentRuntimeSubagentInspectInput) {
+    const active = this.activeSubagents.get(input.childId)
+    return {
+      state: active && this.activeTurns.get(active.threadId)?.turnId === active.turnId
+        ? 'active' as const
+        : 'missing' as const,
+      observedAt: new Date().toISOString()
+    }
+  }
+
+  async messageSubagent(input: AgentRuntimeSubagentMessageInput) {
+    const active = this.activeSubagents.get(input.childId)
+    if (!active) return { established: false }
+    const result = await this.steerTurn({
+      threadId: active.threadId,
+      turnId: active.turnId,
+      text: input.message
+    })
+    return { established: result.ok }
+  }
+
+  async cancelSubagent(input: AgentRuntimeSubagentCancelInput): Promise<void> {
+    const active = this.activeSubagents.get(input.childId)
+    if (!active) return
+    const result = await this.interruptTurn(active.threadId, active.turnId)
+    if (!result.ok) throw new Error(result.message)
   }
 
   updateTurnGovernanceSnapshot(input: AgentRuntimeTurnGovernanceSnapshotInput): void {
@@ -476,6 +687,7 @@ export class ClaudeCodeRuntimeService {
     try {
       const active = this.activeTurns.get(threadId)
       if (active) {
+        active.inputStream?.close()
         active.abortController.abort()
         active.query.close?.()
       }
@@ -693,10 +905,12 @@ export class ClaudeCodeRuntimeService {
 
   async stop(): Promise<void> {
     for (const active of this.activeTurns.values()) {
+      active.inputStream?.close()
       active.abortController.abort()
       active.query.close?.()
     }
     this.activeTurns.clear()
+    this.activeSubagents.clear()
     this.turnGovernanceSnapshots.clear()
     for (const subscriber of this.eventSubscribers) {
       subscriber.closed = true
@@ -781,6 +995,11 @@ export class ClaudeCodeRuntimeService {
     try {
       for await (const message of options.query) {
         await this.handleSdkMessage(message, options, state)
+        if (message.type === 'result' && this.activeTurns.get(options.threadId)?.inputStream) {
+          this.activeTurns.get(options.threadId)?.inputStream?.close()
+          options.query.close?.()
+          break
+        }
       }
       if (this.activeTurns.get(options.threadId)?.turnId !== options.turnId) return
       await this.finalizeToolExecutions(options.threadId, options.turnId, state)
@@ -1030,10 +1249,14 @@ export class ClaudeCodeRuntimeService {
           tool: input.toolUse.name,
           value: nativeAgentToolResultValue(input.result.payload, input.toolUse.name)
         }, input.callId)
+    const structuredError = recordValue(input.result.payload?.error)
     const error = input.result.isError
       ? {
-          code: 'claude_tool_error',
-          message: input.result.detail || `Claude tool ${input.toolUse.name} failed.`
+          ...structuredError,
+          code: stringField(structuredError.code) || 'claude_tool_error',
+          message: stringField(structuredError.message) ||
+            input.result.detail ||
+            `Claude tool ${input.toolUse.name} failed.`
         }
       : null
     const event = {
@@ -1067,7 +1290,8 @@ export class ClaudeCodeRuntimeService {
         ...event,
         status: 'error',
         receipt: terminalExecutionReceipt('error', output, input.result.detail, {
-          errorCode: error?.code
+          errorCode: error?.code,
+          error
         })
       })
     } else {
@@ -2066,6 +2290,15 @@ function stringifyUnknown(value: unknown): string | undefined {
     return JSON.stringify(value)
   } catch {
     return String(value)
+  }
+}
+
+function subagentUsageFromClaudeUsage(usage: AgentRuntimeUsage): AgentRuntimeSubagentUsage {
+  return {
+    promptTokens: usage.inputTokens ?? 0,
+    completionTokens: usage.outputTokens ?? 0,
+    totalTokens: usage.totalTokens ?? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0),
+    ...(usage.cacheReadTokens !== undefined ? { cachedTokens: usage.cacheReadTokens } : {})
   }
 }
 

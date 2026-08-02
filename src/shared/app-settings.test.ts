@@ -262,8 +262,7 @@ describe('local runtime defaults', () => {
       execution: {
         enabled: true,
         windowSize: 8,
-        exactRepeatThreshold: 3,
-        semanticFailureThreshold: 2
+        exactRepeatThreshold: 3
       }
     })
   })
@@ -335,14 +334,12 @@ describe('local runtime defaults', () => {
       execution: {
         enabled: false,
         windowSize: 10,
-        exactRepeatThreshold: 5,
-        semanticFailureThreshold: 4
+        exactRepeatThreshold: 5
       }
     }).execution).toMatchObject({
       enabled: false,
       windowSize: 10,
-      exactRepeatThreshold: 5,
-      semanticFailureThreshold: 4
+      exactRepeatThreshold: 5
     })
   })
 
@@ -355,17 +352,15 @@ describe('local runtime defaults', () => {
     } as never).execution).toMatchObject({
       enabled: true,
       windowSize: 8,
-      exactRepeatThreshold: 3,
-      semanticFailureThreshold: 2
+      exactRepeatThreshold: 3
     })
   })
 
-  it('does not interpret the obsolete ambiguous execution threshold', () => {
+  it('does not interpret obsolete ambiguous or semantic failure thresholds', () => {
     expect(normalizeRuntimeGuardSettings({
-      execution: { threshold: 7 }
+      execution: { threshold: 7, semanticFailureThreshold: 9 }
     } as never).execution).toMatchObject({
-      exactRepeatThreshold: 3,
-      semanticFailureThreshold: 2
+      exactRepeatThreshold: 3
     })
   })
 })
@@ -959,16 +954,14 @@ describe('mergeLocalRuntimeSettings', () => {
   it('deep-merges runtime guard settings through the new config model', () => {
     const next = mergeRuntimeGuardSettings(defaultRuntimeGuardSettings(), {
       execution: {
-        exactRepeatThreshold: 5,
-        semanticFailureThreshold: 4
+        exactRepeatThreshold: 5
       }
     })
 
     expect(next.execution).toMatchObject({
       enabled: true,
       windowSize: 8,
-      exactRepeatThreshold: 5,
-      semanticFailureThreshold: 4
+      exactRepeatThreshold: 5
     })
   })
 })

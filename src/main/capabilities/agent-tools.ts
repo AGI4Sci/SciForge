@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
 import {
+  CAPABILITY_BROKER_CONTRACT_VERSION,
   capabilityCallerContextSchema,
   capabilityDiscoveryQuerySchema,
   capabilityJsonValueSchema,
@@ -28,7 +29,12 @@ import {
   type AgentVisualLookInput,
   type AgentVisualLookOutput
 } from '../../shared/agent-visual'
-import type { AgentRuntimeToolTurnIdentity } from '../runtime/agent-runtime/agent-tool-surface'
+import {
+  nativeVisualResourceIdentity,
+  normalizeNativeVisualToolError,
+  type AgentRuntimeToolTurnIdentity,
+  type NativeVisualToolErrorContext
+} from '../runtime/agent-runtime/agent-tool-surface'
 
 export const CAPABILITY_AGENT_TOOL_NAMES = Object.freeze({
   discover: 'sciforge_discover',
@@ -103,7 +109,8 @@ const agentResourceRefSchema = z.string().regex(/^res_[A-Za-z0-9_-]{20,}$/u)
 
 const agentDiscoverRequestSchema = capabilityDiscoveryQuerySchema.extend({
   operationRef: agentOperationRefSchema.optional(),
-  includeSchema: z.boolean().optional()
+  includeSchema: z.boolean().optional(),
+  limit: z.number().int().min(1).max(50).default(8)
 }).strict()
 
 const agentObserveRequestSchema = z.object({
@@ -131,7 +138,9 @@ export type AgentOperationDescriptor = Readonly<{
   scope: CapabilityDescriptor['scope']
   effect: CapabilityDescriptor['effect']
   approval: CapabilityDescriptor['approval']
-  resourceKinds: string[]
+  providerFamily: 'native' | 'managed-mcp'
+  acceptedResourceKinds: string[]
+  producedResourceKinds: string[]
   tags: string[]
   inputShape?: CapabilityJsonValue
 }>
@@ -158,6 +167,7 @@ export type AgentCapabilityEvent = Readonly<{
   type: 'resource.changed'
   occurredAt: string
   resourceRef: string
+  resourceStatus: 'live' | 'retired'
   resourceKind: string
   operationRef: string
 }>
@@ -220,7 +230,7 @@ type CallerCache = {
 const toolDefinitions = Object.freeze([
   defineTool(
     CAPABILITY_AGENT_TOOL_NAMES.discover,
-    'Discover current SciForge operations. Use text with a broad capability name to search deferred managed tools, or tag managed-mcp to list them. Results use opaque references; request one operation with includeSchema=true for its compact input shape.',
+    'Discover current SciForge operations with an exact capabilityId or unordered text tokens. Scope, accepted/produced resource kinds, and provider family are independent filters. Native results are bounded by default; set providerFamily=managed-mcp explicitly to search managed tools. Results use opaque references; request one operation with includeSchema=true for its compact input shape.',
     agentDiscoverRequestSchema
   ),
   defineTool(
@@ -311,11 +321,24 @@ export class CapabilityAgentToolSurface {
           }
         }
         const descriptors = await this.#broker.discover(caller, {
+          ...(parsed.capabilityId ? { capabilityId: parsed.capabilityId } : {}),
           ...(parsed.text ? { text: parsed.text } : {}),
-          ...(parsed.resourceKind ? { resourceKind: parsed.resourceKind } : {}),
+          ...(parsed.scope ? { scope: parsed.scope } : {}),
+          ...(parsed.acceptedResourceKind ? { acceptedResourceKind: parsed.acceptedResourceKind } : {}),
+          ...(parsed.producedResourceKind ? { producedResourceKind: parsed.producedResourceKind } : {}),
+          ...(parsed.providerFamily ? { providerFamily: parsed.providerFamily } : {}),
           ...(parsed.effects ? { effects: parsed.effects } : {}),
-          ...(parsed.tags ? { tags: parsed.tags } : {})
+          ...(parsed.tags ? { tags: parsed.tags } : {}),
+          limit: parsed.limit
         }, { context: request.context })
+        if (descriptors.length === 0) {
+          const diagnostic = emptyDiscoveryDiagnostic(parsed)
+          throw new CapabilityAgentToolError(
+            'capability_discovery_empty',
+            `No capability matched the discovery request. ${JSON.stringify(diagnostic)}`,
+            { details: diagnostic }
+          )
+        }
         return {
           tool: CAPABILITY_AGENT_TOOL_NAMES.discover,
           value: descriptors.map((descriptor) => this.#agentOperation(cache, descriptor, false))
@@ -347,16 +370,28 @@ export class CapabilityAgentToolSurface {
             type: event.type,
             occurredAt: event.occurredAt,
             resourceRef: event.resourceRef,
+            resourceStatus: event.resourceStatus,
             resourceKind: event.resourceKind,
             operationRef: this.#operationRef(cache, this.#descriptorForId(descriptors, event.actionId))
           }))
         }
       }
       case CAPABILITY_AGENT_TOOL_NAMES.look: {
-        const parsed = agentVisualLookInputSchema.parse(rawArguments)
+        const resourceIdentity = nativeVisualResourceIdentity(rawArguments)
+        let parsed: AgentVisualLookInput
+        try {
+          parsed = agentVisualLookInputSchema.parse(rawArguments)
+        } catch (error) {
+          throw normalizeNativeVisualToolError(error, {
+            operation: 'look',
+            phase: 'arguments',
+            resourceIdentity
+          })
+        }
         return this.#runVisualCall(
           request.context,
           options.signal,
+          { operation: 'look', resourceIdentity },
           async (visualRuntime, signal) => ({
             tool: CAPABILITY_AGENT_TOOL_NAMES.look,
             value: parseVisualResult(
@@ -367,10 +402,21 @@ export class CapabilityAgentToolSurface {
         )
       }
       case CAPABILITY_AGENT_TOOL_NAMES.capture: {
-        const parsed = agentVisualCaptureInputSchema.parse(rawArguments)
+        const resourceIdentity = nativeVisualResourceIdentity(rawArguments)
+        let parsed: AgentVisualCaptureInput
+        try {
+          parsed = agentVisualCaptureInputSchema.parse(rawArguments)
+        } catch (error) {
+          throw normalizeNativeVisualToolError(error, {
+            operation: 'capture',
+            phase: 'arguments',
+            resourceIdentity
+          })
+        }
         return this.#runVisualCall(
           request.context,
           options.signal,
+          { operation: 'capture', resourceIdentity },
           async (visualRuntime, signal) => ({
             tool: CAPABILITY_AGENT_TOOL_NAMES.capture,
             value: parseVisualResult(
@@ -388,18 +434,30 @@ export class CapabilityAgentToolSurface {
   async #runVisualCall<Result extends CapabilityAgentToolResult>(
     context: CapabilityAgentToolRequestContext,
     sourceSignal: AbortSignal | undefined,
+    errorContext: NativeVisualToolErrorContext,
     call: (visualRuntime: AgentVisualRuntime, signal: AbortSignal) => Promise<Result>
   ): Promise<Result> {
     const visualRuntime = this.#visualRuntime
     if (!visualRuntime) {
-      throw new CapabilityAgentToolError(
-        'visual_runtime_unavailable',
-        'The native SciForge visual runtime is unavailable.'
+      throw normalizeNativeVisualToolError(
+        new CapabilityAgentToolError(
+          'visual_runtime_unavailable',
+          'The native SciForge visual runtime is unavailable.'
+        ),
+        errorContext
       )
     }
     const active = this.#beginActiveCall(context, sourceSignal)
     try {
       return await call(visualRuntime, active.signal)
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error
+        ? String(error.code)
+        : ''
+      throw normalizeNativeVisualToolError(error, {
+        ...errorContext,
+        phase: code === 'invalid_visual_result' ? 'result' : 'runtime'
+      })
     } finally {
       active.close()
     }
@@ -579,7 +637,9 @@ export class CapabilityAgentToolSurface {
       scope: descriptor.scope,
       effect: descriptor.effect,
       approval: descriptor.approval,
-      resourceKinds: [...descriptor.resourceKinds],
+      providerFamily: descriptor.tags.includes('managed-mcp') ? 'managed-mcp' : 'native',
+      acceptedResourceKinds: [...descriptor.resourceKinds],
+      producedResourceKinds: [...(descriptor.producedResourceKinds ?? [])],
       tags: [...descriptor.tags],
       ...(includeSchema ? { inputShape: compactInputShape(descriptor.inputSchema) } : {})
     }
@@ -651,6 +711,12 @@ export class CapabilityAgentToolSurface {
       return capabilityResourceHandleSchema.parse(await this.#broker.bindResourceRef(caller, resourceRef))
     } catch (error) {
       const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
+      if (code === 'resource_ref_retired') {
+        throw new CapabilityAgentToolError(
+          'resource_ref_retired',
+          'The historical resource reference has been retired and cannot be renewed or invoked.'
+        )
+      }
       if (code === 'resource_unavailable' || error instanceof z.ZodError) {
         throw new CapabilityAgentToolError('unknown_resource_ref', 'The resource reference is unknown or expired.')
       }
@@ -713,16 +779,24 @@ export class CapabilityAgentToolError extends Error {
     | 'unknown_agent_tool'
     | 'unknown_operation_ref'
     | 'unknown_resource_ref'
+    | 'resource_ref_retired'
+    | 'capability_discovery_empty'
     | 'stale_resource_ref'
     | 'approval_denied'
     | 'approval_cancelled'
     | 'visual_runtime_unavailable'
     | 'invalid_visual_result'
+  readonly details?: CapabilityJsonValue
 
-  constructor(code: CapabilityAgentToolError['code'], message: string) {
+  constructor(
+    code: CapabilityAgentToolError['code'],
+    message: string,
+    options: { details?: CapabilityJsonValue } = {}
+  ) {
     super(message)
     this.name = 'CapabilityAgentToolError'
     this.code = code
+    this.details = options.details
   }
 }
 
@@ -738,6 +812,68 @@ export function capabilityAgentCallerId(
   return context.threadId
     ? `${context.runtimeId}:${context.threadId}`
     : `${context.runtimeId}-request:${context.requestId}`
+}
+
+function emptyDiscoveryDiagnostic(
+  request: z.infer<typeof agentDiscoverRequestSchema>
+): CapabilityJsonValue {
+  const appliedFilters: Record<string, CapabilityJsonValue> = {
+    ...(request.capabilityId ? { capabilityId: request.capabilityId } : {}),
+    ...(request.text ? { text: request.text } : {}),
+    ...(request.scope ? { scope: request.scope } : {}),
+    ...(request.acceptedResourceKind ? { acceptedResourceKind: request.acceptedResourceKind } : {}),
+    ...(request.producedResourceKind ? { producedResourceKind: request.producedResourceKind } : {}),
+    ...(request.providerFamily ? { providerFamily: request.providerFamily } : {}),
+    ...(request.effects ? { effects: request.effects } : {}),
+    ...(request.tags ? { tags: request.tags } : {}),
+    limit: request.limit
+  }
+  const suggestions: CapabilityJsonValue[] = []
+  if (request.capabilityId) {
+    suggestions.push({
+      text: request.capabilityId.replace(/[._-]+/gu, ' '),
+      ...(request.providerFamily ? { providerFamily: request.providerFamily } : {}),
+      limit: request.limit
+    })
+  }
+  const textTokens = request.text?.match(/[\p{L}\p{N}]+/gu) ?? []
+  if (textTokens.length > 1) {
+    suggestions.push({
+      text: textTokens.slice(0, -1).join(' '),
+      ...(request.providerFamily ? { providerFamily: request.providerFamily } : {}),
+      limit: request.limit
+    })
+  }
+  for (const filter of [
+    'scope',
+    'acceptedResourceKind',
+    'producedResourceKind',
+    'effects',
+    'tags'
+  ] as const) {
+    if (!(filter in appliedFilters)) continue
+    const relaxed = { ...appliedFilters }
+    delete relaxed[filter]
+    suggestions.push(relaxed)
+  }
+  if (request.text && request.providerFamily !== 'managed-mcp') {
+    suggestions.push({
+      text: request.text,
+      providerFamily: 'managed-mcp',
+      limit: request.limit
+    })
+  }
+  if (suggestions.length === 0) suggestions.push({ scope: 'workspace', limit: request.limit })
+
+  return {
+    outcome: 'empty',
+    registryReadiness: {
+      status: 'ready',
+      contractVersion: CAPABILITY_BROKER_CONTRACT_VERSION
+    },
+    appliedFilters,
+    suggestedQueries: suggestions.slice(0, 6)
+  }
 }
 
 function isExpiredResourceHandleError(error: unknown): boolean {

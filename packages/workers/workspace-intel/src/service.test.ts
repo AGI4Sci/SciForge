@@ -160,6 +160,94 @@ test('inspects multiple guarded workspace images with content-derived MIME and a
   assert.equal(result.evidence.claims[0]?.artifactId, 'sample')
 })
 
+test('preserves typed visual inspection failures through the workspace service contract', async (t) => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'workspace-intel-image-inspect-failure-'))
+  t.after(async () => {
+    await rm(tempRoot, { recursive: true, force: true })
+  })
+  const workspaceRoot = join(tempRoot, 'workspace')
+  await mkdir(workspaceRoot, { recursive: true })
+  await writeFile(join(workspaceRoot, 'capture.png'), Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
+  ]))
+  const service = createWorkspaceIntelService({
+    workspaceRoot,
+    visualInspector: async () => ({
+      status: 'visual_inspection_unavailable',
+      code: 'visual_evidence_synthesis_unavailable',
+      message: 'The text reasoner could not synthesize strict visual evidence.',
+      failureClass: 'upstream_unavailable',
+      retryable: true,
+      recovery: {
+        action: 'retry_visual_inspection',
+        instruction: 'Retry visual inspection after text reasoning recovers.'
+      },
+      providerStage: 'text_reasoning'
+    })
+  })
+
+  const result = await service.inspectWorkspaceImages({
+    task: 'Describe the visible interface.',
+    artifacts: [{ id: 'capture', path: 'capture.png' }]
+  })
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: {
+      code: 'visual_evidence_synthesis_unavailable',
+      message: 'The text reasoner could not synthesize strict visual evidence.',
+      retryable: true,
+      suggestedFix: 'Retry visual inspection after text reasoning recovers.',
+      failureClass: 'upstream_unavailable',
+      recovery: {
+        action: 'retry_visual_inspection',
+        instruction: 'Retry visual inspection after text reasoning recovers.'
+      },
+      providerStage: 'text_reasoning'
+    }
+  })
+})
+
+test('fails closed when successful visual evidence is missing a grounded artifact claim', async (t) => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'workspace-intel-image-inspect-grounding-'))
+  t.after(async () => {
+    await rm(tempRoot, { recursive: true, force: true })
+  })
+  const workspaceRoot = join(tempRoot, 'workspace')
+  await mkdir(workspaceRoot, { recursive: true })
+  await writeFile(join(workspaceRoot, 'capture.png'), Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
+  ]))
+  const service = createWorkspaceIntelService({
+    workspaceRoot,
+    visualInspector: async (request) => ({
+      ...visualEvidence(request),
+      claims: []
+    })
+  })
+
+  const result = await service.inspectWorkspaceImages({
+    task: 'Describe the visible interface.',
+    artifacts: [{ id: 'capture', path: 'capture.png' }]
+  })
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: {
+      code: 'visual_evidence_grounding_missing',
+      message: 'Visual evidence is missing a grounded claim for an input artifact.',
+      retryable: false,
+      suggestedFix: 'Stop retrying this result because the returned visual evidence could not be verified.',
+      failureClass: 'evidence_unverified',
+      recovery: {
+        action: 'stop',
+        instruction: 'Stop retrying this result because the returned visual evidence could not be verified.'
+      },
+      providerStage: 'evidence_validation'
+    }
+  })
+})
+
 test('lists and reads project skills by id', async (t) => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'workspace-intel-skills-'))
   t.after(async () => {

@@ -1322,16 +1322,20 @@ describe('app-ipc-schemas', () => {
     expect(settingsPatchSchema.parse({
       runtimeGuards: {
         execution: {
-          exactRepeatThreshold: 4,
-          semanticFailureThreshold: 3
+          exactRepeatThreshold: 4
         }
       }
     }).runtimeGuards).toMatchObject({
       execution: {
-        exactRepeatThreshold: 4,
-        semanticFailureThreshold: 3
+        exactRepeatThreshold: 4
       }
     })
+
+    expect(() => settingsPatchSchema.parse({
+      runtimeGuards: {
+        execution: { semanticFailureThreshold: 3 }
+      }
+    })).toThrow(/Unrecognized key/)
 
     expect(() => settingsPatchSchema.parse({
       runtimeGuards: {

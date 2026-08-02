@@ -792,6 +792,7 @@ async function parseResponsesResponse(
       }
     }
     if (completed) {
+      assertNoErrorPayload(completed);
       assertResponsesResponseSchema(completed);
       return completed;
     }
@@ -823,7 +824,7 @@ async function parseResponsesResponse(
 }
 
 function isExplicitStreamErrorPayload(payload: Record<string, unknown>, event: string | undefined): boolean {
-  if (payload.error !== undefined || event === 'error' || payload.type === 'error' || payload.type === 'response.failed') {
+  if (hasExplicitErrorValue(payload.error) || event === 'error' || payload.type === 'error' || payload.type === 'response.failed') {
     return true;
   }
   return typeof payload.code === 'string'
@@ -1035,12 +1036,20 @@ function invalidResponse(message: string): UpstreamRequestError {
 }
 
 function assertNoErrorPayload(payload: JsonObject): void {
-  if (payload.error === undefined) return;
+  if (!hasExplicitErrorValue(payload.error)) return;
   throw new UpstreamRequestError({
     code: 'upstream_error_payload',
     message: 'Upstream returned an error payload instead of a model response.',
     status: 502,
   });
+}
+
+function hasExplicitErrorValue(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (isRecord(value)) return Object.keys(value).length > 0;
+  return true;
 }
 
 function assertResponsesResponseSchema(payload: JsonObject): void {

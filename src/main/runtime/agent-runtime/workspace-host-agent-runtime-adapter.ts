@@ -446,6 +446,16 @@ export function createPlacementAwareAgentRuntimeAdapter(
   return {
     id: local.id,
     transport: local.transport,
+    ...(local.subagents || workspaceHost.subagents
+      ? {
+          subagents: {
+            spawn: (context, input) => requireSubagentAdapter(selected(context)).spawn(context, input),
+            inspect: (context, input) => requireSubagentAdapter(selected(context)).inspect(context, input),
+            message: (context, input) => requireSubagentAdapter(selected(context)).message(context, input),
+            cancel: (context, input) => requireSubagentAdapter(selected(context)).cancel(context, input)
+          }
+        }
+      : {}),
     connect: (context) => selected(context).connect(context),
     capabilities: (context) => selected(context).capabilities(context),
     listThreads: (context, input) => selected(context).listThreads(context, input),
@@ -519,6 +529,16 @@ export function createPlacementAwareAgentRuntimeAdapter(
         }
       : {})
   }
+}
+
+function requireSubagentAdapter(adapter: AgentRuntimeAdapter): NonNullable<AgentRuntimeAdapter['subagents']> {
+  if (!adapter.subagents) {
+    throw new WorkspaceHostAgentRuntimeError(
+      'compatibility-error',
+      `AgentRuntimeAdapter ${adapter.id} does not support subagent controls for this placement.`
+    )
+  }
+  return adapter.subagents
 }
 
 export class WorkspaceHostAgentRuntimeError extends Error {

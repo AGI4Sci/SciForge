@@ -640,8 +640,7 @@ const runtimeGuardPatchSchema = z.object({
   execution: z.object({
     enabled: z.boolean().optional(),
     windowSize: z.number().int().positive().max(256).optional(),
-    exactRepeatThreshold: z.number().int().min(2).max(128).optional(),
-    semanticFailureThreshold: z.number().int().min(2).max(128).optional()
+    exactRepeatThreshold: z.number().int().min(2).max(128).optional()
   }).strict().optional()
 }).strict()
 

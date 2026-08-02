@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -9,6 +10,8 @@ import {
 import { useTranslation } from 'react-i18next'
 import {
   Check,
+  ChevronLeft,
+  ChevronRight,
   Clipboard,
   ClipboardCopy,
   Columns2,
@@ -19,6 +22,7 @@ import {
   LoaderCircle,
   MessageSquare,
   PencilLine,
+  Search,
   TriangleAlert
 } from 'lucide-react'
 import type { MarkdownWechatCopyResult } from '@shared/markdown-wechat'
@@ -39,10 +43,13 @@ import {
 import { CopyTextButton } from '../components/CopyTextButton'
 import {
   documentTextAnchorFromDomRange,
+  findDocumentTextSearchMatches,
   isNewDocumentNavigationRequest,
   resolveDocumentTextOverlayRects,
   resolveDomDocumentTextAnchor,
+  resolveDomDocumentTextSearchMatches,
   type DocumentTextAnchor,
+  type DocumentTextOverlayRect,
   type ResolvedDocumentTextOverlay
 } from './dom-text-annotations'
 import type {
@@ -97,6 +104,13 @@ type MarkdownSelectionState = {
   selection: DocumentAnnotationSelection
   toolbarStyle: CSSProperties
 }
+
+type MarkdownSearchOverlay = {
+  index: number
+  rects: DocumentTextOverlayRect[]
+}
+
+type MarkdownScrollSyncOrigin = 'editor' | 'preview' | 'search'
 
 export type MarkdownWechatCopyState =
   | { kind: 'idle' }
@@ -201,13 +215,23 @@ export function MarkdownWorkspaceViewer({
     observation?.selection?.kind === 'text' ? 'edit' : 'preview'
   )
   const [mode, setMode] = useState<MarkdownWorkspaceViewerMode>(resolvedInitialMode)
+  const viewerRef = useRef<HTMLElement | null>(null)
+  const editorRef = useRef<HTMLTextAreaElement | null>(null)
   const previewScrollerRef = useRef<HTMLDivElement | null>(null)
   const previewTextRootRef = useRef<HTMLDivElement | null>(null)
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
   const handledNavigationRequestIdRef = useRef<string | null>(null)
   const copyRequestRef = useRef(0)
   const copyInFlightRef = useRef(false)
+  const scrollSyncOriginRef = useRef<MarkdownScrollSyncOrigin | null>(null)
+  const scrollSyncResetFrameRef = useRef<number | null>(null)
+  const previousModeRef = useRef<MarkdownWorkspaceViewerMode>(resolvedInitialMode)
   const [selectionState, setSelectionState] = useState<MarkdownSelectionState | null>(null)
   const [resolvedAnnotationOverlays, setResolvedAnnotationOverlays] = useState<ResolvedDocumentTextOverlay[]>([])
+  const [resolvedSearchOverlays, setResolvedSearchOverlays] = useState<MarkdownSearchOverlay[]>([])
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchIndex, setSearchIndex] = useState(0)
+  const [editorSearchText, setEditorSearchText] = useState(model.markdown)
   const [wechatCopyState, setWechatCopyState] = useState<MarkdownWechatCopyState>({ kind: 'idle' })
 
   useEffect(() => {
@@ -227,11 +251,39 @@ export function MarkdownWorkspaceViewer({
   const showEditor = mode === 'edit' || mode === 'split'
   const showPreview = mode === 'preview' || mode === 'split'
   const wechatCopyFeedback = buildMarkdownWechatCopyFeedbackModel(wechatCopyState)
+  const sourceSearchMatches = useMemo(
+    () => findDocumentTextSearchMatches(editorSearchText, searchQuery),
+    [editorSearchText, searchQuery]
+  )
+  const searchMatchCount = mode === 'preview'
+    ? resolvedSearchOverlays.length
+    : sourceSearchMatches.length
+  const activeSearchIndex = searchMatchCount > 0
+    ? Math.min(searchIndex, searchMatchCount - 1)
+    : 0
+  const searchMatchLabel = searchQuery.trim()
+    ? `${searchMatchCount ? activeSearchIndex + 1 : 0}/${searchMatchCount}`
+    : ''
+
+  useEffect(() => {
+    setEditorSearchText(model.markdown)
+  }, [documentContentKey, model.markdown, observation?.file.path])
+
+  useEffect(() => {
+    setSearchIndex(0)
+  }, [documentContentKey, observation?.file.path, searchQuery])
+
+  useEffect(() => {
+    setSearchIndex((current) => searchMatchCount > 0
+      ? Math.min(current, searchMatchCount - 1)
+      : 0)
+  }, [searchMatchCount])
 
   useEffect(() => {
     if (!showPreview) {
       setSelectionState(null)
       setResolvedAnnotationOverlays([])
+      setResolvedSearchOverlays([])
       return
     }
     const root = previewTextRootRef.current
@@ -239,6 +291,7 @@ export function MarkdownWorkspaceViewer({
     if (!root || !scroller) return
     const refresh = (): void => {
       setResolvedAnnotationOverlays(resolveDocumentTextOverlayRects(root, scroller, annotationOverlays))
+      setResolvedSearchOverlays(resolveMarkdownSearchOverlayRects(root, scroller, searchQuery))
     }
     const frame = window.requestAnimationFrame(refresh)
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(refresh)
@@ -250,7 +303,7 @@ export function MarkdownWorkspaceViewer({
       observer?.disconnect()
       window.removeEventListener('resize', refresh)
     }
-  }, [annotationOverlays, model.markdown, showPreview])
+  }, [annotationOverlays, model.markdown, searchQuery, showPreview])
 
   useEffect(() => {
     if (!isNewDocumentNavigationRequest(
@@ -262,11 +315,20 @@ export function MarkdownWorkspaceViewer({
       return
     }
     const root = previewTextRootRef.current
-    if (!root) return
+    const scroller = previewScrollerRef.current
+    if (!root || !scroller) return
     const anchor = resolveDomDocumentTextAnchor(root, navigationRequest)
     if (!anchor) return
-    const target = anchor.range.startContainer.parentElement
-    target?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+    const targetRect = anchor.range.getBoundingClientRect()
+    const scrollerRect = scroller.getBoundingClientRect()
+    const targetTop = scroller.scrollTop + targetRect.top - scrollerRect.top
+    scroller.scrollTo({
+      top: Math.max(0, Math.min(
+        scroller.scrollHeight - scroller.clientHeight,
+        targetTop - scroller.clientHeight / 2 + targetRect.height / 2
+      )),
+      behavior: 'smooth'
+    })
     handledNavigationRequestIdRef.current = navigationRequest.requestId
   }, [model.markdown, navigationRequest, showPreview])
 
@@ -345,8 +407,125 @@ export function MarkdownWorkspaceViewer({
     }
   }, [model.truncated, onCopyForWechat, wechatCopyState.kind])
 
+  const lockScrollSync = useCallback((origin: MarkdownScrollSyncOrigin): void => {
+    scrollSyncOriginRef.current = origin
+    if (scrollSyncResetFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollSyncResetFrameRef.current)
+    }
+    scrollSyncResetFrameRef.current = window.requestAnimationFrame(() => {
+      if (scrollSyncOriginRef.current === origin) scrollSyncOriginRef.current = null
+      scrollSyncResetFrameRef.current = null
+    })
+  }, [])
+
+  const synchronizePaneScroll = useCallback((
+    origin: Exclude<MarkdownScrollSyncOrigin, 'search'>,
+    source: HTMLElement,
+    target: HTMLElement
+  ): void => {
+    if (mode !== 'split') return
+    const activeOrigin = scrollSyncOriginRef.current
+    if (activeOrigin && activeOrigin !== origin) return
+    const nextScrollTop = proportionalScrollTop({
+      sourceScrollTop: source.scrollTop,
+      sourceScrollHeight: source.scrollHeight,
+      sourceClientHeight: source.clientHeight,
+      targetScrollHeight: target.scrollHeight,
+      targetClientHeight: target.clientHeight
+    })
+    if (Math.abs(target.scrollTop - nextScrollTop) < 1) return
+    lockScrollSync(origin)
+    target.scrollTop = nextScrollTop
+  }, [lockScrollSync, mode])
+
+  const handleEditorElementChange = useCallback((element: HTMLTextAreaElement | null): void => {
+    editorRef.current = element
+  }, [])
+
+  const handleEditorScroll = useCallback((editor: HTMLTextAreaElement): void => {
+    const preview = previewScrollerRef.current
+    if (preview) synchronizePaneScroll('editor', editor, preview)
+  }, [synchronizePaneScroll])
+
+  const handlePreviewScroll = useCallback((preview: HTMLDivElement): void => {
+    const editor = editorRef.current
+    if (editor) synchronizePaneScroll('preview', preview, editor)
+  }, [synchronizePaneScroll])
+
+  const jumpSearch = useCallback((direction: -1 | 1): void => {
+    if (searchMatchCount === 0) return
+    setSearchIndex((current) => (current + direction + searchMatchCount) % searchMatchCount)
+  }, [searchMatchCount])
+
+  useEffect(() => {
+    const root = viewerRef.current
+    if (!root) return
+    const handleFindShortcut = (event: KeyboardEvent): void => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'f') return
+      const activeElement = root.ownerDocument.activeElement
+      if (!root.contains(activeElement) && !root.matches(':hover')) return
+      event.preventDefault()
+      searchInputRef.current?.focus()
+      searchInputRef.current?.select()
+    }
+    root.ownerDocument.addEventListener('keydown', handleFindShortcut)
+    return () => root.ownerDocument.removeEventListener('keydown', handleFindShortcut)
+  }, [])
+
+  useEffect(() => {
+    if (!searchQuery.trim() || searchMatchCount === 0) return
+    const frame = window.requestAnimationFrame(() => {
+      lockScrollSync('search')
+      if (showEditor) {
+        const editor = editorRef.current
+        const match = sourceSearchMatches[Math.min(activeSearchIndex, sourceSearchMatches.length - 1)]
+        if (editor && match) locateTextareaSearchMatch(editor, editorSearchText, match.from, match.to)
+      }
+      if (showPreview) {
+        const preview = previewScrollerRef.current
+        const overlay = resolvedSearchOverlays[Math.min(activeSearchIndex, resolvedSearchOverlays.length - 1)]
+        const rect = overlay?.rects[0]
+        if (preview && rect) {
+          preview.scrollTop = Math.max(0, rect.top - preview.clientHeight / 2 + rect.height / 2)
+        }
+      }
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [
+    activeSearchIndex,
+    editorSearchText,
+    lockScrollSync,
+    resolvedSearchOverlays,
+    searchMatchCount,
+    searchQuery,
+    showEditor,
+    showPreview,
+    sourceSearchMatches
+  ])
+
+  useEffect(() => {
+    const previousMode = previousModeRef.current
+    previousModeRef.current = mode
+    if (mode !== 'split') return
+    const frame = window.requestAnimationFrame(() => {
+      const editor = editorRef.current
+      const preview = previewScrollerRef.current
+      if (!editor || !preview) return
+      if (previousMode === 'preview') synchronizePaneScroll('preview', preview, editor)
+      else synchronizePaneScroll('editor', editor, preview)
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [mode, synchronizePaneScroll])
+
+  useEffect(() => () => {
+    if (scrollSyncResetFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollSyncResetFrameRef.current)
+    }
+  }, [])
+
   return (
     <section
+      ref={viewerRef}
       className={compactClassName(
         'workspace-preview-markdown-viewer flex h-full min-h-0 flex-col overflow-hidden',
         className
@@ -357,7 +536,7 @@ export function MarkdownWorkspaceViewer({
       data-truncated={model.truncated ? 'true' : 'false'}
       data-markdown-wechat-copy-state={wechatCopyFeedback.phase}
     >
-      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-ds-border px-4 py-3 pr-20">
+      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-ds-border px-4 py-3 pr-28">
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
             <h3 className="truncate text-sm font-semibold text-ds-text" title={model.title}>{model.title}</h3>
@@ -396,6 +575,65 @@ export function MarkdownWorkspaceViewer({
         </p>
       </header>
 
+      {model.status === 'ready' ? (
+        <div
+          className="shrink-0 border-b border-ds-border bg-ds-panel/70 px-4 py-2 pr-20"
+          data-markdown-search-toolbar
+        >
+          <div className="flex min-w-0 items-center gap-1 rounded-lg border border-ds-border bg-ds-bg px-2 py-1">
+            <Search className="h-4 w-4 shrink-0 text-ds-faint" aria-hidden="true" />
+            <input
+              ref={searchInputRef}
+              type="search"
+              className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ds-text outline-none placeholder:text-ds-faint"
+              value={searchQuery}
+              placeholder={t('writeDocxSearchPlaceholder')}
+              aria-label={t('writeDocxSearchPlaceholder')}
+              data-markdown-search-input
+              onChange={(event) => setSearchQuery(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  jumpSearch(event.shiftKey ? -1 : 1)
+                } else if (event.key === 'Escape') {
+                  event.preventDefault()
+                  setSearchQuery('')
+                }
+              }}
+            />
+            <span
+              className="min-w-[42px] shrink-0 text-right text-[11px] tabular-nums text-ds-faint"
+              aria-live="polite"
+              data-markdown-search-count
+            >
+              {searchMatchLabel}
+            </span>
+            <button
+              type="button"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ds-muted transition hover:bg-ds-hover hover:text-ds-text disabled:cursor-default disabled:opacity-35"
+              title={t('writePdfPrevMatch')}
+              aria-label={t('writePdfPrevMatch')}
+              disabled={searchMatchCount === 0}
+              onClick={() => jumpSearch(-1)}
+              data-markdown-search-previous
+            >
+              <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ds-muted transition hover:bg-ds-hover hover:text-ds-text disabled:cursor-default disabled:opacity-35"
+              title={t('writePdfNextMatch')}
+              aria-label={t('writePdfNextMatch')}
+              disabled={searchMatchCount === 0}
+              onClick={() => jumpSearch(1)}
+              data-markdown-search-next
+            >
+              <ChevronRight className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {model.status === 'ready' && onCopyForWechat && wechatCopyState.kind !== 'idle' ? (
         <MarkdownWechatCopyNotice state={wechatCopyState} />
       ) : null}
@@ -426,6 +664,9 @@ export function MarkdownWorkspaceViewer({
                 documentContentKey={documentContentKey}
                 className="h-full min-h-0"
                 onApplyEdit={onApplyEdit ? applyTextEdit : undefined}
+                onDraftChange={setEditorSearchText}
+                onEditorElementChange={handleEditorElementChange}
+                onEditorScroll={handleEditorScroll}
               />
             </div>
           ) : null}
@@ -442,6 +683,7 @@ export function MarkdownWorkspaceViewer({
               data-active-annotation-id={activeAnnotationId ?? undefined}
               onPointerUp={scheduleSelectionUpdate}
               onKeyUp={scheduleSelectionUpdate}
+              onScroll={(event) => handlePreviewScroll(event.currentTarget)}
             >
               <div ref={previewTextRootRef} data-markdown-annotation-text-root>
                 <WriteMarkdownPreview
@@ -457,6 +699,10 @@ export function MarkdownWorkspaceViewer({
                 overlays={resolvedAnnotationOverlays}
                 activeAnnotationId={activeAnnotationId}
                 onAnnotationSelect={onAnnotationSelect}
+              />
+              <MarkdownSearchOverlayLayer
+                overlays={resolvedSearchOverlays}
+                activeIndex={activeSearchIndex}
               />
             </div>
           ) : null}
@@ -632,6 +878,89 @@ export function createMarkdownAnnotationSelection(input: {
       rects: []
     }
   }
+}
+
+export function proportionalScrollTop(input: {
+  sourceScrollTop: number
+  sourceScrollHeight: number
+  sourceClientHeight: number
+  targetScrollHeight: number
+  targetClientHeight: number
+}): number {
+  const sourceRange = Math.max(0, input.sourceScrollHeight - input.sourceClientHeight)
+  const targetRange = Math.max(0, input.targetScrollHeight - input.targetClientHeight)
+  if (sourceRange === 0 || targetRange === 0) return 0
+  const progress = Math.max(0, Math.min(1, input.sourceScrollTop / sourceRange))
+  return progress * targetRange
+}
+
+function locateTextareaSearchMatch(
+  editor: HTMLTextAreaElement,
+  text: string,
+  from: number,
+  to: number
+): void {
+  editor.setSelectionRange(from, to)
+  const lineIndex = text.slice(0, from).split(/\r\n|\r|\n/u).length - 1
+  const computedLineHeight = Number.parseFloat(
+    editor.ownerDocument.defaultView?.getComputedStyle(editor).lineHeight ?? ''
+  )
+  const lineHeight = Number.isFinite(computedLineHeight) ? computedLineHeight : 20
+  const targetTop = lineIndex * lineHeight - editor.clientHeight / 2 + lineHeight / 2
+  editor.scrollTop = Math.max(0, Math.min(
+    editor.scrollHeight - editor.clientHeight,
+    targetTop
+  ))
+}
+
+function resolveMarkdownSearchOverlayRects(
+  root: HTMLElement,
+  scroller: HTMLElement,
+  query: string
+): MarkdownSearchOverlay[] {
+  const scrollerRect = scroller.getBoundingClientRect()
+  return resolveDomDocumentTextSearchMatches(root, query).flatMap((match, index) => {
+    const rects = Array.from(match.range.getClientRects())
+      .filter((rect) => rect.width > 0 && rect.height > 0)
+      .map((rect) => ({
+        top: rect.top - scrollerRect.top + scroller.scrollTop,
+        left: rect.left - scrollerRect.left + scroller.scrollLeft,
+        width: rect.width,
+        height: rect.height
+      }))
+    return rects.length ? [{ index, rects }] : []
+  })
+}
+
+function MarkdownSearchOverlayLayer({
+  overlays,
+  activeIndex
+}: {
+  overlays: readonly MarkdownSearchOverlay[]
+  activeIndex: number
+}): ReactElement {
+  return (
+    <div
+      className="pointer-events-none absolute inset-0 z-[9]"
+      aria-hidden="true"
+      data-markdown-search-overlay-layer
+    >
+      {overlays.flatMap((overlay) => overlay.rects.map((rect, rectIndex) => (
+        <span
+          key={`${overlay.index}-${rectIndex}`}
+          className={compactClassName(
+            'absolute rounded-[2px]',
+            overlay.index === activeIndex
+              ? 'bg-orange-400/45 ring-1 ring-orange-500/70'
+              : 'bg-amber-300/35'
+          )}
+          style={rect}
+          data-markdown-search-match={overlay.index}
+          data-active={overlay.index === activeIndex ? 'true' : undefined}
+        />
+      )))}
+    </div>
+  )
 }
 
 function MarkdownAnnotationOverlayLayer({

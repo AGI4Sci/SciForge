@@ -1,6 +1,6 @@
-import { useEffect, useId, useState, type ReactElement } from 'react'
+import { useEffect, useId, useRef, useState, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
-import { Download, Minus, Plus, X } from 'lucide-react'
+import { Download, LoaderCircle, Minus, PencilLine, Plus, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 type ImagePreviewLightboxProps = {
@@ -11,6 +11,10 @@ type ImagePreviewLightboxProps = {
   downloadDisabled?: boolean
   downloadLabel?: string
   onDownload?: () => void | Promise<void>
+  editDisabled?: boolean
+  editLabel?: string
+  onEdit?: () => void | Promise<void>
+  statusMessage?: string
   onClose: () => void
 }
 
@@ -30,13 +34,21 @@ export function ImagePreviewLightbox({
   downloadDisabled = false,
   downloadLabel,
   onDownload,
+  editDisabled = false,
+  editLabel,
+  onEdit,
+  statusMessage,
   onClose
 }: ImagePreviewLightboxProps): ReactElement | null {
   const { t } = useTranslation('common')
   const [zoom, setZoom] = useState(1)
+  const [editBusy, setEditBusy] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
+  const editRequestRef = useRef(0)
   const titleId = useId()
   const resolvedTitle = title || alt || t('imagePreviewTitle')
   const resolvedDownloadLabel = downloadLabel ?? t('imagePreviewDownload')
+  const resolvedEditLabel = editLabel ?? t('imagePreviewOpenSystemEditor')
 
   useEffect(() => {
     if (!open || typeof window === 'undefined') return
@@ -53,6 +65,12 @@ export function ImagePreviewLightbox({
     }
   }, [open, onClose])
 
+  useEffect(() => {
+    editRequestRef.current += 1
+    setEditBusy(false)
+    setEditError(null)
+  }, [open, src])
+
   if (!open || typeof document === 'undefined') return null
 
   const zoomPercent = `${Math.round(zoom * 100)}%`
@@ -64,6 +82,23 @@ export function ImagePreviewLightbox({
     zoom === 1
       ? undefined
       : { width: `${zoom * 100}%` }
+  const runEdit = async (): Promise<void> => {
+    if (!onEdit || editBusy || editDisabled) return
+    const requestId = editRequestRef.current + 1
+    editRequestRef.current = requestId
+    setEditBusy(true)
+    setEditError(null)
+    try {
+      await onEdit()
+    } catch (error) {
+      if (editRequestRef.current !== requestId) return
+      setEditError(error instanceof Error && error.message.trim()
+        ? error.message
+        : String(error))
+    } finally {
+      if (editRequestRef.current === requestId) setEditBusy(false)
+    }
+  }
 
   return createPortal(
     <div
@@ -78,7 +113,33 @@ export function ImagePreviewLightbox({
       <h2 id={titleId} className="sr-only">
         {resolvedTitle}
       </h2>
+      {editError || statusMessage ? (
+        <div
+          className={`absolute left-1/2 top-4 z-10 max-w-[min(32rem,calc(100vw-10rem))] -translate-x-1/2 rounded-full px-4 py-2 text-center text-xs font-medium shadow-lg ${editError ? 'bg-red-50 text-red-800' : 'bg-white text-zinc-700'}`}
+          role={editError ? 'alert' : 'status'}
+          aria-live="polite"
+        >
+          {editError
+            ? t('imagePreviewOpenSystemEditorFailed', { message: editError })
+            : statusMessage}
+        </div>
+      ) : null}
       <div className="absolute right-3 top-3 z-10 flex items-center gap-2 sm:right-4 sm:top-4">
+        {onEdit ? (
+          <button
+            type="button"
+            onClick={() => void runEdit()}
+            disabled={editDisabled || editBusy}
+            aria-label={resolvedEditLabel}
+            aria-busy={editBusy ? 'true' : undefined}
+            title={resolvedEditLabel}
+            className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-white text-zinc-700 shadow-[0_14px_34px_rgba(0,0,0,0.22)] transition hover:bg-zinc-50 hover:text-zinc-950 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-800"
+          >
+            {editBusy
+              ? <LoaderCircle className="h-5 w-5 animate-spin" strokeWidth={1.9} />
+              : <PencilLine className="h-5 w-5" strokeWidth={1.9} />}
+          </button>
+        ) : null}
         {onDownload ? (
           <button
             type="button"

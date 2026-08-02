@@ -1,9 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  DEFAULT_MULTI_AGENT_CHILD_TIMEOUT_MS,
-  DEFAULT_MULTI_AGENT_TIMEOUT_HANDSHAKE_MS,
-  DEFAULT_MULTI_AGENT_TIMEOUT_SUMMARY_GRACE_MS,
   DelegateTaskInput,
   MULTI_AGENT_CONTRACT_VERSION,
   MultiAgentChildRunRecord,
@@ -16,9 +13,6 @@ test('runtime config and child run records apply contract defaults', () => {
     enabled: true,
     maxParallel: 2,
     maxChildren: 16,
-    childTimeoutMs: DEFAULT_MULTI_AGENT_CHILD_TIMEOUT_MS,
-    timeoutHandshakeMs: DEFAULT_MULTI_AGENT_TIMEOUT_HANDSHAKE_MS,
-    timeoutSummaryGraceMs: DEFAULT_MULTI_AGENT_TIMEOUT_SUMMARY_GRACE_MS,
     maxTranscriptEntries: 1000
   })
 
@@ -46,6 +40,6 @@ test('contract schemas are strict and expose stable error codes', () => {
     prompt: 'Do work',
     runtimeSpecificFlag: true
   }))
-  assert.equal(MultiAgentErrorCode.parse('timeout'), 'timeout')
+  assert.throws(() => MultiAgentErrorCode.parse('timeout'))
   assert.throws(() => MultiAgentErrorCode.parse('provider_api_key_missing'))
 })

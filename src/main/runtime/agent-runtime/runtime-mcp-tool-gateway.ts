@@ -683,6 +683,12 @@ export function runtimeToolResponseFromMcpResult(
   const retryable = booleanValue(structuredError?.retryable) ??
     booleanValue(structuredRecord?.retryable) ??
     booleanValue(record?.retryable)
+  const recoveryGuidance = stringValue(structuredError?.recoveryGuidance) ||
+    stringValue(structuredRecord?.recoveryGuidance) ||
+    stringValue(record?.recoveryGuidance)
+  const providerStage = stringValue(structuredError?.providerStage) ||
+    stringValue(structuredRecord?.providerStage) ||
+    stringValue(record?.providerStage)
   const resourceIdentity = stringValue(structuredRecord?.resourceRef) ||
     stringValue(structuredRecord?.resourceIdentity) ||
     stringValue(record?.resourceRef)
@@ -715,6 +721,8 @@ export function runtimeToolResponseFromMcpResult(
     ...(errorCode ? { errorCode } : {}),
     ...(failureClass ? { failureClass } : {}),
     ...(retryable !== undefined ? { retryable } : {}),
+    ...(recoveryGuidance ? { recoveryGuidance } : {}),
+    ...(providerStage ? { providerStage } : {}),
     ...(resourceIdentity ? { resourceIdentity } : {}),
     ...(evidenceDelta !== undefined ? { evidenceDelta } : {}),
     ...(stateChanged !== undefined ? { stateChanged } : {})

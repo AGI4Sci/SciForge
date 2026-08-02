@@ -271,7 +271,13 @@ export const visibleContextCaptureResultSchema = z.discriminatedUnion('ok', [
     error: z.object({
       code: z.string().trim().min(1).max(128),
       message: z.string().trim().min(1).max(1000),
-      retryable: z.boolean()
+      failureClass: z.string().trim().min(1).max(128),
+      retryable: z.boolean(),
+      recovery: z.object({
+        action: z.string().trim().min(1).max(128),
+        instruction: z.string().trim().min(1).max(1000)
+      }).strict(),
+      providerStage: z.string().trim().min(1).max(128)
     }).strict()
   }).strict()
 ])

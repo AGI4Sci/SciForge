@@ -36,6 +36,11 @@ import type {
   VisibleContextCapturedFrame,
   VisibleContextService
 } from '../../services/visible-context-service'
+import {
+  AgentRuntimeToolError,
+  nativeVisualResourceIdentity,
+  normalizeNativeVisualToolError
+} from './agent-tool-surface'
 
 const VISUAL_ASSET_DIRECTORY_SEGMENTS = ['.sciforge', 'visual-assets'] as const
 const MAX_TRACKED_SNAPSHOTS = 512
@@ -150,6 +155,21 @@ export class AgentVisualRuntime {
     rawInput: AgentVisualLookInput,
     context: AgentVisualRuntimeCallContext
   ): Promise<AgentVisualLookOutput> {
+    try {
+      return await this.executeLook(rawInput, context)
+    } catch (error) {
+      throw normalizeNativeVisualToolError(error, {
+        operation: 'look',
+        phase: 'runtime',
+        resourceIdentity: nativeVisualResourceIdentity(rawInput)
+      })
+    }
+  }
+
+  private async executeLook(
+    rawInput: AgentVisualLookInput,
+    context: AgentVisualRuntimeCallContext
+  ): Promise<AgentVisualLookOutput> {
     const input = agentVisualLookInputSchema.parse(rawInput)
     const scope = visualScope(context)
     throwIfAborted(context.signal)
@@ -175,13 +195,57 @@ export class AgentVisualRuntime {
     if (!inspector) throw new Error('Visual understanding is unavailable.')
     const inspection = await inspector(visualInspectionRequest(input, frame.path, frame.mimeType))
     throwIfAborted(context.signal)
-    if (inspection.status !== 'inspected') throw new Error(inspection.message)
+    if (inspection.status !== 'inspected') {
+      throw new AgentRuntimeToolError(
+        inspection.message,
+        {
+          code: inspection.code,
+          failureClass: inspection.failureClass,
+          retryable: inspection.retryable,
+          recovery: inspection.recovery,
+          ...(inspection.providerStage ? { providerStage: inspection.providerStage } : {}),
+          resourceIdentity: nativeVisualResourceIdentity(input),
+          evidenceDelta: false,
+          stateChanged: false
+        }
+      )
+    }
     const inspectedArtifact = inspection.artifacts.find((artifact) => artifact.id === 'source')
     if (!inspectedArtifact || inspectedArtifact.sha256 !== sourceSha256) {
-      throw new Error('The visual inspector did not attest the immutable source snapshot.')
+      throw new AgentRuntimeToolError(
+        'The visual inspector did not attest the immutable source snapshot.',
+        {
+          code: 'visual_evidence_attestation_missing',
+          failureClass: 'evidence_unverified',
+          retryable: false,
+          recovery: {
+            action: 'stop',
+            instruction: 'Stop and report that the immutable snapshot was not attested; do not issue a visual proof.'
+          },
+          providerStage: 'evidence_validation',
+          resourceIdentity: nativeVisualResourceIdentity(input),
+          evidenceDelta: false,
+          stateChanged: false
+        }
+      )
     }
     if (!inspection.claims.some((claim) => claim.artifactId === 'source')) {
-      throw new Error('The visual inspector returned no grounded evidence for the immutable source snapshot.')
+      throw new AgentRuntimeToolError(
+        'The visual inspector returned no grounded evidence for the immutable source snapshot.',
+        {
+          code: 'visual_evidence_grounding_missing',
+          failureClass: 'evidence_unverified',
+          retryable: false,
+          recovery: {
+            action: 'stop',
+            instruction: 'Stop and report that grounded visual evidence is missing; do not issue a visual proof.'
+          },
+          providerStage: 'evidence_validation',
+          resourceIdentity: nativeVisualResourceIdentity(input),
+          evidenceDelta: false,
+          stateChanged: false
+        }
+      )
     }
     const snapshot = resolved.snapshot ?? this.createSnapshot(
       scope,
@@ -268,6 +332,21 @@ export class AgentVisualRuntime {
   }
 
   async capture(
+    rawInput: AgentVisualCaptureInput,
+    context: AgentVisualRuntimeCallContext
+  ): Promise<AgentVisualCaptureOutput> {
+    try {
+      return await this.executeCapture(rawInput, context)
+    } catch (error) {
+      throw normalizeNativeVisualToolError(error, {
+        operation: 'capture',
+        phase: 'runtime',
+        resourceIdentity: nativeVisualResourceIdentity(rawInput)
+      })
+    }
+  }
+
+  private async executeCapture(
     rawInput: AgentVisualCaptureInput,
     context: AgentVisualRuntimeCallContext
   ): Promise<AgentVisualCaptureOutput> {

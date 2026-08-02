@@ -16,6 +16,11 @@ import {
 } from '../../shared/app-settings'
 import { ControlledProcessService } from '../processes/controlled-process-service'
 import { WorkspacePlacementRouter } from '../services/workspace-placement-router'
+import { VisibleContextService } from '../services/visible-context-service'
+import {
+  VISIBLE_CONTEXT_SCHEMA_VERSION,
+  type VisibleContextSnapshot
+} from '../../shared/visible-context'
 
 const handlers = new Map<string, (event: unknown, payload?: unknown) => Promise<unknown>>()
 const { showOpenDialog, showSaveDialog } = vi.hoisted(() => ({
@@ -149,6 +154,24 @@ function createSender(id: number) {
     })
   }
   return sender
+}
+
+function visibleSnapshot(
+  windowId: string,
+  revision: number,
+  activeThreadId: string,
+  route: string
+): VisibleContextSnapshot {
+  return {
+    schemaVersion: VISIBLE_CONTEXT_SCHEMA_VERSION,
+    windowId,
+    revision,
+    publishedAt: `2026-07-31T03:00:0${revision}.000Z`,
+    freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
+    activeThreadId,
+    route,
+    components: []
+  }
 }
 
 function waitForAbortStream(signal: AbortSignal): AsyncIterable<unknown> {
@@ -394,6 +417,86 @@ describe('registerAppIpcHandlers', () => {
 
     expect(publish).toHaveBeenCalledWith({ ...payload, windowId: 'electron:41' })
   })
+
+  it.each([
+    {
+      initiatingKind: 'browser' as const,
+      initiatingWindowId: 'browser:1',
+      competingWindowId: 'electron:1'
+    },
+    {
+      initiatingKind: 'electron' as const,
+      initiatingWindowId: 'electron:1',
+      competingWindowId: 'browser:1'
+    }
+  ])(
+    'binds a $initiatingKind startTurn to its sender surface despite a later $competingWindowId publish',
+    async ({ initiatingKind, initiatingWindowId, competingWindowId }) => {
+      const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+      const userDataDir = mkdtempSync(join(tmpdir(), 'sciforge-visible-context-ipc-'))
+      try {
+        const visibleContext = new VisibleContextService(userDataDir, {
+          surfaceCaptureProvider: { capture: vi.fn() },
+          now: () => new Date('2026-07-31T03:00:03.000Z')
+        })
+        await visibleContext.publish(visibleSnapshot(
+          initiatingWindowId,
+          1,
+          'thread-a',
+          `/${initiatingWindowId}/initial`
+        ))
+        await visibleContext.publish(visibleSnapshot(
+          competingWindowId,
+          1,
+          'thread-a',
+          `/${competingWindowId}/initial`
+        ))
+        let boundWindowId: string | undefined
+        const startTurn = vi.fn(async (input: {
+          runtimeId: 'codex'
+          threadId: string
+          visibleContextOwnerThreadId?: string
+          visibleContextSurfaceId?: string
+        }) => {
+          await visibleContext.publish(visibleSnapshot(
+            competingWindowId,
+            2,
+            'thread-a',
+            `/${competingWindowId}/background`
+          ))
+          const bound = await visibleContext.bindSurface(
+            `${input.runtimeId}:${input.threadId}`,
+            input.visibleContextOwnerThreadId ?? input.threadId,
+            input.visibleContextSurfaceId ?? ''
+          )
+          boundWindowId = bound?.windowId
+          return { threadId: input.threadId, turnId: 'turn-1' }
+        })
+        registerAppIpcHandlers(registerOptions({
+          agentRuntime: { startTurn } as never,
+          visibleContext
+        }))
+        const sender = createSender(1) as ReturnType<typeof createSender> & {
+          capturePage?: ReturnType<typeof vi.fn>
+        }
+        if (initiatingKind === 'electron') sender.capturePage = vi.fn()
+
+        await expect(handlers.get('agentRuntime:startTurn')?.({ sender }, {
+          runtimeId: 'codex',
+          threadId: 'thread-a',
+          text: 'inspect the visible surface'
+        })).resolves.toEqual({ threadId: 'thread-a', turnId: 'turn-1' })
+
+        expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+          visibleContextSurfaceId: initiatingWindowId
+        }))
+        expect(boundWindowId).toBe(initiatingWindowId)
+        expect(visibleContext.peek().windowId).toBe(competingWindowId)
+      } finally {
+        rmSync(userDataDir, { recursive: true, force: true })
+      }
+    }
+  )
 
   it('issues registered target references through the native sender identity', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
@@ -1064,7 +1167,7 @@ describe('registerAppIpcHandlers', () => {
       limit: 20
     })
     await expect(
-      handlers.get('agentRuntime:startTurn')?.({}, {
+      handlers.get('agentRuntime:startTurn')?.({ sender }, {
         runtimeId: 'codex',
         threadId: 'side-thread-1',
         text: ' hello ',
@@ -1087,7 +1190,7 @@ describe('registerAppIpcHandlers', () => {
       })
     ).resolves.toBeUndefined()
     await expect(
-      handlers.get('agentRuntime:steerTurn')?.({}, {
+      handlers.get('agentRuntime:steerTurn')?.({ sender }, {
         runtimeId: 'codex',
         threadId: 'thread-1',
         turnId: ' turn-1 ',
@@ -1196,6 +1299,7 @@ describe('registerAppIpcHandlers', () => {
       runtimeId: 'codex',
       threadId: 'side-thread-1',
       text: 'hello',
+      visibleContextSurfaceId: 'browser:12',
       visibleContextOwnerThreadId: 'parent-thread-1',
       executionIntent: {
         mode: 'execute',
@@ -1216,6 +1320,7 @@ describe('registerAppIpcHandlers', () => {
       threadId: 'thread-1',
       turnId: 'turn-1',
       text: 'keep going',
+      visibleContextSurfaceId: 'browser:12',
       executionIntent: {
         mode: 'inspect',
         requirements: [{ receiptKind: 'visual.look' }]

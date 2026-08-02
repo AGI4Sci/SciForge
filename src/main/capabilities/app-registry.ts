@@ -532,6 +532,7 @@ function workspacePreviewCapabilities(dependencies: AppCapabilityDependencies) {
       description: 'Opens a workspace file with the canonical Workspace Preview host and returns a scoped resource handle.',
       audiences: ['ui', 'agent', 'system'],
       scope: 'workspace',
+      producedResourceKinds: [WORKSPACE_PREVIEW_RESOURCE_KIND],
       effect: 'read',
       approval: 'none',
       concurrency: { revision: 'none', idempotency: 'none' },
@@ -898,10 +899,14 @@ function workspacePreviewCapabilities(dependencies: AppCapabilityDependencies) {
       tags: ['workspace', 'preview', 'lifecycle'],
       inputSchema: resourceActionInputSchema,
       outputSchema: capabilityOutputSchema,
-      handler: async (_, context) => ({
-        output: await dependencies.workspacePreviewHost.releaseSession(resourceSessionId(context.resource)),
-        changed: false
-      })
+      handler: async (_, context) => {
+        const released = await dependencies.workspacePreviewHost.releaseSession(resourceSessionId(context.resource))
+        return {
+          output: released,
+          changed: false,
+          retireResource: released
+        }
+      }
     })
   ]
 }

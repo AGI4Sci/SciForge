@@ -10,7 +10,8 @@ import {
   buildMarkdownWechatCopyFeedbackModel,
   buildMarkdownWorkspaceViewerModel,
   createMarkdownAnnotationSelection,
-  createMarkdownReplaceAllOperation
+  createMarkdownReplaceAllOperation,
+  proportionalScrollTop
 } from './MarkdownWorkspaceViewer'
 import { createDocumentTextAnchor } from './dom-text-annotations'
 
@@ -197,6 +198,46 @@ describe('MarkdownWorkspaceViewer', () => {
     expect(html).not.toContain('data-text-preview-editor')
     expect(html).toContain('data-markdown-preview-pane')
     expect(html).toContain('<h1>Alpha</h1>')
+  })
+
+  it('keeps document search available in edit, preview, and split modes', () => {
+    for (const initialMode of ['edit', 'preview', 'split'] as const) {
+      const html = renderToStaticMarkup(createElement(MarkdownWorkspaceViewer, {
+        observation: createMarkdownObservation(),
+        onApplyEdit: () => undefined,
+        initialMode
+      }))
+
+      expect(html).toContain(`data-markdown-view-mode="${initialMode}"`)
+      expect(html).toContain('data-markdown-search-toolbar')
+      expect(html).toContain('data-markdown-search-input')
+      expect(html).toContain('data-markdown-search-previous')
+      expect(html).toContain('data-markdown-search-next')
+    }
+  })
+
+  it('maps split-pane scrolling by bounded document progress', () => {
+    expect(proportionalScrollTop({
+      sourceScrollTop: 400,
+      sourceScrollHeight: 1_000,
+      sourceClientHeight: 200,
+      targetScrollHeight: 2_000,
+      targetClientHeight: 400
+    })).toBe(800)
+    expect(proportionalScrollTop({
+      sourceScrollTop: 900,
+      sourceScrollHeight: 1_000,
+      sourceClientHeight: 200,
+      targetScrollHeight: 2_000,
+      targetClientHeight: 400
+    })).toBe(1_600)
+    expect(proportionalScrollTop({
+      sourceScrollTop: 10,
+      sourceScrollHeight: 100,
+      sourceClientHeight: 100,
+      targetScrollHeight: 1_000,
+      targetClientHeight: 200
+    })).toBe(0)
   })
 
   it('exposes the shared annotation surface in preview and split modes', () => {

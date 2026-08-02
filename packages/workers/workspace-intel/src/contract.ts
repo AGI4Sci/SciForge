@@ -1,7 +1,9 @@
 import { z } from 'zod'
 import type {
   VisualArtifactMimeType,
-  VisualInspectionEvidence
+  VisualInspectionEvidence,
+  VisualInspectionFailureClass,
+  VisualInspectionRecovery
 } from './visual-inspection.js'
 
 export const WORKSPACE_TREE_RESOURCE_URI = 'workspace://tree'
@@ -38,7 +40,10 @@ export type WorkspaceIntelErrorCode =
   | 'invalid_request'
   | 'skill_not_found'
   | 'visual_inspection_unavailable'
+  | 'vision_evidence_unavailable'
+  | 'visual_evidence_synthesis_unavailable'
   | 'visual_inspection_invalid'
+  | 'visual_evidence_grounding_missing'
   | 'unsupported_image_format'
   | 'image_too_large'
   | 'read_failed'
@@ -48,6 +53,9 @@ export type WorkspaceIntelError = {
   message: string
   retryable: boolean
   suggestedFix?: string
+  failureClass?: VisualInspectionFailureClass
+  recovery?: VisualInspectionRecovery
+  providerStage?: string
 }
 
 export type WorkspaceIntelFailure = {

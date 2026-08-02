@@ -7,6 +7,7 @@ import type {
 } from '@sciforge/domain-sdk/host'
 import {
   getActiveAgentRuntime,
+  getAgentCapabilitySettings,
   type AppSettingsV1
 } from '../../../shared/app-settings'
 import { resolveRuntimeModelRouterSettings } from '../../../shared/app-settings-model-router'
@@ -104,7 +105,15 @@ import type {
 } from '../../../shared/workspace-host-state'
 import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 import { redactSecrets } from '../../../shared/secret-redaction'
-import type { AgentRuntimeToolTurnIdentity } from './agent-tool-surface'
+import type {
+  AgentRuntimeToolSurface,
+  AgentRuntimeToolTurnIdentity
+} from './agent-tool-surface'
+import {
+  agentRuntimeChildFromMultiAgentRecord,
+  createAgentRuntimeSubagentToolBridge,
+  type AgentRuntimeSubagentToolBridge
+} from './subagent-tool-bridge'
 
 export type AgentRuntimeHostSettingsProvider = () => AppSettingsV1 | Promise<AppSettingsV1>
 
@@ -130,6 +139,7 @@ export type AgentRuntimeHostOptions = {
   services?: AgentRuntimeHostServices
   nativeVisualToolsAvailable?: () => boolean
   artifactConsumers?: readonly DomainAgentArtifactConsumer[]
+  subagentStoreRoot?: string
 }
 
 export function createAgentRuntimeHost(options: AgentRuntimeHostOptions): AgentRuntimeHost {
@@ -205,10 +215,44 @@ export class AgentRuntimeHost {
   private readonly capabilityApprovalSubscribers = new Map<string, Set<CapabilityApprovalSubscriber>>()
   private readonly governance = new RuntimeGovernanceSupervisor()
   private readonly executionIntegrity = new RuntimeExecutionIntegrityGuard()
+  private readonly subagentToolBridge: AgentRuntimeSubagentToolBridge | null
   private disposed = false
 
   constructor(private readonly options: AgentRuntimeHostOptions) {
     this.adapters = normalizeAdapters(options.adapters)
+    this.subagentToolBridge = options.subagentStoreRoot
+      ? createAgentRuntimeSubagentToolBridge({
+          storeRoot: options.subagentStoreRoot,
+          resolveBinding: async (runtimeId, parentThreadId) => {
+            const { adapter, context } = await this.resolveRequiredRuntime(runtimeId, parentThreadId)
+            if (!adapter.subagents) {
+              throw new Error(`AgentRuntimeAdapter ${runtimeId} does not implement subagent controls.`)
+            }
+            const settings = getAgentCapabilitySettings(context.settings).subagents
+            return {
+              adapter: adapter.subagents,
+              context,
+              enabled: settings.enabled,
+              maxParallel: settings.maxParallel,
+              maxChildren: settings.maxChildRuns
+            }
+          },
+          onChildEvent: async (runtimeId, event, record) => {
+            const { adapter, context } = await this.resolveRequiredRuntime(runtimeId, event.parentThreadId)
+            await this.publishSyntheticEvent(adapter, context, {
+              kind: 'child_event',
+              runtimeId,
+              threadId: event.parentThreadId,
+              turnId: event.parentTurnId,
+              child: agentRuntimeChildFromMultiAgentRecord(runtimeId, record, event)
+            })
+          }
+        })
+      : null
+  }
+
+  subagentTools(): AgentRuntimeToolSurface | null {
+    return this.subagentToolBridge?.toolSurface() ?? null
   }
 
   hasActiveTurns(): boolean {
@@ -356,24 +400,23 @@ export class AgentRuntimeHost {
     const sharedInput = await this.withSharedContextLedger(adapter.id, contextualInput)
     const visuallyGuardedInput = withVisualExecutionRequirement(sharedInput)
     const integrityGuardedInput = withExecutionIntegrityRequirement(visuallyGuardedInput)
-    const turnInput = await this.withCanonicalVisibleState(adapter.id, integrityGuardedInput)
     await this.publishTurnLifecycle(Object.freeze({
       kind: 'before-turn',
       state: 'starting',
       runtimeId: adapter.id,
-      threadId: turnInput.threadId.trim(),
-      ...(turnInput.workspace?.trim() || context.settings.workspaceRoot?.trim()
-        ? { workspaceRoot: turnInput.workspace?.trim() || context.settings.workspaceRoot?.trim() }
+      threadId: integrityGuardedInput.threadId.trim(),
+      ...(integrityGuardedInput.workspace?.trim() || context.settings.workspaceRoot?.trim()
+        ? { workspaceRoot: integrityGuardedInput.workspace?.trim() || context.settings.workspaceRoot?.trim() }
         : {}),
       occurredAt: new Date().toISOString()
     }))
-    const handle = await this.enqueueThreadTurnStart(adapter, context, turnInput)
+    const handle = await this.enqueueThreadTurnStart(adapter, context, integrityGuardedInput)
     this.rememberThreadWorkspaceHost(
       adapter.id,
-      handle.threadId || turnInput.threadId,
+      handle.threadId || integrityGuardedInput.threadId,
       context.workspaceHost
     )
-    this.rememberTurnWorkspace(adapter.id, turnInput, handle)
+    this.rememberTurnWorkspace(adapter.id, integrityGuardedInput, handle)
     this.startTurnTraceCapture(adapter, context, handle)
     return handle
   }
@@ -442,27 +485,30 @@ export class AgentRuntimeHost {
         ...input,
         ...(clientDirectiveId ? { clientDirectiveId } : {})
       })
-      const steerInput = await this.withDirectiveContinuity(adapter.id, {
-        runtimeId: guardedInput.runtimeId,
-        threadId: guardedInput.threadId,
-        turnId: input.turnId,
-        text: guardedInput.text,
-        ...(guardedInput.clientDirectiveId
-          ? { clientDirectiveId: guardedInput.clientDirectiveId }
-          : {}),
-        ...(guardedInput.executionIntent
-          ? { executionIntent: guardedInput.executionIntent }
-          : {})
+      await this.enqueueThreadOperation(adapter.id, input.threadId, async () => {
+        const canonicalInput = await this.withCanonicalVisibleState(adapter.id, guardedInput)
+        const steerInput = await this.withDirectiveContinuity(adapter.id, {
+          runtimeId: canonicalInput.runtimeId,
+          threadId: canonicalInput.threadId,
+          turnId: input.turnId,
+          text: canonicalInput.text,
+          ...(canonicalInput.clientDirectiveId
+            ? { clientDirectiveId: canonicalInput.clientDirectiveId }
+            : {}),
+          ...(canonicalInput.executionIntent
+            ? { executionIntent: canonicalInput.executionIntent }
+            : {})
+        })
+        await this.deliverGovernedSteer(
+          adapter.id,
+          adapter,
+          context,
+          input.threadId,
+          input.turnId,
+          canonicalInput,
+          steerInput
+        )
       })
-      await this.deliverGovernedSteer(
-        adapter.id,
-        adapter,
-        context,
-        input.threadId,
-        input.turnId,
-        guardedInput,
-        steerInput
-      )
       return { value: undefined, turnId: input.turnId }
     }, () => undefined)
   }
@@ -813,6 +859,7 @@ export class AgentRuntimeHost {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.subagentToolBridge?.dispose()
     for (const record of this.capabilityApprovals.values()) {
       if (record.resolve) this.settleCapabilityApproval(record, 'cancelled', 'Agent runtime host stopped.')
     }
@@ -1724,20 +1771,28 @@ export class AgentRuntimeHost {
     runtimeId: AgentRuntimeId,
     input: AgentRuntimeTurnStartInput
   ): Promise<AgentRuntimeTurnStartInput> {
+    const { visibleContextSurfaceId, ...runtimeInput } = input
     const service = this.options.services?.visibleContext
-    if (!service) return input
+    if (!service) return runtimeInput
     const callerId = capabilityAgentCallerId({
       runtimeId,
-      threadId: input.threadId,
-      requestId: input.threadId
+      threadId: runtimeInput.threadId,
+      requestId: runtimeInput.threadId
     })
-    const visibleContextOwnerThreadId = input.visibleContextOwnerThreadId?.trim() || input.threadId
-    const snapshot = await service.bindCurrentSurface(callerId, visibleContextOwnerThreadId).catch(() => null)
+    const visibleContextOwnerThreadId = runtimeInput.visibleContextOwnerThreadId?.trim()
+      || runtimeInput.threadId
+    const snapshot = visibleContextSurfaceId?.trim()
+      ? await service.bindSurface(
+          callerId,
+          visibleContextOwnerThreadId,
+          visibleContextSurfaceId
+        ).catch(() => null)
+      : null
     const statePacket = renderCanonicalVisibleState(snapshot)
     return {
-      ...input,
-      text: `${statePacket}\n\n${input.text}`,
-      displayText: input.displayText ?? input.text
+      ...runtimeInput,
+      text: `${statePacket}\n\n${runtimeInput.text}`,
+      displayText: runtimeInput.displayText ?? runtimeInput.text
     }
   }
 
@@ -1986,20 +2041,25 @@ export class AgentRuntimeHost {
     context: AgentRuntimeAdapterContext,
     input: AgentRuntimeTurnStartInput
   ): Promise<AgentRuntimeTurnHandle> {
-    const threadId = input.threadId.trim()
-    const key = threadTurnKey(adapter.id, threadId)
-    if (!threadId) {
-      return this.startAdapterTurn(adapter, context, input)
-    }
-    const previous = this.turnQueues.get(key) ?? Promise.resolve()
-    const task = previous
-      .catch(() => undefined)
-      .then(async () => {
-        const steered = await this.steerActiveTurnIfSupported(adapter, context, input)
+    return this.enqueueThreadOperation(adapter.id, input.threadId, async () => {
+        const canonicalInput = await this.withCanonicalVisibleState(adapter.id, input)
+        const steered = await this.steerActiveTurnIfSupported(adapter, context, canonicalInput)
         if (steered) return steered
-        await this.waitForThreadTerminal(adapter, context, input)
-        return this.startAdapterTurn(adapter, context, input)
+        await this.waitForThreadTerminal(adapter, context, canonicalInput)
+        return this.startAdapterTurn(adapter, context, canonicalInput)
       })
+  }
+
+  private enqueueThreadOperation<T>(
+    runtimeId: AgentRuntimeId,
+    threadIdInput: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const threadId = threadIdInput.trim()
+    if (!threadId) return operation()
+    const key = threadTurnKey(runtimeId, threadId)
+    const previous = this.turnQueues.get(key) ?? Promise.resolve()
+    const task = previous.catch(() => undefined).then(operation)
     this.turnQueues.set(key, task)
     void task
       .finally(() => {
@@ -2014,7 +2074,19 @@ export class AgentRuntimeHost {
     context: AgentRuntimeAdapterContext,
     input: AgentRuntimeTurnStartInput
   ): Promise<AgentRuntimeTurnHandle> {
-    const startValidation = this.executionIntegrity.turnStartValidationState(input)
+    const { visibleContextSurfaceId: _surfaceId, ...adapterInput } = input
+    const startValidation = this.executionIntegrity.turnStartValidationState(adapterInput)
+    if (
+      startValidation.nativeVisualObligationsPending &&
+      this.options.nativeVisualToolsAvailable?.() === false
+    ) {
+      throw new AgentRuntimeTurnPreflightError(
+        'runtime_visual_capability_unavailable',
+        'Required native visual tools are unavailable, so the runtime turn was not started.',
+        'capability_unavailable',
+        false
+      )
+    }
     const dispatchContext: AgentRuntimeAdapterContext = {
       ...context,
       turnGovernanceSnapshot: {
@@ -2022,29 +2094,29 @@ export class AgentRuntimeHost {
         nativeVisualProofChainPending: startValidation.nativeVisualObligationsPending
       }
     }
-    const handle = await adapter.startTurn(dispatchContext, input)
-    this.rememberTurnGovernanceProfile(adapter.id, input, handle)
+    const handle = await adapter.startTurn(dispatchContext, adapterInput)
+    this.rememberTurnGovernanceProfile(adapter.id, adapterInput, handle)
     this.executionIntegrity.rememberTurn(
       adapter.id,
-      input,
-      handle.threadId || input.threadId,
+      adapterInput,
+      handle.threadId || adapterInput.threadId,
       handle.turnId
     )
     await this.updateTurnGovernanceSnapshot(
       adapter,
       context,
-      handle.threadId || input.threadId,
+      handle.threadId || adapterInput.threadId,
       handle.turnId
     ).catch(async (error) => {
       await adapter.interruptTurn(context, {
         runtimeId: adapter.id,
-        threadId: handle.threadId || input.threadId,
+        threadId: handle.threadId || adapterInput.threadId,
         turnId: handle.turnId,
         discard: false
       }).catch(() => undefined)
       throw error
     })
-    this.rememberActiveThreadTurn(adapter.id, input, handle, 'running')
+    this.rememberActiveThreadTurn(adapter.id, adapterInput, handle, 'running')
     return handle
   }
 
@@ -2451,6 +2523,9 @@ export class AgentRuntimeHost {
       threadId: input.threadId,
       text: input.text,
       displayText: input.text,
+      ...(input.visibleContextSurfaceId
+        ? { visibleContextSurfaceId: input.visibleContextSurfaceId }
+        : {}),
       ...(input.clientDirectiveId ? { clientDirectiveId: input.clientDirectiveId } : {}),
       ...(input.executionIntent ? { executionIntent: input.executionIntent } : {})
     }))
@@ -2804,6 +2879,25 @@ export class AgentRuntimeHost {
         this.artifactBroadcastTurns.delete(key)
       }
     })()
+  }
+}
+
+class AgentRuntimeTurnPreflightError extends Error {
+  readonly code: string
+  readonly failureClass: string
+  readonly retryable: boolean
+
+  constructor(
+    code: string,
+    message: string,
+    failureClass: string,
+    retryable: boolean
+  ) {
+    super(message)
+    this.name = 'AgentRuntimeTurnPreflightError'
+    this.code = code
+    this.failureClass = failureClass
+    this.retryable = retryable
   }
 }
 

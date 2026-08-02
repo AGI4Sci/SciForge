@@ -89,6 +89,41 @@ describe('markdown-wechat-clipboard-service', () => {
     }))
   })
 
+  it.each([
+    {
+      name: 'sized divergence separator',
+      tex: String.raw`\mathcal{L}_{\text{SDPO}}(\theta) = \mathbb{E}_{x \sim \mathcal{D}}\left[D_{\text{KL}}\left(p_{\theta}(y \mid x, y^*, f) \;\big\|\; p_{\theta}(y \mid x)\right)\right]`
+    },
+    {
+      name: 'extensible overbrace',
+      tex: String.raw`\overbrace{a+b+c+d}^{n}`
+    },
+    {
+      name: 'extensible arrow',
+      tex: String.raw`A \xrightarrow{\text{long label}} B`
+    }
+  ])('preserves nested MathJax SVG viewports for $name', async ({ tex }) => {
+    const result = await renderMarkdownForWechat({
+      sourcePath: '/workspace/article.md',
+      workspaceRoot: '/workspace',
+      markdown: `$$\n${tex}\n$$`
+    })
+
+    const svgTags = result.html.match(/<svg\b[^>]*>/g) ?? []
+    expect(svgTags.length).toBeGreaterThan(1)
+    expect(svgTags[0]).not.toMatch(/\s(?:width|height)=/)
+    for (const nestedSvg of svgTags.slice(1)) {
+      expect(nestedSvg).toMatch(/\swidth="\d+(?:\.\d+)?"/)
+      expect(nestedSvg).toMatch(/\sheight="\d+(?:\.\d+)?"/)
+      expect(nestedSvg).toMatch(/\sviewBox="[^"]+"/)
+      expect(nestedSvg).not.toMatch(/style="[^"]*\b(?:width|height):\s*\d+(?:\.\d+)?;/)
+    }
+    expect(result.html).toContain('<path')
+    expect(result.warnings).not.toContainEqual(expect.objectContaining({
+      code: 'formula-invalid'
+    }))
+  })
+
   it('preserves invalid or active TeX as readable text without active output', async () => {
     const result = await renderMarkdownForWechat({
       sourcePath: '/workspace/article.md',

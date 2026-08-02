@@ -10,6 +10,7 @@ import {
   AgentVisualRuntime,
   type AgentVisualRuntimeCallContext
 } from './agent-visual-runtime'
+import { VisibleContextCaptureError } from '../../services/visible-context-service'
 
 const cleanup: string[] = []
 
@@ -115,6 +116,158 @@ function inspectedWithoutGroundedEvidence(): VisualInspector {
 }
 
 describe('AgentVisualRuntime', () => {
+  it.each([
+    {
+      message: 'The bound surface layout is unavailable while another session or resource is visible.',
+      code: 'visual_layout_owner_changed',
+      failureClass: 'layout_unavailable',
+      retryable: false,
+      action: 'restore_bound_surface'
+    },
+    {
+      message: 'The selected surface target is no longer visible.',
+      code: 'visual_target_stale',
+      failureClass: 'stale_resource',
+      retryable: false,
+      action: 'reobserve_visual_target'
+    },
+    {
+      message: 'The surface layout did not refresh before visual inspection.',
+      code: 'visual_layout_refresh_timeout',
+      failureClass: 'timeout',
+      retryable: true,
+      action: 'refresh_visual_layout'
+    },
+    {
+      message: 'Renderer layout refresh is unavailable.',
+      code: 'visual_layout_refresh_unavailable',
+      failureClass: 'capability_unavailable',
+      retryable: false,
+      action: 'stop'
+    }
+  ])('returns a typed native failure when capture reports: $message', async ({
+    message,
+    code,
+    failureClass,
+    retryable,
+    action
+  }) => {
+    const workspaceRoot = await temporaryDirectory('sciforge-agent-visual-error-')
+    const runtime = new AgentVisualRuntime({
+      visibleContext: {
+        currentSurface: vi.fn(async () => ({
+          resourceId: 'surface',
+          workspaceId: workspaceRoot,
+          semanticRevision: 'surface-1',
+          layoutRevision: '1',
+          state: {}
+        })),
+        captureFrame: vi.fn(async () => {
+          throw new Error(message)
+        })
+      },
+      visualInspector: () => inspectorWithRegion()
+    })
+
+    await expect(runtime.look({
+      targetRef: `target_${'e'.repeat(24)}`,
+      task: 'Inspect the current visual target.'
+    }, callContext(workspaceRoot))).rejects.toMatchObject({
+      name: 'AgentRuntimeToolError',
+      code,
+      failureClass,
+      retryable,
+      resourceIdentity: `visual:target_${'e'.repeat(24)}`,
+      recovery: { action }
+    })
+  })
+
+  it.each([
+    {
+      code: 'capture_surface_unsupported',
+      message: 'This surface has no trusted pixel capture provider.',
+      failureClass: 'capability_unavailable',
+      retryable: false,
+      recovery: {
+        action: 'stop',
+        instruction: 'Use a SciForge surface with trusted pixel capture.'
+      },
+      providerStage: 'surface_capture'
+    },
+    {
+      code: 'capture_surface_unavailable',
+      message: 'The trusted surface capture provider is temporarily unavailable.',
+      failureClass: 'upstream_unavailable',
+      retryable: true,
+      recovery: {
+        action: 'retry_visual_inspection',
+        instruction: 'Reconnect the trusted surface and retry visual inspection once.'
+      },
+      providerStage: 'surface_capture'
+    }
+  ])('preserves typed capture preflight cause $code through Agent Visual Runtime', async (failure) => {
+    const workspaceRoot = await temporaryDirectory('sciforge-agent-visual-capture-preflight-')
+    const runtime = new AgentVisualRuntime({
+      visibleContext: {
+        currentSurface: vi.fn(async () => ({
+          resourceId: 'surface',
+          workspaceId: workspaceRoot,
+          semanticRevision: 'surface-1',
+          layoutRevision: '1',
+          state: {}
+        })),
+        captureFrame: vi.fn(async () => {
+          throw new VisibleContextCaptureError(failure)
+        })
+      },
+      visualInspector: () => inspectorWithRegion()
+    })
+
+    await expect(runtime.look({
+      task: 'Inspect the current surface.'
+    }, callContext(workspaceRoot))).rejects.toMatchObject({
+      name: 'AgentRuntimeToolError',
+      code: failure.code,
+      failureClass: failure.failureClass,
+      retryable: failure.retryable,
+      recovery: failure.recovery,
+      providerStage: failure.providerStage,
+      resourceIdentity: 'visual:current',
+      evidenceDelta: false,
+      stateChanged: false
+    })
+  })
+
+  it('keeps an unknown capture preflight exception on the unknown visual fallback', async () => {
+    const workspaceRoot = await temporaryDirectory('sciforge-agent-visual-capture-preflight-unknown-')
+    const runtime = new AgentVisualRuntime({
+      visibleContext: {
+        currentSurface: vi.fn(async () => ({
+          resourceId: 'surface',
+          workspaceId: workspaceRoot,
+          semanticRevision: 'surface-1',
+          layoutRevision: '1',
+          state: {}
+        })),
+        captureFrame: vi.fn(async () => {
+          throw new Error('Unexpected capture provider exception.')
+        })
+      },
+      visualInspector: () => inspectorWithRegion()
+    })
+
+    await expect(runtime.look({
+      task: 'Inspect the current surface.'
+    }, callContext(workspaceRoot))).rejects.toMatchObject({
+      name: 'AgentRuntimeToolError',
+      code: 'visual_look_failed',
+      failureClass: 'execution_error',
+      retryable: false,
+      providerStage: undefined,
+      resourceIdentity: 'visual:current'
+    })
+  })
+
   it('looks at the current trusted surface and persists a verified region as a content-addressed PNG', async () => {
     const workspaceRoot = await temporaryDirectory('sciforge-agent-visual-workspace-')
     const captureRoot = await temporaryDirectory('sciforge-agent-visual-capture-')
@@ -256,7 +409,15 @@ describe('AgentVisualRuntime', () => {
       name: 'reported unavailable',
       visualInspector: vi.fn<VisualInspector>(async () => ({
         status: 'visual_inspection_unavailable',
-        message: 'Model Router visual inspection failed with HTTP 400.'
+        code: 'visual_inspection_unavailable',
+        message: 'Model Router visual inspection failed with HTTP 400.',
+        failureClass: 'capability_unavailable',
+        retryable: false,
+        recovery: {
+          action: 'stop',
+          instruction: 'Stop and correct the visual provider request.'
+        },
+        providerStage: 'vision_translation'
       })),
       expected: /failed with HTTP 400/u
     },
@@ -297,6 +458,185 @@ describe('AgentVisualRuntime', () => {
     await expect(runtime.look({
       task: 'Inspect the image.'
     }, callContext(workspaceRoot))).rejects.toThrow(expected)
+  })
+
+  it('normalizes unavailable visual inspection with retry guidance and no proof', async () => {
+    const workspaceRoot = await temporaryDirectory('sciforge-agent-visual-inspector-unavailable-')
+    const captureRoot = await temporaryDirectory('sciforge-agent-visual-inspector-unavailable-source-')
+    const sourcePath = join(captureRoot, 'surface.png')
+    await writeFile(sourcePath, testPng())
+    const runtime = new AgentVisualRuntime({
+      visibleContext: {
+        currentSurface: vi.fn(async () => ({
+          resourceId: 'surface',
+          workspaceId: workspaceRoot,
+          semanticRevision: 'surface-1',
+          layoutRevision: '1',
+          state: {}
+        })),
+        captureFrame: vi.fn(async () => ({
+          path: sourcePath,
+          mimeType: 'image/png' as const,
+          capturedAt: '2026-07-26T06:00:00.000Z',
+          width: 100,
+          height: 80
+        }))
+      },
+      visualInspector: () => undefined
+    })
+
+    await expect(runtime.look({
+      task: 'Inspect the current surface.'
+    }, callContext(workspaceRoot))).rejects.toMatchObject({
+      name: 'AgentRuntimeToolError',
+      code: 'visual_inspection_unavailable',
+      failureClass: 'upstream_unavailable',
+      retryable: true,
+      resourceIdentity: 'visual:current',
+      recovery: { action: 'retry_visual_inspection' }
+    })
+  })
+
+  it.each([
+    {
+      name: 'transient provider unavailability',
+      failure: {
+        status: 'visual_inspection_unavailable',
+        message: 'Vision evidence is temporarily unavailable.',
+        code: 'vision_evidence_unavailable',
+        failureClass: 'upstream_unavailable',
+        retryable: true,
+        providerStage: 'vision_translation',
+        recovery: {
+          action: 'retry_visual_inspection',
+          instruction: 'Retry the same immutable snapshot once.'
+        }
+      }
+    },
+    {
+      name: 'invalid evidence contract',
+      failure: {
+        status: 'visual_inspection_invalid',
+        message: 'The visual evidence payload violated its contract.',
+        code: 'visual_inspection_invalid',
+        failureClass: 'contract_violation',
+        retryable: false,
+        providerStage: 'vision_translation',
+        recovery: {
+          action: 'stop',
+          instruction: 'Stop and report the invalid evidence contract.'
+        }
+      }
+    },
+    {
+      name: 'text reasoner synthesis unavailability',
+      failure: {
+        status: 'visual_inspection_unavailable',
+        message: 'Verified vision evidence could not be synthesized.',
+        code: 'visual_evidence_synthesis_unavailable',
+        failureClass: 'upstream_unavailable',
+        retryable: true,
+        providerStage: 'text_reasoning',
+        recovery: {
+          action: 'retry_visual_inspection',
+          instruction: 'Retry synthesis for the same immutable snapshot once.'
+        }
+      }
+    },
+    {
+      name: 'missing artifact grounding',
+      failure: {
+        status: 'visual_inspection_invalid',
+        message: 'The visual evidence did not ground the immutable artifact.',
+        code: 'visual_evidence_grounding_missing',
+        failureClass: 'evidence_unverified',
+        retryable: false,
+        providerStage: 'vision_translation',
+        recovery: {
+          action: 'stop',
+          instruction: 'Stop and report the missing artifact grounding.'
+        }
+      }
+    }
+  ])('preserves structured Workspace Inspector cause for $name', async ({ failure }) => {
+    const workspaceRoot = await temporaryDirectory('sciforge-agent-visual-structured-failure-')
+    const captureRoot = await temporaryDirectory('sciforge-agent-visual-structured-failure-source-')
+    const sourcePath = join(captureRoot, 'surface.png')
+    await writeFile(sourcePath, testPng())
+    const runtime = new AgentVisualRuntime({
+      visibleContext: {
+        currentSurface: vi.fn(async () => ({
+          resourceId: 'surface',
+          workspaceId: workspaceRoot,
+          semanticRevision: 'surface-1',
+          layoutRevision: '1',
+          state: {}
+        })),
+        captureFrame: vi.fn(async () => ({
+          path: sourcePath,
+          mimeType: 'image/png' as const,
+          capturedAt: '2026-07-26T06:00:00.000Z',
+          width: 100,
+          height: 80
+        }))
+      },
+      visualInspector: () => (
+        vi.fn(async () => failure) as unknown as VisualInspector
+      )
+    })
+
+    await expect(runtime.look({
+      task: 'Inspect the current surface.'
+    }, callContext(workspaceRoot))).rejects.toMatchObject({
+      name: 'AgentRuntimeToolError',
+      code: failure.code,
+      failureClass: failure.failureClass,
+      retryable: failure.retryable,
+      providerStage: failure.providerStage,
+      recovery: failure.recovery,
+      resourceIdentity: 'visual:current',
+      evidenceDelta: false,
+      stateChanged: false
+    })
+  })
+
+  it('uses visual_look_failed only for an unknown inspector exception', async () => {
+    const workspaceRoot = await temporaryDirectory('sciforge-agent-visual-unknown-failure-')
+    const captureRoot = await temporaryDirectory('sciforge-agent-visual-unknown-failure-source-')
+    const sourcePath = join(captureRoot, 'surface.png')
+    await writeFile(sourcePath, testPng())
+    const runtime = new AgentVisualRuntime({
+      visibleContext: {
+        currentSurface: vi.fn(async () => ({
+          resourceId: 'surface',
+          workspaceId: workspaceRoot,
+          semanticRevision: 'surface-1',
+          layoutRevision: '1',
+          state: {}
+        })),
+        captureFrame: vi.fn(async () => ({
+          path: sourcePath,
+          mimeType: 'image/png' as const,
+          capturedAt: '2026-07-26T06:00:00.000Z',
+          width: 100,
+          height: 80
+        }))
+      },
+      visualInspector: () => vi.fn(async () => {
+        throw new Error('Unexpected inspector exception.')
+      })
+    })
+
+    await expect(runtime.look({
+      task: 'Inspect the current surface.'
+    }, callContext(workspaceRoot))).rejects.toMatchObject({
+      name: 'AgentRuntimeToolError',
+      code: 'visual_look_failed',
+      failureClass: 'execution_error',
+      retryable: false,
+      providerStage: undefined,
+      resourceIdentity: 'visual:current'
+    })
   })
 
   it('rejects snapshot and region refs outside their caller, workspace, or turn', async () => {

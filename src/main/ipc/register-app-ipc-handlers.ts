@@ -252,7 +252,6 @@ import {
 import { readComputerUseRuntimeStatus } from '../services/computer-use-status'
 import { exportWriteDocument } from '../services/write-export-service'
 import { listGuiSkills } from '../services/skill-service'
-
 type GuiUpdaterModule = typeof import('../gui-updater')
 
 type WorkspaceFileWatchRecord = {
@@ -932,21 +931,34 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       )
     )
   )
-  handleInvoke('agentRuntime:startTurn', async (_, payload: unknown) =>
-    requireAgentRuntime().startTurn(
-      parseIpcPayload('agentRuntime:startTurn', agentRuntimeStartTurnPayloadSchema, payload)
+  handleInvoke('agentRuntime:startTurn', async (event, payload: unknown) => {
+    const runtime = requireAgentRuntime()
+    const request = parseIpcPayload(
+      'agentRuntime:startTurn',
+      agentRuntimeStartTurnPayloadSchema,
+      payload
     )
-  )
+    return runtime.startTurn({
+      ...request,
+      visibleContextSurfaceId: visibleContextWindowId(event.sender)
+    })
+  })
   handleInvoke('agentRuntime:interruptTurn', async (_, payload: unknown) =>
     requireAgentRuntime().interruptTurn(
       parseIpcPayload('agentRuntime:interruptTurn', agentRuntimeTurnTargetPayloadSchema, payload)
     )
   )
-  handleInvoke('agentRuntime:steerTurn', async (_, payload: unknown) =>
-    requireAgentRuntime().steerTurn(
-      parseIpcPayload('agentRuntime:steerTurn', agentRuntimeTurnSteerPayloadSchema, payload)
+  handleInvoke('agentRuntime:steerTurn', async (event, payload: unknown) => {
+    const request = parseIpcPayload(
+      'agentRuntime:steerTurn',
+      agentRuntimeTurnSteerPayloadSchema,
+      payload
     )
-  )
+    return requireAgentRuntime().steerTurn({
+      ...request,
+      visibleContextSurfaceId: visibleContextWindowId(event.sender)
+    })
+  })
   handleInvoke('agentRuntime:renameThread', async (_, payload: unknown) =>
     requireAgentRuntime().renameThread(
       parseIpcPayload('agentRuntime:renameThread', agentRuntimeThreadRenamePayloadSchema, payload)

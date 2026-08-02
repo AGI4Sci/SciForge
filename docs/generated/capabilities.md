@@ -29594,6 +29594,9 @@ Opens a workspace file with the canonical Workspace Preview host and returns a s
       }
     ]
   },
+  "producedResourceKinds": [
+    "workspace-preview"
+  ],
   "resourceKinds": [],
   "tags": [
     "workspace",

@@ -564,6 +564,8 @@ export type AgentRuntimeTurnStartInput = {
   runtimeId: AgentRuntimeId
   threadId: string
   text: string
+  /** @internal Trusted sender provenance injected only after strict IPC validation. */
+  visibleContextSurfaceId?: string
   clientDirectiveId?: string
   executionIntent?: AgentRuntimeExecutionIntent
   metadata?: Record<string, unknown>
@@ -609,6 +611,8 @@ export type AgentRuntimeTurnSteerInput = {
   turnId: string
   workspaceLocator?: WorkspaceLocator
   text: string
+  /** @internal Trusted sender provenance injected only after strict IPC validation. */
+  visibleContextSurfaceId?: string
   clientDirectiveId?: string
   executionIntent?: AgentRuntimeExecutionIntent
 }

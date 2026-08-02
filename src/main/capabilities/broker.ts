@@ -100,6 +100,11 @@ type ResourceGrant = {
   expiresAt: string
 }
 
+type RetiredResourceState = Pick<
+  ResourceState,
+  'resourceRef' | 'workspaceId' | 'allowedAudiences'
+>
+
 type IdempotencyEntry = {
   fingerprint: string
   promise: Promise<CapabilityInvocationResult>
@@ -164,6 +169,7 @@ export class CapabilityBroker {
   readonly #maxIdempotencyEntries: number
   readonly #resources = new Map<string, ResourceState>()
   readonly #resourcesByRef = new Map<string, ResourceState>()
+  readonly #retiredResourcesByRef = new Map<string, RetiredResourceState>()
   readonly #handles = new Map<string, ResourceGrant>()
   readonly #idempotency = new Map<string, IdempotencyEntry>()
   readonly #auditRecords: CapabilityAuditRecord[] = []
@@ -323,7 +329,7 @@ export class CapabilityBroker {
       observe: state.observe,
       contentTransport: state.contentTransport
     })
-    const discovered = this.registry.discover(caller, { resourceKind: state.resourceKind })
+    const discovered = this.registry.discover(caller, { acceptedResourceKind: state.resourceKind })
     const operations = observed.data.operationIds
       ? observed.data.operationIds.map((id) => {
           const descriptor = discovered.find((candidate) => candidate.id === id)
@@ -605,6 +611,10 @@ export class CapabilityBroker {
       .filter((event) => this.#eventVisibleToCaller(event, caller))
       .filter((event) => !query.resourceRef || event.resourceRef === query.resourceRef)
       .slice(0, query.limit)
+      .map((event) => capabilityResourceChangeEventSchema.parse({
+        ...event,
+        resourceStatus: this.#resourceReferenceStatus(caller, event.resourceRef)
+      }))
   }
 
   subscribe(
@@ -681,7 +691,29 @@ export class CapabilityBroker {
     }
 
     const mutation = isMutation(definition)
+    const retireResource = rawResult.retireResource === true
+    if (retireResource && !resource) {
+      throw new CapabilityBrokerError(
+        'retired_resource_required',
+        'A retired result requires a resource handle.',
+        { category: 'failed' }
+      )
+    }
+    if (retireResource && definition.descriptor.effect === 'read') {
+      throw new CapabilityBrokerError(
+        'invalid_retirement_effect',
+        'A read capability cannot retire a resource.',
+        { category: 'failed' }
+      )
+    }
     const changed = rawResult.changed ?? Boolean(mutation && resource)
+    if (retireResource && changed) {
+      throw new CapabilityBrokerError(
+        'invalid_retirement_change',
+        'A capability result cannot both revise and retire a resource.',
+        { category: 'failed' }
+      )
+    }
     if (changed && !mutation) {
       throw new CapabilityBrokerError('invalid_change_effect', 'Only mutation effects may report resource changes.', {
         category: 'failed'
@@ -739,6 +771,8 @@ export class CapabilityBroker {
       beforeRevision,
       afterRevision
     })
+
+    if (retireResource && resource) this.#retireResource(resource)
 
     if (changed && resource && beforeRevision && afterRevision && request.invocationId) {
       this.#publishEvent(capabilityResourceChangeEventSchema.parse({
@@ -808,6 +842,19 @@ export class CapabilityBroker {
   ): ResourceState {
     const state = this.#resourcesByRef.get(resourceRef)
     if (!state) {
+      const retired = this.#retiredResourcesByRef.get(resourceRef)
+      if (retired) {
+        if (retired.workspaceId !== caller.workspaceId) {
+          throw new CapabilityBrokerError('resource_scope_mismatch', 'Resource reference is outside the caller scope.')
+        }
+        if (!retired.allowedAudiences.includes(caller.audience)) {
+          throw new CapabilityBrokerError(
+            'resource_audience_denied',
+            'Resource reference is not transferable to this audience.'
+          )
+        }
+        throw new CapabilityBrokerError('resource_ref_retired', 'Resource reference has been retired.')
+      }
       throw new CapabilityBrokerError('resource_unavailable', 'Resource reference is no longer available.')
     }
     if (state.workspaceId !== caller.workspaceId) {
@@ -993,7 +1040,10 @@ export class CapabilityBroker {
     for (const subscription of this.#subscriptions) {
       if (!this.#eventVisibleToCaller(event, subscription.caller)) continue
       try {
-        subscription.listener(event)
+        subscription.listener(capabilityResourceChangeEventSchema.parse({
+          ...event,
+          resourceStatus: this.#resourceReferenceStatus(subscription.caller, event.resourceRef)
+        }))
       } catch {
         // Event consumers are isolated from successful domain mutations.
       }
@@ -1002,6 +1052,32 @@ export class CapabilityBroker {
 
   #eventVisibleToCaller(event: CapabilityResourceChangeEvent, caller: CapabilityCallerContext): boolean {
     return event.workspaceId === caller.workspaceId
+  }
+
+  #resourceReferenceStatus(
+    caller: CapabilityCallerContext,
+    resourceRef: string
+  ): CapabilityResourceChangeEvent['resourceStatus'] {
+    const state = this.#resourcesByRef.get(resourceRef)
+    return state
+      && state.workspaceId === caller.workspaceId
+      && state.allowedAudiences.includes(caller.audience)
+      ? 'live'
+      : 'retired'
+  }
+
+  #retireResource(resource: ResourceState): void {
+    this.#resources.delete(resource.key)
+    this.#resourcesByRef.delete(resource.resourceRef)
+    this.#retiredResourcesByRef.set(resource.resourceRef, {
+      resourceRef: resource.resourceRef,
+      workspaceId: resource.workspaceId,
+      allowedAudiences: [...resource.allowedAudiences]
+    })
+    this.#trimMap(this.#retiredResourcesByRef, this.#maxEvents)
+    for (const [token, grant] of this.#handles) {
+      if (grant.resourceKey === resource.key) this.#handles.delete(token)
+    }
   }
 
   #trimMap<Key, Value>(map: Map<Key, Value>, maxSize: number): void {

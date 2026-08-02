@@ -38,6 +38,9 @@ export type CapabilityApprovalMode = z.infer<typeof capabilityApprovalModeSchema
 export const capabilityScopeSchema = z.enum(['global', 'workspace', 'resource'])
 export type CapabilityScope = z.infer<typeof capabilityScopeSchema>
 
+export const capabilityProviderFamilySchema = z.enum(['native', 'managed-mcp'])
+export type CapabilityProviderFamily = z.infer<typeof capabilityProviderFamilySchema>
+
 export const capabilityConcurrencySchema = z.object({
   revision: z.enum(['none', 'optimistic']),
   idempotency: z.enum(['none', 'required'])
@@ -59,6 +62,7 @@ export const capabilityDescriptorSchema = z.object({
   audiences: z.array(capabilityAudienceSchema).min(1).max(3),
   scope: capabilityScopeSchema,
   resourceKinds: z.array(z.string().trim().min(1).max(128)).max(64).default([]),
+  producedResourceKinds: z.array(z.string().trim().min(1).max(128)).max(64).optional(),
   effect: capabilityEffectSchema,
   approval: capabilityApprovalModeSchema,
   concurrency: capabilityConcurrencySchema,
@@ -71,6 +75,16 @@ export const capabilityDescriptorSchema = z.object({
   }
   if (new Set(descriptor.resourceKinds).size !== descriptor.resourceKinds.length) {
     context.addIssue({ code: 'custom', path: ['resourceKinds'], message: 'Capability resource kinds must be unique.' })
+  }
+  if (
+    descriptor.producedResourceKinds
+    && new Set(descriptor.producedResourceKinds).size !== descriptor.producedResourceKinds.length
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['producedResourceKinds'],
+      message: 'Produced capability resource kinds must be unique.'
+    })
   }
   if (descriptor.scope === 'resource' && descriptor.resourceKinds.length === 0) {
     context.addIssue({ code: 'custom', path: ['resourceKinds'], message: 'Resource-scoped capabilities must declare resource kinds.' })
@@ -199,10 +213,15 @@ export const capabilityResourceContentAccessSchema = z.object({
 export type CapabilityResourceContentAccess = z.infer<typeof capabilityResourceContentAccessSchema>
 
 export const capabilityDiscoveryQuerySchema = z.object({
+  capabilityId: capabilityIdSchema.optional(),
   text: z.string().trim().min(1).max(256).optional(),
-  resourceKind: z.string().trim().min(1).max(128).optional(),
+  scope: capabilityScopeSchema.optional(),
+  acceptedResourceKind: z.string().trim().min(1).max(128).optional(),
+  producedResourceKind: z.string().trim().min(1).max(128).optional(),
+  providerFamily: capabilityProviderFamilySchema.optional(),
   effects: z.array(capabilityEffectSchema).min(1).max(5).optional(),
-  tags: z.array(z.string().trim().min(1).max(64)).min(1).max(16).optional()
+  tags: z.array(z.string().trim().min(1).max(64)).min(1).max(16).optional(),
+  limit: z.number().int().min(1).max(50).optional()
 }).strict()
 export type CapabilityDiscoveryQuery = z.infer<typeof capabilityDiscoveryQuerySchema>
 
@@ -277,6 +296,7 @@ export const capabilityResourceChangeEventSchema = z.object({
   occurredAt: z.string().datetime({ offset: true }),
   workspaceId: z.string().trim().min(1).max(1_024).optional(),
   resourceRef: z.string().regex(/^res_[A-Za-z0-9_-]{20,}$/),
+  resourceStatus: z.enum(['live', 'retired']).default('live'),
   resourceKind: z.string().trim().min(1).max(128),
   actionId: capabilityIdSchema,
   invocationId: z.string().trim().min(1).max(256),

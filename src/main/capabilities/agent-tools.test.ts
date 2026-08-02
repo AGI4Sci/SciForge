@@ -215,7 +215,11 @@ describe('CapabilityAgentToolSurface', () => {
         task: 'Inspect the figure.'
       },
       context
-    })).rejects.toMatchObject({ code: 'invalid_visual_result' })
+    })).rejects.toMatchObject({
+      code: 'visual_invalid_result',
+      failureClass: 'contract_violation',
+      retryable: false
+    })
   })
 
   it('discovers live operations as opaque refs and expands only a requested compact schema', async () => {
@@ -223,8 +227,19 @@ describe('CapabilityAgentToolSurface', () => {
     const broker = new CapabilityBroker(registry)
     const surface = createCapabilityAgentToolSurface({ broker, resolveCaller: () => caller })
 
-    expect((await surface.call({ name: CAPABILITY_AGENT_TOOL_NAMES.discover, arguments: {}, context })).value)
-      .toEqual([])
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context
+    })).rejects.toMatchObject({
+      code: 'capability_discovery_empty',
+      details: {
+        outcome: 'empty',
+        registryReadiness: { status: 'ready' },
+        appliedFilters: { limit: 8 },
+        suggestedQueries: expect.any(Array)
+      }
+    })
     registry.register(readCapability('test.hot-discovered'))
 
     const discovered = await surface.call({
@@ -237,7 +252,10 @@ describe('CapabilityAgentToolSurface', () => {
     expect(operation).toMatchObject({
       operationRef: expect.stringMatching(/^op_/u),
       schemaRef: expect.stringMatching(/^schema_/u),
-      title: 'Hot-discovered capability'
+      title: 'Hot-discovered capability',
+      providerFamily: 'native',
+      acceptedResourceKinds: [],
+      producedResourceKinds: []
     })
     expect(operation).not.toHaveProperty('id')
     expect(operation).not.toHaveProperty('inputShape')
@@ -257,6 +275,43 @@ describe('CapabilityAgentToolSurface', () => {
           }
         }
       }
+    })
+  })
+
+  it('projects current event resource liveness without treating retired refs as reusable', async () => {
+    const eventOperation = descriptor('document.update', 'Update document', 'resource', 'workspace-write')
+    const resourceRef = 'res_document_abcdefghijklmnopqrstuvwxyz'
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => [eventOperation]),
+        listEvents: vi.fn(async () => [{
+          id: 'event_abcdefghijklmnopqrstuvwxyz',
+          type: 'resource.changed' as const,
+          occurredAt: '2026-07-16T11:00:00.000Z',
+          workspaceId: '/workspace',
+          resourceRef,
+          resourceStatus: 'retired' as const,
+          resourceKind: 'document',
+          actionId: eventOperation.id,
+          invocationId: 'update-1',
+          beforeRevision: '1',
+          afterRevision: '2'
+        }])
+      },
+      resolveCaller: () => caller
+    })
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.events,
+      arguments: {},
+      context
+    })).resolves.toMatchObject({
+      value: [{
+        resourceRef,
+        resourceStatus: 'retired',
+        operationRef: expect.stringMatching(/^op_/u)
+      }]
     })
   })
 
@@ -677,6 +732,21 @@ describe('CapabilityAgentToolSurface', () => {
       arguments: { resourceRef: 'res_abcdefghijklmnopqrstuvwxyz' },
       context
     })).rejects.toMatchObject({ code: 'unknown_resource_ref' })
+
+    const retiredSurface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        bindResourceRef: vi.fn(() => {
+          throw Object.assign(new Error('retired'), { code: 'resource_ref_retired' })
+        })
+      },
+      resolveCaller: () => caller
+    })
+    await expect(retiredSurface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: 'res_abcdefghijklmnopqrstuvwxyz' },
+      context
+    })).rejects.toMatchObject({ code: 'resource_ref_retired' })
 
     const uiSurface = createCapabilityAgentToolSurface({
       broker: brokerStub(),

@@ -1,7 +1,10 @@
 import { EventEmitter } from 'node:events'
+import { randomUUID } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { loadImage } from '@napi-rs/canvas'
 import type { AppBridgeSender } from './ipc/register-app-ipc-handlers'
+import type { VisibleContextBounds } from '../shared/visible-context'
 import {
   capabilityResourceContentDescriptorSchema,
   capabilityResourceContentRangeSchema
@@ -12,7 +15,11 @@ import { mainPerformanceMonitor } from './performance-monitor'
 
 const DEFAULT_DEV_BROWSER_BRIDGE_PORT = 5174
 const DEFAULT_MAX_INVOKE_BODY_BYTES = 24 * 1024 * 1024
+const DEFAULT_MAX_SURFACE_CAPTURE_BODY_BYTES = 48 * 1024 * 1024
+const MAX_SURFACE_CAPTURE_PNG_BYTES = 32 * 1024 * 1024
+const DEFAULT_SURFACE_CAPTURE_TIMEOUT_MS = 5_000
 const CLIENT_DESTROY_DELAY_MS = 1_000
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 const DEV_BROWSER_BRIDGE_ALLOWED_HEADERS = [
   'Content-Type',
   'X-SciForge-Client',
@@ -182,8 +189,25 @@ export type DevBrowserBridgeServer = {
   send: (channel: string, ...args: unknown[]) => void
   sendTo: (clientNumericId: number, channel: string, ...args: unknown[]) => boolean
   hasClient: (clientNumericId: number) => boolean
+  captureSurface: (
+    clientNumericId: number,
+    request: DevBrowserSurfaceCaptureRequest
+  ) => Promise<DevBrowserSurfaceCapture>
   close: () => Promise<void>
 }
+
+export type DevBrowserSurfaceCaptureRequest = Readonly<{
+  revision: number
+  bounds?: VisibleContextBounds
+}>
+
+export type DevBrowserSurfaceCapture = Readonly<{
+  png: Uint8Array
+  width: number
+  height: number
+  scaleFactor: number
+  bounds?: VisibleContextBounds
+}>
 
 export type DevBrowserBridgeResourceContent = {
   describe: (payload: unknown, sender: AppBridgeSender) => Promise<unknown>
@@ -196,6 +220,8 @@ type StartDevBrowserBridgeServerOptions = {
   host?: string
   port?: number
   maxInvokeBodyBytes?: number
+  maxSurfaceCaptureBodyBytes?: number
+  surfaceCaptureTimeoutMs?: number
   allowedChannels?: readonly string[]
   allowAllChannels?: boolean
   instanceId?: string
@@ -204,6 +230,31 @@ type StartDevBrowserBridgeServerOptions = {
 type ParsedHttpByteRange =
   | { ok: true; start: number; end: number }
   | { ok: false; message: string }
+
+type PendingSurfaceCapture = {
+  clientNumericId: number
+  revision: number
+  bounds?: VisibleContextBounds
+  resolve: (capture: DevBrowserSurfaceCapture) => void
+  reject: (error: Error) => void
+  timer: ReturnType<typeof setTimeout>
+}
+
+type SurfaceCaptureUpload = {
+  requestId: string
+  revision: number
+} & (
+  | {
+      ok: true
+      viewportWidth: number
+      viewportHeight: number
+      pngBase64: string
+    }
+  | {
+      ok: false
+      error: string
+    }
+)
 
 class DevBrowserBridgeClient extends EventEmitter implements AppBridgeSender {
   readonly id: number
@@ -222,8 +273,8 @@ class DevBrowserBridgeClient extends EventEmitter implements AppBridgeSender {
     return this.destroyed
   }
 
-  send(channel: string, ...args: unknown[]): void {
-    if (this.destroyed) return
+  send(channel: string, ...args: unknown[]): boolean {
+    if (this.destroyed || this.responses.size === 0) return false
     const startedAt = mainPerformanceMonitor.now()
     mainPerformanceMonitor.count('main.devBridge.send')
     mainPerformanceMonitor.count(`main.devBridge.send.${channel}`)
@@ -239,6 +290,7 @@ class DevBrowserBridgeClient extends EventEmitter implements AppBridgeSender {
         responses: this.responses.size
       })
     }
+    return true
   }
 
   attach(response: ServerResponse): void {
@@ -341,6 +393,123 @@ function parseInvokeBody(value: unknown): { channel: string; payload: unknown } 
   }
 }
 
+function parseSurfaceCaptureUpload(value: unknown): SurfaceCaptureUpload {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Surface capture response must be an object.')
+  }
+  const body = value as Record<string, unknown>
+  const requestId = typeof body.requestId === 'string' ? body.requestId.trim() : ''
+  if (!/^[0-9a-f-]{36}$/u.test(requestId)) {
+    throw new Error('Surface capture request ID is invalid.')
+  }
+  const revision = positiveSafeInteger(body.revision, 'Surface capture revision')
+  if (body.ok === false) {
+    const error = typeof body.error === 'string' ? body.error.trim() : ''
+    if (!error || error.length > 1_000) {
+      throw new Error('Surface capture failure message is invalid.')
+    }
+    return { requestId, revision, ok: false, error }
+  }
+  if (body.ok !== true) {
+    throw new Error('Surface capture response status is invalid.')
+  }
+  const viewportWidth = positiveFiniteNumber(body.viewportWidth, 'Surface capture viewport width')
+  const viewportHeight = positiveFiniteNumber(body.viewportHeight, 'Surface capture viewport height')
+  const pngBase64 = typeof body.pngBase64 === 'string' ? body.pngBase64 : ''
+  if (!pngBase64 || pngBase64.length > Math.ceil(MAX_SURFACE_CAPTURE_PNG_BYTES / 3) * 4 + 4) {
+    throw new Error('Surface capture PNG payload is invalid.')
+  }
+  return { requestId, revision, ok: true, viewportWidth, viewportHeight, pngBase64 }
+}
+
+function positiveSafeInteger(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new Error(`${label} is invalid.`)
+  }
+  return value as number
+}
+
+function positiveFiniteNumber(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 100_000) {
+    throw new Error(`${label} is invalid.`)
+  }
+  return value
+}
+
+async function decodeSurfaceCapture(
+  upload: SurfaceCaptureUpload,
+  pending: PendingSurfaceCapture
+): Promise<DevBrowserSurfaceCapture> {
+  if (upload.revision !== pending.revision) {
+    throw new Error('Surface capture revision does not match the requested visible layout.')
+  }
+  if (!upload.ok) {
+    throw new Error(`Browser pixel capture failed: ${upload.error}`)
+  }
+  const canonicalBase64 = upload.pngBase64.replace(/\s/gu, '')
+  const png = Buffer.from(canonicalBase64, 'base64')
+  if (
+    png.byteLength === 0 ||
+    png.byteLength > MAX_SURFACE_CAPTURE_PNG_BYTES ||
+    png.toString('base64') !== canonicalBase64 ||
+    png.byteLength < 24 ||
+    !png.subarray(0, PNG_SIGNATURE.byteLength).equals(PNG_SIGNATURE) ||
+    png.toString('ascii', 12, 16) !== 'IHDR'
+  ) {
+    throw new Error('Surface capture response is not a valid PNG image.')
+  }
+  const width = png.readUInt32BE(16)
+  const height = png.readUInt32BE(20)
+  if (width < 1 || height < 1) {
+    throw new Error('Surface capture PNG dimensions are invalid.')
+  }
+  const decoded = await loadImage(png).catch(() => null)
+  if (!decoded || decoded.width !== width || decoded.height !== height) {
+    throw new Error('Surface capture response could not be decoded as the declared PNG image.')
+  }
+  const bounds = pending.bounds
+    ? clipSurfaceCaptureBounds(pending.bounds, upload.viewportWidth, upload.viewportHeight)
+    : undefined
+  const cssWidth = bounds?.width ?? upload.viewportWidth
+  const cssHeight = bounds?.height ?? upload.viewportHeight
+  const scaleFactor = width / cssWidth
+  const verticalScaleFactor = height / cssHeight
+  if (
+    !Number.isFinite(scaleFactor) ||
+    scaleFactor <= 0 ||
+    Math.abs(scaleFactor - verticalScaleFactor) > Math.max(0.05, scaleFactor * 0.02)
+  ) {
+    throw new Error('Surface capture pixel dimensions do not match the requested viewport.')
+  }
+  return {
+    png,
+    width,
+    height,
+    scaleFactor,
+    ...(bounds ? { bounds } : {})
+  }
+}
+
+function clipSurfaceCaptureBounds(
+  bounds: VisibleContextBounds,
+  viewportWidth: number,
+  viewportHeight: number
+): VisibleContextBounds {
+  for (const [field, value] of Object.entries(bounds)) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw new Error(`Surface capture bound ${field} is invalid.`)
+    }
+  }
+  const x = Math.max(0, Math.floor(bounds.x))
+  const y = Math.max(0, Math.floor(bounds.y))
+  const right = Math.min(viewportWidth, Math.ceil(bounds.x + bounds.width))
+  const bottom = Math.min(viewportHeight, Math.ceil(bounds.y + bounds.height))
+  if (right <= x || bottom <= y) {
+    throw new Error('Surface capture target is outside the browser viewport.')
+  }
+  return { x, y, width: right - x, height: bottom - y }
+}
+
 function parseHttpByteRange(value: string | undefined, size: number): ParsedHttpByteRange | null {
   if (!value) return null
   const match = /^bytes=(\d*)-(\d*)$/u.exec(value.trim())
@@ -369,11 +538,25 @@ export async function startDevBrowserBridgeServer(
   const host = options.host ?? '127.0.0.1'
   const port = options.port ?? DEFAULT_DEV_BROWSER_BRIDGE_PORT
   const maxInvokeBodyBytes = options.maxInvokeBodyBytes ?? DEFAULT_MAX_INVOKE_BODY_BYTES
+  const maxSurfaceCaptureBodyBytes = options.maxSurfaceCaptureBodyBytes
+    ?? DEFAULT_MAX_SURFACE_CAPTURE_BODY_BYTES
+  const surfaceCaptureTimeoutMs = options.surfaceCaptureTimeoutMs
+    ?? DEFAULT_SURFACE_CAPTURE_TIMEOUT_MS
   const allowedChannels = createAllowedChannelSet(options.allowedChannels)
   const instanceId = options.instanceId?.trim() || ''
   const clients = new Map<string, DevBrowserBridgeClient>()
   const clientsByNumericId = new Map<number, DevBrowserBridgeClient>()
+  const pendingSurfaceCaptures = new Map<string, PendingSurfaceCapture>()
   let nextClientNumericId = 1
+
+  const rejectPendingSurfaceCaptures = (clientNumericId: number, message: string): void => {
+    for (const [requestId, pending] of pendingSurfaceCaptures) {
+      if (pending.clientNumericId !== clientNumericId) continue
+      clearTimeout(pending.timer)
+      pendingSurfaceCaptures.delete(requestId)
+      pending.reject(new Error(message))
+    }
+  }
 
   const getClient = (clientId: string): DevBrowserBridgeClient => {
     const existing = clients.get(clientId)
@@ -382,6 +565,10 @@ export async function startDevBrowserBridgeServer(
     created.once('destroyed', () => {
       if (clients.get(clientId) === created) clients.delete(clientId)
       clientsByNumericId.delete(created.id)
+      rejectPendingSurfaceCaptures(
+        created.id,
+        `Browser surface browser:${created.id} disconnected during pixel capture.`
+      )
     })
     clients.set(clientId, created)
     clientsByNumericId.set(created.id, created)
@@ -501,6 +688,51 @@ export async function startDevBrowserBridgeServer(
       return
     }
 
+    if (request.method === 'POST' && requestUrl.pathname === '/surface-capture') {
+      void (async () => {
+        let upload: SurfaceCaptureUpload | null = null
+        let pending: PendingSurfaceCapture | undefined
+        try {
+          const clientId = normalizeClientId(request.headers['x-sciforge-client'])
+          const client = clients.get(clientId)
+          if (!client || client.isDestroyed()) {
+            writeJson(response, 409, {
+              ok: false,
+              message: 'The browser capture client is no longer connected.'
+            })
+            return
+          }
+          upload = parseSurfaceCaptureUpload(
+            await readJsonBody(request, maxSurfaceCaptureBodyBytes)
+          )
+          pending = pendingSurfaceCaptures.get(upload.requestId)
+          if (!pending || pending.clientNumericId !== client.id) {
+            writeJson(response, 409, {
+              ok: false,
+              message: 'The browser capture request is unknown or belongs to another client.'
+            })
+            return
+          }
+          const captured = await decodeSurfaceCapture(upload, pending)
+          clearTimeout(pending.timer)
+          pendingSurfaceCaptures.delete(upload.requestId)
+          pending.resolve(captured)
+          writeJson(response, 200, { ok: true })
+        } catch (error) {
+          if (upload && pending) {
+            clearTimeout(pending.timer)
+            pendingSurfaceCaptures.delete(upload.requestId)
+            pending.reject(error instanceof Error ? error : new Error(String(error)))
+          }
+          writeJson(response, isLocalHttpBodyTooLargeError(error) ? 413 : 400, {
+            ok: false,
+            message: error instanceof Error ? error.message : String(error)
+          })
+        }
+      })()
+      return
+    }
+
     if (request.method === 'POST' && requestUrl.pathname === '/invoke') {
       void (async () => {
         const startedAt = mainPerformanceMonitor.now()
@@ -566,7 +798,49 @@ export async function startDevBrowserBridgeServer(
       const client = clientsByNumericId.get(clientNumericId)
       return Boolean(client && !client.isDestroyed())
     },
+    captureSurface: (clientNumericId, request) => {
+      const client = clientsByNumericId.get(clientNumericId)
+      if (!client || client.isDestroyed()) {
+        return Promise.reject(new Error(
+          `Browser surface browser:${clientNumericId} is no longer connected.`
+        ))
+      }
+      const requestId = randomUUID()
+      return new Promise<DevBrowserSurfaceCapture>((resolve, reject) => {
+        const pending: PendingSurfaceCapture = {
+          clientNumericId,
+          revision: positiveSafeInteger(request.revision, 'Surface capture revision'),
+          ...(request.bounds ? { bounds: { ...request.bounds } } : {}),
+          resolve,
+          reject,
+          timer: setTimeout(() => {
+            pendingSurfaceCaptures.delete(requestId)
+            reject(new Error(
+              `Browser surface browser:${clientNumericId} did not return pixel capture before the timeout.`
+            ))
+          }, surfaceCaptureTimeoutMs)
+        }
+        pending.timer.unref?.()
+        pendingSurfaceCaptures.set(requestId, pending)
+        const delivered = client.send('devBrowserBridge:surface-capture-requested', {
+          requestId,
+          revision: pending.revision,
+          ...(pending.bounds ? { bounds: pending.bounds } : {})
+        })
+        if (delivered) return
+        clearTimeout(pending.timer)
+        pendingSurfaceCaptures.delete(requestId)
+        reject(new Error(
+          `Browser surface browser:${clientNumericId} has no active pixel-capture channel.`
+        ))
+      })
+    },
     close: async () => {
+      for (const [requestId, pending] of pendingSurfaceCaptures) {
+        clearTimeout(pending.timer)
+        pendingSurfaceCaptures.delete(requestId)
+        pending.reject(new Error('The development browser bridge closed during pixel capture.'))
+      }
       for (const client of clients.values()) {
         client.destroy()
       }

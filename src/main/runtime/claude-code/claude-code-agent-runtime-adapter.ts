@@ -30,6 +30,12 @@ export function createClaudeCodeAgentRuntimeAdapter(
   return {
     id: 'claude',
     transport: 'cli_process',
+    subagents: {
+      spawn: (_context, input) => service.spawnSubagent(input),
+      inspect: (_context, input) => service.inspectSubagent(input),
+      message: (_context, input) => service.messageSubagent(input),
+      cancel: (_context, input) => service.cancelSubagent(input)
+    },
 
     async connect() {
       const result = await service.connect()
@@ -96,8 +102,12 @@ export function createClaudeCodeAgentRuntimeAdapter(
       if (!result.ok) throw claudeFailure(result)
     },
 
-    async steerTurn() {
-      const result = await service.steerTurn()
+    async steerTurn(_context, input) {
+      const result = await service.steerTurn({
+        threadId: input.threadId,
+        turnId: input.turnId,
+        text: input.text
+      })
       if (!result.ok) throw claudeFailure(result)
     },
 

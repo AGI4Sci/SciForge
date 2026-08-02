@@ -323,6 +323,21 @@ describe('app capability registry', () => {
     expect(observed.operations).toEqual([])
   })
 
+  it('keeps Workspace Preview discoverable when a visual-file query includes surplus format words', () => {
+    const { dependencies } = createDependencies()
+    const registry = createRegistry(dependencies)
+    const matches = registry.discover({
+      audience: 'agent',
+      callerId: 'thread-1',
+      workspaceId: '/workspace'
+    }, {
+      text: 'open workspace file image png view',
+      limit: 5
+    })
+
+    expect(matches.map(({ id }) => id)).toContain(APP_CAPABILITY_IDS.workspacePreviewOpen)
+  })
+
   it('uses the same Workspace Preview provider for UI and agent callers', async () => {
     const { dependencies, open } = createDependencies()
     const broker = new CapabilityBroker(createRegistry(dependencies))

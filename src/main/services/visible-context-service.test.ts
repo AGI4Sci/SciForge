@@ -8,6 +8,7 @@ import {
   type VisibleContextSnapshot
 } from '../../shared/visible-context'
 import {
+  VisibleContextCaptureError,
   VisibleContextService,
   type CapturedVisualPage,
   type SurfaceCaptureProvider
@@ -86,6 +87,61 @@ function successfulSurfaceCaptureProvider(
 }
 
 describe('VisibleContextService capture', () => {
+  it.each([
+    {
+      code: 'capture_surface_unsupported' as const,
+      message: 'This surface has no trusted pixel capture provider.',
+      failureClass: 'capability_unavailable',
+      retryable: false,
+      recovery: {
+        action: 'stop',
+        instruction: 'Use a SciForge surface with trusted pixel capture.'
+      },
+      providerStage: 'surface_capture'
+    },
+    {
+      code: 'capture_surface_unavailable' as const,
+      message: 'The trusted surface capture provider is temporarily unavailable.',
+      failureClass: 'upstream_unavailable',
+      retryable: true,
+      recovery: {
+        action: 'retry_visual_inspection',
+        instruction: 'Reconnect the trusted surface and retry visual inspection once.'
+      },
+      providerStage: 'surface_capture'
+    }
+  ])('preserves typed $code provider failures through captureFrame', async (reason) => {
+    const service = new VisibleContextService(await temporaryUserData(), {
+      surfaceCaptureProvider: {
+        capture: vi.fn(async () => ({ ok: false as const, reason }))
+      },
+      now: () => new Date('2026-07-11T03:00:03.000Z')
+    })
+    await service.publish(snapshot())
+
+    await expect(service.captureFrame('electron:1')).rejects.toMatchObject({
+      name: 'VisibleContextCaptureError',
+      ...reason
+    })
+  })
+
+  it('does not misclassify an unknown provider exception as a known capture failure', async () => {
+    const unknown = new Error('Unexpected native capture exception.')
+    const service = new VisibleContextService(await temporaryUserData(), {
+      surfaceCaptureProvider: {
+        capture: vi.fn(async () => {
+          throw unknown
+        })
+      },
+      now: () => new Date('2026-07-11T03:00:03.000Z')
+    })
+    await service.publish(snapshot())
+
+    await expect(service.captureFrame('electron:1')).rejects.toBe(unknown)
+    expect(unknown).not.toBeInstanceOf(VisibleContextCaptureError)
+    expect(unknown).not.toHaveProperty('code')
+  })
+
   it('keeps semantic current resources available when only renderer layout is stale', async () => {
     const service = new VisibleContextService(await temporaryUserData(), {
       surfaceCaptureProvider: successfulSurfaceCaptureProvider(vi.fn()),
@@ -114,6 +170,151 @@ describe('VisibleContextService capture', () => {
     now = new Date('2026-07-11T03:00:07.000Z')
     expect((await service.get()).freshness.stale).toBe(true)
     expect((await service.publish(snapshot({ revision: 0, route: '/out-of-order' }))).route).toBe('/chat')
+  })
+
+  it.each([
+    {
+      selectedWindowId: 'browser:1',
+      competingWindowId: 'electron:1'
+    },
+    {
+      selectedWindowId: 'electron:1',
+      competingWindowId: 'browser:1'
+    }
+  ])(
+    'keeps $selectedWindowId active when $competingWindowId publishes before the caller binds',
+    async ({ selectedWindowId, competingWindowId }) => {
+      const capture = vi.fn(async () => ({
+        ok: true as const,
+        page: {
+          png: whitePng(),
+          width: 100,
+          height: 80,
+          scaleFactor: 1
+        }
+      }))
+      const service = new VisibleContextService(await temporaryUserData(), {
+        surfaceCaptureProvider: { capture },
+        now: () => new Date('2026-07-11T03:00:03.000Z')
+      })
+      await service.publish(snapshot({
+        windowId: selectedWindowId,
+        activeThreadId: 'thread-a',
+        route: `/${selectedWindowId}/initial`
+      }))
+      await service.publish(snapshot({
+        windowId: competingWindowId,
+        activeThreadId: 'thread-a',
+        route: `/${competingWindowId}/initial`
+      }))
+
+      await service.publish(snapshot({
+        windowId: competingWindowId,
+        revision: 2,
+        activeThreadId: 'thread-a',
+        route: `/${competingWindowId}/background`
+      }))
+
+      const bound = await service.bindSurface(
+        'codex:thread-a',
+        'thread-a',
+        selectedWindowId
+      )
+      expect(bound).toMatchObject({
+        windowId: selectedWindowId,
+        route: `/${selectedWindowId}/initial`
+      })
+
+      await service.publish(snapshot({
+        windowId: selectedWindowId,
+        revision: 2,
+        activeThreadId: 'thread-a',
+        route: `/${selectedWindowId}/active`
+      }))
+      expect(service.peek()).toMatchObject({
+        windowId: selectedWindowId,
+        route: `/${selectedWindowId}/active`
+      })
+      const current = await service.currentSurface('codex:thread-a')
+      await service.captureFrame(current.resourceId)
+      expect(capture).toHaveBeenCalledWith({
+        windowId: selectedWindowId,
+        revision: 2,
+        activeThreadId: 'thread-a'
+      })
+    }
+  )
+
+  it('rejects binding when the selected surface has not published the owner thread', async () => {
+    const service = new VisibleContextService(await temporaryUserData(), {
+      surfaceCaptureProvider: { capture: vi.fn() }
+    })
+    await service.publish(snapshot({
+      windowId: 'browser:1',
+      activeThreadId: 'thread-b'
+    }))
+
+    await expect(service.bindSurface(
+      'codex:thread-a',
+      'thread-a',
+      'browser:1'
+    )).resolves.toBeNull()
+  })
+
+  it('refreshes only the sender-derived surface before binding a newly selected thread', async () => {
+    let service: VisibleContextService
+    let refreshPublication: Promise<VisibleContextSnapshot> | null = null
+    const requestSurfaceRefresh = vi.fn((windowId: string) => {
+      refreshPublication = service.publish(snapshot({
+        windowId,
+        revision: 2,
+        activeThreadId: 'thread-a',
+        route: '/refreshed'
+      }))
+    })
+    service = new VisibleContextService(await temporaryUserData(), {
+      surfaceCaptureProvider: { capture: vi.fn() },
+      requestSurfaceRefresh
+    })
+    await service.publish(snapshot({
+      windowId: 'browser:1',
+      activeThreadId: 'thread-b'
+    }))
+    await service.publish(snapshot({
+      windowId: 'electron:9',
+      activeThreadId: 'thread-a',
+      route: '/competing'
+    }))
+
+    await expect(service.bindSurface(
+      'codex:thread-a',
+      'thread-a',
+      'browser:1'
+    )).resolves.toMatchObject({
+      windowId: 'browser:1',
+      activeThreadId: 'thread-a',
+      route: '/refreshed'
+    })
+    expect(requestSurfaceRefresh).toHaveBeenCalledWith('browser:1')
+    await refreshPublication
+  })
+
+  it('does not treat a persisted snapshot as a live bindable surface', async () => {
+    const userDataDir = await temporaryUserData()
+    const writer = new VisibleContextService(userDataDir, {
+      surfaceCaptureProvider: { capture: vi.fn() }
+    })
+    await writer.publish(snapshot({ activeThreadId: 'thread-a' }))
+
+    const restarted = new VisibleContextService(userDataDir, {
+      surfaceCaptureProvider: { capture: vi.fn() }
+    })
+    await expect(restarted.get()).resolves.toMatchObject({ windowId: 'electron:1' })
+    await expect(restarted.bindSurface(
+      'codex:thread-a',
+      'thread-a',
+      'electron:1'
+    )).resolves.toBeNull()
   })
 
   it('separates semantic revision from layout revision and emits stable opaque target refs', async () => {
@@ -233,6 +434,31 @@ describe('VisibleContextService capture', () => {
     })
   })
 
+  it('resolves an opaque target against its exact live window after another surface publishes', async () => {
+    const service = new VisibleContextService(await temporaryUserData(), {
+      surfaceCaptureProvider: { capture: vi.fn() },
+      now: () => new Date('2026-07-11T03:00:01.000Z')
+    })
+    await service.publish(snapshot({
+      windowId: 'electron:1',
+      activeThreadId: 'thread-a'
+    }))
+    const observed = await service.currentSurface()
+    const targetRef = (observed.state as {
+      targets: Array<{ targetRef: string }>
+    }).targets[0]!.targetRef
+    await service.publish(snapshot({
+      windowId: 'browser:2',
+      activeThreadId: 'thread-b',
+      route: '/other'
+    }))
+
+    await expect(service.resolveRegisteredTarget(targetRef)).resolves.toMatchObject({
+      surface: { windowId: 'electron:1', revision: 1 },
+      bounds: { x: 10, y: 20, width: 300, height: 400 }
+    })
+  })
+
   it('captures a trusted target frame without requiring visual interpretation', async () => {
     const capture = vi.fn(async () => ({
       png: whitePng(310, 410),
@@ -273,7 +499,7 @@ describe('VisibleContextService capture', () => {
       now: () => new Date('2026-07-11T03:00:02.000Z')
     })
     await service.publish(snapshot({ activeThreadId: 'thread-a' }))
-    await service.bindCurrentSurface('codex:thread-a', 'thread-a')
+    await service.bindSurface('codex:thread-a', 'thread-a', 'electron:1')
     const bound = await service.currentSurface('codex:thread-a')
 
     await service.publish(snapshot({
@@ -295,6 +521,7 @@ describe('VisibleContextService capture', () => {
     }))
 
     const stillBound = await service.currentSurface('codex:thread-a')
+    await service.bindSurface('codex:thread-b', 'thread-b', 'electron:1')
     const foreground = await service.currentSurface('codex:thread-b')
     expect(stillBound.resourceId).toBe(bound.resourceId)
     expect(stillBound.state).toMatchObject({
@@ -306,6 +533,97 @@ describe('VisibleContextService capture', () => {
     await expect(service.captureFrame(bound.resourceId))
       .rejects.toThrow(/another session or resource is visible/u)
     expect(capture).not.toHaveBeenCalled()
+  })
+
+  it('keeps same-turn visual ownership while messages, busy state, timeline state, and layout change', async () => {
+    const capture = vi.fn(async (request: {
+      revision: number
+      bounds?: { x: number; y: number; width: number; height: number }
+    }) => ({
+      ok: true as const,
+      page: {
+        png: whitePng(),
+        width: 100,
+        height: 80,
+        scaleFactor: 1,
+        bounds: request.bounds
+      }
+    }))
+    const service = new VisibleContextService(await temporaryUserData(), {
+      surfaceCaptureProvider: { capture },
+      now: () => new Date('2026-07-11T03:00:03.000Z')
+    })
+    const timelineComponent = {
+      ...snapshot().components[0]!,
+      summary: '1 message',
+      resources: undefined,
+      state: {
+        messageCount: 1,
+        busy: false,
+        timeline: 'waiting'
+      }
+    }
+    await service.publish(snapshot({
+      activeThreadId: 'thread-a',
+      components: [timelineComponent]
+    }))
+    await service.bindSurface('codex:thread-a', 'thread-a', 'electron:1')
+    const bound = await service.currentSurface('codex:thread-a')
+    const targetRef = (bound.state as { targets: Array<{ targetRef: string }> }).targets[0]?.targetRef
+
+    await service.publish(snapshot({
+      revision: 2,
+      publishedAt: '2026-07-11T03:00:01.000Z',
+      activeThreadId: 'thread-a',
+      components: [{
+        ...timelineComponent,
+        summary: '2 messages',
+        state: {
+          messageCount: 2,
+          busy: true,
+          timeline: 'streaming'
+        },
+        visualTargets: timelineComponent.visualTargets?.map((target) => ({
+          ...target,
+          bounds: { x: 30, y: 40, width: 310, height: 410 }
+        }))
+      }]
+    }))
+
+    await service.captureFrame(bound.resourceId, { targetRef })
+    expect(capture).toHaveBeenLastCalledWith({
+      windowId: 'electron:1',
+      revision: 2,
+      activeThreadId: 'thread-a',
+      bounds: { x: 30, y: 40, width: 310, height: 410 }
+    })
+
+    await service.publish(snapshot({
+      revision: 3,
+      publishedAt: '2026-07-11T03:00:02.000Z',
+      activeThreadId: 'thread-a',
+      components: [{
+        ...timelineComponent,
+        summary: '3 messages',
+        state: {
+          messageCount: 3,
+          busy: false,
+          timeline: 'complete'
+        },
+        visualTargets: timelineComponent.visualTargets?.map((target) => ({
+          ...target,
+          bounds: { x: 50, y: 60, width: 320, height: 420 }
+        }))
+      }]
+    }))
+
+    await service.captureFrame(bound.resourceId, { targetRef })
+    expect(capture).toHaveBeenLastCalledWith({
+      windowId: 'electron:1',
+      revision: 3,
+      activeThreadId: 'thread-a',
+      bounds: { x: 50, y: 60, width: 320, height: 420 }
+    })
   })
 
   it('requests a renderer refresh only when capture needs stale layout', async () => {
@@ -337,7 +655,7 @@ describe('VisibleContextService capture', () => {
       now: () => new Date('2026-07-11T03:00:06.000Z')
     })
     await service.publish(snapshot({ activeThreadId: 'thread-a' }))
-    await service.bindCurrentSurface('codex:thread-a', 'thread-a')
+    await service.bindSurface('codex:thread-a', 'thread-a', 'electron:1')
     const bound = await service.currentSurface('codex:thread-a')
     const targetRef = (bound.state as { targets: Array<{ targetRef: string }> }).targets[0]?.targetRef
 

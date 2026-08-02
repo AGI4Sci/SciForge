@@ -1,9 +1,6 @@
 import { z } from 'zod'
 
-export const MULTI_AGENT_CONTRACT_VERSION = 1
-export const DEFAULT_MULTI_AGENT_CHILD_TIMEOUT_MS = 10 * 60 * 1000
-export const DEFAULT_MULTI_AGENT_TIMEOUT_HANDSHAKE_MS = 5 * 1000
-export const DEFAULT_MULTI_AGENT_TIMEOUT_SUMMARY_GRACE_MS = 60 * 1000
+export const MULTI_AGENT_CONTRACT_VERSION = 2
 
 export const MultiAgentChildStatus = z.enum(['queued', 'running', 'completed', 'failed', 'aborted'])
 export type MultiAgentChildStatus = z.infer<typeof MultiAgentChildStatus>
@@ -27,7 +24,6 @@ export const MultiAgentErrorCode = z.enum([
   'child_not_found',
   'child_failed',
   'child_aborted',
-  'timeout',
   'invalid_input',
   'store_read_failed',
   'store_write_failed'
@@ -120,9 +116,6 @@ export const MultiAgentRuntimeConfig = z
     enabled: z.boolean().default(true),
     maxParallel: z.number().int().nonnegative().default(2),
     maxChildren: z.number().int().nonnegative().default(16),
-    childTimeoutMs: z.number().int().positive().default(DEFAULT_MULTI_AGENT_CHILD_TIMEOUT_MS),
-    timeoutHandshakeMs: z.number().int().positive().default(DEFAULT_MULTI_AGENT_TIMEOUT_HANDSHAKE_MS),
-    timeoutSummaryGraceMs: z.number().int().positive().default(DEFAULT_MULTI_AGENT_TIMEOUT_SUMMARY_GRACE_MS),
     maxTranscriptEntries: z.number().int().positive().default(1000)
   })
   .strict()
@@ -241,20 +234,23 @@ export type MultiAgentExecutorResult = {
   threadRef?: MultiAgentChildThreadRef
 }
 
-export type MultiAgentProgressSummaryRequest = {
-  reason: 'timeout'
+export type MultiAgentMessageRequest = {
   message: string
   signal: AbortSignal
 }
 
-export type MultiAgentProgressSummaryReceipt = {
+export type MultiAgentMessageReceipt = {
   established: boolean
+}
+
+export type MultiAgentLiveness = {
+  state: 'active' | 'missing'
+  observedAt: string
 }
 
 export type MultiAgentTerminationReason =
   | 'parent_abort'
-  | 'timeout_channel_unavailable'
-  | 'timeout_summary_grace_expired'
+  | 'parent_cancel'
 
 export type MultiAgentTerminationRequest = {
   reason: MultiAgentTerminationReason
@@ -262,10 +258,8 @@ export type MultiAgentTerminationRequest = {
 }
 
 export type MultiAgentLifecycleControl = {
-  threadRef?: MultiAgentChildThreadRef
-  requestProgressSummary(
-    request: MultiAgentProgressSummaryRequest
-  ): Promise<MultiAgentProgressSummaryReceipt>
+  sendMessage(request: MultiAgentMessageRequest): Promise<MultiAgentMessageReceipt>
+  inspect(signal: AbortSignal): Promise<MultiAgentLiveness>
   terminate(request: MultiAgentTerminationRequest): Promise<void>
 }
 
@@ -284,6 +278,7 @@ export type MultiAgentExecutorInput = {
   maxToolCalls?: number
   signal: AbortSignal
   registerLifecycleControl(control: MultiAgentLifecycleControl): void
+  setThreadRef(threadRef: MultiAgentChildThreadRef): Promise<void>
   appendTranscript: (entry: MultiAgentTranscriptEntry) => Promise<void>
 }
 

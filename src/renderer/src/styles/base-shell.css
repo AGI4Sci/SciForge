@@ -2186,6 +2186,10 @@ pre {
 
 .ds-stage-surface {
   position: relative;
+  /* This is a structural viewport, not a scroll owner. `overflow: hidden`
+     can still be moved by descendant scrollIntoView() calls, which pushes the
+     top toolbar outside the window. `clip` keeps scrolling inside owned panes. */
+  overflow: clip;
   background: var(--ds-stage-gradient);
 }
 

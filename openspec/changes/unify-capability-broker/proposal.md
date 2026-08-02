@@ -11,6 +11,14 @@ SciForge exposes product capabilities through separate renderer IPC, main-proces
 - Publish visible surfaces as generic visual sources for the native visual runtime, while document annotations remain ordinary provider operations with compact observations and schema references.
 - Separate semantic resource revision from layout epoch so rendering, scrolling, and resizing cannot invalidate an agent observation.
 - Add one shared execution governor for all agent runtimes using normalized semantic failure receipts and capability-aware policy denials.
+- Make capability discovery deterministic with exact capability IDs, tokenized ranked
+  search, explicit scope/resource filters, bounded native-first results, and
+  actionable empty-result diagnostics.
+- Expose resource-reference liveness in event history and apply a shared
+  evidence-aware retry budget to stable non-retryable failures.
+- Keep the text reasoner as the primary model while treating vision translators
+  as evidence producers; strict native visual inspection must preserve grounded
+  evidence or fail with a typed cause instead of returning a text-only success.
 - Migrate Workspace Preview and Biology Room as the first complete vertical slice so their actions are discoverable and invoke the existing canonical providers.
 - Generate visible-context access metadata and capability documentation from registered definitions.
 - Add registration completeness and architecture-boundary tests so future features cannot claim agent access without an executable capability.
@@ -35,5 +43,9 @@ None.
 - Shared contracts: capability manifests, resource handles, observations, invocations, events, and schemas.
 - Renderer/preload: broker-backed clients and registry-derived visible-context metadata.
 - Agent runtimes: stable discovery/observe/invoke/event tools and removal of feature-specific prompt guidance.
+- Agent runtimes: typed visual failures, deterministic recovery guidance, and
+  circuit breaking for repeated attempts that produce no new evidence.
+- Model Router: successful Responses payload compatibility, vision-evidence
+  provenance, text-primary synthesis, and fail-closed strict visual inspection.
 - Workspace Preview/Biology Room: registered providers using existing domain services as the only execution engines.
 - Tests and CI: registry completeness, single-provider, audience, schema, revision, idempotency, and no-bypass checks.

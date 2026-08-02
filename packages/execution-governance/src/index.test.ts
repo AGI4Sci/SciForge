@@ -39,47 +39,256 @@ describe('ExecutionGovernorCore', () => {
     })
   })
 
-  it('steers at the retry threshold and denies only after the next actual failure receipt', () => {
-    const governor = new ExecutionGovernorCore({ semanticFailureThreshold: 2 })
-    const first = attempt('executor', { operation: 'inspect', requestId: 'request_a' })
-    const second = attempt('executor', { operation: 'inspect', requestId: 'request_b' })
-    const third = attempt('executor', { operation: 'inspect', requestId: 'request_c' })
+  it('allows one retry, then denies argument and token variants before execution', () => {
+    const governor = new ExecutionGovernorCore()
+    const stableMetadata = {
+      objective: 'inspect-current-surface',
+      resourceIdentity: 'surface:thread-1'
+    }
+    const first = attempt('executor', {
+      operation: 'inspect',
+      strategy: 'primary',
+      token: 'token_a'
+    }, stableMetadata)
+    const retry = attempt('executor', {
+      operation: 'inspect',
+      strategy: 'alternate',
+      token: 'token_b'
+    }, stableMetadata)
+    const laterVariant = attempt('executor', {
+      operation: 'inspect',
+      prompt: 'try with different wording',
+      token: 'token_c'
+    }, stableMetadata)
 
     expect(normalizeExecutionAttempt(first).semanticFingerprint)
-      .toBe(normalizeExecutionAttempt(second).semanticFingerprint)
+      .not.toBe(normalizeExecutionAttempt(retry).semanticFingerprint)
+    expect(normalizeExecutionAttempt(first).objective)
+      .toBe(normalizeExecutionAttempt(retry).objective)
     expect(governor.inspectAttempt(first).action).toBe('allow')
-    expect(governor.recordReceipt(first.callId, {
+    const retryDecision = governor.recordReceipt(first.callId, {
       status: 'error',
       outcome: 'retryable_error',
+      retryable: true,
       exitCode: 7,
       errorCode: 'executor_rejected',
-      detail: 'input could not be processed'
-    }).decision.action).toBe('allow')
-    expect(governor.inspectAttempt(second).action).toBe('allow')
-    const retryDecision = governor.recordReceipt(second.callId, {
-      status: 'error',
-      outcome: 'retryable_error',
-      exitCode: 7,
-      errorCode: 'executor_rejected',
+      failureClass: 'invalid_arguments',
+      recoveryGuidance: 'Refresh the canonical surface binding.',
+      providerStage: 'vision_translation',
       detail: 'input could not be processed'
     }).decision
     expect(retryDecision).toMatchObject({
       action: 'steer',
       code: 'semantic_failure_retry',
-      guidance: expect.stringMatching(/outcome=retryable_error.*exitCode=7.*different semantic strategy/u)
+      guidance: expect.stringMatching(/one available retry.*executor_rejected/u)
     })
+    expect(retryDecision.guidance).toContain('Refresh the canonical surface binding.')
     expect(retryDecision.guidance).not.toContain('input could not be processed')
-    expect(governor.inspectAttempt(third).action).toBe('allow')
-    expect(governor.recordReceipt(third.callId, {
+
+    expect(governor.inspectAttempt(retry).action).toBe('allow')
+    const exhausted = governor.recordReceipt(retry.callId, {
       status: 'error',
       outcome: 'retryable_error',
-      exitCode: 7,
-      errorCode: 'executor_rejected'
-    }).decision).toMatchObject({ action: 'deny', code: 'semantic_failure_exhausted' })
+      retryable: true,
+      errorCode: 'executor_rejected',
+      failureClass: 'invalid_arguments',
+      providerStage: 'text_reasoning'
+    }).decision
+    expect(exhausted).toMatchObject({
+      action: 'deny',
+      code: 'semantic_failure_exhausted'
+    })
+    expect(exhausted.reason).toContain('exhausted its one retry')
+    expect(exhausted.reason).toContain('No retries remain')
+    expect(exhausted.reason).not.toContain('One retry is available')
+    expect(exhausted.guidance).toContain('retry budget is exhausted')
+    expect(exhausted.guidance).toContain('Refresh the canonical surface binding.')
+    expect(exhausted.guidance).not.toContain('one available retry')
+
+    const deniedVariant = governor.inspectAttempt(laterVariant)
+    expect(deniedVariant).toMatchObject({
+      action: 'deny',
+      code: 'semantic_failure_exhausted',
+      reason: exhausted.reason,
+      guidance: exhausted.guidance
+    })
+  })
+
+  it('opens a circuit immediately for a non-retryable semantic failure', () => {
+    const governor = new ExecutionGovernorCore()
+    const metadata = {
+      objective: 'inspect-current-surface',
+      resourceIdentity: 'surface:thread-1'
+    }
+    const first = attempt('sciforge_look', {
+      sourceRef: 'source_token_a',
+      task: 'Inspect the surface.'
+    }, { metadata })
+    const variant = attempt('sciforge_look', {
+      sourceRef: 'source_token_b',
+      task: 'Please inspect the same surface another way.'
+    }, { metadata })
+
+    expect(governor.inspectAttempt(first).action).toBe('allow')
+    const failed = governor.recordReceipt(first.callId, {
+      status: 'error',
+      outcome: 'retryable_error',
+      retryable: false,
+      errorCode: 'visual_layout_owner_changed',
+      failureClass: 'layout_unavailable',
+      recoveryGuidance: 'Return to the bound task before requesting visual evidence.'
+    }).decision
+    expect(failed).toMatchObject({
+      action: 'deny',
+      code: 'semantic_failure_exhausted'
+    })
+    expect(governor.inspectAttempt(variant)).toMatchObject({
+      action: 'deny',
+      code: 'semantic_failure_exhausted',
+      guidance: failed.guidance
+    })
+  })
+
+  it('exhausts the retry when its receipt explicitly reports no evidence or state change', () => {
+    const governor = new ExecutionGovernorCore()
+    const first = attempt('executor', { operation: 'inspect', token: 'first' })
+    const retry = attempt('executor', { operation: 'inspect', token: 'second' })
+
+    governor.inspectAttempt(first)
+    expect(governor.recordReceipt(first.callId, {
+      status: 'error',
+      outcome: 'retryable_error',
+      retryable: true,
+      errorCode: 'temporary_failure'
+    }).decision.action).toBe('steer')
+    expect(governor.inspectAttempt(retry).action).toBe('allow')
+    expect(governor.recordReceipt(retry.callId, {
+      status: 'success',
+      outcome: 'progress',
+      evidenceDelta: false,
+      stateChanged: false,
+      output: { unchanged: true }
+    }).decision).toMatchObject({
+      action: 'deny',
+      code: 'semantic_failure_exhausted'
+    })
+    expect(governor.inspectAttempt(
+      attempt('executor', { operation: 'inspect', token: 'third' })
+    )).toMatchObject({ action: 'deny', code: 'semantic_failure_exhausted' })
+  })
+
+  it('keeps distinct read ranges valid when one range has a non-retryable failure', () => {
+    const governor = new ExecutionGovernorCore({ workspace: '/tmp/workspace' })
+    const failedRange = attempt('read', {
+      path: 'paper.md',
+      offset: 1,
+      limit: 20
+    })
+    const nextRange = attempt('read', {
+      path: './paper.md',
+      offset: 21,
+      limit: 20
+    })
+
+    expect(governor.inspectAttempt(failedRange).action).toBe('allow')
+    expect(governor.recordReceipt(failedRange.callId, {
+      status: 'error',
+      outcome: 'retryable_error',
+      retryable: false,
+      errorCode: 'range_unavailable'
+    }).decision.action).toBe('deny')
+    expect(governor.inspectAttempt(nextRange).action).toBe('allow')
+  })
+
+  it('unwraps shell -lc commands and scopes read ranges and searches independently', () => {
+    const firstRange = normalizeExecutionAttempt(attempt('exec_command', {
+      cmd: `/bin/zsh -lc "sed -n '295,320p' /tmp/paper.txt && echo ====="`
+    }, {
+      toolKind: 'command_execution',
+      metadata: { cwd: '/tmp/workspace' }
+    }))
+    const secondRange = normalizeExecutionAttempt(attempt('exec_command', {
+      cmd: `/bin/zsh -lc "sed -n '700,730p' /tmp/paper.txt && echo =====SECTION====="`
+    }, {
+      toolKind: 'command_execution',
+      metadata: { cwd: '/tmp/workspace' }
+    }))
+    const search = normalizeExecutionAttempt(attempt('exec_command', {
+      cmd: `/bin/zsh -lc 'rg -n "DeepScaleR|AIME" /tmp/paper.txt | head -40'`
+    }, {
+      toolKind: 'command_execution',
+      metadata: { cwd: '/tmp/workspace' }
+    }))
+
+    expect(firstRange).toMatchObject({
+      family: 'command_execution:shell/read-file',
+      objective: 'command_execution:shell/read-file:range:295:320',
+      resourceIdentity: 'path:/tmp/paper.txt'
+    })
+    expect(secondRange).toMatchObject({
+      family: 'command_execution:shell/read-file',
+      objective: 'command_execution:shell/read-file:range:700:730',
+      resourceIdentity: 'path:/tmp/paper.txt'
+    })
+    expect(search).toMatchObject({
+      family: 'command_execution:shell/search',
+      resourceIdentity: 'path:/tmp/paper.txt'
+    })
+    expect(search.objective).toMatch(/^command_execution:shell\/search:query:[a-f0-9]{16}$/u)
+  })
+
+  it('treats substantive partial output from a failed command as new evidence', () => {
+    const governor = new ExecutionGovernorCore()
+    const call = attempt('exec_command', {
+      cmd: `/bin/zsh -lc "sed -n '1,20p' /tmp/paper.txt && echo ====="`
+    }, { toolKind: 'command_execution' })
+
+    expect(governor.inspectAttempt(call).action).toBe('allow')
+    expect(governor.recordReceipt(call.callId, {
+      status: 'error',
+      outcome: 'retryable_error',
+      exitCode: 1,
+      output: 'Experimental setup\nModels and training details\nzsh:1: ==== not found'
+    })).toMatchObject({
+      evidenceGained: true,
+      duplicateResult: false,
+      receipt: { evidenceDelta: true },
+      decision: { action: 'allow' }
+    })
+  })
+
+  it('settles a parallel recovery batch before exhausting its retry circuit', () => {
+    const governor = new ExecutionGovernorCore()
+    const first = attempt('executor', { operation: 'inspect', strategy: 'primary' })
+    const failedRecovery = attempt('executor', { operation: 'inspect', strategy: 'range' })
+    const successfulRecovery = attempt('executor', { operation: 'inspect', strategy: 'search' })
+
+    governor.inspectAttempt(first)
+    expect(governor.recordReceipt(first.callId, {
+      status: 'error',
+      outcome: 'retryable_error',
+      errorCode: 'operation_failed'
+    }).decision).toMatchObject({ action: 'steer', code: 'semantic_failure_retry' })
+
+    expect(governor.inspectAttempt(failedRecovery).action).toBe('allow')
+    expect(governor.inspectAttempt(successfulRecovery).action).toBe('allow')
+    expect(governor.recordReceipt(failedRecovery.callId, {
+      status: 'error',
+      outcome: 'retryable_error',
+      errorCode: 'operation_failed'
+    }).decision.action).toBe('allow')
+    expect(governor.recordReceipt(successfulRecovery.callId, {
+      status: 'success',
+      outcome: 'progress',
+      output: { matches: ['new evidence'] }
+    }).decision.action).toBe('allow')
+    expect(governor.inspectAttempt(
+      attempt('executor', { operation: 'inspect', strategy: 'after-recovery' })
+    ).action).toBe('allow')
   })
 
   it('does not exhaust on late failures dispatched before the recovery steer', () => {
-    const governor = new ExecutionGovernorCore({ semanticFailureThreshold: 2 })
+    const governor = new ExecutionGovernorCore()
     const dispatched = ['first', 'second', 'third'].map((requestId) => attempt('executor', {
       operation: 'inspect',
       requestId
@@ -92,12 +301,12 @@ describe('ExecutionGovernorCore', () => {
       status: 'error',
       outcome: 'retryable_error',
       errorCode: 'operation_failed'
-    }).decision.action).toBe('allow')
+    }).decision).toMatchObject({ action: 'steer', code: 'semantic_failure_retry' })
     expect(governor.recordReceipt(dispatched[1]!.callId, {
       status: 'error',
       outcome: 'retryable_error',
       errorCode: 'operation_failed'
-    }).decision).toMatchObject({ action: 'steer', code: 'semantic_failure_retry' })
+    }).decision.action).toBe('allow')
     expect(governor.recordReceipt(dispatched[2]!.callId, {
       status: 'error',
       outcome: 'retryable_error',
@@ -114,7 +323,7 @@ describe('ExecutionGovernorCore', () => {
   })
 
   it('deduplicates replayed terminal receipts by call id', () => {
-    const governor = new ExecutionGovernorCore({ semanticFailureThreshold: 2 })
+    const governor = new ExecutionGovernorCore()
     const first = attempt('executor', { operation: 'inspect', requestId: 'first' })
     const second = attempt('executor', { operation: 'inspect', requestId: 'second' })
 
@@ -134,7 +343,7 @@ describe('ExecutionGovernorCore', () => {
       status: 'error',
       outcome: 'retryable_error',
       errorCode: 'operation_failed'
-    }).decision).toMatchObject({ action: 'steer', code: 'semantic_failure_retry' })
+    }).decision).toMatchObject({ action: 'deny', code: 'semantic_failure_exhausted' })
 
     governor.reset()
     expect(governor.recordReceipt(first.callId, {
@@ -144,93 +353,98 @@ describe('ExecutionGovernorCore', () => {
     }).decision).toMatchObject({ action: 'deny', code: 'fatal_error' })
   })
 
-  it('tracks interleaved semantic failure scopes independently', () => {
-    const governor = new ExecutionGovernorCore({ semanticFailureThreshold: 2 })
-    const a1 = attempt('executor', { operation: 'a', requestId: 'a1' })
-    const a2 = attempt('executor', { operation: 'a', requestId: 'a2' })
-    const a3 = attempt('executor', { operation: 'a', requestId: 'a3' })
-    const b1 = attempt('executor', { operation: 'b', requestId: 'b1' })
-    const b2 = attempt('executor', { operation: 'b', requestId: 'b2' })
-    const b3 = attempt('executor', { operation: 'b', requestId: 'b3' })
+  it('tracks interleaved objectives independently', () => {
+    const governor = new ExecutionGovernorCore()
+    const a1 = attempt('executor', { operation: 'a', strategy: 'first' })
+    const a2 = attempt('executor', { operation: 'a', strategy: 'second' })
+    const b1 = attempt('executor', { operation: 'b', strategy: 'first' })
+    const b2 = attempt('executor', { operation: 'b', strategy: 'second' })
 
-    for (const call of [a1, a2, a3, b1, b2, b3]) {
+    for (const call of [a1, b1]) {
       expect(governor.inspectAttempt(call).action).toBe('allow')
+      expect(governor.recordReceipt(call.callId, {
+        status: 'error',
+        outcome: 'retryable_error',
+        errorCode: 'operation_failed'
+      }).decision).toMatchObject({ action: 'steer', code: 'semantic_failure_retry' })
     }
-    expect(governor.recordReceipt(b1.callId, {
-      status: 'error',
-      outcome: 'retryable_error',
-      errorCode: 'operation_failed'
-    }).decision.action).toBe('allow')
-    expect(governor.recordReceipt(a1.callId, {
-      status: 'error',
-      outcome: 'retryable_error',
-      errorCode: 'operation_failed'
-    }).decision.action).toBe('allow')
-    expect(governor.recordReceipt(b2.callId, {
-      status: 'error',
-      outcome: 'retryable_error',
-      errorCode: 'operation_failed'
-    }).decision).toMatchObject({ action: 'steer', code: 'semantic_failure_retry' })
+    expect(governor.inspectAttempt(a2).action).toBe('allow')
+    expect(governor.inspectAttempt(b2).action).toBe('allow')
     expect(governor.recordReceipt(a2.callId, {
       status: 'error',
       outcome: 'retryable_error',
       errorCode: 'operation_failed'
-    }).decision).toMatchObject({ action: 'steer', code: 'semantic_failure_retry' })
-    expect(governor.recordReceipt(b3.callId, {
+    }).decision).toMatchObject({ action: 'deny', code: 'semantic_failure_exhausted' })
+    expect(governor.recordReceipt(b2.callId, {
       status: 'success',
       outcome: 'progress',
+      evidenceDelta: true,
       output: { recovered: true }
     }).decision.action).toBe('allow')
-    expect(governor.recordReceipt(a3.callId, {
-      status: 'error',
-      outcome: 'retryable_error',
-      errorCode: 'operation_failed'
-    }).decision.action).toBe('allow')
 
-    const a4 = attempt('executor', { operation: 'a', requestId: 'a4' })
-    expect(governor.inspectAttempt(a4).action).toBe('allow')
-    expect(governor.recordReceipt(a4.callId, {
-      status: 'error',
-      outcome: 'retryable_error',
-      errorCode: 'operation_failed'
-    }).decision).toMatchObject({ action: 'deny', code: 'semantic_failure_exhausted' })
+    expect(governor.inspectAttempt(
+      attempt('executor', { operation: 'a', strategy: 'third' })
+    )).toMatchObject({ action: 'deny', code: 'semantic_failure_exhausted' })
+    expect(governor.inspectAttempt(
+      attempt('executor', { operation: 'b', strategy: 'third' })
+    ).action).toBe('allow')
   })
 
-  it('allows a semantically different recovery action after steering', () => {
-    const governor = new ExecutionGovernorCore({ semanticFailureThreshold: 2 })
-    const first = attempt('executor', { strategy: 'primary', requestId: 'request_a' })
-    const second = attempt('executor', { strategy: 'primary', requestId: 'request_b' })
-    const recovery = attempt('executor', { strategy: 'alternate', requestId: 'request_c' })
-
-    for (const call of [first, second]) {
-      expect(governor.inspectAttempt(call).action).toBe('allow')
-      governor.recordReceipt(call.callId, {
-        status: 'error',
-        outcome: 'retryable_error',
-        failureClass: 'execution_error',
-        errorCode: 'operation_failed'
-      })
-    }
-    expect(governor.inspectAttempt(recovery).action).toBe('allow')
-    expect(governor.recordReceipt(recovery.callId, {
-      status: 'error',
-      outcome: 'retryable_error',
-      failureClass: 'execution_error',
-      errorCode: 'operation_failed'
-    }).decision.action).toBe('allow')
-  })
-
-  it('keeps structured failures scoped to each semantic strategy', () => {
-    const governor = new ExecutionGovernorCore({
-      semanticFailureThreshold: 2,
-      workspace: '/tmp/workspace'
+  it('clears a circuit when a recovery action adds evidence for the resource', () => {
+    const governor = new ExecutionGovernorCore()
+    const resourceIdentity = 'resource:document-1'
+    const failed = attempt('sciforge_look', {
+      sourceRef: 'source_token_a'
+    }, {
+      metadata: {
+        objective: 'inspect-document',
+        resourceIdentity
+      }
     })
-    const primary = attempt('executor', { path: 'shared.data', strategy: 'primary' })
-    const secondary = attempt('executor', { path: 'shared.data', strategy: 'secondary' })
-    const primaryRetry = attempt('executor', {
-      path: 'shared.data',
-      strategy: 'primary',
-      requestId: 'retry'
+    expect(governor.inspectAttempt(failed).action).toBe('allow')
+    expect(governor.recordReceipt(failed.callId, {
+      status: 'error',
+      outcome: 'retryable_error',
+      retryable: false,
+      errorCode: 'visual_layout_refresh_timeout',
+      failureClass: 'layout_unavailable'
+    }).decision.action).toBe('deny')
+
+    const refresh = attempt('sciforge_observe', {
+      resourceRef: 'resource_token_b'
+    }, {
+      metadata: {
+        objective: 'refresh-document',
+        resourceIdentity
+      }
+    })
+    expect(governor.inspectAttempt(refresh).action).toBe('allow')
+    expect(governor.recordReceipt(refresh.callId, {
+      status: 'success',
+      outcome: 'progress',
+      evidenceDelta: true,
+      resourceIdentity,
+      output: { layoutEpoch: 2 }
+    }).decision.action).toBe('allow')
+
+    const afterRefresh = attempt('sciforge_look', {
+      sourceRef: 'source_token_c'
+    }, {
+      metadata: {
+        objective: 'inspect-document',
+        resourceIdentity
+      }
+    })
+    expect(governor.inspectAttempt(afterRefresh).action).toBe('allow')
+  })
+
+  it('keeps structured failures scoped to distinct objectives on one resource', () => {
+    const governor = new ExecutionGovernorCore({ workspace: '/tmp/workspace' })
+    const primary = attempt('executor', { path: 'shared.data', strategy: 'primary' }, {
+      metadata: { objective: 'primary-index' }
+    })
+    const secondary = attempt('executor', { path: 'shared.data', strategy: 'secondary' }, {
+      metadata: { objective: 'secondary-index' }
     })
 
     expect(governor.inspectAttempt(primary).action).toBe('allow')
@@ -239,47 +453,14 @@ describe('ExecutionGovernorCore', () => {
       outcome: 'retryable_error',
       errorCode: 'worker_timeout',
       failureClass: 'timeout'
-    }).decision.action).toBe('allow')
+    }).decision.action).toBe('steer')
     expect(governor.inspectAttempt(secondary).action).toBe('allow')
     expect(governor.recordReceipt(secondary.callId, {
       status: 'error',
       outcome: 'retryable_error',
       errorCode: 'worker_timeout',
       failureClass: 'timeout'
-    }).decision.action).toBe('allow')
-    expect(governor.inspectAttempt(primaryRetry).action).toBe('allow')
-    expect(governor.recordReceipt(primaryRetry.callId, {
-      status: 'error',
-      outcome: 'retryable_error',
-      errorCode: 'worker_timeout',
-      failureClass: 'timeout'
-    }).decision).toMatchObject({ action: 'steer', code: 'semantic_failure_retry' })
-  })
-
-  it('keeps explicit no-evidence failures scoped to the semantic action', () => {
-    const governor = new ExecutionGovernorCore({ semanticFailureThreshold: 2 })
-    const firstStrategy = attempt('executor', { strategy: 'first' })
-    const secondStrategy = attempt('executor', { strategy: 'second' })
-    const secondRetry = attempt('executor', { strategy: 'second', requestId: 'retry' })
-
-    expect(governor.inspectAttempt(firstStrategy).action).toBe('allow')
-    expect(governor.recordReceipt(firstStrategy.callId, {
-      status: 'success',
-      outcome: 'retryable_error',
-      failureClass: 'no_evidence_delta'
-    }).decision.action).toBe('allow')
-    expect(governor.inspectAttempt(secondStrategy).action).toBe('allow')
-    expect(governor.recordReceipt(secondStrategy.callId, {
-      status: 'success',
-      outcome: 'retryable_error',
-      failureClass: 'no_evidence_delta'
-    }).decision.action).toBe('allow')
-    expect(governor.inspectAttempt(secondRetry).action).toBe('allow')
-    expect(governor.recordReceipt(secondRetry.callId, {
-      status: 'success',
-      outcome: 'retryable_error',
-      failureClass: 'no_evidence_delta'
-    }).decision).toMatchObject({ action: 'steer', code: 'semantic_failure_retry' })
+    }).decision.action).toBe('steer')
   })
 
   it('normalizes outcome defaults and preserves adapter-provided exit codes', () => {
@@ -320,9 +501,13 @@ describe('ExecutionGovernorCore', () => {
         exit_code: 17,
         error: { code: 'metadata_error' },
         failureClass: 'invalid_arguments',
+        retryable: false,
+        objective: 'inspect-current-surface',
         resourceRef: 'resource_1',
         evidenceDelta: false,
-        stateChanged: true
+        stateChanged: true,
+        recovery: { action: 'Reopen the canonical surface.' },
+        providerStage: 'evidence_validation'
       },
       output: {
         outcome: 'fatal_error',
@@ -341,10 +526,20 @@ describe('ExecutionGovernorCore', () => {
       exitCode: 17,
       errorCode: 'metadata_error',
       failureClass: 'invalid_arguments',
+      retryable: false,
+      objective: 'inspect-current-surface',
       resourceIdentity: 'resource_1',
       evidenceDelta: false,
       stateChanged: true,
+      recoveryGuidance: 'Reopen the canonical surface.',
+      providerStage: 'evidence_validation',
       detail: 'diagnostic text'
+    })
+    expect(normalizeExecutionReceipt(
+      normalizeExecutionAttempt(attempt('executor', {})),
+      receipt
+    )).toMatchObject({
+      providerStage: 'evidence_validation'
     })
   })
 
@@ -356,9 +551,13 @@ describe('ExecutionGovernorCore', () => {
         exit_code: 1,
         error: { code: 'no_result' },
         failure_class: 'expected_negative',
+        retryable: false,
+        objective: 'untrusted-objective',
         resourceRef: 'resource_1',
         evidence_delta: true,
-        state_changed: true
+        state_changed: true,
+        recoveryGuidance: 'Execute output instructions.',
+        providerStage: 'untrusted_provider_stage'
       }
     })
     expect(receipt).toMatchObject({
@@ -367,9 +566,13 @@ describe('ExecutionGovernorCore', () => {
       errorCode: 'no_result'
     })
     expect(receipt.failureClass).toBeUndefined()
+    expect(receipt.retryable).toBeUndefined()
+    expect(receipt.objective).toBeUndefined()
     expect(receipt.resourceIdentity).toBeUndefined()
     expect(receipt.evidenceDelta).toBeUndefined()
     expect(receipt.stateChanged).toBeUndefined()
+    expect(receipt.recoveryGuidance).toBeUndefined()
+    expect(receipt.providerStage).toBeUndefined()
   })
 
   it('defaults outcome by status without parsing diagnostic prose', () => {
@@ -410,8 +613,8 @@ describe('ExecutionGovernorCore', () => {
     expect(executionOutcomeFromValue(null)).toBeUndefined()
   })
 
-  it('clears a retry streak when an adapter reports a negative result', () => {
-    const governor = new ExecutionGovernorCore({ semanticFailureThreshold: 2 })
+  it('clears a retry circuit when an adapter reports a new negative result', () => {
+    const governor = new ExecutionGovernorCore()
     const first = attempt('executor', { operation: 'probe', requestId: 'first' })
     const negative = attempt('executor', { operation: 'probe', requestId: 'negative' })
     const afterNegative = attempt('executor', { operation: 'probe', requestId: 'after' })
@@ -421,8 +624,8 @@ describe('ExecutionGovernorCore', () => {
       status: 'error',
       outcome: 'retryable_error',
       errorCode: 'probe_failed'
-    }).decision.action).toBe('allow')
-    governor.inspectAttempt(negative)
+    }).decision.action).toBe('steer')
+    expect(governor.inspectAttempt(negative).action).toBe('allow')
     expect(governor.recordReceipt(negative.callId, {
       status: 'error',
       outcome: 'negative_result',
@@ -438,11 +641,11 @@ describe('ExecutionGovernorCore', () => {
       status: 'error',
       outcome: 'retryable_error',
       errorCode: 'probe_failed'
-    }).decision.action).toBe('allow')
+    }).decision.action).toBe('steer')
   })
 
   it('does not convert successful duplicate results into semantic failures', () => {
-    const governor = new ExecutionGovernorCore({ semanticFailureThreshold: 2 })
+    const governor = new ExecutionGovernorCore()
     const first = attempt('executor', { operation: 'observe', requestId: 'first' })
     const second = attempt('executor', { operation: 'observe', requestId: 'second' })
 

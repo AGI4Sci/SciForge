@@ -91,6 +91,12 @@ visibility 和 latency metric 描述。
 type AgentRuntimeAdapter = {
   id: 'sciforge' | 'codex' | 'claude'
   transport: 'http_sse' | 'jsonrpc_stdio' | 'cli_process'
+  subagents?: {
+    spawn(context, input): Promise<AgentRuntimeSubagentResult>
+    inspect(context, input): Promise<AgentRuntimeSubagentLiveness>
+    message(context, input): Promise<AgentRuntimeSubagentMessageReceipt>
+    cancel(context, input): Promise<void>
+  }
 
   connect(context): Promise<void>
   capabilities(context): Promise<AgentRuntimeCapabilities>
@@ -246,9 +252,13 @@ type AgentRuntimeCapabilities = {
 
 `tools.subagents.available` 表示当前 runtime 可以在统一 children/transcript UI 中展示
 child/subagent 工作，并按 runtime 能力使用 multi-agent 链路。`maxParallel` 和
-`maxChildren` 来自共享 agent capability settings。SciForge Runtime 的 `delegate_task`
-使用 `packages/workers/multi-agent` 的共享 child-run contract；Codex 和 Claude Code
-保留 native child/workflow/subagent 解析，但输出必须是同一 `AgentRuntimeChild` 形状。
+`maxChildren` 来自共享 agent capability settings。`AgentRuntimeHost` 是
+`delegate_task`、`subagent_status`、`subagent_wait`、`subagent_send` 和
+`subagent_cancel` 的唯一工具所有者，并使用 `packages/workers/multi-agent` 保存和调度
+child run。Codex、Claude Code 以及后续 runtime 适配器只实现统一的
+`spawn/inspect/message/cancel` provider 契约；不得在 runtime 私有目录再注册另一套
+delegation 工具或状态机。Provider 原生 child/workflow/subagent 事件仍可解析，但输出
+必须归一为同一 `AgentRuntimeChild` 形状。
 
 SciForge Runtime 初始值大致为：
 

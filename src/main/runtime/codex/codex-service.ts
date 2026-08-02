@@ -88,7 +88,16 @@ import {
   nativeAgentToolExecutionMetadata,
   type AgentRuntimeToolSurface
 } from '../agent-runtime/agent-tool-surface'
-import type { AgentRuntimeTurnGovernanceSnapshotInput } from '../agent-runtime/adapter'
+import type {
+  AgentRuntimeSubagentCancelInput,
+  AgentRuntimeSubagentInspectInput,
+  AgentRuntimeSubagentMessageInput,
+  AgentRuntimeSubagentResult,
+  AgentRuntimeSubagentSpawnInput,
+  AgentRuntimeSubagentTranscriptEntry,
+  AgentRuntimeSubagentUsage,
+  AgentRuntimeTurnGovernanceSnapshotInput
+} from '../agent-runtime/adapter'
 import {
   GUI_COMPUTER_USE_MCP_SERVER_NAME,
   isComputerUseMcpConfigured
@@ -99,18 +108,7 @@ import {
   type RuntimeToolDefinition,
   type RuntimeToolReleaseReason
 } from '../agent-runtime/runtime-tool-contract'
-import {
-  codexChildFromMultiAgentRecord,
-  createCodexMultiAgentToolBridge,
-  type CodexMultiAgentToolBridge
-} from './codex-multi-agent-tools'
-import type {
-  MultiAgentExecutorInput,
-  MultiAgentExecutorResult,
-  MultiAgentChildEvent,
-  MultiAgentTranscriptEntry,
-  MultiAgentUsage
-} from '../../../../packages/workers/multi-agent/src'
+import { AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME } from '../agent-runtime/subagent-tool-bridge'
 import {
   CODEX_PRE_TOOL_USE_GOVERNANCE_STORAGE_ROOT_ENV,
   CodexPreToolUseGovernanceBridge
@@ -160,6 +158,17 @@ type CodexTurnGovernanceBinding = {
   sessionId: string
   governanceThreadId: string
   governanceTurnId: string
+}
+
+type ActiveCodexSubagent = {
+  childId: string
+  parentThreadId: string
+  parentTurnId: string
+  threadId: string
+  codexThreadId: string
+  turnId: string
+  client: CodexAppServerJsonRpcClient
+  terminate(signal?: AbortSignal): Promise<void>
 }
 
 type CodexConnectedClient = {
@@ -239,12 +248,13 @@ const INTERRUPT_TIMED_OUT_TURN_MS = 5_000
 const CODEX_PENDING_TOOL_COMPLETION_GRACE_MS = 5_000
 const CODEX_TURN_DISCONNECTED_MESSAGE = 'Codex runtime disconnected before this turn completed. The stuck turn was closed so you can retry.'
 const CODEX_TURN_STOPPED_MESSAGE = 'Codex runtime stopped before this turn completed. The stuck turn was closed so you can retry.'
-const CODEX_MULTI_AGENT_DEVELOPER_INSTRUCTIONS = [
-  'SciForge provides `delegate_task` for bounded child-agent work.',
+const CODEX_SUBAGENT_DEVELOPER_INSTRUCTIONS = [
+  'SciForge provides `delegate_task` for child-agent work without a wall-clock execution deadline.',
   'Use it when parallel investigation or independent implementation subtasks materially help the user request.',
   'When two or more independent subtasks are ready, put them in one `delegate_task` tasks array so they start concurrently; do not wait for separate delegation calls one by one.',
   'Give each child a concise label and a self-contained prompt; do not use it for trivial work or as a substitute for doing the main task.',
-  'Treat the tool result as the child agent answer, the same way you would read an assistant response.'
+  '`delegate_task` returns child IDs immediately. Use `subagent_wait` to observe progress, `subagent_status` to inspect liveness, `subagent_send` to ask for progress or provide guidance, and `subagent_cancel` only for an explicit cancellation decision.',
+  'A wait timeout or one missing liveness probe is not child failure. Continue monitoring; only terminal child status is final.'
 ].join('\n')
 const CODEX_THREAD_FALLBACK_TITLE = 'Codex thread'
 const MAX_CODEX_THREAD_TITLE_LENGTH = 80
@@ -273,8 +283,7 @@ export class CodexRuntimeService {
   private readonly eventStore: CodexEventStore | null
   private readonly usageStore: CodexUsageStore | null
   private readonly preToolUseGovernanceBridge: CodexPreToolUseGovernanceBridge | null
-  private multiAgentBridge: CodexMultiAgentToolBridge | null = null
-  private readonly multiAgentChildThreadIds = new Set<string>()
+  private readonly activeSubagents = new Map<string, ActiveCodexSubagent>()
   private usageBackfillPromise: Promise<void> | null = null
   private readonly activeTurns = new Map<string, string>()
   private readonly turnTimings = new Map<string, CodexTurnTiming>()
@@ -517,7 +526,7 @@ export class CodexRuntimeService {
       const dynamicTools = await this.codexDynamicTools(settings)
       const response = await client.startThread({
         ...baseThreadParams(settings, workspace, {
-          multiAgentConfigured: Boolean(this.ensureCodexMultiAgentBridge(settings)),
+          subagentsConfigured: this.isSubagentDelegationConfigured(settings),
           dynamicTools
         }),
         ...codexModelAccessThreadParams(settings),
@@ -1013,7 +1022,6 @@ export class CodexRuntimeService {
       const codexThreadId = await this.codexThreadIdFor(threadId)
       const { client } = await this.ensureConnectedClient()
       this.options.capabilityAgentTools?.abortTurn?.({ runtimeId: 'codex', threadId, turnId }, 'user_stop')
-      this.multiAgentBridge?.abortRequestsForTurn(threadId, turnId)
       await client.interruptTurn({ threadId: codexThreadId, turnId })
       if (options.discard) await this.stop('user_stop')
       return { ok: true }
@@ -1340,7 +1348,6 @@ export class CodexRuntimeService {
         throw new Error('Codex app-server startup was superseded.')
       }
       session.launch = launch
-      this.ensureCodexMultiAgentBridge(settings)
       const createClient = this.options.createClient ?? createCodexAppServerClient
       const client = createClient({
         command: launch.command,
@@ -1559,25 +1566,15 @@ export class CodexRuntimeService {
   }
 
   private async codexDynamicTools(
-    settings?: AppSettingsV1,
-    options: { includeMultiAgent?: boolean } = {}
+    _settings?: AppSettingsV1
   ): Promise<RuntimeToolDefinition[]> {
-    const current = settings ?? await this.options.settings()
-    const includeMultiAgent = options.includeMultiAgent !== false
     const capabilityTools = this.options.capabilityAgentTools?.tools() ?? []
-    const reservedNames = new Set<string>(capabilityTools.map((tool) => tool.name))
-    const otherTools = (includeMultiAgent
-      ? this.ensureCodexMultiAgentBridge(current)?.dynamicTools() ?? []
-      : []).filter((tool) => !reservedNames.has(tool.name))
-    return [
-      ...capabilityTools.map((tool) => ({
-        type: tool.type,
-        name: tool.name,
-        description: tool.description,
-        inputSchema: tool.inputSchema
-      })),
-      ...otherTools
-    ]
+    return capabilityTools.map((tool) => ({
+      type: tool.type,
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema
+    }))
   }
 
   private async handleDynamicToolCall(
@@ -1615,17 +1612,13 @@ export class CodexRuntimeService {
     if (this.canHandleCapabilityAgentTool(contextualRequest)) {
       return this.handleCapabilityAgentToolCall(contextualRequest, settings)
     }
-    const multiAgentBridge = this.ensureCodexMultiAgentBridge(settings)
-    if (multiAgentBridge?.canHandle(contextualRequest)) {
-      if (await this.isMultiAgentChildThread(contextualRequest.threadId)) {
-        return {
-          contentItems: [{ type: 'inputText', text: 'delegate_task is disabled inside child agents.' }],
-          success: false
-        }
-      }
-      return multiAgentBridge.callTool(contextualRequest)
-    }
     return failedDynamicToolCall(`Unknown runtime tool: ${contextualRequest.tool}`)
+  }
+
+  private isSubagentDelegationConfigured(settings: AppSettingsV1): boolean {
+    return getAgentCapabilitySettings(settings).subagents.enabled &&
+      (this.options.capabilityAgentTools?.tools() ?? [])
+        .some((tool) => tool.name === AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME)
   }
 
   private canHandleCapabilityAgentTool(request: RuntimeToolCallRequest): boolean {
@@ -1715,6 +1708,8 @@ export class CodexRuntimeService {
           ...(response?.errorCode ? { errorCode: response.errorCode } : {}),
           ...(response?.failureClass ? { failureClass: response.failureClass } : {}),
           ...(response?.retryable !== undefined ? { retryable: response.retryable } : {}),
+          ...(response?.recoveryGuidance ? { recoveryGuidance: response.recoveryGuidance } : {}),
+          ...(response?.providerStage ? { providerStage: response.providerStage } : {}),
           ...(response?.resourceIdentity ? { resourceIdentity: response.resourceIdentity } : {}),
           ...(response?.evidenceDelta !== undefined ? { evidenceDelta: response.evidenceDelta } : {}),
           ...(response?.stateChanged !== undefined ? { stateChanged: response.stateChanged } : {}),
@@ -1745,36 +1740,7 @@ export class CodexRuntimeService {
     return { ...request, threadId: storedThread.guiThreadId }
   }
 
-  private ensureCodexMultiAgentBridge(settings: AppSettingsV1): CodexMultiAgentToolBridge | null {
-    const subagents = getAgentCapabilitySettings(settings).subagents
-    if (!subagents.enabled) {
-      this.multiAgentBridge = null
-      return null
-    }
-    if (!this.multiAgentBridge) {
-      this.multiAgentBridge = createCodexMultiAgentToolBridge({
-        enabled: true,
-        maxParallel: subagents.maxParallel,
-        maxChildren: subagents.maxChildRuns,
-        ...(this.options.storageRoot ? { storeRoot: join(this.options.storageRoot, 'multi-agent-child-runs') } : {}),
-        executor: (input) => this.runCodexMultiAgentChild(input),
-        onChildEvent: (event) => this.publishCodexMultiAgentChildEvent(event)
-      })
-    }
-    return this.multiAgentBridge
-  }
-
-  private async publishCodexMultiAgentChildEvent(event: MultiAgentChildEvent): Promise<void> {
-    const record = await this.multiAgentBridge?.child(event.parentThreadId, event.childId)
-    if (!record) return
-    await this.publishClientEvent({
-      threadId: event.parentThreadId,
-      turnId: record.parentTurnId,
-      child: codexChildFromMultiAgentRecord(record, event)
-    })
-  }
-
-  private async runCodexMultiAgentChild(input: MultiAgentExecutorInput): Promise<MultiAgentExecutorResult> {
+  async spawnSubagent(input: AgentRuntimeSubagentSpawnInput): Promise<AgentRuntimeSubagentResult> {
     const settings = await this.options.settings()
     const { client } = await this.ensureModelUseClient(settings)
     if (input.signal.aborted) throw new Error('Codex child turn was aborted before startup.')
@@ -1783,10 +1749,10 @@ export class CodexRuntimeService {
       turnId: input.parentTurnId
     })
     const workspace = resolveCodexWorkspace(settings, input.workspace)
-    const dynamicTools = await this.codexDynamicTools(settings, { includeMultiAgent: false })
+    const dynamicTools = await this.codexDynamicTools(settings)
     const threadResponse = await client.startThread({
       ...baseThreadParams(settings, workspace, {
-        multiAgentConfigured: false,
+        subagentsConfigured: false,
         dynamicTools
       }),
       ...codexModelAccessThreadParams(settings),
@@ -1824,8 +1790,6 @@ export class CodexRuntimeService {
     })
     const childGuiThreadId = storedChild?.guiThreadId ?? childThread.id
     const childCodexThreadId = storedChild?.codexThreadId ?? childThread.id
-    this.multiAgentChildThreadIds.add(childGuiThreadId)
-    this.multiAgentChildThreadIds.add(childCodexThreadId)
     const subscriber = this.addEventSubscriber(childGuiThreadId)
     const startedAtMs = Date.now()
     let childTurnId = ''
@@ -1881,24 +1845,21 @@ export class CodexRuntimeService {
       })
       preparedGovernance = null
       this.recordTurnModelHint(childGuiThreadId, childTurnId, modelAccess.model)
-      input.registerLifecycleControl({
-        threadRef: {
-          runtime: 'codex',
-          threadId: childGuiThreadId,
-          turnId: childTurnId
-        },
-        requestProgressSummary: async (request) => {
-          if (this.activeTurns.get(childGuiThreadId) !== childTurnId) {
-            return { established: false }
-          }
-          await client.steerTurn({
-            threadId: childCodexThreadId,
-            expectedTurnId: childTurnId,
-            input: [textInput(request.message)]
-          }, request.signal)
-          return { established: true }
-        },
-        terminate: (request) => terminateChildTurn(request.signal)
+      const activeSubagent: ActiveCodexSubagent = {
+        childId: input.childId,
+        parentThreadId: input.parentThreadId,
+        parentTurnId: input.parentTurnId,
+        threadId: childGuiThreadId,
+        codexThreadId: childCodexThreadId,
+        turnId: childTurnId,
+        client,
+        terminate: terminateChildTurn
+      }
+      this.activeSubagents.set(input.childId, activeSubagent)
+      await input.onSpawned({
+        runtime: 'codex',
+        threadId: childGuiThreadId,
+        turnId: childTurnId
       })
       await input.appendTranscript({
         id: `${input.childId}-thread-start`,
@@ -1928,6 +1889,7 @@ export class CodexRuntimeService {
         }
       }
     } finally {
+      this.activeSubagents.delete(input.childId)
       await this.releasePreparedCodexTurnGovernance(preparedGovernance)
         .catch(() => undefined)
       if (childTurnId) {
@@ -1936,6 +1898,33 @@ export class CodexRuntimeService {
       }
       this.closeEventSubscriber(subscriber)
     }
+  }
+
+  async inspectSubagent(input: AgentRuntimeSubagentInspectInput) {
+    const active = this.activeSubagents.get(input.childId)
+    return {
+      state: active && this.activeTurns.get(active.threadId) === active.turnId
+        ? 'active' as const
+        : 'missing' as const,
+      observedAt: new Date().toISOString()
+    }
+  }
+
+  async messageSubagent(input: AgentRuntimeSubagentMessageInput) {
+    const active = this.activeSubagents.get(input.childId)
+    if (!active || this.activeTurns.get(active.threadId) !== active.turnId) {
+      return { established: false }
+    }
+    await active.client.steerTurn({
+      threadId: active.codexThreadId,
+      expectedTurnId: active.turnId,
+      input: [textInput(input.message)]
+    }, input.signal)
+    return { established: true }
+  }
+
+  async cancelSubagent(input: AgentRuntimeSubagentCancelInput): Promise<void> {
+    await this.activeSubagents.get(input.childId)?.terminate(input.signal)
   }
 
   private async waitForCodexChildTurn(input: {
@@ -1948,12 +1937,12 @@ export class CodexRuntimeService {
     terminateChildTurn(signal?: AbortSignal): Promise<void>
   }): Promise<{
     summary: string
-    usage?: Partial<MultiAgentUsage>
-    transcript: MultiAgentTranscriptEntry[]
+    usage?: AgentRuntimeSubagentUsage
+    transcript: AgentRuntimeSubagentTranscriptEntry[]
   }> {
-    const transcript: MultiAgentTranscriptEntry[] = []
+    const transcript: AgentRuntimeSubagentTranscriptEntry[] = []
     let assistantText = ''
-    let usage: Partial<MultiAgentUsage> | undefined
+    let usage: AgentRuntimeSubagentUsage | undefined
     const onAbort = (): void => this.closeEventSubscriber(input.subscriber)
     input.signal.addEventListener('abort', onAbort, { once: true })
     try {
@@ -1988,7 +1977,7 @@ export class CodexRuntimeService {
             metadata: event.tool.meta
           })
         }
-        if (event.usage) usage = multiAgentUsageFromCodexUsage(event.usage)
+        if (event.usage) usage = subagentUsageFromCodexUsage(event.usage)
         if (isTerminalRuntimeError(event.runtimeError)) {
           throw codexChildTurnError(event.runtimeError, transcript, usage)
         }
@@ -1997,9 +1986,9 @@ export class CodexRuntimeService {
       if (input.signal.aborted) {
         await input.terminateChildTurn().catch(() => undefined)
         const error = Object.assign(new Error('Codex child turn was aborted.'), {
-          ...(assistantText.trim() ? { multiAgentSummary: assistantText.trim() } : {}),
-          multiAgentTranscript: transcript,
-          ...(usage ? { multiAgentUsage: usage } : {})
+          ...(assistantText.trim() ? { subagentSummary: assistantText.trim() } : {}),
+          subagentTranscript: transcript,
+          ...(usage ? { subagentUsage: usage } : {})
         })
         error.name = 'AbortError'
         throw error
@@ -2060,14 +2049,6 @@ export class CodexRuntimeService {
     for (const runtimeEvent of this.eventsAfterPendingToolBarrier(parentEvent)) {
       await this.publishClientEvent(runtimeEvent)
     }
-  }
-
-  private async isMultiAgentChildThread(threadId: string | undefined): Promise<boolean> {
-    const normalized = threadId?.trim()
-    if (!normalized) return false
-    if (this.multiAgentChildThreadIds.has(normalized)) return true
-    const storedThread = await this.findStoredThread(normalized)
-    return isCodexChildThreadSource(storedThread?.threadSource)
   }
 
   private async handleCodingPlanNotification(
@@ -2803,7 +2784,7 @@ export class CodexRuntimeService {
     const dynamicTools = await this.codexDynamicTools(input.settings)
     const response = await input.client.startThread({
       ...baseThreadParams(input.settings, input.workspace, {
-        multiAgentConfigured: Boolean(this.ensureCodexMultiAgentBridge(input.settings)),
+        subagentsConfigured: this.isSubagentDelegationConfigured(input.settings),
         dynamicTools
       }),
       ...codexModelAccessThreadParams(input.settings),
@@ -3548,7 +3529,7 @@ function baseThreadParams(
   settings: AppSettingsV1,
   workspace?: string,
   dynamicMcp: {
-    multiAgentConfigured?: boolean
+    subagentsConfigured?: boolean
     dynamicTools?: RuntimeToolDefinition[]
   } = {}
 ): CodexAppServerThreadStartParams {
@@ -3568,10 +3549,10 @@ function baseThreadParams(
 }
 
 function dynamicDeveloperInstructions(input: {
-  multiAgentConfigured?: boolean
+  subagentsConfigured?: boolean
 }): string {
   return [
-    input.multiAgentConfigured ? CODEX_MULTI_AGENT_DEVELOPER_INSTRUCTIONS : ''
+    input.subagentsConfigured ? CODEX_SUBAGENT_DEVELOPER_INSTRUCTIONS : ''
   ].filter(Boolean).join('\n\n')
 }
 
@@ -3583,6 +3564,8 @@ function failedDynamicToolCall(
     | 'errorCode'
     | 'failureClass'
     | 'retryable'
+    | 'recoveryGuidance'
+    | 'providerStage'
     | 'resourceIdentity'
     | 'evidenceDelta'
     | 'stateChanged'
@@ -4072,7 +4055,7 @@ function usageHasTokens(usage: AgentRuntimeUsage): boolean {
     safeUsageInteger(usage.cacheWriteTokens) > 0
 }
 
-function multiAgentUsageFromCodexUsage(usage: AgentRuntimeUsage): Partial<MultiAgentUsage> {
+function subagentUsageFromCodexUsage(usage: AgentRuntimeUsage): AgentRuntimeSubagentUsage {
   return {
     promptTokens: usage.inputTokens,
     completionTokens: usage.outputTokens,
@@ -4113,12 +4096,12 @@ function isTerminalRuntimeError(
 
 function codexChildTurnError(
   error: NonNullable<CodexThreadEventPayload['runtimeError']>,
-  transcript: readonly MultiAgentTranscriptEntry[],
-  usage: Partial<MultiAgentUsage> | undefined
+  transcript: readonly AgentRuntimeSubagentTranscriptEntry[],
+  usage: AgentRuntimeSubagentUsage | undefined
 ): Error {
   const thrown = Object.assign(new Error(error.message || 'Codex child turn failed.'), {
-    multiAgentTranscript: transcript,
-    ...(usage ? { multiAgentUsage: usage } : {})
+    subagentTranscript: transcript,
+    ...(usage ? { subagentUsage: usage } : {})
   })
   if (isAbortRuntimeError(error)) thrown.name = 'AbortError'
   return thrown
@@ -4243,6 +4226,8 @@ function dynamicToolErrorMetadata(error: unknown): Pick<
   | 'errorCode'
   | 'failureClass'
   | 'retryable'
+  | 'recoveryGuidance'
+  | 'providerStage'
   | 'resourceIdentity'
   | 'evidenceDelta'
   | 'stateChanged'
@@ -4251,6 +4236,9 @@ function dynamicToolErrorMetadata(error: unknown): Pick<
   const code = stringValue(record?.code).trim()
   const failureClass = stringValue(record?.failureClass).trim()
   const retryable = booleanValue(record?.retryable)
+  const recoveryGuidance = stringValue(asRecord(record?.recovery)?.instruction).trim() ||
+    stringValue(record?.recoveryGuidance).trim()
+  const providerStage = stringValue(record?.providerStage).trim()
   const resourceIdentity = stringValue(record?.resourceIdentity).trim()
   const evidenceDelta = booleanValue(record?.evidenceDelta)
   const stateChanged = booleanValue(record?.stateChanged)
@@ -4258,6 +4246,8 @@ function dynamicToolErrorMetadata(error: unknown): Pick<
     ...(code ? { errorCode: code } : {}),
     ...(failureClass ? { failureClass } : {}),
     ...(retryable !== undefined ? { retryable } : {}),
+    ...(recoveryGuidance ? { recoveryGuidance } : {}),
+    ...(providerStage ? { providerStage } : {}),
     ...(resourceIdentity ? { resourceIdentity } : {}),
     ...(evidenceDelta !== undefined ? { evidenceDelta } : {}),
     ...(stateChanged !== undefined ? { stateChanged } : {})

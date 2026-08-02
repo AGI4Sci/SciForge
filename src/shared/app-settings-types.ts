@@ -214,7 +214,6 @@ export type RuntimeExecutionGuardSettingsV1 = {
   enabled: boolean
   windowSize: number
   exactRepeatThreshold: number
-  semanticFailureThreshold: number
 }
 
 export type RuntimeGuardSettingsV1 = {
@@ -224,7 +223,7 @@ export type RuntimeGuardSettingsV1 = {
 export type RuntimeGuardSettingsPatchV1 = {
   execution?: Partial<Pick<
     RuntimeExecutionGuardSettingsV1,
-    'enabled' | 'windowSize' | 'exactRepeatThreshold' | 'semanticFailureThreshold'
+    'enabled' | 'windowSize' | 'exactRepeatThreshold'
   >>
 }
 

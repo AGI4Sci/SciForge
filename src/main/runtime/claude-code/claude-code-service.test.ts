@@ -309,6 +309,72 @@ afterEach(() => {
 })
 
 describe('ClaudeCodeRuntimeService', () => {
+  it('implements Claude subagent spawn and live message delivery with streaming SDK input', async () => {
+    let release!: () => void
+    const messages = new Promise<SDKMessage[]>((resolve) => {
+      release = () => resolve([
+        init('claude-subagent-session'),
+        assistantText('review complete', 'claude-subagent-session'),
+        result('review complete', 'claude-subagent-session')
+      ])
+    })
+    const { sdk, calls } = fakeSdk(() => messages)
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const spawned = vi.fn()
+    const completion = service.spawnSubagent({
+      childId: 'claude-child-1',
+      parentThreadId: 'parent-thread',
+      parentTurnId: 'parent-turn',
+      prompt: 'Review the repository.',
+      signal: new AbortController().signal,
+      appendTranscript: vi.fn(async () => undefined),
+      onSpawned: spawned
+    })
+    await vi.waitFor(() => expect(spawned).toHaveBeenCalledWith({
+      runtime: 'claude',
+      threadId: expect.any(String),
+      turnId: expect.any(String)
+    }))
+    await expect(service.inspectSubagent({
+      childId: 'claude-child-1',
+      parentThreadId: 'parent-thread',
+      parentTurnId: 'parent-turn',
+      signal: new AbortController().signal
+    })).resolves.toMatchObject({ state: 'active' })
+    await expect(service.messageSubagent({
+      childId: 'claude-child-1',
+      parentThreadId: 'parent-thread',
+      parentTurnId: 'parent-turn',
+      message: 'Please include a progress update.',
+      signal: new AbortController().signal
+    })).resolves.toEqual({ established: true })
+
+    const prompt = calls[0]?.prompt
+    expect(typeof prompt).not.toBe('string')
+    const iterator = (prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]()
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { type: 'user', message: { content: expect.stringContaining('Review the repository.') } }
+    })
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { type: 'user', message: { content: 'Please include a progress update.' }, priority: 'now' }
+    })
+    release()
+    await expect(completion).resolves.toMatchObject({
+      summary: 'review complete',
+      threadRef: { runtime: 'claude', turnId: expect.any(String) }
+    })
+    await expect(service.inspectSubagent({
+      childId: 'claude-child-1',
+      parentThreadId: 'parent-thread',
+      parentTurnId: 'parent-turn',
+      signal: new AbortController().signal
+    })).resolves.toMatchObject({ state: 'missing' })
+  })
+
   it('denies non-native visual bypasses before Claude dispatch while the Host snapshot is pending', async () => {
     let releaseQuery: (() => void) | undefined
     const messages = new Promise<SDKMessage[]>((resolve) => {
@@ -1039,6 +1105,67 @@ describe('ClaudeCodeRuntimeService', () => {
         evidenceStrength: 'executor_receipt',
         success: false,
         error: expect.objectContaining({ code: 'claude_tool_error' })
+      })
+    }))
+  })
+
+  it('preserves structured native visual recovery metadata in Claude receipts', async () => {
+    const { sdk } = fakeSdk(() => [
+      init('claude-session-visual-failure'),
+      toolUseMessage({
+        sessionId: 'claude-session-visual-failure',
+        callId: 'tool-look-1',
+        toolName: 'sciforge_look'
+      }),
+      toolResultMessage({
+        sessionId: 'claude-session-visual-failure',
+        callId: 'tool-look-1',
+        content: {
+          error: {
+            code: 'visual_layout_owner_changed',
+            message: 'The bound surface is hidden.',
+            failureClass: 'layout_unavailable',
+            retryable: false,
+            resourceIdentity: 'visual:current',
+            recovery: {
+              action: 'restore_bound_surface',
+              instruction: 'Restore the task-bound surface before starting a new visual call.'
+            }
+          }
+        },
+        isError: true
+      }),
+      result('Visual inspection is blocked.', 'claude-session-visual-failure')
+    ])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const thread = await service.startThread({ workspace: '/tmp/workspace', title: 'Visual failure' })
+    if (!thread.ok) throw new Error(thread.message)
+    const turn = await service.startTurn({
+      threadId: thread.thread.id,
+      text: 'inspect it',
+      workspace: '/tmp/workspace'
+    })
+    if (!turn.ok) throw new Error(turn.message)
+    await waitUntil(async () => {
+      const detail = await service.readThread(thread.thread.id)
+      return detail.ok && detail.detail.latestTurnStatus === 'completed'
+    })
+
+    const toolEvents = (await storedEvents(service, thread.thread.id)).filter((event) =>
+      event.kind === 'tool_event' && event.itemId === 'tool-look-1'
+    )
+    expect(toolEvents.at(-1)).toEqual(expect.objectContaining({
+      status: 'error',
+      receipt: expect.objectContaining({
+        errorCode: 'visual_layout_owner_changed',
+        failureClass: 'layout_unavailable',
+        retryable: false,
+        resourceIdentity: 'visual:current',
+        recoveryGuidance: 'Restore the task-bound surface before starting a new visual call.'
       })
     }))
   })

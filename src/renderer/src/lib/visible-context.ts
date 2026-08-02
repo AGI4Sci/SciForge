@@ -28,10 +28,11 @@ type VisualTargetRegistration = {
 
 const visualTargets = new Map<string, VisualTargetRegistration>()
 const sensitiveTargetIds = new WeakMap<Element, string>()
+const VISIBLE_CONTEXT_REVISION_STORAGE_KEY = 'sciforge.visible-context.revision'
 let nextSensitiveTargetId = 0
 let shell: VisibleContextShell = {}
 let publishTimer: number | null = null
-let revision = 0
+let revision = readPersistedRevision()
 
 export function setVisibleContextShell(next: VisibleContextShell): void {
   ensureVisibleContextRefreshListener()
@@ -280,6 +281,7 @@ function publishVisibleContext(): void {
   if (typeof publish !== 'function') return
   const publishedAt = new Date().toISOString()
   revision += 1
+  persistRevision(revision)
   const snapshot: VisibleContextPublishInput = {
     schemaVersion: VISIBLE_CONTEXT_SCHEMA_VERSION,
     revision,
@@ -301,6 +303,30 @@ function publishVisibleContext(): void {
       })
   }
   void publish(snapshot).catch(() => undefined)
+}
+
+function readPersistedRevision(): number {
+  if (typeof window === 'undefined') return 0
+  try {
+    const stored = Number.parseInt(
+      window.sessionStorage?.getItem(VISIBLE_CONTEXT_REVISION_STORAGE_KEY) ?? '',
+      10
+    )
+    return Number.isSafeInteger(stored) && stored >= 0 ? stored : 0
+  } catch {
+    return 0
+  }
+}
+
+function persistRevision(nextRevision: number): void {
+  try {
+    window.sessionStorage?.setItem(
+      VISIBLE_CONTEXT_REVISION_STORAGE_KEY,
+      String(nextRevision)
+    )
+  } catch {
+    // Persistence is best-effort; publishing remains available in restricted renderers.
+  }
 }
 
 function withRegisteredVisualTargets(

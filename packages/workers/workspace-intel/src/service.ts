@@ -450,7 +450,15 @@ export class WorkspaceIntelService {
         throw serviceError(
           'visual_inspection_unavailable',
           'Visual understanding is unavailable.',
-          'Configure the local SciForge Model Router vision translator and retry.'
+          'Configure the local SciForge Model Router vision translator before trying again.',
+          false,
+          {
+            failureClass: 'capability_unavailable',
+            recovery: {
+              action: 'stop',
+              instruction: 'Configure the local SciForge Model Router vision translator before trying again.'
+            }
+          }
         )
       }
       const artifacts = await Promise.all(input.artifacts.map(async (artifact) => {
@@ -487,15 +495,26 @@ export class WorkspaceIntelService {
       })
       if (evidence.status !== 'inspected') {
         throw serviceError(
-          evidence.status,
+          evidence.code,
           evidence.message,
-          'Check the Model Router vision translator health and retry.',
-          true
+          evidence.recovery.instruction,
+          evidence.retryable,
+          {
+            failureClass: evidence.failureClass,
+            recovery: evidence.recovery,
+            ...(evidence.providerStage ? { providerStage: evidence.providerStage } : {})
+          }
         )
       }
       const evidenceArtifacts = new Map(evidence.artifacts.map((artifact) => [artifact.id, artifact]))
       if (input.artifacts.some(({ id }) => !evidenceArtifacts.has(id))) {
-        throw serviceError('visual_inspection_invalid', 'Visual evidence is missing an input artifact attestation.')
+        throw unverifiedVisualEvidenceError('Visual evidence is missing an input artifact attestation.')
+      }
+      const claimedArtifactIds = new Set(evidence.claims.map(({ artifactId }) => artifactId))
+      if (input.artifacts.some(({ id }) => !claimedArtifactIds.has(id))) {
+        throw unverifiedVisualEvidenceError(
+          'Visual evidence is missing a grounded claim for an input artifact.'
+        )
       }
       return {
         ok: true,
@@ -1289,13 +1308,25 @@ class WorkspaceIntelServiceError extends Error {
   readonly code: WorkspaceIntelErrorCode
   readonly retryable: boolean
   readonly suggestedFix?: string
+  readonly failureClass?: WorkspaceIntelError['failureClass']
+  readonly recovery?: WorkspaceIntelError['recovery']
+  readonly providerStage?: string
 
-  constructor(code: WorkspaceIntelErrorCode, message: string, suggestedFix?: string, retryable = false) {
+  constructor(
+    code: WorkspaceIntelErrorCode,
+    message: string,
+    suggestedFix?: string,
+    retryable = false,
+    metadata: Pick<WorkspaceIntelError, 'failureClass' | 'recovery' | 'providerStage'> = {}
+  ) {
     super(message)
     this.name = 'WorkspaceIntelServiceError'
     this.code = code
     this.retryable = retryable
     this.suggestedFix = suggestedFix
+    this.failureClass = metadata.failureClass
+    this.recovery = metadata.recovery
+    this.providerStage = metadata.providerStage
   }
 }
 
@@ -1303,9 +1334,28 @@ function serviceError(
   code: WorkspaceIntelErrorCode,
   message: string,
   suggestedFix?: string,
-  retryable = false
+  retryable = false,
+  metadata: Pick<WorkspaceIntelError, 'failureClass' | 'recovery' | 'providerStage'> = {}
 ): WorkspaceIntelServiceError {
-  return new WorkspaceIntelServiceError(code, message, suggestedFix, retryable)
+  return new WorkspaceIntelServiceError(code, message, suggestedFix, retryable, metadata)
+}
+
+function unverifiedVisualEvidenceError(message: string): WorkspaceIntelServiceError {
+  const instruction = 'Stop retrying this result because the returned visual evidence could not be verified.'
+  return serviceError(
+    'visual_evidence_grounding_missing',
+    message,
+    instruction,
+    false,
+    {
+      failureClass: 'evidence_unverified',
+      recovery: {
+        action: 'stop',
+        instruction
+      },
+      providerStage: 'evidence_validation'
+    }
+  )
 }
 
 function errorToWorkspaceIntelError(error: unknown): WorkspaceIntelError {
@@ -1314,7 +1364,10 @@ function errorToWorkspaceIntelError(error: unknown): WorkspaceIntelError {
       code: error.code,
       message: error.message,
       retryable: error.retryable,
-      ...(error.suggestedFix ? { suggestedFix: error.suggestedFix } : {})
+      ...(error.suggestedFix ? { suggestedFix: error.suggestedFix } : {}),
+      ...(error.failureClass ? { failureClass: error.failureClass } : {}),
+      ...(error.recovery ? { recovery: error.recovery } : {}),
+      ...(error.providerStage ? { providerStage: error.providerStage } : {})
     }
   }
   return {

@@ -849,13 +849,14 @@ function appendInlineStyle(node: Element, declaration: string): void {
 }
 
 function cleanAndValidateOutputTree(tree: Root): void {
-  const walk = (parent: Parent, inDisplayMath = false): void => {
+  const walk = (parent: Parent, inDisplayMath = false, mathSvgDepth = 0): void => {
     for (let index = 0; index < parent.children.length; index += 1) {
       const child = parent.children[index]
       if (child.type !== 'element') continue
 
       const classes = classNames(child)
       const nextInDisplayMath = inDisplayMath || classes.includes('wechat-math-display')
+      const nextMathSvgDepth = mathSvgDepth + (child.tagName === 'svg' ? 1 : 0)
 
       if (child.tagName === 'mjx-container') {
         child.tagName = 'span'
@@ -866,14 +867,19 @@ function cleanAndValidateOutputTree(tree: Root): void {
       if (child.tagName === 'svg') {
         const width = stringProperty(child, 'width')
         const height = stringProperty(child, 'height')
-        if (width) appendInlineStyle(child, `width: ${width};`)
-        if (nextInDisplayMath) {
-          appendInlineStyle(child, 'max-width: 100%; height: auto;')
-        } else if (height) {
-          appendInlineStyle(child, `height: ${height};`)
+        // Only the outer formula SVG uses CSS sizing. MathJax's nested SVGs are
+        // geometric viewports for stretchy glyphs; moving their unitless SVG
+        // dimensions into CSS makes the declarations invalid and clips the glyph.
+        if (mathSvgDepth === 0) {
+          if (width) appendInlineStyle(child, `width: ${width};`)
+          if (nextInDisplayMath) {
+            appendInlineStyle(child, 'max-width: 100%; height: auto;')
+          } else if (height) {
+            appendInlineStyle(child, `height: ${height};`)
+          }
+          delete child.properties.width
+          delete child.properties.height
         }
-        delete child.properties.width
-        delete child.properties.height
       }
 
       if (!ALLOWED_OUTPUT_TAGS.has(child.tagName)) {
@@ -925,7 +931,7 @@ function cleanAndValidateOutputTree(tree: Root): void {
         }
       }
 
-      walk(child, nextInDisplayMath)
+      walk(child, nextInDisplayMath, nextMathSvgDepth)
     }
   }
 

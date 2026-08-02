@@ -243,7 +243,6 @@ function MessageTimelineComponent({
 
   const remoteChannelMode = Boolean(activeThread && isRemoteChannelThread(activeThread, remoteChannels))
   const hasContent = blocks.length > 0 || live || liveReasoning
-  const endRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
   const turns = useMemo(() => groupTurns(blocks), [blocks])
@@ -265,7 +264,6 @@ function MessageTimelineComponent({
     collapseEarlierTurns
   } = useTimelineScroll({
     containerRef,
-    endRef,
     activeThreadId,
     pageSize: TURN_PAGE_SIZE,
     autoCollapseThreshold: AUTO_COLLAPSE_THRESHOLD,
@@ -450,7 +448,6 @@ function MessageTimelineComponent({
             })()}
           />
         ) : null}
-        <div ref={endRef} aria-hidden className="h-px w-full shrink-0" />
       </div>
     </div>
   )

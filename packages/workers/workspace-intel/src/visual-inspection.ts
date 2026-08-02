@@ -77,9 +77,33 @@ export type VisualInspectionEvidence = {
   structuredResult?: unknown
 }
 
+export type VisualInspectionFailureCode =
+  | 'visual_inspection_unavailable'
+  | 'vision_evidence_unavailable'
+  | 'visual_evidence_synthesis_unavailable'
+  | 'visual_inspection_invalid'
+  | 'visual_evidence_grounding_missing'
+
+export type VisualInspectionFailureClass =
+  | 'upstream_unavailable'
+  | 'capability_unavailable'
+  | 'contract_violation'
+  | 'evidence_unverified'
+  | 'invalid_arguments'
+
+export type VisualInspectionRecovery = {
+  action: 'retry_visual_inspection' | 'stop'
+  instruction: string
+}
+
 export type VisualInspectionFailure = {
   status: 'visual_inspection_unavailable' | 'visual_inspection_invalid'
+  code: VisualInspectionFailureCode
   message: string
+  failureClass: VisualInspectionFailureClass
+  retryable: boolean
+  recovery: VisualInspectionRecovery
+  providerStage?: string
 }
 
 export type VisualInspectionResult = VisualInspectionEvidence | VisualInspectionFailure
@@ -109,20 +133,35 @@ export function createModelRouterVisualInspector(
     if (!baseUrl || !apiKey || !model) {
       return {
         status: 'visual_inspection_unavailable',
+        code: 'visual_inspection_unavailable',
         message: baseUrl === null
           ? 'Visual understanding requires a local SciForge Model Router URL at http(s)://<loopback>/v1.'
-          : 'Visual understanding requires a configured SciForge Model Router.'
+          : 'Visual understanding requires a configured SciForge Model Router.',
+        failureClass: 'capability_unavailable',
+        retryable: false,
+        recovery: {
+          action: 'stop',
+          instruction: 'Configure the local SciForge Model Router and its vision translator before trying again.'
+        }
       }
     }
     const normalized = normalizeRequest(request)
     if (!normalized) {
       return {
         status: 'visual_inspection_invalid',
-        message: 'Visual inspection requires a task and between 1 and 8 valid image artifacts.'
+        code: 'visual_inspection_invalid',
+        message: 'Visual inspection requires a task and between 1 and 8 valid image artifacts.',
+        failureClass: 'invalid_arguments',
+        retryable: false,
+        recovery: {
+          action: 'stop',
+          instruction: 'Correct the visual inspection task and artifact inputs before trying again.'
+        }
       }
     }
+    let loadedArtifacts: Array<VisualInspectionArtifact & { bytes: Buffer; sha256: string }>
     try {
-      const loadedArtifacts = await Promise.all(normalized.artifacts.map(async (artifact) => {
+      loadedArtifacts = await Promise.all(normalized.artifacts.map(async (artifact) => {
         const bytes = await readFile(artifact.imagePath)
         return {
           ...artifact,
@@ -130,29 +169,44 @@ export function createModelRouterVisualInspector(
           sha256: sha256(bytes)
         }
       }))
-      const artifactEvidence = loadedArtifacts.map(({ id, mimeType, sha256: artifactSha256 }) => ({
+    } catch {
+      return {
+        status: 'visual_inspection_unavailable',
+        code: 'visual_inspection_unavailable',
+        message: 'A visual artifact could not be read.',
+        failureClass: 'capability_unavailable',
+        retryable: false,
+        recovery: {
+          action: 'stop',
+          instruction: 'Restore the visual artifact and ensure it is readable before trying again.'
+        }
+      }
+    }
+    const artifactEvidence = loadedArtifacts.map(({ id, mimeType, sha256: artifactSha256 }) => ({
+      id,
+      mimeType,
+      sha256: artifactSha256
+    }))
+    const requestDescriptor = {
+      task: normalized.task,
+      artifacts: loadedArtifacts.map(({ id, mimeType, regions, sha256: artifactSha256 }) => ({
         id,
         mimeType,
-        sha256: artifactSha256
-      }))
-      const requestDescriptor = {
-        task: normalized.task,
-        artifacts: loadedArtifacts.map(({ id, mimeType, regions, sha256: artifactSha256 }) => ({
-          id,
-          mimeType,
-          sha256: artifactSha256,
-          ...(regions?.length ? { regions } : {})
-        })),
-        truthLocks: normalized.truthLocks,
-        outputIntent: normalized.outputIntent
-      }
-      const requestSha256 = sha256(stableJson(requestDescriptor))
+        sha256: artifactSha256,
+        ...(regions?.length ? { regions } : {})
+      })),
+      truthLocks: normalized.truthLocks,
+      outputIntent: normalized.outputIntent
+    }
+    const requestSha256 = sha256(stableJson(requestDescriptor))
+    try {
       const response = await fetchImpl(`${baseUrl}/responses`, {
         method: 'POST',
         headers: {
           accept: 'application/json',
           authorization: `Bearer ${apiKey}`,
-          'content-type': 'application/json'
+          'content-type': 'application/json',
+          'x-sciforge-model-router-evidence-policy': 'required'
         },
         body: JSON.stringify({
           model,
@@ -181,20 +235,21 @@ export function createModelRouterVisualInspector(
       })
       const raw = await response.text()
       if (!response.ok) {
-        return {
-          status: 'visual_inspection_unavailable',
-          message: `Model Router visual inspection failed with HTTP ${response.status}.`
-        }
+        return parseModelRouterFailure(raw, response.status)
       }
-      const payload = parseJsonRecord(raw)
+      const payload = tryParseJsonRecord(raw)
+      if (!payload) return invalidEvidenceFailure()
       const observationText = responseOutputText(payload)
-      const observation = parseVisualEvidence(observationText, new Set(artifactEvidence.map(({ id }) => id)))
-      if (!observation) {
-        return {
-          status: 'visual_inspection_invalid',
-          message: 'Model Router visual inspection returned an invalid evidence payload.'
-        }
+      const parsedObservation = parseVisualEvidence(
+        observationText,
+        new Set(artifactEvidence.map(({ id }) => id))
+      )
+      if (!parsedObservation.ok) {
+        return parsedObservation.reason === 'grounding_missing'
+          ? groundingFailure()
+          : invalidEvidenceFailure()
       }
+      const observation = parsedObservation.evidence
       const inspectedAt = now().toISOString()
       const evidenceSha256 = sha256(stableJson(observation))
       return {
@@ -209,10 +264,18 @@ export function createModelRouterVisualInspector(
         attestation: `sha256:${sha256(`${requestSha256}\0${evidenceSha256}`)}`,
         ...observation
       }
-    } catch (error) {
+    } catch {
       return {
         status: 'visual_inspection_unavailable',
-        message: error instanceof Error ? error.message : String(error)
+        code: 'visual_inspection_unavailable',
+        message: 'Model Router visual inspection could not be reached.',
+        failureClass: 'upstream_unavailable',
+        retryable: true,
+        recovery: {
+          action: 'retry_visual_inspection',
+          instruction: 'Retry the visual inspection after Model Router connectivity recovers.'
+        },
+        providerStage: 'model_router_transport'
       }
     }
   }
@@ -336,16 +399,26 @@ function responseOutputText(payload: Record<string, unknown>): string {
   return chunks.join('\n')
 }
 
-function parseVisualEvidence(text: string, artifactIds: Set<string>): {
+type ParsedVisualEvidence = {
   summary: string
   claims: VisualEvidenceClaim[]
   uncertainties: string[]
   structuredResult?: unknown
-} | null {
+}
+
+function parseVisualEvidence(text: string, artifactIds: Set<string>): {
+  ok: true
+  evidence: ParsedVisualEvidence
+} | {
+  ok: false
+  reason: 'invalid_payload' | 'grounding_missing'
+} {
   const parsed = parseEmbeddedJson(text)
-  if (!parsed) return null
+  if (!parsed) return { ok: false, reason: 'invalid_payload' }
   const summary = stringValue(parsed.summary)
-  if (!summary || !Array.isArray(parsed.claims) || !Array.isArray(parsed.uncertainties)) return null
+  if (!summary || !Array.isArray(parsed.claims) || !Array.isArray(parsed.uncertainties)) {
+    return { ok: false, reason: 'invalid_payload' }
+  }
   const claims: VisualEvidenceClaim[] = []
   const claimedArtifactIds = new Set<string>()
   for (const item of parsed.claims) {
@@ -361,22 +434,165 @@ function parseVisualEvidence(text: string, artifactIds: Set<string>): {
       confidence === null ||
       confidence < 0 ||
       confidence > 1
-    ) return null
+    ) return { ok: false, reason: 'invalid_payload' }
     const region = record.region === undefined ? undefined : normalizedRegion(record.region)
-    if (record.region !== undefined && !region) return null
+    if (record.region !== undefined && !region) return { ok: false, reason: 'invalid_payload' }
     claims.push({ kind, text: claimText, artifactId, ...(region ? { region } : {}), confidence })
     claimedArtifactIds.add(artifactId)
   }
-  if ([...artifactIds].some((artifactId) => !claimedArtifactIds.has(artifactId))) return null
+  if ([...artifactIds].some((artifactId) => !claimedArtifactIds.has(artifactId))) {
+    return { ok: false, reason: 'grounding_missing' }
+  }
   const uncertainties = stringArray(parsed.uncertainties)
-  if (uncertainties.length !== parsed.uncertainties.length) return null
+  if (uncertainties.length !== parsed.uncertainties.length) {
+    return { ok: false, reason: 'invalid_payload' }
+  }
   return {
-    summary,
-    claims,
-    uncertainties,
-    ...(Object.prototype.hasOwnProperty.call(parsed, 'structuredResult')
-      ? { structuredResult: parsed.structuredResult }
-      : {})
+    ok: true,
+    evidence: {
+      summary,
+      claims,
+      uncertainties,
+      ...(Object.prototype.hasOwnProperty.call(parsed, 'structuredResult')
+        ? { structuredResult: parsed.structuredResult }
+        : {})
+    }
+  }
+}
+
+function parseModelRouterFailure(raw: string, httpStatus: number): VisualInspectionFailure {
+  const payload = tryParseJsonRecord(raw)
+  const error = asRecord(payload?.error)
+  const code = stringValue(error.code)
+  const message = stringValue(error.message)
+  const failureClass = stringValue(error.failureClass)
+  const retryable = error.retryable
+  const recovery = asRecord(error.recovery)
+  const recoveryAction = stringValue(recovery.action)
+  const recoveryInstruction = stringValue(recovery.instruction)
+  const providerStage = stringValue(error.stage)
+  if (
+    code &&
+    message &&
+    isVisualInspectionFailureClass(failureClass) &&
+    typeof retryable === 'boolean' &&
+    isVisualInspectionRecoveryAction(recoveryAction) &&
+    recoveryInstruction
+  ) {
+    return {
+      status: typedFailureStatus(code, failureClass),
+      code: typedFailureCode(code, failureClass),
+      message,
+      failureClass,
+      retryable,
+      recovery: {
+        action: recoveryAction,
+        instruction: recoveryInstruction
+      },
+      ...(providerStage ? { providerStage } : {})
+    }
+  }
+  return httpFailure(httpStatus)
+}
+
+function typedFailureStatus(
+  code: string,
+  failureClass: VisualInspectionFailureClass
+): VisualInspectionFailure['status'] {
+  return code === 'visual_inspection_invalid' ||
+    code === 'visual_evidence_grounding_missing' ||
+    failureClass === 'contract_violation' ||
+    failureClass === 'evidence_unverified' ||
+    failureClass === 'invalid_arguments'
+    ? 'visual_inspection_invalid'
+    : 'visual_inspection_unavailable'
+}
+
+function typedFailureCode(
+  code: string,
+  failureClass: VisualInspectionFailureClass
+): VisualInspectionFailureCode {
+  if (code === 'vision_evidence_unavailable' || code === 'visual_evidence_synthesis_unavailable') {
+    return code
+  }
+  if (code === 'visual_evidence_grounding_missing' || failureClass === 'evidence_unverified') {
+    return 'visual_evidence_grounding_missing'
+  }
+  return typedFailureStatus(code, failureClass) === 'visual_inspection_invalid'
+    ? 'visual_inspection_invalid'
+    : 'visual_inspection_unavailable'
+}
+
+function httpFailure(httpStatus: number): VisualInspectionFailure {
+  if (httpStatus === 408 || httpStatus === 429 || httpStatus >= 500) {
+    return {
+      status: 'visual_inspection_unavailable',
+      code: 'visual_inspection_unavailable',
+      message: `Model Router visual inspection failed with HTTP ${httpStatus}.`,
+      failureClass: 'upstream_unavailable',
+      retryable: true,
+      recovery: {
+        action: 'retry_visual_inspection',
+        instruction: 'Retry the visual inspection after the Model Router or upstream provider recovers.'
+      },
+      providerStage: 'model_router_transport'
+    }
+  }
+  if (httpStatus === 401 || httpStatus === 403 || httpStatus === 404 || httpStatus === 405) {
+    return {
+      status: 'visual_inspection_unavailable',
+      code: 'visual_inspection_unavailable',
+      message: `Model Router visual inspection failed with HTTP ${httpStatus}.`,
+      failureClass: 'capability_unavailable',
+      retryable: false,
+      recovery: {
+        action: 'stop',
+        instruction: 'Restore Model Router authorization and visual capability configuration before trying again.'
+      },
+      providerStage: 'model_router_transport'
+    }
+  }
+  return {
+    status: 'visual_inspection_invalid',
+    code: 'visual_inspection_invalid',
+    message: `Model Router rejected the visual inspection request with HTTP ${httpStatus}.`,
+    failureClass: 'invalid_arguments',
+    retryable: false,
+    recovery: {
+      action: 'stop',
+      instruction: 'Correct the visual inspection request before trying again.'
+    },
+    providerStage: 'model_router_transport'
+  }
+}
+
+function invalidEvidenceFailure(): VisualInspectionFailure {
+  return {
+    status: 'visual_inspection_invalid',
+    code: 'visual_inspection_invalid',
+    message: 'Model Router visual inspection returned an invalid evidence payload.',
+    failureClass: 'contract_violation',
+    retryable: false,
+    recovery: {
+      action: 'stop',
+      instruction: 'Stop retrying this result and inspect the Model Router visual evidence trace.'
+    },
+    providerStage: 'evidence_validation'
+  }
+}
+
+function groundingFailure(): VisualInspectionFailure {
+  return {
+    status: 'visual_inspection_invalid',
+    code: 'visual_evidence_grounding_missing',
+    message: 'Model Router visual evidence is missing a grounded claim for an input artifact.',
+    failureClass: 'evidence_unverified',
+    retryable: false,
+    recovery: {
+      action: 'stop',
+      instruction: 'Stop retrying this result because the returned visual evidence could not be verified.'
+    },
+    providerStage: 'evidence_validation'
   }
 }
 
@@ -421,12 +637,34 @@ function isClaimKind(value: string): value is VisualEvidenceClaim['kind'] {
   return value === 'observation' || value === 'issue' || value === 'recommendation'
 }
 
+function isVisualInspectionFailureClass(value: string): value is VisualInspectionFailureClass {
+  return value === 'upstream_unavailable' ||
+    value === 'capability_unavailable' ||
+    value === 'contract_violation' ||
+    value === 'evidence_unverified' ||
+    value === 'invalid_arguments'
+}
+
+function isVisualInspectionRecoveryAction(
+  value: string
+): value is VisualInspectionRecovery['action'] {
+  return value === 'retry_visual_inspection' || value === 'stop'
+}
+
 function parseJsonRecord(value: string): Record<string, unknown> {
   const parsed = JSON.parse(value) as unknown
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('Expected a JSON object.')
   }
   return parsed as Record<string, unknown>
+}
+
+function tryParseJsonRecord(value: string): Record<string, unknown> | null {
+  try {
+    return parseJsonRecord(value)
+  } catch {
+    return null
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

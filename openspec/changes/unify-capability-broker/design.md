@@ -102,6 +102,72 @@ Renderer publication age is layout freshness only. It may make coordinates, scro
 
 Stable opaque `resourceRef` values can be rebound to a fresh short-lived handle after the broker revalidates audience and workspace scope. This renewal keeps long-running or hidden turns operational without weakening optimistic semantic revision checks or exposing provider session IDs.
 
+### 14. Discovery, historical references, and recovery are machine-actionable
+
+Capability discovery accepts an exact capability ID independently of free-text
+search. Free-text search is normalized into unordered tokens and ranked against
+IDs, titles, descriptions, and tags. A strong partial token match remains
+eligible so descriptive surplus words such as file format or intended view do
+not hide the canonical capability; unmatched tokens reduce the score, while a
+zero-overlap query remains empty. Scope, accepted resource kind, produced
+resource kind, and provider family are separate filters; one field never
+silently changes the meaning of another. Agent discovery defaults to a bounded
+native registry result set and includes managed MCP capabilities only when the
+caller explicitly requests that provider family.
+
+An empty discovery result is a typed outcome containing registry readiness,
+applied filters, and suggested relaxed queries. It is not an unqualified empty
+array that can be mistaken for capability absence.
+
+Historical events never imply that an opaque reference is still executable.
+Event projections annotate every returned reference as `live` or `retired`
+after checking the current handle/reference stores. Retired references remain
+valuable for audit but cannot be renewed or invoked.
+
+Native and managed failures enter the shared governor with a stable code,
+failure class, retryability, objective, resource identity, and evidence-change
+signal. A non-retryable failure opens a turn-scoped circuit immediately. A
+retryable failure without new evidence receives one retry; later variants of the
+same semantic objective are denied with the original recovery action plus an
+explicit statement that the retry was exhausted. An exhausted denial never
+repeats the earlier claim that a retry remains available.
+
+### 15. Vision produces evidence while the text reasoner remains primary
+
+The configured text reasoner remains the primary model for planning, synthesis,
+tool selection, and final answers. A vision translator is a bounded evidence
+producer: it observes authorized immutable images and returns textual evidence
+with explicit artifact grounding. Model Router then supplies that evidence to
+the text reasoner through the existing canonical `/v1/responses` path.
+
+Provider protocol compatibility is decided from semantic payload state, not
+field presence. In particular, a completed Responses payload with `error: null`
+is a successful model response. Only a non-null explicit error, a failed event,
+or a structurally valid error envelope can reject the provider attempt.
+
+Requests that require native visual proof use a strict evidence contract. The
+text reasoner may synthesize or format verified vision evidence, but it cannot
+replace failed vision with an HTTP-success text answer containing no grounded
+claims. A failed translator, malformed evidence, missing artifact grounding, or
+missing attestation crosses worker and Host boundaries as a typed cause.
+Ordinary conversational image requests may still degrade visibly to text-only
+reasoning when the request does not require native proof.
+
+Protocol negotiation may switch once after a definitive endpoint or schema
+rejection before any model output. Transient provider failures enter the shared
+governor with their retryable classification. Evidence repair is bounded to one
+attempt for the same immutable snapshot and does not create a second hidden
+retry engine.
+
+The browser development surface uses the same surface-capture provider
+contract as Electron. The main-process bridge issues a one-time capture
+challenge to the exact connected browser client, bound to the current layout
+revision and requested bounds. It accepts only a bounded PNG response that
+matches the client, challenge, revision, PNG signature, dimensions, and crop
+scale before applying Host-owned redaction and inspection. This development
+transport is not a text fallback and does not create a second visual reasoning
+path.
+
 ## Risks / Trade-offs
 
 - [Large cross-cutting cutover can collide with active changes] → Add the broker in new modules, use narrow integration edits, and migrate domains separately with focused tests.
@@ -111,6 +177,17 @@ Stable opaque `resourceRef` values can be rebound to a fresh short-lived handle 
 - [In-memory idempotency or events are lost on restart] → The first slice defines a bounded in-memory store and explicit restart semantics; persistent audit/event storage can replace it without changing the contract.
 - [Broker becomes a bottleneck] → Handlers remain async and stream or reference large artifacts instead of copying them through events.
 - [Agent exposure can exceed safe authority] → Audience and approval are mandatory registry fields, and unsafe combinations fail registration.
+- [Tokenized discovery may broaden results] → Exact IDs and explicit filters take
+  precedence, ranking is deterministic, and result counts are bounded.
+- [Historical reference liveness checks add work] → Resolve liveness only for the
+  bounded event page and expose retired references without attempting renewal.
+- [Text-primary routing can obscure visual provenance] → Keep vision evidence
+  explicitly artifact-grounded, preserve the translator/provider stage in typed
+  diagnostics, and prohibit text-only success for strict native visual proof.
+- [A browser development renderer could return stale or mismatched pixels] →
+  Bind capture to the exact bridge client, a one-time challenge, and the current
+  layout revision; validate the PNG and crop geometry in the main process and
+  fail closed before visual inspection on any mismatch.
 
 ## Migration Plan
 

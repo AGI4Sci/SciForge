@@ -75,12 +75,18 @@ describe('RuntimeCapabilityBroker', () => {
       name: CAPABILITY_AGENT_TOOL_NAMES.discover,
       arguments: {},
       context
-    })).resolves.toMatchObject({ value: [] })
+    })).rejects.toMatchObject({
+      code: 'capability_discovery_empty',
+      details: {
+        registryReadiness: { status: 'ready' },
+        suggestedQueries: expect.any(Array)
+      }
+    })
     expect(client.listTools).not.toHaveBeenCalled()
 
     const discovered = await surface.call({
       name: CAPABILITY_AGENT_TOOL_NAMES.discover,
-      arguments: { text: 'visual' },
+      arguments: { text: 'visual', providerFamily: 'managed-mcp' },
       context
     })
     expect(discovered.value).toEqual([expect.objectContaining({
@@ -157,12 +163,12 @@ describe('RuntimeCapabilityBroker', () => {
     }
     const alpha = await surface.call({
       name: CAPABILITY_AGENT_TOOL_NAMES.discover,
-      arguments: { text: 'alpha-server' },
+      arguments: { text: 'alpha-server', providerFamily: 'managed-mcp' },
       context
     })
     const beta = await surface.call({
       name: CAPABILITY_AGENT_TOOL_NAMES.discover,
-      arguments: { text: 'beta-server' },
+      arguments: { text: 'beta-server', providerFamily: 'managed-mcp' },
       context
     })
     const alphaRef = (alpha.value as Array<{ operationRef: string }>)[0]!.operationRef
@@ -217,14 +223,14 @@ describe('RuntimeCapabilityBroker', () => {
     }
     await expect(surface.call({
       name: CAPABILITY_AGENT_TOOL_NAMES.discover,
-      arguments: { text: 'restricted' },
+      arguments: { text: 'restricted', providerFamily: 'managed-mcp' },
       context: deniedContext
-    })).resolves.toMatchObject({ value: [] })
+    })).rejects.toMatchObject({ code: 'capability_discovery_empty' })
 
     const allowedContext = { ...deniedContext, requestId: 'allowed', runtimeId: 'allowed-runtime' }
     const discovered = await surface.call({
       name: CAPABILITY_AGENT_TOOL_NAMES.discover,
-      arguments: { text: 'restricted' },
+      arguments: { text: 'restricted', providerFamily: 'managed-mcp' },
       context: allowedContext
     })
     const operationRef = (discovered.value as Array<{ operationRef: string }>)[0]!.operationRef

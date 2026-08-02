@@ -62,3 +62,34 @@
 - [x] 10.3 Publish the current visible surface as a canonical capability resource summary and require agent routing to prefer that resource over path guessing or legacy direct-tool/shell access.
 - [ ] 10.4 Add readiness, version skew, missing-operation, resource freshness, and no-fallback regression tests.
 - [x] 10.5 Bind current semantic resources to the starting runtime/thread, treat renderer age as layout-only freshness, renew scoped resource references, and add hidden-session regression coverage.
+
+## 11. Agent capability reliability corrections
+
+- [x] 11.1 Preserve stable runtime/thread ownership for native visual calls while
+  rebasing capture to the latest layout; add same-turn message, busy-state, and
+  layout-change regression coverage.
+- [x] 11.2 Add exact capability-ID lookup, unordered token ranking, explicit
+  scope/resource/provider filters, bounded native-first results, and actionable
+  empty-result diagnostics to agent discovery.
+- [x] 11.3 Normalize native visual failures into stable typed runtime errors and
+  enforce an evidence-aware per-turn retry circuit through the shared execution
+  governor; reject known-missing required native visual capabilities before
+  runtime dispatch.
+- [x] 11.4 Annotate event resource references with current `live`/`retired`
+  status and reject retired audit references with `resource_ref_retired`.
+- [x] 11.5 Add focused cross-runtime, capability transport, event-liveness, and
+  visual-binding tests for the corrected contracts.
+- [x] 11.6 Run capability governance, generated composition freshness, package
+  boundaries, typecheck, changed-file lint, focused suites, and full regression;
+  audit for parallel paths, domain hard-coding, stale entrypoints, and dead code.
+- [x] 11.7 Keep strong partial discovery matches eligible when descriptive
+  surplus tokens are present, and make exhausted retry-circuit denials state
+  unambiguously that no retry remains; add regression coverage and re-run
+  focused verification.
+- [x] 11.8 Keep the text reasoner primary while making vision translation a
+  grounded evidence stage: accept successful Responses payloads with
+  `error: null`, prohibit text-only degradation for strict native visual proof,
+  add revision-bound browser development surface capture, preserve typed visual
+  causes across worker/Host boundaries, add protocol, bridge, router, inspector,
+  runtime, and end-to-end regression coverage, and re-run focused plus full
+  verification.

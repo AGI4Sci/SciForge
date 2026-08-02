@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { VisibleContextPublishInput } from '@shared/visible-context'
+
+const html2canvas = vi.hoisted(() => vi.fn())
+
+vi.mock('html2canvas-pro', () => ({ default: html2canvas }))
 
 type MockEvent = {
   data: string
@@ -30,6 +35,22 @@ class MockEventSource {
 }
 
 const storage = new Map<string, string>()
+
+function visibleContextSnapshot(revision: number): VisibleContextPublishInput {
+  return {
+    schemaVersion: 3,
+    revision,
+    publishedAt: '2026-07-31T00:00:00.000Z',
+    freshness: {
+      stale: false,
+      ageMs: 0,
+      staleAfterMs: 5_000
+    },
+    activeThreadId: 'thread-1',
+    route: '/',
+    components: []
+  }
+}
 
 function installWindow(existingSciForge?: unknown, search = '', userAgent = 'Mozilla/5.0 Chrome/127 Safari/537.36'): void {
   const windowValue = {
@@ -64,6 +85,7 @@ describe('dev sciforge browser bridge', () => {
     vi.resetModules()
     vi.restoreAllMocks()
     storage.clear()
+    html2canvas.mockReset()
     MockEventSource.instances = []
     Object.defineProperty(globalThis, 'EventSource', {
       value: MockEventSource,
@@ -155,6 +177,234 @@ describe('dev sciforge browser bridge', () => {
       streamId: 'stream-1',
       event: { kind: 'heartbeat', threadId: 'thread-1' }
     })
+  })
+
+  it('creates a new browser client identity when the renderer page reloads', async () => {
+    const randomUUID = vi.fn()
+      .mockReturnValueOnce('page-incarnation-1')
+      .mockReturnValueOnce('page-incarnation-2')
+    Object.defineProperty(globalThis, 'crypto', {
+      value: { randomUUID },
+      configurable: true
+    })
+    Object.defineProperty(globalThis, 'fetch', {
+      value: vi.fn(async () => new Response(JSON.stringify({ ok: true, payload: null }))),
+      configurable: true
+    })
+
+    installWindow()
+    const firstModule = await import('./dev-sciforge-bridge')
+    firstModule.installDevSciForgeBridge()
+    await vi.waitFor(() => {
+      expect(MockEventSource.instances[0]?.url).toContain('clientId=page-incarnation-1')
+    })
+
+    vi.resetModules()
+    installWindow()
+    const reloadedModule = await import('./dev-sciforge-bridge')
+    reloadedModule.installDevSciForgeBridge()
+
+    await vi.waitFor(() => {
+      expect(MockEventSource.instances[1]?.url).toContain('clientId=page-incarnation-2')
+    })
+    expect(randomUUID).toHaveBeenCalledTimes(2)
+  })
+
+  it('ignores a client identity cloned through session storage by a duplicated tab', async () => {
+    storage.set('sciforge.dev-browser-bridge.client-id', 'cloned-page-incarnation')
+    Object.defineProperty(globalThis, 'crypto', {
+      value: { randomUUID: () => 'duplicate-tab-incarnation' },
+      configurable: true
+    })
+    installWindow()
+    Object.defineProperty(globalThis, 'fetch', {
+      value: vi.fn(async () => new Response(JSON.stringify({ ok: true, payload: null }))),
+      configurable: true
+    })
+    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
+
+    installDevSciForgeBridge()
+
+    await vi.waitFor(() => {
+      expect(MockEventSource.instances[0]?.url).toContain('clientId=duplicate-tab-incarnation')
+    })
+    expect(MockEventSource.instances[0]?.url).not.toContain('cloned-page-incarnation')
+    expect(storage.get('sciforge.dev-browser-bridge.client-id')).toBe('cloned-page-incarnation')
+  })
+
+  it('rasterizes CSS color() pseudo-element styles into revision-bound browser pixels', async () => {
+    installWindow()
+    Object.assign(window, {
+      innerWidth: 800,
+      innerHeight: 600,
+      devicePixelRatio: 2,
+      scrollX: 0,
+      scrollY: 0
+    })
+    const documentElement = {
+      pseudoElementStyles: {
+        before: {
+          backgroundImage: 'linear-gradient(color(srgb 0.1 0.2 0.3 / 0.4), transparent)'
+        },
+        after: {
+          boxShadow: '0 0 0 1px color(srgb 0.5 0.6 0.7 / 0.8)'
+        }
+      }
+    }
+    Object.defineProperty(globalThis, 'document', {
+      value: { documentElement },
+      configurable: true
+    })
+    Object.defineProperty(globalThis, 'requestAnimationFrame', {
+      value: (callback: FrameRequestCallback) => {
+        callback(0)
+        return 1
+      },
+      configurable: true
+    })
+    const pngBase64 = 'cG5nLXBpeGVscw=='
+    html2canvas.mockImplementation(async (element) => {
+      expect(element).toBe(documentElement)
+      expect(documentElement.pseudoElementStyles).toEqual({
+        before: {
+          backgroundImage: 'linear-gradient(color(srgb 0.1 0.2 0.3 / 0.4), transparent)'
+        },
+        after: {
+          boxShadow: '0 0 0 1px color(srgb 0.5 0.6 0.7 / 0.8)'
+        }
+      })
+      return {
+        toDataURL: () => `data:image/png;base64,${pngBase64}`
+      }
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/invoke')) {
+        const body = JSON.parse(String(init?.body)) as {
+          channel: string
+          payload: VisibleContextPublishInput
+        }
+        if (body.channel === 'visibleContext:publish') {
+          return new Response(JSON.stringify({
+            ok: true,
+            payload: { ...body.payload, windowId: 'browser:1' }
+          }))
+        }
+      }
+      return new Response(JSON.stringify({ ok: true }))
+    })
+    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
+    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
+
+    installDevSciForgeBridge()
+    await window.sciforge.visibleContext.publish(visibleContextSnapshot(12))
+    await vi.waitFor(() => {
+      expect(MockEventSource.instances).toHaveLength(1)
+    })
+    MockEventSource.instances[0].emit('bridge-message', {
+      channel: 'devBrowserBridge:surface-capture-requested',
+      payload: {
+        requestId: '12345678-1234-1234-1234-123456789abc',
+        revision: 12,
+        bounds: { x: 10, y: 20, width: 300, height: 400 }
+      }
+    })
+
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://localhost:5173/__sciforge-dev-bridge/surface-capture',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            'X-SciForge-Client': 'client-1'
+          })
+        })
+      )
+    })
+    expect(html2canvas).toHaveBeenCalledWith(
+      document.documentElement,
+      expect.objectContaining({
+        width: 300,
+        height: 400,
+        x: 10,
+        y: 20,
+        scale: 2,
+        useCORS: true,
+        allowTaint: false
+      })
+    )
+    const captureRequest = fetchMock.mock.calls.find(([input]) => (
+      String(input).endsWith('/surface-capture')
+    ))
+    const captureRequestInit = captureRequest?.[1] as RequestInit | undefined
+    const upload = JSON.parse(String(captureRequestInit?.body)) as Record<string, unknown>
+    expect(upload).toMatchObject({
+      requestId: '12345678-1234-1234-1234-123456789abc',
+      revision: 12,
+      ok: true,
+      viewportWidth: 800,
+      viewportHeight: 600,
+      pngBase64
+    })
+  })
+
+  it('rejects a surface capture before rasterization when the published revision does not match', async () => {
+    const { captureDevBrowserSurface } = await import('./dev-browser-surface-capture')
+
+    const response = await captureDevBrowserSurface({
+      requestId: 'capture-before-mismatch',
+      revision: 12
+    }, () => 11)
+
+    expect(response).toEqual({
+      requestId: 'capture-before-mismatch',
+      revision: 12,
+      ok: false,
+      error: 'Browser visible-context revision changed before capture: requested 12, current 11.'
+    })
+    expect(html2canvas).not.toHaveBeenCalled()
+  })
+
+  it('rejects rasterized pixels when the published revision changes during capture', async () => {
+    installWindow()
+    Object.assign(window, {
+      innerWidth: 800,
+      innerHeight: 600,
+      devicePixelRatio: 1,
+      scrollX: 0,
+      scrollY: 0
+    })
+    Object.defineProperty(globalThis, 'document', {
+      value: { documentElement: {} },
+      configurable: true
+    })
+    Object.defineProperty(globalThis, 'requestAnimationFrame', {
+      value: (callback: FrameRequestCallback) => {
+        callback(0)
+        return 1
+      },
+      configurable: true
+    })
+    let currentRevision = 12
+    html2canvas.mockImplementation(async () => {
+      currentRevision = 13
+      return {
+        toDataURL: () => 'data:image/png;base64,cG5nLXBpeGVscw=='
+      }
+    })
+    const { captureDevBrowserSurface } = await import('./dev-browser-surface-capture')
+
+    const response = await captureDevBrowserSurface({
+      requestId: 'capture-during-mismatch',
+      revision: 12
+    }, () => currentRevision)
+
+    expect(response).toEqual({
+      requestId: 'capture-during-mismatch',
+      revision: 12,
+      ok: false,
+      error: 'Browser visible-context revision changed during capture: requested 12, current 13.'
+    })
+    expect(html2canvas).toHaveBeenCalledTimes(1)
   })
 
   it('does not expose legacy PDF annotation sidecar calls through the dev bridge', async () => {
