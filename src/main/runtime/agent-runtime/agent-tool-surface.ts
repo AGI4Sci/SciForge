@@ -136,6 +136,7 @@ export type NativeVisualToolErrorCode =
   | 'capture_surface_unsupported'
   | 'capture_surface_unavailable'
   | 'visual_source_unavailable'
+  | 'visual_source_retired'
   | 'visual_snapshot_stale'
   | 'visual_target_stale'
   | 'visual_inspection_unavailable'
@@ -421,6 +422,25 @@ export function normalizeNativeVisualToolError(
         recovery: {
           action: 'repeat_visual_look',
           instruction: 'Run sciforge_look again on the current source and use only the new snapshot, region, and proof references.'
+        }
+      }
+    )
+  }
+
+  if (
+    upstreamCode === 'resource_ref_retired' ||
+    normalizedMessage.includes('resource reference has been retired')
+  ) {
+    return nativeVisualError(
+      message,
+      {
+        code: 'visual_source_retired',
+        failureClass: 'stale_resource',
+        retryable: false,
+        resourceIdentity,
+        recovery: {
+          action: 'stop',
+          instruction: 'Stop using this historical source reference and report that its task-owned lifetime has ended; do not substitute the current foreground workspace.'
         }
       }
     )

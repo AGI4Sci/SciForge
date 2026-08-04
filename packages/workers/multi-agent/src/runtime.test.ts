@@ -70,6 +70,37 @@ test('runtime persists queued/running/completed records through an injected exec
   assert.equal(diagnostics.aggregates[0]?.key, 'Notes:router-model')
 })
 
+test('runtime keeps executing when child refresh notifications fail', async () => {
+  const store = new InMemoryMultiAgentStore()
+  let executorCalls = 0
+  let notificationCalls = 0
+  const runtime = new MultiAgentRuntime({
+    store,
+    idGenerator: () => 'child-notification-failure',
+    events: {
+      onChildEvent: async () => {
+        notificationCalls += 1
+        throw new Error('refresh transport unavailable')
+      }
+    },
+    executor: async () => {
+      executorCalls += 1
+      return { summary: 'Completed despite refresh failure' }
+    }
+  })
+
+  const record = await runtime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-1',
+    prompt: 'Finish the work'
+  })
+
+  assert.equal(record.status, 'completed')
+  assert.equal(executorCalls, 1)
+  assert.equal(notificationCalls, 3)
+  assert.equal((await store.get('thread-1', record.id))?.status, 'completed')
+})
+
 test('runtime merges streamed transcript updates by entry id', async () => {
   const store = new InMemoryMultiAgentStore()
   const runtime = new MultiAgentRuntime({
@@ -210,6 +241,32 @@ test('runtime requires a host-injected executor and does not create a fallback c
   assert.deepEqual(await store.list(), [])
 })
 
+test('runtime still fails closed when canonical child persistence fails', async () => {
+  let executorCalls = 0
+  const store = new class extends InMemoryMultiAgentStore {
+    override async upsert(_record: MultiAgentChildRunRecord): Promise<void> {
+      throw new Error('canonical store unavailable')
+    }
+  }()
+  const runtime = new MultiAgentRuntime({
+    store,
+    executor: async () => {
+      executorCalls += 1
+      return { summary: 'must not run' }
+    }
+  })
+
+  await assert.rejects(
+    runtime.runChild({
+      parentThreadId: 'thread-1',
+      parentTurnId: 'turn-1',
+      prompt: 'Do work'
+    }),
+    /canonical store unavailable/u
+  )
+  assert.equal(executorCalls, 0)
+})
+
 test('runtime enforces maxParallel while a child run is active', async () => {
   const entered = deferred<void>()
   const release = deferred<MultiAgentExecutorResult>()
@@ -240,7 +297,44 @@ test('runtime enforces maxParallel while a child run is active', async () => {
       parentTurnId: 'turn-2',
       prompt: 'Second'
     }),
-    (error) => error instanceof MultiAgentRuntimeError && error.code === 'parallel_budget_exhausted'
+    (error) => error instanceof MultiAgentRuntimeError &&
+      error.code === 'parallel_budget_exhausted' &&
+      error.message.includes('Wait for an existing child to reach a terminal state')
+  )
+
+  release.resolve({ summary: 'First done' })
+  await first
+})
+
+test('runtime reports the non-resetting turn budget before the temporary parallel budget', async () => {
+  const entered = deferred<void>()
+  const release = deferred<MultiAgentExecutorResult>()
+  const runtime = new MultiAgentRuntime({
+    config: { maxParallel: 1, maxChildren: 1 },
+    store: new InMemoryMultiAgentStore(),
+    idGenerator: sequenceIds('child'),
+    executor: async () => {
+      entered.resolve()
+      return release.promise
+    }
+  })
+
+  const first = runtime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-1',
+    prompt: 'First'
+  })
+  await entered.promise
+
+  await assert.rejects(
+    runtime.runChild({
+      parentThreadId: 'thread-1',
+      parentTurnId: 'turn-1',
+      prompt: 'Second in the same turn'
+    }),
+    (error) => error instanceof MultiAgentRuntimeError &&
+      error.code === 'child_budget_exhausted' &&
+      error.message.includes('does not reset after a child finishes')
   )
 
   release.resolve({ summary: 'First done' })
@@ -302,7 +396,9 @@ test('runtime enforces maxChildren per parent turn without exhausting later turn
       parentTurnId: 'turn-1',
       prompt: 'Second child in same turn'
     }),
-    (error) => error instanceof MultiAgentRuntimeError && error.code === 'child_budget_exhausted'
+    (error) => error instanceof MultiAgentRuntimeError &&
+      error.code === 'child_budget_exhausted' &&
+      error.message.includes('shared across all delegate_task calls in the parent turn')
   )
 
   const third = await runtime.runChild({
@@ -416,6 +512,97 @@ test('runtime diagnostics hide stale persisted active records after restart', as
   assert.equal(diagnostics.aggregates[0]?.aborted, 1)
   assert.equal((await runtime.child('thread-1', 'child-stale'))?.status, 'aborted')
   assert.equal((await store.get('thread-1', 'child-stale'))?.status, 'running')
+})
+
+test('runtime persistently recovers stale children once without replaying their requests', async () => {
+  const store = new InMemoryMultiAgentStore()
+  for (const [id, status] of [['child-queued', 'queued'], ['child-running', 'running']] as const) {
+    await store.upsert(MultiAgentChildRunRecord.parse({
+      id,
+      parentThreadId: 'thread-1',
+      parentTurnId: 'turn-stale',
+      requestId: `request-${status}`,
+      prompt: `${status} work`,
+      status,
+      transcript: [{
+        id: `${id}-prompt`,
+        kind: 'user_message',
+        text: `${status} work`,
+        createdAt: '2026-06-27T00:00:00.000Z'
+      }],
+      createdAt: '2026-06-27T00:00:00.000Z',
+      updatedAt: '2026-06-27T00:00:01.000Z',
+      ...(status === 'running' ? { startedAt: '2026-06-27T00:00:01.000Z' } : {})
+    }))
+  }
+  const events: MultiAgentChildEvent[] = []
+  let executorCalls = 0
+  const runtime = new MultiAgentRuntime({
+    store,
+    nowIso: () => '2026-06-27T00:01:00.000Z',
+    events: { onChildEvent: (event) => events.push(event) },
+    executor: async () => {
+      executorCalls += 1
+      return { summary: 'fresh work completed' }
+    }
+  })
+
+  const recovered = await runtime.recoverStaleChildren()
+  assert.deepEqual(recovered.map((record) => record.status), ['aborted', 'aborted'])
+  assert.deepEqual(events.map((event) => event.status), ['aborted', 'aborted'])
+  for (const id of ['child-queued', 'child-running']) {
+    const record = await store.get('thread-1', id)
+    assert.equal(record?.status, 'aborted')
+    assert.equal(record?.finishedAt, '2026-06-27T00:01:00.000Z')
+    assert.equal(record?.error?.code, 'child_aborted')
+    assert.equal(record?.error?.details && (record.error.details as { recoveryReason?: string }).recoveryReason, 'runtime_restart')
+  }
+  assert.deepEqual(await runtime.recoverStaleChildren(), [])
+  assert.equal(events.length, 2)
+
+  const replayed = await runtime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-stale',
+    requestId: 'request-queued',
+    prompt: 'must not replay'
+  })
+  assert.equal(replayed.status, 'aborted')
+  assert.equal(executorCalls, 0)
+
+  const fresh = await runtime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-fresh',
+    requestId: 'request-fresh',
+    prompt: 'new work'
+  })
+  assert.equal(fresh.status, 'completed')
+  assert.equal(executorCalls, 1)
+})
+
+test('runtime recovery never aborts a child active in the current process', async () => {
+  const entered = deferred<void>()
+  const release = deferred<MultiAgentExecutorResult>()
+  const store = new InMemoryMultiAgentStore()
+  const runtime = new MultiAgentRuntime({
+    store,
+    idGenerator: () => 'child-active',
+    executor: async () => {
+      entered.resolve()
+      return release.promise
+    }
+  })
+
+  const started = await runtime.startChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-active',
+    prompt: 'Keep running'
+  })
+  await entered.promise
+  assert.deepEqual(await runtime.recoverStaleChildren(), [])
+  assert.equal((await store.get('thread-1', started.id))?.status, 'running')
+
+  release.resolve({ summary: 'done' })
+  assert.equal((await runtime.waitForChild('thread-1', started.id, { timeoutMs: 1_000 }))?.record.status, 'completed')
 })
 
 test('runtime records executor failure and parent abort as canonical error codes', async () => {

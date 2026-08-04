@@ -89,7 +89,10 @@ type ResourceState = {
   semanticRevision: string
   layoutRevision?: string
   observe: CapabilityResourceRegistration['observe']
+  dispose?: CapabilityResourceRegistration['dispose']
   contentTransport?: CapabilityResourceRegistration['contentTransport']
+  retentionCount: number
+  retirementRequested: boolean
 }
 
 type ResourceGrant = {
@@ -227,12 +230,16 @@ export class CapabilityBroker {
       semanticRevision: registration.semanticRevision,
       layoutRevision: registration.layoutRevision,
       observe: registration.observe,
-      contentTransport: registration.contentTransport
+      dispose: registration.dispose,
+      contentTransport: registration.contentTransport,
+      retentionCount: 0,
+      retirementRequested: false
     }
     resource.semanticRevision = registration.semanticRevision
     resource.layoutRevision = registration.layoutRevision
     resource.allowedAudiences = allowedAudiences
     resource.observe = registration.observe
+    resource.dispose = registration.dispose
     resource.contentTransport = registration.contentTransport
     this.#resources.set(key, resource)
     this.#resourcesByRef.set(resource.resourceRef, resource)
@@ -269,8 +276,34 @@ export class CapabilityBroker {
       semanticRevision: state.semanticRevision,
       layoutRevision: state.layoutRevision,
       observe: state.observe,
+      dispose: state.dispose,
       contentTransport: state.contentTransport
     })
+  }
+
+  /**
+   * Keeps opaque resources alive for one task snapshot. Provider retirement is
+   * deferred until the returned, idempotent release function is called.
+   */
+  retainResourceRefs(
+    rawCaller: CapabilityCallerContextInput,
+    resourceRefs: readonly string[]
+  ): () => Promise<void> {
+    const caller = this.#parseCaller(rawCaller)
+    const resources = [...new Set(resourceRefs)]
+      .map((resourceRef) => this.#authorizedResourceRef(caller, resourceRef))
+    for (const resource of resources) resource.retentionCount += 1
+    let released = false
+    return async () => {
+      if (released) return
+      released = true
+      for (const resource of resources) {
+        resource.retentionCount = Math.max(0, resource.retentionCount - 1)
+        if (resource.retentionCount === 0 && resource.retirementRequested) {
+          await this.#finalizeResourceRetirement(resource)
+        }
+      }
+    }
   }
 
   /**
@@ -327,6 +360,7 @@ export class CapabilityBroker {
       semanticRevision: state.semanticRevision,
       layoutRevision: state.layoutRevision,
       observe: state.observe,
+      dispose: state.dispose,
       contentTransport: state.contentTransport
     })
     const discovered = this.registry.discover(caller, { acceptedResourceKind: state.resourceKind })
@@ -692,6 +726,7 @@ export class CapabilityBroker {
 
     const mutation = isMutation(definition)
     const retireResource = rawResult.retireResource === true
+      || rawResult.retireResource === 'defer-while-retained'
     if (retireResource && !resource) {
       throw new CapabilityBrokerError(
         'retired_resource_required',
@@ -747,6 +782,7 @@ export class CapabilityBroker {
         semanticRevision,
         layoutRevision: resource.layoutRevision,
         observe: resource.observe,
+        dispose: resource.dispose,
         contentTransport: resource.contentTransport
       })
     }
@@ -772,7 +808,12 @@ export class CapabilityBroker {
       afterRevision
     })
 
-    if (retireResource && resource) this.#retireResource(resource)
+    if (retireResource && resource) {
+      await this.#requestResourceRetirement(
+        resource,
+        rawResult.retireResource === 'defer-while-retained'
+      )
+    }
 
     if (changed && resource && beforeRevision && afterRevision && request.invocationId) {
       this.#publishEvent(capabilityResourceChangeEventSchema.parse({
@@ -804,6 +845,9 @@ export class CapabilityBroker {
   #parseResourceRegistration(raw: CapabilityResourceRegistration): CapabilityResourceRegistration {
     if (!raw || typeof raw !== 'object' || typeof raw.observe !== 'function') {
       throw new CapabilityBrokerError('invalid_resource_registration', 'Resource registration requires an observer.')
+    }
+    if (raw.dispose !== undefined && typeof raw.dispose !== 'function') {
+      throw new CapabilityBrokerError('invalid_resource_registration', 'Resource disposal must be a function.')
     }
     const resourceId = raw.resourceId?.trim()
     const resourceKind = raw.resourceKind?.trim()
@@ -1066,7 +1110,31 @@ export class CapabilityBroker {
       : 'retired'
   }
 
-  #retireResource(resource: ResourceState): void {
+  async #requestResourceRetirement(
+    resource: ResourceState,
+    deferWhileRetained: boolean
+  ): Promise<void> {
+    resource.retirementRequested = true
+    if (deferWhileRetained && resource.retentionCount > 0) return
+    await this.#finalizeResourceRetirement(resource, !deferWhileRetained)
+  }
+
+  async #finalizeResourceRetirement(
+    resource: ResourceState,
+    ignoreRetentions = false
+  ): Promise<void> {
+    if (this.#resourcesByRef.get(resource.resourceRef) !== resource) return
+    if ((!ignoreRetentions && resource.retentionCount > 0) || !resource.retirementRequested) return
+    try {
+      await resource.dispose?.()
+    } catch (error) {
+      resource.retirementRequested = false
+      throw new CapabilityBrokerError(
+        'resource_disposal_failed',
+        'The resource provider failed to dispose its retired resource.',
+        { category: 'failed', cause: error }
+      )
+    }
     this.#resources.delete(resource.key)
     this.#resourcesByRef.delete(resource.resourceRef)
     this.#retiredResourcesByRef.set(resource.resourceRef, {

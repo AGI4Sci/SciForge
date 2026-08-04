@@ -665,6 +665,13 @@ export class CodexRuntimeService {
       this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.event, { event: published })
       return published
     }
+    if (event.kind === 'child_event') {
+      return this.publishClientEvent({
+        threadId: event.threadId,
+        ...(event.turnId ? { turnId: event.turnId } : {}),
+        child: event.child
+      })
+    }
     if (event.kind !== 'runtime_status') {
       throw new Error(`Unsupported Codex synthetic event kind: ${event.kind}`)
     }
@@ -2381,7 +2388,7 @@ export class CodexRuntimeService {
     }
     const guiThreadId = storedThread?.guiThreadId ?? threadId
     const stored = await this.eventStore.append(guiThreadId, { ...event, threadId: guiThreadId })
-    const turnId = event.turnId || event.userMessage?.turnId
+    const turnId = isChildOnlyEvent(event) ? undefined : event.turnId || event.userMessage?.turnId
     await this.threadStore?.upsert({
       guiThreadId,
       codexThreadId: storedThread.codexThreadId,
@@ -2394,8 +2401,8 @@ export class CodexRuntimeService {
     return stored
   }
 
-  private async publishClientEvent(event: CodexThreadEventPayload): Promise<void> {
-    if (await this.recoverModelRouterAliasFailure(event)) return
+  private async publishClientEvent(event: CodexThreadEventPayload): Promise<CodexThreadEventPayload> {
+    if (await this.recoverModelRouterAliasFailure(event)) return event
     const stored = await this.persistEvent(event.threadId, event)
     const runtimeEvent = stored?.event ?? event
     await this.recordUsageEvent(runtimeEvent, stored?.createdAt)
@@ -2405,6 +2412,7 @@ export class CodexRuntimeService {
     await this.emitFirstDeltaIfNeeded(runtimeEvent)
     await this.emitTurnDoneIfNeeded(runtimeEvent)
     await this.noteRuntimeEvent(runtimeEvent)
+    return runtimeEvent
   }
 
   private async recoverModelRouterAliasFailure(event: CodexThreadEventPayload): Promise<boolean> {
@@ -3456,6 +3464,7 @@ function preferThreadDetail(
 
 function latestStoredTurnId(events: CodexStoredEvent[]): string | undefined {
   for (const item of [...events].reverse()) {
+    if (isChildOnlyEvent(item.event)) continue
     const turnId = item.event.turnId || item.event.userMessage?.turnId
     if (turnId) return turnId
   }
@@ -3493,11 +3502,26 @@ function storedTurnHasAssistantResponse(events: CodexStoredEvent[], turnId: stri
 
 function storedTurnAgeExceeds(events: CodexStoredEvent[], turnId: string, minAgeMs: number): boolean {
   const timestamps = events
+    .filter((item) => !isChildOnlyEvent(item.event))
     .filter((item) => (item.event.turnId || item.event.userMessage?.turnId) === turnId)
     .map((item) => Date.parse(item.createdAt))
     .filter((value) => Number.isFinite(value))
   if (timestamps.length === 0) return false
   return Date.now() - Math.max(...timestamps) >= minAgeMs
+}
+
+function isChildOnlyEvent(event: CodexThreadEventPayload): boolean {
+  return Boolean(
+    event.child &&
+    !event.userMessage &&
+    !event.deltas?.length &&
+    !event.tool &&
+    !event.runtimeError &&
+    !event.runtimeStatus &&
+    !event.goal &&
+    !event.usage &&
+    event.turnComplete !== true
+  )
 }
 
 function detailTurnAgeExceeds(

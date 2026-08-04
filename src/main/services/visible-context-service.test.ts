@@ -245,6 +245,60 @@ describe('VisibleContextService capture', () => {
     }
   )
 
+  it('retains the exact question-time resource before later workspace publishes', async () => {
+    const releaseResources = vi.fn()
+    const retainResourceRefs = vi.fn(() => releaseResources)
+    const service = new VisibleContextService(await temporaryUserData(), {
+      surfaceCaptureProvider: successfulSurfaceCaptureProvider(vi.fn()),
+      retainResourceRefs,
+      now: () => new Date('2026-07-11T03:00:03.000Z')
+    })
+    await service.publish(snapshot({ activeThreadId: 'thread-a', route: '/question-time' }))
+    const prepared = await service.prepareSurfaceBinding(
+      'codex:thread-a',
+      'thread-a',
+      'electron:1'
+    )
+    expect(prepared).not.toBeNull()
+
+    await service.publish(snapshot({
+      revision: 2,
+      activeThreadId: 'thread-a',
+      route: '/later-workspace-state',
+      components: snapshot().components.map((component) => ({
+        ...component,
+        resources: component.resources?.map((resource) => ({
+          ...resource,
+          capability: {
+            resourceRef: `res_${'c'.repeat(26)}`,
+            operations: []
+          }
+        }))
+      }))
+    }))
+
+    const claimed = service.claimSurfaceBinding('codex:thread-a', prepared!.bindingId)
+    expect(claimed).toMatchObject({ route: '/question-time', revision: 1 })
+    expect(retainResourceRefs).toHaveBeenCalledWith({
+      callerId: 'codex:thread-a',
+      workspaceId: '/workspace',
+      resourceRefs: [`res_${'b'.repeat(26)}`]
+    })
+    expect(service.boundSurface('codex:thread-a')).toMatchObject({ route: '/question-time' })
+
+    expect(service.assignSurfaceTurn(
+      'codex:thread-a',
+      'turn-question-time',
+      prepared!.bindingId
+    )).toBe(true)
+    await service.releaseSurface('codex:thread-a', undefined, 'turn-stale')
+    expect(service.boundSurface('codex:thread-a')).toMatchObject({ route: '/question-time' })
+    expect(releaseResources).not.toHaveBeenCalled()
+
+    await service.releaseSurface('codex:thread-a', undefined, 'turn-question-time')
+    expect(releaseResources).toHaveBeenCalledOnce()
+  })
+
   it('rejects binding when the selected surface has not published the owner thread', async () => {
     const service = new VisibleContextService(await temporaryUserData(), {
       surfaceCaptureProvider: { capture: vi.fn() }

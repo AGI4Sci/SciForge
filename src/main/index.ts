@@ -1103,8 +1103,18 @@ app.whenReady().then(async () => {
   const workspaceReferenceService = new WorkspaceReferenceService()
   let domainSystemCapabilityInvoker:
   ReturnType<typeof createMainSystemCapabilityInvoker> | null = null
+  let capabilityBrokerForVisibleContext: CapabilityBroker | null = null
   const visibleContextService = new VisibleContextService(app.getPath('userData'), {
     surfaceCaptureProvider: visibleContextSurfaceCaptureProvider,
+    retainResourceRefs: ({ callerId, workspaceId, resourceRefs }) => {
+      const broker = capabilityBrokerForVisibleContext
+      if (!broker) throw new Error('Capability resources are not ready for task binding.')
+      return broker.retainResourceRefs({
+        audience: 'agent',
+        callerId,
+        ...(workspaceId ? { workspaceId } : {})
+      }, resourceRefs)
+    },
     requestSurfaceRefresh: (windowId) => {
       emitVisibleContextRendererEvent('visibleContext:refresh-requested', undefined, windowId)
     },
@@ -1261,6 +1271,7 @@ app.whenReady().then(async () => {
   const capabilityBroker = new CapabilityBroker(
     createApplicationCapabilityRegistry(catalog, appCapabilityDependencies)
   )
+  capabilityBrokerForVisibleContext = capabilityBroker
   domainSystemCapabilityInvoker = createMainSystemCapabilityInvoker(capabilityBroker)
   const visualSourceRegistry = new VisualSourceRegistry([
     {

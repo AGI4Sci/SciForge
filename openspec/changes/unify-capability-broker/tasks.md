@@ -93,3 +93,8 @@
   causes across worker/Host boundaries, add protocol, bridge, router, inspector,
   runtime, and end-to-end regression coverage, and re-run focused plus full
   verification.
+- [x] 11.9 Capture and retain the exact question-time visible-resource binding
+  before runtime queuing, defer provider retirement through terminal task
+  cleanup, preserve the original binding for active-turn steering, and add
+  broker, Workspace Preview, IPC, Host, visual-error, and lifecycle regression
+  coverage.

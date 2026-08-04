@@ -408,6 +408,9 @@ function workspacePreviewResource(
       describeActionId: APP_CAPABILITY_IDS.workspacePreviewDescribeAsset,
       readRangeActionId: APP_CAPABILITY_IDS.workspacePreviewReadRange
     },
+    dispose: async () => {
+      await dependencies.workspacePreviewHost.releaseSession(sessionId)
+    },
     observe: async (caller) => {
       const session = dependencies.workspacePreviewHost.getSession(sessionId)
       if (!session) throw new Error('Workspace Preview session was not found.')
@@ -899,14 +902,11 @@ function workspacePreviewCapabilities(dependencies: AppCapabilityDependencies) {
       tags: ['workspace', 'preview', 'lifecycle'],
       inputSchema: resourceActionInputSchema,
       outputSchema: capabilityOutputSchema,
-      handler: async (_, context) => {
-        const released = await dependencies.workspacePreviewHost.releaseSession(resourceSessionId(context.resource))
-        return {
-          output: released,
-          changed: false,
-          retireResource: released
-        }
-      }
+      handler: () => ({
+        output: true,
+        changed: false,
+        retireResource: 'defer-while-retained'
+      })
     })
   ]
 }

@@ -82,6 +82,7 @@ function issueDocument(
     expiresInMs?: number
     layoutRevision?: string
     audiences?: CapabilityAudience[]
+    dispose?: () => void | Promise<void>
   } = {}
 ): CapabilityResourceHandle {
   const semanticRevision = options.semanticRevision ?? '1'
@@ -93,6 +94,7 @@ function issueDocument(
     semanticRevision,
     layoutRevision: options.layoutRevision,
     expiresInMs: options.expiresInMs,
+    dispose: options.dispose,
     observe: async () => ({
       state: { title: 'Paper', annotationCount: 0 },
       semanticRevision,
@@ -471,6 +473,7 @@ describe('CapabilityBroker', () => {
     })
     const liveEvent = broker.listEvents(agent)[0]
     expect(liveEvent).toMatchObject({ resourceStatus: 'live' })
+    const releaseTaskBinding = broker.retainResourceRefs(agent, [liveEvent!.resourceRef])
 
     await broker.invoke(agent, {
       actionId: 'document.release',
@@ -485,6 +488,52 @@ describe('CapabilityBroker', () => {
       resourceStatus: 'retired'
     })
     expect(() => broker.bindResourceRef(agent, liveEvent!.resourceRef))
+      .toThrow(expect.objectContaining({ code: 'resource_ref_retired' }))
+    await releaseTaskBinding()
+  })
+
+  it('defers provider disposal while a task retains the question-time resource', async () => {
+    const release = defineCapability({
+      id: 'document.release',
+      version: '1',
+      title: 'Release document',
+      description: 'Requests retirement of the document resource.',
+      audiences: ['ui', 'agent'],
+      scope: 'resource',
+      resourceKinds: ['document'],
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ released: z.boolean() }).strict(),
+      handler: async () => ({
+        output: { released: true },
+        changed: false,
+        retireResource: 'defer-while-retained'
+      })
+    })
+    const dispose = vi.fn()
+    const broker = new CapabilityBroker(new CapabilityRegistry([readCapability(), mutationCapability(), release]))
+    const handle = issueDocument(broker, agent, { audiences: ['ui', 'agent'], dispose })
+    const observed = await broker.observe(agent, { resource: handle })
+    const releaseTaskBinding = broker.retainResourceRefs(agent, [observed.resourceRef])
+
+    await broker.invoke(ui, {
+      actionId: 'document.release',
+      invocationId: 'release-from-ui',
+      resource: handle,
+      input: {}
+    })
+
+    expect(dispose).not.toHaveBeenCalled()
+    expect(broker.describeResourceRef(agent, observed.resourceRef)).toMatchObject({
+      resourceRef: observed.resourceRef,
+      resourceKind: 'document'
+    })
+
+    await releaseTaskBinding()
+    expect(dispose).toHaveBeenCalledOnce()
+    expect(() => broker.bindResourceRef(agent, observed.resourceRef))
       .toThrow(expect.objectContaining({ code: 'resource_ref_retired' }))
   })
 

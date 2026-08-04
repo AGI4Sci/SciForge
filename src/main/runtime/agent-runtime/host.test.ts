@@ -39,7 +39,8 @@ import {
   AGENT_RUNTIME_AUXILIARY_OPERATIONS,
   AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS
 } from '../../../shared/agent-runtime-contract'
-import type { CodexRuntimeService } from '../codex'
+import { CodexRuntimeService } from '../codex'
+import { CodexThreadStore } from '../codex/codex-thread-store'
 import type { AgentRuntimeAdapter, AgentRuntimeAdapterContext } from './adapter'
 import { createAgentRuntimeHost } from './host'
 import {
@@ -420,6 +421,105 @@ describe('AgentRuntimeHost', () => {
         child: expect.objectContaining({ runtimeId: 'claude', summary: 'child complete' })
       })
     )
+  })
+
+  it('runs host-owned Codex delegation through the real synthetic child publisher', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-runtime-codex-delegation-'))
+    evidenceQueueRoots.push(root)
+    const codexStorageRoot = join(root, 'codex-runtime')
+    await new CodexThreadStore({ rootDir: codexStorageRoot }).upsert({
+      guiThreadId: 'parent-thread',
+      codexThreadId: 'parent-thread',
+      workspace: '/tmp/workspace',
+      title: 'Parent',
+      latestSeq: 1,
+      latestTurnId: 'parent-turn'
+    })
+    const sink = { send: vi.fn() }
+    const service = new CodexRuntimeService({
+      settings: async () => settings('codex'),
+      sink,
+      storageRoot: codexStorageRoot
+    })
+    const adapter = createCodexAgentRuntimeAdapter(service)
+    const spawn = vi.fn<NonNullable<AgentRuntimeAdapter['subagents']>['spawn']>(async (_context, input) => {
+      const threadRef = {
+        runtime: 'codex',
+        threadId: 'child-thread',
+        turnId: 'child-turn'
+      }
+      await input.onSpawned(threadRef)
+      return { summary: 'Codex child completed', threadRef }
+    })
+    adapter.subagents = {
+      spawn,
+      inspect: vi.fn(async () => ({ state: 'missing' as const, observedAt: '2026-08-02T00:00:00.000Z' })),
+      message: vi.fn(async () => ({ established: false })),
+      cancel: vi.fn(async () => undefined)
+    }
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter],
+      subagentStoreRoot: join(root, 'subagents')
+    })
+    const tools = host.subagentTools()!
+    const subscriptionAbort = new AbortController()
+    const subscription = host.subscribeEvents({
+      runtimeId: 'codex',
+      threadId: 'parent-thread',
+      sinceSeq: 0,
+      signal: subscriptionAbort.signal
+    })[Symbol.asyncIterator]()
+    const firstSubscribedEvent = subscription.next()
+
+    const started = await tools.call({
+      name: 'delegate_task',
+      arguments: { prompt: 'Read one paper.' },
+      context: {
+        requestId: 'spawn-codex-1',
+        runtimeId: 'codex',
+        threadId: 'parent-thread',
+        turnId: 'parent-turn'
+      }
+    })
+    const childId = (started.value as { childId: string }).childId
+    await expect(tools.call({
+      name: 'subagent_wait',
+      arguments: { childId, timeoutMs: 1_000 },
+      context: {
+        requestId: 'wait-codex-1',
+        runtimeId: 'codex',
+        threadId: 'parent-thread',
+        turnId: 'parent-turn'
+      }
+    })).resolves.toMatchObject({
+      value: { status: 'completed', terminal: true, summary: 'Codex child completed' }
+    })
+
+    expect(spawn).toHaveBeenCalledOnce()
+    const storedEvents = await service.readStoredEvents('parent-thread')
+    expect(storedEvents.filter((event) => event.child?.id === childId).map((event) => event.child?.status)).toEqual([
+      'queued',
+      'running',
+      'running',
+      'completed'
+    ])
+    const subscribedStatuses: string[] = []
+    let subscribed = await firstSubscribedEvent
+    for (let index = 0; index < 8 && !subscribed.done; index += 1) {
+      if (subscribed.value.kind === 'child_event' && subscribed.value.child.id === childId) {
+        subscribedStatuses.push(subscribed.value.child.status)
+        if (subscribed.value.child.status === 'completed') break
+      }
+      subscribed = await subscription.next()
+    }
+    expect(subscribedStatuses).toEqual(['queued', 'running', 'running', 'completed'])
+    subscriptionAbort.abort()
+    expect(sink.send).toHaveBeenCalledWith(
+      expect.any(String),
+      { event: expect.objectContaining({ child: expect.objectContaining({ id: childId, status: 'completed' }) }) }
+    )
+    host.dispose()
   })
 
   it('coordinates capability confirmations through neutral approval events and resolution', async () => {
@@ -1018,6 +1118,81 @@ describe('AgentRuntimeHost', () => {
     expect(dispatched?.text).toContain('"index": 3')
     expect(dispatched?.text).toContain(userText)
     expect(dispatched?.displayText).toBe(userText)
+  })
+
+  it('claims the prepared question-time surface instead of rebinding the later UI surface', async () => {
+    const adapter = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    const questionTimeSnapshot = {
+      schemaVersion: 3 as const,
+      windowId: 'browser:1',
+      revision: 7,
+      publishedAt: '2026-07-31T00:00:00.000Z',
+      freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
+      activeThreadId: 'codex-thread',
+      route: '/question-time',
+      components: []
+    }
+    const visibleContext = {
+      boundSurface: vi.fn(() => null),
+      claimSurfaceBinding: vi.fn(() => questionTimeSnapshot),
+      bindSurface: vi.fn()
+    }
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter],
+      services: { visibleContext: visibleContext as never }
+    })
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Inspect the paper I was viewing.',
+      visibleContextSurfaceId: 'browser:1',
+      visibleContextBindingId: 'bound_surface_question_time'
+    })
+
+    expect(visibleContext.claimSurfaceBinding).toHaveBeenCalledWith(
+      'codex:codex-thread',
+      'bound_surface_question_time'
+    )
+    expect(visibleContext.bindSurface).not.toHaveBeenCalled()
+    expect(vi.mocked(adapter.startTurn).mock.calls[0]?.[1].text).toContain('/question-time')
+    expect(vi.mocked(adapter.startTurn).mock.calls[0]?.[1]).not.toHaveProperty('visibleContextBindingId')
+  })
+
+  it('does not fall back to newer UI state when submission-time binding was unavailable', async () => {
+    const adapter = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    const visibleContext = {
+      boundSurface: vi.fn(() => null),
+      bindSurface: vi.fn()
+    }
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter],
+      services: { visibleContext: visibleContext as never }
+    })
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Inspect what I submitted.',
+      visibleContextSurfaceId: 'browser:1',
+      visibleContextBindingAttempted: true
+    })
+
+    expect(visibleContext.bindSurface).not.toHaveBeenCalled()
+    expect(vi.mocked(adapter.startTurn).mock.calls[0]?.[1].text)
+      .toContain('Canonical visible state for this turn: unavailable.')
   })
 
   it('fails closed when canonical visible state cannot be bound', async () => {

@@ -486,7 +486,7 @@ export class AgentRuntimeHost {
         ...(clientDirectiveId ? { clientDirectiveId } : {})
       })
       await this.enqueueThreadOperation(adapter.id, input.threadId, async () => {
-        const canonicalInput = await this.withCanonicalVisibleState(adapter.id, guardedInput)
+        const canonicalInput = await this.withCanonicalVisibleState(adapter.id, guardedInput, 'reuse')
         const steerInput = await this.withDirectiveContinuity(adapter.id, {
           runtimeId: canonicalInput.runtimeId,
           threadId: canonicalInput.threadId,
@@ -593,6 +593,11 @@ export class AgentRuntimeHost {
     )
     await adapter.deleteThread(context, input)
     this.threadWorkspaceHosts.delete(threadTurnKey(adapter.id, input.threadId))
+    await Promise.resolve(this.options.services?.visibleContext?.releaseSurface?.(capabilityAgentCallerId({
+      runtimeId: adapter.id,
+      threadId: input.threadId,
+      requestId: input.threadId
+    }))).catch(() => undefined)
   }
 
   async *subscribeEvents(input: AgentRuntimeEventSubscribeInput): AsyncIterable<AgentRuntimeEvent> {
@@ -1769,9 +1774,15 @@ export class AgentRuntimeHost {
 
   private async withCanonicalVisibleState(
     runtimeId: AgentRuntimeId,
-    input: AgentRuntimeTurnStartInput
+    input: AgentRuntimeTurnStartInput,
+    mode: 'claim' | 'reuse' = 'claim'
   ): Promise<AgentRuntimeTurnStartInput> {
-    const { visibleContextSurfaceId, ...runtimeInput } = input
+    const {
+      visibleContextSurfaceId,
+      visibleContextBindingId,
+      visibleContextBindingAttempted,
+      ...runtimeInput
+    } = input
     const service = this.options.services?.visibleContext
     if (!service) return runtimeInput
     const callerId = capabilityAgentCallerId({
@@ -1781,13 +1792,19 @@ export class AgentRuntimeHost {
     })
     const visibleContextOwnerThreadId = runtimeInput.visibleContextOwnerThreadId?.trim()
       || runtimeInput.threadId
-    const snapshot = visibleContextSurfaceId?.trim()
-      ? await service.bindSurface(
-          callerId,
-          visibleContextOwnerThreadId,
-          visibleContextSurfaceId
-        ).catch(() => null)
-      : null
+    const snapshot = mode === 'reuse'
+      ? service.boundSurface?.(callerId) ?? null
+      : visibleContextBindingId?.trim()
+        ? service.claimSurfaceBinding?.(callerId, visibleContextBindingId) ?? null
+        : visibleContextBindingAttempted
+          ? null
+        : visibleContextSurfaceId?.trim()
+          ? await service.bindSurface(
+              callerId,
+              visibleContextOwnerThreadId,
+              visibleContextSurfaceId
+            ).catch(() => null)
+          : null
     const statePacket = renderCanonicalVisibleState(snapshot)
     return {
       ...runtimeInput,
@@ -2042,11 +2059,45 @@ export class AgentRuntimeHost {
     input: AgentRuntimeTurnStartInput
   ): Promise<AgentRuntimeTurnHandle> {
     return this.enqueueThreadOperation(adapter.id, input.threadId, async () => {
-        const canonicalInput = await this.withCanonicalVisibleState(adapter.id, input)
-        const steered = await this.steerActiveTurnIfSupported(adapter, context, canonicalInput)
-        if (steered) return steered
-        await this.waitForThreadTerminal(adapter, context, canonicalInput)
-        return this.startAdapterTurn(adapter, context, canonicalInput)
+        const callerId = capabilityAgentCallerId({
+          runtimeId: adapter.id,
+          threadId: input.threadId,
+          requestId: input.threadId
+        })
+        try {
+          const steeringInput = await this.withCanonicalVisibleState(adapter.id, input, 'reuse')
+          const steered = await this.steerActiveTurnIfSupported(adapter, context, steeringInput)
+          if (steered) {
+            if (input.visibleContextBindingId) {
+              await this.options.services?.visibleContext?.discardSurfaceBinding?.(
+                callerId,
+                input.visibleContextBindingId
+              )
+            }
+            return steered
+          }
+          await this.waitForThreadTerminal(adapter, context, input)
+          const canonicalInput = await this.withCanonicalVisibleState(adapter.id, input)
+          const handle = await this.startAdapterTurn(adapter, context, canonicalInput)
+          this.options.services?.visibleContext?.assignSurfaceTurn?.(
+            callerId,
+            handle.turnId,
+            input.visibleContextBindingId
+          )
+          return handle
+        } catch (error) {
+          if (input.visibleContextBindingId) {
+            await Promise.resolve(this.options.services?.visibleContext?.discardSurfaceBinding?.(
+              callerId,
+              input.visibleContextBindingId
+            )).catch(() => undefined)
+            await Promise.resolve(this.options.services?.visibleContext?.releaseSurface?.(
+              callerId,
+              input.visibleContextBindingId
+            )).catch(() => undefined)
+          }
+          throw error
+        }
       })
   }
 
@@ -2074,7 +2125,12 @@ export class AgentRuntimeHost {
     context: AgentRuntimeAdapterContext,
     input: AgentRuntimeTurnStartInput
   ): Promise<AgentRuntimeTurnHandle> {
-    const { visibleContextSurfaceId: _surfaceId, ...adapterInput } = input
+    const {
+      visibleContextSurfaceId: _surfaceId,
+      visibleContextBindingId: _bindingId,
+      visibleContextBindingAttempted: _bindingAttempted,
+      ...adapterInput
+    } = input
     const startValidation = this.executionIntegrity.turnStartValidationState(adapterInput)
     if (
       startValidation.nativeVisualObligationsPending &&
@@ -2790,6 +2846,15 @@ export class AgentRuntimeHost {
     if (!turnId) return
     const key = turnGovernanceKey(runtimeId, event.threadId, turnId)
     const workspaceRoot = this.turnWorkspaces.get(key) || context.settings.workspaceRoot?.trim()
+    await Promise.resolve(this.options.services?.visibleContext?.releaseSurface?.(
+      capabilityAgentCallerId({
+        runtimeId,
+        threadId: event.threadId,
+        requestId: event.threadId
+      }),
+      undefined,
+      turnId
+    )).catch(() => undefined)
     await this.publishTurnLifecycle(Object.freeze({
       kind: 'after-turn',
       state: state === 'completed'

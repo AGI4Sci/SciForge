@@ -566,6 +566,10 @@ export type AgentRuntimeTurnStartInput = {
   text: string
   /** @internal Trusted sender provenance injected only after strict IPC validation. */
   visibleContextSurfaceId?: string
+  /** @internal Opaque question-time surface binding prepared by the trusted Host. */
+  visibleContextBindingId?: string
+  /** @internal Prevents a failed submission-time capture from rebinding newer UI state. */
+  visibleContextBindingAttempted?: boolean
   clientDirectiveId?: string
   executionIntent?: AgentRuntimeExecutionIntent
   metadata?: Record<string, unknown>

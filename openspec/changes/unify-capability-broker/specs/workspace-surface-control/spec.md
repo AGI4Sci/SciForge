@@ -42,9 +42,13 @@ Workspace surfaces SHALL publish generic visual sources whose native look provid
 - **WHEN** a user switches away from a session whose agent turn is operating on a bound Workspace Preview resource
 - **THEN** annotation, document, and other semantic provider operations continue against that bound resource
 
-#### Scenario: Hidden session requests visual inspection
-- **WHEN** a hidden turn requests `sciforge_look` after another session becomes visible
+#### Scenario: Hidden session requests live-surface visual inspection
+- **WHEN** a hidden turn requests `sciforge_look` against its live surface after another session becomes visible
 - **THEN** inspection fails visibly as layout unavailable and never captures the foreground session as evidence for the hidden turn
+
+#### Scenario: Hidden session inspects its task-bound preview resource
+- **WHEN** a hidden turn requests `sciforge_look` with the retained opaque reference of its question-time Workspace Preview resource
+- **THEN** the provider renders that retained resource independently of the foreground surface and UI cleanup cannot retire it before terminal task cleanup
 
 #### Scenario: Stale layout is refreshed on demand
 - **WHEN** a still-visible bound surface has exceeded its layout freshness threshold and `sciforge_look` is invoked

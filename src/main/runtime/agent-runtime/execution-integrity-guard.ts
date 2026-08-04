@@ -50,6 +50,8 @@ type ToolReceipt = {
   asyncHandle?: string
   /** True only when the executor reports that the asynchronous handle is terminal. */
   asyncTerminal?: boolean
+  /** Stable provider thread shared by host and provider representations of one child execution. */
+  childHandle?: string
   trustedTerminal: boolean
   trustedSuccess: boolean
 }
@@ -479,6 +481,7 @@ function rememberReceipt(state: ExecutionIntegrityState, receipt: ToolReceipt): 
   if (!existing) {
     state.calls.set(key, receipt)
     closeCorrelatedAsyncReceipts(state, key, receipt)
+    closeCorrelatedChildReceipts(state, key, receipt)
     return
   }
   if (
@@ -510,9 +513,11 @@ function rememberReceipt(state: ExecutionIntegrityState, receipt: ToolReceipt): 
       receipt.completionReceipts
     ),
     asyncHandle: receipt.asyncHandle || existing.asyncHandle,
-    asyncTerminal: receipt.asyncTerminal || existing.asyncTerminal
+    asyncTerminal: receipt.asyncTerminal || existing.asyncTerminal,
+    childHandle: receipt.childHandle || existing.childHandle
   })
   closeCorrelatedAsyncReceipts(state, key, receipt)
+  closeCorrelatedChildReceipts(state, key, receipt)
 }
 
 function rememberNativeVisualPlan(
@@ -633,6 +638,37 @@ function closeCorrelatedAsyncReceipts(
   }
 }
 
+/**
+ * A supervised child has both a host-owned child id and a provider-owned
+ * thread id. Codex can announce the provider thread before the host child is
+ * updated with its thread reference, so both representations may enter the
+ * ledger. A terminal lifecycle event for either representation closes every
+ * open receipt bound to that same provider thread.
+ */
+function closeCorrelatedChildReceipts(
+  state: ExecutionIntegrityState,
+  terminalKey: string,
+  terminal: ToolReceipt
+): void {
+  if (!terminal.childHandle || !isTerminalPhase(terminal.phase)) return
+  for (const [key, existing] of state.calls) {
+    if (
+      key === terminalKey ||
+      isTerminalPhase(existing.phase) ||
+      existing.childHandle !== terminal.childHandle
+    ) {
+      continue
+    }
+    state.calls.set(key, {
+      ...terminal,
+      callId: existing.callId,
+      toolName: existing.toolName,
+      effectClasses: mergeEffectClasses(existing.effectClasses, terminal.effectClasses),
+      childHandle: existing.childHandle
+    })
+  }
+}
+
 function asyncReceiptFromMeta(meta: Record<string, unknown>): { handle: string; terminal: boolean } {
   const output = recordValue(meta.output ?? meta.result)
   const argumentsRecord = recordValue(meta.arguments)
@@ -665,6 +701,7 @@ function rememberChildReceipt(
           : status === 'running'
             ? 'dispatched'
             : 'requested'
+  const providerThreadId = event.child.openAsThreadRef?.threadId?.trim()
   rememberReceipt(state, {
     callId: `child:${event.child.id}`,
     toolName: normalizedToolName(event.child.name || event.child.kind || 'child_agent'),
@@ -674,6 +711,7 @@ function rememberChildReceipt(
     attempt: 1,
     effectClasses: ['child_agent'],
     completionReceipts: [],
+    ...(providerThreadId ? { childHandle: `thread:${providerThreadId}` } : {}),
     trustedTerminal: phase === 'succeeded' || phase === 'failed' || phase === 'cancelled',
     trustedSuccess: phase === 'succeeded'
   })
