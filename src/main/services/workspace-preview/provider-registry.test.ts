@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
+  DEFAULT_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS,
+  MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID,
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
   type WorkspacePreviewFileState,
   type WorkspacePreviewPluginManifest,
   type WorkspacePreviewSession
 } from '../../../shared/workspace-preview'
+import {
+  MARKDOWN_COPY_FOR_WECHAT_ACTION_ID
+} from '../../../shared/markdown-wechat'
 import {
   WorkspacePreviewProviderRegistry,
   type WorkspacePreviewProvider
@@ -86,6 +91,28 @@ describe('WorkspacePreviewProviderRegistry', () => {
 })
 
 describe('WorkspacePreviewWorkerClient provider routing', () => {
+  it('does not install the desktop WeChat copy host action in worker-only provider composition', async () => {
+    const client = createWorkerClient()
+    const input = markdownProviderInput()
+
+    await expect(client.observe(input)).resolves.toEqual({
+      ok: false,
+      reason: 'unsupported-plugin',
+      message: `Workspace preview plugin ${MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID} does not have a first-party worker observer.`
+    })
+    await expect(client.invokeAction({
+      ...input,
+      action: {
+        actionId: MARKDOWN_COPY_FOR_WECHAT_ACTION_ID,
+        input: {}
+      }
+    })).resolves.toEqual({
+      ok: false,
+      reason: 'unsupported-plugin',
+      message: `Workspace preview plugin ${MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID} does not expose first-party worker actions.`
+    })
+  })
+
   it('preserves unknown-provider errors for observe, action, and artifact operations', async () => {
     const client = createWorkerClient()
     const input = unknownProviderInput()
@@ -247,6 +274,36 @@ describe('WorkspacePreviewWorkerClient provider routing', () => {
     })
   })
 })
+
+function markdownProviderInput(): {
+  manifest: WorkspacePreviewPluginManifest
+  file: WorkspacePreviewFileState
+  session: WorkspacePreviewSession
+} {
+  const manifest = DEFAULT_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS.find(
+    (candidate) => candidate.id === MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID
+  )
+  if (!manifest) throw new Error('Missing Markdown workspace preview manifest fixture.')
+  const file: WorkspacePreviewFileState = {
+    workspaceRoot: '/workspace',
+    path: '/workspace/article.md',
+    relativePath: 'article.md',
+    size: 10,
+    mtimeMs: 1
+  }
+  const session: WorkspacePreviewSession = {
+    id: 'session-markdown-provider',
+    pluginId: manifest.id,
+    workspaceRoot: file.workspaceRoot,
+    path: file.path,
+    modality: manifest.modality,
+    mode: 'preview',
+    openedAt: '2026-07-30T00:00:00.000Z',
+    updatedAt: '2026-07-30T00:00:00.000Z',
+    mtimeMs: file.mtimeMs
+  }
+  return { manifest, file, session }
+}
 
 function unknownProviderInput(): {
   manifest: WorkspacePreviewPluginManifest

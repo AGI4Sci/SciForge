@@ -4,7 +4,7 @@ import {
   codexAppServerApprovalToolName,
   isCodexAppServerApprovalRequestMethod,
   isCodexAppServerUserInputRequestMethod
-} from './request-registry'
+} from '@sciforge/codex-runtime/app-server'
 
 export type CodexEventNormalizeContext = {
   threadId?: string

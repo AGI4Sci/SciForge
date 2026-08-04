@@ -60,6 +60,9 @@ export type TextWorkspaceViewerProps = {
   documentContentKey?: string
   className?: string
   onApplyEdit?: TextWorkspaceViewerApplyEditHandler
+  onDraftChange?: (text: string) => void
+  onEditorElementChange?: (element: HTMLTextAreaElement | null) => void
+  onEditorScroll?: (element: HTMLTextAreaElement) => void
 }
 
 export function buildTextWorkspaceViewerModel(
@@ -192,7 +195,10 @@ export function TextWorkspaceViewer({
   model,
   documentContentKey,
   className,
-  onApplyEdit
+  onApplyEdit,
+  onDraftChange,
+  onEditorElementChange,
+  onEditorScroll
 }: TextWorkspaceViewerProps): ReactNode {
   const { t } = useTranslation('common')
   const resolvedModel = model ?? buildTextWorkspaceViewerModel(observation, Boolean(onApplyEdit))
@@ -219,6 +225,10 @@ export function TextWorkspaceViewer({
   const initialTextRangeKey = JSON.stringify(initialTextRange ?? null)
   const statusRole = resolvedModel.status.kind === 'unsupported' ? 'alert' : 'status'
   const dirty = draft !== persistedText
+  const setEditorElement = useCallback((element: HTMLTextAreaElement | null): void => {
+    editorRef.current = element
+    onEditorElementChange?.(element)
+  }, [onEditorElementChange])
 
   if (
     savingRef.current &&
@@ -246,7 +256,8 @@ export function TextWorkspaceViewer({
     setPersistedText(resolvedModel.text)
     draftRef.current = resolvedModel.text
     persistedTextRef.current = resolvedModel.text
-  }, [draftSourceKey, resolvedModel.text])
+    onDraftChange?.(resolvedModel.text)
+  }, [draftSourceKey, onDraftChange, resolvedModel.text])
 
   useEffect(() => {
     const editor = editorRef.current
@@ -327,7 +338,7 @@ export function TextWorkspaceViewer({
       ) : (
         <div className="flex min-h-0 flex-1 flex-col gap-3 p-4 pr-20">
           <textarea
-            ref={editorRef}
+            ref={setEditorElement}
             className="min-h-0 flex-1 resize-none rounded-md border border-ds-border bg-ds-panel p-3 font-mono text-xs leading-5 text-ds-text outline-none focus:border-ds-accent"
             data-text-preview-editor
             data-initial-selection={initialTextRange ? 'true' : 'false'}
@@ -338,10 +349,12 @@ export function TextWorkspaceViewer({
               const nextDraft = event.currentTarget.value
               draftRef.current = nextDraft
               setDraft(nextDraft)
+              onDraftChange?.(nextDraft)
               if (saveState.kind === 'saved' || saveState.kind === 'error') {
                 setSaveState({ kind: 'idle' })
               }
             }}
+            onScroll={(event) => onEditorScroll?.(event.currentTarget)}
             onKeyDown={(event) => {
               if (
                 resolvedModel.editable &&

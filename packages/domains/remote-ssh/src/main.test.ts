@@ -50,6 +50,7 @@ const target: RemoteSshTarget = {
 
 function service(): RemoteSshServicePort {
   return {
+    openOpenSshConfig: vi.fn(async () => ({ opened: true as const })),
     listLabs: vi.fn(async () => ({ labs: [lab] })),
     listVirtualBoxMachines: vi.fn(async () => ({ available: true, machines: [] })),
     saveLab: vi.fn(async () => ({ lab })),
@@ -147,6 +148,17 @@ function service(): RemoteSshServicePort {
       sizeBytes: 42,
       completedAt: now
     })),
+    authorizeWorkspaceHostSession: vi.fn(async () => ({
+      providerId: 'remote-ssh.workspace-host-provider' as const,
+      authorizedSessionId: 'ssh_whs_123456789012345678901234'
+    })),
+    authorizeEgressSession: vi.fn(async () => ({
+      authorizedSessionId: 'ssh_egs_123456789012345678901234',
+      expiresAt: '2026-07-23T00:00:00.000Z'
+    })),
+    attachWorkspaceHost: vi.fn(async () => {
+      throw new Error('Not used by this capability test.')
+    }),
     close: vi.fn()
   }
 }
@@ -214,7 +226,8 @@ describe('Remote SSH main domain entry', () => {
 
     expect(harness.entry.definition).toBe(domainPackageDefinition)
     expect(harness.entry.contributions.map(({ kind, id }) => `${kind}:${id}`)).toEqual([
-      'main.capability-factory:remote-ssh.capabilities'
+      'main.capability-factory:remote-ssh.capabilities',
+      'main.workspace-host-provider:remote-ssh.workspace-host-provider'
     ])
     expect(harness.definitions).toHaveLength(Object.keys(REMOTE_SSH_CAPABILITY_IDS).length)
     expect(harness.services).toHaveLength(0)
@@ -237,6 +250,7 @@ describe('Remote SSH main domain entry', () => {
   it('governs every mutation and exposes configuration mutations only to UI', () => {
     const { definitions } = buildEntry()
     const uiOnlyIds = new Set<string>([
+      REMOTE_SSH_CAPABILITY_IDS.openOpenSshConfig,
       REMOTE_SSH_CAPABILITY_IDS.listLabs,
       REMOTE_SSH_CAPABILITY_IDS.listVirtualBoxMachines,
       REMOTE_SSH_CAPABILITY_IDS.saveLab,
@@ -249,12 +263,16 @@ describe('Remote SSH main domain entry', () => {
       REMOTE_SSH_CAPABILITY_IDS.saveBinding,
       REMOTE_SSH_CAPABILITY_IDS.listTargetCatalog,
       REMOTE_SSH_CAPABILITY_IDS.saveTarget,
-      REMOTE_SSH_CAPABILITY_IDS.deleteTarget
+      REMOTE_SSH_CAPABILITY_IDS.deleteTarget,
+      REMOTE_SSH_CAPABILITY_IDS.openWorkspaceHostSession,
+      REMOTE_SSH_CAPABILITY_IDS.openEgressSession
     ])
     const optimisticResourceMutationIds = new Set<string>([
       REMOTE_SSH_CAPABILITY_IDS.executeCommand,
       REMOTE_SSH_CAPABILITY_IDS.uploadFile,
-      REMOTE_SSH_CAPABILITY_IDS.downloadFile
+      REMOTE_SSH_CAPABILITY_IDS.downloadFile,
+      REMOTE_SSH_CAPABILITY_IDS.openWorkspaceHostSession,
+      REMOTE_SSH_CAPABILITY_IDS.openEgressSession
     ])
 
     for (const capability of definitions) {
@@ -310,6 +328,17 @@ describe('Remote SSH main domain entry', () => {
       .toHaveBeenCalledWith(lab.id, lab.revision)
     expect(harness.services[0]!.stopLabEnvironment)
       .toHaveBeenCalledWith(lab.id, lab.revision)
+  })
+
+  it('opens the local OpenSSH configuration through its governed UI capability', async () => {
+    const harness = buildEntry()
+    const result = await definition(
+      harness.definitions,
+      REMOTE_SSH_CAPABILITY_IDS.openOpenSshConfig
+    ).handler({}, context({ audience: 'ui' }))
+
+    expect(harness.services[0]!.openOpenSshConfig).toHaveBeenCalledOnce()
+    expect(result).toEqual({ output: { opened: true }, changed: false })
   })
 
   it('lists workspace-filtered targets and issues canonical observable resources', async () => {
@@ -394,6 +423,46 @@ describe('Remote SSH main domain entry', () => {
     expect(harness.services[0]!.executeCommand).toHaveBeenCalledWith(
       '/workspace', target.id, target.revision, commandInput, abort.signal
     )
+
+    const workspaceSession = await definition(
+      harness.definitions,
+      REMOTE_SSH_CAPABILITY_IDS.openWorkspaceHostSession
+    ).handler({
+      workspaceRoot: '/cluster/project',
+      egress: { mode: 'none' }
+    }, context({
+      audience: 'ui',
+      workspaceId: '/workspace',
+      resource: targetContext.resource,
+      signal: abort.signal
+    }))
+    expect(harness.services[0]!.authorizeWorkspaceHostSession).toHaveBeenCalledWith(
+      '/workspace',
+      target.id,
+      target.revision,
+      { workspaceRoot: '/cluster/project', egress: { mode: 'none' } }
+    )
+    expect(workspaceSession.changed).toBe(false)
+    expect(JSON.stringify(workspaceSession.output)).not.toContain(target.id)
+    expect(JSON.stringify(workspaceSession.output)).not.toContain(target.sshAlias)
+
+    const egressSession = await definition(
+      harness.definitions,
+      REMOTE_SSH_CAPABILITY_IDS.openEgressSession
+    ).handler({}, context({
+      audience: 'ui',
+      workspaceId: '/workspace',
+      resource: targetContext.resource,
+      signal: abort.signal
+    }))
+    expect(harness.services[0]!.authorizeEgressSession).toHaveBeenCalledWith(
+      '/workspace',
+      target.id,
+      target.revision
+    )
+    expect(egressSession.changed).toBe(false)
+    expect(JSON.stringify(egressSession.output)).not.toContain(target.id)
+    expect(JSON.stringify(egressSession.output)).not.toContain(target.sshAlias)
 
     await definition(harness.definitions, REMOTE_SSH_CAPABILITY_IDS.cancelCommand)
       .handler({ executionId }, context({ workspaceId: '/workspace' }))

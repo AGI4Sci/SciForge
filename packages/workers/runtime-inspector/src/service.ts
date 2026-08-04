@@ -1,20 +1,17 @@
 import { execFile, spawn } from 'node:child_process'
-import { constants } from 'node:fs'
-import { lstat, open, readdir, realpath } from 'node:fs/promises'
+import { realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import {
   isAbsolute,
   join,
   relative,
-  resolve,
-  sep
+  resolve
 } from 'node:path'
 import { promisify } from 'node:util'
 import { createConnection } from 'node:net'
 
 import {
   GIT_BRANCHES_RESOURCE_URI,
-  GIT_CHECKPOINTS_RESOURCE_URI,
   GIT_DIFF_RESOURCE_URI,
   GIT_STATUS_RESOURCE_URI,
   LSP_STATUS_RESOURCE_URI,
@@ -24,12 +21,10 @@ import {
   RUNTIME_INSPECTOR_DEFAULT_RUNTIME_BASE_URL,
   RUNTIME_INSPECTOR_DEFAULT_LIMIT,
   RUNTIME_INSPECTOR_DEFAULT_MODEL_ROUTER_BASE_URL,
-  RUNTIME_INSPECTOR_DEFAULT_PATCH_BYTES,
   RUNTIME_INSPECTOR_DEFAULT_TIMEOUT_MS,
   RUNTIME_INSPECTOR_DIAGNOSTICS_RESOURCE_URI,
   RUNTIME_INSPECTOR_MAX_DIFF_BYTES,
   RUNTIME_INSPECTOR_MAX_LIMIT,
-  RUNTIME_INSPECTOR_MAX_PATCH_BYTES,
   RUNTIME_INSPECTOR_MAX_TIMEOUT_MS,
   RUNTIME_INSPECTOR_MCP_SERVER_VERSION,
   RUNTIME_INSPECTOR_WORKER_TRANSPORT,
@@ -38,8 +33,6 @@ import {
   RUNTIME_PORTS_RESOURCE_URI,
   RuntimeInspectorToolNames,
   GitBranchesInputSchema,
-  GitCheckpointListInputSchema,
-  GitCheckpointPreviewInputSchema,
   GitDiffPreviewInputSchema,
   GitStatusInputSchema,
   LspQueryInputSchema,
@@ -49,16 +42,10 @@ import {
   RuntimeLocalStatusInputSchema,
   RuntimeModelRouterStatusInputSchema,
   RuntimePortsInputSchema,
-  gitCheckpointResourceUri,
   gitDiffResourceUri,
   type GitBranchSummary,
   type GitBranchesInput,
   type GitBranchesResult,
-  type GitCheckpointListInput,
-  type GitCheckpointListResult,
-  type GitCheckpointPreviewInput,
-  type GitCheckpointPreviewResult,
-  type GitCheckpointSummary,
   type GitDiffPreviewInput,
   type GitDiffPreviewResult,
   type GitDiffScope,
@@ -101,7 +88,6 @@ export type RuntimeInspectorFetch = (input: string | URL, init?: RequestInit) =>
 
 export type RuntimeInspectorServiceOptions = {
   workspaceRoot?: string
-  checkpointDataDir?: string
   modelRouterBaseUrl?: string
   runtimeBaseUrl?: string
   runtimeToken?: string
@@ -141,14 +127,8 @@ type RuntimeEndpoint = {
   local: boolean
 }
 
-type CheckpointMetadata = Omit<GitCheckpointSummary, 'resourceUri'> & {
-  checkpointRef?: string
-  untrackedFiles?: string[]
-}
-
 export class RuntimeInspectorService {
   readonly workspaceRoot?: string
-  readonly checkpointDataDir?: string
   readonly modelRouterBaseUrl: string
   readonly runtimeBaseUrl: string
   readonly runtimeToken: string
@@ -164,11 +144,6 @@ export class RuntimeInspectorService {
       options.workspaceRoot ??
       this.env.SCIFORGE_RUNTIME_INSPECTOR_WORKSPACE_ROOT ??
       this.env.GUI_RUNTIME_INSPECTOR_WORKSPACE_ROOT
-    )
-    this.checkpointDataDir = cleanOptionalPath(
-      options.checkpointDataDir ??
-      this.env.SCIFORGE_RUNTIME_INSPECTOR_CHECKPOINT_DATA_DIR ??
-      this.env.GUI_RUNTIME_INSPECTOR_CHECKPOINT_DATA_DIR
     )
     this.modelRouterBaseUrl = cleanOptionalString(
       options.modelRouterBaseUrl ??
@@ -218,7 +193,6 @@ export class RuntimeInspectorService {
         GIT_STATUS_RESOURCE_URI,
         GIT_BRANCHES_RESOURCE_URI,
         GIT_DIFF_RESOURCE_URI,
-        GIT_CHECKPOINTS_RESOURCE_URI,
         RUNTIME_PORTS_RESOURCE_URI,
         RUNTIME_HEALTH_RESOURCE_URI,
         RUNTIME_DEPENDENCIES_RESOURCE_URI,
@@ -228,7 +202,6 @@ export class RuntimeInspectorService {
       ],
       configured: {
         ...(this.workspaceRoot ? { workspaceRoot: this.workspaceRoot } : {}),
-        ...(this.checkpointDataDir ? { checkpointDataDir: this.checkpointDataDir } : {}),
         modelRouterBaseUrl: this.modelRouterBaseUrl,
         runtimeBaseUrl: this.runtimeBaseUrl,
         runtimeTokenConfigured: this.runtimeToken.trim().length > 0
@@ -353,80 +326,6 @@ export class RuntimeInspectorService {
     })
   }
 
-  async gitCheckpointList(input: GitCheckpointListInput = {}): Promise<GitCheckpointListResult> {
-    const parsed = GitCheckpointListInputSchema.safeParse(input)
-    if (!parsed.success) return this.invalidRequest(parsed.error.message)
-
-    return this.capture(async () => {
-      const checkpointDataDir = this.resolveCheckpointDataDir(parsed.data.checkpoint_data_dir)
-      const checkpointRoot = join(checkpointDataDir, 'git-checkpoints')
-      const entries = await readdir(checkpointRoot, { withFileTypes: true }).catch(() => [])
-      const checkpoints: GitCheckpointSummary[] = []
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue
-        const metadata = await readCheckpointMetadata(checkpointDataDir, entry.name)
-        if (!metadata) continue
-        const summary = publicCheckpoint(metadata)
-        if (parsed.data.runtime_id && summary.runtimeId !== parsed.data.runtime_id) continue
-        if (parsed.data.thread_id && summary.threadId !== parsed.data.thread_id) continue
-        if (parsed.data.workspace_root && normalizeComparablePath(summary.workspaceRoot) !== normalizeComparablePath(parsed.data.workspace_root)) continue
-        checkpoints.push(summary)
-      }
-      checkpoints.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      const limit = limitFor(parsed.data.limit)
-      const offset = decodeCursor(parsed.data.cursor)
-      const page = checkpoints.slice(offset, offset + limit)
-      const nextCursor = offset + limit < checkpoints.length ? String(offset + limit) : undefined
-      return {
-        ok: true,
-        checkpointDataDir,
-        checkpoints: page,
-        total: checkpoints.length,
-        limit,
-        ...(parsed.data.cursor ? { cursor: parsed.data.cursor } : {}),
-        ...(nextCursor ? { nextCursor } : {}),
-        truncated: nextCursor !== undefined,
-        resourceUri: GIT_CHECKPOINTS_RESOURCE_URI
-      }
-    })
-  }
-
-  async gitCheckpointPreview(input: GitCheckpointPreviewInput): Promise<GitCheckpointPreviewResult> {
-    const parsed = GitCheckpointPreviewInputSchema.safeParse(input)
-    if (!parsed.success) return this.invalidRequest(parsed.error.message)
-
-    return this.capture(async () => {
-      const request = parsed.data
-      const checkpointId = safeCheckpointId(request.checkpoint_id)
-      const checkpointDataDir = this.resolveCheckpointDataDir(request.checkpoint_data_dir)
-      const metadata = await readCheckpointMetadata(checkpointDataDir, checkpointId)
-      if (!metadata) {
-        throw serviceError('checkpoint_not_found', `Git checkpoint not found: ${checkpointId}`, false, 'Use gui_git_checkpoint_list to choose an available checkpoint id.')
-      }
-      const maxBytes = clampInteger(
-        request.max_patch_bytes ?? RUNTIME_INSPECTOR_DEFAULT_PATCH_BYTES,
-        1,
-        RUNTIME_INSPECTOR_MAX_PATCH_BYTES
-      )
-      const includePatches = request.include_patches !== false
-      const stagedPatch = includePatches
-        ? await readCheckpointTextFileChunk(checkpointDataDir, checkpointId, 'staged.patch', request.staged_offset ?? 0, maxBytes)
-        : undefined
-      const unstagedPatch = includePatches
-        ? await readCheckpointTextFileChunk(checkpointDataDir, checkpointId, 'unstaged.patch', request.unstaged_offset ?? 0, maxBytes)
-        : undefined
-      return {
-        ok: true,
-        checkpointDataDir,
-        checkpoint: publicCheckpoint(metadata),
-        ...(stagedPatch ? { stagedPatch } : {}),
-        ...(unstagedPatch ? { unstagedPatch } : {}),
-        untrackedFiles: metadata.untrackedFiles ?? [],
-        resourceUri: gitCheckpointResourceUri(checkpointId)
-      }
-    })
-  }
-
   async runtimePorts(input: RuntimePortsInput = {}): Promise<RuntimePortsResult> {
     const parsed = RuntimePortsInputSchema.safeParse(input)
     if (!parsed.success) return this.invalidRequest(parsed.error.message)
@@ -505,7 +404,6 @@ export class RuntimeInspectorService {
         },
         await gitDependency(),
         await this.lsp.dependency(parsed.data.workspace_root ?? this.workspaceRoot),
-        checkpointDependency(this.checkpointDataDir),
         {
           id: 'fetch',
           available: typeof this.fetchImpl === 'function',
@@ -689,19 +587,6 @@ export class RuntimeInspectorService {
     this.lsp.shutdown()
   }
 
-  private resolveCheckpointDataDir(input?: string): string {
-    const value = cleanOptionalPath(input) ?? this.checkpointDataDir
-    if (!value) {
-      throw serviceError(
-        'checkpoint_data_dir_required',
-        'Checkpoint data directory is required to inspect saved Git checkpoints.',
-        false,
-        'Pass checkpoint_data_dir or set SCIFORGE_RUNTIME_INSPECTOR_CHECKPOINT_DATA_DIR to the app userData directory.'
-      )
-    }
-    return resolve(expandHomePath(value))
-  }
-
   private async resolveGitRepository(workspaceRootInput?: string): Promise<GitRepository> {
     const workspaceRoot = await this.resolveWorkspaceRoot(workspaceRootInput)
     try {
@@ -760,7 +645,6 @@ export function createRuntimeInspectorService(options: RuntimeInspectorServiceOp
 export function runtimeInspectorConfigFromEnv(env: NodeJS.ProcessEnv = process.env): RuntimeInspectorServiceOptions {
   return {
     workspaceRoot: cleanOptionalPath(env.SCIFORGE_RUNTIME_INSPECTOR_WORKSPACE_ROOT ?? env.GUI_RUNTIME_INSPECTOR_WORKSPACE_ROOT),
-    checkpointDataDir: cleanOptionalPath(env.SCIFORGE_RUNTIME_INSPECTOR_CHECKPOINT_DATA_DIR ?? env.GUI_RUNTIME_INSPECTOR_CHECKPOINT_DATA_DIR),
     modelRouterBaseUrl: cleanOptionalString(env.SCIFORGE_RUNTIME_INSPECTOR_MODEL_ROUTER_BASE_URL ?? env.GUI_MODEL_ROUTER_BASE_URL),
     runtimeBaseUrl: cleanOptionalString(env.SCIFORGE_RUNTIME_INSPECTOR_RUNTIME_BASE_URL ?? env.GUI_RUNTIME_BASE_URL),
     runtimeToken: cleanOptionalString(env.SCIFORGE_RUNTIME_INSPECTOR_RUNTIME_TOKEN ?? env.GUI_RUNTIME_TOKEN),
@@ -936,158 +820,6 @@ function gitErrorText(error: unknown): string {
   return details.join('\n').trim() || String(error)
 }
 
-async function readCheckpointMetadata(dataDir: string, checkpointId: string): Promise<CheckpointMetadata | null> {
-  try {
-    const metadata = await readCheckpointFile(dataDir, checkpointId, 'metadata.json')
-    if (!metadata) return null
-    const raw = JSON.parse(metadata) as unknown
-    const record = asRecord(raw)
-    const id = stringValue(record.checkpointId)
-    const runtimeId = stringValue(record.runtimeId)
-    const threadId = stringValue(record.threadId)
-    const workspaceRoot = stringValue(record.workspaceRoot)
-    const repositoryRoot = stringValue(record.repositoryRoot)
-    const head = stringValue(record.head)
-    const createdAt = stringValue(record.createdAt)
-    const diffStat = stringValue(record.diffStat)
-    const status = stringValue(record.status)
-    if (!id || !isAgentRuntimeId(runtimeId) || !threadId || !workspaceRoot || !repositoryRoot || !head || !createdAt || !isCheckpointStatus(status)) {
-      return null
-    }
-    return {
-      checkpointId: id,
-      runtimeId,
-      threadId,
-      ...(stringValue(record.turnId) ? { turnId: stringValue(record.turnId) } : {}),
-      workspaceRoot,
-      repositoryRoot,
-      branch: typeof record.branch === 'string' ? record.branch : null,
-      head,
-      createdAt,
-      diffStat,
-      status,
-      ...(stringValue(record.restoreStatus) ? { restoreStatus: stringValue(record.restoreStatus) } : {}),
-      ...(stringValue(record.checkpointRef) ? { checkpointRef: stringValue(record.checkpointRef) } : {}),
-      untrackedFiles: arrayOfStrings(record.untrackedFiles)
-    }
-  } catch {
-    return null
-  }
-}
-
-function publicCheckpoint(metadata: CheckpointMetadata): GitCheckpointSummary {
-  return {
-    checkpointId: metadata.checkpointId,
-    runtimeId: metadata.runtimeId,
-    threadId: metadata.threadId,
-    ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
-    workspaceRoot: metadata.workspaceRoot,
-    repositoryRoot: metadata.repositoryRoot,
-    branch: metadata.branch,
-    head: metadata.head,
-    createdAt: metadata.createdAt,
-    diffStat: metadata.diffStat,
-    status: metadata.status,
-    ...(metadata.restoreStatus ? { restoreStatus: metadata.restoreStatus } : {}),
-    resourceUri: gitCheckpointResourceUri(metadata.checkpointId)
-  }
-}
-
-function checkpointDir(dataDir: string, checkpointId: string): string {
-  return join(resolve(dataDir), 'git-checkpoints', checkpointId)
-}
-
-async function readCheckpointFile(dataDir: string, checkpointId: string, fileName: string): Promise<string | null> {
-  const path = await safeCheckpointFilePath(dataDir, checkpointId, fileName)
-  if (!path) return null
-  const file = await open(path, readOnlyNoFollowFlags()).catch(() => null)
-  if (!file) return null
-  try {
-    return await file.readFile('utf8')
-  } finally {
-    await file.close()
-  }
-}
-
-async function safeCheckpointFilePath(dataDir: string, checkpointId: string, fileName: string): Promise<string | null> {
-  if (fileName.includes('/') || fileName.includes('\\')) return null
-  const checkpointRoot = resolve(dataDir, 'git-checkpoints')
-  const dir = checkpointDir(dataDir, checkpointId)
-  const path = join(dir, fileName)
-  const [rootReal, dirInfo, fileInfo] = await Promise.all([
-    realpath(checkpointRoot).catch(() => null),
-    lstat(dir).catch(() => null),
-    lstat(path).catch(() => null)
-  ])
-  if (!rootReal || !dirInfo?.isDirectory() || !fileInfo?.isFile()) return null
-  const [dirReal, fileReal] = await Promise.all([
-    realpath(dir).catch(() => null),
-    realpath(path).catch(() => null)
-  ])
-  if (!dirReal || !fileReal) return null
-  if (!isPathWithin(rootReal, dirReal) || !isPathWithin(dirReal, fileReal)) return null
-  return path
-}
-
-function isPathWithin(root: string, target: string): boolean {
-  const rel = relative(root, target)
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
-}
-
-function safeCheckpointId(raw: string): string {
-  const value = raw.trim()
-  if (!/^[A-Za-z0-9._-]{1,160}$/.test(value)) {
-    throw serviceError('invalid_request', 'Invalid git checkpoint id.', false, 'Use checkpoint ids returned by gui_git_checkpoint_list.')
-  }
-  return value
-}
-
-async function readCheckpointTextFileChunk(
-  dataDir: string,
-  checkpointId: string,
-  fileName: string,
-  offset: number,
-  maxBytes: number
-): Promise<ProcessChunk> {
-  const path = await safeCheckpointFilePath(dataDir, checkpointId, fileName)
-  if (!path) return emptyTextFileChunk(offset)
-  return readTextFileChunk(path, offset, maxBytes)
-}
-
-async function readTextFileChunk(path: string, offset: number, maxBytes: number): Promise<ProcessChunk> {
-  const fileInfo = await lstat(path).catch(() => null)
-  if (!fileInfo?.isFile() || fileInfo.size === 0) return emptyTextFileChunk(offset)
-  const file = await open(path, readOnlyNoFollowFlags()).catch(() => null)
-  if (!file) return emptyTextFileChunk(offset)
-  try {
-    const info = await file.stat()
-    if (!info.isFile() || info.size === 0) return emptyTextFileChunk(offset)
-    const safeOffset = Math.min(offset, info.size)
-    const buffer = Buffer.alloc(Math.min(maxBytes + 1, Math.max(0, info.size - safeOffset)))
-    const result = await file.read(buffer, 0, buffer.length, safeOffset)
-    const truncated = safeOffset + result.bytesRead < info.size || result.bytesRead > maxBytes
-    const sliced = buffer.subarray(0, Math.min(result.bytesRead, maxBytes))
-    const nextOffset = truncated ? safeOffset + sliced.length : undefined
-    return {
-      text: sliced.toString('utf8'),
-      offset: safeOffset,
-      bytesRead: sliced.length,
-      truncated,
-      ...(nextOffset !== undefined ? { nextOffset, nextCursor: String(nextOffset) } : {})
-    }
-  } finally {
-    await file.close()
-  }
-}
-
-function emptyTextFileChunk(offset: number): ProcessChunk {
-  return { text: '', offset, bytesRead: 0, truncated: false }
-}
-
-function readOnlyNoFollowFlags(): number {
-  return constants.O_RDONLY | constants.O_NOFOLLOW
-}
-
 function endpointSummary(id: 'model-router' | 'local-runtime', label: string, baseUrl: string): {
   id: 'model-router' | 'local-runtime'
   label: string
@@ -1257,21 +989,6 @@ async function gitDependency(): Promise<RuntimeDependency> {
   }
 }
 
-function checkpointDependency(checkpointDataDir: string | undefined): RuntimeDependency {
-  return checkpointDataDir
-    ? {
-        id: 'git-checkpoint-data-dir',
-        available: true,
-        path: resolve(expandHomePath(checkpointDataDir)),
-        status: 'configured'
-      }
-    : {
-        id: 'git-checkpoint-data-dir',
-        available: false,
-        reason: 'Checkpoint data dir was not configured.'
-      }
-}
-
 function normalizeGitPath(pathInput: string | undefined, repositoryRoot: string): string | undefined {
   const raw = pathInput?.trim()
   if (!raw) return undefined
@@ -1436,10 +1153,6 @@ function expandHomePath(path: string): string {
   return path
 }
 
-function normalizeComparablePath(path: string): string {
-  return resolve(expandHomePath(path)).split(sep).join('/').replace(/\/+$/, '')
-}
-
 function trimTrailingSlash(value: string): string {
   return value.trim().replace(/\/+$/, '')
 }
@@ -1483,22 +1196,4 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {}
-}
-
-function stringValue(value: unknown): string {
-  return typeof value === 'string' ? value : ''
-}
-
-function arrayOfStrings(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === 'string')
-    : []
-}
-
-function isAgentRuntimeId(value: string): value is CheckpointMetadata['runtimeId'] {
-  return value === 'sciforge' || value === 'codex' || value === 'claude'
-}
-
-function isCheckpointStatus(value: string): value is CheckpointMetadata['status'] {
-  return value === 'available' || value === 'restored' || value === 'blocked' || value === 'failed'
 }

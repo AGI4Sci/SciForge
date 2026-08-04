@@ -27,7 +27,6 @@ import {
   mergeScheduleSettings,
   mergeSpeechToTextSettings,
   mergeWorkflowSettings,
-  mergeRemoteExecutorSettings,
   mergeWriteSettings,
   mergeImageGenerationSettings,
   normalizeAppBehaviorSettings,
@@ -43,9 +42,10 @@ import {
   normalizeScheduleSettings,
   normalizeSpeechToTextSettings,
   normalizeWorkflowSettings,
-  normalizeRemoteExecutorSettings,
   normalizeWriteSettings,
   normalizeImageGenerationSettings,
+  mergeWorkbenchToolbarSettings,
+  normalizeWorkbenchToolbarSettings,
   type AppSettingsPatch,
   type AppSettingsV1
 } from '@shared/app-settings'
@@ -83,7 +83,7 @@ export function mergeSettings(current: AppSettingsV1, patch: SettingsPatch): App
     runtimeGuards: runtimeGuardsPatch,
     imageGeneration: imageGenerationPatch,
     connectPhone: connectPhonePatch,
-    remoteExecutor: remoteExecutorPatch,
+    workbenchToolbar: workbenchToolbarPatch,
     ...restPatch
   } = patch
   const restSettingsPatch = restPatch as Partial<Pick<
@@ -109,6 +109,10 @@ export function mergeSettings(current: AppSettingsV1, patch: SettingsPatch): App
     computerUse: mergeComputerUseSettings(safeCurrent.computerUse, computerUsePatch),
     runtimeGuards: mergeRuntimeGuardSettings(safeCurrent.runtimeGuards, runtimeGuardsPatch),
     imageGeneration: mergeImageGenerationSettings(safeCurrent.imageGeneration, imageGenerationPatch),
+    workbenchToolbar: mergeWorkbenchToolbarSettings(
+      safeCurrent.workbenchToolbar,
+      workbenchToolbarPatch
+    ),
     log: {
       ...safeCurrent.log,
       ...(patch.log ?? {})
@@ -133,7 +137,6 @@ export function mergeSettings(current: AppSettingsV1, patch: SettingsPatch): App
     connectPhone: mergeConnectPhoneSettings(safeCurrent.connectPhone, connectPhonePatch),
     schedule: mergeScheduleSettings(safeCurrent.schedule, patch.schedule),
     workflow: mergeWorkflowSettings(safeCurrent.workflow, patch.workflow),
-    remoteExecutor: mergeRemoteExecutorSettings(safeCurrent.remoteExecutor, remoteExecutorPatch),
     guiUpdate: {
       ...safeCurrent.guiUpdate,
       ...(patch.guiUpdate ?? {})
@@ -184,6 +187,7 @@ export function coerceRendererSettings(settings: AppSettingsV1): AppSettingsV1 {
       turnComplete: raw.notifications?.turnComplete !== false
     },
     appBehavior: normalizeAppBehaviorSettings(raw.appBehavior),
+    workbenchToolbar: normalizeWorkbenchToolbarSettings(raw.workbenchToolbar),
     keyboardShortcuts: normalizeKeyboardShortcuts(raw.keyboardShortcuts),
     write: normalizeWriteSettings(raw.write),
     speechToText: normalizeSpeechToTextSettings(raw.speechToText),
@@ -191,7 +195,6 @@ export function coerceRendererSettings(settings: AppSettingsV1): AppSettingsV1 {
     connectPhone: normalizeConnectPhoneSettings(raw.connectPhone),
     schedule: normalizeScheduleSettings(raw.schedule),
     workflow: normalizeWorkflowSettings(raw.workflow),
-    remoteExecutor: normalizeRemoteExecutorSettings(raw.remoteExecutor),
     guiUpdate: {
       channel: normalizeGuiUpdateChannel(raw.guiUpdate?.channel ?? DEFAULT_GUI_UPDATE_CHANNEL)
     },

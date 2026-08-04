@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } 
 import { AlertCircle, Check, ChevronDown, GitBranch, Loader2, Plus, Search } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { GitBranchesResult } from '@shared/git-branches'
+import { activeWorkspaceLocator } from '../../remote-workspace/placement'
 
 type Props = {
   workspaceRoot: string
@@ -24,7 +25,10 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
     setLoading(true)
     setError(null)
     try {
-      const next = await window.sciforge.getGitBranches(root)
+      const next = await window.sciforge.getGitBranches(
+        root,
+        activeWorkspaceLocator(root)
+      )
       setResult(next)
       if (!next.ok) setError(next.message)
     } catch (e) {
@@ -83,7 +87,11 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
     setActingBranch(branch)
     setError(null)
     try {
-      const next = await window.sciforge.switchGitBranch(root, branch)
+      const next = await window.sciforge.switchGitBranch(
+        root,
+        branch,
+        activeWorkspaceLocator(root)
+      )
       setResult(next)
       if (!next.ok) {
         setError(next.message)
@@ -104,7 +112,11 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
     setActingBranch(branch)
     setError(null)
     try {
-      const next = await window.sciforge.createAndSwitchGitBranch(root, branch)
+      const next = await window.sciforge.createAndSwitchGitBranch(
+        root,
+        branch,
+        activeWorkspaceLocator(root)
+      )
       setResult(next)
       if (!next.ok) {
         setError(next.message)

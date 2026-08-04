@@ -33,6 +33,15 @@ export type DomDocumentTextAnchor = DocumentTextAnchor & {
   range: Range
 }
 
+export type DocumentTextSearchMatch = {
+  from: number
+  to: number
+}
+
+export type DomDocumentTextSearchMatch = DocumentTextSearchMatch & {
+  range: Range
+}
+
 export type DocumentTextOverlayRect = {
   top: number
   left: number
@@ -148,6 +157,41 @@ export function documentTextPositionAtOffset(
 
 export function documentTextFromDom(root: HTMLElement): string {
   return documentTextNodes(root).map((node) => node.data).join('')
+}
+
+export function findDocumentTextSearchMatches(
+  documentText: string,
+  query: string,
+  maxMatches = 2_000
+): DocumentTextSearchMatch[] {
+  const needle = query.trim()
+  if (!needle || maxMatches <= 0) return []
+  const matches: DocumentTextSearchMatch[] = []
+  const pattern = new RegExp(escapeRegularExpression(needle), 'gi')
+  for (const match of documentText.matchAll(pattern)) {
+    const from = match.index
+    const to = from + match[0].length
+    matches.push({ from, to })
+    if (matches.length >= maxMatches) break
+  }
+  return matches
+}
+
+function escapeRegularExpression(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+export function resolveDomDocumentTextSearchMatches(
+  root: HTMLElement,
+  query: string,
+  maxMatches = 2_000
+): DomDocumentTextSearchMatch[] {
+  const nodes = documentTextNodes(root)
+  const documentText = nodes.map((node) => node.data).join('')
+  return findDocumentTextSearchMatches(documentText, query, maxMatches).flatMap((match) => {
+    const range = createDomRangeForOffsets(root, nodes, match.from, match.to)
+    return range ? [{ ...match, range }] : []
+  })
 }
 
 export function documentTextAnchorFromDomRange(

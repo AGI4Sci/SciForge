@@ -114,7 +114,17 @@ describe('Claude Code agent tool transport', () => {
         inputSchema: { type: 'object', properties: {} }
       }],
       call: async () => {
-        throw Object.assign(new Error('The resource reference expired.'), { code: 'unknown_resource_ref' })
+        throw Object.assign(new Error('The resource reference expired.'), {
+          code: 'unknown_resource_ref',
+          failureClass: 'stale_resource',
+          retryable: false,
+          providerStage: 'evidence_validation',
+          resourceIdentity: 'resource:expired',
+          recovery: {
+            action: 'reobserve',
+            instruction: 'Observe the current resource before invoking another operation.'
+          }
+        })
       }
     }
     let handler: ((args: Record<string, unknown>, extra: unknown) => Promise<unknown>) | undefined
@@ -133,7 +143,12 @@ describe('Claude Code agent tool transport', () => {
       structuredContent: {
         error: {
           code: 'unknown_resource_ref',
-          message: 'The resource reference expired.'
+          message: 'The resource reference expired.',
+          failureClass: 'stale_resource',
+          retryable: false,
+          providerStage: 'evidence_validation',
+          resourceIdentity: 'resource:expired',
+          recoveryGuidance: 'Observe the current resource before invoking another operation.'
         }
       },
       isError: true

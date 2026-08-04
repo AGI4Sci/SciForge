@@ -1,7 +1,10 @@
 import type { ReactElement } from 'react'
-import type { LucideIcon } from 'lucide-react'
-import type { DomainWorkbenchRightPanelRenderContext } from '@sciforge/domain-sdk/host'
-import type { RightPanelMode } from '../components/chat/WorkbenchTopBar'
+import {
+  RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
+  type DomainRendererWorkbenchRightPanelContract,
+  type DomainRendererWorkbenchRightPanelRenderContext,
+  type DomainRendererWorkbenchRightPanelValue
+} from '@sciforge/domain-sdk/renderer'
 import {
   RendererSlotRegistry,
   type RegisteredRendererSlotContribution,
@@ -9,52 +12,43 @@ import {
 } from './renderer-slot-registry'
 
 export const WORKBENCH_RIGHT_PANEL_SLOT = 'workbench.right-panel' as const
-export const RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND =
-  'renderer.workbench-right-panel' as const
+export { RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND }
 
-export type WorkbenchRightPanelContribution = {
-  id: string
-  mode: Exclude<RightPanelMode, null>
-  label: string
-  icon: LucideIcon
-  title: string
-  resourceKind: string
-  isAvailable: () => boolean
-  render: (context: DomainWorkbenchRightPanelRenderContext) => ReactElement
-}
+export type WorkbenchRightPanelContribution =
+  DomainRendererWorkbenchRightPanelContract &
+  DomainRendererWorkbenchRightPanelValue<ReactElement> &
+  Readonly<{ id: string }>
 
-type WorkbenchRendererSlots = {
+type WorkbenchRightPanelSlots = {
   [WORKBENCH_RIGHT_PANEL_SLOT]: WorkbenchRightPanelContribution
 }
 
 export type RegisteredWorkbenchRightPanelContribution = RegisteredRendererSlotContribution<
-  WorkbenchRendererSlots,
+  WorkbenchRightPanelSlots,
   typeof WORKBENCH_RIGHT_PANEL_SLOT
 >
 
 export class WorkbenchRightPanelContributionRegistry {
-  private readonly slots = new RendererSlotRegistry<WorkbenchRendererSlots>()
+  private readonly slots = new RendererSlotRegistry<WorkbenchRightPanelSlots>()
 
-  register(input: {
+  register(input: Readonly<{
+    id: string
     ownerId: string
     order?: number
-    contribution: WorkbenchRightPanelContribution
-  }): RendererSlotRegistrationDisposable {
-    const duplicateMode = this.list().find(
-      ({ contribution }) => contribution.mode === input.contribution.mode
-    )
-    if (duplicateMode) {
-      throw new Error(
-        `Duplicate Workbench right-panel mode "${input.contribution.mode}" from ` +
-        `"${input.ownerId}"; already registered by "${duplicateMode.ownerId}".`
-      )
-    }
+    contract: DomainRendererWorkbenchRightPanelContract
+    value: DomainRendererWorkbenchRightPanelValue<ReactElement>
+  }>): RendererSlotRegistrationDisposable {
     return this.slots.register({
       slot: WORKBENCH_RIGHT_PANEL_SLOT,
-      id: input.contribution.id,
+      id: input.id,
       ownerId: input.ownerId,
       order: input.order,
-      contribution: input.contribution
+      contribution: Object.freeze({
+        id: input.id,
+        ...input.contract,
+        render: (context: DomainRendererWorkbenchRightPanelRenderContext) =>
+          input.value.render(context)
+      })
     })
   }
 
@@ -62,15 +56,13 @@ export class WorkbenchRightPanelContributionRegistry {
     return this.slots.list(WORKBENCH_RIGHT_PANEL_SLOT)
   }
 
-  resolve(mode: RightPanelMode): RegisteredWorkbenchRightPanelContribution | null {
-    if (!mode) return null
-    return this.list().find(({ contribution }) => contribution.mode === mode) ?? null
-  }
-
-  resolveById(contributionId: string): RegisteredWorkbenchRightPanelContribution | null {
-    const normalized = contributionId.trim()
-    if (!normalized) return null
-    return this.list().find(({ id }) => id === normalized) ?? null
+  resolve(
+    contributionId: string | null | undefined
+  ): RegisteredWorkbenchRightPanelContribution | null {
+    const normalized = contributionId?.trim()
+    return normalized
+      ? this.slots.get(WORKBENCH_RIGHT_PANEL_SLOT, normalized)
+      : null
   }
 
   dispose(): void {

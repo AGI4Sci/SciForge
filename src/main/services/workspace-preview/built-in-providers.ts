@@ -26,6 +26,9 @@ import {
   TEXT_WORKSPACE_PREVIEW_PLUGIN_ID
 } from '../../../shared/workspace-preview'
 import {
+  MARKDOWN_COPY_FOR_WECHAT_ACTION_ID
+} from '../../../shared/markdown-wechat'
+import {
   type WorkspacePreviewProviderApplyEditInput,
   type WorkspacePreviewProviderApplyEditResult,
   type WorkspacePreviewProviderExportInput,
@@ -69,6 +72,9 @@ export type WorkspacePreviewBuiltInHostProviderAdapters = Readonly<{
   exportAnnotatedPdf(input: WorkspacePreviewProviderExportInput): Promise<WorkspacePreviewProviderExportResult>
   invokeHtmlPreview(input: WorkspacePreviewProviderActionInput): Promise<WorkspacePreviewProviderActionResult>
   invokeMarkdownImage(input: WorkspacePreviewProviderActionInput): Promise<WorkspacePreviewProviderActionResult>
+  invokeMarkdownCopyForWechat(
+    input: WorkspacePreviewProviderActionInput
+  ): Promise<WorkspacePreviewProviderActionResult>
 }>
 
 export type WorkspacePreviewBuiltInProviderAdapters = Readonly<{
@@ -158,11 +164,16 @@ export function createBuiltInWorkspacePreviewProviderRegistrations(
       ...(host
         ? {
             validateFile: host.validateTextFile,
-            observe: (input: WorkspacePreviewProviderObservationInput) => host.observeSourceText(input, ['markdown.readImage']),
+            observe: (input: WorkspacePreviewProviderObservationInput) => host.observeSourceText(input, [
+              'markdown.readImage',
+              MARKDOWN_COPY_FOR_WECHAT_ACTION_ID
+            ]),
             applyEdit: chainEdits(textEdit, ...annotationEdits),
             exportPreview: annotationExport,
             invokeHostAction: (input: WorkspacePreviewProviderActionInput) => input.action.actionId === 'markdown.readImage'
               ? host.invokeMarkdownImage(input)
+              : input.action.actionId === MARKDOWN_COPY_FOR_WECHAT_ACTION_ID
+                ? host.invokeMarkdownCopyForWechat(input)
               : Promise.resolve(null)
           }
         : {})

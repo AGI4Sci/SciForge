@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from 'node:child_process'
 import { join } from 'node:path'
+import type { Readable } from 'node:stream'
 
 export type ProcessRequest = Readonly<{
   executable: 'ssh' | 'sftp'
@@ -24,13 +25,42 @@ export interface RemoteSshProcessRunner {
   run(request: ProcessRequest): Promise<ProcessResult>
 }
 
+export type StreamingProcessRequest = Readonly<{
+  executable: 'ssh'
+  args: readonly string[]
+  signal?: AbortSignal
+}>
+
+export type StreamingProcessExit = Readonly<{
+  exitCode: number | null
+  signal: NodeJS.Signals | null
+}>
+
+/**
+ * Package-private transport primitive used by Workspace Host attachment.
+ * It is intentionally not a renderer contract and never exposes a target alias.
+ */
+export interface RemoteSshStreamingProcess {
+  readonly stdout: Readable
+  readonly stderr: Readable
+  readonly exit: Promise<StreamingProcessExit>
+  write(data: string | Uint8Array): Promise<void>
+  end(): void
+  dispose(): Promise<void>
+}
+
+export interface RemoteSshStreamingProcessRunner {
+  open(request: StreamingProcessRequest): RemoteSshStreamingProcess
+}
+
 export type SpawnProcess = (
   executable: string,
   args: readonly string[],
   options: SpawnOptionsWithoutStdio & { stdio: ['pipe', 'pipe', 'pipe'] }
 ) => ChildProcessWithoutNullStreams
 
-export class SystemOpenSshProcessRunner implements RemoteSshProcessRunner {
+export class SystemOpenSshProcessRunner
+implements RemoteSshProcessRunner, RemoteSshStreamingProcessRunner {
   constructor(
     private readonly spawnProcess: SpawnProcess = spawn as SpawnProcess,
     private readonly executablePaths: Readonly<Partial<Record<'ssh' | 'sftp', string>>> = {}
@@ -142,6 +172,91 @@ export class SystemOpenSshProcessRunner implements RemoteSshProcessRunner {
         // error/close events above remain the single settlement path.
       }
     })
+  }
+
+  open(request: StreamingProcessRequest): RemoteSshStreamingProcess {
+    if (request.signal?.aborted) throw abortError()
+
+    const child = this.spawnProcess(
+      this.executablePaths.ssh ?? systemOpenSshExecutable('ssh'),
+      request.args,
+      {
+        shell: false,
+        windowsHide: true,
+        env: openSshEnvironment(process.env),
+        stdio: ['pipe', 'pipe', 'pipe']
+      }
+    )
+    child.stdin.on('error', () => undefined)
+
+    let settled = false
+    let disposed = false
+    let forceKill: ReturnType<typeof setTimeout> | undefined
+    let resolveExit!: (result: StreamingProcessExit) => void
+    let rejectExit!: (error: Error) => void
+    const exit = new Promise<StreamingProcessExit>((resolve, reject) => {
+      resolveExit = resolve
+      rejectExit = reject
+    })
+    // A caller may dispose before awaiting exit. Keep child failures observable
+    // through `exit` without creating an unhandled rejection in that interval.
+    void exit.catch(() => undefined)
+
+    const clear = () => {
+      if (forceKill) clearTimeout(forceKill)
+      request.signal?.removeEventListener('abort', onAbort)
+    }
+    const terminate = () => {
+      if (!child.killed) child.kill('SIGTERM')
+      forceKill ??= setTimeout(() => {
+        if (!settled) child.kill('SIGKILL')
+      }, 1_000)
+      forceKill.unref?.()
+    }
+    const onAbort = () => {
+      disposed = true
+      terminate()
+    }
+    request.signal?.addEventListener('abort', onAbort, { once: true })
+
+    child.once('error', (error) => {
+      if (settled) return
+      settled = true
+      clear()
+      rejectExit(error)
+    })
+    child.once('close', (exitCode, signal) => {
+      if (settled) return
+      settled = true
+      clear()
+      resolveExit({ exitCode, signal })
+    })
+
+    return {
+      stdout: child.stdout,
+      stderr: child.stderr,
+      exit,
+      write: async (data) => {
+        if (disposed || settled || child.stdin.destroyed || !child.stdin.writable) {
+          throw new Error('Remote SSH streaming process is not writable.')
+        }
+        await new Promise<void>((resolve, reject) => {
+          child.stdin.write(data, (error) => error ? reject(error) : resolve())
+        })
+      },
+      end: () => {
+        if (!child.stdin.destroyed && child.stdin.writable) child.stdin.end()
+      },
+      dispose: async () => {
+        if (disposed) {
+          await exit.catch(() => undefined)
+          return
+        }
+        disposed = true
+        if (!settled) terminate()
+        await exit.catch(() => undefined)
+      }
+    }
   }
 }
 

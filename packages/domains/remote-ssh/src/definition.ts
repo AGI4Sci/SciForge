@@ -15,9 +15,30 @@ export const REMOTE_SSH_DOMAIN_PACKAGE_NAME = domainPackageDefinition.packageNam
 export const REMOTE_SSH_CAPABILITY_FACTORY_CONTRIBUTION = contributionFor(
   'main', 'main.capability-factory'
 )
+export const REMOTE_SSH_WORKSPACE_HOST_PROVIDER_CONTRIBUTION = contributionFor(
+  'main', 'main.workspace-host-provider'
+)
+export const REMOTE_SSH_WORKSPACE_HOST_PROVIDER_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    REMOTE_SSH_WORKSPACE_HOST_PROVIDER_CONTRIBUTION.id
+  ]!
 export const REMOTE_SSH_RENDERER_RIGHT_PANEL_CONTRIBUTION = contributionFor(
   'renderer', 'renderer.workbench-right-panel'
 )
+export const REMOTE_SSH_RENDERER_RIGHT_PANEL_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    REMOTE_SSH_RENDERER_RIGHT_PANEL_CONTRIBUTION.id
+  ]!
+export const REMOTE_SSH_RENDERER_COMMAND_CONTRIBUTION = contributionFor(
+  'renderer', 'renderer.command'
+)
+export const REMOTE_SSH_RENDERER_TOOLBAR_ACTION_CONTRIBUTION = contributionFor(
+  'renderer', 'renderer.workbench-toolbar-action'
+)
+export const REMOTE_SSH_RENDERER_TOOLBAR_ACTION_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    REMOTE_SSH_RENDERER_TOOLBAR_ACTION_CONTRIBUTION.id
+  ]!
 export const REMOTE_SSH_RENDERER_I18N_CONTRIBUTION = contributionFor(
   'renderer', 'renderer.i18n-resource'
 )

@@ -66,3 +66,50 @@
 - [x] 10.2 Add real Electron Workspace Preview read/edit/release coverage and Paper Radar UI capability coverage.
 - [x] 10.3 Build an unpacked distributable and launch the packaged app through the migrated domain paths.
 - [x] 10.4 Re-run full tests, package tests, typechecks, governance, lint on changed files, build, and dead-path audits.
+
+## 11. User-configurable Workbench toolbar contributions
+
+- [x] 11.1 Add bounded, normalized host settings for hidden command IDs and explicit toolbar order.
+- [x] 11.2 Resolve visible toolbar contributions from installed actions plus user preferences without changing contribution availability or execution authority.
+- [x] 11.3 Add an accessible toolbar configuration surface for add/remove, reorder, and reset actions.
+- [x] 11.4 Cover normalization, persistence, ordering, missing-package retention, and UI rendering with focused tests.
+- [x] 11.5 Run typechecks, focused regressions, build verification, and local UI validation.
+- [x] 11.6 Make the toolbar customization entry visibly labeled and verify it in the running app.
+
+## 12. Six-package architecture and contracts
+
+- [x] 12.1 Define Create Loop, Visual Review, Change Inspector, Terminal, Anchored Comments, and Git Checkpoints as independent SciForge official domain packages that are preinstalled and enabled by default.
+- [x] 12.2 Specify generic renderer command, right-panel, bottom-panel, overlay, and bounded composer-context contributions.
+- [x] 12.3 Specify package installation, enablement, toolbar placement, capability authority, and runtime lifecycle as independent Host-owned boundaries.
+
+## 13. Generic renderer contribution SDK
+
+- [x] 13.1 Add stable owner-aware contracts and registries for `renderer.command`, `renderer.workbench-right-panel`, `renderer.workbench-bottom-panel`, `renderer.overlay`, and `renderer.composer-context`.
+- [x] 13.2 Bind every renderer contribution declared by one package atomically, reject missing/extra/duplicate contributions, and dispose registrations in reverse order.
+- [x] 13.3 Make Workbench, top bar, bottom panel, application overlay outlet, and composer resolve only generic installed contributions without feature IDs or imports.
+- [x] 13.4 Route every toolbar/menu/shortcut placement through the same stable `renderer.command`; do not retain placement-owned callbacks.
+
+## 14. Official Workbench packages
+
+- [x] 14.1 Create `@sciforge/domain-create-loop` and move Create Loop contracts, command, right panel, capabilities, and runtime lifecycle behind its process-separated public entrypoints.
+- [x] 14.2 Create `@sciforge/domain-visual-review` and move Visual Review contracts, command, right panel, bounded composer context, capabilities, and owned services behind its public entrypoints.
+- [x] 14.3 Create `@sciforge/domain-change-inspector` and move Change Inspector contracts, command, right panel, capabilities, and worker lifecycle behind its public entrypoints.
+- [x] 14.4 Create `@sciforge/domain-terminal` and move Terminal contracts, command, bottom panel, session capabilities, and owner-scoped event/runtime lifecycle behind its public entrypoints.
+- [x] 14.5 Create `@sciforge/domain-anchored-comments` and move Anchored Comments contracts, command, overlay, bounded composer context, capture/feedback capabilities, and service lifecycle behind its public entrypoints.
+- [x] 14.6 Create `@sciforge/domain-git-checkpoints` and move Git Checkpoints contracts, command, right panel, capabilities, and service lifecycle behind its public entrypoints.
+- [x] 14.7 Select all six packages through generated installed-domain composition with preinstalled/default-enabled metadata, and remove their Host feature maps, imports, mode switches, and domain-specific transport paths.
+
+## 15. Lifecycle and preference behavior
+
+- [ ] 15.1 Persist package enablement independently from toolbar hidden/order preferences, with all six packages enabled on fresh and migrated installations.
+- [x] 15.2 Ensure hiding a command changes only placement while the enabled package's other surfaces, composer context, capabilities, and runtime remain active.
+- [ ] 15.3 Ensure disabling a package blocks new invocations, removes all owned contributions, disposes runtime resources idempotently, preserves package data/preferences, and does not affect another package.
+- [x] 15.4 Ensure uninstall or package absence prevents activation while retaining bounded stable-ID placement preferences for reinstall; keep protected bundled-package removal policy separate from disablement.
+
+## 16. Acceptance verification
+
+- [x] 16.1 Add manifest/composition tests proving each of the six packages owns its full declared contribution set and can be added or removed without editing Host feature maps.
+- [x] 16.2 Add renderer tests for command reuse, right/bottom panel routing, overlay activation/cleanup, composer context bounds, atomic activation, and reverse disposal.
+- [ ] 16.3 Add lifecycle tests for fresh defaults and independent hidden, disabled, absent/reinstalled, reset, failed activation, shutdown, and version-switch states.
+- [x] 16.4 Add capability-governance tests proving UI and agent callers use one broker path and that no migrated domain-specific IPC/preload/service facade remains.
+- [x] 16.5 Run package boundary checks, generated composition freshness, typechecks, focused package tests, full regressions, changed-file lint, source build, unpacked packaged-app launch, and dead-path audits.

@@ -1,7 +1,12 @@
 import { z } from 'zod'
+import {
+  workspaceNetworkEgressSelectionSchema,
+  type WorkspaceNetworkEgressSelection
+} from '@sciforge/domain-sdk/workspace-host'
 
 export const REMOTE_SSH_SCHEMA_VERSION = 2
 export const REMOTE_SSH_TARGET_RESOURCE_KIND = 'remote-ssh-target'
+export const REMOTE_SSH_WORKSPACE_HOST_PROVIDER_ID = 'remote-ssh.workspace-host-provider'
 export const REMOTE_SSH_MAX_CAPTURED_OUTPUT_CHARACTERS = 256 * 1_024
 export const REMOTE_SSH_DEFAULT_ENVIRONMENT_PROVIDER = 'vm' as const
 
@@ -14,6 +19,7 @@ export const REMOTE_SSH_CAPABILITY_IDS = Object.freeze({
   ensureLabEnvironment: 'remote-ssh.lab-environment.ensure',
   openLabEnvironmentConsole: 'remote-ssh.lab-environment.console.open',
   stopLabEnvironment: 'remote-ssh.lab-environment.stop',
+  openOpenSshConfig: 'remote-ssh.openssh-config.open',
   getBinding: 'remote-ssh.bindings.get',
   saveBinding: 'remote-ssh.bindings.save',
   listTargetCatalog: 'remote-ssh.targets.catalog',
@@ -24,7 +30,9 @@ export const REMOTE_SSH_CAPABILITY_IDS = Object.freeze({
   executeCommand: 'remote-ssh.command.execute',
   cancelCommand: 'remote-ssh.command.cancel',
   uploadFile: 'remote-ssh.file.upload',
-  downloadFile: 'remote-ssh.file.download'
+  downloadFile: 'remote-ssh.file.download',
+  openWorkspaceHostSession: 'remote-ssh.workspace-host-session.open',
+  openEgressSession: 'remote-ssh.egress-session.open'
 } as const)
 
 const isoDateTimeSchema = z.string().datetime({ offset: true })
@@ -77,6 +85,28 @@ export const remoteSshRemotePathSchema = z.string()
   .refine(
     (value) => !value.startsWith('-') && !/[\0\r\n]/.test(value),
     'Remote paths cannot start with an option prefix or contain control separators.'
+  )
+
+export const remoteSshWorkspaceRootSchema = z.string()
+  .trim()
+  .min(1)
+  .max(4_096)
+  .regex(/^\/(?:[^/\0\r\n]+(?:\/[^/\0\r\n]+)*)?$/, 'Use an absolute normalized POSIX path.')
+  .refine(
+    (value) => !value.split('/').some((segment) => segment === '.' || segment === '..'),
+    'Workspace root cannot contain traversal segments.'
+  )
+
+export const remoteSshWorkspaceHostSessionIdSchema = z.string()
+  .regex(
+    /^ssh_whs_[A-Za-z0-9_-]{24,128}$/,
+    'Remote Workspace session IDs must be opaque package-issued identities.'
+  )
+
+export const remoteSshEgressSessionIdSchema = z.string()
+  .regex(
+    /^ssh_egs_[A-Za-z0-9_-]{24,128}$/,
+    'Remote SSH egress session IDs must be opaque package-issued identities.'
   )
 
 export const remoteSshTargetCapabilitySchema = z.enum(['shell', 'file-transfer'])
@@ -146,6 +176,22 @@ export const remoteSshLabEnvironmentStateSchema = z.enum([
   'login-required',
   'ready',
   'failed'
+])
+
+export const remoteSshLabEnvironmentGuidanceCodeSchema = z.enum([
+  'install-provider',
+  'select-environment',
+  'start-environment',
+  'wait-for-environment',
+  'resume-environment',
+  'install-host-openssh',
+  'configure-gateway-alias',
+  'trust-gateway-host-key',
+  'authorize-gateway-key',
+  'enable-gateway-ssh',
+  'open-vpn-login',
+  'test-target',
+  'retry'
 ])
 
 const labelKeySchema = z.string().trim().min(1).max(64)
@@ -264,6 +310,10 @@ export const remoteSshProbeEndpointSchema = z.object({
 
 export const remoteSshEmptyInputSchema = z.object({}).strict()
 
+export const remoteSshOpenConfigInputSchema = remoteSshEmptyInputSchema
+export const remoteSshOpenConfigResultSchema = z.object({
+  opened: z.literal(true)
+}).strict()
 export const remoteSshLabListInputSchema = remoteSshEmptyInputSchema
 export const remoteSshLabListResultSchema = z.object({ labs: z.array(remoteSshLabSchema).max(512) }).strict()
 export const remoteSshVirtualBoxMachineSchema = z.object({
@@ -307,6 +357,7 @@ export const remoteSshLabEnvironmentResultSchema = z.object({
   provider: remoteSshLabEnvironmentProviderSchema,
   state: remoteSshLabEnvironmentStateSchema,
   consoleAvailable: z.boolean(),
+  guidanceCode: remoteSshLabEnvironmentGuidanceCodeSchema.optional(),
   message: z.string().trim().min(1).max(2_000).optional(),
   checkedAt: isoDateTimeSchema
 }).strict()
@@ -366,6 +417,19 @@ export const remoteSshTargetProbeResultSchema = z.object({
   target: remoteSshProbeEndpointSchema,
   ready: z.boolean(),
   checkedAt: isoDateTimeSchema
+}).strict()
+export const remoteSshWorkspaceHostSessionOpenInputSchema = z.object({
+  workspaceRoot: remoteSshWorkspaceRootSchema,
+  egress: workspaceNetworkEgressSelectionSchema
+}).strict()
+export const remoteSshWorkspaceHostSessionOpenResultSchema = z.object({
+  providerId: z.literal(REMOTE_SSH_WORKSPACE_HOST_PROVIDER_ID),
+  authorizedSessionId: remoteSshWorkspaceHostSessionIdSchema
+}).strict()
+export const remoteSshEgressSessionOpenInputSchema = remoteSshEmptyInputSchema
+export const remoteSshEgressSessionOpenResultSchema = z.object({
+  authorizedSessionId: remoteSshEgressSessionIdSchema,
+  expiresAt: isoDateTimeSchema
 }).strict()
 export const remoteSshTargetSaveInputSchema = z.object({
   id: remoteSshIdSchema.optional(),
@@ -487,6 +551,8 @@ export type RemoteSshLabEnvironmentConfig = z.infer<typeof remoteSshLabEnvironme
 export type RemoteSshLabEnvironmentLocatorConfig =
   z.infer<typeof remoteSshLabEnvironmentLocatorConfigSchema>
 export type RemoteSshLabEnvironmentState = z.infer<typeof remoteSshLabEnvironmentStateSchema>
+export type RemoteSshLabEnvironmentGuidanceCode =
+  z.infer<typeof remoteSshLabEnvironmentGuidanceCodeSchema>
 export type RemoteSshLab = z.infer<typeof remoteSshLabSchema>
 export type RemoteSshTarget = z.infer<typeof remoteSshTargetSchema>
 export type RemoteSshTargetSummary = z.infer<typeof remoteSshTargetSummarySchema>
@@ -497,6 +563,7 @@ export type RemoteSshFailureCode = z.infer<typeof remoteSshFailureCodeSchema>
 export type RemoteSshFailure = z.infer<typeof remoteSshFailureSchema>
 export type RemoteSshProbeStatus = z.infer<typeof remoteSshProbeStatusSchema>
 export type RemoteSshProbeEndpoint = z.infer<typeof remoteSshProbeEndpointSchema>
+export type RemoteSshOpenConfigResult = z.infer<typeof remoteSshOpenConfigResultSchema>
 export type RemoteSshLabListInput = z.infer<typeof remoteSshLabListInputSchema>
 export type RemoteSshLabListResult = z.infer<typeof remoteSshLabListResultSchema>
 export type RemoteSshVirtualBoxMachine =
@@ -529,6 +596,12 @@ export type RemoteSshTargetCatalogResult = z.infer<typeof remoteSshTargetCatalog
 export type RemoteSshTargetObserveResult = z.infer<typeof remoteSshTargetObserveResultSchema>
 export type RemoteSshTargetProbeInput = z.infer<typeof remoteSshTargetProbeInputSchema>
 export type RemoteSshTargetProbeResult = z.infer<typeof remoteSshTargetProbeResultSchema>
+export type RemoteSshWorkspaceHostSessionOpenInput =
+  Readonly<{ workspaceRoot: string; egress: WorkspaceNetworkEgressSelection }>
+export type RemoteSshWorkspaceHostSessionOpenResult =
+  z.infer<typeof remoteSshWorkspaceHostSessionOpenResultSchema>
+export type RemoteSshEgressSessionOpenResult =
+  z.infer<typeof remoteSshEgressSessionOpenResultSchema>
 export type RemoteSshTargetSaveInput = z.infer<typeof remoteSshTargetSaveInputSchema>
 export type RemoteSshTargetSaveResult = z.infer<typeof remoteSshTargetSaveResultSchema>
 export type RemoteSshTargetDeleteInput = z.infer<typeof remoteSshTargetDeleteInputSchema>

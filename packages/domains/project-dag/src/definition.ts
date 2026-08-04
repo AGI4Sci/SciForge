@@ -27,6 +27,22 @@ export const PROJECT_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.workbench-right-panel'
 )
+export const PROJECT_DAG_RENDERER_RIGHT_PANEL_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    PROJECT_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION.id
+  ]!
+export const PROJECT_DAG_RENDERER_COMMAND_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.command'
+)
+export const PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.workbench-toolbar-action'
+)
+export const PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION.id
+  ]!
 export const PROJECT_DAG_RENDERER_I18N_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.i18n-resource'

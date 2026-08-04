@@ -9,9 +9,12 @@ import {
   REMOTE_SSH_OPENSSH_TEMPLATE,
   groupRemoteSshTargets,
   handlesByTargetId,
+  labEnvironmentGuidanceAction,
+  labEnvironmentGuidanceCode,
   probeDisplay,
   remoteSshGeneratedGatewayAlias,
-  remoteSshOnboardingAction
+  remoteSshOnboardingAction,
+  remoteSshWorkspaceOpenReadiness
 } from './RemoteSshPanel'
 import { remoteSshMessages } from './remote-ssh-messages'
 
@@ -96,10 +99,20 @@ describe('RemoteSshPanel helpers', () => {
       ready: false,
       checkedAt: now
     }
+    const environmentUnavailable: RemoteSshTargetProbeResult = {
+      targetId: 'gpu-a',
+      target: { status: 'not-tested' },
+      ready: false,
+      checkedAt: now
+    }
 
     expect(probeDisplay(undefined, translate).label).toBe('remoteSshStatusUnknown')
     expect(probeDisplay(reachable, translate).label).toBe('remoteSshStatusReachable')
     expect(probeDisplay(authenticationFailure, translate).label).toBe('remoteSshStatusAuthRequired')
+    expect(probeDisplay(environmentUnavailable, translate)).toEqual({
+      label: 'remoteSshStatusNotTested',
+      className: 'text-amber-600 dark:text-amber-400'
+    })
   })
 
   it('provides a credential-free target template while SciForge owns the environment proxy', () => {
@@ -164,9 +177,93 @@ describe('RemoteSshPanel helpers', () => {
     expect(remoteSshOnboardingAction(firstLab, {
       labId: firstLab.id,
       provider: 'vm',
+      state: 'configuration-required',
+      consoleAvailable: true,
+      guidanceCode: 'configure-gateway-alias',
+      checkedAt: now
+    })).toBe('open-config')
+    expect(remoteSshOnboardingAction(firstLab, {
+      labId: firstLab.id,
+      provider: 'vm',
+      state: 'configuration-required',
+      consoleAvailable: true,
+      guidanceCode: 'authorize-gateway-key',
+      checkedAt: now
+    })).toBe('open-console')
+    expect(remoteSshOnboardingAction(firstLab, {
+      labId: firstLab.id,
+      provider: 'vm',
       state: 'ready',
       consoleAvailable: true,
       checkedAt: now
     })).toBe('add-target')
+  })
+
+  it('maps environment results to one focused remediation action', () => {
+    expect(labEnvironmentGuidanceCode({
+      labId: 'lab-a',
+      provider: 'vm',
+      state: 'login-required',
+      consoleAvailable: true,
+      checkedAt: now
+    })).toBe('open-vpn-login')
+    expect(labEnvironmentGuidanceAction('configure-gateway-alias', 1)).toBe('open-config')
+    expect(labEnvironmentGuidanceAction('authorize-gateway-key', 1)).toBe('open-console')
+    expect(labEnvironmentGuidanceAction('test-target', 0)).toBe('add-target')
+    expect(labEnvironmentGuidanceAction('test-target', 1)).toBeNull()
+  })
+
+  it('opens a remote workspace only after the environment and target path are ready', () => {
+    const environment = {
+      labId: 'lab-a',
+      provider: 'vm' as const,
+      state: 'ready' as const,
+      consoleAvailable: true,
+      checkedAt: now
+    }
+    const reachable: RemoteSshTargetProbeResult = {
+      targetId: 'gpu-a',
+      target: { status: 'reachable', latencyMs: 12 },
+      ready: true,
+      checkedAt: now
+    }
+
+    expect(remoteSshWorkspaceOpenReadiness({
+      allowed: false,
+      resourceAvailable: true,
+      hostAvailable: true,
+      environment,
+      probe: reachable
+    })).toBe('unavailable')
+    expect(remoteSshWorkspaceOpenReadiness({
+      allowed: true,
+      resourceAvailable: true,
+      hostAvailable: true,
+      environment: { ...environment, state: 'configuration-required' },
+      probe: reachable
+    })).toBe('environment-required')
+    expect(remoteSshWorkspaceOpenReadiness({
+      allowed: true,
+      resourceAvailable: true,
+      hostAvailable: true,
+      environment
+    })).toBe('target-check-required')
+    expect(remoteSshWorkspaceOpenReadiness({
+      allowed: true,
+      resourceAvailable: true,
+      hostAvailable: true,
+      environment,
+      probe: reachable
+    })).toBe('ready')
+  })
+
+  it('explains key authorization without asking users to copy private keys', () => {
+    const copy = [
+      remoteSshMessages.en.remoteSshGuidanceAuthorizeKeyBody,
+      remoteSshMessages.zh.remoteSshGuidanceAuthorizeKeyBody
+    ].join('\n')
+
+    expect(copy).toMatch(/public key|公钥/u)
+    expect(copy).toMatch(/Never copy a private key|不要复制私钥/u)
   })
 })

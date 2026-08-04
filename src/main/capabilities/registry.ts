@@ -11,6 +11,7 @@ import {
   type CapabilityDescriptor,
   type CapabilityDiscoveryQuery,
   type CapabilityJsonValue,
+  type CapabilityProviderFamily,
   type CapabilityResourceHandle
 } from '../../shared/capability-broker'
 
@@ -59,6 +60,7 @@ export type CapabilityHandlerContext = {
 export type CapabilityHandlerResult<Output> = {
   output: Output
   changed?: boolean
+  retireResource?: boolean
   semanticRevision?: string
   layoutRevision?: string
 }
@@ -87,9 +89,10 @@ export type DefineCapabilityOptions<
   OutputSchema extends AnyZodSchema
 > = Omit<
   CapabilityDescriptor,
-  'contractVersion' | 'inputSchema' | 'outputSchema' | 'resourceKinds' | 'tags'
+  'contractVersion' | 'inputSchema' | 'outputSchema' | 'resourceKinds' | 'producedResourceKinds' | 'tags'
 > & {
   resourceKinds?: string[]
+  producedResourceKinds?: string[]
   tags?: string[]
   inputSchema: InputSchema
   outputSchema: OutputSchema
@@ -145,6 +148,7 @@ export function defineCapability<
     audiences: options.audiences,
     scope: options.scope,
     resourceKinds: options.resourceKinds ?? [],
+    ...(options.producedResourceKinds ? { producedResourceKinds: options.producedResourceKinds } : {}),
     effect: options.effect,
     approval: options.approval,
     concurrency: options.concurrency,
@@ -253,20 +257,111 @@ export class CapabilityRegistry {
   ): CapabilityDescriptor[] {
     const caller = capabilityCallerContextSchema.parse(rawCaller)
     const query = rawQuery ? capabilityDiscoveryQuerySchema.parse(rawQuery) : undefined
-    const text = query?.text?.toLocaleLowerCase()
-
-    return this.list().filter((descriptor) => {
-      if (!descriptor.audiences.includes(caller.audience)) return false
-      if (query?.resourceKind) {
-        if (descriptor.scope !== 'resource' || !descriptor.resourceKinds.includes(query.resourceKind)) return false
-      }
-      if (query?.effects && !query.effects.includes(descriptor.effect)) return false
-      if (query?.tags && !query.tags.every((tag) => descriptor.tags.includes(tag))) return false
-      if (text) {
-        const haystack = `${descriptor.id}\n${descriptor.title}\n${descriptor.description}\n${descriptor.tags.join(' ')}`.toLocaleLowerCase()
-        if (!haystack.includes(text)) return false
-      }
-      return true
-    })
+    return discoverCapabilityDescriptors(this.list(), caller, query, 'native')
   }
+}
+
+/**
+ * Canonical capability discovery filter and ranking used by native registry
+ * entries and managed provider projections. Provider adapters supply their
+ * family explicitly; the query never infers one from text or resource fields.
+ */
+export function discoverCapabilityDescriptors(
+  descriptors: readonly CapabilityDescriptor[],
+  rawCaller: CapabilityCallerContextInput,
+  rawQuery: CapabilityDiscoveryQuery | undefined = undefined,
+  providerFamily: CapabilityProviderFamily = 'native'
+): CapabilityDescriptor[] {
+  const caller = capabilityCallerContextSchema.parse(rawCaller)
+  const query = rawQuery ? capabilityDiscoveryQuerySchema.parse(rawQuery) : undefined
+  if (query?.providerFamily && query.providerFamily !== providerFamily) return []
+
+  const queryTokens = query?.text ? normalizedTokens(query.text) : []
+  const ranked = descriptors.flatMap((descriptor) => {
+    if (!descriptor.audiences.includes(caller.audience)) return []
+    if (query?.capabilityId && descriptor.id !== query.capabilityId) return []
+    if (query?.scope && descriptor.scope !== query.scope) return []
+    if (
+      query?.acceptedResourceKind
+      && (descriptor.scope !== 'resource' || !descriptor.resourceKinds.includes(query.acceptedResourceKind))
+    ) return []
+    if (
+      query?.producedResourceKind
+      && !descriptor.producedResourceKinds?.includes(query.producedResourceKind)
+    ) return []
+    if (query?.effects && !query.effects.includes(descriptor.effect)) return []
+    if (query?.tags && !query.tags.every((tag) => descriptor.tags.includes(tag))) return []
+
+    const score = discoveryTextScore(
+      descriptor,
+      query?.capabilityId ? undefined : query?.text,
+      query?.capabilityId ? [] : queryTokens
+    )
+    if (score === undefined) return []
+    return [{ descriptor, score }]
+  })
+
+  ranked.sort((left, right) => (
+    right.score - left.score
+    || left.descriptor.id.localeCompare(right.descriptor.id)
+  ))
+  const limit = query?.limit
+  return (limit ? ranked.slice(0, limit) : ranked).map(({ descriptor }) => descriptor)
+}
+
+function discoveryTextScore(
+  descriptor: CapabilityDescriptor,
+  text: string | undefined,
+  queryTokens: readonly string[]
+): number | undefined {
+  if (!text) return 0
+  const normalizedText = normalizeDiscoveryText(text)
+  const fields = {
+    id: normalizeDiscoveryText(descriptor.id),
+    title: normalizeDiscoveryText(descriptor.title),
+    description: normalizeDiscoveryText(descriptor.description),
+    tags: descriptor.tags.map(normalizeDiscoveryText)
+  }
+  const fieldTokens = {
+    id: new Set(normalizedTokens(descriptor.id)),
+    title: new Set(normalizedTokens(descriptor.title)),
+    description: new Set(normalizedTokens(descriptor.description)),
+    tags: new Set(descriptor.tags.flatMap(normalizedTokens))
+  }
+  const allTokens = new Set([
+    ...fieldTokens.id,
+    ...fieldTokens.title,
+    ...fieldTokens.description,
+    ...fieldTokens.tags
+  ])
+  const matchedTokens = queryTokens.filter((token) => allTokens.has(token))
+  const minimumMatches = queryTokens.length <= 2
+    ? queryTokens.length
+    : Math.ceil(queryTokens.length / 2)
+  if (matchedTokens.length < minimumMatches) return undefined
+
+  let score = 0
+  if (fields.id === normalizedText) score += 10_000
+  if (fields.title === normalizedText) score += 5_000
+  if (fields.id.includes(normalizedText)) score += 1_000
+  if (fields.title.includes(normalizedText)) score += 800
+  if (fields.tags.includes(normalizedText)) score += 600
+  if (fields.description.includes(normalizedText)) score += 200
+  for (const token of matchedTokens) {
+    if (fieldTokens.id.has(token)) score += 100
+    if (fieldTokens.title.has(token)) score += 80
+    if (fieldTokens.tags.has(token)) score += 60
+    if (fieldTokens.description.has(token)) score += 20
+  }
+  score += Math.round((matchedTokens.length / queryTokens.length) * 100)
+  score -= (queryTokens.length - matchedTokens.length) * 10
+  return score
+}
+
+function normalizedTokens(value: string): string[] {
+  return [...new Set(normalizeDiscoveryText(value).match(/[\p{L}\p{N}]+/gu) ?? [])]
+}
+
+function normalizeDiscoveryText(value: string): string {
+  return value.normalize('NFKC').toLocaleLowerCase()
 }

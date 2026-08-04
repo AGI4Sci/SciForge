@@ -8,6 +8,7 @@ import type {
   LocalRuntimeToolDiagnosticsJson
 } from './local-runtime-contract'
 import type { AgentRuntimeId } from '@shared/app-settings'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 import type {
   ScientificObjectComparison,
   ScientificObjectRef,
@@ -20,7 +21,6 @@ import type {
   AgentRuntimeContextState,
   AgentRuntimeExecutionIntent,
   AgentRuntimeFileReference,
-  AgentRuntimeGitCheckpoint,
   AgentRuntimeListThreadChildrenResponse,
   AgentRuntimeMemoryRecord,
   AgentRuntimePhase,
@@ -140,6 +140,7 @@ export type UserInputAnswer = {
 export type NormalizedThread = {
   id: string
   runtimeId?: AgentRuntimeId
+  workspaceLocator?: WorkspaceLocator
   title: string
   updatedAt: string
   model: string
@@ -226,6 +227,7 @@ export type ThreadListOptions = {
 
 export type ThreadCreateInput = {
   workspace?: string
+  workspaceLocator?: WorkspaceLocator
   title?: string
   mode?: string
   relation?: AgentRuntimeThreadRelation
@@ -553,12 +555,17 @@ export interface AgentProvider {
   readonly id: AgentRuntimeId
   readonly displayName: string
   getCapabilities(): AgentProviderCapabilities
-  rememberThreadRuntime?(threadId: string, runtimeId?: AgentRuntimeId): void
+  rememberThreadRuntime?(
+    threadId: string,
+    runtimeId?: AgentRuntimeId,
+    workspaceLocator?: WorkspaceLocator
+  ): void
   connect(): Promise<void>
   listThreads(options?: ThreadListOptions): Promise<NormalizedThread[]>
   createThread(input: ThreadCreateInput): Promise<NormalizedThread>
   getThreadDetail(threadId: string): Promise<{
     runtimeId?: AgentRuntimeId
+    workspaceLocator?: WorkspaceLocator
     blocks: ChatBlock[]
     latestSeq: number
     threadStatus?: string
@@ -580,7 +587,7 @@ export interface AgentProvider {
       title?: string
       model?: string
       reasoningEffort?: string
-      remoteTargetId?: string
+      workspaceLocator?: WorkspaceLocator
       executionIntent?: AgentRuntimeExecutionIntent
       governanceProfile?: 'default' | 'write' | 'remote_guard'
       displayText?: string
@@ -634,18 +641,6 @@ export interface AgentProvider {
     limit?: number
   }): Promise<AgentRuntimeListThreadChildrenResponse>
   readChildTranscript?(input: AgentRuntimeReadChildTranscriptInput): Promise<AgentRuntimeReadChildTranscriptResponse>
-  listGitCheckpoints?(options?: {
-    runtimeId?: AgentRuntimeId
-    threadId?: string
-    workspaceRoot?: string
-  }): Promise<AgentRuntimeGitCheckpoint[]>
-  createGitCheckpoint?(input: {
-    workspaceRoot: string
-    threadId: string
-    turnId?: string
-  }): Promise<unknown>
-  previewGitCheckpoint?(checkpointId: string): Promise<unknown>
-  restoreGitCheckpoint?(checkpointId: string, options?: { force?: boolean }): Promise<unknown>
   createMemory?(input: {
     content: string
     scope?: AgentRuntimeMemoryRecord['scope']
@@ -719,7 +714,12 @@ export interface AgentProvider {
   ): Promise<NormalizedThread>
   resumeSession?(
     sessionId: string,
-    options?: { model?: string; mode?: string; maxResumeCount?: number }
+    options?: {
+      model?: string
+      mode?: string
+      maxResumeCount?: number
+      workspaceLocator?: WorkspaceLocator
+    }
   ): Promise<{ threadId: string; sessionId: string }>
   subscribeThreadEvents(
     threadId: string,

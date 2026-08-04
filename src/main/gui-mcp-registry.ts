@@ -46,25 +46,6 @@ import {
   type WorkspaceIntelMcpLaunchConfig
 } from './workspace-intel-mcp-config'
 import {
-  buildRemoteExecutorMcpArgs,
-  GUI_REMOTE_EXECUTOR_MCP_SERVER_NAME,
-  GUI_REMOTE_EXECUTOR_MCP_TIMEOUT_MS,
-  remoteExecutorMcpEnabledTools,
-  remoteExecutorMcpEnv,
-  resolveRemoteExecutorMcpCommand,
-  type RemoteExecutorMcpLaunchConfig
-} from './remote-executor-mcp-config'
-import {
-  buildWorkflowMcpArgs,
-  GUI_WORKFLOW_INTERNAL_SECRET_ENV,
-  GUI_WORKFLOW_MCP_SERVER_NAME,
-  resolveWorkflowMcpCommand,
-  WORKFLOW_MCP_TIMEOUT_MS,
-  workflowMcpEnabledTools,
-  workflowMcpEnv,
-  type WorkflowMcpLaunchConfig
-} from './workflow-mcp-config'
-import {
   buildWriteAssistMcpArgs,
   GUI_WRITE_ASSIST_MCP_SERVER_NAME,
   resolveWriteAssistMcpCommand,
@@ -117,14 +98,6 @@ import {
   pptMasterMcpEnabledTools,
   type PptMasterMcpLaunchConfig
 } from './ppt-master-mcp-config'
-import {
-  buildVisualDocumentMcpArgs,
-  GUI_VISUAL_DOCUMENT_MCP_SERVER_NAME,
-  GUI_VISUAL_DOCUMENT_MCP_TIMEOUT_MS,
-  resolveVisualDocumentMcpCommand,
-  visualDocumentMcpEnabledTools,
-  type VisualDocumentMcpLaunchConfig
-} from './visual-document-mcp-config'
 import { internalSecretEnv } from './internal-http-secret'
 
 export type GuiMcpRuntimeServerConfig = {
@@ -145,18 +118,9 @@ export type GuiMcpRegistryInput = {
   researchMcp?: {
     launch: ResearchSearchMcpLaunchConfig
   }
-  workflowMcp?: {
-    settings?: AppSettingsV1
-    launch: WorkflowMcpLaunchConfig
-  }
   workspaceIntelMcp?: {
     settings?: AppSettingsV1
     launch: WorkspaceIntelMcpLaunchConfig
-  }
-  remoteExecutorMcp?: {
-    settings?: AppSettingsV1
-    launch: RemoteExecutorMcpLaunchConfig
-    enabled?: boolean
   }
   writeAssistMcp?: {
     settings?: AppSettingsV1
@@ -185,10 +149,6 @@ export type GuiMcpRegistryInput = {
   pptMasterMcp?: {
     settings?: AppSettingsV1
     launch: PptMasterMcpLaunchConfig
-  }
-  visualDocumentMcp?: {
-    settings?: AppSettingsV1
-    launch: VisualDocumentMcpLaunchConfig
   }
   computerUseMcp?: {
     settings?: AppSettingsV1
@@ -231,17 +191,6 @@ function managedRuntimeServerConfigs(
       enabledTools: researchSearchMcpEnabledTools()
     })
   }
-  const workflowSettings = input.workflowMcp?.settings ?? settings
-  if (input.workflowMcp && workflowSettings) {
-    servers.push({
-      id: GUI_WORKFLOW_MCP_SERVER_NAME,
-      command: resolveWorkflowMcpCommand(input.workflowMcp.launch),
-      args: buildWorkflowMcpArgs(workflowSettings, input.workflowMcp.launch),
-      env: workflowMcpEnv(internalSecretEnv(GUI_WORKFLOW_INTERNAL_SECRET_ENV, workflowSettings.workflow.webhookSecret)),
-      timeoutMs: WORKFLOW_MCP_TIMEOUT_MS,
-      enabledTools: workflowMcpEnabledTools()
-    })
-  }
   const workspaceIntelSettings = input.workspaceIntelMcp?.settings ?? settings
   if (input.workspaceIntelMcp && workspaceIntelSettings) {
     servers.push({
@@ -251,17 +200,6 @@ function managedRuntimeServerConfigs(
       env: workspaceIntelMcpEnv({}, workspaceIntelSettings),
       timeoutMs: WORKSPACE_INTEL_MCP_TIMEOUT_MS,
       enabledTools: workspaceIntelMcpEnabledTools()
-    })
-  }
-  if (input.remoteExecutorMcp?.launch && input.remoteExecutorMcp.enabled !== false) {
-    const remoteExecutorSettings = input.remoteExecutorMcp.settings ?? settings
-    servers.push({
-      id: GUI_REMOTE_EXECUTOR_MCP_SERVER_NAME,
-      command: resolveRemoteExecutorMcpCommand(input.remoteExecutorMcp.launch),
-      args: buildRemoteExecutorMcpArgs(input.remoteExecutorMcp.launch),
-      env: remoteExecutorMcpEnv({}, remoteExecutorSettings),
-      timeoutMs: GUI_REMOTE_EXECUTOR_MCP_TIMEOUT_MS,
-      enabledTools: remoteExecutorMcpEnabledTools()
     })
   }
   const writeAssistSettings = input.writeAssistMcp?.settings ?? settings
@@ -349,20 +287,6 @@ function managedRuntimeServerConfigs(
       pptMasterSettings.workspaceRoot
     )
     servers.push(runtimeServerConfigFromJson(GUI_PPT_MASTER_MCP_SERVER_NAME, config, GUI_PPT_MASTER_MCP_TIMEOUT_MS, pptMasterMcpEnabledTools()))
-  }
-  const visualDocumentSettings = input.visualDocumentMcp?.settings ?? settings
-  if (input.visualDocumentMcp && visualDocumentSettings) {
-    servers.push({
-      id: GUI_VISUAL_DOCUMENT_MCP_SERVER_NAME,
-      command: resolveVisualDocumentMcpCommand(input.visualDocumentMcp.launch),
-      args: buildVisualDocumentMcpArgs(
-        input.visualDocumentMcp.launch,
-        visualDocumentSettings.workspaceRoot
-      ),
-      env: { ELECTRON_RUN_AS_NODE: '1' },
-      timeoutMs: GUI_VISUAL_DOCUMENT_MCP_TIMEOUT_MS,
-      enabledTools: visualDocumentMcpEnabledTools()
-    })
   }
   const computerUseSettings = input.computerUseMcp?.settings ?? settings
   if (

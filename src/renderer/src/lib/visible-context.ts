@@ -6,6 +6,11 @@ import {
   type VisibleContextPublishInput,
   type VisualContextTarget
 } from '@shared/visible-context'
+import type {
+  DomainVisibleContextInspection,
+  DomainVisibleContextPoint,
+  DomainVisibleContextSelectionInspection
+} from '@sciforge/domain-sdk/host'
 
 type VisibleContextShell = {
   activeThreadId?: string | null
@@ -23,10 +28,11 @@ type VisualTargetRegistration = {
 
 const visualTargets = new Map<string, VisualTargetRegistration>()
 const sensitiveTargetIds = new WeakMap<Element, string>()
+const VISIBLE_CONTEXT_REVISION_STORAGE_KEY = 'sciforge.visible-context.revision'
 let nextSensitiveTargetId = 0
 let shell: VisibleContextShell = {}
 let publishTimer: number | null = null
-let revision = 0
+let revision = readPersistedRevision()
 
 export function setVisibleContextShell(next: VisibleContextShell): void {
   ensureVisibleContextRefreshListener()
@@ -73,6 +79,94 @@ export function registerVisibleContextVisualTarget(input: VisualTargetRegistrati
     uninstallVisualTargetListenersWhenIdle()
     scheduleVisibleContextPublish()
   }
+}
+
+/**
+ * Resolves a pointer only against targets explicitly registered with the Host.
+ * Domain renderers receive a bounded semantic target; they never receive or
+ * search the application's DOM.
+ */
+export function inspectRegisteredVisibleContextTargetAt(
+  point: DomainVisibleContextPoint
+): Promise<DomainVisibleContextInspection | null> {
+  if (
+    !Number.isFinite(point.clientX) ||
+    !Number.isFinite(point.clientY)
+  ) return Promise.resolve(null)
+  const candidates = registeredTargetCandidates()
+    .filter(({ bounds }) => pointInBounds(point, bounds))
+    .sort((left, right) => (
+      (left.bounds.width * left.bounds.height) -
+      (right.bounds.width * right.bounds.height)
+    ))
+  const candidate = candidates[0]
+  if (!candidate) return Promise.resolve(null)
+  if (candidate.registration.target.redact) {
+    return Promise.resolve(Object.freeze({ selectable: false, reason: 'redacted' }))
+  }
+  return window.sciforge.visibleContext.registeredTargetRef({
+    componentId: candidate.registration.componentId,
+    targetId: candidate.registration.target.id
+  }).then((resolved) => resolved.ok
+    ? Object.freeze({
+        selectable: true as const,
+        targetRef: resolved.targetRef,
+        componentId: candidate.registration.componentId,
+        target: Object.freeze({ ...candidate.registration.target }),
+        bounds: Object.freeze({ ...candidate.bounds })
+      })
+    : null)
+}
+
+/**
+ * Returns text only when the browser selection is wholly contained by one
+ * registered, non-sensitive visual target.
+ */
+export function inspectRegisteredVisibleContextTextSelection():
+Promise<DomainVisibleContextSelectionInspection | null> {
+  if (typeof window === 'undefined') return Promise.resolve(null)
+  const selection = window.getSelection()
+  if (!selection || selection.isCollapsed || selection.rangeCount !== 1) {
+    return Promise.resolve(null)
+  }
+  const text = selection.toString().trim()
+  if (!text) return Promise.resolve(null)
+  const range = selection.getRangeAt(0)
+  const start = nodeElement(range.startContainer)
+  const end = nodeElement(range.endContainer)
+  if (!start || !end) return Promise.resolve(null)
+  const candidates = registeredTargetCandidates()
+    .filter(({ element }) => element?.contains(start) && element.contains(end))
+    .sort((left, right) => (
+      (left.bounds.width * left.bounds.height) -
+      (right.bounds.width * right.bounds.height)
+    ))
+  const candidate = candidates[0]
+  if (!candidate || candidate.registration.target.redact) return Promise.resolve(null)
+  const rangeRect = range.getBoundingClientRect()
+  const bounds = Number.isFinite(rangeRect.left) &&
+    Number.isFinite(rangeRect.top) &&
+    rangeRect.width > 0 &&
+    rangeRect.height > 0
+    ? {
+        x: rangeRect.left,
+        y: rangeRect.top,
+        width: rangeRect.width,
+        height: rangeRect.height
+      }
+    : candidate.bounds
+  return window.sciforge.visibleContext.registeredTargetRef({
+    componentId: candidate.registration.componentId,
+    targetId: candidate.registration.target.id
+  }).then((resolved) => resolved.ok
+    ? Object.freeze({
+        targetRef: resolved.targetRef,
+        componentId: candidate.registration.componentId,
+        target: Object.freeze({ ...candidate.registration.target }),
+        bounds: Object.freeze(bounds),
+        text: text.slice(0, 20_000)
+      })
+    : null)
 }
 
 const SENSITIVE_VISUAL_CONTEXT_SELECTOR = [
@@ -187,6 +281,7 @@ function publishVisibleContext(): void {
   if (typeof publish !== 'function') return
   const publishedAt = new Date().toISOString()
   revision += 1
+  persistRevision(revision)
   const snapshot: VisibleContextPublishInput = {
     schemaVersion: VISIBLE_CONTEXT_SCHEMA_VERSION,
     revision,
@@ -208,6 +303,30 @@ function publishVisibleContext(): void {
       })
   }
   void publish(snapshot).catch(() => undefined)
+}
+
+function readPersistedRevision(): number {
+  if (typeof window === 'undefined') return 0
+  try {
+    const stored = Number.parseInt(
+      window.sessionStorage?.getItem(VISIBLE_CONTEXT_REVISION_STORAGE_KEY) ?? '',
+      10
+    )
+    return Number.isSafeInteger(stored) && stored >= 0 ? stored : 0
+  } catch {
+    return 0
+  }
+}
+
+function persistRevision(nextRevision: number): void {
+  try {
+    window.sessionStorage?.setItem(
+      VISIBLE_CONTEXT_REVISION_STORAGE_KEY,
+      String(nextRevision)
+    )
+  } catch {
+    // Persistence is best-effort; publishing remains available in restricted renderers.
+  }
 }
 
 function withRegisteredVisualTargets(
@@ -235,6 +354,45 @@ function resolveVisualTarget(registration: VisualTargetRegistration): VisualCont
     ...registration.target,
     ...(bounds ? { bounds } : {})
   }
+}
+
+function registeredTargetCandidates(): Array<{
+  registration: VisualTargetRegistration
+  element: Element | null
+  bounds: VisibleContextBounds
+}> {
+  const candidates: Array<{
+    registration: VisualTargetRegistration
+    element: Element | null
+    bounds: VisibleContextBounds
+  }> = []
+  for (const registration of visualTargets.values()) {
+    const element = registration.element?.() ?? null
+    const bounds = element
+      ? measureVisibleContextBounds(element, registration.relativeBounds)
+      : registration.target.bounds ?? (
+          registration.target.kind === 'window' && typeof window !== 'undefined'
+            ? { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight }
+            : null
+        )
+    if (!bounds) continue
+    candidates.push({ registration, element, bounds })
+  }
+  return candidates
+}
+
+function pointInBounds(
+  point: DomainVisibleContextPoint,
+  bounds: VisibleContextBounds
+): boolean {
+  return point.clientX >= bounds.x &&
+    point.clientY >= bounds.y &&
+    point.clientX <= bounds.x + bounds.width &&
+    point.clientY <= bounds.y + bounds.height
+}
+
+function nodeElement(node: Node): Element | null {
+  return node instanceof Element ? node : node.parentElement
 }
 
 let visualTargetListenersInstalled = false

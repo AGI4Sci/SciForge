@@ -27,6 +27,10 @@ import {
   remoteSshLabEnvironmentStopInputSchema,
   remoteSshLabListInputSchema,
   remoteSshLabListResultSchema,
+  remoteSshOpenConfigInputSchema,
+  remoteSshOpenConfigResultSchema,
+  remoteSshEgressSessionOpenInputSchema,
+  remoteSshEgressSessionOpenResultSchema,
   remoteSshVirtualBoxMachineListInputSchema,
   remoteSshVirtualBoxMachineListResultSchema,
   remoteSshLabSaveInputSchema,
@@ -42,6 +46,8 @@ import {
   remoteSshTargetProbeResultSchema,
   remoteSshTargetSaveInputSchema,
   remoteSshTargetSaveResultSchema,
+  remoteSshWorkspaceHostSessionOpenInputSchema,
+  remoteSshWorkspaceHostSessionOpenResultSchema,
   type RemoteSshBindingGetResult,
   type RemoteSshBindingSaveInput,
   type RemoteSshBindingSaveResult,
@@ -53,11 +59,13 @@ import {
   type RemoteSshFileDownloadResult,
   type RemoteSshFileUploadInput,
   type RemoteSshFileUploadResult,
+  type RemoteSshEgressSessionOpenResult,
   type RemoteSshLabDeleteInput,
   type RemoteSshLabDeleteResult,
   type RemoteSshLabEnvironmentOpenConsoleResult,
   type RemoteSshLabEnvironmentResult,
   type RemoteSshLabListResult,
+  type RemoteSshOpenConfigResult,
   type RemoteSshVirtualBoxMachineListResult,
   type RemoteSshLabSaveInput,
   type RemoteSshLabSaveResult,
@@ -69,10 +77,18 @@ import {
   type RemoteSshTargetObserveResult,
   type RemoteSshTargetProbeResult,
   type RemoteSshTargetSaveInput,
-  type RemoteSshTargetSaveResult
+  type RemoteSshTargetSaveResult,
+  type RemoteSshWorkspaceHostSessionOpenInput,
+  type RemoteSshWorkspaceHostSessionOpenResult
 } from '../contract'
 
 export const remoteSshCapabilityContracts = Object.freeze({
+  openOpenSshConfig: {
+    actionId: REMOTE_SSH_CAPABILITY_IDS.openOpenSshConfig,
+    effect: 'external-write' as const,
+    inputSchema: remoteSshOpenConfigInputSchema,
+    outputSchema: remoteSshOpenConfigResultSchema
+  },
   listLabs: {
     actionId: REMOTE_SSH_CAPABILITY_IDS.listLabs,
     effect: 'read' as const,
@@ -151,6 +167,18 @@ export const remoteSshCapabilityContracts = Object.freeze({
     inputSchema: remoteSshTargetProbeInputSchema,
     outputSchema: remoteSshTargetProbeResultSchema
   },
+  openEgressSession: {
+    actionId: REMOTE_SSH_CAPABILITY_IDS.openEgressSession,
+    effect: 'external-write' as const,
+    inputSchema: remoteSshEgressSessionOpenInputSchema,
+    outputSchema: remoteSshEgressSessionOpenResultSchema
+  },
+  openWorkspaceHostSession: {
+    actionId: REMOTE_SSH_CAPABILITY_IDS.openWorkspaceHostSession,
+    effect: 'external-write' as const,
+    inputSchema: remoteSshWorkspaceHostSessionOpenInputSchema,
+    outputSchema: remoteSshWorkspaceHostSessionOpenResultSchema
+  },
   saveTarget: {
     actionId: REMOTE_SSH_CAPABILITY_IDS.saveTarget,
     effect: 'external-write' as const,
@@ -199,6 +227,9 @@ export type RemoteSshMutationConfirmation = Readonly<{
 }>
 
 export type RemoteSshCapabilityClient = Readonly<{
+  openOpenSshConfig: (
+    confirmation: RemoteSshMutationConfirmation
+  ) => Promise<RemoteSshOpenConfigResult>
   listLabs: () => Promise<RemoteSshLabListResult>
   listVirtualBoxMachines: () => Promise<RemoteSshVirtualBoxMachineListResult>
   saveLab: (input: RemoteSshLabSaveInput, confirmation: RemoteSshMutationConfirmation) => Promise<RemoteSshLabSaveResult>
@@ -213,6 +244,8 @@ export type RemoteSshCapabilityClient = Readonly<{
   listTargets: (workspaceId: string) => Promise<RemoteSshTargetListResult>
   observeTarget: (resource: RemoteSshTargetHandle, workspaceId: string) => Promise<DomainRendererCapabilityObservation<RemoteSshTargetObserveResult>>
   probeTarget: (resource: RemoteSshTargetHandle, workspaceId: string) => Promise<RemoteSshTargetProbeResult>
+  openEgressSession: (resource: RemoteSshTargetHandle, workspaceId: string, confirmation: RemoteSshMutationConfirmation) => Promise<RemoteSshEgressSessionOpenResult>
+  openWorkspaceHostSession: (resource: RemoteSshTargetHandle, input: RemoteSshWorkspaceHostSessionOpenInput, workspaceId: string, confirmation: RemoteSshMutationConfirmation) => Promise<RemoteSshWorkspaceHostSessionOpenResult>
   saveTarget: (input: RemoteSshTargetSaveInput, confirmation: RemoteSshMutationConfirmation) => Promise<RemoteSshTargetSaveResult>
   deleteTarget: (input: RemoteSshTargetDeleteInput, confirmation: RemoteSshMutationConfirmation) => Promise<RemoteSshTargetDeleteResult>
   executeCommand: (resource: RemoteSshTargetHandle, input: RemoteSshCommandExecuteInput, workspaceId: string, confirmation: RemoteSshMutationConfirmation) => Promise<RemoteSshCommandExecuteResult>
@@ -225,6 +258,8 @@ export function createRemoteSshCapabilityClient(
   client: DomainRendererCapabilityInvoker
 ): RemoteSshCapabilityClient {
   return Object.freeze({
+    openOpenSshConfig: (confirmation) =>
+      client.invoke(remoteSshCapabilityContracts.openOpenSshConfig, {}, confirmation),
     listLabs: () => client.invoke(remoteSshCapabilityContracts.listLabs, {}),
     listVirtualBoxMachines: () =>
       client.invoke(remoteSshCapabilityContracts.listVirtualBoxMachines, {}),
@@ -267,6 +302,31 @@ export function createRemoteSshCapabilityClient(
       remoteSshCapabilityContracts.probeTarget,
       {},
       { resource, workspaceId }
+    ),
+    openEgressSession: (resource, workspaceId, confirmation) => client.invoke(
+      remoteSshCapabilityContracts.openEgressSession,
+      {},
+      {
+        workspaceId,
+        resource,
+        expectedRevision: resource.semanticRevision,
+        ...confirmation
+      }
+    ),
+    openWorkspaceHostSession: (
+      resource,
+      input,
+      workspaceId,
+      confirmation
+    ) => client.invoke(
+      remoteSshCapabilityContracts.openWorkspaceHostSession,
+      input,
+      {
+        workspaceId,
+        resource,
+        expectedRevision: resource.semanticRevision,
+        ...confirmation
+      }
     ),
     saveTarget: (input, confirmation) => client.invoke(remoteSshCapabilityContracts.saveTarget, input, confirmation),
     deleteTarget: (input, confirmation) => client.invoke(remoteSshCapabilityContracts.deleteTarget, input, confirmation),

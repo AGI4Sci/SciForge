@@ -3,7 +3,15 @@ import type {
   WorkspaceFileChangePayload,
   WorkspaceFileWatchResult
 } from '@shared/workspace-file'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
+import { useChatStore } from '../store/chat-store'
 import { startWriteWorkspaceFileWatch } from './write-file-watch'
+
+const REMOTE_LOCATOR: WorkspaceLocator = {
+  contractVersion: 1,
+  hostSessionId: 'remote-session-1',
+  path: '/cluster/write'
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -46,6 +54,7 @@ describe('write file watch helper', () => {
       content: 'fresh content',
       size: 13,
       truncated: false,
+      revision: 'revision-1',
       startedAt: '2026-01-01T00:00:00.000Z'
     })
     const onTextSnapshot = vi.fn()
@@ -66,6 +75,7 @@ describe('write file watch helper', () => {
       content: 'fresh content',
       size: 13,
       truncated: false,
+      revision: 'revision-1',
       animate: false
     })
   })
@@ -96,6 +106,7 @@ describe('write file watch helper', () => {
       content: 'initial',
       size: 7,
       truncated: false,
+      revision: 'revision-1',
       startedAt: '2026-01-01T00:00:00.000Z'
     })
     const onTextSnapshot = vi.fn()
@@ -120,6 +131,7 @@ describe('write file watch helper', () => {
       content: 'ignored',
       size: 7,
       truncated: false,
+      revision: 'revision-other',
       changedAt: '2026-01-01T00:00:01.000Z'
     })
     emit({
@@ -130,6 +142,7 @@ describe('write file watch helper', () => {
       content: 'changed',
       size: 7,
       truncated: false,
+      revision: 'revision-2',
       changedAt: '2026-01-01T00:00:02.000Z'
     })
     emit({
@@ -147,6 +160,7 @@ describe('write file watch helper', () => {
       content: 'changed',
       size: 7,
       truncated: false,
+      revision: 'revision-2',
       animate: true
     })
     expect(onTextSnapshot).toHaveBeenNthCalledWith(2, {
@@ -178,6 +192,7 @@ describe('write file watch helper', () => {
       content: 'late',
       size: 4,
       truncated: false,
+      revision: 'revision-late',
       startedAt: '2026-01-01T00:00:00.000Z'
     })
     await flushPromises()
@@ -185,5 +200,60 @@ describe('write file watch helper', () => {
     expect(off).toHaveBeenCalled()
     expect(api.unwatchWorkspaceFile).toHaveBeenCalledWith('watch-late')
     expect(onTextSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('pins watch placement and rejects events after a same-path session switch', async () => {
+    useChatStore.setState({ workspaceLocator: REMOTE_LOCATOR })
+    const { api, emit } = createApi({
+      ok: true,
+      watchId: 'watch-remote',
+      path: '/cluster/write/draft.md',
+      content: 'initial',
+      size: 7,
+      truncated: false,
+      revision: 'revision-1',
+      startedAt: '2026-07-30T00:00:00.000Z'
+    })
+    const onTextSnapshot = vi.fn()
+    const onError = vi.fn()
+
+    startWriteWorkspaceFileWatch({
+      api,
+      workspaceRoot: REMOTE_LOCATOR.path,
+      path: '/cluster/write/draft.md',
+      kind: 'text',
+      onTextSnapshot,
+      onImageChanged: vi.fn(),
+      onError
+    })
+    await flushPromises()
+
+    expect(api.watchWorkspaceFile).toHaveBeenCalledWith({
+      workspaceRoot: '/cluster/write',
+      path: '/cluster/write/draft.md',
+      workspaceLocator: REMOTE_LOCATOR
+    })
+    expect(onTextSnapshot).toHaveBeenLastCalledWith(
+      expect.objectContaining({ revision: 'revision-1' })
+    )
+    onTextSnapshot.mockClear()
+    useChatStore.setState({
+      workspaceLocator: { ...REMOTE_LOCATOR, hostSessionId: 'remote-session-2' }
+    })
+    emit({
+      ok: true,
+      watchId: 'watch-remote',
+      workspaceRoot: REMOTE_LOCATOR.path,
+      path: '/cluster/write/draft.md',
+      content: 'wrong session',
+      size: 13,
+      truncated: false,
+      revision: 'revision-2',
+      changedAt: '2026-07-30T00:00:01.000Z'
+    })
+
+    expect(onTextSnapshot).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('session changed'))
+    useChatStore.setState({ workspaceLocator: null })
   })
 })

@@ -40,9 +40,18 @@ export function remoteToolMetadataFromMeta(meta: Record<string, unknown> | undef
   const remote = unknownRecord(meta.remote)
   const source = Object.keys(remote).length > 0 ? remote : meta
   const targetObject = unknownRecord(source.target)
-  const target =
-    firstString(source, ['targetLabel', 'label', 'remoteTargetLabel', 'remoteTargetId', 'targetId']) ||
-    firstString(targetObject, ['label', 'id', 'targetId'])
+  const rawTarget =
+    firstString(source, [
+      'displayLabel',
+      'targetLabel',
+      'label',
+      'remoteTargetLabel',
+      'workspaceHostLabel'
+    ]) ||
+    firstString(targetObject, ['label', 'displayLabel'])
+  const target = rawTarget
+    ? sanitizeRemoteWorkspaceDisplayLabel(rawTarget, '')
+    : undefined
   const mode = firstString(source, ['mode', 'kind', 'executorKind', 'remoteMode'])
   const runId = firstString(source, ['runId', 'run_id'])
   const jobId = firstString(source, ['jobId', 'job_id', 'slurmJobId'])
@@ -130,3 +139,4 @@ export function remoteToolMetadataChips(
   }
   return chips
 }
+import { sanitizeRemoteWorkspaceDisplayLabel } from '../../remote-workspace/display'

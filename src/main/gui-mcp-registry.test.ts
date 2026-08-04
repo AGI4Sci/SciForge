@@ -6,7 +6,6 @@ import {
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
-  defaultRemoteExecutorSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
@@ -65,7 +64,6 @@ function createSettings(): AppSettingsV1 {
       webhookPort: 9898,
       webhookSecret: 'workflow-secret'
     },
-    remoteExecutor: defaultRemoteExecutorSettings(),
     guiUpdate: {
       channel: 'stable'
     },
@@ -117,16 +115,12 @@ describe('GUI MCP runtime registry', () => {
     const servers = buildManagedGuiMcpServers({
       settings,
       scheduleMcp: { settings, launch },
-      workflowMcp: { settings, launch },
-      workspaceIntelMcp: { settings, launch },
-      remoteExecutorMcp: { launch }
+      workspaceIntelMcp: { settings, launch }
     })
 
     expect(servers.map((server) => server.id)).toEqual([
       'gui_schedule',
-      'gui_workflow',
-      'gui_workspace_intel',
-      'remote_executor'
+      'gui_workspace_intel'
     ])
     expect(servers.find((server) => server.id === 'gui_schedule')).toMatchObject({
       env: {
@@ -135,13 +129,6 @@ describe('GUI MCP runtime registry', () => {
       },
       enabledTools: expect.arrayContaining(['gui_schedule_list', 'gui_schedule_run'])
     })
-    expect(servers.find((server) => server.id === 'gui_workflow')).toMatchObject({
-      env: {
-        ELECTRON_RUN_AS_NODE: '1',
-        GUI_WORKFLOW_INTERNAL_SECRET: 'workflow-secret'
-      },
-      enabledTools: expect.arrayContaining(['gui_workflow_list', 'gui_workflow_run'])
-    })
     expect(servers.find((server) => server.id === 'gui_workspace_intel')).toMatchObject({
       env: {
         ELECTRON_RUN_AS_NODE: '1',
@@ -149,11 +136,6 @@ describe('GUI MCP runtime registry', () => {
         SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY: 'router-runtime-test-key',
         SCIFORGE_MODEL_ROUTER_VISUAL_MODEL: 'router-vision-model'
       }
-    })
-    expect(servers.find((server) => server.id === 'remote_executor')).toMatchObject({
-      env: { ELECTRON_RUN_AS_NODE: '1' },
-      args: expect.arrayContaining(['--gui-remote-executor-mcp-server']),
-      enabledTools: expect.arrayContaining(['remote_run'])
     })
   })
 
@@ -164,11 +146,10 @@ describe('GUI MCP runtime registry', () => {
       scientificSkillsMcp: { launch },
       scientificPlottingMcp: { launch },
       imageGenerationMcp: { launch },
-      pptMasterMcp: { launch },
-      visualDocumentMcp: { launch }
+      pptMasterMcp: { launch }
     })
 
-    for (const id of ['scientific_skills', 'scientific_plotting', 'image_generation', 'ppt_master', 'visual_document']) {
+    for (const id of ['scientific_skills', 'scientific_plotting', 'image_generation', 'ppt_master']) {
       expect(servers.find((server) => server.id === id)?.args).toEqual(
         expect.arrayContaining(['--workspace-root', '/tmp/project'])
       )
@@ -181,13 +162,6 @@ describe('GUI MCP runtime registry', () => {
     )
     const scientificPlottingTools = servers.find((server) => server.id === 'scientific_plotting')?.enabledTools
     expect(scientificPlottingTools).not.toContain('visual_generate')
-    expect(servers.find((server) => server.id === 'visual_document')).toMatchObject({
-      args: expect.arrayContaining(['--sciforge-visual-document-mcp-server']),
-      enabledTools: expect.arrayContaining([
-        'sciforge_visual_document_save_annotations',
-        'sciforge_visual_document_accept_candidate'
-      ])
-    })
   })
 
   it('returns no managed servers without launch input', () => {
@@ -200,7 +174,9 @@ describe('GUI MCP runtime registry', () => {
     for (const id of [
       'gui_computer_use',
       'gui_research_memory',
+      'remote_executor',
       'sciforge_canvas',
+      'visual_document',
       ['gui', 'paper', 'radar'].join('_')
     ]) {
       expect(buildManagedGuiMcpServers({}).find((server) => server.id === id)).toBeUndefined()

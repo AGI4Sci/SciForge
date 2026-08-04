@@ -42,7 +42,10 @@ describe('installed Paper Radar domain package', () => {
 
     const discovery = await agent.call({
       name: CAPABILITY_AGENT_TOOL_NAMES.discover,
-      arguments: { tags: ['paper-radar'] },
+      arguments: {
+        tags: ['paper-radar'],
+        limit: Object.keys(PAPER_RADAR_CAPABILITY_IDS).length
+      },
       context
     })
     expect(discovery.tool).toBe(CAPABILITY_AGENT_TOOL_NAMES.discover)

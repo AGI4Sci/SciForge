@@ -1,6 +1,7 @@
-import { Fragment, type ReactElement } from 'react'
+import { type ReactElement } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import type { DomainRendererCommandInvocation } from '@sciforge/domain-sdk/renderer'
 import type { EditorInfo } from '@shared/editor'
 import type { GuiUpdateState } from '@shared/gui-update'
 import {
@@ -13,34 +14,28 @@ import {
   ClipboardList,
   Download,
   ExternalLink,
-  FileEdit,
   FolderOpen,
   Loader2,
   MessageCircleMore,
-  Palette,
   RefreshCw,
-  RotateCcw,
-  Terminal,
-  Workflow
+  Terminal
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { readPreferredEditorId, writePreferredEditorId } from '../../lib/editor-preferences'
 import { openSafeExternalUrl } from '../../lib/open-external'
 import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
-import { AnchoredCommentsTopBarActions } from '../anchored-comments'
 import type {
-  RegisteredWorkbenchRightPanelContribution
-} from '../../domain-modules/workbench-right-panel-slot'
+  RegisteredWorkbenchToolbarActionContribution
+} from '../../domain-modules/workbench-toolbar-slot'
+import { visibleWorkbenchToolbarActions } from '../../domain-modules/workbench-toolbar-preferences'
+import { useWorkbenchToolbarSettings } from '../../lib/use-workbench-toolbar-settings'
+import { WorkbenchToolbarCustomizer } from './WorkbenchToolbarCustomizer'
 
 export const RIGHT_PANEL_MODES = [
   'todo',
-  'changes',
-  'workflow',
   'file',
   'plan',
   'sdd-ai',
-  'checkpoints',
-  'visual-review',
   'child-agents'
 ] as const
 
@@ -55,7 +50,9 @@ type Props = {
   onToggleRightPanelMode: (mode: Exclude<RightPanelMode, null>) => void
   workspaceRoot?: string
   planPanelEnabled?: boolean
-  rightPanelContributions?: readonly RegisteredWorkbenchRightPanelContribution[]
+  toolbarActions?: readonly RegisteredWorkbenchToolbarActionContribution[]
+  toolbarCommandInvocation?: DomainRendererCommandInvocation
+  onExecuteToolbarCommand?: (commandId: string) => void
   sideChatCount?: number
   sideChatRunningCount?: number
   sideChatOpen?: boolean
@@ -66,8 +63,6 @@ type Props = {
   childAgentAttentionCount?: number
   childAgentsOpen?: boolean
   onOpenChildAgents?: () => void
-  terminalOpen?: boolean
-  onToggleTerminal?: () => void
 }
 
 export function WorkbenchTopBar({
@@ -75,7 +70,9 @@ export function WorkbenchTopBar({
   onToggleRightPanelMode,
   workspaceRoot = '',
   planPanelEnabled = false,
-  rightPanelContributions = [],
+  toolbarActions = [],
+  toolbarCommandInvocation,
+  onExecuteToolbarCommand,
   sideChatCount = 0,
   sideChatRunningCount = 0,
   sideChatOpen = false,
@@ -85,9 +82,7 @@ export function WorkbenchTopBar({
   childAgentRunningCount = 0,
   childAgentAttentionCount = 0,
   childAgentsOpen = false,
-  onOpenChildAgents,
-  terminalOpen = false,
-  onToggleTerminal
+  onOpenChildAgents
 }: Props): ReactElement {
   const { t } = useTranslation(['common', 'settings'])
   const [editors, setEditors] = useState<EditorInfo[]>([])
@@ -97,24 +92,33 @@ export function WorkbenchTopBar({
   const [guiUpdateState, setGuiUpdateState] = useState<GuiUpdateState>({ status: 'idle' })
   const [applyingGuiUpdate, setApplyingGuiUpdate] = useState(false)
   const [openingWorkspace, setOpeningWorkspace] = useState(false)
+  const {
+    preferences: toolbarPreferences,
+    saveState: toolbarSaveState,
+    saveError: toolbarSaveError,
+    savePreferences: saveToolbarPreferences
+  } = useWorkbenchToolbarSettings()
   const editorMenuRef = useRef<HTMLDivElement>(null)
   const editorMenuButtonRef = useRef<HTMLButtonElement>(null)
   const editorMenuPanelRef = useRef<HTMLDivElement>(null)
   const [editorMenuPosition, setEditorMenuPosition] = useState<{ left: number; top: number; width: number } | null>(null)
+  const toolbarContext: DomainRendererCommandInvocation =
+    toolbarCommandInvocation ?? (workspaceRoot ? { workspaceRoot } : {})
+  const contributedItems = visibleWorkbenchToolbarActions(
+    toolbarActions,
+    toolbarPreferences
+  )
+    .filter(({ contribution }) => contribution.isAvailable(toolbarContext))
+    .map(({ id, contribution }) => ({
+      id,
+      commandId: contribution.commandId,
+      label: t(contribution.label),
+      icon: contribution.icon,
+      active: contribution.isActive(toolbarContext)
+    }))
   const items = [
-    ...rightPanelContributions
-      .filter(({ contribution }) => contribution.isAvailable())
-      .map(({ contribution }) => ({
-        mode: contribution.mode,
-        label: t(contribution.label),
-        icon: contribution.icon
-      })),
     ...(planPanelEnabled ? [{ mode: 'plan' as const, label: t('rightPanelPlan'), icon: ClipboardList }] : []),
-    { mode: 'workflow' as const, label: t('workflow'), icon: Workflow },
-    { mode: 'visual-review' as const, label: t('rightPanelVisualReview'), icon: Palette },
-    { mode: 'file' as const, label: t('rightPanelFiles'), icon: FolderOpen },
-    { mode: 'changes' as const, label: t('rightPanelChanges'), icon: FileEdit },
-    { mode: 'checkpoints' as const, label: t('rightPanelCheckpoints'), icon: RotateCcw }
+    { mode: 'file' as const, label: t('rightPanelFiles'), icon: FolderOpen }
   ]
   const selectedEditor = useMemo(
     () => editors.find((editor) => editor.id === selectedEditorId) ?? editors[0],
@@ -488,7 +492,7 @@ export function WorkbenchTopBar({
           <Bot className="h-4 w-4" strokeWidth={1.75} />
           {childAgentCount > 0 ? (
             <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-white">
-              {Math.min(childAgentCount, 9)}
+              {childAgentCount}
             </span>
           ) : null}
           {childAgentAttentionCount > 0 ? (
@@ -526,48 +530,57 @@ export function WorkbenchTopBar({
         </button>
       ) : null}
 
+      {contributedItems.map((item) => {
+        const Icon = item.icon
+        return (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => onExecuteToolbarCommand?.(item.commandId)}
+            disabled={!onExecuteToolbarCommand}
+            className={`rounded-full border px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] ${
+              item.active
+                ? 'border-ds-border-strong bg-white/70 text-ds-ink dark:bg-white/10'
+                : 'border-transparent bg-white/38 text-ds-faint opacity-90 hover:border-ds-border-muted hover:bg-white/55 hover:text-ds-ink hover:opacity-100 dark:bg-white/4 dark:hover:bg-white/8'
+            }`}
+            aria-label={item.label}
+            aria-pressed={item.active}
+            title={item.label}
+          >
+            <Icon className="h-4 w-4" strokeWidth={1.75} />
+          </button>
+        )
+      })}
+
+      <WorkbenchToolbarCustomizer
+        actions={toolbarActions}
+        preferences={toolbarPreferences}
+        saving={toolbarSaveState === 'saving'}
+        error={toolbarSaveError}
+        onChange={(next) => {
+          void saveToolbarPreferences(next)
+        }}
+      />
+
       {items.map((item) => {
         const active = rightPanelMode === item.mode
         const Icon = item.icon
-        const isChanges = item.mode === 'changes'
         return (
-          <Fragment key={item.mode}>
-            <button
-              type="button"
-              onClick={() => onToggleRightPanelMode(item.mode)}
-              className={`rounded-full border px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] ${
-                active
-                  ? 'border-ds-border-strong bg-white/70 text-ds-ink dark:bg-white/10'
-                  : 'border-transparent bg-white/38 text-ds-faint opacity-90 hover:border-ds-border-muted hover:bg-white/55 hover:text-ds-ink hover:opacity-100 dark:bg-white/4 dark:hover:bg-white/8'
-              }`}
-              aria-label={item.label}
-              aria-pressed={active}
-              title={item.label}
-            >
-              <Icon className="h-4 w-4" strokeWidth={1.75} />
-            </button>
-            {isChanges ? (
-              <>
-                {onToggleTerminal ? (
-                  <button
-                    type="button"
-                    onClick={onToggleTerminal}
-                    className={`rounded-full border px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] ${
-                      terminalOpen
-                        ? 'border-ds-border-strong bg-white/70 text-ds-ink dark:bg-white/10'
-                        : 'border-transparent bg-white/38 text-ds-faint opacity-90 hover:border-ds-border-muted hover:bg-white/55 hover:text-ds-ink hover:opacity-100 dark:bg-white/4 dark:hover:bg-white/8'
-                    }`}
-                    aria-label={t('rightPanelTerminal')}
-                    aria-pressed={terminalOpen}
-                    title={t('rightPanelTerminal')}
-                  >
-                    <Terminal className="h-4 w-4" strokeWidth={1.75} />
-                  </button>
-                ) : null}
-                <AnchoredCommentsTopBarActions />
-              </>
-            ) : null}
-          </Fragment>
+          <button
+            key={item.mode}
+            type="button"
+            onClick={() => onToggleRightPanelMode(item.mode)}
+            className={`rounded-full border px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] ${
+              active
+                ? 'border-ds-border-strong bg-white/70 text-ds-ink dark:bg-white/10'
+                : 'border-transparent bg-white/38 text-ds-faint opacity-90 hover:border-ds-border-muted hover:bg-white/55 hover:text-ds-ink hover:opacity-100 dark:bg-white/4 dark:hover:bg-white/8'
+            }`}
+            aria-label={item.label}
+            aria-pressed={active}
+            title={item.label}
+          >
+            <Icon className="h-4 w-4" strokeWidth={1.75} />
+          </button>
         )
       })}
     </div>

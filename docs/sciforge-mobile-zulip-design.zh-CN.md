@@ -185,7 +185,7 @@ Zulip Mobile / Web
         -> AgentRuntimeHost
           -> SciForge Runtime / Codex / Claude adapter
           -> Model Router
-          -> Workers: Schedule, Paper Radar, Workflow, Remote Executor
+          -> Workers: Schedule, Paper Radar, Workflow, Workspace Host
         -> Evidence DAG
         -> Digest Generator
       -> Zulip REST API

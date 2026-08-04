@@ -1,5 +1,11 @@
 import type { DomainMainHost } from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
+import type {
+  WorkspaceHostClient,
+  WorkspaceHostProvider,
+  WorkspaceHostProviderAttachInput,
+  WorkspaceHostProviderContext
+} from '@sciforge/domain-sdk/workspace-host'
 import type { z } from 'zod'
 import {
   REMOTE_SSH_CAPABILITY_IDS,
@@ -16,6 +22,8 @@ import {
   remoteSshFileDownloadResultSchema,
   remoteSshFileUploadInputSchema,
   remoteSshFileUploadResultSchema,
+  remoteSshEgressSessionOpenInputSchema,
+  remoteSshEgressSessionOpenResultSchema,
   remoteSshLabDeleteInputSchema,
   remoteSshLabDeleteResultSchema,
   remoteSshLabEnvironmentEnsureInputSchema,
@@ -26,6 +34,8 @@ import {
   remoteSshLabEnvironmentStopInputSchema,
   remoteSshLabListInputSchema,
   remoteSshLabListResultSchema,
+  remoteSshOpenConfigInputSchema,
+  remoteSshOpenConfigResultSchema,
   remoteSshVirtualBoxMachineListInputSchema,
   remoteSshVirtualBoxMachineListResultSchema,
   remoteSshLabSaveInputSchema,
@@ -42,6 +52,8 @@ import {
   remoteSshTargetSaveInputSchema,
   remoteSshTargetSaveResultSchema,
   remoteSshTargetSummarySchema,
+  remoteSshWorkspaceHostSessionOpenInputSchema,
+  remoteSshWorkspaceHostSessionOpenResultSchema,
   type RemoteSshBindingGetResult,
   type RemoteSshBindingSaveInput,
   type RemoteSshBindingSaveResult,
@@ -53,11 +65,13 @@ import {
   type RemoteSshFileDownloadResult,
   type RemoteSshFileUploadInput,
   type RemoteSshFileUploadResult,
+  type RemoteSshEgressSessionOpenResult,
   type RemoteSshLabDeleteInput,
   type RemoteSshLabDeleteResult,
   type RemoteSshLabEnvironmentOpenConsoleResult,
   type RemoteSshLabEnvironmentResult,
   type RemoteSshLabListResult,
+  type RemoteSshOpenConfigResult,
   type RemoteSshVirtualBoxMachineListResult,
   type RemoteSshLabSaveInput,
   type RemoteSshLabSaveResult,
@@ -67,14 +81,21 @@ import {
   type RemoteSshTargetObserveResult,
   type RemoteSshTargetProbeResult,
   type RemoteSshTargetSaveInput,
-  type RemoteSshTargetSaveResult
+  type RemoteSshTargetSaveResult,
+  type RemoteSshWorkspaceHostSessionOpenInput,
+  type RemoteSshWorkspaceHostSessionOpenResult
 } from './contract.js'
 import {
   REMOTE_SSH_CAPABILITY_FACTORY_CONTRIBUTION,
   REMOTE_SSH_DOMAIN_MODULE_ID,
+  REMOTE_SSH_WORKSPACE_HOST_PROVIDER_CONTRIBUTION,
+  REMOTE_SSH_WORKSPACE_HOST_PROVIDER_CONTRACT,
   domainPackageDefinition
 } from './definition.js'
-import { createRemoteSshService } from './main/service.js'
+import {
+  createRemoteSshService,
+  type RemoteSshServiceOptions
+} from './main/service.js'
 
 type CapabilityAudience = 'ui' | 'agent' | 'system'
 type CapabilityEffect = 'read' | 'workspace-write' | 'external-write' | 'destructive'
@@ -136,6 +157,7 @@ export type RemoteSshCapabilityBuilder<CapabilityDefinition = unknown> = (
 ) => CapabilityDefinition
 
 export type RemoteSshServicePort = Readonly<{
+  openOpenSshConfig(): Promise<RemoteSshOpenConfigResult>
   listLabs(): Promise<RemoteSshLabListResult>
   listVirtualBoxMachines(): Promise<RemoteSshVirtualBoxMachineListResult>
   saveLab(input: RemoteSshLabSaveInput): Promise<RemoteSshLabSaveResult>
@@ -192,6 +214,21 @@ export type RemoteSshServicePort = Readonly<{
     input: RemoteSshFileDownloadInput,
     signal?: AbortSignal
   ): Promise<RemoteSshFileDownloadResult>
+  authorizeWorkspaceHostSession(
+    workspaceId: string,
+    targetId: string,
+    expectedRevision: string,
+    input: RemoteSshWorkspaceHostSessionOpenInput
+  ): Promise<RemoteSshWorkspaceHostSessionOpenResult>
+  authorizeEgressSession(
+    workspaceId: string,
+    targetId: string,
+    expectedRevision: string
+  ): Promise<RemoteSshEgressSessionOpenResult>
+  attachWorkspaceHost(
+    input: WorkspaceHostProviderAttachInput,
+    context: WorkspaceHostProviderContext
+  ): Promise<WorkspaceHostClient>
   close(): void
 }>
 
@@ -207,10 +244,10 @@ export type RemoteSshCapabilityFactory<CapabilityDefinition = unknown> = Readonl
 }>
 
 export type RemoteSshMainContribution<CapabilityDefinition = unknown> =
-  RemoteSshCapabilityFactory<CapabilityDefinition>
+  RemoteSshCapabilityFactory<CapabilityDefinition> | WorkspaceHostProvider
 
 type RemoteSshMainHost = DomainMainHost & Readonly<{
-  createService?: (options: Readonly<{ userDataDir: string }>) => RemoteSshServicePort
+  createService?: (options: RemoteSshServiceOptions) => RemoteSshServicePort
 }>
 
 /** Creates the raw main-process entry and lazily owns exactly one service. */
@@ -220,7 +257,11 @@ export function createDomainMainEntry(
   let service: RemoteSshServicePort | undefined
   const getService = (): RemoteSshServicePort => {
     service ??= (host.createService ?? createRemoteSshService)({
-      userDataDir: host.getUserDataDir()
+      userDataDir: host.getUserDataDir(),
+      ...(host.openPath ? { openPath: host.openPath } : {}),
+      ...(host.resolveWorkspaceServerArtifact
+        ? { workspaceServerArtifact: host.resolveWorkspaceServerArtifact }
+        : {})
     })
     return service
   }
@@ -239,6 +280,16 @@ export function createDomainMainEntry(
           service?.close()
           service = undefined
         }
+      },
+      {
+        ...REMOTE_SSH_WORKSPACE_HOST_PROVIDER_CONTRIBUTION,
+        contract: REMOTE_SSH_WORKSPACE_HOST_PROVIDER_CONTRACT,
+        value: Object.freeze({
+          attach: (
+            input: WorkspaceHostProviderAttachInput,
+            context: WorkspaceHostProviderContext
+          ) => getService().attachWorkspaceHost(input, context)
+        }) satisfies WorkspaceHostProvider
       }
     ]
   }
@@ -263,6 +314,23 @@ export function createRemoteSshCapabilityFactory<CapabilityDefinition>(options: 
       allowedDirectTransports: Object.freeze([]) as readonly []
     }),
     createDefinitions: () => [
+      defineCapability({
+        id: REMOTE_SSH_CAPABILITY_IDS.openOpenSshConfig,
+        version: '1.0.0', title: 'Open the local OpenSSH configuration',
+        description: 'Creates ~/.ssh/config when needed and opens it with the configured local editor.',
+        audiences: uiAudience,
+        scope: 'global', effect: 'external-write', approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['remote-ssh', 'openssh', 'configuration'],
+        inputSchema: remoteSshOpenConfigInputSchema,
+        outputSchema: remoteSshOpenConfigResultSchema,
+        handler: async () => ({
+          output: remoteSshOpenConfigResultSchema.parse(
+            await getService().openOpenSshConfig()
+          ),
+          changed: false
+        })
+      }),
       defineCapability({
         id: REMOTE_SSH_CAPABILITY_IDS.listLabs,
         version: '1.0.0', title: 'List Remote SSH labs',
@@ -557,6 +625,57 @@ export function createRemoteSshCapabilityFactory<CapabilityDefinition>(options: 
         })
       }),
       defineCapability({
+        id: REMOTE_SSH_CAPABILITY_IDS.openEgressSession,
+        version: '1.0.0', title: 'Authorize Remote SSH network egress',
+        description: 'Authorizes this target as a network-egress hop for the caller workspace.',
+        audiences: uiAudience,
+        scope: 'resource', resourceKinds: targetResourceKinds,
+        effect: 'external-write', approval: 'confirmation',
+        concurrency: { revision: 'optimistic', idempotency: 'required' },
+        tags: ['remote-ssh', 'workspace-egress', 'session'],
+        inputSchema: remoteSshEgressSessionOpenInputSchema,
+        outputSchema: remoteSshEgressSessionOpenResultSchema,
+        handler: async (_, context) => {
+          const target = requireTargetResource(context)
+          return {
+            output: remoteSshEgressSessionOpenResultSchema.parse(
+              await getService().authorizeEgressSession(
+                target.workspaceId,
+                target.targetId,
+                target.semanticRevision
+              )
+            ),
+            changed: false
+          }
+        }
+      }),
+      defineCapability({
+        id: REMOTE_SSH_CAPABILITY_IDS.openWorkspaceHostSession,
+        version: '1.0.0', title: 'Open Remote Workspace session',
+        description: 'Authorizes a private Remote Workspace host session on this target.',
+        audiences: uiAudience,
+        scope: 'resource', resourceKinds: targetResourceKinds,
+        effect: 'external-write', approval: 'confirmation',
+        concurrency: { revision: 'optimistic', idempotency: 'required' },
+        tags: ['remote-ssh', 'workspace-host', 'session'],
+        inputSchema: remoteSshWorkspaceHostSessionOpenInputSchema,
+        outputSchema: remoteSshWorkspaceHostSessionOpenResultSchema,
+        handler: async (input, context) => {
+          const target = requireTargetResource(context)
+          return {
+            output: remoteSshWorkspaceHostSessionOpenResultSchema.parse(
+              await getService().authorizeWorkspaceHostSession(
+                target.workspaceId,
+                target.targetId,
+                target.semanticRevision,
+                input
+              )
+            ),
+            changed: false
+          }
+        }
+      }),
+      defineCapability({
         id: REMOTE_SSH_CAPABILITY_IDS.uploadFile,
         version: '1.0.0', title: 'Upload file over Remote SSH',
         description: 'Uploads one workspace-relative file to the authorized target.',
@@ -637,6 +756,19 @@ function targetResource(
             REMOTE_SSH_CAPABILITY_IDS.uploadFile,
             REMOTE_SSH_CAPABILITY_IDS.downloadFile
           )
+        }
+        if (
+          observation.target.capabilities.includes('shell') &&
+          observation.target.capabilities.includes('file-transfer') &&
+          caller.audience === 'ui'
+        ) {
+          operationIds.push(REMOTE_SSH_CAPABILITY_IDS.openWorkspaceHostSession)
+        }
+        if (
+          observation.target.capabilities.includes('shell') &&
+          caller.audience === 'ui'
+        ) {
+          operationIds.push(REMOTE_SSH_CAPABILITY_IDS.openEgressSession)
         }
       }
       return {

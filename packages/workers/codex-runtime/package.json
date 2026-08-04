@@ -1,0 +1,38 @@
+{
+  "name": "@sciforge/codex-runtime",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "private": false,
+  "description": "Process-neutral Codex app-server client and Workspace Host runtime backend.",
+  "sciforge": {
+    "lifecycleLayer": "workers",
+    "skillFacing": false,
+    "sideEffects": "process",
+    "publicContract": true,
+    "runtimeAdapter": true,
+    "mcpServer": false
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./app-server": "./src/app-server/index.ts",
+    "./workspace-host": "./src/workspace-host-runtime.ts"
+  },
+  "files": [
+    "src",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@sciforge/domain-sdk": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.2"
+  }
+}

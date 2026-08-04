@@ -3,6 +3,8 @@ import {
   resolveWriteMarkdownResource,
   resolveWriteMarkdownResourcePath
 } from '@shared/write-markdown-resource'
+import { withPinnedWorkspaceLocator } from '../../remote-workspace/placement'
+import { useWriteWorkspaceStore } from '../write-workspace-store'
 
 export type WriteLocalImageOptions = {
   className?: string
@@ -55,7 +57,18 @@ export const WriteLocalImage = Image.extend<WriteLocalImageOptions>({
           dom.title = 'Image could not be loaded'
           return
         }
-        void window.sciforge.readWorkspaceImage({ path: localPath, workspaceRoot })
+        let input
+        try {
+          input = withPinnedWorkspaceLocator(
+            { path: localPath, workspaceRoot },
+            useWriteWorkspaceStore.getState().pinnedWorkspaceLocator
+          )
+        } catch (error) {
+          dom.classList.add('write-rich-image-error')
+          dom.title = error instanceof Error ? error.message : String(error)
+          return
+        }
+        void window.sciforge.readWorkspaceImage(input)
           .then((result) => {
             if (dom.dataset.rawSrc !== src) return
             if (result.ok) {

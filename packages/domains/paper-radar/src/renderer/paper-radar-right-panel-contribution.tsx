@@ -2,15 +2,20 @@ import React, { lazy, type ReactElement } from 'react'
 import { Newspaper } from 'lucide-react'
 import {
   defineTrustedRendererDomainPackageEntry,
+  type DomainRendererCommandHandler,
+  type DomainRendererWorkbenchRightPanelRenderContext,
+  type DomainRendererWorkbenchRightPanelValue,
+  type DomainRendererWorkbenchToolbarActionValue,
   type TrustedRendererDomainPackageEntry
 } from '@sciforge/domain-sdk/renderer'
-import type {
-  DomainRendererHost,
-  DomainWorkbenchRightPanelRenderContext
-} from '@sciforge/domain-sdk/host'
+import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
+  PAPER_RADAR_RENDERER_COMMAND_CONTRIBUTION,
   PAPER_RADAR_RENDERER_I18N_CONTRIBUTION,
+  PAPER_RADAR_RENDERER_RIGHT_PANEL_CONTRACT,
   PAPER_RADAR_RENDERER_RIGHT_PANEL_CONTRIBUTION,
+  PAPER_RADAR_RENDERER_TOOLBAR_ACTION_CONTRACT,
+  PAPER_RADAR_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition'
 import { createPaperRadarCapabilityClient } from './paper-radar-capability-client'
@@ -23,22 +28,20 @@ const PaperRadarPanel = lazy(() =>
   import('./PaperRadarPanel').then((module) => ({ default: module.PaperRadarPanel }))
 )
 
-export type PaperRadarRightPanelRenderProps = DomainWorkbenchRightPanelRenderContext
+export type PaperRadarRightPanelRenderProps =
+  DomainRendererWorkbenchRightPanelRenderContext
 
 /** Structural renderer value consumed by the host Workbench right-panel slot. */
-export type PaperRadarRightPanelContribution = Readonly<{
-  id: string
-  mode: 'paper'
-  label: string
-  icon: typeof Newspaper
-  title: string
-  resourceKind: string
-  isAvailable: () => boolean
-  render: (props: PaperRadarRightPanelRenderProps) => ReactElement
-}>
+export type PaperRadarRightPanelContribution =
+  DomainRendererWorkbenchRightPanelValue<ReactElement>
+
+export type PaperRadarToolbarActionContribution =
+  DomainRendererWorkbenchToolbarActionValue<typeof Newspaper>
 
 export type PaperRadarRendererContribution =
   | PaperRadarRightPanelContribution
+  | DomainRendererCommandHandler
+  | PaperRadarToolbarActionContribution
   | PaperRadarI18nResourceContribution
 
 export function createPaperRadarRightPanelContribution(
@@ -46,13 +49,6 @@ export function createPaperRadarRightPanelContribution(
 ): PaperRadarRightPanelContribution {
   const capabilityClient = createPaperRadarCapabilityClient(host.capabilityInvoker)
   return Object.freeze({
-    id: PAPER_RADAR_RENDERER_RIGHT_PANEL_CONTRIBUTION.id,
-    mode: 'paper',
-    label: 'rightPanelPaperRadar',
-    icon: Newspaper,
-    title: 'Paper radar',
-    resourceKind: 'paper-radar',
-    isAvailable: () => true,
     render: ({ className, onCollapse }): ReactElement => (
       <PaperRadarPanel
         capabilityClient={capabilityClient}
@@ -64,6 +60,17 @@ export function createPaperRadarRightPanelContribution(
   })
 }
 
+export function createPaperRadarCommand(
+  host: DomainRendererHost
+): DomainRendererCommandHandler {
+  return createOpenRightPanelCommand(host, PAPER_RADAR_RENDERER_RIGHT_PANEL_CONTRIBUTION.id)
+}
+
+export function createPaperRadarToolbarActionContribution():
+PaperRadarToolbarActionContribution {
+  return Object.freeze({ icon: Newspaper })
+}
+
 export function createDomainRendererEntry(
   host: DomainRendererHost
 ): TrustedRendererDomainPackageEntry<PaperRadarRendererContribution> {
@@ -72,12 +79,44 @@ export function createDomainRendererEntry(
     contributions: [
       {
         ...PAPER_RADAR_RENDERER_RIGHT_PANEL_CONTRIBUTION,
+        contract: PAPER_RADAR_RENDERER_RIGHT_PANEL_CONTRACT,
         value: createPaperRadarRightPanelContribution(host)
+      },
+      {
+        ...PAPER_RADAR_RENDERER_COMMAND_CONTRIBUTION,
+        value: createPaperRadarCommand(host)
+      },
+      {
+        ...PAPER_RADAR_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
+        contract: PAPER_RADAR_RENDERER_TOOLBAR_ACTION_CONTRACT,
+        value: createPaperRadarToolbarActionContribution()
       },
       {
         ...PAPER_RADAR_RENDERER_I18N_CONTRIBUTION,
         value: paperRadarI18nResourceContribution
       }
     ]
+  })
+}
+
+function createOpenRightPanelCommand(
+  host: DomainRendererHost,
+  contributionId: string
+): DomainRendererCommandHandler {
+  return Object.freeze({
+    execute: ({ sessionId, payload }) => {
+      if (!sessionId || !host.workbench) return
+      host.workbench.openRightPanel({
+        contributionId,
+        sessionId,
+        ...(payload === undefined ? {} : {
+          activation: { contributionId, revision: 1, payload }
+        })
+      })
+    },
+    isAvailable: () => Boolean(host.workbench),
+    isActive: ({ activeSurface }) =>
+      activeSurface?.kind === 'right-panel' &&
+      activeSurface.contributionId === contributionId
   })
 }

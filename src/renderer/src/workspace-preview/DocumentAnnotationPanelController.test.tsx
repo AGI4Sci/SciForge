@@ -20,6 +20,7 @@ import type {
 import {
   DocumentAnnotationPanelController,
   documentAnnotationSideBlockText,
+  fitDocumentAnnotationPanelWidth,
   type DocumentAnnotationPanelRenderInput
 } from './DocumentAnnotationPanelController'
 
@@ -186,6 +187,14 @@ function textEditOperation(): WorkspacePreviewEditOperation {
 }
 
 describe('DocumentAnnotationPanelController', () => {
+  it('keeps the resizable annotations panel readable without crowding a normal document viewport', () => {
+    expect(fitDocumentAnnotationPanelWidth(1_200, 360)).toBe(360)
+    expect(fitDocumentAnnotationPanelWidth(1_200, 900)).toBe(720)
+    expect(fitDocumentAnnotationPanelWidth(800, 720)).toBe(473)
+    expect(fitDocumentAnnotationPanelWidth(600, 100)).toBe(273)
+    expect(fitDocumentAnnotationPanelWidth(200, 360)).toBe(193)
+  })
+
   it('uses the user-visible side message instead of the internal runtime prompt', () => {
     expect(documentAnnotationSideBlockText({
       id: 'user-1',

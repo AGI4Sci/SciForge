@@ -50,6 +50,27 @@ Workspace surfaces SHALL publish generic visual sources whose native look provid
 - **WHEN** a still-visible bound surface has exceeded its layout freshness threshold and `sciforge_look` is invoked
 - **THEN** the main process requests a renderer publication and resolves the target against the refreshed layout before capture
 
+#### Scenario: Same turn publishes new messages or layout
+- **WHEN** the bound runtime and thread remain current while message count, busy state, timeline state, or layout publication changes
+- **THEN** `sciforge_look` preserves the turn ownership binding, rebases to the latest layout, and does not report that another session is visible
+
+#### Scenario: Text-primary visual reasoning
+- **WHEN** `sciforge_look` inspects an authorized immutable snapshot
+- **THEN** a vision translator produces grounded observation evidence and the configured text reasoner remains the primary model for synthesis and final reasoning
+
+#### Scenario: Successful Responses payload includes a null error
+- **WHEN** the vision provider returns a completed Responses payload with model output and `error: null`
+- **THEN** Model Router accepts the output as successful evidence and does not switch to a text-only degradation path
+
+#### Scenario: Vision evidence is unavailable
+- **WHEN** the vision translator cannot produce evidence for a strict native visual inspection
+- **THEN** the inspection fails with a typed provider or evidence cause and returns no proof instead of a text-only HTTP-success response
+
+#### Scenario: Browser development surface requests native visual proof
+- **WHEN** `sciforge_look` targets the current browser development surface
+- **THEN** the main-process bridge challenges the exact connected client for pixels bound to the current layout revision and requested bounds
+- **AND** only a bounded PNG matching the client, challenge, revision, dimensions, and crop scale proceeds to Host-owned redaction and inspection
+
 ### Requirement: Biology Room uses its canonical service
 Biology Room UI and agent operations SHALL invoke the existing Biology Room service through the capability broker.
 

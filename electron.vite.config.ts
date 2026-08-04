@@ -4,7 +4,15 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    // These public runtime packages are source-owned workspaces. Bundle them
+    // into the main artifact so source and packaged Electron never have to
+    // execute TypeScript package entrypoints or resolve source-level `.js`
+    // specifiers through Node's ESM loader.
+    plugins: [
+      externalizeDepsPlugin({
+        exclude: ['@sciforge/codex-runtime', '@sciforge/workspace-egress']
+      })
+    ],
     build: {
       rollupOptions: {
         input: {
@@ -16,9 +24,7 @@ export default defineConfig({
           ),
           'schedule-mcp-node-entry': resolve('src/main/schedule-mcp-node-entry.ts'),
           'research-search-mcp-node-entry': resolve('src/main/research-search-mcp-node-entry.ts'),
-          'workflow-mcp-node-entry': resolve('src/main/workflow-mcp-node-entry.ts'),
           'workspace-intel-mcp-node-entry': resolve('src/main/workspace-intel-mcp-node-entry.ts'),
-          'remote-executor-mcp-node-entry': resolve('src/main/remote-executor-mcp-node-entry.ts'),
           'write-assist-mcp-node-entry': resolve('src/main/write-assist-mcp-node-entry.ts'),
           'runtime-inspector-mcp-node-entry': resolve('src/main/runtime-inspector-mcp-node-entry.ts'),
           'scientific-skills-mcp-node-entry': resolve('src/main/scientific-skills-mcp-node-entry.ts'),
@@ -26,7 +32,6 @@ export default defineConfig({
           'bgc-discovery-mcp-node-entry': resolve('src/main/bgc-discovery-mcp-node-entry.ts'),
           'image-generation-mcp-node-entry': resolve('src/main/image-generation-mcp-node-entry.ts'),
           'ppt-master-mcp-node-entry': resolve('src/main/ppt-master-mcp-node-entry.ts'),
-          'visual-document-mcp-node-entry': resolve('src/main/visual-document-mcp-node-entry.ts'),
           'computer-use-mcp-node-entry': resolve('src/main/computer-use-mcp-node-entry.ts')
         }
       }

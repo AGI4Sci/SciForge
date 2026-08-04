@@ -5,6 +5,8 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactElement
 } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -36,6 +38,10 @@ import type {
 import type {
   PdfAnnotationThreadSummary
 } from '../write/pdf-annotations'
+import {
+  readBrowserStorageItem,
+  writeBrowserStorageItem
+} from '../lib/browser-storage'
 import type {
   WorkspacePreviewPanelShellContext
 } from './WorkspacePreviewPanelShell'
@@ -57,6 +63,48 @@ const ANNOTATION_LIST_OPERATION_ID = 'workspace-preview.annotations.list'
 const ANNOTATION_IMPORT_OPERATION_ID = 'workspace-preview.annotations.import'
 const ANNOTATION_REVIEW_GENERATE_OPERATION_ID = 'workspace-preview.annotations.review.generate'
 const ANNOTATION_REVIEW_IMPROVE_OPERATION_ID = 'workspace-preview.annotations.review.improve'
+const ANNOTATION_PANEL_WIDTH_KEY = 'sciforge.workspacePreview.annotationPanelWidth'
+const ANNOTATION_PANEL_DEFAULT_WIDTH = 360
+const ANNOTATION_PANEL_MIN_WIDTH = 300
+const ANNOTATION_PANEL_HARD_MIN_WIDTH = 220
+const ANNOTATION_PANEL_MAX_WIDTH = 720
+const DOCUMENT_PANEL_MIN_WIDTH = 320
+const ANNOTATION_PANEL_RESIZE_HANDLE_WIDTH = 7
+const ANNOTATION_PANEL_KEYBOARD_RESIZE_STEP = 24
+
+function readStoredAnnotationPanelWidth(): number {
+  const raw = readBrowserStorageItem(ANNOTATION_PANEL_WIDTH_KEY)
+  if (raw == null) return ANNOTATION_PANEL_DEFAULT_WIDTH
+  const stored = Number(raw)
+  if (!Number.isFinite(stored)) return ANNOTATION_PANEL_DEFAULT_WIDTH
+  return Math.round(Math.min(
+    ANNOTATION_PANEL_MAX_WIDTH,
+    Math.max(ANNOTATION_PANEL_HARD_MIN_WIDTH, stored)
+  ))
+}
+
+export function fitDocumentAnnotationPanelWidth(
+  containerWidth: number,
+  requestedWidth: number
+): number {
+  const availableWidth = Math.max(
+    0,
+    Math.round(containerWidth) - ANNOTATION_PANEL_RESIZE_HANDLE_WIDTH
+  )
+  if (availableWidth === 0) return ANNOTATION_PANEL_HARD_MIN_WIDTH
+
+  const hardMinimum = Math.min(ANNOTATION_PANEL_HARD_MIN_WIDTH, availableWidth)
+  const maximum = Math.min(
+    ANNOTATION_PANEL_MAX_WIDTH,
+    Math.max(hardMinimum, availableWidth - DOCUMENT_PANEL_MIN_WIDTH)
+  )
+  const minimum = Math.min(
+    ANNOTATION_PANEL_MIN_WIDTH,
+    maximum
+  )
+
+  return Math.round(Math.min(maximum, Math.max(minimum, requestedWidth)))
+}
 
 export type DocumentAnnotationPanelRenderInput = {
   pdf: {
@@ -152,7 +200,9 @@ export function DocumentAnnotationPanelController({
   const [pdfReviewImprovingThreadId, setPdfReviewImprovingThreadId] = useState<string | null>(null)
   const [pdfReviewNotice, setPdfReviewNotice] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
   const [annotationNotice, setAnnotationNotice] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
+  const [annotationPanelWidth, setAnnotationPanelWidth] = useState(readStoredAnnotationPanelWidth)
   const importInputRef = useRef<HTMLInputElement | null>(null)
+  const controllerRef = useRef<HTMLDivElement | null>(null)
   const sessionId = context.state.session?.id ?? null
   const path = observation?.file.path ?? context.state.session?.path ?? ''
   const operationIds = context.state.capability?.operations.map((operation) => operation.id) ?? []
@@ -215,6 +265,31 @@ export function DocumentAnnotationPanelController({
     setPanelOpen(false)
     if (canReadSidecar) void loadSidecar()
   }, [canReadSidecar, loadSidecar, path])
+
+  useEffect(() => {
+    writeBrowserStorageItem(
+      ANNOTATION_PANEL_WIDTH_KEY,
+      String(Math.round(annotationPanelWidth))
+    )
+  }, [annotationPanelWidth])
+
+  useEffect(() => {
+    const controller = controllerRef.current
+    if (!controller) return
+    const fitToController = (): void => {
+      setAnnotationPanelWidth((current) =>
+        fitDocumentAnnotationPanelWidth(controller.clientWidth, current)
+      )
+    }
+    fitToController()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', fitToController)
+      return () => window.removeEventListener('resize', fitToController)
+    }
+    const observer = new ResizeObserver(fitToController)
+    observer.observe(controller)
+    return () => observer.disconnect()
+  }, [])
 
   const activeThreadId = selectedThreadId ?? hoveredThreadId
   const pdfAnnotationOverlays = useMemo(() => createPdfAnnotationOverlaysFromSidecar(sidecar, {
@@ -622,8 +697,88 @@ export function DocumentAnnotationPanelController({
     }
   }, [canImportSidecar, context.host, loadSidecar, sessionId])
 
+  const resizeAnnotationPanelBy = useCallback((delta: number): void => {
+    const controllerWidth = controllerRef.current?.clientWidth
+    if (!controllerWidth) return
+    setAnnotationPanelWidth((current) =>
+      fitDocumentAnnotationPanelWidth(controllerWidth, current + delta)
+    )
+  }, [])
+
+  const beginAnnotationPanelResize = useCallback((
+    event: ReactPointerEvent<HTMLDivElement>
+  ): void => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    const controller = controllerRef.current
+    if (!controller) return
+    const startX = event.clientX
+    const startWidth = annotationPanelWidth
+    const target = event.currentTarget
+    const pointerId = event.pointerId
+    try {
+      target.setPointerCapture(pointerId)
+    } catch {
+      // Pointer capture can fail if the pointer was already released.
+    }
+    const previousCursor = document.body.style.cursor
+    const previousUserSelect = document.body.style.userSelect
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    const onMove = (moveEvent: PointerEvent): void => {
+      setAnnotationPanelWidth(fitDocumentAnnotationPanelWidth(
+        controller.clientWidth,
+        startWidth + startX - moveEvent.clientX
+      ))
+    }
+    const onEnd = (): void => {
+      try {
+        if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId)
+      } catch {
+        // The browser may release capture before cleanup runs.
+      }
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousUserSelect
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onEnd)
+      window.removeEventListener('pointercancel', onEnd)
+    }
+
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onEnd)
+    window.addEventListener('pointercancel', onEnd)
+  }, [annotationPanelWidth])
+
+  const resizeAnnotationPanelWithKeyboard = useCallback((
+    event: ReactKeyboardEvent<HTMLDivElement>
+  ): void => {
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault()
+      resizeAnnotationPanelBy(event.shiftKey
+        ? ANNOTATION_PANEL_KEYBOARD_RESIZE_STEP * 2
+        : ANNOTATION_PANEL_KEYBOARD_RESIZE_STEP)
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault()
+      resizeAnnotationPanelBy(event.shiftKey
+        ? ANNOTATION_PANEL_KEYBOARD_RESIZE_STEP * -2
+        : -ANNOTATION_PANEL_KEYBOARD_RESIZE_STEP)
+    } else if (event.key === 'Home') {
+      event.preventDefault()
+      resizeAnnotationPanelBy(ANNOTATION_PANEL_HARD_MIN_WIDTH - annotationPanelWidth)
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      resizeAnnotationPanelBy(ANNOTATION_PANEL_MAX_WIDTH - annotationPanelWidth)
+    }
+  }, [annotationPanelWidth, resizeAnnotationPanelBy])
+
   return (
-    <div className={`flex h-full min-h-0 ${className}`} data-document-annotation-controller>
+    <div
+      ref={controllerRef}
+      className={`flex h-full min-h-0 ${className}`}
+      data-document-annotation-controller
+    >
       <input
         ref={importInputRef}
         type="file"
@@ -659,41 +814,62 @@ export function DocumentAnnotationPanelController({
         })}
       </div>
       {panelOpen ? (
-        <WritePdfAnnotationsPanel
-          sidecar={sidecar}
-          documentKind={documentKind}
-          selectedThreadId={selectedThreadId}
-          annotationDisplayMode={displayMode}
-          exportingPackage={exportingPackage}
-          importingPackage={importingPackage}
-          reloadingSidecar={loadingSidecar}
-          className="w-[360px] shrink-0"
-          onAnnotationDisplayModeChange={setDisplayMode}
-          onLocateThread={locateThread}
-          onHoverThread={(threadId) => setHoveredThreadId(threadId)}
-          onResolveThread={(threadId: string, _summary: PdfAnnotationThreadSummary) => resolveThread(threadId)}
-          onReopenThread={(threadId: string, _summary: PdfAnnotationThreadSummary) => reopenThread(threadId)}
-          onDeleteThread={(threadId: string, _summary: PdfAnnotationThreadSummary) => deleteThread(threadId)}
-          onEditAnnotation={(annotationId: string, body: string) => editAnnotation(annotationId, body)}
-          onAskQuestion={questionBridge ? (threadId, question, summary, options) => {
-            void askQuestion(threadId, question, summary, options)
-          } : undefined}
-          questionReplies={questionReplies}
-          pdfReviewAvailable={canGeneratePdfReview}
-          pdfReviewHasSelection={pdfReviewHasSelection}
-          pdfReviewSelectionLabel={pdfReviewSelectionLabel}
-          pdfReviewGenerating={pdfReviewGenerating}
-          pdfReviewImprovingThreadId={pdfReviewImprovingThreadId}
-          pdfReviewNotice={pdfReviewNotice}
-          notice={annotationNotice}
-          onClearPdfReviewNotice={clearPdfReviewNotice}
-          onGeneratePdfReview={(input) => void generatePdfReview(input)}
-          onImproveAnnotation={canImprovePdfReview ? (threadId, summary) => void improvePdfReviewAnnotation(threadId, summary) : undefined}
-          onExportPackage={documentKind === 'pdf' ? () => void exportPackage() : undefined}
-          onImportPackage={canImportSidecar ? importPackage : undefined}
-          onReloadSidecar={() => void loadSidecar()}
-          onCollapse={() => setPanelOpen(false)}
-        />
+        <>
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={t('writePdfAnnotationsResize')}
+            aria-valuemin={ANNOTATION_PANEL_HARD_MIN_WIDTH}
+            aria-valuemax={ANNOTATION_PANEL_MAX_WIDTH}
+            aria-valuenow={annotationPanelWidth}
+            tabIndex={0}
+            className="ds-workbench-divider ds-no-drag relative z-20 shrink-0 cursor-col-resize focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/30"
+            data-document-annotation-panel-resizer
+            onPointerDown={beginAnnotationPanelResize}
+            onKeyDown={resizeAnnotationPanelWithKeyboard}
+          />
+          <div
+            className="h-full min-h-0 shrink-0"
+            style={{ width: annotationPanelWidth }}
+            data-document-annotation-panel-width={annotationPanelWidth}
+          >
+            <WritePdfAnnotationsPanel
+              sidecar={sidecar}
+              documentKind={documentKind}
+              selectedThreadId={selectedThreadId}
+              annotationDisplayMode={displayMode}
+              exportingPackage={exportingPackage}
+              importingPackage={importingPackage}
+              reloadingSidecar={loadingSidecar}
+              className="h-full w-full"
+              onAnnotationDisplayModeChange={setDisplayMode}
+              onLocateThread={locateThread}
+              onHoverThread={(threadId) => setHoveredThreadId(threadId)}
+              onResolveThread={(threadId: string, _summary: PdfAnnotationThreadSummary) => resolveThread(threadId)}
+              onReopenThread={(threadId: string, _summary: PdfAnnotationThreadSummary) => reopenThread(threadId)}
+              onDeleteThread={(threadId: string, _summary: PdfAnnotationThreadSummary) => deleteThread(threadId)}
+              onEditAnnotation={(annotationId: string, body: string) => editAnnotation(annotationId, body)}
+              onAskQuestion={questionBridge ? (threadId, question, summary, options) => {
+                void askQuestion(threadId, question, summary, options)
+              } : undefined}
+              questionReplies={questionReplies}
+              pdfReviewAvailable={canGeneratePdfReview}
+              pdfReviewHasSelection={pdfReviewHasSelection}
+              pdfReviewSelectionLabel={pdfReviewSelectionLabel}
+              pdfReviewGenerating={pdfReviewGenerating}
+              pdfReviewImprovingThreadId={pdfReviewImprovingThreadId}
+              pdfReviewNotice={pdfReviewNotice}
+              notice={annotationNotice}
+              onClearPdfReviewNotice={clearPdfReviewNotice}
+              onGeneratePdfReview={(input) => void generatePdfReview(input)}
+              onImproveAnnotation={canImprovePdfReview ? (threadId, summary) => void improvePdfReviewAnnotation(threadId, summary) : undefined}
+              onExportPackage={documentKind === 'pdf' ? () => void exportPackage() : undefined}
+              onImportPackage={canImportSidecar ? importPackage : undefined}
+              onReloadSidecar={() => void loadSidecar()}
+              onCollapse={() => setPanelOpen(false)}
+            />
+          </div>
+        </>
       ) : null}
     </div>
   )

@@ -14,12 +14,6 @@ export type WriteExportPayload = {
   overrideConfirmed?: boolean
 }
 
-export type WriteRichClipboardPayload = {
-  path: string
-  workspaceRoot?: string
-  content: string
-}
-
 export type WriteExportResult =
   | {
       ok: true
@@ -35,15 +29,5 @@ export type WriteExportResult =
   | {
       ok: false
       canceled: false
-      message: string
-    }
-
-export type WriteRichClipboardResult =
-  | {
-      ok: true
-      copiedAt: string
-    }
-  | {
-      ok: false
       message: string
     }

@@ -7,7 +7,6 @@ import {
   type ConnectPhoneSettingsPatchV1,
   type ComputerUseSettingsPatchV1,
   type RemoteChannelSettingsPatchV1,
-  type RemoteExecutorSettingsPatchV1,
   type GuiUpdateConfigV1,
   type ImageGenerationSettingsPatchV1,
   type NotificationConfigV1,
@@ -16,6 +15,7 @@ import {
   type WorkflowSettingsPatchV1,
   type WriteSettingsPatchV1
 } from './app-settings-types'
+import { normalizeWorkbenchToolbarSettings } from './app-settings-workbench-toolbar'
 import { normalizeKeyboardShortcuts, type KeyboardShortcutsConfigV1 } from './keyboard-shortcuts'
 import {
   defaultLocalRuntimeSettings,
@@ -40,7 +40,6 @@ import { normalizeInstallationId } from './app-settings-normalizers'
 import { normalizeConnectPhoneSettings, normalizeRemoteChannelSettings } from './app-settings-remote-channel'
 import { normalizeScheduleSettings } from './app-settings-schedule'
 import { normalizeWorkflowSettings } from './app-settings-workflow'
-import { normalizeRemoteExecutorSettings } from './app-settings-remote-executor'
 import { normalizeWriteSettings } from './app-settings-write'
 import { normalizeSpeechToTextSettings } from './speech-to-text'
 import { normalizeComputerUseSettings } from './app-settings-computer-use'
@@ -50,6 +49,7 @@ import { normalizeImageGenerationSettings } from './app-settings-image-generatio
 export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
   const maybeSettings = settings as AppSettingsV1 & {
     appBehavior?: Partial<AppBehaviorConfigV1>
+    workbenchToolbar?: Parameters<typeof normalizeWorkbenchToolbarSettings>[0]
     keyboardShortcuts?: Partial<KeyboardShortcutsConfigV1>
     notifications?: Partial<NotificationConfigV1>
     modelAccess?: Parameters<typeof normalizeModelAccessSettings>[0]
@@ -59,7 +59,6 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     connectPhone?: ConnectPhoneSettingsPatchV1
     schedule?: ScheduleSettingsPatchV1
     workflow?: WorkflowSettingsPatchV1
-    remoteExecutor?: RemoteExecutorSettingsPatchV1
     speechToText?: SpeechToTextSettingsPatchV1
     guiUpdate?: Partial<GuiUpdateConfigV1>
     runtimeGuards?: Parameters<typeof normalizeRuntimeGuardSettings>[0]
@@ -105,6 +104,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
       turnComplete: maybeSettings.notifications?.turnComplete !== false
     },
     appBehavior: normalizeAppBehaviorSettings(maybeSettings.appBehavior),
+    workbenchToolbar: normalizeWorkbenchToolbarSettings(maybeSettings.workbenchToolbar),
     keyboardShortcuts: normalizeKeyboardShortcuts(maybeSettings.keyboardShortcuts),
     write: normalizeWriteSettings(maybeSettings.write),
     speechToText: normalizeSpeechToTextSettings(maybeSettings.speechToText),
@@ -112,7 +112,6 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     connectPhone: normalizeConnectPhoneSettings(maybeSettings.connectPhone),
     schedule: normalizeScheduleSettings(maybeSettings.schedule),
     workflow: normalizeWorkflowSettings(maybeSettings.workflow),
-    remoteExecutor: normalizeRemoteExecutorSettings(maybeSettings.remoteExecutor),
     guiUpdate: {
       channel: normalizeGuiUpdateChannel(
         maybeSettings.guiUpdate?.channel ?? DEFAULT_GUI_UPDATE_CHANNEL

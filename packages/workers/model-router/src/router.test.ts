@@ -4719,6 +4719,66 @@ test('inline image vision observations are cached across repeated Model Router r
   }
 });
 
+test('vision observation cache is scoped by normalized instruction intent for the same image', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-vision-intent-cache-'));
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('vision-overview', 'Observation: the image is a hotel voucher.'),
+      chatCompletion('text-overview', JSON.stringify({ type: 'final_answer', content: 'It is a hotel voucher.' })),
+      chatCompletion('vision-total', 'Observation: the exact total is 421.15 yuan.'),
+      chatCompletion('text-total', JSON.stringify({ type: 'final_answer', content: 'The total is 421.15 yuan.' })),
+      chatCompletion('text-total-cached', JSON.stringify({ type: 'final_answer', content: 'The cached total is 421.15 yuan.' })),
+    ]),
+  });
+
+  const requestBody = (task: string) => ({
+    model: 'sciforge-router',
+    input: [{
+      role: 'user',
+      content: [
+        { type: 'input_text', text: task },
+        { type: 'input_image', image_url: pngDataUrl, mime_type: 'image/png' },
+      ],
+    }],
+  });
+
+  try {
+    const overview = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify(requestBody('Describe the overall document type.')),
+    });
+    const total = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify(requestBody('Read the exact monetary total.')),
+    });
+    const repeatedTotal = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify(requestBody('Read the exact monetary total.')),
+    });
+
+    assert.equal(overview.status, 200);
+    assert.equal(total.status, 200);
+    assert.equal(repeatedTotal.status, 200);
+    assert.equal(calls.filter((call) => call.url === 'https://vision.example/v1/responses').length, 2);
+    assert.equal(calls.filter((call) => call.url === 'https://text.example/v1/responses').length, 3);
+    assert.match(JSON.stringify(calls[0]?.body), /Describe the overall document type/);
+    assert.match(JSON.stringify(calls[2]?.body), /Read the exact monetary total/);
+    assert.match(JSON.stringify(calls[4]?.body), /cache_status=hit/);
+    assert.match(JSON.stringify(calls[4]?.body), /exact total is 421\.15 yuan/);
+    assert.doesNotMatch(JSON.stringify(calls[4]?.body), /image is a hotel voucher/);
+  } finally {
+    await server.close();
+  }
+});
+
 test('textual ask refs route through vision translator before text reasoner', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-textual-ref-'));
   const calls: CapturedFetch[] = [];
@@ -5457,6 +5517,174 @@ test('vision translator failures force an explicit image unavailable final answe
     const body = await response.json() as Record<string, unknown>;
     assert.match(String(body.output_text), /could not inspect the image/i);
     assert.doesNotMatch(String(body.output_text), /sk-should-not-leak|data:image|base64/i);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]?.url, 'https://vision.example/v1/responses');
+    assert.equal(calls[1]?.url, 'https://text.example/v1/responses');
+  } finally {
+    await server.close();
+  }
+});
+
+test('strict evidence policy fails closed when vision translation fails without calling the text reasoner', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-strict-vision-failure-'));
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      Response.json({ error: { message: 'translator timeout with sk-should-not-leak' } }, { status: 504 }),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({
+        'content-type': 'application/json',
+        'x-sciforge-model-router-evidence-policy': 'required',
+      }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'What is in the image?' },
+            { type: 'input_image', image_url: pngDataUrl },
+          ],
+        }],
+      }),
+    });
+
+    assert.equal(response.status, 504);
+    const body = await response.json() as Record<string, any>;
+    assert.deepEqual(body.error, {
+      stage: 'vision_translation',
+      failureClass: 'upstream_unavailable',
+      retryable: true,
+      recovery: {
+        action: 'retry_visual_inspection',
+        instruction: 'Retry the same native visual inspection once after the vision provider becomes available.',
+      },
+      cause: {
+        code: 'upstream_http_504',
+        status: 504,
+      },
+      code: 'vision_evidence_unavailable',
+      message: 'Strict visual evidence is unavailable because vision translation failed.',
+    });
+    assert.doesNotMatch(JSON.stringify(body), /sk-should-not-leak|data:image|base64/i);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.url, 'https://vision.example/v1/responses');
+  } finally {
+    await server.close();
+  }
+});
+
+test('strict evidence policy keeps the text reasoner primary after successful vision translation', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-strict-vision-success-'));
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('vision-initial', 'Observation: the plot contains three blue bars.'),
+      chatCompletion('text-final', JSON.stringify({
+        type: 'final_answer',
+        content: 'The plot contains three blue bars.',
+      })),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({
+        'content-type': 'application/json',
+        'x-sciforge-model-router-evidence-policy': 'required',
+      }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'Describe the plot.' },
+            { type: 'input_image', image_url: pngDataUrl },
+          ],
+        }],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(body.output_text, 'The plot contains three blue bars.');
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]?.url, 'https://vision.example/v1/responses');
+    assert.equal(calls[1]?.url, 'https://text.example/v1/responses');
+    assert.match(JSON.stringify(calls[1]?.body), /Observation: the plot contains three blue bars/);
+    assert.doesNotMatch(JSON.stringify(calls[1]?.body), /data:image|base64|tiny-png/i);
+  } finally {
+    await server.close();
+  }
+});
+
+test('strict evidence policy returns a typed synthesis failure when the primary text reasoner fails', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-strict-text-failure-'));
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('vision-initial', 'Observation: the plot contains three blue bars.'),
+      Response.json({ error: { message: 'text provider unavailable with sk-should-not-leak' } }, { status: 503 }),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({
+        'content-type': 'application/json',
+        'x-sciforge-model-router-evidence-policy': 'required',
+      }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'Describe the plot.' },
+            { type: 'input_image', image_url: pngDataUrl },
+          ],
+        }],
+      }),
+    });
+
+    assert.equal(response.status, 503);
+    const body = await response.json() as Record<string, any>;
+    assert.deepEqual(body.error, {
+      stage: 'text_reasoning',
+      failureClass: 'upstream_unavailable',
+      retryable: true,
+      recovery: {
+        action: 'retry_visual_inspection',
+        instruction: 'Retry the same native visual inspection once after the text reasoner becomes available.',
+      },
+      cause: {
+        code: 'upstream_http_503',
+        status: 503,
+      },
+      code: 'visual_evidence_synthesis_unavailable',
+      message: 'Strict visual evidence synthesis is unavailable because text reasoning failed.',
+    });
+    assert.doesNotMatch(JSON.stringify(body), /sk-should-not-leak|data:image|base64/i);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]?.url, 'https://vision.example/v1/responses');
+    assert.equal(calls[1]?.url, 'https://text.example/v1/responses');
   } finally {
     await server.close();
   }

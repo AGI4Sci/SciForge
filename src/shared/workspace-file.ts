@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 import type {
   WorkspacePreviewAnchor,
   WorkspacePreviewIntegrityExpectation,
@@ -8,6 +9,7 @@ import type {
 export type WorkspaceFileTarget = {
   path: string
   workspaceRoot?: string
+  workspaceLocator?: WorkspaceLocator
   line?: number
   column?: number
   selection?: WorkspaceStructuredSelection
@@ -25,6 +27,7 @@ export type WorkspaceEntry = {
 export type WorkspaceDirectoryTarget = {
   path?: string
   workspaceRoot: string
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type WorkspaceFileWritePayload = {
@@ -32,6 +35,8 @@ export type WorkspaceFileWritePayload = {
   workspaceRoot?: string
   content?: string
   contentBase64?: string
+  expectedRevision?: string
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type WorkspaceDocxTextParagraphWrite = {
@@ -49,22 +54,26 @@ export type WorkspaceFileCreatePayload = {
   path: string
   workspaceRoot: string
   content?: string
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type WorkspaceDirectoryCreatePayload = {
   path: string
   workspaceRoot: string
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type WorkspaceEntryRenamePayload = {
   path: string
   workspaceRoot: string
   newName: string
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type WorkspacePdfRenameSuggestionPayload = {
   path: string
   workspaceRoot: string
+  workspaceLocator?: WorkspaceLocator
 }
 
 export const workspaceFileConflictStrategySchema = z.enum(['ask', 'overwrite', 'rename', 'skip', 'merge'])
@@ -97,6 +106,7 @@ export type WorkspaceEntryCopyPayload = {
   targetDirectory: string
   targetWorkspaceRoot: string
   conflictPolicy?: WorkspaceFileConflictPolicy
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type WorkspaceEntryImportPayload = {
@@ -104,6 +114,7 @@ export type WorkspaceEntryImportPayload = {
   targetDirectory: string
   targetWorkspaceRoot: string
   conflictPolicy?: WorkspaceFileConflictPolicy
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type WorkspaceEntryMovePayload = {
@@ -112,28 +123,76 @@ export type WorkspaceEntryMovePayload = {
   targetDirectory: string
   targetWorkspaceRoot: string
   conflictPolicy?: WorkspaceFileConflictPolicy
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type WorkspaceEntryDeletePayload = {
   path: string
   workspaceRoot: string
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type WorkspaceClipboardPastePayload = {
   workspaceRoot: string
   targetDirectory: string
   conflictPolicy?: WorkspaceFileConflictPolicy
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type WorkspaceFileWatchPayload = {
   path: string
   workspaceRoot: string
+  workspaceLocator?: WorkspaceLocator
 }
+
+export type WorkspaceFileRangeReadPayload = {
+  path: string
+  workspaceRoot: string
+  offset: number
+  length: number
+  workspaceLocator?: WorkspaceLocator
+}
+
+export type WorkspaceFileRangeReadResult =
+  | {
+      ok: true
+      path: string
+      offset: number
+      dataBase64: string
+      bytesRead: number
+      truncated: boolean
+      revision: string
+    }
+  | { ok: false; message: string }
+
+export type WorkspaceTextSearchPayload = {
+  workspaceRoot: string
+  query: string
+  path?: string
+  glob?: string
+  caseSensitive?: boolean
+  maxResults?: number
+  workspaceLocator?: WorkspaceLocator
+}
+
+export type WorkspaceTextSearchResult =
+  | {
+      ok: true
+      matches: Array<{
+        path: string
+        line: number
+        column: number
+        preview: string
+      }>
+      truncated: boolean
+    }
+  | { ok: false; message: string }
 
 export type WorkspaceClipboardImageSavePayload = {
   workspaceRoot: string
   currentFilePath: string
   imageDirectory?: string
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type ClipboardImageReadResult =
@@ -158,6 +217,7 @@ export type WorkspaceFileReadTextResult = {
   mimeType: string
   size: number
   truncated: boolean
+  revision: string
   line?: number
   column?: number
 }
@@ -172,6 +232,7 @@ export type WorkspaceFileReadPdfResult = {
   size: number
   truncated: false
   mtimeMs: number
+  revision: string
   line?: number
   column?: number
 }
@@ -193,6 +254,7 @@ export type WorkspaceFileReadDocxResult = {
   size: number
   truncated: false
   mtimeMs: number
+  revision: string
   line?: number
   column?: number
 }
@@ -210,6 +272,7 @@ export type WorkspaceImageReadResult =
       dataUrl: string
       mimeType: string
       size: number
+      revision: string
     }
   | { ok: false; message: string }
 
@@ -245,6 +308,7 @@ export type WorkspaceFileWriteResult =
       ok: true
       path: string
       savedAt: string
+      revision: string
     }
   | { ok: false; message: string }
 
@@ -346,6 +410,7 @@ export type WorkspaceFileWatchResult =
       mimeType?: string
       size: number
       truncated: boolean
+      revision: string
       mtimeMs?: number
       startedAt: string
     }
@@ -389,6 +454,7 @@ export type WorkspaceFileChangePayload =
       mimeType?: string
       size: number
       truncated: boolean
+      revision: string
       mtimeMs?: number
       changedAt: string
     }

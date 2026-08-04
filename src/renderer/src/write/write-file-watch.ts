@@ -3,6 +3,12 @@ import type {
   WorkspaceFileWatchPayload,
   WorkspaceFileWatchResult
 } from '@shared/workspace-file'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
+import {
+  assertPinnedWorkspaceLocator,
+  pinWorkspaceLocator,
+  withPinnedWorkspaceLocator
+} from '../remote-workspace/placement'
 
 type WriteFileWatchApi = {
   watchWorkspaceFile: (payload: WorkspaceFileWatchPayload) => Promise<WorkspaceFileWatchResult>
@@ -15,6 +21,7 @@ type TextSnapshot = {
   content?: string
   size?: number
   truncated?: boolean
+  revision?: string
   message?: string
   animate: boolean
 }
@@ -24,6 +31,7 @@ type StartWriteFileWatchOptions = {
   workspaceRoot: string
   path: string
   kind: 'text' | 'image'
+  workspaceLocator?: WorkspaceLocator | null
   onTextSnapshot: (snapshot: TextSnapshot) => void
   onImageChanged: (path: string) => void
   onError: (message: string) => void
@@ -32,6 +40,10 @@ type StartWriteFileWatchOptions = {
 export function startWriteWorkspaceFileWatch(options: StartWriteFileWatchOptions): () => void {
   let cancelled = false
   let watchId = ''
+  const pinnedWorkspaceLocator =
+    options.workspaceLocator === undefined
+      ? pinWorkspaceLocator(options.workspaceRoot)
+      : options.workspaceLocator
 
   const unwatch = (id: string): void => {
     void options.api.unwatchWorkspaceFile(id).catch(() => undefined)
@@ -46,6 +58,12 @@ export function startWriteWorkspaceFileWatch(options: StartWriteFileWatchOptions
 
   const offChanged = options.api.onWorkspaceFileChanged((payload) => {
     if (!watchId || payload.watchId !== watchId) return
+    try {
+      assertPinnedWorkspaceLocator(options.workspaceRoot, pinnedWorkspaceLocator)
+    } catch (error) {
+      options.onError(error instanceof Error ? error.message : String(error))
+      return
+    }
     if (options.kind === 'image') {
       options.onImageChanged(payload.path)
       return
@@ -56,6 +74,7 @@ export function startWriteWorkspaceFileWatch(options: StartWriteFileWatchOptions
         content: payload.content,
         size: payload.size,
         truncated: payload.truncated,
+        revision: payload.revision,
         animate: true
       })
       return
@@ -67,12 +86,31 @@ export function startWriteWorkspaceFileWatch(options: StartWriteFileWatchOptions
     })
   })
 
-  void options.api.watchWorkspaceFile({
-    path: options.path,
-    workspaceRoot: options.workspaceRoot
-  }).then((result) => {
+  let watchPayload: WorkspaceFileWatchPayload
+  try {
+    watchPayload = withPinnedWorkspaceLocator(
+      {
+        path: options.path,
+        workspaceRoot: options.workspaceRoot
+      },
+      pinnedWorkspaceLocator
+    )
+  } catch (error) {
+    offChanged()
+    options.onError(error instanceof Error ? error.message : String(error))
+    return () => undefined
+  }
+
+  void options.api.watchWorkspaceFile(watchPayload).then((result) => {
     if (cancelled) {
       if (result.ok) unwatch(result.watchId)
+      return
+    }
+    try {
+      assertPinnedWorkspaceLocator(options.workspaceRoot, pinnedWorkspaceLocator)
+    } catch (error) {
+      if (result.ok) unwatch(result.watchId)
+      options.onError(error instanceof Error ? error.message : String(error))
       return
     }
     if (!result.ok) {
@@ -89,6 +127,7 @@ export function startWriteWorkspaceFileWatch(options: StartWriteFileWatchOptions
       content: result.content,
       size: result.size,
       truncated: result.truncated,
+      revision: result.revision,
       animate: false
     })
   }).catch((error) => {

@@ -2,6 +2,10 @@ import { createHash, randomUUID } from 'node:crypto'
 import { ipcMain } from 'electron'
 import { z } from 'zod'
 import {
+  workspaceLocatorSchema,
+  type WorkspaceLocator
+} from '@sciforge/domain-sdk/workspace-host'
+import {
   CAPABILITY_BROKER_CONTRACT_VERSION,
   capabilityDiscoveryQuerySchema,
   capabilityEventQuerySchema,
@@ -44,6 +48,7 @@ const capabilityBindIpcSchema = z.object({
 }).strict()
 const capabilityInvokeIpcSchema = z.object({
   workspaceId: workspaceIdSchema.optional(),
+  workspaceLocator: workspaceLocatorSchema.optional(),
   request: capabilityInvocationRequestSchema,
   approval: z.object({ mode: z.enum(['confirmation']) }).strict().optional()
 }).strict()
@@ -77,6 +82,7 @@ type CapabilityIpcMain = Pick<typeof ipcMain, 'handle' | 'removeHandler'>
 export type RegisterCapabilityIpcOptions = {
   broker: CapabilityBroker
   ipc?: CapabilityIpcMain
+  onCallerDestroyed?: (callerId: string) => void
 }
 
 export type CapabilityIpcRegistration = {
@@ -94,11 +100,17 @@ type Subscription = {
   dispose: () => void
 }
 
-function uiCaller(sender: CapabilityIpcSender, workspaceId?: string, approvals: CapabilityApprovalGrant[] = []): CapabilityCallerContextInput {
+function uiCaller(
+  sender: CapabilityIpcSender,
+  workspaceId?: string,
+  approvals: CapabilityApprovalGrant[] = [],
+  workspaceLocator?: WorkspaceLocator
+): CapabilityCallerContextInput {
   return {
     audience: 'ui',
     callerId: `window:${sender.id}`,
     ...(workspaceId ? { workspaceId } : {}),
+    ...(workspaceLocator ? { workspaceLocator } : {}),
     approvals
   }
 }
@@ -110,13 +122,26 @@ function parse<T>(schema: z.ZodType<T>, payload: unknown): T {
 export function registerCapabilityIpc(options: RegisterCapabilityIpcOptions): CapabilityIpcRegistration {
   const ipc = options.ipc ?? ipcMain
   const subscriptions = new Map<string, Subscription>()
+  const watchedCallerIds = new Set<number>()
   const invokeHandlers = new Map<string, CapabilityIpcHandler>()
   const channels = Object.values(CAPABILITY_IPC_CHANNELS).filter((channel) => channel !== CAPABILITY_IPC_CHANNELS.event)
 
   const handle = (channel: string, handler: CapabilityIpcHandler): void => {
     invokeHandlers.set(channel, handler)
     ipc.removeHandler(channel)
-    ipc.handle(channel, (event, payload) => handler(event, payload))
+    ipc.handle(channel, (event, payload) => {
+      watchCaller(event.sender)
+      return handler(event, payload)
+    })
+  }
+
+  const watchCaller = (sender: CapabilityIpcSender): void => {
+    if (watchedCallerIds.has(sender.id)) return
+    watchedCallerIds.add(sender.id)
+    sender.once('destroyed', () => {
+      watchedCallerIds.delete(sender.id)
+      options.onCallerDestroyed?.(`window:${sender.id}`)
+    })
   }
 
   handle(CAPABILITY_IPC_CHANNELS.discover, (event, payload) => {
@@ -178,7 +203,10 @@ export function registerCapabilityIpc(options: RegisterCapabilityIpcOptions): Ca
           mode: input.approval.mode
         }]
       : []
-    return options.broker.invoke(uiCaller(event.sender, input.workspaceId, approvals), input.request)
+    return options.broker.invoke(
+      uiCaller(event.sender, input.workspaceId, approvals, input.workspaceLocator),
+      input.request
+    )
   })
   handle(CAPABILITY_IPC_CHANNELS.events, (event, payload) => {
     const input = parse(capabilityEventsIpcSchema, payload)
@@ -218,6 +246,7 @@ export function registerCapabilityIpc(options: RegisterCapabilityIpcOptions): Ca
     invoke: async (channel, payload, sender) => {
       const handler = invokeHandlers.get(channel)
       if (!handler) throw new Error(`Unknown capability bridge channel: ${channel}`)
+      watchCaller(sender)
       return await handler({ sender }, payload)
     },
     resourceContent: {
@@ -241,6 +270,7 @@ export function registerCapabilityIpc(options: RegisterCapabilityIpcOptions): Ca
       for (const channel of channels) ipc.removeHandler(channel)
       for (const subscription of subscriptions.values()) subscription.dispose()
       subscriptions.clear()
+      watchedCallerIds.clear()
       invokeHandlers.clear()
     }
   }

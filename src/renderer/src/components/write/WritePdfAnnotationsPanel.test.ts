@@ -117,7 +117,7 @@ describe('WritePdfAnnotationsPanel', () => {
             {
               id: 'side-thread:assistant-2',
               role: 'assistant',
-              text: 'Yes, temperature can matter by changing local disorder.'
+              text: 'Yes, temperature can matter when \\(c_t < 1\\).'
             }
           ]
         }
@@ -159,6 +159,7 @@ describe('WritePdfAnnotationsPanel', () => {
     expect(html).toContain('Does temperature matter too?')
     expect(html).toContain('Agent answer')
     expect(html).toContain('anisotropic axis rotates')
+    expect(html.match(/ds-markdown ds-chat-answer/g)).toHaveLength(2)
     expect(html.match(/aria-label="Copy message"/g)?.length).toBeGreaterThanOrEqual(4)
     expect(html.match(/ds-selectable-text/g)?.length).toBeGreaterThanOrEqual(4)
     expect(html).not.toContain('A comment on the claim.')

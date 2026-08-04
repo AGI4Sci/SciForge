@@ -29,8 +29,6 @@ const RUNTIME_INSPECTOR_ALLOWED_ENV_NAMES = new Set([
   'PATH',
   'SCIFORGE_RUNTIME_INSPECTOR_WORKSPACE_ROOT',
   'GUI_RUNTIME_INSPECTOR_WORKSPACE_ROOT',
-  'SCIFORGE_RUNTIME_INSPECTOR_CHECKPOINT_DATA_DIR',
-  'GUI_RUNTIME_INSPECTOR_CHECKPOINT_DATA_DIR',
   'SCIFORGE_RUNTIME_INSPECTOR_MODEL_ROUTER_BASE_URL',
   'GUI_MODEL_ROUTER_BASE_URL',
   'SCIFORGE_RUNTIME_INSPECTOR_RUNTIME_BASE_URL',
@@ -38,9 +36,7 @@ const RUNTIME_INSPECTOR_ALLOWED_ENV_NAMES = new Set([
   'SCIFORGE_RUNTIME_INSPECTOR_TIMEOUT_MS'
 ])
 
-export type RuntimeInspectorMcpLaunchConfig = ManagedGuiMcpLaunchConfig & {
-  checkpointDataDir: string
-}
+export type RuntimeInspectorMcpLaunchConfig = ManagedGuiMcpLaunchConfig
 
 type RuntimeInspectorMcpConfigPaths = {
   mcpJsonPath?: string
@@ -74,8 +70,6 @@ export function buildRuntimeInspectorMcpArgs(
   const args = [
     resolveRuntimeInspectorMcpNodeEntryPath(launch),
     GUI_RUNTIME_INSPECTOR_MCP_LAUNCH_FLAG,
-    '--checkpoint-data-dir',
-    launch.checkpointDataDir,
     '--model-router-base-url',
     modelRouter.baseUrl,
 	    '--runtime-base-url',

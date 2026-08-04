@@ -36,7 +36,26 @@ function transport(output: CapabilityJsonValue) {
   const invoke = vi.fn(async ({ request }: Parameters<SciForgeApi['capabilities']['invoke']>[0]) =>
     result(request.actionId, output, request.invocationId)
   )
-  return { readiness, observe, invoke }
+  const subscribe = vi.fn(async () => ({
+    subscriptionId: '123e4567-e89b-12d3-a456-426614174000'
+  }))
+  const unsubscribe = vi.fn(async () => true)
+  let eventHandler: Parameters<SciForgeApi['capabilities']['onEvent']>[0] | null = null
+  const removeEventListener = vi.fn()
+  const onEvent = vi.fn((handler: Parameters<SciForgeApi['capabilities']['onEvent']>[0]) => {
+    eventHandler = handler
+    return removeEventListener
+  })
+  return {
+    readiness,
+    observe,
+    invoke,
+    subscribe,
+    unsubscribe,
+    onEvent,
+    removeEventListener,
+    emitEvent: (payload: Parameters<NonNullable<typeof eventHandler>>[0]) => eventHandler?.(payload)
+  }
 }
 
 describe('RendererCapabilityClient', () => {
@@ -179,6 +198,77 @@ describe('RendererCapabilityClient', () => {
     }, resource)).rejects.toThrow(
       'Capability observation resource kind mismatch: expected "example-resource", received "unexpected-resource".'
     )
+  })
+
+  it('subscribes through the canonical broker stream and filters by resource reference', async () => {
+    const bridge = transport(null)
+    const listener = vi.fn()
+    const client = new RendererCapabilityClient({ getTransport: () => bridge })
+    const dispose = await client.subscribe(
+      'res_abcdefghijklmnopqrst',
+      listener,
+      { workspaceId: '/workspace' }
+    )
+
+    expect(bridge.subscribe).toHaveBeenCalledWith('/workspace')
+    bridge.emitEvent({
+      subscriptionId: '123e4567-e89b-12d3-a456-426614174000',
+      event: {
+        id: 'event_abcdefghijklmnopqrst',
+        type: 'resource.changed',
+        occurredAt: '2026-07-22T00:06:00.000Z',
+        workspaceId: '/workspace',
+        resourceRef: 'res_otherabcdefghijklmnop',
+        resourceStatus: 'live',
+        resourceKind: 'example-resource',
+        actionId: 'example.compute',
+        invocationId: 'invocation-1',
+        beforeRevision: 'revision-7',
+        afterRevision: 'revision-8'
+      }
+    })
+    bridge.emitEvent({
+      subscriptionId: '123e4567-e89b-12d3-a456-426614174000',
+      event: {
+        id: 'event_zyxwvutsrqponmlkjihg',
+        type: 'resource.changed',
+        occurredAt: '2026-07-22T00:07:00.000Z',
+        workspaceId: '/workspace',
+        resourceRef: 'res_abcdefghijklmnopqrst',
+        resourceStatus: 'live',
+        resourceKind: 'example-resource',
+        actionId: 'example.compute',
+        invocationId: 'invocation-2',
+        beforeRevision: 'revision-8',
+        afterRevision: 'revision-9'
+      }
+    })
+
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(listener).toHaveBeenCalledWith({
+      resourceRef: 'res_abcdefghijklmnopqrst',
+      resourceKind: 'example-resource',
+      actionId: 'example.compute',
+      beforeRevision: 'revision-8',
+      afterRevision: 'revision-9',
+      changedAt: '2026-07-22T00:07:00.000Z'
+    })
+
+    dispose()
+    expect(bridge.removeEventListener).toHaveBeenCalledOnce()
+    expect(bridge.unsubscribe).toHaveBeenCalledWith('123e4567-e89b-12d3-a456-426614174000')
+  })
+
+  it('fails closed when a capability subscription cannot be established', async () => {
+    const bridge = transport(null)
+    bridge.subscribe.mockRejectedValue(new Error('subscription unavailable'))
+    const client = new RendererCapabilityClient({ getTransport: () => bridge })
+
+    await expect(client.subscribe(
+      'res_abcdefghijklmnopqrst',
+      vi.fn()
+    )).rejects.toThrow('subscription unavailable')
+    expect(bridge.removeEventListener).toHaveBeenCalledOnce()
   })
 
   it('rejects values outside the JSON transport boundary before invoking', async () => {

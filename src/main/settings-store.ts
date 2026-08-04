@@ -21,7 +21,6 @@ import {
   defaultRuntimeGuardSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
-  defaultRemoteExecutorSettings,
   defaultImageGenerationSettings,
   getCodexRuntimeSettings,
   getClaudeRuntimeSettings,
@@ -37,11 +36,11 @@ import {
   mergeAgentCapabilitySettings,
   mergeRuntimeGuardSettings,
   defaultWriteSettings,
+  defaultWorkbenchToolbarSettings,
   mergeRemoteChannelSettings,
   mergeScheduleSettings,
   mergeSpeechToTextSettings,
   mergeWorkflowSettings,
-  mergeRemoteExecutorSettings,
   mergeWriteSettings,
   mergeImageGenerationSettings,
   normalizeAppBehaviorSettings,
@@ -49,7 +48,8 @@ import {
   normalizeAppSettings,
   normalizeModelAccessSettings,
   normalizeAgentRuntimeId,
-  reconcileScheduleWorkflows,
+  mergeWorkbenchToolbarSettings,
+  normalizeWorkbenchToolbarSettings,
   type AppSettingsPatch,
   type AppSettingsV1,
   type RemoteChannelV1,
@@ -285,6 +285,7 @@ const defaultSettings = (): AppSettingsV1 => ({
     turnComplete: true
   },
   appBehavior: normalizeAppBehaviorSettings(),
+  workbenchToolbar: defaultWorkbenchToolbarSettings(),
   keyboardShortcuts: normalizeKeyboardShortcuts(),
   guiUpdate: {
     channel: DEFAULT_GUI_UPDATE_CHANNEL
@@ -295,18 +296,14 @@ const defaultSettings = (): AppSettingsV1 => ({
   remoteChannel: defaultRemoteChannelSettings(),
   connectPhone: defaultConnectPhoneSettings(),
   schedule: defaultScheduleSettings(),
-  workflow: defaultWorkflowSettings(),
-  remoteExecutor: defaultRemoteExecutorSettings()
+  workflow: defaultWorkflowSettings()
 })
 
 function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
   const migrated = parsed
   const defaults = defaultSettings()
   const schedule = mergeScheduleSettings(defaults.schedule, migrated.schedule)
-  const workflow = reconcileScheduleWorkflows(
-    mergeWorkflowSettings(defaults.workflow, migrated.workflow),
-    schedule
-  )
+  const workflow = mergeWorkflowSettings(defaults.workflow, migrated.workflow)
   return {
     version: 1,
     installationId: migrated.installationId ?? defaults.installationId,
@@ -339,6 +336,7 @@ function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
       ...defaults.appBehavior,
       ...migrated.appBehavior
     }),
+    workbenchToolbar: normalizeWorkbenchToolbarSettings(migrated.workbenchToolbar),
     keyboardShortcuts: normalizeKeyboardShortcuts(migrated.keyboardShortcuts),
     write: mergeWriteSettings(defaults.write, migrated.write),
     imageGeneration: mergeImageGenerationSettings(defaults.imageGeneration, migrated.imageGeneration),
@@ -346,7 +344,6 @@ function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
     connectPhone: mergeConnectPhoneSettings(defaults.connectPhone, migrated.connectPhone),
     schedule,
     workflow,
-    remoteExecutor: mergeRemoteExecutorSettings(defaults.remoteExecutor, migrated.remoteExecutor),
     guiUpdate: { ...defaults.guiUpdate, ...migrated.guiUpdate },
     codePromptPrefix: typeof migrated.codePromptPrefix === 'string' ? migrated.codePromptPrefix : ''
   }
@@ -450,7 +447,6 @@ export class JsonSettingsStore {
       normalized.schedule.internal.secret !== normalizedBeforeLocalIds.schedule.internal.secret ||
       normalized.workflow.webhookSecret !== normalizedBeforeLocalIds.workflow.webhookSecret ||
       parsed.activeAgentRuntime !== normalized.activeAgentRuntime ||
-      !('remoteExecutor' in parsed) ||
       !('agentCapabilities' in parsed)
     ) {
       await this.save(normalized)
@@ -479,17 +475,13 @@ export class JsonSettingsStore {
       imageGeneration: imageGenerationPatch,
       speechToText: speechToTextPatch,
       connectPhone: connectPhonePatch,
-      remoteExecutor: remoteExecutorPatch,
     } = partial
     const patchedRuntimeSettings = applyClaudeRuntimePatch(
       applyCodexRuntimePatch(applyLocalRuntimePatch(cur, agentsPatch?.sciforge), agentsPatch?.codex),
       agentsPatch?.claude
     )
     const schedule = mergeScheduleSettings(cur.schedule, partial.schedule)
-    const workflow = reconcileScheduleWorkflows(
-      mergeWorkflowSettings(cur.workflow, partial.workflow),
-      schedule
-    )
+    const workflow = mergeWorkflowSettings(cur.workflow, partial.workflow)
     const next = withGeneratedLocalIds(normalizeStoredSettings({
       ...patchedRuntimeSettings,
       installationId: partial.installationId ?? cur.installationId,
@@ -510,6 +502,10 @@ export class JsonSettingsStore {
         ...cur.appBehavior,
         ...(partial.appBehavior ?? {})
       }),
+      workbenchToolbar: mergeWorkbenchToolbarSettings(
+        cur.workbenchToolbar,
+        partial.workbenchToolbar
+      ),
       keyboardShortcuts: normalizeKeyboardShortcuts({
         bindings: {
           ...cur.keyboardShortcuts.bindings,
@@ -523,7 +519,6 @@ export class JsonSettingsStore {
       connectPhone: mergeConnectPhoneSettings(cur.connectPhone, connectPhonePatch),
       schedule,
       workflow,
-      remoteExecutor: mergeRemoteExecutorSettings(cur.remoteExecutor, remoteExecutorPatch),
       guiUpdate: { ...cur.guiUpdate, ...(partial.guiUpdate ?? {}) }
     }))
     await this.save(next)

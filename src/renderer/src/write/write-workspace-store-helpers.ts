@@ -217,6 +217,7 @@ export function filterWriteEntries(entries: WorkspaceEntry[]): WorkspaceEntry[] 
 export function initialState(): Pick<
   WriteWorkspaceState,
   | 'workspaceRoot'
+  | 'pinnedWorkspaceLocator'
   | 'rootDirectory'
   | 'entriesByDir'
   | 'expandedDirs'
@@ -232,6 +233,7 @@ export function initialState(): Pick<
   | 'pdfMtimeMs'
   | 'fileSize'
   | 'fileTruncated'
+  | 'fileRevision'
   | 'fileError'
   | 'fileLoading'
   | 'saveStatus'
@@ -241,6 +243,7 @@ export function initialState(): Pick<
 > {
   return {
     workspaceRoot: '',
+    pinnedWorkspaceLocator: null,
     rootDirectory: '',
     entriesByDir: {},
     expandedDirs: new Set(),
@@ -256,6 +259,7 @@ export function initialState(): Pick<
     pdfMtimeMs: 0,
     fileSize: 0,
     fileTruncated: false,
+    fileRevision: null,
     fileError: null,
     fileLoading: false,
     saveStatus: 'saved',

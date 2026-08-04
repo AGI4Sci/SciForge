@@ -156,7 +156,13 @@ function settleInterruptedTurn(set: ChatStoreSet, get: ChatStoreGet): void {
 }
 
 function rememberActionThreadRuntime(
-  provider: { rememberThreadRuntime?: (threadId: string, runtimeId?: ChatState['threads'][number]['runtimeId']) => void },
+  provider: {
+    rememberThreadRuntime?: (
+      threadId: string,
+      runtimeId?: ChatState['threads'][number]['runtimeId'],
+      workspaceLocator?: ChatState['threads'][number]['workspaceLocator']
+    ) => void
+  },
   get: ChatStoreGet,
   threadId: string
 ): void {
@@ -532,7 +538,11 @@ export function createMaintenanceActions(
       return null
     }
     try {
-      const result = await p.resumeSession(id, options)
+      const workspaceLocator = options?.workspaceLocator ?? get().workspaceLocator ?? undefined
+      const result = await p.resumeSession(
+        id,
+        workspaceLocator ? { ...options, workspaceLocator } : options
+      )
       await get().refreshThreads()
       await get().selectThread(result.threadId)
       return result.threadId

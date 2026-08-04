@@ -9,7 +9,6 @@ const STICK_TO_BOTTOM_PX = 96
 
 type UseTimelineScrollOptions = {
   containerRef: RefObject<HTMLDivElement | null>
-  endRef: RefObject<HTMLDivElement | null>
   activeThreadId: string | null
   pageSize: number
   autoCollapseThreshold: number
@@ -48,6 +47,19 @@ export function deriveTimelineVisibleTurnCount({
   return latestPageCount
 }
 
+export function scrollTimelineToBottom(
+  container: {
+    scrollHeight: number
+    scrollTo: (options?: ScrollToOptions) => void
+  },
+  behavior: ScrollBehavior
+): void {
+  container.scrollTo({
+    top: container.scrollHeight,
+    behavior
+  })
+}
+
 /**
  * Owns the timeline scroll behaviour: stick-to-bottom snap scroll,
  * earlier-turns lazy loading, and prepend-position preservation. Pulled
@@ -56,7 +68,6 @@ export function deriveTimelineVisibleTurnCount({
  */
 export function useTimelineScroll({
   containerRef,
-  endRef,
   activeThreadId,
   pageSize,
   autoCollapseThreshold,
@@ -142,12 +153,10 @@ export function useTimelineScroll({
     }
     scrollFrameRef.current = window.requestAnimationFrame(() => {
       scrollFrameRef.current = null
-      endRef.current?.scrollIntoView({
-        behavior: streaming ? 'auto' : 'smooth',
-        block: 'end'
-      })
+      const container = containerRef.current
+      if (container) scrollTimelineToBottom(container, streaming ? 'auto' : 'smooth')
     })
-  }, [autoScrollEnabled, contentKey, endRef, streaming])
+  }, [autoScrollEnabled, containerRef, contentKey, streaming])
 
   // Hard reset on thread switch.
   useEffect(() => {
@@ -160,9 +169,10 @@ export function useTimelineScroll({
       scrollFrameRef.current = null
     }
     if (autoScrollEnabled) {
-      endRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+      const container = containerRef.current
+      if (container) scrollTimelineToBottom(container, 'auto')
     }
-  }, [activeThreadId, autoScrollEnabled, endRef])
+  }, [activeThreadId, autoScrollEnabled, containerRef])
 
   // Cleanup any pending rAF on unmount.
   useEffect(

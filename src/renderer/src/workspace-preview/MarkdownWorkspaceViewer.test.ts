@@ -7,9 +7,11 @@ import {
 } from '@shared/workspace-preview'
 import {
   MarkdownWorkspaceViewer,
+  buildMarkdownWechatCopyFeedbackModel,
   buildMarkdownWorkspaceViewerModel,
   createMarkdownAnnotationSelection,
-  createMarkdownReplaceAllOperation
+  createMarkdownReplaceAllOperation,
+  proportionalScrollTop
 } from './MarkdownWorkspaceViewer'
 import { createDocumentTextAnchor } from './dom-text-annotations'
 
@@ -90,6 +92,74 @@ describe('MarkdownWorkspaceViewer', () => {
     expect(html).toContain('<li>beta</li>')
   })
 
+  it('renders the WeChat copy action only when its callback is available', () => {
+    const withoutAction = renderToStaticMarkup(createElement(MarkdownWorkspaceViewer, {
+      observation: createMarkdownObservation()
+    }))
+    const withAction = renderToStaticMarkup(createElement(MarkdownWorkspaceViewer, {
+      observation: createMarkdownObservation(),
+      onCopyForWechat: async () => markdownWechatCopyResult()
+    }))
+
+    expect(withoutAction).not.toContain('data-markdown-copy-for-wechat')
+    expect(withAction).toContain('data-markdown-copy-for-wechat')
+    expect(withAction).toContain('data-state="idle"')
+    expect(withAction).toContain('markdownWechatCopy')
+  })
+
+  it('disables WeChat copy for truncated Markdown observations', () => {
+    const html = renderToStaticMarkup(createElement(MarkdownWorkspaceViewer, {
+      observation: createMarkdownObservation({
+        text: {
+          lineCount: 3,
+          characterCount: 200_001,
+          truncated: true
+        }
+      }),
+      onCopyForWechat: async () => markdownWechatCopyResult()
+    }))
+
+    expect(html).toContain('data-markdown-copy-for-wechat')
+    expect(html).toContain('disabled=""')
+    expect(html).toContain('markdownWechatCopyTruncated')
+  })
+
+  it('models idle, progress, success, warning, and error copy feedback', () => {
+    expect(buildMarkdownWechatCopyFeedbackModel({ kind: 'idle' })).toEqual({
+      phase: 'idle',
+      warningCount: 0
+    })
+    expect(buildMarkdownWechatCopyFeedbackModel({ kind: 'copying' })).toEqual({
+      phase: 'copying',
+      warningCount: 0
+    })
+    expect(buildMarkdownWechatCopyFeedbackModel({
+      kind: 'success',
+      result: markdownWechatCopyResult()
+    })).toEqual({
+      phase: 'success',
+      warningCount: 0
+    })
+    expect(buildMarkdownWechatCopyFeedbackModel({
+      kind: 'success',
+      result: markdownWechatCopyResult([{
+        code: 'remote-image-preserved',
+        message: 'A remote image URL was preserved.',
+        index: 2
+      }])
+    })).toEqual({
+      phase: 'warning',
+      warningCount: 1
+    })
+    expect(buildMarkdownWechatCopyFeedbackModel({
+      kind: 'error',
+      message: 'Clipboard unavailable.'
+    })).toEqual({
+      phase: 'error',
+      warningCount: 0
+    })
+  })
+
   it('can render edit-only mode', () => {
     const html = renderToStaticMarkup(createElement(MarkdownWorkspaceViewer, {
       observation: createMarkdownObservation(),
@@ -128,6 +198,46 @@ describe('MarkdownWorkspaceViewer', () => {
     expect(html).not.toContain('data-text-preview-editor')
     expect(html).toContain('data-markdown-preview-pane')
     expect(html).toContain('<h1>Alpha</h1>')
+  })
+
+  it('keeps document search available in edit, preview, and split modes', () => {
+    for (const initialMode of ['edit', 'preview', 'split'] as const) {
+      const html = renderToStaticMarkup(createElement(MarkdownWorkspaceViewer, {
+        observation: createMarkdownObservation(),
+        onApplyEdit: () => undefined,
+        initialMode
+      }))
+
+      expect(html).toContain(`data-markdown-view-mode="${initialMode}"`)
+      expect(html).toContain('data-markdown-search-toolbar')
+      expect(html).toContain('data-markdown-search-input')
+      expect(html).toContain('data-markdown-search-previous')
+      expect(html).toContain('data-markdown-search-next')
+    }
+  })
+
+  it('maps split-pane scrolling by bounded document progress', () => {
+    expect(proportionalScrollTop({
+      sourceScrollTop: 400,
+      sourceScrollHeight: 1_000,
+      sourceClientHeight: 200,
+      targetScrollHeight: 2_000,
+      targetClientHeight: 400
+    })).toBe(800)
+    expect(proportionalScrollTop({
+      sourceScrollTop: 900,
+      sourceScrollHeight: 1_000,
+      sourceClientHeight: 200,
+      targetScrollHeight: 2_000,
+      targetClientHeight: 400
+    })).toBe(1_600)
+    expect(proportionalScrollTop({
+      sourceScrollTop: 10,
+      sourceScrollHeight: 100,
+      sourceClientHeight: 100,
+      targetScrollHeight: 1_000,
+      targetClientHeight: 200
+    })).toBe(0)
   })
 
   it('exposes the shared annotation surface in preview and split modes', () => {
@@ -237,3 +347,24 @@ describe('MarkdownWorkspaceViewer', () => {
     expect(html).not.toContain('data-markdown-preview-pane')
   })
 })
+
+function markdownWechatCopyResult(warnings: Array<{
+  code: 'remote-image-preserved'
+  message: string
+  index?: number
+}> = []) {
+  return {
+    copiedAt: '2026-07-30T09:00:00.000Z',
+    outputBytes: 512,
+    counts: {
+      formulas: 2,
+      inlineFormulas: 1,
+      displayFormulas: 1,
+      codeBlocks: 1,
+      embeddedImages: 1,
+      remoteImages: warnings.length
+    },
+    warnings,
+    effect: 'clipboard-write' as const
+  }
+}

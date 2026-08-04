@@ -2,10 +2,12 @@ import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type {
   DomainAgentArtifactConsumer,
-  DomainAgentArtifactEvent
+  DomainAgentArtifactEvent,
+  DomainMainTurnLifecycleEvent
 } from '@sciforge/domain-sdk/host'
 import {
   getActiveAgentRuntime,
+  getAgentCapabilitySettings,
   type AppSettingsV1
 } from '../../../shared/app-settings'
 import { resolveRuntimeModelRouterSettings } from '../../../shared/app-settings-model-router'
@@ -82,7 +84,6 @@ import { AgentRuntimeContextCompactor } from './context-compactor'
 import type { LspCodeNavigationService } from '../../services/lsp-code-navigation-service'
 import type { AgentRuntimeTraceRecorder } from '../../services/agent-runtime-trace-service'
 import type { RuntimeContextStateService } from '../../services/runtime-context-state-service'
-import type { GitCheckpointService } from '../../services/git-checkpoint-service'
 import type { SharedMemoryService } from '../../services/shared-memory-service'
 import type { WorkspaceReferenceService } from '../../services/workspace-reference-service'
 import type { VisibleContextService } from '../../services/visible-context-service'
@@ -99,8 +100,20 @@ import type {
 import type {
   VisibleContextSnapshot
 } from '../../../shared/visible-context'
+import type {
+  WorkspaceHostPlacement
+} from '../../../shared/workspace-host-state'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 import { redactSecrets } from '../../../shared/secret-redaction'
-import type { AgentRuntimeToolTurnIdentity } from './agent-tool-surface'
+import type {
+  AgentRuntimeToolSurface,
+  AgentRuntimeToolTurnIdentity
+} from './agent-tool-surface'
+import {
+  agentRuntimeChildFromMultiAgentRecord,
+  createAgentRuntimeSubagentToolBridge,
+  type AgentRuntimeSubagentToolBridge
+} from './subagent-tool-bridge'
 
 export type AgentRuntimeHostSettingsProvider = () => AppSettingsV1 | Promise<AppSettingsV1>
 
@@ -108,12 +121,14 @@ export type AgentRuntimeHostServices = {
   codeNavigation?: LspCodeNavigationService
   trace?: AgentRuntimeTraceRecorder
   contextState?: RuntimeContextStateService
-  gitCheckpoints?: GitCheckpointService
   memory?: SharedMemoryService
   workspaceReferences?: WorkspaceReferenceService
   visibleContext?: VisibleContextService
   goals?: RuntimeGoalService
   contextLedger?: RuntimeContextLedgerService
+  workspaceHosts?: Readonly<{
+    resolvePlacement(locator: WorkspaceLocator): Promise<WorkspaceHostPlacement>
+  }>
 }
 
 export type AgentRuntimeHostOptions = {
@@ -124,6 +139,7 @@ export type AgentRuntimeHostOptions = {
   services?: AgentRuntimeHostServices
   nativeVisualToolsAvailable?: () => boolean
   artifactConsumers?: readonly DomainAgentArtifactConsumer[]
+  subagentStoreRoot?: string
 }
 
 export function createAgentRuntimeHost(options: AgentRuntimeHostOptions): AgentRuntimeHost {
@@ -188,22 +204,68 @@ export class AgentRuntimeHost {
   private readonly terminalWaiters = new Map<string, Set<() => void>>()
   private readonly turnGovernanceProfiles = new Map<string, AgentRuntimeGovernanceProfile>()
   private readonly turnWorkspaces = new Map<string, string>()
-  private readonly postTurnCheckpoints = new Set<string>()
+  private readonly threadWorkspaceHosts = new Map<string, WorkspaceHostPlacement>()
   private readonly artifactBroadcastTurns = new Set<string>()
+  private readonly turnLifecycleSubscribers = new Set<
+    (event: DomainMainTurnLifecycleEvent) => void | Promise<void>
+  >()
   private readonly traceCaptureTasks = new Map<string, Promise<void>>()
   private readonly capabilityApprovals = new Map<string, CapabilityApprovalRecord>()
   private readonly capabilityApprovalOrder: string[] = []
   private readonly capabilityApprovalSubscribers = new Map<string, Set<CapabilityApprovalSubscriber>>()
   private readonly governance = new RuntimeGovernanceSupervisor()
   private readonly executionIntegrity = new RuntimeExecutionIntegrityGuard()
+  private readonly subagentToolBridge: AgentRuntimeSubagentToolBridge | null
   private disposed = false
 
   constructor(private readonly options: AgentRuntimeHostOptions) {
     this.adapters = normalizeAdapters(options.adapters)
+    this.subagentToolBridge = options.subagentStoreRoot
+      ? createAgentRuntimeSubagentToolBridge({
+          storeRoot: options.subagentStoreRoot,
+          resolveBinding: async (runtimeId, parentThreadId) => {
+            const { adapter, context } = await this.resolveRequiredRuntime(runtimeId, parentThreadId)
+            if (!adapter.subagents) {
+              throw new Error(`AgentRuntimeAdapter ${runtimeId} does not implement subagent controls.`)
+            }
+            const settings = getAgentCapabilitySettings(context.settings).subagents
+            return {
+              adapter: adapter.subagents,
+              context,
+              enabled: settings.enabled,
+              maxParallel: settings.maxParallel,
+              maxChildren: settings.maxChildRuns
+            }
+          },
+          onChildEvent: async (runtimeId, event, record) => {
+            const { adapter, context } = await this.resolveRequiredRuntime(runtimeId, event.parentThreadId)
+            await this.publishSyntheticEvent(adapter, context, {
+              kind: 'child_event',
+              runtimeId,
+              threadId: event.parentThreadId,
+              turnId: event.parentTurnId,
+              child: agentRuntimeChildFromMultiAgentRecord(runtimeId, record, event)
+            })
+          }
+        })
+      : null
+  }
+
+  subagentTools(): AgentRuntimeToolSurface | null {
+    return this.subagentToolBridge?.toolSurface() ?? null
   }
 
   hasActiveTurns(): boolean {
     return this.activeThreadTurns.size > 0
+  }
+
+  subscribeTurnLifecycle(
+    listener: (event: DomainMainTurnLifecycleEvent) => void | Promise<void>
+  ): () => void {
+    this.turnLifecycleSubscribers.add(listener)
+    return () => {
+      this.turnLifecycleSubscribers.delete(listener)
+    }
   }
 
   async connect(runtimeId?: AgentRuntimeId): Promise<void> {
@@ -218,8 +280,22 @@ export class AgentRuntimeHost {
 
   async listThreads(input: AgentRuntimeThreadListInput = {}): Promise<AgentRuntimeThread[]> {
     if (input.runtimeId) {
-      const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
-      return this.withSharedGoalsOnThreads(adapter.id, await adapter.listThreads(context, input))
+      const { adapter, context } = await this.resolveRequiredRuntime(
+        input.runtimeId,
+        undefined,
+        input.workspaceLocator
+      )
+      const threads = await adapter.listThreads(context, input)
+      const placedThreads = threads.map((thread) =>
+        withWorkspaceHostOnThread(thread, context.workspaceHost)
+      )
+      for (const thread of placedThreads) {
+        this.rememberThreadWorkspaceHost(adapter.id, thread.id, context.workspaceHost)
+      }
+      return this.withSharedGoalsOnThreads(adapter.id, placedThreads)
+    }
+    if (input.workspaceLocator) {
+      throw new Error('A Workspace Host thread list requires an explicit runtimeId.')
     }
 
     const settings = await this.options.settings()
@@ -244,16 +320,30 @@ export class AgentRuntimeHost {
   }
 
   async startThread(input: AgentRuntimeThreadStartInput): Promise<AgentRuntimeThread> {
-    const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
-    return adapter.startThread(context, input)
+    const { adapter, context: baseContext } = await this.resolveRequiredRuntime(
+      input.runtimeId,
+      input.threadId
+    )
+    const context = await this.withWorkspaceHostPlacement(baseContext, input.workspaceLocator)
+    const thread = withWorkspaceHostOnThread(
+      await adapter.startThread(context, withWorkspaceLocatorPath(input)),
+      context.workspaceHost
+    )
+    this.rememberThreadWorkspaceHost(adapter.id, thread.id || input.threadId, context.workspaceHost)
+    return thread
   }
 
   async readThread(input: AgentRuntimeThreadReadInput): Promise<AgentRuntimeThreadDetail> {
-    const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
+    const { adapter, context } = await this.resolveRequiredRuntime(
+      input.runtimeId,
+      input.threadId,
+      input.workspaceLocator
+    )
     const key = `${adapter.id}:${input.threadId}`
     const existing = this.threadReadsInFlight.get(key)
     if (existing) return existing
     const pending = adapter.readThread(context, input)
+      .then((detail) => withWorkspaceHostOnThread(detail, context.workspaceHost))
       .then((detail) => this.withSharedGoalOnThread(adapter.id, detail))
       .finally(() => {
         if (this.threadReadsInFlight.get(key) === pending) this.threadReadsInFlight.delete(key)
@@ -263,7 +353,11 @@ export class AgentRuntimeHost {
   }
 
   async readThreadSidebarProbe(input: AgentRuntimeThreadReadInput): Promise<AgentRuntimeThreadSidebarProbe> {
-    const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
+    const { adapter, context } = await this.resolveRequiredRuntime(
+      input.runtimeId,
+      input.threadId,
+      input.workspaceLocator
+    )
     if (adapter.readThreadSidebarProbe) {
       return adapter.readThreadSidebarProbe(context, input)
     }
@@ -289,9 +383,14 @@ export class AgentRuntimeHost {
     input: AgentRuntimeTurnStartInput,
     options: { includeSharedContext: boolean }
   ): Promise<AgentRuntimeTurnHandle> {
-    const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
-    await this.autoCompactThreadIfNeeded(adapter, context, input)
-    const safeInput = this.withWorkspaceRelativeFileReferences(context, input)
+    const { adapter, context: baseContext } = await this.resolveRequiredRuntime(
+      input.runtimeId,
+      input.threadId
+    )
+    const context = await this.withWorkspaceHostPlacement(baseContext, input.workspaceLocator)
+    const placedInput = withWorkspaceLocatorPath(input)
+    await this.autoCompactThreadIfNeeded(adapter, context, placedInput)
+    const safeInput = this.withWorkspaceRelativeFileReferences(context, placedInput)
     const contextualInput = options.includeSharedContext
       ? await this.withSharedGoalInstruction(
           adapter.id,
@@ -301,10 +400,23 @@ export class AgentRuntimeHost {
     const sharedInput = await this.withSharedContextLedger(adapter.id, contextualInput)
     const visuallyGuardedInput = withVisualExecutionRequirement(sharedInput)
     const integrityGuardedInput = withExecutionIntegrityRequirement(visuallyGuardedInput)
-    const turnInput = await this.withCanonicalVisibleState(adapter.id, integrityGuardedInput)
-    this.createPreTurnCheckpoint(adapter.id, context, turnInput)
-    const handle = await this.enqueueThreadTurnStart(adapter, context, turnInput)
-    this.rememberTurnWorkspace(adapter.id, turnInput, handle)
+    await this.publishTurnLifecycle(Object.freeze({
+      kind: 'before-turn',
+      state: 'starting',
+      runtimeId: adapter.id,
+      threadId: integrityGuardedInput.threadId.trim(),
+      ...(integrityGuardedInput.workspace?.trim() || context.settings.workspaceRoot?.trim()
+        ? { workspaceRoot: integrityGuardedInput.workspace?.trim() || context.settings.workspaceRoot?.trim() }
+        : {}),
+      occurredAt: new Date().toISOString()
+    }))
+    const handle = await this.enqueueThreadTurnStart(adapter, context, integrityGuardedInput)
+    this.rememberThreadWorkspaceHost(
+      adapter.id,
+      handle.threadId || integrityGuardedInput.threadId,
+      context.workspaceHost
+    )
+    this.rememberTurnWorkspace(adapter.id, integrityGuardedInput, handle)
     this.startTurnTraceCapture(adapter, context, handle)
     return handle
   }
@@ -353,45 +465,60 @@ export class AgentRuntimeHost {
   }
 
   async interruptTurn(input: AgentRuntimeTurnTargetInput): Promise<void> {
-    const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
+    const { adapter, context } = await this.resolveRequiredRuntime(
+      input.runtimeId,
+      input.threadId,
+      input.workspaceLocator
+    )
     this.cancelCapabilityApprovalsForTurn(input.runtimeId, input.threadId, input.turnId, 'Turn interrupted.')
     await adapter.interruptTurn(context, input)
   }
 
   async steerTurn(input: AgentRuntimeTurnSteerInput): Promise<void> {
     await this.withUserDirectiveDelivery(input, async (clientDirectiveId) => {
-      const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
+      const { adapter, context } = await this.resolveRequiredRuntime(
+        input.runtimeId,
+        input.threadId,
+        input.workspaceLocator
+      )
       const guardedInput = this.withSteerExecutionRequirements({
         ...input,
         ...(clientDirectiveId ? { clientDirectiveId } : {})
       })
-      const steerInput = await this.withDirectiveContinuity(adapter.id, {
-        runtimeId: guardedInput.runtimeId,
-        threadId: guardedInput.threadId,
-        turnId: input.turnId,
-        text: guardedInput.text,
-        ...(guardedInput.clientDirectiveId
-          ? { clientDirectiveId: guardedInput.clientDirectiveId }
-          : {}),
-        ...(guardedInput.executionIntent
-          ? { executionIntent: guardedInput.executionIntent }
-          : {})
+      await this.enqueueThreadOperation(adapter.id, input.threadId, async () => {
+        const canonicalInput = await this.withCanonicalVisibleState(adapter.id, guardedInput)
+        const steerInput = await this.withDirectiveContinuity(adapter.id, {
+          runtimeId: canonicalInput.runtimeId,
+          threadId: canonicalInput.threadId,
+          turnId: input.turnId,
+          text: canonicalInput.text,
+          ...(canonicalInput.clientDirectiveId
+            ? { clientDirectiveId: canonicalInput.clientDirectiveId }
+            : {}),
+          ...(canonicalInput.executionIntent
+            ? { executionIntent: canonicalInput.executionIntent }
+            : {})
+        })
+        await this.deliverGovernedSteer(
+          adapter.id,
+          adapter,
+          context,
+          input.threadId,
+          input.turnId,
+          canonicalInput,
+          steerInput
+        )
       })
-      await this.deliverGovernedSteer(
-        adapter.id,
-        adapter,
-        context,
-        input.threadId,
-        input.turnId,
-        guardedInput,
-        steerInput
-      )
       return { value: undefined, turnId: input.turnId }
     }, () => undefined)
   }
 
   private async steerControlTurn(input: AgentRuntimeTurnSteerInput): Promise<void> {
-    const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
+    const { adapter, context } = await this.resolveRequiredRuntime(
+      input.runtimeId,
+      input.threadId,
+      input.workspaceLocator
+    )
     await adapter.steerTurn(context, input)
   }
 
@@ -450,17 +577,30 @@ export class AgentRuntimeHost {
   }
 
   async renameThread(input: AgentRuntimeThreadRenameInput): Promise<void> {
-    const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
+    const { adapter, context } = await this.resolveRequiredRuntime(
+      input.runtimeId,
+      input.threadId,
+      input.workspaceLocator
+    )
     await adapter.renameThread(context, input)
   }
 
   async deleteThread(input: AgentRuntimeThreadDeleteInput): Promise<void> {
-    const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
+    const { adapter, context } = await this.resolveRequiredRuntime(
+      input.runtimeId,
+      input.threadId,
+      input.workspaceLocator
+    )
     await adapter.deleteThread(context, input)
+    this.threadWorkspaceHosts.delete(threadTurnKey(adapter.id, input.threadId))
   }
 
   async *subscribeEvents(input: AgentRuntimeEventSubscribeInput): AsyncIterable<AgentRuntimeEvent> {
-    const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
+    const { adapter, context } = await this.resolveRequiredRuntime(
+      input.runtimeId,
+      input.threadId,
+      input.workspaceLocator
+    )
     const capabilities = await adapter.capabilities(context)
     const guardSettings = runtimeGuardSettings(context)
     const approvalSubscription = this.subscribeCapabilityApprovalEvents(input.runtimeId, input.threadId, input.signal)
@@ -471,7 +611,7 @@ export class AgentRuntimeHost {
       this.options.services?.contextState?.observeEvent(event)
       await this.options.services?.contextLedger?.observeEvent(event).catch(() => undefined)
       this.observeThreadTurnLifecycle(adapter.id, event)
-      this.createPostTurnCheckpoint(adapter.id, event)
+      await this.publishTerminalTurnLifecycle(adapter.id, context, event)
       this.broadcastCompletedTurnArtifacts(adapter, context, event)
     }
     const governEvent = (
@@ -629,7 +769,11 @@ export class AgentRuntimeHost {
       )
       return
     }
-    const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
+    const { adapter, context } = await this.resolveRequiredRuntime(
+      input.runtimeId,
+      input.threadId,
+      input.workspaceLocator
+    )
     if (!adapter.resolveApproval) throw unsupported(adapter.id, 'approval')
     await adapter.resolveApproval(context, input)
   }
@@ -715,6 +859,7 @@ export class AgentRuntimeHost {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.subagentToolBridge?.dispose()
     for (const record of this.capabilityApprovals.values()) {
       if (record.resolve) this.settleCapabilityApproval(record, 'cancelled', 'Agent runtime host stopped.')
     }
@@ -728,13 +873,21 @@ export class AgentRuntimeHost {
   }
 
   async resolveUserInput(input: AgentRuntimeUserInputResolveInput): Promise<void> {
-    const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
+    const { adapter, context } = await this.resolveRequiredRuntime(
+      input.runtimeId,
+      input.threadId,
+      input.workspaceLocator
+    )
     if (!adapter.resolveUserInput) throw unsupported(adapter.id, 'user input')
     await adapter.resolveUserInput(context, input)
   }
 
   async compactThread(input: AgentRuntimeThreadCompactInput): Promise<void> {
-    const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
+    const { adapter, context } = await this.resolveRequiredRuntime(
+      input.runtimeId,
+      input.threadId,
+      input.workspaceLocator
+    )
     const capabilities = await adapter.capabilities(context)
     if (capabilities.controls.compact === 'noop') {
       await this.recordNoopCompaction(adapter, context, input)
@@ -747,13 +900,26 @@ export class AgentRuntimeHost {
   }
 
   async forkThread(input: AgentRuntimeThreadForkInput): Promise<AgentRuntimeThread> {
-    const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
+    const { adapter, context } = await this.resolveRequiredRuntime(
+      input.runtimeId,
+      input.threadId,
+      input.workspaceLocator
+    )
     if (!adapter.forkThread) throw unsupported(adapter.id, 'fork')
-    return adapter.forkThread(context, input)
+    const thread = withWorkspaceHostOnThread(
+      await adapter.forkThread(context, input),
+      context.workspaceHost
+    )
+    this.rememberThreadWorkspaceHost(adapter.id, thread.id, context.workspaceHost)
+    return thread
   }
 
   async resumeSession(input: AgentRuntimeSessionResumeInput): Promise<AgentRuntimeSessionResumeHandle> {
-    const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
+    const { adapter, context } = await this.resolveRequiredRuntime(
+      input.runtimeId,
+      input.sessionId,
+      input.workspaceLocator
+    )
     if (!adapter.resumeSession) throw unsupported(adapter.id, 'resume session')
     const service = this.options.services?.contextState
     const sourceState = service?.peek({
@@ -805,13 +971,23 @@ export class AgentRuntimeHost {
   }
 
   async updateThreadRelation(input: AgentRuntimeThreadRelationInput): Promise<void> {
-    const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
+    const { adapter, context } = await this.resolveRequiredRuntime(
+      input.runtimeId,
+      input.threadId,
+      input.workspaceLocator
+    )
     if (!adapter.updateThreadRelation) throw unsupported(adapter.id, 'thread relation')
     await adapter.updateThreadRelation(context, input)
   }
 
   async usage(input: AgentRuntimeUsageQuery): Promise<AgentRuntimeUsageResponse> {
-    const { adapter, context } = await this.resolveOptionalActiveRuntime(input.runtimeId)
+    const { adapter, context } = input.workspaceLocator || input.threadId
+      ? await this.resolveRequiredRuntime(
+          input.runtimeId,
+          input.threadId,
+          input.workspaceLocator
+        )
+      : await this.resolveOptionalActiveRuntime(input.runtimeId)
     if (!adapter.usage) {
       return {
         supported: false,
@@ -833,7 +1009,13 @@ export class AgentRuntimeHost {
   }
 
   private async dispatchAuxiliary(input: AgentRuntimeAuxiliaryInput): Promise<unknown> {
-    const { adapter, context } = await this.resolveOptionalActiveRuntime(input.runtimeId)
+    const { adapter, context } = input.workspaceLocator
+      ? await this.resolveRequiredRuntime(
+          input.runtimeId,
+          auxiliaryThreadId(input),
+          input.workspaceLocator
+        )
+      : await this.resolveOptionalActiveRuntime(input.runtimeId)
     if (isThreadGoalAuxiliaryOperation(input.operation)) {
       return this.handleThreadGoalAuxiliary(adapter, context, input)
     }
@@ -1001,49 +1183,6 @@ export class AgentRuntimeHost {
           })
         }
       }
-      case 'listGitCheckpoints':
-        assertPayloadRuntimeIdMatchesOwner(payload, 'runtimeId', runtimeId)
-        return {
-          handled: true,
-          value: await this.options.services?.gitCheckpoints?.list({
-            runtimeId,
-            threadId: optionalString(payload.threadId),
-            workspaceRoot: optionalString(payload.workspaceRoot)
-          }) ?? []
-        }
-      case 'createGitCheckpoint': {
-        assertPayloadRuntimeIdMatchesOwner(payload, 'runtimeId', runtimeId)
-        const service = this.options.services?.gitCheckpoints
-        if (!service) return { handled: false }
-        return {
-          handled: true,
-          value: await service.create({
-            runtimeId,
-            threadId: requiredString(payload, 'threadId'),
-            workspaceRoot: requiredString(payload, 'workspaceRoot', context.settings.workspaceRoot || ''),
-            ...(optionalString(payload.turnId) ? { turnId: optionalString(payload.turnId) } : {})
-          })
-        }
-      }
-      case 'previewGitCheckpoint': {
-        const service = this.options.services?.gitCheckpoints
-        if (!service) return { handled: false }
-        return {
-          handled: true,
-          value: await service.preview(requiredString(payload, 'checkpointId'))
-        }
-      }
-      case 'restoreGitCheckpoint': {
-        const service = this.options.services?.gitCheckpoints
-        if (!service) return { handled: false }
-        return {
-          handled: true,
-          value: await service.restore({
-            checkpointId: requiredString(payload, 'checkpointId'),
-            force: payload.force === true
-          })
-        }
-      }
       case 'createMemory': {
         const service = this.options.services?.memory
         if (!service) return { handled: false }
@@ -1166,7 +1305,15 @@ export class AgentRuntimeHost {
     const fileReferences = arrayOfRuntimeFileReferences(payload.fileReferences)
 
     const sourceDetail = await this.readRuntimeHandoffSourceDetail(sourceRuntimeId, sourceThreadId)
-    const { adapter: targetAdapter, context: targetContext } = await this.resolveRequiredRuntime(targetRuntimeId)
+    const workspaceLocator = sourceContext.workspaceHost?.locator
+    const {
+      adapter: targetAdapter,
+      context: targetBaseContext
+    } = await this.resolveRequiredRuntime(targetRuntimeId)
+    const targetContext = await this.withWorkspaceHostPlacement(
+      targetBaseContext,
+      workspaceLocator
+    )
     const targetCapabilities = await targetAdapter.capabilities(targetContext)
     const targetThreadId = targetCapabilities.storage.guiOwnedThreads
       ? optionalString(payload.targetThreadId) ?? sourceThreadId
@@ -1178,6 +1325,7 @@ export class AgentRuntimeHost {
           title: title ?? 'Runtime handoff',
           updatedAt: new Date().toISOString(),
           ...(workspace ? { workspace } : {}),
+          ...(workspaceLocator ? { workspaceLocator } : {}),
           ...(mode ? { mode } : {}),
           ...(model ? { model } : {}),
           status: 'running'
@@ -1185,6 +1333,7 @@ export class AgentRuntimeHost {
       : await targetAdapter.startThread(targetContext, {
           runtimeId: targetRuntimeId,
           ...(workspace ? { workspace } : {}),
+          ...(workspaceLocator ? { workspaceLocator } : {}),
           ...(title ? { title } : {}),
           ...(mode ? { mode } : {}),
           ...(model ? { model } : {})
@@ -1225,6 +1374,7 @@ export class AgentRuntimeHost {
         metadata: handoffAuditMetadata,
         displayText,
         ...(workspace ? { workspace } : {}),
+        ...(workspaceLocator ? { workspaceLocator } : {}),
         ...(mode ? { mode } : {}),
         ...(model ? { model } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -1281,7 +1431,10 @@ export class AgentRuntimeHost {
     sourceThreadId: string
   ): Promise<AgentRuntimeThreadDetail | null> {
     try {
-      const { adapter, context } = await this.resolveRequiredRuntime(sourceRuntimeId)
+      const { adapter, context } = await this.resolveRequiredRuntime(
+        sourceRuntimeId,
+        sourceThreadId
+      )
       return await adapter.readThread(context, {
         runtimeId: sourceRuntimeId,
         threadId: sourceThreadId
@@ -1407,16 +1560,6 @@ export class AgentRuntimeHost {
         outputSchema: 'AgentRuntimeHandoffPacket'
       })
     }
-    if (services.gitCheckpoints) {
-      addDescriptor({
-        id: 'git.turnCheckpoint',
-        channel: 'host_service',
-        available: true,
-        inputSchema: 'workspaceRoot/threadId/turnId',
-        outputSchema: 'AgentRuntimeGitCheckpoint',
-        errorCodes: ['dirty_worktree', 'branch_changed', 'not_git_repo', 'git_unavailable']
-      })
-    }
     if (services.memory) {
       addDescriptor({
         id: 'memory.shared',
@@ -1526,9 +1669,7 @@ export class AgentRuntimeHost {
       storage: {
         ...capabilities.storage,
         memory: services.memory ? { available: true } : capabilities.storage.memory,
-        checkpoints: services.gitCheckpoints
-          ? { available: true }
-          : capabilities.storage.checkpoints ?? { available: false, reason: 'unsupported' },
+        checkpoints: capabilities.storage.checkpoints ?? { available: false, reason: 'unsupported' },
         workspaceReferences: services.workspaceReferences
           ? { available: true }
           : capabilities.storage.workspaceReferences ?? { available: false, reason: 'unsupported' }
@@ -1630,20 +1771,28 @@ export class AgentRuntimeHost {
     runtimeId: AgentRuntimeId,
     input: AgentRuntimeTurnStartInput
   ): Promise<AgentRuntimeTurnStartInput> {
+    const { visibleContextSurfaceId, ...runtimeInput } = input
     const service = this.options.services?.visibleContext
-    if (!service) return input
+    if (!service) return runtimeInput
     const callerId = capabilityAgentCallerId({
       runtimeId,
-      threadId: input.threadId,
-      requestId: input.threadId
+      threadId: runtimeInput.threadId,
+      requestId: runtimeInput.threadId
     })
-    const visibleContextOwnerThreadId = input.visibleContextOwnerThreadId?.trim() || input.threadId
-    const snapshot = await service.bindCurrentSurface(callerId, visibleContextOwnerThreadId).catch(() => null)
+    const visibleContextOwnerThreadId = runtimeInput.visibleContextOwnerThreadId?.trim()
+      || runtimeInput.threadId
+    const snapshot = visibleContextSurfaceId?.trim()
+      ? await service.bindSurface(
+          callerId,
+          visibleContextOwnerThreadId,
+          visibleContextSurfaceId
+        ).catch(() => null)
+      : null
     const statePacket = renderCanonicalVisibleState(snapshot)
     return {
-      ...input,
-      text: `${statePacket}\n\n${input.text}`,
-      displayText: input.displayText ?? input.text
+      ...runtimeInput,
+      text: `${statePacket}\n\n${runtimeInput.text}`,
+      displayText: runtimeInput.displayText ?? runtimeInput.text
     }
   }
 
@@ -1824,14 +1973,67 @@ export class AgentRuntimeHost {
     return { adapter, context: { settings } }
   }
 
-  private async resolveRequiredRuntime(runtimeId: AgentRuntimeId | undefined): Promise<{
+  private async resolveRequiredRuntime(
+    runtimeId: AgentRuntimeId | undefined,
+    threadId?: string,
+    workspaceLocator?: WorkspaceLocator
+  ): Promise<{
     adapter: AgentRuntimeAdapter
     context: AgentRuntimeAdapterContext
   }> {
     if (runtimeId === undefined) {
       throw new Error('AgentRuntimeAdapter runtimeId is required for this operation.')
     }
-    return this.resolveOptionalActiveRuntime(runtimeId)
+    const resolved = await this.resolveOptionalActiveRuntime(runtimeId)
+    const normalizedThreadId = threadId?.trim()
+    const workspaceHost = normalizedThreadId
+      ? this.threadWorkspaceHosts.get(
+          threadTurnKey(resolved.adapter.id, normalizedThreadId)
+        )
+      : undefined
+    const placed = workspaceHost
+      ? { ...resolved, context: { ...resolved.context, workspaceHost } }
+      : resolved
+    return workspaceLocator
+      ? {
+          ...placed,
+          context: await this.withWorkspaceHostPlacement(
+            placed.context,
+            workspaceLocator
+          )
+        }
+      : placed
+  }
+
+  private async withWorkspaceHostPlacement(
+    context: AgentRuntimeAdapterContext,
+    locator?: WorkspaceLocator
+  ): Promise<AgentRuntimeAdapterContext> {
+    if (!locator) return context
+    const workspaceHosts = this.options.services?.workspaceHosts
+    if (!workspaceHosts) {
+      throw new Error(
+        'A workspaceHost locator requires an attached Workspace Host session manager.'
+      )
+    }
+    const workspaceHost = await workspaceHosts.resolvePlacement(locator)
+    return {
+      ...context,
+      workspaceHost
+    }
+  }
+
+  private rememberThreadWorkspaceHost(
+    runtimeId: AgentRuntimeId,
+    threadId: string | undefined,
+    workspaceHost: WorkspaceHostPlacement | undefined
+  ): void {
+    const normalizedThreadId = threadId?.trim()
+    if (!normalizedThreadId || !workspaceHost) return
+    this.threadWorkspaceHosts.set(
+      threadTurnKey(runtimeId, normalizedThreadId),
+      workspaceHost
+    )
   }
 
   private enqueueThreadTurnStart(
@@ -1839,20 +2041,25 @@ export class AgentRuntimeHost {
     context: AgentRuntimeAdapterContext,
     input: AgentRuntimeTurnStartInput
   ): Promise<AgentRuntimeTurnHandle> {
-    const threadId = input.threadId.trim()
-    const key = threadTurnKey(adapter.id, threadId)
-    if (!threadId) {
-      return this.startAdapterTurn(adapter, context, input)
-    }
-    const previous = this.turnQueues.get(key) ?? Promise.resolve()
-    const task = previous
-      .catch(() => undefined)
-      .then(async () => {
-        const steered = await this.steerActiveTurnIfSupported(adapter, context, input)
+    return this.enqueueThreadOperation(adapter.id, input.threadId, async () => {
+        const canonicalInput = await this.withCanonicalVisibleState(adapter.id, input)
+        const steered = await this.steerActiveTurnIfSupported(adapter, context, canonicalInput)
         if (steered) return steered
-        await this.waitForThreadTerminal(adapter, context, input)
-        return this.startAdapterTurn(adapter, context, input)
+        await this.waitForThreadTerminal(adapter, context, canonicalInput)
+        return this.startAdapterTurn(adapter, context, canonicalInput)
       })
+  }
+
+  private enqueueThreadOperation<T>(
+    runtimeId: AgentRuntimeId,
+    threadIdInput: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const threadId = threadIdInput.trim()
+    if (!threadId) return operation()
+    const key = threadTurnKey(runtimeId, threadId)
+    const previous = this.turnQueues.get(key) ?? Promise.resolve()
+    const task = previous.catch(() => undefined).then(operation)
     this.turnQueues.set(key, task)
     void task
       .finally(() => {
@@ -1867,7 +2074,19 @@ export class AgentRuntimeHost {
     context: AgentRuntimeAdapterContext,
     input: AgentRuntimeTurnStartInput
   ): Promise<AgentRuntimeTurnHandle> {
-    const startValidation = this.executionIntegrity.turnStartValidationState(input)
+    const { visibleContextSurfaceId: _surfaceId, ...adapterInput } = input
+    const startValidation = this.executionIntegrity.turnStartValidationState(adapterInput)
+    if (
+      startValidation.nativeVisualObligationsPending &&
+      this.options.nativeVisualToolsAvailable?.() === false
+    ) {
+      throw new AgentRuntimeTurnPreflightError(
+        'runtime_visual_capability_unavailable',
+        'Required native visual tools are unavailable, so the runtime turn was not started.',
+        'capability_unavailable',
+        false
+      )
+    }
     const dispatchContext: AgentRuntimeAdapterContext = {
       ...context,
       turnGovernanceSnapshot: {
@@ -1875,29 +2094,29 @@ export class AgentRuntimeHost {
         nativeVisualProofChainPending: startValidation.nativeVisualObligationsPending
       }
     }
-    const handle = await adapter.startTurn(dispatchContext, input)
-    this.rememberTurnGovernanceProfile(adapter.id, input, handle)
+    const handle = await adapter.startTurn(dispatchContext, adapterInput)
+    this.rememberTurnGovernanceProfile(adapter.id, adapterInput, handle)
     this.executionIntegrity.rememberTurn(
       adapter.id,
-      input,
-      handle.threadId || input.threadId,
+      adapterInput,
+      handle.threadId || adapterInput.threadId,
       handle.turnId
     )
     await this.updateTurnGovernanceSnapshot(
       adapter,
       context,
-      handle.threadId || input.threadId,
+      handle.threadId || adapterInput.threadId,
       handle.turnId
     ).catch(async (error) => {
       await adapter.interruptTurn(context, {
         runtimeId: adapter.id,
-        threadId: handle.threadId || input.threadId,
+        threadId: handle.threadId || adapterInput.threadId,
         turnId: handle.turnId,
         discard: false
       }).catch(() => undefined)
       throw error
     })
-    this.rememberActiveThreadTurn(adapter.id, input, handle, 'running')
+    this.rememberActiveThreadTurn(adapter.id, adapterInput, handle, 'running')
     return handle
   }
 
@@ -2304,6 +2523,9 @@ export class AgentRuntimeHost {
       threadId: input.threadId,
       text: input.text,
       displayText: input.text,
+      ...(input.visibleContextSurfaceId
+        ? { visibleContextSurfaceId: input.visibleContextSurfaceId }
+        : {}),
       ...(input.clientDirectiveId ? { clientDirectiveId: input.clientDirectiveId } : {}),
       ...(input.executionIntent ? { executionIntent: input.executionIntent } : {})
     }))
@@ -2556,38 +2778,38 @@ export class AgentRuntimeHost {
     this.turnWorkspaces.set(turnGovernanceKey(runtimeId, threadId, turnId), workspace)
   }
 
-  private createPreTurnCheckpoint(
+  private async publishTerminalTurnLifecycle(
     runtimeId: AgentRuntimeId,
     context: AgentRuntimeAdapterContext,
-    input: AgentRuntimeTurnStartInput
-  ): void {
-    const service = this.options.services?.gitCheckpoints
-    const workspaceRoot = input.workspace?.trim() || context.settings.workspaceRoot?.trim()
-    if (!service || !workspaceRoot || !input.threadId.trim()) return
-    void service.create({
-      runtimeId,
-      threadId: input.threadId.trim(),
-      workspaceRoot
-    }).catch(() => undefined)
-  }
-
-  private createPostTurnCheckpoint(runtimeId: AgentRuntimeId, event: AgentRuntimeEvent): void {
+    event: AgentRuntimeEvent
+  ): Promise<void> {
     if (event.kind !== 'turn_lifecycle') return
-    if (!isAgentRuntimeTerminalTurnState(event.state)) return
+    const state = normalizeAgentRuntimeTurnState(event.state)
+    if (!state || !isAgentRuntimeTerminalTurnState(state)) return
     const turnId = event.turnId?.trim()
     if (!turnId) return
     const key = turnGovernanceKey(runtimeId, event.threadId, turnId)
-    if (this.postTurnCheckpoints.has(key)) return
-    const workspaceRoot = this.turnWorkspaces.get(key)
-    const service = this.options.services?.gitCheckpoints
-    if (!workspaceRoot || !service) return
-    this.postTurnCheckpoints.add(key)
-    void service.create({
+    const workspaceRoot = this.turnWorkspaces.get(key) || context.settings.workspaceRoot?.trim()
+    await this.publishTurnLifecycle(Object.freeze({
+      kind: 'after-turn',
+      state: state === 'completed'
+        ? 'completed'
+        : state === 'failed'
+          ? 'failed'
+          : 'cancelled',
       runtimeId,
       threadId: event.threadId,
       turnId,
-      workspaceRoot
-    }).catch(() => undefined)
+      ...(workspaceRoot ? { workspaceRoot } : {}),
+      occurredAt: new Date().toISOString()
+    }))
+  }
+
+  private async publishTurnLifecycle(event: DomainMainTurnLifecycleEvent): Promise<void> {
+    if (this.turnLifecycleSubscribers.size === 0) return
+    await Promise.allSettled(
+      [...this.turnLifecycleSubscribers].map((listener) => Promise.resolve(listener(event)))
+    )
   }
 
   private governanceProfileForEvent(
@@ -2657,6 +2879,25 @@ export class AgentRuntimeHost {
         this.artifactBroadcastTurns.delete(key)
       }
     })()
+  }
+}
+
+class AgentRuntimeTurnPreflightError extends Error {
+  readonly code: string
+  readonly failureClass: string
+  readonly retryable: boolean
+
+  constructor(
+    code: string,
+    message: string,
+    failureClass: string,
+    retryable: boolean
+  ) {
+    super(message)
+    this.name = 'AgentRuntimeTurnPreflightError'
+    this.code = code
+    this.failureClass = failureClass
+    this.retryable = retryable
   }
 }
 
@@ -3786,4 +4027,38 @@ async function* mergeRuntimeEventStreams(
 
 function turnGovernanceKey(runtimeId: AgentRuntimeId, threadId: string, turnId: string): string {
   return `${runtimeId}:${threadId}:${turnId}`
+}
+
+function withWorkspaceLocatorPath<
+  Input extends {
+    workspace?: string
+    workspaceLocator?: WorkspaceLocator
+  }
+>(input: Input): Input {
+  if (!input.workspaceLocator) return input
+  return {
+    ...input,
+    workspace: input.workspaceLocator.path
+  }
+}
+
+function withWorkspaceHostOnThread<Thread extends AgentRuntimeThread>(
+  thread: Thread,
+  workspaceHost?: WorkspaceHostPlacement
+): Thread {
+  if (!workspaceHost) return thread
+  return {
+    ...thread,
+    workspace: workspaceHost.locator.path,
+    workspaceLocator: workspaceHost.locator
+  }
+}
+
+function auxiliaryThreadId(input: AgentRuntimeAuxiliaryInput): string | undefined {
+  const payload = recordPayload(input.payload)
+  const options = recordPayload(payload.options)
+  return optionalString(payload.threadId) ??
+    optionalString(payload.sourceThreadId) ??
+    optionalString(payload.parentThreadId) ??
+    optionalString(options.threadId)
 }

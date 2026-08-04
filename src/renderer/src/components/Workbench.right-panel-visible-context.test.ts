@@ -1,6 +1,8 @@
+import { createElement } from 'react'
 import { describe, expect, it } from 'vitest'
 import { RIGHT_PANEL_MODES } from './chat/WorkbenchTopBar'
 import { buildRightPanelVisibleContextComponent } from './Workbench'
+import { installedRendererContributions } from '../domain-modules/installed-renderer-contributions'
 
 const UPDATED_AT = '2026-07-19T00:00:00.000Z'
 
@@ -31,20 +33,36 @@ describe('Workbench right-panel visible context', () => {
   })
 
   it('derives contributed panel context metadata from the registry', () => {
-    const component = buildRightPanelVisibleContextComponent({
-      mode: 'paper',
-      sessionId: 'session-a',
-      width: 420,
-      workspaceRoot: '/workspace/a',
-      updatedAt: UPDATED_AT
+    const registration = installedRendererContributions.rightPanels.register({
+      id: 'fixture.right-panel',
+      ownerId: 'fixture.domain',
+      contract: {
+        location: 'workbench.right-panel',
+        title: 'Fixture panel',
+        resourceKind: 'fixture-resource'
+      },
+      value: {
+        render: () => createElement('div')
+      }
     })
+    try {
+      const component = buildRightPanelVisibleContextComponent({
+        mode: 'fixture.right-panel',
+        sessionId: 'session-a',
+        width: 420,
+        workspaceRoot: '/workspace/a',
+        updatedAt: UPDATED_AT
+      })
 
-    expect(component.title).toBe('Paper radar')
-    expect(component.state?.currentResource).toMatchObject({
-      kind: 'paper-radar',
-      title: 'Paper radar',
-      sessionId: 'session-a'
-    })
+      expect(component.title).toBe('Fixture panel')
+      expect(component.state?.currentResource).toMatchObject({
+        kind: 'fixture-resource',
+        title: 'Fixture panel',
+        sessionId: 'session-a'
+      })
+    } finally {
+      registration.dispose()
+    }
   })
 
   it('switches modes without retaining resource state from the previous panel', () => {
@@ -75,7 +93,7 @@ describe('Workbench right-panel visible context', () => {
       mode: 'changes',
       width: 500,
       currentResource: {
-        kind: 'session-changes'
+        kind: 'changes'
       }
     })
     expect(changes.state?.currentResource).not.toHaveProperty('path')

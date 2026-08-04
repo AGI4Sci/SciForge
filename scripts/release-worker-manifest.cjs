@@ -34,11 +34,12 @@ const BUILTIN_PACKAGE_DEFINITIONS = {
   search: {
     dir: 'packages/workers/search'
   },
-  workflow: {
-    dir: 'packages/workers/workflow'
-  },
   workspaceIntel: {
     dir: 'packages/workers/workspace-intel'
+  },
+  workspaceEgress: {
+    dir: 'packages/workers/workspace-egress',
+    bundleTo: 'node_modules/@sciforge/workspace-egress'
   },
   writeAssist: {
     dir: 'packages/workers/write-assist'
@@ -48,9 +49,6 @@ const BUILTIN_PACKAGE_DEFINITIONS = {
   },
   runtimeInspector: {
     dir: 'packages/workers/runtime-inspector'
-  },
-  remoteExecutor: {
-    dir: 'packages/workers/remote-executor'
   },
   scientificPlotting: {
     dir: 'packages/workers/scientific-plotting'
@@ -66,9 +64,6 @@ const BUILTIN_PACKAGE_DEFINITIONS = {
   },
   pptMaster: {
     dir: 'packages/workers/ppt-master'
-  },
-  visualDocument: {
-    dir: 'packages/workers/visual-document'
   },
   guiOwlComputerUse: {
     dir: 'packages/workers/gui-owl-computer-use'
@@ -347,18 +342,16 @@ const WORKSPACE_PACKAGE_IDS = [
   'planGateway',
   'schedule',
   'search',
-  'workflow',
+  'workspaceEgress',
   'workspaceIntel',
   'writeAssist',
   'sciModalityRouter',
   'runtimeInspector',
-  'remoteExecutor',
   'scientificPlotting',
   'bgcDiscovery',
   'imageGeneration',
   'multiAgent',
-  'pptMaster',
-  'visualDocument'
+  'pptMaster'
 ]
 
 const BUNDLED_PACKAGE_IDS = [
@@ -367,17 +360,15 @@ const BUNDLED_PACKAGE_IDS = [
   'planGateway',
   'schedule',
   'search',
-  'workflow',
+  'workspaceEgress',
   'workspaceIntel',
-  'remoteExecutor',
   'writeAssist',
   'runtimeInspector',
   'scientificPlotting',
   'bgcDiscovery',
   'imageGeneration',
   'multiAgent',
-  'pptMaster',
-  'visualDocument'
+  'pptMaster'
 ]
 
 const NON_BUNDLED_PACKAGE_IDS = [
@@ -509,21 +500,6 @@ const RUNTIME_ENTRIES = [
     ]
   },
   {
-    id: 'workflow',
-    label: 'Workflow',
-    packageIds: ['workflow'],
-    requiredPathsExport: 'WORKFLOW_RUNTIME_REQUIRED_PATHS',
-    requiredPaths: packagePaths('workflow', [
-      'package.json',
-      'src/mcp-server.ts',
-      'src/service.ts',
-      'src/contract.ts'
-    ]),
-    executableNodeEntryPaths: [
-      'out/main/workflow-mcp-node-entry.js'
-    ]
-  },
-  {
     id: 'workspace-intel',
     label: 'Workspace Intel',
     packageIds: ['workspaceIntel'],
@@ -536,22 +512,6 @@ const RUNTIME_ENTRIES = [
     ]),
     executableNodeEntryPaths: [
       'out/main/workspace-intel-mcp-node-entry.js'
-    ]
-  },
-  {
-    id: 'remote-executor',
-    label: 'Remote Executor',
-    packageIds: ['remoteExecutor'],
-    requiredPathsExport: 'REMOTE_EXECUTOR_RUNTIME_REQUIRED_PATHS',
-    requiredPaths: packagePaths('remoteExecutor', [
-      'package.json',
-      'src/mcp-server.ts',
-      'src/service.ts',
-      'src/contract.ts',
-      'remote_worker.py'
-    ]),
-    executableNodeEntryPaths: [
-      'out/main/remote-executor-mcp-node-entry.js'
     ]
   },
   {
@@ -660,21 +620,6 @@ const RUNTIME_ENTRIES = [
     ]),
     executableNodeEntryPaths: [
       'out/main/ppt-master-mcp-node-entry.js'
-    ]
-  },
-  {
-    id: 'visual-document',
-    label: 'VisualDocument',
-    packageIds: ['visualDocument'],
-    requiredPathsExport: 'VISUAL_DOCUMENT_RUNTIME_REQUIRED_PATHS',
-    requiredPaths: packagePaths('visualDocument', [
-      'package.json',
-      'src/visual-document-mcp-server.ts',
-      'src/visual-document-engine.ts',
-      'src/contract.ts'
-    ]),
-    executableNodeEntryPaths: [
-      'out/main/visual-document-mcp-node-entry.js'
     ]
   }
 ]

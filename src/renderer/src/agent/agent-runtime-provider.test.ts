@@ -320,7 +320,16 @@ describe('AgentRuntimeProvider', () => {
       })
     ])
     expect(listThreads).toHaveBeenCalledWith({ limit: 1, includeSide: true })
-    await expect(provider.createThread({ title: 'Two', workspace: '/tmp/workspace', mode: 'agent' })).resolves.toEqual(
+    await expect(provider.createThread({
+      title: 'Two',
+      workspace: '/shared/project',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'host-session-1',
+        path: '/shared/project'
+      },
+      mode: 'agent'
+    })).resolves.toEqual(
       expect.objectContaining({ id: 'thread-2', title: 'Two', runtimeId: 'codex' })
     )
     await expect(provider.getThreadDetail('thread-2')).resolves.toMatchObject({
@@ -367,7 +376,12 @@ describe('AgentRuntimeProvider', () => {
       clientDirectiveId: 'directive:send:1',
       model: 'gpt-5',
       reasoningEffort: 'medium',
-      displayText: 'hello'
+      displayText: 'hello',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'host-session-1',
+        path: '/shared/project'
+      }
     })).resolves.toEqual({ threadId: 'thread-2', turnId: 'turn-2', userMessageItemId: 'user-2' })
     await expect(provider.interruptTurn('thread-2', 'turn-2', { discard: true })).resolves.toBeUndefined()
     await expect(provider.steerUserMessage?.('thread-2', 'turn-2', 'more', {
@@ -390,10 +404,23 @@ describe('AgentRuntimeProvider', () => {
     expect(startThread).toHaveBeenCalledWith({
       runtimeId: 'codex',
       title: 'Two',
-      workspace: '/tmp/workspace',
+      workspace: '/shared/project',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'host-session-1',
+        path: '/shared/project'
+      },
       mode: 'agent'
     })
-    expect(readThread).toHaveBeenCalledWith({ runtimeId: 'codex', threadId: 'thread-2' })
+    expect(readThread).toHaveBeenCalledWith({
+      runtimeId: 'codex',
+      threadId: 'thread-2',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'host-session-1',
+        path: '/shared/project'
+      }
+    })
     expect(startTurn).toHaveBeenCalledWith({
       runtimeId: 'codex',
       threadId: 'thread-2',
@@ -401,12 +428,22 @@ describe('AgentRuntimeProvider', () => {
       clientDirectiveId: 'directive:send:1',
       model: 'gpt-5',
       reasoningEffort: 'medium',
-      displayText: 'hello'
+      displayText: 'hello',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'host-session-1',
+        path: '/shared/project'
+      }
     })
     expect(interruptTurn).toHaveBeenCalledWith({
       runtimeId: 'codex',
       threadId: 'thread-2',
       turnId: 'turn-2',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'host-session-1',
+        path: '/shared/project'
+      },
       discard: true
     })
     expect(steerTurn).toHaveBeenCalledWith({
@@ -414,27 +451,52 @@ describe('AgentRuntimeProvider', () => {
       threadId: 'thread-2',
       turnId: 'turn-2',
       text: 'more',
-      clientDirectiveId: 'directive:steer:1'
+      clientDirectiveId: 'directive:steer:1',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'host-session-1',
+        path: '/shared/project'
+      }
     })
     expect(renameThread).toHaveBeenCalledWith({
       runtimeId: 'codex',
       threadId: 'thread-2',
-      title: 'Renamed'
+      title: 'Renamed',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'host-session-1',
+        path: '/shared/project'
+      }
     })
     expect(deleteThread).toHaveBeenCalledWith({
       runtimeId: 'codex',
-      threadId: 'thread-2'
+      threadId: 'thread-2',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'host-session-1',
+        path: '/shared/project'
+      }
     })
     expect(compactThread).toHaveBeenCalledWith({
       runtimeId: 'codex',
       threadId: 'thread-2',
-      reason: 'manual'
+      reason: 'manual',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'host-session-1',
+        path: '/shared/project'
+      }
     })
     expect(forkThread).toHaveBeenCalledWith({
       runtimeId: 'codex',
       threadId: 'thread-2',
       relation: 'side',
-      title: 'Side path'
+      title: 'Side path',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'host-session-1',
+        path: '/shared/project'
+      }
     })
     expect(resumeSession).toHaveBeenCalledWith({
       runtimeId: 'codex',
@@ -445,7 +507,159 @@ describe('AgentRuntimeProvider', () => {
     expect(updateThreadRelation).toHaveBeenCalledWith({
       runtimeId: 'codex',
       threadId: 'thread-2',
-      relation: 'primary'
+      relation: 'primary',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'host-session-1',
+        path: '/shared/project'
+      }
+    })
+  })
+
+  it('places every remembered remote thread operation on its workspace host session', async () => {
+    const workspaceLocator = {
+      contractVersion: 1 as const,
+      hostSessionId: 'remote-session-1',
+      path: '/cluster/project'
+    }
+    const readThread = vi.fn(async () => ({
+      id: 'remote-thread',
+      runtimeId: 'codex' as const,
+      title: 'Remote thread',
+      updatedAt: '2026-06-11T00:01:00.000Z',
+      latestSeq: 4,
+      items: [
+        {
+          id: 'approval-item',
+          kind: 'approval' as const,
+          summary: 'Run command?',
+          status: 'pending' as const,
+          meta: { approvalId: 'approval-remote' }
+        },
+        {
+          id: 'input-item',
+          kind: 'user_input' as const,
+          summary: 'Choose one',
+          status: 'pending' as const,
+          meta: { requestId: 'input-remote' }
+        }
+      ]
+    }))
+    const readThreadSidebarProbe = vi.fn(async () => ({
+      runtimeId: 'codex' as const,
+      threadId: 'remote-thread',
+      text: 'Remote summary'
+    }))
+    const startTurn = vi.fn(async () => ({
+      threadId: 'remote-thread',
+      turnId: 'turn-remote',
+      userMessageItemId: 'user-remote'
+    }))
+    const steerTurn = vi.fn(async () => undefined)
+    const interruptTurn = vi.fn(async () => undefined)
+    const renameThread = vi.fn(async () => undefined)
+    const compactThread = vi.fn(async () => undefined)
+    const forkThread = vi.fn(async () => ({
+      id: 'remote-fork',
+      runtimeId: 'codex' as const,
+      title: 'Remote fork',
+      updatedAt: '2026-06-11T00:02:00.000Z'
+    }))
+    const updateThreadRelation = vi.fn(async () => undefined)
+    const resolveApproval = vi.fn(async () => undefined)
+    const resolveUserInput = vi.fn(async () => undefined)
+    const auxiliary = vi.fn(async () => ({
+      threadId: 'remote-thread',
+      modelContextWindow: 100_000,
+      totalTokens: 1_000,
+      remainingTokens: 99_000,
+      remainingPercent: 99,
+      autoCompactionThresholdPercent: 10,
+      autoCompactionEnabled: true,
+      lastUpdatedAt: '2026-06-11T00:01:00.000Z'
+    }))
+    const subscribeEvents = vi.fn(async () => ({ streamId: 'stream-remote' }))
+    const stopEvents = vi.fn(async () => true)
+    const deleteThread = vi.fn(async () => undefined)
+    vi.stubGlobal('window', {
+      sciforge: {
+        getSettings: vi.fn(async () => settings('codex')),
+        setSettings: vi.fn(),
+        agentRuntime: {
+          readThread,
+          readThreadSidebarProbe,
+          startTurn,
+          steerTurn,
+          interruptTurn,
+          renameThread,
+          compactThread,
+          forkThread,
+          updateThreadRelation,
+          resolveApproval,
+          resolveUserInput,
+          auxiliary,
+          subscribeEvents,
+          stopEvents,
+          onEvent: vi.fn(() => vi.fn()),
+          onEnd: vi.fn(() => vi.fn()),
+          onError: vi.fn(() => vi.fn()),
+          deleteThread
+        }
+      }
+    })
+
+    const provider = new AgentRuntimeProvider()
+    provider.rememberThreadRuntime('remote-thread', 'codex', workspaceLocator)
+
+    await provider.getThreadDetail('remote-thread')
+    await provider.getThreadSidebarProbe('remote-thread')
+    await provider.sendUserMessage('remote-thread', 'continue')
+    await provider.steerUserMessage?.('remote-thread', 'turn-remote', 'more')
+    await provider.interruptTurn('remote-thread', 'turn-remote')
+    await provider.renameThread('remote-thread', 'Renamed')
+    await provider.compactThread?.('remote-thread', 'manual')
+    await provider.forkThread?.('remote-thread', { relation: 'side', title: 'Remote fork' })
+    await provider.updateThreadRelation?.('remote-thread', 'primary')
+    await provider.submitApprovalDecision?.('approval-remote', 'allow')
+    await provider.submitUserInputResponse?.('input-remote', [
+      { id: 'choice', label: 'Yes', value: 'yes' }
+    ])
+    await provider.getContextState?.('remote-thread')
+
+    const abortController = new AbortController()
+    const subscription = provider.subscribeThreadEvents(
+      'remote-thread',
+      4,
+      makeSink(),
+      abortController.signal
+    )
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    abortController.abort()
+    await subscription
+    await provider.deleteThread('remote-thread')
+
+    for (const bridgeCall of [
+      readThread,
+      readThreadSidebarProbe,
+      startTurn,
+      steerTurn,
+      interruptTurn,
+      renameThread,
+      compactThread,
+      forkThread,
+      updateThreadRelation,
+      resolveApproval,
+      resolveUserInput,
+      subscribeEvents,
+      deleteThread
+    ]) {
+      expect(bridgeCall).toHaveBeenCalledWith(expect.objectContaining({ workspaceLocator }))
+    }
+    expect(auxiliary).toHaveBeenCalledWith({
+      runtimeId: 'codex',
+      workspaceLocator,
+      operation: 'getContextState',
+      payload: { threadId: 'remote-thread' }
     })
   })
 
@@ -1108,23 +1322,6 @@ describe('AgentRuntimeProvider', () => {
       if (input.operation === 'getContextState') {
         return { runtimeId: 'codex', threadId: input.payload?.threadId, rawHistoryItems: 0, effectiveHistoryItems: 0, updatedAt: 'now' }
       }
-      if (input.operation === 'listGitCheckpoints') {
-        return [{
-          id: 'checkpoint-1',
-          runtimeId: input.runtimeId,
-          threadId: input.payload?.threadId,
-          workspaceRoot: input.payload?.workspaceRoot,
-          createdAt: '2026-06-20T00:00:00.000Z'
-        }]
-      }
-      if (input.operation === 'createGitCheckpoint') {
-        return {
-          id: 'checkpoint-2',
-          runtimeId: input.runtimeId,
-          threadId: input.payload?.threadId,
-          workspaceRoot: input.payload?.workspaceRoot
-        }
-      }
       if (input.operation === 'runCodeNavigation') {
         return { ok: true, locations: [{ relativePath: 'src/index.ts', line: 3, character: 8 }] }
       }
@@ -1242,25 +1439,6 @@ describe('AgentRuntimeProvider', () => {
       id: 'attachment-1',
       name: 'figure.png'
     })
-    await expect(provider.listGitCheckpoints?.({
-      threadId: 'codex-thread',
-      workspaceRoot: '/tmp/ws'
-    })).resolves.toEqual([
-      expect.objectContaining({
-        id: 'checkpoint-1',
-        runtimeId: 'codex',
-        threadId: 'codex-thread'
-      })
-    ])
-    await expect(provider.createGitCheckpoint?.({
-      workspaceRoot: '/tmp/ws',
-      threadId: 'codex-thread',
-      turnId: 'turn-1'
-    })).resolves.toEqual(expect.objectContaining({
-      id: 'checkpoint-2',
-      runtimeId: 'codex',
-      threadId: 'codex-thread'
-    }))
     await expect(provider.runCodeNavigation?.({
       workspaceRoot: '/tmp/ws',
       operation: 'goToDefinition',
@@ -1316,23 +1494,6 @@ describe('AgentRuntimeProvider', () => {
           threadId: 'codex-thread',
           workspace: '/tmp/ws'
         }
-      }
-    })
-    expect(auxiliary).toHaveBeenCalledWith({
-      runtimeId: 'codex',
-      operation: 'listGitCheckpoints',
-      payload: {
-        threadId: 'codex-thread',
-        workspaceRoot: '/tmp/ws'
-      }
-    })
-    expect(auxiliary).toHaveBeenCalledWith({
-      runtimeId: 'codex',
-      operation: 'createGitCheckpoint',
-      payload: {
-        workspaceRoot: '/tmp/ws',
-        threadId: 'codex-thread',
-        turnId: 'turn-1'
       }
     })
     expect(auxiliary).toHaveBeenCalledWith({

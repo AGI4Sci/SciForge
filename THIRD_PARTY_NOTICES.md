@@ -1,6 +1,6 @@
 # Third Party Notices
 
-Last updated: 2026-07-21
+Last updated: 2026-07-30
 
 This file records the third-party license and distribution boundary for the current SciForge source tree. It is an engineering compliance index, not legal advice. The exact npm dependency graph is pinned by `package-lock.json`.
 
@@ -140,6 +140,18 @@ Current source dependencies that may include native code or platform binaries:
 | `@napi-rs/canvas` | npm dependency | `MIT` |
 | `node-pty` | npm dependency | `MIT` |
 | Electron/Chromium/Node/V8 | Electron runtime | See Electron and Chromium notices above. |
+
+The ignored, build-generated Linux x64 Workspace Host deployment artifact also
+contains fixed redistributable runtime components:
+
+| Component | Pinned version | Distribution evidence |
+| --- | --- | --- |
+| Node.js Linux x64 runtime | `22.18.0` | Node distribution license is bundled as `runtime/LICENSE`; the build verifies the pinned archive integrity before extracting `runtime/node`. |
+| OpenAI Codex Linux x64 cohort | `0.146.0` | Apache-2.0 license and package metadata are bundled under `codex/`; the build verifies the pinned package archive and license integrity before including the CLI and helper executables. |
+
+These components are downloaded only by the desktop build, cached outside the
+tracked source distribution, covered by the Workspace Host manifest with
+SHA-256/size/mode metadata, and never downloaded by the remote cluster.
 
 No repository-tracked `.node`, `.dylib`, `.so`, or `.dll` files were found in the source tree outside ignored build/dependency directories during this update. Final installers must be scanned separately because native binaries can be introduced by packaging.
 

@@ -9,6 +9,9 @@ import {
   MAIN_WORKSPACE_PREVIEW_PLUGIN_CONTRIBUTION_KIND,
   RENDERER_WORKSPACE_PREVIEW_PLUGIN_CONTRIBUTION_KIND
 } from '@sciforge/domain-sdk/workspace-preview'
+import {
+  WORKSPACE_SERVER_WORKSPACE_PREVIEW_PLUGIN_CONTRIBUTION_KIND
+} from '@sciforge/domain-sdk/workspace-server'
 import manifest from '../sciforge.domain.json' with { type: 'json' }
 
 export const domainPackageDefinition: TrustedDomainPackageDefinition =
@@ -27,6 +30,11 @@ export const LIFE_SCIENCE_PREVIEW_RENDERER_CONTRIBUTIONS = previewContributionsF
   RENDERER_WORKSPACE_PREVIEW_PLUGIN_CONTRIBUTION_KIND
 )
 
+export const LIFE_SCIENCE_PREVIEW_WORKSPACE_SERVER_CONTRIBUTIONS = previewContributionsFor(
+  'workspace-server',
+  WORKSPACE_SERVER_WORKSPACE_PREVIEW_PLUGIN_CONTRIBUTION_KIND
+)
+
 export const LIFE_SCIENCE_PREVIEW_RENDERER_LIFECYCLE_CONTRIBUTIONS = contributionsFor(
   'renderer',
   'renderer.lifecycle'
@@ -39,8 +47,16 @@ export const LIFE_SCIENCE_PREVIEW_CONTRIBUTION_IDS = Object.freeze(
 const rendererContributionIds = LIFE_SCIENCE_PREVIEW_RENDERER_CONTRIBUTIONS.map(
   (contribution) => contribution.id
 )
-if (JSON.stringify(LIFE_SCIENCE_PREVIEW_CONTRIBUTION_IDS) !== JSON.stringify(rendererContributionIds)) {
-  throw new Error('Life Science Preview main and renderer contribution IDs must match exactly.')
+const workspaceServerContributionIds = LIFE_SCIENCE_PREVIEW_WORKSPACE_SERVER_CONTRIBUTIONS.map(
+  (contribution) => contribution.id
+)
+if (
+  JSON.stringify(LIFE_SCIENCE_PREVIEW_CONTRIBUTION_IDS) !== JSON.stringify(rendererContributionIds) ||
+  JSON.stringify(LIFE_SCIENCE_PREVIEW_CONTRIBUTION_IDS) !== JSON.stringify(workspaceServerContributionIds)
+) {
+  throw new Error(
+    'Life Science Preview main, renderer, and workspace-server contribution IDs must match exactly.'
+  )
 }
 
 function previewContributionsFor(

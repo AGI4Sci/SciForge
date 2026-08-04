@@ -13,8 +13,10 @@ import {
   type MultiAgentErrorInfo,
   type MultiAgentEventSink,
   type MultiAgentExecutor,
+  type MultiAgentLifecycleControl,
   type MultiAgentExecutorResult,
   type MultiAgentRuntimeConfig as MultiAgentRuntimeConfigType,
+  type MultiAgentTerminationReason,
   type MultiAgentTranscriptEntry as MultiAgentTranscriptEntryType,
   type MultiAgentUsage as MultiAgentUsageType
 } from './contract.js'
@@ -54,8 +56,12 @@ export type RunChildInput = {
   bashCommandPolicy?: Record<string, unknown>
   filePathPolicy?: Record<string, unknown>
   maxToolCalls?: number
-  childTimeoutMs?: number
   signal?: AbortSignal
+}
+
+export type MultiAgentWaitResult = {
+  record: MultiAgentChildRunRecord
+  timedOut: boolean
 }
 
 export type MultiAgentRuntimeOptions = {
@@ -68,10 +74,21 @@ export type MultiAgentRuntimeOptions = {
   recordUsage?: (parentThreadId: string, usage: MultiAgentUsageType) => void
 }
 
+type ExecutorOutcome =
+  | { kind: 'result'; result: MultiAgentExecutorResult }
+  | { kind: 'error'; error: unknown }
+
 export class MultiAgentRuntime {
   private readonly config: MultiAgentRuntimeConfigType
   private active = 0
   private readonly activeChildIds = new Set<string>()
+  private readonly pendingChildReservations = new Map<string, number>()
+  private readonly activeRequestsByKey = new Map<string, Promise<MultiAgentChildRunRecord>>()
+  private readonly startedRequestsByKey = new Map<string, Promise<MultiAgentChildRunRecord>>()
+  private readonly executionsByChildId = new Map<string, Promise<MultiAgentChildRunRecord>>()
+  private readonly lifecycleControlsByChildId = new Map<string, MultiAgentLifecycleControl>()
+  private readonly boundariesByChildId = new Map<string, ReturnType<typeof createExecutionBoundary>>()
+  private startGate: Promise<void> = Promise.resolve()
   private eventSeq = 0
 
   constructor(private readonly options: MultiAgentRuntimeOptions) {
@@ -79,22 +96,92 @@ export class MultiAgentRuntime {
   }
 
   async runChild(input: RunChildInput): Promise<MultiAgentChildRunRecord> {
+    return this.ensureChildExecution(input).execution
+  }
+
+  async startChild(input: RunChildInput): Promise<MultiAgentChildRunRecord> {
+    return this.ensureChildExecution(input).started
+  }
+
+  private ensureChildExecution(input: RunChildInput): {
+    execution: Promise<MultiAgentChildRunRecord>
+    started: Promise<MultiAgentChildRunRecord>
+  } {
     const normalized = normalizeRunChildInput(input)
-    if (normalized.requestId) {
-      const replayed = await this.options.store.findByRequest(
-        normalized.parentThreadId,
-        normalized.parentTurnId,
-        normalized.requestId
-      )
-      if (replayed) return normalizeRuntimeView(replayed, this.activeChildIds)
+    const requestKey = normalized.requestId
+      ? childRequestKey(normalized.parentThreadId, normalized.parentTurnId, normalized.requestId)
+      : ''
+    const activeRequest = requestKey ? this.activeRequestsByKey.get(requestKey) : undefined
+    const activeStarted = requestKey ? this.startedRequestsByKey.get(requestKey) : undefined
+    if (activeRequest && activeStarted) return { execution: activeRequest, started: activeStarted }
+
+    let resolveStarted!: (record: MultiAgentChildRunRecord) => void
+    let rejectStarted!: (error: unknown) => void
+    let startedSettled = false
+    const started = new Promise<MultiAgentChildRunRecord>((resolve, reject) => {
+      resolveStarted = resolve
+      rejectStarted = reject
+    })
+    void started.catch(() => undefined)
+    let execution!: Promise<MultiAgentChildRunRecord>
+    execution = this.executeChild(input, {
+      onReserved: (childId) => this.executionsByChildId.set(childId, execution),
+      onStarted: (record) => {
+        startedSettled = true
+        resolveStarted(record)
+      }
+    })
+    void execution.then((record) => {
+      if (!startedSettled) resolveStarted(record)
+    }, (error) => {
+      if (!startedSettled) rejectStarted(error)
+    }).finally(() => {
+      if (requestKey && this.activeRequestsByKey.get(requestKey) === execution) {
+        this.activeRequestsByKey.delete(requestKey)
+        this.startedRequestsByKey.delete(requestKey)
+      }
+    })
+    if (requestKey) {
+      this.activeRequestsByKey.set(requestKey, execution)
+      this.startedRequestsByKey.set(requestKey, started)
     }
-    await this.assertCanStart(normalized.parentThreadId, normalized.parentTurnId)
+    return { execution, started }
+  }
+
+  private async executeChild(
+    input: RunChildInput,
+    observer: {
+      onReserved(childId: string): void
+      onStarted(record: MultiAgentChildRunRecord): void
+    }
+  ): Promise<MultiAgentChildRunRecord> {
+    const normalized = normalizeRunChildInput(input)
+    const reservation: { replayed: MultiAgentChildRunRecord } | { id: string } = await this.withStartGate(async () => {
+      if (normalized.requestId) {
+        const replayed = await this.options.store.findByRequest(
+          normalized.parentThreadId,
+          normalized.parentTurnId,
+          normalized.requestId
+        )
+        if (replayed) return { replayed } as const
+      }
+      await this.assertCanStart(normalized.parentThreadId, normalized.parentTurnId)
+      const id = this.options.idGenerator?.() ?? randomChildId()
+      this.active += 1
+      this.activeChildIds.add(id)
+      this.incrementPendingChildReservation(normalized.parentThreadId, normalized.parentTurnId)
+      return { id } as const
+    })
+    if ('replayed' in reservation) {
+      return normalizeRuntimeView(reservation.replayed, this.activeChildIds)
+    }
+
     const executor = this.options.executor
     if (!executor) {
       throw new MultiAgentRuntimeError(createMultiAgentError('executor_missing', 'multi-agent executor is not configured'))
     }
-
-    const id = this.options.idGenerator?.() ?? randomChildId()
+    const id = reservation.id
+    observer.onReserved(id)
     const createdAt = this.now()
     let record = MultiAgentChildRunRecord.parse({
       id,
@@ -116,12 +203,20 @@ export class MultiAgentRuntime {
       createdAt,
       updatedAt: createdAt
     })
-    await this.persistAndEmit(record)
+    try {
+      await this.persistAndEmit(record)
+    } catch (error) {
+      this.releasePendingChildReservation(normalized.parentThreadId, normalized.parentTurnId)
+      this.active -= 1
+      this.activeChildIds.delete(id)
+      throw error
+    }
+    this.releasePendingChildReservation(normalized.parentThreadId, normalized.parentTurnId)
 
-    const boundary = createExecutionBoundary(input.signal, normalized.childTimeoutMs ?? this.config.childTimeoutMs)
+    const boundary = createExecutionBoundary(input.signal)
+    this.boundariesByChildId.set(id, boundary)
     let acceptingTranscript = true
-    this.active += 1
-    this.activeChildIds.add(id)
+    let lifecycleControl: MultiAgentLifecycleControl | undefined
     try {
       const startedAt = this.now()
       record = MultiAgentChildRunRecord.parse({
@@ -131,12 +226,13 @@ export class MultiAgentRuntime {
         updatedAt: startedAt
       })
       await this.persistAndEmit(record)
+      observer.onStarted(record)
       if (boundary.signal.aborted) {
         throw new MultiAgentRuntimeError(createMultiAgentError('child_aborted', 'multi-agent child run was aborted'))
       }
 
-      const result = await Promise.race([
-        executor({
+      const executorOutcome = Promise.resolve()
+        .then(() => executor({
           childId: id,
           parentThreadId: normalized.parentThreadId,
           parentTurnId: normalized.parentTurnId,
@@ -150,13 +246,46 @@ export class MultiAgentRuntime {
           filePathPolicy: normalized.filePathPolicy,
           maxToolCalls: normalized.maxToolCalls,
           signal: boundary.signal,
+          registerLifecycleControl: (control) => {
+            if (!boundary.signal.aborted) {
+              lifecycleControl = control
+              this.lifecycleControlsByChildId.set(id, control)
+            }
+          },
+          setThreadRef: async (threadRef) => {
+            record = MultiAgentChildRunRecord.parse({
+              ...record,
+              threadRef: MultiAgentChildThreadRef.parse(threadRef),
+              updatedAt: this.now()
+            })
+            await this.persistAndEmit(record)
+          },
           appendTranscript: async (entry) => {
             if (!acceptingTranscript) return
             record = await this.appendTranscript(record, entry)
           }
-        }),
-        boundary.aborted
+        }))
+        .then<ExecutorOutcome, ExecutorOutcome>(
+          (result) => ({ kind: 'result', result }),
+          (error: unknown) => ({ kind: 'error', error })
+        )
+      const initialOutcome = await Promise.race([
+        executorOutcome.then((outcome) => ({ kind: 'executor' as const, outcome })),
+        boundary.parentAborted.then(() => ({ kind: 'parent_abort' as const }))
       ])
+      if (initialOutcome.kind === 'parent_abort') {
+        await terminateLifecycleControl(
+          lifecycleControl,
+          'parent_abort',
+          5_000
+        )
+        throw new MultiAgentRuntimeError(createMultiAgentError(
+          'child_aborted',
+          'multi-agent child run was aborted'
+        ))
+      }
+      if (initialOutcome.outcome.kind === 'error') throw initialOutcome.outcome.error
+      const result = initialOutcome.outcome.result
       if (!result) {
         throw new MultiAgentRuntimeError(createMultiAgentError('executor_missing', 'multi-agent executor returned no result'))
       }
@@ -183,17 +312,19 @@ export class MultiAgentRuntime {
       return record
     } catch (error) {
       const finishedAt = this.now()
-      const errorInfo = errorInfoFromThrown(error, boundary.timedOut)
+      const errorInfo = errorInfoFromThrown(error)
       const failureDetails = executorFailureDetailsFromThrown(error)
       const status = errorInfo.code === 'child_aborted' ? 'aborted' : 'failed'
       record = MultiAgentChildRunRecord.parse({
         ...record,
         status,
+        ...(failureDetails.summary ? { summary: failureDetails.summary } : {}),
         error: errorInfo,
         usage: normalizeUsage(failureDetails.usage),
         transcript: normalizeTranscript({
           record,
           transcript: failureDetails.transcript,
+          summary: failureDetails.summary,
           status,
           error: errorInfo,
           finishedAt,
@@ -208,6 +339,9 @@ export class MultiAgentRuntime {
     } finally {
       acceptingTranscript = false
       boundary.dispose()
+      this.boundariesByChildId.delete(id)
+      this.lifecycleControlsByChildId.delete(id)
+      this.executionsByChildId.delete(id)
       this.active -= 1
       this.activeChildIds.delete(id)
     }
@@ -216,6 +350,78 @@ export class MultiAgentRuntime {
   async child(parentThreadId: string, childId: string): Promise<MultiAgentChildRunRecord | null> {
     const record = await this.options.store.get(parentThreadId, childId)
     return record ? normalizeRuntimeView(record, this.activeChildIds) : null
+  }
+
+  async waitForChild(
+    parentThreadId: string,
+    childId: string,
+    options: { timeoutMs?: number; signal?: AbortSignal } = {}
+  ): Promise<MultiAgentWaitResult | null> {
+    const current = await this.child(parentThreadId, childId)
+    if (!current) return null
+    if (isTerminalChildStatus(current.status)) return { record: current, timedOut: false }
+    const execution = this.executionsByChildId.get(childId)
+    if (!execution) return { record: current, timedOut: false }
+    const timeoutMs = normalizeWaitTimeoutMs(options.timeoutMs)
+    if (timeoutMs === 0) return { record: current, timedOut: true }
+    const deadline = startDeadline(timeoutMs)
+    const abort = abortPromise(options.signal)
+    try {
+      const outcome = await Promise.race([
+        execution.then((record) => ({ kind: 'completed' as const, record })),
+        deadline.promise.then(() => ({ kind: 'timeout' as const })),
+        abort.promise.then(() => ({ kind: 'aborted' as const }))
+      ])
+      if (outcome.kind === 'aborted') {
+        throw new MultiAgentRuntimeError(createMultiAgentError('child_aborted', 'multi-agent wait was aborted'))
+      }
+      if (outcome.kind === 'completed') return { record: outcome.record, timedOut: false }
+      return {
+        record: (await this.child(parentThreadId, childId)) ?? current,
+        timedOut: true
+      }
+    } finally {
+      deadline.cancel()
+      abort.dispose()
+    }
+  }
+
+  async inspectChild(parentThreadId: string, childId: string): Promise<{
+    record: MultiAgentChildRunRecord
+    liveness: { state: 'active' | 'missing'; observedAt: string }
+  } | null> {
+    const record = await this.child(parentThreadId, childId)
+    if (!record) return null
+    if (isTerminalChildStatus(record.status)) {
+      return { record, liveness: { state: 'missing', observedAt: this.now() } }
+    }
+    const control = this.lifecycleControlsByChildId.get(childId)
+    if (!control) return { record, liveness: { state: 'missing', observedAt: this.now() } }
+    const bounded = startBoundedLifecycleCall(5_000, (signal) => control.inspect(signal))
+    const outcome = await bounded.outcome
+    if (outcome.kind === 'completed') return { record, liveness: outcome.value }
+    return { record, liveness: { state: 'missing', observedAt: this.now() } }
+  }
+
+  async sendMessage(parentThreadId: string, childId: string, message: string): Promise<boolean> {
+    const record = await this.child(parentThreadId, childId)
+    if (!record) throw new MultiAgentRuntimeError(createMultiAgentError('child_not_found', `multi-agent child ${childId} was not found`))
+    if (isTerminalChildStatus(record.status)) return false
+    const control = this.lifecycleControlsByChildId.get(childId)
+    if (!control) return false
+    const bounded = startBoundedLifecycleCall(5_000, (signal) => control.sendMessage({ message, signal }))
+    const outcome = await bounded.outcome
+    return outcome.kind === 'completed' && outcome.value.established
+  }
+
+  async cancelChild(parentThreadId: string, childId: string): Promise<MultiAgentChildRunRecord | null> {
+    const record = await this.child(parentThreadId, childId)
+    if (!record || isTerminalChildStatus(record.status)) return record
+    const control = this.lifecycleControlsByChildId.get(childId)
+    await terminateLifecycleControl(control, 'parent_cancel', 5_000)
+    this.boundariesByChildId.get(childId)?.abort(abortError('multi-agent child run was cancelled'))
+    const waited = await this.waitForChild(parentThreadId, childId, { timeoutMs: 5_000 })
+    return waited?.record ?? record
   }
 
   async transcript(
@@ -257,12 +463,39 @@ export class MultiAgentRuntime {
     }
     const existing = (await this.options.store.list({ parentThreadId }))
       .filter((record) => record.parentTurnId === parentTurnId)
-    if (existing.length >= this.config.maxChildren) {
+    const reserved = this.pendingChildReservations.get(childReservationKey(parentThreadId, parentTurnId)) ?? 0
+    if (existing.length + reserved >= this.config.maxChildren) {
       throw new MultiAgentRuntimeError(createMultiAgentError(
         'child_budget_exhausted',
-        `multi-agent child budget exhausted for parent turn ${parentTurnId}: ${existing.length}/${this.config.maxChildren}`
+        `multi-agent child budget exhausted for parent turn ${parentTurnId}: ${existing.length + reserved}/${this.config.maxChildren}`
       ))
     }
+  }
+
+  private async withStartGate<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.startGate
+    let release!: () => void
+    this.startGate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await previous
+    try {
+      return await operation()
+    } finally {
+      release()
+    }
+  }
+
+  private incrementPendingChildReservation(parentThreadId: string, parentTurnId: string): void {
+    const key = childReservationKey(parentThreadId, parentTurnId)
+    this.pendingChildReservations.set(key, (this.pendingChildReservations.get(key) ?? 0) + 1)
+  }
+
+  private releasePendingChildReservation(parentThreadId: string, parentTurnId: string): void {
+    const key = childReservationKey(parentThreadId, parentTurnId)
+    const next = (this.pendingChildReservations.get(key) ?? 1) - 1
+    if (next > 0) this.pendingChildReservations.set(key, next)
+    else this.pendingChildReservations.delete(key)
   }
 
   private async appendTranscript(
@@ -381,21 +614,20 @@ function normalizeRunChildInput(input: RunChildInput): Required<Pick<RunChildInp
     strictAllowedToolNames: input.strictAllowedToolNames === true,
     bashCommandPolicy: input.bashCommandPolicy,
     filePathPolicy: input.filePathPolicy,
-    maxToolCalls: normalizePositiveInteger(input.maxToolCalls),
-    childTimeoutMs: normalizeChildTimeoutMs(input.childTimeoutMs)
+    maxToolCalls: normalizePositiveInteger(input.maxToolCalls)
   }
-}
-
-function normalizeChildTimeoutMs(value: number | undefined): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
-  const normalized = Math.trunc(value)
-  return normalized > 0 ? normalized : undefined
 }
 
 function normalizePositiveInteger(value: number | undefined): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
   const normalized = Math.trunc(value)
   return normalized > 0 ? normalized : undefined
+}
+
+function normalizeWaitTimeoutMs(value: number | undefined): number {
+  if (value === undefined) return 30_000
+  if (!Number.isFinite(value)) return 30_000
+  return Math.max(0, Math.min(60_000, Math.trunc(value)))
 }
 
 function normalizeAllowedToolNames(value: readonly string[] | undefined): string[] | undefined {
@@ -440,26 +672,27 @@ function normalizeTranscript(input: {
         createdAt: input.record.createdAt
       }, ...entries]
 
-  if (input.summary && !withPrompt.some((entry) => entry.kind === 'assistant_message' && entry.text === input.summary)) {
-    return trimTranscript([...withPrompt, {
+  let finalized = withPrompt
+  if (input.summary && !finalized.some((entry) => entry.kind === 'assistant_message' && entry.text === input.summary)) {
+    finalized = [...finalized, {
       id: `${input.record.id}-summary`,
       kind: 'assistant_message',
       text: input.summary,
       createdAt: input.finishedAt
-    }], input.maxEntries)
+    }]
   }
   const error = input.error
-  if (error && !withPrompt.some((entry) => entry.metadata?.code === error.code && entry.text === error.message)) {
-    return trimTranscript([...withPrompt, {
+  if (error && !finalized.some((entry) => entry.metadata?.code === error.code && entry.text === error.message)) {
+    finalized = [...finalized, {
       id: `${input.record.id}-error`,
       kind: 'event',
       text: error.message,
       status: input.status ?? input.record.status,
       createdAt: input.finishedAt,
       metadata: { code: error.code }
-    }], input.maxEntries)
+    }]
   }
-  return trimTranscript(withPrompt, input.maxEntries)
+  return trimTranscript(finalized, input.maxEntries)
 }
 
 function mergeTranscript(
@@ -480,24 +713,35 @@ function trimTranscript(
   return entries.slice(entries.length - maxEntries)
 }
 
-function errorInfoFromThrown(error: unknown, timedOut: boolean): MultiAgentErrorInfo {
-  if (timedOut) return createMultiAgentError('timeout', 'multi-agent child run timed out', { retryable: true })
+function errorInfoFromThrown(error: unknown): MultiAgentErrorInfo {
   if (error instanceof MultiAgentRuntimeError) return error.toJSON()
   if (isAbortError(error)) return createMultiAgentError('child_aborted', 'multi-agent child run was aborted')
   return createMultiAgentError('child_failed', error instanceof Error ? error.message : String(error))
 }
 
 function executorFailureDetailsFromThrown(error: unknown): {
+  summary?: string
   transcript?: readonly MultiAgentTranscriptEntryType[]
   usage?: Partial<MultiAgentUsageType>
   threadRef?: MultiAgentChildThreadRef
 } {
   if (!error || typeof error !== 'object') return {}
   const record = error as Record<string, unknown>
-  const transcriptResult = MultiAgentTranscriptEntry.array().safeParse(record.multiAgentTranscript)
-  const usageResult = MultiAgentUsage.partial().safeParse(record.multiAgentUsage)
+  const transcriptResult = MultiAgentTranscriptEntry.array().safeParse(record.subagentTranscript)
+  const usageResult = MultiAgentUsage.partial().safeParse(record.subagentUsage)
   const threadRefResult = MultiAgentChildThreadRef.safeParse(record.multiAgentThreadRef)
+  const explicitSummary = typeof record.subagentSummary === 'string'
+    ? record.subagentSummary.trim()
+    : ''
+  const transcriptSummary = transcriptResult.success
+    ? [...transcriptResult.data]
+        .reverse()
+        .find((entry) => entry.kind === 'assistant_message' && entry.text?.trim())
+        ?.text?.trim()
+    : undefined
+  const summary = explicitSummary || transcriptSummary
   return {
+    ...(summary ? { summary } : {}),
     ...(transcriptResult.success ? { transcript: transcriptResult.data } : {}),
     ...(usageResult.success ? { usage: usageResult.data } : {}),
     ...(threadRefResult.success ? { threadRef: threadRefResult.data } : {})
@@ -506,6 +750,16 @@ function executorFailureDetailsFromThrown(error: unknown): {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && (error.name === 'AbortError' || error.message.toLowerCase().includes('abort'))
+}
+
+function abortError(message: string): Error {
+  const error = new Error(message)
+  error.name = 'AbortError'
+  return error
+}
+
+function isTerminalChildStatus(status: MultiAgentChildStatus): boolean {
+  return status === 'completed' || status === 'failed' || status === 'aborted'
 }
 
 function countStatuses(records: readonly MultiAgentChildRunRecord[]): Record<MultiAgentChildStatus, number> {
@@ -575,47 +829,140 @@ function trimOptional(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined
 }
 
+function childReservationKey(parentThreadId: string, parentTurnId: string): string {
+  return `${parentThreadId}\u0000${parentTurnId}`
+}
+
+function childRequestKey(parentThreadId: string, parentTurnId: string, requestId: string): string {
+  return `${parentThreadId}\u0000${parentTurnId}\u0000${requestId}`
+}
+
 function randomChildId(): string {
   return `child_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
 
-function createExecutionBoundary(parentSignal: AbortSignal | undefined, timeoutMs: number | undefined) {
+async function terminateLifecycleControl(
+  control: MultiAgentLifecycleControl | undefined,
+  reason: MultiAgentTerminationReason,
+  timeoutMs: number
+): Promise<void> {
+  if (!control) return
+  const termination = startBoundedLifecycleCall(
+    timeoutMs,
+    (signal) => control.terminate({ reason, signal })
+  )
+  const outcome = await termination.outcome
+  if (outcome.kind === 'timed_out') {
+    termination.cancel(new Error(`multi-agent ${reason} termination timed out`))
+  }
+}
+
+function startBoundedLifecycleCall<T>(
+  timeoutMs: number,
+  call: (signal: AbortSignal) => Promise<T>
+): {
+  outcome: Promise<
+    | { kind: 'completed'; value: T }
+    | { kind: 'failed'; error: unknown }
+    | { kind: 'timed_out' }
+    | { kind: 'cancelled' }
+  >
+  cancel(reason?: unknown): void
+} {
   const controller = new AbortController()
-  let timedOut = false
-  let closed = false
-  let rejectAbort: ((error: Error) => void) | undefined
-  const aborted = new Promise<never>((_, reject) => {
-    rejectAbort = reject
+  let resolveDeadline!: (
+    outcome: { kind: 'timed_out' } | { kind: 'cancelled' }
+  ) => void
+  let settled = false
+  const deadline = new Promise<{ kind: 'timed_out' } | { kind: 'cancelled' }>((resolve) => {
+    resolveDeadline = resolve
   })
-  aborted.catch(() => undefined)
-  const rejectOnce = (error: Error) => {
-    if (closed) return
-    closed = true
-    rejectAbort?.(error)
+  const timeoutHandle = setTimeout(() => {
+    if (settled) return
+    controller.abort(new Error('multi-agent lifecycle control timed out'))
+    resolveDeadline({ kind: 'timed_out' })
+  }, timeoutMs)
+  const callOutcome = Promise.resolve()
+    .then(() => call(controller.signal))
+    .then(
+      (value) => ({ kind: 'completed' as const, value }),
+      (error: unknown) => ({ kind: 'failed' as const, error })
+    )
+  const outcome = Promise.race([callOutcome, deadline]).finally(() => {
+    settled = true
+    clearTimeout(timeoutHandle)
+  })
+  return {
+    outcome,
+    cancel(reason?: unknown) {
+      if (settled) return
+      controller.abort(reason)
+      resolveDeadline({ kind: 'cancelled' })
+    }
   }
+}
+
+function startDeadline(timeoutMs: number): {
+  promise: Promise<void>
+  cancel(): void
+} {
+  let resolveDeadline!: () => void
+  const promise = new Promise<void>((resolve) => {
+    resolveDeadline = resolve
+  })
+  const timeoutHandle = setTimeout(resolveDeadline, timeoutMs)
+  return {
+    promise,
+    cancel() {
+      clearTimeout(timeoutHandle)
+    }
+  }
+}
+
+function abortPromise(signal: AbortSignal | undefined): {
+  promise: Promise<void>
+  dispose(): void
+} {
+  let resolveAbort!: () => void
+  const promise = new Promise<void>((resolve) => {
+    resolveAbort = resolve
+  })
+  const onAbort = () => resolveAbort()
+  if (signal?.aborted) resolveAbort()
+  else signal?.addEventListener('abort', onAbort, { once: true })
+  return {
+    promise,
+    dispose() {
+      signal?.removeEventListener('abort', onAbort)
+    }
+  }
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object'
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function createExecutionBoundary(parentSignal: AbortSignal | undefined) {
+  const controller = new AbortController()
+  let resolveParentAbort!: () => void
+  const parentAborted = new Promise<void>((resolve) => {
+    resolveParentAbort = resolve
+  })
   const abortFromParent = () => {
-    controller.abort(parentSignal?.reason)
-    rejectOnce(new Error('multi-agent child run aborted'))
+    if (!controller.signal.aborted) controller.abort(parentSignal?.reason)
+    resolveParentAbort()
   }
-  if (parentSignal?.aborted) controller.abort(parentSignal.reason)
+  if (parentSignal?.aborted) abortFromParent()
   else parentSignal?.addEventListener('abort', abortFromParent, { once: true })
-  const timeout = timeoutMs === undefined
-    ? undefined
-    : setTimeout(() => {
-        timedOut = true
-        const error = new Error('multi-agent child run timed out')
-        controller.abort(error)
-        rejectOnce(error)
-      }, timeoutMs)
   return {
     signal: controller.signal,
-    aborted,
-    get timedOut() {
-      return timedOut
+    parentAborted,
+    abort(reason?: unknown) {
+      if (!controller.signal.aborted) controller.abort(reason)
     },
     dispose() {
-      closed = true
-      if (timeout) clearTimeout(timeout)
       parentSignal?.removeEventListener('abort', abortFromParent)
     }
   }

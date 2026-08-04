@@ -63,6 +63,7 @@ import {
   type ComposerFileReference
 } from '../../lib/composer-file-references'
 import { loadWorkspaceFileIndex } from '../../lib/workspace-file-index'
+import { withActiveWorkspaceLocator } from '../../remote-workspace/placement'
 import {
   COMPACT_COMMAND_ALIASES,
   getGoalPanelDraftObjective,
@@ -395,7 +396,10 @@ async function droppedWorkspaceReference(
   let kind = kindForDroppedPath(path, file)
   if (typeof window !== 'undefined' && typeof window.sciforge?.listWorkspaceDirectory === 'function') {
     const directory = await window.sciforge
-      .listWorkspaceDirectory({ workspaceRoot, path: relativePath })
+      .listWorkspaceDirectory(withActiveWorkspaceLocator({
+        workspaceRoot,
+        path: relativePath
+      }))
       .catch(() => ({ ok: false as const, message: '' }))
     if (directory.ok) kind = 'directory'
   }

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   resolveWriteMarkdownResource,
   resolveWriteMarkdownResourcePath,
+  resolveWriteMarkdownWorkspaceLinkPath,
   WriteMarkdownPreview
 } from '../components/write/WriteMarkdownPreview'
 import {
@@ -438,10 +439,36 @@ describe('write markdown preview resources', () => {
     )
   })
 
+  it('resolves encoded Markdown document links inside the active workspace', () => {
+    expect(resolveWriteMarkdownWorkspaceLinkPath(
+      '../OPSD%20Report/OPSD%20Report.md',
+      '/tmp/workspace/docs/survey.md',
+      '/tmp/workspace'
+    )).toBe('/tmp/workspace/OPSD Report/OPSD Report.md')
+    expect(resolveWriteMarkdownWorkspaceLinkPath(
+      '../../secret.md',
+      '/tmp/workspace/docs/survey.md',
+      '/tmp/workspace'
+    )).toBeUndefined()
+  })
+
   it('keeps explicit external URLs unchanged', () => {
     expect(resolveWriteMarkdownResource('https://example.com/a.png', '/tmp/workspace/docs/draft.md')).toBe('https://example.com/a.png')
     expect(resolveWriteMarkdownResource('data:image/png;base64,AAAA', '/tmp/workspace/docs/draft.md')).toBe('data:image/png;base64,AAAA')
     expect(resolveWriteMarkdownResourcePath('https://example.com/a.png', '/tmp/workspace/docs/draft.md')).toBeUndefined()
+  })
+
+  it('renders loaded Markdown images as accessible preview controls', () => {
+    const html = renderToStaticMarkup(createElement(WriteMarkdownPreview, {
+      content: '![Detailed chart](https://example.com/chart.png)',
+      isMarkdown: true
+    }))
+
+    expect(html).toContain('class="write-markdown-image-button"')
+    expect(html).toContain('type="button"')
+    expect(html).toContain('src="https://example.com/chart.png"')
+    expect(html).toContain('alt="Detailed chart"')
+    expect(html).not.toContain('node="[object Object]"')
   })
 
   it('does not pass through unsafe explicit URLs from markdown content', () => {

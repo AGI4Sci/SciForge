@@ -12,6 +12,7 @@ import {
 } from './installed-set.js'
 import { installedMainDomainContributions } from './main.js'
 import { installedRendererDomainContributions } from './renderer.js'
+import { installedWorkspaceServerDomainContributions } from './workspace-server.js'
 
 const fixtureDefinition: TrustedDomainPackageDefinitionInput = {
   contractVersion: DOMAIN_PACKAGE_CONTRACT_VERSION,
@@ -42,6 +43,15 @@ const fixtureDefinition: TrustedDomainPackageDefinitionInput = {
         kind: 'fixture.unlisted-renderer-kind',
         priority: 10
       }]
+    },
+    {
+      process: 'workspace-server',
+      export: './workspace-server',
+      contributions: [{
+        id: 'fixture.domain-probe.workspace-server-probe',
+        kind: 'fixture.unlisted-workspace-server-kind',
+        priority: 5
+      }]
     }
   ]
 }
@@ -53,22 +63,29 @@ describe('trusted compile-time domain packages', () => {
 
     assert.deepEqual(installedMainDomainContributions(withoutFixture), [])
     assert.deepEqual(installedRendererDomainContributions(withoutFixture), [])
+    assert.deepEqual(installedWorkspaceServerDomainContributions(withoutFixture), [])
 
     const main = installedMainDomainContributions(withFixture)
     const renderer = installedRendererDomainContributions(withFixture)
+    const workspaceServer = installedWorkspaceServerDomainContributions(withFixture)
     assert.deepEqual(main.map((item) => item.declaration.kind), [
       'fixture.unlisted-main-kind'
     ])
     assert.deepEqual(renderer.map((item) => item.declaration.kind), [
       'fixture.unlisted-renderer-kind'
     ])
+    assert.deepEqual(workspaceServer.map((item) => item.declaration.kind), [
+      'fixture.unlisted-workspace-server-kind'
+    ])
     assert.equal(main[0]?.entrypoint, './main')
     assert.equal(renderer[0]?.entrypoint, './renderer')
+    assert.equal(workspaceServer[0]?.entrypoint, './workspace-server')
     assert.deepEqual(main[0]?.owner, {
       moduleId: 'fixture.domain-probe',
       moduleVersion: '1.2.3'
     })
     assert.deepEqual(renderer[0]?.owner, main[0]?.owner)
+    assert.deepEqual(workspaceServer[0]?.owner, main[0]?.owner)
   })
 
   it('keeps definitions and projected metadata immutable', () => {

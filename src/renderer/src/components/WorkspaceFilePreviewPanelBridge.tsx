@@ -1,4 +1,5 @@
 import type { WorkspaceFileTarget } from '@shared/workspace-file'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 import type {
   VisibleContextComponentSnapshot,
   VisibleContextResource
@@ -32,6 +33,7 @@ import {
   registerVisibleContextComponent,
   registerVisibleContextVisualTarget
 } from '../lib/visible-context'
+import { useChatStore } from '../store/chat-store'
 
 const WORKSPACE_PREVIEW_EVENT_REFRESH_DEBOUNCE_MS = 80
 const workspacePreviewRegistry = installedRendererContributions.workspacePreviews
@@ -52,11 +54,29 @@ export type WorkspaceFilePreviewPanelBridgeProps = {
   annotationQuestionBridge?: DocumentAnnotationQuestionBridge
   onClose: () => void
   onOpenDirectory?: (target: { workspaceRoot: string; path: string }) => void
+  onOpenFile?: (target: WorkspaceFileTarget) => void
 }
 
 export type WorkspacePreviewIntegrityNotice =
   | { kind: 'verified'; message: '证据版本已验证' }
   | { kind: 'mismatch'; message: '当前文件与 Snapshot 证据版本不一致，未打开' }
+
+export function resolveWorkspacePreviewWorkspaceLocator(input: Readonly<{
+  sessionId?: string
+  activeThreadId: string | null
+  threads: readonly Readonly<{ id: string; workspaceLocator?: WorkspaceLocator }>[]
+  workspaceLocator: WorkspaceLocator | null
+}>): WorkspaceLocator | undefined {
+  const ownerThreadId = input.sessionId ?? input.activeThreadId
+  const ownerThread = ownerThreadId
+    ? input.threads.find((thread) => thread.id === ownerThreadId)
+    : undefined
+  return ownerThread?.workspaceLocator ?? (
+    ownerThreadId === input.activeThreadId
+      ? input.workspaceLocator ?? undefined
+      : undefined
+  )
+}
 
 function normalizedSha256(value?: string): string {
   return value?.trim().toLowerCase().replace(/^sha256:/u, '') ?? ''
@@ -116,8 +136,17 @@ export function WorkspaceFilePreviewPanelBridge({
   className,
   annotationQuestionBridge,
   onClose,
-  onOpenDirectory
+  onOpenDirectory,
+  onOpenFile
 }: WorkspaceFilePreviewPanelBridgeProps): ReactElement {
+  const workspaceLocator = useChatStore((state) =>
+    resolveWorkspacePreviewWorkspaceLocator({
+      ...(sessionId ? { sessionId } : {}),
+      activeThreadId: state.activeThreadId,
+      threads: state.threads,
+      workspaceLocator: state.workspaceLocator
+    })
+  )
   const targetPath = target?.path
   const route = useMemo(
     () => resolveWorkspaceFilePreviewPanelBridgeRoute(targetPath ? { path: targetPath } : null),
@@ -128,8 +157,10 @@ export function WorkspaceFilePreviewPanelBridge({
     <WorkspacePreviewPanelShell
       target={target}
       workspaceRoot={workspaceRoot}
+      workspaceLocator={workspaceLocator}
       registry={workspacePreviewRegistry}
       className={compactClassName('ds-no-drag', className)}
+      onOpenFile={onOpenFile}
     >
       {(context) => (
         <WorkspacePreviewShellBody

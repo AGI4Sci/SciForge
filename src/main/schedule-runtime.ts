@@ -3,21 +3,18 @@ import { randomUUID } from 'node:crypto'
 import { URL } from 'node:url'
 import type {
   AppSettingsV1,
+  AgentRuntimeId,
   ScheduleReasoningEffort,
   ScheduleRunMode,
   ScheduleRunResult,
   ScheduleRuntimeStatus,
   ScheduleTaskFromTextResult,
-  ScheduledTaskV1,
-  WorkflowRunResult,
-  WorkflowRuntimeStatus
+  ScheduledTaskV1
 } from '../shared/app-settings'
 import {
   DEFAULT_SCHEDULE_MODEL,
-  SCHEDULE_WORKFLOW_ID_PREFIX,
   normalizeAgentRuntimeId,
-  normalizeScheduleReasoningEffort,
-  scheduleTaskWorkflowId
+  normalizeScheduleReasoningEffort
 } from '../shared/app-settings'
 import {
   buildScheduledTaskFromDetectedRequest,
@@ -26,10 +23,16 @@ import {
 import { isAuthorizedInternalHttpRequest } from './internal-http-secret'
 import {
   asString,
+  computeScheduleNextRunAt,
   internalUrl,
   nestedRecord,
   parseJsonObject,
   readRequestBody,
+  runPromptViaRuntime,
+  SCHEDULER_INTERVAL_MS,
+  summarizeTaskResult,
+  TASK_RESPONSE_TIMEOUT_MS,
+  waitForAssistantTextViaRuntime,
   writeJson,
   type ScheduleRuntimeDeps
 } from './schedule-runtime-helpers'
@@ -43,47 +46,61 @@ export function scheduledThreadTitle(title: string): string {
   return suffix ? `${prefix} ${suffix}` : prefix
 }
 
-export type ScheduleWorkflowRunner = {
-  runWorkflow: (workflowId: string, input?: unknown) => Promise<WorkflowRunResult>
-  status: () => Promise<WorkflowRuntimeStatus>
+type RunningScheduleTask = {
+  runtimeId: AgentRuntimeId
+  threadId: string
+  turnId: string
 }
 
 export class ScheduleRuntime {
   private readonly deps: ScheduleRuntimeDeps
-  private readonly workflowRunner?: ScheduleWorkflowRunner
+  private scheduler: ReturnType<typeof setInterval> | null = null
+  private readonly runningTasks = new Map<string, RunningScheduleTask>()
   private server: Server | null = null
   private serverKey = ''
   private powerSaveBlockerId: number | null = null
 
-  constructor(deps: ScheduleRuntimeDeps, workflowRunner?: ScheduleWorkflowRunner) {
+  constructor(deps: ScheduleRuntimeDeps) {
     this.deps = deps
-    this.workflowRunner = workflowRunner
   }
 
   sync(settings: AppSettingsV1): void {
+    this.startScheduler()
     this.syncInternalServer(settings)
-    this.syncPowerSaveBlocker()
+    this.syncPowerSaveBlocker(settings)
+    void this.ensureNextRuns(settings)
   }
 
   stop(): void {
+    if (this.scheduler) {
+      clearInterval(this.scheduler)
+      this.scheduler = null
+    }
+    for (const running of this.runningTasks.values()) {
+      void this.deps.agentRuntime.interruptTurn?.({
+        runtimeId: running.runtimeId,
+        threadId: running.threadId,
+        turnId: running.turnId
+      }).catch((error) => {
+        this.deps.logError('schedule-task', 'Failed to interrupt scheduled task during shutdown', {
+          message: error instanceof Error ? error.message : String(error),
+          threadId: running.threadId,
+          turnId: running.turnId
+        })
+      })
+    }
+    this.runningTasks.clear()
     this.closeInternalServer()
     this.stopPowerSaveBlocker()
   }
 
   async status(): Promise<ScheduleRuntimeStatus> {
     const settings = await this.deps.store.load()
-    const workflowStatus = await this.workflowRunner?.status().catch(() => null)
     return {
       internalServerRunning: this.server !== null,
       internalUrl: internalUrl(settings),
-      runningTaskIds: (workflowStatus?.runningWorkflowIds ?? [])
-        .map((workflowId) =>
-          workflowId.startsWith(SCHEDULE_WORKFLOW_ID_PREFIX)
-            ? workflowId.slice(SCHEDULE_WORKFLOW_ID_PREFIX.length)
-            : ''
-        )
-        .filter(Boolean),
-      powerSaveBlockerActive: Boolean(workflowStatus?.powerSaveBlockerActive)
+      runningTaskIds: [...this.runningTasks.keys()],
+      powerSaveBlockerActive: this.isPowerSaveBlockerActive()
     }
   }
 
@@ -92,14 +109,89 @@ export class ScheduleRuntime {
     const task = settings.schedule.tasks.find((item) => item.id === taskId)
     if (!task) return { ok: false, message: 'Task not found.' }
     if (!task.prompt.trim()) return { ok: false, message: 'Task prompt is empty.' }
-    if (!this.workflowRunner) return { ok: false, message: 'Workflow runtime is not initialized.' }
-    const result = await this.workflowRunner.runWorkflow(scheduleTaskWorkflowId(task.id))
+    if (this.runningTasks.has(task.id)) return { ok: false, message: 'Task is already running.' }
+    const runtimeId = normalizeAgentRuntimeId(task.runtimeId ?? settings.activeAgentRuntime)
+    const result = await runPromptViaRuntime(this.deps, settings, {
+      prompt: task.prompt,
+      title: scheduledThreadTitle(task.title),
+      workspaceRoot: task.workspaceRoot,
+      model: task.model,
+      reasoningEffort: task.reasoningEffort,
+      mode: task.mode,
+      runtimeId,
+      waitForResult: false,
+      responseTimeoutMs: TASK_RESPONSE_TIMEOUT_MS
+    })
     if (!result.ok) return result
-    return {
-      ok: true,
-      threadId: result.runId,
-      message: result.message || 'Started'
+    const threadId = result.threadId.trim()
+    const turnId = result.turnId?.trim() ?? ''
+    if (!threadId || !turnId) return { ok: false, message: 'Failed to start scheduled task.' }
+
+    this.runningTasks.set(task.id, { runtimeId, threadId, turnId })
+    await this.updateTaskRunState(task.id, (current) => ({
+      ...current,
+      lastRunAt: new Date().toISOString(),
+      nextRunAt: '',
+      lastStatus: 'running',
+      lastMessage: 'Running',
+      runtimeId,
+      agentThreadIds: {
+        ...(current.agentThreadIds ?? {}),
+        [runtimeId]: threadId
+      }
+    }))
+    this.syncPowerSaveBlocker(await this.deps.store.load())
+    void this.finishTask(task.id, { runtimeId, threadId, turnId })
+    return { ok: true, threadId, turnId, message: result.message || 'Started' }
+  }
+
+  private async finishTask(taskId: string, running: RunningScheduleTask): Promise<void> {
+    let status: ScheduledTaskV1['lastStatus'] = 'success'
+    let message = 'Completed'
+    try {
+      const text = await waitForAssistantTextViaRuntime(
+        this.deps,
+        running.runtimeId,
+        running.threadId,
+        running.turnId,
+        TASK_RESPONSE_TIMEOUT_MS
+      )
+      message = summarizeTaskResult(text)
+    } catch (error) {
+      status = 'error'
+      message = error instanceof Error ? error.message : String(error)
+      this.deps.logError('schedule-task', 'Scheduled task failed', { taskId, message })
+    } finally {
+      const active = this.runningTasks.get(taskId)
+      if (active?.turnId === running.turnId) this.runningTasks.delete(taskId)
+      await this.updateTaskRunState(taskId, (current) => {
+        const finishedAt = new Date()
+        const oneShot = current.schedule.kind === 'at'
+        return {
+          ...current,
+          ...(oneShot ? { enabled: false } : {}),
+          lastStatus: status,
+          lastMessage: message,
+          updatedAt: finishedAt.toISOString(),
+          nextRunAt: oneShot ? '' : computeScheduleNextRunAt(current, finishedAt)
+        }
+      })
+      this.syncPowerSaveBlocker(await this.deps.store.load())
     }
+  }
+
+  private async updateTaskRunState(
+    taskId: string,
+    update: (task: ScheduledTaskV1) => ScheduledTaskV1
+  ): Promise<void> {
+    const settings = await this.deps.store.load()
+    const task = settings.schedule.tasks.find((item) => item.id === taskId)
+    if (!task) return
+    await this.deps.store.patch({
+      schedule: {
+        tasks: settings.schedule.tasks.map((item) => item.id === taskId ? update(item) : item)
+      }
+    })
   }
 
   async createScheduledTaskFromText(
@@ -234,6 +326,62 @@ export class ScheduleRuntime {
 
   private resolveDefaultWorkspaceRoot(settings: AppSettingsV1): string {
     return settings.schedule.defaultWorkspaceRoot.trim() || settings.workspaceRoot
+  }
+
+  private startScheduler(): void {
+    if (this.scheduler) return
+    this.scheduler = setInterval(() => {
+      void this.tick()
+    }, SCHEDULER_INTERVAL_MS)
+    this.scheduler.unref?.()
+    void this.tick()
+  }
+
+  private async tick(): Promise<void> {
+    const settings = await this.deps.store.load()
+    if (!settings.schedule.enabled) return
+    await this.ensureNextRuns(settings)
+    const fresh = await this.deps.store.load()
+    const now = Date.now()
+    for (const task of fresh.schedule.tasks) {
+      if (!task.enabled || this.runningTasks.has(task.id)) continue
+      const dueAt = Date.parse(task.nextRunAt)
+      if (!Number.isFinite(dueAt) || dueAt > now) continue
+      void this.runTask(task.id)
+    }
+  }
+
+  private async ensureNextRuns(settings: AppSettingsV1): Promise<void> {
+    const now = new Date()
+    let changed = false
+    const tasks = settings.schedule.tasks.map((task) => {
+      if (this.runningTasks.has(task.id)) return task
+      if (task.lastStatus === 'running') {
+        changed = true
+        const oneShot = task.schedule.kind === 'at'
+        return {
+          ...task,
+          ...(oneShot ? { enabled: false } : {}),
+          lastStatus: 'error' as const,
+          lastMessage: 'Scheduled task was interrupted before completion.',
+          updatedAt: now.toISOString(),
+          nextRunAt: oneShot ? '' : computeScheduleNextRunAt(task, now)
+        }
+      }
+      if (
+        !settings.schedule.enabled ||
+        !task.enabled ||
+        task.schedule.kind === 'manual' ||
+        task.nextRunAt
+      ) return task
+      changed = true
+      return {
+        ...task,
+        nextRunAt: computeScheduleNextRunAt(task, now)
+      }
+    })
+    if (!changed) return
+    await this.deps.store.patch({ schedule: { tasks } })
   }
 
   private syncInternalServer(settings: AppSettingsV1): void {
@@ -399,8 +547,33 @@ export class ScheduleRuntime {
     }
   }
 
-  private syncPowerSaveBlocker(): void {
-    this.stopPowerSaveBlocker()
+  private syncPowerSaveBlocker(settings: AppSettingsV1): void {
+    const blocker = this.deps.powerSaveBlocker
+    const shouldBlock = settings.schedule.keepAwake && this.runningTasks.size > 0
+    if (!blocker || !shouldBlock) {
+      this.stopPowerSaveBlocker()
+      return
+    }
+    try {
+      if (this.powerSaveBlockerId != null && blocker.isStarted(this.powerSaveBlockerId)) return
+      this.stopPowerSaveBlocker()
+      this.powerSaveBlockerId = blocker.start('prevent-app-suspension')
+    } catch (error) {
+      this.deps.logError('schedule-power-save', 'Failed to start power save blocker', {
+        message: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  private isPowerSaveBlockerActive(): boolean {
+    const blocker = this.deps.powerSaveBlocker
+    const id = this.powerSaveBlockerId
+    if (!blocker || id == null) return false
+    try {
+      return blocker.isStarted(id)
+    } catch {
+      return false
+    }
   }
 
   private stopPowerSaveBlocker(): void {
@@ -419,8 +592,7 @@ export class ScheduleRuntime {
 }
 
 export function createScheduleRuntime(
-  deps: ScheduleRuntimeDeps,
-  workflowRunner?: ScheduleWorkflowRunner
+  deps: ScheduleRuntimeDeps
 ): ScheduleRuntime {
-  return new ScheduleRuntime(deps, workflowRunner)
+  return new ScheduleRuntime(deps)
 }

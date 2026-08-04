@@ -13,6 +13,7 @@ import {
   parseMachineReadableValue,
   parseVirtualBoxMachineList,
   systemOpenSshExecutable,
+  virtualBoxManagerLaunchCommand,
   virtualBoxExecutableCandidates,
   type SpawnVmTunnel,
   type VmCommandRequest,
@@ -42,10 +43,16 @@ const lab: RemoteSshLab = {
 class FakeVmRunner implements VmCommandRunner {
   readonly requests: VmCommandRequest[] = []
 
-  constructor(private readonly handler: (request: VmCommandRequest) => VmCommandResult) {}
+  constructor(
+    private readonly handler: (request: VmCommandRequest) => VmCommandResult,
+    private readonly gatewayHandler: (request: VmCommandRequest) => VmCommandResult = () => ok()
+  ) {}
 
   async run(request: VmCommandRequest): Promise<VmCommandResult> {
     this.requests.push(request)
+    if (/(?:^|[/\\])ssh(?:\.exe)?$/iu.test(request.executable)) {
+      return this.gatewayHandler(request)
+    }
     return this.handler(request)
   }
 }
@@ -194,6 +201,7 @@ describe('VirtualBoxLabEnvironmentProvider', () => {
       provider: 'vm',
       state: 'provider-unavailable',
       consoleAvailable: false,
+      guidanceCode: 'install-provider',
       message: 'VirtualBox is not installed or VBoxManage is unavailable.',
       checkedAt: now
     })
@@ -208,6 +216,7 @@ describe('VirtualBoxLabEnvironmentProvider', () => {
     await expect(provider.get(lab)).resolves.toMatchObject({
       state: 'configuration-required',
       consoleAvailable: false,
+      guidanceCode: 'select-environment',
       message: expect.stringContaining(vmUuid)
     })
     expect(runner.requests).toHaveLength(1)
@@ -216,6 +225,84 @@ describe('VirtualBoxLabEnvironmentProvider', () => {
       vmUuid,
       '--machinereadable'
     ])
+  })
+
+  it.each([
+    {
+      failure: 'ssh: Could not resolve hostname sciforge-lab-a-gateway: Name or service not known',
+      guidanceCode: 'configure-gateway-alias'
+    },
+    {
+      failure: 'Host key verification failed.',
+      guidanceCode: 'trust-gateway-host-key'
+    },
+    {
+      failure: 'sciforge@vm: Permission denied (publickey,password).',
+      guidanceCode: 'authorize-gateway-key'
+    },
+    {
+      failure: 'Connection timed out during banner exchange',
+      guidanceCode: 'enable-gateway-ssh'
+    }
+  ] as const)(
+    'turns an SSH readiness failure into $guidanceCode guidance',
+    async ({ failure, guidanceCode }) => {
+      const runner = new FakeVmRunner(
+        () => machineState('running'),
+        () => failed(failure)
+      )
+      const provider = fixtureProvider(runner)
+
+      await expect(provider.get(lab)).resolves.toMatchObject({
+        state: 'configuration-required',
+        consoleAvailable: true,
+        guidanceCode,
+        message: failure
+      })
+      const probe = runner.requests.find((request) =>
+        request.executable === '/usr/bin/ssh'
+      )
+      expect(probe).toMatchObject({
+        args: expect.arrayContaining([
+          '-T',
+          '-o', 'BatchMode=yes',
+          '-o', 'ClearAllForwardings=yes',
+          '-o', 'ForwardAgent=no',
+          '-o', 'ForwardX11=no',
+          '-o', 'PermitLocalCommand=no',
+          '-o', 'StrictHostKeyChecking=yes',
+          lab.environment.provider === 'vm'
+            ? lab.environment.gatewaySshAlias
+            : ''
+        ]),
+        timeoutMs: 8_000
+      })
+    }
+  )
+
+  it('reports a ready gateway only after a non-interactive SSH probe succeeds', async () => {
+    const runner = new FakeVmRunner(() => machineState('running'))
+    const provider = fixtureProvider(runner)
+
+    await expect(provider.get(lab)).resolves.toMatchObject({
+      state: 'ready',
+      consoleAvailable: true,
+      guidanceCode: 'test-target'
+    })
+  })
+
+  it('guides installation when the host OpenSSH client is missing', async () => {
+    const runner = new FakeVmRunner(() => machineState('running'))
+    const provider = fixtureProvider(runner, {
+      isExecutable: async (path) => path === '/usr/bin/VBoxManage'
+    })
+
+    await expect(provider.get(lab)).resolves.toMatchObject({
+      state: 'configuration-required',
+      consoleAvailable: true,
+      guidanceCode: 'install-host-openssh'
+    })
+    expect(runner.requests).toHaveLength(1)
   })
 
   it('starts a stopped VM in its visible VirtualBox console', async () => {
@@ -231,7 +318,7 @@ describe('VirtualBoxLabEnvironmentProvider', () => {
     const provider = fixtureProvider(runner)
 
     await expect(provider.ensure(lab)).resolves.toMatchObject({
-      state: 'login-required',
+      state: 'ready',
       consoleAvailable: true
     })
     expect(runner.requests.some((request) =>
@@ -312,13 +399,26 @@ describe('VirtualBoxLabEnvironmentProvider', () => {
     })
   })
 
-  it('does not claim to open a console for an externally started VM', async () => {
+  it('opens VirtualBox Manager for an externally started VM', async () => {
     const runner = new FakeVmRunner(() => machineState('running'))
-    const provider = fixtureProvider(runner)
+    const launches: Array<{
+      platform: NodeJS.Platform
+      vboxManageExecutable: string
+    }> = []
+    const provider = fixtureProvider(runner, {
+      openVirtualBoxManager: async (input) => {
+        launches.push(input)
+      }
+    })
 
-    await expect(provider.openConsole(lab)).rejects.toThrow(
-      'cannot attach a new GUI console to an already-running virtual machine'
-    )
+    await expect(provider.openConsole(lab)).resolves.toEqual({
+      labId: lab.id,
+      presentation: { kind: 'opened' }
+    })
+    expect(launches).toEqual([{
+      platform: 'linux',
+      vboxManageExecutable: '/usr/bin/VBoxManage'
+    }])
     expect(runner.requests.some((request) => request.args[0] === 'startvm')).toBe(false)
   })
 
@@ -339,7 +439,7 @@ describe('VirtualBoxLabEnvironmentProvider', () => {
     })
 
     await expect(provider.ensure(lab)).resolves.toMatchObject({
-      state: 'login-required'
+      state: 'ready'
     })
     await expect(provider.openConsole(lab)).resolves.toEqual({
       labId: lab.id,
@@ -613,6 +713,30 @@ describe('VirtualBox command helpers', () => {
       '/nix/profile/bin/VBoxManage',
       '/custom/bin/VBoxManage'
     ])
+  })
+
+  it('launches the platform VirtualBox Manager without a shell', () => {
+    expect(virtualBoxManagerLaunchCommand(
+      'darwin',
+      '/Applications/VirtualBox.app/Contents/MacOS/VBoxManage'
+    )).toEqual({
+      executable: '/usr/bin/open',
+      args: ['-a', 'VirtualBox']
+    })
+    expect(virtualBoxManagerLaunchCommand(
+      'win32',
+      String.raw`C:\Program Files\Oracle\VirtualBox\VBoxManage.exe`
+    )).toEqual({
+      executable: String.raw`C:\Program Files\Oracle\VirtualBox\VirtualBox.exe`,
+      args: []
+    })
+    expect(virtualBoxManagerLaunchCommand(
+      'linux',
+      '/opt/virtualbox/VBoxManage'
+    )).toEqual({
+      executable: '/opt/virtualbox/VirtualBox',
+      args: []
+    })
   })
 
   it('force-kills a command that ignores graceful timeout termination', async () => {

@@ -14,6 +14,13 @@ import {
   type AppSettingsPatch,
   type AppSettingsV1
 } from '../../shared/app-settings'
+import { ControlledProcessService } from '../processes/controlled-process-service'
+import { WorkspacePlacementRouter } from '../services/workspace-placement-router'
+import { VisibleContextService } from '../services/visible-context-service'
+import {
+  VISIBLE_CONTEXT_SCHEMA_VERSION,
+  type VisibleContextSnapshot
+} from '../../shared/visible-context'
 
 const handlers = new Map<string, (event: unknown, payload?: unknown) => Promise<unknown>>()
 const { showOpenDialog, showSaveDialog } = vi.hoisted(() => ({
@@ -47,10 +54,6 @@ const { writeExportServiceMock } = vi.hoisted(() => ({
       path: '/tmp/workspace/report.html',
       format: payload.format ?? 'html',
       exportedAt: '2026-07-07T01:00:00.000Z'
-    })),
-    copyWriteDocumentAsRichText: vi.fn(async () => ({
-      ok: true,
-      copiedAt: '2026-07-07T01:00:00.000Z'
     }))
   }
 }))
@@ -83,6 +86,14 @@ function settings(): AppSettingsV1 {
 
 function registerOptions(overrides: Partial<Parameters<typeof import('./register-app-ipc-handlers').registerAppIpcHandlers>[0]> = {}) {
   const applySettingsPatch = vi.fn(async () => settings())
+  const workspacePlacement = new WorkspacePlacementRouter({
+    sessionManager: {
+      portFor: () => {
+        throw new Error('Remote Workspace Host is unavailable in this test.')
+      }
+    },
+    localControlledProcesses: new ControlledProcessService()
+  })
   return {
     store: { load: vi.fn(async () => settings()) } as never,
     actionGuardEvaluator: {
@@ -116,6 +127,7 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
     loadGuiUpdaterModule: vi.fn() as never,
     resolveLogDirectory: () => '/tmp/logs',
     logError: vi.fn(),
+    workspacePlacement,
     ...overrides
   }
 }
@@ -142,6 +154,24 @@ function createSender(id: number) {
     })
   }
   return sender
+}
+
+function visibleSnapshot(
+  windowId: string,
+  revision: number,
+  activeThreadId: string,
+  route: string
+): VisibleContextSnapshot {
+  return {
+    schemaVersion: VISIBLE_CONTEXT_SCHEMA_VERSION,
+    windowId,
+    revision,
+    publishedAt: `2026-07-31T03:00:0${revision}.000Z`,
+    freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
+    activeThreadId,
+    route,
+    components: []
+  }
 }
 
 function waitForAbortStream(signal: AbortSignal): AsyncIterable<unknown> {
@@ -347,6 +377,7 @@ describe('registerAppIpcHandlers', () => {
     const visibleContext = {
       publish: vi.fn(),
       get: vi.fn(),
+      registeredTargetRef: vi.fn(),
       readCapturePreview
     }
     registerAppIpcHandlers(registerOptions({ visibleContext }))
@@ -368,6 +399,7 @@ describe('registerAppIpcHandlers', () => {
     const visibleContext = {
       publish,
       get: vi.fn(),
+      registeredTargetRef: vi.fn(),
       readCapturePreview: vi.fn()
     }
     registerAppIpcHandlers(registerOptions({ visibleContext }))
@@ -384,6 +416,112 @@ describe('registerAppIpcHandlers', () => {
     await handlers.get('visibleContext:publish')?.({ sender }, payload)
 
     expect(publish).toHaveBeenCalledWith({ ...payload, windowId: 'electron:41' })
+  })
+
+  it.each([
+    {
+      initiatingKind: 'browser' as const,
+      initiatingWindowId: 'browser:1',
+      competingWindowId: 'electron:1'
+    },
+    {
+      initiatingKind: 'electron' as const,
+      initiatingWindowId: 'electron:1',
+      competingWindowId: 'browser:1'
+    }
+  ])(
+    'binds a $initiatingKind startTurn to its sender surface despite a later $competingWindowId publish',
+    async ({ initiatingKind, initiatingWindowId, competingWindowId }) => {
+      const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+      const userDataDir = mkdtempSync(join(tmpdir(), 'sciforge-visible-context-ipc-'))
+      try {
+        const visibleContext = new VisibleContextService(userDataDir, {
+          surfaceCaptureProvider: { capture: vi.fn() },
+          now: () => new Date('2026-07-31T03:00:03.000Z')
+        })
+        await visibleContext.publish(visibleSnapshot(
+          initiatingWindowId,
+          1,
+          'thread-a',
+          `/${initiatingWindowId}/initial`
+        ))
+        await visibleContext.publish(visibleSnapshot(
+          competingWindowId,
+          1,
+          'thread-a',
+          `/${competingWindowId}/initial`
+        ))
+        let boundWindowId: string | undefined
+        const startTurn = vi.fn(async (input: {
+          runtimeId: 'codex'
+          threadId: string
+          visibleContextOwnerThreadId?: string
+          visibleContextSurfaceId?: string
+        }) => {
+          await visibleContext.publish(visibleSnapshot(
+            competingWindowId,
+            2,
+            'thread-a',
+            `/${competingWindowId}/background`
+          ))
+          const bound = await visibleContext.bindSurface(
+            `${input.runtimeId}:${input.threadId}`,
+            input.visibleContextOwnerThreadId ?? input.threadId,
+            input.visibleContextSurfaceId ?? ''
+          )
+          boundWindowId = bound?.windowId
+          return { threadId: input.threadId, turnId: 'turn-1' }
+        })
+        registerAppIpcHandlers(registerOptions({
+          agentRuntime: { startTurn } as never,
+          visibleContext
+        }))
+        const sender = createSender(1) as ReturnType<typeof createSender> & {
+          capturePage?: ReturnType<typeof vi.fn>
+        }
+        if (initiatingKind === 'electron') sender.capturePage = vi.fn()
+
+        await expect(handlers.get('agentRuntime:startTurn')?.({ sender }, {
+          runtimeId: 'codex',
+          threadId: 'thread-a',
+          text: 'inspect the visible surface'
+        })).resolves.toEqual({ threadId: 'thread-a', turnId: 'turn-1' })
+
+        expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+          visibleContextSurfaceId: initiatingWindowId
+        }))
+        expect(boundWindowId).toBe(initiatingWindowId)
+        expect(visibleContext.peek().windowId).toBe(competingWindowId)
+      } finally {
+        rmSync(userDataDir, { recursive: true, force: true })
+      }
+    }
+  )
+
+  it('issues registered target references through the native sender identity', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const registeredTargetRef = vi.fn(async () => 'target_ref')
+    const visibleContext = {
+      publish: vi.fn(),
+      get: vi.fn(),
+      registeredTargetRef,
+      readCapturePreview: vi.fn()
+    }
+    registerAppIpcHandlers(registerOptions({ visibleContext }))
+    const sender = { id: 42, capturePage: vi.fn() }
+
+    await expect(handlers.get('visibleContext:target-ref')?.({ sender }, {
+      componentId: 'chat.timeline',
+      targetId: 'message-1'
+    })).resolves.toEqual({ ok: true, targetRef: 'target_ref' })
+    expect(registeredTargetRef).toHaveBeenCalledWith('electron:42', {
+      componentId: 'chat.timeline',
+      targetId: 'message-1'
+    })
+    await expect(handlers.get('visibleContext:target-ref')?.({ sender }, {
+      componentId: '',
+      targetId: 'message-1'
+    })).rejects.toThrow(/Invalid payload for visibleContext:target-ref/)
   })
 
   it('rejects invalid settings patches at the handler boundary', async () => {
@@ -460,12 +598,12 @@ describe('registerAppIpcHandlers', () => {
     expect(applySettingsPatch).toHaveBeenCalledWith(payload)
   })
 
-  it('does not register Paper Radar domain-specific IPC channels', async () => {
+  it('does not register domain-specific Paper Radar or Visual Review IPC channels', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
     registerAppIpcHandlers(registerOptions())
 
-    expect(handlers.size).toBe(142)
     expect([...handlers.keys()].filter((channel) => channel.startsWith('paperRadar:'))).toEqual([])
+    expect([...handlers.keys()].filter((channel) => channel.startsWith('visual-document:'))).toEqual([])
   })
 
   it('routes visual style profile extraction through its single IPC command', async () => {
@@ -681,75 +819,6 @@ describe('registerAppIpcHandlers', () => {
     expect(handlers.get('settings:set')).toBeTypeOf('function')
   })
 
-  it('returns VisualDocument IPC validation errors instead of rejecting through Electron', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const openVisualDocument = vi.fn()
-    const sender = createSender(910)
-
-    const dispatcher = registerAppIpcHandlers(registerOptions({ openVisualDocument }))
-
-    await expect(
-      dispatcher.invoke('visual-document:open', { workspaceRoot: '' }, sender)
-    ).resolves.toMatchObject({
-      ok: false,
-      status: 'invalid_request'
-    })
-    expect(openVisualDocument).not.toHaveBeenCalled()
-  })
-
-  it('routes the complete VisualDocument lifecycle through one strict IPC surface', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const handlers = {
-      getVisualDocumentStatus: vi.fn(async () => ({ ok: true })),
-      openVisualDocument: vi.fn(async (request: unknown) => request),
-      insertVisualDocumentArtifact: vi.fn(async (request: unknown) => request),
-      updateVisualDocumentContext: vi.fn(async (request: unknown) => request),
-      saveVisualDocumentAnnotations: vi.fn(async (request: unknown) => request),
-      exportVisualReviewPacket: vi.fn(async (request: unknown) => request),
-      createVisualCandidateRevision: vi.fn(async (request: unknown) => request),
-      acceptVisualCandidateRevision: vi.fn(async (request: unknown) => request),
-      rejectVisualCandidateRevision: vi.fn(async (request: unknown) => request)
-    }
-    const dispatcher = registerAppIpcHandlers(registerOptions(handlers as never))
-    const sender = createSender(911)
-    const requests = [
-      ['visual-document:status', { workspaceRoot: '/tmp/project' }, handlers.getVisualDocumentStatus],
-      ['visual-document:open', { workspaceRoot: '/tmp/project', documentId: 'figure-1', createIfMissing: false }, handlers.openVisualDocument],
-      ['visual-document:insert-artifact', { workspaceRoot: '/tmp/project', kind: 'image', sourcePath: '/tmp/figure.png' }, handlers.insertVisualDocumentArtifact],
-      ['visual-document:update-context', { workspaceRoot: '/tmp/project', styleProfileRef: 'paper-style' }, handlers.updateVisualDocumentContext],
-      ['visual-document:save-annotations', { workspaceRoot: '/tmp/project', annotations: [] }, handlers.saveVisualDocumentAnnotations],
-      ['visual-document:export-review-packet', { workspaceRoot: '/tmp/project' }, handlers.exportVisualReviewPacket],
-      ['visual-document:create-candidate', {
-        workspaceRoot: '/tmp/project',
-        candidatePath: '/tmp/candidate.png',
-        summary: 'Improved layout',
-        reviewEvidence: {
-          tool: 'image_generation_review_candidate',
-          ok: true,
-          reviewedArtifactPath: '/tmp/candidate.png',
-          reviewedArtifactHash: 'a'.repeat(64),
-          reviewedAt: '2026-07-12T00:00:00.000Z',
-          score: { overall: 0.9, dimensions: 1, nonEmpty: 1, background: 1, semantic: 0.92, warnings: [] },
-          semantic: { pass: true, summary: 'Passed review.', violations: [], repairInstructions: [] },
-          repairable: false,
-          warnings: []
-        }
-      }, handlers.createVisualCandidateRevision],
-      ['visual-document:accept-candidate', { workspaceRoot: '/tmp/project', revisionId: 'revision-1' }, handlers.acceptVisualCandidateRevision],
-      ['visual-document:reject-candidate', { workspaceRoot: '/tmp/project', revisionId: 'revision-1' }, handlers.rejectVisualCandidateRevision]
-    ] as const
-
-    for (const [channel, payload, handler] of requests) {
-      await dispatcher.invoke(channel, payload, sender)
-      expect(handler).toHaveBeenCalledOnce()
-    }
-    expect(handlers.getVisualDocumentStatus).toHaveBeenCalledWith('/tmp/project')
-    expect(handlers.acceptVisualCandidateRevision).toHaveBeenCalledWith({
-      workspaceRoot: '/tmp/project',
-      revisionId: 'revision-1'
-    })
-  })
-
   it('does not register retired workspace surface business channels', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
     registerAppIpcHandlers(registerOptions())
@@ -775,7 +844,16 @@ describe('registerAppIpcHandlers', () => {
       'workspacePreview:export',
       'workspacePreview:invokeAction',
       'workspacePreview:watch',
-      'workspacePreview:unwatch'
+      'workspacePreview:unwatch',
+      'visual-document:status',
+      'visual-document:open',
+      'visual-document:insert-artifact',
+      'visual-document:update-context',
+      'visual-document:save-annotations',
+      'visual-document:export-review-packet',
+      'visual-document:create-candidate',
+      'visual-document:accept-candidate',
+      'visual-document:reject-candidate'
     ]
 
     for (const channel of retiredChannels) {
@@ -818,6 +896,124 @@ describe('registerAppIpcHandlers', () => {
       title: 'Unsafe picker',
       filters: []
     }, createSender(12))).rejects.toThrow('Invalid payload for workspace:pick-file')
+  })
+
+  it('routes the generic extension lifecycle through injected functions', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const summary = {
+      packageName: '@sciforge/domain-browser',
+      moduleId: 'sciforge.browser',
+      moduleDisplayName: 'Browser',
+      version: '1.0.0',
+      publisher: { id: 'sciforge', displayName: 'SciForge' },
+      source: 'user' as const,
+      verification: 'official-signed' as const,
+      execution: 'sandboxed-runtime' as const,
+      status: 'active' as const,
+      permissions: ['network.outbound'],
+      contributionKinds: ['command', 'right-panel'],
+      contributionCount: 2,
+      canRollback: false,
+      installedAt: '2026-07-27T12:30:00.000Z'
+    }
+    const extensions = {
+      list: vi.fn(async () => [summary]),
+      install: vi.fn(async () => summary),
+      uninstall: vi.fn(async () => undefined),
+      rollback: vi.fn(async () => summary),
+      setEnabled: vi.fn(async () => ({ ...summary, status: 'disabled' as const }))
+    }
+    const dispatcher = registerAppIpcHandlers(registerOptions({ extensions }))
+    const sender = createSender(14)
+
+    await expect(dispatcher.invoke('extensions:list', {}, sender)).resolves.toEqual([summary])
+    await expect(dispatcher.invoke('extensions:install', {
+      path: ' /tmp/browser.sciforge-extension '
+    }, sender)).resolves.toEqual(summary)
+    await expect(dispatcher.invoke('extensions:uninstall', {
+      packageName: ' @sciforge/domain-browser '
+    }, sender)).resolves.toBeUndefined()
+    await expect(dispatcher.invoke('extensions:rollback', {
+      packageName: '@sciforge/domain-browser'
+    }, sender)).resolves.toEqual(summary)
+    await expect(dispatcher.invoke('extensions:set-enabled', {
+      packageName: '@sciforge/domain-browser',
+      enabled: false
+    }, sender)).resolves.toMatchObject({ status: 'disabled' })
+
+    expect(extensions.install).toHaveBeenCalledWith({
+      path: '/tmp/browser.sciforge-extension'
+    })
+    expect(extensions.uninstall).toHaveBeenCalledWith({
+      packageName: '@sciforge/domain-browser'
+    })
+    expect(extensions.rollback).toHaveBeenCalledWith({
+      packageName: '@sciforge/domain-browser'
+    })
+    expect(extensions.setEnabled).toHaveBeenCalledWith({
+      packageName: '@sciforge/domain-browser',
+      enabled: false
+    })
+  })
+
+  it('rejects invalid extension inputs before dispatch and fails clearly without a manager', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const install = vi.fn()
+    const dispatcher = registerAppIpcHandlers(registerOptions({
+      extensions: {
+        list: vi.fn(),
+        install,
+        uninstall: vi.fn(),
+        rollback: vi.fn(),
+        setEnabled: vi.fn()
+      } as never
+    }))
+    const sender = createSender(15)
+
+    await expect(dispatcher.invoke('extensions:install', {
+      path: '',
+      allowUnsigned: true
+    }, sender)).rejects.toThrow('Invalid payload for extensions:install')
+    expect(install).not.toHaveBeenCalled()
+
+    const unavailable = registerAppIpcHandlers(registerOptions())
+    await expect(unavailable.invoke('extensions:list', {}, sender))
+      .rejects.toThrow('Extension management is not initialized.')
+  })
+
+  it('bounds extension manager errors and rejects unsafe result metadata', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const sender = createSender(16)
+    const failing = registerAppIpcHandlers(registerOptions({
+      extensions: {
+        list: vi.fn(async () => {
+          throw new Error('Official signature failed.\n\u0000 Retry with a signed package.')
+        }),
+        install: vi.fn(),
+        uninstall: vi.fn(),
+        rollback: vi.fn(),
+        setEnabled: vi.fn()
+      } as never
+    }))
+
+    await expect(failing.invoke('extensions:list', {}, sender)).rejects.toThrow(
+      'Official signature failed. Retry with a signed package.'
+    )
+
+    const invalidResult = registerAppIpcHandlers(registerOptions({
+      extensions: {
+        list: vi.fn(async () => [{
+          packageName: '@sciforge/domain-browser',
+          secrets: { privateKey: 'not-renderer-safe' }
+        }]),
+        install: vi.fn(),
+        uninstall: vi.fn(),
+        rollback: vi.fn(),
+        setEnabled: vi.fn()
+      } as never
+    }))
+    await expect(invalidResult.invoke('extensions:list', {}, sender))
+      .rejects.toThrow('Invalid payload for extensions:list result')
   })
 
   it('keeps the generic workspace file watch and unwatch lifecycle', async () => {
@@ -971,7 +1167,7 @@ describe('registerAppIpcHandlers', () => {
       limit: 20
     })
     await expect(
-      handlers.get('agentRuntime:startTurn')?.({}, {
+      handlers.get('agentRuntime:startTurn')?.({ sender }, {
         runtimeId: 'codex',
         threadId: 'side-thread-1',
         text: ' hello ',
@@ -994,7 +1190,7 @@ describe('registerAppIpcHandlers', () => {
       })
     ).resolves.toBeUndefined()
     await expect(
-      handlers.get('agentRuntime:steerTurn')?.({}, {
+      handlers.get('agentRuntime:steerTurn')?.({ sender }, {
         runtimeId: 'codex',
         threadId: 'thread-1',
         turnId: ' turn-1 ',
@@ -1103,6 +1299,7 @@ describe('registerAppIpcHandlers', () => {
       runtimeId: 'codex',
       threadId: 'side-thread-1',
       text: 'hello',
+      visibleContextSurfaceId: 'browser:12',
       visibleContextOwnerThreadId: 'parent-thread-1',
       executionIntent: {
         mode: 'execute',
@@ -1123,6 +1320,7 @@ describe('registerAppIpcHandlers', () => {
       threadId: 'thread-1',
       turnId: 'turn-1',
       text: 'keep going',
+      visibleContextSurfaceId: 'browser:12',
       executionIntent: {
         mode: 'inspect',
         requirements: [{ receiptKind: 'visual.look' }]
@@ -1655,5 +1853,47 @@ describe('registerAppIpcHandlers', () => {
     expect(webContents.setZoomLevel).toHaveBeenCalledWith(1)
     expect(mainWindow.maximize).toHaveBeenCalledTimes(1)
     expect(mainWindow.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('exposes only attached Workspace Host session operations over trusted IPC', async () => {
+    const snapshot = {
+      activeWorkspaceHostId: 'session-1',
+      workspaces: [],
+      updatedAt: '2026-07-30T00:00:00.000Z'
+    }
+    const remoteWorkspace = {
+      list: vi.fn(() => []),
+      get: vi.fn(() => snapshot),
+      attach: vi.fn(async () => snapshot),
+      select: vi.fn(() => snapshot),
+      reconnect: vi.fn(async () => snapshot),
+      close: vi.fn(async () => snapshot),
+      subscribe: vi.fn(() => () => undefined)
+    }
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    registerAppIpcHandlers(registerOptions({
+      remoteWorkspace: remoteWorkspace as never
+    }))
+
+    await handlers.get('remoteWorkspace:list')?.({})
+    await handlers.get('remoteWorkspace:get')?.({})
+    await handlers.get('remoteWorkspace:attach')?.({}, {
+      providerId: 'remote-ssh.workspace-host-provider',
+      authorizedSessionId: 'authorized-session-1'
+    })
+    await handlers.get('remoteWorkspace:select')?.({}, { sessionId: 'session-1' })
+    await handlers.get('remoteWorkspace:reconnect')?.({}, { sessionId: 'session-1' })
+    await handlers.get('remoteWorkspace:close')?.({}, { sessionId: 'session-1' })
+
+    expect(remoteWorkspace.attach).toHaveBeenCalledWith({
+      providerId: 'remote-ssh.workspace-host-provider',
+      authorizedSessionId: 'authorized-session-1'
+    })
+    expect(remoteWorkspace.select).toHaveBeenCalledWith({ sessionId: 'session-1' })
+    await expect(handlers.get('remoteWorkspace:attach')?.({}, {
+      providerId: 'remote-ssh.workspace-host-provider',
+      authorizedSessionId: 'authorized-session-2',
+      workspaceRoot: '/must/not-cross-this-boundary'
+    })).rejects.toThrow(/Invalid payload/u)
   })
 })

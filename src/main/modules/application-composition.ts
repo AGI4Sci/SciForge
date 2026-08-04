@@ -1,9 +1,13 @@
 import { DOMAIN_PACKAGE_CONTRACT_VERSION } from '@sciforge/domain-sdk'
 import type { AppCapabilityDependencies } from '../capabilities/app-registry'
 import {
+  CONTROLLED_PROCESS_CAPABILITY_CONTRIBUTION_FACTORY,
   SURFACE_CAPABILITY_CONTRIBUTION_FACTORY,
   WORKSPACE_PREVIEW_CAPABILITY_CONTRIBUTION_FACTORY
 } from '../capabilities/app-registry'
+import {
+  VERSION_CONTROL_CAPABILITY_CONTRIBUTION_FACTORY
+} from '../capabilities/version-control-provider'
 import type { CapabilityRegistry } from '../capabilities/registry'
 import { DomainModuleCatalog, type MainDomainModuleDefinition } from './catalog'
 import {
@@ -17,12 +21,28 @@ import {
 
 const CORE_MAIN_DOMAIN_ENTRIES: readonly MainDomainModuleDefinition[] = Object.freeze([
   coreCapabilityEntry({
+    packageName: '@sciforge/core-controlled-process',
+    moduleId: 'sciforge.controlled-process',
+    displayName: 'Controlled Process',
+    contributionId: 'sciforge.controlled-process.capability-factory',
+    priority: 10_000,
+    value: CONTROLLED_PROCESS_CAPABILITY_CONTRIBUTION_FACTORY
+  }),
+  coreCapabilityEntry({
     packageName: '@sciforge/core-surface',
     moduleId: 'sciforge.surface',
     displayName: 'Surface Context',
     contributionId: 'sciforge.surface.capability-factory',
     priority: 10_000,
     value: SURFACE_CAPABILITY_CONTRIBUTION_FACTORY
+  }),
+  coreCapabilityEntry({
+    packageName: '@sciforge/core-version-control',
+    moduleId: 'sciforge.version-control',
+    displayName: 'Version Control',
+    contributionId: 'sciforge.version-control.capability-factory',
+    priority: 10_000,
+    value: VERSION_CONTROL_CAPABILITY_CONTRIBUTION_FACTORY
   }),
   coreCapabilityEntry({
     packageName: '@sciforge/core-workspace-preview',

@@ -2,6 +2,10 @@
   "contractVersion": 1,
   "kind": "trusted-compile-time",
   "packageName": "@sciforge/domain-biology-room",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
   "module": {
     "id": "sciforge.biology-room",
     "displayName": "Biology Room",

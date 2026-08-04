@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { defaultWriteSettings } from '@shared/app-settings'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
+import { useChatStore } from '../store/chat-store'
 import { createWriteFileActions } from './write-workspace-file-actions'
 import { initialState } from './write-workspace-store-helpers'
 import type { WriteWorkspaceGet, WriteWorkspaceSet, WriteWorkspaceState } from './write-workspace-store-types'
@@ -46,11 +48,17 @@ function makeBaseState(): WriteWorkspaceState {
   }
 }
 
-function createHarness(): {
+const REMOTE_LOCATOR: WorkspaceLocator = {
+  contractVersion: 1,
+  hostSessionId: 'remote-session-1',
+  path: '/cluster/write'
+}
+
+function createHarness(overrides: Partial<WriteWorkspaceState> = {}): {
   actions: ReturnType<typeof createWriteFileActions>
   get: WriteWorkspaceGet
 } {
-  let state = makeBaseState()
+  let state = { ...makeBaseState(), ...overrides }
   const set: WriteWorkspaceSet = (partial) => {
     const patch = typeof partial === 'function' ? partial(state) : partial
     state = { ...state, ...patch }
@@ -73,6 +81,7 @@ function installSciForge(overrides: Partial<Window['sciforge']>): void {
 }
 
 afterEach(() => {
+  useChatStore.setState({ workspaceLocator: null })
   vi.unstubAllGlobals()
 })
 
@@ -144,7 +153,8 @@ describe('write workspace file actions', () => {
       mimeType: 'application/pdf' as const,
       size: 2048,
       truncated: false as const,
-      mtimeMs: 1234
+      mtimeMs: 1234,
+      revision: 'pdf-revision-1'
     }))
     installSciForge({
       readWorkspaceFile
@@ -184,8 +194,9 @@ describe('write workspace file actions', () => {
         path: '/tmp/write/papers/study.pdf',
         content: 'not actually a pdf',
         mimeType: 'text/plain',
-        size: 18,
-        truncated: false
+      size: 18,
+      truncated: false,
+      revision: 'text-revision-1'
       }))
     })
     const { actions, get } = createHarness()
@@ -196,5 +207,50 @@ describe('write workspace file actions', () => {
     expect(get().activeFileKind).toBeNull()
     expect(get().fileLoading).toBe(false)
     expect(get().fileError).toBeTruthy()
+  })
+
+  it('pins the remote session for file reads and records the source revision', async () => {
+    const readWorkspaceFile = vi.fn(async () => ({
+      ok: true as const,
+      kind: 'text' as const,
+      path: '/cluster/write/draft.md',
+      content: 'draft',
+      mimeType: 'text/markdown',
+      size: 5,
+      truncated: false,
+      revision: 'revision-1'
+    }))
+    installSciForge({ readWorkspaceFile })
+    useChatStore.setState({ workspaceLocator: REMOTE_LOCATOR })
+    const { actions, get } = createHarness({
+      workspaceRoot: REMOTE_LOCATOR.path,
+      pinnedWorkspaceLocator: REMOTE_LOCATOR
+    })
+
+    await actions.openFile(REMOTE_LOCATOR.path, '/cluster/write/draft.md')
+
+    expect(readWorkspaceFile).toHaveBeenCalledWith({
+      workspaceRoot: '/cluster/write',
+      path: '/cluster/write/draft.md',
+      workspaceLocator: REMOTE_LOCATOR
+    })
+    expect(get().fileRevision).toBe('revision-1')
+  })
+
+  it('rejects file mutations after switching to another session at the same path', async () => {
+    const createWorkspaceFile = vi.fn()
+    installSciForge({ createWorkspaceFile })
+    useChatStore.setState({
+      workspaceLocator: { ...REMOTE_LOCATOR, hostSessionId: 'remote-session-2' }
+    })
+    const { actions, get } = createHarness({
+      workspaceRoot: REMOTE_LOCATOR.path,
+      pinnedWorkspaceLocator: REMOTE_LOCATOR
+    })
+
+    await expect(actions.createFile(REMOTE_LOCATOR.path, 'draft.md')).resolves.toBeNull()
+
+    expect(createWorkspaceFile).not.toHaveBeenCalled()
+    expect(get().fileError).toContain('session changed')
   })
 })

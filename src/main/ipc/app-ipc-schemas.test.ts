@@ -24,8 +24,17 @@ import {
   agentRuntimeEventSubscribePayloadSchema,
   agentRuntimeUserInputResolvePayloadSchema,
   agentRuntimeStartTurnPayloadSchema,
+  remoteWorkspaceAttachPayloadSchema,
+  remoteWorkspaceSelectPayloadSchema,
+  remoteWorkspaceSessionPayloadSchema,
   connectPhoneInstallQrPayloadSchema,
   connectPhoneInstallPollPayloadSchema,
+  domainExtensionInstallPayloadSchema,
+  domainExtensionListPayloadSchema,
+  domainExtensionListResultSchema,
+  domainExtensionPackagePayloadSchema,
+  domainExtensionSetEnabledPayloadSchema,
+  domainExtensionSummarySchema,
   visualStyleExtractPayloadSchema,
   visualStyleSaveProfilePayloadSchema,
   isSafeOpenExternalUrl,
@@ -39,8 +48,6 @@ import {
   traceExportPayloadSchema,
   traceReadPayloadSchema,
   traceSummariesPayloadSchema,
-  visualDocumentInsertArtifactPayloadSchema,
-  visualDocumentSaveAnnotationsPayloadSchema,
   skillListPayloadSchema,
   workspaceClipboardPastePayloadSchema,
   workspaceDirectoryCreatePayloadSchema,
@@ -53,12 +60,69 @@ import {
   workspacePdfRenameSuggestionPayloadSchema,
   workspacePreviewOpenPayloadSchema,
   writeExportPayloadSchema,
-  writeRichClipboardPayloadSchema,
   writeInlineCompletionPayloadSchema,
   writeRetrievalPayloadSchema
 } from './app-ipc-schemas'
 
 describe('app-ipc-schemas', () => {
+  it('validates bounded renderer-safe extension metadata and strict operation inputs', () => {
+    const summary = {
+      packageName: '@sciforge/domain-browser',
+      moduleId: 'sciforge.browser',
+      moduleDisplayName: 'Browser',
+      version: '1.2.3',
+      publisher: {
+        id: 'sciforge',
+        displayName: 'SciForge'
+      },
+      source: 'user',
+      verification: 'official-signed',
+      execution: 'sandboxed-runtime',
+      status: 'active',
+      permissions: ['network.outbound'],
+      contributionKinds: ['command', 'right-panel'],
+      contributionCount: 2,
+      canRollback: false,
+      installedAt: '2026-07-27T12:30:00.000Z'
+    }
+
+    expect(domainExtensionListPayloadSchema.parse({})).toEqual({})
+    expect(domainExtensionInstallPayloadSchema.parse({ path: ' /tmp/browser.sfx ' })).toEqual({
+      path: '/tmp/browser.sfx'
+    })
+    expect(domainExtensionPackagePayloadSchema.parse({
+      packageName: ' @sciforge/domain-browser '
+    })).toEqual({
+      packageName: '@sciforge/domain-browser'
+    })
+    expect(domainExtensionSetEnabledPayloadSchema.parse({
+      packageName: '@sciforge/domain-browser',
+      enabled: false
+    })).toEqual({
+      packageName: '@sciforge/domain-browser',
+      enabled: false
+    })
+    expect(domainExtensionSummarySchema.parse(summary)).toEqual(summary)
+    expect(domainExtensionListResultSchema.parse([summary])).toEqual([summary])
+
+    expect(() => domainExtensionListPayloadSchema.parse({ includeInvalid: true })).toThrow()
+    expect(() => domainExtensionInstallPayloadSchema.parse({
+      path: '/tmp/browser.sfx',
+      allowUnsigned: true
+    })).toThrow()
+    expect(() => domainExtensionPackagePayloadSchema.parse({
+      packageName: 'domain-browser'
+    })).toThrow()
+    expect(() => domainExtensionSummarySchema.parse({
+      ...summary,
+      verification: 'unsigned'
+    })).toThrow()
+    expect(() => domainExtensionSummarySchema.parse({
+      ...summary,
+      permissions: Array.from({ length: 1_001 }, (_, index) => `permission.item-${index}`)
+    })).toThrow()
+  })
+
   it('accepts bounded protocol-neutral full-trace queries', () => {
     expect(traceReadPayloadSchema.parse({
       runtimeId: 'codex',
@@ -105,6 +169,25 @@ describe('app-ipc-schemas', () => {
       threadSource: 'pdf_annotation',
       sidebarVisibility: 'hidden'
     })
+  })
+
+  it('accepts only opaque authorized and attached Workspace Host identities', () => {
+    expect(remoteWorkspaceAttachPayloadSchema.parse({
+      providerId: ' remote-ssh.workspace-host-provider ',
+      authorizedSessionId: ' authorized-session-1 '
+    })).toEqual({
+      providerId: 'remote-ssh.workspace-host-provider',
+      authorizedSessionId: 'authorized-session-1'
+    })
+    expect(remoteWorkspaceSelectPayloadSchema.parse({ sessionId: null }))
+      .toEqual({ sessionId: null })
+    expect(remoteWorkspaceSessionPayloadSchema.parse({ sessionId: ' session-1 ' }))
+      .toEqual({ sessionId: 'session-1' })
+    expect(() => remoteWorkspaceAttachPayloadSchema.parse({
+      providerId: 'remote-ssh.workspace-host-provider',
+      authorizedSessionId: 'authorized-session-1',
+      workspaceRoot: '/must/not-cross-this-boundary'
+    })).toThrow()
   })
 
   it('accepts neutral agent runtime turn payloads', () => {
@@ -207,44 +290,6 @@ describe('app-ipc-schemas', () => {
         text: ' '
       })
     ).toThrow()
-  })
-
-  it('accepts strict VisualDocument artifacts and normalized review annotations', () => {
-    expect(visualDocumentInsertArtifactPayloadSchema.parse({
-      workspaceRoot: ' /tmp/workspace ',
-      documentId: ' thread-1 ',
-      kind: 'generated_image',
-      sourcePath: ' .sciforge/images/cover.png ',
-      manifestPath: ' .sciforge/artifacts/cover.manifest.json '
-    })).toMatchObject({
-      workspaceRoot: '/tmp/workspace',
-      documentId: 'thread-1',
-      kind: 'generated_image',
-      sourcePath: '.sciforge/images/cover.png',
-      manifestPath: '.sciforge/artifacts/cover.manifest.json'
-    })
-
-    expect(visualDocumentInsertArtifactPayloadSchema.parse({
-      workspaceRoot: '/tmp/workspace',
-      kind: 'edited_image',
-      sourcePath: '.sciforge/images/cover-v2.png'
-    }).kind).toBe('edited_image')
-
-    expect(visualDocumentSaveAnnotationsPayloadSchema.parse({
-      workspaceRoot: '/tmp/workspace',
-      annotations: [{
-        geometry: { kind: 'box', bounds: { x: 0.1, y: 0.2, width: 0.5, height: 0.4 } },
-        instruction: ' Increase the whitespace. '
-      }]
-    }).annotations[0]?.instruction).toBe('Increase the whitespace.')
-
-    expect(() => visualDocumentSaveAnnotationsPayloadSchema.parse({
-      workspaceRoot: '/tmp/workspace',
-      annotations: [{
-        geometry: { kind: 'pin', point: { x: 1.2, y: 0.5 } },
-        instruction: 'Invalid coordinate'
-      }]
-    })).toThrow()
   })
 
   it('accepts bounded visual style extraction payloads', () => {
@@ -652,11 +697,21 @@ describe('app-ipc-schemas', () => {
     expect(workspacePreviewOpenPayloadSchema.parse({
       path: ' protein.PDB ',
       workspaceRoot: ' /tmp/workspace ',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'remote-session-1',
+        path: '/tmp/workspace'
+      },
       mimeType: ' chemical/x-pdb ',
       mode: ' inspect '
     })).toEqual({
       path: 'protein.PDB',
       workspaceRoot: '/tmp/workspace',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'remote-session-1',
+        path: '/tmp/workspace'
+      },
       mimeType: 'chemical/x-pdb',
       mode: 'inspect'
     })
@@ -778,47 +833,6 @@ describe('app-ipc-schemas', () => {
         model: '',
         language: '',
         timeoutMs: 60000
-      },
-      remoteExecutor: {
-        enabled: true,
-        defaultTargetId: 'hpc-1',
-        targets: [{
-          id: 'hpc-1',
-          label: 'HPC',
-          enabled: true,
-          kind: 'slurm',
-          remoteWorkspaceRoot: '/remote/workspace',
-          ssh: {
-            host: 'login.example.edu',
-            user: 'alice',
-            port: 22,
-            pythonPath: '/usr/bin/python3',
-            identityFile: '/Users/alice/.ssh/id_ed25519'
-          },
-          slurm: {
-            defaults: {
-              partition: 'gpu',
-              account: 'lab',
-              qos: 'normal',
-              timeLimit: '01:00:00',
-              nodes: 1,
-              ntasks: 1,
-              cpusPerTask: 8,
-              gpus: 1,
-              memory: '32G',
-              constraint: 'a100',
-              gres: 'gpu:a100:1',
-              extraArgs: ['--exclusive']
-            }
-          },
-          trustedWorkspaces: [{
-            workspaceRoot: '/repo/project',
-            targetFingerprint: 'fp-1',
-            trustedAt: '2026-01-01T00:00:00.000Z',
-            trustedBy: 'user',
-            approvalBypass: true
-          }]
-        }]
       }
     })
 
@@ -834,8 +848,26 @@ describe('app-ipc-schemas', () => {
     expect(payload.write?.inlineCompletion?.maxTokens).toBe(128)
     expect(payload.speechToText?.baseUrl).toBe('')
     expect(payload.modelRouter?.profiles?.default?.imageGenerator?.model).toBe('image-model')
-    expect(payload.remoteExecutor?.defaultTargetId).toBe('hpc-1')
-    expect(payload.remoteExecutor?.targets?.[0]?.slurm?.defaults?.extraArgs).toEqual(['--exclusive'])
+  })
+
+  it('accepts bounded Workbench toolbar placement settings', () => {
+    expect(settingsPatchSchema.parse({
+      workbenchToolbar: {
+        hiddenCommandIds: [' paper-radar.open '],
+        commandOrder: ['remote-ssh.open', 'paper-radar.open']
+      }
+    })).toEqual({
+      workbenchToolbar: {
+        hiddenCommandIds: ['paper-radar.open'],
+        commandOrder: ['remote-ssh.open', 'paper-radar.open']
+      }
+    })
+
+    expect(() => settingsPatchSchema.parse({
+      workbenchToolbar: {
+        commandOrder: Array.from({ length: 257 }, (_, index) => `plugin-${index}.open`)
+      }
+    })).toThrow()
   })
 
   it('rejects obsolete host settings for installed domain packages', () => {
@@ -1262,6 +1294,16 @@ describe('app-ipc-schemas', () => {
     ).toThrow(/Unrecognized key/)
   })
 
+  it('rejects the retired Remote Executor settings path', () => {
+    expect(() =>
+      settingsPatchSchema.parse({
+        remoteExecutor: {
+          enabled: true
+        }
+      })
+    ).toThrow(/Unrecognized key/)
+  })
+
   it('rejects legacy local runtime tuning patches in favor of runtime guards', () => {
     expect(() =>
       settingsPatchSchema.parse({
@@ -1280,16 +1322,20 @@ describe('app-ipc-schemas', () => {
     expect(settingsPatchSchema.parse({
       runtimeGuards: {
         execution: {
-          exactRepeatThreshold: 4,
-          semanticFailureThreshold: 3
+          exactRepeatThreshold: 4
         }
       }
     }).runtimeGuards).toMatchObject({
       execution: {
-        exactRepeatThreshold: 4,
-        semanticFailureThreshold: 3
+        exactRepeatThreshold: 4
       }
     })
+
+    expect(() => settingsPatchSchema.parse({
+      runtimeGuards: {
+        execution: { semanticFailureThreshold: 3 }
+      }
+    })).toThrow(/Unrecognized key/)
 
     expect(() => settingsPatchSchema.parse({
       runtimeGuards: {
@@ -1724,14 +1770,4 @@ describe('app-ipc-schemas', () => {
     }).format).toBe('tex')
   })
 
-  it('accepts write rich clipboard payloads', () => {
-    const payload = writeRichClipboardPayloadSchema.parse({
-      path: '/tmp/workspace/draft.md',
-      workspaceRoot: '/tmp/workspace',
-      content: '# Draft'
-    })
-
-    expect(payload.path).toBe('/tmp/workspace/draft.md')
-    expect(payload.content).toBe('# Draft')
-  })
 })

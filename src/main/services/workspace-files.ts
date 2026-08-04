@@ -200,6 +200,10 @@ function workspaceFilePosition(payload: WorkspaceFileTarget): { line?: number; c
   }
 }
 
+function workspaceFileRevision(fileInfo: WorkspaceFileStat): string {
+  return `${fileInfo.size}:${fileInfo.mtimeMs}`
+}
+
 async function readWorkspacePdfFromResolvedPath(
   targetPath: string,
   fileInfo: WorkspaceFileStat,
@@ -220,6 +224,7 @@ async function readWorkspacePdfFromResolvedPath(
     size: fileInfo.size,
     truncated: false,
     mtimeMs: fileInfo.mtimeMs,
+    revision: workspaceFileRevision(fileInfo),
     ...workspaceFilePosition(payload)
   }
 }
@@ -355,12 +360,14 @@ async function readWorkspaceDocxFromResolvedPath(
     size: fileInfo.size,
     truncated: false,
     mtimeMs: fileInfo.mtimeMs,
+    revision: workspaceFileRevision(fileInfo),
     ...workspaceFilePosition(payload)
   }
 }
 
 async function readWorkspaceTextFromWorkspaceIntel(
   targetPath: string,
+  fileInfo: WorkspaceFileStat,
   payload: WorkspaceFileTarget
 ): Promise<WorkspaceFileReadResult> {
   const workspaceRoot = payload.workspaceRoot?.trim() ? payload.workspaceRoot : dirname(targetPath)
@@ -384,6 +391,7 @@ async function readWorkspaceTextFromWorkspaceIntel(
     mimeType: result.mimeType,
     size: result.size,
     truncated: result.truncated,
+    revision: workspaceFileRevision(fileInfo),
     ...workspaceFilePosition(payload)
   }
 }
@@ -429,7 +437,7 @@ export async function readWorkspaceFile(payload: WorkspaceFileTarget): Promise<W
       return readWorkspaceDocxFromResolvedPath(targetPath, fileInfo, payload)
     }
 
-    return readWorkspaceTextFromWorkspaceIntel(targetPath, payload)
+    return readWorkspaceTextFromWorkspaceIntel(targetPath, fileInfo, payload)
   } catch (error) {
     return {
       ok: false,
@@ -463,7 +471,8 @@ export async function readWorkspaceImage(
       path: targetPath,
       dataUrl: `data:${mimeType};base64,${bytes.toString('base64')}`,
       mimeType,
-      size: fileInfo.size
+      size: fileInfo.size,
+      revision: workspaceFileRevision(fileInfo)
     }
   } catch (error) {
     return {
@@ -485,10 +494,12 @@ export async function writeWorkspaceFile(
     } else {
       await writeSafeWorkspaceFile(target, payload.content ?? '', { encoding: 'utf8' })
     }
+    const written = await stat(target.path)
     return {
       ok: true,
       path: target.path,
-      savedAt: new Date().toISOString()
+      savedAt: new Date().toISOString(),
+      revision: workspaceFileRevision(written)
     }
   } catch (error) {
     return {

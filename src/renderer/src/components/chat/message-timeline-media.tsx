@@ -13,7 +13,7 @@ import { getProvider } from '../../agent/registry'
 import { openSafeExternalUrl } from '../../lib/open-external'
 import { useChatStore } from '../../store/chat-store'
 import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
-import { ImagePreviewLightbox } from './ImagePreviewLightbox'
+import { ImagePreviewLightbox } from '../ImagePreviewLightbox'
 import { registerVisibleContextVisualTarget } from '../../lib/visible-context'
 
 export type TimelineImageReference = {

@@ -33,6 +33,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@sciforge/domain-anchored-comments": "^0.1.0",
     "@aws-sdk/client-s3": "^3.1049.0",
     "zod": "^4.4.3"
   },

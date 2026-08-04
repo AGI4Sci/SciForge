@@ -25,13 +25,12 @@ import {
   type CodexAppServerInitializeResponse,
   type CodexAppServerJsonRpcClient,
   type CodexAppServerJsonRpcClientOptions
-} from './app-server/json-rpc-client'
+} from '@sciforge/codex-runtime/app-server'
 import type {
   CodexAppServerPendingRequest,
   CodexAppServerPendingRequestRegistryOptions
-} from './app-server/request-registry'
+} from '@sciforge/codex-runtime/app-server'
 import type { CodexThreadEventPayload } from './codex-runtime-api'
-import { FileMultiAgentStore } from '../../../../packages/workers/multi-agent/src'
 import { CodexPreToolUseGovernanceBridge } from './codex-pre-tool-use-governance'
 import {
   CAPABILITY_AGENT_TOOL_NAMES,
@@ -2151,11 +2150,13 @@ describe('CodexRuntimeService compatibility operations', () => {
       turnId: 'turn-1',
       tool: CAPABILITY_AGENT_TOOL_NAMES.discover,
       arguments: {}
-    })).resolves.toEqual({
-      success: true,
-      contentItems: [{ type: 'inputText', text: '[]' }],
-      structuredContent: [],
-      evidenceDelta: true
+    })).resolves.toMatchObject({
+      success: false,
+      errorCode: 'capability_discovery_empty',
+      contentItems: [{
+        type: 'inputText',
+        text: expect.stringContaining('No capability matched the discovery request')
+      }]
     })
     expect(resolveCaller).toHaveBeenCalledWith({
       requestId: 'capability-request-1',
@@ -2170,7 +2171,7 @@ describe('CodexRuntimeService compatibility operations', () => {
       callerId: 'thread-1',
       workspaceId: '/tmp/capability-workspace',
       approvals: []
-    }, {}, { context: expect.objectContaining({ runtimeId: 'codex', threadId: 'thread-1' }) })
+    }, { limit: 8 }, { context: expect.objectContaining({ runtimeId: 'codex', threadId: 'thread-1' }) })
   })
 
   it('mints completion receipts only for strict in-process native visual results', async () => {
@@ -2241,10 +2242,11 @@ describe('CodexRuntimeService compatibility operations', () => {
     expect(ordinaryResult).not.toHaveProperty('completionReceipts')
   })
 
-  it('advertises and executes Codex multi-agent dynamic spawn calls as child threads', async () => {
-    const queued = clientWithQueuedEvents()
+  it('preserves structured native visual recovery metadata in Codex tool receipts', async () => {
     const storageRoot = await tempRoot()
+    const client = controllableClient()
     const sink = { send: vi.fn() }
+    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
     const surface: AgentRuntimeToolSurface = {
       tools: () => [{
         type: 'function',
@@ -2252,12 +2254,69 @@ describe('CodexRuntimeService compatibility operations', () => {
         description: 'Look.',
         inputSchema: { type: 'object', properties: {} }
       }],
-      call: async () => ({
-        tool: 'sciforge_look',
-        value: codexVisualLookOutput()
-      })
+      call: async () => {
+        throw Object.assign(new Error('The bound surface is hidden.'), {
+          code: 'visual_layout_owner_changed',
+          failureClass: 'layout_unavailable',
+          retryable: false,
+          providerStage: 'visual_surface_binding',
+          resourceIdentity: 'visual:current',
+          recovery: {
+            action: 'restore_bound_surface',
+            instruction: 'Restore the task-bound surface before starting a new visual call.'
+          }
+        })
+      }
     }
-    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink,
+      storageRoot,
+      capabilityAgentTools: surface,
+      createClient: (options) => {
+        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
+        return client
+      }
+    })
+
+    await service.startThread({
+      title: 'Native visual failure',
+      workspace: '/tmp/capability-workspace'
+    })
+    await expect(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'native-failure-request',
+      callId: 'native-failure-call',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: 'sciforge_look',
+      arguments: {}
+    })).resolves.toMatchObject({
+      success: false,
+      errorCode: 'visual_layout_owner_changed',
+      failureClass: 'layout_unavailable',
+      retryable: false,
+      recoveryGuidance: 'Restore the task-bound surface before starting a new visual call.',
+      providerStage: 'visual_surface_binding',
+      resourceIdentity: 'visual:current'
+    })
+    expect(sink.send).toHaveBeenCalledWith(CODEX_MAIN_IPC_CHANNELS.event, {
+      event: expect.objectContaining({
+        tool: expect.objectContaining({
+          status: 'error',
+          meta: expect.objectContaining({
+            errorCode: 'visual_layout_owner_changed',
+            retryable: false,
+            recoveryGuidance: 'Restore the task-bound surface before starting a new visual call.',
+            providerStage: 'visual_surface_binding'
+          })
+        })
+      })
+    })
+  })
+
+  it('implements the Codex spawn, inspect, message, and cancel adapter contract', async () => {
+    const queued = clientWithQueuedEvents()
+    const storageRoot = await tempRoot()
     vi.mocked(queued.client.startThread)
       .mockResolvedValueOnce({ thread: { id: 'parent-codex-thread' } })
       .mockResolvedValueOnce({ thread: { id: 'child-codex-thread' } })
@@ -2266,318 +2325,68 @@ describe('CodexRuntimeService compatibility operations', () => {
       .mockResolvedValueOnce({ turn: { id: 'child-turn' } })
     const service = new CodexRuntimeService({
       settings: async () => settings(),
-      sink,
+      sink: { send: vi.fn() },
       storageRoot,
-      capabilityAgentTools: surface,
-      createClient: (options) => {
-        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
-        return queued.client
-      }
+      createClient: () => queued.client
     })
+    await service.startThread({ threadId: 'parent-thread', title: 'Parent' })
+    await service.startTurn({ threadId: 'parent-thread', text: 'Delegate this task.' })
 
-    await expect(service.startThread({ threadId: 'parent-gui-thread', title: 'Parent' })).resolves.toMatchObject({
-      ok: true,
-      thread: expect.objectContaining({ id: 'parent-gui-thread' })
-    })
-    await expect(service.startTurn({
-      threadId: 'parent-gui-thread',
-      text: 'Delegate visual inspection.',
-      ownedVisualToolsAvailable: true,
-      nativeVisualProofChainPending: true
-    })).resolves.toMatchObject({
-      ok: true,
-      turnId: 'parent-turn'
-    })
-    expect(queued.client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      dynamicTools: expect.arrayContaining([
-        expect.objectContaining({ name: 'delegate_task' })
-      ]),
-      developerInstructions: expect.stringContaining('delegate_task')
-    }))
-
-    const pending = pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'multi-agent-request-1',
-      threadId: 'parent-codex-thread',
-      turnId: 'parent-turn',
-      tool: 'delegate_task',
-      arguments: {
-        label: 'Reviewer',
-        prompt: 'Return child-ok only.',
-        model: 'deepseek-v4-pro'
-      }
-    })
-    await vi.waitFor(() => {
-      expect(queued.client.startTurn).toHaveBeenNthCalledWith(2, expect.objectContaining({
-        threadId: 'child-codex-thread',
-        model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
-        responsesapiClientMetadata: {
-          runtime_id: 'codex',
-          gui_thread_id: expect.any(String)
-        },
-        input: expect.arrayContaining([
-          expect.objectContaining({ text: 'Return child-ok only.' })
-        ])
-      }))
-    })
-    const governanceBridge = new CodexPreToolUseGovernanceBridge({ storageRoot })
-    await expect(governanceBridge.evaluate({
-      hook_event_name: 'PreToolUse',
-      session_id: 'child-codex-thread',
-      turn_id: 'child-turn',
-      tool_name: 'Bash',
-      tool_use_id: 'child-bypass-call',
-      tool_input: { command: 'python inspect_pixels.py' },
-      cwd: '/tmp/workspace'
-    })).resolves.toMatchObject({
-      hookSpecificOutput: {
-        permissionDecision: 'deny',
-        permissionDecisionReason: expect.stringContaining(
-          'native_visual_proof_chain_required'
-        )
-      }
-    })
-    await expect(service.updateTurnGovernanceSnapshot({
-      runtimeId: 'codex',
-      threadId: 'parent-gui-thread',
-      turnId: 'parent-turn',
-      snapshot: {
-        ownedVisualToolsAvailable: true,
-        nativeVisualProofChainPending: false
-      }
-    })).resolves.toEqual({ ok: true })
-    await expect(governanceBridge.evaluate({
-      hook_event_name: 'PreToolUse',
-      session_id: 'child-codex-thread',
-      turn_id: 'child-turn',
-      tool_name: 'Bash',
-      tool_use_id: 'child-after-parent-update',
-      tool_input: { command: 'pwd' },
-      cwd: '/tmp/workspace'
-    })).resolves.toEqual({})
-    const childStartThreadParams = vi.mocked(queued.client.startThread).mock.calls[1]?.[0] as {
-      dynamicTools?: Array<{ name?: string }>
-      developerInstructions?: string
-    }
-    expect(childStartThreadParams.dynamicTools ?? []).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: 'delegate_task' })
-    ]))
-    expect(childStartThreadParams.developerInstructions ?? '').not.toContain('delegate_task')
-    expect(queued.client.startTurn).not.toHaveBeenCalledWith(expect.objectContaining({
-      model: 'deepseek-v4-pro'
-    }))
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'child-look-request',
-      callId: 'child-look-call',
-      threadId: 'child-codex-thread',
-      turnId: 'child-turn',
-      tool: 'sciforge_look',
-      arguments: {}
-    })).resolves.toMatchObject({
-      success: true,
-      completionReceipts: [{
-        callId: 'child-look-call',
-        kind: 'visual.look',
-        receiptId: codexVisualRefs.proof
-      }]
-    })
-    await vi.waitFor(() => {
-      expect(sink.send).toHaveBeenCalledWith(CODEX_MAIN_IPC_CHANNELS.event, {
-        event: expect.objectContaining({
-          threadId: 'parent-gui-thread',
-          turnId: 'parent-turn',
-          tool: expect.objectContaining({
-            status: 'success',
-            completionReceipts: [{
-              callId: 'child-look-call',
-              kind: 'visual.look',
-              receiptId: codexVisualRefs.proof,
-              contractVersion: 'completion-receipt.v1',
-              status: 'satisfied',
-              issuer: 'sciforge.agent-visual',
-              subjectRef: codexVisualRefs.source,
-              relatedRefs: [
-                codexVisualRefs.snapshot,
-                codexVisualRefs.region
-              ],
-              attestation: `sha256:${'d'.repeat(64)}`,
-              createdAt: '2026-07-26T00:00:00.000Z'
-            }],
-            meta: expect.objectContaining({
-              callId: 'child-look-call',
-              childThreadId: 'child-codex-thread',
-              childTurnId: 'child-turn',
-              governanceThreadId: 'parent-gui-thread',
-              governanceTurnId: 'parent-turn',
-              receiptScope: 'parent_turn'
-            })
-          })
-        })
-      })
-    })
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'nested-multi-agent-request',
-      threadId: 'child-codex-thread',
-      turnId: 'child-turn',
-      tool: 'delegate_task',
-      arguments: {
-        label: 'Nested',
-        prompt: 'This should not run.'
-      }
-    })).resolves.toEqual({
-      contentItems: [{ type: 'inputText', text: 'delegate_task is disabled inside child agents.' }],
-      success: false
-    })
-    queued.push({
-      type: 'event',
-      channel: CODEX_MAIN_IPC_CHANNELS.event,
-      payload: {
-        method: 'item/agentMessage/delta',
-        params: {
-          threadId: 'child-codex-thread',
-          turnId: 'child-turn',
-          text: 'child-ok'
-        }
-      }
-    })
-    queued.push({
-      type: 'event',
-      channel: CODEX_MAIN_IPC_CHANNELS.event,
-      payload: {
-        method: 'turn/completed',
-        params: {
-          threadId: 'child-codex-thread',
-          turnId: 'child-turn'
-        }
-      }
-    })
-
-    await expect(pending).resolves.toMatchObject({
-      success: true,
-      contentItems: [{ type: 'inputText', text: 'child-ok' }]
-    })
-    await expect(governanceBridge.evaluate({
-      hook_event_name: 'PreToolUse',
-      session_id: 'child-codex-thread',
-      turn_id: 'child-turn',
-      tool_name: 'Bash',
-      tool_use_id: 'child-after-completion',
-      tool_input: { command: 'pwd' },
-      cwd: '/tmp/workspace'
-    })).resolves.toMatchObject({
-      hookSpecificOutput: {
-        permissionDecision: 'deny',
-        permissionDecisionReason: expect.stringContaining(
-          'native_visual_governance_unavailable'
-        )
-      }
-    })
-    await vi.waitFor(() => {
-      expect(sink.send).toHaveBeenCalledWith(CODEX_MAIN_IPC_CHANNELS.event, {
-        event: expect.objectContaining({
-          threadId: 'parent-gui-thread',
-          turnId: 'parent-turn',
-          child: expect.objectContaining({
-            id: expect.any(String),
-            label: 'Reviewer',
-            status: 'completed',
-            summary: 'child-ok',
-            openAsThreadRef: expect.objectContaining({
-              runtimeId: 'codex',
-              threadId: 'child-codex-thread'
-            })
-          })
-        })
-      })
-    })
-    queued.close()
-  })
-
-  it('replays a persisted multi-agent app-server request after service restart without creating another child', async () => {
-    const client = controllableClient()
-    const storageRoot = await tempRoot()
-    const store = new FileMultiAgentStore(join(storageRoot, 'multi-agent-child-runs'))
-    await store.upsert({
-      contractVersion: 1,
-      id: 'persisted-child',
+    const spawned = vi.fn()
+    const controller = new AbortController()
+    const completion = service.spawnSubagent({
+      childId: 'child-1',
       parentThreadId: 'parent-thread',
       parentTurnId: 'parent-turn',
-      requestId: 'persisted-app-server-request',
-      prompt: 'Run once before restart',
-      status: 'completed',
-      summary: 'persisted child result',
-      usage: { promptTokens: 1, completionTokens: 2, totalTokens: 3 },
-      transcript: [],
-      createdAt: '2026-07-12T00:00:00.000Z',
-      startedAt: '2026-07-12T00:00:01.000Z',
-      updatedAt: '2026-07-12T00:00:02.000Z',
-      finishedAt: '2026-07-12T00:00:02.000Z'
+      label: 'Reviewer',
+      prompt: 'Review the repository.',
+      signal: controller.signal,
+      appendTranscript: vi.fn(async () => undefined),
+      onSpawned: spawned
     })
-    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
-    const restartedService = new CodexRuntimeService({
-      settings: async () => settings(),
-      sink: { send: vi.fn() },
-      storageRoot,
-      createClient: (options) => {
-        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
-        return client
-      }
-    })
-
-    await expect(restartedService.connect()).resolves.toMatchObject({ ok: true })
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'persisted-app-server-request',
-      threadId: 'parent-thread',
-      turnId: 'parent-turn',
-      tool: 'delegate_task',
-      arguments: { prompt: 'Run once before restart' }
-    })).resolves.toEqual({
-      contentItems: [{ type: 'inputText', text: 'persisted child result' }],
-      success: true
-    })
-    expect(client.startThread).not.toHaveBeenCalled()
-    expect(await store.list()).toHaveLength(1)
-  })
-
-  it('keeps delegate_task disabled in persisted Codex child threads after restart', async () => {
-    const client = controllableClient()
-    const storageRoot = await tempRoot()
-    const threadStore = new CodexThreadStore({ rootDir: storageRoot })
-    await threadStore.upsert({
-      guiThreadId: 'child-gui-thread',
-      codexThreadId: 'child-codex-thread',
-      workspace: '/tmp/workspace',
-      title: 'Persisted child',
-      threadSource: 'subagent',
-      relation: 'side',
-      parentThreadId: 'parent-gui-thread',
-      parentTurnId: 'parent-turn'
-    })
-    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
-    const service = new CodexRuntimeService({
-      settings: async () => settings(),
-      sink: { send: vi.fn() },
-      storageRoot,
-      createClient: (options) => {
-        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
-        return client
-      }
-    })
-
-    await expect(service.connect()).resolves.toMatchObject({ ok: true })
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'nested-after-restart',
+    await vi.waitFor(() => expect(spawned).toHaveBeenCalledWith({
+      runtime: 'codex',
+      threadId: expect.any(String),
+      turnId: 'child-turn'
+    }))
+    await expect(service.inspectSubagent({
+      childId: 'child-1',
+      parentThreadId: 'parent-thread',
+      parentTurnId: 'parent-turn',
+      signal: new AbortController().signal
+    })).resolves.toMatchObject({ state: 'active' })
+    await expect(service.messageSubagent({
+      childId: 'child-1',
+      parentThreadId: 'parent-thread',
+      parentTurnId: 'parent-turn',
+      message: 'Report progress.',
+      signal: new AbortController().signal
+    })).resolves.toEqual({ established: true })
+    expect(queued.client.steerTurn).toHaveBeenCalledWith(expect.objectContaining({
       threadId: 'child-codex-thread',
-      turnId: 'child-turn',
-      tool: 'delegate_task',
-      arguments: {
-        label: 'Nested',
-        prompt: 'This should still be blocked after restart.'
-      }
-    })).resolves.toEqual({
-      contentItems: [{ type: 'inputText', text: 'delegate_task is disabled inside child agents.' }],
-      success: false
+      expectedTurnId: 'child-turn'
+    }), expect.any(AbortSignal))
+
+    await service.cancelSubagent({
+      childId: 'child-1',
+      parentThreadId: 'parent-thread',
+      parentTurnId: 'parent-turn',
+      reason: 'parent_cancel',
+      signal: new AbortController().signal
     })
-    expect(client.startThread).not.toHaveBeenCalled()
+    expect(queued.client.interruptTurn).toHaveBeenCalledWith({
+      threadId: 'child-codex-thread',
+      turnId: 'child-turn'
+    }, expect.any(AbortSignal))
+    controller.abort()
+    await expect(completion).rejects.toThrow('aborted')
+    await expect(service.inspectSubagent({
+      childId: 'child-1',
+      parentThreadId: 'parent-thread',
+      parentTurnId: 'parent-turn',
+      signal: new AbortController().signal
+    })).resolves.toMatchObject({ state: 'missing' })
+    queued.close()
   })
 
   it('forces Codex thread starts through the managed Model Router provider', async () => {
@@ -2661,7 +2470,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     expect(launch?.env?.CODEX_HOME).not.toBe(persistedCodexHome)
   })
 
-  it('trusts only the exact app-owned matcher-free PreToolUse hook before connecting', async () => {
+  it('trusts only the exact app-owned matcher-free PreToolUse hook without a version gate', async () => {
     const root = await tempRoot()
     const managedCodexHome = join(root, 'codex-home')
     const workspace = join(root, 'workspace')
@@ -2692,7 +2501,7 @@ process.stdout.write(JSON.stringify({
     current.workspaceRoot = workspace
     const client = controllableClient()
     vi.mocked(client.connect).mockResolvedValue({
-      userAgent: 'Codex Desktop/0.141.0 (Mac OS 15.7.4; arm64) dumb (sciforge; 0.1.0)',
+      userAgent: 'sciforge/development (Mac OS 15.7.4; arm64) xterm-256color (sciforge; 0.1.0)',
       codexHome: managedCodexHome,
       platformFamily: 'unix',
       platformOs: 'macos'
@@ -2780,64 +2589,6 @@ process.stdout.write(JSON.stringify({
         trusted_hash: `sha256:${'a'.repeat(64)}`
       }
     ]])
-  })
-
-  it.each([
-    {
-      name: 'an older runtime',
-      userAgent: 'Codex Desktop/0.140.99 (test)',
-      expectedMessage: 'connected Codex is 0.140.99'
-    },
-    {
-      name: 'a prerelease at the minimum stable version',
-      userAgent: 'Codex Desktop/0.141.0-alpha.1 (test)',
-      expectedMessage: 'connected Codex is 0.141.0-alpha.1'
-    },
-    {
-      name: 'an unversioned runtime',
-      userAgent: 'Codex Desktop/development (test)',
-      expectedMessage: 'Reported user agent: "Codex Desktop/development (test)"'
-    }
-  ])('fails governed startup for $name before trusting hooks', async ({
-    userAgent,
-    expectedMessage
-  }) => {
-    const root = await tempRoot()
-    const managedCodexHome = join(root, 'codex-home')
-    const client = controllableClient()
-    vi.mocked(client.connect).mockResolvedValue({
-      userAgent,
-      codexHome: managedCodexHome,
-      platformFamily: 'unix',
-      platformOs: 'macos'
-    })
-    client.listHooks = vi.fn(async () => ({ data: [] }))
-    client.writeConfigBatch = vi.fn(async () => ({
-      status: 'ok',
-      version: '2',
-      filePath: join(managedCodexHome, 'config.toml'),
-      overriddenMetadata: null
-    }))
-    const service = new CodexRuntimeService({
-      settings: async () => settings(),
-      sink: { send: vi.fn() },
-      managedCodexHome,
-      storageRoot: root,
-      preToolUseHookLaunch: {
-        appPath: join(root, 'SciForge App'),
-        execPath: process.execPath,
-        isPackaged: false
-      },
-      createClient: () => client
-    })
-
-    await expect(service.connect()).resolves.toMatchObject({
-      ok: false,
-      message: expect.stringContaining(expectedMessage)
-    })
-    expect(client.listHooks).not.toHaveBeenCalled()
-    expect(client.writeConfigBatch).not.toHaveBeenCalled()
-    expect(client.stop).toHaveBeenCalledOnce()
   })
 
   it('forces Codex turns through the managed Model Router alias', async () => {

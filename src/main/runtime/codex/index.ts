@@ -8,7 +8,7 @@ export {
   createCodexAppServerClient,
   type CodexAppServerJsonRpcClient,
   type CodexAppServerJsonRpcClientOptions
-} from './app-server/json-rpc-client'
+} from '@sciforge/codex-runtime/app-server'
 export {
   CODEX_PLAN_GATEWAY_PROVIDER_ID,
   prepareCodexAppServerLaunch,
@@ -28,4 +28,4 @@ export {
   type CodexAppServerPendingRequest,
   type CodexAppServerResolveApprovalInput,
   type CodexAppServerResolveUserInputInput
-} from './app-server/request-registry'
+} from '@sciforge/codex-runtime/app-server'

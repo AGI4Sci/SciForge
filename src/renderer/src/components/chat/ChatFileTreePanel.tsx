@@ -56,6 +56,10 @@ import {
   writeWorkspaceReferenceDragData,
   type WorkspaceReferenceDragDataSource
 } from '../../lib/workspace-reference-drag'
+import {
+  withActiveWorkspaceLocator,
+  withActiveWorkspaceLocatorForRoot
+} from '../../remote-workspace/placement'
 
 export { composerReferenceFromWorkspaceReference } from '../../lib/workspace-reference-composer'
 
@@ -612,7 +616,10 @@ export function ChatFileTreePanel({
     void (async () => {
       try {
         if (decision) {
-          const payload = fileTreeWorkspaceDropPayload(decision)
+          const payload = withActiveWorkspaceLocatorForRoot(
+            decision.targetWorkspaceRoot,
+            fileTreeWorkspaceDropPayload(decision)
+          )
           const result = decision.action === 'copy'
             ? await window.sciforge.copyWorkspaceEntry(payload)
             : await window.sciforge.moveWorkspaceEntry(payload)
@@ -624,7 +631,9 @@ export function ChatFileTreePanel({
           return
         }
         if (!importPayload) return
-        const result = await window.sciforge.importWorkspaceEntries(importPayload)
+        const result = await window.sciforge.importWorkspaceEntries(
+          withActiveWorkspaceLocatorForRoot(root, importPayload)
+        )
         if (!result.ok) {
           window.alert(result.message)
           return
@@ -698,10 +707,10 @@ export function ChatFileTreePanel({
   const copyReferenceContent = async (reference: AgentRuntimeWorkspaceReference): Promise<void> => {
     if (!navigator?.clipboard?.writeText) return
     try {
-      const result = await window.sciforge.readWorkspaceFile({
+      const result = await window.sciforge.readWorkspaceFile(withActiveWorkspaceLocator({
         path: reference.relativePath,
         workspaceRoot: reference.workspaceRoot || root
-      })
+      }))
       const copyContent = fileTreeCopyContentFromReadResult(result)
       if (!copyContent.ok) {
         window.alert(copyContent.message ?? t(fileTreeCopyContentErrorKey(copyContent.reason)))
@@ -732,19 +741,19 @@ export function ChatFileTreePanel({
       let result: Awaited<ReturnType<typeof window.sciforge.suggestWorkspacePdfName>> | undefined
       if (typeof window.sciforge.suggestWorkspacePdfName === 'function') {
         try {
-          result = await window.sciforge.suggestWorkspacePdfName({
+          result = await window.sciforge.suggestWorkspacePdfName(withActiveWorkspaceLocator({
             path: referencePath,
             workspaceRoot: referenceRoot
-          })
+          }))
         } catch {
           result = undefined
         }
       }
       if (!result) {
-        const readResult = await window.sciforge.readWorkspaceFile({
+        const readResult = await window.sciforge.readWorkspaceFile(withActiveWorkspaceLocator({
           path: referencePath,
           workspaceRoot: referenceRoot
-        })
+        }))
         result = await suggestPdfNameFromWorkspaceRead(readResult, reference.name)
       }
       if (!result.ok) {
@@ -812,10 +821,10 @@ export function ChatFileTreePanel({
     const targetDirectory = normalizePath(targetDirectoryPath)
     if (!fileClipboard) {
       try {
-        const result = await window.sciforge.pasteWorkspaceClipboard({
+        const result = await window.sciforge.pasteWorkspaceClipboard(withActiveWorkspaceLocator({
           workspaceRoot: root,
           targetDirectory
-        })
+        }))
         if (!result.ok) {
           window.alert(result.message)
           return
@@ -826,12 +835,12 @@ export function ChatFileTreePanel({
       }
       return
     }
-    const payload = {
+    const payload = withActiveWorkspaceLocatorForRoot(root, {
       sourcePath: fileClipboard.reference.relativePath,
       sourceWorkspaceRoot: fileClipboard.reference.workspaceRoot || root,
       targetDirectory,
       targetWorkspaceRoot: root
-    }
+    })
     try {
       const result = fileClipboard.action === 'cut'
         ? await window.sciforge.moveWorkspaceEntry(payload)
@@ -858,8 +867,12 @@ export function ChatFileTreePanel({
     setCreateDialog((current) => current ? { ...current, submitting: true, error: null } : current)
     try {
       const result = directory
-        ? await window.sciforge.createWorkspaceDirectory({ workspaceRoot: root, path })
-        : await window.sciforge.createWorkspaceFile({ workspaceRoot: root, path, content: '' })
+        ? await window.sciforge.createWorkspaceDirectory(
+            withActiveWorkspaceLocator({ workspaceRoot: root, path })
+          )
+        : await window.sciforge.createWorkspaceFile(
+            withActiveWorkspaceLocator({ workspaceRoot: root, path, content: '' })
+          )
       if (!result.ok) {
         setCreateDialog((current) => current
           ? { ...current, submitting: false, error: result.message }
@@ -888,11 +901,11 @@ export function ChatFileTreePanel({
         filters: [{ name: t('fileTreeAllFiles'), extensions: ['*'] }]
       })
       if (selection.canceled || !selection.path) return
-      const result = await window.sciforge.importWorkspaceEntries({
+      const result = await window.sciforge.importWorkspaceEntries(withActiveWorkspaceLocatorForRoot(root, {
         sourcePaths: [selection.path],
         targetDirectory,
         targetWorkspaceRoot: root
-      })
+      }))
       if (!result.ok) {
         window.alert(result.message)
         return
@@ -918,10 +931,10 @@ export function ChatFileTreePanel({
     const confirmKey = directory ? 'writeDeleteFolderConfirm' : 'writeDeleteFileConfirm'
     if (!window.confirm(t(confirmKey, { name: reference.name || reference.relativePath }))) return
     try {
-      const result = await window.sciforge.deleteWorkspaceEntry({
+      const result = await window.sciforge.deleteWorkspaceEntry(withActiveWorkspaceLocator({
         path: reference.relativePath,
         workspaceRoot: reference.workspaceRoot || root
-      })
+      }))
       if (!result.ok) {
         window.alert(result.message)
         return
@@ -952,11 +965,11 @@ export function ChatFileTreePanel({
     const nextPath = renamedRelativePath(previousPath, newName)
     setRenameDialog((current) => current ? { ...current, submitting: true, error: null } : current)
     try {
-      const result = await window.sciforge.renameWorkspaceEntry({
+      const result = await window.sciforge.renameWorkspaceEntry(withActiveWorkspaceLocator({
         path: previousPath,
         workspaceRoot: reference.workspaceRoot || root,
         newName
-      })
+      }))
       if (!result.ok) {
         setRenameDialog((current) => current ? { ...current, submitting: false, error: result.message } : current)
         return

@@ -15,12 +15,17 @@ import { loadPdfAnnotationSidecar } from '../pdf-annotation-sidecar-service'
 import { WorkspaceHtmlPreviewService } from '../workspace-html-preview-service'
 import {
   DEFAULT_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS,
+  WORKSPACE_PREVIEW_MAX_VISIBLE_TEXT_CHARS,
   WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
   WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES,
   workspacePreviewExtensionIdSchema,
   workspacePreviewModalitySchema,
   workspacePreviewPluginMetadataItemSchema
 } from '../../../shared/workspace-preview'
+import {
+  MARKDOWN_COPY_FOR_WECHAT_ACTION_ID,
+  type MarkdownWechatRenderInput
+} from '../../../shared/markdown-wechat'
 import {
   WorkspacePreviewHost as WorkspacePreviewHostImplementation,
   type WorkspacePreviewHostOptions
@@ -1326,6 +1331,124 @@ describe('WorkspacePreviewHost', () => {
     })
     expect(actionResult.result).not.toHaveProperty('path')
     expect(JSON.stringify(actionResult.result)).not.toContain(workspaceRoot)
+  })
+
+  it('advertises and invokes the WeChat copy host action with the complete canonical Markdown source', async () => {
+    await mkdir(join(workspaceRoot, 'docs'))
+    const markdown = `# Complete article\n\n${'research evidence '.repeat(
+      Math.ceil((WORKSPACE_PREVIEW_MAX_VISIBLE_TEXT_CHARS + 64) / 18)
+    )}`
+    const sourcePath = join(workspaceRoot, 'docs', 'article.md')
+    await writeFile(sourcePath, markdown, 'utf8')
+    const copyMarkdownForWechat = vi.fn(async (_input: MarkdownWechatRenderInput) => ({
+      copiedAt: '2026-07-30T10:00:00.000Z',
+      outputBytes: 4_096,
+      counts: {
+        formulas: 2,
+        inlineFormulas: 1,
+        displayFormulas: 1,
+        codeBlocks: 1,
+        embeddedImages: 1,
+        remoteImages: 0
+      },
+      warnings: [],
+      effect: 'clipboard-write' as const
+    }))
+    const host = new WorkspacePreviewHost({
+      createSessionId: () => 'session-markdown-wechat',
+      copyMarkdownForWechat
+    })
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'docs/article.md',
+      mimeType: 'text/markdown'
+    })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+    const canonicalSourcePath = opened.session.path
+    const canonicalWorkspaceRoot = opened.session.workspaceRoot
+
+    const observed = await host.observe(opened.session.id)
+    expect(observed).toMatchObject({
+      ok: true,
+      observation: {
+        text: { truncated: true },
+        actions: expect.arrayContaining([
+          'markdown.readImage',
+          MARKDOWN_COPY_FOR_WECHAT_ACTION_ID
+        ])
+      }
+    })
+
+    const actionResult = await host.invokeAction(
+      opened.session.id,
+      { actionId: MARKDOWN_COPY_FOR_WECHAT_ACTION_ID, input: {} },
+      '2026-07-30T10:00:01.000Z'
+    )
+
+    expect(copyMarkdownForWechat).toHaveBeenCalledOnce()
+    const copyInput = copyMarkdownForWechat.mock.calls[0]?.[0]
+    expect(copyInput).toMatchObject({
+      sourcePath: canonicalSourcePath,
+      workspaceRoot: canonicalWorkspaceRoot
+    })
+    expect(copyInput?.markdown).toHaveLength(markdown.length)
+    expect(copyInput?.markdown.endsWith('research evidence ')).toBe(true)
+    expect(actionResult).toEqual({
+      ok: true,
+      sessionId: 'session-markdown-wechat',
+      pluginId: 'markdown',
+      actionId: MARKDOWN_COPY_FOR_WECHAT_ACTION_ID,
+      invokedAt: '2026-07-30T10:00:01.000Z',
+      result: {
+        copiedAt: '2026-07-30T10:00:00.000Z',
+        outputBytes: 4_096,
+        counts: {
+          formulas: 2,
+          inlineFormulas: 1,
+          displayFormulas: 1,
+          codeBlocks: 1,
+          embeddedImages: 1,
+          remoteImages: 0
+        },
+        warnings: [],
+        effect: 'clipboard-write'
+      },
+      audit: {
+        pluginId: 'markdown',
+        path: canonicalSourcePath,
+        actionId: MARKDOWN_COPY_FOR_WECHAT_ACTION_ID,
+        effect: 'host-action'
+      }
+    })
+  })
+
+  it('returns a failed WeChat copy action without falling back when the clipboard service fails', async () => {
+    const sourcePath = join(workspaceRoot, 'article.md')
+    await writeFile(sourcePath, '# Clipboard failure\n', 'utf8')
+    const copyMarkdownForWechat = vi.fn(async () => {
+      throw new Error('Clipboard is unavailable.')
+    })
+    const host = new WorkspacePreviewHost({
+      createSessionId: () => 'session-markdown-wechat-failure',
+      copyMarkdownForWechat
+    })
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'article.md',
+      mimeType: 'text/markdown'
+    })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+
+    await expect(host.invokeAction(opened.session.id, {
+      actionId: MARKDOWN_COPY_FOR_WECHAT_ACTION_ID,
+      input: {}
+    })).resolves.toEqual({
+      ok: false,
+      message: 'Clipboard is unavailable.'
+    })
+    expect(copyMarkdownForWechat).toHaveBeenCalledOnce()
   })
 
   it('serves HTML preview URLs through the unified host action without exposing file paths in the action result', async () => {

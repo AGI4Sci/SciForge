@@ -1,11 +1,53 @@
 import type { InstalledDomainProcessEntrySet } from '@sciforge/domain-sdk'
+import {
+  RENDERER_COMMAND_CONTRIBUTION_KIND,
+  RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND,
+  RENDERER_WORKBENCH_BOTTOM_PANEL_CONTRIBUTION_KIND,
+  RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND,
+  RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
+  domainRendererComposerContextProviderContractSchema,
+  domainRendererWorkbenchBottomPanelContractSchema,
+  domainRendererWorkbenchGlobalOverlayContractSchema,
+  domainRendererWorkbenchRightPanelContractSchema,
+  domainRendererWorkbenchToolbarActionContractSchema,
+  isDomainRendererCommandHandler,
+  isDomainRendererComposerContextProvider,
+  isDomainRendererWorkbenchSurfaceValue,
+  isDomainRendererWorkbenchToolbarActionValue,
+  type DomainRendererCommandHandler,
+  type DomainRendererComposerContextProvider,
+  type DomainRendererComposerContextProviderContract,
+  type DomainRendererWorkbenchBottomPanelContract,
+  type DomainRendererWorkbenchBottomPanelValue,
+  type DomainRendererWorkbenchGlobalOverlayContract,
+  type DomainRendererWorkbenchGlobalOverlayValue,
+  type DomainRendererWorkbenchRightPanelContract,
+  type DomainRendererWorkbenchRightPanelValue
+} from '@sciforge/domain-sdk/renderer'
+import type { ReactElement } from 'react'
 import i18n from '../i18n'
 import { installedRendererDomainEntrySet } from './installed-domain-renderer'
 import {
-  RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
-  WorkbenchRightPanelContributionRegistry,
-  type WorkbenchRightPanelContribution
+  WorkbenchRightPanelContributionRegistry
 } from './workbench-right-panel-slot'
+import {
+  WorkbenchBottomPanelContributionRegistry
+} from './workbench-bottom-panel-slot'
+import {
+  WorkbenchGlobalOverlayContributionRegistry
+} from './workbench-global-overlay-slot'
+import {
+  ComposerContextProviderRegistry
+} from './composer-context-provider-registry'
+import {
+  WorkbenchCommandRegistry
+} from './workbench-command-registry'
+import {
+  RENDERER_WORKBENCH_TOOLBAR_ACTION_CONTRIBUTION_KIND,
+  WorkbenchToolbarActionContributionRegistry,
+  type WorkbenchToolbarActionContract,
+  type WorkbenchToolbarActionValue
+} from './workbench-toolbar-slot'
 import {
   createBuiltInWorkspacePreviewPluginRegistrations
 } from '../workspace-preview/built-in-plugin-contributions'
@@ -51,8 +93,13 @@ export type RendererTranslationHost = Readonly<{
 }>
 
 export type InstalledRendererContributions = Readonly<{
+  commands: WorkbenchCommandRegistry
   rightPanels: WorkbenchRightPanelContributionRegistry
   chatResultPanels: ChatResultPanelContributionRegistry
+  bottomPanels: WorkbenchBottomPanelContributionRegistry
+  globalOverlays: WorkbenchGlobalOverlayContributionRegistry
+  composerContexts: ComposerContextProviderRegistry
+  toolbarActions: WorkbenchToolbarActionContributionRegistry
   workspacePreviews: RendererWorkspacePreviewRegistry
   readonly disposed: boolean
   dispose(): void
@@ -70,28 +117,180 @@ export function createInstalledRendererContributions(
   const entrySet = options.entrySet ?? installedRendererDomainEntrySet
   const translations = options.translations ?? i18n
   const panels: Array<{
+    id: string
     ownerId: string
     order: number
-    contribution: WorkbenchRightPanelContribution
+    contract: DomainRendererWorkbenchRightPanelContract
+    value: DomainRendererWorkbenchRightPanelValue<ReactElement>
+    onDispose?: () => void
+  }> = []
+  const bottomPanels: Array<{
+    id: string
+    ownerId: string
+    order: number
+    contract: DomainRendererWorkbenchBottomPanelContract
+    value: DomainRendererWorkbenchBottomPanelValue<ReactElement>
+    onDispose?: () => void
+  }> = []
+  const globalOverlays: Array<{
+    id: string
+    ownerId: string
+    order: number
+    contract: DomainRendererWorkbenchGlobalOverlayContract
+    value: DomainRendererWorkbenchGlobalOverlayValue<ReactElement>
+    onDispose?: () => void
+  }> = []
+  const composerContexts: Array<{
+    id: string
+    ownerId: string
+    order: number
+    contract: DomainRendererComposerContextProviderContract
+    value: DomainRendererComposerContextProvider
+    onDispose?: () => void
+  }> = []
+  const commands: Array<{
+    id: string
+    ownerId: string
+    order: number
+    contribution: DomainRendererCommandHandler
+    onDispose?: () => void
+  }> = []
+  const resources: Array<{
+    contribution: RendererI18nResourceContribution
+    onDispose?: () => void
+  }> = []
+  const toolbarActions: Array<{
+    id: string
+    ownerId: string
+    order: number
+    contract: WorkbenchToolbarActionContract
+    value: WorkbenchToolbarActionValue
+    onDispose?: () => void
   }> = []
   const chatResultPanels: Array<{
     ownerId: string
     order: number
     contribution: ChatResultPanelContribution
+    onDispose?: () => void
   }> = []
-  const resources: RendererI18nResourceContribution[] = []
   const workspacePreviewPlugins: RendererWorkspacePreviewPluginRegistrationInput[] = []
-  const lifecycles: RendererLifecycleContribution[] = []
+  const lifecycles: Array<{
+    contribution: RendererLifecycleContribution
+    onDispose?: () => void
+  }> = []
 
   for (const installed of entrySet.contributions) {
+    if (installed.declaration.kind === RENDERER_COMMAND_CONTRIBUTION_KIND) {
+      if (!isDomainRendererCommandHandler(installed.value)) {
+        throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
+      }
+      commands.push({
+        id: installed.declaration.id,
+        ownerId: installed.owner.moduleId,
+        order: installed.declaration.priority,
+        contribution: installed.value,
+        ...(installed.onDispose ? { onDispose: installed.onDispose } : {})
+      })
+      continue
+    }
     if (installed.declaration.kind === RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND) {
-      if (!isWorkbenchRightPanelContribution(installed.value)) {
+      const contract = domainRendererWorkbenchRightPanelContractSchema.safeParse(
+        installed.contract
+      )
+      if (
+        !contract.success ||
+        !isDomainRendererWorkbenchSurfaceValue(installed.value)
+      ) {
         throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
       }
       panels.push({
+        id: installed.declaration.id,
         ownerId: installed.owner.moduleId,
         order: installed.declaration.priority,
-        contribution: installed.value
+        contract: contract.data,
+        value: installed.value as DomainRendererWorkbenchRightPanelValue<ReactElement>,
+        ...(installed.onDispose ? { onDispose: installed.onDispose } : {})
+      })
+      continue
+    }
+    if (installed.declaration.kind === RENDERER_WORKBENCH_BOTTOM_PANEL_CONTRIBUTION_KIND) {
+      const contract = domainRendererWorkbenchBottomPanelContractSchema.safeParse(
+        installed.contract
+      )
+      if (
+        !contract.success ||
+        !isDomainRendererWorkbenchSurfaceValue(installed.value)
+      ) {
+        throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
+      }
+      bottomPanels.push({
+        id: installed.declaration.id,
+        ownerId: installed.owner.moduleId,
+        order: installed.declaration.priority,
+        contract: contract.data,
+        value: installed.value as DomainRendererWorkbenchBottomPanelValue<ReactElement>,
+        ...(installed.onDispose ? { onDispose: installed.onDispose } : {})
+      })
+      continue
+    }
+    if (installed.declaration.kind === RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND) {
+      const contract = domainRendererWorkbenchGlobalOverlayContractSchema.safeParse(
+        installed.contract
+      )
+      if (
+        !contract.success ||
+        !isDomainRendererWorkbenchSurfaceValue(installed.value)
+      ) {
+        throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
+      }
+      globalOverlays.push({
+        id: installed.declaration.id,
+        ownerId: installed.owner.moduleId,
+        order: installed.declaration.priority,
+        contract: contract.data,
+        value: installed.value as DomainRendererWorkbenchGlobalOverlayValue<ReactElement>,
+        ...(installed.onDispose ? { onDispose: installed.onDispose } : {})
+      })
+      continue
+    }
+    if (installed.declaration.kind === RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND) {
+      const contract = domainRendererComposerContextProviderContractSchema.safeParse(
+        installed.contract
+      )
+      if (
+        !contract.success ||
+        !isDomainRendererComposerContextProvider(installed.value)
+      ) {
+        throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
+      }
+      composerContexts.push({
+        id: installed.declaration.id,
+        ownerId: installed.owner.moduleId,
+        order: installed.declaration.priority,
+        contract: contract.data,
+        value: installed.value,
+        ...(installed.onDispose ? { onDispose: installed.onDispose } : {})
+      })
+      continue
+    }
+    if (installed.declaration.kind === RENDERER_WORKBENCH_TOOLBAR_ACTION_CONTRIBUTION_KIND) {
+      const contract = domainRendererWorkbenchToolbarActionContractSchema.safeParse(
+        installed.contract
+      )
+      if (
+        !contract.success ||
+        !isDomainRendererWorkbenchToolbarActionValue(installed.value) ||
+        !isWorkbenchToolbarIcon(installed.value.icon)
+      ) {
+        throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
+      }
+      toolbarActions.push({
+        id: installed.declaration.id,
+        ownerId: installed.owner.moduleId,
+        order: installed.declaration.priority,
+        contract: contract.data,
+        value: installed.value as WorkbenchToolbarActionValue,
+        ...(installed.onDispose ? { onDispose: installed.onDispose } : {})
       })
       continue
     }
@@ -99,7 +298,10 @@ export function createInstalledRendererContributions(
       if (!isRendererI18nResourceContribution(installed.value)) {
         throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
       }
-      resources.push(installed.value)
+      resources.push({
+        contribution: installed.value,
+        ...(installed.onDispose ? { onDispose: installed.onDispose } : {})
+      })
       continue
     }
     if (installed.declaration.kind === RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND) {
@@ -109,7 +311,8 @@ export function createInstalledRendererContributions(
       chatResultPanels.push({
         ownerId: installed.owner.moduleId,
         order: installed.declaration.priority,
-        contribution: installed.value
+        contribution: installed.value,
+        ...(installed.onDispose ? { onDispose: installed.onDispose } : {})
       })
       continue
     }
@@ -127,7 +330,10 @@ export function createInstalledRendererContributions(
       if (!isRendererLifecycleContribution(installed.value)) {
         throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
       }
-      lifecycles.push(installed.value)
+      lifecycles.push({
+        contribution: installed.value,
+        ...(installed.onDispose ? { onDispose: installed.onDispose } : {})
+      })
       continue
     }
     throw new Error(
@@ -135,42 +341,117 @@ export function createInstalledRendererContributions(
     )
   }
 
+  const workbenchCommands = new WorkbenchCommandRegistry()
   const rightPanels = new WorkbenchRightPanelContributionRegistry()
   const chatResultPanelRegistry = new ChatResultPanelContributionRegistry()
+  const workbenchBottomPanels = new WorkbenchBottomPanelContributionRegistry()
+  const workbenchGlobalOverlays = new WorkbenchGlobalOverlayContributionRegistry()
+  const workbenchComposerContexts = new ComposerContextProviderRegistry()
+  const workbenchToolbarActions = new WorkbenchToolbarActionContributionRegistry(
+    workbenchCommands
+  )
   const workspacePreviews = createRendererWorkspacePreviewRegistry({
     registrations: [
       ...createBuiltInWorkspacePreviewPluginRegistrations(),
       ...workspacePreviewPlugins
     ]
   })
-  const translationDisposers: Array<() => void> = []
-  const lifecycleDisposers: Array<() => void> = []
+  const registrationDisposers: Array<() => void> = [
+    () => workbenchCommands.dispose(),
+    () => rightPanels.dispose(),
+    () => chatResultPanelRegistry.dispose(),
+    () => workbenchBottomPanels.dispose(),
+    () => workbenchGlobalOverlays.dispose(),
+    () => workbenchComposerContexts.dispose(),
+    () => workbenchToolbarActions.dispose(),
+    () => workspacePreviews.dispose()
+  ]
   try {
-    for (const resource of resources) {
-      translationDisposers.push(installTranslationResource(translations, resource))
+    for (const command of commands) {
+      pushOwnedRegistration(
+        registrationDisposers,
+        command.onDispose,
+        workbenchCommands.register(command).dispose
+      )
     }
-    for (const panel of panels) rightPanels.register(panel)
-    for (const panel of chatResultPanels) chatResultPanelRegistry.register(panel)
+    for (const panel of panels) {
+      pushOwnedRegistration(
+        registrationDisposers,
+        panel.onDispose,
+        rightPanels.register(panel).dispose
+      )
+    }
+    for (const panel of bottomPanels) {
+      pushOwnedRegistration(
+        registrationDisposers,
+        panel.onDispose,
+        workbenchBottomPanels.register(panel).dispose
+      )
+    }
+    for (const overlay of globalOverlays) {
+      pushOwnedRegistration(
+        registrationDisposers,
+        overlay.onDispose,
+        workbenchGlobalOverlays.register(overlay).dispose
+      )
+    }
+    for (const context of composerContexts) {
+      pushOwnedRegistration(
+        registrationDisposers,
+        context.onDispose,
+        workbenchComposerContexts.register(context).dispose
+      )
+    }
+    for (const action of toolbarActions) {
+      pushOwnedRegistration(
+        registrationDisposers,
+        action.onDispose,
+        workbenchToolbarActions.register(action).dispose
+      )
+    }
+    for (const resource of resources) {
+      pushOwnedRegistration(
+        registrationDisposers,
+        resource.onDispose,
+        installTranslationResource(translations, resource.contribution)
+      )
+    }
+    for (const panel of chatResultPanels) {
+      pushOwnedRegistration(
+        registrationDisposers,
+        panel.onDispose,
+        chatResultPanelRegistry.register(panel).dispose
+      )
+    }
     for (const lifecycle of lifecycles) {
-      const dispose = lifecycle.activate()
+      const dispose = lifecycle.contribution.activate()
       if (dispose !== undefined && typeof dispose !== 'function') {
         throw new Error('Renderer lifecycle activate() must return a disposer function or undefined.')
       }
-      lifecycleDisposers.push(dispose ?? (() => undefined))
+      if (lifecycle.onDispose) registrationDisposers.push(lifecycle.onDispose)
+      if (dispose) registrationDisposers.push(dispose)
     }
   } catch (error) {
-    for (const dispose of lifecycleDisposers.reverse()) dispose()
-    rightPanels.dispose()
-    chatResultPanelRegistry.dispose()
-    workspacePreviews.dispose()
-    for (const dispose of translationDisposers.reverse()) dispose()
+    try {
+      disposeRegistrationsInReverse(registrationDisposers)
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        'Renderer contribution activation and rollback both failed.'
+      )
+    }
     throw error
   }
 
   let disposed = false
   return Object.freeze({
+    commands: workbenchCommands,
     rightPanels,
     chatResultPanels: chatResultPanelRegistry,
+    bottomPanels: workbenchBottomPanels,
+    globalOverlays: workbenchGlobalOverlays,
+    composerContexts: workbenchComposerContexts,
+    toolbarActions: workbenchToolbarActions,
     workspacePreviews,
     get disposed() {
       return disposed
@@ -178,11 +459,7 @@ export function createInstalledRendererContributions(
     dispose() {
       if (disposed) return
       disposed = true
-      for (const dispose of lifecycleDisposers.reverse()) dispose()
-      rightPanels.dispose()
-      chatResultPanelRegistry.dispose()
-      workspacePreviews.dispose()
-      for (const dispose of translationDisposers.reverse()) dispose()
+      disposeRegistrationsInReverse(registrationDisposers)
     }
   })
 }
@@ -227,19 +504,29 @@ function installTranslationResource(
   }
 }
 
-function isWorkbenchRightPanelContribution(
-  value: unknown
-): value is WorkbenchRightPanelContribution {
-  if (!value || typeof value !== 'object') return false
-  const candidate = value as Partial<WorkbenchRightPanelContribution>
-  return typeof candidate.id === 'string' &&
-    typeof candidate.mode === 'string' &&
-    typeof candidate.label === 'string' &&
-    typeof candidate.icon === 'object' &&
-    typeof candidate.title === 'string' &&
-    typeof candidate.resourceKind === 'string' &&
-    typeof candidate.isAvailable === 'function' &&
-    typeof candidate.render === 'function'
+function pushOwnedRegistration(
+  disposers: Array<() => void>,
+  onDispose: (() => void) | undefined,
+  unregister: () => void
+): void {
+  if (onDispose) disposers.push(onDispose)
+  disposers.push(unregister)
+}
+
+function disposeRegistrationsInReverse(disposers: Array<() => void>): void {
+  let firstError: unknown
+  for (const dispose of disposers.splice(0).reverse()) {
+    try {
+      dispose()
+    } catch (error) {
+      firstError ??= error
+    }
+  }
+  if (firstError !== undefined) throw firstError
+}
+
+function isWorkbenchToolbarIcon(value: unknown): boolean {
+  return (typeof value === 'object' || typeof value === 'function') && value !== null
 }
 
 function isRendererI18nResourceContribution(

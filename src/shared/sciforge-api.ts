@@ -6,13 +6,7 @@ import type {
   ComputerUseSettingsV1,
   ScheduleRunResult,
   ScheduleRuntimeStatus,
-  ScheduleTaskFromTextResult,
-  WorkflowApprovalDecision,
-  WorkflowCodeCheckResult,
-  WorkflowCodeLanguage,
-  WorkflowNodeTestResult,
-  WorkflowRunResult,
-  WorkflowRuntimeStatus
+  ScheduleTaskFromTextResult
 } from './app-settings'
 import type {
   TraceClearResult,
@@ -22,16 +16,6 @@ import type {
   TraceSummary,
   TraceSummaryQuery
 } from '@sciforge/full-trace'
-import type {
-  AnchoredCommentCaptureRequest,
-  AnchoredCommentCaptureResult,
-  AnchoredCommentThread,
-  CommentScreenshotAssetRef,
-  FeedbackSubmissionRequest,
-  FeedbackSubmissionResult,
-  FeedbackSubmissionStatusRequest,
-  FeedbackSubmissionStatusResult
-} from './anchored-comments'
 import type { EditorListResult, EditorOpenResult, OpenEditorPathOptions } from './editor'
 import type { GitBranchesResult } from './git-branches'
 import type {
@@ -68,13 +52,18 @@ import type {
   WorkspaceFileChangePayload,
   WorkspaceFileCreatePayload,
   WorkspaceFileCreateResult,
+  WorkspaceFileRangeReadPayload,
+  WorkspaceFileRangeReadResult,
   WorkspaceFileResolveResult,
   WorkspaceFileTarget,
   WorkspaceFileWatchPayload,
   WorkspaceFileWatchResult,
   WorkspaceFileWritePayload,
-  WorkspaceFileWriteResult
+  WorkspaceFileWriteResult,
+  WorkspaceTextSearchPayload,
+  WorkspaceTextSearchResult
 } from './workspace-file'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 import type {
   WorkspaceObservation,
   WorkspacePreviewArtifactDescriptor,
@@ -120,9 +109,7 @@ import type {
 } from './write-retrieval'
 import type {
   WriteExportPayload,
-  WriteExportResult,
-  WriteRichClipboardPayload,
-  WriteRichClipboardResult
+  WriteExportResult
 } from './write-export'
 import type {
   AgentRuntimeAuxiliaryInput,
@@ -147,19 +134,14 @@ import type {
   SpeechTranscriptionResult
 } from './speech-to-text'
 import type {
-  TerminalCreatePayload,
-  TerminalCreateResult,
-  TerminalDataPayload,
-  TerminalExitPayload,
-  TerminalResizePayload,
-  TerminalWritePayload
-} from './terminal'
-import type {
   VisibleContextCapturePreviewRequest,
   VisibleContextCapturePreviewResult,
   VisibleContextPublishInput,
-  VisibleContextSnapshot
+  VisibleContextSnapshot,
+  VisibleContextTargetRefRequest,
+  VisibleContextTargetRefResult
 } from './visible-context'
+import type { RemoteWorkspaceApi } from './remote-workspace'
 import type {
   VisualStyleExtractRequest,
   VisualStyleExtractResult,
@@ -172,52 +154,13 @@ import type {
   ScientificPlottingStatusResult
 } from './scientific-plotting'
 import type {
-  VisualDocument,
-  VisualDocumentCreateCandidateRequest,
-  VisualDocumentCreateCandidateResult,
-  VisualDocumentExportReviewPacketRequest,
-  VisualDocumentExportReviewPacketResult,
-  VisualDocumentInsertArtifactRequest,
-  VisualDocumentInsertArtifactResult,
-  VisualDocumentOpenRequest,
-  VisualDocumentOpenResult,
-  VisualDocumentRevisionDecisionRequest,
-  VisualDocumentRevisionDecisionResult,
-  VisualDocumentSaveAnnotationsRequest,
-  VisualDocumentSaveAnnotationsResult,
-  VisualDocumentStatusResult,
-  VisualDocumentUpdateContextRequest,
-  VisualDocumentUpdateContextResult,
-  VisualReviewAnnotation,
-  VisualReviewPacket
-} from '../../packages/workers/visual-document/src/types'
-export type {
-  VisualDocument,
-  VisualDocumentCreateCandidateRequest,
-  VisualDocumentCreateCandidateResult,
-  VisualDocumentExportReviewPacketRequest,
-  VisualDocumentExportReviewPacketResult,
-  VisualDocumentInsertArtifactRequest,
-  VisualDocumentInsertArtifactResult,
-  VisualDocumentOpenRequest,
-  VisualDocumentOpenResult,
-  VisualDocumentRevisionDecisionRequest,
-  VisualDocumentRevisionDecisionResult,
-  VisualDocumentSaveAnnotationsRequest,
-  VisualDocumentSaveAnnotationsResult,
-  VisualDocumentStatusResult,
-  VisualDocumentUpdateContextRequest,
-  VisualDocumentUpdateContextResult,
-  VisualReviewAnnotation,
-  VisualReviewPacket
-}
-import type {
   ResearchCard,
   ResearchCardArchiveInput,
   ResearchCardCreateInput,
   ResearchCardListInput,
   ResearchCardUpdateInput
 } from './research-cards'
+import type { DomainExtensionsApi } from './domain-extensions'
 
 export type WorkspacePickResult = { canceled: boolean; path: string | null }
 export type WorkspaceFilePickerFilter = {
@@ -233,32 +176,38 @@ export type PathOpenResult = { ok: boolean; message?: string }
 export type AgentRuntimeEventSubscribeInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
   sinceSeq?: number
   streamId?: string
 }
 export type AgentRuntimeThreadRenameInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
   title: string
 }
 export type AgentRuntimeThreadDeleteInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
 }
 export type AgentRuntimeThreadCompactInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
   reason?: string
 }
 export type AgentRuntimeThreadForkInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
   relation?: AgentRuntimeThreadRelation
   title?: string
 }
 export type AgentRuntimeSessionResumeInput = {
   runtimeId: AgentRuntimeId
   sessionId: string
+  workspaceLocator?: WorkspaceLocator
   model?: string
   mode?: string
   maxResumeCount?: number
@@ -270,11 +219,13 @@ export type AgentRuntimeSessionResumeHandle = {
 export type AgentRuntimeThreadRelationInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
   relation: AgentRuntimeThreadRelation
 }
 export type AgentRuntimeApprovalResolveInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
   approvalId: string
   decision: 'allowed' | 'denied'
   message?: string
@@ -282,6 +233,7 @@ export type AgentRuntimeApprovalResolveInput = {
 export type AgentRuntimeUserInputResolveInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
   requestId: string
   answers: Array<{ id: string; label?: string; value: string }>
 }
@@ -695,6 +647,7 @@ export type PerformanceSnapshotResult =
 export type WorkspacePreviewOpenInput = {
   path: string
   workspaceRoot: string
+  workspaceLocator?: WorkspaceLocator
   mimeType?: string
   mode?: WorkspacePreviewSession['mode']
   line?: number
@@ -845,16 +798,10 @@ export type SciForgeApi = {
     export: (traceIds?: readonly string[]) => Promise<FullTraceExportDialogResult>
     clear: () => Promise<TraceClearResult>
   }
+  extensions: DomainExtensionsApi
   getConnectPhoneStatus: () => Promise<ConnectPhoneRuntimeStatus>
   getScheduleStatus: () => Promise<ScheduleRuntimeStatus>
   runScheduleTask: (taskId: string) => Promise<ScheduleRunResult>
-  getWorkflowStatus: () => Promise<WorkflowRuntimeStatus>
-  runWorkflow: (workflowId: string, input?: unknown) => Promise<WorkflowRunResult>
-  stopWorkflow: (workflowId: string) => Promise<WorkflowRunResult>
-  runWorkflowNode: (workflowId: string, nodeId: string) => Promise<WorkflowRunResult>
-  testWorkflowNode: (workflowId: string, nodeId: string, mockJson: string) => Promise<WorkflowNodeTestResult>
-  resolveWorkflowApproval: (token: string, decision: WorkflowApprovalDecision) => Promise<{ ok: boolean }>
-  checkWorkflowCode: (language: WorkflowCodeLanguage, code: string) => Promise<WorkflowCodeCheckResult>
   startConnectPhoneInstallQr: (
     provider: 'feishu' | 'weixin',
     options?: { isLark?: boolean }
@@ -930,37 +877,25 @@ export type SciForgeApi = {
   prepareScientificPlottingReference: (
     request: ScientificPlottingPrepareReferenceRequest
   ) => Promise<ScientificPlottingPrepareReferenceResult>
-  getVisualDocumentStatus: (workspaceRoot?: string) => Promise<VisualDocumentStatusResult>
-  openVisualDocument: (request: VisualDocumentOpenRequest) => Promise<VisualDocumentOpenResult>
-  insertVisualDocumentArtifact: (
-    request: VisualDocumentInsertArtifactRequest
-  ) => Promise<VisualDocumentInsertArtifactResult>
-  updateVisualDocumentContext: (
-    request: VisualDocumentUpdateContextRequest
-  ) => Promise<VisualDocumentUpdateContextResult>
-  saveVisualDocumentAnnotations: (
-    request: VisualDocumentSaveAnnotationsRequest
-  ) => Promise<VisualDocumentSaveAnnotationsResult>
-  exportVisualReviewPacket: (
-    request: VisualDocumentExportReviewPacketRequest
-  ) => Promise<VisualDocumentExportReviewPacketResult>
-  createVisualCandidateRevision: (
-    request: VisualDocumentCreateCandidateRequest
-  ) => Promise<VisualDocumentCreateCandidateResult>
-  acceptVisualCandidateRevision: (
-    request: VisualDocumentRevisionDecisionRequest
-  ) => Promise<VisualDocumentRevisionDecisionResult>
-  rejectVisualCandidateRevision: (
-    request: VisualDocumentRevisionDecisionRequest
-  ) => Promise<VisualDocumentRevisionDecisionResult>
   extractVisualStyleProfile: (request: VisualStyleExtractRequest) => Promise<VisualStyleExtractResult>
   saveVisualStyleProfile: (request: VisualStyleSaveProfileRequest) => Promise<VisualStyleSaveProfileResult>
   listSkills: (workspaceRoot?: string) => Promise<SkillListResult>
   saveSkillFile: (rootPath: string, skillName: string, content: string) => Promise<SkillSaveResult>
   openSkillRoot: (rootPath: string) => Promise<PathOpenResult>
-  getGitBranches: (workspaceRoot: string) => Promise<GitBranchesResult>
-  switchGitBranch: (workspaceRoot: string, branch: string) => Promise<GitBranchesResult>
-  createAndSwitchGitBranch: (workspaceRoot: string, branch: string) => Promise<GitBranchesResult>
+  getGitBranches: (
+    workspaceRoot: string,
+    workspaceLocator?: WorkspaceLocator
+  ) => Promise<GitBranchesResult>
+  switchGitBranch: (
+    workspaceRoot: string,
+    branch: string,
+    workspaceLocator?: WorkspaceLocator
+  ) => Promise<GitBranchesResult>
+  createAndSwitchGitBranch: (
+    workspaceRoot: string,
+    branch: string,
+    workspaceLocator?: WorkspaceLocator
+  ) => Promise<GitBranchesResult>
   listEditors: () => Promise<EditorListResult>
   openEditorPath: (options: OpenEditorPathOptions) => Promise<EditorOpenResult>
   listWorkspaceDirectory: (options: WorkspaceDirectoryTarget) => Promise<WorkspaceDirectoryListResult>
@@ -968,6 +903,12 @@ export type SciForgeApi = {
   readWorkspaceFile: (options: WorkspaceFileTarget) => Promise<WorkspaceFileReadResult>
   readWorkspaceImage: (options: WorkspaceFileTarget) => Promise<WorkspaceImageReadResult>
   writeWorkspaceFile: (payload: WorkspaceFileWritePayload) => Promise<WorkspaceFileWriteResult>
+  readWorkspaceFileRange: (
+    payload: WorkspaceFileRangeReadPayload
+  ) => Promise<WorkspaceFileRangeReadResult>
+  searchWorkspaceText: (
+    payload: WorkspaceTextSearchPayload
+  ) => Promise<WorkspaceTextSearchResult>
   createWorkspaceFile: (payload: WorkspaceFileCreatePayload) => Promise<WorkspaceFileCreateResult>
   createWorkspaceDirectory: (
     payload: WorkspaceDirectoryCreatePayload
@@ -1016,6 +957,7 @@ export type SciForgeApi = {
     }) => Promise<CapabilityResourceHandle>
     invoke: (input: {
       workspaceId?: string
+      workspaceLocator?: WorkspaceLocator
       request: CapabilityInvocationRequest
       approval?: { mode: 'confirmation' }
     }) => Promise<CapabilityInvocationResult>
@@ -1044,9 +986,6 @@ export type SciForgeApi = {
   listWriteInlineCompletionDebugEntries: () => Promise<WriteInlineCompletionDebugEntry[]>
   clearWriteInlineCompletionDebugEntries: () => Promise<boolean>
   exportWriteDocument: (payload: WriteExportPayload) => Promise<WriteExportResult>
-  copyWriteDocumentAsRichText: (
-    payload: WriteRichClipboardPayload
-  ) => Promise<WriteRichClipboardResult>
   speechToText: {
     transcribe: (payload: SpeechTranscriptionRequest) => Promise<SpeechTranscriptionResult>
   }
@@ -1059,34 +998,16 @@ export type SciForgeApi = {
   visibleContext: {
     publish: (snapshot: VisibleContextPublishInput) => Promise<VisibleContextSnapshot>
     get: () => Promise<VisibleContextSnapshot>
+    registeredTargetRef: (
+      request: VisibleContextTargetRefRequest
+    ) => Promise<VisibleContextTargetRefResult>
     readCapturePreview: (
       request: VisibleContextCapturePreviewRequest
     ) => Promise<VisibleContextCapturePreviewResult>
     onRefreshRequested: (handler: () => void) => () => void
     onCaptureStateChanged: (handler: (active: boolean) => void) => () => void
   }
-  anchoredComments: {
-    list: (filter?: {
-      workspaceKey?: string
-      targetKey?: string
-      purpose?: AnchoredCommentThread['purpose']
-      status?: AnchoredCommentThread['status']
-      includeResolved?: boolean
-    }) => Promise<AnchoredCommentThread[]>
-    get: (threadId: string) => Promise<AnchoredCommentThread | null>
-    upsert: (thread: AnchoredCommentThread) => Promise<AnchoredCommentThread>
-    delete: (threadId: string) => Promise<boolean>
-    readAsset: (asset: CommentScreenshotAssetRef) => Promise<{
-      digest: string
-      mimeType: 'image/png'
-      dataUrl: string
-    }>
-    capture: (request: AnchoredCommentCaptureRequest) => Promise<AnchoredCommentCaptureResult>
-    submitFeedback: (request: FeedbackSubmissionRequest) => Promise<FeedbackSubmissionResult>
-    feedbackStatus: (
-      request: FeedbackSubmissionStatusRequest
-    ) => Promise<FeedbackSubmissionStatusResult>
-  }
+  remoteWorkspace: RemoteWorkspaceApi
   agentRuntime: {
     connect: (runtimeId?: AgentRuntimeThreadListInput['runtimeId']) => Promise<void>
     capabilities: (runtimeId?: AgentRuntimeThreadListInput['runtimeId']) => Promise<AgentRuntimeCapabilities>
@@ -1148,11 +1069,5 @@ export type SciForgeApi = {
   logError: (category: string, message: string, detail?: unknown) => Promise<void>
   getLogPath: () => Promise<string>
   openLogDir: () => Promise<{ ok: boolean; message?: string }>
-  createTerminal: (payload: TerminalCreatePayload) => Promise<TerminalCreateResult>
-  writeToTerminal: (payload: TerminalWritePayload) => Promise<boolean>
-  resizeTerminal: (payload: TerminalResizePayload) => Promise<boolean>
-  disposeTerminal: (sessionId: string) => Promise<boolean>
-  onTerminalData: (handler: (payload: TerminalDataPayload) => void) => () => void
-  onTerminalExit: (handler: (payload: TerminalExitPayload) => void) => () => void
   getPathForFile: (file: File) => string
 }

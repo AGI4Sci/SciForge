@@ -68,6 +68,36 @@ describe('SystemOpenSshProcessRunner', () => {
     await expect(resultPromise).resolves.toMatchObject({ timedOut: true, signal: 'SIGKILL' })
     expect(signals).toEqual(['SIGTERM', 'SIGKILL'])
   })
+
+  it('opens a controlled streaming process and disposes it deterministically', async () => {
+    vi.useFakeTimers()
+    vi.stubEnv('OPENAI_API_KEY', 'must-not-reach-stream')
+    const child = fakeChild()
+    let options: Parameters<SpawnProcess>[2] | undefined
+    const signals: Array<NodeJS.Signals | number | undefined> = []
+    child.value.kill = ((signal?: NodeJS.Signals | number) => {
+      signals.push(signal)
+      ;(child.value as unknown as { killed: boolean }).killed = true
+      if (signal === 'SIGKILL') queueMicrotask(() => child.emit('close', null, 'SIGKILL'))
+      return true
+    })
+    const runner = new SystemOpenSshProcessRunner(((_file, _args, spawnOptions) => {
+      options = spawnOptions
+      return child.value
+    }) as SpawnProcess)
+
+    const process = runner.open({ executable: 'ssh', args: ['--', 'private-target'] })
+    await process.write('request\n')
+    expect(child.stdin.read()?.toString()).toBe('request\n')
+    expect(options?.env).not.toHaveProperty('OPENAI_API_KEY')
+
+    const disposed = process.dispose()
+    await vi.advanceTimersByTimeAsync(1_001)
+    await disposed
+    await expect(process.exit).resolves.toEqual({ exitCode: null, signal: 'SIGKILL' })
+    expect(signals).toEqual(['SIGTERM', 'SIGKILL'])
+    await expect(process.write('late')).rejects.toThrow(/not writable/i)
+  })
 })
 
 function fakeChild() {

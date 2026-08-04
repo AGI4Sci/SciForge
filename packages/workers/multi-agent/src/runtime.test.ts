@@ -114,6 +114,42 @@ test('runtime merges streamed transcript updates by entry id', async () => {
   })
 })
 
+test('runtime persists a provider thread reference while the child is still running', async () => {
+  let release!: () => void
+  let attached!: () => void
+  const waiting = new Promise<void>((resolve) => { release = resolve })
+  const threadAttached = new Promise<void>((resolve) => { attached = resolve })
+  const runtime = new MultiAgentRuntime({
+    store: new InMemoryMultiAgentStore(),
+    idGenerator: () => 'child-with-thread',
+    executor: async (input) => {
+      await input.setThreadRef({
+        runtime: 'claude',
+        threadId: 'claude-child-thread',
+        turnId: 'claude-child-turn'
+      })
+      attached()
+      await waiting
+      return { summary: 'Done' }
+    }
+  })
+
+  const started = await runtime.startChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-1',
+    prompt: 'Inspect the project.'
+  })
+  assert.equal(started.status, 'running')
+  await threadAttached
+  assert.deepEqual((await runtime.child('thread-1', started.id))?.threadRef, {
+    runtime: 'claude',
+    threadId: 'claude-child-thread',
+    turnId: 'claude-child-turn'
+  })
+  release()
+  assert.equal((await runtime.waitForChild('thread-1', started.id, { timeoutMs: 1_000 }))?.record.status, 'completed')
+})
+
 test('runtime preserves an explicit empty child tool allow-list', async () => {
   const runtime = new MultiAgentRuntime({
     store: new InMemoryMultiAgentStore(),
@@ -211,6 +247,39 @@ test('runtime enforces maxParallel while a child run is active', async () => {
   await first
 })
 
+test('runtime reserves concurrent starts atomically before enforcing child budgets', async () => {
+  const release = deferred<MultiAgentExecutorResult>()
+  const store = new InMemoryMultiAgentStore()
+  const runtime = new MultiAgentRuntime({
+    config: { maxParallel: 2, maxChildren: 1 },
+    store,
+    idGenerator: sequenceIds('child'),
+    executor: async () => release.promise
+  })
+
+  const first = runtime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-1',
+    prompt: 'First'
+  })
+  const second = runtime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-1',
+    prompt: 'Second'
+  })
+
+  await assert.rejects(
+    second,
+    (error) => error instanceof MultiAgentRuntimeError && error.code === 'child_budget_exhausted'
+  )
+  const diagnostics = await runtime.diagnostics('thread-1')
+  assert.equal(diagnostics.active, 1)
+  assert.equal(diagnostics.childRuns.length, 1)
+
+  release.resolve({ summary: 'First done' })
+  await first
+})
+
 test('runtime enforces maxChildren per parent turn without exhausting later turns', async () => {
   const store = new InMemoryMultiAgentStore()
   const runtime = new MultiAgentRuntime({
@@ -282,6 +351,37 @@ test('runtime reuses a persisted request before budget checks or executor startu
   assert.equal((await store.list()).length, 1)
 })
 
+test('runtime shares one in-flight execution for concurrent calls with the same request identity', async () => {
+  const release = deferred<MultiAgentExecutorResult>()
+  let executorCalls = 0
+  const store = new InMemoryMultiAgentStore()
+  const runtime = new MultiAgentRuntime({
+    config: { maxParallel: 2, maxChildren: 2 },
+    store,
+    idGenerator: sequenceIds('child'),
+    executor: async () => {
+      executorCalls += 1
+      return release.promise
+    }
+  })
+  const input = {
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-1',
+    requestId: 'request-1',
+    prompt: 'Run once'
+  }
+
+  const first = runtime.runChild(input)
+  const replay = runtime.runChild(input)
+  await Promise.resolve()
+  release.resolve({ summary: 'Done once' })
+
+  const [firstRecord, replayRecord] = await Promise.all([first, replay])
+  assert.equal(firstRecord.id, replayRecord.id)
+  assert.equal(executorCalls, 1)
+  assert.equal((await store.list()).length, 1)
+})
+
 test('runtime diagnostics hide stale persisted active records after restart', async () => {
   const store = new InMemoryMultiAgentStore()
   await store.upsert(MultiAgentChildRunRecord.parse({
@@ -318,7 +418,7 @@ test('runtime diagnostics hide stale persisted active records after restart', as
   assert.equal((await store.get('thread-1', 'child-stale'))?.status, 'running')
 })
 
-test('runtime records executor failure, abort, and timeout as canonical error codes', async () => {
+test('runtime records executor failure and parent abort as canonical error codes', async () => {
   const failedRuntime = new MultiAgentRuntime({
     store: new InMemoryMultiAgentStore(),
     idGenerator: () => 'child-failed',
@@ -341,8 +441,8 @@ test('runtime records executor failure, abort, and timeout as canonical error co
     idGenerator: () => 'child-detailed-failed',
     executor: async () => {
       throw Object.assign(new Error('tool loop failed'), {
-        multiAgentUsage: { promptTokens: 7, completionTokens: 2, totalTokens: 9 },
-        multiAgentTranscript: [
+        subagentUsage: { promptTokens: 7, completionTokens: 2, totalTokens: 9 },
+        subagentTranscript: [
           {
             id: 'tool-call-1',
             kind: 'tool',
@@ -385,35 +485,106 @@ test('runtime records executor failure, abort, and timeout as canonical error co
   const aborted = await abortedPromise
   assert.equal(aborted.status, 'aborted')
   assert.equal(aborted.error?.code, 'child_aborted')
+})
 
-  const timedOutRuntime = new MultiAgentRuntime({
-    config: { childTimeoutMs: 5 },
+test('startChild returns a stable handle and observation timeout never fails a running child', async () => {
+  const result = deferred<MultiAgentExecutorResult>()
+  const runtime = new MultiAgentRuntime({
     store: new InMemoryMultiAgentStore(),
-    idGenerator: () => 'child-timeout',
-    executor: async () => new Promise(() => undefined)
+    idGenerator: () => 'child-long-running',
+    executor: async () => result.promise
   })
-  const timedOut = await timedOutRuntime.runChild({
-    parentThreadId: 'thread-1',
-    parentTurnId: 'turn-3',
-    prompt: 'Timeout'
-  })
-  assert.equal(timedOut.status, 'failed')
-  assert.equal(timedOut.error?.code, 'timeout')
 
-  const perChildTimedOutRuntime = new MultiAgentRuntime({
-    config: { childTimeoutMs: 60_000 },
-    store: new InMemoryMultiAgentStore(),
-    idGenerator: () => 'child-timeout-override',
-    executor: async () => new Promise(() => undefined)
-  })
-  const perChildTimedOut = await perChildTimedOutRuntime.runChild({
+  const started = await runtime.startChild({
     parentThreadId: 'thread-1',
-    parentTurnId: 'turn-4',
-    prompt: 'Timeout override',
-    childTimeoutMs: 5
+    parentTurnId: 'turn-long',
+    prompt: 'Read all papers'
   })
-  assert.equal(perChildTimedOut.status, 'failed')
-  assert.equal(perChildTimedOut.error?.code, 'timeout')
+  assert.equal(started.id, 'child-long-running')
+  assert.equal(started.status, 'running')
+
+  const observed = await runtime.waitForChild('thread-1', started.id, { timeoutMs: 5 })
+  assert.equal(observed?.timedOut, true)
+  assert.equal(observed?.record.status, 'running')
+  assert.equal(observed?.record.error, undefined)
+
+  result.resolve({ summary: 'All papers complete.' })
+  const completed = await runtime.waitForChild('thread-1', started.id, { timeoutMs: 50 })
+  assert.equal(completed?.timedOut, false)
+  assert.equal(completed?.record.status, 'completed')
+})
+
+test('runtime inspects, messages, and explicitly cancels a running child through one lifecycle control', async () => {
+  const messages: string[] = []
+  const terminationReasons: string[] = []
+  const runtime = new MultiAgentRuntime({
+    store: new InMemoryMultiAgentStore(),
+    idGenerator: () => 'child-interactive',
+    executor: async (input) => {
+      input.registerLifecycleControl({
+        sendMessage: async (request) => {
+          messages.push(request.message)
+          return { established: true }
+        },
+        inspect: async () => ({ state: 'active', observedAt: '2026-06-27T00:00:05.000Z' }),
+        terminate: async (request) => {
+          terminationReasons.push(request.reason)
+        }
+      })
+      return waitForAbort(input.signal)
+    }
+  })
+
+  const started = await runtime.startChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-interactive',
+    prompt: 'Long research task'
+  })
+  assert.equal(await runtime.sendMessage('thread-1', started.id, 'Please report progress.'), true)
+  assert.deepEqual(messages, ['Please report progress.'])
+  assert.deepEqual((await runtime.inspectChild('thread-1', started.id))?.liveness, {
+    state: 'active',
+    observedAt: '2026-06-27T00:00:05.000Z'
+  })
+
+  const cancelled = await runtime.cancelChild('thread-1', started.id)
+  assert.equal(cancelled?.status, 'aborted')
+  assert.deepEqual(terminationReasons, ['parent_cancel'])
+})
+
+test('parent abort uses lifecycle termination control', async () => {
+  const parent = new AbortController()
+  const entered = deferred<void>()
+  const terminationReasons: string[] = []
+  const runtime = new MultiAgentRuntime({
+    store: new InMemoryMultiAgentStore(),
+    idGenerator: () => 'child-parent-abort',
+    executor: async (input) => {
+      input.registerLifecycleControl({
+        sendMessage: async () => ({ established: true }),
+        inspect: async () => ({ state: 'active', observedAt: new Date().toISOString() }),
+        terminate: async (request) => {
+          terminationReasons.push(request.reason)
+        }
+      })
+      entered.resolve()
+      return waitForAbort(input.signal)
+    }
+  })
+
+  const running = runtime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-parent-abort',
+    prompt: 'Wait for parent abort',
+    signal: parent.signal
+  })
+  await entered.promise
+  parent.abort()
+  const record = await running
+
+  assert.equal(record.status, 'aborted')
+  assert.equal(record.error?.code, 'child_aborted')
+  assert.deepEqual(terminationReasons, ['parent_abort'])
 })
 
 function clock(): () => string {

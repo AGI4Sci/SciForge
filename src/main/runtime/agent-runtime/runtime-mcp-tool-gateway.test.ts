@@ -814,7 +814,9 @@ describe('runtime MCP tool gateway', () => {
         error: {
           code: 'unknown_resource_ref',
           failureClass: 'stale_resource',
-          retryable: true
+          retryable: true,
+          recoveryGuidance: 'Observe the resource again.',
+          providerStage: 'evidence_validation'
         },
         resourceRef: 'res_surface_12345678901234567890'
       }
@@ -823,6 +825,8 @@ describe('runtime MCP tool gateway', () => {
       errorCode: 'unknown_resource_ref',
       failureClass: 'stale_resource',
       retryable: true,
+      recoveryGuidance: 'Observe the resource again.',
+      providerStage: 'evidence_validation',
       resourceIdentity: 'res_surface_12345678901234567890'
     })
   })

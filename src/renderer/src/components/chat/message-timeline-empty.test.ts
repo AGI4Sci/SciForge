@@ -65,6 +65,13 @@ describe('MessageTimelineEmptyHero — runtime offline hero (issue #78)', () => 
     expect(html).toContain('Retry')
     expect(html).toContain('Open Settings')
   })
+
+  it('does not render the legacy DeepSeek GUI wake animation', () => {
+    const html = renderOfflineHero(i18n.t('common:runtimePortConflict'))
+    expect(html).not.toContain('ds-runtime-wake-stage')
+    expect(html).not.toContain('ds-runtime-wake-shell')
+    expect(html).not.toContain('ds-runtime-wake-logo')
+  })
 })
 
 describe('MessageTimelineEmptyHero — runtime offline hero (issue #78, zh-CN)', () => {

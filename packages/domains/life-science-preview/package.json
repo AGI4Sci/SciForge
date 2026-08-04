@@ -10,6 +10,7 @@
     "./definition": "./src/definition.ts",
     "./main": "./src/main/index.ts",
     "./renderer": "./src/renderer/index.tsx",
+    "./workspace-server": "./src/workspace-server/index.ts",
     "./workspace-preview-wire": "./src/wire.ts"
   },
   "files": [

@@ -19,7 +19,8 @@ describe('timeline remote tool metadata', () => {
       toolKind: 'command_execution',
       summary: 'bash: sbatch run.sh',
       meta: {
-        targetId: 'gpu-lab',
+        workspaceHostLabel: 'GPU workspace',
+        targetId: 'opaque-gpu-host',
         mode: 'slurm',
         trusted: true,
         jobId: '1234',
@@ -29,7 +30,8 @@ describe('timeline remote tool metadata', () => {
 
     const summary = summarizeToolBlock(block, (key, opts) => i18n.t(`common:${key}`, opts))
 
-    expect(summary).toContain('target gpu-lab')
+    expect(summary).toContain('target GPU workspace')
+    expect(summary).not.toContain('opaque-gpu-host')
     expect(summary).toContain('slurm')
     expect(summary).toContain('Trusted')
     expect(summary).toContain('queued')
@@ -44,7 +46,8 @@ describe('timeline remote tool metadata', () => {
       summary: 'Submitted remote job',
       meta: {
         remote: {
-          targetId: 'gpu-lab',
+          displayLabel: 'GPU workspace',
+          targetId: 'opaque-gpu-host',
           mode: 'slurm',
           trusted: false,
           runId: 'run-7',
@@ -56,7 +59,8 @@ describe('timeline remote tool metadata', () => {
 
     const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
 
-    expect(html).toContain('Target gpu-lab')
+    expect(html).toContain('Target GPU workspace')
+    expect(html).not.toContain('opaque-gpu-host')
     expect(html).toContain('Untrusted')
     expect(html).toContain('Run run-7')
     expect(html).toContain('Job 1234')

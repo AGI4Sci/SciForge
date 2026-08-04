@@ -111,8 +111,7 @@ export function defaultRuntimeGuardSettings(): RuntimeGuardSettingsV1 {
     execution: {
       enabled: true,
       windowSize: 8,
-      exactRepeatThreshold: 3,
-      semanticFailureThreshold: 2
+      exactRepeatThreshold: 3
     }
   }
 }
@@ -130,20 +129,11 @@ export function normalizeRuntimeGuardSettings(
       128
     )
   )
-  const semanticFailureThreshold = Math.max(
-    2,
-    boundedPositiveInt(
-      executionInput?.semanticFailureThreshold,
-      defaults.execution.semanticFailureThreshold,
-      128
-    )
-  )
   return {
     execution: {
       enabled: executionInput?.enabled !== false,
       windowSize: boundedPositiveInt(executionInput?.windowSize, defaults.execution.windowSize, 256),
-      exactRepeatThreshold,
-      semanticFailureThreshold
+      exactRepeatThreshold
     }
   }
 }

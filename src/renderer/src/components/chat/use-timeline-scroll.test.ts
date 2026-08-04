@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deriveTimelineVisibleTurnCount } from './use-timeline-scroll'
+import { deriveTimelineVisibleTurnCount, scrollTimelineToBottom } from './use-timeline-scroll'
 
 describe('deriveTimelineVisibleTurnCount', () => {
   it('keeps long conversations on the latest page instead of expanding all turns', () => {
@@ -48,5 +48,21 @@ describe('deriveTimelineVisibleTurnCount', () => {
         historyExpansionRequested: true
       })
     ).toBe(24)
+  })
+})
+
+describe('scrollTimelineToBottom', () => {
+  it('scrolls only the owned timeline container', () => {
+    const calls: ScrollToOptions[] = []
+    const container = {
+      scrollHeight: 2_400,
+      scrollTo: (options?: ScrollToOptions) => {
+        if (options) calls.push(options)
+      }
+    }
+
+    scrollTimelineToBottom(container, 'smooth')
+
+    expect(calls).toEqual([{ top: 2_400, behavior: 'smooth' }])
   })
 })

@@ -3,6 +3,7 @@ import {
   relativeWorkspacePath,
   type ComposerFileReference
 } from './composer-file-references'
+import { withActiveWorkspaceLocator } from '../remote-workspace/placement'
 
 export type WorkspaceFileIndexRecord = {
   files: ComposerFileReference[]
@@ -135,10 +136,10 @@ export async function loadWorkspaceFileIndex(workspaceRoot: string): Promise<Wor
       const current = queue.shift()
       if (!current) break
       visitedDirectories += 1
-      const result = await window.sciforge.listWorkspaceDirectory({
+      const result = await window.sciforge.listWorkspaceDirectory(withActiveWorkspaceLocator({
         workspaceRoot: root,
         path: current.path
-      })
+      }))
       if (!result.ok) continue
 
       for (const entry of result.entries) {

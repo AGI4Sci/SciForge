@@ -168,6 +168,12 @@ function failedToolResult(error: unknown): CallToolResult {
     message,
     ...(typeof record.failureClass === 'string' ? { failureClass: record.failureClass } : {}),
     ...(typeof record.retryable === 'boolean' ? { retryable: record.retryable } : {}),
+    ...(typeof record.recoveryGuidance === 'string'
+      ? { recoveryGuidance: record.recoveryGuidance }
+      : typeof recordValue(record.recovery).instruction === 'string'
+        ? { recoveryGuidance: recordValue(record.recovery).instruction }
+        : {}),
+    ...(typeof record.providerStage === 'string' ? { providerStage: record.providerStage } : {}),
     ...(typeof record.resourceIdentity === 'string' ? { resourceIdentity: record.resourceIdentity } : {}),
     ...(typeof record.evidenceDelta === 'boolean' ? { evidenceDelta: record.evidenceDelta } : {}),
     ...(typeof record.stateChanged === 'boolean' ? { stateChanged: record.stateChanged } : {})

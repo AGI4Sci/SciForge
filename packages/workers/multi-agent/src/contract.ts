@@ -1,7 +1,6 @@
 import { z } from 'zod'
 
-export const MULTI_AGENT_CONTRACT_VERSION = 1
-export const DEFAULT_MULTI_AGENT_CHILD_TIMEOUT_MS = 10 * 60 * 1000
+export const MULTI_AGENT_CONTRACT_VERSION = 2
 
 export const MultiAgentChildStatus = z.enum(['queued', 'running', 'completed', 'failed', 'aborted'])
 export type MultiAgentChildStatus = z.infer<typeof MultiAgentChildStatus>
@@ -25,7 +24,6 @@ export const MultiAgentErrorCode = z.enum([
   'child_not_found',
   'child_failed',
   'child_aborted',
-  'timeout',
   'invalid_input',
   'store_read_failed',
   'store_write_failed'
@@ -118,7 +116,6 @@ export const MultiAgentRuntimeConfig = z
     enabled: z.boolean().default(true),
     maxParallel: z.number().int().nonnegative().default(2),
     maxChildren: z.number().int().nonnegative().default(16),
-    childTimeoutMs: z.number().int().positive().default(DEFAULT_MULTI_AGENT_CHILD_TIMEOUT_MS),
     maxTranscriptEntries: z.number().int().positive().default(1000)
   })
   .strict()
@@ -237,6 +234,35 @@ export type MultiAgentExecutorResult = {
   threadRef?: MultiAgentChildThreadRef
 }
 
+export type MultiAgentMessageRequest = {
+  message: string
+  signal: AbortSignal
+}
+
+export type MultiAgentMessageReceipt = {
+  established: boolean
+}
+
+export type MultiAgentLiveness = {
+  state: 'active' | 'missing'
+  observedAt: string
+}
+
+export type MultiAgentTerminationReason =
+  | 'parent_abort'
+  | 'parent_cancel'
+
+export type MultiAgentTerminationRequest = {
+  reason: MultiAgentTerminationReason
+  signal: AbortSignal
+}
+
+export type MultiAgentLifecycleControl = {
+  sendMessage(request: MultiAgentMessageRequest): Promise<MultiAgentMessageReceipt>
+  inspect(signal: AbortSignal): Promise<MultiAgentLiveness>
+  terminate(request: MultiAgentTerminationRequest): Promise<void>
+}
+
 export type MultiAgentExecutorInput = {
   childId: string
   parentThreadId: string
@@ -251,6 +277,8 @@ export type MultiAgentExecutorInput = {
   filePathPolicy?: Record<string, unknown>
   maxToolCalls?: number
   signal: AbortSignal
+  registerLifecycleControl(control: MultiAgentLifecycleControl): void
+  setThreadRef(threadRef: MultiAgentChildThreadRef): Promise<void>
   appendTranscript: (entry: MultiAgentTranscriptEntry) => Promise<void>
 }
 

@@ -100,30 +100,6 @@ class RegistryAgentProvider implements AgentProvider {
     return this.neutral.readChildTranscript(...args)
   }
 
-  listGitCheckpoints(
-    ...args: Parameters<NonNullable<AgentProvider['listGitCheckpoints']>>
-  ): ReturnType<NonNullable<AgentProvider['listGitCheckpoints']>> {
-    return this.neutral.listGitCheckpoints(...args)
-  }
-
-  createGitCheckpoint(
-    ...args: Parameters<NonNullable<AgentProvider['createGitCheckpoint']>>
-  ): ReturnType<NonNullable<AgentProvider['createGitCheckpoint']>> {
-    return this.neutral.createGitCheckpoint(...args)
-  }
-
-  previewGitCheckpoint(
-    ...args: Parameters<NonNullable<AgentProvider['previewGitCheckpoint']>>
-  ): ReturnType<NonNullable<AgentProvider['previewGitCheckpoint']>> {
-    return this.neutral.previewGitCheckpoint(...args)
-  }
-
-  restoreGitCheckpoint(
-    ...args: Parameters<NonNullable<AgentProvider['restoreGitCheckpoint']>>
-  ): ReturnType<NonNullable<AgentProvider['restoreGitCheckpoint']>> {
-    return this.neutral.restoreGitCheckpoint(...args)
-  }
-
   createMemory(
     ...args: Parameters<NonNullable<AgentProvider['createMemory']>>
   ): ReturnType<NonNullable<AgentProvider['createMemory']>> {

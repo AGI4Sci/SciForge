@@ -67,6 +67,7 @@ export const MODEL_ROUTER_VISION_MIME_TYPES = [
 ] as const;
 export const MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES = 20 * 1024 * 1024;
 export const MODEL_ROUTER_MAX_REQUEST_BYTES = 40 * 1024 * 1024;
+const MODEL_ROUTER_EVIDENCE_POLICY_HEADER = 'x-sciforge-model-router-evidence-policy';
 
 export interface ModelRouterProfileCapabilityRegistration {
   vision?: {
@@ -630,10 +631,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
       options.log?.(`model-router ${routerError.code}: ${routerError.message}`);
       if (response.destroyed || response.writableEnded) return;
       return sendJson(response, routerError.status, {
-        error: {
-          code: routerError.code,
-          message: routerError.message,
-        },
+        error: routerErrorResponseBody(routerError),
       });
     }
     })();
@@ -1386,6 +1384,7 @@ async function routeResponsesRequest(
   const textSecret = secretForProvider(profile.textReasoner, context.env, 'textReasoner');
   const visionTranslator = profile.translators.vision;
   const visionSecret = visionTranslator ? optionalSecretForProvider(visionTranslator, context.env) : undefined;
+  const evidencePolicy = requestedEvidencePolicy(context.request);
 
   const responseId = context.responseId ?? makeId('resp');
   const requestInputs = extractRequestInputs(request.input, request.instructions);
@@ -1432,6 +1431,21 @@ async function routeResponsesRequest(
   // Lexical detectors must not become routing truth; final routing must use structured semantic signals and refs-first evidence.
   const visionModalities = extracted.modalities.filter((item) => finalModalityRoutingSignal(item).kind === 'vision.image');
   const unsupportedModalities = extracted.modalities.filter((item) => finalModalityRoutingSignal(item).kind !== 'vision.image');
+  const strictVisualEvidenceRequired = evidencePolicy === 'required';
+
+  if (strictVisualEvidenceRequired && visionModalities.length === 0) {
+    throw strictVisionEvidenceError({
+      causeCode: 'vision_evidence_input_required',
+      status: 400,
+      failureClass: 'invalid_arguments',
+      retryable: false,
+      message: 'Strict evidence policy requires at least one visual input.',
+      recovery: {
+        action: 'stop',
+        instruction: 'Attach an authorized visual input and repeat the native visual inspection.',
+      },
+    });
+  }
 
   if (unsupportedModalities.length > 0) {
     for (const item of unsupportedModalities) {
@@ -1499,6 +1513,21 @@ async function routeResponsesRequest(
 
   if (visionModalities.length > 0) {
     if (!visionTranslator || !visionSecret) {
+      if (strictVisualEvidenceRequired) {
+        throw strictVisionEvidenceError({
+          causeCode: visionTranslator
+            ? 'vision_translator_credentials_unavailable'
+            : 'vision_translator_not_configured',
+          status: 503,
+          failureClass: 'capability_unavailable',
+          retryable: false,
+          message: 'Strict visual evidence is unavailable because the vision translator is not ready.',
+          recovery: {
+            action: 'stop',
+            instruction: 'Configure the vision translator and its credentials before repeating native visual inspection.',
+          },
+        });
+      }
       degraded = true;
       imageNotSent = true;
       const reason = !visionTranslator
@@ -1510,7 +1539,15 @@ async function routeResponsesRequest(
       }
     } else {
       for (const modality of visionModalities) {
-        const cacheKey = visionObservationCacheKey(profileId, modality);
+        const translationInstruction = visionTranslatorInstruction(
+          extracted.userText || 'Describe the provided visual input.',
+          modality,
+        );
+        const instructionIntentSha256 = visionInstructionIntentSha256(
+          translationInstruction,
+          evidencePolicy,
+        );
+        const cacheKey = visionObservationCacheKey(profileId, modality, instructionIntentSha256);
         const cached = context.visionTranslationCache.get(cacheKey);
         if (cached) {
           const cachedObservation = formatCachedVisionTranslationObservation(modality, cached);
@@ -1524,7 +1561,7 @@ async function routeResponsesRequest(
             profile,
             secret: visionSecret,
             fetchImpl: context.fetchImpl,
-            instruction: visionTranslatorInstruction(extracted.userText || 'Describe the provided visual input.', modality),
+            instruction: translationInstruction,
             modality,
             phase: 'vision-initial',
             calls,
@@ -1535,8 +1572,20 @@ async function routeResponsesRequest(
           });
           addUsage(usage, result.usage);
           observation = result.outputText;
+          if (strictVisualEvidenceRequired && !observation.trim()) {
+            throw routerError(
+              502,
+              'vision_translation_empty',
+              'Vision translator returned no usable observation.',
+              'visionTranslator',
+            );
+          }
         } catch (error) {
           if (context.providerSignal?.aborted) throw error;
+          if (strictVisualEvidenceRequired) {
+            recordProviderAuthFailure(context, traceErrorSummary(error), 'visionTranslator');
+            throw strictVisionEvidenceErrorFromCause(error);
+          }
           degraded = true;
           observationStatus = 'failed';
           const summary = traceErrorSummary(error);
@@ -1551,7 +1600,13 @@ async function routeResponsesRequest(
         }
         observations.push(formatVisionObservation(modality, observation, observationStatus));
         if (observationStatus === 'ok') {
-          storeVisionTranslationCacheEntry(context.visionTranslationCache, profileId, modality, observation);
+          storeVisionTranslationCacheEntry(
+            context.visionTranslationCache,
+            profileId,
+            modality,
+            instructionIntentSha256,
+            observation,
+          );
         }
       }
     }
@@ -1585,6 +1640,13 @@ async function routeResponsesRequest(
         upstreamNegotiator: context.upstreamNegotiator,
         preferredProtocol: context.preferredProtocol,
         traceSession: context.traceSession,
+      }).catch((error: unknown) => {
+        if (context.providerSignal?.aborted) throw error;
+        if (strictVisualEvidenceRequired) {
+          recordProviderAuthFailure(context, traceErrorSummary(error), 'textReasoner');
+          throw strictVisualEvidenceSynthesisErrorFromCause(error);
+        }
+        throw error;
       });
       addUsage(usage, textResult.usage);
       responseStatus = textResult.status;
@@ -1628,8 +1690,20 @@ async function routeResponsesRequest(
             });
             addUsage(usage, result.usage);
             supplementObservation = result.outputText;
+            if (strictVisualEvidenceRequired && !supplementObservation.trim()) {
+              throw routerError(
+                502,
+                'vision_translation_empty',
+                'Vision translator returned no usable supplemental observation.',
+                'visionTranslator',
+              );
+            }
           } catch (error) {
             if (context.providerSignal?.aborted) throw error;
+            if (strictVisualEvidenceRequired) {
+              recordProviderAuthFailure(context, traceErrorSummary(error), 'visionTranslator');
+              throw strictVisionEvidenceErrorFromCause(error);
+            }
             degraded = true;
             supplementStatus = 'failed';
             const summary = traceErrorSummary(error);
@@ -1697,6 +1771,18 @@ function requestedProfileId(request: Record<string, unknown>, incoming: Incoming
   if (typeof metadata.profile === 'string' && metadata.profile.trim()) return metadata.profile.trim();
   if (typeof metadata.modelRouterProfile === 'string' && metadata.modelRouterProfile.trim()) return metadata.modelRouterProfile.trim();
   return config.defaultProfile;
+}
+
+function requestedEvidencePolicy(incoming: IncomingMessage): 'allow-degraded' | 'required' {
+  const value = incoming.headers[MODEL_ROUTER_EVIDENCE_POLICY_HEADER];
+  if (value === undefined) return 'allow-degraded';
+  const normalized = (Array.isArray(value) ? value[0] : value)?.trim().toLowerCase();
+  if (normalized === 'required') return 'required';
+  throw routerError(
+    400,
+    'invalid_evidence_policy',
+    `${MODEL_ROUTER_EVIDENCE_POLICY_HEADER} must be "required" when supplied.`,
+  );
 }
 
 function preferredResponsesProtocol(
@@ -2610,9 +2696,10 @@ function storeVisionTranslationCacheEntry(
   cache: Map<string, VisionTranslationCacheEntry>,
   profileId: string,
   modality: ModalityRef,
+  instructionIntentSha256: string,
   observation: string,
 ) {
-  const modalityCacheKey = visionObservationCacheKey(profileId, modality);
+  const modalityCacheKey = visionObservationCacheKey(profileId, modality, instructionIntentSha256);
   const existing = cache.get(modalityCacheKey);
   const now = new Date().toISOString();
   cache.set(modalityCacheKey, {
@@ -2627,11 +2714,32 @@ function storeVisionTranslationCacheEntry(
   });
 }
 
-function visionObservationCacheKey(profileId: string, modality: ModalityRef) {
+function visionObservationCacheKey(
+  profileId: string,
+  modality: ModalityRef,
+  instructionIntentSha256: string,
+) {
   return [
     profileId,
     modality.contentSha256 ?? modality.sha256,
+    instructionIntentSha256,
   ].join(':');
+}
+
+function visionInstructionIntentSha256(
+  instruction: string,
+  evidencePolicy: 'allow-degraded' | 'required',
+): string {
+  const normalizedInstruction = instruction
+    .normalize('NFKC')
+    .trim()
+    .replace(/\s+/gu, ' ');
+  return createHash('sha256')
+    .update(JSON.stringify({
+      evidencePolicy,
+      instruction: normalizedInstruction,
+    }))
+    .digest('hex');
 }
 
 function extractTextualModalityRefs(userText: string, startOrdinal: number): { userText: string; modalities: ModalityRef[] } {
@@ -3673,10 +3781,7 @@ function sendDeferredResponseStream(
         id: responseId,
         model,
         status: 'failed',
-        error: {
-          code: routerError.code,
-          message: routerError.message,
-        },
+        error: routerErrorResponseBody(routerError),
       },
     });
     response.write('data: [DONE]\n\n');
@@ -3729,7 +3834,7 @@ function sendDeferredChatCompletionStream(
   }).catch((error) => {
     const normalized = normalizeRouterError(error);
     writeChatCompletionChunk(response, {
-      error: { code: normalized.code, message: normalized.message },
+      error: routerErrorResponseBody(normalized),
     });
     response.write('data: [DONE]\n\n');
     response.end();
@@ -3756,7 +3861,7 @@ function sendDeferredAnthropicMessageStream(
       type: 'error',
       error: {
         type: routerError.code,
-        message: routerError.message,
+        ...routerErrorResponseBody(routerError),
       },
     });
     response.end();
@@ -4036,6 +4141,7 @@ type RouterError = Error & {
   status: number;
   code: string;
   role?: ModelRouterUpstreamDiagnostic['role'];
+  details?: JsonObject;
 };
 
 function normalizeRouterError(error: unknown): RouterError {
@@ -4048,12 +4154,132 @@ function routerError(
   code: string,
   message: string,
   role?: ModelRouterUpstreamDiagnostic['role'],
+  details?: JsonObject,
 ): RouterError {
   const error = new Error(message) as RouterError;
   error.status = status;
   error.code = code;
   if (role) error.role = role;
+  if (details) error.details = details;
   return error;
+}
+
+function routerErrorResponseBody(error: RouterError): JsonObject {
+  return {
+    ...(error.details ?? {}),
+    code: error.code,
+    message: error.message,
+  };
+}
+
+type StrictVisionEvidenceErrorOptions = {
+  causeCode: string;
+  status: number;
+  failureClass: 'invalid_arguments' | 'capability_unavailable' | 'contract_violation' | 'upstream_unavailable';
+  retryable: boolean;
+  message: string;
+  recovery: {
+    action: 'retry_visual_inspection' | 'stop';
+    instruction: string;
+  };
+};
+
+function strictVisionEvidenceError(options: StrictVisionEvidenceErrorOptions): RouterError {
+  return routerError(
+    options.status,
+    'vision_evidence_unavailable',
+    options.message,
+    'visionTranslator',
+    {
+      stage: 'vision_translation',
+      failureClass: options.failureClass,
+      retryable: options.retryable,
+      recovery: options.recovery,
+      cause: {
+        code: options.causeCode,
+        status: options.status,
+      },
+    },
+  );
+}
+
+function strictVisionEvidenceErrorFromCause(error: unknown): RouterError {
+  const classification = classifyStrictVisualCause(error);
+  return strictVisionEvidenceError({
+    causeCode: classification.code,
+    status: classification.status,
+    failureClass: classification.failureClass,
+    retryable: classification.retryable,
+    message: 'Strict visual evidence is unavailable because vision translation failed.',
+    recovery: classification.retryable
+      ? {
+        action: 'retry_visual_inspection',
+        instruction: 'Retry the same native visual inspection once after the vision provider becomes available.',
+      }
+      : {
+        action: 'stop',
+        instruction: 'Stop this visual path and repair the reported vision translation capability or contract failure.',
+      },
+  });
+}
+
+function strictVisualEvidenceSynthesisErrorFromCause(error: unknown): RouterError {
+  const classification = classifyStrictVisualCause(error);
+  return routerError(
+    classification.status,
+    'visual_evidence_synthesis_unavailable',
+    'Strict visual evidence synthesis is unavailable because text reasoning failed.',
+    'textReasoner',
+    {
+      stage: 'text_reasoning',
+      failureClass: classification.failureClass,
+      retryable: classification.retryable,
+      recovery: classification.retryable
+        ? {
+          action: 'retry_visual_inspection',
+          instruction: 'Retry the same native visual inspection once after the text reasoner becomes available.',
+        }
+        : {
+          action: 'stop',
+          instruction: 'Stop this visual path and repair the reported text reasoning capability or contract failure.',
+        },
+      cause: {
+        code: classification.code,
+        status: classification.status,
+      },
+    },
+  );
+}
+
+function classifyStrictVisualCause(error: unknown): {
+  code: string;
+  status: number;
+  failureClass: StrictVisionEvidenceErrorOptions['failureClass'];
+  retryable: boolean;
+} {
+  const cause = normalizeRouterError(error);
+  const code = cause.code;
+  const status = cause.status;
+  const isContractFailure = /(?:protocol|invalid_response|error_payload|translation_empty)/u.test(code);
+  const isCapabilityFailure = status === 401
+    || status === 403
+    || /(?:credentials|not_configured|capability_unsupported|mime_not_supported|input_too_large)/u.test(code);
+  const retryable = !isContractFailure
+    && !isCapabilityFailure
+    && (
+      status === 408
+      || status === 429
+      || status >= 500
+      || /(?:timeout|network)/u.test(code)
+    );
+  const failureClass: StrictVisionEvidenceErrorOptions['failureClass'] = isContractFailure
+    ? 'contract_violation'
+    : isCapabilityFailure
+      ? 'capability_unavailable'
+      : retryable
+        ? 'upstream_unavailable'
+        : 'capability_unavailable';
+  return { code, status, failureClass, retryable };
 }
 
 function isRouterError(error: unknown): error is RouterError {
@@ -4135,7 +4361,14 @@ function corsHeaders() {
   return {
     'access-control-allow-origin': '*',
     'access-control-allow-methods': 'GET,POST,OPTIONS',
-    'access-control-allow-headers': 'content-type,authorization,x-api-key,anthropic-version,x-sciforge-model-router-profile',
+    'access-control-allow-headers': [
+      'content-type',
+      'authorization',
+      'x-api-key',
+      'anthropic-version',
+      'x-sciforge-model-router-profile',
+      MODEL_ROUTER_EVIDENCE_POLICY_HEADER,
+    ].join(','),
   };
 }
 

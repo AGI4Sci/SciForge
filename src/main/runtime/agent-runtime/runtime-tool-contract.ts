@@ -49,6 +49,8 @@ export type RuntimeToolCallResponse = {
   errorCode?: string
   failureClass?: string
   retryable?: boolean
+  recoveryGuidance?: string
+  providerStage?: string
   resourceIdentity?: string
   evidenceDelta?: boolean
   stateChanged?: boolean

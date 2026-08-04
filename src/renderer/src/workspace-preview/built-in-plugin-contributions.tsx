@@ -3,6 +3,10 @@ import {
   type ReactElement
 } from 'react'
 import { useTranslation } from 'react-i18next'
+import {
+  MARKDOWN_COPY_FOR_WECHAT_ACTION_ID,
+  markdownWechatCopyResultSchema
+} from '@shared/markdown-wechat'
 import type {
   WorkspacePreviewPluginManifest,
   WorkspaceObservation,
@@ -286,6 +290,9 @@ function MarkdownWorkspaceViewerHost({
   const { t } = useTranslation('common')
   const host = context.host
   const sessionId = context.state.session?.id
+  const copyForWechatAvailable = Boolean(
+    sessionId && observation?.actions.includes(MARKDOWN_COPY_FOR_WECHAT_ACTION_ID)
+  )
   const loadWorkspaceImage = useCallback<NonNullable<MarkdownWorkspaceViewerProps['loadWorkspaceImage']>>(async ({ path }) => {
     if (!sessionId) return { ok: false, message: 'No workspace preview session is active.' }
     const result = await host.invokeAction(sessionId, {
@@ -301,6 +308,19 @@ function MarkdownWorkspaceViewerHost({
       ok: true,
       dataUrl: payload.dataUrl
     }
+  }, [host, sessionId])
+  const copyForWechat = useCallback<NonNullable<MarkdownWorkspaceViewerProps['onCopyForWechat']>>(async () => {
+    if (!sessionId) throw new Error('No workspace preview session is active.')
+    const result = await host.invokeAction(sessionId, {
+      actionId: MARKDOWN_COPY_FOR_WECHAT_ACTION_ID,
+      input: {}
+    })
+    if (!result.ok) throw new Error(result.message)
+    const parsed = markdownWechatCopyResultSchema.safeParse(result.result)
+    if (!parsed.success) {
+      throw new Error('Markdown WeChat copy action returned an invalid result.')
+    }
+    return parsed.data
   }, [host, sessionId])
   const applyMarkdownEdit = useCallback<MarkdownWorkspaceViewerApplyEditHandler>(async (operation) => {
     await applyEdit(operation)
@@ -324,7 +344,9 @@ function MarkdownWorkspaceViewerHost({
       documentContentKey={documentContentKey}
       className="h-full min-h-0"
       onApplyEdit={applyMarkdownEdit}
+      onCopyForWechat={copyForWechatAvailable ? copyForWechat : undefined}
       loadWorkspaceImage={loadWorkspaceImage}
+      onOpenWorkspaceLink={context.openFile}
       annotationOverlays={annotationOverlays}
       activeAnnotationId={activeAnnotationId}
       navigationRequest={navigationRequest}

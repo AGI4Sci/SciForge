@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FileReferenceTarget } from './file-references'
+import {
+  activeWorkspaceLocator
+} from '../remote-workspace/placement'
 
 type ValidationState =
   | { status: 'idle' }
@@ -29,8 +32,12 @@ function normalizedWorkspaceRoot(workspaceRoot?: string): string {
   return workspaceRoot?.trim() ?? ''
 }
 
-function cacheKey(target: FileReferenceTarget | null, workspaceRoot?: string): string {
-  return `${normalizedWorkspaceRoot(workspaceRoot)}\u0000${normalizeTarget(target)?.path ?? ''}`
+function cacheKey(
+  target: FileReferenceTarget | null,
+  workspaceRoot?: string,
+  hostSessionId?: string
+): string {
+  return `${hostSessionId ?? 'local'}\u0000${normalizedWorkspaceRoot(workspaceRoot)}\u0000${normalizeTarget(target)?.path ?? ''}`
 }
 
 function readValidationCache(key: string): CachedValidation | undefined {
@@ -73,7 +80,12 @@ export async function validateFileReference(
   const normalizedTarget = normalizeTarget(target)
   if (!normalizedTarget) return { status: 'invalid' }
   const normalizedWorkspace = normalizedWorkspaceRoot(workspaceRoot)
-  const key = cacheKey(normalizedTarget, normalizedWorkspace)
+  const workspaceLocator = activeWorkspaceLocator(normalizedWorkspace)
+  const key = cacheKey(
+    normalizedTarget,
+    normalizedWorkspace,
+    workspaceLocator?.hostSessionId
+  )
   const cached = readValidationCache(key)
   if (cached !== undefined) return cached instanceof Promise ? cached : cached
 
@@ -86,7 +98,8 @@ export async function validateFileReference(
       path: normalizedTarget.path,
       line: normalizedTarget.line,
       column: normalizedTarget.column,
-      workspaceRoot: normalizedWorkspace
+      workspaceRoot: normalizedWorkspace,
+      ...(workspaceLocator ? { workspaceLocator } : {})
     })
 
     return result.ok

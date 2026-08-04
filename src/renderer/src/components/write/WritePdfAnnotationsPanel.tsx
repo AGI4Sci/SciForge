@@ -48,6 +48,7 @@ import {
 } from '../../write/pdf-annotations'
 import type { DocumentKind } from '../../workspace-preview/document-annotation-types'
 import { CopyTextButton } from '../CopyTextButton'
+import { AssistantMarkdown } from '../chat/AssistantMarkdown'
 
 export type WritePdfAnnotationDisplayMode = 'hidden' | 'current' | 'all'
 export type WritePdfReviewScope = 'document' | 'selection'
@@ -1114,8 +1115,18 @@ export function WritePdfAnnotationsPanel({
                                       className="ml-auto -mr-1"
                                     />
                                   </div>
-                                  <div className="ds-selectable-text whitespace-pre-wrap text-[12px] leading-5 text-ds-ink [overflow-wrap:anywhere]">
-                                    {turn.text}
+                                  <div
+                                    className={`ds-selectable-text text-[12px] leading-5 text-ds-ink [overflow-wrap:anywhere] ${
+                                      assistant ? 'ds-markdown ds-chat-answer' : 'whitespace-pre-wrap'
+                                    }`}
+                                  >
+                                    {assistant ? (
+                                      <AssistantMarkdown
+                                        text={turn.text}
+                                        streaming={turn.busy === true}
+                                        className="text-[12px] leading-5 [overflow-wrap:anywhere]"
+                                      />
+                                    ) : turn.text}
                                   </div>
                                 </div>
                               )

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createExecutionReceipt } from '@sciforge/execution-governance'
 import type { DomainAgentArtifactEvent } from '@sciforge/domain-sdk/host'
+import { WORKSPACE_HOST_PROTOCOL_VERSION } from '@sciforge/domain-sdk/workspace-host'
 import {
   sanitizeTraceTextChunks,
   type TraceEvent,
@@ -27,7 +28,6 @@ import type {
   AgentRuntimeCapabilities,
   AgentRuntimeExecutionIntent,
   AgentRuntimeEvent,
-  AgentRuntimeGitCheckpoint,
   AgentRuntimeId,
   AgentRuntimeUsageQuery,
   AgentRuntimeUsageResponse,
@@ -64,6 +64,7 @@ import {
   type SettingsMemoryRecord,
   type SettingsMemoryRecordUpdater
 } from '../../../renderer/src/lib/settings-memory-actions'
+import type { WorkspaceHostPlacement } from '../../../shared/workspace-host-state'
 
 function visualExecutionIntent(requiresRegionRef = true): AgentRuntimeExecutionIntent {
   return {
@@ -356,6 +357,68 @@ describe('AgentRuntimeHost', () => {
     expect(local.updateThreadRelation).toHaveBeenCalledWith(
       { settings: expect.objectContaining({ activeAgentRuntime: 'codex' }) },
       { runtimeId: 'sciforge', threadId: 'local-thread', relation: 'primary' }
+    )
+  })
+
+  it('owns subagent tools and dispatches provider controls through the selected adapter', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-runtime-subagents-'))
+    const adapter = fakeAdapter('claude', {
+      id: 'parent-thread',
+      runtimeId: 'claude',
+      title: 'Parent',
+      updatedAt: '2026-08-02T00:00:00.000Z'
+    })
+    const subagents: NonNullable<AgentRuntimeAdapter['subagents']> = {
+      spawn: vi.fn(async (_context, input) => {
+        await input.onSpawned({ runtime: 'claude', threadId: 'child-thread', turnId: 'child-turn' })
+        return {
+          summary: 'child complete',
+          threadRef: { runtime: 'claude', threadId: 'child-thread', turnId: 'child-turn' }
+        }
+      }),
+      inspect: vi.fn(async () => ({ state: 'active' as const, observedAt: '2026-08-02T00:00:00.000Z' })),
+      message: vi.fn(async () => ({ established: true })),
+      cancel: vi.fn(async () => undefined)
+    }
+    adapter.subagents = subagents
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('claude'),
+      adapters: [adapter],
+      subagentStoreRoot: root
+    })
+    const tools = host.subagentTools()
+    expect(tools?.tools().map((tool) => tool.name)).toContain('delegate_task')
+    const started = await tools!.call({
+      name: 'delegate_task',
+      arguments: { prompt: 'Run a focused review.' },
+      context: {
+        requestId: 'spawn-1',
+        runtimeId: 'claude',
+        threadId: 'parent-thread',
+        turnId: 'parent-turn'
+      }
+    })
+    const childId = (started.value as { childId: string }).childId
+    await expect(tools!.call({
+      name: 'subagent_wait',
+      arguments: { childId, timeoutMs: 1_000 },
+      context: {
+        requestId: 'wait-1',
+        runtimeId: 'claude',
+        threadId: 'parent-thread',
+        turnId: 'parent-turn'
+      }
+    })).resolves.toMatchObject({
+      value: { status: 'completed', terminal: true }
+    })
+    expect(subagents.spawn).toHaveBeenCalledOnce()
+    expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ settings: expect.objectContaining({ activeAgentRuntime: 'claude' }) }),
+      expect.objectContaining({
+        kind: 'child_event',
+        runtimeId: 'claude',
+        child: expect.objectContaining({ runtimeId: 'claude', summary: 'child complete' })
+      })
     )
   })
 
@@ -917,7 +980,7 @@ describe('AgentRuntimeHost', () => {
       ]
     }
     const visibleContext = {
-      bindCurrentSurface: vi.fn(async () => snapshot)
+      bindSurface: vi.fn(async () => snapshot)
     }
     const host = createAgentRuntimeHost({
       settings: async () => settings('codex'),
@@ -930,12 +993,17 @@ describe('AgentRuntimeHost', () => {
       runtimeId: 'codex',
       threadId: 'codex-side-thread',
       visibleContextOwnerThreadId: 'codex-thread',
+      visibleContextSurfaceId: 'browser:1',
       text: userText,
       displayText: userText
     })
 
     const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
-    expect(visibleContext.bindCurrentSurface).toHaveBeenCalledWith('codex:codex-side-thread', 'codex-thread')
+    expect(visibleContext.bindSurface).toHaveBeenCalledWith(
+      'codex:codex-side-thread',
+      'codex-thread',
+      'browser:1'
+    )
     expect(dispatched?.text).toContain('Canonical visible state bound atomically for this turn:')
     expect(dispatched?.text).toContain('"region": "left-sidebar"')
     expect(dispatched?.text).toContain('"region": "center"')
@@ -960,7 +1028,7 @@ describe('AgentRuntimeHost', () => {
       updatedAt: '2026-06-10T00:00:00.000Z'
     })
     const visibleContext = {
-      bindCurrentSurface: vi.fn(async () => { throw new Error('renderer unavailable') }),
+      bindSurface: vi.fn(async () => { throw new Error('renderer unavailable') }),
       get: vi.fn(),
       peek: vi.fn()
     }
@@ -982,7 +1050,7 @@ describe('AgentRuntimeHost', () => {
     })
 
     const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
-    expect(visibleContext.bindCurrentSurface).toHaveBeenCalledWith('codex:codex-thread', 'codex-thread')
+    expect(visibleContext.bindSurface).not.toHaveBeenCalled()
     expect(visibleContext.get).not.toHaveBeenCalled()
     expect(visibleContext.peek).not.toHaveBeenCalled()
     expect(dispatched?.text).toContain('Canonical visible state for this turn: unavailable.')
@@ -990,6 +1058,86 @@ describe('AgentRuntimeHost', () => {
     expect(dispatched?.text).not.toContain('surface.current')
     expect(dispatched?.text).toContain('Runtime-enforced execution integrity gate')
     expect(dispatched?.displayText).toBe('Run the unit tests.')
+  })
+
+  it('binds concurrent same-thread starts to their immutable sender surfaces inside the turn queue', async () => {
+    const adapter = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    const firstHandle = deferred<AgentRuntimeTurnHandle>()
+    vi.mocked(adapter.startTurn)
+      .mockReturnValueOnce(firstHandle.promise)
+      .mockResolvedValueOnce({ threadId: 'codex-thread', turnId: 'turn-2' })
+    const visibleContext = {
+      bindSurface: vi.fn(async (
+        _callerId: string,
+        activeThreadId: string,
+        windowId: string
+      ) => ({
+        schemaVersion: 3 as const,
+        windowId,
+        revision: 1,
+        publishedAt: '2026-07-31T00:00:00.000Z',
+        freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
+        activeThreadId,
+        route: `/${windowId}`,
+        components: []
+      }))
+    }
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter],
+      services: { visibleContext: visibleContext as never }
+    })
+
+    const browserStart = host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'from browser',
+      visibleContextSurfaceId: 'browser:1'
+    })
+    const electronStart = host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'from electron',
+      visibleContextSurfaceId: 'electron:9'
+    })
+    await vi.waitFor(() => {
+      expect(visibleContext.bindSurface).toHaveBeenCalledTimes(1)
+      expect(adapter.startTurn).toHaveBeenCalledTimes(1)
+    })
+    expect(visibleContext.bindSurface).toHaveBeenNthCalledWith(
+      1,
+      'codex:codex-thread',
+      'codex-thread',
+      'browser:1'
+    )
+
+    firstHandle.resolve({ threadId: 'codex-thread', turnId: 'turn-1' })
+    await expect(browserStart).resolves.toEqual({
+      threadId: 'codex-thread',
+      turnId: 'turn-1'
+    })
+    await expect(electronStart).resolves.toEqual({
+      threadId: 'codex-thread',
+      turnId: 'turn-2'
+    })
+
+    expect(visibleContext.bindSurface).toHaveBeenNthCalledWith(
+      2,
+      'codex:codex-thread',
+      'codex-thread',
+      'electron:9'
+    )
+    const firstInput = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
+    const secondInput = vi.mocked(adapter.startTurn).mock.calls[1]?.[1]
+    expect(firstInput?.text).toContain('"route": "/browser:1"')
+    expect(secondInput?.text).toContain('"route": "/electron:9"')
+    expect(firstInput).not.toHaveProperty('visibleContextSurfaceId')
+    expect(secondInput).not.toHaveProperty('visibleContextSurfaceId')
   })
 
   it.each(['sciforge', 'codex', 'claude'] as const)(
@@ -3825,233 +3973,6 @@ describe('AgentRuntimeHost', () => {
     }
   })
 
-  it('creates fail-open git checkpoints around runtime turns', async () => {
-    const adapter = fakeAdapter('codex', {
-      id: 'codex-thread',
-      runtimeId: 'codex',
-      title: 'Codex',
-      updatedAt: '2026-06-10T00:00:00.000Z'
-    })
-    vi.mocked(adapter.startTurn).mockResolvedValue({
-      threadId: 'codex-thread',
-      turnId: 'turn-1'
-    })
-    vi.mocked(adapter.subscribeEvents).mockImplementation(async function* () {
-      yield {
-        kind: 'turn_lifecycle',
-        runtimeId: 'codex',
-        threadId: 'codex-thread',
-        turnId: 'turn-1',
-        state: 'completed'
-      } satisfies AgentRuntimeEvent
-    })
-    const create = vi.fn(async () => ({
-      ok: true as const,
-      value: {
-        checkpointId: 'checkpoint',
-        runtimeId: 'codex' as const,
-        threadId: 'codex-thread',
-        workspaceRoot: '/tmp/workspace',
-        repositoryRoot: '/tmp/workspace',
-        branch: 'main',
-        head: 'abc',
-        createdAt: '2026-06-20T00:00:00.000Z',
-        diffStat: '',
-        status: 'available' as const
-      }
-    }))
-    const host = createAgentRuntimeHost({
-      settings: async () => settings('codex'),
-      adapters: [adapter],
-      services: {
-        gitCheckpoints: { create } as never
-      }
-    })
-
-    await host.startTurn({
-      runtimeId: 'codex',
-      threadId: 'codex-thread',
-      text: 'edit files',
-      workspace: '/tmp/workspace'
-    })
-    for await (const _event of host.subscribeEvents({
-      runtimeId: 'codex',
-      threadId: 'codex-thread'
-    })) {
-      // consume stream
-    }
-
-    expect(create).toHaveBeenNthCalledWith(1, {
-      runtimeId: 'codex',
-      threadId: 'codex-thread',
-      workspaceRoot: '/tmp/workspace'
-    })
-    expect(create).toHaveBeenNthCalledWith(2, {
-      runtimeId: 'codex',
-      threadId: 'codex-thread',
-      turnId: 'turn-1',
-      workspaceRoot: '/tmp/workspace'
-    })
-  })
-
-  it('routes git checkpoint auxiliary operations through host services before adapters', async () => {
-    const adapter = fakeAdapter('codex', {
-      id: 'codex-thread',
-      runtimeId: 'codex',
-      title: 'Codex',
-      updatedAt: '2026-06-10T00:00:00.000Z'
-    })
-    const adapterAuxiliary = vi.fn(async () => ({ adapter: true }))
-    adapter.auxiliary = adapterAuxiliary
-    const checkpoint = {
-      checkpointId: 'checkpoint-1',
-      runtimeId: 'codex',
-      threadId: 'codex-thread',
-      turnId: 'turn-1',
-      workspaceRoot: '/tmp/workspace',
-      repositoryRoot: '/tmp/workspace',
-      branch: 'main',
-      head: 'abc123',
-      createdAt: '2026-06-20T00:00:00.000Z',
-      diffStat: ' src/app.ts | 1 +',
-      status: 'available'
-    } satisfies AgentRuntimeGitCheckpoint
-    const restored = {
-      ...checkpoint,
-      status: 'restored',
-      restoreStatus: '2026-06-20T00:01:00.000Z',
-      rescueCheckpointId: 'checkpoint-rescue'
-    } satisfies AgentRuntimeGitCheckpoint & { rescueCheckpointId: string }
-    const list = vi.fn(async () => [checkpoint])
-    const create = vi.fn(async () => ({ ok: true as const, value: checkpoint }))
-    const preview = vi.fn(async () => ({
-      ok: true as const,
-      value: {
-        checkpoint,
-        stagedPatch: 'diff --git a/src/app.ts b/src/app.ts',
-        unstagedPatch: '',
-        untrackedFiles: ['notes.md']
-      }
-    }))
-    const restore = vi.fn(async () => ({ ok: true as const, value: restored }))
-    const host = createAgentRuntimeHost({
-      settings: async () => settings('codex'),
-      adapters: [adapter],
-      services: {
-        gitCheckpoints: { list, create, preview, restore } as never
-      }
-    })
-
-    await expect(host.auxiliary({
-      runtimeId: 'codex',
-      operation: 'listGitCheckpoints',
-      payload: {
-        threadId: 'codex-thread',
-        workspaceRoot: '/tmp/workspace'
-      }
-    })).resolves.toEqual([checkpoint])
-    expect(list).toHaveBeenCalledWith({
-      runtimeId: 'codex',
-      threadId: 'codex-thread',
-      workspaceRoot: '/tmp/workspace'
-    })
-    await expect(host.auxiliary({
-      runtimeId: 'codex',
-      operation: 'listGitCheckpoints',
-      payload: {
-        runtimeId: 'claude',
-        threadId: 'codex-thread',
-        workspaceRoot: '/tmp/workspace'
-      }
-    })).rejects.toThrow(/payload\.runtimeId must match the top-level runtimeId/)
-    await expect(host.auxiliary({
-      runtimeId: 'codex',
-      operation: 'createGitCheckpoint',
-      payload: {
-        runtimeId: 'claude',
-        threadId: 'codex-thread',
-        workspaceRoot: '/tmp/workspace'
-      }
-    })).rejects.toThrow(/payload\.runtimeId must match the top-level runtimeId/)
-    expect(create).not.toHaveBeenCalled()
-    await expect(host.auxiliary({
-      runtimeId: 'codex',
-      operation: 'createGitCheckpoint',
-      payload: {
-        threadId: 'codex-thread',
-        workspaceRoot: '/tmp/workspace',
-        turnId: 'turn-1'
-      }
-    })).resolves.toEqual({ ok: true, value: checkpoint })
-    await expect(host.auxiliary({
-      runtimeId: 'codex',
-      operation: 'previewGitCheckpoint',
-      payload: { checkpointId: 'checkpoint-1' }
-    })).resolves.toEqual({
-      ok: true,
-      value: {
-        checkpoint,
-        stagedPatch: 'diff --git a/src/app.ts b/src/app.ts',
-        unstagedPatch: '',
-        untrackedFiles: ['notes.md']
-      }
-    })
-    await expect(host.auxiliary({
-      runtimeId: 'codex',
-      operation: 'restoreGitCheckpoint',
-      payload: { checkpointId: 'checkpoint-1', force: true }
-    })).resolves.toEqual({ ok: true, value: restored })
-
-    expect(list).toHaveBeenCalledWith({
-      runtimeId: 'codex',
-      threadId: 'codex-thread',
-      workspaceRoot: '/tmp/workspace'
-    })
-    expect(create).toHaveBeenCalledWith({
-      runtimeId: 'codex',
-      threadId: 'codex-thread',
-      workspaceRoot: '/tmp/workspace',
-      turnId: 'turn-1'
-    })
-    expect(preview).toHaveBeenCalledWith('checkpoint-1')
-    expect(restore).toHaveBeenCalledWith({ checkpointId: 'checkpoint-1', force: true })
-    expect(adapterAuxiliary).not.toHaveBeenCalled()
-  })
-
-  it('passes blocked git checkpoint restore results through host auxiliary', async () => {
-    const adapter = fakeAdapter('codex', {
-      id: 'codex-thread',
-      runtimeId: 'codex',
-      title: 'Codex',
-      updatedAt: '2026-06-10T00:00:00.000Z'
-    })
-    const adapterAuxiliary = vi.fn(async () => ({ adapter: true }))
-    adapter.auxiliary = adapterAuxiliary
-    const blocked = {
-      ok: false as const,
-      reason: 'dirty_worktree',
-      message: 'The working tree has changes. Preview or commit/stash them before restoring.',
-      details: { dirty: ['src/app.ts'] }
-    }
-    const restore = vi.fn(async () => blocked)
-    const host = createAgentRuntimeHost({
-      settings: async () => settings('codex'),
-      adapters: [adapter],
-      services: {
-        gitCheckpoints: { restore } as never
-      }
-    })
-
-    await expect(host.auxiliary({
-      runtimeId: 'codex',
-      operation: 'restoreGitCheckpoint',
-      payload: { checkpointId: 'checkpoint-1' }
-    })).resolves.toEqual(blocked)
-
-    expect(restore).toHaveBeenCalledWith({ checkpointId: 'checkpoint-1', force: false })
-    expect(adapterAuxiliary).not.toHaveBeenCalled()
-  })
-
   it('does not materialize completed turns when no artifact consumer is installed', async () => {
     const claude = fakeAdapter('claude', {
       id: 'claude-thread',
@@ -4191,8 +4112,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4272,8 +4192,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4316,8 +4235,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4359,8 +4277,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4430,8 +4347,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4472,8 +4388,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4523,8 +4438,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4576,8 +4490,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4630,8 +4543,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4681,8 +4593,7 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          execution: { enabled: true, windowSize: 8, exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2 }
+          execution: { enabled: true, windowSize: 8, exactRepeatThreshold: 2 }
         }
       }),
       adapters: [codex],
@@ -4742,8 +4653,7 @@ describe('AgentRuntimeHost', () => {
           execution: {
             enabled: true,
             windowSize: 8,
-            exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2
+            exactRepeatThreshold: 2
           }
         }
       }),
@@ -4777,6 +4687,33 @@ describe('AgentRuntimeHost', () => {
     )
   })
 
+  it('rejects a required native visual turn before runtime dispatch when the tools are unavailable', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      nativeVisualToolsAvailable: () => false
+    })
+
+    await expect(host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Inspect the current visual resource.',
+      executionIntent: visualExecutionIntent()
+    })).rejects.toMatchObject({
+      name: 'AgentRuntimeTurnPreflightError',
+      code: 'runtime_visual_capability_unavailable',
+      failureClass: 'capability_unavailable',
+      retryable: false
+    })
+    expect(codex.startTurn).not.toHaveBeenCalled()
+  })
+
   it('does not deny OS GUI automation when native visual tools are unavailable', async () => {
     const codex = fakeAdapter('codex', {
       id: 'codex-thread',
@@ -4806,8 +4743,7 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          execution: { enabled: true, windowSize: 8, exactRepeatThreshold: 2,
-            semanticFailureThreshold: 2 }
+          execution: { enabled: true, windowSize: 8, exactRepeatThreshold: 2 }
         }
       }),
       adapters: [codex],
@@ -5642,6 +5578,210 @@ describe('AgentRuntimeHost', () => {
     expect(local.usage).toHaveBeenCalledWith(
       { settings: expect.objectContaining({ activeAgentRuntime: 'codex' }) },
       query
+    )
+  })
+
+  it('passes placement-neutral Workspace Host metadata without changing runtime identity', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-30T00:00:00.000Z'
+    })
+    const locator = {
+      contractVersion: WORKSPACE_HOST_PROTOCOL_VERSION,
+      hostSessionId: 'workspace-session-1',
+      path: '/cluster/project'
+    }
+    const placement: WorkspaceHostPlacement = {
+      locator,
+      session: {
+        protocolVersion: WORKSPACE_HOST_PROTOCOL_VERSION,
+        serverVersion: '1.0.0',
+        serverInstanceId: 'server-instance-1',
+        sessionId: 'workspace-session-1',
+        lifecycleMode: 'persistent-daemon',
+        locator,
+        platform: { os: 'linux', architecture: 'x64' },
+        capabilities: [],
+        contributions: [],
+        eventSequence: 0,
+        replay: { earliestSequence: 0, latestSequence: 0 },
+        egress: { mode: 'none', status: 'disabled' }
+      }
+    }
+    const resolvePlacement = vi.fn(async () => placement)
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      services: {
+        workspaceHosts: { resolvePlacement }
+      }
+    })
+
+    await expect(host.listThreads({
+      runtimeId: 'codex',
+      workspaceLocator: locator
+    })).resolves.toEqual([
+      expect.objectContaining({
+        workspace: locator.path,
+        workspaceLocator: locator
+      })
+    ])
+    await expect(host.startThread({
+      runtimeId: 'codex',
+      workspace: '/must/not-select-local-placement',
+      workspaceLocator: locator
+    })).resolves.toEqual(expect.objectContaining({
+      workspace: locator.path,
+      workspaceLocator: locator
+    }))
+    await expect(host.readThread({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      workspaceLocator: locator
+    })).resolves.toEqual(expect.objectContaining({
+      workspace: locator.path,
+      workspaceLocator: locator
+    }))
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Inspect the remote workspace.',
+      workspaceLocator: locator
+    })
+
+    expect(resolvePlacement).toHaveBeenCalledWith(locator)
+    expect(codex.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceHost: placement }),
+      expect.objectContaining({
+        runtimeId: 'codex',
+        workspace: '/cluster/project',
+        workspaceLocator: locator
+      })
+    )
+  })
+
+  it('fails closed when a Workspace Host locator has no session manager', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-30T00:00:00.000Z'
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex]
+    })
+
+    await expect(host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Do not run locally.',
+      workspaceLocator: {
+        contractVersion: WORKSPACE_HOST_PROTOCOL_VERSION,
+        hostSessionId: 'workspace-session-1',
+        path: '/cluster/project'
+      }
+    })).rejects.toThrow(/attached Workspace Host session manager/u)
+    expect(codex.startTurn).not.toHaveBeenCalled()
+  })
+
+  it('restores explicit Workspace Host placement on every thread-scoped operation', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-30T00:00:00.000Z'
+    })
+    codex.resolveApproval = vi.fn(async () => undefined)
+    codex.resolveUserInput = vi.fn(async () => undefined)
+    codex.compactThread = vi.fn(async () => undefined)
+    codex.auxiliary = vi.fn(async () => ({ ok: true }))
+    codex.forkThread = vi.fn(async () => ({
+      id: 'fork-thread',
+      runtimeId: 'codex' as const,
+      title: 'Fork',
+      updatedAt: '2026-07-30T00:00:00.000Z'
+    }))
+    codex.capabilities = vi.fn(async () => ({
+      ...capabilities('codex'),
+      controls: {
+        ...capabilities('codex').controls,
+        compact: 'native' as const
+      }
+    }))
+    const locator = {
+      contractVersion: WORKSPACE_HOST_PROTOCOL_VERSION,
+      hostSessionId: 'workspace-session-restored',
+      path: '/cluster/restored'
+    }
+    const placement: WorkspaceHostPlacement = {
+      locator,
+      session: {
+        protocolVersion: WORKSPACE_HOST_PROTOCOL_VERSION,
+        serverVersion: '1.0.0',
+        serverInstanceId: 'server-restored',
+        sessionId: locator.hostSessionId,
+        lifecycleMode: 'persistent-daemon',
+        locator,
+        platform: { os: 'linux', architecture: 'x64' },
+        capabilities: [],
+        contributions: [],
+        eventSequence: 0,
+        replay: { earliestSequence: 0, latestSequence: 0 },
+        egress: { mode: 'none', status: 'disabled' }
+      }
+    }
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      services: {
+        workspaceHosts: {
+          resolvePlacement: vi.fn(async () => placement)
+        }
+      }
+    })
+    const threadInput = { runtimeId: 'codex' as const, threadId: 'codex-thread', workspaceLocator: locator }
+
+    await host.readThread(threadInput)
+    await host.readThreadSidebarProbe(threadInput)
+    await host.interruptTurn({ ...threadInput, turnId: 'turn-1' })
+    const events = host.subscribeEvents(threadInput)[Symbol.asyncIterator]()
+    await events.next()
+    await events.return?.()
+    await host.resolveApproval({ ...threadInput, approvalId: 'approval-1', decision: 'allowed' })
+    await host.resolveUserInput({ ...threadInput, requestId: 'request-1', answers: [] })
+    await host.renameThread({ ...threadInput, title: 'Renamed' })
+    await host.compactThread(threadInput)
+    await host.forkThread(threadInput)
+    await host.updateThreadRelation({ ...threadInput, relation: 'primary' })
+    await host.auxiliary({
+      runtimeId: 'codex',
+      operation: 'reviewThread',
+      payload: { threadId: 'codex-thread' },
+      workspaceLocator: locator
+    })
+    await host.deleteThread(threadInput)
+
+    const calledWithPlacedContext = (mock: ReturnType<typeof vi.fn>) =>
+      expect(mock).toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceHost: placement }),
+        expect.objectContaining({ workspaceLocator: locator })
+      )
+    calledWithPlacedContext(vi.mocked(codex.readThread))
+    calledWithPlacedContext(vi.mocked(codex.interruptTurn))
+    calledWithPlacedContext(vi.mocked(codex.resolveApproval))
+    calledWithPlacedContext(vi.mocked(codex.resolveUserInput))
+    calledWithPlacedContext(vi.mocked(codex.renameThread))
+    calledWithPlacedContext(vi.mocked(codex.compactThread))
+    calledWithPlacedContext(vi.mocked(codex.forkThread!))
+    calledWithPlacedContext(vi.mocked(codex.updateThreadRelation!))
+    calledWithPlacedContext(vi.mocked(codex.auxiliary!))
+    calledWithPlacedContext(vi.mocked(codex.deleteThread))
+    expect(codex.subscribeEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceHost: placement }),
+      expect.objectContaining({ workspaceLocator: locator })
     )
   })
 })

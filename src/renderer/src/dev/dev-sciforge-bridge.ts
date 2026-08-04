@@ -1,11 +1,17 @@
 import type { SciForgeApi } from '@shared/sciforge-api'
+import type { VisibleContextSnapshot } from '@shared/visible-context'
 import { serializeCapabilityResourceContentAccess } from '@shared/workspace-preview-asset-url'
+import {
+  captureDevBrowserSurface,
+  type DevBrowserSurfaceCaptureRequest
+} from './dev-browser-surface-capture'
 
 const DEV_BRIDGE_PROXY_PATH = '/__sciforge-dev-bridge'
-const CLIENT_ID_STORAGE_KEY = 'sciforge.dev-browser-bridge.client-id'
 const DEV_INSTANCE_ID = typeof __SCIFORGE_DEV_INSTANCE_ID__ === 'string'
   ? __SCIFORGE_DEV_INSTANCE_ID__.trim()
   : ''
+const PAGE_INCARNATION_CLIENT_ID = globalThis.crypto?.randomUUID?.()
+  ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`
 
 type BridgeEnvelope<T> =
   | { ok: true; payload: T }
@@ -22,6 +28,7 @@ let installed = false
 let eventSource: EventSource | null = null
 let clientId = ''
 let bridgeUrl = ''
+let lastPublishedVisibleContextRevision: number | null = null
 const channelHandlers = new Map<string, Set<ChannelHandler>>()
 
 function defaultBridgeUrl(): string {
@@ -37,28 +44,8 @@ function detectPlatform(): string {
   return 'browser'
 }
 
-function storageGet(storage: Storage | undefined, key: string): string | null {
-  try {
-    return storage?.getItem(key) ?? null
-  } catch {
-    return null
-  }
-}
-
-function storageSet(storage: Storage | undefined, key: string, value: string): void {
-  try {
-    storage?.setItem(key, value)
-  } catch {
-    /* best effort only */
-  }
-}
-
 function resolveClientId(): string {
-  const existing = storageGet(globalThis.sessionStorage, CLIENT_ID_STORAGE_KEY)
-  if (existing) return existing
-  const created = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`
-  storageSet(globalThis.sessionStorage, CLIENT_ID_STORAGE_KEY, created)
-  return created
+  return PAGE_INCARNATION_CLIENT_ID
 }
 
 function ensureEventSource(): void {
@@ -119,7 +106,35 @@ async function invoke<T>(channel: string, payload?: unknown): Promise<T> {
   return envelope.payload
 }
 
+async function submitSurfaceCapture(request: DevBrowserSurfaceCaptureRequest): Promise<void> {
+  const capture = await captureDevBrowserSurface(
+    request,
+    () => lastPublishedVisibleContextRevision
+  )
+  const response = await fetch(`${bridgeUrl}/surface-capture`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-SciForge-Client': clientId,
+      ...(DEV_INSTANCE_ID ? { 'X-SciForge-Dev-Instance': DEV_INSTANCE_ID } : {})
+    },
+    body: JSON.stringify(capture)
+  })
+  if (!response.ok) {
+    const envelope = await response.json().catch(() => null) as { message?: unknown } | null
+    const message = typeof envelope?.message === 'string'
+      ? envelope.message
+      : `Bridge returned HTTP ${response.status}.`
+    throw new Error(`Browser pixel capture was rejected: ${message}`)
+  }
+}
+
 function createApi(): SciForgeApi {
+  const publishVisibleContext: SciForgeApi['visibleContext']['publish'] = async (snapshot) => {
+    const published = await invoke<VisibleContextSnapshot>('visibleContext:publish', snapshot)
+    lastPublishedVisibleContextRevision = published.revision
+    return published
+  }
   const getConnectPhoneStatus: SciForgeApi['getConnectPhoneStatus'] = () => invoke('connectPhone:status')
   const startConnectPhoneInstallQr: SciForgeApi['startConnectPhoneInstallQr'] = (provider, options) =>
     invoke('connectPhone:install:qrcode', { provider, isLark: options?.isLark })
@@ -146,6 +161,16 @@ function createApi(): SciForgeApi {
     getSettings: () => invoke('settings:get'),
     setSettings: (partial) => invoke('settings:set', partial),
     onSettingsChanged,
+    remoteWorkspace: {
+      list: () => invoke('remoteWorkspace:list'),
+      get: () => invoke('remoteWorkspace:get'),
+      attach: (input) => invoke('remoteWorkspace:attach', input),
+      select: (input) => invoke('remoteWorkspace:select', input),
+      reconnect: (input) => invoke('remoteWorkspace:reconnect', input),
+      close: (input) => invoke('remoteWorkspace:close', input),
+      onSnapshotChanged: (handler) =>
+        onChannel('remoteWorkspace:snapshot-changed', handler)
+    },
     getModelAccessStatus: () => invoke('modelAccess:status'),
     fetchUpstreamModels: () => invoke('upstream:models'),
     traces: {
@@ -154,18 +179,16 @@ function createApi(): SciForgeApi {
       export: (traceIds) => invoke('traces:export', { traceIds }),
       clear: () => invoke('traces:clear')
     },
+    extensions: {
+      list: () => invoke('extensions:list'),
+      install: (input) => invoke('extensions:install', input),
+      uninstall: (input) => invoke('extensions:uninstall', input),
+      rollback: (input) => invoke('extensions:rollback', input),
+      setEnabled: (input) => invoke('extensions:set-enabled', input)
+    },
     getConnectPhoneStatus,
     getScheduleStatus: () => invoke('schedule:status'),
     runScheduleTask: (taskId) => invoke('schedule:task:run', taskId),
-    getWorkflowStatus: () => invoke('workflow:status'),
-    runWorkflow: (workflowId, input) => invoke('workflow:run', { workflowId, input }),
-    stopWorkflow: (workflowId) => invoke('workflow:stop', workflowId),
-    runWorkflowNode: (workflowId, nodeId) => invoke('workflow:node:run', { workflowId, nodeId }),
-    testWorkflowNode: (workflowId, nodeId, mockJson) =>
-      invoke('workflow:node:test', { workflowId, nodeId, mockJson }),
-    resolveWorkflowApproval: (token, decision) =>
-      invoke('workflow:approval:resolve', { token, decision }),
-    checkWorkflowCode: (language, code) => invoke('workflow:code:check', { language, code }),
     startConnectPhoneInstallQr,
     pollConnectPhoneInstall,
     getDiscordBotStatus: () => invoke('discord:status'),
@@ -226,24 +249,6 @@ function createApi(): SciForgeApi {
       invoke('scientific-plotting:status', { workspaceRoot }),
     prepareScientificPlottingReference: (request) =>
       invoke('scientific-plotting:prepare-reference', request),
-    getVisualDocumentStatus: (workspaceRoot) =>
-      invoke('visual-document:status', { workspaceRoot }),
-    openVisualDocument: (request) =>
-      invoke('visual-document:open', request),
-    insertVisualDocumentArtifact: (request) =>
-      invoke('visual-document:insert-artifact', request),
-    updateVisualDocumentContext: (request) =>
-      invoke('visual-document:update-context', request),
-    saveVisualDocumentAnnotations: (request) =>
-      invoke('visual-document:save-annotations', request),
-    exportVisualReviewPacket: (request) =>
-      invoke('visual-document:export-review-packet', request),
-    createVisualCandidateRevision: (request) =>
-      invoke('visual-document:create-candidate', request),
-    acceptVisualCandidateRevision: (request) =>
-      invoke('visual-document:accept-candidate', request),
-    rejectVisualCandidateRevision: (request) =>
-      invoke('visual-document:reject-candidate', request),
     extractVisualStyleProfile: (request) =>
       invoke('visual-style:extract-profile', request),
     saveVisualStyleProfile: (request) =>
@@ -252,11 +257,22 @@ function createApi(): SciForgeApi {
     saveSkillFile: (rootPath, skillName, content) =>
       invoke('skill:save-file', { rootPath, skillName, content }),
     openSkillRoot: (rootPath) => invoke('skill:open-root', rootPath),
-    getGitBranches: (workspaceRoot) => invoke('git:branches', workspaceRoot),
-    switchGitBranch: (workspaceRoot, branch) =>
-      invoke('git:switch-branch', { workspaceRoot, branch }),
-    createAndSwitchGitBranch: (workspaceRoot, branch) =>
-      invoke('git:create-and-switch-branch', { workspaceRoot, branch }),
+    getGitBranches: (workspaceRoot, workspaceLocator) => invoke('git:branches', {
+      workspaceRoot,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    }),
+    switchGitBranch: (workspaceRoot, branch, workspaceLocator) =>
+      invoke('git:switch-branch', {
+        workspaceRoot,
+        branch,
+        ...(workspaceLocator ? { workspaceLocator } : {})
+      }),
+    createAndSwitchGitBranch: (workspaceRoot, branch, workspaceLocator) =>
+      invoke('git:create-and-switch-branch', {
+        workspaceRoot,
+        branch,
+        ...(workspaceLocator ? { workspaceLocator } : {})
+      }),
     listEditors: () => invoke('editor:list'),
     openEditorPath: (options) => invoke('editor:open-path', options),
     listWorkspaceDirectory: (options) => invoke('file:list-workspace-directory', options),
@@ -264,6 +280,8 @@ function createApi(): SciForgeApi {
     readWorkspaceFile: (options) => invoke('file:read-workspace', options),
     readWorkspaceImage: (options) => invoke('file:read-workspace-image', options),
     writeWorkspaceFile: (payload) => invoke('file:write-workspace', payload),
+    readWorkspaceFileRange: (payload) => invoke('file:read-workspace-range', payload),
+    searchWorkspaceText: (payload) => invoke('file:search-workspace-text', payload),
     createWorkspaceFile: (payload) => invoke('file:create-workspace', payload),
     createWorkspaceDirectory: (payload) => invoke('file:create-workspace-directory', payload),
     saveWorkspaceClipboardImage: (payload) => invoke('file:save-workspace-clipboard-image', payload),
@@ -301,23 +319,14 @@ function createApi(): SciForgeApi {
     listWriteInlineCompletionDebugEntries: () => invoke('write:inline-completion-debug:list'),
     clearWriteInlineCompletionDebugEntries: () => invoke('write:inline-completion-debug:clear'),
     exportWriteDocument: (payload) => invoke('write:export', payload),
-    copyWriteDocumentAsRichText: (payload) => invoke('write:copy-rich-text', payload),
     visibleContext: {
-      publish: (snapshot) => invoke('visibleContext:publish', snapshot),
+      publish: publishVisibleContext,
       get: () => invoke('visibleContext:get'),
+      registeredTargetRef: (request) =>
+        invoke('visibleContext:target-ref', request),
       readCapturePreview: (request) => invoke('visibleContext:capture:preview', request),
       onRefreshRequested: (handler) => onChannel('visibleContext:refresh-requested', handler),
       onCaptureStateChanged: (handler) => onChannel('visibleContext:capture-state', handler)
-    },
-    anchoredComments: {
-      list: (filter) => invoke('anchoredComments:list', filter),
-      get: (threadId) => invoke('anchoredComments:get', threadId),
-      upsert: (thread) => invoke('anchoredComments:upsert', thread),
-      delete: (threadId) => invoke('anchoredComments:delete', threadId),
-      readAsset: (asset) => invoke('anchoredComments:asset:read', asset),
-      capture: (request) => invoke('anchoredComments:capture', request),
-      submitFeedback: (request) => invoke('anchoredComments:feedback:submit', request),
-      feedbackStatus: (request) => invoke('anchoredComments:feedback:status', request)
     },
     speechToText: {
       transcribe: (payload) => invoke('speech:transcribe', payload)
@@ -381,12 +390,6 @@ function createApi(): SciForgeApi {
     logError: (category, message, detail) => invoke('log:error', { category, message, detail }),
     getLogPath: () => invoke('log:get-path'),
     openLogDir: () => invoke('log:open-dir'),
-    createTerminal: (payload) => invoke('terminal:create', payload),
-    writeToTerminal: (payload) => invoke('terminal:write', payload),
-    resizeTerminal: (payload) => invoke('terminal:resize', payload),
-    disposeTerminal: (sessionId) => invoke('terminal:dispose', sessionId),
-    onTerminalData: (handler) => onChannel('terminal:data', handler),
-    onTerminalExit: (handler) => onChannel('terminal:exit', handler),
     getPathForFile: (file) => (file as File & { path?: string }).path ?? file.name
   }
 }
@@ -408,5 +411,11 @@ export function installDevSciForgeBridge(): void {
   bridgeUrl = defaultBridgeUrl()
   clientId = resolveClientId()
   window.sciforge = createApi()
+  onChannel<DevBrowserSurfaceCaptureRequest>(
+    'devBrowserBridge:surface-capture-requested',
+    (request) => {
+      void submitSurfaceCapture(request).catch(() => undefined)
+    }
+  )
   ensureEventSource()
 }

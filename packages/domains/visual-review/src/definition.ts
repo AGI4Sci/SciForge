@@ -1,0 +1,49 @@
+import {
+  defineTrustedDomainPackage,
+  type TrustedDomainPackageDefinition,
+  type TrustedDomainPackageDefinitionInput
+} from '@sciforge/domain-sdk/contract'
+import manifest from '../sciforge.domain.json' with { type: 'json' }
+
+export const domainPackageDefinition: TrustedDomainPackageDefinition =
+  defineTrustedDomainPackage(manifest as TrustedDomainPackageDefinitionInput)
+
+export const VISUAL_REVIEW_DOMAIN_MODULE_ID = domainPackageDefinition.module.id
+export const VISUAL_REVIEW_DOMAIN_PACKAGE_NAME = domainPackageDefinition.packageName
+
+export const VISUAL_REVIEW_CAPABILITY_FACTORY_CONTRIBUTION = contributionFor(
+  'main',
+  'main.capability-factory'
+)
+export const VISUAL_REVIEW_RENDERER_RIGHT_PANEL_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.workbench-right-panel'
+)
+export const VISUAL_REVIEW_RENDERER_RIGHT_PANEL_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    VISUAL_REVIEW_RENDERER_RIGHT_PANEL_CONTRIBUTION.id
+  ]!
+export const VISUAL_REVIEW_RENDERER_COMMAND_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.command'
+)
+export const VISUAL_REVIEW_RENDERER_TOOLBAR_ACTION_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.workbench-toolbar-action'
+)
+export const VISUAL_REVIEW_RENDERER_TOOLBAR_ACTION_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    VISUAL_REVIEW_RENDERER_TOOLBAR_ACTION_CONTRIBUTION.id
+  ]!
+export const VISUAL_REVIEW_RENDERER_I18N_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.i18n-resource'
+)
+
+function contributionFor(process: 'main' | 'renderer', kind: string) {
+  const contribution = domainPackageDefinition.entrypoints
+    .find((entrypoint) => entrypoint.process === process)
+    ?.contributions.find((candidate) => candidate.kind === kind)
+  if (!contribution) throw new Error(`Visual Review manifest is missing ${process}:${kind}.`)
+  return contribution
+}

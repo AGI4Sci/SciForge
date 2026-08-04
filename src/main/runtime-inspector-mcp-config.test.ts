@@ -26,8 +26,7 @@ import { RuntimeInspectorToolNames } from '../../packages/workers/runtime-inspec
 const launch: RuntimeInspectorMcpLaunchConfig = {
   appPath: '/Applications/SciForge.app',
   execPath: '/Applications/SciForge.app/Contents/MacOS/SciForge',
-  isPackaged: false,
-  checkpointDataDir: '/tmp/sciforge-user-data'
+  isPackaged: false
 }
 
 function createSettings(): AppSettingsV1 {

@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { capabilityResourceHandleSchema } from '../../shared/capability-broker'
 import { WorkspacePreviewHost } from '../services/workspace-preview'
+import { ControlledProcessService } from '../processes/controlled-process-service'
+import { VersionControlWorkspaceService } from '../services/version-control-workspace-service'
 import { APP_CAPABILITY_IDS, WORKSPACE_PREVIEW_RESOURCE_KIND } from './app-registry'
 import { CapabilityBroker } from './broker'
 import {
@@ -40,7 +42,9 @@ describe('Workspace Preview capability content transport integration', () => {
       })
       const catalog = createApplicationDomainCatalog({ getUserDataDir: () => root })
       const broker = new CapabilityBroker(createApplicationCapabilityRegistry(catalog, {
-        workspacePreviewHost
+        controlledProcessService: new ControlledProcessService(),
+        workspacePreviewHost,
+        versionControlWorkspaceService: new VersionControlWorkspaceService()
       }))
       const caller = {
         audience: 'ui' as const,

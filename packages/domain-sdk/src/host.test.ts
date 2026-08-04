@@ -4,7 +4,11 @@ import {
   isDomainAgentArtifactConsumer,
   isDomainMainActionGuard,
   isDomainMainRuntimeLifecycleContribution,
+  type DomainMainTurnLifecycleEvent,
   type DomainMainModelAccessHost,
+  type DomainRendererCapabilityChange,
+  type DomainRendererCapabilityInvoker,
+  type DomainVisibleContextInspection,
   type DomainWorkbenchRightPanelRenderContext
 } from './host.js'
 
@@ -76,5 +80,89 @@ describe('domain host contracts', () => {
       apiKey: 'runtime-secret',
       model: 'sciforge-router'
     })
+  })
+
+  it('models process-neutral turn lifecycle events', () => {
+    const before: DomainMainTurnLifecycleEvent = {
+      kind: 'before-turn',
+      state: 'starting',
+      runtimeId: 'runtime-1',
+      threadId: 'thread-1',
+      workspaceRoot: '/workspace',
+      occurredAt: '2026-07-28T00:00:00.000Z'
+    }
+    const after: DomainMainTurnLifecycleEvent = {
+      kind: 'after-turn',
+      state: 'completed',
+      runtimeId: 'runtime-1',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      workspaceRoot: '/workspace',
+      occurredAt: '2026-07-28T00:00:01.000Z'
+    }
+
+    assert.equal(before.kind, 'before-turn')
+    assert.equal(after.turnId, 'turn-1')
+  })
+
+  it('subscribes to canonical capability changes by resource reference', async () => {
+    let listener: ((change: DomainRendererCapabilityChange) => void) | undefined
+    const invoker: DomainRendererCapabilityInvoker = {
+      observe: async () => {
+        throw new Error('not used')
+      },
+      invoke: async () => {
+        throw new Error('not used')
+      },
+      subscribe: async (resourceRef, next) => {
+        assert.equal(resourceRef, 'resource-ref-1')
+        listener = next
+        return () => {
+          listener = undefined
+        }
+      }
+    }
+    const dispose = await invoker.subscribe?.('resource-ref-1', () => undefined)
+
+    assert.equal(typeof dispose, 'function')
+    listener?.({
+      resourceRef: 'resource-ref-1',
+      resourceKind: 'fixture.state',
+      actionId: 'fixture.state.refresh',
+      beforeRevision: 'revision-1',
+      afterRevision: 'revision-2',
+      changedAt: '2026-07-28T00:00:00.000Z'
+    })
+    dispose?.()
+    assert.equal(listener, undefined)
+  })
+
+  it('keeps redacted visual targets opaque to package overlays', () => {
+    const denied: DomainVisibleContextInspection = {
+      selectable: false,
+      reason: 'redacted'
+    }
+    const visible: DomainVisibleContextInspection = {
+      selectable: true,
+      targetRef: 'host-signed-target-ref',
+      componentId: 'fixture.viewer',
+      target: {
+        id: 'fixture.target',
+        kind: 'region'
+      },
+      bounds: {
+        x: 10,
+        y: 20,
+        width: 300,
+        height: 200
+      }
+    }
+
+    assert.equal(denied.selectable, false)
+    assert.equal(visible.selectable, true)
+    if (visible.selectable) {
+      assert.equal(visible.targetRef, 'host-signed-target-ref')
+      assert.equal(visible.bounds.width, 300)
+    }
   })
 })

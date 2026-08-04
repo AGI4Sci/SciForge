@@ -1,5 +1,7 @@
 import { Extension } from '@tiptap/core'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
+import { withPinnedWorkspaceLocator } from '../../remote-workspace/placement'
+import { useWriteWorkspaceStore } from '../write-workspace-store'
 
 export type WritePasteImageOptions = {
   getWorkspaceRoot: () => string
@@ -50,12 +52,22 @@ export const WritePasteImage = Extension.create<WritePasteImageOptions>({
 
             event.preventDefault()
             const imageDirectory = options.getImageDirectory().trim()
+            let input
+            try {
+              input = withPinnedWorkspaceLocator(
+                {
+                  workspaceRoot,
+                  currentFilePath: filePath,
+                  ...(imageDirectory ? { imageDirectory } : {})
+                },
+                useWriteWorkspaceStore.getState().pinnedWorkspaceLocator
+              )
+            } catch (error) {
+              options.onError(error instanceof Error ? error.message : String(error))
+              return true
+            }
             void window.sciforge
-              .saveWorkspaceClipboardImage({
-                workspaceRoot,
-                currentFilePath: filePath,
-                ...(imageDirectory ? { imageDirectory } : {})
-              })
+              .saveWorkspaceClipboardImage(input)
               .then((result) => {
                 if (!result.ok) {
                   options.onError(result.message)

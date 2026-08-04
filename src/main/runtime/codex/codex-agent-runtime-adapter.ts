@@ -53,6 +53,12 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
   return {
     id: 'codex',
     transport: 'jsonrpc_stdio',
+    subagents: {
+      spawn: (_context, input) => service.spawnSubagent(input),
+      inspect: (_context, input) => service.inspectSubagent(input),
+      message: (_context, input) => service.messageSubagent(input),
+      cancel: (_context, input) => service.cancelSubagent(input)
+    },
 
     async connect() {
       const result = await service.connect()
@@ -1097,12 +1103,16 @@ function mergeCodexChild(
       }
     : next.transcriptRef ?? previous.transcriptRef
   const latest = latestCodexChild(previous, next)
+  const terminal = terminalCodexChild(previous, next)
   return {
     ...previous,
     ...next,
     id: preferExistingId ? previous.id : next.id,
     kind: preferExistingThreadIdentity ? previous.kind : next.kind,
-    status: latest.status,
+    // A child attempt cannot become active again after a terminal event. Native
+    // thread snapshots may retain a newer "running" timestamp after the
+    // canonical completion event, so terminal lifecycle evidence must win.
+    status: terminal?.status ?? latest.status,
     ...(previous.usage || next.usage
       ? { usage: { ...(previous.usage ?? {}), ...(next.usage ?? {}) } }
       : {}),
@@ -1126,6 +1136,20 @@ function mergeCodexChild(
         : {})
     }
   }
+}
+
+function terminalCodexChild(
+  previous: AgentRuntimeChild,
+  next: AgentRuntimeChild
+): AgentRuntimeChild | null {
+  const terminal = [previous, next].filter((child) => (
+    child.status === 'completed' ||
+    child.status === 'failed' ||
+    child.status === 'aborted'
+  ))
+  if (terminal.length === 0) return null
+  if (terminal.length === 1) return terminal[0]
+  return latestCodexChild(terminal[0], terminal[1])
 }
 
 function latestCodexChild(previous: AgentRuntimeChild, next: AgentRuntimeChild): AgentRuntimeChild {

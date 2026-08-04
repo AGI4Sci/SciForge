@@ -486,6 +486,109 @@ test('structured 2xx Responses errors fall back only before any output or ambigu
   }
 });
 
+test('completed Responses payloads with error null remain successful in non-stream and stream modes', async () => {
+  const completed = {
+    id: 'resp_visual_evidence',
+    object: 'response',
+    created_at: 1_775_000_000,
+    status: 'completed',
+    error: null,
+    incomplete_details: null,
+    model: 'configured-model',
+    output: [
+      {
+        id: 'msg_visual_evidence',
+        type: 'message',
+        status: 'completed',
+        role: 'assistant',
+        content: [{
+          type: 'output_text',
+          annotations: [],
+          text: '{"summary":"Grounded visual evidence","claims":[{"artifactId":"source"}]}',
+        }],
+      },
+    ],
+    output_text: '{"summary":"Grounded visual evidence","claims":[{"artifactId":"source"}]}',
+    usage: {
+      input_tokens: 128,
+      output_tokens: 32,
+      total_tokens: 160,
+    },
+  };
+
+  for (const stream of [false, true]) {
+    let calls = 0;
+    const result = await new UpstreamProtocolNegotiator().request({
+      request: { ...request, stream },
+      baseUrl: `https://responses-null-error-${stream ? 'stream' : 'json'}.example/v1`,
+      apiKey: 'secret',
+      model: 'configured-model',
+      compatibility: {
+        preferredProtocol: 'responses',
+        allowedProtocols: ['responses'],
+      },
+      fetchImpl: async () => {
+        calls += 1;
+        return stream
+          ? sse([['response.completed', {
+            type: 'response.completed',
+            response: completed,
+          }]])
+          : Response.json(completed);
+      },
+      preferredProtocol: 'responses',
+    });
+
+    assert.equal(result.protocol, 'responses');
+    assert.equal(result.response.status, 'completed');
+    assert.equal(result.response.error, null);
+    assert.equal(result.response.output_text, completed.output_text);
+    assert.equal(calls, 1);
+  }
+});
+
+test('Responses payloads with real error objects remain explicit failures', async () => {
+  const failed = {
+    id: 'resp_failed',
+    object: 'response',
+    status: 'failed',
+    error: {
+      code: 'provider_error',
+      message: 'The provider rejected the request.',
+    },
+    output: [],
+  };
+
+  for (const stream of [false, true]) {
+    let calls = 0;
+    await assert.rejects(
+      new UpstreamProtocolNegotiator().request({
+        request: { ...request, stream },
+        baseUrl: `https://responses-real-error-${stream ? 'stream' : 'json'}.example/v1`,
+        apiKey: 'secret',
+        model: 'configured-model',
+        compatibility: {
+          preferredProtocol: 'responses',
+          allowedProtocols: ['responses'],
+        },
+        fetchImpl: async () => {
+          calls += 1;
+          return stream
+            ? sse([['response.completed', {
+              type: 'response.completed',
+              response: failed,
+            }]])
+            : Response.json(failed);
+        },
+        preferredProtocol: 'responses',
+      }),
+      (error: unknown) => error instanceof UpstreamRequestError
+        && error.code === 'upstream_error_payload',
+    );
+    assert.equal(calls, 1);
+  }
+});
+
 test('tool-schema incompatibility fails closed before sending any provider request', async () => {
   let calls = 0;
   const negotiator = new UpstreamProtocolNegotiator();

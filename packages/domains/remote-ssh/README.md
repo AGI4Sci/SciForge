@@ -153,6 +153,51 @@ fragments, or `user@host` destinations. Alias validation accepts one literal `Ho
 wildcards or command-line options. Credentials and host-key trust stay in the user's OpenSSH and OS
 credential configuration.
 
+## Remote Workspace Host
+
+Remote SSH contributes `main.workspace-host-provider`. Opening a cluster directory remains a
+two-step governed operation. `remote-ssh.workspace-host-session.open` first consumes an authorized
+target resource and records the absolute Linux workspace root plus network-egress policy in a
+package-owned, one-attach authorization. The generic Workspace Host registry then receives only its
+opaque authorization ID. It never decodes the Broker resource or receives a target ID, SSH alias,
+SOCKS endpoint, credential, or raw SSH stream.
+
+The provider revalidates the workspace binding and target revision, ensures the existing VPN
+environment, and uses the same package-owned `ProxyCommand` as probes and transfers. It accepts the
+canonical Linux x64 artifact supplied by the host, verifies every local digest, probes Linux x64,
+and uses the artifact's verified bundled Node runtime. It uploads into a private staging directory,
+verifies size, SHA-256, and executable metadata on the target, and atomically installs the exact
+server/protocol/domain cohort under
+`~/.sciforge/server/<versioned-cohort>/`.
+
+Electron and the workbench UI stay local. Directory listing, contained file reads/writes, search,
+watched changes, controlled processes, Git, Codex, and scientific previews are multiplexed over
+the SDK Workspace Host protocol and run beside the cluster data. The streaming OpenSSH process is
+main-process-only and is deterministically disposed.
+
+Lifecycle mode is discovered rather than assumed. A verified per-user daemon and Unix-socket relay
+can preserve one server session and event journal across VPN/SSH reattachment. When the target
+cannot host that daemon, the same protocol reports `connection-session`; the UI must not claim
+that foreground processes survive disconnect. Scheduler-owned jobs remain independent in either
+mode.
+
+Offline GPU targets may use no egress, a loopback-only desktop CONNECT relay exposed through an SSH
+reverse forward, or a separately authorized CPU target. CPU selection uses
+`remote-ssh.egress-session.open`; the resulting opaque ID is resolved only inside this package and
+allowed connections use `ssh -W`. Enabled routes require an exact hostname/port allowlist. The
+server receives only a remote-loopback proxy endpoint, bearer credential, and expiry in the
+encrypted handshake. Target identity, alias, selection ID, and the desktop relay endpoint never
+enter server arguments, observations, events, or journals. Heartbeat, renewal, revision changes,
+route loss, close, and reconnect revoke or replace leases without choosing a silent fallback.
+
+Remote Codex model traffic uses a separate workspace-scoped Model Router bridge, never the general
+CONNECT allowlist. The provider acquires a short-lived loopback lease from the generic Workspace
+Host context, creates a second loopback-only SSH reverse forward, and sends only the GPU-loopback
+`/v1` base URL, scoped bearer token, and expiry in the sensitive handshake. The desktop's static
+runtime key and upstream provider settings never enter this package, SSH arguments, or the remote
+server. Model access has its own renew and revoke controls but shares the Workspace Host
+connection's close, reconnect, and route-loss lifecycle.
+
 ## Guided setup in the panel
 
 When no target is configured, the package-owned right panel presents four resumable steps:
@@ -193,6 +238,12 @@ The current package contract and canonical main-process implementation support:
 - bounded non-interactive command execution through system `ssh`;
 - cancellation of the local SSH process and execution timeouts;
 - workspace-bounded uploads and downloads through system `sftp`;
+- versioned, digest-verified Workspace Host deployment with a zero-upload installed-cohort probe;
+- a local workbench backed by cluster-resident files, Git, controlled processes, Codex, and
+  scientific previews over the generic Workspace Host protocol;
+- persistent-daemon attach and replay when the target supports a private Unix socket, with a
+  truthful connection-session fallback when it does not;
+- explicit no-egress, allowlisted local egress, or separately authorized CPU-target egress;
 - global, per-lab, and per-target concurrency limits; and
 - stable failure classification with redaction of common secret material from captured output.
 
@@ -245,7 +296,7 @@ Remote SSH does not:
   tunnelling;
 - edit the user's OpenSSH configuration, copy final-server keys into an environment, or enable SSH
   agent forwarding;
-- provide a persistent interactive terminal; or
+- expose a raw SSH stream, uncontrolled interactive shell, or arbitrary tunnel to the renderer; or
 - guarantee that cancelling the local SSH process terminates a remote child process.
 
 Long-running computations should therefore be submitted to a remote batch scheduler or another

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AddressInfo } from 'node:net'
 import { request } from 'node:http'
 import { readFileSync } from 'node:fs'
+import { createCanvas } from '@napi-rs/canvas'
 import { z } from 'zod'
 import { CapabilityBroker } from './capabilities/broker'
 import { registerCapabilityIpc } from './capabilities/ipc'
@@ -18,7 +19,7 @@ let server: TestServer | null = null
 
 function extractLiteralInvokeChannels(source: string, callee: 'ipcRenderer.invoke' | 'invoke'): string[] {
   const escaped = callee.replace('.', '\\.')
-  const pattern = new RegExp(`${escaped}\\(\\s*['"]([^'"]+)['"]`, 'g')
+  const pattern = new RegExp(`${escaped}(?:<[^>]+>)?\\(\\s*['"]([^'"]+)['"]`, 'g')
   return [...new Set([...source.matchAll(pattern)].map((match) => match[1]).filter(Boolean))].sort()
 }
 
@@ -427,18 +428,16 @@ describe('dev browser bridge server', () => {
       port: 0
     })
 
-    for (const channel of ['agentRuntime:connect', 'agentRuntime:startTurn', 'visual-document:open'] as const) {
+    for (const channel of ['agentRuntime:connect', 'agentRuntime:startTurn'] as const) {
       const response = await postJson('/invoke', {
         channel,
-        payload: channel === 'visual-document:open'
-          ? { workspaceRoot: '/tmp/workspace', documentId: 'thread-test' }
-          : { runtimeId: 'sciforge' }
+        payload: { runtimeId: 'sciforge' }
       })
 
       expect(response.status).toBe(200)
       expect(JSON.parse(response.body).ok).toBe(true)
     }
-    expect(invoke).toHaveBeenCalledTimes(3)
+    expect(invoke).toHaveBeenCalledTimes(2)
   })
 
   it('allows callers to explicitly opt into mutating channels', async () => {
@@ -568,6 +567,87 @@ describe('dev browser bridge server', () => {
     })
     expect(server.sendTo(999, 'visibleContext:refresh-requested')).toBe(false)
     expect(server.hasClient(999)).toBe(false)
+    sse.close()
+  })
+
+  it('returns revision-bound verified PNG pixels from the matching browser client', async () => {
+    server = await startDevBrowserBridgeServer({
+      dispatcher: { invoke: vi.fn(async () => ({ ok: true })) },
+      port: 0
+    })
+    const sse = await openSse('/events?clientId=browser-capture')
+    const capturePromise = server.captureSurface(1, {
+      revision: 7,
+      bounds: { x: 10, y: 20, width: 300, height: 400 }
+    })
+
+    await vi.waitFor(() => {
+      expect(sse.chunks.join('')).toContain(
+        '"channel":"devBrowserBridge:surface-capture-requested"'
+      )
+    })
+    const captureMessage = sse.chunks.join('')
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => JSON.parse(line.slice('data: '.length)) as {
+        channel?: string
+        payload?: { requestId?: string; revision?: number }
+      })
+      .find((message) => message.channel === 'devBrowserBridge:surface-capture-requested')
+    const canvas = createCanvas(600, 800)
+    const response = await postJson('/surface-capture', {
+      requestId: captureMessage?.payload?.requestId,
+      revision: captureMessage?.payload?.revision,
+      ok: true,
+      viewportWidth: 1_000,
+      viewportHeight: 800,
+      pngBase64: canvas.toBuffer('image/png').toString('base64')
+    }, 'browser-capture')
+
+    expect(response.status).toBe(200)
+    await expect(capturePromise).resolves.toMatchObject({
+      png: expect.any(Uint8Array),
+      width: 600,
+      height: 800,
+      scaleFactor: 2,
+      bounds: { x: 10, y: 20, width: 300, height: 400 }
+    })
+    sse.close()
+  })
+
+  it('rejects browser pixels when their revision does not match the capture challenge', async () => {
+    server = await startDevBrowserBridgeServer({
+      dispatcher: { invoke: vi.fn(async () => ({ ok: true })) },
+      port: 0
+    })
+    const sse = await openSse('/events?clientId=browser-stale-capture')
+    const capturePromise = server.captureSurface(1, { revision: 9 })
+    const captureRejection = expect(capturePromise).rejects.toThrow(/revision does not match/u)
+    await vi.waitFor(() => {
+      expect(sse.chunks.join('')).toContain(
+        '"channel":"devBrowserBridge:surface-capture-requested"'
+      )
+    })
+    const captureMessage = sse.chunks.join('')
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => JSON.parse(line.slice('data: '.length)) as {
+        channel?: string
+        payload?: { requestId?: string }
+      })
+      .find((message) => message.channel === 'devBrowserBridge:surface-capture-requested')
+    const canvas = createCanvas(100, 80)
+    const response = await postJson('/surface-capture', {
+      requestId: captureMessage?.payload?.requestId,
+      revision: 8,
+      ok: true,
+      viewportWidth: 100,
+      viewportHeight: 80,
+      pngBase64: canvas.toBuffer('image/png').toString('base64')
+    }, 'browser-stale-capture')
+
+    expect(response.status).toBe(400)
+    await captureRejection
     sse.close()
   })
 

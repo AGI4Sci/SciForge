@@ -1,6 +1,7 @@
 import type { AttachmentReference } from '../agent/types'
 import type { AgentRuntimeFileReference } from '@shared/agent-runtime-contract'
 import type { AgentRuntimeId } from '@shared/app-settings'
+import { workspaceLocatorSchema } from '@sciforge/domain-sdk/workspace-host'
 import {
   readBrowserStorageItem,
   removeBrowserStorageItem,
@@ -132,7 +133,10 @@ function sanitizeQueuedMessage(value: unknown, restored: boolean): QueuedUserMes
   const model = text(input.model)
   const modelLabel = text(input.modelLabel)
   const reasoningEffort = text(input.reasoningEffort)
-  const remoteTargetId = text(input.remoteTargetId)
+  const workspaceLocatorResult = workspaceLocatorSchema.safeParse(input.workspaceLocator)
+  const workspaceLocator = workspaceLocatorResult.success
+    ? workspaceLocatorResult.data
+    : undefined
   const attachmentIds = stringList(input.attachmentIds)
   const attachments = Array.isArray(input.attachments)
     ? input.attachments.map(attachment).filter((item): item is AttachmentReference => item != null)
@@ -166,7 +170,7 @@ function sanitizeQueuedMessage(value: unknown, restored: boolean): QueuedUserMes
     ...(model ? { model } : {}),
     ...(modelLabel ? { modelLabel } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
-    ...(remoteTargetId ? { remoteTargetId } : {}),
+    ...(workspaceLocator ? { workspaceLocator } : {}),
     ...(attachmentIds?.length ? { attachmentIds } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(fileReferences.length ? { fileReferences } : {}),

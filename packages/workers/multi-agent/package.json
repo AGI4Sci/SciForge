@@ -4,7 +4,7 @@
   "license": "MIT",
   "type": "module",
   "private": false,
-  "description": "Shared SciForge multi-agent child-run contract, store, and bounded runtime.",
+  "description": "Shared SciForge multi-agent child-run contract, store, and supervised runtime.",
   "sciforge": {
     "lifecycleLayer": "workers",
     "skillFacing": false,

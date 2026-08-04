@@ -438,10 +438,13 @@ export function createThreadActions(
     }
     try {
       const settings = await rendererRuntimeClient.getSettings()
-      const requestedWorkspaceRoot = normalizeWorkspaceRoot(options.workspaceRoot)
+      const workspaceLocator = get().workspaceLocator
+      const requestedWorkspaceRoot = normalizeWorkspaceRoot(
+        options.workspaceRoot ?? workspaceLocator?.path
+      )
       const settingsWorkspaceRoot = normalizeWorkspaceRoot(settings.workspaceRoot)
       const workspaceRoot = resolveDraftWorkspaceRoot(get(), settingsWorkspaceRoot, requestedWorkspaceRoot)
-      if (workspaceRoot && workspaceRoot !== settingsWorkspaceRoot) {
+      if (!workspaceLocator && workspaceRoot && workspaceRoot !== settingsWorkspaceRoot) {
         try {
           await rendererRuntimeClient.setSettings({ workspaceRoot })
         } catch (error) {
@@ -466,7 +469,7 @@ export function createThreadActions(
       const codeWorkspaceRoots = rememberCodeWorkspaceRoots(get().codeWorkspaceRoots, [workspaceRoot])
       set({ codeWorkspaceRoots })
       let reusableThreadId: string | null = null
-      if (!options.forceNew) {
+      if (!options.forceNew && !workspaceLocator) {
         const p = getProvider()
         reusableThreadId = await findReusableEmptyThreadId(
           get(),
@@ -809,7 +812,9 @@ export function createThreadActions(
         ...(thread.title ? { title: thread.title } : {}),
         ...(latestQueued.model ? { model: latestQueued.model } : {}),
         ...(latestQueued.reasoningEffort ? { reasoningEffort: latestQueued.reasoningEffort } : {}),
-        ...(latestQueued.remoteTargetId ? { remoteTargetId: latestQueued.remoteTargetId } : {}),
+        ...(latestQueued.workspaceLocator
+          ? { workspaceLocator: latestQueued.workspaceLocator }
+          : {}),
         ...(latestQueued.governanceProfile ? { governanceProfile: latestQueued.governanceProfile } : {}),
         displayText: latestQueued.displayText ?? latestQueued.text,
         ...(latestQueued.attachmentIds?.length ? { attachmentIds: latestQueued.attachmentIds } : {}),
@@ -1050,7 +1055,7 @@ export function createThreadActions(
       : null
     const sourceRoute = queued?.sourceRoute ?? overrides?.sourceRoute ?? get().route
     const requestedGovernanceProfile = queued?.governanceProfile ?? overrides?.governanceProfile
-    const remoteTargetId = (queued?.remoteTargetId ?? overrides?.remoteTargetId)?.trim() || ''
+    const workspaceLocator = queued?.workspaceLocator ?? overrides?.workspaceLocator
     const requestedTargetThreadId = (queued?.targetThreadId ?? overrides?.targetThreadId)?.trim() || ''
     const initialState = get()
     const initialActiveThreadId = initialState.activeThreadId
@@ -1136,7 +1141,7 @@ export function createThreadActions(
             ...(composerModel ? { model: composerModel } : {}),
             ...(userModelChip ? { modelLabel: userModelChip } : {}),
             ...(reasoningEffort ? { reasoningEffort } : {}),
-            ...(remoteTargetId ? { remoteTargetId } : {}),
+            ...(workspaceLocator ? { workspaceLocator } : {}),
             ...(overrides?.guiPlan ? { guiPlan: overrides.guiPlan } : {}),
             ...(attachmentIds?.length ? { attachmentIds } : {}),
             ...(attachments?.length ? { attachments } : {}),
@@ -1206,7 +1211,7 @@ export function createThreadActions(
       ...(composerModel ? { model: composerModel } : {}),
       ...(userModelChip ? { modelLabel: userModelChip } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
-      ...(remoteTargetId ? { remoteTargetId } : {}),
+      ...(workspaceLocator ? { workspaceLocator } : {}),
       ...(overrides?.guiPlan ? { guiPlan: overrides.guiPlan } : {}),
       ...(attachmentIds.length ? { attachmentIds } : {}),
       ...(attachments.length ? { attachments } : {}),
@@ -1270,7 +1275,11 @@ export function createThreadActions(
     if (!activeThreadId) {
       try {
         const settings = await rendererRuntimeClient.getSettings()
-        const workspaceRoot = resolveDraftWorkspaceRoot(get(), settings.workspaceRoot)
+        const workspaceRoot = resolveDraftWorkspaceRoot(
+          get(),
+          settings.workspaceRoot,
+          workspaceLocator?.path
+        )
         if (!workspaceRoot) {
           if (!sendSessionStillFocused()) return false
           set({
@@ -1289,12 +1298,14 @@ export function createThreadActions(
         }
         const codeWorkspaceRoots = rememberCodeWorkspaceRoots(get().codeWorkspaceRoots, [workspaceRoot])
         set({ codeWorkspaceRoots })
-        const reusableThreadId = await findReusableEmptyThreadId(
-          get(),
-          p,
-          workspaceRoot,
-          (thread) => isCodeThread(thread, get().remoteChannels)
-        )
+        const reusableThreadId = workspaceLocator
+          ? null
+          : await findReusableEmptyThreadId(
+              get(),
+              p,
+              workspaceRoot,
+              (thread) => isCodeThread(thread, get().remoteChannels)
+            )
         const reusableThread = reusableThreadId
           ? get().threads.find((thread) => thread.id === reusableThreadId) ?? null
           : null
@@ -1305,6 +1316,7 @@ export function createThreadActions(
           reusableThreadId == null
             ? await p.createThread({
                 workspace: workspaceRoot,
+                ...(workspaceLocator ? { workspaceLocator } : {}),
                 title: generatedTitle,
                 mode: mode ?? 'agent'
               })
@@ -1424,7 +1436,7 @@ export function createThreadActions(
         ...(sendingThread?.title ? { title: sendingThread.title } : {}),
         ...(composerModel ? { model: composerModel } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
-        ...(remoteTargetId ? { remoteTargetId } : {}),
+        ...(workspaceLocator ? { workspaceLocator } : {}),
         ...(governanceProfile ? { governanceProfile } : {}),
         ...(runtimeDisplayText ? { displayText: runtimeDisplayText } : {}),
         ...((queued?.guiPlan ?? overrides?.guiPlan) ? { guiPlan: queued?.guiPlan ?? overrides?.guiPlan } : {}),
@@ -1705,23 +1717,31 @@ export function createThreadActions(
     try {
       if (!activeThreadId) {
         const settings = await rendererRuntimeClient.getSettings()
-        const workspaceRoot = resolveDraftWorkspaceRoot(get(), settings.workspaceRoot)
+        const workspaceLocator = get().workspaceLocator
+        const workspaceRoot = resolveDraftWorkspaceRoot(
+          get(),
+          settings.workspaceRoot,
+          workspaceLocator?.path
+        )
         if (!workspaceRoot) {
           set({ error: i18n.t('common:workspaceRequiredToCreateThread') })
           return false
         }
         const codeWorkspaceRoots = rememberCodeWorkspaceRoots(get().codeWorkspaceRoots, [workspaceRoot])
         set({ codeWorkspaceRoots })
-        const reusableThreadId = await findReusableEmptyThreadId(
-          get(),
-          p,
-          workspaceRoot,
-          (thread) => isCodeThread(thread, get().remoteChannels)
-        )
+        const reusableThreadId = workspaceLocator
+          ? null
+          : await findReusableEmptyThreadId(
+              get(),
+              p,
+              workspaceRoot,
+              (thread) => isCodeThread(thread, get().remoteChannels)
+            )
         const createdThread =
           reusableThreadId == null
             ? await p.createThread({
                 workspace: workspaceRoot,
+                ...(workspaceLocator ? { workspaceLocator } : {}),
                 title: i18n.t('common:slashCommandReviewTitle'),
                 mode: 'agent'
               })

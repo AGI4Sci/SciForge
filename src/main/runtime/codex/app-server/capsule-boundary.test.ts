@@ -2,21 +2,21 @@ import { describe, expect, it } from 'vitest'
 import {
   CODEX_MAIN_IPC_CHANNELS,
   createCodexAppServerClient
-} from './json-rpc-client'
+} from '@sciforge/codex-runtime/app-server'
 import type {
   CodexAppServerJsonRpcRequest,
   CodexAppServerThreadStartParams
-} from './protocol'
+} from '@sciforge/codex-runtime/app-server'
 import {
   createCodexAppServerPendingRequestRegistry
-} from './request-registry'
+} from '@sciforge/codex-runtime/app-server'
 import {
   normalizeCodexEvent
 } from './event-normalizer'
 import {
   defaultCodexAppServerServerRequestResponse,
   visibleServerRequestFailureMessage
-} from './server-requests'
+} from '@sciforge/codex-runtime/app-server'
 
 describe('Codex app-server capsule boundaries', () => {
   it('exposes protocol, JSON-RPC, request, event, and reasoning seams from app-server', async () => {

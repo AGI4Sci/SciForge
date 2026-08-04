@@ -165,7 +165,7 @@ describe('CapabilityRegistry', () => {
     })).toThrow(/Optimistic revisions require resource scope/)
   })
 
-  it('discovers only actions registered for the caller audience and resource kind', () => {
+  it('discovers by exact ID and ranked unordered tokens with independent bounded filters', () => {
     const uiOnly = defineCapability({
       id: 'document.human-review',
       version: '1',
@@ -181,12 +181,49 @@ describe('CapabilityRegistry', () => {
       outputSchema: z.object({ ready: z.boolean() }).strict(),
       handler: async () => ({ output: { ready: true } })
     })
-    const registry = new CapabilityRegistry([readCapability(), uiOnly])
+    const openPreview = defineCapability({
+      id: 'workspace-preview.open',
+      version: '1',
+      title: 'Open Workspace Preview',
+      description: 'Open a workspace file through the canonical preview provider.',
+      audiences: ['ui', 'agent'],
+      scope: 'workspace',
+      producedResourceKinds: ['workspace-preview'],
+      effect: 'read',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'none' },
+      tags: ['workspace', 'preview', 'open'],
+      inputSchema: z.object({ path: z.string() }).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async () => ({ output: { ok: true } })
+    })
+    const registry = new CapabilityRegistry([readCapability(), uiOnly, openPreview])
 
-    expect(registry.discover(agent, { resourceKind: 'document' }).map((item) => item.id))
+    expect(registry.discover(agent, { acceptedResourceKind: 'document' }).map((item) => item.id))
       .toEqual(['document.read-section'])
-    expect(registry.discover(ui, { resourceKind: 'document' }).map((item) => item.id))
+    expect(registry.discover(ui, { acceptedResourceKind: 'document' }).map((item) => item.id))
       .toEqual(['document.human-review', 'document.read-section'])
+    expect(registry.discover(agent, {
+      capabilityId: 'workspace-preview.open',
+      text: 'words that do not match'
+    }).map((item) => item.id)).toEqual(['workspace-preview.open'])
+    expect(registry.discover(agent, {
+      text: 'file preview workspace open'
+    }).map((item) => item.id)).toEqual(['workspace-preview.open'])
+    expect(registry.discover(agent, {
+      text: 'open workspace file image png view'
+    }).map((item) => item.id)).toEqual(['workspace-preview.open'])
+    expect(registry.discover(agent, {
+      text: 'image png view'
+    })).toEqual([])
+    expect(registry.discover(agent, {
+      scope: 'workspace',
+      producedResourceKind: 'workspace-preview'
+    }).map((item) => item.id)).toEqual(['workspace-preview.open'])
+    expect(registry.discover(agent, {
+      providerFamily: 'managed-mcp'
+    })).toEqual([])
+    expect(registry.discover(ui, { limit: 1 })).toHaveLength(1)
   })
 })
 
@@ -401,6 +438,54 @@ describe('CapabilityBroker', () => {
       status: 'rejected',
       errorCode: 'revision_conflict'
     })
+  })
+
+  it('projects historical resource liveness and rejects retired references with a stable code', async () => {
+    const release = defineCapability({
+      id: 'document.release',
+      version: '1',
+      title: 'Release document',
+      description: 'Retires the broker resource after its provider is released.',
+      audiences: ['agent'],
+      scope: 'resource',
+      resourceKinds: ['document'],
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ released: z.boolean() }).strict(),
+      handler: async () => ({
+        output: { released: true },
+        changed: false,
+        retireResource: true
+      })
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([mutationCapability(), release]))
+    const handle = issueDocument(broker)
+    const changed = await broker.invoke(agent, {
+      actionId: 'document.annotation-upsert',
+      invocationId: 'annotation-before-release',
+      resource: handle,
+      expectedRevision: '1',
+      input: { text: 'Audit this change' }
+    })
+    const liveEvent = broker.listEvents(agent)[0]
+    expect(liveEvent).toMatchObject({ resourceStatus: 'live' })
+
+    await broker.invoke(agent, {
+      actionId: 'document.release',
+      invocationId: 'release-document',
+      resource: changed.resource,
+      input: {}
+    })
+
+    expect(broker.listEvents(agent)[0]).toMatchObject({
+      id: liveEvent?.id,
+      resourceRef: liveEvent?.resourceRef,
+      resourceStatus: 'retired'
+    })
+    expect(() => broker.bindResourceRef(agent, liveEvent!.resourceRef))
+      .toThrow(expect.objectContaining({ code: 'resource_ref_retired' }))
   })
 
   it('deduplicates concurrent retries and rejects invocation ID reuse with different input', async () => {

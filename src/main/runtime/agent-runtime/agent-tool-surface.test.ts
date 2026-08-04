@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { nativeAgentToolExecutionMetadata } from './agent-tool-surface'
+import {
+  AgentRuntimeToolError,
+  nativeAgentToolExecutionMetadata,
+  nativeVisualResourceIdentity,
+  normalizeNativeVisualToolError
+} from './agent-tool-surface'
 
 const refs = {
   source: `res_${'s'.repeat(24)}`,
@@ -109,6 +114,124 @@ describe('nativeAgentToolExecutionMetadata', () => {
         subjectRef: refs.artifact,
         parentReceiptIds: [refs.captureProof]
       }]
+    })
+  })
+})
+
+describe('normalizeNativeVisualToolError', () => {
+  it.each([
+    {
+      message: 'The bound surface layout is unavailable while another session or resource is visible.',
+      code: 'visual_layout_owner_changed',
+      failureClass: 'layout_unavailable',
+      retryable: false,
+      action: 'restore_bound_surface'
+    },
+    {
+      message: 'The selected surface target is no longer visible.',
+      code: 'visual_target_stale',
+      failureClass: 'stale_resource',
+      retryable: false,
+      action: 'reobserve_visual_target'
+    },
+    {
+      message: 'The surface layout did not refresh before visual inspection.',
+      code: 'visual_layout_refresh_timeout',
+      failureClass: 'timeout',
+      retryable: true,
+      action: 'refresh_visual_layout'
+    },
+    {
+      message: 'Renderer layout refresh is unavailable.',
+      code: 'visual_layout_refresh_unavailable',
+      failureClass: 'capability_unavailable',
+      retryable: false,
+      action: 'stop'
+    },
+    {
+      message: 'Visual understanding is unavailable.',
+      code: 'visual_inspection_unavailable',
+      failureClass: 'upstream_unavailable',
+      retryable: true,
+      action: 'retry_visual_inspection'
+    }
+  ])('normalizes "$message" without relying on provider-specific codes', ({
+    message,
+    code,
+    failureClass,
+    retryable,
+    action
+  }) => {
+    const error = normalizeNativeVisualToolError(new Error(message), {
+      operation: 'look',
+      resourceIdentity: refs.source
+    })
+
+    expect(error).toBeInstanceOf(AgentRuntimeToolError)
+    expect(error).toMatchObject({
+      code,
+      failureClass,
+      retryable,
+      resourceIdentity: `visual:${refs.source}`,
+      evidenceDelta: false,
+      stateChanged: false,
+      recovery: {
+        action,
+        instruction: expect.any(String)
+      }
+    })
+    expect(error.message).toContain('Recovery:')
+  })
+
+  it('normalizes schema failures as non-retryable invalid arguments', () => {
+    const schemaError = Object.assign(new Error('Invalid input'), { name: 'ZodError' })
+    expect(normalizeNativeVisualToolError(schemaError, {
+      operation: 'capture',
+      resourceIdentity: refs.snapshot
+    })).toMatchObject({
+      code: 'visual_invalid_arguments',
+      failureClass: 'invalid_arguments',
+      retryable: false,
+      resourceIdentity: `visual:${refs.snapshot}`,
+      recovery: { action: 'correct_arguments' }
+    })
+  })
+
+  it('preserves an already normalized error and derives stable visual identities', () => {
+    const error = new AgentRuntimeToolError('already normalized', {
+      code: 'visual_target_stale',
+      failureClass: 'stale_resource',
+      retryable: false
+    })
+    expect(normalizeNativeVisualToolError(error, { operation: 'look' })).toBe(error)
+    expect(nativeVisualResourceIdentity({ sourceRef: refs.source })).toBe(`visual:${refs.source}`)
+    expect(nativeVisualResourceIdentity({ targetRef: 'target_current' })).toBe('visual:target_current')
+    expect(nativeVisualResourceIdentity({})).toBe('visual:current')
+  })
+
+  it('preserves structured visual provider cause metadata verbatim', () => {
+    const recovery = {
+      action: 'retry_visual_inspection',
+      instruction: 'Retry this immutable snapshot once.'
+    }
+    const error = Object.assign(new Error('Vision evidence was temporarily unavailable.'), {
+      code: 'vision_evidence_unavailable',
+      failureClass: 'upstream_unavailable',
+      retryable: true,
+      recovery,
+      providerStage: 'vision_translation'
+    })
+
+    expect(normalizeNativeVisualToolError(error, {
+      operation: 'look',
+      resourceIdentity: refs.snapshot
+    })).toMatchObject({
+      code: 'vision_evidence_unavailable',
+      failureClass: 'upstream_unavailable',
+      retryable: true,
+      recovery,
+      providerStage: 'vision_translation',
+      resourceIdentity: `visual:${refs.snapshot}`
     })
   })
 })

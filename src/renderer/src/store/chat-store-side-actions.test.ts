@@ -64,6 +64,7 @@ class FakeProvider implements AgentProvider {
       model: 'deepseek-chat',
       mode: input.mode ?? 'agent',
       workspace: input.workspace,
+      workspaceLocator: input.workspaceLocator,
       status: 'idle'
     }
   }
@@ -407,6 +408,42 @@ describe('chat-store-side-actions', () => {
         reasoningEffort: 'max',
         visibleContextOwnerThreadId: 'thr_main'
       })
+    )
+  })
+
+  it('keeps a remote parent locator on fallback side threads and turns', async () => {
+    const { actions, state, provider } = buildHarness()
+    const workspaceLocator = {
+      contractVersion: 1 as const,
+      hostSessionId: 'workspace-session-side',
+      path: '/shared/remote-project'
+    }
+    provider.capabilities = {
+      ...provider.capabilities,
+      fork: false,
+      sideConversations: false
+    }
+    state.threads = state.threads.map((item) => item.id === 'thr_main'
+      ? {
+          ...item,
+          workspace: workspaceLocator.path,
+          workspaceLocator
+        }
+      : item)
+
+    const id = await actions.spawnSideConversation('inspect this branch')
+
+    expect(provider.createMock).toHaveBeenCalledWith(expect.objectContaining({
+      workspace: workspaceLocator.path,
+      workspaceLocator
+    }))
+    expect(state.sideConversations[id!]).toEqual(expect.objectContaining({
+      workspaceLocator
+    }))
+    expect(provider.sendMock).toHaveBeenCalledWith(
+      id,
+      'inspect this branch',
+      expect.objectContaining({ workspaceLocator })
     )
   })
 

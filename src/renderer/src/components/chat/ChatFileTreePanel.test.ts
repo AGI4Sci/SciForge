@@ -323,7 +323,8 @@ describe('ChatFileTreePanel helpers', () => {
       content: 'hello',
       mimeType: 'text/plain',
       size: 5,
-      truncated: false
+      truncated: false,
+      revision: 'revision-1'
     })).toEqual({ ok: true, content: 'hello' })
     expect(fileTreeCopyContentFromReadResult({
       ok: true,
@@ -334,7 +335,8 @@ describe('ChatFileTreePanel helpers', () => {
       mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       size: 2048,
       truncated: false,
-      mtimeMs: 1
+      mtimeMs: 1,
+      revision: 'revision-1'
     })).toEqual({ ok: true, content: 'report text' })
   })
 
@@ -346,7 +348,8 @@ describe('ChatFileTreePanel helpers', () => {
       content: 'partial',
       mimeType: 'text/plain',
       size: 2_000_000,
-      truncated: true
+      truncated: true,
+      revision: 'revision-1'
     })).toEqual({ ok: false, reason: 'truncated' })
     expect(fileTreeCopyContentFromReadResult({
       ok: true,
@@ -357,7 +360,8 @@ describe('ChatFileTreePanel helpers', () => {
       mimeType: 'application/pdf',
       size: 1024,
       truncated: false,
-      mtimeMs: 1
+      mtimeMs: 1,
+      revision: 'revision-1'
     })).toEqual({ ok: false, reason: 'unsupported' })
     expect(fileTreeCopyContentFromReadResult({
       ok: false,

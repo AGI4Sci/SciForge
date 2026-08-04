@@ -34,12 +34,10 @@ type GovernanceState = {
   observedRunningToolIds: Set<string>
   callIdsByToolId: Map<string, string>
   hygieneReplayAttempts: number
-  semanticRecoveryAttempts: Map<string, number>
   actions: Set<string>
 }
 
 const MAX_HYGIENE_REPLAY_RECOVERY_ATTEMPTS = 2
-const MAX_SEMANTIC_RECOVERY_ATTEMPTS = 3
 
 export class RuntimeGovernanceSupervisor {
   private readonly states = new Map<string, GovernanceState>()
@@ -53,14 +51,17 @@ export class RuntimeGovernanceSupervisor {
     const threadId = event.threadId.trim()
     const turnId = event.turnId?.trim()
     if (!threadId || !turnId) return
-    const key = `${capabilities.runtimeId}:${threadId}:${turnId}`
+    const turnKey = `${capabilities.runtimeId}:${threadId}:${turnId}`
     if (event.kind === 'turn_lifecycle' && isAgentRuntimeTerminalTurnState(event.state)) {
-      this.states.delete(key)
+      for (const key of this.states.keys()) {
+        if (key.startsWith(`${turnKey}:`)) this.states.delete(key)
+      }
       return
     }
     if (event.kind !== 'tool_event') return
     if (capabilities.guard.execution !== 'observe' || !settings.execution.enabled) return
 
+    const key = `${turnKey}:${governanceExecutionScope(event)}`
     const state = this.states.get(key) ?? createGovernanceState(settings)
     this.states.set(key, state)
     const toolId = runningToolIdentity(event)
@@ -119,13 +120,7 @@ export class RuntimeGovernanceSupervisor {
     decision: ExecutionGovernorDecision,
     controls: RuntimeGovernanceControls
   ): void {
-    const recoveryKey = semanticRecoveryKey(decision, receipt)
-    if (decision.action === 'allow') {
-      if (receipt.outcome === 'progress' || receipt.outcome === 'negative_result') {
-        state.semanticRecoveryAttempts.delete(recoveryKey)
-      }
-      return
-    }
+    if (decision.action === 'allow') return
     const key = [
       'receipt',
       receipt.callId,
@@ -140,26 +135,18 @@ export class RuntimeGovernanceSupervisor {
     if (state.actions.has(key)) return
     state.actions.add(key)
     if (decision.action === 'deny') {
-      if (decision.code === 'semantic_failure_exhausted') {
-        const recoveryAttempt = nextSemanticRecoveryAttempt(state, recoveryKey)
-        if (recoveryAttempt <= MAX_SEMANTIC_RECOVERY_ATTEMPTS) {
-          void this.steer(
-            event,
-            runtimeId,
-            controls,
-            continuedSemanticRecoveryDecision(decision, recoveryAttempt),
-            'recovery',
-            recoveryAttempt,
-            receipt
-          )
-          return
-        }
-      }
       void this.interrupt(event, runtimeId, controls, decision, receipt)
       return
     }
-    const recoveryAttempt = nextSemanticRecoveryAttempt(state, recoveryKey)
-    void this.steer(event, runtimeId, controls, decision, 'recovery', recoveryAttempt, receipt)
+    void this.steer(
+      event,
+      runtimeId,
+      controls,
+      decision,
+      'recovery',
+      decision.code === 'semantic_failure_retry' ? 1 : undefined,
+      receipt
+    )
   }
 
   private async steer(
@@ -172,10 +159,11 @@ export class RuntimeGovernanceSupervisor {
     receipt?: NormalizedExecutionReceipt
   ): Promise<void> {
     const text = governanceInstruction(decision, receipt, recoveryAttempt)
+    const target = governanceExecutionTarget(event)
     void controls.steerTurn({
       runtimeId,
-      threadId: event.threadId,
-      turnId: event.turnId?.trim() || '',
+      threadId: target.threadId,
+      turnId: target.turnId,
       text
     }).catch(() => undefined)
     await publishGovernanceEvent(controls, event, runtimeId, level, decision, recoveryAttempt, receipt)
@@ -188,10 +176,11 @@ export class RuntimeGovernanceSupervisor {
     decision: ExecutionGovernorDecision,
     receipt?: NormalizedExecutionReceipt
   ): Promise<void> {
+    const target = governanceExecutionTarget(event)
     void controls.interruptTurn({
       runtimeId,
-      threadId: event.threadId,
-      turnId: event.turnId?.trim() || '',
+      threadId: target.threadId,
+      turnId: target.turnId,
       discard: false
     }).catch(() => undefined)
     await publishGovernanceEvent(controls, event, runtimeId, 'hard', decision, undefined, receipt)
@@ -205,11 +194,12 @@ export class RuntimeGovernanceSupervisor {
   ): void {
     state.hygieneReplayAttempts += 1
     const attempt = state.hygieneReplayAttempts
+    const target = governanceExecutionTarget(event)
     if (attempt <= MAX_HYGIENE_REPLAY_RECOVERY_ATTEMPTS) {
       void controls.steerTurn({
         runtimeId,
-        threadId: event.threadId,
-        turnId: event.turnId?.trim() || '',
+        threadId: target.threadId,
+        turnId: target.turnId,
         text: historyHygieneRecoveryInstruction(attempt)
       }).catch(() => undefined)
       void publishHistoryHygieneEvent(controls, event, runtimeId, 'recovery', attempt)
@@ -219,12 +209,37 @@ export class RuntimeGovernanceSupervisor {
     state.actions.add('history-hygiene:hard')
     void controls.interruptTurn({
       runtimeId,
-      threadId: event.threadId,
-      turnId: event.turnId?.trim() || '',
+      threadId: target.threadId,
+      turnId: target.turnId,
       discard: false
     }).catch(() => undefined)
     void publishHistoryHygieneEvent(controls, event, runtimeId, 'hard', attempt)
   }
+}
+
+function governanceExecutionScope(
+  event: Extract<AgentRuntimeEvent, { kind: 'tool_event' }>
+): string {
+  const meta = recordValue(event.meta)
+  const childThreadId = stringValue(meta.childThreadId).trim()
+  const childTurnId = stringValue(meta.childTurnId).trim()
+  return childThreadId
+    ? `child:${childThreadId}:${childTurnId || 'active'}`
+    : 'parent'
+}
+
+function governanceExecutionTarget(
+  event: Extract<AgentRuntimeEvent, { kind: 'tool_event' }>
+): { threadId: string; turnId: string } {
+  const meta = recordValue(event.meta)
+  const childThreadId = stringValue(meta.childThreadId).trim()
+  const childTurnId = stringValue(meta.childTurnId).trim()
+  return childThreadId && childTurnId
+    ? { threadId: childThreadId, turnId: childTurnId }
+    : {
+        threadId: event.threadId,
+        turnId: event.turnId?.trim() || ''
+      }
 }
 
 export async function adapterCapabilities(
@@ -242,49 +257,12 @@ function createGovernanceState(settings: RuntimeGuardSettingsV1): GovernanceStat
   return {
     governor: new ExecutionGovernorCore({
       windowSize: settings.execution.windowSize,
-      threshold: settings.execution.exactRepeatThreshold,
-      semanticFailureThreshold: settings.execution.semanticFailureThreshold
+      threshold: settings.execution.exactRepeatThreshold
     }),
     observedRunningToolIds: new Set(),
     callIdsByToolId: new Map(),
     hygieneReplayAttempts: 0,
-    semanticRecoveryAttempts: new Map(),
     actions: new Set()
-  }
-}
-
-function semanticRecoveryKey(
-  decision: ExecutionGovernorDecision,
-  receipt: NormalizedExecutionReceipt
-): string {
-  return [
-    decision.attempt.semanticFingerprint,
-    receipt.failureClass,
-    receipt.errorCode,
-    receipt.resourceIdentity
-  ].join('\0')
-}
-
-function nextSemanticRecoveryAttempt(state: GovernanceState, key: string): number {
-  const attempt = (state.semanticRecoveryAttempts.get(key) ?? 0) + 1
-  state.semanticRecoveryAttempts.set(key, attempt)
-  return attempt
-}
-
-function continuedSemanticRecoveryDecision(
-  decision: ExecutionGovernorDecision,
-  recoveryAttempt: number
-): ExecutionGovernorDecision {
-  return {
-    ...decision,
-    action: 'steer',
-    code: 'semantic_failure_retry',
-    reason: `${decision.attempt.family} recovery attempt ${recoveryAttempt - 1} failed with the same semantic strategy.`,
-    guidance: [
-      'Abandon the failed semantic operation instead of retrying it with another guessed argument shape.',
-      'Switch to a meaningfully different capability, tool family, or evidence path and continue the original task.',
-      'Do not stop merely because this recoverable branch failed.'
-    ].join(' ')
   }
 }
 
@@ -363,11 +341,14 @@ async function publishGovernanceEvent(
   recoveryAttempt?: number,
   receipt?: NormalizedExecutionReceipt
 ): Promise<void> {
+  const target = source.kind === 'tool_event'
+    ? governanceExecutionTarget(source)
+    : { threadId: source.threadId, turnId: source.turnId }
   await controls.publishSyntheticEvent({
     kind: 'runtime_status',
-    threadId: source.threadId,
+    threadId: target.threadId,
     runtimeId,
-    turnId: source.turnId,
+    turnId: target.turnId,
     phase: 'tool_running',
     message: level === 'hard'
       ? `Execution governance interrupted ${decision.attempt.family} activity.`
@@ -391,10 +372,10 @@ async function publishGovernanceEvent(
   if (level === 'hard') {
     await controls.publishSyntheticEvent({
       kind: 'error',
-      threadId: source.threadId,
+      threadId: target.threadId,
       runtimeId,
-      turnId: source.turnId,
-      itemId: `execution-governance-${source.turnId || source.threadId}`,
+      turnId: target.turnId,
+      itemId: `execution-governance-${target.turnId || target.threadId}`,
       recoverable: true,
       severity: 'error',
       code: decision.code === 'owned_visual_policy_denied' ||
@@ -414,11 +395,14 @@ async function publishHistoryHygieneEvent(
   level: 'recovery' | 'hard',
   attempt: number
 ): Promise<void> {
+  const target = source.kind === 'tool_event'
+    ? governanceExecutionTarget(source)
+    : { threadId: source.threadId, turnId: source.turnId }
   await controls.publishSyntheticEvent({
     kind: 'runtime_status',
-    threadId: source.threadId,
+    threadId: target.threadId,
     runtimeId,
-    turnId: source.turnId,
+    turnId: target.turnId,
     phase: 'tool_running',
     message: level === 'hard'
       ? 'Runtime guard interrupted repeated execution of history-only tool arguments.'
@@ -434,10 +418,10 @@ async function publishHistoryHygieneEvent(
   if (level === 'hard') {
     await controls.publishSyntheticEvent({
       kind: 'error',
-      threadId: source.threadId,
+      threadId: target.threadId,
       runtimeId,
-      turnId: source.turnId,
-      itemId: `runtime-guard-history-hygiene-${source.turnId || source.threadId}`,
+      turnId: target.turnId,
+      itemId: `runtime-guard-history-hygiene-${target.turnId || target.threadId}`,
       recoverable: true,
       severity: 'error',
       code: 'runtime_history_hygiene_replay',

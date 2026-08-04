@@ -78,6 +78,47 @@ describe('preload agentRuntime bridge', () => {
     expect(api.biologyRoom).toBeUndefined()
   })
 
+  it('exposes attached-session-only Remote Workspace IPC', async () => {
+    const api = exposedApi as {
+      remoteWorkspace: {
+        list(): Promise<unknown>
+        get(): Promise<unknown>
+        attach(input: unknown): Promise<unknown>
+        select(input: unknown): Promise<unknown>
+        reconnect(input: unknown): Promise<unknown>
+        close(input: unknown): Promise<unknown>
+        onSnapshotChanged(handler: (snapshot: unknown) => void): () => void
+      }
+    }
+    const attach = {
+      providerId: 'remote-ssh.workspace-host-provider',
+      authorizedSessionId: 'authorized-session-1'
+    }
+
+    await api.remoteWorkspace.list()
+    await api.remoteWorkspace.get()
+    await api.remoteWorkspace.attach(attach)
+    await api.remoteWorkspace.select({ sessionId: 'session-1' })
+    await api.remoteWorkspace.reconnect({ sessionId: 'session-1' })
+    await api.remoteWorkspace.close({ sessionId: 'session-1' })
+    const listener = vi.fn()
+    const unsubscribe = api.remoteWorkspace.onSnapshotChanged(listener)
+    const wrapped = on.mock.calls.find(
+      ([channel]) => channel === 'remoteWorkspace:snapshot-changed'
+    )?.[1] as ((event: unknown, snapshot: unknown) => void) | undefined
+    wrapped?.({}, { workspaces: [] })
+    unsubscribe()
+
+    expect(invoke).toHaveBeenCalledWith('remoteWorkspace:list')
+    expect(invoke).toHaveBeenCalledWith('remoteWorkspace:get')
+    expect(invoke).toHaveBeenCalledWith('remoteWorkspace:attach', attach)
+    expect(listener).toHaveBeenCalledWith({ workspaces: [] })
+    expect(removeListener).toHaveBeenCalledWith(
+      'remoteWorkspace:snapshot-changed',
+      wrapped
+    )
+  })
+
   it('exposes durable full-trace read, export, and clear IPC', async () => {
     const api = exposedApi as {
       traces: {
@@ -99,30 +140,35 @@ describe('preload agentRuntime bridge', () => {
     expect(invoke).toHaveBeenCalledWith('traces:clear')
   })
 
-  it('does not expose the removed draw.io runtime API', () => {
-    expect(exposedApi).not.toHaveProperty('getLocalDrawioUrl')
+  it('exposes the grouped generic extension lifecycle', async () => {
+    const api = exposedApi as {
+      extensions: {
+        list(): Promise<unknown>
+        install(input: unknown): Promise<unknown>
+        uninstall(input: unknown): Promise<unknown>
+        rollback(input: unknown): Promise<unknown>
+        setEnabled(input: unknown): Promise<unknown>
+      }
+    }
+    const install = { path: '/tmp/browser.sciforge-extension' }
+    const byPackage = { packageName: '@sciforge/domain-browser' }
+    const disable = { ...byPackage, enabled: false }
+
+    await api.extensions.list()
+    await api.extensions.install(install)
+    await api.extensions.uninstall(byPackage)
+    await api.extensions.rollback(byPackage)
+    await api.extensions.setEnabled(disable)
+
+    expect(invoke).toHaveBeenCalledWith('extensions:list')
+    expect(invoke).toHaveBeenCalledWith('extensions:install', install)
+    expect(invoke).toHaveBeenCalledWith('extensions:uninstall', byPackage)
+    expect(invoke).toHaveBeenCalledWith('extensions:rollback', byPackage)
+    expect(invoke).toHaveBeenCalledWith('extensions:set-enabled', disable)
   })
 
-  it('exposes the unified VisualDocument lifecycle without legacy canvas methods', async () => {
-    const api = exposedApi as Record<string, ((payload: unknown) => Promise<unknown>) | undefined>
-    const calls = [
-      ['openVisualDocument', 'visual-document:open', { workspaceRoot: '/tmp/project', documentId: 'figure-1' }],
-      ['insertVisualDocumentArtifact', 'visual-document:insert-artifact', { workspaceRoot: '/tmp/project', kind: 'image', sourcePath: '/tmp/figure.png' }],
-      ['updateVisualDocumentContext', 'visual-document:update-context', { workspaceRoot: '/tmp/project', styleProfileRef: 'paper-style' }],
-      ['saveVisualDocumentAnnotations', 'visual-document:save-annotations', { workspaceRoot: '/tmp/project', annotations: [] }],
-      ['exportVisualReviewPacket', 'visual-document:export-review-packet', { workspaceRoot: '/tmp/project' }],
-      ['createVisualCandidateRevision', 'visual-document:create-candidate', { workspaceRoot: '/tmp/project', candidatePath: '/tmp/candidate.png', summary: 'Improved layout' }],
-      ['acceptVisualCandidateRevision', 'visual-document:accept-candidate', { workspaceRoot: '/tmp/project', revisionId: 'revision-1' }],
-      ['rejectVisualCandidateRevision', 'visual-document:reject-candidate', { workspaceRoot: '/tmp/project', revisionId: 'revision-1' }]
-    ] as const
-
-    for (const [method, channel, payload] of calls) {
-      await api[method]?.(payload)
-      expect(invoke).toHaveBeenCalledWith(channel, payload)
-    }
-    await api.getVisualDocumentStatus?.('/tmp/project')
-    expect(invoke).toHaveBeenCalledWith('visual-document:status', { workspaceRoot: '/tmp/project' })
-
+  it('does not expose the removed draw.io runtime API', () => {
+    expect(exposedApi).not.toHaveProperty('getLocalDrawioUrl')
   })
 
   it('exposes real file paths from picked or dropped files', () => {

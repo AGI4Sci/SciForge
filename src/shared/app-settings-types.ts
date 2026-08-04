@@ -214,7 +214,6 @@ export type RuntimeExecutionGuardSettingsV1 = {
   enabled: boolean
   windowSize: number
   exactRepeatThreshold: number
-  semanticFailureThreshold: number
 }
 
 export type RuntimeGuardSettingsV1 = {
@@ -224,7 +223,7 @@ export type RuntimeGuardSettingsV1 = {
 export type RuntimeGuardSettingsPatchV1 = {
   execution?: Partial<Pick<
     RuntimeExecutionGuardSettingsV1,
-    'enabled' | 'windowSize' | 'exactRepeatThreshold' | 'semanticFailureThreshold'
+    'enabled' | 'windowSize' | 'exactRepeatThreshold'
   >>
 }
 
@@ -313,6 +312,13 @@ export type AppBehaviorConfigV1 = {
   startMinimized: boolean
   closeToTray: boolean
 }
+
+export type WorkbenchToolbarSettingsV1 = {
+  hiddenCommandIds: string[]
+  commandOrder: string[]
+}
+
+export type WorkbenchToolbarSettingsPatchV1 = Partial<WorkbenchToolbarSettingsV1>
 
 export type ScheduleSkillSettingsV1 = {
   defaultNames: string[]
@@ -661,7 +667,7 @@ export type WorkflowVarType = (typeof WORKFLOW_VAR_TYPES)[number]
 /**
  * One advertised output field of a node, for the typed reference picker. `key` is
  * a dot-path relative to the node's json (or the literal 'text'). Derived metadata
- * only — see workflow-output-descriptors.ts. `children` cascades object types.
+ * only. `children` cascades object types.
  */
 export type WorkflowOutputVar = {
   key: string
@@ -1101,11 +1107,6 @@ export type WorkflowNodeRunResultV1 = {
   error: string
 }
 
-/** Result of a single-node test run (not persisted to history). */
-export type WorkflowNodeTestResult =
-  | { ok: true; result: WorkflowNodeRunResultV1 }
-  | { ok: false; message: string }
-
 /** A human-approval node that has paused a run and is awaiting a decision. */
 export type WorkflowPendingApprovalV1 = {
   token: string
@@ -1233,29 +1234,6 @@ export type WorkflowSettingsPatchV1 = Partial<Omit<WorkflowSettingsV1, 'workflow
   workflows?: Array<Partial<WorkflowV1>>
 }
 
-export type WorkflowRunResult =
-  | { ok: true; runId: string; status: WorkflowRunStatus; message: string }
-  | { ok: false; message: string }
-
-/** Result of an editor-time syntax check on a Code node's script. */
-export type WorkflowCodeCheckResult =
-  | { status: 'ok' }
-  | { status: 'error'; message: string }
-  | { status: 'unavailable'; message: string }
-
-export type WorkflowNodeStatusMap = Record<string, WorkflowNodeRunStatus>
-
-export type WorkflowRuntimeStatus = {
-  runningWorkflowIds: string[]
-  /** workflowId -> nodeId -> live status, for lighting up the canvas during a run. */
-  nodeStatus: Record<string, WorkflowNodeStatusMap>
-  /** workflowId -> nodeId -> live per-node result (input/output/timing), for the run-log panel. */
-  nodeResults: Record<string, Record<string, WorkflowNodeRunResultV1>>
-  powerSaveBlockerActive: boolean
-  /** Human-approval nodes currently paused, awaiting an approve/reject decision. */
-  pendingApprovals: WorkflowPendingApprovalV1[]
-}
-
 export type WriteInlineCompletionSettingsV1 = {
   enabled: boolean
   retrievalEnabled: boolean
@@ -1329,79 +1307,6 @@ export type GuiUpdateConfigV1 = {
   channel: GuiUpdateChannel
 }
 
-export type RemoteExecutorTargetKindV1 = 'ssh' | 'slurm'
-
-export type RemoteExecutorSshSettingsV1 = {
-  host?: string
-  user?: string
-  port?: number
-  pythonPath?: string
-  identityFile?: string
-}
-
-export type RemoteExecutorSlurmDefaultsV1 = {
-  partition?: string
-  account?: string
-  qos?: string
-  timeLimit?: string
-  nodes?: number
-  ntasks?: number
-  cpusPerTask?: number
-  gpus?: number
-  memory?: string
-  constraint?: string
-  gres?: string
-  extraArgs?: string[]
-}
-
-export type RemoteExecutorSlurmSettingsV1 = {
-  defaults?: RemoteExecutorSlurmDefaultsV1
-}
-
-export type RemoteExecutorTrustedWorkspaceV1 = {
-  workspaceRoot: string
-  targetFingerprint: string
-  trustedAt: string
-  trustedBy: string
-  approvalBypass: true
-}
-
-export type RemoteExecutorTargetV1 = {
-  id: string
-  label: string
-  enabled: boolean
-  kind: RemoteExecutorTargetKindV1
-  ssh?: RemoteExecutorSshSettingsV1
-  remoteWorkspaceRoot: string
-  slurm?: RemoteExecutorSlurmSettingsV1
-  trustedWorkspaces: RemoteExecutorTrustedWorkspaceV1[]
-}
-
-export type RemoteExecutorSettingsV1 = {
-  enabled: boolean
-  defaultTargetId: string
-  targets: RemoteExecutorTargetV1[]
-}
-
-export type RemoteExecutorSshSettingsPatchV1 = Partial<RemoteExecutorSshSettingsV1>
-export type RemoteExecutorSlurmDefaultsPatchV1 = Partial<RemoteExecutorSlurmDefaultsV1>
-export type RemoteExecutorSlurmSettingsPatchV1 = {
-  defaults?: RemoteExecutorSlurmDefaultsPatchV1
-}
-export type RemoteExecutorTrustedWorkspacePatchV1 = Partial<RemoteExecutorTrustedWorkspaceV1>
-export type RemoteExecutorTargetPatchV1 = Partial<
-  Omit<RemoteExecutorTargetV1, 'ssh' | 'slurm' | 'trustedWorkspaces'>
-> & {
-  ssh?: RemoteExecutorSshSettingsPatchV1
-  slurm?: RemoteExecutorSlurmSettingsPatchV1
-  trustedWorkspaces?: RemoteExecutorTrustedWorkspacePatchV1[]
-}
-export type RemoteExecutorSettingsPatchV1 = Partial<
-  Omit<RemoteExecutorSettingsV1, 'targets'>
-> & {
-  targets?: RemoteExecutorTargetPatchV1[]
-}
-
 export type AppSettingsV1 = {
   version: 1
   installationId?: string
@@ -1420,6 +1325,7 @@ export type AppSettingsV1 = {
   log: LogConfigV1
   notifications: NotificationConfigV1
   appBehavior: AppBehaviorConfigV1
+  workbenchToolbar?: WorkbenchToolbarSettingsV1
   keyboardShortcuts: KeyboardShortcutsConfigV1
   write: WriteSettingsV1
   speechToText?: SpeechToTextSettingsV1
@@ -1427,13 +1333,12 @@ export type AppSettingsV1 = {
   connectPhone: ConnectPhoneSettingsV1
   schedule: ScheduleSettingsV1
   workflow: WorkflowSettingsV1
-  remoteExecutor?: RemoteExecutorSettingsV1
   guiUpdate: GuiUpdateConfigV1
   codePromptPrefix: string
 }
 
 export type AppSettingsPatch = Partial<
-  Omit<AppSettingsV1, 'modelAccess' | 'modelRouter' | 'agents' | 'log' | 'notifications' | 'appBehavior' | 'keyboardShortcuts' | 'write' | 'speechToText' | 'remoteChannel' | 'connectPhone' | 'schedule' | 'workflow' | 'remoteExecutor' | 'guiUpdate' | 'computerUse' | 'agentCapabilities' | 'imageGeneration'>
+  Omit<AppSettingsV1, 'modelAccess' | 'modelRouter' | 'agents' | 'log' | 'notifications' | 'appBehavior' | 'workbenchToolbar' | 'keyboardShortcuts' | 'write' | 'speechToText' | 'remoteChannel' | 'connectPhone' | 'schedule' | 'workflow' | 'guiUpdate' | 'computerUse' | 'agentCapabilities' | 'imageGeneration'>
 > & {
   modelAccess?: ModelAccessSettingsPatchV1
   modelRouter?: ModelRouterSettingsPatchV1
@@ -1445,6 +1350,7 @@ export type AppSettingsPatch = Partial<
   log?: Partial<LogConfigV1>
   notifications?: Partial<NotificationConfigV1>
   appBehavior?: Partial<AppBehaviorConfigV1>
+  workbenchToolbar?: WorkbenchToolbarSettingsPatchV1
   keyboardShortcuts?: Partial<KeyboardShortcutsConfigV1>
   write?: WriteSettingsPatchV1
   speechToText?: SpeechToTextSettingsPatchV1
@@ -1452,6 +1358,5 @@ export type AppSettingsPatch = Partial<
   connectPhone?: ConnectPhoneSettingsPatchV1
   schedule?: ScheduleSettingsPatchV1
   workflow?: WorkflowSettingsPatchV1
-  remoteExecutor?: RemoteExecutorSettingsPatchV1
   guiUpdate?: Partial<GuiUpdateConfigV1>
 }

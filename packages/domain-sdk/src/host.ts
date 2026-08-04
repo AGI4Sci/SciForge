@@ -1,7 +1,27 @@
 import type { z } from 'zod'
 
+import type { DomainMainAgentExecutionHost } from './agent-execution.js'
 import type { DomainPackageJsonValue } from './contract.js'
+import type { DomainMainPowerHost } from './power.js'
 import type { TrustedDomainProcessEntryInput } from './process-entry.js'
+import type {
+  DomainCapabilityResourceHandle,
+  DomainRendererSessionResource,
+  DomainRendererWorkbenchSendMessageInput,
+  DomainRendererWorkbenchSendMessageResult,
+  DomainRendererWorkbenchSurfaceActivation,
+  DomainRendererWorkspaceFilePickerRequest,
+  DomainRendererWorkspacePickResult
+} from './renderer-contributions.js'
+import type { DomainMainVisualCaptureHost } from './visual-capture.js'
+import type {
+  WorkspaceHostArtifact,
+  WorkspaceHostOpenRemoteSessionInput
+} from './workspace-host.js'
+export * from './agent-execution.js'
+export * from './power.js'
+export * from './renderer-contributions.js'
+export * from './visual-capture.js'
 
 export const MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND = 'main.runtime-lifecycle' as const
 export const MAIN_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION_KIND =
@@ -46,6 +66,35 @@ export type DomainAgentThreadDetail = DomainAgentThread & Readonly<{
   artifacts: readonly unknown[]
 }>
 
+type DomainMainTurnLifecycleEventBase = Readonly<{
+  runtimeId: string
+  threadId: string
+  workspaceRoot?: string
+  occurredAt: string
+}>
+
+export type DomainMainBeforeTurnEvent = DomainMainTurnLifecycleEventBase & Readonly<{
+  kind: 'before-turn'
+  state: 'starting'
+  turnId?: string
+}>
+
+export type DomainMainAfterTurnEvent = DomainMainTurnLifecycleEventBase & Readonly<{
+  kind: 'after-turn'
+  state: 'completed' | 'failed' | 'cancelled'
+  turnId: string
+}>
+
+export type DomainMainTurnLifecycleEvent =
+  | DomainMainBeforeTurnEvent
+  | DomainMainAfterTurnEvent
+
+export type DomainMainTurnLifecycleEventsHost = Readonly<{
+  subscribe: (
+    listener: (event: DomainMainTurnLifecycleEvent) => void | Promise<void>
+  ) => DomainMainRuntimeDisposer
+}>
+
 export type DomainMainAgentThreadsHost = Readonly<{
   list: (input?: DomainAgentThreadListInput) => Promise<readonly DomainAgentThread[]>
   read: (input: Readonly<{
@@ -76,12 +125,26 @@ export type DomainCapabilityContract<TInput, TOutput> = Readonly<{
 }>
 
 export type DomainMainSystemCapabilityInvoker = Readonly<{
+  /**
+   * Invokes a capability through host policy. This system-facing surface has no
+   * approval argument: lifecycle code cannot manufacture user approval.
+   * Approval-requiring effects fail unless the host already owns a valid grant.
+   */
   invoke<TInput, TOutput>(
     contract: DomainCapabilityContract<TInput, TOutput>,
     input: TInput,
     options?: Readonly<{
       workspaceId?: string
       idempotencyKey?: string
+      resource?: DomainCapabilityResourceHandle
+      expectedRevision?: string
+      authorization?: Readonly<{
+        /**
+         * The host may propagate an already-approved outer action. It must
+         * reject this mode when no matching current action exists.
+         */
+        mode: 'inherit-current-action'
+      }>
     }>
   ): Promise<TOutput>
 }>
@@ -107,6 +170,9 @@ export type DomainMainRuntimeLifecycleHost = Readonly<{
   appRoot: string
   environment: Readonly<Record<string, string | undefined>>
   agentThreads: DomainMainAgentThreadsHost
+  turnEvents?: DomainMainTurnLifecycleEventsHost
+  agentExecution?: DomainMainAgentExecutionHost
+  power?: DomainMainPowerHost
   capabilities: DomainMainSystemCapabilityInvoker
   modelAccess: DomainMainModelAccessHost
   enablement: DomainMainModuleEnablementHost
@@ -197,6 +263,7 @@ export type DomainWorkbenchRightPanelSession = Readonly<{
   id: string
   runtimeId?: string
   workspaceRoot?: string
+  resources?: readonly DomainRendererSessionResource[]
 }>
 
 export type DomainWorkbenchRightPanelActivation = Readonly<{
@@ -218,6 +285,17 @@ export type DomainWorkbenchOpenRightPanelInput = Readonly<{
   sessionId: string
   activation?: DomainWorkbenchRightPanelActivation
 }>
+
+export type DomainWorkbenchOpenSurfaceInput = Readonly<{
+  contributionId: string
+  sessionId?: string
+  activation?: DomainRendererWorkbenchSurfaceActivation
+}>
+
+export type DomainWorkbenchToggleGlobalOverlayInput =
+  DomainWorkbenchOpenSurfaceInput & Readonly<{
+    open?: boolean
+  }>
 
 export type DomainWorkspacePreviewTarget = Readonly<{
   path: string
@@ -243,8 +321,22 @@ export type DomainRendererWorkspacePreviewHost = Readonly<{
   open: (target: DomainWorkspacePreviewTarget) => void
 }>
 
+export type DomainRendererWorkspaceHost = Readonly<{
+  pickFile: (
+    request: DomainRendererWorkspaceFilePickerRequest
+  ) => Promise<DomainRendererWorkspacePickResult>
+  openRemoteSession?: (
+    input: WorkspaceHostOpenRemoteSessionInput
+  ) => Promise<void>
+}>
+
 export type DomainRendererWorkbenchHost = Readonly<{
   openRightPanel: (input: DomainWorkbenchOpenRightPanelInput) => void
+  openBottomPanel?: (input: DomainWorkbenchOpenSurfaceInput) => void
+  toggleGlobalOverlay?: (input: DomainWorkbenchToggleGlobalOverlayInput) => void
+  sendMessage?: (
+    input: DomainRendererWorkbenchSendMessageInput
+  ) => Promise<DomainRendererWorkbenchSendMessageResult>
 }>
 
 /**
@@ -257,17 +349,15 @@ export type DomainRendererWorkbenchHost = Readonly<{
 export type DomainMainHost = Readonly<{
   getUserDataDir: () => string
   defineCapability: (options: unknown) => unknown
+  /** Opens one absolute local path with the operating system's configured application. */
+  openPath?: (path: string) => Promise<void>
+  resolveWorkspaceServerArtifact?: () => Promise<WorkspaceHostArtifact>
+  capabilities?: DomainMainSystemCapabilityInvoker
+  visualCapture?: DomainMainVisualCaptureHost
 }>
 
 export type DomainRendererCapabilityContract<TInput, TOutput> =
   DomainCapabilityContract<TInput, TOutput>
-
-/** Structurally matches an opaque capability resource handle issued by the host. */
-export type DomainCapabilityResourceHandle = Readonly<{
-  token: string
-  semanticRevision: string
-  expiresAt: string
-}>
 
 export type DomainRendererCapabilityObservationContract<TState> = Readonly<{
   resourceKind: string
@@ -283,6 +373,17 @@ export type DomainRendererCapabilityObservation<TState> = Readonly<{
   observedAt: string
   state: TState
 }>
+
+export type DomainRendererCapabilityChange = Readonly<{
+  resourceRef: string
+  resourceKind: string
+  actionId: string
+  beforeRevision: string
+  afterRevision: string
+  changedAt: string
+}>
+
+export type DomainRendererCapabilityChangeDisposer = () => void
 
 export type DomainVisibleContextResource = Readonly<{
   kind: string
@@ -321,6 +422,41 @@ export type DomainVisibleContextTarget = Readonly<{
   metadata?: Readonly<Record<string, unknown>>
 }>
 
+export type DomainVisibleContextPoint = Readonly<{
+  clientX: number
+  clientY: number
+}>
+
+export type DomainVisibleContextViewportBounds = Readonly<{
+  x: number
+  y: number
+  width: number
+  height: number
+}>
+
+export type DomainVisibleContextInspection =
+  | Readonly<{
+    selectable: true
+    /** Opaque, host-signed reference accepted by the visual-capture port. */
+    targetRef: string
+    componentId: string
+    target: DomainVisibleContextTarget
+    bounds: DomainVisibleContextViewportBounds
+  }>
+  | Readonly<{
+    selectable: false
+    reason: 'redacted'
+  }>
+
+export type DomainVisibleContextSelectionInspection = Readonly<{
+  /** Opaque, host-signed reference accepted by the visual-capture port. */
+  targetRef: string
+  componentId: string
+  target: DomainVisibleContextTarget
+  bounds: DomainVisibleContextViewportBounds
+  text: string
+}>
+
 export type DomainRendererVisibleContextHost = Readonly<{
   registerComponent(component: DomainVisibleContextComponent): () => void
   registerVisualTarget(input: Readonly<{
@@ -329,6 +465,10 @@ export type DomainRendererVisibleContextHost = Readonly<{
     /** Renderer-owned element handle; the host validates it before measuring. */
     element?: () => object | null
   }>): () => void
+  inspectRegisteredTargetAt?(
+    point: DomainVisibleContextPoint
+  ): Promise<DomainVisibleContextInspection | null>
+  inspectRegisteredTextSelection?(): Promise<DomainVisibleContextSelectionInspection | null>
 }>
 
 export type DomainRendererCapabilityInvoker = Readonly<{
@@ -347,12 +487,18 @@ export type DomainRendererCapabilityInvoker = Readonly<{
       approval?: Readonly<{ mode: 'confirmation' }>
     }>
   ): Promise<TOutput>
+  subscribe?(
+    resourceRef: string,
+    listener: (change: DomainRendererCapabilityChange) => void,
+    options?: Readonly<{ workspaceId?: string }>
+  ): Promise<DomainRendererCapabilityChangeDisposer>
 }>
 
 /** Renderer-safe services available to every trusted domain package. */
 export type DomainRendererHost = Readonly<{
   capabilityInvoker: DomainRendererCapabilityInvoker
   openExternal: (url: string) => void | Promise<void>
+  workspace?: DomainRendererWorkspaceHost
   workspacePreview?: DomainRendererWorkspacePreviewHost
   workbench?: DomainRendererWorkbenchHost
   visibleContext?: DomainRendererVisibleContextHost

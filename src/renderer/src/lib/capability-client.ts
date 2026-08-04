@@ -8,17 +8,22 @@ import {
   capabilityJsonValueSchema,
   capabilityObservationSchema,
   capabilityObserveRequestSchema,
+  capabilityResourceChangeEventSchema,
   capabilityReadinessRequestSchema,
   capabilityReadinessSchema,
   type CapabilityEffect,
   type CapabilityReadiness
 } from '@shared/capability-broker'
 import type {
+  DomainRendererCapabilityChange,
+  DomainRendererCapabilityChangeDisposer,
   DomainCapabilityResourceHandle,
   DomainRendererCapabilityObservation,
   DomainRendererCapabilityObservationContract
 } from '@sciforge/domain-sdk/host'
 import type { SciForgeApi } from '@shared/sciforge-api'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
+import { activeWorkspaceLocator } from '../remote-workspace/placement'
 
 export type RendererCapabilityContract<TInput, TOutput> = Readonly<{
   actionId: string
@@ -29,6 +34,7 @@ export type RendererCapabilityContract<TInput, TOutput> = Readonly<{
 
 export type RendererCapabilityInvokeOptions = Readonly<{
   workspaceId?: string
+  workspaceLocator?: WorkspaceLocator
   resource?: DomainCapabilityResourceHandle
   expectedRevision?: string
   approval?: { mode: 'confirmation' }
@@ -38,7 +44,10 @@ export type RendererCapabilityObserveOptions = Readonly<{
   workspaceId?: string
 }>
 
-type CapabilityTransport = Pick<SciForgeApi['capabilities'], 'readiness' | 'observe' | 'invoke'>
+type CapabilityTransport = Pick<
+  SciForgeApi['capabilities'],
+  'readiness' | 'observe' | 'invoke' | 'subscribe' | 'unsubscribe' | 'onEvent'
+>
 
 export type RendererCapabilityClientOptions = Readonly<{
   getTransport?: () => CapabilityTransport
@@ -103,6 +112,8 @@ export class RendererCapabilityClient {
     const jsonInput = capabilityJsonValueSchema.parse(parsedInput)
     const readiness = await this.readiness([actionId], options.workspaceId)
     if (readiness.status !== 'ready') throw new Error(readiness.message)
+    const workspaceLocator = options.workspaceLocator ??
+      activeWorkspaceLocator(options.workspaceId)
 
     const request = capabilityInvocationRequestSchema.parse({
       actionId,
@@ -115,6 +126,7 @@ export class RendererCapabilityClient {
     })
     const result = capabilityInvocationResultSchema.parse(await this.getTransport().invoke({
       ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
+      ...(workspaceLocator ? { workspaceLocator } : {}),
       request,
       ...(options.approval ? { approval: options.approval } : {})
     }))
@@ -125,6 +137,67 @@ export class RendererCapabilityClient {
       throw new Error(`Capability result invocation mismatch for "${actionId}".`)
     }
     return contract.outputSchema.parse(result.output)
+  }
+
+  async subscribe(
+    resourceRef: string,
+    listener: (change: DomainRendererCapabilityChange) => void,
+    options: RendererCapabilityObserveOptions = {}
+  ): Promise<DomainRendererCapabilityChangeDisposer> {
+    const normalizedResourceRef = resourceRef.trim()
+    if (!/^res_[A-Za-z0-9_-]{20,}$/.test(normalizedResourceRef)) {
+      throw new Error('Capability subscription requires a valid resource reference.')
+    }
+    if (typeof listener !== 'function') {
+      throw new TypeError('Capability subscription listener must be a function.')
+    }
+
+    const transport = this.getTransport()
+    let disposed = false
+    let subscriptionId: string | null = null
+    const pending: Parameters<Parameters<CapabilityTransport['onEvent']>[0]>[0][] = []
+
+    const deliver = (payload: Parameters<Parameters<CapabilityTransport['onEvent']>[0]>[0]): void => {
+      if (disposed || payload.subscriptionId !== subscriptionId) return
+      const event = capabilityResourceChangeEventSchema.parse(payload.event)
+      if (event.resourceRef !== normalizedResourceRef) return
+      listener({
+        resourceRef: event.resourceRef,
+        resourceKind: event.resourceKind,
+        actionId: event.actionId,
+        beforeRevision: event.beforeRevision,
+        afterRevision: event.afterRevision,
+        changedAt: event.occurredAt
+      })
+    }
+    const removeEventListener = transport.onEvent((payload) => {
+      if (subscriptionId === null) {
+        if (pending.length < 100) pending.push(payload)
+        return
+      }
+      deliver(payload)
+    })
+
+    try {
+      const subscription = await transport.subscribe(options.workspaceId)
+      subscriptionId = subscription.subscriptionId
+      for (const payload of pending.splice(0)) deliver(payload)
+    } catch (error) {
+      disposed = true
+      pending.length = 0
+      removeEventListener()
+      throw error
+    }
+
+    return () => {
+      if (disposed) return
+      disposed = true
+      pending.length = 0
+      removeEventListener()
+      if (subscriptionId) {
+        void transport.unsubscribe(subscriptionId).catch(() => undefined)
+      }
+    }
   }
 }
 

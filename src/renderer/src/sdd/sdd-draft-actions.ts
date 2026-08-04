@@ -1,4 +1,5 @@
 import { selectSddDraftSession, useSddDraftStore, type SddDraft } from './sdd-draft-store'
+import { withActiveWorkspaceLocator } from '../remote-workspace/placement'
 
 type SddDraftDiskSnapshot = {
   path?: string
@@ -46,10 +47,10 @@ export async function syncSddDraftFromDisk(
 
   let content = snapshot.content
   if (typeof content !== 'string') {
-    const result = await window.sciforge.readWorkspaceFile({
+    const result = await window.sciforge.readWorkspaceFile(withActiveWorkspaceLocator({
       workspaceRoot: session.draft.workspaceRoot,
       path: session.draft.relativePath
-    })
+    }))
     if (!result.ok) {
       const latest = selectSddDraftSession(useSddDraftStore.getState(), ownerSessionId)
       if (latest?.draft.id === session.draft.id) {
@@ -77,11 +78,11 @@ export async function saveSddDraftToDisk(ownerSessionId: string): Promise<boolea
 
   useSddDraftStore.getState().setSessionSaveStatus(ownerSessionId, 'saving')
   try {
-    const result = await window.sciforge.writeWorkspaceFile({
+    const result = await window.sciforge.writeWorkspaceFile(withActiveWorkspaceLocator({
       workspaceRoot: session.draft.workspaceRoot,
       path: session.draft.relativePath,
       content: session.content
-    })
+    }))
     const latest = selectSddDraftSession(useSddDraftStore.getState(), ownerSessionId)
     if (latest?.draft.id !== session.draft.id) return result.ok
     if (!result.ok) {

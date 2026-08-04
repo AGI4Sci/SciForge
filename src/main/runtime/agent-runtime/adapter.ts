@@ -19,9 +19,12 @@ import type {
   AgentRuntimeUsageQuery,
   AgentRuntimeUsageResponse
 } from '../../../shared/agent-runtime-contract'
+import type { WorkspaceHostPlacement } from '../../../shared/workspace-host-state'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 
 export type AgentRuntimeAdapterContext = {
   settings: AppSettingsV1
+  workspaceHost?: WorkspaceHostPlacement
   turnGovernanceSnapshot?: AgentRuntimeTurnGovernanceSnapshot
 }
 
@@ -29,16 +32,19 @@ export type AgentRuntimeThreadRenameInput = {
   runtimeId: AgentRuntimeId
   threadId: string
   title: string
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type AgentRuntimeThreadDeleteInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type AgentRuntimeEventSubscribeInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
   sinceSeq?: number
   streamId?: string
   signal?: AbortSignal
@@ -50,6 +56,7 @@ export type AgentRuntimeApprovalResolveInput = {
   approvalId: string
   decision: 'allowed' | 'denied'
   message?: string
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type AgentRuntimeUserInputResolveInput = {
@@ -57,12 +64,14 @@ export type AgentRuntimeUserInputResolveInput = {
   threadId: string
   requestId: string
   answers: Array<{ id: string; label?: string; value: string }>
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type AgentRuntimeThreadCompactInput = {
   runtimeId: AgentRuntimeId
   threadId: string
   reason?: string
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type AgentRuntimeThreadForkInput = {
@@ -70,6 +79,7 @@ export type AgentRuntimeThreadForkInput = {
   threadId: string
   relation?: AgentRuntimeThreadRelation
   title?: string
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type AgentRuntimeSessionResumeInput = {
@@ -78,6 +88,7 @@ export type AgentRuntimeSessionResumeInput = {
   model?: string
   mode?: string
   maxResumeCount?: number
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type AgentRuntimeSessionResumeHandle = {
@@ -89,6 +100,7 @@ export type AgentRuntimeThreadRelationInput = {
   runtimeId: AgentRuntimeId
   threadId: string
   relation: AgentRuntimeThreadRelation
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type AgentRuntimeTurnGovernanceSnapshot = {
@@ -100,9 +112,115 @@ export type AgentRuntimeTurnGovernanceSnapshotInput = AgentRuntimeTurnTargetInpu
   snapshot: AgentRuntimeTurnGovernanceSnapshot
 }
 
+export type AgentRuntimeSubagentTarget = {
+  childId: string
+  parentThreadId: string
+  parentTurnId: string
+}
+
+export type AgentRuntimeSubagentThreadRef = {
+  runtime?: string
+  threadId: string
+  turnId?: string
+  url?: string
+}
+
+export type AgentRuntimeSubagentTranscriptEntry = {
+  id: string
+  kind: 'user_message' | 'assistant_message' | 'reasoning' | 'tool' | 'system' | 'event'
+  text?: string
+  summary?: string
+  status?: string
+  createdAt?: string
+  metadata?: Record<string, unknown>
+}
+
+export type AgentRuntimeSubagentUsage = {
+  promptTokens?: number
+  completionTokens?: number
+  totalTokens?: number
+  cachedTokens?: number
+  cacheHitTokens?: number
+  cacheMissTokens?: number
+  cacheHitRate?: number | null
+  turns?: number
+  costUsd?: number
+  costCny?: number
+  cacheSavingsUsd?: number
+  cacheSavingsCny?: number
+  tokenEconomySavingsTokens?: number
+  tokenEconomySavingsUsd?: number
+  tokenEconomySavingsCny?: number
+}
+
+export type AgentRuntimeSubagentResult = {
+  summary?: string
+  usage?: AgentRuntimeSubagentUsage
+  transcript?: readonly AgentRuntimeSubagentTranscriptEntry[]
+  threadRef?: AgentRuntimeSubagentThreadRef
+}
+
+export type AgentRuntimeSubagentLiveness = {
+  state: 'active' | 'missing'
+  observedAt: string
+}
+
+export type AgentRuntimeSubagentMessageReceipt = {
+  established: boolean
+}
+
+export type AgentRuntimeSubagentSpawnInput = AgentRuntimeSubagentTarget & {
+  label?: string
+  prompt: string
+  workspace?: string
+  model?: string
+  signal: AbortSignal
+  appendTranscript(entry: AgentRuntimeSubagentTranscriptEntry): Promise<void>
+  onSpawned(threadRef: AgentRuntimeSubagentThreadRef): void | Promise<void>
+}
+
+export type AgentRuntimeSubagentInspectInput = AgentRuntimeSubagentTarget & {
+  signal: AbortSignal
+}
+
+export type AgentRuntimeSubagentMessageInput = AgentRuntimeSubagentTarget & {
+  message: string
+  signal: AbortSignal
+}
+
+export type AgentRuntimeSubagentCancelInput = AgentRuntimeSubagentTarget & {
+  reason: 'parent_abort' | 'parent_cancel'
+  signal: AbortSignal
+}
+
+/**
+ * Provider-owned child execution controls. AgentRuntime owns orchestration,
+ * persistence, tool publication, and parent/child accounting; adapters only
+ * translate these four operations to their provider protocol.
+ */
+export type AgentRuntimeSubagentAdapter = {
+  spawn(
+    context: AgentRuntimeAdapterContext,
+    input: AgentRuntimeSubagentSpawnInput
+  ): Promise<AgentRuntimeSubagentResult>
+  inspect(
+    context: AgentRuntimeAdapterContext,
+    input: AgentRuntimeSubagentInspectInput
+  ): Promise<AgentRuntimeSubagentLiveness>
+  message(
+    context: AgentRuntimeAdapterContext,
+    input: AgentRuntimeSubagentMessageInput
+  ): Promise<AgentRuntimeSubagentMessageReceipt>
+  cancel(
+    context: AgentRuntimeAdapterContext,
+    input: AgentRuntimeSubagentCancelInput
+  ): Promise<void>
+}
+
 export type AgentRuntimeAdapter = {
   id: AgentRuntimeId
   transport: AgentRuntimeTransport
+  subagents?: AgentRuntimeSubagentAdapter
   connect(context: AgentRuntimeAdapterContext): Promise<void>
   capabilities(context: AgentRuntimeAdapterContext): Promise<AgentRuntimeCapabilities>
   listThreads(

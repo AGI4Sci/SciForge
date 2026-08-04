@@ -3,7 +3,7 @@ import {
   RECOMMENDED_SKILL_ITEMS,
   scientificSkillsRootSourceLabel,
   scientificSkillsRootSourceTitle,
-  skillMarketplaceItemsFromDiscoveredSkills
+  skillCatalogItemsFromDiscoveredSkills
 } from './PluginMarketplaceView'
 
 describe('recommended skill catalog', () => {
@@ -14,9 +14,9 @@ describe('recommended skill catalog', () => {
   })
 })
 
-describe('skillMarketplaceItemsFromDiscoveredSkills', () => {
-  it('turns discovered project and global skills into personal marketplace items', () => {
-    const items = skillMarketplaceItemsFromDiscoveredSkills([
+describe('skillCatalogItemsFromDiscoveredSkills', () => {
+  it('turns discovered project and global skills into personal catalog items', () => {
+    const items = skillCatalogItemsFromDiscoveredSkills([
       {
         id: 'openspec-apply-change',
         name: 'Openspec Apply Change',

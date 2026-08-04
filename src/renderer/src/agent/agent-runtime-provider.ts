@@ -47,6 +47,7 @@ import {
   describeRuntimeError,
   isExecutionIntegrityErrorCode
 } from '../lib/format-runtime-error'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 
 type LegacyCapabilities = ReturnType<AgentProvider['getCapabilities']>
 type SendUserMessageOptions = NonNullable<Parameters<AgentProvider['sendUserMessage']>[2]>
@@ -118,6 +119,7 @@ function normalizeThread(thread: AgentRuntimeThread): NormalizedThread {
   const normalized = {
     id: thread.id,
     runtimeId: thread.runtimeId,
+    workspaceLocator: thread.workspaceLocator,
     title: thread.title,
     updatedAt: thread.updatedAt,
     model: thread.model ?? '',
@@ -675,6 +677,7 @@ export class AgentRuntimeProvider implements AgentProvider {
   readonly displayName = 'Agent Runtime'
   private capabilitiesCache: AgentRuntimeCapabilities = defaultCapabilities()
   private readonly threadRuntimes = new Map<string, AgentRuntimeId>()
+  private readonly threadWorkspaceLocators = new Map<string, WorkspaceLocator>()
   private readonly approvalThreads = new Map<string, InteractionRequestRef>()
   private readonly userInputThreads = new Map<string, InteractionRequestRef>()
 
@@ -710,14 +713,30 @@ export class AgentRuntimeProvider implements AgentProvider {
 
   async createThread(input: Parameters<AgentProvider['createThread']>[0]): Promise<NormalizedThread> {
     const runtimeId = await this.activeRuntimeId()
-    return this.normalizeRememberedThread(await agentRuntimeClient.startThread({ runtimeId, ...input }))
+    const thread = await agentRuntimeClient.startThread({ runtimeId, ...input })
+    const workspaceLocator = thread.workspaceLocator ?? input.workspaceLocator
+    this.rememberThreadRuntime(thread.id, thread.runtimeId, workspaceLocator)
+    return {
+      ...normalizeThread(thread),
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    }
   }
 
   async getThreadDetail(threadId: string): ReturnType<AgentProvider['getThreadDetail']> {
     const runtimeId = await this.runtimeIdForThread(threadId)
-    const detail = await agentRuntimeClient.readThread({ runtimeId, threadId })
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
+    const detail = await agentRuntimeClient.readThread({
+      runtimeId,
+      threadId,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    })
     const items = detailItems(detail)
-    this.rememberThreadRuntime(detail.id, detail.runtimeId)
+    const resolvedWorkspaceLocator = detail.workspaceLocator ?? workspaceLocator
+    this.rememberThreadRuntime(
+      detail.id,
+      detail.runtimeId,
+      resolvedWorkspaceLocator
+    )
     this.rememberInteractionRequests(detail.id, detail.runtimeId, items)
     const latestTurn = latestTurnFromDetail(detail)
     const latestUserMessageId = [...items].reverse().find((item) => item.kind === 'user_message')?.id
@@ -733,6 +752,7 @@ export class AgentRuntimeProvider implements AgentProvider {
     })))
     return {
       runtimeId: detail.runtimeId,
+      ...(resolvedWorkspaceLocator ? { workspaceLocator: resolvedWorkspaceLocator } : {}),
       blocks: settleTerminalSnapshotBlocks(
         rawBlocks,
         terminalSnapshotOutcome(detail.status, latestTurn?.status)
@@ -750,8 +770,13 @@ export class AgentRuntimeProvider implements AgentProvider {
 
   async getThreadSidebarProbe(threadId: string): Promise<{ text: string | null }> {
     const runtimeId = await this.runtimeIdForThread(threadId)
-    const probe = await agentRuntimeClient.readThreadSidebarProbe({ runtimeId, threadId })
-    this.rememberThreadRuntime(probe.threadId, probe.runtimeId)
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
+    const probe = await agentRuntimeClient.readThreadSidebarProbe({
+      runtimeId,
+      threadId,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    })
+    this.rememberThreadRuntime(probe.threadId, probe.runtimeId, workspaceLocator)
     return { text: probe.text }
   }
 
@@ -762,6 +787,12 @@ export class AgentRuntimeProvider implements AgentProvider {
   ): ReturnType<AgentProvider['sendUserMessage']> {
     const { title, ...turnOptions } = options
     const runtimeId = await this.runtimeIdForThread(threadId)
+    const workspaceLocator =
+      turnOptions.workspaceLocator ?? this.workspaceLocatorForThread(threadId)
+    const placedTurnOptions = {
+      ...turnOptions,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    }
     const activeRuntimeId = await this.activeRuntimeId()
     if (activeRuntimeId !== runtimeId) {
       const result = await this.auxiliary<AgentRuntimeHandoffStartResult>('startRuntimeHandoff', {
@@ -770,16 +801,26 @@ export class AgentRuntimeProvider implements AgentProvider {
         targetThreadId: threadId,
         text,
         ...(title ? { title } : {}),
-        ...turnOptionsForRuntime(activeRuntimeId, turnOptions)
-      }, runtimeId)
+        ...turnOptionsForRuntime(activeRuntimeId, placedTurnOptions)
+      }, runtimeId, workspaceLocator)
       const targetThread = this.normalizeRememberedThread(result.targetThread)
+      this.rememberThreadRuntime(
+        targetThread.id,
+        targetThread.runtimeId,
+        targetThread.workspaceLocator ?? workspaceLocator
+      )
       return {
         ...result.turn,
         threadId: targetThread.id || result.turn.threadId || threadId,
         threadIdChange: 'handoff'
       }
     }
-    return agentRuntimeClient.startTurn({ runtimeId, threadId, text, ...turnOptionsForRuntime(runtimeId, turnOptions) })
+    return agentRuntimeClient.startTurn({
+      runtimeId,
+      threadId,
+      text,
+      ...turnOptionsForRuntime(runtimeId, placedTurnOptions)
+    })
   }
 
   reviewThread(
@@ -797,15 +838,25 @@ export class AgentRuntimeProvider implements AgentProvider {
     options: Parameters<NonNullable<AgentProvider['steerUserMessage']>>[3] = {}
   ): Promise<void> {
     const runtimeId = await this.runtimeIdForThread(threadId)
-    await agentRuntimeClient.steerTurn({ runtimeId, threadId, turnId, text, ...options })
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
+    await agentRuntimeClient.steerTurn({
+      runtimeId,
+      threadId,
+      turnId,
+      text,
+      ...options,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    })
   }
 
   async interruptTurn(threadId: string, turnId: string, options?: { discard?: boolean }): Promise<void> {
     const runtimeId = await this.runtimeIdForThread(threadId)
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
     await agentRuntimeClient.interruptTurn({
       runtimeId,
       threadId,
       turnId,
+      ...(workspaceLocator ? { workspaceLocator } : {}),
       ...(options?.discard === undefined
         ? runtimeId === 'claude' ? { discard: true } : {}
         : { discard: options.discard })
@@ -814,13 +865,25 @@ export class AgentRuntimeProvider implements AgentProvider {
 
   async renameThread(threadId: string, title: string): Promise<void> {
     const runtimeId = await this.runtimeIdForThread(threadId)
-    await agentRuntimeClient.renameThread({ runtimeId, threadId, title })
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
+    await agentRuntimeClient.renameThread({
+      runtimeId,
+      threadId,
+      title,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    })
   }
 
   async deleteThread(threadId: string): Promise<void> {
     const runtimeId = await this.runtimeIdForThread(threadId)
-    await agentRuntimeClient.deleteThread({ runtimeId, threadId })
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
+    await agentRuntimeClient.deleteThread({
+      runtimeId,
+      threadId,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    })
     this.threadRuntimes.delete(threadId)
+    this.threadWorkspaceLocators.delete(threadId)
   }
 
   getRuntimeInfo(): ReturnType<NonNullable<AgentProvider['getRuntimeInfo']>> {
@@ -839,7 +902,10 @@ export class AgentRuntimeProvider implements AgentProvider {
     input: Parameters<NonNullable<AgentProvider['uploadAttachment']>>[0]
   ): ReturnType<NonNullable<AgentProvider['uploadAttachment']>> {
     const runtimeId = input.threadId ? await this.runtimeIdForThread(input.threadId) : undefined
-    return this.auxiliary('uploadAttachment', input, runtimeId)
+    const workspaceLocator = input.threadId
+      ? this.workspaceLocatorForThread(input.threadId)
+      : undefined
+    return this.auxiliary('uploadAttachment', input, runtimeId, workspaceLocator)
   }
 
   async getAttachmentContent(
@@ -847,7 +913,15 @@ export class AgentRuntimeProvider implements AgentProvider {
     options?: Parameters<NonNullable<AgentProvider['getAttachmentContent']>>[1]
   ): ReturnType<NonNullable<AgentProvider['getAttachmentContent']>> {
     const runtimeId = options?.threadId ? await this.runtimeIdForThread(options.threadId) : undefined
-    return this.auxiliary('getAttachmentContent', { attachmentId, options }, runtimeId)
+    const workspaceLocator = options?.threadId
+      ? this.workspaceLocatorForThread(options.threadId)
+      : undefined
+    return this.auxiliary(
+      'getAttachmentContent',
+      { attachmentId, options },
+      runtimeId,
+      workspaceLocator
+    )
   }
 
   runCodeNavigation(
@@ -858,37 +932,6 @@ export class AgentRuntimeProvider implements AgentProvider {
 
   getContextState(threadId: string): ReturnType<NonNullable<AgentProvider['getContextState']>> {
     return this.threadAuxiliary(threadId, 'getContextState')
-  }
-
-  async listGitCheckpoints(
-    options?: Parameters<NonNullable<AgentProvider['listGitCheckpoints']>>[0]
-  ): ReturnType<NonNullable<AgentProvider['listGitCheckpoints']>> {
-    const { runtimeId, threadId, ...payload } = options ?? {}
-    const selectedRuntimeId = runtimeId ?? (threadId ? await this.runtimeIdForThread(threadId) : undefined)
-    return this.auxiliary('listGitCheckpoints', {
-      ...payload,
-      ...(threadId ? { threadId } : {})
-    }, selectedRuntimeId)
-  }
-
-  async createGitCheckpoint(
-    input: Parameters<NonNullable<AgentProvider['createGitCheckpoint']>>[0]
-  ): ReturnType<NonNullable<AgentProvider['createGitCheckpoint']>> {
-    const runtimeId = await this.runtimeIdForThread(input.threadId)
-    return this.auxiliary('createGitCheckpoint', input, runtimeId)
-  }
-
-  previewGitCheckpoint(
-    checkpointId: string
-  ): ReturnType<NonNullable<AgentProvider['previewGitCheckpoint']>> {
-    return this.auxiliary('previewGitCheckpoint', { checkpointId })
-  }
-
-  restoreGitCheckpoint(
-    checkpointId: string,
-    options?: Parameters<NonNullable<AgentProvider['restoreGitCheckpoint']>>[1]
-  ): ReturnType<NonNullable<AgentProvider['restoreGitCheckpoint']>> {
-    return this.auxiliary('restoreGitCheckpoint', { checkpointId, force: options?.force === true })
   }
 
   async createMemory(
@@ -949,7 +992,13 @@ export class AgentRuntimeProvider implements AgentProvider {
 
   async compactThread(threadId: string, reason?: string): Promise<void> {
     const runtimeId = await this.runtimeIdForThread(threadId)
-    await agentRuntimeClient.compactThread({ runtimeId, threadId, reason })
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
+    await agentRuntimeClient.compactThread({
+      runtimeId,
+      threadId,
+      reason,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    })
   }
 
   getThreadGoal(threadId: string): ReturnType<NonNullable<AgentProvider['getThreadGoal']>> {
@@ -993,7 +1042,12 @@ export class AgentRuntimeProvider implements AgentProvider {
     input: AgentRuntimeReadChildTranscriptInput
   ): Promise<AgentRuntimeReadChildTranscriptResponse> {
     const runtimeId = input.runtimeId ?? await this.runtimeIdForThread(input.parentThreadId)
-    return this.auxiliary('readChildTranscript', input as unknown as Record<string, unknown>, runtimeId)
+    return this.auxiliary(
+      'readChildTranscript',
+      input as unknown as Record<string, unknown>,
+      runtimeId,
+      this.workspaceLocatorForThread(input.parentThreadId)
+    )
   }
 
   async forkThread(
@@ -1001,20 +1055,45 @@ export class AgentRuntimeProvider implements AgentProvider {
     options: { relation?: AgentRuntimeThreadRelation; title?: string } = {}
   ): Promise<NormalizedThread> {
     const runtimeId = await this.runtimeIdForThread(threadId)
-    return this.normalizeRememberedThread(await agentRuntimeClient.forkThread({ runtimeId, threadId, ...options }))
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
+    const thread = await agentRuntimeClient.forkThread({
+      runtimeId,
+      threadId,
+      ...options,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    })
+    const forkWorkspaceLocator = thread.workspaceLocator ?? workspaceLocator
+    this.rememberThreadRuntime(thread.id, thread.runtimeId, forkWorkspaceLocator)
+    return {
+      ...normalizeThread(thread),
+      ...(forkWorkspaceLocator ? { workspaceLocator: forkWorkspaceLocator } : {})
+    }
   }
 
   async resumeSession(
     sessionId: string,
-    options: { model?: string; mode?: string; maxResumeCount?: number } = {}
+    options: {
+      model?: string
+      mode?: string
+      maxResumeCount?: number
+      workspaceLocator?: WorkspaceLocator
+    } = {}
   ): Promise<{ threadId: string; sessionId: string }> {
     const runtimeId = await this.activeRuntimeId()
-    return agentRuntimeClient.resumeSession({ runtimeId, sessionId, ...options })
+    const result = await agentRuntimeClient.resumeSession({ runtimeId, sessionId, ...options })
+    this.rememberThreadRuntime(result.threadId, runtimeId, options.workspaceLocator)
+    return result
   }
 
   async updateThreadRelation(threadId: string, relation: AgentRuntimeThreadRelation): Promise<void> {
     const runtimeId = await this.runtimeIdForThread(threadId)
-    await agentRuntimeClient.updateThreadRelation({ runtimeId, threadId, relation })
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
+    await agentRuntimeClient.updateThreadRelation({
+      runtimeId,
+      threadId,
+      relation,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    })
   }
 
   async submitApprovalDecision(
@@ -1024,11 +1103,13 @@ export class AgentRuntimeProvider implements AgentProvider {
   ): Promise<void> {
     const request = this.approvalThreads.get(approvalId)
     if (!request) throw unresolvedInteraction('approval', approvalId)
+    const workspaceLocator = this.workspaceLocatorForThread(request.threadId)
     await agentRuntimeClient.resolveApproval({
       runtimeId: request.runtimeId,
       threadId: request.threadId,
       approvalId: request.requestId ?? approvalId,
-      decision: decision === 'allow' ? 'allowed' : 'denied'
+      decision: decision === 'allow' ? 'allowed' : 'denied',
+      ...(workspaceLocator ? { workspaceLocator } : {})
     })
   }
 
@@ -1036,10 +1117,12 @@ export class AgentRuntimeProvider implements AgentProvider {
     const request = this.userInputThreads.get(requestId)
     if (!request) throw unresolvedInteraction('user input', requestId)
     const runtimeRequestId = request.requestId ?? requestId
+    const workspaceLocator = this.workspaceLocatorForThread(request.threadId)
     await agentRuntimeClient.resolveUserInput({
       runtimeId: request.runtimeId,
       threadId: request.threadId,
       requestId: runtimeRequestId,
+      ...(workspaceLocator ? { workspaceLocator } : {}),
       answers: answers.map((answer) => ({
         id: answer.id,
         label: answer.label,
@@ -1054,7 +1137,8 @@ export class AgentRuntimeProvider implements AgentProvider {
     await this.auxiliary(
       'cancelUserInput',
       { threadId: request.threadId, requestId: request.requestId ?? requestId },
-      request.runtimeId
+      request.runtimeId,
+      this.workspaceLocatorForThread(request.threadId)
     )
   }
 
@@ -1066,11 +1150,12 @@ export class AgentRuntimeProvider implements AgentProvider {
   ): Promise<void> {
     try {
       const runtimeId = await this.runtimeIdForThread(threadId)
+      const workspaceLocator = this.workspaceLocatorForThread(threadId)
       await agentRuntimeClient.subscribeEvents(threadId, sinceSeq, (event) => {
         if (!agentRuntimeEventBelongsToThread(event.threadId, threadId)) return
         this.rememberInteractionEvent(threadId, event, runtimeId)
         dispatchAgentRuntimeEvent(event, sink)
-      }, signal, runtimeId)
+      }, signal, runtimeId, workspaceLocator)
     } catch (error) {
       sink.onError(error instanceof Error ? error : new Error(String(error)))
     }
@@ -1086,22 +1171,37 @@ export class AgentRuntimeProvider implements AgentProvider {
     throw unresolvedThreadRuntime(threadId)
   }
 
-  rememberThreadRuntime(threadId: string, runtimeId: AgentRuntimeId | undefined): void {
+  rememberThreadRuntime(
+    threadId: string,
+    runtimeId: AgentRuntimeId | undefined,
+    workspaceLocator?: WorkspaceLocator
+  ): void {
     if (runtimeId) this.threadRuntimes.set(threadId, runtimeId)
+    if (workspaceLocator) this.threadWorkspaceLocators.set(threadId, workspaceLocator)
   }
 
   private normalizeRememberedThread(thread: AgentRuntimeThread): NormalizedThread {
-    this.rememberThreadRuntime(thread.id, thread.runtimeId)
+    this.rememberThreadRuntime(thread.id, thread.runtimeId, thread.workspaceLocator)
     return normalizeThread(thread)
+  }
+
+  private workspaceLocatorForThread(threadId: string): WorkspaceLocator | undefined {
+    return this.threadWorkspaceLocators.get(threadId)
   }
 
   private async auxiliary<T>(
     operation: AgentRuntimeAuxiliaryOperation,
     payload: Record<string, unknown> = {},
-    runtimeId?: AgentRuntimeId
+    runtimeId?: AgentRuntimeId,
+    workspaceLocator?: WorkspaceLocator
   ): Promise<T> {
     const selectedRuntimeId = runtimeId ?? await this.activeRuntimeId()
-    return agentRuntimeClient.auxiliary<T>({ runtimeId: selectedRuntimeId, operation, payload })
+    return agentRuntimeClient.auxiliary<T>({
+      runtimeId: selectedRuntimeId,
+      operation,
+      payload,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    })
   }
 
   private async threadAuxiliary<T>(
@@ -1110,7 +1210,12 @@ export class AgentRuntimeProvider implements AgentProvider {
     payload: Record<string, unknown> = {}
   ): Promise<T> {
     const runtimeId = await this.runtimeIdForThread(threadId)
-    return this.auxiliary<T>(operation, { threadId, ...payload }, runtimeId)
+    return this.auxiliary<T>(
+      operation,
+      { threadId, ...payload },
+      runtimeId,
+      this.workspaceLocatorForThread(threadId)
+    )
   }
 
   private rememberInteractionRequests(threadId: string, runtimeId: AgentRuntimeId, items: AgentRuntimeItem[]): void {

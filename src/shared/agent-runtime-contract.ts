@@ -1,4 +1,5 @@
 import type { ExecutionReceipt } from '@sciforge/execution-governance'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 
 export type AgentRuntimeId = 'sciforge' | 'codex' | 'claude'
 
@@ -188,7 +189,6 @@ export type AgentRuntimeCapabilityId =
   | 'context.ledger'
   | 'context.handoff'
   | 'context.goalResume'
-  | 'git.turnCheckpoint'
   | 'memory.shared'
   | 'workspace.references'
   | 'ui.visibleContext'
@@ -348,23 +348,6 @@ export type AgentRuntimeHandoffStartResult = {
   packet: AgentRuntimeHandoffPacket
 }
 
-export type AgentRuntimeGitCheckpointStatus = 'available' | 'restored' | 'blocked' | 'failed'
-
-export type AgentRuntimeGitCheckpoint = {
-  checkpointId: string
-  runtimeId: AgentRuntimeId
-  threadId: string
-  turnId?: string
-  workspaceRoot: string
-  repositoryRoot: string
-  branch: string | null
-  head: string
-  createdAt: string
-  diffStat: string
-  status: AgentRuntimeGitCheckpointStatus
-  restoreStatus?: string
-}
-
 export type AgentRuntimeMemoryScope = 'user' | 'project' | 'workspace'
 export type AgentRuntimeMemoryThreadMode = 'agent' | 'plan'
 export type AgentRuntimeMemoryTaskType = 'agent' | 'plan' | 'plan_draft' | 'plan_refine'
@@ -442,6 +425,7 @@ export type AgentRuntimeThread = {
   model?: string
   mode?: string
   workspace?: string
+  workspaceLocator?: WorkspaceLocator
   status?: string
   archived?: boolean
   preview?: string
@@ -491,6 +475,7 @@ export type AgentRuntimeTurnHandle = {
 
 export type AgentRuntimeThreadListInput = {
   runtimeId?: AgentRuntimeId
+  workspaceLocator?: WorkspaceLocator
   limit?: number
   search?: string
   includeArchived?: boolean
@@ -503,6 +488,7 @@ export type AgentRuntimeThreadStartInput = {
   runtimeId: AgentRuntimeId
   threadId?: string
   workspace?: string
+  workspaceLocator?: WorkspaceLocator
   title?: string
   mode?: string
   model?: string
@@ -516,6 +502,7 @@ export type AgentRuntimeThreadStartInput = {
 export type AgentRuntimeThreadReadInput = {
   runtimeId: AgentRuntimeId
   threadId: string
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type AgentRuntimeThreadSidebarProbe = {
@@ -577,14 +564,16 @@ export type AgentRuntimeTurnStartInput = {
   runtimeId: AgentRuntimeId
   threadId: string
   text: string
+  /** @internal Trusted sender provenance injected only after strict IPC validation. */
+  visibleContextSurfaceId?: string
   clientDirectiveId?: string
   executionIntent?: AgentRuntimeExecutionIntent
   metadata?: Record<string, unknown>
   workspace?: string
+  workspaceLocator?: WorkspaceLocator
   mode?: string
   model?: string
   reasoningEffort?: string
-  remoteTargetId?: string
   governanceProfile?: AgentRuntimeGovernanceProfile
   displayText?: string
   visibleContextOwnerThreadId?: string
@@ -612,6 +601,7 @@ export type AgentRuntimeTurnTargetInput = {
   runtimeId: AgentRuntimeId
   threadId: string
   turnId: string
+  workspaceLocator?: WorkspaceLocator
   discard?: boolean
 }
 
@@ -619,7 +609,10 @@ export type AgentRuntimeTurnSteerInput = {
   runtimeId: AgentRuntimeId
   threadId: string
   turnId: string
+  workspaceLocator?: WorkspaceLocator
   text: string
+  /** @internal Trusted sender provenance injected only after strict IPC validation. */
+  visibleContextSurfaceId?: string
   clientDirectiveId?: string
   executionIntent?: AgentRuntimeExecutionIntent
 }
@@ -644,6 +637,7 @@ export type AgentRuntimeUsageQuery = {
   to?: string
   timezone?: string
   threadId?: string
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type AgentRuntimeUsageResponse =
@@ -865,10 +859,6 @@ export const AGENT_RUNTIME_AUXILIARY_OPERATIONS = [
   'startRuntimeHandoff',
   'recordContextCompaction',
   'updateGoalResumeState',
-  'listGitCheckpoints',
-  'createGitCheckpoint',
-  'previewGitCheckpoint',
-  'restoreGitCheckpoint',
   'listSkills',
   'uploadAttachment',
   'getAttachmentContent',
@@ -908,7 +898,6 @@ export const AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS = [
   'startRuntimeHandoff',
   'recordContextCompaction',
   'updateGoalResumeState',
-  'createGitCheckpoint',
   'updateThreadWorkspace',
   'archiveThread',
   'getThreadGoal',
@@ -931,6 +920,7 @@ export type AgentRuntimeAuxiliaryActiveScopedOperation = Exclude<
 type AgentRuntimeAuxiliaryInputBase<Operation extends AgentRuntimeAuxiliaryOperation> = {
   operation: Operation
   payload?: Record<string, unknown>
+  workspaceLocator?: WorkspaceLocator
 }
 
 export type AgentRuntimeAuxiliaryThreadBoundInput = {

@@ -10,7 +10,7 @@ export const DOMAIN_PACKAGE_IMPLICIT_RUNTIME_PATHS = Object.freeze([
 const stableSemanticVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 const semanticVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
 
-export const domainPackageProcessSchema = z.enum(['main', 'renderer'])
+export const domainPackageProcessSchema = z.enum(['main', 'renderer', 'workspace-server'])
 export type DomainPackageProcess = z.infer<typeof domainPackageProcessSchema>
 
 export const domainPackageNameSchema = z.string()
@@ -63,6 +63,29 @@ export const domainPackageContributionKindSchema = z.string()
   .max(128)
   .regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/, 'Use a lowercase contribution kind.')
 
+export const domainPackagePublisherIdSchema = z.string()
+  .trim()
+  .min(2)
+  .max(64)
+  .regex(
+    /^[a-z0-9][a-z0-9-]*[a-z0-9]$/,
+    'Use a lowercase publisher ID containing letters, numbers, or internal hyphens.'
+  )
+
+export const domainPackagePublisherSchema = z.object({
+  id: domainPackagePublisherIdSchema,
+  displayName: z.string().trim().min(1).max(160)
+}).strict()
+
+export const domainPackagePermissionIdSchema = z.string()
+  .trim()
+  .min(3)
+  .max(192)
+  .regex(
+    /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$/,
+    'Use a namespaced lowercase permission ID.'
+  )
+
 export type DomainPackageJsonValue =
   | null
   | boolean
@@ -108,6 +131,14 @@ export const domainPackageHostApiRangeSchema = z.object({
   }
 })
 
+export const domainPackageModuleSchema = z.object({
+  id: domainPackageModuleIdSchema,
+  displayName: z.string().trim().min(1).max(160),
+  version: domainPackageVersionSchema,
+  hostApi: domainPackageHostApiRangeSchema,
+  priority: z.number().int().min(-10_000).max(10_000).default(100)
+}).strict()
+
 export const domainPackageContributionDeclarationSchema = z.object({
   id: domainPackageContributionIdSchema,
   kind: domainPackageContributionKindSchema,
@@ -127,10 +158,49 @@ const rendererEntrypointSchema = z.object({
   contributions: z.array(domainPackageContributionDeclarationSchema).max(1_000).default([])
 }).strict()
 
+const workspaceServerEntrypointSchema = z.object({
+  process: z.literal('workspace-server'),
+  export: z.literal('./workspace-server'),
+  contributions: z.array(domainPackageContributionDeclarationSchema).max(1_000).default([])
+}).strict()
+
 export const domainPackageEntrypointSchema = z.discriminatedUnion('process', [
   mainEntrypointSchema,
-  rendererEntrypointSchema
+  rendererEntrypointSchema,
+  workspaceServerEntrypointSchema
 ])
+
+const sandboxedMainEntrypointSchema = z.object({
+  process: z.literal('main'),
+  isolation: z.literal('extension-host'),
+  entry: domainPackageRelativePathSchema,
+  format: z.literal('module'),
+  contributions: z.array(domainPackageContributionDeclarationSchema).max(1_000).default([])
+}).strict()
+
+const sandboxedRendererEntrypointSchema = z.object({
+  process: z.literal('renderer'),
+  isolation: z.literal('sandboxed-webview'),
+  entry: domainPackageRelativePathSchema,
+  format: z.literal('html'),
+  contributions: z.array(domainPackageContributionDeclarationSchema).max(1_000).default([])
+}).strict()
+
+export const sandboxedDomainPackageEntrypointSchema = z.discriminatedUnion('process', [
+  sandboxedMainEntrypointSchema,
+  sandboxedRendererEntrypointSchema
+])
+
+export const domainPackageRequestedPermissionSchema = z.object({
+  id: domainPackagePermissionIdSchema,
+  process: z.enum(['main', 'renderer']),
+  reason: z.string().trim().min(1).max(500),
+  required: z.boolean(),
+  parameters: z.record(
+    z.string().trim().min(1).max(192),
+    domainPackageJsonValueSchema
+  ).optional()
+}).strict()
 
 export const domainPackageRuntimePackagingSchema = z.object({
   requiredPaths: z.array(domainPackageRelativePathSchema).max(1_000).default([]),
@@ -183,54 +253,16 @@ export const trustedDomainPackageDefinitionSchema = z.object({
   contractVersion: z.literal(DOMAIN_PACKAGE_CONTRACT_VERSION),
   kind: z.literal('trusted-compile-time'),
   packageName: domainPackageNameSchema,
-  module: z.object({
-    id: domainPackageModuleIdSchema,
-    displayName: z.string().trim().min(1).max(160),
-    version: domainPackageVersionSchema,
-    hostApi: domainPackageHostApiRangeSchema,
-    priority: z.number().int().min(-10_000).max(10_000).default(100)
-  }).strict(),
+  publisher: domainPackagePublisherSchema.optional(),
+  module: domainPackageModuleSchema,
   contributionContracts: z.record(
     domainPackageContributionIdSchema,
     domainPackageJsonValueSchema
   ).default({}),
   packaging: domainPackagePackagingSchema.optional(),
-  entrypoints: z.array(domainPackageEntrypointSchema).min(1).max(2)
+  entrypoints: z.array(domainPackageEntrypointSchema).min(1).max(3)
 }).strict().superRefine((definition, context) => {
-  const processes = new Set<DomainPackageProcess>()
-  const contributionIds = new Set<string>()
-  for (const [entrypointIndex, entrypoint] of definition.entrypoints.entries()) {
-    if (processes.has(entrypoint.process)) {
-      context.addIssue({
-        code: 'custom',
-        path: ['entrypoints', entrypointIndex, 'process'],
-        message: `Domain package ${definition.packageName} declares ${entrypoint.process} more than once.`
-      })
-    }
-    processes.add(entrypoint.process)
-
-    const contributionKeys = new Set<string>()
-    for (const [contributionIndex, contribution] of entrypoint.contributions.entries()) {
-      contributionIds.add(contribution.id)
-      const key = domainContributionKey(contribution.kind, contribution.id)
-      if (contributionKeys.has(key)) {
-        context.addIssue({
-          code: 'custom',
-          path: ['entrypoints', entrypointIndex, 'contributions', contributionIndex],
-          message: `Duplicate ${entrypoint.process} contribution ${contribution.kind}:${contribution.id}.`
-        })
-      }
-      contributionKeys.add(key)
-    }
-  }
-  for (const contractId of Object.keys(definition.contributionContracts)) {
-    if (contributionIds.has(contractId)) continue
-    context.addIssue({
-      code: 'custom',
-      path: ['contributionContracts', contractId],
-      message: `Contribution contract ${contractId} has no declared contribution.`
-    })
-  }
+  validateDomainDefinitionOwnership(definition, context)
   const dependencies = definition.packaging?.runtime?.dependencies ?? []
   for (const [dependencyIndex, dependency] of dependencies.entries()) {
     if (dependency !== definition.packageName) continue
@@ -242,15 +274,77 @@ export const trustedDomainPackageDefinitionSchema = z.object({
   }
 })
 
+export const sandboxedDomainPackageDefinitionSchema = z.object({
+  contractVersion: z.literal(DOMAIN_PACKAGE_CONTRACT_VERSION),
+  kind: z.literal('sandboxed-runtime'),
+  packageName: domainPackageNameSchema,
+  publisher: domainPackagePublisherSchema,
+  module: domainPackageModuleSchema,
+  requestedPermissions: z.array(domainPackageRequestedPermissionSchema).max(1_000),
+  contributionContracts: z.record(
+    domainPackageContributionIdSchema,
+    domainPackageJsonValueSchema
+  ).default({}),
+  entrypoints: z.array(sandboxedDomainPackageEntrypointSchema).min(1).max(2)
+}).strict().superRefine((definition, context) => {
+  const processes = validateDomainDefinitionOwnership(definition, context)
+  const permissionKeys = new Set<string>()
+  for (const [permissionIndex, permission] of definition.requestedPermissions.entries()) {
+    if (!processes.has(permission.process)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['requestedPermissions', permissionIndex, 'process'],
+        message: `Permission ${permission.id} targets undeclared ${permission.process} entrypoint.`
+      })
+    }
+    const key = `${permission.process}\u0000${permission.id}`
+    if (permissionKeys.has(key)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['requestedPermissions', permissionIndex],
+        message: `Duplicate ${permission.process} permission ${permission.id}.`
+      })
+    }
+    permissionKeys.add(key)
+  }
+})
+
+export const domainPackageDefinitionSchema = z.discriminatedUnion('kind', [
+  trustedDomainPackageDefinitionSchema,
+  sandboxedDomainPackageDefinitionSchema
+])
+
 export type DomainPackageHostApiRange = z.infer<typeof domainPackageHostApiRangeSchema>
+export type DomainPackageModule = z.infer<typeof domainPackageModuleSchema>
 export type DomainPackageContributionDeclaration = z.infer<
   typeof domainPackageContributionDeclarationSchema
 >
 export type DomainPackageEntrypoint = z.infer<typeof domainPackageEntrypointSchema>
+export type SandboxedDomainPackageEntrypoint = z.infer<
+  typeof sandboxedDomainPackageEntrypointSchema
+>
+export type DomainPackagePublisher = z.infer<typeof domainPackagePublisherSchema>
+export type DomainPackageRequestedPermission = z.infer<
+  typeof domainPackageRequestedPermissionSchema
+>
 export type DomainPackageRuntimePackaging = z.infer<typeof domainPackageRuntimePackagingSchema>
 export type DomainPackagePackaging = z.infer<typeof domainPackagePackagingSchema>
 export type TrustedDomainPackageDefinition = z.infer<typeof trustedDomainPackageDefinitionSchema>
 export type TrustedDomainPackageDefinitionInput = z.input<typeof trustedDomainPackageDefinitionSchema>
+export type SandboxedDomainPackageDefinition = z.infer<
+  typeof sandboxedDomainPackageDefinitionSchema
+>
+export type SandboxedDomainPackageDefinitionInput = z.input<
+  typeof sandboxedDomainPackageDefinitionSchema
+>
+export type DomainPackageDefinition = z.infer<typeof domainPackageDefinitionSchema>
+export type DomainPackageDefinitionInput = z.input<typeof domainPackageDefinitionSchema>
+
+export function defineDomainPackage(
+  input: DomainPackageDefinitionInput
+): DomainPackageDefinition {
+  return deepFreeze(domainPackageDefinitionSchema.parse(input))
+}
 
 export function defineTrustedDomainPackage(
   input: TrustedDomainPackageDefinitionInput
@@ -293,6 +387,55 @@ function parseStableSemanticVersion(version: string): [number, number, number] {
   const normalized = domainPackageStableVersionSchema.parse(version)
   const [major, minor, patch] = normalized.split('.').map(Number)
   return [major!, minor!, patch!]
+}
+
+function validateDomainDefinitionOwnership(
+  definition: Readonly<{
+    packageName: string
+    contributionContracts: Readonly<Record<string, DomainPackageJsonValue>>
+    entrypoints: readonly Readonly<{
+      process: DomainPackageProcess
+      contributions: readonly DomainPackageContributionDeclaration[]
+    }>[]
+  }>,
+  context: z.RefinementCtx
+): ReadonlySet<DomainPackageProcess> {
+  const processes = new Set<DomainPackageProcess>()
+  const contributionIds = new Set<string>()
+  for (const [entrypointIndex, entrypoint] of definition.entrypoints.entries()) {
+    if (processes.has(entrypoint.process)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['entrypoints', entrypointIndex, 'process'],
+        message: `Domain package ${definition.packageName} declares ${entrypoint.process} more than once.`
+      })
+    }
+    processes.add(entrypoint.process)
+
+    const contributionKeys = new Set<string>()
+    for (const [contributionIndex, contribution] of entrypoint.contributions.entries()) {
+      contributionIds.add(contribution.id)
+      const key = domainContributionKey(contribution.kind, contribution.id)
+      if (contributionKeys.has(key)) {
+        context.addIssue({
+          code: 'custom',
+          path: ['entrypoints', entrypointIndex, 'contributions', contributionIndex],
+          message: `Duplicate ${entrypoint.process} contribution ${contribution.kind}:${contribution.id}.`
+        })
+      }
+      contributionKeys.add(key)
+    }
+  }
+
+  for (const contractId of Object.keys(definition.contributionContracts)) {
+    if (contributionIds.has(contractId)) continue
+    context.addIssue({
+      code: 'custom',
+      path: ['contributionContracts', contractId],
+      message: `Contribution contract ${contractId} has no declared contribution.`
+    })
+  }
+  return processes
 }
 
 function deepFreeze<Value>(value: Value): Value {

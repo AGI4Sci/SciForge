@@ -13,7 +13,7 @@ import type {
   CodexAppServerAccount,
   CodexAppServerGetAccountRateLimitsResponse,
   CodexAppServerPlanType
-} from './app-server/protocol'
+} from '@sciforge/codex-runtime/app-server'
 
 export type CodexJsonObject = Record<string, unknown>
 

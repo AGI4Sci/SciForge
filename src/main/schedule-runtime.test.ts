@@ -10,17 +10,14 @@ import {
   defaultWorkflowSettings,
   defaultWriteSettings,
   mergeScheduleSettings,
-  scheduleTaskWorkflowId,
   type AppSettingsPatch,
   type AppSettingsV1,
-  type ScheduledTaskV1,
-  type WorkflowRuntimeStatus
+  type ScheduledTaskV1
 } from '../shared/app-settings'
 import {
   ScheduleRuntime,
   computeScheduleNextRunAt,
-  scheduledThreadTitle,
-  type ScheduleWorkflowRunner
+  scheduledThreadTitle
 } from './schedule-runtime'
 import type { ScheduleRuntimeDeps } from './schedule-runtime-helpers'
 
@@ -108,40 +105,36 @@ function createStore(initial: AppSettingsV1) {
   }
 }
 
-function unusedAgentRuntime(): ScheduleRuntimeDeps['agentRuntime'] {
-  const fail = async (): Promise<never> => {
-    throw new Error('Unexpected agentRuntime call in this test.')
-  }
+function createAgentRuntime() {
   return {
-    startThread: vi.fn(fail),
-    readThread: vi.fn(fail),
-    startTurn: vi.fn(fail),
-    interruptTurn: vi.fn(fail)
+    startThread: vi.fn(async () => ({ id: 'thread-1' })),
+    readThread: vi.fn(async () => ({
+      id: 'thread-1',
+      thread: { id: 'thread-1', status: 'idle' },
+      turns: [{
+        id: 'turn-1',
+        status: 'completed',
+        items: [{ kind: 'assistant_text', turnId: 'turn-1', text: 'Task complete.' }]
+      }]
+    })),
+    startTurn: vi.fn(async () => ({ threadId: 'thread-1', turnId: 'turn-1' })),
+    interruptTurn: vi.fn(async () => undefined)
   } as unknown as ScheduleRuntimeDeps['agentRuntime']
 }
 
 function createRuntime(
   initial: AppSettingsV1,
-  forbiddenDirectCall = vi.fn(),
-  agentRuntime: unknown = unusedAgentRuntime(),
-  workflowRunner: ScheduleWorkflowRunner = {
-    runWorkflow: vi.fn(async () => ({ ok: true as const, runId: 'workflow-run-1', status: 'running' as const, message: 'Started' })),
-    status: vi.fn(async (): Promise<WorkflowRuntimeStatus> => ({
-      runningWorkflowIds: [],
-      nodeStatus: {},
-      nodeResults: {},
-      powerSaveBlockerActive: false,
-      pendingApprovals: []
-    }))
-  }
+  agentRuntime: ScheduleRuntimeDeps['agentRuntime'] = createAgentRuntime(),
+  powerSaveBlocker?: ScheduleRuntimeDeps['powerSaveBlocker']
 ) {
   const store = createStore(initial)
   const runtime = new ScheduleRuntime({
     store: store as never,
-    agentRuntime: agentRuntime as ScheduleRuntimeDeps['agentRuntime'],
-    logError: vi.fn()
-  }, workflowRunner)
-  return { runtime, store, forbiddenDirectCall, agentRuntime, workflowRunner }
+    agentRuntime,
+    logError: vi.fn(),
+    powerSaveBlocker
+  })
+  return { runtime, store, agentRuntime }
 }
 
 async function findAvailablePort(): Promise<number> {
@@ -242,69 +235,77 @@ describe('ScheduleRuntime', () => {
     expect('tasks' in store.read().remoteChannel).toBe(false)
   })
 
-  it('delegates manual Schedule runs to the compiled Workflow runtime', async () => {
+  it('runs manual Schedule tasks directly through AgentRuntime', async () => {
     const task = makeTask({ reasoningEffort: 'max' })
-    const forbiddenDirectCall = vi.fn()
-    const agentRuntime = unusedAgentRuntime()
-    const { runtime, workflowRunner } = createRuntime(settingsWith([task]), forbiddenDirectCall, agentRuntime)
+    const agentRuntime = createAgentRuntime()
+    const { runtime, store } = createRuntime(settingsWith([task]), agentRuntime)
 
     await expect(runtime.runTask(task.id)).resolves.toMatchObject({
       ok: true,
-      threadId: 'workflow-run-1',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
       message: 'Started'
     })
 
-    expect(workflowRunner.runWorkflow).toHaveBeenCalledWith(scheduleTaskWorkflowId(task.id))
-    expect(agentRuntime.startThread).not.toHaveBeenCalled()
-    expect(agentRuntime.startTurn).not.toHaveBeenCalled()
-    expect(forbiddenDirectCall).not.toHaveBeenCalled()
+    expect(agentRuntime.startThread).toHaveBeenCalledWith(expect.objectContaining({
+      runtimeId: 'codex',
+      workspace: task.workspaceRoot,
+      title: '[Scheduled task] Task'
+    }))
+    expect(agentRuntime.startTurn).toHaveBeenCalledWith(expect.objectContaining({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      reasoningEffort: 'max'
+    }))
+    expect(store.read().schedule.tasks[0]).toMatchObject({
+      lastStatus: 'running',
+      runtimeId: 'codex',
+      agentThreadIds: { codex: 'thread-1' }
+    })
+    runtime.stop()
   })
 
-  it('returns Workflow runtime errors without falling back to direct agent execution', async () => {
+  it('returns AgentRuntime startup errors without marking the task running', async () => {
     const task = makeTask({ runtimeId: 'sciforge' })
-    const forbiddenDirectCall = vi.fn()
-    const agentRuntime = unusedAgentRuntime()
-    const workflowRunner = {
-      runWorkflow: vi.fn(async () => ({ ok: false as const, message: 'Workflow rejected the scheduled run.' })),
-      status: vi.fn(async (): Promise<WorkflowRuntimeStatus> => ({
-        runningWorkflowIds: [],
-        nodeStatus: {},
-        nodeResults: {},
-        powerSaveBlockerActive: false,
-        pendingApprovals: []
-      }))
-    }
-    const { runtime, store } = createRuntime(settingsWith([task]), forbiddenDirectCall, agentRuntime, workflowRunner)
+    const agentRuntime = createAgentRuntime()
+    vi.mocked(agentRuntime.startThread).mockRejectedValueOnce(new Error('Runtime unavailable.'))
+    const { runtime, store } = createRuntime(settingsWith([task]), agentRuntime)
 
     await expect(runtime.runTask(task.id)).resolves.toMatchObject({
       ok: false,
-      message: 'Workflow rejected the scheduled run.'
+      message: 'Runtime unavailable.'
     })
 
-    expect(workflowRunner.runWorkflow).toHaveBeenCalledWith(scheduleTaskWorkflowId(task.id))
-    expect(agentRuntime.startThread).not.toHaveBeenCalled()
+    expect(agentRuntime.startThread).toHaveBeenCalledOnce()
+    expect(agentRuntime.startTurn).not.toHaveBeenCalled()
     expect(store.read().schedule.tasks[0]).toMatchObject({ lastStatus: 'idle', lastMessage: '' })
-    expect(forbiddenDirectCall).not.toHaveBeenCalled()
   })
 
-  it('projects schedule-owned Workflow runtime status back to Schedule status', async () => {
+  it('reports directly tracked tasks and power-save state', async () => {
     const task = makeTask()
-    const workflowRunner = {
-      runWorkflow: vi.fn(async () => ({ ok: true as const, runId: 'run-1', status: 'running' as const, message: 'Started' })),
-      status: vi.fn(async (): Promise<WorkflowRuntimeStatus> => ({
-        runningWorkflowIds: [scheduleTaskWorkflowId(task.id), 'workflow-2'],
-        nodeStatus: {},
-        nodeResults: {},
-        powerSaveBlockerActive: true,
-        pendingApprovals: []
-      }))
+    const powerSaveBlocker = {
+      start: vi.fn(() => 9),
+      stop: vi.fn(),
+      isStarted: vi.fn((id: number) => id === 9)
     }
-    const { runtime } = createRuntime(settingsWith([task]), vi.fn(), unusedAgentRuntime(), workflowRunner)
+    const { runtime } = createRuntime(
+      settingsWith([task], { keepAwake: true }),
+      createAgentRuntime(),
+      powerSaveBlocker
+    )
+    ;(runtime as unknown as { runningTasks: Map<string, unknown> }).runningTasks.set(task.id, {
+      runtimeId: 'sciforge',
+      threadId: 'thread-1',
+      turnId: 'turn-1'
+    })
+    ;(runtime as unknown as { syncPowerSaveBlocker: (settings: AppSettingsV1) => void })
+      .syncPowerSaveBlocker(settingsWith([task], { keepAwake: true }))
 
     await expect(runtime.status()).resolves.toMatchObject({
       runningTaskIds: [task.id],
       powerSaveBlockerActive: true
     })
+    runtime.stop()
   })
 
   it('serves status, run, and detect-from-text through the authenticated internal HTTP API', async () => {

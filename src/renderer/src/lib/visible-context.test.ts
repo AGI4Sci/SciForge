@@ -40,6 +40,30 @@ describe('visible context visual targets', () => {
     })
   })
 
+  it('continues renderer revisions from session storage after a reload', async () => {
+    vi.resetModules()
+    const storage = new Map([['sciforge.visible-context.revision', '41']])
+    const publish = vi.fn(async (snapshot: VisibleContextPublishInput) => ({
+      ...snapshot,
+      windowId: 'electron:1'
+    }))
+    vi.stubGlobal('window', {
+      sciforge: { visibleContext: { publish } },
+      sessionStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => storage.set(key, value)
+      },
+      clearTimeout: vi.fn(),
+      setTimeout: vi.fn()
+    })
+    const reloaded = await import('./visible-context')
+
+    reloaded.publishVisibleContextNow()
+
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ revision: 42 }))
+    expect(storage.get('sciforge.visible-context.revision')).toBe('42')
+  })
+
   it('publishes immediately when main requests an on-demand refresh', () => {
     const publish = vi.fn(async (snapshot: VisibleContextPublishInput) => ({ ...snapshot, windowId: 'electron:1' }))
     let refresh: (() => void) | undefined

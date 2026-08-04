@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   createDocumentTextAnchor,
   documentTextPositionAtOffset,
+  findDocumentTextSearchMatches,
   isNewDocumentNavigationRequest,
   resolveDocumentTextAnchor
 } from './dom-text-annotations'
@@ -69,6 +70,23 @@ describe('DOM text annotation anchors', () => {
     expect(resolveDocumentTextAnchor('Alpha beta', { quote: '' })).toBeNull()
     expect(resolveDocumentTextAnchor('Alpha beta', { quote: 'gamma' })).toBeNull()
     expect(createDocumentTextAnchor('Alpha beta', 3, 3)).toBeNull()
+  })
+
+  it('finds bounded case-insensitive document search matches', () => {
+    expect(findDocumentTextSearchMatches('Alpha beta ALPHA alphabet', 'alpha')).toEqual([
+      { from: 0, to: 5 },
+      { from: 11, to: 16 },
+      { from: 17, to: 22 }
+    ])
+    expect(findDocumentTextSearchMatches('one one one', 'one', 2)).toEqual([
+      { from: 0, to: 3 },
+      { from: 4, to: 7 }
+    ])
+    expect(findDocumentTextSearchMatches('a+b A+B', 'a+b')).toEqual([
+      { from: 0, to: 3 },
+      { from: 4, to: 7 }
+    ])
+    expect(findDocumentTextSearchMatches('Alpha', '   ')).toEqual([])
   })
 
   it('treats navigation as an explicit request-id event', () => {

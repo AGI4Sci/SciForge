@@ -30,14 +30,6 @@ function runtimeInspectorServiceOptionsFromArgv(
       }
       continue
     }
-    if (arg === '--checkpoint-data-dir') {
-      const value = argv[index + 1]
-      if (value) {
-        serviceOptions.checkpointDataDir = value
-        index += 1
-      }
-      continue
-    }
     if (arg === '--model-router-base-url') {
       const value = argv[index + 1]
       if (value) {
