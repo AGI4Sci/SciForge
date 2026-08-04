@@ -26,6 +26,13 @@ Capabilities:
 - `dataset-api.metadata` and `dataset-api.raw-data`: retrieve metadata and
   stream validated raw data with bounded retries, checksums, provenance, and a
   bounded text/FASTA/JSON preview for the conversation card.
+- `dataset-api.register-object-store` and `dataset-api.list-object-stores`:
+  register workspace-scoped S3-compatible private stores using environment
+  variable references for SigV4 credentials, and inspect credential readiness
+  without exposing credential values.
+- `dataset-api.list-objects`, `dataset-api.object-metadata`, and
+  `dataset-api.object-raw-data`: browse a bounded object page, inspect object
+  headers, and stream complete or ranged objects into checksummed artifacts.
 - `dataset-api.prepare-plan`, `dataset-api.execute-plan`, and
   `dataset-api.resume-plan`: confirm, checkpoint, execute, and recover immutable
   preparation workflows.
@@ -66,3 +73,12 @@ for loopback development APIs. The UniProt ID-mapping adapter is the only
 allow-listed POST workflow and cannot target an arbitrary URL.
 Raw downloads support byte ranges and produce SHA-256 checksums without parsing
 or transforming the source bytes.
+
+S3-compatible registrations are stored separately in
+`.sciforge/datasets/object-stores.json`. The registry contains endpoint,
+bucket, allowed prefix, region, path-style selection, and credential environment
+variable names only. Access and secret values are resolved at invocation time.
+HTTPS is required by default; an internal HTTP endpoint must be registered with
+the explicit `allowInsecureHttp=true` acknowledgement. Object keys are always
+scoped below the registered prefix, listings are bounded to 1,000 keys per
+page, and downloads default to a 256 MiB limit with optional byte ranges.

@@ -73,6 +73,47 @@ describe('TimelineDatasetResultsPanel', () => {
     })
   })
 
+  it('classifies private object-store browsing and ranged downloads', () => {
+    const blocks: DatasetTimelineBlock[] = [
+      {
+        kind: 'tool',
+        id: 'objects-1',
+        summary: 'sciforge_invoke',
+        status: 'success',
+        meta: { structuredContent: { output: { datasetApi: {
+          actionId: 'dataset-api.list-objects',
+          success: true,
+          result: {
+            source: { id: 'private-ncbi', name: 'Private NCBI Gene' },
+            request: { bucket: 'private-hcorpus', prefix: 'en-database-ncbi-gene/' },
+            objects: [{ key: 'en-database-ncbi-gene/README', size: 1024 }]
+          }
+        } } } }
+      },
+      {
+        kind: 'tool',
+        id: 'object-download-1',
+        summary: 'sciforge_invoke',
+        status: 'success',
+        meta: { structuredContent: { output: { datasetApi: {
+          actionId: 'dataset-api.object-raw-data',
+          success: true,
+          result: {
+            source: { id: 'private-ncbi', name: 'Private NCBI Gene' },
+            request: { bucket: 'private-hcorpus', key: 'en-database-ncbi-gene/README' },
+            response: { status: 206, bytes: 1024 },
+            artifact: { path: '/workspace/README', fileName: 'README', bytes: 1024, format: 'text' }
+          }
+        } } } }
+      }
+    ]
+
+    expect(datasetResultsFromTimelineBlocks(blocks)).toMatchObject([
+      { toolName: 'dataset_list_objects', kind: 'objects', success: true },
+      { toolName: 'dataset_object_raw_data', kind: 'raw-data', success: true }
+    ])
+  })
+
   it('extracts raw-data artifacts from structuredContent tool detail', () => {
     const structured = {
       result: {

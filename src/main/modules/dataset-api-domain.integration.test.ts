@@ -48,7 +48,7 @@ describe('installed Dataset API domain package', () => {
 
     const discovery = await agent.call({
       name: CAPABILITY_AGENT_TOOL_NAMES.discover,
-      arguments: { tags: ['dataset'] },
+      arguments: { tags: ['dataset'], limit: Object.keys(DATASET_API_CAPABILITY_IDS).length },
       context
     })
     expect(discovery.tool).toBe(CAPABILITY_AGENT_TOOL_NAMES.discover)

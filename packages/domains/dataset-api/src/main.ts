@@ -10,6 +10,11 @@ import {
   datasetApiRawDataInputSchema,
   datasetApiRegisterInputSchema,
   datasetApiRegisterProviderInputSchema,
+  datasetObjectListInputSchema,
+  datasetObjectMetadataInputSchema,
+  datasetObjectRawDataInputSchema,
+  datasetObjectStoreListInputSchema,
+  datasetObjectStoreRegisterInputSchema,
   datasetDeduplicateInputSchema,
   datasetExecutePlanInputSchema,
   datasetFilterInputSchema,
@@ -41,6 +46,10 @@ import {
   createDatasetApiService,
   type DatasetApiService
 } from './service.js'
+import {
+  createDatasetObjectStoreService,
+  type DatasetObjectStoreService
+} from './object-store.js'
 
 type Audience = 'ui' | 'agent' | 'system'
 type Effect = 'read' | 'workspace-write'
@@ -75,6 +84,7 @@ export { DATASET_API_CAPABILITY_IDS } from './contract.js'
 
 type DatasetApiServices = Readonly<{
   api: DatasetApiService
+  objectStore: DatasetObjectStoreService
   processing: DatasetProcessingService
   executor: ReturnType<typeof createDatasetPlanExecutor>
 }>
@@ -104,9 +114,11 @@ export function createDomainMainEntry(
         services = host.createDatasetApiServices()
       } else {
         const api = createDatasetApiService()
+        const objectStore = createDatasetObjectStoreService()
         const processing = createDatasetProcessingService()
         services = {
           api,
+          objectStore,
           processing,
           executor: createDatasetPlanExecutor(api, processing)
         }
@@ -141,7 +153,8 @@ export function createDatasetApiCapabilityFactory<CapabilityDefinition>(options:
     title: string,
     description: string,
     inputSchema: z.ZodType,
-    handler: (input: any, workspaceRoot: string) => Promise<unknown>
+    handler: (input: any, workspaceRoot: string) => Promise<unknown>,
+    tags: readonly string[] = ['dataset', 'biology', 'data-access']
   ): CapabilityDefinition => options.defineCapability({
     id,
     version: '1.0.0',
@@ -152,7 +165,7 @@ export function createDatasetApiCapabilityFactory<CapabilityDefinition>(options:
     effect: 'read',
     approval: 'none',
     concurrency: { revision: 'none', idempotency: 'none' },
-    tags: ['dataset', 'biology', 'data-access'],
+    tags,
     inputSchema,
     outputSchema: datasetApiCapabilityOutputSchema,
     handler: async (input, context) => ({
@@ -274,6 +287,46 @@ export function createDatasetApiCapabilityFactory<CapabilityDefinition>(options:
           return services().api.rawData(request)
         },
         ['dataset', 'biology', 'raw-data', 'network']
+      ),
+      defineWrite(
+        DATASET_API_CAPABILITY_IDS.registerObjectStore,
+        'Register a private dataset object store',
+        'Registers an S3-compatible object store using credential environment-variable references; credential values are never accepted or persisted.',
+        datasetObjectStoreRegisterInputSchema.omit({ workspaceRoot: true }),
+        async (input, workspaceRoot) => services().objectStore.register(withWorkspace(workspaceRoot, input)),
+        ['dataset', 'object-storage', 'private-data', 'registration']
+      ),
+      defineRead(
+        DATASET_API_CAPABILITY_IDS.listObjectStores,
+        'List registered dataset object stores',
+        'Lists workspace-scoped S3-compatible object stores and credential readiness without exposing credential values.',
+        datasetObjectStoreListInputSchema.omit({ workspaceRoot: true }),
+        async (_input, workspaceRoot) => services().objectStore.list({ workspaceRoot }),
+        ['dataset', 'object-storage', 'private-data']
+      ),
+      defineRead(
+        DATASET_API_CAPABILITY_IDS.listObjects,
+        'Browse private dataset objects',
+        'Lists a bounded page of objects and common prefixes within a registered object-store scope.',
+        datasetObjectListInputSchema.omit({ workspaceRoot: true }),
+        async (input, workspaceRoot) => services().objectStore.listObjects(withWorkspace(workspaceRoot, input)),
+        ['dataset', 'object-storage', 'private-data', 'search']
+      ),
+      defineRead(
+        DATASET_API_CAPABILITY_IDS.objectMetadata,
+        'Read private dataset object metadata',
+        'Reads S3-compatible object metadata without downloading the object body.',
+        datasetObjectMetadataInputSchema.omit({ workspaceRoot: true }),
+        async (input, workspaceRoot) => services().objectStore.metadata(withWorkspace(workspaceRoot, input)),
+        ['dataset', 'object-storage', 'private-data', 'metadata']
+      ),
+      defineWrite(
+        DATASET_API_CAPABILITY_IDS.objectRawData,
+        'Download private dataset object data',
+        'Streams a complete or ranged S3-compatible object into a checksummed workspace artifact.',
+        datasetObjectRawDataInputSchema.omit({ workspaceRoot: true }),
+        async (input, workspaceRoot) => services().objectStore.rawData(withWorkspace(workspaceRoot, input)),
+        ['dataset', 'object-storage', 'private-data', 'raw-data']
       ),
       defineWrite(
         DATASET_API_CAPABILITY_IDS.preparePlan,

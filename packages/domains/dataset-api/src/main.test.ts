@@ -11,11 +11,13 @@ test('publishes the complete Dataset API surface through governed capabilities',
     definitions.map((definition) => definition.id),
     Object.values(DATASET_API_CAPABILITY_IDS)
   )
-  assert.equal(definitions.length, 22)
+  assert.equal(definitions.length, 27)
   assert.ok(definitions.every((definition) => definition.audiences.includes('agent')))
   assert.ok(definitions.every((definition) => definition.scope === 'workspace'))
   assert.equal(findDefinition(definitions, DATASET_API_CAPABILITY_IDS.catalog).effect, 'read')
   assert.equal(findDefinition(definitions, DATASET_API_CAPABILITY_IDS.rawData).effect, 'workspace-write')
+  assert.equal(findDefinition(definitions, DATASET_API_CAPABILITY_IDS.listObjects).effect, 'read')
+  assert.equal(findDefinition(definitions, DATASET_API_CAPABILITY_IDS.objectRawData).effect, 'workspace-write')
 })
 
 test('keeps workspace paths out of agent inputs and injects the caller workspace', async () => {
@@ -136,10 +138,19 @@ function capabilityDefinitions(overrides: Record<string, unknown> = {}): Definit
     publish: async () => ({}),
     ...(overrides.processing as object | undefined)
   }
+  const objectStore = {
+    register: async () => ({ source: { id: 'test-store' }, reused: false }),
+    list: async () => ({ stores: [] }),
+    listObjects: async () => ({ objects: [] }),
+    metadata: async () => ({ source: { id: 'test-store' }, metadata: {} }),
+    rawData: async () => ({ source: { id: 'test-store' }, artifact: {} }),
+    ...(overrides.objectStore as object | undefined)
+  }
   const factory = createDatasetApiCapabilityFactory<Definition>({
     defineCapability: (definition) => definition as unknown as Definition,
     getServices: () => ({
       api,
+      objectStore,
       processing,
       executor: {
         execute: async () => ({}),

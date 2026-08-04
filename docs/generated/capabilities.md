@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **145**
+Registered actions: **150**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -60,12 +60,17 @@ Registered actions: **145**
 | `dataset-api.id-map-provider` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `dataset-api.join` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `dataset-api.list` | 1.0.0 | ui, agent, system | read | none | workspace |
+| `dataset-api.list-object-stores` | 1.0.0 | ui, agent, system | read | none | workspace |
+| `dataset-api.list-objects` | 1.0.0 | ui, agent, system | read | none | workspace |
 | `dataset-api.metadata` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.object-metadata` | 1.0.0 | ui, agent, system | read | none | workspace |
+| `dataset-api.object-raw-data` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `dataset-api.prepare-plan` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `dataset-api.profile` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `dataset-api.publish` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `dataset-api.raw-data` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `dataset-api.register` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.register-object-store` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `dataset-api.register-provider` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `dataset-api.resume-plan` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `dataset-api.select-columns` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
@@ -7861,6 +7866,11 @@ Lists built-in public biology data providers, transports, metadata access, raw-d
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -8045,6 +8055,11 @@ Deduplicates records by explicit structured keys and preserves removed duplicate
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -8178,6 +8193,11 @@ Executes every operation in a confirmed plan with durable step checkpoints.
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -8394,6 +8414,11 @@ Applies structured filter conditions and writes deterministic included and exclu
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -8617,6 +8642,11 @@ Converts explicit edge records into deterministic node, edge, graph-summary, and
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -8865,6 +8895,11 @@ Maps identifiers using a workspace mapping artifact with explicit cardinality an
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -9129,6 +9164,11 @@ Runs a bounded UniProt mapping job, persists provenance, and applies the mapping
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -9371,6 +9411,11 @@ Joins two structured artifacts with explicit key mappings and deterministic unma
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -9494,6 +9539,11 @@ Lists API-backed dataset databases registered in the caller workspace.
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -9541,6 +9591,292 @@ Lists API-backed dataset databases registered in the caller workspace.
     "data-access"
   ],
   "title": "List registered dataset databases"
+}
+```
+
+## `dataset-api.list-object-stores`
+
+Lists workspace-scoped S3-compatible object stores and credential readiness without exposing credential values.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "object-storage",
+    "private-data"
+  ],
+  "title": "List registered dataset object stores"
+}
+```
+
+## `dataset-api.list-objects`
+
+Lists a bounded page of objects and common prefixes within a registered object-store scope.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "continuationToken": {
+        "maxLength": 8192,
+        "minLength": 1,
+        "type": "string"
+      },
+      "delimiter": {
+        "maxLength": 16,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxKeys": {
+        "maximum": 1000,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "prefix": {
+        "maxLength": 4096,
+        "type": "string"
+      },
+      "sourceId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "sourceId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "object-storage",
+    "private-data",
+    "search"
+  ],
+  "title": "Browse private dataset objects"
 }
 ```
 
@@ -9715,6 +10051,11 @@ Reads structured metadata from a registered dataset database and can persist the
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -9763,6 +10104,338 @@ Reads structured metadata from a registered dataset database and can persist the
     "network"
   ],
   "title": "Read dataset metadata"
+}
+```
+
+## `dataset-api.object-metadata`
+
+Reads S3-compatible object metadata without downloading the object body.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "key": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "sourceId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "sourceId",
+      "key"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "object-storage",
+    "private-data",
+    "metadata"
+  ],
+  "title": "Read private dataset object metadata"
+}
+```
+
+## `dataset-api.object-raw-data`
+
+Streams a complete or ranged S3-compatible object into a checksummed workspace artifact.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "expectedFormat": {
+        "enum": [
+          "auto",
+          "fasta",
+          "json",
+          "text",
+          "binary"
+        ],
+        "type": "string"
+      },
+      "key": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxBytes": {
+        "maximum": 1073741824,
+        "minimum": 1024,
+        "type": "integer"
+      },
+      "outputFileName": {
+        "maxLength": 255,
+        "minLength": 1,
+        "type": "string"
+      },
+      "overwrite": {
+        "type": "boolean"
+      },
+      "range": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start"
+        ],
+        "type": "object"
+      },
+      "sourceId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "sourceId",
+      "key"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "object-storage",
+    "private-data",
+    "raw-data"
+  ],
+  "title": "Download private dataset object data"
 }
 ```
 
@@ -9993,6 +10666,11 @@ Creates a reviewable data-preparation plan or confirms an immutable draft after 
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -10157,6 +10835,11 @@ Profiles JSON, JSONL, CSV, TSV, or FASTA data and persists a bounded report.
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -10324,6 +11007,11 @@ Publishes confirmed-plan artifacts with manifest, schema, quality report, checks
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -10569,6 +11257,11 @@ Downloads validated raw data from a registered database into a checksummed works
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -10784,6 +11477,11 @@ Registers an API-backed database with separate metadata and raw-data endpoint te
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -10831,6 +11529,213 @@ Registers an API-backed database with separate metadata and raw-data endpoint te
     "data-preparation"
   ],
   "title": "Register a dataset database"
+}
+```
+
+## `dataset-api.register-object-store`
+
+Registers an S3-compatible object store using credential environment-variable references; credential values are never accepted or persisted.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "allowInsecureHttp": {
+        "type": "boolean"
+      },
+      "bucket": {
+        "maxLength": 255,
+        "minLength": 1,
+        "type": "string"
+      },
+      "credentialEnv": {
+        "additionalProperties": false,
+        "properties": {
+          "accessKeyId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          },
+          "secretAccessKey": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          },
+          "sessionToken": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "accessKeyId",
+          "secretAccessKey"
+        ],
+        "type": "object"
+      },
+      "description": {
+        "maxLength": 2000,
+        "type": "string"
+      },
+      "endpoint": {
+        "format": "uri",
+        "maxLength": 4096,
+        "type": "string"
+      },
+      "forcePathStyle": {
+        "type": "boolean"
+      },
+      "id": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "name": {
+        "maxLength": 160,
+        "minLength": 1,
+        "type": "string"
+      },
+      "overwrite": {
+        "type": "boolean"
+      },
+      "prefix": {
+        "maxLength": 4096,
+        "type": "string"
+      },
+      "region": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "endpoint",
+      "bucket",
+      "credentialEnv"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "object-storage",
+    "private-data",
+    "registration"
+  ],
+  "title": "Register a private dataset object store"
 }
 ```
 
@@ -10936,6 +11841,11 @@ Registers an executable built-in biology provider preset in the caller workspace
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -11073,6 +11983,11 @@ Resumes a failed or interrupted confirmed plan from its checksum-verified checkp
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -11278,6 +12193,11 @@ Selects, renames, defaults, and requires structured fields without arbitrary cod
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -11434,6 +12354,11 @@ Profiles SDF or mmCIF structure data with format-aware parsers.
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -11601,6 +12526,11 @@ Validates SDF or mmCIF records and persists a quality report.
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -12156,6 +13086,11 @@ Applies allow-listed deterministic normalization and scalar transformations.
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",
@@ -12395,6 +13330,11 @@ Validates schema, record, range, uniqueness, missingness, and FASTA integrity co
               "dataset-api.register",
               "dataset-api.metadata",
               "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
               "dataset-api.prepare-plan",
               "dataset-api.execute-plan",
               "dataset-api.resume-plan",

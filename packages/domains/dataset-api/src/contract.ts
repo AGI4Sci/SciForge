@@ -7,6 +7,11 @@ export const DATASET_API_CAPABILITY_IDS = Object.freeze({
   register: 'dataset-api.register',
   metadata: 'dataset-api.metadata',
   rawData: 'dataset-api.raw-data',
+  registerObjectStore: 'dataset-api.register-object-store',
+  listObjectStores: 'dataset-api.list-object-stores',
+  listObjects: 'dataset-api.list-objects',
+  objectMetadata: 'dataset-api.object-metadata',
+  objectRawData: 'dataset-api.object-raw-data',
   preparePlan: 'dataset-api.prepare-plan',
   executePlan: 'dataset-api.execute-plan',
   resumePlan: 'dataset-api.resume-plan',
@@ -479,12 +484,76 @@ export const datasetApiRawDataInputSchema = z.object({
   maxRetries: z.number().int().min(0).max(3).optional()
 }).strict()
 
+const objectStoreKeySchema = z.string().min(1).max(4096).refine(
+  (value) => !value.includes('\u0000'),
+  { message: 'Object keys must not contain NUL bytes.' }
+)
+
+export const datasetObjectStoreRegisterInputSchema = z.object({
+  workspaceRoot: optionalWorkspaceRootSchema,
+  id: datasetIdSchema,
+  name: z.string().trim().min(1).max(160).optional(),
+  description: z.string().trim().max(2000).optional(),
+  endpoint: z.string().trim().url().max(4096),
+  bucket: z.string().trim().min(1).max(255),
+  prefix: z.string().max(4096).optional(),
+  region: z.string().trim().min(1).max(128).optional(),
+  forcePathStyle: z.boolean().optional(),
+  allowInsecureHttp: z.boolean().optional(),
+  credentialEnv: z.object({
+    accessKeyId: envVarSchema,
+    secretAccessKey: envVarSchema,
+    sessionToken: envVarSchema.optional()
+  }).strict(),
+  overwrite: z.boolean().optional()
+}).strict()
+
+export const datasetObjectStoreListInputSchema = z.object({
+  workspaceRoot: optionalWorkspaceRootSchema
+}).strict()
+
+export const datasetObjectListInputSchema = z.object({
+  workspaceRoot: optionalWorkspaceRootSchema,
+  sourceId: datasetIdSchema,
+  prefix: z.string().max(4096).optional(),
+  delimiter: z.string().min(1).max(16).optional(),
+  continuationToken: z.string().min(1).max(8192).optional(),
+  maxKeys: z.number().int().min(1).max(1000).optional()
+}).strict()
+
+export const datasetObjectMetadataInputSchema = z.object({
+  workspaceRoot: optionalWorkspaceRootSchema,
+  sourceId: datasetIdSchema,
+  key: objectStoreKeySchema
+}).strict()
+
+export const datasetObjectRawDataInputSchema = z.object({
+  workspaceRoot: optionalWorkspaceRootSchema,
+  sourceId: datasetIdSchema,
+  key: objectStoreKeySchema,
+  outputFileName: outputFileNameSchema.optional(),
+  expectedFormat: z.enum(['auto', 'fasta', 'json', 'text', 'binary']).optional(),
+  range: z.object({
+    start: z.number().int().nonnegative(),
+    end: z.number().int().nonnegative().optional()
+  }).strict().refine((value) => value.end === undefined || value.end >= value.start, {
+    message: 'range.end must be greater than or equal to range.start.'
+  }).optional(),
+  overwrite: z.boolean().optional(),
+  maxBytes: z.number().int().min(1024).max(1024 * 1024 * 1024).optional()
+}).strict()
+
 export type DatasetApiListInput = z.infer<typeof datasetApiListInputSchema>
 export type DatasetApiCatalogInput = z.infer<typeof datasetApiCatalogInputSchema>
 export type DatasetApiRegisterProviderInput = z.infer<typeof datasetApiRegisterProviderInputSchema>
 export type DatasetApiRegisterInput = z.infer<typeof datasetApiRegisterInputSchema>
 export type DatasetApiMetadataInput = z.infer<typeof datasetApiMetadataInputSchema>
 export type DatasetApiRawDataInput = z.infer<typeof datasetApiRawDataInputSchema>
+export type DatasetObjectStoreRegisterInput = z.infer<typeof datasetObjectStoreRegisterInputSchema>
+export type DatasetObjectStoreListInput = z.infer<typeof datasetObjectStoreListInputSchema>
+export type DatasetObjectListInput = z.infer<typeof datasetObjectListInputSchema>
+export type DatasetObjectMetadataInput = z.infer<typeof datasetObjectMetadataInputSchema>
+export type DatasetObjectRawDataInput = z.infer<typeof datasetObjectRawDataInputSchema>
 export type DatasetProcessingFormat = z.infer<typeof datasetConcreteFormatSchema>
 export type DatasetPreparePlanInput = z.infer<typeof datasetPreparePlanInputSchema>
 export type DatasetExecutePlanInput = z.infer<typeof datasetExecutePlanInputSchema>
@@ -517,6 +586,25 @@ export type DatasetApiSource = {
     headerName?: string
     queryName?: string
     required?: boolean
+  }
+  createdAt: string
+  updatedAt: string
+}
+
+export type DatasetObjectStoreSource = {
+  id: string
+  name: string
+  description?: string
+  endpoint: string
+  bucket: string
+  prefix?: string
+  region: string
+  forcePathStyle: boolean
+  allowInsecureHttp: boolean
+  credentialEnv: {
+    accessKeyId: string
+    secretAccessKey: string
+    sessionToken?: string
   }
   createdAt: string
   updatedAt: string

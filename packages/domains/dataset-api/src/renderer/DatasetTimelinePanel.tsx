@@ -14,7 +14,7 @@ export type DatasetTimelineBlock = Readonly<{
 type DatasetToolBlock = DatasetTimelineBlock & Readonly<{ kind: 'tool' }>
 type OpenDatasetArtifact = (path: string) => void
 
-type DatasetResultKind = 'metadata' | 'raw-data' | 'catalog' | 'sources' | 'plan' | 'execution' | 'profile' | 'processing' | 'validation' | 'publication' | 'other'
+type DatasetResultKind = 'metadata' | 'raw-data' | 'catalog' | 'sources' | 'object-stores' | 'objects' | 'plan' | 'execution' | 'profile' | 'processing' | 'validation' | 'publication' | 'other'
 
 export type TimelineDatasetResult = {
   id: string
@@ -154,6 +154,8 @@ function datasetKind(toolName: string, result: Record<string, unknown> | null): 
   if (toolName === 'dataset_validate' || result?.validation !== undefined) return 'validation'
   if (toolName === 'dataset_publish' || result?.publication !== undefined) return 'publication'
   if (['dataset_filter', 'dataset_select_columns', 'dataset_transform', 'dataset_deduplicate', 'dataset_id_map', 'dataset_id_map_provider', 'dataset_join', 'dataset_graph_organize'].includes(toolName)) return 'processing'
+  if (toolName === 'dataset_list_object_stores' || Array.isArray(result?.stores)) return 'object-stores'
+  if (toolName === 'dataset_list_objects' || Array.isArray(result?.objects)) return 'objects'
   if (toolName.endsWith('_metadata') || result?.metadata !== undefined) return 'metadata'
   if (toolName.endsWith('_raw_data') || result?.artifact !== undefined) return 'raw-data'
   if (toolName.endsWith('_catalog') || Array.isArray(result?.providers)) return 'catalog'
@@ -620,6 +622,8 @@ function datasetKindTitle(kind: DatasetResultKind, t: (key: string) => string): 
   if (kind === 'raw-data') return t('datasetResultRawData')
   if (kind === 'catalog') return t('datasetResultCatalog')
   if (kind === 'sources') return t('datasetResultSources')
+  if (kind === 'object-stores') return t('datasetResultObjectStores')
+  if (kind === 'objects') return t('datasetResultObjects')
   if (kind === 'plan') return t('datasetResultPlan')
   if (kind === 'execution') return t('datasetResultExecution')
   if (kind === 'profile') return t('datasetResultProfile')
@@ -646,6 +650,8 @@ function datasetSuccessSubtitle(
   }
   if (kind === 'catalog') return t('datasetResultProvidersCount', { count: arrayValue(result?.providers).length })
   if (kind === 'sources') return t('datasetResultSourcesCount', { count: arrayValue(result?.sources).length })
+  if (kind === 'object-stores') return t('datasetResultObjectStoresCount', { count: arrayValue(result?.stores).length })
+  if (kind === 'objects') return t('datasetResultObjectsCount', { count: arrayValue(result?.objects).length })
   if (kind === 'plan') return t('datasetResultPlanPrepared')
   if (kind === 'execution') {
     const execution = asRecord(result?.execution)
@@ -679,6 +685,10 @@ function datasetFacts(
   if (bytes !== undefined || artifactBytes !== undefined) facts.push({ label: t('datasetResultSize'), value: formatBytes(bytes ?? artifactBytes) })
   if (format) facts.push({ label: t('datasetResultFormat'), value: format.toUpperCase() })
   if (contentType) facts.push({ label: t('datasetResultContentType'), value: contentType })
+  const request = asRecord(result?.request)
+  if (stringValue(request?.bucket)) facts.push({ label: t('datasetResultBucket'), value: stringValue(request?.bucket) })
+  if (stringValue(request?.prefix)) facts.push({ label: t('datasetResultPrefix'), value: stringValue(request?.prefix) })
+  if (stringValue(request?.key)) facts.push({ label: t('datasetResultObjectKey'), value: stringValue(request?.key) })
   if (kind === 'raw-data' && stringValue(artifact?.fileName)) {
     facts.push({ label: t('datasetResultFile'), value: stringValue(artifact?.fileName) })
   }
