@@ -136,6 +136,39 @@ test('routes AI Agent nodes through the Host agent execution port and records th
   await deactivate()
 })
 
+test('repairs common JSON-like model output before downstream workflow nodes run', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-create-loop-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  const runtime = new CreateLoopRuntime({
+    statePath: createLoopStatePath(root),
+    setInterval: () => ({ timer: true }),
+    clearInterval: () => undefined
+  })
+  const deactivate = await runtime.activate(runtimeContext())
+  const workflow = fixtureWorkflow()
+  workflow.nodes[1] = {
+    id: 'template',
+    name: 'Loose JSON',
+    type: 'template',
+    position: { x: 200, y: 0 },
+    disabled: false,
+    config: { template: "```json\n{state: {ok: true}, 'candidate': {id: 1},}\n```", outputMode: 'json' }
+  }
+  await runtime.save(
+    { ...defaultWorkflowSettings(), enabled: true, workflows: [workflow] },
+    0
+  )
+  await runtime.runWorkflow(workflow.id)
+  await waitForRun(runtime, workflow.id)
+  const completed = await runtime.read()
+  assert.equal(completed.settings.workflows[0]?.lastStatus, 'success')
+  assert.deepEqual(
+    JSON.parse(completed.settings.workflows[0]?.runs[0]?.nodeResults[1]?.outputJson ?? '{}'),
+    { state: { ok: true }, candidate: { id: 1 } }
+  )
+  await deactivate()
+})
+
 function fixtureWorkflow(): WorkflowV1 {
   const now = '2026-07-28T00:00:00.000Z'
   return {

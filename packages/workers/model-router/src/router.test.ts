@@ -3021,6 +3021,105 @@ test('responses tool calls pass through the Model Router API without becoming te
   }
 });
 
+test('responses enforce a prompt tool policy before calling the upstream model', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-tool-policy-'));
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('text-tool-policy', 'Done.'),
+      chatCompletion('text-tool-policy-legacy', 'Done.'),
+      chatCompletion('text-tool-policy-none', 'Done.'),
+      chatCompletion('text-tool-policy-chinese', 'Done.'),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: '<sciforge-tool-policy allowed="sciforge_discover,sciforge_invoke" />\nGround the dataset.',
+        tools: [
+          { type: 'function', name: 'exec_command', parameters: { type: 'object' } },
+          { type: 'function', name: 'sciforge_discover', parameters: { type: 'object' } },
+          { type: 'function', name: 'sciforge_invoke', parameters: { type: 'object' } },
+          { type: 'function', name: 'scientific_skills_search', parameters: { type: 'object' } },
+        ],
+        tool_choice: { type: 'function', name: 'exec_command' },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(
+      (calls[0]?.body.tools as Array<{ name?: string }> | undefined)
+        ?.map((tool) => tool.name),
+      ['sciforge_discover', 'sciforge_invoke'],
+    );
+    assert.equal(calls[0]?.body.tool_choice, 'auto');
+
+    const legacyResponse = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: 'The only permitted tool names in this stage are sciforge_discover and sciforge_invoke.\nGround the dataset.',
+        tools: [
+          { type: 'function', name: 'exec_command', parameters: { type: 'object' } },
+          { type: 'function', name: 'sciforge_discover', parameters: { type: 'object' } },
+          { type: 'function', name: 'sciforge_invoke', parameters: { type: 'object' } },
+        ],
+      }),
+    });
+    assert.equal(legacyResponse.status, 200);
+    assert.deepEqual(
+      (calls[1]?.body.tools as Array<{ name?: string }> | undefined)?.map((tool) => tool.name),
+      ['sciforge_discover', 'sciforge_invoke'],
+    );
+
+    const noToolsResponse = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: '<sciforge-tool-policy allowed="" />\nGenerate from incoming state only.',
+        tools: [
+          { type: 'function', name: 'exec_command', parameters: { type: 'object' } },
+          { type: 'function', name: 'sciforge_discover', parameters: { type: 'object' } },
+        ],
+      }),
+    });
+    assert.equal(noToolsResponse.status, 200);
+    assert.deepEqual(calls[2]?.body.tools, []);
+
+    const chineseResponse = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: '严格只使用 sciforge_discover 和 sciforge_invoke：完成数据集任务。',
+        tools: [
+          { type: 'function', name: 'exec_command', parameters: { type: 'object' } },
+          { type: 'function', name: 'sciforge_discover', parameters: { type: 'object' } },
+          { type: 'function', name: 'sciforge_invoke', parameters: { type: 'object' } },
+        ],
+      }),
+    });
+    assert.equal(chineseResponse.status, 200);
+    assert.deepEqual(
+      (calls[3]?.body.tools as Array<{ name?: string }> | undefined)?.map((tool) => tool.name),
+      ['sciforge_discover', 'sciforge_invoke'],
+    );
+  } finally {
+    await server.close();
+  }
+});
+
 test('responses tool outputs are preserved through canonical upstream routing', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-tool-output-'));
   const calls: CapturedFetch[] = [];

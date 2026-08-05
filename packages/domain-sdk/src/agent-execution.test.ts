@@ -34,13 +34,11 @@ describe('agent execution host contract', () => {
     })
   })
 
-  it('defaults execution mode and rejects host-private or unbounded fields', () => {
+  it('defaults execution mode, inherits the active runtime, and rejects host-private fields', () => {
     assert.deepEqual(domainMainAgentExecutionRequestSchema.parse({
-      runtimeId: 'sciforge',
       prompt: 'Continue.',
       workspaceRoot: '/workspace'
     }), {
-      runtimeId: 'sciforge',
       prompt: 'Continue.',
       workspaceRoot: '/workspace',
       mode: 'agent'

@@ -1409,7 +1409,7 @@ async function routeResponsesRequest(
   const requestWithSafeTextInput = typeof request.input === 'string'
     ? { ...requestWithoutContinuationHandle, input: extracted.userText }
     : requestWithoutContinuationHandle;
-  const requestForTextReasoner = hasToolTranscriptInput
+  const unrestrictedRequestForTextReasoner = hasToolTranscriptInput
     ? {
       ...requestWithSafeTextInput,
       input: repairResponseToolTranscriptInput(
@@ -1422,8 +1422,12 @@ async function routeResponsesRequest(
       ),
     }
     : requestWithSafeTextInput;
+  const requestForTextReasoner = applyPromptToolPolicy(
+    unrestrictedRequestForTextReasoner,
+    extracted.userText,
+  );
   const textReasonerRequestOptions = textReasonerOptionsFromResponsesRequest(requestForTextReasoner);
-  const toolNameAliases = chatToolNameAliasesFromResponsesTools(request.tools);
+  const toolNameAliases = chatToolNameAliasesFromResponsesTools(requestForTextReasoner.tools);
   const textReasonerMessages = hasToolTranscriptInput || hasAssistantReasoningInput
     ? chatMessagesFromResponsesRequest(requestForTextReasoner, profile.textReasoner.model)
     : [];
@@ -1762,6 +1766,45 @@ async function routeResponsesRequest(
     incompleteDetails,
     terminalDetails,
   };
+}
+
+function applyPromptToolPolicy(
+  request: Record<string, unknown>,
+  userText: string,
+): Record<string, unknown> {
+  const allowed = promptToolPolicyAllowedNames(userText);
+  if (!allowed) return request;
+  const tools = Array.isArray(request.tools)
+    ? request.tools.filter((tool) => {
+      if (!isRecord(tool)) return false;
+      const name = stringField(tool.name)
+        || (isRecord(tool.function) ? stringField(tool.function.name) : '');
+      return Boolean(name && allowed.has(name));
+    })
+    : request.tools;
+  const toolChoice = request.tool_choice;
+  const selectedName = isRecord(toolChoice)
+    ? stringField(toolChoice.name)
+      || (isRecord(toolChoice.function) ? stringField(toolChoice.function.name) : '')
+    : '';
+  return {
+    ...request,
+    ...(tools === undefined ? {} : { tools }),
+    ...(selectedName && !allowed.has(selectedName) ? { tool_choice: 'auto' } : {}),
+  };
+}
+
+function promptToolPolicyAllowedNames(userText: string): Set<string> | null {
+  const explicitMatch = /<sciforge-tool-policy\s+allowed="([A-Za-z0-9_,. -]*)"\s*\/>/u.exec(userText);
+  const explicit = explicitMatch?.[1];
+  const legacy = /The only permitted tool names[^.\n]* are ([A-Za-z0-9_, -]+)\./u.exec(userText)?.[1];
+  const chinese = /只使用\s+([A-Za-z0-9_.-]+(?:\s*(?:,|、|和|\band\b)\s*[A-Za-z0-9_.-]+)*)/u.exec(userText)?.[1];
+  const names = (explicit ?? legacy ?? chinese)
+    ?.split(/,|、|和|\band\b/u)
+    .map((name) => name.trim())
+    .filter(Boolean);
+  if (explicitMatch) return new Set(names ?? []);
+  return names?.length ? new Set(names) : null;
 }
 
 function requestedProfileId(request: Record<string, unknown>, incoming: IncomingMessage, config: ModelRouterConfig) {

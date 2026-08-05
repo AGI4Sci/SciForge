@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 export const domainMainAgentExecutionRequestSchema = z.object({
-  runtimeId: z.string().trim().min(1).max(128),
+  runtimeId: z.string().trim().min(1).max(128).optional(),
   prompt: z.string().min(1).max(1_000_000),
   workspaceRoot: z.string().min(1).max(4_096),
   model: z.string().trim().min(1).max(256).optional(),
@@ -24,7 +24,8 @@ export type DomainMainAgentExecutionResult = z.infer<
 
 /**
  * Runs an agent through a host-owned runtime without exposing the host's
- * provider, thread, turn, or transport implementations.
+ * provider, thread, turn, or transport implementations. Omitting runtimeId
+ * selects the user's active runtime through the Host.
  */
 export type DomainMainAgentExecutionHost = Readonly<{
   run: (

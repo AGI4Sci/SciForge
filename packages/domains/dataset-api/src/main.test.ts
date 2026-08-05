@@ -11,7 +11,7 @@ test('publishes the complete Dataset API surface through governed capabilities',
     definitions.map((definition) => definition.id),
     Object.values(DATASET_API_CAPABILITY_IDS)
   )
-  assert.equal(definitions.length, 27)
+  assert.equal(definitions.length, 28)
   assert.ok(definitions.every((definition) => definition.audiences.includes('agent')))
   assert.ok(definitions.every((definition) => definition.scope === 'workspace'))
   assert.equal(findDefinition(definitions, DATASET_API_CAPABILITY_IDS.catalog).effect, 'read')
@@ -134,6 +134,7 @@ function capabilityDefinitions(overrides: Record<string, unknown> = {}): Definit
     structureProfile: async () => ({}),
     structureValidate: async () => ({}),
     organizeGraph: async () => ({}),
+    materialize: async () => ({}),
     validate: async () => ({}),
     publish: async () => ({}),
     ...(overrides.processing as object | undefined)

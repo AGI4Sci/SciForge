@@ -92,6 +92,7 @@ test('executes a confirmed plan end-to-end and resolves logical artifact names',
     assert.equal(result.execution.completedSteps, 4)
     assert.equal(context.fetchCount(), 1)
     assert.match(result.execution.steps[1].artifacts[0].path, /reviewed\.json$/)
+    assert.equal(result.execution.steps.every((step) => step.artifacts.length <= 1), true)
     const checkpoint = JSON.parse(await readFile(result.artifact.path, 'utf8'))
     assert.equal(checkpoint.status, 'succeeded')
     assert.equal(checkpoint.steps[1].resolvedParameters.inputArtifact.endsWith('/raw.json'), true)

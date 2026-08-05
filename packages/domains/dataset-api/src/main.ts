@@ -21,6 +21,7 @@ import {
   datasetGraphOrganizeInputSchema,
   datasetIdMapInputSchema,
   datasetJoinInputSchema,
+  datasetMaterializeInputSchema,
   datasetPreparePlanWireSchema,
   datasetProfileInputSchema,
   datasetProviderIdMapInputSchema,
@@ -459,6 +460,14 @@ export function createDatasetApiCapabilityFactory<CapabilityDefinition>(options:
         'Converts explicit edge records into deterministic node, edge, graph-summary, and invalid-record artifacts.',
         datasetGraphOrganizeInputSchema.omit({ workspaceRoot: true }),
         async (input, workspaceRoot) => services().processing.organizeGraph(withWorkspace(workspaceRoot, input))
+      ),
+      defineWrite(
+        DATASET_API_CAPABILITY_IDS.materialize,
+        'Materialize generated dataset records',
+        'Writes bounded generated records as a checksummed Dataset artifact with generation metadata and parent provenance.',
+        datasetMaterializeInputSchema.omit({ workspaceRoot: true }),
+        async (input, workspaceRoot) => services().processing.materialize(withWorkspace(workspaceRoot, input)),
+        ['dataset', 'generation', 'materialization', 'provenance']
       ),
       defineWrite(
         DATASET_API_CAPABILITY_IDS.validate,

@@ -41,6 +41,9 @@ Capabilities:
   code-free tabular and sequence preparation.
 - `dataset-api.structure-profile`, `structure-validate`, and `graph-organize`:
   structure- and network-aware preparation.
+- `dataset-api.materialize`: write bounded records accepted by a generated
+  Create Loop as a checksummed JSON/JSONL/CSV/TSV artifact, retaining model,
+  quality-criteria, loop, and parent-artifact provenance.
 - `dataset-api.validate` and `dataset-api.publish`: quality-gate and publish a
   reproducible dataset release.
 

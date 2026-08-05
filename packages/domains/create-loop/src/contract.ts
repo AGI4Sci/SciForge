@@ -748,6 +748,7 @@ export const CREATE_LOOP_RESOURCE_KIND = 'create-loop-settings'
 export const CREATE_LOOP_CAPABILITY_IDS = Object.freeze({
   read: 'create-loop.read',
   save: 'create-loop.save',
+  buildDataset: 'create-loop.build-dataset',
   run: 'create-loop.run',
   stop: 'create-loop.stop',
   status: 'create-loop.status',
@@ -778,6 +779,55 @@ const createLoopWorkflowWireSchema = domainPackageJsonValueSchema.refine(
   ),
   'Expected a canonical Create Loop workflow.'
 )
+
+const generatedDatasetFieldSchema = z.object({
+  type: z.enum(['string', 'number', 'boolean', 'object', 'array']),
+  description: z.string().trim().min(1).max(1000).optional(),
+  required: z.boolean().optional()
+}).strict()
+
+export const createDatasetLoopInputSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  objective: z.string().trim().min(1).max(8000),
+  sourceIds: z.array(z.string().trim().min(1).max(160)).min(1).max(50),
+  outputSchema: z.record(
+    z.string().trim().min(1).max(512),
+    generatedDatasetFieldSchema
+  ).refine((value) => Object.keys(value).length > 0, 'At least one output field is required.'),
+  quality: z.object({
+    criteria: z.array(z.string().trim().min(1).max(1000)).min(1).max(100),
+    targetCount: z.number().int().min(1).max(100).default(20),
+    maxIterations: z.number().int().min(1).max(100).default(25),
+    minQualityScore: z.number().min(0).max(1).default(0.7),
+    minStrongScore: z.number().min(0).max(1).default(0.65),
+    maxWeakScore: z.number().min(0).max(1).default(0.5),
+    minScoreGap: z.number().min(0).max(1).default(0.2),
+    maxDuplicateFraction: z.number().min(0).max(1).default(0.05)
+  }).strict().superRefine((quality, context) => {
+    if (quality.maxIterations < quality.targetCount) {
+      context.addIssue({
+        code: 'custom',
+        path: ['maxIterations'],
+        message: 'maxIterations must be at least targetCount because each round produces at most one accepted record.'
+      })
+    }
+  }),
+  models: z.object({
+    challenger: z.string().trim().max(256).optional(),
+    weak: z.string().trim().max(256).optional(),
+    strong: z.string().trim().max(256).optional(),
+    judge: z.string().trim().max(256).optional()
+  }).strict().optional(),
+  output: z.object({
+    datasetName: z.string().trim().min(1).max(80).regex(/^[a-z0-9][a-z0-9_-]*$/),
+    fileName: z.string().trim().min(1).max(255),
+    format: z.enum(['json', 'jsonl', 'csv', 'tsv']).default('jsonl')
+  }).strict(),
+  humanReview: z.boolean().default(true),
+  run: z.boolean().default(true)
+}).strict()
+
+export type CreateDatasetLoopInput = z.infer<typeof createDatasetLoopInputSchema>
 const createLoopNodeRunResultSchema = z.object({
   nodeId: z.string().max(256),
   status: z.enum(['pending', 'running', 'success', 'error', 'skipped']),
@@ -847,6 +897,13 @@ export const createLoopRunResultSchema = z.discriminatedUnion('ok', [
     message: z.string().max(1_000_000)
   }).strict()
 ])
+export const createDatasetLoopOutputSchema = z.object({
+  workflowId: z.string().max(256),
+  iterationWorkflowId: z.string().max(256),
+  created: z.boolean(),
+  revision: z.number().int().nonnegative(),
+  run: createLoopRunResultSchema.nullable()
+}).strict()
 export const createLoopRuntimeStatusSchema = z.object({
   runningWorkflowIds: z.array(z.string().max(256)).max(10_000),
   nodeStatus: z.record(

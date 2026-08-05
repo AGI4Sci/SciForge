@@ -143,7 +143,7 @@ function normalizeDatasetToolName(value: string): string | null {
   if (capabilityMatch) {
     return `dataset_${capabilityMatch[1].toLowerCase().replaceAll('-', '_')}`
   }
-  const match = value.match(/dataset_(api_(?:catalog|register_provider|list|register|metadata|raw_data)|prepare_plan|execute_plan|resume_plan|profile|filter|select_columns|transform|deduplicate|id_map(?:_provider)?|join|structure_(?:profile|validate)|graph_organize|validate|publish)/i)
+  const match = value.match(/dataset_(api_(?:catalog|register_provider|list|register|metadata|raw_data)|prepare_plan|execute_plan|resume_plan|profile|filter|select_columns|transform|deduplicate|id_map(?:_provider)?|join|structure_(?:profile|validate)|graph_organize|materialize|validate|publish)/i)
   return match ? `dataset_${match[1].toLowerCase()}` : null
 }
 
@@ -153,7 +153,7 @@ function datasetKind(toolName: string, result: Record<string, unknown> | null): 
   if (toolName === 'dataset_profile' || result?.profile !== undefined) return 'profile'
   if (toolName === 'dataset_validate' || result?.validation !== undefined) return 'validation'
   if (toolName === 'dataset_publish' || result?.publication !== undefined) return 'publication'
-  if (['dataset_filter', 'dataset_select_columns', 'dataset_transform', 'dataset_deduplicate', 'dataset_id_map', 'dataset_id_map_provider', 'dataset_join', 'dataset_graph_organize'].includes(toolName)) return 'processing'
+  if (['dataset_filter', 'dataset_select_columns', 'dataset_transform', 'dataset_deduplicate', 'dataset_id_map', 'dataset_id_map_provider', 'dataset_join', 'dataset_graph_organize', 'dataset_materialize'].includes(toolName)) return 'processing'
   if (toolName === 'dataset_list_object_stores' || Array.isArray(result?.stores)) return 'object-stores'
   if (toolName === 'dataset_list_objects' || Array.isArray(result?.objects)) return 'objects'
   if (toolName.endsWith('_metadata') || result?.metadata !== undefined) return 'metadata'

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { LookupAddress } from 'node:dns'
 import { lookup as systemLookup } from 'node:dns/promises'
 import { createReadStream } from 'node:fs'
-import { access, link, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { access, link, mkdir, open, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import type { LookupFunction } from 'node:net'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { Agent, fetch as undiciFetch } from 'undici'
@@ -32,6 +32,8 @@ type DatasetApiRegistry = {
 export type DatasetApiService = ReturnType<typeof createDatasetApiService>
 
 const resilientDatasetFetch = createResilientDatasetFetch()
+const RAW_ARTIFACT_PREVIEW_BYTES = 2 * 1024
+const DEFAULT_DATASET_MAX_RETRIES = 3
 
 export class DatasetApiRequestError extends Error {
   readonly code = 'DATASET_API_NETWORK_ERROR'
@@ -127,13 +129,20 @@ export function createDatasetApiService(options: {
         env,
         input.timeoutMs ?? 30_000,
         undefined,
-        input.maxRetries ?? 2
+        input.maxRetries ?? DEFAULT_DATASET_MAX_RETRIES
       )
       const maxBytes = input.maxBytes ?? 2 * 1024 * 1024
       if (!response.ok) throw await httpError(response, maxBytes)
       const body = await readResponseBody(response, maxBytes)
       const contentType = response.headers.get('content-type') ?? ''
       const metadata = parseMetadata(body, contentType)
+      const responseMode = input.responseMode ?? 'auto'
+      const summarizeResponse = responseMode === 'summary' || (
+        responseMode === 'auto' && Buffer.byteLength(body) > 64 * 1024
+      )
+      const responseMetadata = summarizeResponse
+        ? summarizeMetadata(metadata)
+        : metadata
       const sourceRecord = { id: source.id, name: source.name }
       const requestRecord = { url: redactUrl(url) }
       const responseRecord = { status: response.status, contentType, bytes: Buffer.byteLength(body) }
@@ -163,6 +172,7 @@ export function createDatasetApiService(options: {
         } finally {
           await rm(temporaryPath, { force: true }).catch(() => undefined)
         }
+        artifactPath = await realpath(artifactPath)
         const manifestPath = `${artifactPath}.manifest.json`
         await writeRawArtifactManifest(manifestPath, {
           version: 1,
@@ -198,11 +208,13 @@ export function createDatasetApiService(options: {
         }
       }
       return {
+        ...(artifact ? { artifact } : {}),
         source: sourceRecord,
         request: requestRecord,
         response: responseRecord,
-        metadata,
-        ...(artifact ? { artifact } : {})
+        metadata: responseMetadata,
+        metadataResponseMode: summarizeResponse ? 'summary' : 'full',
+        metadataTruncated: summarizeResponse
       }
     },
 
@@ -222,7 +234,7 @@ export function createDatasetApiService(options: {
           input.query ?? {},
           env,
           input.timeoutMs ?? 30_000,
-          input.maxRetries ?? 2
+          input.maxRetries ?? DEFAULT_DATASET_MAX_RETRIES
         )
         url = resolved.url
         resolvedFrom = resolved.resolvedFrom
@@ -238,7 +250,7 @@ export function createDatasetApiService(options: {
         env,
         input.timeoutMs ?? 5 * 60_000,
         headers,
-        input.maxRetries ?? 2
+        input.maxRetries ?? DEFAULT_DATASET_MAX_RETRIES
       )
       const maxBytes = input.maxBytes ?? 256 * 1024 * 1024
       if (!response.ok) throw await httpError(response, Math.min(maxBytes, 16 * 1024))
@@ -266,11 +278,10 @@ export function createDatasetApiService(options: {
         } else {
           reused = await installRawArtifact(temporaryPath, artifactPath, streamed.sha256)
         }
-      } catch (error) {
-        throw error
       } finally {
         await rm(temporaryPath, { force: true }).catch(() => undefined)
       }
+      finalArtifactPath = await realpath(finalArtifactPath)
       const sourceRecord = { id: source.id, name: source.name }
       const requestRecord = {
         url: redactUrl(url),
@@ -310,12 +321,9 @@ export function createDatasetApiService(options: {
         createdAt: new Date().toISOString()
       })
       const preview = expectedFormat === 'fasta' || expectedFormat === 'json' || expectedFormat === 'text'
-        ? await readArtifactPreview(finalArtifactPath, 16 * 1024)
+        ? await readArtifactPreview(finalArtifactPath, RAW_ARTIFACT_PREVIEW_BYTES)
         : undefined
       return {
-        source: sourceRecord,
-        request: requestRecord,
-        response: responseRecord,
         artifact: {
           path: finalArtifactPath,
           manifestPath,
@@ -328,7 +336,10 @@ export function createDatasetApiService(options: {
             preview: preview.content,
             previewTruncated: preview.truncated
           } : {})
-        }
+        },
+        source: sourceRecord,
+        request: requestRecord,
+        response: responseRecord
       }
     }
   }
@@ -781,6 +792,29 @@ function parseMetadata(body: string, contentType: string): unknown {
     }
   }
   return body
+}
+
+function summarizeMetadata(value: unknown, depth = 0): unknown {
+  if (value === null || typeof value === 'number' || typeof value === 'boolean') return value
+  if (typeof value === 'string') {
+    return value.length > 256 ? `${value.slice(0, 256)}…` : value
+  }
+  if (depth >= 2) {
+    if (Array.isArray(value)) return { itemCount: value.length }
+    if (typeof value === 'object') return { fieldCount: Object.keys(value).length }
+    return String(value)
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 2).map((item) => summarizeMetadata(item, depth + 1))
+  }
+  if (typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .slice(0, 20)
+        .map(([key, item]) => [key, summarizeMetadata(item, depth + 1)])
+    )
+  }
+  return String(value)
 }
 
 async function streamResponseToFile(

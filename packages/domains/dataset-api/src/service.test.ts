@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { EXECUTABLE_DATASET_PROVIDER_IDS, executableDatasetProviderIdSchema } from './contract.js'
 import { EXECUTABLE_DATASET_PROVIDER_PRESETS } from './provider-presets.js'
@@ -45,6 +45,7 @@ test('registers a database and reads its metadata endpoint', async () => {
     })
     assert.deepEqual(metadata.metadata, { id: 'ds-42', title: 'Example dataset', files: 1 })
     assert.ok(metadata.artifact)
+    assert.ok(Object.keys(metadata).indexOf('artifact') < Object.keys(metadata).indexOf('metadata'))
     assert.deepEqual(JSON.parse(await readFile(metadata.artifact.path, 'utf8')), metadata.metadata)
     const metadataManifest = JSON.parse(await readFile(metadata.artifact.manifestPath, 'utf8'))
     assert.equal(metadataManifest.operation, 'dataset_api_metadata')
@@ -54,6 +55,47 @@ test('registers a database and reads its metadata endpoint', async () => {
     assert.equal(listed.sources[0]?.auth?.configured, true)
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('keeps complete metadata in the artifact while returning a bounded summary', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-summary-'))
+  const complete = {
+    primaryAccession: 'P04637',
+    comments: Array.from({ length: 120 }, (_, index) => ({
+      id: index + 1,
+      text: `comment-${index + 1}-${'x'.repeat(2_000)}`,
+      evidence: Array.from({ length: 20 }, (_, evidenceIndex) => ({ id: evidenceIndex + 1 }))
+    }))
+  }
+  const service = createDatasetApiService({
+    workspaceRoot,
+    fetchImpl: async () => new Response(JSON.stringify(complete), {
+      headers: { 'content-type': 'application/json' }
+    })
+  })
+  try {
+    await service.register({
+      id: 'summary-db',
+      baseUrl: 'https://example.com/',
+      metadataEndpoint: 'metadata/{identifier}',
+      rawDataEndpoint: 'raw/{identifier}'
+    })
+    const result = await service.metadata({
+      sourceId: 'summary-db',
+      pathParameters: { identifier: 'P04637' },
+      responseMode: 'summary',
+      outputFileName: 'P04637.json'
+    })
+    assert.equal(result.metadataResponseMode, 'summary')
+    assert.equal(result.metadataTruncated, true)
+    assert.equal((result.metadata as typeof complete).primaryAccession, 'P04637')
+    assert.equal((result.metadata as typeof complete).comments.length, 2)
+    assert.ok(JSON.stringify(result.metadata).length < 8_000)
+    assert.ok(result.artifact)
+    assert.deepEqual(JSON.parse(await readFile(result.artifact.path, 'utf8')), complete)
+  } finally {
     await rm(workspaceRoot, { recursive: true, force: true })
   }
 })
@@ -119,6 +161,80 @@ test('streams raw data to the workspace cache with a checksum and byte range', a
   }
 })
 
+test('canonicalizes reused artifact aliases before validating their manifests', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-alias-'))
+  const service = createDatasetApiService({
+    workspaceRoot,
+    fetchImpl: async (url) => String(url).includes('/metadata/')
+      ? new Response(JSON.stringify({ primaryAccession: 'P04637' }), {
+        headers: { 'content-type': 'application/json' }
+      })
+      : new Response('>sp|P04637|P53_HUMAN\nMEEPQSDPSV\n', {
+        headers: { 'content-type': 'text/plain; format=fasta' }
+      })
+  })
+  try {
+    await service.register({
+      id: 'alias-db',
+      baseUrl: 'https://example.com/',
+      metadataEndpoint: 'metadata/{identifier}',
+      rawDataEndpoint: 'raw/{identifier}'
+    })
+
+    const metadata = await service.metadata({
+      sourceId: 'alias-db',
+      pathParameters: { identifier: 'P04637' },
+      outputFileName: 'p04637-metadata.json'
+    })
+    assert.ok(metadata.artifact)
+    const metadataAlias = join(dirname(metadata.artifact.path), 'P04637-metadata.json')
+    await symlink(metadata.artifact.path, metadataAlias).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'EEXIST') throw error
+    })
+    await symlink(metadata.artifact.manifestPath, `${metadataAlias}.manifest.json`).catch(
+      (error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EEXIST') throw error
+      }
+    )
+    const reusedMetadata = await service.metadata({
+      sourceId: 'alias-db',
+      pathParameters: { identifier: 'P04637' },
+      outputFileName: 'P04637-metadata.json'
+    })
+    assert.ok(reusedMetadata.artifact)
+    assert.equal(reusedMetadata.artifact.path, metadata.artifact.path)
+    assert.equal(reusedMetadata.artifact.manifestPath, metadata.artifact.manifestPath)
+    assert.equal(reusedMetadata.artifact.reused, true)
+
+    const raw = await service.rawData({
+      sourceId: 'alias-db',
+      pathParameters: { identifier: 'P04637' },
+      outputFileName: 'p04637.fasta'
+    })
+    const rawAlias = join(dirname(raw.artifact.path), 'P04637.fasta')
+    await symlink(raw.artifact.path, rawAlias).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'EEXIST') throw error
+    })
+    await symlink(raw.artifact.manifestPath, `${rawAlias}.manifest.json`).catch(
+      (error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EEXIST') throw error
+      }
+    )
+    const reusedRaw = await service.rawData({
+      sourceId: 'alias-db',
+      pathParameters: { identifier: 'P04637' },
+      outputFileName: 'P04637.fasta',
+      expectedFormat: 'fasta',
+      overwrite: true
+    })
+    assert.equal(reusedRaw.artifact.path, raw.artifact.path)
+    assert.equal(reusedRaw.artifact.manifestPath, raw.artifact.manifestPath)
+    assert.equal(reusedRaw.artifact.reused, true)
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
 test('registers and accesses executable biology provider presets', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-provider-'))
   const requestedUrls: string[] = []
@@ -168,6 +284,51 @@ test('registers and accesses executable biology provider presets', async () => {
   }
 })
 
+test('returns a compact raw-data receipt with artifact identity before a bounded preview', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-compact-receipt-'))
+  const payload = JSON.stringify({
+    id: 'R-HSA-109581',
+    events: Array.from({ length: 200 }, (_, index) => ({
+      id: `event-${index + 1}`,
+      description: `event-description-${index + 1}-${'x'.repeat(160)}`
+    }))
+  })
+  const service = createDatasetApiService({
+    workspaceRoot,
+    fetchImpl: async () => new Response(payload, {
+      headers: { 'content-type': 'application/json' }
+    })
+  })
+  try {
+    await service.register({
+      id: 'compact-db',
+      baseUrl: 'https://example.com/',
+      metadataEndpoint: 'metadata/{identifier}',
+      rawDataEndpoint: 'raw/{identifier}'
+    })
+    const result = await service.rawData({
+      sourceId: 'compact-db',
+      pathParameters: { identifier: 'R-HSA-109581' },
+      outputFileName: 'R-HSA-109581.json',
+      expectedFormat: 'json'
+    })
+    const serialized = JSON.stringify(result)
+    assert.equal(Object.keys(result)[0], 'artifact')
+    assert.equal(result.artifact.previewTruncated, true)
+    assert.ok(Buffer.byteLength(result.artifact.preview ?? '') <= 2 * 1024)
+    assert.ok(serialized.length < 8_000)
+    assert.ok(serialized.includes(JSON.stringify(result.artifact.path)))
+    assert.ok(serialized.includes(JSON.stringify(result.artifact.manifestPath)))
+    assert.ok(serialized.includes(result.artifact.sha256))
+    assert.equal(await readFile(result.artifact.path, 'utf8'), payload)
+    const manifest = JSON.parse(await readFile(result.artifact.manifestPath, 'utf8'))
+    assert.equal(manifest.path, result.artifact.path)
+    assert.equal(manifest.sha256, result.artifact.sha256)
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
 test('retries transient network failures and preserves the underlying diagnostic', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-retry-'))
   let attempts = 0
@@ -194,6 +355,42 @@ test('retries transient network failures and preserves the underlying diagnostic
     const result = await service.metadata({ sourceId: 'retry-db', maxRetries: 1 })
     assert.deepEqual(result.metadata, { ok: true })
     assert.equal(attempts, 2)
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('uses three retries by default for intermittently unavailable dataset services', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-default-retry-'))
+  let attempts = 0
+  const service = createDatasetApiService({
+    workspaceRoot,
+    fetchImpl: async () => {
+      attempts += 1
+      if (attempts <= 3) {
+        const cause = Object.assign(new Error('temporary upstream reset'), { code: 'ECONNRESET' })
+        const error = new TypeError('fetch failed') as TypeError & { cause?: Error }
+        error.cause = cause
+        throw error
+      }
+      return new Response(JSON.stringify({ id: 'ENSG00000141510' }), {
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+  })
+  try {
+    await service.register({
+      id: 'intermittent-db',
+      baseUrl: 'https://example.com/',
+      metadataEndpoint: 'metadata/{identifier}',
+      rawDataEndpoint: 'raw/{identifier}'
+    })
+    const result = await service.metadata({
+      sourceId: 'intermittent-db',
+      pathParameters: { identifier: 'ENSG00000141510' }
+    })
+    assert.deepEqual(result.metadata, { id: 'ENSG00000141510' })
+    assert.equal(attempts, 4)
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true })
   }

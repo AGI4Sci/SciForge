@@ -114,6 +114,30 @@ describe('TimelineDatasetResultsPanel', () => {
     ])
   })
 
+  it('renders generated record materialization as a processing result', () => {
+    const blocks: DatasetTimelineBlock[] = [{
+      kind: 'tool',
+      id: 'materialize-1',
+      summary: 'sciforge_invoke',
+      status: 'success',
+      meta: { structuredContent: { output: { datasetApi: {
+        actionId: 'dataset-api.materialize',
+        success: true,
+        result: {
+          artifact: { path: '/workspace/generated.jsonl', bytes: 1024, format: 'jsonl' },
+          counts: { records: 10 },
+          generation: { loopId: 'dataset-generation-loop' }
+        }
+      } } } }
+    }]
+
+    expect(datasetResultsFromTimelineBlocks(blocks)).toMatchObject([{
+      toolName: 'dataset_materialize',
+      kind: 'processing',
+      success: true
+    }])
+  })
+
   it('extracts raw-data artifacts from structuredContent tool detail', () => {
     const structured = {
       result: {

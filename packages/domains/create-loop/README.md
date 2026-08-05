@@ -27,3 +27,12 @@ Disabling or removing the package leaves this state intact.
 Node implementations use public lifecycle ports. Operations whose public ports
 are unavailable fail closed instead of importing a Host service or creating a
 parallel transport.
+
+`create-loop.build-dataset` accepts confirmed conversational data requirements
+(sources, output schema, quality thresholds, models, and release target), then
+dynamically compiles and saves an editable coordinator workflow plus its
+generation-round workflow. The generated graph uses existing AI/LLM, loop,
+condition, code, approval, and output nodes to ground through Dataset API,
+generate and evaluate candidates, retry rejected records, and materialize,
+validate, and publish the accepted batch. It is not a built-in preset and does
+not introduce a separate synthetic-data domain.

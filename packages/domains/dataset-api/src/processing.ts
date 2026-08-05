@@ -8,6 +8,7 @@ import {
   datasetGraphOrganizeInputSchema,
   datasetIdMapInputSchema,
   datasetJoinInputSchema,
+  datasetMaterializeInputSchema,
   datasetProviderIdMapInputSchema,
   datasetStructureProfileInputSchema,
   datasetStructureValidateInputSchema,
@@ -22,6 +23,7 @@ import {
   type DatasetGraphOrganizeInput,
   type DatasetIdMapInput,
   type DatasetJoinInput,
+  type DatasetMaterializeInput,
   type DatasetProviderIdMapInput,
   type DatasetStructureProfileInput,
   type DatasetStructureValidateInput,
@@ -160,18 +162,24 @@ export function createDatasetProcessingService(options: {
           draftPath: planPath,
           draftSha256,
           confirmedAt: new Date().toISOString()
-            }
+        }
         await writeIdempotentJson(confirmationPath, confirmation)
+        const confirmedPlan = { ...draft, status: 'confirmed', confirmedByUser: true, confirmation }
+        const artifact = await describeStandaloneArtifact(
+          confirmationPath,
+          'plan',
+          'dataset_prepare_plan',
+          { confirmedByUser: true, draftPlanId: input.draftPlanId },
+          { operations: draft.operations?.length ?? 0, outputs: draft.outputs?.length ?? 0 },
+          [{ path: planPath, sha256: draftSha256 }]
+        )
         return {
-          plan: { ...draft, status: 'confirmed', confirmedByUser: true, confirmation },
-          artifact: await describeStandaloneArtifact(
-            confirmationPath,
-            'plan',
-            'dataset_prepare_plan',
-            { confirmedByUser: true, draftPlanId: input.draftPlanId },
-            { operations: draft.operations?.length ?? 0, outputs: draft.outputs?.length ?? 0 },
-            [{ path: planPath, sha256: draftSha256 }]
-          )
+          // Keep the executable identity first and top-level. Agent tool receipts can be
+          // compacted, so consumers must not have to recover planId from a large nested plan.
+          planId: input.draftPlanId,
+          status: 'confirmed' as const,
+          artifact,
+          plan: confirmedPlan
         }
       }
       if (!input.objective || !input.operations || !input.outputs) {
@@ -199,11 +207,17 @@ export function createDatasetProcessingService(options: {
       const confirmation = input.confirmedByUser
         ? await ensurePlanConfirmation(workspaceRoot, planId, path)
         : undefined
+      const plan = { ...document, ...(confirmation ? { confirmation } : {}) }
+      const artifact = await describeStandaloneArtifact(path, 'plan', 'dataset_prepare_plan', {
+        confirmedByUser: input.confirmedByUser
+      }, { operations: input.operations.length, outputs: input.outputs.length })
       return {
-        plan: { ...document, ...(confirmation ? { confirmation } : {}) },
-        artifact: await describeStandaloneArtifact(path, 'plan', 'dataset_prepare_plan', {
-          confirmedByUser: input.confirmedByUser
-        }, { operations: input.operations.length, outputs: input.outputs.length })
+        // Property order is intentional: compact/truncated receipts retain the exact ID
+        // required by dataset-api.execute-plan before any verbose plan definition.
+        planId,
+        status: document.status,
+        artifact,
+        plan
       }
     },
 
@@ -956,6 +970,43 @@ export function createDatasetProcessingService(options: {
       return { graph, graphArtifact, nodesArtifact, edgesArtifact, invalidArtifact, counts }
     },
 
+    async materialize(raw: DatasetMaterializeInput) {
+      const input = datasetMaterializeInputSchema.parse(raw)
+      const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
+      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_materialize', input)
+      const parents = []
+      for (const candidate of input.parentArtifacts ?? []) {
+        const path = await resolveInputArtifact(workspaceRoot, candidate)
+        parents.push({ path, sha256: hash(await readFile(path)) })
+      }
+      const data = serializeDataset(input.records, input.format)
+      const parameters = {
+        ...processingParameters(input, ['workspaceRoot', 'records', 'parentArtifacts']),
+        recordsSha256: hash(data)
+      }
+      const artifact = await writeDerivedArtifact({
+        workspaceRoot,
+        operation: 'dataset_materialize',
+        format: input.format,
+        outputFileName: input.outputFileName,
+        data,
+        parents,
+        parameters,
+        summary: {
+          records: input.records.length,
+          generated: true,
+          objective: input.generation.objective,
+          loopId: input.generation.loopId
+        },
+        records: input.records.length
+      })
+      return {
+        artifact,
+        counts: { records: input.records.length },
+        generation: input.generation
+      }
+    },
+
     async validate(raw: DatasetValidateInput) {
       const input = datasetValidateInputSchema.parse(raw)
       const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
@@ -1143,7 +1194,7 @@ function resolveStructureFormat(
   if (extension === '.sdf' || extension === '.sd') return 'sdf'
   if (extension === '.cif' || extension === '.mmcif') return 'mmcif'
   if (/^\s*data_/m.test(text) && /(?:^|\n)_\w+\./.test(text)) return 'mmcif'
-  if (/^\$\$\$\$\s*$/m.test(text) || /(?:^|\n)M  END\s*(?:\n|$)/.test(text)) return 'sdf'
+  if (/^\$\$\$\$\s*$/m.test(text) || /(?:^|\n)M {2}END\s*(?:\n|$)/.test(text)) return 'sdf'
   throw new Error('Unable to detect structure format; set format to sdf or mmcif explicitly.')
 }
 
@@ -1184,7 +1235,7 @@ function profileSdf(structure: LoadedStructure): StructureProfile {
   for (const [recordIndex, lines] of records.entries()) {
     const title = (lines[0] ?? '').trim()
     if (title && titles.length < 20) titles.push(title)
-    const molEnd = lines.findIndex((line) => /^M  END\s*$/.test(line))
+    const molEnd = lines.findIndex((line) => /^M {2}END\s*$/.test(line))
     if (molEnd < 0) {
       errors.push({ record: recordIndex + 1, rule: 'molBlockTerminator', message: 'Missing M  END.' })
       continue
@@ -1244,9 +1295,9 @@ function profileSdf(structure: LoadedStructure): StructureProfile {
 }
 
 function sdfCounts(lines: string[]): { atoms: number; bonds: number } | null {
-  const v3000 = lines.find((line) => /M  V30 COUNTS\s+\d+\s+\d+/.test(line))
+  const v3000 = lines.find((line) => /M {2}V30 COUNTS\s+\d+\s+\d+/.test(line))
   if (v3000) {
-    const match = v3000.match(/M  V30 COUNTS\s+(\d+)\s+(\d+)/)
+    const match = v3000.match(/M {2}V30 COUNTS\s+(\d+)\s+(\d+)/)
     return match ? { atoms: Number(match[1]), bonds: Number(match[2]) } : null
   }
   const line = lines[3] ?? ''
@@ -2064,7 +2115,7 @@ function planParametersMatch(
   declared: Record<string, unknown>,
   actual: Record<string, unknown>
 ): boolean {
-  return Object.entries(declared).every(([key, value]) => (
+  return Object.entries(declared).filter(([key]) => key !== 'planId').every(([key, value]) => (
     canonicalJson(normalizePlanBindingValue(key, value)) ===
     canonicalJson(normalizePlanBindingValue(key, actual[key]))
   ))

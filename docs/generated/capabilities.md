@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **150**
+Registered actions: **152**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -40,6 +40,7 @@ Registered actions: **150**
 | `controlled-process.read` | 1.0.0 | ui | read | none | resource |
 | `controlled-process.resize` | 1.0.0 | ui | compute | none | resource |
 | `controlled-process.write` | 1.0.0 | ui | external-write | none | resource |
+| `create-loop.build-dataset` | 1.0.0 | ui, agent | external-write | confirmation | workspace |
 | `create-loop.check-code` | 1.0.0 | ui, agent | compute | none | workspace |
 | `create-loop.export-dsl` | 1.0.0 | ui, agent | read | none | workspace |
 | `create-loop.import-dsl` | 1.0.0 | ui, agent | compute | none | workspace |
@@ -62,6 +63,7 @@ Registered actions: **150**
 | `dataset-api.list` | 1.0.0 | ui, agent, system | read | none | workspace |
 | `dataset-api.list-object-stores` | 1.0.0 | ui, agent, system | read | none | workspace |
 | `dataset-api.list-objects` | 1.0.0 | ui, agent, system | read | none | workspace |
+| `dataset-api.materialize` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `dataset-api.metadata` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `dataset-api.object-metadata` | 1.0.0 | ui, agent, system | read | none | workspace |
 | `dataset-api.object-raw-data` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
@@ -6460,6 +6462,331 @@ Writes bounded input to an owned controlled process.
 }
 ```
 
+## `create-loop.build-dataset`
+
+Compiles confirmed conversational data requirements into editable Create Loop workflows that use Dataset API grounding, candidate generation, quality evaluation, retry, materialization, validation, and versioned publication. This dynamically builds workflows and does not use a preset or a separate feature module.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "humanReview": {
+        "default": true,
+        "type": "boolean"
+      },
+      "models": {
+        "additionalProperties": false,
+        "properties": {
+          "challenger": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "judge": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "strong": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "weak": {
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": {
+        "maxLength": 160,
+        "minLength": 1,
+        "type": "string"
+      },
+      "objective": {
+        "maxLength": 8000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "output": {
+        "additionalProperties": false,
+        "properties": {
+          "datasetName": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9_-]*$",
+            "type": "string"
+          },
+          "fileName": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "format": {
+            "default": "jsonl",
+            "enum": [
+              "json",
+              "jsonl",
+              "csv",
+              "tsv"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "datasetName",
+          "fileName",
+          "format"
+        ],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "required": {
+              "type": "boolean"
+            },
+            "type": {
+              "enum": [
+                "string",
+                "number",
+                "boolean",
+                "object",
+                "array"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        "propertyNames": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "quality": {
+        "additionalProperties": false,
+        "properties": {
+          "criteria": {
+            "items": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": "array"
+          },
+          "maxDuplicateFraction": {
+            "default": 0.05,
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "maxIterations": {
+            "default": 25,
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "maxWeakScore": {
+            "default": 0.5,
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "minQualityScore": {
+            "default": 0.7,
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "minScoreGap": {
+            "default": 0.2,
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "minStrongScore": {
+            "default": 0.65,
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "targetCount": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "criteria",
+          "targetCount",
+          "maxIterations",
+          "minQualityScore",
+          "minStrongScore",
+          "maxWeakScore",
+          "minScoreGap",
+          "maxDuplicateFraction"
+        ],
+        "type": "object"
+      },
+      "run": {
+        "default": true,
+        "type": "boolean"
+      },
+      "sourceIds": {
+        "items": {
+          "maxLength": 160,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 50,
+        "minItems": 1,
+        "type": "array"
+      }
+    },
+    "required": [
+      "name",
+      "objective",
+      "sourceIds",
+      "outputSchema",
+      "quality",
+      "output",
+      "humanReview",
+      "run"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "created": {
+        "type": "boolean"
+      },
+      "iterationWorkflowId": {
+        "maxLength": 256,
+        "type": "string"
+      },
+      "revision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "run": {
+        "anyOf": [
+          {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "message": {
+                    "maxLength": 1000000,
+                    "type": "string"
+                  },
+                  "ok": {
+                    "const": true,
+                    "type": "boolean"
+                  },
+                  "runId": {
+                    "maxLength": 256,
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "idle",
+                      "running",
+                      "success",
+                      "error"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "ok",
+                  "runId",
+                  "status",
+                  "message"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "message": {
+                    "maxLength": 1000000,
+                    "type": "string"
+                  },
+                  "ok": {
+                    "const": false,
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "ok",
+                  "message"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "workflowId": {
+        "maxLength": 256,
+        "type": "string"
+      }
+    },
+    "required": [
+      "workflowId",
+      "iterationWorkflowId",
+      "created",
+      "revision",
+      "run"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "workflow",
+    "automation",
+    "loop",
+    "dataset",
+    "generation"
+  ],
+  "title": "Build and run a dataset generation loop"
+}
+```
+
 ## `create-loop.check-code`
 
 Checks JavaScript, Python, or Bash node syntax.
@@ -7885,6 +8212,7 @@ Lists built-in public biology data providers, transports, metadata access, raw-d
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -8074,6 +8402,7 @@ Deduplicates records by explicit structured keys and preserves removed duplicate
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -8212,6 +8541,7 @@ Executes every operation in a confirmed plan with durable step checkpoints.
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -8433,6 +8763,7 @@ Applies structured filter conditions and writes deterministic included and exclu
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -8661,6 +8992,7 @@ Converts explicit edge records into deterministic node, edge, graph-summary, and
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -8914,6 +9246,7 @@ Maps identifiers using a workspace mapping artifact with explicit cardinality an
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -9183,6 +9516,7 @@ Runs a bounded UniProt mapping job, persists provenance, and applies the mapping
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -9430,6 +9764,7 @@ Joins two structured artifacts with explicit key mappings and deterministic unma
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -9558,6 +9893,7 @@ Lists API-backed dataset databases registered in the caller workspace.
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -9686,6 +10022,7 @@ Lists workspace-scoped S3-compatible object stores and credential readiness with
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -9843,6 +10180,7 @@ Lists a bounded page of objects and common prefixes within a registered object-s
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -9877,6 +10215,269 @@ Lists a bounded page of objects and common prefixes within a registered object-s
     "search"
   ],
   "title": "Browse private dataset objects"
+}
+```
+
+## `dataset-api.materialize`
+
+Writes bounded generated records as a checksummed Dataset artifact with generation metadata and parent provenance.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "format": {
+        "default": "jsonl",
+        "enum": [
+          "json",
+          "jsonl",
+          "csv",
+          "tsv"
+        ],
+        "type": "string"
+      },
+      "generation": {
+        "additionalProperties": false,
+        "properties": {
+          "loopId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "models": {
+            "additionalProperties": {
+              "maxLength": 256,
+              "type": "string"
+            },
+            "propertyNames": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "objective": {
+            "maxLength": 8000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "qualityCriteria": {
+            "items": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "runId": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "objective",
+          "loopId"
+        ],
+        "type": "object"
+      },
+      "outputFileName": {
+        "maxLength": 255,
+        "minLength": 1,
+        "type": "string"
+      },
+      "parentArtifacts": {
+        "items": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 100,
+        "type": "array"
+      },
+      "planId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "records": {
+        "items": {
+          "additionalProperties": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "propertyNames": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "maxItems": 1000,
+        "minItems": 1,
+        "type": "array"
+      }
+    },
+    "required": [
+      "planId",
+      "records",
+      "format",
+      "outputFileName",
+      "generation"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.register-object-store",
+              "dataset-api.list-object-stores",
+              "dataset-api.list-objects",
+              "dataset-api.object-metadata",
+              "dataset-api.object-raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.materialize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "generation",
+    "materialization",
+    "provenance"
+  ],
+  "title": "Materialize generated dataset records"
 }
 ```
 
@@ -10070,6 +10671,7 @@ Reads structured metadata from a registered dataset database and can persist the
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -10215,6 +10817,7 @@ Reads S3-compatible object metadata without downloading the object body.
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -10402,6 +11005,7 @@ Streams a complete or ranged S3-compatible object into a checksummed workspace a
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -10523,6 +11127,7 @@ Creates a reviewable data-preparation plan or confirms an immutable draft after 
                 "dataset_structure_profile",
                 "dataset_structure_validate",
                 "dataset_graph_organize",
+                "dataset_materialize",
                 "dataset_validate",
                 "dataset_publish"
               ],
@@ -10685,6 +11290,7 @@ Creates a reviewable data-preparation plan or confirms an immutable draft after 
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -10854,6 +11460,7 @@ Profiles JSON, JSONL, CSV, TSV, or FASTA data and persists a bounded report.
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -11026,6 +11633,7 @@ Publishes confirmed-plan artifacts with manifest, schema, quality report, checks
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -11276,6 +11884,7 @@ Downloads validated raw data from a registered database into a checksummed works
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -11496,6 +12105,7 @@ Registers an API-backed database with separate metadata and raw-data endpoint te
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -11702,6 +12312,7 @@ Registers an S3-compatible object store using credential environment-variable re
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -11860,6 +12471,7 @@ Registers an executable built-in biology provider preset in the caller workspace
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -12002,6 +12614,7 @@ Resumes a failed or interrupted confirmed plan from its checksum-verified checkp
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -12212,6 +12825,7 @@ Selects, renames, defaults, and requires structured fields without arbitrary cod
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -12373,6 +12987,7 @@ Profiles SDF or mmCIF structure data with format-aware parsers.
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -12545,6 +13160,7 @@ Validates SDF or mmCIF records and persists a quality report.
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -13105,6 +13721,7 @@ Applies allow-listed deterministic normalization and scalar transformations.
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],
@@ -13349,6 +13966,7 @@ Validates schema, record, range, uniqueness, missingness, and FASTA integrity co
               "dataset-api.structure-profile",
               "dataset-api.structure-validate",
               "dataset-api.graph-organize",
+              "dataset-api.materialize",
               "dataset-api.validate",
               "dataset-api.publish"
             ],

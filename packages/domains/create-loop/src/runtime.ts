@@ -33,7 +33,8 @@ import {
 const SCHEMA_VERSION = 1
 const SCHEDULER_POLL_MS = 30_000
 const MAX_NODE_EXECUTIONS = 200
-const MAX_RUN_DURATION_MS = 30 * 60_000
+const DEFAULT_MAX_RUN_DURATION_MS = 30 * 60_000
+const MAX_DATASET_GENERATION_RUN_DURATION_MS = 3 * 60 * 60_000
 const CODE_TIMEOUT_MS = 30_000
 
 type PersistedState = {
@@ -328,7 +329,7 @@ export class CreateLoopRuntime {
           results,
           callerWorkspaceRoot
         ),
-        MAX_RUN_DURATION_MS,
+        workflowRunDurationMs(workflow),
         signal
       )
     } catch (error) {
@@ -506,7 +507,8 @@ export class CreateLoopRuntime {
         return { payload, message: 'Trigger received.' }
       case 'llm': {
         const prompt = interpolate(node.config.prompt, payload)
-        const text = await this.#reason(prompt, node.config.model, signal)
+        const responseText = await this.#reason(prompt, node.config.model, signal)
+        const text = normalizeGeneratedDatasetLlmOutput(workflow, node, payload, responseText)
         return { payload: { json: { text }, text }, message: text }
       }
       case 'ai-agent': {
@@ -528,7 +530,7 @@ export class CreateLoopRuntime {
           throw new Error('AI Agent nodes require an active or configured workspace.')
         }
         const result = await context.agentExecution.run({
-          runtimeId: node.config.runtimeId ?? 'sciforge',
+          ...(node.config.runtimeId ? { runtimeId: node.config.runtimeId } : {}),
           prompt: interpolate(node.config.prompt, payload),
           workspaceRoot,
           ...(node.config.model.trim() ? { model: node.config.model.trim() } : {}),
@@ -581,7 +583,9 @@ export class CreateLoopRuntime {
       }
       case 'json': {
         if (node.config.mode === 'parse') {
-          const json = parseJson(payload.text)
+          const json = node.config.strict
+            ? JSON.parse(payload.text) as unknown
+            : parseJson(payload.text)
           return { payload: { json, text: payload.text }, message: 'JSON parsed.' }
         }
         const text = JSON.stringify(payload.json)
@@ -1047,7 +1051,12 @@ function payloadFromInput(input: unknown): Payload {
 function payloadFromResult(result: WorkflowNodeRunResultV1): Payload {
   if (!result.outputJson) return { json: {}, text: result.message }
   const json = parseJson(result.outputJson)
-  return { json, text: isRecord(json) && typeof json.text === 'string' ? json.text : result.message || result.outputJson }
+  return {
+    json,
+    text: isRecord(json) && typeof json.text === 'string'
+      ? json.text
+      : result.outputJson
+  }
 }
 
 function branchFromMessage(message: string): string | null {
@@ -1230,7 +1239,62 @@ function writeJsonResponse(
 }
 
 function parseJson(text: string): unknown {
-  return JSON.parse(text)
+  const trimmed = text.trim()
+  const candidates = [trimmed]
+  for (const match of trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
+    candidates.push(match[1]!.trim())
+  }
+  const extracted = extractBalancedJson(trimmed)
+  if (extracted) candidates.push(extracted)
+  let lastError: unknown
+  for (const candidate of [...new Set(candidates)]) {
+    for (const value of [candidate, repairJsonLike(candidate)]) {
+      try {
+        return JSON.parse(value)
+      } catch (error) {
+        lastError = error
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Invalid JSON.')
+}
+
+function repairJsonLike(text: string): string {
+  return text
+    .replace(/^\uFEFF/u, '')
+    .replace(/([{,]\s*)'([^'\\\r\n]+)'(\s*:)/gu, '$1"$2"$3')
+    .replace(/([{,]\s*)([A-Za-z_$][A-Za-z0-9_$-]*)(\s*:)/gu, '$1"$2"$3')
+    .replace(/,\s*([}\]])/gu, '$1')
+}
+
+function extractBalancedJson(text: string): string | null {
+  for (let start = 0; start < text.length; start += 1) {
+    const opening = text[start]
+    if (opening !== '{' && opening !== '[') continue
+    const stack: string[] = [opening]
+    let inString = false
+    let escaped = false
+    for (let index = start + 1; index < text.length; index += 1) {
+      const character = text[index]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (character === '\\') escaped = true
+        else if (character === '"') inString = false
+        continue
+      }
+      if (character === '"') {
+        inString = true
+        continue
+      }
+      if (character === '{' || character === '[') stack.push(character)
+      else if (character === '}' || character === ']') {
+        const expected = character === '}' ? '{' : '['
+        if (stack.pop() !== expected) break
+        if (stack.length === 0) return text.slice(start, index + 1)
+      }
+    }
+  }
+  return null
 }
 
 function parseJsonOrText(text: string): unknown {
@@ -1243,6 +1307,70 @@ function parseJsonOrText(text: string): unknown {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isGeneratedDatasetWorkflow(workflow: WorkflowV1): boolean {
+  return workflow.env.some((entry) => (
+    entry.key === 'SCIFORGE_GENERATED_KIND' && entry.value === 'dataset-generation'
+  ))
+}
+
+function normalizeGeneratedDatasetLlmOutput(
+  workflow: WorkflowV1,
+  node: Extract<WorkflowNodeV1, { type: 'llm' }>,
+  incoming: Payload,
+  responseText: string
+): string {
+  if (!isGeneratedDatasetWorkflow(workflow)) return responseText
+  if (!['challenger', 'weak-solver', 'strong-solver', 'judge'].includes(node.id)) {
+    return responseText
+  }
+  const parsed = parseJson(responseText)
+  if (!isRecord(parsed)) {
+    throw new Error(`Generated dataset ${node.id} must return a JSON object envelope.`)
+  }
+  if (!isRecord(incoming.json)) {
+    throw new Error(`Generated dataset ${node.id} received an invalid input envelope.`)
+  }
+  if (node.id === 'challenger') {
+    if (!isRecord(parsed.candidate) || !isRecord(parsed.generation)) {
+      throw new Error('Generated dataset challenger must return candidate and generation objects.')
+    }
+    return JSON.stringify({
+      state: incoming.json,
+      candidate: parsed.candidate,
+      generation: parsed.generation
+    })
+  }
+  if (!isRecord(incoming.json.state) || !isRecord(incoming.json.candidate)) {
+    throw new Error(`Generated dataset ${node.id} input is missing state or candidate.`)
+  }
+  if (node.id === 'weak-solver') {
+    if (!isRecord(parsed.weak)) throw new Error('Generated dataset weak solver must return a weak result object.')
+    return JSON.stringify({ ...incoming.json, weak: parsed.weak })
+  }
+  if (node.id === 'strong-solver') {
+    if (!isRecord(parsed.strong)) throw new Error('Generated dataset strong solver must return a strong result object.')
+    return JSON.stringify({ ...incoming.json, strong: parsed.strong })
+  }
+  if (!isRecord(parsed.verdict)) {
+    throw new Error('Generated dataset judge must return a verdict object.')
+  }
+  return JSON.stringify({ ...incoming.json, verdict: parsed.verdict })
+}
+
+function workflowRunDurationMs(workflow: WorkflowV1): number {
+  if (!isGeneratedDatasetWorkflow(workflow)) return DEFAULT_MAX_RUN_DURATION_MS
+  const loop = workflow.nodes.find((node) => node.type === 'loop')
+  if (!loop || loop.config.mode !== 'condition') {
+    return DEFAULT_MAX_RUN_DURATION_MS
+  }
+  const iterations = Math.min(100, Math.max(1, loop.config.maxIterations))
+  const estimated = (iterations + 2) * 20 * 60_000
+  return Math.min(
+    MAX_DATASET_GENERATION_RUN_DURATION_MS,
+    Math.max(DEFAULT_MAX_RUN_DURATION_MS, estimated)
+  )
 }
 
 function errorMessage(error: unknown): string {

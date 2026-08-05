@@ -26,6 +26,7 @@ export const DATASET_API_CAPABILITY_IDS = Object.freeze({
   structureProfile: 'dataset-api.structure-profile',
   structureValidate: 'dataset-api.structure-validate',
   graphOrganize: 'dataset-api.graph-organize',
+  materialize: 'dataset-api.materialize',
   validate: 'dataset-api.validate',
   publish: 'dataset-api.publish'
 })
@@ -92,6 +93,7 @@ const datasetPlanOperationSchema = z.object({
     'dataset_structure_profile',
     'dataset_structure_validate',
     'dataset_graph_organize',
+    'dataset_materialize',
     'dataset_validate',
     'dataset_publish'
   ]),
@@ -374,6 +376,27 @@ export const datasetValidateInputSchema = datasetInputSchema.extend({
   outputFileName: outputFileNameSchema.optional()
 }).strict()
 
+const datasetMaterializeRecordSchema = z.record(
+  z.string().trim().min(1).max(512),
+  z.json()
+)
+
+export const datasetMaterializeInputSchema = z.object({
+  workspaceRoot: optionalWorkspaceRootSchema,
+  planId: datasetIdSchema,
+  records: z.array(datasetMaterializeRecordSchema).min(1).max(1000),
+  format: z.enum(['json', 'jsonl', 'csv', 'tsv']).default('jsonl'),
+  outputFileName: outputFileNameSchema,
+  parentArtifacts: z.array(artifactPathSchema).max(100).optional(),
+  generation: z.object({
+    objective: z.string().trim().min(1).max(8000),
+    loopId: z.string().trim().min(1).max(256),
+    runId: z.string().trim().min(1).max(512).optional(),
+    models: z.record(z.string().trim().min(1).max(64), z.string().trim().max(256)).optional(),
+    qualityCriteria: z.array(z.string().trim().min(1).max(1000)).max(100).optional()
+  }).strict()
+}).strict()
+
 export const datasetPublishInputSchema = z.object({
   workspaceRoot: optionalWorkspaceRootSchema,
   planId: datasetIdSchema,
@@ -569,6 +592,7 @@ export type DatasetJoinInput = z.infer<typeof datasetJoinInputSchema>
 export type DatasetStructureProfileInput = z.infer<typeof datasetStructureProfileInputSchema>
 export type DatasetStructureValidateInput = z.infer<typeof datasetStructureValidateInputSchema>
 export type DatasetGraphOrganizeInput = z.infer<typeof datasetGraphOrganizeInputSchema>
+export type DatasetMaterializeInput = z.infer<typeof datasetMaterializeInputSchema>
 export type DatasetValidateInput = z.infer<typeof datasetValidateInputSchema>
 export type DatasetPublishInput = z.infer<typeof datasetPublishInputSchema>
 

@@ -228,6 +228,7 @@ async function dispatch(
     case 'dataset_structure_profile': return processing.structureProfile(input as never)
     case 'dataset_structure_validate': return processing.structureValidate(input as never)
     case 'dataset_graph_organize': return processing.organizeGraph(input as never)
+    case 'dataset_materialize': return processing.materialize(input as never)
     case 'dataset_validate': return processing.validate(input as never)
     case 'dataset_publish': return processing.publish(input as never)
     default: throw new Error(`Confirmed plan contains unsupported operation '${tool}'.`)
@@ -377,7 +378,7 @@ function executionResult(state: DatasetPlanExecutionState, statePath: string, re
         attempts: step.attempts,
         error: step.error,
         counts: step.counts,
-        artifacts: step.artifacts
+        artifacts: compactReceiptArtifacts(step.artifacts)
       }))
     },
     artifact: {
@@ -387,6 +388,15 @@ function executionResult(state: DatasetPlanExecutionState, statePath: string, re
       format: 'report'
     }
   }
+}
+
+function compactReceiptArtifacts(artifacts: ArtifactReference[]): ArtifactReference[] {
+  const primary = artifacts.filter((artifact) => (
+    artifact.key === 'artifact' ||
+    artifact.key === 'graphArtifact' ||
+    artifact.key === 'publication'
+  ))
+  return primary.length > 0 ? primary : artifacts.slice(0, 1)
 }
 
 function executionRunId(planId: string, planSha256: string): string {

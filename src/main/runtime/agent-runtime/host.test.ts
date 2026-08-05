@@ -501,6 +501,18 @@ describe('AgentRuntimeHost', () => {
     expect((requested.value as Extract<AgentRuntimeEvent, { kind: 'approval_requested' }>).meta)
       .not.toHaveProperty('inputPreview')
     const approvalId = (requested.value as Extract<AgentRuntimeEvent, { kind: 'approval_requested' }>).approvalId
+    await expect(host.readThread({
+      runtimeId: 'codex',
+      threadId: 'codex-thread'
+    })).resolves.toMatchObject({
+      items: [expect.objectContaining({
+        id: approvalId,
+        turnId: 'turn-1',
+        kind: 'approval',
+        status: 'pending',
+        meta: expect.objectContaining({ approvalId })
+      })]
+    })
     await host.resolveApproval({
       runtimeId: 'codex',
       threadId: 'codex-thread',

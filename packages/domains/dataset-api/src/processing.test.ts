@@ -26,6 +26,7 @@ async function confirmedPlan(service: ReturnType<typeof createDatasetProcessingS
       { tool: 'dataset_structure_profile', description: 'Profile structure files.' },
       { tool: 'dataset_structure_validate', description: 'Validate structure files.' },
       { tool: 'dataset_graph_organize', description: 'Organize graph data.' },
+      { tool: 'dataset_materialize', description: 'Materialize generated records.' },
       { tool: 'dataset_validate', description: 'Validate output.' },
       { tool: 'dataset_publish', description: 'Publish output.' }
     ],
@@ -34,6 +35,29 @@ async function confirmedPlan(service: ReturnType<typeof createDatasetProcessingS
   })
   return result.plan.planId
 }
+
+test('places the exact executable plan identity at the start of prepare-plan receipts', async () => {
+  const { service, cleanup } = await fixture()
+  try {
+    const prepared = await service.preparePlan({
+      objective: 'Publish a compact receipt fixture.',
+      operations: [{
+        tool: 'dataset_materialize',
+        description: 'Materialize records.',
+        parameters: { records: [{ id: 'fixture' }], outputFileName: 'fixture.jsonl', format: 'jsonl' }
+      }],
+      outputs: [{ name: 'fixture.jsonl', format: 'jsonl' }],
+      confirmedByUser: true
+    })
+
+    assert.equal(prepared.planId, prepared.plan.planId)
+    assert.equal(prepared.status, 'confirmed')
+    assert.equal(prepared.artifact.path.endsWith('.json'), true)
+    assert.match(JSON.stringify(prepared).slice(0, 96), /^\{"planId":"plan-[a-f0-9]{16}","status":"confirmed"/)
+  } finally {
+    await cleanup()
+  }
+})
 
 test('runs a reproducible JSON preparation, validation, and publication chain', async () => {
   const { workspaceRoot, service, cleanup } = await fixture()
@@ -119,7 +143,7 @@ test('runs a reproducible JSON preparation, validation, and publication chain', 
     assert.deepEqual(publicationManifest.artifacts[0].parameters.keys, ['accession'])
     const checksumBytes = await readFile(published.publication.checksumsPath)
     assert.match(checksumBytes.toString('utf8'), new RegExp(`${published.publication.sha256}  manifest\\.json`))
-    assert.match(checksumBytes.toString('utf8'), /  preparation-plan\.json/)
+    assert.match(checksumBytes.toString('utf8'), / {2}preparation-plan\.json/)
     assert.equal(await readFile(sourcePath, 'utf8'), sourceText)
 
     const repeatedPublication = await service.publish({
@@ -144,6 +168,140 @@ test('runs a reproducible JSON preparation, validation, and publication chain', 
     })
     assert.equal(repeated.artifact.path, filtered.artifact.path)
     assert.equal(repeated.artifact.reused, true)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('materializes generated records with model metadata and parent provenance', async () => {
+  const { workspaceRoot, service, cleanup } = await fixture()
+  const parentPath = join(workspaceRoot, 'grounding.json')
+  await writeFile(parentPath, '[{"source":"fixture"}]\n')
+  try {
+    const planId = await confirmedPlan(service)
+    const result = await service.materialize({
+      planId,
+      records: [
+        { id: 'sample-1', question: 'What does TP53 encode?', answer: 'A tumor suppressor protein.' },
+        { id: 'sample-2', question: 'Which pathway contains TP53?', answer: 'The p53 signaling pathway.' }
+      ],
+      format: 'jsonl',
+      outputFileName: 'synthetic-tp53.jsonl',
+      parentArtifacts: [parentPath],
+      generation: {
+        objective: 'Create grounded TP53 questions.',
+        loopId: 'tp53-generation-loop',
+        runId: 'run-1',
+        models: { weak: 'weak-model', strong: 'strong-model' },
+        qualityCriteria: ['Every answer must be grounded.']
+      }
+    })
+    assert.equal(result.counts.records, 2)
+    assert.match(await readFile(result.artifact.path, 'utf8'), /"sample-2"/)
+    const manifest = JSON.parse(await readFile(result.artifact.manifestPath, 'utf8'))
+    assert.equal(manifest.operation, 'dataset_materialize')
+    assert.equal(manifest.records, 2)
+    assert.equal(manifest.parents.length, 1)
+    assert.equal(manifest.parameters.generation.models.weak, 'weak-model')
+
+    const repeated = await service.materialize({
+      planId,
+      records: [
+        { id: 'sample-1', question: 'What does TP53 encode?', answer: 'A tumor suppressor protein.' },
+        { id: 'sample-2', question: 'Which pathway contains TP53?', answer: 'The p53 signaling pathway.' }
+      ],
+      format: 'jsonl',
+      outputFileName: 'synthetic-tp53.jsonl',
+      parentArtifacts: [parentPath],
+      generation: {
+        objective: 'Create grounded TP53 questions.',
+        loopId: 'tp53-generation-loop',
+        runId: 'run-1',
+        models: { weak: 'weak-model', strong: 'strong-model' },
+        qualityCriteria: ['Every answer must be grounded.']
+      }
+    })
+    assert.equal(repeated.artifact.path, result.artifact.path)
+    assert.equal(repeated.artifact.reused, true)
+
+    const changed = await service.materialize({
+      planId,
+      records: [{ id: 'sample-3', question: 'What activates TP53?', answer: 'Cellular stress signals.' }],
+      format: 'jsonl',
+      outputFileName: 'synthetic-tp53.jsonl',
+      parentArtifacts: [parentPath],
+      generation: {
+        objective: 'Create grounded TP53 questions.',
+        loopId: 'tp53-generation-loop',
+        runId: 'run-2',
+        models: { weak: 'weak-model', strong: 'strong-model' },
+        qualityCriteria: ['Every answer must be grounded.']
+      }
+    })
+    assert.notEqual(changed.artifact.path, result.artifact.path)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('requires the confirmed materialize plan to use the generation schema field', async () => {
+  const { service, cleanup } = await fixture()
+  const records = [{ accession: 'P04637', question: 'Length?', answer: '393 aa.' }]
+  const generation = {
+    objective: 'Create one grounded UniProt question.',
+    loopId: 'uniprot-generation-loop'
+  }
+  try {
+    const invalid = await service.preparePlan({
+      objective: generation.objective,
+      operations: [{
+        tool: 'dataset_materialize',
+        description: 'Materialize the accepted sample.',
+        parameters: {
+          records,
+          format: 'jsonl',
+          outputFileName: 'uniprot-invalid.jsonl',
+          generationMetadata: { loopId: generation.loopId }
+        }
+      }],
+      outputs: [{ name: 'uniprot-invalid.jsonl', format: 'jsonl' }],
+      confirmedByUser: true
+    })
+    await assert.rejects(
+      service.materialize({
+        planId: invalid.plan.planId,
+        records,
+        format: 'jsonl',
+        outputFileName: 'uniprot-invalid.jsonl',
+        generation
+      }),
+      /parameters do not authorize/
+    )
+
+    const valid = await service.preparePlan({
+      objective: generation.objective,
+      operations: [{
+        tool: 'dataset_materialize',
+        description: 'Materialize the accepted sample.',
+        parameters: {
+          planId: 'plan-placeholder',
+          records,
+          format: 'jsonl',
+          outputFileName: 'uniprot-valid.jsonl',
+          generation
+        }
+      }],
+      outputs: [{ name: 'uniprot-valid.jsonl', format: 'jsonl' }],
+      confirmedByUser: true
+    })
+    const result = await service.materialize({
+      planId: valid.plan.planId,
+      records,
+      format: 'jsonl',
+      outputFileName: 'uniprot-valid.jsonl',
+      generation
+    })
+    assert.equal(result.counts.records, 1)
   } finally {
     await cleanup()
   }
