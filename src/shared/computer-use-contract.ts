@@ -1,0 +1,226 @@
+import { z } from 'zod'
+
+const safeId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/)
+
+export const computerUseEmptyInputSchema = z.object({}).strict()
+
+export const computerUseIsolationSchema = z.enum([
+  'auto',
+  'agent-isolated',
+  'host-app-scoped',
+  'host-global',
+  'host-approved'
+])
+
+export const computerUseBackendSchema = z.enum([
+  'browser-cdp', 'windows-uia', 'isolated-desktop', 'legacy-pyautogui', 'static-image'
+])
+
+export const computerUseVerificationSchema = z.enum([
+  'verified', 'unverified', 'failed', 'not-applicable'
+])
+
+export const computerUseLeaseScopeSchema = z.enum(['target', 'environment', 'process-global'])
+
+export const computerUseTargetKindSchema = z.enum([
+  'browser-page',
+  'electron-webcontents',
+  'windows-uia',
+  'isolated-desktop',
+  'host-desktop',
+  'static-image'
+])
+
+export const COMPUTER_USE_ERROR_CODES = [
+  'INVALID_ARGUMENT', 'SESSION_NOT_FOUND', 'SESSION_OWNER_MISMATCH',
+  'REQUEST_ID_CONFLICT', 'SESSION_BUSY', 'TARGET_BUSY', 'HOST_INPUT_BUSY',
+  'BACKEND_UNAVAILABLE', 'ISOLATION_UNAVAILABLE', 'DEGRADATION_NOT_ALLOWED',
+  'TARGET_NOT_FOUND', 'TARGET_LOST', 'STALE_OBSERVATION', 'ACTION_UNSUPPORTED',
+  'ACTION_UNVERIFIED', 'ACTION_OUTCOME_UNKNOWN', 'LEASE_EXPIRED',
+  'CANCEL_PENDING', 'CLEANUP_INCOMPLETE'
+] as const
+
+export type ComputerUseErrorCode = typeof COMPUTER_USE_ERROR_CODES[number]
+
+const targetLocatorFields = {
+  'browser-page': ['cdpEndpoint', 'cdpTargetId'],
+  'electron-webcontents': ['webContentsId', 'cdpTargetId'],
+  'windows-uia': ['processId', 'nativeWindowHandle', 'automationId'],
+  'isolated-desktop': ['isolatedEnvironmentId'],
+  'host-desktop': ['monitorId'],
+  'static-image': ['imageRef']
+} as const
+
+export const computerUseTargetSchema = z.object({
+  targetId: safeId.optional(),
+  kind: computerUseTargetKindSchema,
+  ownership: z.enum(['attached', 'managed']).default('attached'),
+  locator: z.record(z.string(), z.unknown()).default({}),
+  display: z.object({
+    monitorId: z.string().min(1).max(256).optional(),
+    scaleFactor: z.number().positive().optional(),
+    viewport: z.tuple([z.number().int().positive(), z.number().int().positive()]).optional()
+  }).strict().optional(),
+  backendHint: z.string().trim().min(1).max(256).optional(),
+  generation: z.string().trim().min(1).max(256).optional(),
+  metadata: z.object({
+    title: z.string().max(2_048).optional(),
+    url: z.string().max(2_048).optional(),
+    processName: z.string().max(2_048).optional()
+  }).strict().optional()
+}).strict().superRefine((target, context) => {
+  const allowed = targetLocatorFields[target.kind] as readonly string[]
+  const unknown = Object.keys(target.locator).filter((field) => !allowed.includes(field))
+  if (unknown.length > 0) {
+    context.addIssue({
+      code: 'custom',
+      path: ['locator'],
+      message: `locator fields are unsupported for ${target.kind}: ${unknown.join(', ')}`
+    })
+  }
+  const has = (field: string): boolean => Object.hasOwn(target.locator, field)
+  const hasRequiredLocator = target.kind === 'host-desktop' ||
+    (target.kind === 'browser-page' && has('cdpEndpoint') && has('cdpTargetId')) ||
+    (target.kind === 'electron-webcontents' && (has('webContentsId') || has('cdpTargetId'))) ||
+    (target.kind === 'windows-uia' && (
+      has('processId') || has('nativeWindowHandle') || has('automationId')
+    )) ||
+    (target.kind === 'isolated-desktop' && has('isolatedEnvironmentId')) ||
+    (target.kind === 'static-image' && has('imageRef'))
+  if (!hasRequiredLocator) {
+    context.addIssue({
+      code: 'custom',
+      path: ['locator'],
+      message: `locator does not identify a ${target.kind} target`
+    })
+  }
+  for (const [field, value] of Object.entries(target.locator)) {
+    if (field === 'processId' || field === 'webContentsId') {
+      if (!Number.isInteger(value) || (value as number) <= 0) {
+        context.addIssue({ code: 'custom', path: ['locator', field], message: 'must be a positive integer' })
+      }
+    } else if (typeof value !== 'string' || value.trim().length === 0 || value.length > 2_048) {
+      context.addIssue({ code: 'custom', path: ['locator', field], message: 'must be a non-empty string' })
+    }
+  }
+  if (target.kind === 'windows-uia' && has('nativeWindowHandle')) {
+    if (!has('processId')) {
+      context.addIssue({ code: 'custom', path: ['locator'], message: 'nativeWindowHandle requires processId' })
+    }
+    if (!target.generation) {
+      context.addIssue({ code: 'custom', path: ['generation'], message: 'nativeWindowHandle requires generation' })
+    }
+  }
+})
+
+export const computerUseRunInputSchema = z.object({
+  instruction: z.string().trim().min(1).max(16_384),
+  sessionId: safeId.optional(),
+  target: computerUseTargetSchema.optional(),
+  requestedIsolation: computerUseIsolationSchema.optional(),
+  allowDegraded: z.boolean().optional(),
+  queueIfBusy: z.boolean().optional(),
+  deadlineMs: z.number().int().min(1).max(600_000).optional()
+}).strict()
+
+export type ComputerUseRunInput = z.infer<typeof computerUseRunInputSchema>
+
+export type NormalizedComputerUseRunInput = ComputerUseRunInput & {
+  requestedIsolation: z.infer<typeof computerUseIsolationSchema>
+  allowDegraded: boolean
+  queueIfBusy: boolean
+  protocolVersion: 1 | 2
+}
+
+export const computerUseBindTargetInputSchema = z.object({
+  sessionId: safeId.optional(),
+  target: computerUseTargetSchema
+}).strict()
+
+export const computerUseReleaseSessionInputSchema = z.object({
+  sessionId: safeId,
+  reason: z.string().trim().min(1).max(256).optional(),
+  force: z.boolean().optional()
+}).strict()
+
+export const COMPUTER_USE_V2_FIELDS = [
+  'sessionId',
+  'target',
+  'requestedIsolation',
+  'allowDegraded',
+  'queueIfBusy',
+  'deadlineMs'
+] as const
+
+export function isComputerUseV2Input(input: ComputerUseRunInput): boolean {
+  return COMPUTER_USE_V2_FIELDS.some((field) => Object.hasOwn(input, field))
+}
+
+export function normalizeComputerUseRunInput(value: unknown): NormalizedComputerUseRunInput {
+  const input = computerUseRunInputSchema.parse(value)
+  return {
+    ...input,
+    requestedIsolation: input.requestedIsolation ?? 'auto',
+    allowDegraded: input.allowDegraded ?? false,
+    queueIfBusy: input.queueIfBusy ?? false,
+    protocolVersion: isComputerUseV2Input(input) ? 2 : 1
+  }
+}
+
+export const computerUseBackendCapabilitiesSchema = z.object({
+  backend: computerUseBackendSchema,
+  available: z.boolean(),
+  targetKinds: z.array(computerUseTargetKindSchema),
+  actions: z.array(z.string()),
+  effectiveIsolation: computerUseIsolationSchema.exclude(['auto']),
+  backgroundInput: z.enum(['semantic', 'targeted', 'none']),
+  requiresHostFocus: z.boolean(),
+  affectsUserInput: z.boolean(),
+  usesHostClipboard: z.boolean(),
+  supportsReadback: z.array(z.string()),
+  leaseScope: computerUseLeaseScopeSchema,
+  maxConcurrency: z.number().int().nonnegative(),
+  reason: z.string().nullable()
+}).strict()
+
+export const computerUseRuntimeStatusSchema = z.object({
+  protocolVersion: z.literal(2),
+  approvalProof: z.literal('legacy-trust-boundary'),
+  backendsConnected: z.boolean(),
+  registry: z.object({
+    counts: z.object({
+      sessions: z.number().int().nonnegative(),
+      requests: z.number().int().nonnegative(),
+      activeLeases: z.number().int().nonnegative(),
+      tombstones: z.number().int().nonnegative(),
+      releasedLeaseTombstones: z.number().int().nonnegative()
+    }),
+    closed: z.boolean(),
+    sessions: z.array(z.record(z.string(), z.unknown())),
+    requests: z.array(z.record(z.string(), z.unknown())),
+    leases: z.array(z.record(z.string(), z.unknown()))
+  })
+}).strict()
+
+export function redactComputerUseTarget(
+  target: z.infer<typeof computerUseTargetSchema>
+): Record<string, unknown> {
+  const locator = { ...target.locator }
+  if (target.kind === 'browser-page' && 'cdpEndpoint' in locator) {
+    locator.cdpEndpoint = '<redacted>'
+  }
+  if (target.kind === 'static-image' && 'imageRef' in locator) {
+    locator.imageRef = '<redacted>'
+  }
+  return {
+    ...target,
+    locator,
+    ...(target.metadata ? {
+      metadata: {
+        ...target.metadata,
+        ...(target.metadata.title !== undefined ? { title: '<redacted>' } : {}),
+        ...(target.metadata.url !== undefined ? { url: '<redacted>' } : {})
+      }
+    } : {})
+  }
+}

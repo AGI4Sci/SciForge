@@ -26,6 +26,8 @@ def test_err_envelope_and_bad_code():
     assert res["ok"] is False
     assert res["error"]["code"] == "NEEDS_APPROVAL"
     assert res["error"]["blockedReason"] == "x"
+    assert res["error"]["failureClass"] == "request"
+    assert res["error"]["recovery"]
     try:
         R.err("NOT_A_CODE", "bad")
     except AssertionError:

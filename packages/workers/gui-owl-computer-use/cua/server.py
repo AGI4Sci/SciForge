@@ -21,7 +21,6 @@ import base64
 import hmac
 import io
 import json
-import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 
@@ -31,6 +30,7 @@ from . import result as R
 from . import cancel
 from .config import CONFIG
 from .runner import run_task
+from .service import SERVICE
 
 VERSION = "0.1.0"
 
@@ -100,12 +100,24 @@ class Handler(BaseHTTPRequestHandler):
                 "service": R.SERVICE_ID, "version": VERSION,
                 "model": CONFIG.model_router_model, "engine": "sciforge-model-router",
                 "endpoint": "responses",
+                "protocolVersion": 2,
+                "backendsConnected": False,
+                "approvalProof": "legacy-trust-boundary",
                 "allowExecute": CONFIG.allow_execute,
                 "authRequired": bool(CONFIG.service_token or CONFIG.allow_execute)}})
+        if self.path == "/computer-use/status":
+            return self._send(200, {"ok": True, "data": SERVICE.status()})
+        if self.path == "/computer-use/capabilities":
+            return self._send(200, {"ok": True, "data": SERVICE.capabilities()})
+        if self.path == "/computer-use/targets":
+            return self._send(200, {"ok": True, "data": SERVICE.list_targets()})
         return self._send(404, R.err("NOT_FOUND", f"no route {self.path}"))
 
     def do_POST(self):
-        if self.path not in ("/computer-use/run", "/computer-use/cancel"):
+        if self.path not in (
+            "/computer-use/run", "/computer-use/cancel",
+            "/computer-use/sessions/bind", "/computer-use/sessions/release",
+        ):
             return self._send(404, R.err("NOT_FOUND", f"no route {self.path}"))
         auth_error = _check_auth(self.headers.get("Authorization"))
         if auth_error:
@@ -118,19 +130,27 @@ class Handler(BaseHTTPRequestHandler):
         # Cancel: flip the flag the in-flight run checks between steps so it stops
         # driving the desktop. Runs on a separate thread from the run loop.
         if self.path == "/computer-use/cancel":
-            rid = body.get("requestId")
-            if not rid:
-                return self._send(400, R.err("INVALID_ARGUMENT", "requestId is required"))
-            cancel.request_cancel(rid)
-            return self._send(200, {"ok": True, "data": {"cancelled": rid}})
+            res = SERVICE.cancel(body, cancel.request_cancel)
+            return self._send(200 if res.get("ok") else 400, res)
+        if self.path == "/computer-use/sessions/bind":
+            res = SERVICE.bind_session(body)
+            return self._send(200 if res.get("ok") else 400, res)
+        if self.path == "/computer-use/sessions/release":
+            res = SERVICE.release_session(body)
+            return self._send(200 if res.get("ok") else 409, res)
+
+        def run_legacy(request: dict) -> dict:
+            provider = _screenshot_provider(request)
+            return run_task(
+                CONFIG, request["instruction"], provider,
+                execute=request["execute"], approve=request["approve"],
+                request_id=request.get("requestId"))
+
         try:
-            provider = _screenshot_provider(body)
-            res = run_task(
-                CONFIG, body.get("instruction", ""), provider,
-                execute=bool(body.get("execute")), approve=bool(body.get("approve")),
-                request_id=body.get("requestId"))
+            res = SERVICE.run(body, run_legacy)
             code = 200 if res.get("ok") else (
-                403 if res.get("error", {}).get("code") == "NEEDS_APPROVAL" else 400)
+                403 if res.get("error", {}).get("code") == "NEEDS_APPROVAL" else
+                503 if res.get("error", {}).get("code") == "BACKEND_UNAVAILABLE" else 400)
             return self._send(code, res)
         except Exception as e:  # noqa: BLE001
             return self._send(500, R.err("INTERNAL_ERROR", str(e), retryable=True))
@@ -142,7 +162,11 @@ def main():
           f"(model-router={CONFIG.model_router_model} @ {CONFIG.model_router_base_url}, "
           f"allow_execute={CONFIG.allow_execute}, "
           f"auth_required={bool(CONFIG.service_token or CONFIG.allow_execute)})")
-    srv.serve_forever()
+    try:
+        srv.serve_forever()
+    finally:
+        srv.server_close()
+        SERVICE.shutdown()
 
 
 if __name__ == "__main__":

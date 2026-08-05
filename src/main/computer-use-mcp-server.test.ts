@@ -5,7 +5,8 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   COMPUTER_USE_MCP_TOOL_NAME,
-  GUI_COMPUTER_USE_MCP_SERVER_NAME
+  GUI_COMPUTER_USE_MCP_SERVER_NAME,
+  computerUseMcpEnabledTools
 } from './computer-use-mcp-config'
 import { createComputerUseMcpServer, runComputerUseMcpServerFromArgv } from './computer-use-mcp-server'
 
@@ -69,7 +70,7 @@ describe('computer-use MCP server', () => {
       ])
 
       const tools = await client.listTools()
-      expect(tools.tools.map((tool) => tool.name)).toEqual([COMPUTER_USE_MCP_TOOL_NAME])
+      expect(tools.tools.map((tool) => tool.name)).toEqual(computerUseMcpEnabledTools())
       expect(tools.tools[0]?.annotations).toMatchObject({
         title: 'Computer use',
         readOnlyHint: false,
@@ -98,6 +99,54 @@ describe('computer-use MCP server', () => {
         }
       })
       expect(String(requests[0]?.body.requestId)).toMatch(/^mcp-cua-/)
+    } finally {
+      await client.close()
+      await mcpServer.close()
+    }
+  })
+
+  it('forwards protocol v2 session and target fields without weakening them', async () => {
+    const requests: Array<Record<string, unknown>> = []
+    const sidecar = await startFakeSidecar(async (request, response) => {
+      requests.push(await readJsonBody(request))
+      response.writeHead(503, { 'Content-Type': 'application/json' })
+      response.end(JSON.stringify({
+        ok: false,
+        error: { code: 'BACKEND_UNAVAILABLE', message: 'P2 is not connected' }
+      }))
+    })
+    const mcpServer = createComputerUseMcpServer({
+      serviceUrl: sidecar.url,
+      serviceToken: '',
+      timeoutMs: 5_000
+    })
+    const client = new Client({ name: 'computer-use-v2-test', version: '0.1.0' })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    try {
+      await Promise.all([mcpServer.connect(serverTransport), client.connect(clientTransport)])
+      const result = await client.callTool({
+        name: COMPUTER_USE_MCP_TOOL_NAME,
+        arguments: {
+          instruction: 'type in the selected page',
+          sessionId: 'session-browser-1',
+          target: {
+            targetId: 'target-browser-1',
+            kind: 'browser-page',
+            locator: { cdpEndpoint: 'http://127.0.0.1:9222', cdpTargetId: 'page-1' }
+          },
+          requestedIsolation: 'host-app-scoped',
+          allowDegraded: false
+        }
+      })
+      expect(result.isError).toBe(true)
+      expect(requests[0]).toMatchObject({
+        sessionId: 'session-browser-1',
+        target: { targetId: 'target-browser-1', kind: 'browser-page' },
+        requestedIsolation: 'host-app-scoped',
+        allowDegraded: false,
+        execute: true,
+        approve: true
+      })
     } finally {
       await client.close()
       await mcpServer.close()

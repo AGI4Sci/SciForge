@@ -89,8 +89,14 @@ describe('createClaudeCodeAgentRuntimeAdapter', () => {
       mcpServers: [{
         id: 'gui_owl_computer_use',
         status: 'configured',
-        toolCount: 1,
-        tools: ['computer_use']
+        toolCount: 5,
+        tools: [
+          'computer_use_get_capabilities',
+          'computer_use_list_targets',
+          'computer_use_bind_target',
+          'computer_use',
+          'computer_use_release_session'
+        ]
       }]
     })
     await expect(adapter.auxiliary?.(ctx, {

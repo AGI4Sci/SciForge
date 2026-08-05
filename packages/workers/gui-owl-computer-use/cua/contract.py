@@ -20,12 +20,25 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from . import result as R
+from .isolation import parse_requested_isolation
+from .target import parse_target_descriptor, validate_safe_id
 
 TOOL_RUN = "gui_computer_use_run"
 TOOL_CANCEL = "gui_computer_use_cancel"
+TOOL_GET_CAPABILITIES = "gui_computer_use_get_capabilities"
+TOOL_LIST_TARGETS = "gui_computer_use_list_targets"
+TOOL_BIND_TARGET = "gui_computer_use_bind_target"
+TOOL_RELEASE_SESSION = "gui_computer_use_release_session"
 
 # Re-exported so callers don't reach into result.py for the canonical set.
 ERROR_CODES = R.ERROR_CODES
+
+PROTOCOL_V1 = 1
+PROTOCOL_V2 = 2
+V2_RUN_FIELDS = frozenset({
+    "sessionId", "target", "requestedIsolation", "allowDegraded",
+    "queueIfBusy", "deadlineMs",
+})
 
 RUN_INPUT_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -62,10 +75,111 @@ RUN_INPUT_SCHEMA: Dict[str, Any] = {
             "description": "Optional stable id; pass the same id to "
             "gui_computer_use_cancel to stop this run.",
         },
+        "sessionId": {
+            "type": "string",
+            "description": "Stable session identity owned by one runtime thread.",
+        },
+        "target": {
+            "type": "object",
+            "description": "Explicit input/display target descriptor (protocol v2).",
+            "properties": {
+                "targetId": {"type": "string"},
+                "kind": {"type": "string", "enum": [
+                    "browser-page", "electron-webcontents", "windows-uia",
+                    "isolated-desktop", "host-desktop", "static-image",
+                ]},
+                "ownership": {"type": "string", "enum": ["attached", "managed"]},
+                "locator": {"type": "object"},
+                "display": {"type": "object"},
+                "backendHint": {"type": "string"},
+                "generation": {"type": "string"},
+                "metadata": {"type": "object"},
+            },
+            "required": ["kind"],
+            "additionalProperties": False,
+        },
+        "requestedIsolation": {
+            "type": "string",
+            "enum": ["auto", "agent-isolated", "host-app-scoped", "host-global", "host-approved"],
+            "default": "auto",
+        },
+        "allowDegraded": {"type": "boolean", "default": False},
+        "queueIfBusy": {"type": "boolean", "default": False},
+        "deadlineMs": {"type": "integer", "minimum": 1, "maximum": 600000},
     },
     "required": ["instruction"],
     "additionalProperties": False,
 }
+
+
+def normalize_run_input(value: object) -> Dict[str, Any]:
+    """Validate and normalize legacy/v2 input without touching a backend."""
+    if not isinstance(value, dict):
+        raise ValueError("run input must be an object")
+    allowed = set(RUN_INPUT_SCHEMA["properties"])
+    unknown = set(value) - allowed
+    if unknown:
+        raise ValueError(f"unsupported fields: {', '.join(sorted(unknown))}")
+
+    instruction = value.get("instruction")
+    if not isinstance(instruction, str) or not instruction.strip():
+        raise ValueError("instruction is required")
+    if len(instruction) > 16_384:
+        raise ValueError("instruction must be at most 16384 characters")
+
+    normalized: Dict[str, Any] = {"instruction": instruction.strip()}
+    for field in ("execute", "approve", "allowDegraded", "queueIfBusy"):
+        raw = value.get(field, False)
+        if not isinstance(raw, bool):
+            raise ValueError(f"{field} must be a boolean")
+        normalized[field] = raw
+    for field in ("imagePath", "imageBase64"):
+        raw = value.get(field)
+        if raw is not None:
+            if not isinstance(raw, str) or not raw:
+                raise ValueError(f"{field} must be a non-empty string")
+            normalized[field] = raw
+    for field in ("requestId", "sessionId"):
+        raw = value.get(field)
+        if raw is not None:
+            normalized[field] = validate_safe_id(raw, field)
+
+    if "target" in value:
+        normalized["target"] = parse_target_descriptor(value["target"]).to_dict()
+    normalized["requestedIsolation"] = parse_requested_isolation(
+        value.get("requestedIsolation")
+    ).value
+    deadline_ms = value.get("deadlineMs")
+    if deadline_ms is not None:
+        if (
+            isinstance(deadline_ms, bool)
+            or not isinstance(deadline_ms, int)
+            or not 1 <= deadline_ms <= 600_000
+        ):
+            raise ValueError("deadlineMs must be an integer between 1 and 600000")
+        normalized["deadlineMs"] = deadline_ms
+
+    normalized["protocolVersion"] = (
+        PROTOCOL_V2 if V2_RUN_FIELDS.intersection(value) else PROTOCOL_V1
+    )
+    return normalized
+
+
+def v2_backend_unavailable(request: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    details: Dict[str, Any] = {"protocolVersion": PROTOCOL_V2}
+    if request is not None:
+        for field in ("sessionId", "requestId", "requestedIsolation"):
+            if field in request:
+                details[field] = request[field]
+        if "target" in request:
+            details["targetId"] = request["target"]["targetId"]
+    return R.err(
+        "BACKEND_UNAVAILABLE",
+        "session-target channels are declared by protocol v2 but are not connected until P2",
+        retryable=False,
+        blocked_reason="computer-use-session-channel-not-implemented",
+        details=details,
+    )
 
 CANCEL_INPUT_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -76,6 +190,40 @@ CANCEL_INPUT_SCHEMA: Dict[str, Any] = {
         }
     },
     "required": ["requestId"],
+    "additionalProperties": False,
+}
+
+EMPTY_INPUT_SCHEMA: Dict[str, Any] = {
+    "type": "object", "properties": {}, "additionalProperties": False,
+}
+
+BIND_TARGET_INPUT_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "sessionId": {"type": "string"},
+        "owner": {
+            "type": "object",
+            "properties": {
+                "runtimeId": {"type": "string"},
+                "threadId": {"type": "string"},
+            },
+            "required": ["runtimeId", "threadId"],
+            "additionalProperties": False,
+        },
+        "target": RUN_INPUT_SCHEMA["properties"]["target"],
+    },
+    "required": ["owner", "target"],
+    "additionalProperties": False,
+}
+
+RELEASE_SESSION_INPUT_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "sessionId": {"type": "string"},
+        "reason": {"type": "string"},
+        "force": {"type": "boolean", "default": False},
+    },
+    "required": ["sessionId"],
     "additionalProperties": False,
 }
 

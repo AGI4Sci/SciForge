@@ -43,7 +43,7 @@ import {
   type AppSettingsV1
 } from '../../../shared/app-settings'
 import {
-  COMPUTER_USE_MCP_TOOL_NAME,
+  computerUseMcpEnabledTools,
   configuredComputerUseCapability,
   GUI_COMPUTER_USE_MCP_SERVER_NAME,
   unavailableComputerUseCapability
@@ -550,11 +550,12 @@ function codexToolDiagnostics(state: CodexMcpState = emptyCodexMcpState): Record
     })
   }
   if (state.computerUseConfigured) {
+    const computerUseTools = computerUseMcpEnabledTools()
     mcpServers.push({
       id: GUI_COMPUTER_USE_MCP_SERVER_NAME,
       status: 'configured',
-      toolCount: 1,
-      tools: [COMPUTER_USE_MCP_TOOL_NAME]
+      toolCount: computerUseTools.length,
+      tools: computerUseTools
     })
   }
   return {

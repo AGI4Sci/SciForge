@@ -12,8 +12,8 @@ import {
   type AppSettingsV1
 } from '../shared/app-settings'
 import {
-  COMPUTER_USE_MCP_TOOL_NAME,
-  GUI_COMPUTER_USE_MCP_SERVER_NAME
+  GUI_COMPUTER_USE_MCP_SERVER_NAME,
+  computerUseMcpEnabledTools
 } from './computer-use-mcp-config'
 
 const launch = {
@@ -94,7 +94,7 @@ describe('GUI MCP runtime registry', () => {
       expect.objectContaining({
         id: GUI_COMPUTER_USE_MCP_SERVER_NAME,
         args: expect.arrayContaining(['--gui-owl-computer-use-mcp-server']),
-        enabledTools: [COMPUTER_USE_MCP_TOOL_NAME],
+        enabledTools: computerUseMcpEnabledTools(),
         env: {
           ELECTRON_RUN_AS_NODE: '1',
           SCIFORGE_CUA_SERVICE_URL: 'http://127.0.0.1:3900',

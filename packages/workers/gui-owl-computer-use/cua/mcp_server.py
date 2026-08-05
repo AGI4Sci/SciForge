@@ -32,6 +32,7 @@ from . import contract
 from . import result as R
 from .config import CONFIG
 from .runner import run_task
+from .service import SERVICE
 
 SERVER_NAME = "sciforge-gui-owl-computer-use"
 VERSION = "0.1.0"
@@ -55,21 +56,21 @@ def _screenshot_provider(args: Dict[str, Any]):
 
 
 def _run_tool(args: Dict[str, Any]) -> Dict[str, Any]:
-    instruction = str(args.get("instruction", "") or "").strip()
-    if not instruction:
-        return R.err("INVALID_ARGUMENT", "instruction is required")
-    try:
-        provider = _screenshot_provider(args)
-    except Exception as e:  # noqa: BLE001
-        return R.err("UNAVAILABLE", f"screenshot source failed: {e}", retryable=True)
-    return run_task(
-        CONFIG,
-        instruction,
-        provider,
-        execute=bool(args.get("execute")),
-        approve=bool(args.get("approve")),
-        request_id=args.get("requestId"),
-    )
+    def run_legacy(request: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            provider = _screenshot_provider(request)
+        except Exception as e:  # noqa: BLE001
+            return R.err("UNAVAILABLE", f"screenshot source failed: {e}", retryable=True)
+        return run_task(
+            CONFIG,
+            request["instruction"],
+            provider,
+            execute=request["execute"],
+            approve=request["approve"],
+            request_id=request.get("requestId"),
+        )
+
+    return SERVICE.run(args, run_legacy)
 
 
 def create_server() -> Server:
@@ -78,6 +79,21 @@ def create_server() -> Server:
     @server.list_tools()
     async def list_tools() -> List[types.Tool]:  # noqa: D401
         return [
+            types.Tool(
+                name=contract.TOOL_GET_CAPABILITIES,
+                description="Return the current Computer Use protocol and backend capability status.",
+                inputSchema=contract.EMPTY_INPUT_SCHEMA,
+            ),
+            types.Tool(
+                name=contract.TOOL_LIST_TARGETS,
+                description="List redacted targets exposed by configured target providers.",
+                inputSchema=contract.EMPTY_INPUT_SCHEMA,
+            ),
+            types.Tool(
+                name=contract.TOOL_BIND_TARGET,
+                description="Bind one immutable target to a runtime-owned Computer Use session.",
+                inputSchema=contract.BIND_TARGET_INPUT_SCHEMA,
+            ),
             types.Tool(
                 name=contract.TOOL_RUN,
                 description=(
@@ -98,21 +114,29 @@ def create_server() -> Server:
                 ),
                 inputSchema=contract.CANCEL_INPUT_SCHEMA,
             ),
+            types.Tool(
+                name=contract.TOOL_RELEASE_SESSION,
+                description="Cancel active work and release a Computer Use session.",
+                inputSchema=contract.RELEASE_SESSION_INPUT_SCHEMA,
+            ),
         ]
 
     @server.call_tool()
     async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextContent]:
         arguments = arguments or {}
-        if name == contract.TOOL_CANCEL:
-            rid = str(arguments.get("requestId", "") or "")
-            if not rid:
-                res = R.err("INVALID_ARGUMENT", "requestId is required")
-            else:
-                cancel.request_cancel(rid)
-                res = R.ok({"cancelled": rid}, summary=f"cancel requested for {rid}")
+        if name == contract.TOOL_GET_CAPABILITIES:
+            res = R.ok(SERVICE.capabilities())
+        elif name == contract.TOOL_LIST_TARGETS:
+            res = R.ok(SERVICE.list_targets())
+        elif name == contract.TOOL_BIND_TARGET:
+            res = SERVICE.bind_session(arguments)
+        elif name == contract.TOOL_CANCEL:
+            res = SERVICE.cancel(arguments, cancel.request_cancel)
         elif name == contract.TOOL_RUN:
             # The desktop loop can run for many steps; keep the event loop free.
             res = await asyncio.to_thread(_run_tool, arguments)
+        elif name == contract.TOOL_RELEASE_SESSION:
+            res = SERVICE.release_session(arguments)
         else:
             res = R.err("NOT_FOUND", f"unknown tool {name}")
         return _to_text_content(res)

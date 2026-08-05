@@ -1255,8 +1255,9 @@ export type AgentRuntimeCapabilities = {
     computerUse: CapabilityState & {
       server?: 'mcp'
       toolName?: 'computer_use'
-      backend?: 'browser-cdp' | 'gui-owl'
-      inputIsolation?: 'agent-isolated' | 'host-approved'
+      backend?: 'browser-cdp' | 'windows-uia' | 'isolated-desktop' |
+        'legacy-pyautogui' | 'static-image' | 'gui-owl'
+      inputIsolation?: 'agent-isolated' | 'host-app-scoped' | 'host-global' | 'host-approved'
       affectsUserInput?: boolean
       requiresHostFocus?: boolean
       usesHostClipboard?: boolean

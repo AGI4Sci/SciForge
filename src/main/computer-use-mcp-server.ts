@@ -3,9 +3,19 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
-import { z } from 'zod'
 import {
+  computerUseBindTargetInputSchema,
+  computerUseEmptyInputSchema,
+  computerUseReleaseSessionInputSchema,
+  computerUseRunInputSchema,
+  type ComputerUseRunInput
+} from '../shared/computer-use-contract'
+import {
+  COMPUTER_USE_BIND_TARGET_TOOL_NAME,
+  COMPUTER_USE_GET_CAPABILITIES_TOOL_NAME,
+  COMPUTER_USE_LIST_TARGETS_TOOL_NAME,
   COMPUTER_USE_MCP_LAUNCH_FLAG,
+  COMPUTER_USE_RELEASE_SESSION_TOOL_NAME,
   GUI_COMPUTER_USE_MCP_SERVER_NAME,
   COMPUTER_USE_MCP_TOOL_NAME
 } from './computer-use-mcp-config'
@@ -21,10 +31,6 @@ type ComputerUseServiceConfig = {
   serviceToken: string
   timeoutMs: number
 }
-
-const computerUseInputSchema = z.object({
-  instruction: z.string().trim().min(1).max(16_384)
-}).strict()
 
 const DEFAULT_TIMEOUT_MS = 600_000
 
@@ -60,13 +66,42 @@ export function createComputerUseMcpServer(
 
   if (!config) return server
 
+  server.registerTool(COMPUTER_USE_GET_CAPABILITIES_TOOL_NAME, {
+    description: 'Return the Computer Use protocol and backend capability status.',
+    inputSchema: computerUseEmptyInputSchema,
+    annotations: { title: 'Computer use capabilities', readOnlyHint: true }
+  }, async (_args, extra) => callComputerUseServiceEndpoint(
+    config, '/computer-use/capabilities', 'GET', undefined, extra.signal
+  ))
+
+  server.registerTool(COMPUTER_USE_LIST_TARGETS_TOOL_NAME, {
+    description: 'List redacted Computer Use targets exposed by configured providers.',
+    inputSchema: computerUseEmptyInputSchema,
+    annotations: { title: 'Computer use targets', readOnlyHint: true }
+  }, async (_args, extra) => callComputerUseServiceEndpoint(
+    config, '/computer-use/targets', 'GET', undefined, extra.signal
+  ))
+
+  server.registerTool(COMPUTER_USE_BIND_TARGET_TOOL_NAME, {
+    description: 'Bind an immutable target to a local runtime-owned session.',
+    inputSchema: computerUseBindTargetInputSchema,
+    annotations: { title: 'Bind computer-use target', readOnlyHint: false }
+  }, async (args, extra) => {
+    const parsed = computerUseBindTargetInputSchema.safeParse(args)
+    if (!parsed.success) return errorToolResult('INVALID_ARGUMENT', 'invalid target binding')
+    return callComputerUseServiceEndpoint(config, '/computer-use/sessions/bind', 'POST', {
+      ...parsed.data,
+      owner: { runtimeId: 'mcp-local', threadId: 'legacy-trust-boundary' }
+    }, extra.signal)
+  })
+
   server.registerTool(COMPUTER_USE_MCP_TOOL_NAME, {
     description: [
       'Control the user\'s real desktop to complete one GUI task through the SciForge GUI-Owl computer-use sidecar.',
       'Provide one clear natural-language instruction. The sidecar observes the screen, plans, grounds coordinates,',
       'and executes only after host approval. Returns a ServiceResult trace and optional answer; verify the result.'
     ].join(' '),
-    inputSchema: computerUseInputSchema,
+    inputSchema: computerUseRunInputSchema,
     annotations: {
       title: 'Computer use',
       readOnlyHint: false,
@@ -75,11 +110,23 @@ export function createComputerUseMcpServer(
       openWorldHint: true
     }
   }, async (args, extra) => {
-    const parsed = computerUseInputSchema.safeParse(args)
+    const parsed = computerUseRunInputSchema.safeParse(args)
     if (!parsed.success) {
       return errorToolResult('INVALID_ARGUMENT', 'instruction is required')
     }
-    return callComputerUseService(config, parsed.data.instruction, extra.signal)
+    return callComputerUseService(config, parsed.data, extra.signal)
+  })
+
+  server.registerTool(COMPUTER_USE_RELEASE_SESSION_TOOL_NAME, {
+    description: 'Cancel active work and release a Computer Use session.',
+    inputSchema: computerUseReleaseSessionInputSchema,
+    annotations: { title: 'Release computer-use session', readOnlyHint: false }
+  }, async (args, extra) => {
+    const parsed = computerUseReleaseSessionInputSchema.safeParse(args)
+    if (!parsed.success) return errorToolResult('INVALID_ARGUMENT', 'invalid session release')
+    return callComputerUseServiceEndpoint(
+      config, '/computer-use/sessions/release', 'POST', parsed.data, extra.signal
+    )
   })
 
   return server
@@ -103,9 +150,44 @@ export function resolveComputerUseServiceConfig(
   }
 }
 
+async function callComputerUseServiceEndpoint(
+  config: ComputerUseServiceConfig,
+  path: string,
+  method: 'GET' | 'POST',
+  body: Record<string, unknown> | undefined,
+  signal: AbortSignal
+): Promise<ComputerUseToolResult> {
+  const controller = new AbortController()
+  const unlink = linkAbortSignal(signal, controller)
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs)
+  try {
+    const response = await fetch(`${config.serviceUrl}${path}`, {
+      method,
+      headers: jsonHeaders(config.serviceToken),
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: controller.signal
+    })
+    const payload = await response.json().catch(() => null)
+    if (!payload || typeof payload !== 'object') {
+      return errorToolResult('BAD_RESPONSE', `computer-use service returned non-JSON (HTTP ${response.status})`)
+    }
+    return serviceResponseToToolResult(response, payload as Record<string, unknown>)
+  } catch (error) {
+    return errorToolResult(
+      'UNAVAILABLE',
+      controller.signal.aborted
+        ? 'computer-use call timed out or was cancelled'
+        : `computer-use call failed: ${error instanceof Error ? error.message : String(error)}`
+    )
+  } finally {
+    clearTimeout(timeout)
+    unlink()
+  }
+}
+
 async function callComputerUseService(
   config: ComputerUseServiceConfig,
-  instruction: string,
+  input: ComputerUseRunInput,
   signal: AbortSignal
 ): Promise<ComputerUseToolResult> {
   const requestId = `mcp-cua-${randomUUID()}`
@@ -125,24 +207,14 @@ async function callComputerUseService(
     const response = await fetch(`${config.serviceUrl}/computer-use/run`, {
       method: 'POST',
       headers: jsonHeaders(config.serviceToken),
-      body: JSON.stringify({ instruction, execute: true, approve: true, requestId }),
+      body: JSON.stringify({ ...input, execute: true, approve: true, requestId }),
       signal: controller.signal
     })
     const payload = await response.json().catch(() => null)
     if (!payload || typeof payload !== 'object') {
       return errorToolResult('BAD_RESPONSE', `computer-use service returned non-JSON (HTTP ${response.status})`)
     }
-    const record = payload as Record<string, unknown>
-    const summary = typeof record.summary === 'string' && record.summary.trim()
-      ? record.summary
-      : response.ok
-        ? 'computer-use run completed'
-        : `computer-use failed (HTTP ${response.status})`
-    return {
-      content: [{ type: 'text', text: summary }],
-      structuredContent: record,
-      ...(record.ok === false || !response.ok ? { isError: true as const } : {})
-    }
+    return serviceResponseToToolResult(response, payload as Record<string, unknown>)
   } catch (error) {
     return errorToolResult(
       'UNAVAILABLE',
@@ -154,6 +226,22 @@ async function callComputerUseService(
     clearTimeout(timeout)
     controller.signal.removeEventListener('abort', cancel)
     unlink()
+  }
+}
+
+function serviceResponseToToolResult(
+  response: Response,
+  record: Record<string, unknown>
+): ComputerUseToolResult {
+  const summary = typeof record.summary === 'string' && record.summary.trim()
+    ? record.summary
+    : response.ok
+      ? 'computer-use request completed'
+      : `computer-use failed (HTTP ${response.status})`
+  return {
+    content: [{ type: 'text', text: summary }],
+    structuredContent: record,
+    ...(record.ok === false || !response.ok ? { isError: true as const } : {})
   }
 }
 

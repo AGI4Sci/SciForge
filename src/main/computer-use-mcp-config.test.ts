@@ -50,11 +50,11 @@ describe('computer use MCP config', () => {
       available: true,
       server: 'mcp',
       toolName: COMPUTER_USE_MCP_TOOL_NAME,
-      backend: 'gui-owl',
+      backend: 'legacy-pyautogui',
       inputIsolation: 'host-approved',
       affectsUserInput: true,
       requiresHostFocus: true,
-      usesHostClipboard: false
+      usesHostClipboard: true
     })
   })
 

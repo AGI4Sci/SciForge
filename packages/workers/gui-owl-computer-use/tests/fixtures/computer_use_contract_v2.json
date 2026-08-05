@@ -1,0 +1,62 @@
+{
+  "valid": [
+    {
+      "name": "legacy instruction stays v1",
+      "input": {"instruction": "inspect the screen"},
+      "protocolVersion": 1
+    },
+    {
+      "name": "browser session request",
+      "input": {
+        "instruction": "type the query",
+        "sessionId": "session-browser-1",
+        "target": {
+          "targetId": "target-browser-1",
+          "kind": "browser-page",
+          "ownership": "attached",
+          "locator": {
+            "cdpEndpoint": "http://127.0.0.1:9222",
+            "cdpTargetId": "page-1"
+          },
+          "display": {"scaleFactor": 1.25, "viewport": [1280, 720]}
+        },
+        "requestedIsolation": "host-app-scoped",
+        "allowDegraded": false,
+        "queueIfBusy": true,
+        "deadlineMs": 30000
+      },
+      "protocolVersion": 2
+    },
+    {
+      "name": "explicit host desktop request",
+      "input": {
+        "instruction": "click the approved point",
+        "target": {
+          "targetId": "host-desktop:default",
+          "kind": "host-desktop",
+          "locator": {"monitorId": "1"}
+        },
+        "requestedIsolation": "host-approved",
+        "allowDegraded": true
+      },
+      "protocolVersion": 2
+    }
+  ],
+  "invalid": [
+    {"name": "blank instruction", "input": {"instruction": "  "}},
+    {"name": "unsafe session id", "input": {"instruction": "x", "sessionId": "bad/id"}},
+    {"name": "invalid deadline", "input": {"instruction": "x", "deadlineMs": 0}},
+    {
+      "name": "browser missing target id",
+      "input": {"instruction": "x", "target": {"kind": "browser-page", "locator": {}}}
+    },
+    {
+      "name": "uia locator has browser field",
+      "input": {
+        "instruction": "x",
+        "target": {"kind": "windows-uia", "locator": {"cdpTargetId": "page-1"}}
+      }
+    },
+    {"name": "unknown top level field", "input": {"instruction": "x", "surprise": true}}
+  ]
+}

@@ -13,7 +13,7 @@ import type {
   ClaudeCodeRuntimeService
 } from './claude-code-service'
 import {
-  COMPUTER_USE_MCP_TOOL_NAME,
+  computerUseMcpEnabledTools,
   configuredComputerUseCapability,
   GUI_COMPUTER_USE_MCP_SERVER_NAME,
   unavailableComputerUseCapability
@@ -155,8 +155,8 @@ export function createClaudeCodeAgentRuntimeAdapter(
               ? [{
                   id: GUI_COMPUTER_USE_MCP_SERVER_NAME,
                   status: 'configured',
-                  toolCount: 1,
-                  tools: [COMPUTER_USE_MCP_TOOL_NAME]
+                  toolCount: computerUseMcpEnabledTools().length,
+                  tools: computerUseMcpEnabledTools()
                 }]
               : [],
             webProviders: [],
