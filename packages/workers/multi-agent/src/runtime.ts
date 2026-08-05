@@ -447,6 +447,45 @@ export class MultiAgentRuntime {
     }
   }
 
+  async recoverStaleChildren(): Promise<MultiAgentChildRunRecord[]> {
+    return this.withStartGate(async () => {
+      const recovered: MultiAgentChildRunRecord[] = []
+      const records = await this.options.store.list()
+      for (const record of records) {
+        if (isTerminalChildStatus(record.status) || this.activeChildIds.has(record.id)) continue
+        const recoveredAt = this.now()
+        const error = createMultiAgentError(
+          'child_aborted',
+          'multi-agent child run was interrupted before this runtime process started',
+          {
+            details: {
+              staleStatus: record.status,
+              originalUpdatedAt: record.updatedAt,
+              recoveryReason: 'runtime_restart'
+            }
+          }
+        )
+        const next = MultiAgentChildRunRecord.parse({
+          ...record,
+          status: 'aborted',
+          error,
+          transcript: normalizeTranscript({
+            record,
+            status: 'aborted',
+            error,
+            finishedAt: recoveredAt,
+            maxEntries: this.config.maxTranscriptEntries
+          }),
+          updatedAt: recoveredAt,
+          finishedAt: recoveredAt
+        })
+        await this.persistAndEmit(next)
+        recovered.push(next)
+      }
+      return recovered
+    })
+  }
+
   private async assertCanStart(parentThreadId: string, parentTurnId: string): Promise<void> {
     if (!this.config.enabled) {
       throw new MultiAgentRuntimeError(createMultiAgentError('config_disabled', 'multi-agent runtime is disabled'))
@@ -454,20 +493,23 @@ export class MultiAgentRuntime {
     if (!this.options.executor) {
       throw new MultiAgentRuntimeError(createMultiAgentError('executor_missing', 'multi-agent executor is not configured'))
     }
-    if (this.active >= this.config.maxParallel) {
-      throw new MultiAgentRuntimeError(createMultiAgentError(
-        'parallel_budget_exhausted',
-        `multi-agent parallel budget exhausted: ${this.active}/${this.config.maxParallel}`,
-        { retryable: true }
-      ))
-    }
     const existing = (await this.options.store.list({ parentThreadId }))
       .filter((record) => record.parentTurnId === parentTurnId)
     const reserved = this.pendingChildReservations.get(childReservationKey(parentThreadId, parentTurnId)) ?? 0
     if (existing.length + reserved >= this.config.maxChildren) {
       throw new MultiAgentRuntimeError(createMultiAgentError(
         'child_budget_exhausted',
-        `multi-agent child budget exhausted for parent turn ${parentTurnId}: ${existing.length + reserved}/${this.config.maxChildren}`
+        `multi-agent child budget exhausted for parent turn ${parentTurnId}: ${existing.length + reserved}/${this.config.maxChildren}. ` +
+        'This budget is shared across all delegate_task calls in the parent turn and does not reset after a child finishes; ' +
+        'consolidate the workload into the allowed children or continue in a later parent turn.'
+      ))
+    }
+    if (this.active >= this.config.maxParallel) {
+      throw new MultiAgentRuntimeError(createMultiAgentError(
+        'parallel_budget_exhausted',
+        `multi-agent parallel budget exhausted: ${this.active}/${this.config.maxParallel}. ` +
+        'Wait for an existing child to reach a terminal state before starting another child.',
+        { retryable: true }
       ))
     }
   }
@@ -515,18 +557,23 @@ export class MultiAgentRuntime {
 
   private async persistAndEmit(record: MultiAgentChildRunRecord): Promise<void> {
     await this.options.store.upsert(record)
-    await this.options.events?.onChildEvent?.({
-      type: 'child_event',
-      seq: ++this.eventSeq,
-      childId: record.id,
-      parentThreadId: record.parentThreadId,
-      parentTurnId: record.parentTurnId,
-      status: record.status,
-      label: record.label,
-      summary: record.summary,
-      error: record.error,
-      createdAt: record.updatedAt
-    })
+    try {
+      await this.options.events?.onChildEvent?.({
+        type: 'child_event',
+        seq: ++this.eventSeq,
+        childId: record.id,
+        parentThreadId: record.parentThreadId,
+        parentTurnId: record.parentTurnId,
+        status: record.status,
+        label: record.label,
+        summary: record.summary,
+        error: record.error,
+        createdAt: record.updatedAt
+      })
+    } catch {
+      // Child events are refresh notifications. The persisted child record is the
+      // canonical state, so a notification transport failure must not abort work.
+    }
   }
 
   private recordUsage(record: MultiAgentChildRunRecord): void {

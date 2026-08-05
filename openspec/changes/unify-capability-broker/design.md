@@ -96,9 +96,11 @@ Dynamic MCP errors are normalized before governance. Runtime adapters MUST NOT m
 
 ### 13. Current resources are bound to the task, not the foreground session
 
-When a turn refers to the current SciForge resource, the host captures the canonical semantic resource references at turn start and binds the current-surface resolver to that runtime/thread caller. Changing the foreground chat session does not retarget or invalidate a running turn. A later turn receives a new binding from the then-current session.
+When a turn refers to the current SciForge resource, the trusted submission boundary captures the canonical visible snapshot and semantic resource references before the turn can wait in a runtime queue. The host later claims that opaque question-time binding for the runtime/thread caller; it never resolves the window ID again against newer renderer state. Changing the foreground chat session does not retarget or invalidate a running turn. A later turn receives a new binding from the then-current session.
 
-Renderer publication age is layout freshness only. It may make coordinates, scroll position, visible pages, or screenshots unavailable, but it does not expire the bound document, annotation threads, or other semantic provider resources. A visual operation requests a renderer refresh on demand and proceeds only if the bound session and resource are still visible; it must not capture the newly foregrounded session on behalf of a hidden task.
+The broker retains every resource reference in the captured snapshot until the task reaches a terminal state. UI close or navigation may request retirement, but provider disposal is deferred until the last task binding is released. Optimistic writes still validate the current semantic revision, and explicit delete, revoke, interrupt, or cancellation policies remain authoritative rather than being hidden by retention.
+
+Renderer publication age is layout freshness only. It may make coordinates, scroll position, visible pages, or screenshots of the live surface unavailable, but it does not expire the bound document, annotation threads, or other semantic provider resources. A live-surface visual operation requests a renderer refresh on demand and proceeds only if the bound session and resource are still visible; it must not capture the newly foregrounded session on behalf of a hidden task. A provider-owned Workspace Preview visual source remains renderable from its retained task resource without substituting the foreground surface.
 
 Stable opaque `resourceRef` values can be rebound to a fresh short-lived handle after the broker revalidates audience and workspace scope. This renewal keeps long-running or hidden turns operational without weakening optimistic semantic revision checks or exposing provider session IDs.
 
@@ -172,7 +174,7 @@ path.
 
 - [Large cross-cutting cutover can collide with active changes] → Add the broker in new modules, use narrow integration edits, and migrate domains separately with focused tests.
 - [Generic schemas can hide domain semantics] → Registry entries retain domain-specific schemas and descriptions; only transport is generic.
-- [Opaque handles can expire during long research tasks] → Stable resource references are rebound only after broker scope checks, and observation renews short-lived handles; layout-only changes do not expire semantic resources.
+- [Opaque handles or UI cleanup can expire resources during long research tasks] → Stable resource references are retained from trusted submission through terminal task cleanup, rebound only after broker scope checks, and provider disposal is deferred while a task owns the question-time snapshot.
 - [A hidden task could inspect the wrong foreground session] → Semantic resources stay task-bound, while layout inspection verifies the bound thread/resource is still visible and otherwise fails with a structured layout-unavailable error.
 - [In-memory idempotency or events are lost on restart] → The first slice defines a bounded in-memory store and explicit restart semantics; persistent audit/event storage can replace it without changing the contract.
 - [Broker becomes a bottleneck] → Handlers remain async and stream or reference large artifacts instead of copying them through events.

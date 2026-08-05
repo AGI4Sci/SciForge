@@ -34,6 +34,8 @@ export type CapabilityResourceRegistration = {
   semanticRevision: string
   layoutRevision?: string
   observe: CapabilityResourceObserver
+  /** Releases provider-owned state after the broker has retired every task binding. */
+  dispose?: () => void | Promise<void>
   contentTransport?: {
     describeActionId: string
     readRangeActionId: string
@@ -60,7 +62,7 @@ export type CapabilityHandlerContext = {
 export type CapabilityHandlerResult<Output> = {
   output: Output
   changed?: boolean
-  retireResource?: boolean
+  retireResource?: boolean | 'defer-while-retained'
   semanticRevision?: string
   layoutRevision?: string
 }

@@ -848,6 +848,23 @@ function appendInlineStyle(node: Element, declaration: string): void {
     : declaration
 }
 
+const WECHAT_MATH_FONT_SIZE_PX = 16
+const WECHAT_MATH_EX_SIZE_PX = WECHAT_MATH_FONT_SIZE_PX / 2
+
+function mathDimensionInPixels(value: string): number | null {
+  const match = /^([0-9]+(?:\.[0-9]+)?)(ex|em|px)?$/i.exec(value.trim())
+  if (!match) return null
+  const magnitude = Number(match[1])
+  if (!Number.isFinite(magnitude) || magnitude <= 0) return null
+  const unit = match[2]?.toLowerCase()
+  const pixels = unit === 'ex'
+    ? magnitude * WECHAT_MATH_EX_SIZE_PX
+    : unit === 'em'
+      ? magnitude * WECHAT_MATH_FONT_SIZE_PX
+      : magnitude
+  return Math.round(pixels * 1_000) / 1_000
+}
+
 function cleanAndValidateOutputTree(tree: Root): void {
   const walk = (parent: Parent, inDisplayMath = false, mathSvgDepth = 0): void => {
     for (let index = 0; index < parent.children.length; index += 1) {
@@ -867,18 +884,23 @@ function cleanAndValidateOutputTree(tree: Root): void {
       if (child.tagName === 'svg') {
         const width = stringProperty(child, 'width')
         const height = stringProperty(child, 'height')
-        // Only the outer formula SVG uses CSS sizing. MathJax's nested SVGs are
-        // geometric viewports for stretchy glyphs; moving their unitless SVG
-        // dimensions into CSS makes the declarations invalid and clips the glyph.
+        // Only the outer formula SVG uses publication sizing. MathJax's nested
+        // SVGs are geometric viewports for stretchy glyphs; changing their
+        // unitless dimensions clips the glyph. Pixel attributes keep the outer
+        // SVG correctly sized even when the WeChat editor strips inline styles.
         if (mathSvgDepth === 0) {
-          if (width) appendInlineStyle(child, `width: ${width};`)
+          const widthPixels = width ? mathDimensionInPixels(width) : null
+          const heightPixels = height ? mathDimensionInPixels(height) : null
+          if (widthPixels !== null) {
+            child.properties.width = String(widthPixels)
+            appendInlineStyle(child, `width: ${widthPixels}px;`)
+          }
           if (nextInDisplayMath) {
             appendInlineStyle(child, 'max-width: 100%; height: auto;')
-          } else if (height) {
-            appendInlineStyle(child, `height: ${height};`)
+          } else if (heightPixels !== null) {
+            appendInlineStyle(child, `height: ${heightPixels}px;`)
           }
-          delete child.properties.width
-          delete child.properties.height
+          if (heightPixels !== null) child.properties.height = String(heightPixels)
         }
       }
 

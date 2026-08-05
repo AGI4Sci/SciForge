@@ -61,6 +61,8 @@ type ActiveRequest = {
 type RuntimeEntry = {
   runtime: MultiAgentRuntime
   maxParallel: number
+  maxChildren: number
+  ready: Promise<void>
 }
 
 type DelegatedTaskInput = {
@@ -152,8 +154,9 @@ export class AgentRuntimeSubagentToolBridge {
       name: AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME,
       description: [
         'Start independent child agents and return stable child IDs immediately.',
-        'For parallel work, send one call with a tasks array within the configured runtime budget;',
-        'do not issue independent delegate_task calls serially.'
+        'Plan the complete workload before calling: the configured child-run budget is shared by every delegate_task call in the same parent turn.',
+        'Partition all work into one balanced tasks array within that budget; splitting the same workload across later delegate_task calls does not reset it.',
+        'After children start, use subagent_wait or subagent_status before deciding whether any remaining work needs a later parent turn.'
       ].join(' '),
       inputSchema: {
         type: 'object',
@@ -243,6 +246,7 @@ export class AgentRuntimeSubagentToolBridge {
     const binding = await this.options.resolveBinding(runtimeId, request.threadId)
     if (!binding.enabled) return failedMultiAgentResponse('Subagent delegation is disabled by runtime settings.')
     const entry = this.runtimeFor(runtimeId, binding)
+    await entry.ready
     if (await this.isChildThread(runtimeId, entry.runtime, request.threadId)) {
       return failedMultiAgentResponse('Subagent delegation is disabled inside child agents.')
     }
@@ -266,7 +270,9 @@ export class AgentRuntimeSubagentToolBridge {
     const maxParallel = entry.maxParallel
     if (input.tasks.length > maxParallel) {
       return failedMultiAgentResponse(
-        `delegate_task accepts at most ${maxParallel} parallel tasks in one call.`
+        `delegate_task accepts at most ${maxParallel} concurrent tasks in one call, and this parent turn allows ${entry.maxChildren} child runs total. ` +
+        `Consolidate the complete workload into at most ${Math.min(maxParallel, entry.maxChildren)} balanced tasks; ` +
+        'splitting it into additional delegate_task calls does not reset the turn budget.'
       )
     }
     if (!request.turnId) return failedMultiAgentResponse('delegate_task requires turnId.')
@@ -411,8 +417,9 @@ export class AgentRuntimeSubagentToolBridge {
         onChildEvent: (event) => this.handleChildEvent(runtimeId, event)
       }
     })
-    const entry = { runtime, maxParallel }
+    const entry: RuntimeEntry = { runtime, maxParallel, maxChildren, ready: Promise.resolve() }
     this.runtimes.set(runtimeId, entry)
+    entry.ready = runtime.recoverStaleChildren().then(() => undefined)
     return entry
   }
 

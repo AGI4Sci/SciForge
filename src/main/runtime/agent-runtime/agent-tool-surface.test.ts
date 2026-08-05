@@ -154,6 +154,13 @@ describe('normalizeNativeVisualToolError', () => {
       failureClass: 'upstream_unavailable',
       retryable: true,
       action: 'retry_visual_inspection'
+    },
+    {
+      message: 'Resource reference has been retired.',
+      code: 'visual_source_retired',
+      failureClass: 'stale_resource',
+      retryable: false,
+      action: 'stop'
     }
   ])('normalizes "$message" without relying on provider-specific codes', ({
     message,

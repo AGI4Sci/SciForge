@@ -68,6 +68,14 @@ SciForge SHALL publish the current visible surface as a generic canonical capabi
 - **WHEN** a running turn has bound the current semantic resource and the user selects another session
 - **THEN** the running turn continues to resolve its original bound resource and is not retargeted to the newly foregrounded session
 
+#### Scenario: Workspace changes while a submitted turn is queued
+- **WHEN** the trusted submission boundary has captured a visible snapshot and the user changes the workspace before the runtime starts the queued turn
+- **THEN** the turn claims the exact submitted snapshot revision and resource references rather than resolving the initiating window again
+
+#### Scenario: UI releases a task-bound resource
+- **WHEN** UI navigation or panel cleanup requests retirement of a resource retained by a running or queued task
+- **THEN** the broker keeps the reference live and defers provider disposal until the task binding reaches terminal cleanup
+
 ### Requirement: Agent transport hides infrastructure fields
 SciForge SHALL expose owned capabilities to agents only through stable broker meta-tools whose domain inputs exclude transport coordination fields.
 

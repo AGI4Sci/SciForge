@@ -111,7 +111,10 @@ describe('markdown-wechat-clipboard-service', () => {
 
     const svgTags = result.html.match(/<svg\b[^>]*>/g) ?? []
     expect(svgTags.length).toBeGreaterThan(1)
-    expect(svgTags[0]).not.toMatch(/\s(?:width|height)=/)
+    expect(svgTags[0]).toMatch(/\swidth="\d+(?:\.\d+)?"/)
+    expect(svgTags[0]).toMatch(/\sheight="\d+(?:\.\d+)?"/)
+    expect(svgTags[0]).toMatch(/style="[^"]*\bwidth:\s*\d+(?:\.\d+)?px;/)
+    expect(svgTags[0]).not.toMatch(/style="[^"]*\b(?:width|height):\s*\d+(?:\.\d+)?(?:ex|em);/)
     for (const nestedSvg of svgTags.slice(1)) {
       expect(nestedSvg).toMatch(/\swidth="\d+(?:\.\d+)?"/)
       expect(nestedSvg).toMatch(/\sheight="\d+(?:\.\d+)?"/)
@@ -122,6 +125,28 @@ describe('markdown-wechat-clipboard-service', () => {
     expect(result.warnings).not.toContainEqual(expect.objectContaining({
       code: 'formula-invalid'
     }))
+  })
+
+  it('gives copied formulas fixed SVG dimensions that survive editor style stripping', async () => {
+    const result = await renderMarkdownForWechat({
+      sourcePath: '/workspace/article.md',
+      workspaceRoot: '/workspace',
+      markdown: 'Inline $E=mc^2$.\n\n$$\n\\frac{a}{b}=c\n$$'
+    })
+
+    const outerSvgTags = result.html.match(/<svg\b[^>]*>/g)?.filter((tag) =>
+      /\srole="img"/.test(tag)
+    ) ?? []
+    expect(outerSvgTags).toHaveLength(2)
+    for (const svgTag of outerSvgTags) {
+      expect(svgTag).toMatch(/\swidth="\d+(?:\.\d+)?"/)
+      expect(svgTag).toMatch(/\sheight="\d+(?:\.\d+)?"/)
+      expect(svgTag).toMatch(/style="[^"]*\bwidth:\s*\d+(?:\.\d+)?px;/)
+      expect(svgTag).not.toMatch(/style="[^"]*\b(?:width|height):\s*\d+(?:\.\d+)?(?:ex|em);/)
+      const height = Number(/\sheight="(\d+(?:\.\d+)?)"/.exec(svgTag)?.[1])
+      expect(height).toBeGreaterThan(8)
+      expect(height).toBeLessThan(64)
+    }
   })
 
   it('preserves invalid or active TeX as readable text without active output', async () => {

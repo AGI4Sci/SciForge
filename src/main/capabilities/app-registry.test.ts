@@ -386,6 +386,38 @@ describe('app capability registry', () => {
     expect(observed.resourceKind).toBe(WORKSPACE_PREVIEW_RESOURCE_KIND)
   })
 
+  it('keeps a question-time Workspace Preview session alive after the UI releases it', async () => {
+    const { dependencies } = createDependencies()
+    const broker = new CapabilityBroker(createRegistry(dependencies))
+    const uiCaller = { audience: 'ui' as const, callerId: 'window-1', workspaceId: '/workspace' }
+    const agentCaller = { audience: 'agent' as const, callerId: 'thread-1', workspaceId: '/workspace' }
+    const opened = await broker.invoke(uiCaller, {
+      actionId: APP_CAPABILITY_IDS.workspacePreviewOpen,
+      input: { path: '/workspace/paper.md', workspaceRoot: '/workspace' }
+    })
+    const handle = capabilityResourceHandleSchema.parse(record(opened.output).resource)
+    const observed = await broker.observe(agentCaller, { resource: handle })
+    const releaseTaskBinding = broker.retainResourceRefs(agentCaller, [observed.resourceRef])
+
+    await broker.invoke(uiCaller, {
+      actionId: APP_CAPABILITY_IDS.workspacePreviewRelease,
+      invocationId: 'release-preview-from-ui',
+      resource: handle,
+      input: {}
+    })
+
+    expect(dependencies.workspacePreviewHost.releaseSession).not.toHaveBeenCalled()
+    expect(broker.describeResourceRef(agentCaller, observed.resourceRef)).toMatchObject({
+      resourceKind: WORKSPACE_PREVIEW_RESOURCE_KIND,
+      resourceRef: observed.resourceRef
+    })
+
+    await releaseTaskBinding()
+    expect(dependencies.workspacePreviewHost.releaseSession).toHaveBeenCalledWith('preview-1')
+    expect(() => broker.describeResourceRef(agentCaller, observed.resourceRef))
+      .toThrow(expect.objectContaining({ code: 'resource_ref_retired' }))
+  })
+
   it('streams resource content by invoking the registered describe and range capabilities', async () => {
     const { dependencies } = createDependencies()
     dependencies.workspacePreviewHost.describeAsset = vi.fn(async () => ({

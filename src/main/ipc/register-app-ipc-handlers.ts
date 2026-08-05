@@ -13,6 +13,7 @@ import type {
   TraceSummaryQuery
 } from '@sciforge/full-trace'
 import { mainPerformanceMonitor } from '../performance-monitor'
+import { capabilityAgentCallerId } from '../capabilities/agent-tools'
 import {
   type AppSettingsPatch,
   type AppSettingsV1,
@@ -346,6 +347,12 @@ export type RegisterAppIpcHandlersOptions = {
       mimeType: 'image/png'
       size: number
     } | { ok: false; message: string }>
+    prepareSurfaceBinding?: (
+      callerId: string,
+      activeThreadId: string,
+      windowId: string
+    ) => Promise<Readonly<{ bindingId: string }> | null>
+    discardSurfaceBinding?: (callerId: string, bindingId: string) => Promise<void>
   }
   setRemoteChannelActiveThreadContext?: (payload: {
     threadId: string
@@ -938,10 +945,32 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       agentRuntimeStartTurnPayloadSchema,
       payload
     )
-    return runtime.startTurn({
-      ...request,
-      visibleContextSurfaceId: visibleContextWindowId(event.sender)
+    const visibleContextSurfaceId = visibleContextWindowId(event.sender)
+    const callerId = capabilityAgentCallerId({
+      runtimeId: request.runtimeId,
+      threadId: request.threadId,
+      requestId: request.threadId
     })
+    const prepared = await visibleContext?.prepareSurfaceBinding?.(
+      callerId,
+      request.visibleContextOwnerThreadId ?? request.threadId,
+      visibleContextSurfaceId
+    ).catch(() => null)
+    try {
+      return await runtime.startTurn({
+        ...request,
+        visibleContextSurfaceId,
+        visibleContextBindingAttempted: true,
+        ...(prepared ? { visibleContextBindingId: prepared.bindingId } : {})
+      })
+    } catch (error) {
+      if (prepared) {
+        await Promise.resolve(
+          visibleContext?.discardSurfaceBinding?.(callerId, prepared.bindingId)
+        ).catch(() => undefined)
+      }
+      throw error
+    }
   })
   handleInvoke('agentRuntime:interruptTurn', async (_, payload: unknown) =>
     requireAgentRuntime().interruptTurn(

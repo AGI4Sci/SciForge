@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
-import { InMemoryMultiAgentStore } from '../../../../packages/workers/multi-agent/src'
+import {
+  InMemoryMultiAgentStore,
+  MultiAgentChildRunRecord
+} from '../../../../packages/workers/multi-agent/src'
 import type { AgentRuntimeId } from '../../../shared/agent-runtime-contract'
 import type {
   AgentRuntimeSubagentAdapter,
@@ -24,6 +27,7 @@ function bridgeWith(
   adapter: AgentRuntimeSubagentAdapter,
   options: {
     maxParallel?: number
+    maxChildren?: number
     onChildEvent?: AgentRuntimeSubagentToolBridgeOptions['onChildEvent']
   } = {}
 ) {
@@ -34,7 +38,7 @@ function bridgeWith(
       context: context(),
       enabled: true,
       maxParallel: options.maxParallel ?? 2,
-      maxChildren: 8
+      maxChildren: options.maxChildren ?? 8
     }),
     onChildEvent: options.onChildEvent
   })
@@ -79,6 +83,44 @@ describe('AgentRuntime subagent tool bridge', () => {
       tool: 'spawn_agent',
       arguments: {}
     })).toBe(false)
+    expect(bridge.dynamicTools()[0]?.description).toContain(
+      'the configured child-run budget is shared by every delegate_task call in the same parent turn'
+    )
+    expect(bridge.dynamicTools()[0]?.description).toContain(
+      'splitting the same workload across later delegate_task calls does not reset it'
+    )
+  })
+
+  it('explains both concurrency and whole-turn budgets before an oversized batch can start', async () => {
+    const adapter = completedAdapter('codex')
+    const bridge = bridgeWith(adapter, { maxParallel: 2, maxChildren: 4 })
+
+    const response = await bridge.callTool({
+      requestId: 'oversized-batch',
+      runtimeId: 'codex',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn',
+      tool: AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME,
+      arguments: {
+        tasks: [
+          { prompt: 'task 1' },
+          { prompt: 'task 2' },
+          { prompt: 'task 3' }
+        ]
+      }
+    })
+
+    expect(response).toMatchObject({ success: false })
+    expect(response.contentItems).toEqual([{
+      type: 'inputText',
+      text: expect.stringContaining(
+        'at most 2 concurrent tasks in one call, and this parent turn allows 4 child runs total'
+      )
+    }])
+    expect(response.contentItems[0]?.type === 'inputText' ? response.contentItems[0].text : '').toContain(
+      'splitting it into additional delegate_task calls does not reset the turn budget'
+    )
+    expect(adapter.spawn).not.toHaveBeenCalled()
   })
 
   it.each<AgentRuntimeId>(['codex', 'claude'])(
@@ -188,6 +230,57 @@ describe('AgentRuntime subagent tool bridge', () => {
       parentThreadId: 'parent-thread',
       openAsThreadRef: { runtimeId: 'claude', threadId: 'claude-child-thread' }
     })
+  })
+
+  it('recovers persisted stale children before spawning and isolates refresh failures', async () => {
+    const store = new InMemoryMultiAgentStore()
+    await store.upsert(MultiAgentChildRunRecord.parse({
+      id: 'child-stale',
+      parentThreadId: 'parent-thread',
+      parentTurnId: 'stale-turn',
+      requestId: 'stale-request',
+      prompt: 'stale work',
+      status: 'queued',
+      transcript: [],
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z'
+    }))
+    const adapter = completedAdapter('codex')
+    const refresh = vi.fn(async () => {
+      throw new Error('child refresh unavailable')
+    })
+    const bridge = createAgentRuntimeSubagentToolBridge({
+      storeFactory: () => store,
+      resolveBinding: async () => ({
+        adapter,
+        context: context(),
+        enabled: true,
+        maxParallel: 2,
+        maxChildren: 8
+      }),
+      onChildEvent: refresh
+    })
+
+    const started = await bridge.callTool({
+      requestId: 'fresh-request',
+      runtimeId: 'codex',
+      threadId: 'parent-thread',
+      turnId: 'fresh-turn',
+      tool: AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME,
+      arguments: { prompt: 'fresh work' }
+    })
+    await bridge.callTool({
+      requestId: 'fresh-wait',
+      runtimeId: 'codex',
+      threadId: 'parent-thread',
+      tool: AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME,
+      arguments: { childId: childId(started), timeoutMs: 1_000 }
+    })
+
+    expect((await store.get('parent-thread', 'child-stale'))?.status).toBe('aborted')
+    expect(adapter.spawn).toHaveBeenCalledOnce()
+    expect(refresh).toHaveBeenCalled()
+    expect((await store.get('parent-thread', childId(started)))?.status).toBe('completed')
   })
 
   it('rejects recursive delegation from provider child threads', async () => {

@@ -553,6 +553,16 @@ describe('RuntimeExecutionIntegrityGuard', () => {
     })
   })
 
+  it('closes provider-thread and host-child receipts for the same completed child execution', () => {
+    const guard = rememberedGuard('codex', 'Explain the task.')
+    guard.observe('codex', childEvent('running', 'provider-thread', 'thread', 'provider-thread'))
+    guard.observe('codex', childEvent('running'))
+    guard.observe('codex', childEvent('running', 'researcher', 'agent', 'provider-thread'))
+    guard.observe('codex', childEvent('completed', 'researcher', 'agent', 'provider-thread'))
+
+    expect(guard.observe('codex', completed('codex')).violation).toBeUndefined()
+  })
+
   it('does not confuse an accepted asynchronous job with job completion', () => {
     const guard = rememberedGuard('sciforge', 'Submit the folding job.', 'external_mutation')
     guard.observe('sciforge', tool('sciforge', 'requested'))
@@ -1087,7 +1097,12 @@ function semanticTool(
   }
 }
 
-function childEvent(status: 'running' | 'completed'): AgentRuntimeEvent {
+function childEvent(
+  status: 'running' | 'completed',
+  id = 'researcher',
+  kind: 'agent' | 'thread' = 'agent',
+  providerThreadId?: string
+): AgentRuntimeEvent {
   return {
     kind: 'child_event',
     runtimeId: 'codex',
@@ -1097,9 +1112,18 @@ function childEvent(status: 'running' | 'completed'): AgentRuntimeEvent {
       runtimeId: 'codex',
       parentThreadId: 'codex-thread',
       parentTurnId: 'codex-turn',
-      id: 'researcher',
-      kind: 'agent',
-      status
+      id,
+      kind,
+      status,
+      ...(providerThreadId
+        ? {
+            openAsThreadRef: {
+              runtimeId: 'codex',
+              threadId: providerThreadId,
+              relation: 'side'
+            }
+          }
+        : {})
     }
   }
 }

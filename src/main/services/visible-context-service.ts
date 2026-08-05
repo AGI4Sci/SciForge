@@ -74,6 +74,11 @@ export type SurfaceCaptureProvider = {
 
 export type VisibleContextServiceOptions = {
   surfaceCaptureProvider: SurfaceCaptureProvider
+  retainResourceRefs?: (input: Readonly<{
+    callerId: string
+    workspaceId?: string
+    resourceRefs: readonly string[]
+  }>) => () => void | Promise<void>
   onCaptureState?: (windowId: string, active: boolean) => void
   requestSurfaceRefresh?: (windowId: string) => void
   now?: () => Date
@@ -129,6 +134,8 @@ type BoundSurface = {
   activeThreadId: string
   resourceId: string
   snapshot: VisibleContextSnapshot
+  turnId?: string
+  releaseResources?: () => void | Promise<void>
 }
 
 type LayoutRefreshWaiter = {
@@ -151,6 +158,7 @@ export class VisibleContextService {
   private readonly snapshots = new Map<string, VisibleContextSnapshot>()
   private readonly boundSurfacesByCaller = new Map<string, BoundSurface>()
   private readonly boundSurfacesByResource = new Map<string, BoundSurface>()
+  private readonly preparedSurfaceBindings = new Map<string, BoundSurface>()
   private readonly layoutRefreshWaiters = new Set<LayoutRefreshWaiter>()
   private readonly surfaceRefSecret = randomBytes(32)
   private captureQueue: Promise<void> = Promise.resolve()
@@ -246,6 +254,16 @@ export class VisibleContextService {
     activeThreadId: string,
     windowId: string
   ): Promise<VisibleContextSnapshot | null> {
+    const prepared = await this.prepareSurfaceBinding(callerId, activeThreadId, windowId)
+    return prepared ? this.claimSurfaceBinding(callerId, prepared.bindingId) : null
+  }
+
+  /** Captures and retains the initiating surface before a queued turn can observe later UI state. */
+  async prepareSurfaceBinding(
+    callerId: string,
+    activeThreadId: string,
+    windowId: string
+  ): Promise<Readonly<{ bindingId: string; snapshot: VisibleContextSnapshot }> | null> {
     const normalizedCallerId = callerId.trim()
     const normalizedThreadId = activeThreadId.trim()
     const normalizedWindowId = windowId.trim()
@@ -259,29 +277,80 @@ export class VisibleContextService {
     }
     if (!snapshot || snapshot.windowId === 'unavailable') return null
     if ((snapshot.activeThreadId ?? null) !== normalizedThreadId) return null
-    return this.bindSurfaceSnapshot(normalizedCallerId, normalizedThreadId, snapshot)
+    const binding = this.createSurfaceBinding(normalizedCallerId, normalizedThreadId, snapshot)
+    this.preparedSurfaceBindings.set(binding.resourceId, binding)
+    this.pruneSurfaceBindings()
+    return { bindingId: binding.resourceId, snapshot: binding.snapshot }
   }
 
-  private bindSurfaceSnapshot(
+  private createSurfaceBinding(
     callerId: string,
     activeThreadId: string,
     snapshot: VisibleContextSnapshot
-  ): VisibleContextSnapshot {
-    const previous = this.boundSurfacesByCaller.get(callerId)
-    if (previous) this.boundSurfacesByResource.delete(previous.resourceId)
+  ): BoundSurface {
+    const resourceRefs = snapshotResourceRefs(snapshot)
+    const releaseResources = resourceRefs.length
+      ? this.options.retainResourceRefs?.({
+          callerId,
+          ...(snapshot.workspaceRoot ? { workspaceId: snapshot.workspaceRoot } : {}),
+          resourceRefs
+        })
+      : undefined
     const resourceId = `bound_surface_${createHmac('sha256', this.surfaceRefSecret)
-      .update(`${callerId}\u0000${snapshot.windowId}\u0000${snapshot.revision}`)
+      .update(`${callerId}\u0000${snapshot.windowId}\u0000${snapshot.revision}\u0000${randomBytes(16).toString('base64url')}`)
       .digest('base64url')}`
     const binding: BoundSurface = {
       callerId,
       activeThreadId,
       resourceId,
-      snapshot
+      snapshot,
+      ...(releaseResources ? { releaseResources } : {})
     }
-    this.boundSurfacesByCaller.set(callerId, binding)
-    this.boundSurfacesByResource.set(resourceId, binding)
-    this.pruneSurfaceBindings()
-    return snapshot
+    return binding
+  }
+
+  claimSurfaceBinding(callerId: string, bindingId: string): VisibleContextSnapshot | null {
+    const normalizedCallerId = callerId.trim()
+    const normalizedBindingId = bindingId.trim()
+    const prepared = this.preparedSurfaceBindings.get(normalizedBindingId)
+    if (!prepared || prepared.callerId !== normalizedCallerId) return null
+    this.preparedSurfaceBindings.delete(normalizedBindingId)
+    const previous = this.boundSurfacesByCaller.get(normalizedCallerId)
+    if (previous) this.releaseBinding(previous)
+    this.boundSurfacesByCaller.set(normalizedCallerId, prepared)
+    this.boundSurfacesByResource.set(prepared.resourceId, prepared)
+    return prepared.snapshot
+  }
+
+  boundSurface(callerId: string, bindingId?: string): VisibleContextSnapshot | null {
+    const binding = this.boundSurfacesByCaller.get(callerId.trim())
+    if (!binding) return null
+    return !bindingId || binding.resourceId === bindingId.trim() ? binding.snapshot : null
+  }
+
+  assignSurfaceTurn(callerId: string, turnId: string, bindingId?: string): boolean {
+    const binding = this.boundSurfacesByCaller.get(callerId.trim())
+    const normalizedTurnId = turnId.trim()
+    if (!binding || !normalizedTurnId) return false
+    if (bindingId && binding.resourceId !== bindingId.trim()) return false
+    binding.turnId = normalizedTurnId
+    return true
+  }
+
+  async discardSurfaceBinding(callerId: string, bindingId: string): Promise<void> {
+    const binding = this.preparedSurfaceBindings.get(bindingId.trim())
+    if (!binding || binding.callerId !== callerId.trim()) return
+    this.preparedSurfaceBindings.delete(binding.resourceId)
+    await binding.releaseResources?.()
+  }
+
+  async releaseSurface(callerId: string, bindingId?: string, turnId?: string): Promise<void> {
+    const binding = this.boundSurfacesByCaller.get(callerId.trim())
+    if (!binding || (bindingId && binding.resourceId !== bindingId.trim())) return
+    if (turnId && binding.turnId !== turnId.trim()) return
+    this.boundSurfacesByCaller.delete(binding.callerId)
+    this.boundSurfacesByResource.delete(binding.resourceId)
+    await binding.releaseResources?.()
   }
 
   async currentSurface(callerId?: string): Promise<{
@@ -658,9 +727,21 @@ export class VisibleContextService {
       const oldestCallerId = this.boundSurfacesByCaller.keys().next().value as string | undefined
       if (!oldestCallerId) return
       const binding = this.boundSurfacesByCaller.get(oldestCallerId)
-      this.boundSurfacesByCaller.delete(oldestCallerId)
-      if (binding) this.boundSurfacesByResource.delete(binding.resourceId)
+      if (binding) this.releaseBinding(binding)
     }
+    while (this.preparedSurfaceBindings.size > MAX_SURFACE_BINDINGS) {
+      const oldestBindingId = this.preparedSurfaceBindings.keys().next().value as string | undefined
+      if (!oldestBindingId) return
+      const binding = this.preparedSurfaceBindings.get(oldestBindingId)
+      this.preparedSurfaceBindings.delete(oldestBindingId)
+      if (binding) void Promise.resolve(binding.releaseResources?.()).catch(() => undefined)
+    }
+  }
+
+  private releaseBinding(binding: BoundSurface): void {
+    this.boundSurfacesByCaller.delete(binding.callerId)
+    this.boundSurfacesByResource.delete(binding.resourceId)
+    void Promise.resolve(binding.releaseResources?.()).catch(() => undefined)
   }
 
   private withFreshness(snapshot: VisibleContextSnapshot): VisibleContextSnapshot {
@@ -801,6 +882,15 @@ function sanitizeVisibleContextSnapshot(snapshot: VisibleContextSnapshot): Visib
       .filter((component) => component.visible)
       .map(sanitizeVisibleContextComponent)
   }
+}
+
+function snapshotResourceRefs(snapshot: VisibleContextSnapshot): string[] {
+  return [...new Set(snapshot.components.flatMap((component) => (
+    component.resources?.flatMap((resource) => {
+      const resourceRef = resource.capability?.resourceRef?.trim()
+      return resourceRef ? [resourceRef] : []
+    }) ?? []
+  )))]
 }
 
 function sanitizeVisibleContextComponent(

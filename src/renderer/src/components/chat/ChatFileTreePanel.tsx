@@ -1402,6 +1402,20 @@ function FileTreeContextMenu({
             disabled={selected}
             onClick={() => run(onAddReference)}
           />
+          {state.directory ? (
+            <>
+              <FileTreeContextMenuItem
+                icon={<FilePlus2 className="h-3.5 w-3.5" strokeWidth={1.8} />}
+                label={t('writeCreateFile')}
+                onClick={() => run(onCreateFile)}
+              />
+              <FileTreeContextMenuItem
+                icon={<FolderPlus className="h-3.5 w-3.5" strokeWidth={1.8} />}
+                label={t('writeCreateFolder')}
+                onClick={() => run(onCreateDirectory)}
+              />
+            </>
+          ) : null}
           <div className="my-1 h-px bg-ds-border-muted" />
           <FileTreeContextMenuItem
             icon={<Copy className="h-3.5 w-3.5" strokeWidth={1.8} />}

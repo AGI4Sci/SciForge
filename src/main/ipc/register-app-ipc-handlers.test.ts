@@ -452,11 +452,13 @@ describe('registerAppIpcHandlers', () => {
           `/${competingWindowId}/initial`
         ))
         let boundWindowId: string | undefined
+        let boundRoute: string | undefined
         const startTurn = vi.fn(async (input: {
           runtimeId: 'codex'
           threadId: string
           visibleContextOwnerThreadId?: string
           visibleContextSurfaceId?: string
+          visibleContextBindingId?: string
         }) => {
           await visibleContext.publish(visibleSnapshot(
             competingWindowId,
@@ -464,12 +466,20 @@ describe('registerAppIpcHandlers', () => {
             'thread-a',
             `/${competingWindowId}/background`
           ))
-          const bound = await visibleContext.bindSurface(
-            `${input.runtimeId}:${input.threadId}`,
-            input.visibleContextOwnerThreadId ?? input.threadId,
-            input.visibleContextSurfaceId ?? ''
-          )
+          await visibleContext.publish(visibleSnapshot(
+            initiatingWindowId,
+            2,
+            'thread-a',
+            `/${initiatingWindowId}/after-submit`
+          ))
+          const bound = input.visibleContextBindingId
+            ? visibleContext.claimSurfaceBinding(
+                `${input.runtimeId}:${input.threadId}`,
+                input.visibleContextBindingId
+              )
+            : null
           boundWindowId = bound?.windowId
+          boundRoute = bound?.route
           return { threadId: input.threadId, turnId: 'turn-1' }
         })
         registerAppIpcHandlers(registerOptions({
@@ -488,10 +498,15 @@ describe('registerAppIpcHandlers', () => {
         })).resolves.toEqual({ threadId: 'thread-a', turnId: 'turn-1' })
 
         expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
-          visibleContextSurfaceId: initiatingWindowId
+          visibleContextSurfaceId: initiatingWindowId,
+          visibleContextBindingId: expect.stringMatching(/^bound_surface_/u)
         }))
         expect(boundWindowId).toBe(initiatingWindowId)
-        expect(visibleContext.peek().windowId).toBe(competingWindowId)
+        expect(boundRoute).toBe(`/${initiatingWindowId}/initial`)
+        expect(visibleContext.peek()).toMatchObject({
+          windowId: initiatingWindowId,
+          route: `/${initiatingWindowId}/after-submit`
+        })
       } finally {
         rmSync(userDataDir, { recursive: true, force: true })
       }
@@ -1300,6 +1315,7 @@ describe('registerAppIpcHandlers', () => {
       threadId: 'side-thread-1',
       text: 'hello',
       visibleContextSurfaceId: 'browser:12',
+      visibleContextBindingAttempted: true,
       visibleContextOwnerThreadId: 'parent-thread-1',
       executionIntent: {
         mode: 'execute',

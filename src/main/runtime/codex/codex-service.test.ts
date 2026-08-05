@@ -3831,6 +3831,95 @@ process.stdout.write(JSON.stringify({
     )
   })
 
+  it('persists and broadcasts synthetic child events for host-owned delegation', async () => {
+    const storageRoot = await tempRoot()
+    const threadStore = new CodexThreadStore({ rootDir: storageRoot })
+    await upsertMaterializedThread(threadStore, {
+      guiThreadId: 'thread-1',
+      codexThreadId: 'thread-1',
+      workspace: '/tmp/workspace',
+      title: 'Parent thread',
+      latestTurnId: 'turn-newer'
+    })
+    await new CodexEventStore({ rootDir: storageRoot }).append('thread-1', {
+      threadId: 'thread-1',
+      turnId: 'turn-newer',
+      userMessage: {
+        itemId: 'user-newer',
+        turnId: 'turn-newer',
+        text: 'Newer parent turn'
+      },
+      turnComplete: true
+    })
+    const sink = { send: vi.fn() }
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink,
+      storageRoot,
+      createClient: () => failingClient()
+    })
+    const subscriptionAbort = new AbortController()
+    const subscription = service.subscribeEvents('thread-1', 1, subscriptionAbort.signal)[Symbol.asyncIterator]()
+    const nextSubscribedEvent = subscription.next()
+
+    const published = await service.publishSyntheticEvent({
+      kind: 'child_event',
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      turnId: 'turn-older',
+      child: {
+        runtimeId: 'codex',
+        parentThreadId: 'thread-1',
+        parentTurnId: 'turn-older',
+        id: 'child-1',
+        kind: 'agent',
+        label: 'Paper reader',
+        status: 'running',
+        updatedAt: '2026-08-02T08:13:32.000Z'
+      }
+    })
+    await expect(nextSubscribedEvent).resolves.toMatchObject({
+      done: false,
+      value: { child: { id: 'child-1', status: 'running' } }
+    })
+    subscriptionAbort.abort()
+
+    expect(published).toMatchObject({
+      threadId: 'thread-1',
+      turnId: 'turn-older',
+      child: {
+        id: 'child-1',
+        runtimeId: 'codex',
+        status: 'running'
+      }
+    })
+    await expect(service.readStoredEvents('thread-1')).resolves.toEqual([
+      expect.objectContaining({
+        turnId: 'turn-newer',
+        userMessage: expect.objectContaining({ itemId: 'user-newer' }),
+        turnComplete: true
+      }),
+      expect.objectContaining({
+        child: expect.objectContaining({ id: 'child-1', status: 'running' })
+      })
+    ])
+    await expect(threadStore.get('thread-1')).resolves.toMatchObject({
+      latestTurnId: 'turn-newer'
+    })
+    await expect(service.readThread('thread-1')).resolves.toMatchObject({
+      ok: true,
+      detail: { latestTurnId: 'turn-newer' }
+    })
+    expect(sink.send).toHaveBeenCalledWith(
+      CODEX_MAIN_IPC_CHANNELS.event,
+      {
+        event: expect.objectContaining({
+          child: expect.objectContaining({ id: 'child-1', status: 'running' })
+        })
+      }
+    )
+  })
+
   it('emits latency phase runtime status events around a Codex turn', async () => {
     const queued = clientWithQueuedEvents()
     const sink = { send: vi.fn() }
