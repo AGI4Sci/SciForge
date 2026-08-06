@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import {
   deriveTraceId,
   LocalTraceStore,
+  SCIENTIFIC_TRACE_SOURCE,
   sanitizeTraceTextChunks,
   type TraceEvent,
   type TraceEventInput
@@ -145,18 +146,89 @@ describe('AgentRuntimeTraceRecorder', () => {
       state: 'completed'
     })
 
-    expect(appendMany).not.toHaveBeenCalled()
-    expect(append.mock.calls.map(([input]) => input.payload.eventKind)).toEqual([
+    expect(rawAppendManyCalls(appendMany)).toHaveLength(0)
+    expect(rawAppendInputs(append).map((input) => input.payload.eventKind)).toEqual([
       'tool',
       'approval',
       'usage',
       'error',
       'lifecycle'
     ])
+    expect(scientificAppendManyCalls(appendMany).flatMap((inputs) =>
+      inputs.map((input) => (input.payload.event as { type?: string }).type)
+    )).toEqual([
+      'TRACE_STARTED',
+      'TOOL_CALL_REQUESTED',
+      'HUMAN_REVIEW_REQUESTED',
+      'RESOURCE_USAGE_RECORDED',
+      'ERROR_RECORDED'
+    ])
 
     await recorder.flushTurn('codex', 'thread-1', 'turn-1')
-    expect(appendMany).toHaveBeenCalledTimes(1)
-    expect(append).toHaveBeenCalledTimes(6)
+    expect(rawAppendManyCalls(appendMany)).toHaveLength(1)
+    expect(rawAppendInputs(append)).toHaveLength(6)
+  })
+
+  it('projects runtime file changes and completion receipts into scientific artifacts and evidence', async () => {
+    const { recorder, appendMany } = fakeRecorder()
+    const artifactRef = `artifact_${'a'.repeat(24)}`
+
+    await recorder.observeEvent('codex', {
+      kind: 'tool_event',
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      itemId: 'tool-1',
+      callId: 'call-1',
+      status: 'success',
+      toolKind: 'file_change',
+      toolName: 'write_file',
+      filePath: 'results/report.md',
+      receipt: { status: 'success', outcome: 'progress' },
+      completionReceipts: [{
+        contractVersion: 'completion-receipt.v1',
+        receiptId: 'visual-capture-proof-1',
+        kind: 'visual.capture',
+        status: 'satisfied',
+        issuer: 'sciforge.agent-visual',
+        callId: 'call-1',
+        subjectRef: artifactRef,
+        relatedRefs: [artifactRef],
+        sha256: 'a'.repeat(64),
+        createdAt: '2026-08-06T00:00:00.000Z'
+      }, {
+        contractVersion: 'completion-receipt.v1',
+        receiptId: 'artifact-validation-proof-1',
+        kind: 'artifact.reference-validation',
+        status: 'satisfied',
+        issuer: 'sciforge.agent-visual',
+        callId: 'call-1',
+        subjectRef: artifactRef,
+        relatedRefs: [artifactRef],
+        attestation: 'Typed artifact reference validated.',
+        createdAt: '2026-08-06T00:00:01.000Z'
+      }]
+    })
+
+    const scientificEvents = scientificAppendManyCalls(appendMany)
+      .flatMap((inputs) => inputs.map((input) => input.payload.event as {
+        type: string
+        payload: Record<string, unknown>
+        links?: { artifacts?: string[]; evidence?: string[] }
+      }))
+    expect(scientificEvents.map((event) => event.type)).toEqual(expect.arrayContaining([
+      'TRACE_STARTED',
+      'TOOL_CALL_COMPLETED',
+      'ARTIFACT_CREATED',
+      'EVIDENCE_ATTACHED'
+    ]))
+    expect(scientificEvents.filter((event) => event.type === 'ARTIFACT_CREATED')).toHaveLength(2)
+    expect(scientificEvents.find((event) =>
+      event.type === 'ARTIFACT_CREATED' && event.payload.artifactId === artifactRef
+    )?.payload.sha256).toBe('a'.repeat(64))
+    expect(scientificEvents.find((event) =>
+      event.type === 'EVIDENCE_ATTACHED'
+    )?.links?.artifacts).toContain(artifactRef)
   })
 
   it('uses the store-wide current-secret filter when Agent text echoes an arbitrary API key', async () => {
@@ -200,7 +272,11 @@ describe('AgentRuntimeTraceRecorder', () => {
       const serialized = JSON.stringify(await store.read())
       expect(serialized).not.toContain(apiKey)
       expect(serialized).toContain('[REDACTED]')
-      expect((await store.read()).events).toHaveLength(3)
+      const events = (await store.read()).events
+      expect(rawTraceEvents(events)).toHaveLength(3)
+      expect(scientificTraceEvents(events).map((event) =>
+        (agentTracePayload(event).event as { type?: string }).type
+      )).toEqual(expect.arrayContaining(['TRACE_STARTED', 'TOOL_CALL_REQUESTED', 'ERROR_RECORDED']))
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
@@ -269,7 +345,7 @@ describe('AgentRuntimeTraceRecorder', () => {
       await recorder.flushTurn('codex', 'thread-1', 'turn-1')
 
       const result = await store.read({ order: 'asc' })
-      const payloads = result.events.map(agentTracePayload)
+      const payloads = rawTraceEvents(result.events).map(agentTracePayload)
       const deltaText = joinedDeltaText(payloads)
       expect(deltaText).not.toContain(apiKey)
       expect(deltaText).toBe(
@@ -290,7 +366,7 @@ describe('AgentRuntimeTraceRecorder', () => {
       expect(exported).not.toContain(apiKey)
       const exportedEvents = exported.trim().split('\n').slice(1)
         .map((line) => JSON.parse(line) as TraceEvent)
-      expect(joinedDeltaText(exportedEvents.map(agentTracePayload))).not.toContain(apiKey)
+      expect(joinedDeltaText(rawTraceEvents(exportedEvents).map(agentTracePayload))).not.toContain(apiKey)
     } finally {
       await rm(userDataDirectory, { recursive: true, force: true })
       await rm(destination, { force: true })
@@ -340,15 +416,16 @@ describe('AgentRuntimeTraceRecorder', () => {
       })
       await recorder.flushTurn('codex', 'thread-1', 'turn-1')
 
-      const readEvents = (await store.read({ order: 'asc' })).events
+      const readEvents = rawTraceEvents((await store.read({ order: 'asc' })).events)
       expect(readEvents.map(agentEventSeq)).toEqual([1, 2, 3, 4])
       expect(readEvents.every((event) => (
         agentTracePayload(event).event as unknown as { createdAt?: string }
       ).createdAt === base.createdAt)).toBe(true)
 
       await store.export({ destination })
-      const exportedEvents = (await readFile(destination, 'utf8')).trim().split('\n').slice(1)
+      const exportedEvents = rawTraceEvents((await readFile(destination, 'utf8')).trim().split('\n').slice(1)
         .map((line) => JSON.parse(line) as TraceEvent)
+      )
       expect(exportedEvents.map(agentEventSeq)).toEqual([1, 2, 3, 4])
     } finally {
       await rm(userDataDirectory, { recursive: true, force: true })
@@ -376,6 +453,38 @@ function fakeRecorder(): {
     append,
     appendMany
   }
+}
+
+function rawAppendInputs(
+  append: ReturnType<typeof vi.fn<(input: TraceEventInput<'agent_event'>) => Promise<TraceEvent>>>
+): TraceEventInput<'agent_event'>[] {
+  return append.mock.calls.map(([input]) => input).filter((input) => input.source !== SCIENTIFIC_TRACE_SOURCE)
+}
+
+function rawAppendManyCalls(
+  appendMany: ReturnType<typeof vi.fn<(
+    inputs: readonly TraceEventInput<'agent_event'>[]
+  ) => Promise<TraceEvent[]>>>
+): Array<readonly TraceEventInput<'agent_event'>[]> {
+  return appendMany.mock.calls.map(([inputs]) => inputs).filter((inputs) =>
+    inputs.some((input) => input.source !== SCIENTIFIC_TRACE_SOURCE))
+}
+
+function scientificAppendManyCalls(
+  appendMany: ReturnType<typeof vi.fn<(
+    inputs: readonly TraceEventInput<'agent_event'>[]
+  ) => Promise<TraceEvent[]>>>
+): Array<readonly TraceEventInput<'agent_event'>[]> {
+  return appendMany.mock.calls.map(([inputs]) => inputs).filter((inputs) =>
+    inputs.every((input) => input.source === SCIENTIFIC_TRACE_SOURCE))
+}
+
+function rawTraceEvents(events: readonly TraceEvent[]): TraceEvent[] {
+  return events.filter((event) => event.source !== SCIENTIFIC_TRACE_SOURCE)
+}
+
+function scientificTraceEvents(events: readonly TraceEvent[]): TraceEvent[] {
+  return events.filter((event) => event.source === SCIENTIFIC_TRACE_SOURCE)
 }
 
 function agentTracePayload(event: TraceEvent): AgentTracePayload {
