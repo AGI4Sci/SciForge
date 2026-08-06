@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import fixturePayload from '../../packages/workers/gui-owl-computer-use/tests/fixtures/computer_use_contract_v2.json'
 import {
+  COMPUTER_USE_ERROR_CODES,
   computerUseRunInputSchema,
   isComputerUseV2Input,
   normalizeComputerUseRunInput,
@@ -16,6 +17,10 @@ type FixtureCase = {
 const fixtures = fixturePayload as { valid: FixtureCase[]; invalid: FixtureCase[] }
 
 describe('computer-use shared v2 contract', () => {
+  it('exposes the structured isolated desktop unavailable code', () => {
+    expect(COMPUTER_USE_ERROR_CODES).toContain('ISOLATED_DESKTOP_UNAVAILABLE')
+  })
+
   for (const fixture of fixtures.valid) {
     it(`accepts ${fixture.name}`, () => {
       const parsed = computerUseRunInputSchema.parse(fixture.input)

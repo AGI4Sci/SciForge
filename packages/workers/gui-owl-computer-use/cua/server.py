@@ -103,6 +103,10 @@ class Handler(BaseHTTPRequestHandler):
                 "authRequired": bool(CONFIG.service_token or CONFIG.allow_execute)}})
         if self.path == "/computer-use/status":
             return self._send(200, {"ok": True, "data": SERVICE.status()})
+        if self.path == "/computer-use/cleanup-pending":
+            return self._send(200, {"ok": True, "data": {
+                "items": SERVICE.cleanup_pending(),
+            }})
         if self.path == "/computer-use/capabilities":
             return self._send(200, {"ok": True, "data": SERVICE.capabilities()})
         if self.path == "/computer-use/targets":
@@ -158,13 +162,20 @@ class Handler(BaseHTTPRequestHandler):
             )
             code = 200 if res.get("ok") else (
                 403 if res.get("error", {}).get("code") == "NEEDS_APPROVAL" else
-                503 if res.get("error", {}).get("code") == "BACKEND_UNAVAILABLE" else 400)
+                503 if res.get("error", {}).get("code") in {
+                    "BACKEND_UNAVAILABLE", "ISOLATED_DESKTOP_UNAVAILABLE",
+                } else 400)
             return self._send(code, res)
         except Exception as e:  # noqa: BLE001
             return self._send(500, R.err("INTERNAL_ERROR", str(e), retryable=True))
 
 
 def main():
+    SERVICE.configure_lifecycle(
+        lease_ttl_seconds=CONFIG.lease_ttl_s,
+        reaper_interval_seconds=CONFIG.lease_reaper_interval_s,
+        reaper_enabled=CONFIG.lease_reaper_enabled,
+    )
     srv = ThreadingHTTPServer(("127.0.0.1", CONFIG.port), Handler)
     print(f"computer-use plugin on http://127.0.0.1:{CONFIG.port} "
           f"(model-router={CONFIG.model_router_model} @ {CONFIG.model_router_base_url}, "

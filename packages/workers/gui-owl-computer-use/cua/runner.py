@@ -11,7 +11,7 @@ from driver.channel import ChannelError, SessionInputChannel
 
 from . import owl_agent, reflector
 from . import result as R
-from .artifacts import ArtifactRun
+from .artifacts import ArtifactRun, prune_artifacts
 from .config import Config
 
 
@@ -109,6 +109,12 @@ def run_task(
         if artifact_run is not None:
             try:
                 artifact_run.finish(terminal, cleanup.to_dict())
+                prune_artifacts(
+                    cfg.artifact_dir,
+                    max_age_seconds=cfg.artifact_retention_s,
+                    max_runs=cfg.artifact_max_runs,
+                    exclude_request_ids=(channel.request_id,),
+                )
             except Exception as error:  # artifact cleanup must not hide channel cleanup
                 cleanup.errors.append(f"artifact manifest: {error}")
 

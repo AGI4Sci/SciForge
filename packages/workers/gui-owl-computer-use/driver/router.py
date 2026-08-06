@@ -12,8 +12,8 @@ from cua.isolation import (
     RequestedIsolation,
     decide_isolation,
 )
-from cua.session_registry import RegistryError, SessionRegistry, TargetLease
-from cua.target import TargetDescriptor
+from cua.session_registry import LeaseScope, RegistryError, SessionRegistry, TargetLease
+from cua.target import TargetDescriptor, TargetKind
 
 from .backend import BackendOpenContext, InputBackend
 
@@ -62,6 +62,7 @@ class BackendRouter:
         approval_context: bool,
         required_actions: tuple[str, ...],
         open_context: BackendOpenContext,
+        lease_ttl_seconds: float | None = None,
     ) -> RouterSelection:
         candidates: list[tuple[int, InputBackend, BackendCapabilities, IsolationDecision]] = []
         rejections: list[dict[str, str]] = []
@@ -99,7 +100,12 @@ class BackendRouter:
             candidates.append((priority, backend, capability, decision))
 
         if not candidates:
-            if any("approval" in item["reason"] for item in rejections):
+            if (
+                target.kind is TargetKind.ISOLATED_DESKTOP
+                and any("ISOLATED_DESKTOP_UNAVAILABLE" in item["reason"] for item in rejections)
+            ):
+                code = "ISOLATED_DESKTOP_UNAVAILABLE"
+            elif any("approval" in item["reason"] for item in rejections):
                 code = "NEEDS_APPROVAL"
             elif any("requested isolation" in item["reason"] for item in rejections):
                 code = "ISOLATION_UNAVAILABLE"
@@ -114,6 +120,8 @@ class BackendRouter:
                     request_id,
                     backend=capability.backend.value,
                     scope=capability.lease_scope,
+                    scope_key=self._scope_key(target, capability.lease_scope),
+                    ttl_seconds=lease_ttl_seconds,
                 )
             except RegistryError as error:
                 raise RoutingError(error.code, str(error), details=error.details) from error
@@ -134,3 +142,15 @@ class BackendRouter:
             f"all matching backends failed before opening target {target.target_id}: {last_open_error}",
             details={"targetId": target.target_id},
         )
+
+    @staticmethod
+    def _scope_key(target: TargetDescriptor, scope: LeaseScope) -> str | None:
+        if scope is not LeaseScope.ENVIRONMENT:
+            return None
+        if target.kind is TargetKind.ISOLATED_DESKTOP:
+            environment_id = target.locator.get("isolatedEnvironmentId")
+            if isinstance(environment_id, str) and environment_id:
+                return environment_id
+        # An environment-scoped backend must never collapse unrelated targets
+        # to a backend-global key merely because a provider omitted its locator.
+        return target.target_id

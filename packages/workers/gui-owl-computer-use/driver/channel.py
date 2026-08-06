@@ -79,6 +79,7 @@ class SessionInputChannel:
         isolation: IsolationDecision,
         cancellation: threading.Event,
         deadline: float | None,
+        lease_ttl_seconds: float | None = None,
     ) -> None:
         self.registry = registry
         self.session_id = session_id
@@ -91,12 +92,14 @@ class SessionInputChannel:
         self.isolation = isolation
         self.cancellation = cancellation
         self.deadline = deadline
+        self.lease_ttl_seconds = lease_ttl_seconds
         self._latest_observation: Observation | None = None
         self._close_lock = threading.Lock()
         self._state = threading.Condition()
         self._closing = False
         self._in_flight = 0
         self._closed = False
+        self._close_reason: str | None = None
         self.cleanup = CleanupSummary()
 
     @property
@@ -115,6 +118,12 @@ class SessionInputChannel:
 
     def _check_available(self) -> None:
         if self._closed or self._closing:
+            if self._close_reason == "lease_expired":
+                raise ChannelError("TIMEOUT", "request lease expired")
+            if self._close_reason == "target_lost":
+                raise ChannelError("TARGET_LOST", "request target was lost")
+            if self._close_reason in {"server_stop", "session_closed"}:
+                raise ChannelError("CANCEL_PENDING", "request was stopped during cleanup")
             raise ChannelError("CLEANUP_INCOMPLETE", "channel is already closed")
         if self.cancelled:
             raise ChannelError("CANCEL_PENDING", "request cancellation was requested")
@@ -160,6 +169,7 @@ class SessionInputChannel:
             self._check_available()
             self._in_flight += 1
         try:
+            self._heartbeat()
             self.registry.begin_action(self.lease.lease_id)
         except Exception:
             with self._state:
@@ -216,6 +226,7 @@ class SessionInputChannel:
                 if error.code not in {"LEASE_NOT_FOUND", "INVALID_STATE_TRANSITION"}:
                     raise
             finally:
+                self._heartbeat(ignore_errors=True)
                 with self._state:
                     self._in_flight -= 1
                     self._state.notify_all()
@@ -236,6 +247,7 @@ class SessionInputChannel:
             self._check_available()
             self._in_flight += 1
         try:
+            self._heartbeat()
             self.registry.begin_action(self.lease.lease_id)
         except Exception:
             with self._state:
@@ -248,6 +260,7 @@ class SessionInputChannel:
             try:
                 self.registry.finish_action(self.lease.lease_id)
             finally:
+                self._heartbeat(ignore_errors=True)
                 with self._state:
                     self._in_flight -= 1
                     self._state.notify_all()
@@ -258,6 +271,7 @@ class SessionInputChannel:
                 return self.cleanup
             with self._state:
                 self._closing = True
+                self._close_reason = self._close_reason or reason
             if self.cancelled:
                 try:
                     self.backend.cancel(self.handle, reason)
@@ -293,3 +307,12 @@ class SessionInputChannel:
     def _record_cleanup_error(self, message: str) -> None:
         if message not in self.cleanup.errors:
             self.cleanup.errors.append(message)
+
+    def _heartbeat(self, *, ignore_errors: bool = False) -> None:
+        if self.lease_ttl_seconds is None:
+            return
+        try:
+            self.registry.heartbeat_lease(self.lease.lease_id, self.lease_ttl_seconds)
+        except RegistryError:
+            if not ignore_errors:
+                raise

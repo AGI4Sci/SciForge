@@ -101,11 +101,30 @@ class Config:
     show_overlay: bool = field(default_factory=lambda: _bool_env("CUA_SHOW_OVERLAY", True))
     port: int = field(default_factory=lambda: _int_env("CUA_PORT", 3900))
     artifact_dir: str = field(default_factory=lambda: _env("CUA_ARTIFACT_DIR", os.path.join(os.getcwd(), "cua-runs")))
+    lease_ttl_s: float = field(default_factory=lambda: _float_env("CUA_LEASE_TTL_S", 120.0))
+    lease_reaper_enabled: bool = field(default_factory=lambda: _bool_env(
+        "CUA_LEASE_REAPER_ENABLED", True,
+    ))
+    lease_reaper_interval_s: float = field(default_factory=lambda: _float_env(
+        "CUA_LEASE_REAPER_INTERVAL_S", 5.0,
+    ))
+    artifact_retention_s: float = field(default_factory=lambda: _float_env(
+        "CUA_ARTIFACT_RETENTION_S", 0.0,
+    ))
+    artifact_max_runs: int = field(default_factory=lambda: _int_env("CUA_ARTIFACT_MAX_RUNS", 0))
 
     def __post_init__(self) -> None:
         self.model_router_base_url = _normalize_local_model_router_base_url(
             self.model_router_base_url,
         )
+        if self.lease_ttl_s <= 0:
+            raise ValueError("CUA_LEASE_TTL_S must be positive")
+        if self.lease_reaper_interval_s <= 0:
+            raise ValueError("CUA_LEASE_REAPER_INTERVAL_S must be positive")
+        if self.artifact_retention_s < 0:
+            raise ValueError("CUA_ARTIFACT_RETENTION_S cannot be negative")
+        if self.artifact_max_runs < 0:
+            raise ValueError("CUA_ARTIFACT_MAX_RUNS cannot be negative")
 
 
 CONFIG = Config()

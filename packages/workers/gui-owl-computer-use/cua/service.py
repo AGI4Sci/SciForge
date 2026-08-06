@@ -22,10 +22,14 @@ ChannelExecutor = Callable[[dict[str, Any], SessionInputChannel], dict[str, Any]
 
 def _default_router() -> BackendRouter:
     from driver.backends.cdp_adapter import CdpAdapterBackend
+    from driver.backends.isolated_desktop import IsolatedDesktopBackend
     from driver.backends.legacy_pyautogui import LegacyPyAutoGUIBackend
     from driver.backends.windows_uia import WindowsUIABackend
 
-    return BackendRouter([CdpAdapterBackend(), WindowsUIABackend(), LegacyPyAutoGUIBackend()])
+    return BackendRouter([
+        CdpAdapterBackend(), WindowsUIABackend(), IsolatedDesktopBackend(),
+        LegacyPyAutoGUIBackend(),
+    ])
 
 
 class ComputerUseService:
@@ -33,11 +37,21 @@ class ComputerUseService:
         self,
         registry: SessionRegistry | None = None,
         router: BackendRouter | None = None,
+        lease_ttl_seconds: float | None = None,
     ) -> None:
+        if lease_ttl_seconds is not None and lease_ttl_seconds <= 0:
+            raise ValueError("lease_ttl_seconds must be positive")
         self.registry = registry or SessionRegistry()
         self.router = router or _default_router()
+        self.lease_ttl_seconds = lease_ttl_seconds
         self._channels_lock = threading.RLock()
         self._channels: dict[str, SessionInputChannel] = {}
+        self._lifecycle_lock = threading.RLock()
+        self._lifecycle_state = "running"
+        self._reaper_stop = threading.Event()
+        self._reaper_thread: threading.Thread | None = None
+        self._reaper_interval_seconds: float | None = None
+        self._last_reaper_error: str | None = None
 
     def run(
         self,
@@ -46,6 +60,13 @@ class ComputerUseService:
         *,
         channel_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        with self._lifecycle_lock:
+            if self._lifecycle_state != "running":
+                return R.err(
+                    "UNAVAILABLE",
+                    "computer use service is shutting down and no longer accepts requests",
+                    details={"reason": "service-shutting-down"},
+                )
         try:
             request = contract.normalize_run_input(value)
         except ValueError as error:
@@ -103,6 +124,7 @@ class ComputerUseService:
                 ),
                 required_actions=required_actions,
                 open_context=open_context,
+                lease_ttl_seconds=self.lease_ttl_seconds,
             )
             channel = SessionInputChannel(
                 registry=self.registry,
@@ -116,6 +138,7 @@ class ComputerUseService:
                 isolation=selection.decision,
                 cancellation=cancellation,
                 deadline=deadline,
+                lease_ttl_seconds=self.lease_ttl_seconds,
             )
             with self._channels_lock:
                 self._channels[request_id] = channel
@@ -317,6 +340,14 @@ class ComputerUseService:
             "approvalProof": "legacy-trust-boundary",
             "backendsConnected": any(item.available for item in capabilities),
             "activeChannels": active_channels,
+            "lifecycleState": self._lifecycle_state,
+            "cleanupPending": self.cleanup_pending(),
+            "reaper": {
+                "running": self._reaper_thread is not None and self._reaper_thread.is_alive(),
+                "intervalSeconds": self._reaper_interval_seconds,
+                "leaseTtlSeconds": self.lease_ttl_seconds,
+                "lastError": self._last_reaper_error,
+            },
             "registry": self.registry.snapshot(),
         }
 
@@ -334,7 +365,120 @@ class ComputerUseService:
             "targets": [target.to_dict(include_sensitive=False) for target in self.router.discover_targets()],
         }
 
-    def shutdown(self) -> dict[str, int]:
+    def cleanup_pending(self) -> list[dict[str, Any]]:
+        with self._channels_lock:
+            channels = list(self._channels.values())
+        return [
+            {
+                "requestId": channel.request_id,
+                "sessionId": channel.session_id,
+                "targetId": channel.target.target_id,
+                "leaseId": channel.lease.lease_id,
+                "backend": channel.capabilities.backend.value,
+                "closed": channel.cleanup.closed,
+                "leaseReleased": channel.cleanup.lease_released,
+                "errors": list(channel.cleanup.errors),
+            }
+            for channel in channels
+            if channel.cleanup.errors or channel.cancelled or self._lifecycle_state != "running"
+        ]
+
+    def reap_once(self) -> dict[str, Any]:
+        scan = self.registry.reap_expired()
+        cleaned: list[str] = []
+        pending: list[str] = []
+        for request_id in scan["expiredRequests"]:
+            if self._finish_after_channel_close(
+                request_id, RequestState.TIMED_OUT, "lease_expired",
+            ):
+                cleaned.append(request_id)
+            else:
+                pending.append(request_id)
+        return {**scan, "cleanedRequests": cleaned, "cleanupPending": pending}
+
+    def mark_target_lost(self, target_id: str) -> dict[str, list[str]]:
+        affected = self.registry.mark_target_lost(target_id)
+        cleaned: list[str] = []
+        pending: list[str] = []
+        for request_id in affected:
+            if self._finish_after_channel_close(
+                request_id, RequestState.TARGET_LOST, "target_lost",
+            ):
+                cleaned.append(request_id)
+            else:
+                pending.append(request_id)
+        return {"affectedRequests": affected, "cleanedRequests": cleaned, "cleanupPending": pending}
+
+    def _finish_after_channel_close(
+        self, request_id: str, state: RequestState, reason: str,
+    ) -> bool:
+        with self._channels_lock:
+            channel = self._channels.get(request_id)
+        if channel is None:
+            return False
+        cleanup = channel.close(reason)
+        if not cleanup.lease_released:
+            return False
+        with self._channels_lock:
+            self._channels.pop(request_id, None)
+        try:
+            self.registry.finish_request(request_id, state, reason=reason)
+        except RegistryError:
+            pass
+        return True
+
+    def start_reaper(self, interval_seconds: float) -> None:
+        if interval_seconds <= 0:
+            raise ValueError("reaper interval must be positive")
+        with self._lifecycle_lock:
+            if self._lifecycle_state != "running":
+                raise RuntimeError("cannot start reaper while service is shutting down")
+            if self._reaper_thread is not None and self._reaper_thread.is_alive():
+                return
+            self._reaper_interval_seconds = interval_seconds
+            self._reaper_stop.clear()
+            self._reaper_thread = threading.Thread(
+                target=self._reaper_loop,
+                name="computer-use-lease-reaper",
+                daemon=True,
+            )
+            self._reaper_thread.start()
+
+    def configure_lifecycle(
+        self,
+        *,
+        lease_ttl_seconds: float,
+        reaper_interval_seconds: float,
+        reaper_enabled: bool = True,
+    ) -> None:
+        if lease_ttl_seconds <= 0 or reaper_interval_seconds <= 0:
+            raise ValueError("lease TTL and reaper interval must be positive")
+        with self._lifecycle_lock, self._channels_lock:
+            if self._lifecycle_state != "running" or self._channels:
+                raise RuntimeError("lifecycle configuration must be set before requests start")
+            self.lease_ttl_seconds = lease_ttl_seconds if reaper_enabled else None
+            self._reaper_interval_seconds = reaper_interval_seconds if reaper_enabled else None
+        if reaper_enabled:
+            self.start_reaper(reaper_interval_seconds)
+
+    def _reaper_loop(self) -> None:
+        interval = self._reaper_interval_seconds or 1.0
+        while not self._reaper_stop.wait(interval):
+            try:
+                self.reap_once()
+                self._last_reaper_error = None
+            except Exception as error:  # reaper must stay alive for later retries
+                self._last_reaper_error = f"{type(error).__name__}: {error}"
+                continue
+
+    def shutdown(self) -> dict[str, Any]:
+        with self._lifecycle_lock:
+            self._lifecycle_state = "shutting-down"
+            self.registry.begin_shutdown()
+            self._reaper_stop.set()
+            reaper = self._reaper_thread
+        if reaper is not None and reaper is not threading.current_thread():
+            reaper.join(timeout=max(1.0, (self._reaper_interval_seconds or 0.0) * 2))
         with self._channels_lock:
             channels = list(self._channels.values())
         for channel in channels:
@@ -343,8 +487,35 @@ class ComputerUseService:
             except RegistryError:
                 pass
         for channel in channels:
-            channel.close("server_stop")
-        return self.registry.shutdown()
+            cleanup = channel.close("server_stop")
+            if not cleanup.lease_released:
+                continue
+            with self._channels_lock:
+                self._channels.pop(channel.request_id, None)
+            try:
+                self.registry.finish_request(
+                    channel.request_id, RequestState.CANCELLED, reason="server_stop",
+                )
+            except RegistryError:
+                pass
+        snapshot = self.registry.snapshot()
+        for session in snapshot["sessions"]:
+            if session["activeRequestId"] is None:
+                try:
+                    self.registry.close_session(session["sessionId"])
+                except RegistryError:
+                    pass
+        counts = self.registry.snapshot_counts()
+        pending = self.cleanup_pending()
+        with self._lifecycle_lock:
+            if not pending and counts["activeLeases"] == 0:
+                self._lifecycle_state = "stopped"
+        return {
+            **counts,
+            "lifecycleState": self._lifecycle_state,
+            "cleanupComplete": not pending and counts["activeLeases"] == 0,
+            "cleanupPending": pending,
+        }
 
 
 SERVICE = ComputerUseService()

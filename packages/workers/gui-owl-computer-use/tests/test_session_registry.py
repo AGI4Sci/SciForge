@@ -189,7 +189,10 @@ def test_ttl_does_not_release_an_in_flight_action():
     registry.finish_action(lease.lease_id)
     result = registry.reap_expired()
     assert result["expiredRequests"] == ["request-1"]
-    assert registry.get_request("request-1").state is RequestState.TIMED_OUT
+    # Registry detects and cancels, but cannot release a real backend handle.
+    # The Service/Channel owner must close it before writing TIMED_OUT.
+    assert registry.get_request("request-1").state is RequestState.CANCELLING
+    assert registry.snapshot_counts()["activeLeases"] == 1
 
 
 def test_heartbeat_extends_lease_before_expiry():
@@ -214,7 +217,8 @@ def test_target_lost_only_terminates_requests_on_that_target():
     registry.acquire_lease("request-1", backend="fake")
     registry.acquire_lease("request-2", backend="fake")
     assert registry.mark_target_lost("target-1") == ["request-1"]
-    assert registry.get_request("request-1").state is RequestState.TARGET_LOST
+    assert registry.get_request("request-1").state is RequestState.CANCELLING
+    assert registry.snapshot_counts()["activeLeases"] == 2
     assert registry.get_request("request-2").state is RequestState.ROUTING
 
 

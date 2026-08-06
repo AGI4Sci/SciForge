@@ -145,6 +145,7 @@ class SessionRegistry:
         self._released_leases: "OrderedDict[str, TargetLease]" = OrderedDict()
         self._tombstones: "OrderedDict[str, RequestRecord]" = OrderedDict()
         self._closed = False
+        self._generation = 0
 
     def bind_session(
         self,
@@ -169,6 +170,7 @@ class SessionRegistry:
                 last_used_at=now,
             )
             self._sessions[sid] = record
+            self._bump()
             return self._copy_session(record)
 
     def begin_request(
@@ -205,6 +207,7 @@ class SessionRegistry:
             session.active_request_id = request_id
             session.state = SessionState.BUSY
             session.last_used_at = now
+            self._bump()
             return self._copy_request(record)
 
     def acquire_lease(
@@ -255,6 +258,7 @@ class SessionRegistry:
             request.lease_id = lease.lease_id
             request.state = RequestState.ROUTING
             request.updated_at = now
+            self._bump()
             return replace(lease)
 
     def transition_request(self, request_id: str, state: RequestState) -> RequestRecord:
@@ -269,6 +273,7 @@ class SessionRegistry:
                 )
             request.state = state
             request.updated_at = self._clock()
+            self._bump()
             return self._copy_request(request)
 
     def request_cancel(self, request_id: str, reason: str = "user_stop") -> RequestRecord:
@@ -287,6 +292,7 @@ class SessionRegistry:
                 lease = self._leases_by_id[request.lease_id]
                 lease.state = LeaseState.CANCELLING
                 lease.updated_at = request.updated_at
+            self._bump()
             return self._copy_request(request)
 
     def release_lease(self, lease_id: str, reason: str) -> TargetLease:
@@ -303,6 +309,7 @@ class SessionRegistry:
             lease.state = LeaseState.RELEASING
             lease.release_reason = reason
             lease.updated_at = self._clock()
+            self._bump()
             return replace(lease)
 
     def finish_release(self, lease_id: str) -> TargetLease:
@@ -325,6 +332,7 @@ class SessionRegistry:
             self._released_leases[lease_id] = lease
             while len(self._released_leases) > self._tombstone_limit:
                 self._released_leases.popitem(last=False)
+            self._bump()
             return replace(lease)
 
     def begin_action(self, lease_id: str) -> TargetLease:
@@ -332,6 +340,7 @@ class SessionRegistry:
             lease = self._require_active_lease(lease_id)
             lease.in_flight_actions += 1
             lease.updated_at = self._clock()
+            self._bump()
             return replace(lease)
 
     def heartbeat_lease(self, lease_id: str, ttl_seconds: float) -> TargetLease:
@@ -343,6 +352,7 @@ class SessionRegistry:
             lease.updated_at = now
             lease.expires_at = now + ttl_seconds
             lease.suspected_stale = False
+            self._bump()
             return replace(lease)
 
     def finish_action(self, lease_id: str) -> TargetLease:
@@ -356,6 +366,7 @@ class SessionRegistry:
                 raise RegistryError("INVALID_STATE_TRANSITION", "lease has no in-flight action")
             lease.in_flight_actions -= 1
             lease.updated_at = self._clock()
+            self._bump()
             return replace(lease)
 
     def reap_expired(self) -> dict[str, list[str]]:
@@ -374,7 +385,8 @@ class SessionRegistry:
                 expired_requests.append(lease.request_id)
             for request_id in expired_requests:
                 self.request_cancel(request_id, "lease_expired")
-                self.finish_request(request_id, RequestState.TIMED_OUT, reason="lease_expired")
+            if suspected:
+                self._bump()
             return {"suspectedStale": suspected, "expiredRequests": expired_requests}
 
     def mark_target_lost(self, target_id: str) -> list[str]:
@@ -386,7 +398,6 @@ class SessionRegistry:
             ]
             for request_id in affected:
                 self.request_cancel(request_id, "target_lost")
-                self.finish_request(request_id, RequestState.TARGET_LOST, reason="target_lost")
             return affected
 
     def finish_request(
@@ -422,6 +433,7 @@ class SessionRegistry:
             self._tombstones[request_id] = request
             while len(self._tombstones) > self._tombstone_limit:
                 self._tombstones.popitem(last=False)
+            self._bump()
             return self._copy_request(request)
 
     def close_session(self, session_id: str, *, force: bool = False) -> SessionRecord:
@@ -441,20 +453,39 @@ class SessionRegistry:
             session.last_used_at = self._clock()
             result = self._copy_session(session)
             self._sessions.pop(session_id, None)
+            self._bump()
             return result
+
+    def begin_shutdown(self) -> dict[str, int]:
+        """Close admission and signal active requests without releasing handles."""
+        with self._lock:
+            if not self._closed:
+                self._closed = True
+                self._bump()
+            for request in self._requests.values():
+                request.cancellation.set()
+                request.cancel_reason = "server_stop"
+                if request.state not in TERMINAL_REQUEST_STATES:
+                    request.state = RequestState.CANCELLING
+                request.updated_at = self._clock()
+                if request.lease_id:
+                    lease = self._leases_by_id.get(request.lease_id)
+                    if lease is not None and lease.state is LeaseState.ACTIVE:
+                        lease.state = LeaseState.CANCELLING
+                        lease.updated_at = request.updated_at
+            if self._requests:
+                self._bump()
+            return self.snapshot_counts()
 
     def shutdown(self) -> dict[str, int]:
         with self._lock:
-            if self._closed:
-                return self.snapshot_counts()
-            self._closed = True
+            self.begin_shutdown()
             for request_id in list(self._requests):
-                request = self._requests[request_id]
-                request.cancellation.set()
                 self.finish_request(request_id, RequestState.CANCELLED, reason="server_stop")
             for session_id in list(self._sessions):
                 session = self._sessions.pop(session_id)
                 session.state = SessionState.CLOSED
+            self._bump()
             return self.snapshot_counts()
 
     def snapshot_counts(self) -> dict[str, int]:
@@ -472,6 +503,7 @@ class SessionRegistry:
             return {
                 "counts": self.snapshot_counts(),
                 "closed": self._closed,
+                "generation": self._generation,
                 "sessions": [
                     {
                         "sessionId": session.session_id,
@@ -580,3 +612,6 @@ class SessionRegistry:
         if record.cancellation.is_set():
             copied.cancellation.set()
         return copied
+
+    def _bump(self) -> None:
+        self._generation += 1

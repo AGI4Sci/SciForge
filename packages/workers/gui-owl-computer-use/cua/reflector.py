@@ -18,7 +18,7 @@ the native model re-plan itself.
 from __future__ import annotations
 
 import platform as _platform
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from PIL import Image
 

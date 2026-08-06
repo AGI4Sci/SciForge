@@ -75,6 +75,7 @@ model/provider selection and policy.
 | Approved process-global compatibility backend | `driver/backends/legacy_pyautogui.py` |
 | Target-scoped Chromium bridge | `driver/backends/cdp_adapter.py`, `src/main/services/computer-use-cdp-adapter.ts` |
 | Pattern-driven Windows UI Automation backend | `driver/backends/windows_uia.py` |
+| Isolated environment provider SPI (unavailable by default) | `driver/backends/isolated_desktop.py` |
 | Explicit-hook click-through mouse overlay | `driver/overlay.py` |
 | Pure contract/result/parse tests | `tests/test_contract.py` |
 | Development-only local model serve helper | `server/serve-gui-owl-32b.sh` |
@@ -142,7 +143,24 @@ minimal wiring needed to expose it to the agent runtime:
 See [`.env.example`](.env.example). Key vars: `SCIFORGE_MODEL_ROUTER_BASE_URL`,
 `SCIFORGE_MODEL_ROUTER_MODEL`, `SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY`,
 `CUA_MAX_STEPS`, `CUA_REFLECT`, `CUA_ALLOW_EXECUTE`,
-`CUA_PORT`, `CUA_SERVICE_TOKEN`, `CUA_SHOW_OVERLAY`, `CUA_ARTIFACT_DIR`.
+`CUA_PORT`, `CUA_SERVICE_TOKEN`, `CUA_SHOW_OVERLAY`, `CUA_ARTIFACT_DIR`,
+`CUA_LEASE_TTL_S`, `CUA_LEASE_REAPER_ENABLED`, `CUA_LEASE_REAPER_INTERVAL_S`,
+`CUA_ARTIFACT_RETENTION_S`, `CUA_ARTIFACT_MAX_RUNS`.
+
+Lease expiry is detected by a service reaper, but a lease is released only
+after the owning backend handle closes successfully. `/computer-use/status`
+and `/computer-use/cleanup-pending` expose handles that still need cleanup.
+Artifact retention is disabled unless an age or count limit is configured.
+Set `CUA_LEASE_REAPER_ENABLED=false` to roll back the watchdog without
+disabling the target-bound channel and backend routing introduced earlier.
+
+### Isolated desktop provider SPI
+
+P4 defines the lifecycle boundary for an infrastructure-owned isolated
+environment, but SciForge does not ship or auto-enable an RDP, VM, Hyper-V or
+Windows Sandbox provider. Consequently `isolated-desktop` reports
+`ISOLATED_DESKTOP_UNAVAILABLE` by default. A provider mock passing unit tests is
+not evidence that three real isolated desktops are available.
 
 ### Optional CDP/Playwright backend
 

@@ -163,9 +163,17 @@ def _to_text_content(res: Dict[str, Any]) -> List[types.TextContent]:
 
 
 async def _serve() -> None:
+    SERVICE.configure_lifecycle(
+        lease_ttl_seconds=CONFIG.lease_ttl_s,
+        reaper_interval_seconds=CONFIG.lease_reaper_interval_s,
+        reaper_enabled=CONFIG.lease_reaper_enabled,
+    )
     server = create_server()
-    async with stdio_server() as (read, write):
-        await server.run(read, write, server.create_initialization_options())
+    try:
+        async with stdio_server() as (read, write):
+            await server.run(read, write, server.create_initialization_options())
+    finally:
+        SERVICE.shutdown()
 
 
 def main() -> None:
