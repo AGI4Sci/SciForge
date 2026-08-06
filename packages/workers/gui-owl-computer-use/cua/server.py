@@ -27,7 +27,6 @@ from typing import Optional
 from PIL import Image
 
 from . import result as R
-from . import cancel
 from .config import CONFIG
 from .runner import run_task
 from .service import SERVICE
@@ -74,10 +73,7 @@ def _screenshot_provider(body: dict):
     if body.get("imagePath"):
         img = Image.open(body["imagePath"]).convert("RGB")
         return lambda: img
-    # live local desktop
-    from driver.desktop import DesktopExecutor
-    ex = DesktopExecutor(dry_run=not (body.get("execute") and body.get("approve")))
-    return ex.screenshot
+    return None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -101,7 +97,7 @@ class Handler(BaseHTTPRequestHandler):
                 "model": CONFIG.model_router_model, "engine": "sciforge-model-router",
                 "endpoint": "responses",
                 "protocolVersion": 2,
-                "backendsConnected": False,
+                "backendsConnected": SERVICE.status()["backendsConnected"],
                 "approvalProof": "legacy-trust-boundary",
                 "allowExecute": CONFIG.allow_execute,
                 "authRequired": bool(CONFIG.service_token or CONFIG.allow_execute)}})
@@ -130,7 +126,7 @@ class Handler(BaseHTTPRequestHandler):
         # Cancel: flip the flag the in-flight run checks between steps so it stops
         # driving the desktop. Runs on a separate thread from the run loop.
         if self.path == "/computer-use/cancel":
-            res = SERVICE.cancel(body, cancel.request_cancel)
+            res = SERVICE.cancel(body)
             return self._send(200 if res.get("ok") else 400, res)
         if self.path == "/computer-use/sessions/bind":
             res = SERVICE.bind_session(body)
@@ -139,15 +135,27 @@ class Handler(BaseHTTPRequestHandler):
             res = SERVICE.release_session(body)
             return self._send(200 if res.get("ok") else 409, res)
 
-        def run_legacy(request: dict) -> dict:
-            provider = _screenshot_provider(request)
+        def execute_channel(request: dict, channel) -> dict:
             return run_task(
-                CONFIG, request["instruction"], provider,
+                CONFIG, request["instruction"], channel,
                 execute=request["execute"], approve=request["approve"],
-                request_id=request.get("requestId"))
+            )
 
         try:
-            res = SERVICE.run(body, run_legacy)
+            res = SERVICE.run(
+                body,
+                execute_channel,
+                channel_options={
+                    "allow_execute": CONFIG.allow_execute,
+                    "settle_s": CONFIG.settle_s,
+                    "show_overlay": CONFIG.show_overlay,
+                    "screenshot_provider": (
+                        _screenshot_provider(body)
+                        if body.get("imagePath") or body.get("imageBase64")
+                        else None
+                    ),
+                },
+            )
             code = 200 if res.get("ok") else (
                 403 if res.get("error", {}).get("code") == "NEEDS_APPROVAL" else
                 503 if res.get("error", {}).get("code") == "BACKEND_UNAVAILABLE" else 400)

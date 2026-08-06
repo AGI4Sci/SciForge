@@ -35,12 +35,11 @@ def test_legacy_request_remains_on_existing_path(monkeypatch):
     assert _run_tool({"instruction": "legacy task"}) is sentinel
 
 
-def test_v2_request_is_explicitly_blocked_before_opening_screen(monkeypatch):
+def test_v2_request_without_bound_session_does_not_open_screen(monkeypatch):
     def fail_if_called(_args):
         raise AssertionError("v2 P1 requests must not open a screenshot provider")
 
     monkeypatch.setattr("cua.mcp_server._screenshot_provider", fail_if_called)
     result = _run_tool({"instruction": "targeted task", "sessionId": "session-1"})
     assert result["ok"] is False
-    assert result["error"]["code"] == "BACKEND_UNAVAILABLE"
-    assert result["error"]["blockedReason"] == "computer-use-session-channel-not-implemented"
+    assert result["error"]["code"] == "SESSION_NOT_FOUND"

@@ -27,7 +27,6 @@ import mcp.types as types
 from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
 
-from . import cancel
 from . import contract
 from . import result as R
 from .config import CONFIG
@@ -49,28 +48,37 @@ def _screenshot_provider(args: Dict[str, Any]):
     if args.get("imagePath"):
         img = Image.open(args["imagePath"]).convert("RGB")
         return lambda: img
-    from driver.desktop import DesktopExecutor
-
-    ex = DesktopExecutor(dry_run=not (args.get("execute") and args.get("approve")))
-    return ex.screenshot
+    return None
 
 
 def _run_tool(args: Dict[str, Any]) -> Dict[str, Any]:
-    def run_legacy(request: Dict[str, Any]) -> Dict[str, Any]:
-        try:
-            provider = _screenshot_provider(request)
-        except Exception as e:  # noqa: BLE001
-            return R.err("UNAVAILABLE", f"screenshot source failed: {e}", retryable=True)
+    def execute_channel(request: Dict[str, Any], channel) -> Dict[str, Any]:
         return run_task(
             CONFIG,
             request["instruction"],
-            provider,
+            channel,
             execute=request["execute"],
             approve=request["approve"],
-            request_id=request.get("requestId"),
         )
 
-    return SERVICE.run(args, run_legacy)
+    try:
+        provider = (
+            _screenshot_provider(args)
+            if args.get("imagePath") or args.get("imageBase64")
+            else None
+        )
+    except Exception as e:  # noqa: BLE001
+        return R.err("UNAVAILABLE", f"screenshot source failed: {e}", retryable=True)
+    return SERVICE.run(
+        args,
+        execute_channel,
+        channel_options={
+            "allow_execute": CONFIG.allow_execute,
+            "settle_s": CONFIG.settle_s,
+            "show_overlay": CONFIG.show_overlay,
+            "screenshot_provider": provider,
+        },
+    )
 
 
 def create_server() -> Server:
@@ -131,7 +139,7 @@ def create_server() -> Server:
         elif name == contract.TOOL_BIND_TARGET:
             res = SERVICE.bind_session(arguments)
         elif name == contract.TOOL_CANCEL:
-            res = SERVICE.cancel(arguments, cancel.request_cancel)
+            res = SERVICE.cancel(arguments)
         elif name == contract.TOOL_RUN:
             # The desktop loop can run for many steps; keep the event loop free.
             res = await asyncio.to_thread(_run_tool, arguments)

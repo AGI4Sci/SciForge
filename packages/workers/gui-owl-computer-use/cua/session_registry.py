@@ -347,7 +347,11 @@ class SessionRegistry:
 
     def finish_action(self, lease_id: str) -> TargetLease:
         with self._lock:
-            lease = self._require_active_lease(lease_id)
+            lease = self._leases_by_id.get(lease_id)
+            if lease is None:
+                raise RegistryError("LEASE_NOT_FOUND", f"lease {lease_id} was not found")
+            if lease.state not in (LeaseState.ACTIVE, LeaseState.CANCELLING):
+                raise RegistryError("INVALID_STATE_TRANSITION", "lease cannot finish an action")
             if lease.in_flight_actions <= 0:
                 raise RegistryError("INVALID_STATE_TRANSITION", "lease has no in-flight action")
             lease.in_flight_actions -= 1
@@ -515,6 +519,11 @@ class SessionRegistry:
             if request is None:
                 raise RegistryError("REQUEST_NOT_FOUND", f"request {request_id} was not found")
             return self._copy_request(request)
+
+    def cancellation_event(self, request_id: str) -> threading.Event:
+        """Return the registry-owned live cancellation token for a channel."""
+        with self._lock:
+            return self._require_request(request_id).cancellation
 
     def _ensure_open(self) -> None:
         if self._closed:

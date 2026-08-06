@@ -1,4 +1,6 @@
 from cua.service import ComputerUseService
+from driver.router import BackendRouter
+from tests.fakes.fake_backend import FakeBackend
 
 
 def uia_target(target_id="target-uia-1"):
@@ -13,14 +15,17 @@ def uia_target(target_id="target-uia-1"):
 def test_service_preserves_v1_and_fails_v2_closed():
     service = ComputerUseService()
     calls = []
-    result = service.run({"instruction": "legacy"}, lambda request: calls.append(request) or {"ok": True})
+    result = service.run(
+        {"instruction": "legacy"},
+        lambda request, _channel: calls.append(request) or {"ok": True},
+    )
     assert result == {"ok": True}
     assert calls[0]["protocolVersion"] == 1
-    blocked = service.run(
+    missing = service.run(
         {"instruction": "targeted", "sessionId": "session-1"},
-        lambda _request: (_ for _ in ()).throw(AssertionError("must not execute")),
+        lambda _request, _channel: (_ for _ in ()).throw(AssertionError("must not execute")),
     )
-    assert blocked["error"]["code"] == "BACKEND_UNAVAILABLE"
+    assert missing["error"]["code"] == "SESSION_NOT_FOUND"
 
 
 def test_bind_status_duplicate_and_release_lifecycle():
@@ -47,6 +52,35 @@ def test_service_rejects_request_id_path_attack_before_legacy_executor():
     service = ComputerUseService()
     result = service.run(
         {"instruction": "x", "requestId": "../escape"},
-        lambda _request: (_ for _ in ()).throw(AssertionError("must not execute")),
+        lambda _request, _channel: (_ for _ in ()).throw(AssertionError("must not execute")),
     )
     assert result["error"]["code"] == "INVALID_ARGUMENT"
+
+
+def test_v2_bound_session_executes_through_channel_and_cleans_request_and_lease():
+    backend = FakeBackend()
+    service = ComputerUseService(router=BackendRouter([backend]))
+    service.bind_session({
+        "sessionId": "session-1",
+        "owner": {"runtimeId": "runtime-1", "threadId": "thread-1"},
+        "target": uia_target(),
+    })
+
+    def execute(request, channel):
+        observed = channel.observe()
+        outcome = channel.perform(
+            {"action": "write", "value": "value"},
+            expected_revision=observed.revision,
+        )
+        return {"ok": True, "data": {"status": "done", "verified": outcome.verification.value}}
+
+    result = service.run(
+        {"instruction": "write", "sessionId": "session-1", "requestId": "request-1"},
+        execute,
+    )
+    assert result["ok"] is True
+    assert result["data"]["verified"] == "verified"
+    assert backend.read("target-uia-1") == ("value",)
+    counts = service.registry.snapshot_counts()
+    assert counts["requests"] == counts["activeLeases"] == 0
+    assert counts["sessions"] == 1

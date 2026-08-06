@@ -20,9 +20,9 @@ Design constraints:
   * Tk must run on a single thread, so the overlay owns a daemon thread with its
     own mainloop and accepts thread-safe commands through a queue.
 
-The overlay is driven by monkeypatching pyautogui's mouse primitives (see
-``install_pyautogui_overlay``) so it captures motion no matter which layer
-(the AgentS2_5 ACI or direct pyautogui code) emits it.
+The overlay is driven by explicit backend hooks.  It never monkeypatches global
+input functions, so opening and closing one run cannot alter another run's
+execution path.
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ import platform
 import queue
 import threading
 import time
-from typing import Optional, Tuple
+from typing import Optional
 
 _TRANSPARENT_KEY = "#010203"  # near-black color key painted fully transparent
 _RING_COLOR = "#00E5FF"
@@ -175,23 +175,23 @@ class DesktopOverlay:
                             self._draw_ripple(state, cmd[1], cmd[2])
                         elif cmd[0] == "hide":
                             try:
-                                win.withdraw(); win.update_idletasks()
+                                state["win"].withdraw(); state["win"].update_idletasks()
                             except Exception:  # noqa: BLE001
                                 pass
                             self._hidden_ack.set()
                         elif cmd[0] == "show":
                             try:
-                                win.deiconify()
-                                win.attributes("-topmost", True)
-                                self._make_click_through(win)
+                                state["win"].deiconify()
+                                state["win"].attributes("-topmost", True)
+                                self._make_click_through(state["win"])
                             except Exception:  # noqa: BLE001
                                 pass
                 except queue.Empty:
                     pass
                 if stop:
-                    root.quit()   # break out of mainloop; teardown happens below
+                    state["root"].quit()   # break out of mainloop; teardown happens below
                     return
-                root.after(25, drain)
+                state["root"].after(25, drain)
 
             after_id = root.after(25, drain)
             root.mainloop()
@@ -258,83 +258,70 @@ class DesktopOverlay:
             pass
 
 
-# --- pyautogui integration ---------------------------------------------------
+# --- process-level explicit manager -----------------------------------------
 
-def install_pyautogui_overlay(overlay: DesktopOverlay,
-                              min_move_duration: float = 0.2) -> "callable":
-    """Monkeypatch pyautogui mouse primitives to drive ``overlay``.
 
-    Returns an uninstaller that restores the originals. The wrappers:
-      * slow teleport-style moves to ``min_move_duration`` so the cursor (and
-        the highlight ring) are followable,
-      * move the ring before every click and play a ripple at the target.
-    All overlay calls are best-effort; the real pyautogui call always runs.
-    """
-    try:
-        import pyautogui
-    except Exception:  # noqa: BLE001
-        return lambda: None
-    if not overlay.active:
-        return lambda: None
+class OverlayManager:
+    """Own at most one host-desktop overlay for the process-global lease."""
 
-    orig_moveto = pyautogui.moveTo
-    orig_click = pyautogui.click
-    orig_dragto = getattr(pyautogui, "dragTo", None)
-    orig_mousedown = getattr(pyautogui, "mouseDown", None)
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._owner: str | None = None
+        self._overlay: DesktopOverlay | None = None
 
-    def _xy(x, y) -> Optional[Tuple[float, float]]:
-        try:
-            if x is None or y is None:
-                px, py = pyautogui.position()
-                return float(x if x is not None else px), float(y if y is not None else py)
-            return float(x), float(y)
-        except Exception:  # noqa: BLE001
-            return None
+    def open(self, owner: str) -> None:
+        with self._lock:
+            if self._owner == owner:
+                return
+            if self._owner is not None:
+                raise RuntimeError("overlay is already owned by another request")
+            overlay = DesktopOverlay().start()
+            self._owner = owner
+            self._overlay = overlay
 
-    def moveTo(x=None, y=None, duration=0.0, *a, **k):  # noqa: N802 - match pyautogui
-        pt = _xy(x, y)
-        if pt:
-            overlay.move_to(*pt)
-        dur = max(duration or 0.0, min_move_duration)
-        return orig_moveto(x, y, duration=dur, *a, **k)
+    def before_observe(self, owner: str) -> None:
+        with self._lock:
+            if self._owner == owner and self._overlay is not None:
+                self._overlay.hide()
 
-    def click(x=None, y=None, *a, **k):
-        pt = _xy(x, y)
-        if pt:
-            overlay.move_to(*pt)
-            time.sleep(min_move_duration)
-            overlay.ripple(*pt)
-        return orig_click(x, y, *a, **k)
+    def after_observe(self, owner: str) -> None:
+        with self._lock:
+            if self._owner == owner and self._overlay is not None:
+                self._overlay.show()
 
-    pyautogui.moveTo = moveTo
-    pyautogui.click = click
+    def before_action(
+        self,
+        owner: str,
+        action: str,
+        x: float | None,
+        y: float | None,
+    ) -> None:
+        with self._lock:
+            if self._owner != owner or self._overlay is None or x is None or y is None:
+                return
+            self._overlay.move_to(x, y)
+            if "click" in action or "drag" in action:
+                self._overlay.ripple(x, y)
 
-    if orig_dragto is not None:
-        def dragTo(x=None, y=None, duration=0.0, *a, **k):  # noqa: N802
-            pt = _xy(x, y)
-            if pt:
-                overlay.move_to(*pt)
-            return orig_dragto(x, y, duration=max(duration or 0.0, min_move_duration), *a, **k)
-        pyautogui.dragTo = dragTo
+    def close(self, owner: str) -> None:
+        with self._lock:
+            if self._owner != owner:
+                return
+            overlay = self._overlay
+            self._owner = None
+            self._overlay = None
+        if overlay is not None:
+            overlay.close()
 
-    if orig_mousedown is not None:
-        def mouseDown(x=None, y=None, *a, **k):  # noqa: N802
-            pt = _xy(x, y)
-            if pt:
-                overlay.move_to(*pt)
-                overlay.ripple(*pt)
-            return orig_mousedown(x, y, *a, **k)
-        pyautogui.mouseDown = mouseDown
+    def snapshot(self) -> dict[str, object]:
+        with self._lock:
+            return {
+                "active": bool(self._overlay and self._overlay.active),
+                "owner": self._owner,
+            }
 
-    def uninstall() -> None:
-        pyautogui.moveTo = orig_moveto
-        pyautogui.click = orig_click
-        if orig_dragto is not None:
-            pyautogui.dragTo = orig_dragto
-        if orig_mousedown is not None:
-            pyautogui.mouseDown = orig_mousedown
 
-    return uninstall
+OVERLAY_MANAGER = OverlayManager()
 
 
 if __name__ == "__main__":  # manual visual test: python -m driver.overlay

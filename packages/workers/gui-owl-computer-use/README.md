@@ -15,7 +15,7 @@ Router responses endpoint.
                 ┌──────────────────────────────────────────────┐
 task ──▶        │  observe → routed model plans+grounds+decides → act → …    │
                 │   model  → local SciForge Model Router                      │
-                │   act    → DesktopExecutor (local, the only OS layer) │
+                │   act    → SessionInputChannel → routed backend       │
                 └──────────────────────────────────────────────┘
 ```
 
@@ -66,12 +66,14 @@ model/provider selection and policy.
 | Grounding model driver (prompt, call, parse, coord mapping) | `cua/owl_agent.py` |
 | Mobile-Agent-v3 reflector | `cua/reflector.py` |
 | Env-driven config | `cua/config.py` |
-| Cancellation registry | `cua/cancel.py` |
+| Session/request/lease and cancellation authority | `cua/session_registry.py` |
 | **MCP** stdio transport adapter | `cua/mcp_server.py` |
 | **HTTP** ServiceResult sidecar | `cua/server.py` |
 | Local entry (`--stdio` / `--http`) | `cua/cli.py` |
-| Cross-platform desktop executor | `driver/desktop.py` |
-| Click-through mouse overlay | `driver/overlay.py` |
+| Backend protocol and capability routing | `driver/backend.py`, `driver/router.py` |
+| Target-bound runner facade | `driver/channel.py` |
+| Approved process-global compatibility backend | `driver/backends/legacy_pyautogui.py` |
+| Explicit-hook click-through mouse overlay | `driver/overlay.py` |
 | Pure contract/result/parse tests | `tests/test_contract.py` |
 | Development-only local model serve helper | `server/serve-gui-owl-32b.sh` |
 | One-click launcher: Model Router config + service + SciForge GUI | `一键启动-computer-use.bat`, `启动-sciforge-computer-use.ps1` |
