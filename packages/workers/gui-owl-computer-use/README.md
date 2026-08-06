@@ -75,7 +75,7 @@ model/provider selection and policy.
 | Approved process-global compatibility backend | `driver/backends/legacy_pyautogui.py` |
 | Target-scoped Chromium bridge | `driver/backends/cdp_adapter.py`, `src/main/services/computer-use-cdp-adapter.ts` |
 | Pattern-driven Windows UI Automation backend | `driver/backends/windows_uia.py` |
-| Isolated environment provider SPI (unavailable by default) | `driver/backends/isolated_desktop.py` |
+| Isolated environment SPI and optional P6a remote Worker controller (unavailable by default) | `driver/backends/isolated_desktop.py`, `driver/backends/remote_windows_worker.py` |
 | Explicit-hook click-through mouse overlay | `driver/overlay.py` |
 | Pure contract/result/parse tests | `tests/test_contract.py` |
 | Development-only local model serve helper | `server/serve-gui-owl-32b.sh` |
@@ -162,7 +162,7 @@ disabling the target-bound channel and backend routing introduced earlier.
 - [Operations, diagnostics and rollback](docs/computer-use-operations.md)
 - [Approval trust boundary ADR](docs/adr-001-approval-trust-boundary.md)
 
-Current controlled evidence is `151 passed, 10 opt-in skipped` for the default
+Current controlled evidence is `173 passed, 10 opt-in skipped` for the default
 Python suite, `5 passed, 1 explicit skip` for the test-owned headless CDP suite,
 and `4 passed` for project-owned Win32 UIA windows. These results do not prove
 ordinary Chrome, Office, VS Code, a real isolated desktop provider, or three
@@ -171,10 +171,12 @@ physical Windows input desktops. P5 did not run Legacy real-input smoke.
 ### Isolated desktop provider SPI
 
 P4 defines the lifecycle boundary for an infrastructure-owned isolated
-environment, but SciForge does not ship or auto-enable an RDP, VM, Hyper-V or
-Windows Sandbox provider. Consequently `isolated-desktop` reports
-`ISOLATED_DESKTOP_UNAVAILABLE` by default. A provider mock passing unit tests is
-not evidence that three real isolated desktops are available.
+environment. P6a adds a fail-closed HTTPS/mTLS Controller for one explicitly
+configured attached remote Windows Worker, but this repository still does not
+ship the Guest Worker, VM image, credentials, provisioning control plane, RDP,
+Hyper-V or Windows Sandbox infrastructure. Consequently `isolated-desktop`
+reports `ISOLATED_DESKTOP_UNAVAILABLE` by default. Controller/fake-transport
+unit tests are not evidence that even one real isolated desktop is available.
 
 ### Optional CDP/Playwright backend
 

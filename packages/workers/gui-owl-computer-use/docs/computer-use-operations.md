@@ -60,6 +60,12 @@ Check these fields first:
 - Leaving the isolated provider unconfigured keeps it explicitly unavailable;
   it will not take over CDP/UIA/Legacy targets.
 
+P6a can connect to one preconfigured attached remote Windows Worker only when
+all `SCIFORGE_CUA_REMOTE_WORKER_*` URL, environment identity, CA, client
+certificate and client key values are present. Partial configuration fails
+closed. The repository does not ship that Guest Worker or provision/destroy a
+VM, so fake transport tests must not be reported as a real isolated desktop.
+
 `queueIfBusy=true` is not implemented and returns `QUEUE_NOT_SUPPORTED`.
 Callers should use an explicit bounded retry policy for `SESSION_BUSY`,
 `TARGET_BUSY` or `HOST_INPUT_BUSY`.

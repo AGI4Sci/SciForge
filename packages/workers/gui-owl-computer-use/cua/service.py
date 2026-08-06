@@ -32,10 +32,12 @@ def _default_router() -> BackendRouter:
     from driver.backends.cdp_adapter import CdpAdapterBackend
     from driver.backends.isolated_desktop import IsolatedDesktopBackend
     from driver.backends.legacy_pyautogui import LegacyPyAutoGUIBackend
+    from driver.backends.remote_windows_worker import RemoteWindowsWorkerProvider
     from driver.backends.windows_uia import WindowsUIABackend
 
     return BackendRouter([
-        CdpAdapterBackend(), WindowsUIABackend(), IsolatedDesktopBackend(),
+        CdpAdapterBackend(), WindowsUIABackend(),
+        IsolatedDesktopBackend(RemoteWindowsWorkerProvider()),
         LegacyPyAutoGUIBackend(),
     ])
 
