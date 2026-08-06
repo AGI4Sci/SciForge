@@ -5,7 +5,7 @@ from cua import result as R
 from cua.capabilities import BackendId
 from cua.isolation import IsolationLevel
 from cua.service import ComputerUseService
-from cua.session_registry import LeaseScope
+from cua.session_registry import LeaseScope, RequestState
 from cua.target import TargetKind
 from driver.channel import ChannelError
 from driver.router import BackendRouter
@@ -214,4 +214,166 @@ def test_force_release_waits_for_in_flight_action_before_closing_session():
     status = service.status()
     assert status["activeChannels"] == 0
     assert status["registry"]["counts"]["sessions"] == 0
+    assert status["registry"]["counts"]["activeLeases"] == 0
+
+
+def test_force_release_waits_for_in_flight_observation_before_closing_handle():
+    entered = Event()
+    observe_release = Event()
+
+    class BlockingObserveBackend(FakeBackend):
+        def observe(self, handle):
+            entered.set()
+            observe_release.wait(2)
+            return super().observe(handle)
+
+    backend = BlockingObserveBackend()
+    service = ComputerUseService(router=BackendRouter([backend]))
+    service.bind_session({
+        "sessionId": "session-1",
+        "owner": {"runtimeId": "runtime", "threadId": "thread"},
+        "target": target(1),
+    })
+
+    def execute(_request, channel):
+        try:
+            channel.observe()
+            if channel.cancelled:
+                raise ChannelError("CANCEL_PENDING", "cancelled during observation")
+            return R.ok({"status": "done"})
+        except ChannelError as error:
+            return R.err(error.code, str(error))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        running = pool.submit(
+            service.run,
+            {"instruction": "observe", "sessionId": "session-1", "requestId": "request-1"},
+            execute,
+        )
+        assert entered.wait(1)
+        releasing = pool.submit(
+            service.release_session,
+            {"sessionId": "session-1", "force": True, "reason": "test_release"},
+        )
+        assert not releasing.done()
+        snapshot = service.registry.snapshot()
+        assert snapshot["leases"][0]["inFlightActionCount"] == 1
+        assert backend.open_handle_count == 1
+        observe_release.set()
+        release_result = releasing.result()
+        run_result = running.result()
+
+    assert release_result["ok"] is True
+    assert run_result["error"]["code"] == "CANCEL_PENDING"
+    assert backend.open_handle_count == 0
+    status = service.status()
+    assert status["activeChannels"] == 0
+    assert status["registry"]["counts"]["activeLeases"] == 0
+
+
+def test_cleanup_failure_keeps_channel_and_lease_until_force_release_retry():
+    backend = FakeBackend(fail_close=True)
+    service = ComputerUseService(router=BackendRouter([backend]))
+    service.bind_session({
+        "sessionId": "session-1",
+        "owner": {"runtimeId": "runtime", "threadId": "thread"},
+        "target": target(1),
+    })
+
+    result = service.run(
+        {"instruction": "inspect", "sessionId": "session-1", "requestId": "request-1"},
+        lambda _request, channel: channel.observe() and R.ok({"status": "done"}),
+    )
+
+    assert result["error"]["code"] == "CLEANUP_INCOMPLETE"
+    assert backend.open_handle_count == 1
+    status = service.status()
+    assert status["activeChannels"] == 1
+    assert status["registry"]["counts"]["requests"] == 1
+    assert status["registry"]["counts"]["activeLeases"] == 1
+
+    backend.fail_close = False
+    released = service.release_session({
+        "sessionId": "session-1",
+        "force": True,
+        "reason": "cleanup_retry",
+    })
+    assert released["ok"] is True
+    assert backend.open_handle_count == 0
+    status = service.status()
+    assert status["activeChannels"] == 0
+    assert status["registry"]["counts"]["sessions"] == 0
+    assert status["registry"]["counts"]["requests"] == 0
+    assert status["registry"]["counts"]["activeLeases"] == 0
+
+
+def test_cancel_during_backend_open_uses_channel_cleanup_and_quarantines_failure():
+    class CancellingOpenBackend(FakeBackend):
+        def open(self, target_descriptor, context):
+            handle = super().open(target_descriptor, context)
+            context.cancellation.set()
+            return handle
+
+    backend = CancellingOpenBackend(fail_close=True)
+    service = ComputerUseService(router=BackendRouter([backend]))
+    service.bind_session({
+        "sessionId": "session-1",
+        "owner": {"runtimeId": "runtime", "threadId": "thread"},
+        "target": target(1),
+    })
+
+    result = service.run(
+        {"instruction": "inspect", "sessionId": "session-1", "requestId": "request-1"},
+        lambda _request, _channel: R.ok({"status": "must-not-run"}),
+    )
+    assert result["error"]["code"] == "CLEANUP_INCOMPLETE"
+    assert service.status()["registry"]["counts"]["activeLeases"] == 1
+    assert backend.open_handle_count == 1
+
+    backend.fail_close = False
+    released = service.release_session({
+        "sessionId": "session-1",
+        "force": True,
+        "reason": "cleanup_retry",
+    })
+    assert released["ok"] is True
+    assert backend.open_handle_count == 0
+    assert service.status()["registry"]["counts"]["activeLeases"] == 0
+
+
+def test_cancel_during_backend_open_cleans_once_and_records_cancelled_terminal():
+    class CancellingOpenBackend(FakeBackend):
+        def __init__(self):
+            super().__init__()
+            self.close_calls = 0
+
+        def open(self, target_descriptor, context):
+            handle = super().open(target_descriptor, context)
+            context.cancellation.set()
+            return handle
+
+        def close(self, handle, reason):
+            self.close_calls += 1
+            return super().close(handle, reason)
+
+    backend = CancellingOpenBackend()
+    service = ComputerUseService(router=BackendRouter([backend]))
+    service.bind_session({
+        "sessionId": "session-1",
+        "owner": {"runtimeId": "runtime", "threadId": "thread"},
+        "target": target(1),
+    })
+
+    result = service.run(
+        {"instruction": "inspect", "sessionId": "session-1", "requestId": "request-1"},
+        lambda _request, _channel: R.ok({"status": "must-not-run"}),
+    )
+
+    assert result["error"]["code"] == "CANCEL_PENDING"
+    assert backend.close_calls == 1
+    assert backend.open_handle_count == 0
+    assert service.registry.get_request("request-1").state is RequestState.CANCELLED
+    status = service.status()
+    assert status["activeChannels"] == 0
+    assert status["registry"]["counts"]["requests"] == 0
     assert status["registry"]["counts"]["activeLeases"] == 0

@@ -71,7 +71,8 @@ describe('computer-use MCP server', () => {
 
       const tools = await client.listTools()
       expect(tools.tools.map((tool) => tool.name)).toEqual(computerUseMcpEnabledTools())
-      expect(tools.tools[0]?.annotations).toMatchObject({
+      const runTool = tools.tools.find((tool) => tool.name === COMPUTER_USE_MCP_TOOL_NAME)
+      expect(runTool?.annotations).toMatchObject({
         title: 'Computer use',
         readOnlyHint: false,
         openWorldHint: true

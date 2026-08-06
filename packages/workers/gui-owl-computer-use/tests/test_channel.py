@@ -80,15 +80,25 @@ def test_channel_cancel_before_action_prevents_commit():
     channel.close("cancelled")
 
 
-def test_channel_close_is_idempotent_and_releases_lease_after_backend_close_error():
+def test_channel_close_quarantines_lease_until_backend_close_retry_succeeds():
     registry, backend, channel = make_channel(backend=FakeBackend(fail_close=True))
     first = channel.close("failed")
-    second = channel.close("ignored")
+    assert first.closed is False
+    assert first.lease_released is False
+    assert first.errors == ["backend close: fake close failed"]
+    assert backend.open_handle_count == 1
+    assert registry.snapshot_counts()["activeLeases"] == 1
+
+    backend.fail_close = False
+    second = channel.close("retry")
     assert first is second
-    assert first.lease_released is True
+    assert second.closed is True
+    assert second.lease_released is True
     assert first.errors == ["backend close: fake close failed"]
     assert backend.open_handle_count == 0
     assert registry.snapshot_counts()["activeLeases"] == 0
+
+    assert channel.close("idempotent") is second
 
 
 def test_channel_surfaces_unknown_action_outcome_as_non_retryable_classification():

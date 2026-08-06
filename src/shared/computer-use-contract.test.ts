@@ -1,6 +1,5 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import fixturePayload from '../../packages/workers/gui-owl-computer-use/tests/fixtures/computer_use_contract_v2.json'
 import {
   computerUseRunInputSchema,
   isComputerUseV2Input,
@@ -14,10 +13,7 @@ type FixtureCase = {
   protocolVersion?: number
 }
 
-const fixtures = JSON.parse(readFileSync(join(
-  process.cwd(),
-  'packages/workers/gui-owl-computer-use/tests/fixtures/computer_use_contract_v2.json'
-), 'utf8')) as { valid: FixtureCase[]; invalid: FixtureCase[] }
+const fixtures = fixturePayload as { valid: FixtureCase[]; invalid: FixtureCase[] }
 
 describe('computer-use shared v2 contract', () => {
   for (const fixture of fixtures.valid) {

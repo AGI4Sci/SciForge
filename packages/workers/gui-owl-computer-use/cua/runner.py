@@ -157,9 +157,13 @@ def _run_loop(
         except Exception as error:  # noqa: BLE001
             if isinstance(error, ChannelError):
                 raise
-            steps.append({"step": index, "error": str(error)})
-            status = "error"
-            break
+            return R.err(
+                "UNAVAILABLE",
+                f"model call failed: {error}",
+                retryable=True,
+                details={"step": index},
+                prov=_provenance(channel, started),
+            ), "failed"
         if channel.cancelled:
             raise ChannelError("CANCEL_PENDING", "request was cancelled during model call")
 

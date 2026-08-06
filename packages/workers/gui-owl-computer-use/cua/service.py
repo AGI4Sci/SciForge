@@ -66,6 +66,7 @@ class ComputerUseService:
         request_started = False
         terminal_state = RequestState.FAILED
         terminal_reason = "request_failed"
+        result: dict[str, Any]
         try:
             session, ephemeral = self._resolve_session(request)
             session_id = session.session_id
@@ -116,51 +117,61 @@ class ComputerUseService:
             )
             with self._channels_lock:
                 self._channels[request_id] = channel
+            if cancellation.is_set():
+                raise RoutingError("CANCEL_PENDING", "request was cancelled while opening backend")
             self.registry.transition_request(request_id, RequestState.RUNNING)
             result = executor(request, channel)
             terminal_state, terminal_reason = self._terminal_from_result(result)
-            cleanup = channel.close(terminal_reason)
-            if cleanup.errors:
-                result.setdefault("warnings", []).extend(cleanup.errors)
-            if not cleanup.lease_released:
-                result = R.err(
-                    "CLEANUP_INCOMPLETE",
-                    "channel cleanup did not release its lease",
-                    details={"errors": cleanup.errors, "requestId": request_id},
-                )
-                terminal_state, terminal_reason = RequestState.FAILED, "cleanup_incomplete"
-            return result
         except RoutingError as error:
             terminal_reason = error.code.lower()
-            return R.err(error.code, str(error), details=error.details)
+            result = R.err(error.code, str(error), details=error.details)
         except RegistryError as error:
             terminal_reason = error.code.lower()
-            return R.err(error.code, str(error), details=error.details)
+            result = R.err(error.code, str(error), details=error.details)
         except ValueError as error:
             terminal_reason = "invalid_argument"
-            return R.err("INVALID_ARGUMENT", str(error))
+            result = R.err("INVALID_ARGUMENT", str(error))
         except Exception as error:  # noqa: BLE001
             terminal_reason = "internal_error"
-            return R.err("INTERNAL_ERROR", str(error), retryable=False)
-        finally:
-            if channel is not None:
-                channel.close(terminal_reason)
-                with self._channels_lock:
-                    self._channels.pop(request_id, None)
-            if request_started:
-                try:
-                    self.registry.finish_request(
-                        request_id,
-                        terminal_state,
-                        reason=terminal_reason,
-                    )
-                except RegistryError:
-                    pass
-            if ephemeral and session_id is not None:
-                try:
-                    self.registry.close_session(session_id, force=True)
-                except RegistryError:
-                    pass
+            result = R.err("INTERNAL_ERROR", str(error), retryable=False)
+
+        # Exception paths use the same public error envelope as executor
+        # results, so derive their Registry terminal state from that envelope
+        # as well. In particular, cancellation during backend open must finish
+        # as CANCELLED rather than inheriting the default FAILED state.
+        if not result.get("ok"):
+            terminal_state, terminal_reason = self._terminal_from_result(result)
+
+        cleanup = channel.close(terminal_reason) if channel is not None else None
+        cleanup_complete = cleanup is None or cleanup.lease_released
+        if cleanup is not None and cleanup.errors:
+            result.setdefault("warnings", []).extend(cleanup.errors)
+        if cleanup is not None and not cleanup.lease_released:
+            result = R.err(
+                "CLEANUP_INCOMPLETE",
+                "channel cleanup did not release its lease",
+                details={"errors": cleanup.errors, "requestId": request_id},
+            )
+            terminal_state, terminal_reason = RequestState.FAILED, "cleanup_incomplete"
+
+        if channel is not None and cleanup_complete:
+            with self._channels_lock:
+                self._channels.pop(request_id, None)
+        if request_started and cleanup_complete:
+            try:
+                self.registry.finish_request(
+                    request_id,
+                    terminal_state,
+                    reason=terminal_reason,
+                )
+            except RegistryError:
+                pass
+        if ephemeral and session_id is not None and cleanup_complete:
+            try:
+                self.registry.close_session(session_id, force=True)
+            except RegistryError:
+                pass
+        return result
 
     def _resolve_session(self, request: dict[str, Any]):
         protocol = request["protocolVersion"]
@@ -250,7 +261,15 @@ class ComputerUseService:
                         "request cancellation is pending before channel ownership is established",
                         details={"requestId": request_id, "sessionId": session_id},
                     )
-                channel.close(reason)
+                cleanup = channel.close(reason)
+                if not cleanup.lease_released:
+                    return R.err(
+                        "CLEANUP_INCOMPLETE",
+                        "channel cleanup did not release its lease",
+                        details={"errors": cleanup.errors, "requestId": request_id},
+                    )
+                with self._channels_lock:
+                    self._channels.pop(request_id, None)
                 self.registry.finish_request(request_id, RequestState.CANCELLED, reason=reason)
             session = self.registry.close_session(session_id, force=False)
             return R.ok({"sessionId": session.session_id, "targetId": session.target.target_id, "state": session.state.value, "reason": reason})

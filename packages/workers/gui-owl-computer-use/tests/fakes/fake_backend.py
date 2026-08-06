@@ -141,11 +141,14 @@ class FakeBackend:
         h = self._as_handle(handle)
         if h.closed:
             return
+        if self.fail_close:
+            # A backend exception does not prove that its handle or owned
+            # system state was released. Keep the fake open so cleanup tests
+            # exercise the conservative lease-quarantine contract.
+            raise RuntimeError("fake close failed")
         h.closed = True
         with self._lock:
             self._open_handles -= 1
-        if self.fail_close:
-            raise RuntimeError("fake close failed")
 
     def write(self, target_id: str, value: str) -> None:
         with self._lock:

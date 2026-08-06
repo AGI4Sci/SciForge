@@ -123,13 +123,10 @@ class BackendRouter:
                 registry.release_lease(lease.lease_id, "backend_open_failed")
                 last_open_error = error
                 continue
-            if open_context.cancellation.is_set():
-                try:
-                    backend.cancel(handle, "cancelled_during_open")
-                finally:
-                    backend.close(handle, "cancelled_during_open")
-                    registry.release_lease(lease.lease_id, "cancelled_during_open")
-                raise RoutingError("CANCEL_PENDING", "request was cancelled while opening backend")
+            # Once open() returns, the handle and lease must have one cleanup
+            # owner. The service immediately wraps this selection in a Channel,
+            # which handles cancellation and retryable close failures without a
+            # second, divergent teardown path in the router.
             return RouterSelection(backend, capability, decision, lease, handle)
 
         raise RoutingError(

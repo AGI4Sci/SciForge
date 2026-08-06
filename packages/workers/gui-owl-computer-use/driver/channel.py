@@ -123,16 +123,19 @@ class SessionInputChannel:
             raise ChannelError("TIMEOUT", "request deadline expired")
 
     def observe(self) -> Observation:
-        self._check_available()
-        observation = self.backend.observe(self.handle)
-        if observation.target_id != self.target.target_id:
-            raise ChannelError(
-                "TARGET_LOST",
-                "backend observation belongs to a different target",
-                details={"expectedTargetId": self.target.target_id, "actualTargetId": observation.target_id},
-            )
-        self._latest_observation = observation
-        return observation
+        # Observation can own a native handle and overlay state just like an
+        # action. Count it as in-flight so force-release/shutdown cannot close
+        # the handle while a capture is still using it.
+        with self.activity():
+            observation = self.backend.observe(self.handle)
+            if observation.target_id != self.target.target_id:
+                raise ChannelError(
+                    "TARGET_LOST",
+                    "backend observation belongs to a different target",
+                    details={"expectedTargetId": self.target.target_id, "actualTargetId": observation.target_id},
+                )
+            self._latest_observation = observation
+            return observation
 
     def perform(self, action: Mapping[str, Any], *, expected_revision: str) -> ActionOutcome:
         self._check_available()
@@ -261,17 +264,27 @@ class SessionInputChannel:
             try:
                 self.registry.begin_release(self.lease.lease_id, reason)
             except Exception as error:
-                self.cleanup.errors.append(f"lease begin release: {error}")
-            try:
-                self.backend.close(self.handle, reason)
-                self.cleanup.closed = True
-            except Exception as error:
-                self.cleanup.errors.append(f"backend close: {error}")
-            try:
-                self.registry.finish_release(self.lease.lease_id)
-                self.cleanup.lease_released = True
-            except Exception as error:
-                self.cleanup.errors.append(f"lease finish release: {error}")
+                self._record_cleanup_error(f"lease begin release: {error}")
+            if not self.cleanup.closed:
+                try:
+                    self.backend.close(self.handle, reason)
+                    self.cleanup.closed = True
+                except Exception as error:
+                    self._record_cleanup_error(f"backend close: {error}")
+            # A failed backend close may leave owned keys, buttons, overlay or
+            # target handles live. Keep the lease quarantined until a later
+            # close retry succeeds instead of allowing another request to
+            # overlap with that residual state.
+            if self.cleanup.closed and not self.cleanup.lease_released:
+                try:
+                    self.registry.finish_release(self.lease.lease_id)
+                    self.cleanup.lease_released = True
+                except Exception as error:
+                    self._record_cleanup_error(f"lease finish release: {error}")
             with self._state:
-                self._closed = True
+                self._closed = self.cleanup.closed and self.cleanup.lease_released
             return self.cleanup
+
+    def _record_cleanup_error(self, message: str) -> None:
+        if message not in self.cleanup.errors:
+            self.cleanup.errors.append(message)

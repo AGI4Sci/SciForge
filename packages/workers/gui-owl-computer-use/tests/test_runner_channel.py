@@ -7,6 +7,7 @@ from cua.capabilities import Verification
 from cua.config import Config
 from cua.runner import run_task
 from cua.service import ComputerUseService
+from cua.session_registry import RequestState
 from driver.router import BackendRouter
 from tests.fakes.fake_backend import FakeBackend
 
@@ -86,11 +87,11 @@ def test_model_failure_still_closes_channel_and_writes_terminal_manifest(monkeyp
         {"instruction": "inspect", "sessionId": "session-1", "requestId": "request-model"},
         lambda request, channel: run_task(cfg, request["instruction"], channel),
     )
-    assert result["ok"] is True
-    assert result["data"]["status"] == "error"
+    assert result["error"]["code"] == "UNAVAILABLE"
     manifest = json.loads((tmp_path / "request-model" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["terminal"] == "failed"
     assert manifest["cleanup"]["leaseReleased"] is True
+    assert service.registry.get_request("request-model").state is RequestState.FAILED
     assert backend.open_handle_count == 0
 
 
