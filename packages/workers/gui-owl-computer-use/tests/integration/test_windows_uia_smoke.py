@@ -254,6 +254,11 @@ def test_three_sessions_write_invoke_toggle_without_cross_line(uia_hosts) -> Non
         assert "checked=1" in result["data"]["status"]
     counts = service.registry.snapshot_counts()
     assert counts["requests"] == counts["activeLeases"] == 0
+    for label in LABELS:
+        assert service.release_session({"sessionId": f"uia-smoke-session-{label}"})["ok"] is True
+    assert service.registry.snapshot_counts()["sessions"] == 0
+    assert service.status()["activeChannels"] == 0
+    assert service.cleanup_pending() == []
     assert _host_state() == desktop_before
 
 
@@ -304,6 +309,9 @@ def test_stale_coordinate_and_cancel_are_side_effect_free(uia_hosts) -> None:
     )
     assert result["error"]["code"] == "CANCEL_PENDING"
     assert service.registry.snapshot_counts()["activeLeases"] == 0
+    assert service.registry.snapshot_counts()["sessions"] == 0
+    assert service.status()["activeChannels"] == 0
+    assert service.cleanup_pending() == []
 
 
 def test_destroyed_target_does_not_break_surviving_windows(uia_hosts) -> None:

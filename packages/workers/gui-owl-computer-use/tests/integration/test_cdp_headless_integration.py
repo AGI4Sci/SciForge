@@ -489,9 +489,14 @@ def test_three_sessions_real_transport_do_not_cross_targets(cdp_stack: CdpStack)
     assert all(state[name]["clicks"] == 1 for name in PAGE_NAMES)
     assert all(state[name]["scroll"] > 0 for name in PAGE_NAMES)
     assert len({result["data"]["firstHash"] for result in results}) == 3
-    assert service.status()["activeChannels"] == 0
+    status = service.status()
+    assert status["activeChannels"] == 0
+    assert status["cleanupPending"] == []
     counts = service.registry.snapshot_counts()
     assert counts["requests"] == counts["activeLeases"] == 0
+    for name in PAGE_NAMES:
+        assert service.release_session({"sessionId": f"cdp-session-{name}"})["ok"] is True
+    assert service.registry.snapshot_counts()["sessions"] == 0
     _assert_no_host_focus_or_clipboard_change(stack.desktop_before)
 
 
@@ -535,6 +540,9 @@ def test_cancelled_channel_does_not_commit_to_its_page(cdp_stack: CdpStack) -> N
     assert result["error"]["code"] == "CANCEL_PENDING"
     assert stack.state.snapshot()["C"]["text"] == before
     assert service.registry.snapshot_counts()["activeLeases"] == 0
+    assert service.registry.snapshot_counts()["sessions"] == 0
+    assert service.status()["activeChannels"] == 0
+    assert service.cleanup_pending() == []
 
 
 def test_target_loss_is_structured_and_does_not_break_other_page(cdp_stack: CdpStack) -> None:
@@ -606,3 +614,8 @@ def test_target_loss_is_structured_and_does_not_break_other_page(cdp_stack: CdpS
     assert stack.state.snapshot()["A"]["text"] == "survivor-A"
     counts = service.registry.snapshot_counts()
     assert counts["requests"] == counts["activeLeases"] == 0
+    for name in ("A", "B"):
+        assert service.release_session({"sessionId": f"loss-session-{name}"})["ok"] is True
+    assert service.registry.snapshot_counts()["sessions"] == 0
+    assert service.status()["activeChannels"] == 0
+    assert service.cleanup_pending() == []
