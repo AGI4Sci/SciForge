@@ -36,3 +36,7 @@ sidecar callers to bypass the host approval boundary.
   default `required` mode.
 - `CUA_INVOCATION_PROOF_MODE=legacy` is retained only as an explicit local
   rollback. It restores the old trust boundary and is not equivalent security.
+
+Operational guidance and the final backend boundary are documented in
+[`computer-use-operations.md`](computer-use-operations.md) and
+[`computer-use-backend-capability-matrix.md`](computer-use-backend-capability-matrix.md).

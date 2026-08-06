@@ -156,6 +156,18 @@ Artifact retention is disabled unless an age or count limit is configured.
 Set `CUA_LEASE_REAPER_ENABLED=false` to roll back the watchdog without
 disabling the target-bound channel and backend routing introduced earlier.
 
+## P5 capability and operations references
+
+- [Backend capability matrix](docs/computer-use-backend-capability-matrix.md)
+- [Operations, diagnostics and rollback](docs/computer-use-operations.md)
+- [Approval trust boundary ADR](docs/adr-001-approval-trust-boundary.md)
+
+Current controlled evidence is `151 passed, 10 opt-in skipped` for the default
+Python suite, `5 passed, 1 explicit skip` for the test-owned headless CDP suite,
+and `4 passed` for project-owned Win32 UIA windows. These results do not prove
+ordinary Chrome, Office, VS Code, a real isolated desktop provider, or three
+physical Windows input desktops. P5 did not run Legacy real-input smoke.
+
 ### Isolated desktop provider SPI
 
 P4 defines the lifecycle boundary for an infrastructure-owned isolated
