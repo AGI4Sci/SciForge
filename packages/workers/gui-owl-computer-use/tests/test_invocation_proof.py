@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 
 import pytest
 
-from cua.invocation_proof import InvocationProofError, InvocationProofVerifier, argument_digest
+from cua.invocation_proof import (
+    InvocationProofError, InvocationProofVerifier, argument_digest, proof_message,
+)
 
 
 ARGS = {"execute": True, "instruction": "type alpha", "nested": {"z": 1, "a": False}}
@@ -32,6 +36,14 @@ def _encoded(proof=PROOF):
     return base64.urlsafe_b64encode(
         json.dumps(proof, ensure_ascii=False, separators=(",", ":")).encode()
     ).decode().rstrip("=")
+
+
+def _signed(**changes):
+    proof = {**PROOF, **changes}
+    proof["signature"] = hmac.new(
+        b"test-secret", proof_message(proof).encode(), hashlib.sha256,
+    ).hexdigest()
+    return proof
 
 
 def test_typescript_fixed_vector_verifies_and_is_single_use():
@@ -85,6 +97,59 @@ def test_expired_missing_and_argument_mismatch_are_distinct():
             expected_request_id="mcp-cua-request-1", now_ms=1_800_000_010_000,
         )
     assert mismatch.value.code == "INVOCATION_IDENTITY_MISMATCH"
+
+
+@pytest.mark.parametrize("field", ["turnId", "callId"])
+@pytest.mark.parametrize("separator", ["\r", "\n", "\0"])
+def test_identity_fields_reject_signature_message_separators(field, separator):
+    proof = _signed(**{field: f"left{separator}right"})
+    with pytest.raises(InvocationProofError) as caught:
+        InvocationProofVerifier("test-secret").verify(
+            _encoded(proof), tool="computer_use", arguments=ARGS,
+            expected_request_id="mcp-cua-request-1", now_ms=1_800_000_010_000,
+        )
+    assert caught.value.code == "INVOCATION_IDENTITY_MISMATCH"
+
+
+def test_replay_cache_fails_closed_without_evicting_live_entries():
+    verifier = InvocationProofVerifier("test-secret", max_entries=1)
+    verifier.verify(
+        _encoded(), tool="computer_use", arguments=ARGS,
+        expected_request_id="mcp-cua-request-1", now_ms=1_800_000_010_000,
+    )
+    second = _signed(proofId="cua-proof-2", nonce="nonce-2")
+    with pytest.raises(InvocationProofError) as capacity:
+        verifier.verify(
+            _encoded(second), tool="computer_use", arguments=ARGS,
+            expected_request_id="mcp-cua-request-1", now_ms=1_800_000_010_001,
+        )
+    assert capacity.value.code == "APPROVAL_PROOF_CAPACITY"
+    with pytest.raises(InvocationProofError) as replay:
+        verifier.verify(
+            _encoded(), tool="computer_use", arguments=ARGS,
+            expected_request_id="mcp-cua-request-1", now_ms=1_800_000_010_002,
+        )
+    assert replay.value.code == "APPROVAL_PROOF_REPLAYED"
+    renewed = _signed(
+        proofId="cua-proof-3", nonce="nonce-3",
+        issuedAtMs=1_800_000_040_000, expiresAtMs=1_800_000_070_000,
+    )
+    assert verifier.verify(
+        _encoded(renewed), tool="computer_use", arguments=ARGS,
+        expected_request_id="mcp-cua-request-1", now_ms=1_800_000_040_000,
+    ) is not None
+
+
+def test_proof_from_a_previous_service_instance_is_rejected():
+    verifier = InvocationProofVerifier(
+        "test-secret", not_before_ms=PROOF["issuedAtMs"] + 1,
+    )
+    with pytest.raises(InvocationProofError) as caught:
+        verifier.verify(
+            _encoded(), tool="computer_use", arguments=ARGS,
+            expected_request_id="mcp-cua-request-1", now_ms=1_800_000_010_000,
+        )
+    assert caught.value.code == "APPROVAL_PROOF_EXPIRED"
 
 
 def test_argument_digest_sorts_nested_keys():

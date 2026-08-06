@@ -49,6 +49,7 @@ class InvocationProofVerifier:
         mode: str = "required",
         max_ttl_ms: int = 300_000,
         max_entries: int = 4096,
+        not_before_ms: int | None = None,
     ) -> None:
         if mode not in {"required", "legacy"}:
             raise ValueError("invocation proof mode must be required or legacy")
@@ -58,6 +59,9 @@ class InvocationProofVerifier:
         self.mode = mode
         self.max_ttl_ms = max_ttl_ms
         self.max_entries = max_entries
+        self.not_before_ms = (
+            int(time.time() * 1000) if not_before_ms is None else not_before_ms
+        )
         self._lock = threading.RLock()
         self._used: "OrderedDict[str, int]" = OrderedDict()
 
@@ -91,6 +95,11 @@ class InvocationProofVerifier:
         current = int(time.time() * 1000) if now_ms is None else now_ms
         issued = proof["issuedAtMs"]
         expires = proof["expiresAtMs"]
+        if issued < self.not_before_ms:
+            raise InvocationProofError(
+                "APPROVAL_PROOF_EXPIRED",
+                "invocation proof predates this service instance",
+            )
         if expires <= issued or expires - issued > self.max_ttl_ms:
             raise InvocationProofError("APPROVAL_PROOF_INVALID", "invocation proof TTL is invalid")
         if current < issued - 5000 or current > expires:
@@ -113,9 +122,12 @@ class InvocationProofVerifier:
             self._prune(current)
             if replay_key in self._used:
                 raise InvocationProofError("APPROVAL_PROOF_REPLAYED", "invocation proof was already used")
+            if len(self._used) >= self.max_entries:
+                raise InvocationProofError(
+                    "APPROVAL_PROOF_CAPACITY",
+                    "invocation proof replay protection is at capacity",
+                )
             self._used[replay_key] = expires
-            while len(self._used) > self.max_entries:
-                self._used.popitem(last=False)
         return InvocationIdentity(
             proof_id=proof["proofId"],
             request_id=proof["requestId"],
@@ -188,7 +200,11 @@ def _validate_shape(proof: dict[str, Any]) -> None:
             raise InvocationProofError("INVOCATION_IDENTITY_MISMATCH", f"invocation {field} is invalid")
     for field in ("turnId", "callId"):
         value = proof.get(field)
-        if not isinstance(value, str) or len(value) > 256:
+        if (
+            not isinstance(value, str)
+            or len(value) > 256
+            or any(separator in value for separator in ("\r", "\n", "\0"))
+        ):
             raise InvocationProofError("INVOCATION_IDENTITY_MISMATCH", f"invocation {field} is invalid")
     if proof.get("approval") != "confirmation":
         raise InvocationProofError("APPROVAL_PROOF_INVALID", "invocation confirmation is missing")

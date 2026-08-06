@@ -163,7 +163,12 @@ function stableJson(value: unknown): string {
 }
 
 function safeText(value: unknown): string | null {
-  return typeof value === 'string' && value.length > 0 && value.length <= 256 ? value : null
+  return typeof value === 'string'
+    && value.length > 0
+    && value.length <= 256
+    && !/[\r\n\0]/u.test(value)
+    ? value
+    : null
 }
 
 function optionalText(value: unknown): string | null | undefined {

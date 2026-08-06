@@ -53,4 +53,13 @@ describe('computer-use invocation proof', () => {
     })).toEqual(trusted)
     expect(parseTrustedComputerUseInvocation({ approval: trusted })).toBeNull()
   })
+
+  it.each(['\r', '\n', '\0'])('rejects proof-message separators in trusted identity fields', (separator) => {
+    expect(parseTrustedComputerUseInvocation({
+      [COMPUTER_USE_INVOCATION_META_KEY]: { ...trusted, turnId: `left${separator}right` }
+    })).toBeNull()
+    expect(parseTrustedComputerUseInvocation({
+      [COMPUTER_USE_INVOCATION_META_KEY]: { ...trusted, callId: `left${separator}right` }
+    })).toBeNull()
+  })
 })

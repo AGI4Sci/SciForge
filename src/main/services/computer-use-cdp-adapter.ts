@@ -180,11 +180,10 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
         })
       } else if (name === 'type') {
         const text = String(action.text ?? '')
+        const beforeReadback = await activeElementReadback(value.page)
         await value.page.keyboard.insertText(text)
-        const readback = await activeElementReadback(value.page)
-        verification = readback.includes(text)
-          ? { status: 'verified', details: { readback } }
-          : { status: 'failed', details: { reason: 'typed-text-not-found-in-active-element', readback } }
+        const afterReadback = await activeElementReadback(value.page)
+        verification = insertedTextVerification(beforeReadback, afterReadback, text)
       } else if (name === 'key' || name === 'hotkey') {
         const keys = Array.isArray(action.keys) ? action.keys.map(String) : [String(action.keys ?? '')]
         const chord = keys.filter(Boolean).map(playwrightKey).join('+')
@@ -234,7 +233,7 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
   })
 }
 
-async function captureTargetScreenshot(page: Page): Promise<string> {
+export async function captureTargetScreenshot(page: Page): Promise<string> {
   let rejectClosed: ((reason: Error) => void) | undefined
   let timeout: ReturnType<typeof setTimeout> | undefined
   let cdp: CDPSession | undefined
@@ -244,8 +243,9 @@ async function captureTargetScreenshot(page: Page): Promise<string> {
   // Close can race between the driver's initial handle check and listener setup.
   if (page.isClosed()) onClosed()
   const capture = (async () => {
-    // Chromium may throttle/freeze a background tab's compositor. Activation
-    // is scoped to this headless browser and never changes the host foreground.
+    // Chromium may not render a background target reliably. This activates the
+    // tab inside the explicitly allowlisted debugging browser; capability docs
+    // must expose that visible-browser side effect.
     await page.bringToFront()
     cdp = await page.context().newCDPSession(page)
     const result = await cdp.send('Page.captureScreenshot', {
@@ -389,6 +389,23 @@ async function activeElementReadback(page: Page): Promise<string> {
     if ('value' in element && typeof element.value === 'string') return element.value
     return element.textContent ?? ''
   })
+}
+
+export function insertedTextVerification(
+  beforeReadback: string,
+  afterReadback: string,
+  text: string
+): Record<string, unknown> {
+  return text.length > 0 && afterReadback !== beforeReadback && afterReadback.includes(text)
+    ? { status: 'verified', details: { beforeReadback, afterReadback } }
+    : {
+        status: 'failed',
+        details: {
+          reason: 'typed-text-change-not-confirmed-in-active-element',
+          beforeReadback,
+          afterReadback
+        }
+      }
 }
 
 async function scrollPosition(page: Page): Promise<{ x: number; y: number }> {

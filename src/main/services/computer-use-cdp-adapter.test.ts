@@ -1,6 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  captureTargetScreenshot,
   createPlaywrightCdpDriver,
+  insertedTextVerification,
   startComputerUseCdpAdapter,
   type CdpAdapterDriver,
   type CdpAdapterTarget,
@@ -92,6 +94,36 @@ async function call(
 }
 
 describe('computer-use CDP adapter', () => {
+  it('verifies type only when non-empty text changes the active element readback', () => {
+    expect(insertedTextVerification('', 'alpha', 'alpha')).toMatchObject({ status: 'verified' })
+    expect(insertedTextVerification('alpha', 'alpha', 'alpha')).toMatchObject({
+      status: 'failed',
+      details: { reason: 'typed-text-change-not-confirmed-in-active-element' }
+    })
+    expect(insertedTextVerification('alpha', 'alpha', '')).toMatchObject({ status: 'failed' })
+  })
+
+  it('makes the required target activation explicit before capture', async () => {
+    const send = vi.fn(async () => ({ data: 'target-png' }))
+    const detach = vi.fn(async () => undefined)
+    const bringToFront = vi.fn(async () => undefined)
+    const page = {
+      once: vi.fn(),
+      off: vi.fn(),
+      isClosed: vi.fn(() => false),
+      bringToFront,
+      context: vi.fn(() => ({
+        newCDPSession: vi.fn(async () => ({ send, detach }))
+      }))
+    }
+    await expect(captureTargetScreenshot(page as never)).resolves.toBe('target-png')
+    expect(send).toHaveBeenCalledWith('Page.captureScreenshot', {
+      format: 'png', fromSurface: true, captureBeyondViewport: false
+    })
+    expect(detach).toHaveBeenCalled()
+    expect(bringToFront).toHaveBeenCalledOnce()
+  })
+
   it('rejects non-loopback browser debugging endpoints before connecting', () => {
     expect(() => createPlaywrightCdpDriver(['http://192.0.2.10:9222'])).toThrow(
       'CDP endpoint must be loopback-only.'

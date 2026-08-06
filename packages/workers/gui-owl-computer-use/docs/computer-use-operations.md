@@ -86,6 +86,11 @@ $env:CUA_UIA_SMOKE = "1"
 & $pythonExe -m pytest tests/integration/test_windows_uia_smoke.py -q -ra
 ```
 
+The CDP capture path activates the selected tab inside its explicitly
+allowlisted debugging browser because Chromium does not reliably capture a
+background target. Headless controlled tests have no visible window, but an
+attached visible debugging browser may visibly switch tabs during observation.
+
 Do not enable Legacy real-input smoke, Office, ordinary Chrome, VS Code, RDP,
 VM, Sandbox or external model calls without separate authorization.
 
