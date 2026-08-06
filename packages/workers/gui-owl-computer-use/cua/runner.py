@@ -19,6 +19,15 @@ _OS_NAME = {"Windows": "windows", "Darwin": "macos", "Linux": "linux"}.get(
     _platform.system(), "linux"
 )
 _TERMINAL = {"terminate", "answer", "stop", "done", "interact", "call_user"}
+_UIA_BACKEND_GUIDANCE = (
+    "The active backend is Windows UI Automation, not a physical mouse/keyboard. "
+    "Use the supplied semantic tree and include automationId for the exact control. "
+    "Allowed semantic actions are: type/write with text, left_click/invoke, toggle, "
+    "select, range with value, scroll, wait, terminate, answer, and interact. "
+    "Do not use coordinates, key/hotkey, open_app, drag, mouse_move, right_click, "
+    "middle_click, double_click, or triple_click. If no suitable automationId/pattern "
+    "is exposed, use interact or terminate with failure instead of guessing."
+)
 
 
 def _norm_action(action: str) -> str:
@@ -114,6 +123,7 @@ def _run_loop(
 ) -> tuple[Dict[str, Any], str]:
     first = channel.observe()
     image = first.image
+    observation_metadata = first.metadata
     latest_revision = first.revision
     width, height = image.size
     status = "exhausted_steps"
@@ -140,6 +150,12 @@ def _run_loop(
             image_window=cfg.image_window,
             progress_status=progress_status,
             replan_hint=replan_hint,
+            backend_guidance=(
+                _UIA_BACKEND_GUIDANCE
+                if channel.capabilities.backend.value == "windows-uia"
+                else ""
+            ),
+            semantic_context=_semantic_context(observation_metadata),
         )
         remaining = channel.remaining_seconds
         if remaining is not None and remaining <= 0:
@@ -203,6 +219,7 @@ def _run_loop(
             channel.wait(float((args or {}).get("time", 2) or 2))
             observation = channel.observe()
             image, latest_revision = observation.image, observation.revision
+            observation_metadata = observation.metadata
             continue
 
         normalized = _norm_action(step_rec["action"]) or "<no-action>"
@@ -221,6 +238,7 @@ def _run_loop(
             steps.append(step_rec)
             observation = channel.observe()
             image, latest_revision = observation.image, observation.revision
+            observation_metadata = observation.metadata
             continue
 
         before_image = image
@@ -230,6 +248,7 @@ def _run_loop(
         step_rec["outcome"] = outcome.to_dict()
         observation = channel.observe()
         after_image, latest_revision = observation.image, observation.revision
+        observation_metadata = observation.metadata
 
         if cfg.reflect:
             try:
@@ -281,3 +300,14 @@ def _run_loop(
     }
     terminal = "cancelled" if status == "cancelled" else "completed" if status != "error" else "failed"
     return R.ok(data, summary=summary, artifacts=artifacts, prov=_provenance(channel, started)), terminal
+
+
+def _semantic_context(metadata: Any) -> str:
+    if not isinstance(metadata, dict) or "semanticTree" not in metadata:
+        return ""
+    tree = metadata.get("semanticTree")
+    if not isinstance(tree, (list, tuple)):
+        return ""
+    # Backend providers already redact password nodes. Keep the model input
+    # bounded and deterministic; semantic UI content remains untrusted data.
+    return json.dumps(tree[:256], ensure_ascii=False, separators=(",", ":"))[:30_000]

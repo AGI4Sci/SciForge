@@ -26,7 +26,10 @@ from driver.backend import (
 )
 
 
-_ACTIONS = ("observe", "click", "invoke", "type", "write", "toggle", "select", "range", "scroll")
+_ACTIONS = (
+    "observe", "click", "left_click", "invoke", "type", "write",
+    "toggle", "select", "range", "scroll",
+)
 
 
 class UIATargetLost(RuntimeError):
@@ -285,7 +288,7 @@ class ComtypesUIAProvider:
                 readback = str(pattern.CurrentValue)
                 status = Verification.VERIFIED if readback == value else Verification.FAILED
                 details = {"pattern": "Value", "expected": value, "actual": readback}
-            elif name in {"click", "invoke"}:
+            elif name in {"click", "left_click", "invoke"}:
                 before = self._element_state(element)
                 pattern = self._pattern(element, uia.UIA_InvokePatternId, uia.IUIAutomationInvokePattern)
                 pattern.Invoke()
