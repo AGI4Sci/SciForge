@@ -127,7 +127,10 @@ class SessionInputChannel:
         # action. Count it as in-flight so force-release/shutdown cannot close
         # the handle while a capture is still using it.
         with self.activity():
-            observation = self.backend.observe(self.handle)
+            try:
+                observation = self.backend.observe(self.handle)
+            except BackendOperationError as error:
+                raise ChannelError(error.code or "BACKEND_UNAVAILABLE", str(error)) from error
             if observation.target_id != self.target.target_id:
                 raise ChannelError(
                     "TARGET_LOST",
@@ -202,7 +205,9 @@ class SessionInputChannel:
                 evidence={**dict(receipt.backend_evidence), **dict(evidence.details)},
             )
         except BackendOperationError as error:
-            code = "ACTION_OUTCOME_UNKNOWN" if error.may_have_taken_effect else "ACTION_UNSUPPORTED"
+            code = error.code or (
+                "ACTION_OUTCOME_UNKNOWN" if error.may_have_taken_effect else "ACTION_UNSUPPORTED"
+            )
             raise ChannelError(code, str(error)) from error
         finally:
             try:

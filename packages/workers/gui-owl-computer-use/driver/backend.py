@@ -58,9 +58,16 @@ class VerificationEvidence:
 class BackendOperationError(RuntimeError):
     """A backend failure with an explicit side-effect boundary."""
 
-    def __init__(self, message: str, *, may_have_taken_effect: bool = False):
+    def __init__(
+        self,
+        message: str,
+        *,
+        may_have_taken_effect: bool = False,
+        code: str | None = None,
+    ):
         super().__init__(message)
         self.may_have_taken_effect = may_have_taken_effect
+        self.code = code
 
 
 @runtime_checkable

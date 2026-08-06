@@ -74,6 +74,7 @@ model/provider selection and policy.
 | Target-bound runner facade | `driver/channel.py` |
 | Approved process-global compatibility backend | `driver/backends/legacy_pyautogui.py` |
 | Target-scoped Chromium bridge | `driver/backends/cdp_adapter.py`, `src/main/services/computer-use-cdp-adapter.ts` |
+| Pattern-driven Windows UI Automation backend | `driver/backends/windows_uia.py` |
 | Explicit-hook click-through mouse overlay | `driver/overlay.py` |
 | Pure contract/result/parse tests | `tests/test_contract.py` |
 | Development-only local model serve helper | `server/serve-gui-owl-32b.sh` |
@@ -165,3 +166,19 @@ python -m cua.cli --http
 The adapter uses `playwright-core` already pinned by the repository. Attached
 handles are released without closing user pages. Targets and endpoint secrets
 remain redacted at the public sidecar boundary.
+
+### Windows UI Automation backend
+
+On Windows, the worker loads the pinned `comtypes==1.4.16` binding and resolves
+each target from its PID/HWND/AutomationId on the request thread. It supports
+only control patterns exposed by the target provider: Value, Invoke, Toggle,
+SelectionItem, RangeValue and Scroll. Value-like writes are read back before a
+`verified` result is returned.
+
+This backend never calls `SetFocus`, PyAutoGUI, PostMessage or the host
+clipboard. A physical key, coordinate-only operation, missing pattern, changed
+HWND/PID/runtime identity or focus-dependent control therefore fails
+explicitly. UIA semantic observation does not imply target-bound pixels;
+`imageAvailable=false` is returned when no such image exists. See
+`docs/adr-002-windows-uia-binding.md` for the dependency and COM-threading
+decision.
