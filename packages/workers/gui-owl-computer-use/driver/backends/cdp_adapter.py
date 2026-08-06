@@ -31,6 +31,12 @@ _ACTIONS = (
 )
 
 
+class CdpAdapterResponseError(RuntimeError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 @dataclass
 class CdpAdapterHandle:
     target: TargetDescriptor
@@ -117,7 +123,12 @@ class CdpAdapterBackend:
         h = self._handle(handle)
         with h.lock:
             self._ensure_open(h)
-            payload = self._request("POST", "/v1/observe", {"handleId": h.adapter_handle_id})
+            try:
+                payload = self._request("POST", "/v1/observe", {"handleId": h.adapter_handle_id})
+            except CdpAdapterResponseError as error:
+                if error.code in {"TARGET_LOST", "BACKEND_UNAVAILABLE"}:
+                    raise BackendOperationError(str(error), code=error.code) from error
+                raise
             if payload.get("targetId") != h.target.target_id:
                 raise BackendOperationError("CDP adapter observed a different target")
             revision = payload.get("revision")
@@ -159,6 +170,14 @@ class CdpAdapterBackend:
                 })
         except BackendOperationError:
             raise
+        except CdpAdapterResponseError as error:
+            if error.code == "TARGET_LOST":
+                raise BackendOperationError(
+                    str(error), code="TARGET_LOST", may_have_taken_effect=True,
+                ) from error
+            raise BackendOperationError(
+                f"CDP adapter action failed: {error}", may_have_taken_effect=True,
+            ) from error
         except Exception as error:
             raise BackendOperationError(
                 f"CDP adapter action failed: {error}", may_have_taken_effect=True,
@@ -238,8 +257,13 @@ class CdpAdapterBackend:
         if not isinstance(payload, dict):
             raise RuntimeError("CDP adapter returned a non-object response")
         if response.status_code >= 400 or payload.get("ok") is False:
-            message = payload.get("error", {}).get("message") if isinstance(payload.get("error"), dict) else None
-            raise RuntimeError(str(message or f"CDP adapter HTTP {response.status_code}"))
+            error_value = payload.get("error")
+            message = error_value.get("message") if isinstance(error_value, dict) else None
+            code = error_value.get("code") if isinstance(error_value, dict) else None
+            raise CdpAdapterResponseError(
+                str(code or "ADAPTER_ERROR"),
+                str(message or f"CDP adapter HTTP {response.status_code}"),
+            )
         data = payload.get("data", payload)
         if not isinstance(data, dict):
             raise RuntimeError("CDP adapter response data must be an object")

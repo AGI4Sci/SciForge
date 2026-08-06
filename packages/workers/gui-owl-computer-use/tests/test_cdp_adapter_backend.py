@@ -8,9 +8,11 @@ import pytest
 from PIL import Image
 
 from cua.capabilities import BackendId, Verification
+from cua.service import ComputerUseService
 from cua.target import parse_target_descriptor
 from driver.backend import BackendOpenContext, BackendOperationError
 from driver.backends.cdp_adapter import CdpAdapterBackend
+from driver.router import BackendRouter
 
 
 def png_base64() -> str:
@@ -32,6 +34,8 @@ class AdapterSession:
     def __init__(self):
         self.calls = []
         self.fail_action = False
+        self.lose_on_observe = False
+        self.unavailable_on_observe = False
 
     def request(self, method, url, **kwargs):
         self.calls.append((method, url, kwargs))
@@ -43,6 +47,16 @@ class AdapterSession:
         if path == "/handles/open":
             return Response({"ok": True, "data": {"handleId": "handle-1"}})
         if path == "/observe":
+            if self.unavailable_on_observe:
+                return Response({"ok": False, "error": {
+                    "code": "BACKEND_UNAVAILABLE",
+                    "message": "CDP target capture timed out",
+                }}, status=400)
+            if self.lose_on_observe:
+                return Response({"ok": False, "error": {
+                    "code": "TARGET_LOST",
+                    "message": "page.screenshot: target page has been closed",
+                }}, status=400)
             return Response({"ok": True, "data": {
                 "targetId": "page-1", "revision": "cdp:1", "imageBase64": png_base64(),
                 "metadata": {"url": "https://example.test/"},
@@ -107,6 +121,44 @@ def test_action_transport_failure_is_unknown_and_never_safe_to_replay():
     with pytest.raises(BackendOperationError) as caught:
         backend.perform(handle, {"action": "click", "coordinate": [1, 2]}, before.revision)
     assert caught.value.may_have_taken_effect is True
+
+
+def test_observe_preserves_structured_target_lost_from_adapter():
+    backend, handle, session = backend_and_handle()
+    session.lose_on_observe = True
+    with pytest.raises(BackendOperationError) as caught:
+        backend.observe(handle)
+    assert caught.value.code == "TARGET_LOST"
+    assert caught.value.may_have_taken_effect is False
+
+
+def test_observe_preserves_structured_backend_unavailable_from_adapter():
+    backend, handle, session = backend_and_handle()
+    session.unavailable_on_observe = True
+    with pytest.raises(BackendOperationError) as caught:
+        backend.observe(handle)
+    assert caught.value.code == "BACKEND_UNAVAILABLE"
+    assert caught.value.may_have_taken_effect is False
+
+
+def test_service_preserves_uncaught_channel_target_lost_code():
+    session = AdapterSession()
+    session.lose_on_observe = True
+    backend = CdpAdapterBackend(
+        adapter_url="http://127.0.0.1:3909", token="secret", session=session,
+    )
+    service = ComputerUseService(router=BackendRouter([backend]))
+    result = service.run(
+        {
+            "instruction": "observe closed target",
+            "target": target_value(),
+            "requestId": "request-target-lost",
+        },
+        lambda _request, channel: channel.observe(),
+    )
+    assert result["error"]["code"] == "TARGET_LOST"
+    counts = service.registry.snapshot_counts()
+    assert counts["requests"] == counts["activeLeases"] == 0
 
 
 def test_unconfigured_backend_is_explicitly_unavailable():

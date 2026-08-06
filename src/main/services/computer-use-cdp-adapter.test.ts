@@ -167,4 +167,50 @@ describe('computer-use CDP adapter', () => {
       error: { code: 'ADAPTER_ERROR' }
     })
   })
+
+  it('classifies a closed Playwright target as TARGET_LOST', async () => {
+    const base = fakeDriver()
+    const driver: CdpAdapterDriver = {
+      ...base,
+      async observe() {
+        throw new Error('page.screenshot: Target page, context or browser has been closed')
+      }
+    }
+    const adapter = await startComputerUseCdpAdapter({ driver, token: 'adapter-secret' })
+    adapters.push(adapter)
+    const opened = await call(adapter, '/v1/handles/open', {
+      requestId: 'request-page-a',
+      target: target('page-a')
+    })
+    const handleId = (await opened.json() as { data: { handleId: string } }).data.handleId
+    const response = await call(adapter, '/v1/observe', { handleId })
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'TARGET_LOST' }
+    })
+  })
+
+  it('classifies a bounded capture timeout as BACKEND_UNAVAILABLE', async () => {
+    const base = fakeDriver()
+    const driver: CdpAdapterDriver = {
+      ...base,
+      async observe() {
+        throw new Error('BACKEND_UNAVAILABLE: CDP target capture timed out.')
+      }
+    }
+    const adapter = await startComputerUseCdpAdapter({ driver, token: 'adapter-secret' })
+    adapters.push(adapter)
+    const opened = await call(adapter, '/v1/handles/open', {
+      requestId: 'request-page-a-timeout',
+      target: target('page-a')
+    })
+    const handleId = (await opened.json() as { data: { handleId: string } }).data.handleId
+    const response = await call(adapter, '/v1/observe', { handleId })
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'BACKEND_UNAVAILABLE' }
+    })
+  })
 })

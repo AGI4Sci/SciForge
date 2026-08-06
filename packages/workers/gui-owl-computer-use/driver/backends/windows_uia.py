@@ -263,7 +263,7 @@ class ComtypesUIAProvider:
     def snapshot(self, target: TargetDescriptor, identity: str) -> UIASnapshot:
         with self._automation() as (automation, uia):
             root = self._resolve_and_validate(automation, uia, target, identity)
-            nodes = tuple(self._walk(automation.ControlViewWalker, root, limit=256))
+            nodes = self._snapshot_nodes(automation, root, target, limit=256)
             revision = "uia:" + hashlib.sha256(
                 json.dumps(nodes, sort_keys=True, ensure_ascii=True).encode("utf-8")
             ).hexdigest()[:24]
@@ -277,7 +277,7 @@ class ComtypesUIAProvider:
     ) -> UIAActionResult:
         with self._automation() as (automation, uia):
             root = self._resolve_and_validate(automation, uia, target, identity)
-            element = self._action_element(automation, uia, root, action)
+            element = self._action_element(automation, uia, root, target, action)
             name = str(action.get("action") or "").lower()
             if name in {"type", "write"}:
                 value = str(action.get("text") if "text" in action else action.get("value", ""))
@@ -329,7 +329,7 @@ class ComtypesUIAProvider:
                 details = {"pattern": "Scroll", "before": before, "after": after}
             else:
                 raise UIAActionUnsupported(f"UIA action requires focus or is unsupported: {name}")
-            snapshot = tuple(self._walk(automation.ControlViewWalker, root, limit=256))
+            snapshot = self._snapshot_nodes(automation, root, target, limit=256)
             revision = "uia:" + hashlib.sha256(
                 json.dumps(snapshot, sort_keys=True, ensure_ascii=True).encode("utf-8")
             ).hexdigest()[:24]
@@ -406,14 +406,69 @@ class ComtypesUIAProvider:
         if expected_pid and actual_pid.value != expected_pid:
             raise UIATargetLost("native window handle now belongs to another process")
 
-    def _action_element(self, automation, uia, root, action: Mapping[str, Any]):
-        automation_id = action.get("automationId") or action.get("elementId")
-        if not automation_id:
+    def _action_element(
+        self, automation, uia, root, target: TargetDescriptor, action: Mapping[str, Any],
+    ):
+        automation_id = action.get("automationId")
+        element_id = action.get("elementId")
+        if not automation_id and not element_id:
             return root
-        condition = automation.CreatePropertyCondition(uia.UIA_AutomationIdPropertyId, str(automation_id))
-        element = root.FindFirst(uia.TreeScope_Subtree, condition)
+        if automation_id:
+            condition = automation.CreatePropertyCondition(
+                uia.UIA_AutomationIdPropertyId, str(automation_id),
+            )
+            element = root.FindFirst(uia.TreeScope_Subtree, condition)
+        else:
+            element = self._element_from_id(automation, root, target, str(element_id))
+            if element is None:
+                element = self._find_element_by_id(
+                    automation.RawViewWalker, root, str(element_id), limit=256,
+                )
         if element is None:
             raise UIATargetLost("requested UIA action element was not found")
+        return element
+
+    def _find_element_by_id(self, walker, root, element_id: str, *, limit: int):
+        stack = [root]
+        visited = 0
+        while stack and visited < limit:
+            element = stack.pop()
+            visited += 1
+            try:
+                if self._element_id(element) == element_id:
+                    return element
+                children = []
+                child = walker.GetFirstChildElement(element)
+                while child is not None and len(children) < limit:
+                    children.append(child)
+                    child = walker.GetNextSiblingElement(child)
+                stack.extend(reversed(children))
+            except Exception:
+                continue
+        return None
+
+    def _element_from_id(self, automation, root, target: TargetDescriptor, element_id: str):
+        prefix = "uia-hwnd:"
+        if not element_id.startswith(prefix):
+            return None
+        try:
+            hwnd_value, _runtime_fingerprint = element_id[len(prefix):].split(":", 1)
+            hwnd = int(hwnd_value, 10)
+        except (ValueError, TypeError) as error:
+            raise UIATargetLost("invalid native UIA element id") from error
+        pid = int(target.locator.get("processId", 0) or 0)
+        self._validate_hwnd(hwnd, pid)
+        root_hwnd = int(root.CurrentNativeWindowHandle)
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.IsChild.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        user32.IsChild.restype = ctypes.c_bool
+        if hwnd != root_hwnd and not user32.IsChild(root_hwnd, hwnd):
+            raise UIATargetLost("native UIA element is outside the bound target window")
+        element = automation.ElementFromHandle(hwnd)
+        if element is None:
+            raise UIATargetLost("native UIA action element was not found")
+        if self._element_id(element) != element_id:
+            raise UIATargetLost("native UIA element runtime identity changed")
         return element
 
     @staticmethod
@@ -438,6 +493,15 @@ class ComtypesUIAProvider:
         return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
 
     @staticmethod
+    def _element_id(element) -> str:
+        hwnd = int(element.CurrentNativeWindowHandle)
+        runtime_id = tuple(int(item) for item in (element.GetRuntimeId() or ()))
+        if hwnd > 0:
+            fingerprint = hashlib.sha256(repr(runtime_id).encode("utf-8")).hexdigest()[:16]
+            return f"uia-hwnd:{hwnd}:{fingerprint}"
+        return "uia-runtime:" + ".".join(str(item) for item in runtime_id)
+
+    @staticmethod
     def _element_state(element) -> dict[str, Any]:
         return {
             "name": str(element.CurrentName or "")[:512],
@@ -446,21 +510,61 @@ class ComtypesUIAProvider:
             "itemStatus": str(element.CurrentItemStatus or "")[:512],
         }
 
+    def _snapshot_nodes(self, automation, root, target: TargetDescriptor, *, limit: int):
+        nodes = list(self._walk(automation.RawViewWalker, root, limit=limit))
+        seen = {str(node.get("elementId") or "") for node in nodes}
+        hwnd_raw = target.locator.get("nativeWindowHandle")
+        if hwnd_raw is None:
+            return tuple(nodes)
+        for hwnd in self._child_hwnds(int(str(hwnd_raw), 0), limit=limit):
+            if len(nodes) >= limit:
+                break
+            try:
+                element = automation.ElementFromHandle(hwnd)
+                node = self._node(element, depth=1)
+                if node["elementId"] not in seen:
+                    nodes.append(node)
+                    seen.add(node["elementId"])
+            except Exception:
+                continue
+        return tuple(nodes)
+
+    @staticmethod
+    def _child_hwnds(parent_hwnd: int, *, limit: int) -> list[int]:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        handles: list[int] = []
+
+        @callback_type
+        def collect(hwnd, _lparam):
+            if len(handles) >= limit:
+                return False
+            handles.append(int(hwnd))
+            return True
+
+        user32.EnumChildWindows.argtypes = [ctypes.c_void_p, callback_type, ctypes.c_void_p]
+        user32.EnumChildWindows.restype = ctypes.c_bool
+        user32.EnumChildWindows(parent_hwnd, collect, None)
+        return handles
+
+    def _node(self, element, *, depth: int) -> dict[str, Any]:
+        return {
+            "depth": depth,
+            "elementId": self._element_id(element),
+            "automationId": str(element.CurrentAutomationId or "")[:256],
+            "name": "<password>" if bool(element.CurrentIsPassword) else str(element.CurrentName or "")[:512],
+            "controlType": int(element.CurrentControlType),
+            "enabled": bool(element.CurrentIsEnabled),
+            "offscreen": bool(element.CurrentIsOffscreen),
+        }
+
     def _walk(self, walker, root, *, limit: int):
         stack = [(root, 0)]
         emitted = 0
         while stack and emitted < limit:
             element, depth = stack.pop()
             try:
-                node = {
-                    "depth": depth,
-                    "automationId": str(element.CurrentAutomationId or "")[:256],
-                    "name": "<password>" if bool(element.CurrentIsPassword) else str(element.CurrentName or "")[:512],
-                    "controlType": int(element.CurrentControlType),
-                    "enabled": bool(element.CurrentIsEnabled),
-                    "offscreen": bool(element.CurrentIsOffscreen),
-                }
-                yield node
+                yield self._node(element, depth=depth)
                 emitted += 1
                 children = []
                 child = walker.GetFirstChildElement(element)

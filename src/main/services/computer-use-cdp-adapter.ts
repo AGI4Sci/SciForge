@@ -2,12 +2,13 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createRequire } from 'node:module'
 import type { AddressInfo } from 'node:net'
-import type { Browser, Page } from 'playwright-core'
+import type { Browser, CDPSession, Page } from 'playwright-core'
 
 const require = createRequire(import.meta.url)
 const { chromium } = require('playwright-core') as typeof import('playwright-core')
 const MAX_BODY_BYTES = 1_000_000
 const ACTION_TIMEOUT_MS = 10_000
+const OBSERVATION_TIMEOUT_MS = 3_000
 
 export type CdpAdapterTarget = Readonly<{
   targetId: string
@@ -46,6 +47,12 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
   const allowedEndpoints = [...new Set(endpoints.map(normalizeLoopbackEndpoint))]
   const browsers = new Map<string, Promise<Browser>>()
   const handles = new Map<string, PlaywrightHandle>()
+  let observationTail: Promise<void> = Promise.resolve()
+  const serializeObservation = <T>(operation: () => Promise<T>): Promise<T> => {
+    const queued = observationTail.then(operation, operation)
+    observationTail = queued.then(() => undefined, () => undefined)
+    return queued
+  }
 
   const browserFor = (endpoint: string): Promise<Browser> => {
     const normalized = normalizeLoopbackEndpoint(endpoint)
@@ -137,12 +144,15 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
     async observe(handleId) {
       const value = handle(handleId)
       if (value.cancelled) throw new Error('CDP handle was cancelled.')
-      const image = await value.page.screenshot({ type: 'png', animations: 'disabled' })
+      // Page.screenshot() can contend on Playwright's browser-level capture
+      // path when several attached pages are observed at once. A fresh CDP
+      // session binds capture to this exact target and can run independently.
+      const imageBase64 = await serializeObservation(() => captureTargetScreenshot(value.page))
       value.revision += 1
       return {
         targetId: value.targetId,
         revision: `cdp:${value.revision}`,
-        imageBase64: image.toString('base64'),
+        imageBase64,
         metadata: {
           url: value.page.url().slice(0, 2048),
           title: (await value.page.title().catch(() => '')).slice(0, 2048),
@@ -222,6 +232,46 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
       )))
     }
   })
+}
+
+async function captureTargetScreenshot(page: Page): Promise<string> {
+  let rejectClosed: ((reason: Error) => void) | undefined
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  let cdp: CDPSession | undefined
+  const closed = new Promise<never>((_resolve, reject) => { rejectClosed = reject })
+  const onClosed = (): void => rejectClosed?.(new Error('TARGET_LOST: CDP target closed during observe.'))
+  page.once('close', onClosed)
+  // Close can race between the driver's initial handle check and listener setup.
+  if (page.isClosed()) onClosed()
+  const capture = (async () => {
+    // Chromium may throttle/freeze a background tab's compositor. Activation
+    // is scoped to this headless browser and never changes the host foreground.
+    await page.bringToFront()
+    cdp = await page.context().newCDPSession(page)
+    const result = await cdp.send('Page.captureScreenshot', {
+      format: 'png', fromSurface: true, captureBeyondViewport: false
+    }) as { data: string }
+    return result.data
+  })()
+  const timedOut = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(new Error(
+      page.isClosed()
+        ? 'TARGET_LOST: CDP target closed while capture was pending.'
+        : 'BACKEND_UNAVAILABLE: CDP target capture timed out.'
+    )), OBSERVATION_TIMEOUT_MS)
+  })
+  try {
+    return await Promise.race([capture, closed, timedOut])
+  } finally {
+    if (timeout) clearTimeout(timeout)
+    page.off('close', onClosed)
+    if (cdp) {
+      await Promise.race([
+        cdp.detach().catch(() => undefined),
+        new Promise<void>((resolve) => setTimeout(resolve, 250))
+      ])
+    }
+  }
 }
 
 export async function startComputerUseCdpAdapter(options: Readonly<{
@@ -398,6 +448,13 @@ function classifyError(error: unknown): string {
   const message = safeError(error)
   if (message.startsWith('STALE_OBSERVATION')) return 'STALE_OBSERVATION'
   if (message.startsWith('ACTION_UNSUPPORTED')) return 'ACTION_UNSUPPORTED'
+  if (
+    message.startsWith('TARGET_LOST')
+    || /target page, context or browser has been closed/iu.test(message)
+    || /cdp handle is unavailable/iu.test(message)
+    || /target closed/iu.test(message)
+  ) return 'TARGET_LOST'
+  if (message.startsWith('BACKEND_UNAVAILABLE')) return 'BACKEND_UNAVAILABLE'
   return 'ADAPTER_ERROR'
 }
 

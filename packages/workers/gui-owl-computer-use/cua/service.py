@@ -7,7 +7,7 @@ import uuid
 from typing import Any, Callable
 
 from driver.backend import BackendOpenContext
-from driver.channel import SessionInputChannel
+from driver.channel import ChannelError, SessionInputChannel
 from driver.router import BackendRouter, RoutingError
 
 from . import contract
@@ -128,6 +128,9 @@ class ComputerUseService:
             terminal_reason = error.code.lower()
             result = R.err(error.code, str(error), details=error.details)
         except RegistryError as error:
+            terminal_reason = error.code.lower()
+            result = R.err(error.code, str(error), details=error.details)
+        except ChannelError as error:
             terminal_reason = error.code.lower()
             result = R.err(error.code, str(error), details=error.details)
         except ValueError as error:
