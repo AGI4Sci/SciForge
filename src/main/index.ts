@@ -140,6 +140,7 @@ import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
 import { ControlledProcessService } from './processes/controlled-process-service'
 import { VersionControlWorkspaceService } from './services/version-control-workspace-service'
 import { VersionControlPlacementFacade } from './services/version-control-placement-facade'
+import { ComputerUseRuntimeClient } from './services/computer-use-runtime-client'
 import { WorkspacePlacementRouter } from './services/workspace-placement-router'
 import {
   WorkspacePreviewHost,
@@ -1763,6 +1764,12 @@ app.whenReady().then(async () => {
       )
   })
 
+  const computerUseRuntimeClient = new ComputerUseRuntimeClient({
+    baseUrl: process.env.SCIFORGE_CUA_SERVICE_URL || 'http://127.0.0.1:3900',
+    token: process.env.SCIFORGE_CUA_SERVICE_TOKEN || process.env.CUA_SERVICE_TOKEN,
+    cachePath: join(app.getPath('userData'), 'computer-use', 'runtime-status.json')
+  })
+
   const appBridgeDispatcher = registerAppIpcHandlers({
     store,
     actionGuardEvaluator,
@@ -1780,6 +1787,7 @@ app.whenReady().then(async () => {
     },
     applySettingsPatch,
     getModelAccessStatus: readModelAccessStatus,
+    getComputerUseRuntimeStatus: () => computerUseRuntimeClient.refresh(),
     traces: fullTraceStore,
     agentRuntime: agentRuntimeHost,
     remoteWorkspace: remoteWorkspaceController,

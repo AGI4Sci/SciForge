@@ -98,6 +98,13 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path in {
+            "/computer-use/status", "/computer-use/cleanup-pending",
+            "/computer-use/capabilities", "/computer-use/targets",
+        }:
+            auth_error = _check_auth(self.headers.get("Authorization"))
+            if auth_error:
+                return self._send(401, auth_error)
         if self.path == "/health":
             return self._send(200, {"ok": True, "data": {"status": "healthy"}})
         if self.path == "/version":

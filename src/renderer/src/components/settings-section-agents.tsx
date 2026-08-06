@@ -34,7 +34,7 @@ import {
 } from './settings-controls'
 
 type ComputerUseBackendSafetyStatus = {
-  inputIsolation?: string
+  effectiveIsolation?: string
   affectsUserInput?: boolean
   requiresHostFocus?: boolean
   usesHostClipboard?: boolean
@@ -86,7 +86,7 @@ function computerUseBackendSafetyChips(
   if (!status) return []
   const chips: ComputerUseBackendSafetyChip[] = []
   const inputIsolationKey = computerUseInputIsolationValueKey(
-    status.inputIsolation
+    status.effectiveIsolation
   )
   if (inputIsolationKey) {
     chips.push({
@@ -547,14 +547,11 @@ function ComputerUseSettingsCard({
   const computerUse = form
     ? getComputerUseSettings(form)
     : defaultComputerUseSettings()
-  const backend = status?.runtime.backend
-  const backendSafety = backend as
-    (typeof backend & ComputerUseBackendSafetyStatus) | null | undefined
-  const backendSafetyChips = backend
-    ? computerUseBackendSafetyChips(backendSafety)
-    : []
-  const activeLeases = status?.runtime.activeLeases ?? []
-  const recentRejections = status?.runtime.recentRejections ?? []
+  const runtime = status?.runtime
+  const backends = runtime?.backends ?? []
+  const activeLeases = runtime?.active ?? []
+  const recentRejections = runtime?.recentRejections ?? []
+  const cleanupPending = runtime?.cleanupPending ?? []
   const permissions = status?.permissions
   const platform =
     permissions?.platform ??
@@ -615,11 +612,12 @@ function ComputerUseSettingsCard({
               settings: computerUse,
               permissions: nextPermissions,
               runtime: {
-                updatedAt: new Date(0).toISOString(),
-                servers: [],
-                activeLeases: [],
-                recentRejections: [],
-                backend: null
+                connection: 'offline', stale: false, lastSuccessAt: null,
+                lastStatusError: null, serverInstanceId: null, generation: null,
+                updatedAt: new Date(0).toISOString(), protocolVersion: null,
+                approvalProof: 'unavailable', lifecycleState: 'unknown',
+                backends: [], counts: { sessions: 0, requests: 0, activeLeases: 0, tombstones: 0, releasedLeaseTombstones: 0 },
+                active: [], cleanupPending: [], recentRejections: [], reaper: null
               }
             }
       )
@@ -708,35 +706,26 @@ function ComputerUseSettingsCard({
               <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2">
                 {t('computerUseRuntimeBackend')}:{' '}
                 <span className="font-mono text-ds-ink">
-                  {backend?.backend ?? DEFAULT_COMPUTER_USE_BACKEND}
+                  {backends.map((item) => item.backend).join(', ') || t('computerUseBackendUnknown')}
                 </span>
               </div>
               <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2">
                 {t('computerUsePlatform')}:{' '}
                 <span className="font-mono text-ds-ink">
-                  {backend?.platform ?? platform ?? 'unknown'}
+                  {platform ?? 'unknown'}
                 </span>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <span
-                className={`inline-flex rounded-lg border px-2.5 py-1 text-[12px] font-semibold ${computerUseStatusPill(backend?.available)}`}
-              >
-                {backend?.available
-                  ? t('computerUseBackendAvailable')
-                  : backend
-                    ? t('computerUseBackendUnavailable')
-                    : t('computerUseBackendUnknown')}
+              <span className={`inline-flex rounded-lg border px-2.5 py-1 text-[12px] font-semibold ${computerUseStatusPill(runtime?.connection === 'online')}`}>
+                {t(`computerUseConnection_${runtime?.connection ?? 'offline'}`)}
               </span>
-              {backendSafetyChips.map((chip) => (
-                <span
-                  key={chip.labelKey}
-                  className="inline-flex max-w-full items-center gap-1 rounded-lg border border-ds-border-muted bg-ds-main/40 px-2 py-1 text-[11px] font-medium text-ds-muted"
-                >
-                  <span className="text-ds-faint">{t(chip.labelKey)}</span>
-                  <span className="text-ds-ink">{t(chip.valueKey)}</span>
-                </span>
-              ))}
+              <span className="inline-flex rounded-lg border border-ds-border-muted bg-ds-main/40 px-2 py-1 text-[11px] font-medium text-ds-muted">
+                {t('computerUseApprovalProof')}: {runtime?.approvalProof ?? 'unavailable'}
+              </span>
+              <span className="inline-flex rounded-lg border border-ds-border-muted bg-ds-main/40 px-2 py-1 text-[11px] font-medium text-ds-muted">
+                {t('computerUseLifecycle')}: {runtime?.lifecycleState ?? 'unknown'}
+              </span>
               <button
                 type="button"
                 onClick={() => void refresh()}
@@ -751,11 +740,25 @@ function ComputerUseSettingsCard({
               </button>
               {notice ? <InlineNoticeView notice={notice} /> : null}
             </div>
-            {backend?.reason ? (
-              <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2 text-[12.5px] leading-5 text-ds-muted">
-                {backend.reason}
+            {runtime?.lastStatusError ? (
+              <div className="rounded-xl border border-amber-300/50 bg-amber-500/10 px-3 py-2 text-[12.5px] leading-5 text-amber-800 dark:text-amber-200">
+                {runtime.lastStatusError}
               </div>
             ) : null}
+            {backends.map((item) => (
+              <div key={item.backend} className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2 text-[12.5px] text-ds-muted">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono font-semibold text-ds-ink">{item.backend}</span>
+                  <span>{item.available ? t('computerUseBackendAvailable') : t('computerUseBackendUnavailable')}</span>
+                  {computerUseBackendSafetyChips(item).map((chip) => (
+                    <span key={`${item.backend}-${chip.labelKey}`} className="rounded border border-ds-border-muted px-1.5 py-0.5 text-[11px]">
+                      {t(chip.labelKey)}: {t(chip.valueKey)}
+                    </span>
+                  ))}
+                </div>
+                {item.reason ? <div className="mt-1">{item.reason}</div> : null}
+              </div>
+            ))}
             {!computerUse.enabled ? (
               <InlineNoticeView
                 notice={{ tone: 'info', message: t('computerUseDisabledHint') }}
@@ -821,6 +824,11 @@ function ComputerUseSettingsCard({
         wideControl
         control={
           <div className="grid gap-2">
+            {activeLeases.some((item) => item.verification === 'unverified') ? (
+              <div className="rounded-xl border border-amber-300/50 bg-amber-500/10 px-3 py-2 text-[12.5px] text-amber-800 dark:text-amber-200">
+                {t('computerUseUnverifiedHint')}
+              </div>
+            ) : null}
             {activeLeases.length === 0 ? (
               <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-3 text-[13px] text-ds-faint">
                 {t('computerUseNoActiveLeases')}
@@ -828,26 +836,47 @@ function ComputerUseSettingsCard({
             ) : (
               activeLeases.slice(0, 6).map((lease) => (
                 <div
-                  key={lease.leaseId}
+                   key={lease.leaseId ?? lease.requestId}
                   className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2"
                 >
                   <div className="truncate text-[13px] font-semibold text-ds-ink">
                     {lease.targetId}
                   </div>
                   <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-ds-faint">
-                    <span className="font-mono">{lease.agentId}</span>
+                     <span className="font-mono">{lease.runtimeId}</span>
                     <span className="font-mono">{lease.threadId}</span>
                     {lease.turnId ? (
                       <span className="font-mono">{lease.turnId}</span>
                     ) : null}
                     <span className="font-mono">
-                      {lease.computerUseSessionId}
-                    </span>
+                       {lease.sessionId}
+                     </span>
+                     <span className="font-mono">{lease.backend ?? 'routing'}</span>
+                     <span>{lease.requestedIsolation} → {lease.effectiveIsolation ?? 'pending'}</span>
+                     <span>{lease.verification}</span>
+                     {lease.degraded ? <span className="text-amber-700 dark:text-amber-200">{lease.degradedReason}</span> : null}
                     <span>{new Date(lease.updatedAt).toLocaleString()}</span>
                   </div>
                 </div>
               ))
             )}
+          </div>
+        }
+      />
+      <SettingRow
+        title={t('computerUseCleanupPending')}
+        description={t('computerUseCleanupPendingDesc')}
+        wideControl
+        control={
+          <div className="grid gap-2">
+            {cleanupPending.length === 0 ? (
+              <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-3 text-[13px] text-ds-faint">{t('computerUseNoCleanupPending')}</div>
+            ) : cleanupPending.map((item) => (
+              <div key={item.leaseId} className="rounded-xl border border-rose-300/50 bg-rose-500/10 px-3 py-2 text-[12.5px] text-rose-800 dark:text-rose-200">
+                <span className="font-mono">{item.backend} / {item.requestId} / {item.leaseId}</span>
+                <div>{item.errors.join('; ') || t('computerUseCleanupUnsafe')}</div>
+              </div>
+            ))}
           </div>
         }
       />
@@ -867,18 +896,14 @@ function ComputerUseSettingsCard({
                 .reverse()
                 .map((rejection, index) => (
                   <div
-                    key={`${rejection.code}-${rejection.targetId ?? 'target'}-${index}`}
+                    key={`${rejection.code}-${rejection.requestId}-${index}`}
                     className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2"
                   >
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="rounded-lg border border-amber-300/60 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:text-amber-200">
                         {rejection.code}
                       </span>
-                      {rejection.targetId ? (
-                        <span className="font-mono text-[11px] text-ds-faint">
-                          {rejection.targetId}
-                        </span>
-                      ) : null}
+                      <span className="font-mono text-[11px] text-ds-faint">{rejection.requestId}</span>
                     </div>
                     <div className="mt-1 text-[12.5px] leading-5 text-ds-muted">
                       {rejection.message}

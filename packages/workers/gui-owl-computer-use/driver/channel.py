@@ -100,6 +100,7 @@ class SessionInputChannel:
         self._in_flight = 0
         self._closed = False
         self._close_reason: str | None = None
+        self.last_verification = Verification.NOT_APPLICABLE
         self.cleanup = CleanupSummary()
 
     @property
@@ -189,6 +190,7 @@ class SessionInputChannel:
             evidence = self.backend.verify(self.handle, action, receipt, before)
             if evidence.target_id != self.target.target_id:
                 raise ChannelError("TARGET_LOST", "verification belongs to a different target")
+            self.last_verification = evidence.status
             if not self.cancelled:
                 self.registry.transition_request(self.request_id, RequestState.RUNNING)
             if evidence.status is Verification.FAILED:

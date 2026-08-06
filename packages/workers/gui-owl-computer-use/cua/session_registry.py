@@ -508,8 +508,12 @@ class SessionRegistry:
                     {
                         "sessionId": session.session_id,
                         "targetId": session.target.target_id,
+                        "runtimeId": session.owner.runtime_id,
+                        "threadId": session.owner.thread_id,
                         "state": session.state.value,
                         "activeRequestId": session.active_request_id,
+                        "createdAt": session.created_at,
+                        "updatedAt": session.last_used_at,
                     }
                     for session in self._sessions.values()
                 ],
@@ -520,6 +524,8 @@ class SessionRegistry:
                         "targetId": request.target_id,
                         "leaseId": request.lease_id,
                         "state": request.state.value,
+                        "createdAt": request.created_at,
+                        "updatedAt": request.updated_at,
                     }
                     for request in self._requests.values()
                 ],
@@ -536,6 +542,8 @@ class SessionRegistry:
                         "expiresAt": lease.expires_at,
                         "inFlightActionCount": lease.in_flight_actions,
                         "suspectedStale": lease.suspected_stale,
+                        "acquiredAt": lease.acquired_at,
+                        "updatedAt": lease.updated_at,
                     }
                     for lease in self._leases_by_id.values()
                 ],

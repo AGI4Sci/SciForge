@@ -4,6 +4,8 @@ from __future__ import annotations
 import time
 import threading
 import uuid
+from collections import deque
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from driver.backend import BackendOpenContext
@@ -19,6 +21,11 @@ from .target import host_desktop_target, parse_target_descriptor, validate_safe_
 
 
 ChannelExecutor = Callable[[dict[str, Any], SessionInputChannel], dict[str, Any]]
+
+
+def _utc_iso(epoch_seconds: float | None = None) -> str:
+    value = time.time() if epoch_seconds is None else epoch_seconds
+    return datetime.fromtimestamp(value, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _default_router() -> BackendRouter:
@@ -39,6 +46,7 @@ class ComputerUseService:
         registry: SessionRegistry | None = None,
         router: BackendRouter | None = None,
         lease_ttl_seconds: float | None = None,
+        server_instance_id: str | None = None,
     ) -> None:
         if lease_ttl_seconds is not None and lease_ttl_seconds <= 0:
             raise ValueError("lease_ttl_seconds must be positive")
@@ -54,6 +62,9 @@ class ComputerUseService:
         self._reaper_interval_seconds: float | None = None
         self._last_reaper_error: str | None = None
         self._approval_proof = "legacy-trust-boundary"
+        self._server_instance_id = server_instance_id or f"cua-{uuid.uuid4()}"
+        self._request_contexts: dict[str, dict[str, Any]] = {}
+        self._recent_rejections: deque[dict[str, Any]] = deque(maxlen=20)
 
     def configure_approval_proof(self, mode: str) -> None:
         if mode not in {"required", "legacy"}:
@@ -113,6 +124,13 @@ class ComputerUseService:
             )
             self.registry.begin_request(session_id, request_id, deadline=deadline)
             request_started = True
+            with self._channels_lock:
+                self._request_contexts[request_id] = {
+                    "runtimeId": session.owner.runtime_id,
+                    "threadId": session.owner.thread_id,
+                    "turnId": invocation.turn_id if invocation is not None else "",
+                    "requestedIsolation": request["requestedIsolation"],
+                }
             cancellation = self.registry.cancellation_event(request_id)
             open_context = BackendOpenContext(
                 request_id=request_id,
@@ -198,6 +216,9 @@ class ComputerUseService:
         if channel is not None and cleanup_complete:
             with self._channels_lock:
                 self._channels.pop(request_id, None)
+        if cleanup_complete:
+            with self._channels_lock:
+                self._request_contexts.pop(request_id, None)
         if request_started and cleanup_complete:
             try:
                 self.registry.finish_request(
@@ -212,6 +233,8 @@ class ComputerUseService:
                 self.registry.close_session(session_id, force=True)
             except RegistryError:
                 pass
+        if not result.get("ok"):
+            self._remember_rejection(result, request_id=request_id)
         return result
 
     def _resolve_session(
@@ -373,21 +396,60 @@ class ComputerUseService:
     def status(self) -> dict[str, Any]:
         capabilities = self.router.capabilities()
         with self._channels_lock:
-            active_channels = len(self._channels)
+            channels = dict(self._channels)
+            contexts = dict(self._request_contexts)
+            rejections = list(self._recent_rejections)
+        registry = self.registry.snapshot()
+        sessions = {item["sessionId"]: item for item in registry["sessions"]}
+        leases = {item["requestId"]: item for item in registry["leases"]}
+        active = []
+        for request in registry["requests"]:
+            request_id = request["requestId"]
+            session = sessions.get(request["sessionId"], {})
+            lease = leases.get(request_id, {})
+            channel = channels.get(request_id)
+            context = contexts.get(request_id, {})
+            active.append({
+                "sessionId": request["sessionId"],
+                "requestId": request_id,
+                "targetId": request["targetId"],
+                "leaseId": request.get("leaseId"),
+                "runtimeId": context.get("runtimeId", session.get("runtimeId", "unknown")),
+                "threadId": context.get("threadId", session.get("threadId", "unknown")),
+                "turnId": context.get("turnId", ""),
+                "backend": channel.capabilities.backend.value if channel else lease.get("backend"),
+                "leaseScope": channel.capabilities.lease_scope.value if channel else lease.get("scope"),
+                "requestedIsolation": (
+                    channel.isolation.requested.value if channel else context.get("requestedIsolation", "auto")
+                ),
+                "effectiveIsolation": channel.isolation.effective.value if channel else None,
+                "degraded": channel.isolation.degraded if channel else False,
+                "degradedReason": channel.isolation.degraded_reason if channel else None,
+                "verification": (
+                    channel.last_verification.value if channel else "not-applicable"
+                ),
+                "state": request["state"],
+                "updatedAt": _utc_iso(request.get("updatedAt")),
+            })
         return {
+            "serverInstanceId": self._server_instance_id,
+            "updatedAt": _utc_iso(),
             "protocolVersion": contract.PROTOCOL_V2,
             "approvalProof": self._approval_proof,
             "backendsConnected": any(item.available for item in capabilities),
-            "activeChannels": active_channels,
+            "backends": [item.to_dict() for item in capabilities],
+            "activeChannels": len(channels),
+            "active": active,
             "lifecycleState": self._lifecycle_state,
             "cleanupPending": self.cleanup_pending(),
+            "recentRejections": rejections,
             "reaper": {
                 "running": self._reaper_thread is not None and self._reaper_thread.is_alive(),
                 "intervalSeconds": self._reaper_interval_seconds,
                 "leaseTtlSeconds": self.lease_ttl_seconds,
                 "lastError": self._last_reaper_error,
             },
-            "registry": self.registry.snapshot(),
+            "registry": registry,
         }
 
     def capabilities(self) -> dict[str, Any]:
@@ -428,11 +490,23 @@ class ComputerUseService:
                 "backend": channel.capabilities.backend.value,
                 "closed": channel.cleanup.closed,
                 "leaseReleased": channel.cleanup.lease_released,
-                "errors": list(channel.cleanup.errors),
+                "errors": [str(error)[:512] for error in channel.cleanup.errors],
             }
             for channel in channels
             if channel.cleanup.errors or channel.cancelled or self._lifecycle_state != "running"
         ]
+
+    def _remember_rejection(self, result: dict[str, Any], *, request_id: str) -> None:
+        error = result.get("error") if isinstance(result, dict) else None
+        if not isinstance(error, dict):
+            return
+        with self._channels_lock:
+            self._recent_rejections.append({
+                "requestId": request_id,
+                "code": str(error.get("code", "UNKNOWN"))[:128],
+                "message": str(error.get("message", "request rejected"))[:512],
+                "updatedAt": _utc_iso(),
+            })
 
     def reap_once(self) -> dict[str, Any]:
         scan = self.registry.reap_expired()
@@ -472,6 +546,7 @@ class ComputerUseService:
             return False
         with self._channels_lock:
             self._channels.pop(request_id, None)
+            self._request_contexts.pop(request_id, None)
         try:
             self.registry.finish_request(request_id, state, reason=reason)
         except RegistryError:
@@ -519,7 +594,7 @@ class ComputerUseService:
                 self.reap_once()
                 self._last_reaper_error = None
             except Exception as error:  # reaper must stay alive for later retries
-                self._last_reaper_error = f"{type(error).__name__}: {error}"
+                self._last_reaper_error = f"{type(error).__name__}: {error}"[:512]
                 continue
 
     def shutdown(self) -> dict[str, Any]:
@@ -543,6 +618,7 @@ class ComputerUseService:
                 continue
             with self._channels_lock:
                 self._channels.pop(channel.request_id, None)
+                self._request_contexts.pop(channel.request_id, None)
             try:
                 self.registry.finish_request(
                     channel.request_id, RequestState.CANCELLED, reason="server_stop",

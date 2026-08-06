@@ -187,9 +187,54 @@ export const computerUseBackendCapabilitiesSchema = z.object({
 }).strict()
 
 export const computerUseRuntimeStatusSchema = z.object({
+  serverInstanceId: safeId,
+  updatedAt: z.string().datetime({ offset: true }),
   protocolVersion: z.literal(2),
   approvalProof: z.enum(['legacy-trust-boundary', 'invocation-proof-v1']),
   backendsConnected: z.boolean(),
+  backends: z.array(computerUseBackendCapabilitiesSchema),
+  activeChannels: z.number().int().nonnegative(),
+  active: z.array(z.object({
+    sessionId: safeId,
+    requestId: safeId,
+    targetId: safeId,
+    leaseId: safeId.nullable(),
+    runtimeId: z.string().min(1).max(128),
+    threadId: z.string().min(1).max(128),
+    turnId: z.string().max(128),
+    backend: computerUseBackendSchema.nullable(),
+    leaseScope: computerUseLeaseScopeSchema.nullable(),
+    requestedIsolation: computerUseIsolationSchema,
+    effectiveIsolation: computerUseIsolationSchema.exclude(['auto']).nullable(),
+    degraded: z.boolean(),
+    degradedReason: z.string().max(512).nullable(),
+    verification: computerUseVerificationSchema,
+    state: z.string().min(1).max(64),
+    updatedAt: z.string().datetime({ offset: true })
+  }).strict()),
+  lifecycleState: z.enum(['running', 'stopping', 'stopped']),
+  cleanupPending: z.array(z.object({
+    requestId: safeId,
+    sessionId: safeId,
+    targetId: safeId,
+    leaseId: safeId,
+    backend: computerUseBackendSchema,
+    closed: z.boolean(),
+    leaseReleased: z.boolean(),
+    errors: z.array(z.string().max(512))
+  }).strict()),
+  recentRejections: z.array(z.object({
+    requestId: safeId,
+    code: z.string().min(1).max(128),
+    message: z.string().min(1).max(512),
+    updatedAt: z.string().datetime({ offset: true })
+  }).strict()).max(20),
+  reaper: z.object({
+    running: z.boolean(),
+    intervalSeconds: z.number().positive().nullable(),
+    leaseTtlSeconds: z.number().positive().nullable(),
+    lastError: z.string().max(512).nullable()
+  }).strict(),
   registry: z.object({
     counts: z.object({
       sessions: z.number().int().nonnegative(),
@@ -199,11 +244,40 @@ export const computerUseRuntimeStatusSchema = z.object({
       releasedLeaseTombstones: z.number().int().nonnegative()
     }),
     closed: z.boolean(),
+    generation: z.number().int().nonnegative(),
     sessions: z.array(z.record(z.string(), z.unknown())),
     requests: z.array(z.record(z.string(), z.unknown())),
     leases: z.array(z.record(z.string(), z.unknown()))
-  })
+  }).strict()
 }).strict()
+
+export const computerUseCapabilitiesStatusSchema = z.object({
+  protocolVersion: z.literal(2),
+  backends: z.array(computerUseBackendCapabilitiesSchema),
+  approvalProof: z.enum(['legacy-trust-boundary', 'invocation-proof-v1'])
+}).strict()
+
+export const computerUseCleanupPendingStatusSchema = z.object({
+  items: computerUseRuntimeStatusSchema.shape.cleanupPending
+}).strict()
+
+export const computerUseStatusEnvelopeSchema = z.object({
+  ok: z.literal(true),
+  data: computerUseRuntimeStatusSchema
+}).strict()
+
+export const computerUseCapabilitiesEnvelopeSchema = z.object({
+  ok: z.literal(true),
+  data: computerUseCapabilitiesStatusSchema
+}).strict()
+
+export const computerUseCleanupPendingEnvelopeSchema = z.object({
+  ok: z.literal(true),
+  data: computerUseCleanupPendingStatusSchema
+}).strict()
+
+export type ComputerUseSidecarRuntimeStatus = z.infer<typeof computerUseRuntimeStatusSchema>
+export type ComputerUseSidecarCapabilities = z.infer<typeof computerUseCapabilitiesStatusSchema>
 
 export function redactComputerUseTarget(
   target: z.infer<typeof computerUseTargetSchema>

@@ -251,6 +251,7 @@ import {
   requestComputerUsePermission
 } from '../services/computer-use-permissions'
 import { readComputerUseRuntimeStatus } from '../services/computer-use-status'
+import type { ComputerUseRuntimeView } from '../services/computer-use-runtime-client'
 import { exportWriteDocument } from '../services/write-export-service'
 import { listGuiSkills } from '../services/skill-service'
 type GuiUpdaterModule = typeof import('../gui-updater')
@@ -298,6 +299,7 @@ export type RegisterAppIpcHandlersOptions = {
   isTrustedIpcSender: (event: IpcMainInvokeEvent) => boolean
   applySettingsPatch: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   getModelAccessStatus: (settings: AppSettingsV1) => Promise<ModelAccessStatus>
+  getComputerUseRuntimeStatus?: () => Promise<ComputerUseRuntimeView>
   traces?: {
     read: (query?: TraceReadQuery) => Promise<TraceReadResult>
     summaries: (query?: TraceSummaryQuery) => Promise<TraceSummary[]>
@@ -479,6 +481,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     getMainWindow,
     applySettingsPatch,
     getModelAccessStatus,
+    getComputerUseRuntimeStatus,
     traces,
     extensions,
     agentRuntime,
@@ -761,11 +764,15 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   )
   handleInvoke('computer-use:status', async () => {
     const settings = await store.load()
-    const statusPath = join(app.getPath('userData'), 'computer-use', 'status.json')
+    const runtime = getComputerUseRuntimeStatus
+      ? await getComputerUseRuntimeStatus()
+      : await readComputerUseRuntimeStatus(
+        join(app.getPath('userData'), 'computer-use', 'status.json')
+      )
     return {
       settings: settings.computerUse,
       permissions: await getComputerUsePermissions(),
-      runtime: await readComputerUseRuntimeStatus(statusPath)
+      runtime
     }
   })
   handleInvoke('performance:snapshot', async () => {

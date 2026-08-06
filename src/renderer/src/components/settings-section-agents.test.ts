@@ -90,6 +90,11 @@ const labels: Record<string, string> = {
   computerUseBackendAvailable: 'available',
   computerUseBackendUnavailable: 'unavailable',
   computerUseBackendUnknown: 'not reported',
+  computerUseConnection_online: 'Sidecar online',
+  computerUseConnection_offline: 'Sidecar offline',
+  computerUseConnection_stale: 'status stale',
+  computerUseApprovalProof: 'Invocation proof',
+  computerUseLifecycle: 'Lifecycle',
   computerUseRefresh: 'Refresh status',
   computerUseDisabledHint: 'Computer use is disabled.',
   computerUseSafetyInputSurface: 'Input surface',
@@ -114,6 +119,11 @@ const labels: Record<string, string> = {
   computerUseActiveLeases: 'Active leases',
   computerUseActiveLeasesDesc: 'Active targets.',
   computerUseNoActiveLeases: 'No active leases.',
+  computerUseUnverifiedHint: 'Unverified is not verified or confirmed failure.',
+  computerUseCleanupPending: 'Cleanup pending',
+  computerUseCleanupPendingDesc: 'Unsafe resources.',
+  computerUseNoCleanupPending: 'No pending cleanup.',
+  computerUseCleanupUnsafe: 'Not safe to reuse',
   computerUseRecentRejections: 'Recent rejections',
   computerUseRecentRejectionsDesc: 'Recent denials.',
   computerUseNoRecentRejections: 'No recent rejections.'
@@ -260,19 +270,49 @@ describe('AgentsSettingsSection', () => {
           accessibilityNeedsRestart: true
         },
         runtime: {
+          connection: 'online',
+          stale: false,
+          lastSuccessAt: '2026-06-23T00:00:00.000Z',
+          lastStatusError: null,
+          serverInstanceId: 'instance-1',
+          generation: 4,
           updatedAt: '2026-06-23T00:00:00.000Z',
-          servers: [],
-          backend: {
-            backend: 'gui-owl',
+          protocolVersion: 2,
+          approvalProof: 'invocation-proof-v1',
+          lifecycleState: 'running',
+          backends: [{
+            backend: 'legacy-pyautogui',
             available: true,
-            platform: 'darwin',
             reason: 'GUI-Owl ready',
-            inputIsolation: 'host-approved',
+            targetKinds: ['host-desktop'],
+            actions: ['observe', 'click'],
+            effectiveIsolation: 'host-approved',
+            backgroundInput: 'none',
             affectsUserInput: true,
             requiresHostFocus: true,
-            usesHostClipboard: false
+            usesHostClipboard: false,
+            supportsReadback: [],
+            leaseScope: 'process-global',
+            maxConcurrency: 1
+          }],
+          counts: {
+            sessions: 1, requests: 1, activeLeases: 1,
+            tombstones: 0, releasedLeaseTombstones: 0
           },
-          activeLeases: [],
+          active: [{
+            sessionId: 'session-1', requestId: 'request-1', targetId: 'target-1',
+            leaseId: 'lease-1', runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1',
+            backend: 'legacy-pyautogui', leaseScope: 'process-global',
+            requestedIsolation: 'agent-isolated', effectiveIsolation: 'host-approved',
+            degraded: true, degradedReason: 'REQUESTED_AGENT_ISOLATED_UNAVAILABLE',
+            verification: 'unverified', state: 'running', updatedAt: '2026-06-23T00:00:00.000Z'
+          }],
+          cleanupPending: [{
+            requestId: 'request-2', sessionId: 'session-2', targetId: 'target-2',
+            leaseId: 'lease-2', backend: 'legacy-pyautogui', closed: false,
+            leaseReleased: false, errors: ['close failed']
+          }],
+          reaper: null,
           recentRejections: []
         }
       }
@@ -288,6 +328,11 @@ describe('AgentsSettingsSection', () => {
     expect(html).toContain('Claude Code CLI')
     expect(html).not.toContain('SciForge Runtime')
     expect(html).toContain('GUI-Owl ready')
+    expect(html).toContain('invocation-proof-v1')
+    expect(html).toContain('REQUESTED_AGENT_ISOLATED_UNAVAILABLE')
+    expect(html).toContain('unverified')
+    expect(html).toContain('Unverified is not verified or confirmed failure.')
+    expect(html).toContain('close failed')
     expect(html).toContain('macOS permissions')
   })
 })

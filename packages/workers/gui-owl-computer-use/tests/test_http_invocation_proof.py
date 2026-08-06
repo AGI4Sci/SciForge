@@ -57,6 +57,16 @@ def _post(port, path, body, proof=None):
     return response.status, payload
 
 
+def _get(port, path, token=None):
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    connection.request("GET", path, headers=headers)
+    response = connection.getresponse()
+    payload = json.loads(response.read())
+    connection.close()
+    return response.status, payload
+
+
 def test_http_mutations_require_proof_derive_owner_and_reject_replay(monkeypatch):
     service = ComputerUseService(router=BackendRouter([]))
     service.configure_approval_proof("required")
@@ -101,6 +111,30 @@ def test_http_mutations_require_proof_derive_owner_and_reject_replay(monkeypatch
         )
         assert status == 403
         assert payload["error"]["code"] == "APPROVAL_PROOF_REPLAYED"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
+def test_dynamic_status_get_reuses_sidecar_bearer_auth(monkeypatch):
+    service = ComputerUseService(router=BackendRouter([]), server_instance_id="instance-http-1")
+    monkeypatch.setattr(server_module, "SERVICE", service)
+    monkeypatch.setattr(server_module.CONFIG, "service_token", "status-token")
+    monkeypatch.setattr(server_module.CONFIG, "allow_execute", False)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server_module.Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, payload = _get(httpd.server_port, "/computer-use/status")
+        assert status == 401
+        assert payload["error"]["code"] == "UNAUTHENTICATED"
+
+        status, payload = _get(
+            httpd.server_port, "/computer-use/status", token="status-token",
+        )
+        assert status == 200
+        assert payload["data"]["serverInstanceId"] == "instance-http-1"
     finally:
         httpd.shutdown()
         httpd.server_close()

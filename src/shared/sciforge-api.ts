@@ -8,6 +8,7 @@ import type {
   ScheduleRuntimeStatus,
   ScheduleTaskFromTextResult
 } from './app-settings'
+import type { ComputerUseSidecarRuntimeStatus } from './computer-use-contract'
 import type {
   TraceClearResult,
   TraceExportResult,
@@ -429,38 +430,23 @@ export type ComputerUsePermissions = {
   screenRecording: ComputerUsePermissionState
   accessibilityNeedsRestart: boolean
 }
-export type ComputerUseLeaseView = {
-  leaseId: string
-  computerUseSessionId: string
-  agentId: string
-  threadId: string
-  turnId?: string
-  targetId: string
-  backend: string
-  acquiredAt: string
-  updatedAt: string
-}
-export type ComputerUseRejectionView = {
-  code: string
-  message: string
-  targetId?: string
-  activeLease?: ComputerUseLeaseView
-}
-export type ComputerUseBackendStatusView = {
-  backend: string
-  available: boolean
-  platform: string
-  reason?: string
-  activeLeases: ComputerUseLeaseView[]
-  recentRejections: ComputerUseRejectionView[]
-  recentError?: string
-}
 export type ComputerUseRuntimeStatusView = {
+  connection: 'online' | 'offline' | 'stale'
+  stale: boolean
+  lastSuccessAt: string | null
+  lastStatusError: string | null
+  serverInstanceId: string | null
+  generation: number | null
   updatedAt: string
-  servers: Array<ComputerUseBackendStatusView & { serverId: string; pid: number; updatedAt: string }>
-  activeLeases: ComputerUseLeaseView[]
-  recentRejections: ComputerUseRejectionView[]
-  backend: ComputerUseBackendStatusView | null
+  protocolVersion: 2 | null
+  approvalProof: 'legacy-trust-boundary' | 'invocation-proof-v1' | 'unavailable'
+  lifecycleState: 'running' | 'stopping' | 'stopped' | 'unknown'
+  backends: ComputerUseSidecarRuntimeStatus['backends']
+  counts: ComputerUseSidecarRuntimeStatus['registry']['counts']
+  active: ComputerUseSidecarRuntimeStatus['active']
+  cleanupPending: ComputerUseSidecarRuntimeStatus['cleanupPending']
+  recentRejections: ComputerUseSidecarRuntimeStatus['recentRejections']
+  reaper: ComputerUseSidecarRuntimeStatus['reaper'] | null
 }
 export type ComputerUseStatusView = {
   settings?: ComputerUseSettingsV1

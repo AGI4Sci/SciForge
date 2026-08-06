@@ -308,6 +308,27 @@ describe('registerAppIpcHandlers', () => {
     expect(getModelAccessStatus).toHaveBeenCalledWith(expect.objectContaining({ version: 1 }))
   })
 
+  it('returns the live Computer Use runtime provider instead of a status file snapshot', async () => {
+    const runtime = {
+      connection: 'online', stale: false, lastSuccessAt: '2026-08-06T08:00:00.000Z',
+      lastStatusError: null, serverInstanceId: 'instance-1', generation: 7,
+      updatedAt: '2026-08-06T08:00:00.000Z', protocolVersion: 2,
+      approvalProof: 'invocation-proof-v1', lifecycleState: 'running',
+      backends: [], counts: { sessions: 0, requests: 0, activeLeases: 0, tombstones: 0, releasedLeaseTombstones: 0 },
+      active: [], cleanupPending: [], recentRejections: [], reaper: null
+    }
+    const getComputerUseRuntimeStatus = vi.fn(async () => runtime)
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    registerAppIpcHandlers(registerOptions({
+      getComputerUseRuntimeStatus: getComputerUseRuntimeStatus as never
+    }))
+
+    const result = await handlers.get('computer-use:status')?.({}) as { runtime: unknown }
+
+    expect(result.runtime).toBe(runtime)
+    expect(getComputerUseRuntimeStatus).toHaveBeenCalledOnce()
+  })
+
   it('validates durable trace queries and exports through an explicit save destination', async () => {
     const traces = {
       read: vi.fn(async () => ({ events: [], total: 0, corruptLines: 0 })),
