@@ -73,6 +73,7 @@ model/provider selection and policy.
 | Backend protocol and capability routing | `driver/backend.py`, `driver/router.py` |
 | Target-bound runner facade | `driver/channel.py` |
 | Approved process-global compatibility backend | `driver/backends/legacy_pyautogui.py` |
+| Target-scoped Chromium bridge | `driver/backends/cdp_adapter.py`, `src/main/services/computer-use-cdp-adapter.ts` |
 | Explicit-hook click-through mouse overlay | `driver/overlay.py` |
 | Pure contract/result/parse tests | `tests/test_contract.py` |
 | Development-only local model serve helper | `server/serve-gui-owl-32b.sh` |
@@ -141,3 +142,26 @@ See [`.env.example`](.env.example). Key vars: `SCIFORGE_MODEL_ROUTER_BASE_URL`,
 `SCIFORGE_MODEL_ROUTER_MODEL`, `SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY`,
 `CUA_MAX_STEPS`, `CUA_REFLECT`, `CUA_ALLOW_EXECUTE`,
 `CUA_PORT`, `CUA_SERVICE_TOKEN`, `CUA_SHOW_OVERLAY`, `CUA_ARTIFACT_DIR`.
+
+### Optional CDP/Playwright backend
+
+The browser backend controls only Chromium targets exposed by an explicitly
+allowlisted loopback CDP endpoint. It cannot attach to an ordinary Chrome
+profile that was not launched with remote debugging enabled.
+
+Start the Node adapter in a development checkout, then start the Python worker
+with the printed loopback URL and the same token:
+
+```powershell
+$env:SCIFORGE_CUA_CDP_ENDPOINTS = 'http://127.0.0.1:9222'
+$env:SCIFORGE_CUA_CDP_ADAPTER_TOKEN = '<random-secret>'
+npx tsx src/main/computer-use-cdp-adapter-node-entry.ts
+
+$env:SCIFORGE_CUA_CDP_ADAPTER_URL = 'http://127.0.0.1:<printed-port>'
+$env:SCIFORGE_CUA_CDP_ADAPTER_TOKEN = '<same-random-secret>'
+python -m cua.cli --http
+```
+
+The adapter uses `playwright-core` already pinned by the repository. Attached
+handles are released without closing user pages. Targets and endpoint secrets
+remain redacted at the public sidecar boundary.

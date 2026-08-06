@@ -21,9 +21,10 @@ ChannelExecutor = Callable[[dict[str, Any], SessionInputChannel], dict[str, Any]
 
 
 def _default_router() -> BackendRouter:
+    from driver.backends.cdp_adapter import CdpAdapterBackend
     from driver.backends.legacy_pyautogui import LegacyPyAutoGUIBackend
 
-    return BackendRouter([LegacyPyAutoGUIBackend()])
+    return BackendRouter([CdpAdapterBackend(), LegacyPyAutoGUIBackend()])
 
 
 class ComputerUseService:
