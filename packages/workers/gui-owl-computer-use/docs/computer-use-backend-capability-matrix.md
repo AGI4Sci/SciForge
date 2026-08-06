@@ -25,4 +25,3 @@ request. A weaker backend is never an implicit fallback for a stronger request.
 - `cleanupPending` means the resource is quarantined and not safe to reuse.
 - The default isolated provider intentionally reports
   `ISOLATED_DESKTOP_UNAVAILABLE`; an interface or mock is not real infrastructure.
-

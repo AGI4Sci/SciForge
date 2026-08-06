@@ -106,4 +106,3 @@ e90e1d61 P5c deterministic full chain
 Use `git revert`, not reset/rebase/force-push, after commits are shared. Reverting
 P5a while keeping later P5 commits is unsupported because P5b–P5e document and
 test the proof-enabled contract.
-
