@@ -73,6 +73,16 @@ if (-not $env:CUA_SERVICE_TOKEN) {
   $env:CUA_SERVICE_TOKEN = [Convert]::ToBase64String($tokenBytes)
 }
 $env:SCIFORGE_CUA_SERVICE_TOKEN = $env:CUA_SERVICE_TOKEN
+# The runtime approval broker and Python sidecar share a different per-launch
+# HMAC secret. Keep it out of tool arguments and generate it independently from
+# the bearer token so either value cannot be repurposed as the other.
+if (-not $env:SCIFORGE_CUA_INVOCATION_SECRET) {
+  $proofSecretBytes = New-Object byte[] 32
+  $proofRng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $proofRng.GetBytes($proofSecretBytes) } finally { $proofRng.Dispose() }
+  $env:SCIFORGE_CUA_INVOCATION_SECRET = [Convert]::ToBase64String($proofSecretBytes)
+}
+if (-not $env:CUA_INVOCATION_PROOF_MODE) { $env:CUA_INVOCATION_PROOF_MODE = "required" }
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) { Die "找不到 node, 请先安装 Node.js" }
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) { Die "找不到 python, 请先安装并加入 PATH" }

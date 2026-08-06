@@ -38,7 +38,9 @@ export const COMPUTER_USE_ERROR_CODES = [
   'DEGRADATION_NOT_ALLOWED',
   'TARGET_NOT_FOUND', 'TARGET_LOST', 'STALE_OBSERVATION', 'ACTION_UNSUPPORTED',
   'ACTION_UNVERIFIED', 'ACTION_OUTCOME_UNKNOWN', 'LEASE_EXPIRED',
-  'CANCEL_PENDING', 'CLEANUP_INCOMPLETE'
+  'CANCEL_PENDING', 'CLEANUP_INCOMPLETE',
+  'APPROVAL_PROOF_REQUIRED', 'APPROVAL_PROOF_INVALID', 'APPROVAL_PROOF_EXPIRED',
+  'APPROVAL_PROOF_REPLAYED', 'INVOCATION_IDENTITY_MISMATCH'
 ] as const
 
 export type ComputerUseErrorCode = typeof COMPUTER_USE_ERROR_CODES[number]
@@ -186,7 +188,7 @@ export const computerUseBackendCapabilitiesSchema = z.object({
 
 export const computerUseRuntimeStatusSchema = z.object({
   protocolVersion: z.literal(2),
-  approvalProof: z.literal('legacy-trust-boundary'),
+  approvalProof: z.enum(['legacy-trust-boundary', 'invocation-proof-v1']),
   backendsConnected: z.boolean(),
   registry: z.object({
     counts: z.object({

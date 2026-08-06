@@ -4,6 +4,13 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import {
+  COMPUTER_USE_INVOCATION_HEADER,
+  createComputerUseInvocationProof,
+  encodeComputerUseInvocationProof,
+  parseTrustedComputerUseInvocation,
+  type TrustedComputerUseInvocation
+} from './services/computer-use-invocation-proof'
+import {
   computerUseBindTargetInputSchema,
   computerUseEmptyInputSchema,
   computerUseReleaseSessionInputSchema,
@@ -30,6 +37,9 @@ type ComputerUseServiceConfig = {
   serviceUrl: string
   serviceToken: string
   timeoutMs: number
+  invocationSecret?: string
+  invocationProofMode?: 'required' | 'legacy'
+  invocationProofTtlMs?: number
 }
 
 const DEFAULT_TIMEOUT_MS = 600_000
@@ -89,10 +99,14 @@ export function createComputerUseMcpServer(
   }, async (args, extra) => {
     const parsed = computerUseBindTargetInputSchema.safeParse(args)
     if (!parsed.success) return errorToolResult('INVALID_ARGUMENT', 'invalid target binding')
-    return callComputerUseServiceEndpoint(config, '/computer-use/sessions/bind', 'POST', {
-      ...parsed.data,
-      owner: { runtimeId: 'mcp-local', threadId: 'legacy-trust-boundary' }
-    }, extra.signal)
+    return callAuthorizedComputerUseEndpoint(
+      config,
+      '/computer-use/sessions/bind',
+      'computer_use_bind_target',
+      parsed.data,
+      extra._meta,
+      extra.signal
+    )
   })
 
   server.registerTool(COMPUTER_USE_MCP_TOOL_NAME, {
@@ -114,7 +128,7 @@ export function createComputerUseMcpServer(
     if (!parsed.success) {
       return errorToolResult('INVALID_ARGUMENT', 'instruction is required')
     }
-    return callComputerUseService(config, parsed.data, extra.signal)
+    return callComputerUseService(config, parsed.data, extra._meta, extra.signal)
   })
 
   server.registerTool(COMPUTER_USE_RELEASE_SESSION_TOOL_NAME, {
@@ -124,8 +138,13 @@ export function createComputerUseMcpServer(
   }, async (args, extra) => {
     const parsed = computerUseReleaseSessionInputSchema.safeParse(args)
     if (!parsed.success) return errorToolResult('INVALID_ARGUMENT', 'invalid session release')
-    return callComputerUseServiceEndpoint(
-      config, '/computer-use/sessions/release', 'POST', parsed.data, extra.signal
+    return callAuthorizedComputerUseEndpoint(
+      config,
+      '/computer-use/sessions/release',
+      'computer_use_release_session',
+      parsed.data,
+      extra._meta,
+      extra.signal
     )
   })
 
@@ -146,7 +165,10 @@ export function resolveComputerUseServiceConfig(
   return {
     serviceUrl,
     serviceToken,
-    timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : DEFAULT_TIMEOUT_MS
+    timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : DEFAULT_TIMEOUT_MS,
+    invocationSecret: (env.SCIFORGE_CUA_INVOCATION_SECRET ?? '').trim(),
+    invocationProofMode: env.CUA_INVOCATION_PROOF_MODE === 'legacy' ? 'legacy' : 'required',
+    invocationProofTtlMs: resolveProofTtlMs(env.SCIFORGE_CUA_INVOCATION_PROOF_TTL_MS)
   }
 }
 
@@ -155,7 +177,8 @@ async function callComputerUseServiceEndpoint(
   path: string,
   method: 'GET' | 'POST',
   body: Record<string, unknown> | undefined,
-  signal: AbortSignal
+  signal: AbortSignal,
+  invocationProof?: string
 ): Promise<ComputerUseToolResult> {
   const controller = new AbortController()
   const unlink = linkAbortSignal(signal, controller)
@@ -163,7 +186,7 @@ async function callComputerUseServiceEndpoint(
   try {
     const response = await fetch(`${config.serviceUrl}${path}`, {
       method,
-      headers: jsonHeaders(config.serviceToken),
+      headers: jsonHeaders(config.serviceToken, invocationProof),
       ...(body ? { body: JSON.stringify(body) } : {}),
       signal: controller.signal
     })
@@ -185,29 +208,77 @@ async function callComputerUseServiceEndpoint(
   }
 }
 
+async function callAuthorizedComputerUseEndpoint(
+  config: ComputerUseServiceConfig,
+  path: string,
+  tool: string,
+  body: Record<string, unknown>,
+  meta: Record<string, unknown> | undefined,
+  signal: AbortSignal
+): Promise<ComputerUseToolResult> {
+  try {
+    const authorization = authorizeMutation(config, tool, body, meta)
+    return callComputerUseServiceEndpoint(
+      config,
+      path,
+      'POST',
+      authorization.body,
+      signal,
+      authorization.proof
+    )
+  } catch (error) {
+    return proofErrorToolResult(error)
+  }
+}
+
 async function callComputerUseService(
   config: ComputerUseServiceConfig,
   input: ComputerUseRunInput,
+  meta: Record<string, unknown> | undefined,
   signal: AbortSignal
 ): Promise<ComputerUseToolResult> {
-  const requestId = `mcp-cua-${randomUUID()}`
+  const argumentsForProof = { ...input, execute: true }
+  let authorization: AuthorizedMutation
+  try {
+    authorization = authorizeMutation(
+      config,
+      COMPUTER_USE_MCP_TOOL_NAME,
+      argumentsForProof,
+      meta,
+      `mcp-cua-${randomUUID()}`
+    )
+  } catch (error) {
+    return proofErrorToolResult(error)
+  }
+  const requestId = String(authorization.body.requestId)
   const controller = new AbortController()
   const unlink = linkAbortSignal(signal, controller)
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs)
   const cancel = (): void => {
-    void fetch(`${config.serviceUrl}/computer-use/cancel`, {
-      method: 'POST',
-      headers: jsonHeaders(config.serviceToken),
-      body: JSON.stringify({ requestId })
-    }).catch(() => undefined)
+    try {
+      const cancelAuthorization = authorizeMutation(
+        config,
+        'computer_use_cancel',
+        { requestId },
+        meta
+      )
+      void fetch(`${config.serviceUrl}/computer-use/cancel`, {
+        method: 'POST',
+        headers: jsonHeaders(config.serviceToken, cancelAuthorization.proof),
+        body: JSON.stringify(cancelAuthorization.body)
+      }).catch(() => undefined)
+    } catch {
+      // The original call still aborts. Status will expose cleanup pending if
+      // a separately authorized cancellation could not be sent.
+    }
   }
   controller.signal.addEventListener('abort', cancel, { once: true })
 
   try {
     const response = await fetch(`${config.serviceUrl}/computer-use/run`, {
       method: 'POST',
-      headers: jsonHeaders(config.serviceToken),
-      body: JSON.stringify({ ...input, execute: true, approve: true, requestId }),
+      headers: jsonHeaders(config.serviceToken, authorization.proof),
+      body: JSON.stringify(authorization.body),
       signal: controller.signal
     })
     const payload = await response.json().catch(() => null)
@@ -245,11 +316,89 @@ function serviceResponseToToolResult(
   }
 }
 
-function jsonHeaders(serviceToken: string): Record<string, string> {
+function jsonHeaders(serviceToken: string, invocationProof?: string): Record<string, string> {
   return {
     'Content-Type': 'application/json',
-    ...(serviceToken ? { Authorization: `Bearer ${serviceToken}` } : {})
+    ...(serviceToken ? { Authorization: `Bearer ${serviceToken}` } : {}),
+    ...(invocationProof ? { [COMPUTER_USE_INVOCATION_HEADER]: invocationProof } : {})
   }
+}
+
+type AuthorizedMutation = {
+  body: Record<string, unknown>
+  proof?: string
+}
+
+function authorizeMutation(
+  config: ComputerUseServiceConfig,
+  tool: string,
+  body: Record<string, unknown>,
+  meta: Record<string, unknown> | undefined,
+  requestId?: string
+): AuthorizedMutation {
+  const resolvedRequestId = requestId ?? `mcp-cua-${randomUUID()}`
+  if ((config.invocationProofMode ?? 'required') === 'legacy') {
+    return {
+      body: {
+        ...body,
+        ...(tool === COMPUTER_USE_MCP_TOOL_NAME ? { approve: true, requestId: resolvedRequestId } : {})
+      }
+    }
+  }
+  const trusted = parseTrustedComputerUseInvocation(meta)
+  requireConfirmedInvocation(trusted)
+  const secret = config.invocationSecret ?? ''
+  if (!secret) throw new InvocationProofError(
+    'APPROVAL_PROOF_REQUIRED',
+    'Computer Use invocation proof is required but its signing secret is unavailable.'
+  )
+  const proof = createComputerUseInvocationProof({
+    secret,
+    trusted,
+    tool,
+    arguments: body,
+    requestId: resolvedRequestId,
+    ttlMs: config.invocationProofTtlMs ?? 30_000
+  })
+  return {
+    body: {
+      ...body,
+      ...(tool === COMPUTER_USE_MCP_TOOL_NAME ? { requestId: proof.requestId } : {})
+    },
+    proof: encodeComputerUseInvocationProof(proof)
+  }
+}
+
+function requireConfirmedInvocation(
+  trusted: TrustedComputerUseInvocation | null
+): asserts trusted is TrustedComputerUseInvocation & { approval: 'confirmation'; invocationId: string } {
+  if (!trusted || trusted.approval !== 'confirmation' || !trusted.invocationId) {
+    throw new InvocationProofError(
+      'APPROVAL_PROOF_REQUIRED',
+      'Computer Use mutation requires one trusted, confirmed invocation.'
+    )
+  }
+}
+
+class InvocationProofError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message)
+    this.name = 'InvocationProofError'
+  }
+}
+
+function proofErrorToolResult(error: unknown): ComputerUseToolResult {
+  return error instanceof InvocationProofError
+    ? errorToolResult(error.code, error.message)
+    : errorToolResult(
+        'APPROVAL_PROOF_INVALID',
+        error instanceof Error ? error.message : 'Computer Use invocation proof is invalid.'
+      )
+}
+
+function resolveProofTtlMs(raw: string | undefined): number {
+  const value = Number(raw)
+  return Number.isInteger(value) && value > 0 && value <= 300_000 ? value : 30_000
 }
 
 function linkAbortSignal(signal: AbortSignal, controller: AbortController): () => void {

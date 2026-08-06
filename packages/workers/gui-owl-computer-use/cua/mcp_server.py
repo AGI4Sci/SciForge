@@ -52,6 +52,12 @@ def _screenshot_provider(args: Dict[str, Any]):
 
 
 def _run_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+    if CONFIG.invocation_proof_mode == "required" and bool(args.get("execute")):
+        return R.err(
+            "APPROVAL_PROOF_REQUIRED",
+            "direct Python MCP execution has no trusted SciForge invocation proof",
+            retryable=False,
+        )
     def execute_channel(request: Dict[str, Any], channel) -> Dict[str, Any]:
         return run_task(
             CONFIG,
@@ -82,6 +88,7 @@ def _run_tool(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def create_server() -> Server:
+    SERVICE.configure_approval_proof(CONFIG.invocation_proof_mode)
     server = Server(SERVER_NAME, VERSION)
 
     @server.list_tools()
@@ -137,14 +144,26 @@ def create_server() -> Server:
         elif name == contract.TOOL_LIST_TARGETS:
             res = R.ok(SERVICE.list_targets())
         elif name == contract.TOOL_BIND_TARGET:
-            res = SERVICE.bind_session(arguments)
+            res = (
+                R.err("APPROVAL_PROOF_REQUIRED", "target binding requires the managed Node MCP gateway")
+                if CONFIG.invocation_proof_mode == "required"
+                else SERVICE.bind_session(arguments)
+            )
         elif name == contract.TOOL_CANCEL:
-            res = SERVICE.cancel(arguments)
+            res = (
+                R.err("APPROVAL_PROOF_REQUIRED", "cancellation requires the managed Node MCP gateway")
+                if CONFIG.invocation_proof_mode == "required"
+                else SERVICE.cancel(arguments)
+            )
         elif name == contract.TOOL_RUN:
             # The desktop loop can run for many steps; keep the event loop free.
             res = await asyncio.to_thread(_run_tool, arguments)
         elif name == contract.TOOL_RELEASE_SESSION:
-            res = SERVICE.release_session(arguments)
+            res = (
+                R.err("APPROVAL_PROOF_REQUIRED", "session release requires the managed Node MCP gateway")
+                if CONFIG.invocation_proof_mode == "required"
+                else SERVICE.release_session(arguments)
+            )
         else:
             res = R.err("NOT_FOUND", f"unknown tool {name}")
         return _to_text_content(res)

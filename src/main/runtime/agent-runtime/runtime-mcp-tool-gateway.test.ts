@@ -619,6 +619,15 @@ describe('runtime MCP tool gateway', () => {
       tool: 'computer_use',
       arguments: {
         instruction: 'open the settings window'
+      },
+      trustedInvocation: {
+        requestId: 'request-1',
+        runtimeId: 'codex',
+        threadId: 'codex-thread-1',
+        turnId: 'codex-turn-1',
+        actionId: 'managed-mcp.computer-use',
+        invocationId: 'invocation-1',
+        approval: 'confirmation'
       }
     })).resolves.toMatchObject({
       success: true
@@ -628,6 +637,17 @@ describe('runtime MCP tool gateway', () => {
         name: 'computer_use',
         arguments: {
           instruction: 'open the settings window'
+        },
+        _meta: {
+          'io.sciforge/computer-use-invocation': {
+            requestId: 'request-1',
+            runtimeId: 'codex',
+            threadId: 'codex-thread-1',
+            turnId: 'codex-turn-1',
+            actionId: 'managed-mcp.computer-use',
+            invocationId: 'invocation-1',
+            approval: 'confirmation'
+          }
         }
       },
       expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 })

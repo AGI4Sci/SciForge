@@ -28,10 +28,19 @@ from PIL import Image
 
 from . import result as R
 from .config import CONFIG
+from .invocation_proof import (
+    INVOCATION_HEADER, InvocationProofError, InvocationProofVerifier,
+)
 from .runner import run_task
 from .service import SERVICE
 
 VERSION = "0.1.0"
+PROOF_VERIFIER = InvocationProofVerifier(
+    CONFIG.invocation_secret,
+    mode=CONFIG.invocation_proof_mode,
+    max_ttl_ms=CONFIG.invocation_proof_ttl_ms,
+)
+SERVICE.configure_approval_proof(CONFIG.invocation_proof_mode)
 
 
 def _bearer_token(value: Optional[str]) -> str:
@@ -98,7 +107,7 @@ class Handler(BaseHTTPRequestHandler):
                 "endpoint": "responses",
                 "protocolVersion": 2,
                 "backendsConnected": SERVICE.status()["backendsConnected"],
-                "approvalProof": "legacy-trust-boundary",
+                "approvalProof": PROOF_VERIFIER.status,
                 "allowExecute": CONFIG.allow_execute,
                 "authRequired": bool(CONFIG.service_token or CONFIG.allow_execute)}})
         if self.path == "/computer-use/status":
@@ -127,16 +136,36 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(n) or b"{}")
         except Exception as e:  # noqa: BLE001
             return self._send(400, R.err("INVALID_ARGUMENT", f"bad json: {e}"))
+        invocation = None
+        try:
+            proof_arguments = dict(body)
+            expected_request_id = None
+            proof_tool = {
+                "/computer-use/run": "computer_use",
+                "/computer-use/cancel": "computer_use_cancel",
+                "/computer-use/sessions/bind": "computer_use_bind_target",
+                "/computer-use/sessions/release": "computer_use_release_session",
+            }[self.path]
+            if self.path == "/computer-use/run":
+                expected_request_id = proof_arguments.pop("requestId", None)
+            invocation = PROOF_VERIFIER.verify(
+                self.headers.get(INVOCATION_HEADER),
+                tool=proof_tool,
+                arguments=proof_arguments,
+                expected_request_id=expected_request_id,
+            )
+        except InvocationProofError as error:
+            return self._send(403, R.err(error.code, str(error), retryable=False))
         # Cancel: flip the flag the in-flight run checks between steps so it stops
         # driving the desktop. Runs on a separate thread from the run loop.
         if self.path == "/computer-use/cancel":
-            res = SERVICE.cancel(body)
+            res = SERVICE.cancel(body, invocation=invocation)
             return self._send(200 if res.get("ok") else 400, res)
         if self.path == "/computer-use/sessions/bind":
-            res = SERVICE.bind_session(body)
+            res = SERVICE.bind_session(body, invocation=invocation)
             return self._send(200 if res.get("ok") else 400, res)
         if self.path == "/computer-use/sessions/release":
-            res = SERVICE.release_session(body)
+            res = SERVICE.release_session(body, invocation=invocation)
             return self._send(200 if res.get("ok") else 409, res)
 
         def execute_channel(request: dict, channel) -> dict:
@@ -159,6 +188,7 @@ class Handler(BaseHTTPRequestHandler):
                         else None
                     ),
                 },
+                invocation=invocation,
             )
             code = 200 if res.get("ok") else (
                 403 if res.get("error", {}).get("code") == "NEEDS_APPROVAL" else

@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildSyncedComputerUseMcpJson,
   COMPUTER_USE_MCP_TOOL_NAME,
+  computerUseMcpEnv,
   configuredComputerUseCapability,
   GUI_COMPUTER_USE_MCP_SERVER_NAME,
   RETIRED_GUI_COMPUTER_USE_MCP_SERVER_NAMES,
@@ -12,6 +13,22 @@ import {
 } from './computer-use-mcp-config'
 
 describe('computer use MCP config', () => {
+  it('passes invocation-proof configuration only through the managed process environment', () => {
+    expect(computerUseMcpEnv({
+      SCIFORGE_CUA_SERVICE_URL: 'http://127.0.0.1:3900',
+      SCIFORGE_CUA_INVOCATION_SECRET: 'proof-secret',
+      SCIFORGE_CUA_INVOCATION_PROOF_TTL_MS: '30000',
+      CUA_INVOCATION_PROOF_MODE: 'required',
+      UNRELATED_SECRET: 'must-not-cross'
+    })).toMatchObject({
+      SCIFORGE_CUA_SERVICE_URL: 'http://127.0.0.1:3900',
+      SCIFORGE_CUA_INVOCATION_SECRET: 'proof-secret',
+      SCIFORGE_CUA_INVOCATION_PROOF_TTL_MS: '30000',
+      CUA_INVOCATION_PROOF_MODE: 'required'
+    })
+    expect(computerUseMcpEnv({ UNRELATED_SECRET: 'must-not-cross' })).not.toHaveProperty('UNRELATED_SECRET')
+  })
+
   it('removes retired GUI-managed computer-use servers from external local runtime mcp.json', () => {
     const synced = buildSyncedComputerUseMcpJson({
       timeouts: { connect_timeout: 1 },

@@ -9,6 +9,7 @@ import {
   computerUseMcpEnabledTools
 } from './computer-use-mcp-config'
 import { createComputerUseMcpServer, runComputerUseMcpServerFromArgv } from './computer-use-mcp-server'
+import { COMPUTER_USE_INVOCATION_META_KEY } from './services/computer-use-invocation-proof'
 
 const openServers: Array<{ close: () => Promise<void> }> = []
 
@@ -39,12 +40,14 @@ describe('computer-use MCP server', () => {
   it('forwards one approved GUI task to the configured GUI-Owl HTTP sidecar', async () => {
     const requests: Array<{
       authorization: string | undefined
+      invocationProof: string | undefined
       body: Record<string, unknown>
       path: string | undefined
     }> = []
     const sidecar = await startFakeSidecar(async (request, response) => {
       requests.push({
         authorization: request.headers.authorization,
+        invocationProof: request.headers['x-sciforge-cua-invocation'] as string | undefined,
         body: await readJsonBody(request),
         path: request.url
       })
@@ -59,7 +62,8 @@ describe('computer-use MCP server', () => {
     const mcpServer = createComputerUseMcpServer({
       serviceUrl: sidecar.url,
       serviceToken: 'sidecar-token',
-      timeoutMs: 5_000
+      timeoutMs: 5_000,
+      invocationSecret: 'test-invocation-secret'
     })
     const client = new Client({ name: 'computer-use-test', version: '0.1.0' })
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
@@ -80,7 +84,8 @@ describe('computer-use MCP server', () => {
 
       const result = await client.callTool({
         name: COMPUTER_USE_MCP_TOOL_NAME,
-        arguments: { instruction: 'open a browser and inspect an AI4AI paper' }
+        arguments: { instruction: 'open a browser and inspect an AI4AI paper' },
+        _meta: trustedInvocationMeta('run-invocation-1')
       })
 
       expect(result.isError).toBeUndefined()
@@ -95,10 +100,11 @@ describe('computer-use MCP server', () => {
         path: '/computer-use/run',
         body: {
           instruction: 'open a browser and inspect an AI4AI paper',
-          execute: true,
-          approve: true
+          execute: true
         }
       })
+      expect(requests[0]?.body).not.toHaveProperty('approve')
+      expect(requests[0]?.invocationProof).toBeTruthy()
       expect(String(requests[0]?.body.requestId)).toMatch(/^mcp-cua-/)
     } finally {
       await client.close()
@@ -119,7 +125,8 @@ describe('computer-use MCP server', () => {
     const mcpServer = createComputerUseMcpServer({
       serviceUrl: sidecar.url,
       serviceToken: '',
-      timeoutMs: 5_000
+      timeoutMs: 5_000,
+      invocationSecret: 'test-invocation-secret'
     })
     const client = new Client({ name: 'computer-use-v2-test', version: '0.1.0' })
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
@@ -137,7 +144,8 @@ describe('computer-use MCP server', () => {
           },
           requestedIsolation: 'host-app-scoped',
           allowDegraded: false
-        }
+        },
+        _meta: trustedInvocationMeta('run-invocation-2')
       })
       expect(result.isError).toBe(true)
       expect(requests[0]).toMatchObject({
@@ -145,9 +153,9 @@ describe('computer-use MCP server', () => {
         target: { targetId: 'target-browser-1', kind: 'browser-page' },
         requestedIsolation: 'host-app-scoped',
         allowDegraded: false,
-        execute: true,
-        approve: true
+        execute: true
       })
+      expect(requests[0]).not.toHaveProperty('approve')
     } finally {
       await client.close()
       await mcpServer.close()
@@ -158,7 +166,51 @@ describe('computer-use MCP server', () => {
     expect(GUI_COMPUTER_USE_MCP_SERVER_NAME).toBe('gui_owl_computer_use')
     await expect(runComputerUseMcpServerFromArgv(['node', 'entry.js'])).resolves.toBe(false)
   })
+
+  it('fails closed when a mutation lacks trusted invocation metadata', async () => {
+    const sidecar = await startFakeSidecar(async (_request, response) => {
+      response.writeHead(500, { 'Content-Type': 'application/json' })
+      response.end('{}')
+    })
+    const mcpServer = createComputerUseMcpServer({
+      serviceUrl: sidecar.url,
+      serviceToken: 'sidecar-token',
+      timeoutMs: 5_000,
+      invocationSecret: 'test-invocation-secret'
+    })
+    const client = new Client({ name: 'computer-use-proof-test', version: '0.1.0' })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    try {
+      await Promise.all([mcpServer.connect(serverTransport), client.connect(clientTransport)])
+      const result = await client.callTool({
+        name: COMPUTER_USE_MCP_TOOL_NAME,
+        arguments: { instruction: 'must not run' }
+      })
+      expect(result.isError).toBe(true)
+      expect(result.structuredContent).toMatchObject({
+        error: { code: 'APPROVAL_PROOF_REQUIRED' }
+      })
+    } finally {
+      await client.close()
+      await mcpServer.close()
+    }
+  })
 })
+
+function trustedInvocationMeta(invocationId: string): Record<string, unknown> {
+  return {
+    [COMPUTER_USE_INVOCATION_META_KEY]: {
+      requestId: `runtime-${invocationId}`,
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      callId: 'call-1',
+      actionId: 'managed-mcp.computer-use',
+      invocationId,
+      approval: 'confirmation'
+    }
+  }
+}
 
 async function startFakeSidecar(
   handler: (request: IncomingMessage, response: ServerResponse) => Promise<void>

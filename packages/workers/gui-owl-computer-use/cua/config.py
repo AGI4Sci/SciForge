@@ -105,6 +105,15 @@ class Config:
     lease_reaper_enabled: bool = field(default_factory=lambda: _bool_env(
         "CUA_LEASE_REAPER_ENABLED", True,
     ))
+    invocation_secret: str = field(default_factory=lambda: _env(
+        "SCIFORGE_CUA_INVOCATION_SECRET",
+    ))
+    invocation_proof_mode: str = field(default_factory=lambda: _env(
+        "CUA_INVOCATION_PROOF_MODE", "required",
+    ).lower())
+    invocation_proof_ttl_ms: int = field(default_factory=lambda: _int_env(
+        "SCIFORGE_CUA_INVOCATION_PROOF_TTL_MS", 30_000,
+    ))
     lease_reaper_interval_s: float = field(default_factory=lambda: _float_env(
         "CUA_LEASE_REAPER_INTERVAL_S", 5.0,
     ))
@@ -125,6 +134,10 @@ class Config:
             raise ValueError("CUA_ARTIFACT_RETENTION_S cannot be negative")
         if self.artifact_max_runs < 0:
             raise ValueError("CUA_ARTIFACT_MAX_RUNS cannot be negative")
+        if self.invocation_proof_mode not in {"required", "legacy"}:
+            raise ValueError("CUA_INVOCATION_PROOF_MODE must be required or legacy")
+        if not 1 <= self.invocation_proof_ttl_ms <= 300_000:
+            raise ValueError("SCIFORGE_CUA_INVOCATION_PROOF_TTL_MS must be between 1 and 300000")
 
 
 CONFIG = Config()

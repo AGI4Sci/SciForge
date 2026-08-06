@@ -1,6 +1,6 @@
-# ADR-001: Computer Use approval trust boundary during P1
+# ADR-001: Computer Use approval trust boundary
 
-Status: temporary, accepted for P1 only
+Status: P1 transitional decision superseded by the P5a invocation-proof boundary
 
 ## Context
 
@@ -22,9 +22,17 @@ sidecar callers to bypass the host approval boundary.
 - Protocol-v2 run requests fail closed with `BACKEND_UNAVAILABLE` until P2
   connects session channels; they cannot fall through to the legacy desktop.
 
-## Required follow-up
+## P5a resolution
 
-Before P5 release, replace this boundary with a short-lived, single-use proof
-created only after capability-broker approval and bound to runtime ID, thread
-ID, tool, request ID, and expiry. The sidecar must reject bare `approve=true`
-for protected execution unless the user explicitly accepts this residual risk.
+- The capability broker creates trusted invocation metadata only after its
+  approval decision and passes it outside model-controlled tool arguments.
+- The managed Computer Use MCP wrapper signs a short-lived HMAC proof bound to
+  runtime, thread, tool, request, invocation, argument digest, issuance time,
+  expiry, nonce, and proof ID.
+- The Python sidecar validates signature, binding, expiry and single use before
+  any mutation reaches `ComputerUseService`; `approve=true` alone is rejected.
+- Session ownership and request identity are derived from the verified proof.
+- `/computer-use/status` reports `approvalProof=invocation-proof-v1` in the
+  default `required` mode.
+- `CUA_INVOCATION_PROOF_MODE=legacy` is retained only as an explicit local
+  rollback. It restores the old trust boundary and is not equivalent security.

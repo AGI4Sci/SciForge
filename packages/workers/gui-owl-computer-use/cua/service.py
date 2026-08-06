@@ -13,6 +13,7 @@ from driver.router import BackendRouter, RoutingError
 from . import contract
 from . import result as R
 from .isolation import RequestedIsolation
+from .invocation_proof import InvocationIdentity
 from .session_registry import RegistryError, RequestState, SessionOwner, SessionRegistry
 from .target import host_desktop_target, parse_target_descriptor, validate_safe_id
 
@@ -52,6 +53,14 @@ class ComputerUseService:
         self._reaper_thread: threading.Thread | None = None
         self._reaper_interval_seconds: float | None = None
         self._last_reaper_error: str | None = None
+        self._approval_proof = "legacy-trust-boundary"
+
+    def configure_approval_proof(self, mode: str) -> None:
+        if mode not in {"required", "legacy"}:
+            raise ValueError("approval proof mode must be required or legacy")
+        self._approval_proof = (
+            "invocation-proof-v1" if mode == "required" else "legacy-trust-boundary"
+        )
 
     def run(
         self,
@@ -59,6 +68,7 @@ class ComputerUseService:
         executor: ChannelExecutor,
         *,
         channel_options: dict[str, Any] | None = None,
+        invocation: InvocationIdentity | None = None,
     ) -> dict[str, Any]:
         with self._lifecycle_lock:
             if self._lifecycle_state != "running":
@@ -72,17 +82,20 @@ class ComputerUseService:
         except ValueError as error:
             return R.err("INVALID_ARGUMENT", str(error))
         options = dict(channel_options or {})
-        if request["execute"] and not (
-            request["approve"] and bool(options.get("allow_execute", False))
-        ):
+        approved = invocation is not None or request["approve"]
+        if request["execute"] and not (approved and bool(options.get("allow_execute", False))):
             return R.err(
                 "NEEDS_APPROVAL",
                 "Execution touches the real desktop and requires trusted approval.",
                 blocked_reason="external-side-effect-requires-approval",
             )
 
-        request_id = request.get("requestId") or f"request-{uuid.uuid4()}"
+        request_id = (
+            invocation.request_id if invocation is not None
+            else request.get("requestId") or f"request-{uuid.uuid4()}"
+        )
         request["requestId"] = request_id
+        request["approve"] = approved
         ephemeral = False
         session_id: str | None = None
         channel: SessionInputChannel | None = None
@@ -91,7 +104,7 @@ class ComputerUseService:
         terminal_reason = "request_failed"
         result: dict[str, Any]
         try:
-            session, ephemeral = self._resolve_session(request)
+            session, ephemeral = self._resolve_session(request, invocation)
             session_id = session.session_id
             deadline = (
                 time.time() + request["deadlineMs"] / 1000.0
@@ -201,14 +214,21 @@ class ComputerUseService:
                 pass
         return result
 
-    def _resolve_session(self, request: dict[str, Any]):
+    def _resolve_session(
+        self, request: dict[str, Any], invocation: InvocationIdentity | None = None,
+    ):
         protocol = request["protocolVersion"]
         target_value = request.get("target")
+        owner = (
+            SessionOwner(invocation.runtime_id, invocation.thread_id)
+            if invocation is not None else None
+        )
         if protocol == contract.PROTOCOL_V1:
-            owner = SessionOwner("legacy-runtime", f"request-{uuid.uuid4()}")
-            return self.registry.bind_session(owner, host_desktop_target()), True
+            resolved_owner = owner or SessionOwner("legacy-runtime", f"request-{uuid.uuid4()}")
+            return self.registry.bind_session(resolved_owner, host_desktop_target()), True
         if "sessionId" in request:
             session = self.registry.get_session(request["sessionId"])
+            self._assert_session_owner(session.owner, invocation)
             if target_value is not None:
                 supplied = parse_target_descriptor(target_value)
                 if supplied.target_id != session.target.target_id or supplied.kind is not session.target.kind:
@@ -217,8 +237,8 @@ class ComputerUseService:
         if target_value is None:
             raise ValueError("protocol v2 run requires sessionId or target")
         target = parse_target_descriptor(target_value)
-        owner = SessionOwner("mcp-local", f"ephemeral-{uuid.uuid4()}")
-        return self.registry.bind_session(owner, target), True
+        resolved_owner = owner or SessionOwner("mcp-local", f"ephemeral-{uuid.uuid4()}")
+        return self.registry.bind_session(resolved_owner, target), True
 
     @staticmethod
     def _terminal_from_result(result: dict[str, Any]) -> tuple[RequestState, str]:
@@ -236,20 +256,27 @@ class ComputerUseService:
             return RequestState.CANCELLED, "cancelled"
         return RequestState.COMPLETED, "completed"
 
-    def bind_session(self, value: object) -> dict[str, Any]:
+    def bind_session(
+        self, value: object, invocation: InvocationIdentity | None = None,
+    ) -> dict[str, Any]:
         if not isinstance(value, dict):
             return R.err("INVALID_ARGUMENT", "bind input must be an object")
         try:
             unknown = set(value) - {"sessionId", "owner", "target"}
             if unknown:
                 raise ValueError(f"unsupported fields: {', '.join(sorted(unknown))}")
-            owner_value = value.get("owner")
-            if not isinstance(owner_value, dict) or set(owner_value) != {"runtimeId", "threadId"}:
-                raise ValueError("owner must contain exactly runtimeId and threadId")
-            owner = SessionOwner(
-                runtime_id=validate_safe_id(owner_value["runtimeId"], "owner.runtimeId"),
-                thread_id=validate_safe_id(owner_value["threadId"], "owner.threadId"),
-            )
+            if invocation is not None:
+                if "owner" in value:
+                    raise ValueError("owner is supplied by the trusted invocation proof")
+                owner = SessionOwner(invocation.runtime_id, invocation.thread_id)
+            else:
+                owner_value = value.get("owner")
+                if not isinstance(owner_value, dict) or set(owner_value) != {"runtimeId", "threadId"}:
+                    raise ValueError("owner must contain exactly runtimeId and threadId")
+                owner = SessionOwner(
+                    runtime_id=validate_safe_id(owner_value["runtimeId"], "owner.runtimeId"),
+                    thread_id=validate_safe_id(owner_value["threadId"], "owner.threadId"),
+                )
             target = parse_target_descriptor(value.get("target"))
             session = self.registry.bind_session(owner, target, session_id=value.get("sessionId"))
             return R.ok({
@@ -263,7 +290,9 @@ class ComputerUseService:
         except ValueError as error:
             return R.err("INVALID_ARGUMENT", str(error))
 
-    def release_session(self, value: object) -> dict[str, Any]:
+    def release_session(
+        self, value: object, invocation: InvocationIdentity | None = None,
+    ) -> dict[str, Any]:
         if not isinstance(value, dict):
             return R.err("INVALID_ARGUMENT", "release input must be an object")
         try:
@@ -278,6 +307,7 @@ class ComputerUseService:
             if not isinstance(force, bool):
                 raise ValueError("force must be a boolean")
             current = self.registry.get_session(session_id)
+            self._assert_session_owner(current.owner, invocation)
             if current.active_request_id is not None and force:
                 request_id = current.active_request_id
                 self.registry.request_cancel(request_id, reason)
@@ -306,7 +336,12 @@ class ComputerUseService:
         except ValueError as error:
             return R.err("INVALID_ARGUMENT", str(error))
 
-    def cancel(self, value: object, legacy_canceller: Callable[[str], None] | None = None) -> dict[str, Any]:
+    def cancel(
+        self,
+        value: object,
+        legacy_canceller: Callable[[str], None] | None = None,
+        invocation: InvocationIdentity | None = None,
+    ) -> dict[str, Any]:
         if not isinstance(value, dict):
             return R.err("INVALID_ARGUMENT", "cancel input must be an object")
         try:
@@ -314,6 +349,10 @@ class ComputerUseService:
             if unknown:
                 raise ValueError(f"unsupported fields: {', '.join(sorted(unknown))}")
             request_id = validate_safe_id(value.get("requestId"), "requestId")
+            if invocation is not None:
+                active = self.registry.get_request(request_id)
+                session = self.registry.get_session(active.session_id)
+                self._assert_session_owner(session.owner, invocation)
             request = self.registry.request_cancel(request_id, str(value.get("reason", "user_stop")))
             terminal = request.state in {
                 RequestState.COMPLETED, RequestState.FAILED, RequestState.CANCELLED,
@@ -337,7 +376,7 @@ class ComputerUseService:
             active_channels = len(self._channels)
         return {
             "protocolVersion": contract.PROTOCOL_V2,
-            "approvalProof": "legacy-trust-boundary",
+            "approvalProof": self._approval_proof,
             "backendsConnected": any(item.available for item in capabilities),
             "activeChannels": active_channels,
             "lifecycleState": self._lifecycle_state,
@@ -356,8 +395,20 @@ class ComputerUseService:
         return {
             "protocolVersion": contract.PROTOCOL_V2,
             "backends": [item.to_dict() for item in capabilities],
-            "approvalProof": "legacy-trust-boundary",
+            "approvalProof": self._approval_proof,
         }
+
+    @staticmethod
+    def _assert_session_owner(
+        owner: SessionOwner, invocation: InvocationIdentity | None,
+    ) -> None:
+        if invocation is None:
+            return
+        if owner.runtime_id != invocation.runtime_id or owner.thread_id != invocation.thread_id:
+            raise RegistryError(
+                "SESSION_OWNER_MISMATCH",
+                "session owner does not match the trusted invocation identity",
+            )
 
     def list_targets(self) -> dict[str, Any]:
         return {

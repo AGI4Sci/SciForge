@@ -41,7 +41,7 @@ export type RuntimeMcpClient = {
     timeout?: number
   }): Promise<{ tools: McpToolDescriptor[]; nextCursor?: string }>
   callTool(
-    input: { name: string; arguments: Record<string, unknown> },
+    input: { name: string; arguments: Record<string, unknown>; _meta?: Record<string, unknown> },
     options?: { signal?: AbortSignal; timeout?: number }
   ): Promise<unknown>
   close(): Promise<void>
@@ -366,7 +366,13 @@ export class RuntimeMcpToolGateway {
       },
       options.signal,
       (signal) => client.callTool(
-        { name: tool.originalName, arguments: callArguments },
+        {
+          name: tool.originalName,
+          arguments: callArguments,
+          ...(request.trustedInvocation && state.config.id === 'gui_owl_computer_use'
+            ? { _meta: { 'io.sciforge/computer-use-invocation': request.trustedInvocation } }
+            : {})
+        },
         { signal, timeout: state.config.timeoutMs }
       )
     )

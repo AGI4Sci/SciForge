@@ -147,15 +147,26 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
   ): Promise<CapabilityInvocationResult> {
     const tool = operation.tool
     const input = managedToolInput(request.input, tool.inputSchema, caller.workspaceId)
+    const runtimeRequestId = String(context.requestId ?? request.invocationId ?? randomUUID())
     const response = await this.#managedTools.callTool({
-      requestId: context.requestId ?? request.invocationId ?? randomUUID(),
+      requestId: runtimeRequestId,
       runtimeId: context.runtimeId,
       threadId: context.threadId ?? runtimeThreadId(caller.callerId),
       ...(context.turnId ? { turnId: context.turnId } : {}),
       ...(context.callId ? { callId: context.callId } : {}),
       namespace: tool.namespace,
       tool: tool.name,
-      arguments: input
+      arguments: input,
+      trustedInvocation: {
+        requestId: runtimeRequestId,
+        runtimeId: context.runtimeId,
+        threadId: context.threadId ?? runtimeThreadId(caller.callerId),
+        ...(context.turnId ? { turnId: context.turnId } : {}),
+        ...(context.callId ? { callId: context.callId } : {}),
+        actionId: request.actionId,
+        ...(request.invocationId ? { invocationId: request.invocationId } : {}),
+        approval: operation.descriptor.approval
+      }
     }, { signal })
     if (!response.success) {
       const detail = response.contentItems

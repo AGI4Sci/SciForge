@@ -41,14 +41,14 @@ model/provider selection and policy.
 - Returns a **`ServiceResult`** with status + trace + screenshot artifact refs —
   **never a final answer or completion truth**. The agent host decides if the
   task is truly done.
-- **External side effects require approval**: dry-run by default. Real
-  mouse/keyboard happens only when the call sets `execute=true` **and**
-  `approve=true` **and** the worker was started with `CUA_ALLOW_EXECUTE=true`;
-  otherwise it returns `NEEDS_APPROVAL`.
-- **HTTP sidecar auth**: `POST /computer-use/run` and
-  `POST /computer-use/cancel` accept an optional bearer token via
-  `CUA_SERVICE_TOKEN`. The GUI launcher generates a random token per start and
-  passes it to the GUI-managed MCP wrapper as `SCIFORGE_CUA_SERVICE_TOKEN`.
+- **External side effects require a trusted invocation proof**: dry-run by
+  default. Real actions require `execute=true`, `CUA_ALLOW_EXECUTE=true`, and a
+  short-lived signed proof created by the GUI-managed MCP wrapper after the
+  runtime approval gate. A caller-provided `approve=true` is not authorization.
+- **HTTP sidecar auth**: mutation endpoints require the optional bearer token
+  configured by `CUA_SERVICE_TOKEN` and, in the default `required` mode, the
+  signed `X-Sciforge-CUA-Invocation` header. The GUI launcher supplies the
+  service token and proof secret only to the managed wrapper/worker boundary.
 - **Refs-first**: screenshots are written to disk and returned as artifact refs,
   never inlined into a tool result.
 - **Model Router only**: computer-use and optional reflection share the local
@@ -113,14 +113,14 @@ curl -s localhost:3900/computer-use/run \
   -H "Authorization: Bearer $CUA_SERVICE_TOKEN" \
   -d '{"instruction":"click the Save button","imagePath":"some_ui.png"}'
 
-# live execution (opt-in): start with CUA_ALLOW_EXECUTE=true, then
-curl -s localhost:3900/computer-use/run \
-  -H "Authorization: Bearer $CUA_SERVICE_TOKEN" \
-  -d '{"instruction":"open Notepad and type hello","execute":true,"approve":true}'
+# Live execution is intentionally unavailable to an unsigned raw curl call.
+# Use the GUI-managed MCP path so the runtime approval gate can issue a
+# short-lived invocation proof. `approve=true` in this JSON is not sufficient.
 ```
 
-Standalone service smoke test (no GUI): start `--http`, then
-`python accept.py --task "open Notepad"` (add `--execute` for real actions).
+Standalone service smoke tests may use dry-run requests. Real actions must use
+the managed proof path; the explicitly weaker `legacy` proof mode exists only
+as a visible local rollback and must not be presented as the secure default.
 
 To launch the **full SciForge GUI with this module wired in** (so the in-app
 agent gets a `computer_use` tool), double-click `一键启动-computer-use.bat`
@@ -143,6 +143,8 @@ minimal wiring needed to expose it to the agent runtime:
 See [`.env.example`](.env.example). Key vars: `SCIFORGE_MODEL_ROUTER_BASE_URL`,
 `SCIFORGE_MODEL_ROUTER_MODEL`, `SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY`,
 `CUA_MAX_STEPS`, `CUA_REFLECT`, `CUA_ALLOW_EXECUTE`,
+`CUA_INVOCATION_PROOF_MODE`, `SCIFORGE_CUA_INVOCATION_SECRET`,
+`SCIFORGE_CUA_INVOCATION_PROOF_TTL_MS`,
 `CUA_PORT`, `CUA_SERVICE_TOKEN`, `CUA_SHOW_OVERLAY`, `CUA_ARTIFACT_DIR`,
 `CUA_LEASE_TTL_S`, `CUA_LEASE_REAPER_ENABLED`, `CUA_LEASE_REAPER_INTERVAL_S`,
 `CUA_ARTIFACT_RETENTION_S`, `CUA_ARTIFACT_MAX_RUNS`.
