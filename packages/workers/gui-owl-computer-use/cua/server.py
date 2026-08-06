@@ -52,10 +52,10 @@ def _bearer_token(value: Optional[str]) -> str:
     return token.strip()
 
 
-def _auth_error() -> dict:
+def _auth_error(config=CONFIG) -> dict:
     # If execution is enabled, require an explicit token even before checking the
     # request header. This prevents an accidentally unauthenticated live sidecar.
-    if not CONFIG.service_token and CONFIG.allow_execute:
+    if not config.service_token and config.allow_execute:
         return R.err(
             "UNAUTHENTICATED",
             "CUA_SERVICE_TOKEN is required when CUA_ALLOW_EXECUTE=true.",
@@ -63,15 +63,15 @@ def _auth_error() -> dict:
     return R.err("UNAUTHENTICATED", "missing or invalid bearer token")
 
 
-def _check_auth(header_value: Optional[str]) -> Optional[dict]:
-    if not CONFIG.service_token and not CONFIG.allow_execute:
+def _check_auth(header_value: Optional[str], config=CONFIG) -> Optional[dict]:
+    if not config.service_token and not config.allow_execute:
         return None
-    if not CONFIG.service_token:
-        return _auth_error()
+    if not config.service_token:
+        return _auth_error(config)
     token = _bearer_token(header_value)
-    if hmac.compare_digest(token, CONFIG.service_token):
+    if hmac.compare_digest(token, config.service_token):
         return None
-    return _auth_error()
+    return _auth_error(config)
 
 
 def _screenshot_provider(body: dict):
@@ -86,6 +86,12 @@ def _screenshot_provider(body: dict):
 
 
 class Handler(BaseHTTPRequestHandler):
+    service = SERVICE
+    config = CONFIG
+    proof_verifier = PROOF_VERIFIER
+    executor = staticmethod(run_task)
+    max_body_bytes = 1_048_576
+
     def _send(self, code: int, payload: dict):
         data = json.dumps(payload).encode()
         self.send_response(code)
@@ -102,7 +108,7 @@ class Handler(BaseHTTPRequestHandler):
             "/computer-use/status", "/computer-use/cleanup-pending",
             "/computer-use/capabilities", "/computer-use/targets",
         }:
-            auth_error = _check_auth(self.headers.get("Authorization"))
+            auth_error = _check_auth(self.headers.get("Authorization"), self.config)
             if auth_error:
                 return self._send(401, auth_error)
         if self.path == "/health":
@@ -110,23 +116,23 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/version":
             return self._send(200, {"ok": True, "data": {
                 "service": R.SERVICE_ID, "version": VERSION,
-                "model": CONFIG.model_router_model, "engine": "sciforge-model-router",
+                "model": self.config.model_router_model, "engine": "sciforge-model-router",
                 "endpoint": "responses",
                 "protocolVersion": 2,
-                "backendsConnected": SERVICE.status()["backendsConnected"],
-                "approvalProof": PROOF_VERIFIER.status,
-                "allowExecute": CONFIG.allow_execute,
-                "authRequired": bool(CONFIG.service_token or CONFIG.allow_execute)}})
+                "backendsConnected": self.service.status()["backendsConnected"],
+                "approvalProof": self.proof_verifier.status,
+                "allowExecute": self.config.allow_execute,
+                "authRequired": bool(self.config.service_token or self.config.allow_execute)}})
         if self.path == "/computer-use/status":
-            return self._send(200, {"ok": True, "data": SERVICE.status()})
+            return self._send(200, {"ok": True, "data": self.service.status()})
         if self.path == "/computer-use/cleanup-pending":
             return self._send(200, {"ok": True, "data": {
-                "items": SERVICE.cleanup_pending(),
+                "items": self.service.cleanup_pending(),
             }})
         if self.path == "/computer-use/capabilities":
-            return self._send(200, {"ok": True, "data": SERVICE.capabilities()})
+            return self._send(200, {"ok": True, "data": self.service.capabilities()})
         if self.path == "/computer-use/targets":
-            return self._send(200, {"ok": True, "data": SERVICE.list_targets()})
+            return self._send(200, {"ok": True, "data": self.service.list_targets()})
         return self._send(404, R.err("NOT_FOUND", f"no route {self.path}"))
 
     def do_POST(self):
@@ -135,11 +141,15 @@ class Handler(BaseHTTPRequestHandler):
             "/computer-use/sessions/bind", "/computer-use/sessions/release",
         ):
             return self._send(404, R.err("NOT_FOUND", f"no route {self.path}"))
-        auth_error = _check_auth(self.headers.get("Authorization"))
+        auth_error = _check_auth(self.headers.get("Authorization"), self.config)
         if auth_error:
             return self._send(401, auth_error)
         try:
             n = int(self.headers.get("Content-Length", 0))
+            if n < 0 or n > self.max_body_bytes:
+                return self._send(413, R.err(
+                    "INVALID_ARGUMENT", "request body exceeds the 1 MiB limit",
+                ))
             body = json.loads(self.rfile.read(n) or b"{}")
         except Exception as e:  # noqa: BLE001
             return self._send(400, R.err("INVALID_ARGUMENT", f"bad json: {e}"))
@@ -155,7 +165,7 @@ class Handler(BaseHTTPRequestHandler):
             }[self.path]
             if self.path == "/computer-use/run":
                 expected_request_id = proof_arguments.pop("requestId", None)
-            invocation = PROOF_VERIFIER.verify(
+            invocation = self.proof_verifier.verify(
                 self.headers.get(INVOCATION_HEADER),
                 tool=proof_tool,
                 arguments=proof_arguments,
@@ -166,29 +176,29 @@ class Handler(BaseHTTPRequestHandler):
         # Cancel: flip the flag the in-flight run checks between steps so it stops
         # driving the desktop. Runs on a separate thread from the run loop.
         if self.path == "/computer-use/cancel":
-            res = SERVICE.cancel(body, invocation=invocation)
+            res = self.service.cancel(body, invocation=invocation)
             return self._send(200 if res.get("ok") else 400, res)
         if self.path == "/computer-use/sessions/bind":
-            res = SERVICE.bind_session(body, invocation=invocation)
+            res = self.service.bind_session(body, invocation=invocation)
             return self._send(200 if res.get("ok") else 400, res)
         if self.path == "/computer-use/sessions/release":
-            res = SERVICE.release_session(body, invocation=invocation)
+            res = self.service.release_session(body, invocation=invocation)
             return self._send(200 if res.get("ok") else 409, res)
 
         def execute_channel(request: dict, channel) -> dict:
-            return run_task(
-                CONFIG, request["instruction"], channel,
+            return self.executor(
+                self.config, request["instruction"], channel,
                 execute=request["execute"], approve=request["approve"],
             )
 
         try:
-            res = SERVICE.run(
+            res = self.service.run(
                 body,
                 execute_channel,
                 channel_options={
-                    "allow_execute": CONFIG.allow_execute,
-                    "settle_s": CONFIG.settle_s,
-                    "show_overlay": CONFIG.show_overlay,
+                    "allow_execute": self.config.allow_execute,
+                    "settle_s": self.config.settle_s,
+                    "show_overlay": self.config.show_overlay,
                     "screenshot_provider": (
                         _screenshot_provider(body)
                         if body.get("imagePath") or body.get("imageBase64")
@@ -207,13 +217,26 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(500, R.err("INTERNAL_ERROR", str(e), retryable=True))
 
 
+def create_http_server(
+    service, config, proof_verifier, executor=run_task, *, address=None,
+):
+    class ConfiguredHandler(Handler):
+        pass
+
+    ConfiguredHandler.service = service
+    ConfiguredHandler.config = config
+    ConfiguredHandler.proof_verifier = proof_verifier
+    ConfiguredHandler.executor = staticmethod(executor)
+    return ThreadingHTTPServer(address or ("127.0.0.1", config.port), ConfiguredHandler)
+
+
 def main():
     SERVICE.configure_lifecycle(
         lease_ttl_seconds=CONFIG.lease_ttl_s,
         reaper_interval_seconds=CONFIG.lease_reaper_interval_s,
         reaper_enabled=CONFIG.lease_reaper_enabled,
     )
-    srv = ThreadingHTTPServer(("127.0.0.1", CONFIG.port), Handler)
+    srv = create_http_server(SERVICE, CONFIG, PROOF_VERIFIER)
     print(f"computer-use plugin on http://127.0.0.1:{CONFIG.port} "
           f"(model-router={CONFIG.model_router_model} @ {CONFIG.model_router_base_url}, "
           f"allow_execute={CONFIG.allow_execute}, "

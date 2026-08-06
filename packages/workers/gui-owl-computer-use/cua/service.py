@@ -92,6 +92,12 @@ class ComputerUseService:
             request = contract.normalize_run_input(value)
         except ValueError as error:
             return R.err("INVALID_ARGUMENT", str(error))
+        if request["queueIfBusy"]:
+            return R.err(
+                "QUEUE_NOT_SUPPORTED",
+                "queueIfBusy is not implemented; retry with an explicit bounded client policy",
+                retryable=False,
+            )
         options = dict(channel_options or {})
         approved = invocation is not None or request["approve"]
         if request["execute"] and not (approved and bool(options.get("allow_execute", False))):

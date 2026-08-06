@@ -7,11 +7,10 @@ import http.client
 import json
 import threading
 import time
-from http.server import ThreadingHTTPServer
-
 from driver.router import BackendRouter
 
 from cua import server as server_module
+from cua.config import Config
 from cua.invocation_proof import InvocationProofVerifier, argument_digest, proof_message
 from cua.service import ComputerUseService
 
@@ -71,11 +70,11 @@ def test_http_mutations_require_proof_derive_owner_and_reject_replay(monkeypatch
     service = ComputerUseService(router=BackendRouter([]))
     service.configure_approval_proof("required")
     verifier = InvocationProofVerifier(SECRET, mode="required")
-    monkeypatch.setattr(server_module, "SERVICE", service)
-    monkeypatch.setattr(server_module, "PROOF_VERIFIER", verifier)
-    monkeypatch.setattr(server_module.CONFIG, "service_token", "")
-    monkeypatch.setattr(server_module.CONFIG, "allow_execute", False)
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server_module.Handler)
+    config = Config(service_token="", allow_execute=False)
+    httpd = server_module.create_http_server(
+        service, config, verifier, executor=lambda *_args, **_kwargs: {"ok": True},
+        address=("127.0.0.1", 0),
+    )
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     try:
@@ -119,10 +118,11 @@ def test_http_mutations_require_proof_derive_owner_and_reject_replay(monkeypatch
 
 def test_dynamic_status_get_reuses_sidecar_bearer_auth(monkeypatch):
     service = ComputerUseService(router=BackendRouter([]), server_instance_id="instance-http-1")
-    monkeypatch.setattr(server_module, "SERVICE", service)
-    monkeypatch.setattr(server_module.CONFIG, "service_token", "status-token")
-    monkeypatch.setattr(server_module.CONFIG, "allow_execute", False)
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server_module.Handler)
+    config = Config(service_token="status-token", allow_execute=False)
+    verifier = InvocationProofVerifier(SECRET, mode="required")
+    httpd = server_module.create_http_server(
+        service, config, verifier, address=("127.0.0.1", 0),
+    )
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     try:
