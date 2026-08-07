@@ -141,6 +141,10 @@ import { ControlledProcessService } from './processes/controlled-process-service
 import { VersionControlWorkspaceService } from './services/version-control-workspace-service'
 import { VersionControlPlacementFacade } from './services/version-control-placement-facade'
 import { ComputerUseRuntimeClient } from './services/computer-use-runtime-client'
+import {
+  startElectronComputerUseAdapterRuntime,
+  type ElectronComputerUseAdapterRuntime
+} from './services/computer-use-electron-adapter-runtime'
 import { WorkspacePlacementRouter } from './services/workspace-placement-router'
 import {
   WorkspacePreviewHost,
@@ -421,6 +425,7 @@ let domainModuleCatalog: DomainModuleCatalog | null = null
 let mainRuntimeContributions: ActivatedMainRuntimeContributions | null = null
 let workspaceHostSessionManagerForShutdown: WorkspaceHostSessionManager | null = null
 let workspaceEgressServiceForShutdown: WorkspaceEgressService | null = null
+let computerUseElectronAdapterForShutdown: ElectronComputerUseAdapterRuntime | null = null
 let managedRuntimesStoppedForQuit = false
 let managedRuntimesStopPromise: Promise<void> | null = null
 let appBehavior: AppBehaviorConfigV1 = normalizeAppBehaviorSettings()
@@ -785,6 +790,11 @@ async function stopManagedRuntimes(): Promise<void> {
       await codexRuntime?.stop()
       await runtimeMcpToolGateway?.close('service_shutdown')
       runtimeMcpToolGateway = null
+      const computerUseAdapter = computerUseElectronAdapterForShutdown
+      computerUseElectronAdapterForShutdown = null
+      await computerUseAdapter?.close().catch(() => {
+        logWarn('computer-use', 'Failed to close the Electron webContents adapter cleanly.')
+      })
       // Drain model clients before terminating the shared access sidecar so an
       // active request can finish and its tail trace can be persisted.
       await stopModelAccessGatewaySidecar({
@@ -1083,6 +1093,34 @@ app.whenReady().then(async () => {
     retentionDays: initial.log.retentionDays
   })
   traceStartup('logger configured')
+  const computerUseServiceUrl = (process.env.SCIFORGE_CUA_SERVICE_URL ?? '').trim()
+  const computerUseServiceToken = (
+    (process.env.SCIFORGE_CUA_SERVICE_TOKEN ?? '').trim() ||
+    (process.env.CUA_SERVICE_TOKEN ?? '').trim()
+  )
+  const explicitCdpAdapter = Boolean(
+    (process.env.SCIFORGE_CUA_CDP_ADAPTER_URL ?? '').trim() ||
+    (process.env.SCIFORGE_CUA_CDP_ADAPTER_TOKEN ?? '').trim()
+  )
+  if (computerUseServiceUrl && computerUseServiceToken && !explicitCdpAdapter) {
+    try {
+      const browserEndpoints = (process.env.SCIFORGE_CUA_CDP_ENDPOINTS ?? '')
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean)
+      computerUseElectronAdapterForShutdown = await startElectronComputerUseAdapterRuntime({
+        serviceUrl: computerUseServiceUrl,
+        serviceToken: computerUseServiceToken,
+        browserEndpoints,
+        listWebContents: () => webContents.getAllWebContents().filter((contents) => (
+          !contents.isDestroyed() && contents.getType() === 'window'
+        ))
+      })
+      logInfo('computer-use', 'Electron webContents adapter started on loopback.')
+    } catch {
+      logWarn('computer-use', 'Electron webContents adapter startup failed; target remains unavailable.')
+    }
+  }
   const traceSensitiveSettings = new CurrentTraceSensitiveSettings(initial)
   const fullTraceStore = new LocalTraceStore({
     userDataDirectory: app.getPath('userData'),
