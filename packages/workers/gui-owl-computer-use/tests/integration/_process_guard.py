@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shutil
+import socket
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -68,3 +69,16 @@ def remove_owned_tree(path: Path) -> None:
         shutil.rmtree(resolved)
     if resolved.exists():
         raise AssertionError(f"test-owned directory remains: {resolved}")
+
+
+def assert_loopback_ports_released(ports: list[int]) -> None:
+    """Prove no test-owned listener or descendant remains on its known ports."""
+
+    errors: list[str] = []
+    for port in ports:
+        with socket.socket() as client:
+            client.settimeout(0.25)
+            if client.connect_ex(("127.0.0.1", port)) == 0:
+                errors.append(f"127.0.0.1:{port} still accepts connections")
+    if errors:
+        raise AssertionError("test-owned ports remain bound: " + "; ".join(errors))

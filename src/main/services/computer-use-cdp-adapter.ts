@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createRequire } from 'node:module'
 import type { AddressInfo } from 'node:net'
@@ -10,18 +10,30 @@ const MAX_BODY_BYTES = 1_000_000
 const ACTION_TIMEOUT_MS = 10_000
 const OBSERVATION_TIMEOUT_MS = 3_000
 
-export type CdpAdapterTarget = Readonly<{
+export type BrowserPageCdpAdapterTarget = Readonly<{
   targetId: string
   kind: 'browser-page'
   ownership: 'attached'
+  generation: string
   locator: { cdpEndpoint: string; cdpTargetId: string }
   metadata: { title: string; url: string }
 }>
 
+export type ElectronWebContentsCdpAdapterTarget = Readonly<{
+  targetId: string
+  kind: 'electron-webcontents'
+  ownership: 'attached'
+  generation: string
+  locator: { webContentsId: number }
+  metadata: { title: string; url: string }
+}>
+
+export type CdpAdapterTarget = BrowserPageCdpAdapterTarget | ElectronWebContentsCdpAdapterTarget
+
 export type CdpAdapterDriver = Readonly<{
-  available(): Promise<{ available: boolean; reason?: string }>
+  available(): Promise<{ available: boolean; reason?: string; adapterInstanceId: string; generation: string; activeHandleCount: number; supportedTargetKinds?: Array<CdpAdapterTarget['kind']> }>
   targets(): Promise<CdpAdapterTarget[]>
-  open(target: CdpAdapterTarget): Promise<string>
+  open(target: CdpAdapterTarget, requestId: string): Promise<{ handleId: string; targetId: string; generation: string }>
   observe(handleId: string): Promise<Record<string, unknown>>
   action(handleId: string, input: Record<string, unknown>): Promise<Record<string, unknown>>
   cancel(handleId: string, reason: string): Promise<void>
@@ -38,15 +50,20 @@ export type ComputerUseCdpAdapter = Readonly<{
 type PlaywrightHandle = {
   id: string
   targetId: string
+  generation: string
+  requestId: string
   page: Page
   revision: number
   cancelled: boolean
 }
 
 export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdapterDriver {
+  const adapterInstanceId = `cdp-adapter-${randomUUID()}`
+  const generation = `cdp-generation-${randomUUID()}`
   const allowedEndpoints = [...new Set(endpoints.map(normalizeLoopbackEndpoint))]
   const browsers = new Map<string, Promise<Browser>>()
   const handles = new Map<string, PlaywrightHandle>()
+  const handlesByRequest = new Map<string, string>()
   let observationTail: Promise<void> = Promise.resolve()
   const serializeObservation = <T>(operation: () => Promise<T>): Promise<T> => {
     const queued = observationTail.then(operation, operation)
@@ -69,8 +86,8 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
     return browser
   }
 
-  const enumerate = async (): Promise<Array<{ target: CdpAdapterTarget; page: Page }>> => {
-    const output: Array<{ target: CdpAdapterTarget; page: Page }> = []
+  const enumerate = async (): Promise<Array<{ target: BrowserPageCdpAdapterTarget; page: Page }>> => {
+    const output: Array<{ target: BrowserPageCdpAdapterTarget; page: Page }> = []
     for (const endpoint of allowedEndpoints) {
       const browser = await browserFor(endpoint)
       for (const context of browser.contexts()) {
@@ -89,6 +106,7 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
                 targetId: stableTargetId(endpoint, cdpTargetId),
                 kind: 'browser-page',
                 ownership: 'attached',
+                generation,
                 locator: { cdpEndpoint: endpoint, cdpTargetId },
                 metadata: {
                   title: (await page.title().catch(() => '')).slice(0, 2048),
@@ -114,32 +132,48 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
   return Object.freeze({
     async available() {
       if (allowedEndpoints.length === 0) {
-        return { available: false, reason: 'No allowlisted loopback CDP endpoint is configured.' }
+        return { available: false, reason: 'No allowlisted loopback CDP endpoint is configured.', adapterInstanceId, generation, activeHandleCount: handles.size, supportedTargetKinds: ['browser-page'] }
       }
       try {
         await Promise.all(allowedEndpoints.map(browserFor))
-        return { available: true }
+        return { available: true, adapterInstanceId, generation, activeHandleCount: handles.size, supportedTargetKinds: ['browser-page'] }
       } catch (error) {
-        return { available: false, reason: safeError(error) }
+        return { available: false, reason: safeError(error), adapterInstanceId, generation, activeHandleCount: handles.size, supportedTargetKinds: ['browser-page'] }
       }
     },
     async targets() {
       return (await enumerate()).map(({ target }) => target)
     },
-    async open(target) {
+    async open(target, requestId) {
+      if (target.kind !== 'browser-page') {
+        throw new Error('ACTION_UNSUPPORTED: Playwright driver accepts browser-page targets only.')
+      }
+      const existingId = handlesByRequest.get(requestId)
+      if (existingId) {
+        const existing = handles.get(existingId)
+        if (!existing || existing.targetId !== target.targetId || existing.generation !== target.generation) {
+          throw new Error('REQUEST_ID_CONFLICT: CDP open request identity changed.')
+        }
+        return { handleId: existing.id, targetId: existing.targetId, generation: existing.generation }
+      }
       if (target.ownership !== 'attached') {
         throw new Error('This adapter instance does not own managed browser targets.')
       }
+      if (target.generation !== generation) {
+        throw new Error('TARGET_LOST: CDP adapter generation changed.')
+      }
       const found = (await enumerate()).find(({ target: candidate }) => (
         candidate.targetId === target.targetId
+        && candidate.generation === target.generation
         && candidate.locator.cdpEndpoint === normalizeLoopbackEndpoint(target.locator.cdpEndpoint)
         && candidate.locator.cdpTargetId === target.locator.cdpTargetId
       ))
       if (!found) throw new Error('The requested CDP target is unavailable or changed identity.')
       const id = `cdp-handle-${randomUUID()}`
       found.page.setDefaultTimeout(ACTION_TIMEOUT_MS)
-      handles.set(id, { id, targetId: target.targetId, page: found.page, revision: 0, cancelled: false })
-      return id
+      handles.set(id, { id, targetId: target.targetId, generation, requestId, page: found.page, revision: 0, cancelled: false })
+      handlesByRequest.set(requestId, id)
+      return { handleId: id, targetId: target.targetId, generation }
     },
     async observe(handleId) {
       const value = handle(handleId)
@@ -151,6 +185,7 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
       value.revision += 1
       return {
         targetId: value.targetId,
+        generation: value.generation,
         revision: `cdp:${value.revision}`,
         imageBase64,
         metadata: {
@@ -208,6 +243,7 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
       value.revision += 1
       return {
         targetId: value.targetId,
+        generation: value.generation,
         committed: name !== 'wait',
         mayHaveTakenEffect: name !== 'wait',
         verification: { ...verification, revisionAfter: `cdp:${value.revision}` }
@@ -220,10 +256,13 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
     async close(handleId) {
       // Handles are attached views. Releasing one must not close the user's
       // page, context, or browser. Process exit disconnects adapter transports.
+      const value = handles.get(handleId)
       handles.delete(handleId)
+      if (value && handlesByRequest.get(value.requestId) === handleId) handlesByRequest.delete(value.requestId)
     },
     async shutdown() {
       handles.clear()
+      handlesByRequest.clear()
       const connected = await Promise.allSettled(browsers.values())
       browsers.clear()
       await Promise.all(connected.flatMap((result) => (
@@ -322,7 +361,7 @@ async function serveRequest(
     const body = await readJsonBody(request)
     if (path === '/v1/handles/open') {
       const target = parseTarget(body.target)
-      send(response, 200, { ok: true, data: { handleId: await driver.open(target) } })
+      send(response, 200, { ok: true, data: await driver.open(target, requiredString(body.requestId, 'requestId')) })
     } else if (path === '/v1/observe') {
       send(response, 200, { ok: true, data: await driver.observe(requiredString(body.handleId, 'handleId')) })
     } else if (path === '/v1/action') {
@@ -354,17 +393,35 @@ class AdapterHttpError extends Error {
 function parseTarget(value: unknown): CdpAdapterTarget {
   const record = asRecord(value)
   const locator = asRecord(record.locator)
-  if (record.kind !== 'browser-page' || record.ownership !== 'attached') {
-    throw new Error('Only attached browser-page targets are supported.')
+  if (record.ownership !== 'attached') {
+    throw new Error('Only attached CDP targets are supported.')
   }
-  const endpoint = normalizeLoopbackEndpoint(requiredString(locator.cdpEndpoint, 'cdpEndpoint'))
-  return {
-    targetId: requiredString(record.targetId, 'targetId'),
-    kind: 'browser-page',
-    ownership: 'attached',
-    locator: { cdpEndpoint: endpoint, cdpTargetId: requiredString(locator.cdpTargetId, 'cdpTargetId') },
-    metadata: { title: '', url: '' }
+  if (record.kind === 'browser-page') {
+    const endpoint = normalizeLoopbackEndpoint(requiredString(locator.cdpEndpoint, 'cdpEndpoint'))
+    return {
+      targetId: requiredString(record.targetId, 'targetId'),
+      kind: 'browser-page',
+      ownership: 'attached',
+      generation: requiredString(record.generation, 'generation'),
+      locator: { cdpEndpoint: endpoint, cdpTargetId: requiredString(locator.cdpTargetId, 'cdpTargetId') },
+      metadata: { title: '', url: '' }
+    }
   }
+  if (record.kind === 'electron-webcontents') {
+    const webContentsId = Number(locator.webContentsId)
+    if (!Number.isSafeInteger(webContentsId) || webContentsId < 1) {
+      throw new Error('webContentsId must be a positive safe integer.')
+    }
+    return {
+      targetId: requiredString(record.targetId, 'targetId'),
+      kind: 'electron-webcontents',
+      ownership: 'attached',
+      generation: requiredString(record.generation, 'generation'),
+      locator: { webContentsId },
+      metadata: { title: '', url: '' }
+    }
+  }
+  throw new Error('Unsupported CDP target kind.')
 }
 
 function normalizeLoopbackEndpoint(raw: string): string {
@@ -377,9 +434,9 @@ function normalizeLoopbackEndpoint(raw: string): string {
   return url.href.replace(/\/$/u, '')
 }
 
-function stableTargetId(endpoint: string, cdpTargetId: string): string {
-  const encoded = Buffer.from(endpoint).toString('base64url').slice(0, 48)
-  return `cdp:${encoded}:${cdpTargetId}`.slice(0, 128)
+export function stableTargetId(endpoint: string, cdpTargetId: string): string {
+  const endpointHash = createHash('sha256').update(endpoint).digest('hex').slice(0, 24)
+  return `cdp:${endpointHash}:${cdpTargetId}`.slice(0, 128)
 }
 
 async function activeElementReadback(page: Page): Promise<string> {
@@ -465,6 +522,7 @@ function classifyError(error: unknown): string {
   const message = safeError(error)
   if (message.startsWith('STALE_OBSERVATION')) return 'STALE_OBSERVATION'
   if (message.startsWith('ACTION_UNSUPPORTED')) return 'ACTION_UNSUPPORTED'
+  if (message.startsWith('REQUEST_ID_CONFLICT')) return 'REQUEST_ID_CONFLICT'
   if (
     message.startsWith('TARGET_LOST')
     || /target page, context or browser has been closed/iu.test(message)
@@ -476,7 +534,11 @@ function classifyError(error: unknown): string {
 }
 
 function safeError(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error)).replaceAll(/\s+/gu, ' ').slice(0, 2000)
+  return (error instanceof Error ? error.message : String(error))
+    .replaceAll(/\b(?:https?|wss?):\/\/[^\s)'"<>]+/giu, '<redacted-url>')
+    .replaceAll(/\bBearer\s+\S+/giu, 'Bearer <redacted>')
+    .replaceAll(/\s+/gu, ' ')
+    .slice(0, 2000)
 }
 
 function send(response: ServerResponse, status: number, payload: unknown): void {

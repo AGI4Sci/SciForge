@@ -1,4 +1,4 @@
-"""Opt-in real CDP transport tests using one test-owned headless browser."""
+"""Opt-in real CDP transport tests using one test-owned Chromium browser."""
 from __future__ import annotations
 
 import ctypes
@@ -26,13 +26,19 @@ from cua.service import ComputerUseService
 from driver.backends.cdp_adapter import CdpAdapterBackend
 from driver.channel import ChannelError
 from driver.router import BackendRouter
-from tests.integration._process_guard import OwnedProcesses, remove_owned_tree
+from tests.integration._process_guard import (
+    OwnedProcesses,
+    assert_loopback_ports_released,
+    remove_owned_tree,
+)
 
 
 pytestmark = pytest.mark.skipif(
     os.getenv("CUA_CDP_INTEGRATION") != "1",
-    reason="set CUA_CDP_INTEGRATION=1 to start the test-owned headless browser",
+    reason="set CUA_CDP_INTEGRATION=1 to start the test-owned browser",
 )
+
+VISIBLE_BROWSER = os.getenv("CUA_CDP_VISIBLE") == "1"
 
 WORKER_DIR = Path(__file__).resolve().parents[2]
 REPO_DIR = WORKER_DIR.parents[2]
@@ -83,7 +89,9 @@ def _assert_no_host_focus_or_clipboard_change(
     before: tuple[int, tuple[int, int], int],
 ) -> None:
     after = _desktop_state()
-    assert after[0] == before[0], "controlled CDP changed the foreground HWND"
+    if not VISIBLE_BROWSER:
+        assert after[0] == before[0], "controlled headless CDP changed the foreground HWND"
+    assert after[1] == before[1], "controlled CDP moved the host cursor"
     assert after[2] == before[2], "controlled CDP changed the clipboard sequence"
 
 
@@ -234,7 +242,11 @@ def cdp_stack() -> CdpStack:
     processes = OwnedProcesses()
     page_server: ThreadingHTTPServer | None = None
     page_thread: threading.Thread | None = None
+    adapter: subprocess.Popen | None = None
+    adapter_url: str | None = None
+    token: str | None = None
     cleanup_errors: list[str] = []
+    owned_ports: list[int] = []
     try:
         desktop_before = _desktop_state()
         state = PageState()
@@ -242,17 +254,23 @@ def cdp_stack() -> CdpStack:
         page_thread = threading.Thread(target=page_server.serve_forever, daemon=True)
         page_thread.start()
         page_port = int(page_server.server_address[1])
+        owned_ports.append(page_port)
 
         profile = root / "profile"
         cdp_port = _free_loopback_port()
-        browser = processes.add(subprocess.Popen(
-            [
-                str(browser_exe), "--headless=new",
+        owned_ports.append(cdp_port)
+        browser_args = [
+                str(browser_exe),
                 f"--remote-debugging-port={cdp_port}",
                 "--remote-debugging-address=127.0.0.1",
                 f"--user-data-dir={profile}", "--no-first-run",
-                "--disable-default-apps", "--disable-sync", "about:blank",
-            ],
+                "--disable-default-apps", "--disable-sync",
+                "--window-size=900,700", "--window-position=80,80", "about:blank",
+            ]
+        if not VISIBLE_BROWSER:
+            browser_args.insert(1, "--headless=new")
+        browser = processes.add(subprocess.Popen(
+            browser_args,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -262,7 +280,7 @@ def cdp_stack() -> CdpStack:
         _wait_until(
             lambda: requests.get(f"{cdp_url}/json/version", timeout=1).status_code == 200,
             timeout_s=15,
-            message="headless browser did not expose its owned CDP endpoint",
+            message="test-owned browser did not expose its CDP endpoint",
         )
         initial = _json_request("GET", f"{cdp_url}/json/list")
         for item in initial:
@@ -279,6 +297,7 @@ def cdp_stack() -> CdpStack:
         )
 
         adapter_port = _free_loopback_port()
+        owned_ports.append(adapter_port)
         adapter_url = f"http://127.0.0.1:{adapter_port}"
         token = hashlib.sha256(os.urandom(32)).hexdigest()
         env = os.environ.copy()
@@ -315,10 +334,28 @@ def cdp_stack() -> CdpStack:
             page_server.server_close()
         if page_thread is not None:
             page_thread.join(timeout=2)
+        if adapter is not None and adapter.poll() is None and adapter_url and token:
+            try:
+                capability_payload = _json_request(
+                    "GET",
+                    f"{adapter_url}/v1/capabilities",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                active_handles = capability_payload["data"]["activeHandleCount"]
+                if active_handles != 0:
+                    cleanup_errors.append(
+                        f"Node CDP adapter retained {active_handles} active handle(s)"
+                    )
+            except Exception as error:
+                cleanup_errors.append(f"could not verify Node CDP handle cleanup: {error}")
         cleanup_errors.extend(processes.close())
         try:
             processes.assert_stopped()
         except AssertionError as error:
+            cleanup_errors.append(str(error))
+        try:
+            assert_loopback_ports_released(owned_ports)
+        except Exception as error:
             cleanup_errors.append(str(error))
         try:
             remove_owned_tree(root)
@@ -387,6 +424,76 @@ def test_single_target_real_transport_and_authentication(cdp_stack: CdpStack) ->
     assert result["ok"] is True, result
     assert service.status()["activeChannels"] == 0
     assert service.registry.snapshot_counts()["activeLeases"] == 0
+
+
+def test_adapter_restart_changes_generation_and_rejects_stale_targets(cdp_stack: CdpStack) -> None:
+    stack = cdp_stack
+    node = shutil.which("node")
+    assert node is not None
+    old_backend = stack.backend()
+    old_capability = old_backend.probe()
+    old_target = _targets_by_name(stack)["A"]
+    port = _free_loopback_port()
+    token = hashlib.sha256(os.urandom(32)).hexdigest()
+    url = f"http://127.0.0.1:{port}"
+    env = os.environ.copy()
+    env.update({
+        "SCIFORGE_CUA_CDP_ENDPOINTS": stack.cdp_url,
+        "SCIFORGE_CUA_CDP_ADAPTER_TOKEN": token,
+        "SCIFORGE_CUA_CDP_ADAPTER_PORT": str(port),
+    })
+    owned = OwnedProcesses()
+    process = owned.add(subprocess.Popen(
+        [
+            node, "--import", "tsx",
+            str(REPO_DIR / "src" / "main" / "computer-use-cdp-adapter-node-entry.ts"),
+        ],
+        cwd=REPO_DIR,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    ))
+    try:
+        headers = {"Authorization": f"Bearer {token}"}
+        _wait_until(
+            lambda: requests.get(f"{url}/v1/capabilities", headers=headers, timeout=1).status_code == 200,
+            timeout_s=20,
+            message="replacement adapter did not become ready",
+        )
+        replacement = CdpAdapterBackend(adapter_url=url, token=token, timeout_s=10)
+        replacement_capability = replacement.probe()
+        assert replacement_capability.available is True
+        assert replacement_capability.instance_id != old_capability.instance_id
+        assert replacement_capability.generation != old_capability.generation
+        replacement_target = {
+            target.target_id: target for target in replacement.discover_targets()
+        }[old_target.target_id]
+        assert replacement_target.generation != old_target.generation
+
+        service = ComputerUseService(router=BackendRouter([replacement]))
+        result = service.run({
+            "instruction": "reject stale adapter generation",
+            "target": old_target.to_dict(),
+            "requestId": "cdp-stale-generation",
+        }, lambda _request, _channel: R.ok({"status": "incorrect"}))
+        assert result["error"]["code"] == "TARGET_LOST"
+        assert service.registry.snapshot_counts()["activeLeases"] == 0
+        assert service.cleanup_pending() == []
+    finally:
+        errors = owned.close()
+        owned.assert_stopped()
+        assert errors == []
+        assert_loopback_ports_released([port])
+    assert process.poll() is not None
+    assert CdpAdapterBackend(adapter_url=url, token=token, timeout_s=0.25).probe().available is False
+    assert stack.browser.poll() is None
+    live_ids = {
+        item.get("id") for item in _json_request("GET", f"{stack.cdp_url}/json/list")
+        if item.get("type") == "page"
+    }
+    assert stack.pages["A"]["id"] in live_ids
 
 
 def test_three_sessions_real_transport_do_not_cross_targets(cdp_stack: CdpStack) -> None:
@@ -500,6 +607,50 @@ def test_three_sessions_real_transport_do_not_cross_targets(cdp_stack: CdpStack)
     _assert_no_host_focus_or_clipboard_change(stack.desktop_before)
 
 
+def test_same_real_cdp_page_returns_target_busy_without_opening_second_handle(
+    cdp_stack: CdpStack,
+) -> None:
+    stack = cdp_stack
+    backend = stack.backend()
+    target = _targets_by_name(stack)["C"]
+    service = ComputerUseService(router=BackendRouter([backend]))
+    entered = threading.Event()
+    release = threading.Event()
+    for name in ("owner", "contender"):
+        assert service.bind_session({
+            "sessionId": f"same-page-{name}",
+            "owner": {"runtimeId": "integration", "threadId": name},
+            "target": target.to_dict(),
+        })["ok"] is True
+
+    def hold(_request, channel):
+        channel.observe()
+        entered.set()
+        assert release.wait(timeout=10)
+        return R.ok({"status": "released"})
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        owner = pool.submit(service.run, {
+            "instruction": "hold target",
+            "sessionId": "same-page-owner",
+            "requestId": "same-page-owner-request",
+        }, hold)
+        assert entered.wait(timeout=10)
+        contender = service.run({
+            "instruction": "contend target",
+            "sessionId": "same-page-contender",
+            "requestId": "same-page-contender-request",
+        }, lambda _request, _channel: R.ok({"status": "incorrect"}))
+        assert contender["error"]["code"] == "TARGET_BUSY"
+        release.set()
+        assert owner.result(timeout=10)["ok"] is True
+
+    assert service.registry.snapshot_counts()["activeLeases"] == 0
+    assert service.cleanup_pending() == []
+    for name in ("owner", "contender"):
+        assert service.release_session({"sessionId": f"same-page-{name}"})["ok"] is True
+
+
 def test_attached_close_does_not_close_pages_or_browser(cdp_stack: CdpStack) -> None:
     stack = cdp_stack
     assert stack.browser.poll() is None
@@ -509,9 +660,139 @@ def test_attached_close_does_not_close_pages_or_browser(cdp_stack: CdpStack) -> 
     _assert_no_host_focus_or_clipboard_change(stack.desktop_before)
 
 
-@pytest.mark.skip(reason="post-dispatch/pre-response transport cut cannot yet be triggered deterministically")
-def test_post_dispatch_transport_loss_is_unknown_and_not_replayed() -> None:
-    """Reserved until the adapter exposes a test-only post-dispatch barrier."""
+def test_attached_driver_shutdown_disconnects_without_closing_browser(cdp_stack: CdpStack) -> None:
+    stack = cdp_stack
+    node = shutil.which("node")
+    assert node is not None
+    module_url = (
+        REPO_DIR / "src" / "main" / "services" / "computer-use-cdp-adapter.ts"
+    ).as_uri()
+    script = (
+        f"import {{ createPlaywrightCdpDriver }} from {json.dumps(module_url)};"
+        f"const driver=createPlaywrightCdpDriver([{json.dumps(stack.cdp_url)}]);"
+        "const status=await driver.available();"
+        "if(!status.available) throw new Error('driver unavailable');"
+        "await driver.shutdown();"
+    )
+    completed = subprocess.run(
+        [node, "--import", "tsx", "--input-type=module", "--eval", script],
+        cwd=REPO_DIR,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=30,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert stack.browser.poll() is None
+    live_ids = {
+        item.get("id") for item in _json_request("GET", f"{stack.cdp_url}/json/list")
+        if item.get("type") == "page"
+    }
+    assert {page["id"] for page in stack.pages.values()} <= live_ids
+
+
+def test_post_dispatch_transport_loss_is_unknown_and_not_replayed(cdp_stack: CdpStack) -> None:
+    """A test-owned proxy drops exactly one response after the real action commits."""
+    stack = cdp_stack
+    dropped = threading.Event()
+    forwarded_actions = 0
+    counter_lock = threading.Lock()
+
+    class LossProxy(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            self._forward()
+
+        def do_POST(self) -> None:  # noqa: N802
+            self._forward()
+
+        def _forward(self) -> None:
+            nonlocal forwarded_actions
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length) if length else b""
+            payload = json.loads(raw or b"{}") if raw else {}
+            response = requests.request(
+                self.command,
+                f"{stack.adapter_url}{self.path}",
+                headers={
+                    "Authorization": self.headers.get("Authorization", ""),
+                    "Content-Type": "application/json",
+                },
+                data=raw or None,
+                timeout=15,
+            )
+            should_drop = (
+                self.path == "/v1/action"
+                and isinstance(payload.get("action"), dict)
+                and payload["action"].get("text") == "committed-without-response"
+            )
+            if should_drop:
+                with counter_lock:
+                    forwarded_actions += 1
+                assert response.status_code == 200, response.text
+                dropped.set()
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
+                self.connection.close()
+                return
+            self.send_response(response.status_code)
+            self.send_header("Content-Type", response.headers.get("Content-Type", "application/json"))
+            self.send_header("Content-Length", str(len(response.content)))
+            self.end_headers()
+            self.wfile.write(response.content)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+    proxy = ThreadingHTTPServer(("127.0.0.1", 0), LossProxy)
+    proxy_thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+    proxy_thread.start()
+    try:
+        proxy_url = f"http://127.0.0.1:{proxy.server_address[1]}"
+        backend = CdpAdapterBackend(adapter_url=proxy_url, token=stack.token, timeout_s=15)
+        target = _targets_by_name(stack)["A"]
+        service = ComputerUseService(router=BackendRouter([backend]))
+
+        def execute(_request, channel):
+            first = channel.observe()
+            channel.perform(
+                {"action": "click", "coordinate": [260, 145]},
+                expected_revision=first.revision,
+            )
+            focused = channel.observe()
+            channel.perform(
+                {"action": "hotkey", "keys": ["ctrl", "a"]},
+                expected_revision=focused.revision,
+            )
+            selected = channel.observe()
+            channel.perform(
+                {"action": "type", "text": "committed-without-response"},
+                expected_revision=selected.revision,
+            )
+            raise AssertionError("lost action response must not be reported as success")
+
+        result = service.run({
+            "instruction": "inject post-dispatch response loss",
+            "target": target.to_dict(),
+            "requestId": "cdp-post-dispatch-loss",
+        }, execute)
+        assert dropped.wait(timeout=5)
+        assert result["error"]["code"] == "ACTION_OUTCOME_UNKNOWN"
+        assert result["error"]["retryable"] is False
+        _wait_until(
+            lambda: stack.state.snapshot()["A"]["text"] == "committed-without-response",
+            timeout_s=5,
+            message="forwarded action did not commit before its response was dropped",
+        )
+        assert forwarded_actions == 1
+        assert service.registry.snapshot_counts()["activeLeases"] == 0
+        assert service.cleanup_pending() == []
+    finally:
+        proxy.shutdown()
+        proxy.server_close()
+        proxy_thread.join(timeout=2)
 
 
 def test_cancelled_channel_does_not_commit_to_its_page(cdp_stack: CdpStack) -> None:

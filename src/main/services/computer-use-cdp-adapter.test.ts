@@ -3,6 +3,7 @@ import {
   captureTargetScreenshot,
   createPlaywrightCdpDriver,
   insertedTextVerification,
+  stableTargetId,
   startComputerUseCdpAdapter,
   type CdpAdapterDriver,
   type CdpAdapterTarget,
@@ -20,6 +21,7 @@ function target(id: string): CdpAdapterTarget {
     targetId: id,
     kind: 'browser-page',
     ownership: 'attached',
+    generation: 'test-generation',
     locator: { cdpEndpoint: 'http://127.0.0.1:9222', cdpTargetId: `cdp-${id}` },
     metadata: { title: id, url: `https://${id}.example.test/` }
   }
@@ -28,16 +30,28 @@ function target(id: string): CdpAdapterTarget {
 function fakeDriver(): CdpAdapterDriver & { events: string[] } {
   const events: string[] = []
   const handles = new Map<string, string>()
+  const requestHandles = new Map<string, { handleId: string; targetId: string; generation: string }>()
   let sequence = 0
   return {
     events,
-    async available() { return { available: true } },
+    async available() {
+      return {
+        available: true,
+        adapterInstanceId: 'test-adapter',
+        generation: 'test-generation',
+        activeHandleCount: handles.size
+      }
+    },
     async targets() { return [target('page-a'), target('page-b'), target('page-c')] },
-    async open(value) {
+    async open(value, requestId) {
+      const existing = requestHandles.get(requestId)
+      if (existing) return existing
       const handleId = `handle-${value.targetId}`
       handles.set(handleId, value.targetId)
-      events.push(`open:${value.targetId}`)
-      return handleId
+      events.push(`open:${value.targetId}:${requestId}`)
+      const result = { handleId, targetId: value.targetId, generation: value.generation }
+      requestHandles.set(requestId, result)
+      return result
     },
     async observe(handleId) {
       const targetId = handles.get(handleId)
@@ -45,6 +59,7 @@ function fakeDriver(): CdpAdapterDriver & { events: string[] } {
       sequence += 1
       return {
         targetId,
+        generation: 'test-generation',
         revision: `cdp:${sequence}`,
         imageBase64: Buffer.from('fake-png').toString('base64'),
         metadata: { targetId }
@@ -57,6 +72,7 @@ function fakeDriver(): CdpAdapterDriver & { events: string[] } {
       events.push(`action:${targetId}:${String((input.action as Record<string, unknown>).text)}`)
       return {
         targetId,
+        generation: 'test-generation',
         committed: true,
         mayHaveTakenEffect: true,
         verification: { status: 'verified', revisionAfter: `cdp:${sequence + 1}`, details: { targetId } }
@@ -67,7 +83,7 @@ function fakeDriver(): CdpAdapterDriver & { events: string[] } {
       events.push(`close:${handles.get(handleId)}`)
       handles.delete(handleId)
     },
-    async shutdown() { handles.clear() }
+    async shutdown() { handles.clear(); requestHandles.clear() }
   }
 }
 
@@ -130,12 +146,39 @@ describe('computer-use CDP adapter', () => {
     )
   })
 
+  it('derives stable public target ids without embedding the endpoint', () => {
+    const endpoint = 'http://127.0.0.1:9222/private-token'
+    const first = stableTargetId(endpoint, 'target-abc')
+    expect(first).toBe(stableTargetId(endpoint, 'target-abc'))
+    expect(first).not.toContain('127.0.0.1')
+    expect(first).not.toContain(Buffer.from(endpoint).toString('base64url').slice(0, 16))
+    expect(first).toMatch(/^cdp:[a-f0-9]{24}:target-abc$/u)
+  })
+
   it('requires bearer authentication and never exposes targets without it', async () => {
     const { adapter } = await start()
     const denied = await call(adapter, '/v1/targets', undefined, 'wrong')
     expect(denied.status).toBe(401)
     const payload = await denied.json() as { error: { code: string } }
     expect(payload.error.code).toBe('UNAUTHORIZED')
+  })
+
+  it('redacts endpoints and bearer values from public adapter errors', async () => {
+    const base = fakeDriver()
+    const driver: CdpAdapterDriver = {
+      ...base,
+      async available() {
+        throw new Error('failed at http://127.0.0.1:9222/private Bearer secret-value')
+      }
+    }
+    const adapter = await startComputerUseCdpAdapter({ driver, token: 'adapter-secret' })
+    adapters.push(adapter)
+    const response = await call(adapter, '/v1/capabilities')
+    const payload = await response.json() as { error: { message: string } }
+    expect(payload.error.message).toContain('<redacted-url>')
+    expect(payload.error.message).toContain('Bearer <redacted>')
+    expect(payload.error.message).not.toContain('9222')
+    expect(payload.error.message).not.toContain('secret-value')
   })
 
   it('exposes capabilities and attached target descriptors', async () => {
@@ -153,6 +196,26 @@ describe('computer-use CDP adapter', () => {
     expect(targetsPayload.data.targets[0]).toMatchObject({
       targetId: 'page-a', ownership: 'attached'
     })
+  })
+
+  it('requires request identity and returns a generation-bound open result', async () => {
+    const { adapter, driver } = await start()
+    const missingRequest = await call(adapter, '/v1/handles/open', { target: target('page-a') })
+    expect(missingRequest.status).toBe(400)
+    const opened = await call(adapter, '/v1/handles/open', {
+      requestId: 'request-page-a', target: target('page-a')
+    })
+    await expect(opened.json()).resolves.toMatchObject({
+      ok: true,
+      data: { handleId: 'handle-page-a', targetId: 'page-a', generation: 'test-generation' }
+    })
+    const repeated = await call(adapter, '/v1/handles/open', {
+      requestId: 'request-page-a', target: target('page-a')
+    })
+    await expect(repeated.json()).resolves.toMatchObject({
+      data: { handleId: 'handle-page-a', generation: 'test-generation' }
+    })
+    expect(driver.events.filter((event) => event.startsWith('open:'))).toHaveLength(1)
   })
 
   it('keeps three handles target-bound under forced concurrent actions', async () => {
@@ -197,6 +260,21 @@ describe('computer-use CDP adapter', () => {
     await expect(response.json()).resolves.toMatchObject({
       ok: false,
       error: { code: 'ADAPTER_ERROR' }
+    })
+  })
+
+  it('rejects an invalid electron webContents locator before it reaches the driver', async () => {
+    const { adapter } = await start()
+    const response = await call(adapter, '/v1/handles/open', {
+      requestId: 'request-electron',
+      target: {
+        targetId: 'electron-1', kind: 'electron-webcontents', ownership: 'attached',
+        generation: 'test-generation', locator: { webContentsId: 0 }
+      }
+    })
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false, error: { code: 'ADAPTER_ERROR' }
     })
   })
 
