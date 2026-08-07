@@ -5,12 +5,13 @@ import time
 import threading
 import uuid
 from collections import deque
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from driver.backend import BackendOpenContext
+from driver.backend import BackendOpenContext, BackendOperationError, RecoverableOpenBackend
 from driver.channel import ChannelError, SessionInputChannel
-from driver.router import BackendRouter, RoutingError
+from driver.router import BackendRouter, PendingOpenSelection, RoutingError
 
 from . import contract
 from . import result as R
@@ -21,6 +22,19 @@ from .target import host_desktop_target, parse_target_descriptor, validate_safe_
 
 
 ChannelExecutor = Callable[[dict[str, Any], SessionInputChannel], dict[str, Any]]
+
+
+@dataclass
+class _PendingOpenCleanup:
+    selection: PendingOpenSelection
+    request_id: str
+    session_id: str
+    ephemeral: bool
+    handle: object | None = None
+    errors: list[str] = field(default_factory=lambda: [
+        "backend open outcome is unknown; lease is quarantined",
+    ])
+    lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
 
 def _utc_iso(epoch_seconds: float | None = None) -> str:
@@ -66,7 +80,7 @@ class ComputerUseService:
         self._approval_proof = "legacy-trust-boundary"
         self._server_instance_id = server_instance_id or f"cua-{uuid.uuid4()}"
         self._request_contexts: dict[str, dict[str, Any]] = {}
-        self._open_cleanup_pending: dict[str, dict[str, Any]] = {}
+        self._open_cleanup_pending: dict[str, _PendingOpenCleanup] = {}
         self._recent_rejections: deque[dict[str, Any]] = deque(maxlen=20)
 
     def configure_approval_proof(self, mode: str) -> None:
@@ -212,18 +226,14 @@ class ComputerUseService:
             terminal_reason = error.code.lower()
             result = R.err(error.code, str(error), details=error.details)
             retain_open_lease = error.details.get("retainLease") is True
-            if retain_open_lease:
+            if retain_open_lease and error.pending_open is not None:
                 with self._channels_lock:
-                    self._open_cleanup_pending[request_id] = {
-                        "requestId": request_id,
-                        "sessionId": session_id or "unknown",
-                        "targetId": str(error.details.get("targetId") or "unknown"),
-                        "leaseId": str(error.details.get("leaseId") or "unknown"),
-                        "backend": str(error.details.get("backend") or "unknown"),
-                        "closed": False,
-                        "leaseReleased": False,
-                        "errors": ["backend open outcome is unknown; lease is quarantined"],
-                    }
+                    self._open_cleanup_pending[request_id] = _PendingOpenCleanup(
+                        selection=error.pending_open,
+                        request_id=request_id,
+                        session_id=session_id or "unknown",
+                        ephemeral=ephemeral,
+                    )
         except RegistryError as error:
             terminal_reason = error.code.lower()
             result = R.err(error.code, str(error), details=error.details)
@@ -538,7 +548,74 @@ class ComputerUseService:
             }
             for channel in channels
             if channel.cleanup.errors or channel.cancelled or self._lifecycle_state != "running"
-        ] + open_pending
+        ] + [self._open_cleanup_view(item) for item in open_pending]
+
+    @staticmethod
+    def _open_cleanup_view(item: _PendingOpenCleanup) -> dict[str, Any]:
+        selection = item.selection
+        return {
+            "requestId": item.request_id,
+            "sessionId": item.session_id,
+            "targetId": selection.target.target_id,
+            "leaseId": selection.lease.lease_id,
+            "backend": selection.capabilities.backend.value,
+            "closed": False,
+            "leaseReleased": False,
+            "errors": [message[:512] for message in item.errors],
+        }
+
+    def _recover_open_cleanup(
+        self, request_id: str, state: RequestState, reason: str,
+    ) -> bool:
+        with self._channels_lock:
+            pending = self._open_cleanup_pending.get(request_id)
+        if pending is None:
+            return False
+        with pending.lock:
+            # Another cleanup caller may have completed while this caller was
+            # waiting for the per-request lock. Treat that as success instead
+            # of closing/finishing the same recovered resource twice.
+            with self._channels_lock:
+                if self._open_cleanup_pending.get(request_id) is not pending:
+                    return True
+            backend = pending.selection.backend
+            try:
+                if pending.handle is None:
+                    if not isinstance(backend, RecoverableOpenBackend):
+                        message = "backend does not support idempotent open recovery"
+                        if message not in pending.errors:
+                            pending.errors.append(message)
+                        return False
+                    pending.handle = backend.recover_open(
+                        pending.selection.target, pending.selection.context,
+                    )
+                backend.close(pending.handle, reason)
+            except BackendOperationError as error:
+                if not error.safe_to_retry:
+                    self._remember_cleanup_error(pending, error)
+                    return False
+                # An explicit safe response proves that no handle exists.
+                pending.handle = None
+            except Exception as error:  # noqa: BLE001
+                self._remember_cleanup_error(pending, error)
+                return False
+            try:
+                self.registry.finish_request(request_id, state, reason=reason)
+                if pending.ephemeral:
+                    self.registry.close_session(pending.session_id, force=True)
+            except RegistryError as error:
+                self._remember_cleanup_error(pending, error)
+                return False
+            with self._channels_lock:
+                self._open_cleanup_pending.pop(request_id, None)
+                self._request_contexts.pop(request_id, None)
+            return True
+
+    @staticmethod
+    def _remember_cleanup_error(pending: _PendingOpenCleanup, error: Exception) -> None:
+        message = f"{type(error).__name__}: {error}"[:512]
+        if message not in pending.errors:
+            pending.errors.append(message)
 
     def _remember_rejection(self, result: dict[str, Any], *, request_id: str) -> None:
         error = result.get("error") if isinstance(result, dict) else None
@@ -563,6 +640,15 @@ class ComputerUseService:
                 cleaned.append(request_id)
             else:
                 pending.append(request_id)
+        with self._channels_lock:
+            uncertain_opens = list(self._open_cleanup_pending)
+        for request_id in uncertain_opens:
+            if self._recover_open_cleanup(request_id, RequestState.FAILED, "open_recovery"):
+                cleaned.append(request_id)
+                if request_id in pending:
+                    pending.remove(request_id)
+            elif request_id not in pending:
+                pending.append(request_id)
         return {**scan, "cleanedRequests": cleaned, "cleanupPending": pending}
 
     def mark_target_lost(self, target_id: str) -> dict[str, list[str]]:
@@ -571,6 +657,8 @@ class ComputerUseService:
         pending: list[str] = []
         for request_id in affected:
             if self._finish_after_channel_close(
+                request_id, RequestState.TARGET_LOST, "target_lost",
+            ) or self._recover_open_cleanup(
                 request_id, RequestState.TARGET_LOST, "target_lost",
             ):
                 cleaned.append(request_id)
@@ -624,7 +712,11 @@ class ComputerUseService:
         if lease_ttl_seconds <= 0 or reaper_interval_seconds <= 0:
             raise ValueError("lease TTL and reaper interval must be positive")
         with self._lifecycle_lock, self._channels_lock:
-            if self._lifecycle_state != "running" or self._channels:
+            if (
+                self._lifecycle_state != "running"
+                or self._channels
+                or self._open_cleanup_pending
+            ):
                 raise RuntimeError("lifecycle configuration must be set before requests start")
             self.lease_ttl_seconds = lease_ttl_seconds if reaper_enabled else None
             self._reaper_interval_seconds = reaper_interval_seconds if reaper_enabled else None
@@ -659,6 +751,12 @@ class ComputerUseService:
                 self.registry.request_cancel(channel.request_id, "server_stop")
             except RegistryError:
                 pass
+        with self._channels_lock:
+            uncertain_opens = list(self._open_cleanup_pending)
+        for request_id in uncertain_opens:
+            self._recover_open_cleanup(
+                request_id, RequestState.CANCELLED, "server_stop",
+            )
         for channel in channels:
             cleanup = channel.close("server_stop")
             if not cleanup.lease_released:

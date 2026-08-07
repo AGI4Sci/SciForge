@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import {
+  CdpAdapterDriverError,
   insertedTextVerification,
   type CdpAdapterDriver,
   type CdpAdapterTarget,
@@ -41,6 +42,9 @@ type ElectronHandle = {
   cancelled: boolean
   destroyed: boolean
   ownsDebugger: boolean
+  debuggerOwnershipUnknown: boolean
+  pressedKeys: Set<string>
+  pressedMouseButtons: Map<string, { x: number; y: number; clickCount: number }>
   onDestroyed: () => void
   onDebuggerDetach: () => void
 }
@@ -82,6 +86,22 @@ export function createElectronWebContentsCdpDriver(
     handle.ownsDebugger = false
   }
 
+  const closeHandle = async (handleId: string): Promise<void> => {
+    const handle = handles.get(handleId)
+    if (!handle) return
+    if (handle.debuggerOwnershipUnknown) {
+      throw new Error('Electron debugger ownership is unknown; refusing to detach or release the handle.')
+    }
+    await releaseOwnedInput(handle)
+    detachOwnedDebugger(handle)
+    if (!handle.contents.isDestroyed()) {
+      handle.contents.removeListener('destroyed', handle.onDestroyed)
+      handle.contents.debugger.removeListener?.('detach', handle.onDebuggerDetach)
+    }
+    handles.delete(handleId)
+    if (handlesByRequest.get(handle.requestId) === handleId) handlesByRequest.delete(handle.requestId)
+  }
+
   return Object.freeze({
     async available() {
       return {
@@ -97,35 +117,70 @@ export function createElectronWebContentsCdpDriver(
     },
     async open(target, requestId) {
       if (target.kind !== 'electron-webcontents') {
-        throw new Error('ACTION_UNSUPPORTED: Electron driver accepts electron-webcontents targets only.')
+        throw new CdpAdapterDriverError(
+          'ACTION_UNSUPPORTED', 'Electron driver accepts electron-webcontents targets only.', true
+        )
       }
       const existingId = handlesByRequest.get(requestId)
       if (existingId) {
-        const existing = requireHandle(existingId)
+        const existing = handles.get(existingId)
+        if (!existing) {
+          handlesByRequest.delete(requestId)
+          throw new CdpAdapterDriverError(
+            'TARGET_LOST', 'Electron open recovery handle is unavailable.', true
+          )
+        }
         if (existing.targetId !== target.targetId || existing.generation !== target.generation) {
           throw new Error('REQUEST_ID_CONFLICT: Electron open request identity changed.')
+        }
+        if (existing.destroyed || existing.contents.isDestroyed()) {
+          if (!existing.contents.isDestroyed()) {
+            existing.contents.removeListener('destroyed', existing.onDestroyed)
+            existing.contents.debugger.removeListener?.('detach', existing.onDebuggerDetach)
+          }
+          handles.delete(existingId)
+          handlesByRequest.delete(requestId)
+          throw new CdpAdapterDriverError(
+            'TARGET_LOST', 'Electron target disappeared before Open recovery.', true
+          )
+        }
+        if (existing.debuggerOwnershipUnknown) {
+          throw new CdpAdapterDriverError(
+            'BACKEND_UNAVAILABLE',
+            'Electron debugger ownership remains unknown after attach failure.',
+            false
+          )
         }
         return { handleId: existing.id, targetId: existing.targetId, generation: existing.generation }
       }
       if (target.ownership !== 'attached') {
-        throw new Error('Electron webContents are attached targets and are never destroyed by this driver.')
+        throw new CdpAdapterDriverError(
+          'ACTION_UNSUPPORTED',
+          'Electron webContents are attached targets and are never destroyed by this driver.',
+          true
+        )
       }
       if (target.generation !== generation) {
-        throw new Error('TARGET_LOST: Electron adapter generation changed.')
+        throw new CdpAdapterDriverError(
+          'TARGET_LOST', 'Electron adapter generation changed.', true
+        )
       }
       const contents = availableContents().find((candidate) => candidate.id === target.locator.webContentsId)
-      if (!contents) throw new Error('TARGET_LOST: Electron webContents is unavailable.')
+      if (!contents) {
+        throw new CdpAdapterDriverError(
+          'TARGET_LOST', 'Electron webContents is unavailable.', true
+        )
+      }
       const expected = targetFor(contents)
       if (expected.targetId !== target.targetId) {
-        throw new Error('TARGET_LOST: Electron webContents identity changed.')
+        throw new CdpAdapterDriverError(
+          'TARGET_LOST', 'Electron webContents identity changed.', true
+        )
       }
       if (contents.debugger.isAttached()) {
-        throw new Error('BACKEND_UNAVAILABLE: Electron webContents debugger is already attached.')
-      }
-      try {
-        contents.debugger.attach('1.3')
-      } catch (error) {
-        throw new Error(`BACKEND_UNAVAILABLE: Electron debugger attach failed: ${safeMessage(error)}`)
+        throw new CdpAdapterDriverError(
+          'BACKEND_UNAVAILABLE', 'Electron webContents debugger is already attached.', true
+        )
       }
       const id = `electron-cdp-handle-${randomUUID()}`
       const handle: ElectronHandle = {
@@ -137,22 +192,49 @@ export function createElectronWebContentsCdpDriver(
         revision: 0,
         cancelled: false,
         destroyed: false,
-        ownsDebugger: true,
+        ownsDebugger: false,
+        debuggerOwnershipUnknown: false,
+        pressedKeys: new Set(),
+        pressedMouseButtons: new Map(),
         onDestroyed: () => undefined,
         onDebuggerDetach: () => undefined
       }
       handle.onDestroyed = () => {
         handle.destroyed = true
         handle.ownsDebugger = false
+        handle.debuggerOwnershipUnknown = false
       }
       handle.onDebuggerDetach = () => {
-        handle.destroyed = true
+        // If attach ownership was ambiguous, a later detach proves that the
+        // unknown debugger resource is gone and the quarantined request may
+        // safely recover only to discard its logical handle.
+        handle.destroyed = !handle.debuggerOwnershipUnknown
         handle.ownsDebugger = false
+        handle.debuggerOwnershipUnknown = false
       }
       contents.once('destroyed', handle.onDestroyed)
       contents.debugger.once?.('detach', handle.onDebuggerDetach)
       handles.set(id, handle)
       handlesByRequest.set(requestId, id)
+      try {
+        contents.debugger.attach('1.3')
+      } catch (error) {
+        const attached = contents.debugger.isAttached()
+        handle.ownsDebugger = false
+        handle.debuggerOwnershipUnknown = attached
+        if (!attached) {
+          contents.removeListener('destroyed', handle.onDestroyed)
+          contents.debugger.removeListener?.('detach', handle.onDebuggerDetach)
+          handles.delete(id)
+          handlesByRequest.delete(requestId)
+        }
+        throw new CdpAdapterDriverError(
+          'BACKEND_UNAVAILABLE',
+          `Electron debugger attach failed: ${safeMessage(error)}`,
+          !attached
+        )
+      }
+      handle.ownsDebugger = true
       return { handleId: id, targetId: target.targetId, generation }
     },
     async observe(handleId) {
@@ -190,12 +272,7 @@ export function createElectronWebContentsCdpDriver(
         const [x, y] = coordinate(action.coordinate)
         const button = name === 'right_click' ? 'right' : 'left'
         const clickCount = name === 'double_click' ? 2 : 1
-        await handle.contents.debugger.sendCommand('Input.dispatchMouseEvent', {
-          type: 'mousePressed', x, y, button, clickCount
-        })
-        await handle.contents.debugger.sendCommand('Input.dispatchMouseEvent', {
-          type: 'mouseReleased', x, y, button, clickCount
-        })
+        await dispatchMouseClick(handle, button, x, y, clickCount)
       } else if (name === 'type') {
         const text = String(action.text ?? '')
         const beforeReadback = await activeElementReadback(handle.contents)
@@ -205,7 +282,7 @@ export function createElectronWebContentsCdpDriver(
       } else if (name === 'key' || name === 'hotkey') {
         const keys = (Array.isArray(action.keys) ? action.keys : [action.keys]).map(String).filter(Boolean)
         if (keys.length === 0) throw new Error('Electron key action requires keys.')
-        await dispatchKeyChord(handle.contents, keys)
+        await dispatchKeyChord(handle, keys)
         verification = { status: 'unverified', details: { chord: keys.join('+') } }
       } else if (name === 'scroll') {
         const pixels = finiteNumber(action.pixels, 1)
@@ -239,28 +316,20 @@ export function createElectronWebContentsCdpDriver(
       if (handle) handle.cancelled = true
     },
     async close(handleId) {
-      const handle = handles.get(handleId)
-      if (!handle) return
-      detachOwnedDebugger(handle)
-      if (!handle.contents.isDestroyed()) {
-        handle.contents.removeListener('destroyed', handle.onDestroyed)
-        handle.contents.debugger.removeListener?.('detach', handle.onDebuggerDetach)
-      }
-      handles.delete(handleId)
-      if (handlesByRequest.get(handle.requestId) === handleId) handlesByRequest.delete(handle.requestId)
+      await closeHandle(handleId)
     },
     async shutdown() {
+      const errors: unknown[] = []
       for (const handleId of [...handles.keys()]) {
-        const handle = handles.get(handleId)
-        if (!handle) continue
-        handles.delete(handleId)
-        if (!handle.contents.isDestroyed()) {
-          handle.contents.removeListener('destroyed', handle.onDestroyed)
-          handle.contents.debugger.removeListener?.('detach', handle.onDebuggerDetach)
+        try {
+          await closeHandle(handleId)
+        } catch (error) {
+          errors.push(error)
         }
-        try { detachOwnedDebugger(handle) } catch { /* best-effort shutdown */ }
       }
-      handlesByRequest.clear()
+      if (errors.length > 0) {
+        throw new AggregateError(errors, 'Electron webContents input cleanup is incomplete.')
+      }
     }
   })
 }
@@ -313,9 +382,24 @@ export function createCompositeCdpDriver(drivers: readonly CdpAdapterDriver[]): 
         }
         return { handleId: priorId, targetId: prior.targetId, generation }
       }
-      if (target.generation !== generation) throw new Error('TARGET_LOST: Composite adapter generation changed.')
-      const match = (await enumerate()).find((item) => sameTarget(item.outer, target))
-      if (!match) throw new Error('TARGET_LOST: CDP target is unavailable or changed identity.')
+      if (target.generation !== generation) {
+        throw new CdpAdapterDriverError(
+          'TARGET_LOST', 'Composite adapter generation changed.', true
+        )
+      }
+      let match: Awaited<ReturnType<typeof enumerate>>[number] | undefined
+      try {
+        match = (await enumerate()).find((item) => sameTarget(item.outer, target))
+      } catch (error) {
+        throw new CdpAdapterDriverError(
+          'BACKEND_UNAVAILABLE', `Composite target discovery failed: ${safeMessage(error)}`, true
+        )
+      }
+      if (!match) {
+        throw new CdpAdapterDriverError(
+          'TARGET_LOST', 'CDP target is unavailable or changed identity.', true
+        )
+      }
       const opened = await match.driver.open(match.inner, requestId)
       const handleId = `composite-cdp-handle-${randomUUID()}`
       handles.set(handleId, { driver: match.driver, innerHandleId: opened.handleId, targetId: target.targetId, requestId })
@@ -342,9 +426,15 @@ export function createCompositeCdpDriver(drivers: readonly CdpAdapterDriver[]): 
       if (handlesByRequest.get(handle.requestId) === handleId) handlesByRequest.delete(handle.requestId)
     },
     async shutdown() {
+      const results = await Promise.allSettled(drivers.map((driver) => driver.shutdown()))
+      const errors = results
+        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        .map((result) => result.reason)
+      if (errors.length > 0) {
+        throw new AggregateError(errors, 'Composite CDP driver cleanup is incomplete.')
+      }
       handles.clear()
       handlesByRequest.clear()
-      await Promise.allSettled(drivers.map((driver) => driver.shutdown()))
     }
   })
 }
@@ -379,17 +469,105 @@ async function scrollPosition(contents: ElectronWebContentsLike): Promise<{ x: n
   return { x: finiteNumber(value.x, 0), y: finiteNumber(value.y, 0) }
 }
 
-async function dispatchKeyChord(contents: ElectronWebContentsLike, keys: string[]): Promise<void> {
+async function dispatchMouseClick(
+  handle: ElectronHandle,
+  button: string,
+  x: number,
+  y: number,
+  clickCount: number
+): Promise<void> {
+  handle.pressedMouseButtons.set(button, { x, y, clickCount })
+  try {
+    await handle.contents.debugger.sendCommand('Input.dispatchMouseEvent', {
+      type: 'mousePressed', x, y, button, clickCount
+    })
+  } finally {
+    // Record ownership before dispatch because a rejected promise does not
+    // prove that the renderer failed to receive the press.
+    await releaseOwnedMouseButtons(handle, [button])
+  }
+}
+
+async function dispatchKeyChord(handle: ElectronHandle, keys: string[]): Promise<void> {
   const normalized = keys.map(electronKey)
   const modifiers = normalized.reduce((mask, key) => mask | modifierMask(key), 0)
-  for (const key of normalized) {
-    await contents.debugger.sendCommand('Input.dispatchKeyEvent', {
-      type: 'keyDown', key, modifiers, ...(key.length === 1 ? { text: key } : {})
-    })
+  try {
+    for (const key of normalized) {
+      // Record ownership before dispatch so a lost keyDown response is still
+      // balanced by keyUp during action cleanup or a later close retry.
+      handle.pressedKeys.add(key)
+      await handle.contents.debugger.sendCommand('Input.dispatchKeyEvent', {
+        type: 'keyDown', key, modifiers, ...(key.length === 1 ? { text: key } : {})
+      })
+    }
+  } finally {
+    await releaseOwnedKeys(handle)
   }
-  for (const key of [...normalized].reverse()) {
-    await contents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key, modifiers })
+}
+
+async function releaseOwnedInput(handle: ElectronHandle): Promise<void> {
+  if (handle.destroyed || handle.contents.isDestroyed()) {
+    // Destroying the renderer also destroys its synthetic input state.
+    handle.pressedKeys.clear()
+    handle.pressedMouseButtons.clear()
+    return
   }
+  if (
+    !handle.contents.debugger.isAttached()
+    && (handle.pressedKeys.size > 0 || handle.pressedMouseButtons.size > 0)
+  ) {
+    throw new Error('Electron target was lost before owned input state could be released.')
+  }
+  const errors: unknown[] = []
+  try {
+    await releaseOwnedMouseButtons(handle)
+  } catch (error) {
+    errors.push(error)
+  }
+  try {
+    await releaseOwnedKeys(handle)
+  } catch (error) {
+    errors.push(error)
+  }
+  if (errors.length > 0) throw new AggregateError(errors, 'Electron owned input release failed.')
+}
+
+async function releaseOwnedMouseButtons(
+  handle: ElectronHandle,
+  buttons: readonly string[] = [...handle.pressedMouseButtons.keys()].reverse()
+): Promise<void> {
+  const errors: unknown[] = []
+  for (const button of buttons) {
+    const state = handle.pressedMouseButtons.get(button)
+    if (!state) continue
+    try {
+      await handle.contents.debugger.sendCommand('Input.dispatchMouseEvent', {
+        type: 'mouseReleased', button, ...state
+      })
+      handle.pressedMouseButtons.delete(button)
+    } catch (error) {
+      errors.push(error)
+    }
+  }
+  if (errors.length > 0) throw new AggregateError(errors, 'Electron mouse release failed.')
+}
+
+async function releaseOwnedKeys(handle: ElectronHandle): Promise<void> {
+  const errors: unknown[] = []
+  for (const key of [...handle.pressedKeys].reverse()) {
+    const modifiers = [...handle.pressedKeys].reduce((mask, pressed) => (
+      mask | modifierMask(pressed)
+    ), 0)
+    try {
+      await handle.contents.debugger.sendCommand('Input.dispatchKeyEvent', {
+        type: 'keyUp', key, modifiers
+      })
+      handle.pressedKeys.delete(key)
+    } catch (error) {
+      errors.push(error)
+    }
+  }
+  if (errors.length > 0) throw new AggregateError(errors, 'Electron key release failed.')
 }
 
 function electronKey(key: string): string {

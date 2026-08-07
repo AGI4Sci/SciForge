@@ -37,7 +37,13 @@ class AdapterSession:
         self.lose_on_observe = False
         self.unavailable_on_observe = False
         self.lose_first_open_response = False
+        self.open_transport_failures = 0
+        self.safe_open_rejection = False
         self.open_attempts = 0
+        self.close_attempts = 0
+        self.close_transport_failures = 0
+        self.recovery_started: threading.Event | None = None
+        self.allow_recovery: threading.Event | None = None
         self.invalid_action_generation = False
 
     def request(self, method, url, **kwargs):
@@ -52,8 +58,21 @@ class AdapterSession:
             return Response({"ok": True, "data": {"targets": [target_value()]}})
         if path == "/handles/open":
             self.open_attempts += 1
+            if self.open_transport_failures > 0:
+                self.open_transport_failures -= 1
+                raise TimeoutError("open response lost after dispatch")
             if self.lose_first_open_response and self.open_attempts == 1:
                 raise TimeoutError("open response lost after creation")
+            if self.safe_open_rejection:
+                return Response({"ok": False, "error": {
+                    "code": "BACKEND_UNAVAILABLE",
+                    "message": "debugger is already attached",
+                    "safeToRetry": True,
+                }}, status=409)
+            if self.open_attempts >= 3 and self.recovery_started is not None:
+                self.recovery_started.set()
+                if self.allow_recovery is None or not self.allow_recovery.wait(timeout=5):
+                    raise TimeoutError("test did not release open recovery")
             return Response({"ok": True, "data": {
                 "handleId": "handle-1", "targetId": "page-1", "generation": "generation-1",
             }})
@@ -83,8 +102,14 @@ class AdapterSession:
                 "committed": True, "mayHaveTakenEffect": True,
                 "verification": {"status": "verified", "revisionAfter": "cdp:2", "details": {"value": "abc"}},
             }})
-        if path in {"/handles/cancel", "/handles/close"}:
+        if path == "/handles/close":
+            self.close_attempts += 1
+            if self.close_transport_failures > 0:
+                self.close_transport_failures -= 1
+                raise TimeoutError("close response lost")
             return Response({"ok": True, "data": {"closed": True}})
+        if path == "/handles/cancel":
+            return Response({"ok": True, "data": {"cancelled": True}})
         raise AssertionError(path)
 
 
@@ -155,6 +180,136 @@ def test_open_replays_same_request_once_to_recover_lost_response():
     handle = backend.open(parse_target_descriptor(target_value()), context)
     assert handle.adapter_handle_id == "handle-1"
     assert session.open_attempts == 2
+
+
+def test_safe_open_rejection_releases_service_request_and_lease():
+    session = AdapterSession()
+    session.safe_open_rejection = True
+    backend = CdpAdapterBackend(
+        adapter_url="http://127.0.0.1:3909", token="secret", session=session,
+    )
+    context = BackendOpenContext("request-safe-open", True, 0, False, threading.Event())
+    with pytest.raises(BackendOperationError) as caught:
+        backend.open(parse_target_descriptor(target_value()), context)
+    assert caught.value.code == "BACKEND_UNAVAILABLE"
+    assert caught.value.safe_to_retry is True
+
+    service = ComputerUseService(router=BackendRouter([backend]))
+    result = service.run({
+        "instruction": "observe busy debugger",
+        "target": target_value(),
+        "requestId": "request-safe-open-service",
+    }, lambda _request, _channel: {"ok": True})
+    assert result["error"]["code"] == "BACKEND_UNAVAILABLE"
+    counts = service.registry.snapshot_counts()
+    assert counts["requests"] == counts["activeLeases"] == 0
+    assert service.cleanup_pending() == []
+
+
+def test_reaper_recovers_unknown_open_then_closes_handle_and_releases_lease():
+    session = AdapterSession()
+    session.open_transport_failures = 2
+    backend = CdpAdapterBackend(
+        adapter_url="http://127.0.0.1:3909", token="secret", session=session,
+    )
+    service = ComputerUseService(router=BackendRouter([backend]))
+    result = service.run({
+        "instruction": "observe after uncertain open",
+        "target": target_value(),
+        "requestId": "request-recover-open",
+    }, lambda _request, _channel: {"ok": True})
+    assert result["error"]["code"] == "CLEANUP_INCOMPLETE"
+    assert service.registry.snapshot_counts()["activeLeases"] == 1
+
+    reaped = service.reap_once()
+    assert reaped["cleanedRequests"] == ["request-recover-open"]
+    assert service.cleanup_pending() == []
+    counts = service.registry.snapshot_counts()
+    assert counts["requests"] == counts["activeLeases"] == counts["sessions"] == 0
+    assert any(call[1].endswith("/handles/close") for call in session.calls)
+
+
+def test_reaper_retries_recovered_handle_close_without_reopening():
+    session = AdapterSession()
+    session.open_transport_failures = 2
+    session.close_transport_failures = 1
+    backend = CdpAdapterBackend(
+        adapter_url="http://127.0.0.1:3909", token="secret", session=session,
+    )
+    service = ComputerUseService(router=BackendRouter([backend]))
+    result = service.run({
+        "instruction": "recover and retry close",
+        "target": target_value(),
+        "requestId": "request-retry-recovered-close",
+    }, lambda _request, _channel: {"ok": True})
+    assert result["error"]["code"] == "CLEANUP_INCOMPLETE"
+
+    first = service.reap_once()
+    assert first["cleanupPending"] == ["request-retry-recovered-close"]
+    assert session.open_attempts == 3
+    assert session.close_attempts == 1
+    assert service.registry.snapshot_counts()["activeLeases"] == 1
+
+    second = service.reap_once()
+    assert second["cleanedRequests"] == ["request-retry-recovered-close"]
+    assert session.open_attempts == 3
+    assert session.close_attempts == 2
+    assert service.cleanup_pending() == []
+    counts = service.registry.snapshot_counts()
+    assert counts["requests"] == counts["activeLeases"] == counts["sessions"] == 0
+
+
+@pytest.mark.parametrize("_iteration", range(10))
+def test_reaper_and_shutdown_serialize_same_pending_open_cleanup(_iteration):
+    session = AdapterSession()
+    session.open_transport_failures = 2
+    session.recovery_started = threading.Event()
+    session.allow_recovery = threading.Event()
+    backend = CdpAdapterBackend(
+        adapter_url="http://127.0.0.1:3909", token="secret", session=session,
+    )
+    service = ComputerUseService(router=BackendRouter([backend]))
+    result = service.run({
+        "instruction": "race cleanup authorities",
+        "target": target_value(),
+        "requestId": "request-concurrent-open-cleanup",
+    }, lambda _request, _channel: {"ok": True})
+    assert result["error"]["code"] == "CLEANUP_INCOMPLETE"
+
+    outputs: dict[str, object] = {}
+    errors: list[BaseException] = []
+
+    def reap() -> None:
+        try:
+            outputs["reap"] = service.reap_once()
+        except BaseException as error:  # noqa: BLE001 - thread assertion transport
+            errors.append(error)
+
+    def shut_down() -> None:
+        try:
+            outputs["shutdown"] = service.shutdown()
+        except BaseException as error:  # noqa: BLE001 - thread assertion transport
+            errors.append(error)
+
+    reaper_thread = threading.Thread(target=reap)
+    reaper_thread.start()
+    assert session.recovery_started.wait(timeout=5)
+    shutdown_thread = threading.Thread(target=shut_down)
+    shutdown_thread.start()
+    session.allow_recovery.set()
+    reaper_thread.join(timeout=5)
+    shutdown_thread.join(timeout=5)
+
+    assert not reaper_thread.is_alive()
+    assert not shutdown_thread.is_alive()
+    assert errors == []
+    assert session.open_attempts == 3
+    assert session.close_attempts == 1
+    assert service.cleanup_pending() == []
+    counts = service.registry.snapshot_counts()
+    assert counts["requests"] == counts["activeLeases"] == counts["sessions"] == 0
+    assert outputs["shutdown"]["cleanupComplete"] is True
+    assert outputs["shutdown"]["lifecycleState"] == "stopped"
 
 
 def test_action_transport_failure_is_unknown_and_never_safe_to_replay():

@@ -103,3 +103,10 @@ class InputBackend(Protocol):
     def cancel(self, handle: object, reason: str) -> None: ...
 
     def close(self, handle: object, reason: str) -> None: ...
+
+
+@runtime_checkable
+class RecoverableOpenBackend(Protocol):
+    """Backend whose idempotent request identity can recover an uncertain Open."""
+
+    def recover_open(self, target: TargetDescriptor, context: BackendOpenContext) -> object: ...

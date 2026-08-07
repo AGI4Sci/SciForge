@@ -32,9 +32,10 @@ _ACTIONS = (
 
 
 class CdpAdapterResponseError(RuntimeError):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, safe_to_retry: bool = False) -> None:
         super().__init__(message)
         self.code = code
+        self.safe_to_retry = safe_to_retry
 
 
 @dataclass
@@ -70,6 +71,10 @@ class CdpAdapterBackend:
         )).strip()
         self.timeout_s = timeout_s
         self._config_lock = threading.RLock()
+        self._pending_lock = threading.RLock()
+        self._pending_opens: dict[
+            str, tuple[TargetDescriptor, BackendOpenContext, str, str]
+        ] = {}
         # The production backend is shared by ThreadingHTTPServer requests.
         # Use a fresh requests session per call instead of sharing mutable
         # connection state across request threads. Tests may inject a transport.
@@ -174,21 +179,97 @@ class CdpAdapterBackend:
             "target": target.to_dict(include_sensitive=True),
         }
         adapter_url, token = self._configuration()
+        with self._pending_lock:
+            pending = self._pending_opens.get(context.request_id)
+            if pending is not None:
+                prior_target, prior_context, adapter_url, token = pending
+                if prior_target != target or prior_context.request_id != context.request_id:
+                    raise BackendOperationError(
+                        "CDP adapter request identity changed during pending open",
+                        code="REQUEST_ID_CONFLICT",
+                    )
+            else:
+                self._pending_opens[context.request_id] = (
+                    target, context, adapter_url, token,
+                )
         # Open is keyed by requestId in the trusted adapter. One replay can
         # recover a response lost after handle creation without duplicating it.
         try:
             payload = self._request_at(adapter_url, token, "POST", "/v1/handles/open", request)
         except CdpAdapterResponseError as error:
+            if error.safe_to_retry:
+                self._forget_pending_open(context.request_id)
             raise BackendOperationError(
-                str(error), code=error.code, safe_to_retry=error.code == "TARGET_LOST",
+                str(error), code=error.code, safe_to_retry=error.safe_to_retry,
             ) from error
         except Exception:
             try:
                 payload = self._request_at(adapter_url, token, "POST", "/v1/handles/open", request)
+            except CdpAdapterResponseError as error:
+                if error.safe_to_retry:
+                    self._forget_pending_open(context.request_id)
+                raise BackendOperationError(
+                    str(error), code=error.code, safe_to_retry=error.safe_to_retry,
+                ) from error
             except Exception as error:
                 raise BackendOperationError(
                     "CDP adapter open outcome is unknown after idempotent recovery failed",
                 ) from error
+        handle = self._handle_from_open_payload(
+            payload, target, context, adapter_url, token,
+        )
+        self._forget_pending_open(context.request_id)
+        return handle
+
+    def recover_open(
+        self, target: TargetDescriptor, context: BackendOpenContext,
+    ) -> CdpAdapterHandle:
+        """Recover one uncertain open through the adapter's requestId idempotency."""
+        with self._pending_lock:
+            pending = self._pending_opens.get(context.request_id)
+        if pending is None:
+            raise BackendOperationError(
+                "CDP adapter has no pending open for this request",
+                code="REQUEST_NOT_FOUND",
+            )
+        prior_target, prior_context, adapter_url, token = pending
+        if prior_target != target or prior_context.request_id != context.request_id:
+            raise BackendOperationError(
+                "CDP adapter pending open identity changed",
+                code="REQUEST_ID_CONFLICT",
+            )
+        request = {
+            "requestId": context.request_id,
+            "target": target.to_dict(include_sensitive=True),
+        }
+        try:
+            payload = self._request_at(
+                adapter_url, token, "POST", "/v1/handles/open", request,
+            )
+        except CdpAdapterResponseError as error:
+            if error.safe_to_retry:
+                self._forget_pending_open(context.request_id)
+            raise BackendOperationError(
+                str(error), code=error.code, safe_to_retry=error.safe_to_retry,
+            ) from error
+        except Exception as error:
+            raise BackendOperationError(
+                "CDP adapter open recovery outcome remains unknown",
+            ) from error
+        handle = self._handle_from_open_payload(
+            payload, target, context, adapter_url, token,
+        )
+        self._forget_pending_open(context.request_id)
+        return handle
+
+    @staticmethod
+    def _handle_from_open_payload(
+        payload: Mapping[str, Any],
+        target: TargetDescriptor,
+        context: BackendOpenContext,
+        adapter_url: str,
+        token: str,
+    ) -> CdpAdapterHandle:
         handle_id = payload.get("handleId")
         if not isinstance(handle_id, str) or not handle_id:
             raise BackendOperationError("CDP adapter did not return a handleId")
@@ -197,6 +278,10 @@ class CdpAdapterBackend:
         return CdpAdapterHandle(
             target, context, handle_id, target.generation, adapter_url, token,
         )
+
+    def _forget_pending_open(self, request_id: str) -> None:
+        with self._pending_lock:
+            self._pending_opens.pop(request_id, None)
 
     def observe(self, handle: object) -> Observation:
         h = self._handle(handle)
@@ -368,9 +453,14 @@ class CdpAdapterBackend:
             error_value = payload.get("error")
             message = error_value.get("message") if isinstance(error_value, dict) else None
             code = error_value.get("code") if isinstance(error_value, dict) else None
+            safe_to_retry = (
+                error_value.get("safeToRetry") is True
+                if isinstance(error_value, dict) else False
+            )
             raise CdpAdapterResponseError(
                 str(code or "ADAPTER_ERROR"),
                 str(message or f"CDP adapter HTTP {response.status_code}"),
+                safe_to_retry=safe_to_retry,
             )
         data = payload.get("data", payload)
         if not isinstance(data, dict):

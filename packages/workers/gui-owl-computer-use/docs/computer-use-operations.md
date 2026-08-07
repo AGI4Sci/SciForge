@@ -88,6 +88,10 @@ $env:CUA_CDP_INTEGRATION = "1"
 & $pythonExe -m pytest tests/integration/test_cdp_headless_integration.py -q -ra
 Remove-Item Env:CUA_CDP_INTEGRATION
 
+$env:CUA_TEST_PYTHON = $pythonExe
+node --import tsx scripts/computer-use-sidecar-restart-smoke.ts
+Remove-Item Env:CUA_TEST_PYTHON
+
 $env:CUA_CDP_INTEGRATION = "1"
 $env:CUA_CDP_VISIBLE = "1"
 & $pythonExe -m pytest tests/integration/test_cdp_headless_integration.py -q -ra
@@ -112,14 +116,20 @@ The trusted SciForge main process also starts an attached
 configured and no explicit external Adapter overrides it. Registration uses
 `POST /computer-use/backends/cdp/configure` with the sidecar Bearer token; only
 credential-free loopback Adapter URLs are accepted. Shutdown clears the route
-only if it still points to that exact Adapter URL. Existing handles retain the
-endpoint and credential that opened them, so reconfiguration cannot redirect
-their action or cleanup.
+only if it still points to that exact Adapter URL. The runtime refreshes this
+idempotent registration while it is alive, so a restarted sidecar can recover
+the route; registration and clear calls are bounded by a request timeout so a
+non-responsive sidecar cannot block Adapter shutdown indefinitely. Existing
+handles retain the endpoint and credential that opened them, so reconfiguration
+cannot redirect their action or cleanup.
 
 Electron targets include only SciForge-owned window `webContents`. Observe uses
 `capturePage()` and actions use the target Debugger Protocol. If another caller
 already owns the Debugger connection, Computer Use rejects the target rather
-than stealing or later detaching that connection. Releasing a handle never
+than stealing or later detaching that connection. If `debugger.attach()` fails
+while the global attached state is ambiguous, the request stays quarantined and
+the driver never claims or detaches that debugger; cleanup can proceed after a
+later detach proves the unknown resource is gone. Releasing a handle never
 destroys the `webContents`. This is not support for arbitrary third-party
 Electron applications.
 

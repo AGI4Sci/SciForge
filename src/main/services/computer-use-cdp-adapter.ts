@@ -47,6 +47,16 @@ export type ComputerUseCdpAdapter = Readonly<{
   close(): Promise<void>
 }>
 
+export class CdpAdapterDriverError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly safeToRetry: boolean = false
+  ) {
+    super(`${code}: ${message}`)
+  }
+}
+
 type PlaywrightHandle = {
   id: string
   targetId: string
@@ -146,7 +156,9 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
     },
     async open(target, requestId) {
       if (target.kind !== 'browser-page') {
-        throw new Error('ACTION_UNSUPPORTED: Playwright driver accepts browser-page targets only.')
+        throw new CdpAdapterDriverError(
+          'ACTION_UNSUPPORTED', 'Playwright driver accepts browser-page targets only.', true
+        )
       }
       const existingId = handlesByRequest.get(requestId)
       if (existingId) {
@@ -157,18 +169,31 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
         return { handleId: existing.id, targetId: existing.targetId, generation: existing.generation }
       }
       if (target.ownership !== 'attached') {
-        throw new Error('This adapter instance does not own managed browser targets.')
+        throw new CdpAdapterDriverError(
+          'ACTION_UNSUPPORTED', 'This adapter instance does not own managed browser targets.', true
+        )
       }
       if (target.generation !== generation) {
-        throw new Error('TARGET_LOST: CDP adapter generation changed.')
+        throw new CdpAdapterDriverError('TARGET_LOST', 'CDP adapter generation changed.', true)
       }
-      const found = (await enumerate()).find(({ target: candidate }) => (
-        candidate.targetId === target.targetId
-        && candidate.generation === target.generation
-        && candidate.locator.cdpEndpoint === normalizeLoopbackEndpoint(target.locator.cdpEndpoint)
-        && candidate.locator.cdpTargetId === target.locator.cdpTargetId
-      ))
-      if (!found) throw new Error('The requested CDP target is unavailable or changed identity.')
+      let found: Awaited<ReturnType<typeof enumerate>>[number] | undefined
+      try {
+        found = (await enumerate()).find(({ target: candidate }) => (
+          candidate.targetId === target.targetId
+          && candidate.generation === target.generation
+          && candidate.locator.cdpEndpoint === normalizeLoopbackEndpoint(target.locator.cdpEndpoint)
+          && candidate.locator.cdpTargetId === target.locator.cdpTargetId
+        ))
+      } catch (error) {
+        throw new CdpAdapterDriverError(
+          'BACKEND_UNAVAILABLE', `CDP target discovery failed: ${safeError(error)}`, true
+        )
+      }
+      if (!found) {
+        throw new CdpAdapterDriverError(
+          'TARGET_LOST', 'The requested CDP target is unavailable or changed identity.', true
+        )
+      }
       const id = `cdp-handle-${randomUUID()}`
       found.page.setDefaultTimeout(ACTION_TIMEOUT_MS)
       handles.set(id, { id, targetId: target.targetId, generation, requestId, page: found.page, revision: 0, cancelled: false })
@@ -376,10 +401,15 @@ async function serveRequest(
       throw new AdapterHttpError(404, 'NOT_FOUND', 'adapter route not found')
     }
   } catch (error) {
-    const known = error instanceof AdapterHttpError
-    send(response, known ? error.status : 400, {
+    const httpError = error instanceof AdapterHttpError
+    const driverError = error instanceof CdpAdapterDriverError
+    send(response, httpError ? error.status : driverError ? 409 : 400, {
       ok: false,
-      error: { code: known ? error.code : classifyError(error), message: safeError(error) }
+      error: {
+        code: httpError || driverError ? error.code : classifyError(error),
+        message: safeError(error),
+        ...(driverError ? { safeToRetry: error.safeToRetry } : {})
+      }
     })
   }
 }

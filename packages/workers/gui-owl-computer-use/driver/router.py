@@ -19,10 +19,18 @@ from .backend import BackendOpenContext, BackendOperationError, InputBackend
 
 
 class RoutingError(RuntimeError):
-    def __init__(self, code: str, message: str, *, details: dict | None = None):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        details: dict | None = None,
+        pending_open: "PendingOpenSelection | None" = None,
+    ):
         super().__init__(message)
         self.code = code
         self.details = details or {}
+        self.pending_open = pending_open
 
 
 @dataclass(frozen=True)
@@ -32,6 +40,15 @@ class RouterSelection:
     decision: IsolationDecision
     lease: TargetLease
     handle: object
+
+
+@dataclass(frozen=True)
+class PendingOpenSelection:
+    backend: InputBackend
+    capabilities: BackendCapabilities
+    target: TargetDescriptor
+    context: BackendOpenContext
+    lease: TargetLease
 
 
 class BackendRouter:
@@ -150,6 +167,9 @@ class BackendRouter:
                         "backend": capability.backend.value,
                         "retainLease": True,
                     },
+                    pending_open=PendingOpenSelection(
+                        backend, capability, target, open_context, lease,
+                    ),
                 ) from error
             # Once open() returns, the handle and lease must have one cleanup
             # owner. The service immediately wraps this selection in a Channel,

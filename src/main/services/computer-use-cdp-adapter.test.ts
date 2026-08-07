@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  CdpAdapterDriverError,
   captureTargetScreenshot,
   createPlaywrightCdpDriver,
   insertedTextVerification,
@@ -216,6 +217,31 @@ describe('computer-use CDP adapter', () => {
       data: { handleId: 'handle-page-a', generation: 'test-generation' }
     })
     expect(driver.events.filter((event) => event.startsWith('open:'))).toHaveLength(1)
+  })
+
+  it('preserves an explicit safe pre-open rejection across HTTP', async () => {
+    const base = fakeDriver()
+    const driver: CdpAdapterDriver = {
+      ...base,
+      async open() {
+        throw new CdpAdapterDriverError(
+          'BACKEND_UNAVAILABLE', 'debugger is already attached', true
+        )
+      }
+    }
+    const adapter = await startComputerUseCdpAdapter({ driver, token: 'adapter-secret' })
+    adapters.push(adapter)
+    const response = await call(adapter, '/v1/handles/open', {
+      requestId: 'request-safe-rejection', target: target('page-a')
+    })
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: 'BACKEND_UNAVAILABLE',
+        safeToRetry: true
+      }
+    })
   })
 
   it('keeps three handles target-bound under forced concurrent actions', async () => {

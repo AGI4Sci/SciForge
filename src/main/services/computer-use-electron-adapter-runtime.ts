@@ -10,6 +10,7 @@ import {
 } from './computer-use-electron-webcontents-driver'
 
 const RETRY_INTERVAL_MS = 5_000
+const REGISTRATION_TIMEOUT_MS = 2_000
 
 export type ElectronComputerUseAdapterRuntime = Readonly<{
   adapter: ComputerUseCdpAdapter
@@ -23,10 +24,15 @@ export async function startElectronComputerUseAdapterRuntime(options: Readonly<{
   browserEndpoints?: readonly string[]
   fetchImpl?: typeof fetch
   retryIntervalMs?: number
+  requestTimeoutMs?: number
 }>): Promise<ElectronComputerUseAdapterRuntime> {
   const serviceUrl = normalizeLoopbackServiceUrl(options.serviceUrl)
   const serviceToken = options.serviceToken.trim()
   if (!serviceToken) throw new Error('Computer Use sidecar token is required for adapter registration.')
+  const requestTimeoutMs = options.requestTimeoutMs ?? REGISTRATION_TIMEOUT_MS
+  if (!Number.isFinite(requestTimeoutMs) || requestTimeoutMs <= 0) {
+    throw new Error('Computer Use adapter registration timeout must be positive.')
+  }
   const electron = createElectronWebContentsCdpDriver(options.listWebContents)
   const endpoints = options.browserEndpoints?.filter((value) => value.trim()) ?? []
   const driver = endpoints.length > 0
@@ -34,17 +40,18 @@ export async function startElectronComputerUseAdapterRuntime(options: Readonly<{
     : electron
   const adapter = await startComputerUseCdpAdapter({ driver })
   const fetchImpl = options.fetchImpl ?? fetch
-  let registered = false
   let closing = false
+  let closed = false
   let registrationInFlight: Promise<void> | null = null
+  let closeInFlight: Promise<void> | null = null
 
   const register = (): Promise<void> => {
-    if (closing || registered) return Promise.resolve()
+    if (closing) return Promise.resolve()
     if (registrationInFlight) return registrationInFlight
     registrationInFlight = configureSidecar(fetchImpl, serviceUrl, serviceToken, {
       adapterUrl: adapter.url,
       adapterToken: adapter.token
-    }).then(() => { registered = true }).finally(() => { registrationInFlight = null })
+    }, requestTimeoutMs).finally(() => { registrationInFlight = null })
     return registrationInFlight
   }
 
@@ -54,17 +61,20 @@ export async function startElectronComputerUseAdapterRuntime(options: Readonly<{
 
   return Object.freeze({
     adapter,
-    async close() {
-      if (closing) return
+    close() {
+      if (closed) return Promise.resolve()
+      if (closeInFlight) return closeInFlight
       closing = true
       clearInterval(timer)
-      await registrationInFlight?.catch(() => undefined)
-      if (registered) {
+      closeInFlight = (async () => {
+        await registrationInFlight?.catch(() => undefined)
         await configureSidecar(fetchImpl, serviceUrl, serviceToken, {
           adapterUrl: '', adapterToken: '', expectedAdapterUrl: adapter.url
-        }).catch(() => undefined)
-      }
-      await adapter.close()
+        }, requestTimeoutMs).catch(() => undefined)
+        await adapter.close()
+        closed = true
+      })().finally(() => { closeInFlight = null })
+      return closeInFlight
     }
   })
 }
@@ -73,14 +83,30 @@ async function configureSidecar(
   fetchImpl: typeof fetch,
   serviceUrl: string,
   serviceToken: string,
-  body: { adapterUrl: string; adapterToken: string; expectedAdapterUrl?: string }
+  body: { adapterUrl: string; adapterToken: string; expectedAdapterUrl?: string },
+  timeoutMs: number
 ): Promise<void> {
-  const response = await fetchImpl(`${serviceUrl}/computer-use/backends/cdp/configure`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${serviceToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  })
-  if (!response.ok) throw new Error(`Computer Use sidecar rejected adapter registration (HTTP ${response.status}).`)
+  const controller = new AbortController()
+  let timeout: ReturnType<typeof setTimeout> | null = null
+  try {
+    const response = await Promise.race([
+      fetchImpl(`${serviceUrl}/computer-use/backends/cdp/configure`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${serviceToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      }),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort()
+          reject(new Error('Computer Use sidecar adapter registration timed out.'))
+        }, timeoutMs)
+      })
+    ])
+    if (!response.ok) throw new Error(`Computer Use sidecar rejected adapter registration (HTTP ${response.status}).`)
+  } finally {
+    if (timeout !== null) clearTimeout(timeout)
+  }
 }
 
 function normalizeLoopbackServiceUrl(raw: string): string {
