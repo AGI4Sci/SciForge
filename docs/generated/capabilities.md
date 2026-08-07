@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **123**
+Registered actions: **124**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -106,6 +106,7 @@ Registered actions: **123**
 | `version-control.restore` | 1.0.0 | ui, agent, system | destructive | confirmation | resource |
 | `version-control.status` | 1.0.0 | ui, agent, system | read | none | resource |
 | `visual-review.accept-candidate` | 1.0.0 | ui | destructive | confirmation | workspace |
+| `visual-review.apply-style-reference` | 1.0.0 | ui | workspace-write | none | workspace |
 | `visual-review.create-candidate` | 1.0.0 | agent, system | workspace-write | none | workspace |
 | `visual-review.export-review-packet` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `visual-review.open` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
@@ -19895,6 +19896,973 @@ Atomically accepts the active candidate and preserves the previous image as a ba
     "annotation"
   ],
   "title": "Accept Visual Review candidate"
+}
+```
+
+## `visual-review.apply-style-reference`
+
+Extracts a manuscript visual style from one reference image and applies it to the current Visual Review document.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "documentId": {
+        "maxLength": 120,
+        "minLength": 1,
+        "type": "string"
+      },
+      "sourcePath": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "documentId",
+      "sourcePath"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "maxLength": 100000,
+            "type": "string"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "maxItems": 10000,
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "maxLength": 192,
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "document": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptedRevisionId": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "activeCandidateRevisionId": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "annotations": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "geometry": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "bounds": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "height": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 1,
+                              "type": "number"
+                            },
+                            "width": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 1,
+                              "type": "number"
+                            },
+                            "x": {
+                              "maximum": 1,
+                              "minimum": 0,
+                              "type": "number"
+                            },
+                            "y": {
+                              "maximum": 1,
+                              "minimum": 0,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "x",
+                            "y",
+                            "width",
+                            "height"
+                          ],
+                          "type": "object"
+                        },
+                        "kind": {
+                          "const": "box",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "bounds"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "pin",
+                          "type": "string"
+                        },
+                        "point": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "x": {
+                              "maximum": 1,
+                              "minimum": 0,
+                              "type": "number"
+                            },
+                            "y": {
+                              "maximum": 1,
+                              "minimum": 0,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "x",
+                            "y"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "point"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "from": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "x": {
+                              "maximum": 1,
+                              "minimum": 0,
+                              "type": "number"
+                            },
+                            "y": {
+                              "maximum": 1,
+                              "minimum": 0,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "x",
+                            "y"
+                          ],
+                          "type": "object"
+                        },
+                        "kind": {
+                          "const": "arrow",
+                          "type": "string"
+                        },
+                        "to": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "x": {
+                              "maximum": 1,
+                              "minimum": 0,
+                              "type": "number"
+                            },
+                            "y": {
+                              "maximum": 1,
+                              "minimum": 0,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "x",
+                            "y"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "from",
+                        "to"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "freehand",
+                          "type": "string"
+                        },
+                        "points": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "x": {
+                                "maximum": 1,
+                                "minimum": 0,
+                                "type": "number"
+                              },
+                              "y": {
+                                "maximum": 1,
+                                "minimum": 0,
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "x",
+                              "y"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 20000,
+                          "minItems": 2,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "points"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "id": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "instruction": {
+                  "maxLength": 20000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "box",
+                    "arrow",
+                    "freehand",
+                    "pin"
+                  ],
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "open",
+                    "resolved"
+                  ],
+                  "type": "string"
+                },
+                "targetNodeIds": {
+                  "items": {
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 10000,
+                  "type": "array"
+                },
+                "updatedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "geometry",
+                "instruction",
+                "targetNodeIds",
+                "status",
+                "createdAt",
+                "updatedAt"
+              ],
+              "type": "object"
+            },
+            "maxItems": 10000,
+            "type": "array"
+          },
+          "artifact": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "caption": {
+                    "maxLength": 10000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "height": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 100000,
+                    "type": "integer"
+                  },
+                  "id": {
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "image",
+                      "generated_image",
+                      "edited_image",
+                      "scientific_plot",
+                      "presentation_slide"
+                    ],
+                    "type": "string"
+                  },
+                  "manifestPath": {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "mimeType": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "sourceHash": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "sourcePath": {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "title": {
+                    "maxLength": 1000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "width": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 100000,
+                    "type": "integer"
+                  },
+                  "workingCopyHash": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "workingCopyPath": {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "kind",
+                  "sourcePath",
+                  "sourceHash",
+                  "workingCopyPath",
+                  "workingCopyHash"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "canvas": {
+            "additionalProperties": false,
+            "properties": {
+              "background": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "height": {
+                "exclusiveMinimum": 0,
+                "maximum": 100000,
+                "type": "number"
+              },
+              "width": {
+                "exclusiveMinimum": 0,
+                "maximum": 100000,
+                "type": "number"
+              }
+            },
+            "required": [
+              "width",
+              "height",
+              "background"
+            ],
+            "type": "object"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "documentId": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "assetPath": {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "bounds": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "height": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 1,
+                      "type": "number"
+                    },
+                    "width": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 1,
+                      "type": "number"
+                    },
+                    "x": {
+                      "maximum": 1,
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "y": {
+                      "maximum": 1,
+                      "minimum": 0,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "y",
+                    "width",
+                    "height"
+                  ],
+                  "type": "object"
+                },
+                "childIds": {
+                  "items": {
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 10000,
+                  "type": "array"
+                },
+                "editable": {
+                  "type": "boolean"
+                },
+                "id": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "generated_asset",
+                    "scientific_plot",
+                    "text",
+                    "shape",
+                    "connector",
+                    "group"
+                  ],
+                  "type": "string"
+                },
+                "maskPath": {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "parentId": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "semanticRef": {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "sourceSpecRef": {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "style": {
+                  "additionalProperties": {
+                    "$ref": "#/definitions/__schema0"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "truthLocked": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "bounds",
+                "editable",
+                "truthLocked"
+              ],
+              "type": "object"
+            },
+            "maxItems": 10000,
+            "type": "array"
+          },
+          "revisions": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "artifactHash": {
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                "artifactPath": {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "backupPath": {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "basedOnHash": {
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "decidedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "height": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 100000,
+                  "type": "integer"
+                },
+                "id": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "reviewEvidence": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "repairable": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "reviewedArtifactHash": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "reviewedArtifactPath": {
+                      "maxLength": 4096,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "reviewedAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    "score": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "background": {
+                          "maximum": 1,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "dimensions": {
+                          "maximum": 1,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "nonEmpty": {
+                          "maximum": 1,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "overall": {
+                          "maximum": 1,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "reference": {
+                          "maximum": 1,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "semantic": {
+                          "maximum": 1,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "warnings": {
+                          "items": {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          "maxItems": 1000,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "overall",
+                        "dimensions",
+                        "nonEmpty",
+                        "background",
+                        "semantic",
+                        "warnings"
+                      ],
+                      "type": "object"
+                    },
+                    "semantic": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "pass": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "repairInstructions": {
+                          "items": {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          "maxItems": 1000,
+                          "type": "array"
+                        },
+                        "summary": {
+                          "maxLength": 20000,
+                          "type": "string"
+                        },
+                        "violations": {
+                          "items": {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          "maxItems": 1000,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "pass",
+                        "summary",
+                        "violations",
+                        "repairInstructions"
+                      ],
+                      "type": "object"
+                    },
+                    "tool": {
+                      "const": "image_generation_review_candidate",
+                      "type": "string"
+                    },
+                    "warnings": {
+                      "items": {
+                        "maxLength": 10000,
+                        "type": "string"
+                      },
+                      "maxItems": 1000,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "tool",
+                    "ok",
+                    "reviewedArtifactPath",
+                    "reviewedArtifactHash",
+                    "reviewedAt",
+                    "score",
+                    "semantic",
+                    "repairable",
+                    "warnings"
+                  ],
+                  "type": "object"
+                },
+                "status": {
+                  "enum": [
+                    "candidate",
+                    "accepted",
+                    "rejected"
+                  ],
+                  "type": "string"
+                },
+                "summary": {
+                  "maxLength": 20000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "width": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 100000,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "status",
+                "basedOnHash",
+                "artifactPath",
+                "artifactHash",
+                "summary",
+                "reviewEvidence",
+                "createdAt"
+              ],
+              "type": "object"
+            },
+            "maxItems": 10000,
+            "type": "array"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "styleProfileRef": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "truthLocks": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "description": {
+                  "maxLength": 20000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "id": {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "nodeIds": {
+                  "items": {
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 10000,
+                  "type": "array"
+                },
+                "sourceRef": {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "description",
+                "nodeIds"
+              ],
+              "type": "object"
+            },
+            "maxItems": 10000,
+            "type": "array"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "documentId",
+          "canvas",
+          "artifact",
+          "nodes",
+          "annotations",
+          "truthLocks",
+          "styleProfileRef",
+          "revisions",
+          "activeCandidateRevisionId",
+          "acceptedRevisionId",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "ok": {
+        "const": true,
+        "type": "boolean"
+      },
+      "profile": {
+        "additionalProperties": false,
+        "properties": {
+          "confidence": {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "palette": {
+            "additionalProperties": false,
+            "properties": {
+              "accent": {
+                "items": {
+                  "maxLength": 100,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              "colors": {
+                "items": {
+                  "maxLength": 100,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "colors",
+              "accent"
+            ],
+            "type": "object"
+          },
+          "semanticDescription": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "semanticDescription",
+          "palette",
+          "confidence"
+        ],
+        "type": "object"
+      },
+      "status": {
+        "const": "style_applied",
+        "type": "string"
+      },
+      "styleProfileRef": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "ok",
+      "status",
+      "document",
+      "styleProfileRef",
+      "profile"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "visual-review",
+    "image",
+    "annotation"
+  ],
+  "title": "Apply Visual Review style reference"
 }
 ```
 

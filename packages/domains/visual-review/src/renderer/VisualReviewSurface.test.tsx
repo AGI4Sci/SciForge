@@ -8,8 +8,9 @@ import {
   normalizedPointFromRect,
   type VisualReviewAnnotation
 } from './VisualReviewSurface'
-import { VisualReviewPanel } from './VisualReviewPanel'
+import { buildVisualRevisionRequest, VisualReviewPanel } from './VisualReviewPanel'
 import type { VisualReviewCapabilityClient } from './capability-client'
+import { VisualStyleControl } from './VisualStyleControl'
 
 const source = {
   id: 'source-v1',
@@ -70,6 +71,25 @@ describe('visual review normalized geometry', () => {
 })
 
 describe('VisualReviewSurface', () => {
+  it('routes every image revision MCP operation through the runtime-neutral capability tools', () => {
+    const request = buildVisualRevisionRequest({
+      workspaceRoot: '/tmp/project',
+      sessionId: 'session-1',
+      documentId: 'figure-1',
+      packetPath: '/tmp/project/.sciforge/visual-documents/figure-1/review-packet.json'
+    })
+
+    expect(request).toContain('providerFamily: "managed-mcp"')
+    expect(request).toContain('sciforge_discover({ operationRef, includeSchema: true })')
+    expect(request).toContain('sciforge_invoke({ operationRef, input })')
+    expect(request).toContain('visual_generate')
+    expect(request).toContain('image_generation_edit_from_visual_review_packet')
+    expect(request).toContain('image_generation_review_candidate')
+    expect(request).toContain('capabilityId: "visual-review.create-candidate"')
+    expect(request).toContain('会话 ID：session-1')
+    expect(request).toContain('不能把 visual_generate')
+  })
+
   it('carves the desktop review panel out of the Electron window drag region', () => {
     const markup = renderToStaticMarkup(createElement(VisualReviewPanel, {
       workspaceRoot: '/tmp/project',
@@ -93,10 +113,23 @@ describe('VisualReviewSurface', () => {
 
     expect(markup).toContain('图像审改')
     expect(markup).toContain('框选')
+    expect(markup).toContain('圈画')
     expect(markup).toContain('Increase spacing around this group.')
     expect(markup).toContain('1 条待处理')
     expect(markup).toContain('生成修改版')
     expect(markup).not.toContain('iframe')
+  })
+
+  it('renders the package-owned image style recognition control', () => {
+    const markup = renderToStaticMarkup(createElement(VisualStyleControl, {
+      workspaceRoot: '/tmp/project',
+      documentId: 'figure-1',
+      profileRef: null,
+      client: capabilityClient,
+      onApplied: vi.fn()
+    }))
+
+    expect(markup).toContain('风格：保持当前图片')
   })
 
   it('renders candidate comparison and explicit human acceptance controls', () => {

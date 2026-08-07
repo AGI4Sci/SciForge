@@ -145,10 +145,6 @@ const api = {
     ipcRenderer.invoke('scientific-plotting:status', { workspaceRoot }),
   prepareScientificPlottingReference: (request) =>
     ipcRenderer.invoke('scientific-plotting:prepare-reference', request),
-  extractVisualStyleProfile: (request) =>
-    ipcRenderer.invoke('visual-style:extract-profile', request),
-  saveVisualStyleProfile: (request) =>
-    ipcRenderer.invoke('visual-style:save-profile', request),
   listSkills: (workspaceRoot) =>
     ipcRenderer.invoke('skill:list', { workspaceRoot }),
   saveSkillFile: (rootPath, skillName, content) =>

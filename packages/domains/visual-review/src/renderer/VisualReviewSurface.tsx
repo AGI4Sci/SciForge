@@ -156,7 +156,7 @@ function annotationLabel(annotation: VisualReviewAnnotation, index: number): str
     : annotation.kind === 'arrow'
       ? '箭头'
       : annotation.kind === 'freehand'
-        ? '画笔'
+        ? '圈画'
         : '图钉'
   return `${index + 1}. ${kind}`
 }
@@ -180,7 +180,7 @@ function toolLabel(tool: VisualReviewTool): string {
     pan: '平移',
     box: '框选',
     arrow: '箭头',
-    freehand: '画笔',
+    freehand: '圈画',
     pin: '图钉'
   }
   return labels[tool]
@@ -499,7 +499,7 @@ export function VisualReviewSurface({
             {annotations.length === 0 && (
               <div className="visual-review-empty">
                 <Pencil size={18} />
-                <p>在图片上框选、画箭头或放置图钉，然后填写修改建议。</p>
+                <p>在图片上框选、圈画、画箭头或放置图钉，然后填写修改建议。</p>
               </div>
             )}
             {annotations.map((annotation, index) => (

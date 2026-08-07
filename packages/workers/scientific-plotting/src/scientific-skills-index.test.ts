@@ -347,14 +347,14 @@ describe('scientific skills index', () => {
       detected: true,
       styleReference: {
         detected: true,
-        extractionTool: 'visual-style:extract-profile',
+        extractionTool: 'visual-review.apply-style-reference',
         outputArtifact: 'VisualStyleProfile v1',
         nextControlledTool: 'SciForge DataFigure Engine'
       }
     })
-    expect(plan.plottingWorkflow?.styleReference?.acceptedSourceTypes).toEqual(['image', 'pdf'])
+    expect(plan.plottingWorkflow?.styleReference?.acceptedSourceTypes).toEqual(['image'])
     expect(plan.plottingWorkflow?.dataFigureHints.join(' ')).toContain('VisualStyleProfile')
-    expect(plan.nextSciForgeActions.join(' ')).toContain('visual-style:extract-profile')
+    expect(plan.nextSciForgeActions.join(' ')).toContain('visual-review.apply-style-reference')
     expect(plan.plottingWorkflow?.styleReference?.guardrails.join(' ')).toContain('do not copy original data')
   })
 

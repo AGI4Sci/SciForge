@@ -249,10 +249,6 @@ function createApi(): SciForgeApi {
       invoke('scientific-plotting:status', { workspaceRoot }),
     prepareScientificPlottingReference: (request) =>
       invoke('scientific-plotting:prepare-reference', request),
-    extractVisualStyleProfile: (request) =>
-      invoke('visual-style:extract-profile', request),
-    saveVisualStyleProfile: (request) =>
-      invoke('visual-style:save-profile', request),
     listSkills: (workspaceRoot) => invoke('skill:list', { workspaceRoot }),
     saveSkillFile: (rootPath, skillName, content) =>
       invoke('skill:save-file', { rootPath, skillName, content }),

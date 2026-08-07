@@ -24,6 +24,7 @@
   "dependencies": {
     "@napi-rs/canvas": "^0.1.100",
     "@sciforge/domain-sdk": "^0.1.0",
+    "@sciforge/scientific-plotting": "^0.1.0",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

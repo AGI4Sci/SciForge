@@ -20,6 +20,7 @@ function service(): VisualReviewServicePort {
     })) as unknown as VisualReviewServicePort['open'],
     readImage: vi.fn(),
     updateContext: vi.fn(),
+    applyStyleReference: vi.fn(),
     saveAnnotations: vi.fn(),
     exportReviewPacket: vi.fn(),
     createCandidate: vi.fn(),
@@ -50,6 +51,7 @@ describe('Visual Review capabilities', () => {
     for (const id of [
       VISUAL_REVIEW_CAPABILITY_IDS.open,
       VISUAL_REVIEW_CAPABILITY_IDS.updateContext,
+      VISUAL_REVIEW_CAPABILITY_IDS.applyStyleReference,
       VISUAL_REVIEW_CAPABILITY_IDS.saveAnnotations,
       VISUAL_REVIEW_CAPABILITY_IDS.exportReviewPacket,
       VISUAL_REVIEW_CAPABILITY_IDS.createCandidate,
@@ -97,7 +99,7 @@ describe('Visual Review capabilities', () => {
         sourcePath: 'outputs/figure.png'
       }
     })
-    expect(result.changed).toBe(false)
+    expect(result).not.toHaveProperty('changed')
   })
 
   it('fails closed without a workspace-scoped caller', async () => {

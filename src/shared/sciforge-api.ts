@@ -143,12 +143,6 @@ import type {
 } from './visible-context'
 import type { RemoteWorkspaceApi } from './remote-workspace'
 import type {
-  VisualStyleExtractRequest,
-  VisualStyleExtractResult,
-  VisualStyleSaveProfileRequest,
-  VisualStyleSaveProfileResult
-} from './visual-style'
-import type {
   ScientificPlottingPrepareReferenceRequest,
   ScientificPlottingPrepareReferenceResult,
   ScientificPlottingStatusResult
@@ -877,8 +871,6 @@ export type SciForgeApi = {
   prepareScientificPlottingReference: (
     request: ScientificPlottingPrepareReferenceRequest
   ) => Promise<ScientificPlottingPrepareReferenceResult>
-  extractVisualStyleProfile: (request: VisualStyleExtractRequest) => Promise<VisualStyleExtractResult>
-  saveVisualStyleProfile: (request: VisualStyleSaveProfileRequest) => Promise<VisualStyleSaveProfileResult>
   listSkills: (workspaceRoot?: string) => Promise<SkillListResult>
   saveSkillFile: (rootPath: string, skillName: string, content: string) => Promise<SkillSaveResult>
   openSkillRoot: (rootPath: string) => Promise<PathOpenResult>

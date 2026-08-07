@@ -35,8 +35,6 @@ import {
   domainExtensionPackagePayloadSchema,
   domainExtensionSetEnabledPayloadSchema,
   domainExtensionSummarySchema,
-  visualStyleExtractPayloadSchema,
-  visualStyleSaveProfilePayloadSchema,
   isSafeOpenExternalUrl,
   remoteChannelActiveThreadContextPayloadSchema,
   remoteChannelMirrorPayloadSchema,
@@ -288,93 +286,6 @@ describe('app-ipc-schemas', () => {
         runtimeId: 'codex',
         threadId: 'thread-1',
         text: ' '
-      })
-    ).toThrow()
-  })
-
-  it('accepts bounded visual style extraction payloads', () => {
-    expect(visualStyleExtractPayloadSchema.parse({
-      workspaceRoot: ' /tmp/workspace ',
-      sourcePath: ' figures/reference.png ',
-      sourceType: 'image',
-      sourceKind: 'reference',
-      scope: 'manuscript',
-      figureId: ' Fig. 2A ',
-      notes: ' Use only visual style. '
-    })).toEqual({
-      workspaceRoot: '/tmp/workspace',
-      sourcePath: 'figures/reference.png',
-      sourceType: 'image',
-      sourceKind: 'reference',
-      scope: 'manuscript',
-      figureId: 'Fig. 2A',
-      notes: 'Use only visual style.'
-    })
-
-    expect(() =>
-      visualStyleExtractPayloadSchema.parse({
-        workspaceRoot: '/tmp/workspace',
-        sourcePath: 'figure.png',
-        scope: 'global'
-      })
-    ).toThrow()
-  })
-
-  it('accepts visual style profile saves with controlled artifact paths', () => {
-    const profile = {
-      version: 1 as const,
-      id: 'manuscript-default',
-      scope: 'manuscript' as const,
-      source: { type: 'reference', path: 'figures/reference.png' },
-      tokens: {
-        canvas: { width: 640, height: 420, aspectRatio: 1.52, background: '#ffffff' },
-        palette: { colors: ['#123456'], background: '#ffffff', ink: '#222222', accent: ['#123456'], colorMode: 'limited' as const },
-        typography: { fontFamily: 'Arial', axisSize: 8, labelSize: 9, titleSize: 11, weight: 'regular' as const },
-        strokes: { ink: '#222222', primaryWidth: 1.2, secondaryWidth: 0.6, lineCap: 'round' as const },
-        spacing: { margin: { left: 0.1, right: 0.1, top: 0.1, bottom: 0.1 }, gutter: 'balanced' as const, density: 'balanced' as const },
-        shapes: { fillMode: 'mixed' as const, shadow: 'none' as const }
-      },
-      semanticDescription: 'Calm, compact scientific visual language.',
-      confidence: { overall: 0.8, palette: 0.9, spacing: 0.7, plots: 0.5, typography: 0.4, generatedAssets: 0.3 }
-    }
-    expect(visualStyleSaveProfilePayloadSchema.parse({
-      workspaceRoot: ' /tmp/workspace ',
-      path: ' .sciforge/visual-styles/manuscript-default.json ',
-      profile,
-      diagnostics: {
-        analyzedAt: '2026-07-12T00:00:00.000Z',
-        sampledPixels: 100,
-        foregroundRatio: 0.3,
-        darkPixelRatio: 0.2,
-        chromaRatio: 0.1,
-        warnings: []
-      }
-    })).toEqual({
-      workspaceRoot: '/tmp/workspace',
-      path: '.sciforge/visual-styles/manuscript-default.json',
-      profile,
-      diagnostics: {
-        analyzedAt: '2026-07-12T00:00:00.000Z',
-        sampledPixels: 100,
-        foregroundRatio: 0.3,
-        darkPixelRatio: 0.2,
-        chromaRatio: 0.1,
-        warnings: []
-      }
-    })
-
-    expect(() =>
-      visualStyleSaveProfilePayloadSchema.parse({
-        workspaceRoot: '/tmp/workspace',
-        profile: { ...profile, confidence: { ...profile.confidence, overall: 2 } },
-        diagnostics: {
-          analyzedAt: '2026-07-12T00:00:00.000Z',
-          sampledPixels: 100,
-          foregroundRatio: 0.3,
-          darkPixelRatio: 0.2,
-          chromaRatio: 0.1,
-          warnings: []
-        }
       })
     ).toThrow()
   })

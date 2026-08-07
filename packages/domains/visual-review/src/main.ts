@@ -3,6 +3,8 @@ import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
 import type { z } from 'zod'
 import {
   VISUAL_REVIEW_CAPABILITY_IDS,
+  visualReviewApplyStyleReferenceInputSchema,
+  visualReviewApplyStyleReferenceOutputSchema,
   visualReviewCreateCandidateInputSchema,
   visualReviewCreateCandidateOutputSchema,
   visualReviewDocumentInputSchema,
@@ -25,6 +27,7 @@ import {
 } from './definition.js'
 import {
   acceptVisualCandidateRevision,
+  applyVisualStyleReference,
   createVisualCandidateRevision,
   exportVisualReviewPacket,
   openVisualReviewDocument,
@@ -61,13 +64,14 @@ export type VisualReviewCapabilityOptions = Readonly<{
   handler: (
     input: any,
     context: VisualReviewCapabilityContext
-  ) => Promise<{ output: unknown; changed?: boolean }> | { output: unknown; changed?: boolean }
+  ) => Promise<{ output: unknown }> | { output: unknown }
 }>
 
 export type VisualReviewServicePort = Readonly<{
   open: typeof openVisualReviewDocument
   readImage: typeof readVisualReviewImage
   updateContext: typeof updateVisualDocumentContext
+  applyStyleReference: typeof applyVisualStyleReference
   saveAnnotations: typeof saveVisualDocumentAnnotations
   exportReviewPacket: typeof exportVisualReviewPacket
   createCandidate: typeof createVisualCandidateRevision
@@ -94,6 +98,7 @@ const defaultService = (): VisualReviewServicePort => Object.freeze({
   open: openVisualReviewDocument,
   readImage: readVisualReviewImage,
   updateContext: updateVisualDocumentContext,
+  applyStyleReference: applyVisualStyleReference,
   saveAnnotations: saveVisualDocumentAnnotations,
   exportReviewPacket: exportVisualReviewPacket,
   createCandidate: createVisualCandidateRevision,
@@ -166,11 +171,8 @@ export function createVisualReviewCapabilityFactory<CapabilityDefinition>(option
             documentId: input.documentId,
             ...(input.artifact ? { artifact: input.artifact } : {})
           })
-          const { changed, ...output } = opened
-          return {
-            output,
-            changed
-          }
+          const { changed: _workspaceChanged, ...output } = opened
+          return { output }
         }
       }),
       define({
@@ -225,8 +227,24 @@ export function createVisualReviewCapabilityFactory<CapabilityDefinition>(option
             workspaceRoot: requireWorkspace(context),
             ...input,
             ...(input.nodes ? { nodes: input.nodes as VisualNode[] } : {})
-          }),
-          changed: true
+          })
+        })
+      }),
+      define({
+        id: VISUAL_REVIEW_CAPABILITY_IDS.applyStyleReference,
+        title: 'Apply Visual Review style reference',
+        description: 'Extracts a manuscript visual style from one reference image and applies it to the current Visual Review document.',
+        audiences: ['ui'],
+        effect: 'workspace-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: visualReviewApplyStyleReferenceInputSchema,
+        outputSchema: visualReviewApplyStyleReferenceOutputSchema,
+        handler: async (input, context) => ({
+          output: await options.getService().applyStyleReference({
+            workspaceRoot: requireWorkspace(context),
+            ...input
+          })
         })
       }),
       define({
@@ -243,8 +261,7 @@ export function createVisualReviewCapabilityFactory<CapabilityDefinition>(option
           output: await options.getService().saveAnnotations({
             workspaceRoot: requireWorkspace(context),
             ...input
-          }),
-          changed: true
+          })
         })
       }),
       define({
@@ -261,8 +278,7 @@ export function createVisualReviewCapabilityFactory<CapabilityDefinition>(option
           output: await options.getService().exportReviewPacket({
             workspaceRoot: requireWorkspace(context),
             ...input
-          }),
-          changed: true
+          })
         })
       }),
       define({
@@ -279,8 +295,7 @@ export function createVisualReviewCapabilityFactory<CapabilityDefinition>(option
           output: await options.getService().createCandidate({
             workspaceRoot: requireWorkspace(context),
             ...input
-          }),
-          changed: true
+          })
         })
       }),
       define({
@@ -297,8 +312,7 @@ export function createVisualReviewCapabilityFactory<CapabilityDefinition>(option
           output: await options.getService().acceptCandidate({
             workspaceRoot: requireWorkspace(context),
             ...input
-          }),
-          changed: true
+          })
         })
       }),
       define({
@@ -315,8 +329,7 @@ export function createVisualReviewCapabilityFactory<CapabilityDefinition>(option
           output: await options.getService().rejectCandidate({
             workspaceRoot: requireWorkspace(context),
             ...input
-          }),
-          changed: true
+          })
         })
       })
     ]
