@@ -159,6 +159,21 @@ def test_target_identity_loss_is_structured_and_has_no_side_effect():
     assert provider.read("uia-target-0") == ""
 
 
+def test_open_failure_is_safe_to_release_because_uia_open_owns_no_external_handle():
+    provider = FakeUIAProvider()
+
+    def fail_open(_target):
+        raise RuntimeError("COM initialization failed before identity resolution")
+
+    provider.open = fail_open
+    backend = WindowsUIABackend(provider)
+    context = BackendOpenContext("request-open-failed", True, 0, False, threading.Event())
+    with pytest.raises(BackendOperationError) as caught:
+        backend.open(parse_target_descriptor(target(0)), context)
+    assert caught.value.code == "BACKEND_UNAVAILABLE"
+    assert caught.value.safe_to_retry is True
+
+
 def test_three_uia_sessions_interleave_without_semantic_cross_line():
     provider = FakeUIAProvider()
     backend = WindowsUIABackend(provider)

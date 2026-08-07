@@ -6,6 +6,7 @@ import hashlib
 import json
 import platform
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -30,6 +31,9 @@ _ACTIONS = (
     "observe", "click", "left_click", "invoke", "type", "write",
     "toggle", "select", "range", "scroll",
 )
+
+_UIA_TYPES_LOCK = threading.Lock()
+_UIA_TYPES: Any | None = None
 
 
 class UIATargetLost(RuntimeError):
@@ -100,11 +104,24 @@ class WindowsUIABackend:
 
     def open(self, target: TargetDescriptor, context: BackendOpenContext) -> WindowsUIAHandle:
         if target.kind is not TargetKind.WINDOWS_UIA:
-            raise BackendOperationError("Windows UIA backend only accepts windows-uia targets")
+            raise BackendOperationError(
+                "Windows UIA backend only accepts windows-uia targets",
+                safe_to_retry=True,
+            )
         try:
             identity = self.provider.open(target)
         except UIATargetLost as error:
-            raise BackendOperationError(str(error), code="TARGET_LOST") from error
+            raise BackendOperationError(
+                str(error), code="TARGET_LOST", safe_to_retry=True,
+            ) from error
+        except Exception as error:
+            # UIA open only resolves and fingerprints an attached target. It
+            # creates no native/remote handle that could survive this call.
+            raise BackendOperationError(
+                "Windows UIA target could not be opened",
+                code="BACKEND_UNAVAILABLE",
+                safe_to_retry=True,
+            ) from error
         return WindowsUIAHandle(target, context, identity)
 
     def observe(self, handle: object) -> Observation:
@@ -285,7 +302,10 @@ class ComtypesUIAProvider:
                 if bool(pattern.CurrentIsReadOnly):
                     raise UIAActionUnsupported("UIA ValuePattern is read-only")
                 pattern.SetValue(value)
-                readback = str(pattern.CurrentValue)
+                readback = self._bounded_readback(
+                    lambda: str(pattern.CurrentValue),
+                    lambda current: current == value,
+                )
                 status = Verification.VERIFIED if readback == value else Verification.FAILED
                 details = {"pattern": "Value", "expected": value, "actual": readback}
             elif name in {"click", "left_click", "invoke"}:
@@ -299,13 +319,19 @@ class ComtypesUIAProvider:
                 pattern = self._pattern(element, uia.UIA_TogglePatternId, uia.IUIAutomationTogglePattern)
                 before = int(pattern.CurrentToggleState)
                 pattern.Toggle()
-                after = int(pattern.CurrentToggleState)
+                after = self._bounded_readback(
+                    lambda: int(pattern.CurrentToggleState),
+                    lambda current: current != before,
+                )
                 status = Verification.VERIFIED if before != after else Verification.FAILED
                 details = {"pattern": "Toggle", "before": before, "after": after}
             elif name == "select":
                 pattern = self._pattern(element, uia.UIA_SelectionItemPatternId, uia.IUIAutomationSelectionItemPattern)
                 pattern.Select()
-                selected = bool(pattern.CurrentIsSelected)
+                selected = self._bounded_readback(
+                    lambda: bool(pattern.CurrentIsSelected),
+                    lambda current: current,
+                )
                 status = Verification.VERIFIED if selected else Verification.FAILED
                 details = {"pattern": "SelectionItem", "selected": selected}
             elif name == "range":
@@ -316,7 +342,10 @@ class ComtypesUIAProvider:
                 if not float(pattern.CurrentMinimum) <= requested <= float(pattern.CurrentMaximum):
                     raise UIAActionUnsupported("UIA range value is outside provider bounds")
                 pattern.SetValue(requested)
-                actual = float(pattern.CurrentValue)
+                actual = self._bounded_readback(
+                    lambda: float(pattern.CurrentValue),
+                    lambda current: current == requested,
+                )
                 status = Verification.VERIFIED if actual == requested else Verification.FAILED
                 details = {"pattern": "RangeValue", "expected": requested, "actual": actual}
             elif name == "scroll":
@@ -337,12 +366,28 @@ class ComtypesUIAProvider:
 
     @staticmethod
     def _load_types():
+        global _UIA_TYPES
+
+        if _UIA_TYPES is not None:
+            return _UIA_TYPES
         from comtypes.client import GetModule
 
-        GetModule("UIAutomationCore.dll")
-        import comtypes.gen.UIAutomationClient as uia
+        with _UIA_TYPES_LOCK:
+            if _UIA_TYPES is None:
+                GetModule("UIAutomationCore.dll")
+                import comtypes.gen.UIAutomationClient as uia
 
-        return uia
+                _UIA_TYPES = uia
+        return _UIA_TYPES
+
+    @staticmethod
+    def _bounded_readback(read, satisfied, *, timeout_s: float = 0.5):
+        deadline = time.monotonic() + timeout_s
+        current = read()
+        while not satisfied(current) and time.monotonic() < deadline:
+            time.sleep(0.01)
+            current = read()
+        return current
 
     @contextmanager
     def _automation(self):

@@ -88,8 +88,17 @@ $env:CUA_CDP_INTEGRATION = "1"
 & $pythonExe -m pytest tests/integration/test_cdp_headless_integration.py -q -ra
 Remove-Item Env:CUA_CDP_INTEGRATION
 
+$env:CUA_CDP_INTEGRATION = "1"
+$env:CUA_CDP_VISIBLE = "1"
+& $pythonExe -m pytest tests/integration/test_cdp_headless_integration.py -q -ra
+Remove-Item Env:CUA_CDP_VISIBLE, Env:CUA_CDP_INTEGRATION
+
 $env:CUA_UIA_SMOKE = "1"
 & $pythonExe -m pytest tests/integration/test_windows_uia_smoke.py -q -ra
+
+$env:CUA_LEGACY_REAL_INPUT = "1"
+& $pythonExe -m pytest tests/integration/test_legacy_real_input_smoke.py -q -ra
+Remove-Item Env:CUA_LEGACY_REAL_INPUT
 ```
 
 The CDP capture path activates the selected tab inside its explicitly
@@ -97,8 +106,32 @@ allowlisted debugging browser because Chromium does not reliably capture a
 background target. Headless controlled tests have no visible window, but an
 attached visible debugging browser may visibly switch tabs during observation.
 
-Do not enable Legacy real-input smoke, Office, ordinary Chrome, VS Code, RDP,
-VM, Sandbox or external model calls without separate authorization.
+Runtime capabilities expose this conservatively as `mayActivateTarget=true`.
+The trusted SciForge main process also starts an attached
+`electron-webcontents` driver when the authenticated loopback sidecar is
+configured and no explicit external Adapter overrides it. Registration uses
+`POST /computer-use/backends/cdp/configure` with the sidecar Bearer token; only
+credential-free loopback Adapter URLs are accepted. Shutdown clears the route
+only if it still points to that exact Adapter URL. Existing handles retain the
+endpoint and credential that opened them, so reconfiguration cannot redirect
+their action or cleanup.
+
+Electron targets include only SciForge-owned window `webContents`. Observe uses
+`capturePage()` and actions use the target Debugger Protocol. If another caller
+already owns the Debugger connection, Computer Use rejects the target rather
+than stealing or later detaching that connection. Releasing a handle never
+destroys the `webContents`. This is not support for arbitrary third-party
+Electron applications.
+
+The Legacy real-input smoke changes real cursor/focus/clipboard state and is
+therefore separately opt-in. Its test-owned Edit disables IME and activates an
+en-US layout only in the short-lived host thread; it does not change the user's
+global input method. The smoke verifies restored text clipboard content, but it
+does not prove preservation of arbitrary non-text clipboard formats.
+
+Do not enable Legacy real-input smoke, visible Chromium, Office, ordinary
+Chrome, VS Code, RDP, VM, Sandbox or external model calls without separate
+authorization.
 
 ## Git rollback order
 
