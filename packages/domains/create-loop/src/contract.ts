@@ -614,6 +614,8 @@ export type WorkflowRunV1 = {
   finishedAt: string
   message: string
   nodeResults: WorkflowNodeRunResultV1[]
+  /** Human-readable audit report generated for dataset-construction runs. */
+  reportPath?: string
 }
 
 /** A workflow-scoped variable readable via {{$env.key}} in node expressions. */
@@ -793,7 +795,7 @@ export const createDatasetLoopInputSchema = z.object({
   outputSchema: z.record(
     z.string().trim().min(1).max(512),
     generatedDatasetFieldSchema
-  ).refine((value) => Object.keys(value).length > 0, 'At least one output field is required.'),
+  ).refine((value) => Object.keys(value).length > 0, 'At least one output field is required.').optional(),
   quality: z.object({
     criteria: z.array(z.string().trim().min(1).max(1000)).min(1).max(100),
     targetCount: z.number().int().min(1).max(100).default(20),
@@ -802,6 +804,8 @@ export const createDatasetLoopInputSchema = z.object({
     minStrongScore: z.number().min(0).max(1).default(0.65),
     maxWeakScore: z.number().min(0).max(1).default(0.5),
     minScoreGap: z.number().min(0).max(1).default(0.2),
+    minRubricCoverage: z.number().min(0).max(1).default(0.8),
+    minQuestionQuality: z.number().min(0).max(1).default(0.7),
     maxDuplicateFraction: z.number().min(0).max(1).default(0.05)
   }).strict().superRefine((quality, context) => {
     if (quality.maxIterations < quality.targetCount) {
@@ -813,10 +817,13 @@ export const createDatasetLoopInputSchema = z.object({
     }
   }),
   models: z.object({
+    designer: z.string().trim().max(256).optional(),
     challenger: z.string().trim().max(256).optional(),
     weak: z.string().trim().max(256).optional(),
     strong: z.string().trim().max(256).optional(),
-    judge: z.string().trim().max(256).optional()
+    judge: z.string().trim().max(256).optional(),
+    verifier: z.string().trim().max(256).optional(),
+    strategist: z.string().trim().max(256).optional()
   }).strict().optional(),
   output: z.object({
     datasetName: z.string().trim().min(1).max(80).regex(/^[a-z0-9][a-z0-9_-]*$/),

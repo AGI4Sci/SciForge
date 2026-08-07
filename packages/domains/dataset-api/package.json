@@ -10,7 +10,8 @@
     "./definition": "./src/definition.ts",
     "./main": "./src/main.ts",
     "./renderer": "./src/renderer/index.tsx",
-    "./service": "./src/service.ts"
+    "./service": "./src/service.ts",
+    "./smoke": "./src/smoke.ts"
   },
   "files": [
     "src",

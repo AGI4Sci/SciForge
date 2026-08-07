@@ -2114,6 +2114,8 @@
   "datasetResultOpenSchema": "打开 schema",
   "datasetResultOpenQuality": "打开质量报告",
   "datasetResultOpenPlan": "打开准备计划",
+  "datasetResultOpenPipeline": "打开构造流程",
+  "datasetResultOpenRunReport": "打开运行报告",
   "datasetResultOpenChecksums": "打开校验和",
   "datasetResultFailed": "Dataset API 请求失败",
   "datasetResultMetadataLoaded": "已读取 {{bytes}} 结构化元数据",

@@ -728,7 +728,8 @@ function normalizeRun(value: unknown, index: number): WorkflowRunV1 {
     startedAt: asTrimmed(r.startedAt),
     finishedAt: asTrimmed(r.finishedAt),
     message: asText(r.message),
-    nodeResults: Array.isArray(r.nodeResults) ? r.nodeResults.map(normalizeNodeResult) : []
+    nodeResults: Array.isArray(r.nodeResults) ? r.nodeResults.map(normalizeNodeResult) : [],
+    ...(asTrimmed(r.reportPath) ? { reportPath: asTrimmed(r.reportPath) } : {})
   }
 }
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -53,6 +53,14 @@ test('places the exact executable plan identity at the start of prepare-plan rec
     assert.equal(prepared.planId, prepared.plan.planId)
     assert.equal(prepared.status, 'confirmed')
     assert.equal(prepared.artifact.path.endsWith('.json'), true)
+    assert.equal(prepared.pipelineArtifact.path.endsWith('.md'), true)
+    const pipeline = await readFile(prepared.pipelineArtifact.path, 'utf8')
+    assert.match(pipeline, /^# Data Construction Pipeline/m)
+    assert.match(pipeline, /## Execution Pipeline/)
+    assert.match(pipeline, /dataset_materialize/)
+    assert.match(pipeline, /dataset-api\.execute-plan/)
+    const confirmed = await service.confirmedPlan({ planId: prepared.planId })
+    assert.equal(confirmed.pipelinePath, prepared.pipelineArtifact.path)
     assert.match(JSON.stringify(prepared).slice(0, 96), /^\{"planId":"plan-[a-f0-9]{16}","status":"confirmed"/)
   } finally {
     await cleanup()
@@ -140,10 +148,15 @@ test('runs a reproducible JSON preparation, validation, and publication chain', 
     const publicationManifest = JSON.parse(publicationManifestBytes.toString('utf8'))
     assert.equal(publicationManifest.planId, planId)
     assert.deepEqual(JSON.parse(await readFile(published.publication.preparationPlanPath, 'utf8')).planId, planId)
+    const pipeline = await readFile(published.publication.pipelinePath, 'utf8')
+    assert.match(pipeline, /^# Data Construction Pipeline/m)
+    assert.match(pipeline, /prepared\.json/)
+    assert.equal(publicationManifest.releaseFiles.pipelinePath, published.publication.pipelinePath)
     assert.deepEqual(publicationManifest.artifacts[0].parameters.keys, ['accession'])
     const checksumBytes = await readFile(published.publication.checksumsPath)
     assert.match(checksumBytes.toString('utf8'), new RegExp(`${published.publication.sha256}  manifest\\.json`))
     assert.match(checksumBytes.toString('utf8'), / {2}preparation-plan\.json/)
+    assert.match(checksumBytes.toString('utf8'), / {2}data-construction-pipeline\.md/)
     assert.equal(await readFile(sourcePath, 'utf8'), sourceText)
 
     const repeatedPublication = await service.publish({
@@ -294,6 +307,17 @@ test('requires the confirmed materialize plan to use the generation schema field
       outputs: [{ name: 'uniprot-valid.jsonl', format: 'jsonl' }],
       confirmedByUser: true
     })
+    const pipeline = await readFile(valid.pipelineArtifact.path, 'utf8')
+    assert.match(pipeline, /## Complete Generation Loop/)
+    assert.match(pipeline, /Designer: schema, rubric and processing recipe/)
+    assert.match(pipeline, /Challenger generates one candidate/)
+    assert.match(pipeline, /Weak solver/)
+    assert.match(pipeline, /Strong solver/)
+    assert.match(pipeline, /Judge: learning value and score gap/)
+    assert.match(pipeline, /Independent Verifier: leakage, rubric, quality, verifiability and duplicates/)
+    assert.match(pipeline, /Strategist: analyze failure trajectory and rewrite recipe/)
+    assert.match(pipeline, /## Dataset API Publication Sub-plan/)
+    assert.match(pipeline, /This plan document alone proves intent, not successful execution/)
     const result = await service.materialize({
       planId: valid.plan.planId,
       records,
@@ -414,6 +438,14 @@ test('transforms fields and performs a full multi-source join with unmatched art
       matchedRightRecords: 1,
       unmatchedLeftRecords: 1,
       unmatchedRightRecords: 1
+    })
+    assert.equal(joined.recordSamples.length, 3)
+    assert.deepEqual(joined.recordSamples[0], {
+      accession: 'P04637',
+      reviewed: true,
+      length: 393,
+      pathway_protein_id: 'P04637',
+      pathway_pathway: 'R-HSA-69563'
     })
     assert.match(await readFile(joined.artifact.path, 'utf8'), /P04637\ttrue\t393\tP04637\tR-HSA-69563/)
     assert.deepEqual(JSON.parse(await readFile(joined.unmatchedArtifacts.left.path, 'utf8')), [
@@ -973,6 +1005,10 @@ test('requires confirmed plans and rejects inputs outside the workspace', async 
       name: 'unvalidated',
       artifacts: [sourcePath]
     }), /requires at least one dataset_validate or dataset_structure_validate report/)
+    await assert.rejects(
+      stat(join(workspaceRoot, '.sciforge', 'datasets', 'published', 'unvalidated', planId)),
+      (error: NodeJS.ErrnoException) => error.code === 'ENOENT'
+    )
     await assert.rejects(service.filter({
       planId,
       inputArtifact: sourcePath,

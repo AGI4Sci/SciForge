@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
-import { copyFile, link, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, link, mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import {
   datasetDeduplicateInputSchema,
@@ -117,6 +117,7 @@ export function createDatasetProcessingService(options: {
       return {
         workspaceRoot,
         path: confirmed.path,
+        pipelinePath: confirmed.pipelinePath,
         sha256: hash(await readFile(confirmed.path)),
         plan: confirmed.plan
       }
@@ -173,12 +174,22 @@ export function createDatasetProcessingService(options: {
           { operations: draft.operations?.length ?? 0, outputs: draft.outputs?.length ?? 0 },
           [{ path: planPath, sha256: draftSha256 }]
         )
+        const pipelinePath = await ensurePlanPipelineMarkdown(planPath, draft)
+        const pipelineArtifact = await describeStandaloneArtifact(
+          pipelinePath,
+          'report',
+          'dataset_prepare_pipeline',
+          { planId: input.draftPlanId },
+          { operations: draft.operations?.length ?? 0, outputs: draft.outputs?.length ?? 0 },
+          [{ path: planPath, sha256: draftSha256 }]
+        )
         return {
           // Keep the executable identity first and top-level. Agent tool receipts can be
           // compacted, so consumers must not have to recover planId from a large nested plan.
           planId: input.draftPlanId,
           status: 'confirmed' as const,
           artifact,
+          pipelineArtifact,
           plan: confirmedPlan
         }
       }
@@ -211,12 +222,22 @@ export function createDatasetProcessingService(options: {
       const artifact = await describeStandaloneArtifact(path, 'plan', 'dataset_prepare_plan', {
         confirmedByUser: input.confirmedByUser
       }, { operations: input.operations.length, outputs: input.outputs.length })
+      const pipelinePath = await ensurePlanPipelineMarkdown(path, document)
+      const pipelineArtifact = await describeStandaloneArtifact(
+        pipelinePath,
+        'report',
+        'dataset_prepare_pipeline',
+        { planId },
+        { operations: input.operations.length, outputs: input.outputs.length },
+        [{ path, sha256: artifact.sha256 }]
+      )
       return {
         // Property order is intentional: compact/truncated receipts retain the exact ID
         // required by dataset-api.execute-plan before any verbose plan definition.
         planId,
         status: document.status,
         artifact,
+        pipelineArtifact,
         plan
       }
     },
@@ -287,7 +308,7 @@ export function createDatasetProcessingService(options: {
         },
         records: excludedRows.length
       })
-      return { artifact, excludedArtifact, counts: artifact.summary }
+      return { artifact, excludedArtifact, counts: artifact.summary, recordSamples: rows.slice(0, 3) }
     },
 
     async selectColumns(raw: DatasetSelectColumnsInput) {
@@ -321,7 +342,11 @@ export function createDatasetProcessingService(options: {
         },
         records: rows.length
       })
-      return { artifact, counts: { inputRecords: dataset.rows.length, outputRecords: rows.length } }
+      return {
+        artifact,
+        counts: { inputRecords: dataset.rows.length, outputRecords: rows.length },
+        recordSamples: rows.slice(0, 3)
+      }
     },
 
     async transform(raw: DatasetTransformInput) {
@@ -764,7 +789,8 @@ export function createDatasetProcessingService(options: {
       return {
         artifact,
         unmatchedArtifacts: { left: unmatchedLeftArtifact, right: unmatchedRightArtifact },
-        counts
+        counts,
+        recordSamples: outputRows.slice(0, 3)
       }
     },
 
@@ -1041,7 +1067,6 @@ export function createDatasetProcessingService(options: {
         input.outputDirectoryName ?? input.name,
         input.planId
       )
-      await mkdir(outputDirectory, { recursive: true })
       const artifacts = []
       for (const candidate of input.artifacts) {
         const sourcePath = await resolveInputArtifact(workspaceRoot, candidate)
@@ -1049,7 +1074,6 @@ export function createDatasetProcessingService(options: {
         const sha256 = hash(sourceBytes)
         const targetName = `${sha256.slice(0, 12)}-${basename(sourcePath)}`
         const targetPath = join(outputDirectory, targetName)
-        await copyIdempotent(sourcePath, targetPath, sha256)
         const sidecar = await readArtifactManifest(sourcePath)
         const publishedFormat = sidecar && isConcreteFormat(sidecar.format) ? sidecar.format : undefined
         const publishedProfile = publishedFormat
@@ -1091,6 +1115,13 @@ export function createDatasetProcessingService(options: {
       if (!input.allowInvalid && quality.status === 'failed') {
         throw new Error('Dataset publication is blocked because an included validation report failed.')
       }
+      // Resolve and inspect every declared artifact before creating the release
+      // directory. A bad logical binding must fail closed without leaving a
+      // partial publication that can be mistaken for a valid release.
+      await mkdir(outputDirectory, { recursive: true })
+      for (const artifact of artifacts) {
+        await copyIdempotent(artifact.sourcePath, artifact.path, artifact.sha256)
+      }
       const publication = {
         version: 1,
         name: input.name,
@@ -1111,20 +1142,33 @@ export function createDatasetProcessingService(options: {
       const schemaPath = join(outputDirectory, 'schema.json')
       const qualityReportPath = join(outputDirectory, 'quality-report.json')
       const preparationPlanPath = join(outputDirectory, 'preparation-plan.json')
+      const pipelinePath = join(outputDirectory, 'data-construction-pipeline.md')
       const checksumsPath = join(outputDirectory, 'checksums.sha256')
+      const sourcePipelinePath = await ensurePlanPipelineMarkdown(plan.path, plan.plan)
+      const pipelineSha256 = hash(await readFile(sourcePipelinePath))
       await writeIdempotentJson(schemaPath, schema)
       await writeIdempotentJson(qualityReportPath, quality)
       await writeIdempotentJson(preparationPlanPath, plan.plan)
+      await copyIdempotent(sourcePipelinePath, pipelinePath, pipelineSha256)
+      const releaseFiles = await existingPublicationReleaseFiles(manifestPath) ?? {
+        manifestPath,
+        schemaPath,
+        qualityReportPath,
+        preparationPlanPath,
+        pipelinePath,
+        checksumsPath
+      }
       await writeIdempotentJson(manifestPath, {
         ...publication,
-        releaseFiles: { manifestPath, schemaPath, qualityReportPath, preparationPlanPath, checksumsPath }
+        releaseFiles
       })
       const checksumTargets = [
         ...artifacts.map((artifact) => artifact.path),
         manifestPath,
         schemaPath,
         qualityReportPath,
-        preparationPlanPath
+        preparationPlanPath,
+        ...(releaseFiles.pipelinePath === pipelinePath ? [pipelinePath] : [])
       ]
       const checksumLines = []
       for (const path of checksumTargets) checksumLines.push(`${hash(await readFile(path))}  ${basename(path)}`)
@@ -1138,6 +1182,7 @@ export function createDatasetProcessingService(options: {
           schemaPath,
           qualityReportPath,
           preparationPlanPath,
+          pipelinePath,
           checksumsPath,
           artifactCount: artifacts.length,
           sha256: manifestSha256
@@ -2090,7 +2135,8 @@ async function requireConfirmedPlan(
       )
     }
   }
-  return { path, plan: confirmedPlan }
+  const pipelinePath = await ensurePlanPipelineMarkdown(path, confirmedPlan as Record<string, unknown>)
+  return { path, pipelinePath, plan: confirmedPlan }
 }
 
 async function ensurePlanConfirmation(workspaceRoot: string, planId: string, path: string) {
@@ -2288,7 +2334,7 @@ async function writeDerivedArtifact(input: {
 
 async function describeStandaloneArtifact(
   path: string,
-  format: 'plan' | 'publication',
+  format: 'plan' | 'publication' | 'report',
   operation: string,
   parameters: Record<string, unknown>,
   summary: Record<string, unknown>,
@@ -2312,6 +2358,225 @@ async function describeStandaloneArtifact(
   }
   await writeIdempotentJson(manifestPath, manifest)
   return manifest
+}
+
+async function ensurePlanPipelineMarkdown(planPath: string, plan: Record<string, unknown>): Promise<string> {
+  const pipelinePath = planPath.replace(/\.json$/i, '.md')
+  const rendered = Buffer.from(renderPlanPipelineMarkdown(plan))
+  try {
+    const existing = await readFile(pipelinePath)
+    if (existing.equals(rendered)) return pipelinePath
+    await atomicReplace(pipelinePath, rendered)
+    return pipelinePath
+  } catch (error) {
+    if (!isMissingFileError(error)) throw error
+  }
+  await atomicWrite(pipelinePath, rendered)
+  return pipelinePath
+}
+
+async function existingPublicationReleaseFiles(manifestPath: string): Promise<Record<string, string> | null> {
+  try {
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>
+    const releaseFiles = recordValue(manifest.releaseFiles)
+    if (!releaseFiles) return null
+    return Object.fromEntries(
+      Object.entries(releaseFiles).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+    )
+  } catch (error) {
+    if (isMissingFileError(error)) return null
+    throw error
+  }
+}
+
+function renderPlanPipelineMarkdown(plan: Record<string, unknown>): string {
+  const planId = textValue(plan.planId) || 'unknown-plan'
+  const objective = textValue(plan.objective) || 'No objective recorded.'
+  const sources = recordArray(plan.sources)
+  const operations = recordArray(plan.operations)
+  const outputs = recordArray(plan.outputs)
+  const exclusions = stringArray(plan.exclusions)
+  const confirmationNotes = stringArray(plan.confirmationNotes)
+  const materialize = operations.find((operation) => operation.tool === 'dataset_materialize')
+  const materializeParameters = recordValue(materialize?.parameters)
+  const generation = recordValue(materializeParameters?.generation)
+  const models = recordValue(generation?.models)
+  const qualityCriteria = stringArray(generation?.qualityCriteria)
+  const validation = operations.find((operation) => operation.tool === 'dataset_validate')
+  const validationParameters = recordValue(validation?.parameters)
+  const validationRules = recordArray(validationParameters?.rules)
+  const loopId = textValue(generation?.loopId)
+  const lines = [
+    '# Data Construction Pipeline',
+    '',
+    '> Generated deterministically from the machine-readable Dataset API plan. Edit or reconfirm the JSON plan rather than editing this document to change execution.',
+    '',
+    '## Overview',
+    '',
+    '| Field | Value |',
+    '| --- | --- |',
+    `| Plan ID | \`${markdownCode(planId)}\` |`,
+    ...(loopId ? [`| Create Loop | \`${markdownCode(loopId)}\` |`] : []),
+    `| Machine plan | \`${markdownCode(`${planId}.json`)}\` (published as \`preparation-plan.json\`) |`,
+    '',
+    '## Objective',
+    '',
+    objective,
+    ''
+  ]
+
+  lines.push('## Data Sources', '')
+  if (sources.length === 0) lines.push('_No named providers were recorded; source artifacts are bound by the executable plan._', '')
+  else {
+    lines.push('| Provider | Purpose | Metadata | Raw data |', '| --- | --- | --- | --- |')
+    for (const source of sources) {
+      lines.push(`| ${markdownCell(textValue(source.providerId) || 'unknown')} | ${markdownCell(textValue(source.purpose) || '')} | ${source.metadataRequest ? 'yes' : 'no'} | ${source.rawDataRequest ? 'yes' : 'no'} |`)
+    }
+    lines.push('')
+  }
+
+  if (models && Object.keys(models).length > 0) {
+    lines.push('## Model Roles', '', '| Role | Model |', '| --- | --- |')
+    for (const [role, model] of Object.entries(models)) lines.push(`| ${markdownCell(role)} | ${markdownCell(String(model || 'workspace default'))} |`)
+    lines.push('')
+  }
+
+  if (loopId) {
+    lines.push(
+      '## Complete Generation Loop',
+      '',
+      'This plan is the deterministic publication sub-plan of a larger Create Loop. The complete data-construction lifecycle is:',
+      '',
+      '```mermaid',
+      'flowchart TD',
+      '  Z["Designer: schema, rubric and processing recipe"] --> A["Acquire registered public/private sources"]',
+      '  A --> B["Profile, filter, normalize, map IDs, join or organize"]',
+      '  B --> C{"Grounding evidence complete?"}',
+      '  C -- no --> X["Stop without fabricating data"]',
+      '  C -- yes --> D["Challenger generates one candidate"]',
+      '  D --> E["Weak solver"]',
+      '  E --> F["Strong solver"]',
+      '  F --> G["Judge: learning value and score gap"]',
+      '  G --> V["Independent Verifier: leakage, rubric, quality, verifiability and duplicates"]',
+      '  V --> T["Strategist: analyze failure trajectory and rewrite recipe"]',
+      '  T -- reject --> H["Apply revised recipe and prompt patch"]',
+      '  H --> D',
+      '  T -- accept --> I{"Target count reached?"}',
+      '  I -- no --> D',
+      '  I -- yes --> J["Batch quality: duplicates, coverage and schema"]',
+      '  J --> K["Optional human review"]',
+      '  K --> L["Immutable Dataset API publication sub-plan"]',
+      '```',
+      '',
+      'The acquisition and preparation capabilities are selected from the confirmed objective and source receipts. Direct facts must remain traceable to the recorded parent artifacts; cross-source interpretations must be labelled as inference.',
+      ''
+    )
+  }
+
+  lines.push(loopId ? '## Dataset API Publication Sub-plan' : '## Execution Pipeline', '')
+  if (operations.length > 0) {
+    lines.push('```mermaid', 'flowchart TD')
+    for (let index = 0; index < operations.length; index += 1) {
+      const tool = textValue(operations[index]?.tool) || `step-${index + 1}`
+      lines.push(`  S${index + 1}["${index + 1}. ${mermaidLabel(tool)}"]${index > 0 ? '' : ''}`)
+      if (index > 0) lines.push(`  S${index} --> S${index + 1}`)
+    }
+    lines.push('```', '', '| Step | Capability | Purpose | Bound parameters |', '| ---: | --- | --- | --- |')
+    operations.forEach((operation, index) => {
+      lines.push(`| ${index + 1} | \`${markdownCode(textValue(operation.tool) || 'unknown')}\` | ${markdownCell(textValue(operation.description) || '')} | ${markdownCell(parameterSummary(recordValue(operation.parameters)))} |`)
+    })
+    lines.push('')
+  } else lines.push('_No executable operations recorded._', '')
+
+  lines.push('## Output Schema', '')
+  if (validationRules.length === 0) lines.push('_Schema is inferred from the generated artifacts._', '')
+  else {
+    lines.push('| Field | Type | Required | Unique |', '| --- | --- | --- | --- |')
+    for (const rule of validationRules) {
+      lines.push(`| ${markdownCell(textValue(rule.field) || '')} | ${markdownCell(textValue(rule.type) || 'any')} | ${rule.required === true ? 'yes' : 'no'} | ${rule.unique === true ? 'yes' : 'no'} |`)
+    }
+    lines.push('')
+  }
+
+  lines.push('## Quality Gates', '')
+  if (qualityCriteria.length > 0) qualityCriteria.forEach((criterion) => lines.push(`- ${criterion}`))
+  else lines.push('- Output must pass the validation operation recorded in the plan.')
+  if (validationParameters?.minRecords !== undefined) lines.push(`- Minimum records: ${String(validationParameters.minRecords)}`)
+  if (validationParameters?.maxMissingFraction !== undefined) lines.push(`- Maximum missing fraction: ${String(validationParameters.maxMissingFraction)}`)
+  confirmationNotes.forEach((note) => lines.push(`- ${note}`))
+  lines.push('')
+
+  lines.push('## Published Outputs', '')
+  if (outputs.length === 0) lines.push('_No named outputs recorded._')
+  else {
+    lines.push('| Name | Format | Description |', '| --- | --- | --- |')
+    for (const output of outputs) {
+      lines.push(`| \`${markdownCode(textValue(output.name) || 'unnamed')}\` | ${markdownCell(textValue(output.format) || 'unknown')} | ${markdownCell(textValue(output.description) || '')} |`)
+    }
+  }
+  lines.push('')
+
+  if (exclusions.length > 0) {
+    lines.push('## Explicit Exclusions', '')
+    exclusions.forEach((exclusion) => lines.push(`- ${exclusion}`))
+    lines.push('')
+  }
+
+  lines.push(
+    '## Execution Evidence',
+    '',
+    `After execution, inspect the sibling run report under \`.sciforge/datasets/runs/run-*.md\`. It records observed step status, attempts, counts, artifact paths, and SHA-256 evidence. This plan document alone proves intent, not successful execution.`,
+    '',
+    '## Reproduction',
+    '',
+    `1. Inspect and confirm \`${markdownCode(planId)}\` in Dataset API.`,
+    `2. Invoke \`dataset-api.execute-plan\` with \`planId=${markdownCode(planId)}\`.`,
+    '3. If execution is interrupted, invoke `dataset-api.resume-plan` with the same immutable plan and its deterministic run ID.',
+    '4. Verify `checksums.sha256`, `quality-report.json`, and `manifest.json` in the published release.',
+    ''
+  )
+  return `${lines.join('\n')}\n`
+}
+
+function parameterSummary(parameters: Record<string, unknown> | undefined): string {
+  if (!parameters || Object.keys(parameters).length === 0) return 'none'
+  return Object.entries(parameters).map(([key, value]) => {
+    if (key === 'records' && Array.isArray(value)) return `${key}: ${value.length} record(s)`
+    if (key === 'parentArtifacts' && Array.isArray(value)) return `${key}: ${value.length} artifact(s)`
+    if (key === 'rules' && Array.isArray(value)) return `${key}: ${value.length} rule(s)`
+    if (key === 'artifacts' && Array.isArray(value)) return `${key}: ${value.length} artifact(s)`
+    if (Array.isArray(value)) return `${key}: ${value.length} item(s)`
+    if (value && typeof value === 'object') return `${key}: {${Object.keys(value).slice(0, 8).join(', ')}}`
+    return `${key}: ${String(value)}`
+  }).join('; ')
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+}
+
+function recordArray(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.map(recordValue).filter((entry): entry is Record<string, unknown> => !!entry) : []
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []
+}
+
+function textValue(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
+}
+
+function markdownCell(value: string): string {
+  return value.replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>')
+}
+
+function markdownCode(value: string): string {
+  return value.replace(/`/g, '\\`')
+}
+
+function mermaidLabel(value: string): string {
+  return value.replace(/["\r\n]/g, ' ')
 }
 
 async function readArtifactManifest(artifactPath: string): Promise<ArtifactManifest | null> {
@@ -2355,6 +2620,16 @@ async function atomicWrite(path: string, bytes: Buffer): Promise<void> {
   await writeFile(temporaryPath, bytes, { flag: 'wx' })
   try {
     await link(temporaryPath, path)
+  } finally {
+    await rm(temporaryPath, { force: true })
+  }
+}
+
+async function atomicReplace(path: string, bytes: Buffer): Promise<void> {
+  const temporaryPath = `${path}.${process.pid}.${Date.now()}.tmp`
+  await writeFile(temporaryPath, bytes, { flag: 'wx' })
+  try {
+    await rename(temporaryPath, path)
   } finally {
     await rm(temporaryPath, { force: true })
   }

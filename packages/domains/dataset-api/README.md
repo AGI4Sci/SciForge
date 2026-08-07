@@ -35,7 +35,10 @@ Capabilities:
   headers, and stream complete or ranged objects into checksummed artifacts.
 - `dataset-api.prepare-plan`, `dataset-api.execute-plan`, and
   `dataset-api.resume-plan`: confirm, checkpoint, execute, and recover immutable
-  preparation workflows.
+  preparation workflows. Every machine-readable `plan-*.json` is accompanied
+  by a deterministic `plan-*.md` data-construction pipeline with sources,
+  model roles, schema, quality gates, execution flow, outputs, and reproduction
+  instructions.
 - `dataset-api.profile`, `filter`, `select-columns`, `transform`,
   `deduplicate`, `id-map`, `id-map-provider`, and `join`: deterministic,
   code-free tabular and sequence preparation.
@@ -54,6 +57,9 @@ Raw downloads follow the same invariant: an identical re-fetch is reused and
 a changed response is written to a checksum-suffixed version instead of
 replacing the original. Raw request receipts are propagated through child
 manifests into the final publication provenance.
+New published releases also include `data-construction-pipeline.md` in the
+manifest and checksum set. Historical immutable releases are not rewritten;
+their generated pipeline remains available as an adjacent release file.
 
 Automatic execution state is stored under `.sciforge/datasets/runs`. A failed
 execution returns a normal structured receipt with `resumable=true`, so the
@@ -85,3 +91,21 @@ HTTPS is required by default; an internal HTTP endpoint must be registered with
 the explicit `allowInsecureHttp=true` acknowledgement. Object keys are always
 scoped below the registered prefix, listings are bounded to 1,000 keys per
 page, and downloads default to a 256 MiB limit with optional byte ranges.
+
+## Real-service smoke testing
+
+Run `npm run smoke:dataset-api:real` to exercise metadata and raw-data access
+against the seven executable public presets not covered by the cross-source
+acceptance fixture: NCBI, UCSC, PubChem, ClinicalTrials.gov, KEGG, QuickGO, and
+AlphaFold DB. The smoke runner uses an isolated temporary workspace, validates
+the downloaded format through Dataset API, reports only bounded receipts, and
+removes its artifacts afterward.
+
+Private S3-compatible access can be checked with
+`node --import tsx scripts/dataset-api-real-smoke.mjs --private`. Configure it
+with `DATASET_SMOKE_S3_ENDPOINT`, `DATASET_SMOKE_S3_BUCKET`, optional
+`DATASET_SMOKE_S3_PREFIX`, `DATASET_SMOKE_S3_REGION`, and
+`DATASET_SMOKE_S3_SOURCE_ID`, plus the process-only
+`DATASET_SMOKE_S3_ACCESS_KEY` and `DATASET_SMOKE_S3_SECRET_KEY`. The private
+smoke performs a bounded listing, HEAD metadata request, and 4 KiB ranged
+download without persisting credentials or printing their values.

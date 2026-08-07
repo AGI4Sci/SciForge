@@ -92,13 +92,23 @@ test('executes a confirmed plan end-to-end and resolves logical artifact names',
     assert.equal(result.execution.completedSteps, 4)
     assert.equal(context.fetchCount(), 1)
     assert.match(result.execution.steps[1].artifacts[0].path, /reviewed\.json$/)
+    assert.deepEqual(result.execution.steps[1].counts?.recordSamples, [
+      { accession: 'P04637', reviewed: true }
+    ])
     assert.equal(result.execution.steps.every((step) => step.artifacts.length <= 1), true)
+    assert.equal(result.reportArtifact.path.endsWith('.md'), true)
+    const executionReport = await readFile(result.reportArtifact.path, 'utf8')
+    assert.match(executionReport, /^# Dataset Pipeline Execution Report/m)
+    assert.match(executionReport, /4 succeeded \/ 0 failed \/ 4 total/)
+    assert.match(executionReport, /dataset_api_raw_data/)
+    assert.match(executionReport, /dataset_publish/)
     const checkpoint = JSON.parse(await readFile(result.artifact.path, 'utf8'))
     assert.equal(checkpoint.status, 'succeeded')
     assert.equal(checkpoint.steps[1].resolvedParameters.inputArtifact.endsWith('/raw.json'), true)
     assert.equal(checkpoint.steps[3].resolvedParameters.artifacts[0].endsWith('-reviewed.json'), true)
     const reused = await executor.execute({ planId })
     assert.equal(reused.execution.reused, true)
+    assert.equal(reused.reportArtifact.path, result.reportArtifact.path)
     assert.equal(context.fetchCount(), 1)
   } finally {
     await context.cleanup()

@@ -51,6 +51,27 @@ test('keeps workspace paths out of agent inputs and injects the caller workspace
   }])
 })
 
+test('passes registered source filters through the workspace capability', async () => {
+  const calls: Array<Record<string, unknown>> = []
+  const definitions = capabilityDefinitions({
+    api: {
+      list: async (input: Record<string, unknown>) => {
+        calls.push(input)
+        return { sources: [] }
+      }
+    }
+  })
+  const capability = findDefinition(definitions, DATASET_API_CAPABILITY_IDS.list)
+  await capability.handler(
+    { sourceIds: ['string', 'quickgo'] },
+    { caller: { workspaceId: '/workspace/project' } }
+  )
+  assert.deepEqual(calls, [{
+    sourceIds: ['string', 'quickgo'],
+    workspaceRoot: '/workspace/project'
+  }])
+})
+
 test('authorizes planned metadata and raw-data access before the network service', async () => {
   const calls: Array<{ method: string; input: Record<string, unknown> }> = []
   const definitions = capabilityDefinitions({

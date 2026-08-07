@@ -2114,6 +2114,8 @@
   "datasetResultOpenSchema": "Open schema",
   "datasetResultOpenQuality": "Open quality report",
   "datasetResultOpenPlan": "Open plan",
+  "datasetResultOpenPipeline": "Open pipeline",
+  "datasetResultOpenRunReport": "Open run report",
   "datasetResultOpenChecksums": "Open checksums",
   "datasetResultFailed": "Dataset API request failed",
   "datasetResultMetadataLoaded": "Loaded {{bytes}} of structured metadata",

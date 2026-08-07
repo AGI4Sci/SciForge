@@ -1483,6 +1483,7 @@ app.whenReady().then(async () => {
         })
         let turnId = ''
         let terminalState: 'completed' | 'failed' | 'cancelled' | null = null
+        let consecutivePolledTerminalFailures = 0
         let resolveTerminal!: () => void
         let rejectTerminal!: (reason?: unknown) => void
         const terminal = new Promise<void>((resolve, reject) => {
@@ -1553,12 +1554,19 @@ app.whenReady().then(async () => {
             const turn = detail.turns?.find((candidate) => candidate.id === turnId) ??
               detail.turns?.find((candidate) => candidate.id === detail.latestTurnId) ??
               detail.turns?.at(-1)
-            // A recoverable tool failure can temporarily surface as a failed
-            // thread while Codex is still deciding whether to retry. Only a
-            // lifecycle event may terminalize failures; polling is a fallback
-            // solely for a completed turn whose lifecycle event was missed.
-            if ((turn?.status ?? detail.status) === 'completed') {
+            const polledStatus = turn?.status ?? detail.status
+            // A recoverable tool failure can temporarily surface as failed
+            // while Codex is still deciding whether to retry. Require three
+            // consecutive failed polls before polling terminalizes a missed
+            // failure lifecycle event.
+            if (polledStatus === 'completed') {
               terminalState = 'completed'
+              consecutivePolledTerminalFailures = 0
+            } else if (polledStatus === 'failed' || polledStatus === 'cancelled') {
+              consecutivePolledTerminalFailures += 1
+              if (consecutivePolledTerminalFailures >= 3) terminalState = polledStatus
+            } else {
+              consecutivePolledTerminalFailures = 0
             }
           }
           if (terminalState !== 'completed') {

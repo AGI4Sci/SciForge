@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import path from 'node:path'
 import { runInNewContext } from 'node:vm'
@@ -35,6 +35,9 @@ const SCHEDULER_POLL_MS = 30_000
 const MAX_NODE_EXECUTIONS = 200
 const DEFAULT_MAX_RUN_DURATION_MS = 30 * 60_000
 const MAX_DATASET_GENERATION_RUN_DURATION_MS = 3 * 60 * 60_000
+const DATASET_AGENT_NODE_TIMEOUT_MS = 12 * 60_000
+const DATASET_PREPARATION_NODE_TIMEOUT_MS = 6 * 60_000
+const DATASET_LLM_NODE_TIMEOUT_MS = 8 * 60_000
 const CODE_TIMEOUT_MS = 30_000
 
 type PersistedState = {
@@ -337,7 +340,7 @@ export class CreateLoopRuntime {
       message = signal.aborted ? 'Workflow stopped.' : errorMessage(error)
     }
     const finishedAt = this.#now().toISOString()
-    const run: WorkflowRunV1 = {
+    let run: WorkflowRunV1 = {
       id: runId,
       trigger,
       status,
@@ -346,6 +349,25 @@ export class CreateLoopRuntime {
       message,
       nodeResults: results
     }
+    if (isDatasetGenerationWorkflow(workflow)) {
+      try {
+        const reportPath = await writeDatasetLoopRunReport({
+          statePath: this.#statePath,
+          workflow,
+          run,
+          callerWorkspaceRoot
+        })
+        run = { ...run, reportPath }
+      } catch (error) {
+        run = {
+          ...run,
+          status: 'error',
+          message: `Workflow audit report failed: ${errorMessage(error)}`
+        }
+      }
+    }
+    status = run.status
+    message = run.message
     await this.#mutate((current) => {
       const workflows = current.settings.workflows.map((candidate) =>
         candidate.id === workflow.id
@@ -430,16 +452,41 @@ export class CreateLoopRuntime {
       [node.id]: 'running'
     }
     const retries = Math.min(10, Math.max(0, node.retries ?? 0))
+    const timeoutMs = isGeneratedDatasetWorkflow(workflow)
+      ? node.type === 'ai-agent'
+        ? node.id === 'preparation' ? DATASET_PREPARATION_NODE_TIMEOUT_MS : DATASET_AGENT_NODE_TIMEOUT_MS
+        : node.type === 'llm' ? DATASET_LLM_NODE_TIMEOUT_MS : 0
+      : 0
+    const timeoutDeadline = timeoutMs > 0 ? Date.now() + timeoutMs : 0
     for (let attempt = 0; attempt <= retries; attempt += 1) {
       try {
-        const output = await this.#nodeOutput(
-          workflow,
-          node,
-          payload,
-          runId,
-          signal,
-          callerWorkspaceRoot
-        )
+        const remainingTimeoutMs = timeoutMs > 0
+          ? Math.max(1, timeoutDeadline - Date.now())
+          : 0
+        const output = timeoutMs > 0
+          ? await withAbortTimeout(
+              (nodeSignal) => this.#nodeOutput(
+                workflow,
+                node,
+                payload,
+                runId,
+                nodeSignal,
+                callerWorkspaceRoot,
+                startedAt
+              ),
+              remainingTimeoutMs,
+              signal,
+              `Node '${node.id}' timed out after ${timeoutMs} ms.`
+            )
+          : await this.#nodeOutput(
+              workflow,
+              node,
+              payload,
+              runId,
+              signal,
+              callerWorkspaceRoot,
+              startedAt
+            )
         return {
           nodeId: node.id,
           status: 'success',
@@ -453,10 +500,30 @@ export class CreateLoopRuntime {
           error: ''
         }
       } catch (error) {
-        if (signal.aborted) throw error
-        if (attempt < retries) {
+        const timeoutBudgetExhausted = timeoutMs > 0 && Date.now() >= timeoutDeadline
+        if (!signal.aborted && !timeoutBudgetExhausted && attempt < retries) {
           await abortableDelay(Math.max(0, node.retryDelayMs ?? 0), signal)
           continue
+        }
+        if (!signal.aborted && isGeneratedDatasetWorkflow(workflow) && node.id === 'preparation') {
+          try {
+            const recoveredText = await recoverDatasetPreparationReceipt(payload.json, callerWorkspaceRoot, startedAt)
+            return {
+              nodeId: node.id,
+              status: 'success',
+              startedAt,
+              finishedAt: this.#now().toISOString(),
+              message: recoveredText,
+              outputJson: JSON.stringify({ text: recoveredText }),
+              inputJson: JSON.stringify(payload.json),
+              retries: attempt,
+              threadId: '',
+              error: `Recovered from immutable Dataset API execution after Agent failure: ${errorMessage(error)}`
+            }
+          } catch {
+            // Preserve the original Agent failure when no matching successful,
+            // hash-verified execution exists in this node's time window.
+          }
         }
         if (node.onError === 'fallback') {
           const fallback = parseJsonOrText(node.fallbackJson ?? '{}')
@@ -496,7 +563,8 @@ export class CreateLoopRuntime {
     payload: Payload,
     runId: string,
     signal: AbortSignal,
-    callerWorkspaceRoot: string
+    callerWorkspaceRoot: string,
+    nodeStartedAt: string
   ): Promise<{ payload: Payload; message: string; threadId?: string }> {
     if (node.disabled) return { payload, message: 'Skipped disabled node.' }
     switch (node.type) {
@@ -540,9 +608,12 @@ export class CreateLoopRuntime {
           mode: node.config.mode,
           signal
         })
+        const resultText = isGeneratedDatasetWorkflow(workflow) && node.id === 'preparation'
+          ? await hydrateDatasetPreparationReceipt(result.text, workspaceRoot, payload.json, nodeStartedAt)
+          : result.text
         return {
-          payload: { json: { text: result.text }, text: result.text },
-          message: result.text,
+          payload: { json: { text: resultText }, text: resultText },
+          message: resultText,
           ...(result.threadId ? { threadId: result.threadId } : {})
         }
       }
@@ -707,16 +778,42 @@ export class CreateLoopRuntime {
         let current = payload
         let count = 0
         while (count < maxIterations) {
+          const iterationResults: WorkflowNodeRunResultV1[] = []
           current = await this.#executeGraph(
             target,
             trigger.id,
             current,
             runId,
             signal,
-            [],
+            iterationResults,
             callerWorkspaceRoot
           )
           count += 1
+          if (current.json && typeof current.json === 'object' && !Array.isArray(current.json)) {
+            const currentRecord = current.json as Record<string, unknown>
+            const existingTrace = Array.isArray(currentRecord.loopExecutionTrace)
+              ? currentRecord.loopExecutionTrace
+              : []
+            const nextJson = {
+              ...currentRecord,
+              loopExecutionTrace: [
+                ...existingTrace,
+                {
+                  round: count,
+                  nodes: iterationResults.map((result) => ({
+                    nodeId: result.nodeId,
+                    status: result.status,
+                    retries: result.retries ?? 0,
+                    threadId: result.threadId,
+                    startedAt: result.startedAt,
+                    finishedAt: result.finishedAt,
+                    error: result.error
+                  }))
+                }
+              ]
+            }
+            current = { json: nextJson, text: JSON.stringify(nextJson) }
+          }
           if (evaluateCondition(
             valueAt(current, node.config.leftExpr),
             node.config.operator,
@@ -1008,6 +1105,243 @@ export class CreateLoopRuntime {
   }
 }
 
+function isDatasetGenerationWorkflow(workflow: WorkflowV1): boolean {
+  return workflow.env.some((entry) => entry.key === 'SCIFORGE_GENERATED_KIND' && entry.value === 'dataset-generation')
+}
+
+export async function writeDatasetLoopRunReport(input: {
+  statePath: string
+  workflow: WorkflowV1
+  run: WorkflowRunV1
+  callerWorkspaceRoot: string
+}): Promise<string> {
+  const workspaceRoot = input.callerWorkspaceRoot.trim()
+  const reportDirectory = workspaceRoot && path.isAbsolute(workspaceRoot)
+    ? path.join(workspaceRoot, '.sciforge', 'datasets', 'runs', 'create-loop', input.workflow.id)
+    : path.join(path.dirname(input.statePath), 'reports', input.workflow.id)
+  await mkdir(reportDirectory, { recursive: true })
+  const reportPath = path.join(reportDirectory, `${input.run.id}.md`)
+  const report = renderDatasetLoopRunReport(input.workflow, input.run)
+  const temporaryPath = `${reportPath}.${process.pid}.${Date.now()}.tmp`
+  await writeFile(temporaryPath, report, { flag: 'wx' })
+  try {
+    await rename(temporaryPath, reportPath)
+  } finally {
+    await rm(temporaryPath, { force: true }).catch(() => undefined)
+  }
+  return reportPath
+}
+
+export function renderDatasetLoopRunReport(workflow: WorkflowV1, run: WorkflowRunV1): string {
+  const parsed = new Map(run.nodeResults.map((result) => [result.nodeId, parseOutputRecord(result.outputJson)]))
+  const latestAuditableState = [...run.nodeResults]
+    .reverse()
+    .map((result) => parseOutputRecord(result.outputJson))
+    .find((candidate) => (
+      recordObject(candidate.design) !== undefined ||
+      recordObject(candidate.outputSchema) !== undefined ||
+      recordList(candidate.processingRecipe).length > 0 ||
+      recordObject(candidate.strategy) !== undefined
+    ))
+  const preferredAuditableState = ['batch-quality', 'ready', 'generation-loop']
+    .map((nodeId) => parsed.get(nodeId) ?? {})
+    .find((candidate) => (
+      recordObject(candidate.design) !== undefined ||
+      recordObject(candidate.outputSchema) !== undefined ||
+      recordList(candidate.processingRecipe).length > 0 ||
+      recordObject(candidate.strategy) !== undefined
+    ))
+  const state = preferredAuditableState ?? latestAuditableState ?? {}
+  const design = recordObject(state.design)
+  const schema = recordObject(state.outputSchema)
+  const topLevelRubric = stringList(state.rubric)
+  const rubric = topLevelRubric.length ? topLevelRubric : stringList(design?.rubric)
+  const topLevelRecipe = recordList(state.processingRecipe)
+  const recipe = topLevelRecipe.length ? topLevelRecipe : recordList(design?.processingRecipe)
+  const preparationExecution = recordObject(state.preparationExecution)
+  const preparationSteps = recordList(preparationExecution?.steps)
+  const preparationArtifacts = recordList(state.preparationArtifacts)
+  const verdicts = recordList(state.verdicts)
+  const loopExecutionTrace = recordList(state.loopExecutionTrace)
+  const strategy = recordObject(state.strategy)
+  const revisions = recordList(strategy?.revisions)
+  const batchQuality = recordObject(state.batchQuality)
+  const publication = parsed.get('parse-publication') ?? parsed.get('output') ?? {}
+  const artifactEvidence = collectReportArtifacts([state, publication])
+  const lines = [
+    '# Synthetic Dataset Loop Run Report',
+    '',
+    '> Generated from the persisted Create Loop run. This report records observed node execution, independent verification, strategy evolution, quality metrics, lineage, and publication evidence.',
+    '',
+    '## Run Summary',
+    '',
+    '| Field | Value |',
+    '| --- | --- |',
+    `| Workflow | \`${markdownCode(workflow.id)}\` |`,
+    `| Run | \`${markdownCode(run.id)}\` |`,
+    `| Status | **${markdownCell(run.status)}** |`,
+    `| Message | ${markdownCell(run.message)} |`,
+    `| Started | ${markdownCell(run.startedAt)} |`,
+    `| Finished | ${markdownCell(run.finishedAt)} |`,
+    `| Nodes | ${run.nodeResults.filter((result) => result.status === 'success').length} succeeded / ${run.nodeResults.length} executed |`,
+    '',
+    '## Designed Output Schema',
+    ''
+  ]
+  if (!schema || Object.keys(schema).length === 0) lines.push('_No designed schema was captured._')
+  else {
+    lines.push('| Field | Type | Required | Description |', '| --- | --- | --- | --- |')
+    for (const [field, raw] of Object.entries(schema)) {
+      const definition = recordObject(raw) ?? {}
+      lines.push(`| ${markdownCell(field)} | ${markdownCell(String(definition.type ?? 'unknown'))} | ${definition.required === true ? 'yes' : 'no'} | ${markdownCell(String(definition.description ?? ''))} |`)
+    }
+  }
+  lines.push('', '## Task Rubric', '')
+  if (rubric.length) rubric.forEach((item) => lines.push(`- ${item}`))
+  else lines.push('_No task rubric was captured._')
+  lines.push('', '## Dataset API Processing Recipe', '')
+  if (recipe.length) {
+    lines.push('| Step | Capability | Purpose |', '| ---: | --- | --- |')
+    recipe.forEach((entry, index) => lines.push(`| ${index + 1} | \`${markdownCode(String(entry.capability ?? 'unknown'))}\` | ${markdownCell(String(entry.purpose ?? ''))} |`))
+  } else lines.push('_No processing recipe was captured._')
+  lines.push('', '## Dataset API Preparation Execution', '')
+  if (!preparationExecution) {
+    lines.push('_No plan-gated preparation was required or captured._')
+  } else {
+    lines.push(
+      `- Plan: ${typeof state.preparationPlanId === 'string' ? `\`${markdownCode(state.preparationPlanId)}\`` : 'not captured'}`,
+      `- Status: **${markdownCell(String(preparationExecution.status ?? 'unknown'))}**`,
+      `- Processing complete: ${state.processingComplete === true ? 'yes' : 'no'}`,
+      '',
+      '| Step | Capability | Status | Attempts | Counts | Artifacts |',
+      '| ---: | --- | --- | ---: | --- | --- |'
+    )
+    for (const step of preparationSteps) {
+      const artifacts = recordList(step.artifacts)
+        .map((artifact) => artifact.path ? `\`${markdownCode(String(artifact.path))}\`${artifact.sha256 ? ` (\`${markdownCode(String(artifact.sha256))}\`)` : ''}` : '')
+        .filter(Boolean)
+        .join('<br>') || '—'
+      lines.push(`| ${Number(step.index ?? 0) + 1} | \`${markdownCode(String(step.tool ?? 'unknown'))}\` | ${markdownCell(String(step.status ?? 'unknown'))} | ${step.attempts ?? 0} | ${markdownCell(step.counts == null ? '—' : JSON.stringify(step.counts))} | ${artifacts} |`)
+    }
+    if (preparationArtifacts.length) {
+      lines.push('', 'Preparation evidence artifacts:')
+      for (const artifact of preparationArtifacts) {
+        if (artifact.path) lines.push(`- \`${markdownCode(String(artifact.path))}\`${artifact.sha256 ? ` — SHA-256 \`${markdownCode(String(artifact.sha256))}\`` : ''}`)
+      }
+    }
+  }
+  lines.push('', '## Node Execution', '', '| Node | Status | Retries | Thread | Started | Finished | Error |', '| --- | --- | ---: | --- | --- | --- | --- |')
+  for (const result of run.nodeResults) {
+    lines.push(`| \`${markdownCode(result.nodeId)}\` | ${result.status} | ${result.retries ?? 0} | ${result.threadId ? `\`${markdownCode(result.threadId)}\`` : '—'} | ${markdownCell(result.startedAt)} | ${markdownCell(result.finishedAt)} | ${markdownCell(result.error)} |`)
+  }
+  lines.push('', '### Loop Node Execution', '')
+  if (!loopExecutionTrace.length) lines.push('_No loop-node execution trace was captured._')
+  else {
+    lines.push('| Round | Node | Status | Retries | Thread | Started | Finished | Error |', '| ---: | --- | --- | ---: | --- | --- | --- | --- |')
+    for (const iteration of loopExecutionTrace) {
+      for (const node of recordList(iteration.nodes)) {
+        lines.push(`| ${iteration.round ?? ''} | \`${markdownCode(String(node.nodeId ?? 'unknown'))}\` | ${markdownCell(String(node.status ?? 'unknown'))} | ${node.retries ?? 0} | ${node.threadId ? `\`${markdownCode(String(node.threadId))}\`` : '—'} | ${markdownCell(String(node.startedAt ?? ''))} | ${markdownCell(String(node.finishedAt ?? ''))} | ${markdownCell(String(node.error ?? ''))} |`)
+      }
+    }
+  }
+  lines.push('', '## Candidate Evaluation and Independent Verification', '')
+  if (!verdicts.length) lines.push('_No candidate verdicts were captured._')
+  else {
+    lines.push('| Round | Accepted | Judge quality | Weak | Strong | Gap | Rubric | Question | Verifiable | Leakage | Failures |', '| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |')
+    for (const entry of verdicts) {
+      const judge = recordObject(entry.judge) ?? entry
+      const verifier = recordObject(entry.verifier) ?? {}
+      const failures = stringList(entry.failureReasons).join('; ')
+      lines.push(`| ${entry.round ?? ''} | ${entry.accepted === true ? 'yes' : 'no'} | ${metric(judge.qualityScore)} | ${metric(judge.weakScore)} | ${metric(judge.strongScore)} | ${metric(entry.scoreGap)} | ${metric(verifier.rubricCoverage)} | ${metric(verifier.questionQuality)} | ${verifier.verifiable === true ? 'yes' : 'no'} | ${entry.deterministicLeakage === true || verifier.leakage === true ? 'yes' : 'no'} | ${markdownCell(failures)} |`)
+    }
+  }
+  lines.push('', '## Strategy Evolution', '')
+  lines.push(`- Current recipe version: ${String(strategy?.version ?? 1)}`)
+  if (typeof strategy?.currentRecipe === 'string') lines.push(`- Current recipe: ${strategy.currentRecipe}`)
+  if (revisions.length) {
+    lines.push('', '| Round | Version | Systemic patterns | Prompt patch | Reason |', '| ---: | ---: | --- | --- | --- |')
+    for (const revision of revisions) {
+      lines.push(`| ${revision.round ?? ''} | ${revision.version ?? ''} | ${markdownCell(stringList(revision.systemicFailurePatterns).join('; '))} | ${markdownCell(String(revision.challengerPromptPatch ?? ''))} | ${markdownCell(String(revision.reason ?? ''))} |`)
+    }
+  } else lines.push('- No recipe revisions were required.')
+  lines.push('', '## Batch Quality', '')
+  if (batchQuality) {
+    lines.push('| Metric | Value |', '| --- | ---: |')
+    for (const [key, value] of Object.entries(batchQuality)) {
+      if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) lines.push(`| ${markdownCell(key)} | ${markdownCell(String(value))} |`)
+      else if (key === 'missingByField') lines.push(`| ${markdownCell(key)} | ${markdownCell(JSON.stringify(value))} |`)
+    }
+  } else lines.push('_No batch-quality summary was captured._')
+  lines.push('', '## Data Lineage and Artifact Hashes', '')
+  const parentArtifacts = stringList(state.parentArtifacts)
+  for (const parent of parentArtifacts) lines.push(`- Grounding parent: \`${markdownCode(parent)}\``)
+  for (const artifact of artifactEvidence) lines.push(`- \`${markdownCode(artifact.path)}\`${artifact.sha256 ? ` — SHA-256 \`${artifact.sha256}\`` : ''}`)
+  if (!parentArtifacts.length && !artifactEvidence.length) lines.push('_No artifact evidence was captured._')
+  lines.push('', '## Publication', '')
+  if (typeof publication.planId === 'string') lines.push(`- Plan: \`${markdownCode(publication.planId)}\``)
+  const publicationRecord = recordObject(publication.publication)
+  if (publicationRecord?.path) lines.push(`- Publication: \`${markdownCode(String(publicationRecord.path))}\``)
+  if (publicationRecord?.manifestPath) lines.push(`- Manifest: \`${markdownCode(String(publicationRecord.manifestPath))}\``)
+  for (const artifact of recordList(publicationRecord?.artifacts)) {
+    if (artifact.path) lines.push(`- Published artifact: \`${markdownCode(String(artifact.path))}\`${artifact.sha256 ? ` — SHA-256 \`${markdownCode(String(artifact.sha256))}\`` : ''}`)
+  }
+  lines.push('')
+  return `${lines.join('\n')}\n`
+}
+
+function parseOutputRecord(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value)
+    return recordObject(parsed) ?? {}
+  } catch {
+    return {}
+  }
+}
+
+function recordObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+}
+
+function recordList(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.map(recordObject).filter((entry): entry is Record<string, unknown> => !!entry) : []
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []
+}
+
+function collectReportArtifacts(values: unknown[]): Array<{ path: string; sha256?: string }> {
+  const found = new Map<string, { path: string; sha256?: string }>()
+  const visit = (value: unknown, depth: number) => {
+    if (depth > 8 || !value || typeof value !== 'object') return
+    if (Array.isArray(value)) {
+      value.forEach((entry) => visit(entry, depth + 1))
+      return
+    }
+    const record = value as Record<string, unknown>
+    if (typeof record.path === 'string') found.set(record.path, {
+      path: record.path,
+      ...(typeof record.sha256 === 'string' ? { sha256: record.sha256 } : {})
+    })
+    Object.values(record).forEach((entry) => visit(entry, depth + 1))
+  }
+  values.forEach((value) => visit(value, 0))
+  return [...found.values()]
+}
+
+function markdownCell(value: string): string {
+  return value.replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>')
+}
+
+function markdownCode(value: string): string {
+  return value.replace(/`/g, '\\`')
+}
+
+function metric(value: unknown): string {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric.toFixed(3) : '—'
+}
+
 export function createLoopStatePath(userDataDir: string): string {
   return path.join(userDataDir, 'domains', 'create-loop', 'state.json')
 }
@@ -1244,8 +1578,7 @@ function parseJson(text: string): unknown {
   for (const match of trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
     candidates.push(match[1]!.trim())
   }
-  const extracted = extractBalancedJson(trimmed)
-  if (extracted) candidates.push(extracted)
+  candidates.push(...extractBalancedJsonValues(trimmed).reverse())
   let lastError: unknown
   for (const candidate of [...new Set(candidates)]) {
     for (const value of [candidate, repairJsonLike(candidate)]) {
@@ -1259,15 +1592,200 @@ function parseJson(text: string): unknown {
   throw lastError instanceof Error ? lastError : new Error('Invalid JSON.')
 }
 
+async function hydrateDatasetPreparationReceipt(
+  text: string,
+  workspaceRoot: string,
+  incoming: unknown,
+  nodeStartedAt: string
+): Promise<string> {
+  const reported = parseJson(text)
+  if (!isRecord(reported)) throw new Error('Dataset preparation Agent did not return an object receipt.')
+  const reportedExecution = isRecord(reported.preparationExecution) ? reported.preparationExecution : null
+  const planId = typeof reported.preparationPlanId === 'string'
+    ? reported.preparationPlanId
+    : typeof reportedExecution?.planId === 'string' ? reportedExecution.planId : ''
+  if (!planId) {
+    const reportedArtifacts = Array.isArray(reported.preparationArtifacts) ? reported.preparationArtifacts : []
+    if (reportedExecution === null && reportedArtifacts.length === 0) return JSON.stringify(reported)
+    throw new Error('Dataset preparation Agent did not return a plan id.')
+  }
+
+  const runsRoot = path.join(workspaceRoot, '.sciforge', 'datasets', 'runs')
+  const candidates: Array<{ path: string; execution: Record<string, unknown>; completedAt: string }> = []
+  for (const name of await readdir(runsRoot)) {
+    if (!/^run-[a-z0-9-]+\.json$/iu.test(name)) continue
+    const runPath = path.join(runsRoot, name)
+    try {
+      const execution = JSON.parse(await readFile(runPath, 'utf8')) as unknown
+      if (!isRecord(execution) || execution.planId !== planId) continue
+      candidates.push({
+        path: runPath,
+        execution,
+        completedAt: typeof execution.completedAt === 'string'
+          ? execution.completedAt
+          : typeof execution.updatedAt === 'string' ? execution.updatedAt : ''
+      })
+    } catch {
+      // Ignore unrelated or partially-written run files; a matching immutable
+      // execution report is still mandatory below.
+    }
+  }
+  const actual = candidates.sort((left, right) => right.completedAt.localeCompare(left.completedAt))[0]
+  if (!actual) throw new Error(`No immutable Dataset API execution report exists for plan '${planId}'.`)
+
+  if (actual.execution.status !== 'succeeded') {
+    return recoverDatasetPreparationReceipt(incoming, workspaceRoot, nodeStartedAt)
+  }
+
+  const preparationArtifacts = await verifiedDatasetPreparationArtifacts(actual.path, actual.execution)
+
+  return JSON.stringify({
+    ...reported,
+    preparationPlanId: planId,
+    preparationExecution: actual.execution,
+    preparationArtifacts,
+    processingComplete: actual.execution.status === 'succeeded',
+    groundingComplete: actual.execution.status === 'succeeded'
+  })
+}
+
+async function recoverDatasetPreparationReceipt(
+  incoming: unknown,
+  workspaceRoot: string,
+  nodeStartedAt: string
+): Promise<string> {
+  if (!isRecord(incoming)) throw new Error('Dataset preparation recovery requires an object state.')
+  const toolByCapability: Record<string, string> = {
+    'dataset-api.profile': 'dataset_profile',
+    'dataset-api.filter': 'dataset_filter',
+    'dataset-api.select-columns': 'dataset_select_columns',
+    'dataset-api.transform': 'dataset_transform',
+    'dataset-api.deduplicate': 'dataset_deduplicate',
+    'dataset-api.id-map': 'dataset_id_map',
+    'dataset-api.id-map-provider': 'dataset_id_map_provider',
+    'dataset-api.join': 'dataset_join',
+    'dataset-api.structure-profile': 'dataset_structure_profile',
+    'dataset-api.structure-validate': 'dataset_structure_validate',
+    'dataset-api.graph-organize': 'dataset_graph_organize'
+  }
+  const recipe = Array.isArray(incoming.processingRecipe) ? incoming.processingRecipe : []
+  const expectedTools = recipe.flatMap((entry) => {
+    if (!isRecord(entry) || typeof entry.capability !== 'string') return []
+    const tool = toolByCapability[entry.capability]
+    return tool ? [tool] : []
+  })
+  if (expectedTools.length === 0) throw new Error('No plan-gated preparation steps require recovery.')
+
+  const runsRoot = path.join(workspaceRoot, '.sciforge', 'datasets', 'runs')
+  const nodeStartMs = Date.parse(nodeStartedAt)
+  const matches: Array<{ path: string; execution: Record<string, unknown>; completedAt: string }> = []
+  for (const name of await readdir(runsRoot)) {
+    if (!/^run-[a-z0-9-]+\.json$/iu.test(name)) continue
+    const runPath = path.join(runsRoot, name)
+    try {
+      const execution = JSON.parse(await readFile(runPath, 'utf8')) as unknown
+      if (!isRecord(execution) || execution.status !== 'succeeded' || typeof execution.planId !== 'string') continue
+      const startedMs = typeof execution.startedAt === 'string' ? Date.parse(execution.startedAt) : Number.NaN
+      if (!Number.isFinite(startedMs) || startedMs < nodeStartMs) continue
+      const steps = Array.isArray(execution.steps) ? execution.steps : []
+      const actualTools = steps.map((step) => isRecord(step) && typeof step.tool === 'string' ? step.tool : '')
+      if (actualTools.length !== expectedTools.length || actualTools.some((tool, index) => tool !== expectedTools[index])) continue
+      if (steps.some((step) => !isRecord(step) || step.status !== 'succeeded')) continue
+      matches.push({
+        path: runPath,
+        execution,
+        completedAt: typeof execution.completedAt === 'string' ? execution.completedAt : ''
+      })
+    } catch {
+      // Ignore unrelated or partially-written Dataset API runs.
+    }
+  }
+  const actual = matches.sort((left, right) => right.completedAt.localeCompare(left.completedAt))[0]
+  if (!actual) throw new Error('No matching successful Dataset API execution exists for recovery.')
+  const preparationArtifacts = await verifiedDatasetPreparationArtifacts(actual.path, actual.execution)
+  return JSON.stringify({
+    ...incoming,
+    preparationPlanId: actual.execution.planId,
+    preparationExecution: actual.execution,
+    preparationArtifacts,
+    processingComplete: true,
+    groundingComplete: true
+  })
+}
+
+async function verifiedDatasetPreparationArtifacts(
+  runPath: string,
+  execution: Record<string, unknown>
+): Promise<Array<{ path: string; sha256: string }>> {
+  const artifactMap = new Map<string, { path: string; sha256: string }>()
+  const steps = Array.isArray(execution.steps) ? execution.steps : []
+  for (const step of steps) {
+    if (!isRecord(step) || !Array.isArray(step.artifacts)) continue
+    for (const artifact of step.artifacts) {
+      if (!isRecord(artifact) || artifact.key !== 'artifact') continue
+      if (typeof artifact.path !== 'string' || typeof artifact.sha256 !== 'string') continue
+      const artifactBytes = await readFile(artifact.path)
+      const observedSha256 = createHash('sha256').update(artifactBytes).digest('hex')
+      if (observedSha256 !== artifact.sha256) {
+        throw new Error(`Dataset preparation artifact hash mismatch: ${artifact.path}`)
+      }
+      artifactMap.set(artifact.path, { path: artifact.path, sha256: artifact.sha256 })
+    }
+  }
+  const runBytes = await readFile(runPath)
+  artifactMap.set(runPath, {
+    path: runPath,
+    sha256: createHash('sha256').update(runBytes).digest('hex')
+  })
+  return [...artifactMap.values()]
+}
+
 function repairJsonLike(text: string): string {
-  return text
+  return escapeUnquotedQuotesInStrings(text
     .replace(/^\uFEFF/u, '')
     .replace(/([{,]\s*)'([^'\\\r\n]+)'(\s*:)/gu, '$1"$2"$3')
     .replace(/([{,]\s*)([A-Za-z_$][A-Za-z0-9_$-]*)(\s*:)/gu, '$1"$2"$3')
-    .replace(/,\s*([}\]])/gu, '$1')
+    .replace(/,\s*([}\]])/gu, '$1'))
 }
 
-function extractBalancedJson(text: string): string | null {
+function escapeUnquotedQuotesInStrings(text: string): string {
+  let repaired = ''
+  let inString = false
+  let escaped = false
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index]!
+    if (!inString) {
+      repaired += character
+      if (character === '"') inString = true
+      continue
+    }
+    if (escaped) {
+      repaired += character
+      escaped = false
+      continue
+    }
+    if (character === '\\') {
+      repaired += character
+      escaped = true
+      continue
+    }
+    if (character !== '"') {
+      repaired += character
+      continue
+    }
+    const nextSignificant = text.slice(index + 1).match(/^\s*([,:}\]])/u)?.[1]
+    if (nextSignificant || text.slice(index + 1).trim() === '') {
+      repaired += character
+      inString = false
+    } else {
+      repaired += '\\"'
+    }
+  }
+  return repaired
+}
+
+function extractBalancedJsonValues(text: string): string[] {
+  const values: string[] = []
   for (let start = 0; start < text.length; start += 1) {
     const opening = text[start]
     if (opening !== '{' && opening !== '[') continue
@@ -1290,11 +1808,15 @@ function extractBalancedJson(text: string): string | null {
       else if (character === '}' || character === ']') {
         const expected = character === '}' ? '{' : '['
         if (stack.pop() !== expected) break
-        if (stack.length === 0) return text.slice(start, index + 1)
+        if (stack.length === 0) {
+          values.push(text.slice(start, index + 1))
+          start = index
+          break
+        }
       }
     }
   }
-  return null
+  return values
 }
 
 function parseJsonOrText(text: string): unknown {
@@ -1322,7 +1844,7 @@ function normalizeGeneratedDatasetLlmOutput(
   responseText: string
 ): string {
   if (!isGeneratedDatasetWorkflow(workflow)) return responseText
-  if (!['challenger', 'weak-solver', 'strong-solver', 'judge'].includes(node.id)) {
+  if (!['challenger', 'weak-solver', 'strong-solver', 'judge', 'verifier', 'strategy-learner'].includes(node.id)) {
     return responseText
   }
   const parsed = parseJson(responseText)
@@ -1352,6 +1874,16 @@ function normalizeGeneratedDatasetLlmOutput(
   if (node.id === 'strong-solver') {
     if (!isRecord(parsed.strong)) throw new Error('Generated dataset strong solver must return a strong result object.')
     return JSON.stringify({ ...incoming.json, strong: parsed.strong })
+  }
+  if (node.id === 'verifier') {
+    if (!isRecord(parsed.verifier)) throw new Error('Generated dataset verifier must return a verifier result object.')
+    return JSON.stringify({ ...incoming.json, verifier: parsed.verifier })
+  }
+  if (node.id === 'strategy-learner') {
+    if (!isRecord(parsed.strategyUpdate)) {
+      throw new Error('Generated dataset strategy learner must return a strategyUpdate object.')
+    }
+    return JSON.stringify({ ...incoming.json, strategyUpdate: parsed.strategyUpdate })
   }
   if (!isRecord(parsed.verdict)) {
     throw new Error('Generated dataset judge must return a verdict object.')
@@ -1402,5 +1934,27 @@ async function withTimeout<T>(
     return await Promise.race([promise, timeout])
   } finally {
     if (timer) clearTimeout(timer)
+  }
+}
+
+async function withAbortTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  parentSignal: AbortSignal,
+  timeoutMessage: string
+): Promise<T> {
+  const controller = new AbortController()
+  const relayAbort = () => controller.abort(parentSignal.reason)
+  if (parentSignal.aborted) relayAbort()
+  else parentSignal.addEventListener('abort', relayAbort, { once: true })
+  const timer = setTimeout(() => controller.abort(new Error(timeoutMessage)), timeoutMs)
+  const aborted = new Promise<never>((_resolve, reject) => {
+    controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true })
+  })
+  try {
+    return await Promise.race([operation(controller.signal), aborted])
+  } finally {
+    clearTimeout(timer)
+    parentSignal.removeEventListener('abort', relayAbort)
   }
 }

@@ -376,6 +376,7 @@ function DatasetExecutionProgress({
   const status = stringValue(execution.status)
   const planId = stringValue(execution.planId)
   const runId = stringValue(execution.runId)
+  const reportPath = stringValue(asRecord(result?.reportArtifact)?.path)
   const resumePrompt = `继续执行已确认的 Dataset 计划。请通过 Dataset API 的“Resume a dataset plan”能力恢复 planId="${planId}", runId="${runId}"，等待终端回执后报告结果。`
   return (
     <div data-dataset-execution-progress className="border-t border-ds-border-muted/70 bg-violet-500/[0.025] px-5 py-4">
@@ -386,16 +387,28 @@ function DatasetExecutionProgress({
             total: numberValue(execution.totalSteps) ?? steps.length
           })}
         </p>
-        {status === 'failed' && onContinuePrompt && planId && runId ? (
-          <button
-            type="button"
-            onClick={() => onContinuePrompt(resumePrompt)}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-violet-600 px-3 text-[12px] font-semibold text-white transition hover:bg-violet-500"
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-            {t('datasetResultResume')}
-          </button>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-2">
+          {reportPath && onOpenArtifact ? (
+            <button
+              type="button"
+              onClick={() => onOpenArtifact(reportPath)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-card px-3 text-[12px] font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              {t('datasetResultOpenRunReport')}
+            </button>
+          ) : null}
+          {status === 'failed' && onContinuePrompt && planId && runId ? (
+            <button
+              type="button"
+              onClick={() => onContinuePrompt(resumePrompt)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-violet-600 px-3 text-[12px] font-semibold text-white transition hover:bg-violet-500"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              {t('datasetResultResume')}
+            </button>
+          ) : null}
+        </div>
       </div>
       <ol className="space-y-2">
         {steps.map((step, position) => {
@@ -492,6 +505,7 @@ export function publicationReleaseFiles(publication: Record<string, unknown>): A
     { label: 'datasetResultOpenSchema', path: stringValue(publication.schemaPath) },
     { label: 'datasetResultOpenQuality', path: stringValue(publication.qualityReportPath) },
     { label: 'datasetResultOpenPlan', path: stringValue(publication.preparationPlanPath) },
+    { label: 'datasetResultOpenPipeline', path: stringValue(publication.pipelinePath) },
     { label: 'datasetResultOpenChecksums', path: stringValue(publication.checksumsPath) }
   ].filter((file) => file.path)
 }

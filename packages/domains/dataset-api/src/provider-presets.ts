@@ -180,7 +180,7 @@ export const EXECUTABLE_DATASET_PROVIDER_PRESETS = {
     source: {
       id: 'quickgo',
       name: 'QuickGO',
-      description: 'GO term metadata and matching annotation records.',
+      description: 'GO term metadata and annotation records searchable by geneProductId or goId.',
       baseUrl: 'https://www.ebi.ac.uk/QuickGO/services/',
       metadataEndpoint: 'ontology/go/terms/{identifier}',
       rawDataEndpoint: 'annotation/search'
@@ -191,8 +191,8 @@ export const EXECUTABLE_DATASET_PROVIDER_PRESETS = {
     },
     rawDataExample: {
       sourceId: 'quickgo',
-      query: { goId: 'GO:0006915', limit: 100 },
-      outputFileName: 'GO-0006915-annotations.json',
+      query: { geneProductId: 'UniProtKB:P04637', limit: 100 },
+      outputFileName: 'P04637-annotations.json',
       expectedFormat: 'json'
     }
   },

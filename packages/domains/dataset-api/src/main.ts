@@ -242,7 +242,7 @@ export function createDatasetApiCapabilityFactory<CapabilityDefinition>(options:
         'List registered dataset databases',
         'Lists API-backed dataset databases registered in the caller workspace.',
         datasetApiListInputSchema.omit({ workspaceRoot: true }),
-        async (_input, workspaceRoot) => services().api.list({ workspaceRoot })
+        async (input, workspaceRoot) => services().api.list(withWorkspace(workspaceRoot, input))
       ),
       defineWrite(
         DATASET_API_CAPABILITY_IDS.register,

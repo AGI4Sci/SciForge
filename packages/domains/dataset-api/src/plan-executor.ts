@@ -302,8 +302,13 @@ function primaryArtifact(result: unknown): ArtifactReference | undefined {
 function collectCounts(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const record = value as Record<string, unknown>
+  const recordSamples = Array.isArray(record.recordSamples)
+    ? structuredClone(record.recordSamples.slice(0, 3))
+    : undefined
   const counts = record.counts
-  if (counts && typeof counts === 'object' && !Array.isArray(counts)) return counts as Record<string, unknown>
+  if (counts && typeof counts === 'object' && !Array.isArray(counts)) {
+    return { ...(counts as Record<string, unknown>), ...(recordSamples ? { recordSamples } : {}) }
+  }
   const profile = record.profile
   if (profile && typeof profile === 'object' && !Array.isArray(profile)) {
     const records = (profile as Record<string, unknown>).records
@@ -357,8 +362,11 @@ async function artifactsAreValid(artifacts: ArtifactReference[]): Promise<boolea
   return true
 }
 
-function executionResult(state: DatasetPlanExecutionState, statePath: string, reused: boolean) {
+async function executionResult(state: DatasetPlanExecutionState, statePath: string, reused: boolean) {
   const stateBytes = Buffer.from(`${JSON.stringify(state, null, 2)}\n`)
+  const reportBytes = Buffer.from(renderExecutionReport(state))
+  const reportPath = statePath.replace(/\.json$/i, '.md')
+  await writeAtomic(reportPath, reportBytes)
   return {
     execution: {
       runId: state.runId,
@@ -386,7 +394,84 @@ function executionResult(state: DatasetPlanExecutionState, statePath: string, re
       sha256: sha256(stateBytes),
       bytes: stateBytes.byteLength,
       format: 'report'
+    },
+    reportArtifact: {
+      path: reportPath,
+      sha256: sha256(reportBytes),
+      bytes: reportBytes.byteLength,
+      format: 'report'
     }
+  }
+}
+
+function renderExecutionReport(state: DatasetPlanExecutionState): string {
+  const succeeded = state.steps.filter((step) => step.status === 'succeeded').length
+  const failed = state.steps.filter((step) => step.status === 'failed').length
+  const lines = [
+    '# Dataset Pipeline Execution Report',
+    '',
+    '> Generated from the immutable execution checkpoint. This report records observed execution evidence; the sibling JSON file remains the resumable machine state.',
+    '',
+    '## Run Summary',
+    '',
+    '| Field | Value |',
+    '| --- | --- |',
+    `| Plan | \`${escapeMarkdownCode(state.planId)}\` |`,
+    `| Run | \`${escapeMarkdownCode(state.runId)}\` |`,
+    `| Status | **${state.status}** |`,
+    `| Steps | ${succeeded} succeeded / ${failed} failed / ${state.steps.length} total |`,
+    `| Started | ${escapeMarkdownCell(state.startedAt)} |`,
+    `| Completed | ${escapeMarkdownCell(state.completedAt ?? 'not completed')} |`,
+    '',
+    '## Executed Steps',
+    '',
+    '| Step | Capability | Status | Attempts | Observed counts | Evidence artifacts |',
+    '| ---: | --- | --- | ---: | --- | --- |'
+  ]
+  for (const step of state.steps) {
+    const counts = step.counts ? JSON.stringify(step.counts) : '—'
+    const artifacts = step.artifacts.length > 0
+      ? step.artifacts.map((artifact) => `\`${escapeMarkdownCode(artifact.path)}\` (\`${artifact.sha256.slice(0, 12)}…\`)`).join('<br>')
+      : '—'
+    lines.push(`| ${step.index + 1} | \`${escapeMarkdownCode(step.tool)}\` | ${step.status} | ${step.attempts} | ${escapeMarkdownCell(counts)} | ${artifacts} |`)
+  }
+  const failedSteps = state.steps.filter((step) => step.error)
+  if (failedSteps.length > 0) {
+    lines.push('', '## Failures', '')
+    for (const step of failedSteps) lines.push(`- Step ${step.index + 1} \`${escapeMarkdownCode(step.tool)}\`: ${step.error}`)
+  }
+  lines.push(
+    '',
+    '## Verification',
+    '',
+    `- Immutable plan SHA-256: \`${state.planSha256}\``,
+    `- Resumable checkpoint: \`${escapeMarkdownCode(statePathForReport(state))}\``,
+    '- Artifact hashes above are the values captured when each step completed.',
+    ''
+  )
+  return `${lines.join('\n')}\n`
+}
+
+function statePathForReport(state: DatasetPlanExecutionState): string {
+  return join(dirname(state.planPath), '..', 'runs', `${state.runId}.json`)
+}
+
+function escapeMarkdownCell(value: string): string {
+  return value.replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>')
+}
+
+function escapeMarkdownCode(value: string): string {
+  return value.replace(/`/g, '\\`')
+}
+
+async function writeAtomic(path: string, bytes: Buffer): Promise<void> {
+  await mkdir(dirname(path), { recursive: true })
+  const temporaryPath = `${path}.${process.pid}.${Date.now()}.tmp`
+  await writeFile(temporaryPath, bytes, { flag: 'wx' })
+  try {
+    await rename(temporaryPath, path)
+  } finally {
+    await rm(temporaryPath, { force: true }).catch(() => undefined)
   }
 }
 

@@ -16,6 +16,30 @@ test('keeps executable provider schemas and presets in sync', () => {
   }
 })
 
+test('lists exact executable examples for registered provider presets', async (context) => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-examples-'))
+  context.after(() => rm(workspaceRoot, { recursive: true, force: true }))
+  const service = createDatasetApiService({ workspaceRoot })
+  await service.registerProvider({ providerId: 'string' })
+  const listed = await service.list({ sourceIds: ['string'] })
+  const source = listed.sources.find((candidate) => candidate.id === 'string')
+  assert.equal(Object.keys(listed)[0], 'usageExamplesBySource')
+  assert.equal(Object.keys(source ?? {})[0], 'usageExamples')
+  assert.deepEqual(listed.usageExamplesBySource.string, source?.usageExamples)
+  assert.deepEqual(source?.usageExamples, {
+    metadata: {
+      sourceId: 'string',
+      query: { identifiers: 'TP53', species: 9606 }
+    },
+    rawData: {
+      sourceId: 'string',
+      query: { identifiers: 'TP53\rBRCA1', species: 9606 },
+      outputFileName: 'string-TP53-BRCA1.tsv',
+      expectedFormat: 'text'
+    }
+  })
+})
+
 test('registers a database and reads its metadata endpoint', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-api-'))
   const server = createServer((request, response) => {
@@ -95,6 +119,38 @@ test('keeps complete metadata in the artifact while returning a bounded summary'
     assert.ok(JSON.stringify(result.metadata).length < 8_000)
     assert.ok(result.artifact)
     assert.deepEqual(JSON.parse(await readFile(result.artifact.path, 'utf8')), complete)
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('keeps shallow identifier and label fields visible in summarized result records', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-label-summary-'))
+  const service = createDatasetApiService({
+    workspaceRoot,
+    fetchImpl: async () => new Response(JSON.stringify({
+      results: [{ id: 'GO:1902749', name: 'regulation of cell cycle G2/M phase transition', definition: { text: 'x'.repeat(2_000) } }],
+      pageInfo: { total: 1 }
+    }), { headers: { 'content-type': 'application/json' } })
+  })
+  try {
+    await service.register({
+      id: 'ontology-db',
+      baseUrl: 'https://example.com/',
+      metadataEndpoint: 'terms/{identifier}',
+      rawDataEndpoint: 'terms/{identifier}/raw'
+    })
+    const result = await service.metadata({
+      sourceId: 'ontology-db',
+      pathParameters: { identifier: 'GO:1902749' },
+      responseMode: 'summary'
+    })
+    assert.deepEqual((result.metadata as { results: unknown[] }).results[0], {
+      id: 'GO:1902749',
+      name: 'regulation of cell cycle G2/M phase transition',
+      definition: { fieldCount: 1 }
+    })
+    assert.ok(JSON.stringify(result.metadata).length < 8_000)
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true })
   }

@@ -330,12 +330,14 @@ describe('TimelineDatasetResultsPanel', () => {
       schemaPath: '/release/schema.json',
       qualityReportPath: '/release/quality-report.json',
       preparationPlanPath: '/release/preparation-plan.json',
+      pipelinePath: '/release/data-construction-pipeline.md',
       checksumsPath: '/release/checksums.sha256'
     })).toEqual([
       { label: 'datasetResultOpenManifest', path: '/release/manifest.json' },
       { label: 'datasetResultOpenSchema', path: '/release/schema.json' },
       { label: 'datasetResultOpenQuality', path: '/release/quality-report.json' },
       { label: 'datasetResultOpenPlan', path: '/release/preparation-plan.json' },
+      { label: 'datasetResultOpenPipeline', path: '/release/data-construction-pipeline.md' },
       { label: 'datasetResultOpenChecksums', path: '/release/checksums.sha256' }
     ])
   })

@@ -84,12 +84,21 @@ export function createDatasetApiService(options: {
       const input = datasetApiListInputSchema.parse(raw)
       const registryPath = resolveRegistryPath(input.workspaceRoot, defaultWorkspaceRoot)
       const registry = await readRegistry(registryPath)
-      return {
-        registryPath,
-        sources: registry.sources.map((source) => ({
+      const requestedSourceIds = input.sourceIds ? new Set(input.sourceIds) : null
+      const sources = registry.sources
+        .filter((source) => !requestedSourceIds || requestedSourceIds.has(source.id))
+        .map((source) => ({
+          usageExamples: providerUsageExamples(source),
           ...source,
           auth: source.auth ? { ...source.auth, configured: !!env[source.auth.envVar] } : undefined
         }))
+      const usageExamplesBySource = Object.fromEntries(
+        sources.flatMap((source) => source.usageExamples ? [[source.id, source.usageExamples]] : [])
+      )
+      return {
+        usageExamplesBySource,
+        sources,
+        registryPath
       }
     },
 
@@ -342,6 +351,25 @@ export function createDatasetApiService(options: {
         response: responseRecord
       }
     }
+  }
+}
+
+function providerUsageExamples(source: DatasetApiSource): {
+  metadata: Record<string, unknown>
+  rawData: Record<string, unknown>
+} | undefined {
+  const preset = Object.values(EXECUTABLE_DATASET_PROVIDER_PRESETS).find((candidate) => (
+    candidate.source.id === source.id
+    || (
+      candidate.source.baseUrl === source.baseUrl
+      && candidate.source.metadataEndpoint === source.metadataEndpoint
+      && candidate.source.rawDataEndpoint === source.rawDataEndpoint
+    )
+  ))
+  if (!preset) return undefined
+  return {
+    metadata: { ...preset.metadataExample, sourceId: source.id },
+    rawData: { ...preset.rawDataExample, sourceId: source.id }
   }
 }
 
@@ -799,7 +827,7 @@ function summarizeMetadata(value: unknown, depth = 0): unknown {
   if (typeof value === 'string') {
     return value.length > 256 ? `${value.slice(0, 256)}…` : value
   }
-  if (depth >= 2) {
+  if (depth >= 3) {
     if (Array.isArray(value)) return { itemCount: value.length }
     if (typeof value === 'object') return { fieldCount: Object.keys(value).length }
     return String(value)

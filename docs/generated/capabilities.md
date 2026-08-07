@@ -6496,11 +6496,23 @@ Compiles confirmed conversational data requirements into editable Create Loop wo
             "maxLength": 256,
             "type": "string"
           },
+          "designer": {
+            "maxLength": 256,
+            "type": "string"
+          },
           "judge": {
             "maxLength": 256,
             "type": "string"
           },
+          "strategist": {
+            "maxLength": 256,
+            "type": "string"
+          },
           "strong": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "verifier": {
             "maxLength": 256,
             "type": "string"
           },
@@ -6625,6 +6637,18 @@ Compiles confirmed conversational data requirements into editable Create Loop wo
             "minimum": 0,
             "type": "number"
           },
+          "minQuestionQuality": {
+            "default": 0.7,
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "minRubricCoverage": {
+            "default": 0.8,
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
           "minScoreGap": {
             "default": 0.2,
             "maximum": 1,
@@ -6652,6 +6676,8 @@ Compiles confirmed conversational data requirements into editable Create Loop wo
           "minStrongScore",
           "maxWeakScore",
           "minScoreGap",
+          "minRubricCoverage",
+          "minQuestionQuality",
           "maxDuplicateFraction"
         ],
         "type": "object"
@@ -6675,7 +6701,6 @@ Compiles confirmed conversational data requirements into editable Create Loop wo
       "name",
       "objective",
       "sourceIds",
-      "outputSchema",
       "quality",
       "output",
       "humanReview",
@@ -9823,7 +9848,19 @@ Lists API-backed dataset databases registered in the caller workspace.
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
-    "properties": {},
+    "properties": {
+      "sourceIds": {
+        "items": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "type": "string"
+        },
+        "maxItems": 50,
+        "minItems": 1,
+        "type": "array"
+      }
+    },
     "type": "object"
   },
   "outputSchema": {

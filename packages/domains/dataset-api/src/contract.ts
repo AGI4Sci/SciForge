@@ -445,7 +445,8 @@ export const datasetApiCatalogInputSchema = z.object({
 }).strict()
 
 export const datasetApiListInputSchema = z.object({
-  workspaceRoot: optionalWorkspaceRootSchema
+  workspaceRoot: optionalWorkspaceRootSchema,
+  sourceIds: z.array(datasetIdSchema).min(1).max(50).optional()
 }).strict()
 
 export const datasetApiRegisterProviderInputSchema = z.object({
