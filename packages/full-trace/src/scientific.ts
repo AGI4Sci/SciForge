@@ -276,6 +276,14 @@ export function validateScientificTraceClosure(events: readonly ScientificTraceE
     issues.push(errorIssue('MISSING_EVIDENCE', undefined, 'Trace must include at least one EVIDENCE_ATTACHED event.'))
   }
 
+  if (!events.some((event) => event.type === 'HUMAN_REVIEW_RECORDED' && hasHumanReviewReason(event))) {
+    issues.push(errorIssue(
+      'MISSING_HUMAN_REASON',
+      undefined,
+      'Trace must include at least one HUMAN_REVIEW_RECORDED event with a reason.'
+    ))
+  }
+
   for (const event of events) {
     if (isRootScientificEventType(event.type)) continue
     if (!event.parentEventId || !eventIds.has(event.parentEventId)) {

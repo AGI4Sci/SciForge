@@ -37,7 +37,12 @@ describe('scientific trace validation', () => {
 
   test('rejects traces that are missing required scientific evidence fields', () => {
     const emptyValidation = validateScientificTraceClosure([])
-    assertIssueCodes(emptyValidation, ['MISSING_INPUT', 'MISSING_ARTIFACT', 'MISSING_EVIDENCE'])
+    assertIssueCodes(emptyValidation, [
+      'MISSING_INPUT',
+      'MISSING_ARTIFACT',
+      'MISSING_EVIDENCE',
+      'MISSING_HUMAN_REASON'
+    ])
 
     const input = scientificEvent({
       eventId: 'event-user-input',
