@@ -28,10 +28,6 @@ from driver.backend import (
 from driver.overlay import OVERLAY_MANAGER
 
 
-pyautogui.FAILSAFE = True
-pyautogui.PAUSE = 0.05
-
-
 _ACTIONS = (
     "observe", "left_click", "click", "right_click", "middle_click",
     "double_click", "triple_click", "mouse_move", "left_click_drag", "drag",
@@ -48,6 +44,10 @@ class LegacyHandle:
     closed: bool = False
     pressed_keys: set[str] = field(default_factory=set)
     pressed_buttons: set[str] = field(default_factory=set)
+    clipboard_restore_value: str | None = None
+    clipboard_restore_pending: bool = False
+    previous_failsafe: bool | None = None
+    previous_pause: float | None = None
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 
@@ -75,15 +75,33 @@ class LegacyPyAutoGUIBackend:
 
     def open(self, target: TargetDescriptor, context: BackendOpenContext) -> LegacyHandle:
         if target.kind is not TargetKind.HOST_DESKTOP:
-            raise BackendOperationError("legacy backend only supports host-desktop targets")
+            raise BackendOperationError(
+                "legacy backend only supports host-desktop targets",
+                safe_to_retry=True,
+            )
         monitor_raw = target.locator.get("monitorId", "1")
         try:
             monitor = int(monitor_raw)
         except (TypeError, ValueError) as error:
-            raise BackendOperationError("host desktop monitorId must be an integer") from error
+            raise BackendOperationError(
+                "host desktop monitorId must be an integer",
+                safe_to_retry=True,
+            ) from error
         handle = LegacyHandle(target=target, context=context, monitor=monitor)
-        if context.show_overlay and context.execute:
-            OVERLAY_MANAGER.open(context.request_id)
+        handle.previous_failsafe = bool(pyautogui.FAILSAFE)
+        handle.previous_pause = float(pyautogui.PAUSE)
+        pyautogui.FAILSAFE = True
+        pyautogui.PAUSE = 0.05
+        try:
+            if context.show_overlay and context.execute:
+                OVERLAY_MANAGER.open(context.request_id)
+        except Exception as error:
+            pyautogui.FAILSAFE = handle.previous_failsafe
+            pyautogui.PAUSE = handle.previous_pause
+            raise BackendOperationError(
+                "legacy overlay could not be opened",
+                safe_to_retry=True,
+            ) from error
         return handle
 
     def observe(self, handle: object) -> Observation:
@@ -122,10 +140,13 @@ class LegacyPyAutoGUIBackend:
         action_name = str(action.get("action") or "").lower()
         if action_name not in _ACTIONS:
             raise BackendOperationError(f"unsupported action: {action_name}")
-        may_have_taken_effect = False
+        # Once a mutating action enters backend dispatch, any exception is
+        # conservatively outcome-unknown. Individual helpers may raise a more
+        # precise no-side-effect BackendOperationError before mutation.
+        may_have_taken_effect = action_name != "wait"
         try:
             with h.lock:
-                may_have_taken_effect = self._perform_locked(h, action_name, action)
+                committed = self._perform_locked(h, action_name, action)
         except BackendOperationError:
             raise
         except Exception as error:
@@ -137,7 +158,7 @@ class LegacyPyAutoGUIBackend:
             action_id=f"action-{uuid.uuid4()}",
             target_id=h.target.target_id,
             revision_before=expected_revision,
-            committed=may_have_taken_effect,
+            committed=committed,
             may_have_taken_effect=may_have_taken_effect,
             backend_evidence={"verification": Verification.UNVERIFIED.value},
         )
@@ -166,17 +187,42 @@ class LegacyPyAutoGUIBackend:
         with h.lock:
             if h.closed:
                 return
+            errors: list[str] = []
+            if h.clipboard_restore_pending:
+                try:
+                    pyperclip.copy(h.clipboard_restore_value or "")
+                except Exception as error:
+                    errors.append(f"clipboard restore: {error}")
+                else:
+                    h.clipboard_restore_pending = False
+                    h.clipboard_restore_value = None
             for button in tuple(h.pressed_buttons):
                 try:
                     pyautogui.mouseUp(button=button)
-                finally:
+                except Exception as error:
+                    errors.append(f"mouseUp {button}: {error}")
+                else:
                     h.pressed_buttons.discard(button)
             for key in tuple(h.pressed_keys):
                 try:
                     pyautogui.keyUp(key)
-                finally:
+                except Exception as error:
+                    errors.append(f"keyUp {key}: {error}")
+                else:
                     h.pressed_keys.discard(key)
-            OVERLAY_MANAGER.close(h.context.request_id)
+            try:
+                OVERLAY_MANAGER.close(h.context.request_id)
+            except Exception as error:
+                errors.append(f"overlay close: {error}")
+            try:
+                if h.previous_failsafe is not None:
+                    pyautogui.FAILSAFE = h.previous_failsafe
+                if h.previous_pause is not None:
+                    pyautogui.PAUSE = h.previous_pause
+            except Exception as error:
+                errors.append(f"pyautogui configuration restore: {error}")
+            if errors:
+                raise RuntimeError("; ".join(errors))
             h.closed = True
 
     @staticmethod
@@ -208,9 +254,18 @@ class LegacyPyAutoGUIBackend:
             pyautogui.mouseDown(button="left")
             try:
                 pyautogui.moveTo(x, y, duration=0.5)
+            except Exception:
+                raise
             finally:
-                pyautogui.mouseUp(button="left")
-                h.pressed_buttons.discard("left")
+                # Keep ownership recorded if release fails so close retries it
+                # before the process-global lease can be transferred.
+                released = False
+                try:
+                    pyautogui.mouseUp(button="left")
+                    released = True
+                finally:
+                    if released:
+                        h.pressed_buttons.discard("left")
         elif name in {"scroll", "hscroll"}:
             if x is not None and y is not None:
                 pyautogui.moveTo(x, y, duration=0.15)
@@ -237,22 +292,31 @@ class LegacyPyAutoGUIBackend:
 
     @staticmethod
     def _type_text(h: LegacyHandle, text: str) -> None:
-        previous: str | None = None
         try:
-            try:
-                previous = pyperclip.paste()
-            except Exception:
-                previous = None
+            previous = pyperclip.paste()
+        except Exception as error:
+            raise BackendOperationError(
+                "legacy clipboard could not be snapshotted before typing",
+                code="BACKEND_UNAVAILABLE",
+            ) from error
+        h.clipboard_restore_value = previous
+        h.clipboard_restore_pending = True
+        try:
             pyperclip.copy(text)
             modifier = "command" if platform.system() == "Darwin" else "ctrl"
             LegacyPyAutoGUIBackend._press_keys(h, [modifier, "v"])
             time.sleep(max(0.25, h.context.settle_s))
         finally:
-            if previous is not None:
-                try:
-                    pyperclip.copy(previous)
-                except Exception:
-                    pass
+            try:
+                pyperclip.copy(previous)
+            except Exception as error:
+                raise BackendOperationError(
+                    "legacy clipboard restore failed after typing",
+                    may_have_taken_effect=True,
+                ) from error
+            else:
+                h.clipboard_restore_pending = False
+                h.clipboard_restore_value = None
 
     @staticmethod
     def _press_keys(h: LegacyHandle, keys: list[str]) -> None:
@@ -265,10 +329,13 @@ class LegacyPyAutoGUIBackend:
             pass
         finally:
             for key in reversed(keys):
+                released = False
                 try:
                     pyautogui.keyUp(key)
+                    released = True
                 finally:
-                    h.pressed_keys.discard(key)
+                    if released:
+                        h.pressed_keys.discard(key)
 
     def _open_app(self, h: LegacyHandle, app_name: str) -> None:
         if not app_name:
