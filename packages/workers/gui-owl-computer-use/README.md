@@ -162,11 +162,13 @@ disabling the target-bound channel and backend routing introduced earlier.
 - [Operations, diagnostics and rollback](docs/computer-use-operations.md)
 - [Approval trust boundary ADR](docs/adr-001-approval-trust-boundary.md)
 
-Current controlled evidence is `173 passed, 10 opt-in skipped` for the default
-Python suite, `5 passed, 1 explicit skip` for the test-owned headless CDP suite,
-and `4 passed` for project-owned Win32 UIA windows. These results do not prove
-ordinary Chrome, Office, VS Code, a real isolated desktop provider, or three
-physical Windows input desktops. P5 did not run Legacy real-input smoke.
+Current local controlled evidence is `202 passed, 16 opt-in skipped` for the
+default Python suite, `9 passed` for the test-owned headless CDP suite, `4
+passed` for project-owned Win32 UIA windows and `2 passed` for a test-owned
+blank Excel name-box Value round trip plus exact-identity crash cleanup. The
+Excel smoke does not write or prove cell content. These results do not prove ordinary Chrome, Word document
+content, Windows Settings, VS Code, a real isolated desktop provider or three
+physical Windows input desktops.
 
 ### Isolated desktop provider SPI
 
@@ -210,8 +212,10 @@ SelectionItem, RangeValue and Scroll. Value-like writes are read back before a
 `verified` result is returned.
 
 This backend never calls `SetFocus`, PyAutoGUI, PostMessage or the host
-clipboard. A physical key, coordinate-only operation, missing pattern, changed
-HWND/PID/runtime identity or focus-dependent control therefore fails
+clipboard. A third-party UIA provider may nevertheless activate its own window
+while committing a semantic Pattern action; the capability therefore exposes
+`mayActivateTarget=true`. A physical key, coordinate-only operation, missing
+pattern, changed HWND/PID/runtime identity or focus-dependent control fails
 explicitly. UIA semantic observation does not imply target-bound pixels;
 `imageAvailable=false` is returned when no such image exists. See
 `docs/adr-002-windows-uia-binding.md` for the dependency and COM-threading

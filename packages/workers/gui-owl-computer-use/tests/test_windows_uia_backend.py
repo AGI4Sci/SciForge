@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from threading import Barrier
 
 import pytest
@@ -12,6 +13,7 @@ from cua.service import ComputerUseService
 from cua.target import parse_target_descriptor
 from driver.backend import BackendOpenContext, BackendOperationError
 from driver.backends.windows_uia import (
+    ComtypesUIAProvider,
     UIAActionResult,
     UIAActionUnsupported,
     UIAProvider,
@@ -110,7 +112,119 @@ def test_capability_is_semantic_target_scoped_and_never_host_input():
     assert capability.requires_host_focus is False
     assert capability.affects_user_input is False
     assert capability.uses_host_clipboard is False
+    assert capability.may_activate_target is True
     assert "key" not in capability.actions
+
+
+class _DiscoveryElement:
+    def __init__(self, pid: int, hwnd: int, title: str, *, stale: bool = False):
+        self.pid = pid
+        self.hwnd = hwnd
+        self.title = title
+        self.stale = stale
+
+    @property
+    def CurrentNativeWindowHandle(self):
+        if self.stale:
+            raise OSError("element disappeared")
+        return self.hwnd
+
+    @property
+    def CurrentProcessId(self):
+        return self.pid
+
+    @property
+    def CurrentName(self):
+        return self.title
+
+    @property
+    def CurrentAutomationId(self):
+        return ""
+
+    def GetRuntimeId(self):
+        return (self.pid, self.hwnd)
+
+
+class _DiscoveryArray:
+    def __init__(self, elements):
+        self.elements = elements
+        self.Length = len(elements)
+
+    def GetElement(self, index):
+        return self.elements[index]
+
+
+class _DiscoveryRoot:
+    def __init__(self, elements):
+        self.elements = elements
+
+    def FindAll(self, scope, condition):
+        assert scope == 2
+        assert condition == "true-condition"
+        return _DiscoveryArray(self.elements)
+
+
+class _DiscoveryAutomation:
+    def __init__(self, elements, *, fail_find_all: bool = False):
+        self.root = _DiscoveryRoot(elements)
+        self.fail_find_all = fail_find_all
+
+    def GetRootElement(self):
+        if not self.fail_find_all:
+            return self.root
+
+        class FailingRoot:
+            def FindAll(self, _scope, _condition):
+                raise OSError("desktop enumeration failed")
+
+        return FailingRoot()
+
+    def CreateTrueCondition(self):
+        return "true-condition"
+
+
+class _DiscoveryUIA:
+    TreeScope_Children = 2
+
+
+def _stub_discovery_automation(provider, automation, state):
+    @contextmanager
+    def stub():
+        state["entered"] += 1
+        try:
+            yield automation, _DiscoveryUIA
+        finally:
+            state["exited"] += 1
+
+    provider._automation = stub
+
+
+def test_discovery_skips_one_stale_window_and_keeps_later_targets():
+    provider = ComtypesUIAProvider()
+    state = {"entered": 0, "exited": 0}
+    automation = _DiscoveryAutomation([
+        _DiscoveryElement(1001, 2001, "A"),
+        _DiscoveryElement(1002, 2002, "B", stale=True),
+        _DiscoveryElement(1003, 2003, "C"),
+    ])
+    _stub_discovery_automation(provider, automation, state)
+
+    targets = provider.discover()
+
+    assert [item.locator["processId"] for item in targets] == [1001, 1003]
+    assert [item.metadata["title"] for item in targets] == ["A", "C"]
+    assert state == {"entered": 1, "exited": 1}
+
+
+def test_discovery_does_not_hide_desktop_enumeration_failure():
+    provider = ComtypesUIAProvider()
+    state = {"entered": 0, "exited": 0}
+    _stub_discovery_automation(provider, _DiscoveryAutomation([], fail_find_all=True), state)
+
+    with pytest.raises(OSError, match="desktop enumeration failed"):
+        provider.discover()
+
+    assert state == {"entered": 1, "exited": 1}
 
 
 def test_value_pattern_style_action_is_read_back_and_verified():

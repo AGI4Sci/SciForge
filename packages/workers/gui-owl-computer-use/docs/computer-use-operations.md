@@ -99,11 +99,25 @@ Remove-Item Env:CUA_CDP_VISIBLE, Env:CUA_CDP_INTEGRATION
 
 $env:CUA_UIA_SMOKE = "1"
 & $pythonExe -m pytest tests/integration/test_windows_uia_smoke.py -q -ra
+Remove-Item Env:CUA_UIA_SMOKE
+
+$env:CUA_UIA_OFFICE_SMOKE = "1"
+& $pythonExe -m pytest tests/integration/test_windows_uia_office_smoke.py -q -ra
+Remove-Item Env:CUA_UIA_OFFICE_SMOKE
 
 $env:CUA_LEGACY_REAL_INPUT = "1"
 & $pythonExe -m pytest tests/integration/test_legacy_real_input_smoke.py -q -ra
 Remove-Item Env:CUA_LEGACY_REAL_INPUT
 ```
+
+The Office UIA smoke refuses to start when Excel is already running. It creates
+one test-owned blank workbook, uses only the uniquely bound name box
+(`automationId=1001`), writes `Z99`, reads it back, restores the original value,
+closes without saving and verifies exact process/window cleanup. It does not
+claim Excel cell-content support. Excel's UIA provider may activate its own
+window while committing `ValuePattern.SetValue`; Windows UIA therefore reports
+`mayActivateTarget=true` even though it never synthesizes physical input or uses
+the host clipboard.
 
 The CDP capture path activates the selected tab inside its explicitly
 allowlisted debugging browser because Chromium does not reliably capture a

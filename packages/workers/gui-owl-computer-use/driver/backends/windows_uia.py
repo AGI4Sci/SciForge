@@ -97,6 +97,10 @@ class WindowsUIABackend:
             lease_scope=LeaseScope.TARGET,
             max_concurrency=64 if available else 0,
             reason=reason,
+            # UIA patterns do not require pre-activating the target, but a
+            # third-party provider may activate its window while committing a
+            # semantic action (observed with Excel's ValuePattern provider).
+            may_activate_target=True,
         )
 
     def discover_targets(self, filters: Mapping[str, Any] | None = None) -> list[TargetDescriptor]:
@@ -246,12 +250,15 @@ class ComtypesUIAProvider:
 
     def discover(self) -> list[TargetDescriptor]:
         targets: list[TargetDescriptor] = []
-        with self._automation() as (automation, _uia):
-            walker = automation.ControlViewWalker
+        with self._automation() as (automation, uia):
             root = automation.GetRootElement()
-            element = walker.GetFirstChildElement(root)
-            while element is not None and len(targets) < 256:
+            elements = root.FindAll(
+                uia.TreeScope_Children,
+                automation.CreateTrueCondition(),
+            )
+            for index in range(min(int(elements.Length), 256)):
                 try:
+                    element = elements.GetElement(index)
                     hwnd = int(element.CurrentNativeWindowHandle)
                     pid = int(element.CurrentProcessId)
                     if hwnd > 0 and pid > 0:
@@ -269,7 +276,6 @@ class ComtypesUIAProvider:
                         }))
                 except Exception:
                     pass
-                element = walker.GetNextSiblingElement(element)
         return targets
 
     def open(self, target: TargetDescriptor) -> str:
