@@ -95,6 +95,10 @@ const labels: Record<string, string> = {
   computerUseConnection_stale: 'status stale',
   computerUseApprovalProof: 'Invocation proof',
   computerUseLifecycle: 'Lifecycle',
+  computerUseSidecarInstance: 'Sidecar instance',
+  computerUseSidecarGeneration: 'Sidecar generation',
+  computerUseBackendInstance: 'Backend instance',
+  computerUseBackendGeneration: 'Backend generation',
   computerUseRefresh: 'Refresh status',
   computerUseDisabledHint: 'Computer use is disabled.',
   computerUseSafetyInputSurface: 'Input surface',
@@ -105,6 +109,8 @@ const labels: Record<string, string> = {
   computerUseSafetyHostFocusRequired: 'required',
   computerUseSafetyClipboard: 'Clipboard',
   computerUseSafetyClipboardNotUsed: 'not used',
+  computerUseSafetyTargetActivation: 'Target activation',
+  computerUseSafetyTargetActivationPossible: 'may switch the debug browser tab',
   computerUsePermissions: 'macOS permissions',
   computerUsePermissionsDesc: 'Accessibility and Screen Recording permissions.',
   computerUseAccessibility: 'Accessibility',
@@ -291,6 +297,9 @@ describe('AgentsSettingsSection', () => {
             affectsUserInput: true,
             requiresHostFocus: true,
             usesHostClipboard: false,
+            mayActivateTarget: true,
+            instanceId: 'legacy-instance-1',
+            generation: 'legacy-generation-1',
             supportsReadback: [],
             leaseScope: 'process-global',
             maxConcurrency: 1
@@ -329,10 +338,13 @@ describe('AgentsSettingsSection', () => {
     expect(html).not.toContain('SciForge Runtime')
     expect(html).toContain('GUI-Owl ready')
     expect(html).toContain('invocation-proof-v1')
+    expect(html).toContain('instance-1')
+    expect(html).toContain('legacy-generation-1')
     expect(html).toContain('REQUESTED_AGENT_ISOLATED_UNAVAILABLE')
     expect(html).toContain('unverified')
     expect(html).toContain('Unverified is not verified or confirmed failure.')
     expect(html).toContain('close failed')
+    expect(html).toContain('may switch the debug browser tab')
     expect(html).toContain('macOS permissions')
   })
 })

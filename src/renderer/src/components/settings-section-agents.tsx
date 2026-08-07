@@ -38,6 +38,7 @@ type ComputerUseBackendSafetyStatus = {
   affectsUserInput?: boolean
   requiresHostFocus?: boolean
   usesHostClipboard?: boolean
+  mayActivateTarget?: boolean
 }
 
 type ComputerUseBackendSafetyChip = {
@@ -122,6 +123,17 @@ function computerUseBackendSafetyChips(
     chips.push({
       labelKey: 'computerUseSafetyClipboard',
       valueKey: clipboardKey
+    })
+  }
+  const activationKey = computerUseBooleanSafetyValueKey(
+    status.mayActivateTarget,
+    'computerUseSafetyTargetActivationPossible',
+    'computerUseSafetyTargetActivationNotUsed'
+  )
+  if (activationKey) {
+    chips.push({
+      labelKey: 'computerUseSafetyTargetActivation',
+      valueKey: activationKey
     })
   }
   return chips
@@ -726,6 +738,12 @@ function ComputerUseSettingsCard({
               <span className="inline-flex rounded-lg border border-ds-border-muted bg-ds-main/40 px-2 py-1 text-[11px] font-medium text-ds-muted">
                 {t('computerUseLifecycle')}: {runtime?.lifecycleState ?? 'unknown'}
               </span>
+              <span className="inline-flex rounded-lg border border-ds-border-muted bg-ds-main/40 px-2 py-1 text-[11px] font-medium text-ds-muted">
+                {t('computerUseSidecarInstance')}: {runtime?.serverInstanceId ?? t('computerUseBackendUnknown')}
+              </span>
+              <span className="inline-flex rounded-lg border border-ds-border-muted bg-ds-main/40 px-2 py-1 text-[11px] font-medium text-ds-muted">
+                {t('computerUseSidecarGeneration')}: {runtime?.generation ?? t('computerUseBackendUnknown')}
+              </span>
               <button
                 type="button"
                 onClick={() => void refresh()}
@@ -756,6 +774,13 @@ function ComputerUseSettingsCard({
                     </span>
                   ))}
                 </div>
+                {item.instanceId || item.generation ? (
+                  <div className="mt-1 font-mono text-[11px]">
+                    {t('computerUseBackendInstance')}: {item.instanceId ?? t('computerUseBackendUnknown')}
+                    {' · '}
+                    {t('computerUseBackendGeneration')}: {item.generation ?? t('computerUseBackendUnknown')}
+                  </div>
+                ) : null}
                 {item.reason ? <div className="mt-1">{item.reason}</div> : null}
               </div>
             ))}
