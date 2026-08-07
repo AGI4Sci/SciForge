@@ -360,6 +360,7 @@ function lifecycleContext(signal: AbortSignal): DomainMainRuntimeLifecycleContex
         model: 'sciforge-router'
       })
     },
+    workflowExecutionReceipts: [],
     enablement: {
       isEnabled: async () => true,
       subscribe: () => () => undefined

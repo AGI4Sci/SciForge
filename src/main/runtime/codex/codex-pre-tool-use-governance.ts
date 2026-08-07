@@ -8,7 +8,11 @@ import type {
   AgentRuntimeTurnGovernanceSnapshotInput
 } from '../agent-runtime/adapter'
 
-const SNAPSHOT_SCHEMA = 'sciforge.codex-pre-tool-use-governance.v2'
+const SNAPSHOT_SCHEMA = 'sciforge.codex-pre-tool-use-governance.v3'
+
+type StoredCodexGovernanceSnapshot = AgentRuntimeTurnGovernanceSnapshot & {
+  allowedTools?: string[]
+}
 
 export const CODEX_PRE_TOOL_USE_GOVERNANCE_STORAGE_ROOT_ENV =
   'SCIFORGE_CODEX_PRE_TOOL_USE_GOVERNANCE_STORAGE_ROOT'
@@ -37,7 +41,7 @@ type StoredCodexTurnGovernanceSnapshot = {
   runtimeId: 'codex'
   threadId: string
   turnId: string
-  snapshot: AgentRuntimeTurnGovernanceSnapshot
+  snapshot: StoredCodexGovernanceSnapshot
 }
 
 type StoredCodexTurnGovernanceBinding = {
@@ -54,7 +58,7 @@ type StoredCodexSessionGovernanceSnapshotSeed = {
   kind: 'session_snapshot'
   runtimeId: 'codex'
   sessionId: string
-  snapshot: AgentRuntimeTurnGovernanceSnapshot
+  snapshot: StoredCodexGovernanceSnapshot
 }
 
 type StoredCodexSessionGovernanceBindingSeed = {
@@ -86,6 +90,10 @@ export class CodexPreToolUseGovernanceBridge {
     }
     const threadId = requiredIdentity(input.threadId, 'threadId')
     const turnId = requiredIdentity(input.turnId, 'turnId')
+    const existing = await readTurnState(this.rootDir, turnId)
+    const allowedTools = existing?.kind === 'turn_snapshot'
+      ? existing.snapshot.allowedTools
+      : undefined
     const stored: StoredCodexTurnGovernanceSnapshot = {
       schema: SNAPSHOT_SCHEMA,
       kind: 'turn_snapshot',
@@ -94,7 +102,8 @@ export class CodexPreToolUseGovernanceBridge {
       turnId,
       snapshot: {
         ownedVisualToolsAvailable: input.snapshot.ownedVisualToolsAvailable === true,
-        nativeVisualProofChainPending: input.snapshot.nativeVisualProofChainPending === true
+        nativeVisualProofChainPending: input.snapshot.nativeVisualProofChainPending === true,
+        ...(allowedTools === undefined ? {} : { allowedTools })
       }
     }
     await atomicWriteFile(
@@ -162,7 +171,8 @@ export class CodexPreToolUseGovernanceBridge {
 
   async seedSession(
     sessionId: string,
-    snapshot: AgentRuntimeTurnGovernanceSnapshot
+    snapshot: AgentRuntimeTurnGovernanceSnapshot,
+    allowedTools?: readonly string[]
   ): Promise<void> {
     const normalizedSessionId = requiredIdentity(sessionId, 'sessionId')
     const stored: StoredCodexSessionGovernanceSnapshotSeed = {
@@ -172,7 +182,10 @@ export class CodexPreToolUseGovernanceBridge {
       sessionId: normalizedSessionId,
       snapshot: {
         ownedVisualToolsAvailable: snapshot.ownedVisualToolsAvailable === true,
-        nativeVisualProofChainPending: snapshot.nativeVisualProofChainPending === true
+        nativeVisualProofChainPending: snapshot.nativeVisualProofChainPending === true,
+        ...(allowedTools === undefined
+          ? {}
+          : { allowedTools: normalizeAllowedTools(allowedTools) })
       }
     }
     await atomicWriteFile(
@@ -226,6 +239,14 @@ export class CodexPreToolUseGovernanceBridge {
           this.rootDir,
           stored.governanceTurnId
         )).snapshot
+    if (
+      snapshot.allowedTools !== undefined &&
+      !snapshot.allowedTools.includes(input.tool_name)
+    ) {
+      return codexPreToolUseFailureClosedOutput(
+        `tool_policy_denied: ${input.tool_name} is outside the Host-bound tool allowlist.`
+      )
+    }
     const workspace = input.cwd?.trim() || undefined
     const decision = new ExecutionGovernorCore({ workspace }).inspectAttempt({
       callId: input.tool_use_id,
@@ -338,7 +359,8 @@ async function readTurnState(
     turnId: normalizedTurnId,
     snapshot: {
       ownedVisualToolsAvailable: snapshot.ownedVisualToolsAvailable,
-      nativeVisualProofChainPending: snapshot.nativeVisualProofChainPending
+      nativeVisualProofChainPending: snapshot.nativeVisualProofChainPending,
+      ...readAllowedTools(snapshot)
     }
   }
 }
@@ -394,7 +416,8 @@ async function readSessionSeed(
     sessionId: normalizedSessionId,
     snapshot: {
       ownedVisualToolsAvailable: snapshot.ownedVisualToolsAvailable,
-      nativeVisualProofChainPending: snapshot.nativeVisualProofChainPending
+      nativeVisualProofChainPending: snapshot.nativeVisualProofChainPending,
+      ...readAllowedTools(snapshot)
     }
   }
 }
@@ -428,6 +451,22 @@ function requiredIdentity(value: string, field: string): string {
   const normalized = value.trim()
   if (!normalized) throw new Error(`Codex governance snapshot requires ${field}.`)
   return normalized
+}
+
+function normalizeAllowedTools(values: readonly string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
+}
+
+function readAllowedTools(snapshot: Record<string, unknown>): { allowedTools?: string[] } {
+  if (snapshot.allowedTools === undefined) return {}
+  if (!Array.isArray(snapshot.allowedTools)) {
+    throw new Error('Codex governance tool allowlist is invalid.')
+  }
+  const allowedTools = snapshot.allowedTools
+  if (!allowedTools.every((value) => typeof value === 'string' && value.trim() === value && value)) {
+    throw new Error('Codex governance tool allowlist is invalid.')
+  }
+  return { allowedTools: normalizeAllowedTools(allowedTools) }
 }
 
 function nonEmptyString(value: unknown): string | undefined {

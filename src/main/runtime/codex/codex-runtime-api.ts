@@ -212,6 +212,7 @@ export type CodexThreadStartPayload = {
   parentTurnId?: string
   threadSource?: string
   sidebarVisibility?: AgentRuntimeThreadSidebarVisibility
+  allowedTools?: string[]
 }
 
 export type CodexThreadStartResult =

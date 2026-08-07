@@ -111,6 +111,14 @@ function asText(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
+function normalizeAllowedTools(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value
+    .map((tool) => asTrimmed(tool))
+    .filter((tool) => /^[A-Za-z0-9_.-]+$/u.test(tool)))]
+    .slice(0, 128)
+}
+
 function normalizeWorkflowScheduleKind(value: unknown): WorkflowTriggerScheduleKind {
   if (value === 'interval' || value === 'daily' || value === 'at' || value === 'cron') return value
   return 'manual'
@@ -383,7 +391,10 @@ export function normalizeWorkflowNode(value: unknown, index: number): WorkflowNo
           providerId: asTrimmed(config.providerId),
           model: asTrimmed(config.model),
           reasoningEffort: normalizeScheduleReasoningEffort(config.reasoningEffort),
-          mode: normalizeRunMode(config.mode)
+          mode: normalizeRunMode(config.mode),
+          ...(Array.isArray(config.allowedTools)
+            ? { allowedTools: normalizeAllowedTools(config.allowedTools) }
+            : {})
         }
       }
     case 'generate-image':
@@ -728,7 +739,8 @@ function normalizeRun(value: unknown, index: number): WorkflowRunV1 {
     startedAt: asTrimmed(r.startedAt),
     finishedAt: asTrimmed(r.finishedAt),
     message: asText(r.message),
-    nodeResults: Array.isArray(r.nodeResults) ? r.nodeResults.map(normalizeNodeResult) : []
+    nodeResults: Array.isArray(r.nodeResults) ? r.nodeResults.map(normalizeNodeResult) : [],
+    ...(asTrimmed(r.reportPath) ? { reportPath: asTrimmed(r.reportPath) } : {})
   }
 }
 

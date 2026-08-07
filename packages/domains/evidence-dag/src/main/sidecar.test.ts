@@ -215,6 +215,7 @@ function lifecycleContext(
     modelAccess: {
       textReasoner
     },
+    workflowExecutionReceipts: [],
     enablement: {
       isEnabled: async () => true,
       subscribe: () => () => undefined

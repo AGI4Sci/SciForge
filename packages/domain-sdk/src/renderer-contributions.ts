@@ -17,6 +17,8 @@ export const RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND =
   'renderer.workbench-global-overlay' as const
 export const RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND =
   'renderer.composer-context-provider' as const
+export const RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND =
+  'renderer.chat-result-panel' as const
 
 export const WORKBENCH_TOPBAR_LOCATION = 'workbench.topbar' as const
 export const WORKBENCH_RIGHT_PANEL_LOCATION = 'workbench.right-panel' as const
@@ -118,6 +120,27 @@ export type DomainRendererWorkspaceFilePickerRequest = z.infer<
 export type DomainRendererWorkspacePickResult = z.infer<
   typeof domainRendererWorkspacePickResultSchema
 >
+
+export type DomainRendererChatResultPanelRenderContext = Readonly<{
+  blocks: readonly unknown[]
+  workspaceRoot?: string
+  sessionId?: string
+  onContinuePrompt?: (prompt: string) => void
+}>
+
+export type DomainRendererChatResultPanelValue<View = unknown> = Readonly<{
+  id: string
+  render: (context: DomainRendererChatResultPanelRenderContext) => View | null
+}>
+
+export function isDomainRendererChatResultPanelValue(
+  value: unknown
+): value is DomainRendererChatResultPanelValue {
+  return hasOnlyKeys(value, ['id', 'render']) &&
+    typeof value.id === 'string' &&
+    value.id.trim().length > 0 &&
+    typeof value.render === 'function'
+}
 
 export type DomainRendererCommandHandler = Readonly<{
   execute: (invocation: DomainRendererCommandInvocation) => void | Promise<void>

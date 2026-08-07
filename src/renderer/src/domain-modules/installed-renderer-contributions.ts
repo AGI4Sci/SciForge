@@ -2,6 +2,7 @@ import type { InstalledDomainProcessEntrySet } from '@sciforge/domain-sdk'
 import {
   RENDERER_COMMAND_CONTRIBUTION_KIND,
   RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND,
+  RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_BOTTOM_PANEL_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
@@ -11,6 +12,7 @@ import {
   domainRendererWorkbenchRightPanelContractSchema,
   domainRendererWorkbenchToolbarActionContractSchema,
   isDomainRendererCommandHandler,
+  isDomainRendererChatResultPanelValue,
   isDomainRendererComposerContextProvider,
   isDomainRendererWorkbenchSurfaceValue,
   isDomainRendererWorkbenchToolbarActionValue,
@@ -66,6 +68,10 @@ import {
   isRendererLifecycleContribution,
   type RendererLifecycleContribution
 } from './renderer-lifecycle'
+import {
+  ChatResultPanelContributionRegistry,
+  type ChatResultPanelContribution
+} from './chat-result-panel-slot'
 
 export const RENDERER_I18N_RESOURCE_CONTRIBUTION_KIND = 'renderer.i18n-resource' as const
 
@@ -90,6 +96,7 @@ export type RendererTranslationHost = Readonly<{
 export type InstalledRendererContributions = Readonly<{
   commands: WorkbenchCommandRegistry
   rightPanels: WorkbenchRightPanelContributionRegistry
+  chatResultPanels: ChatResultPanelContributionRegistry
   bottomPanels: WorkbenchBottomPanelContributionRegistry
   globalOverlays: WorkbenchGlobalOverlayContributionRegistry
   composerContexts: ComposerContextProviderRegistry
@@ -159,6 +166,12 @@ export function createInstalledRendererContributions(
     order: number
     contract: WorkbenchToolbarActionContract
     value: WorkbenchToolbarActionValue
+    onDispose?: () => void
+  }> = []
+  const chatResultPanels: Array<{
+    ownerId: string
+    order: number
+    contribution: ChatResultPanelContribution
     onDispose?: () => void
   }> = []
   const workspacePreviewPlugins: RendererWorkspacePreviewPluginRegistrationInput[] = []
@@ -292,6 +305,21 @@ export function createInstalledRendererContributions(
       })
       continue
     }
+    if (installed.declaration.kind === RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND) {
+      if (
+        !isChatResultPanelContribution(installed.value) ||
+        installed.value.id !== installed.declaration.id
+      ) {
+        throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
+      }
+      chatResultPanels.push({
+        ownerId: installed.owner.moduleId,
+        order: installed.declaration.priority,
+        contribution: installed.value,
+        ...(installed.onDispose ? { onDispose: installed.onDispose } : {})
+      })
+      continue
+    }
     if (installed.declaration.kind === RENDERER_WORKSPACE_PREVIEW_PLUGIN_CONTRIBUTION_KIND) {
       if (!isRendererWorkspacePreviewPluginContribution(installed.value, installed)) {
         throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
@@ -319,6 +347,7 @@ export function createInstalledRendererContributions(
 
   const workbenchCommands = new WorkbenchCommandRegistry()
   const rightPanels = new WorkbenchRightPanelContributionRegistry()
+  const chatResultPanelRegistry = new ChatResultPanelContributionRegistry()
   const workbenchBottomPanels = new WorkbenchBottomPanelContributionRegistry()
   const workbenchGlobalOverlays = new WorkbenchGlobalOverlayContributionRegistry()
   const workbenchComposerContexts = new ComposerContextProviderRegistry()
@@ -334,6 +363,7 @@ export function createInstalledRendererContributions(
   const registrationDisposers: Array<() => void> = [
     () => workbenchCommands.dispose(),
     () => rightPanels.dispose(),
+    () => chatResultPanelRegistry.dispose(),
     () => workbenchBottomPanels.dispose(),
     () => workbenchGlobalOverlays.dispose(),
     () => workbenchComposerContexts.dispose(),
@@ -390,6 +420,13 @@ export function createInstalledRendererContributions(
         installTranslationResource(translations, resource.contribution)
       )
     }
+    for (const panel of chatResultPanels) {
+      pushOwnedRegistration(
+        registrationDisposers,
+        panel.onDispose,
+        chatResultPanelRegistry.register(panel).dispose
+      )
+    }
     for (const lifecycle of lifecycles) {
       const dispose = lifecycle.contribution.activate()
       if (dispose !== undefined && typeof dispose !== 'function') {
@@ -414,6 +451,7 @@ export function createInstalledRendererContributions(
   return Object.freeze({
     commands: workbenchCommands,
     rightPanels,
+    chatResultPanels: chatResultPanelRegistry,
     bottomPanels: workbenchBottomPanels,
     globalOverlays: workbenchGlobalOverlays,
     composerContexts: workbenchComposerContexts,
@@ -504,6 +542,12 @@ function isRendererI18nResourceContribution(
   return Object.values(candidate.resources).every((messages) =>
     isRecord(messages) && Object.values(messages).every((message) => typeof message === 'string')
   )
+}
+
+function isChatResultPanelContribution(
+  value: unknown
+): value is ChatResultPanelContribution {
+  return isDomainRendererChatResultPanelValue(value)
 }
 
 function invalidContribution(id: string, ownerId: string): Error {

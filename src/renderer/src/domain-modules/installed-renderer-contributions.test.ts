@@ -1,6 +1,7 @@
 import type { InstalledDomainProcessEntrySet } from '@sciforge/domain-sdk'
 import {
   RENDERER_COMMAND_CONTRIBUTION_KIND,
+  RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND,
   RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_BOTTOM_PANEL_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND,
@@ -17,6 +18,7 @@ import {
   type RendererTranslationHost
 } from './installed-renderer-contributions'
 import { RENDERER_LIFECYCLE_CONTRIBUTION_KIND } from './renderer-lifecycle'
+import type { ChatResultPanelContribution } from './chat-result-panel-slot'
 import {
   RENDERER_WORKBENCH_TOOLBAR_ACTION_CONTRIBUTION_KIND,
   type WorkbenchToolbarActionContract
@@ -57,6 +59,29 @@ describe('installed renderer contributions', () => {
       title: contribution.title,
       resourceKind: contribution.resourceKind
     }))).toEqual(expectedPanels)
+    const expectedChatPanels = installedRendererDomainEntrySet.contributions
+      .filter(({ declaration }) =>
+        declaration.kind === RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND
+      )
+      .map(({ declaration, owner, value }) => ({
+        id: declaration.id,
+        ownerId: owner.moduleId,
+        contributionId: (value as ChatResultPanelContribution).id
+      }))
+    expect(runtime.chatResultPanels.list().map(({ id, ownerId, contribution }) => ({
+      id,
+      ownerId,
+      contributionId: contribution.id
+    }))).toEqual(expectedChatPanels)
+    expect(runtime.chatResultPanels.list().map(({ id, ownerId, contribution }) => ({
+      id,
+      ownerId,
+      contributionId: contribution.id
+    }))).toContainEqual({
+      id: 'dataset-api.timeline-results',
+      ownerId: 'sciforge.dataset-api',
+      contributionId: 'dataset-api.timeline-results'
+    })
     const expectedCommands = installedRendererDomainEntrySet.contributions
       .filter(({ declaration }) =>
         declaration.kind === RENDERER_COMMAND_CONTRIBUTION_KIND
@@ -115,6 +140,7 @@ describe('installed renderer contributions', () => {
     expect(runtime.disposed).toBe(true)
     expect(runtime.commands.list()).toEqual([])
     expect(runtime.rightPanels.list()).toEqual([])
+    expect(runtime.chatResultPanels.list()).toEqual([])
     expect(runtime.bottomPanels.list()).toEqual([])
     expect(runtime.globalOverlays.list()).toEqual([])
     expect(runtime.composerContexts.list()).toEqual([])

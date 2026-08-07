@@ -5,14 +5,15 @@ import { domainPackageDefinition as domainPackageDefinition1 } from '@sciforge/d
 import { domainPackageDefinition as domainPackageDefinition2 } from '@sciforge/domain-browser-preview/definition'
 import { domainPackageDefinition as domainPackageDefinition3 } from '@sciforge/domain-change-inspector/definition'
 import { domainPackageDefinition as domainPackageDefinition4 } from '@sciforge/domain-create-loop/definition'
-import { domainPackageDefinition as domainPackageDefinition5 } from '@sciforge/domain-evidence-dag/definition'
-import { domainPackageDefinition as domainPackageDefinition6 } from '@sciforge/domain-git-checkpoints/definition'
-import { domainPackageDefinition as domainPackageDefinition7 } from '@sciforge/domain-life-science-preview/definition'
-import { domainPackageDefinition as domainPackageDefinition8 } from '@sciforge/domain-paper-radar/definition'
-import { domainPackageDefinition as domainPackageDefinition9 } from '@sciforge/domain-project-dag/definition'
-import { domainPackageDefinition as domainPackageDefinition10 } from '@sciforge/domain-remote-ssh/definition'
-import { domainPackageDefinition as domainPackageDefinition11 } from '@sciforge/domain-terminal/definition'
-import { domainPackageDefinition as domainPackageDefinition12 } from '@sciforge/domain-visual-review/definition'
+import { domainPackageDefinition as domainPackageDefinition5 } from '@sciforge/domain-dataset-api/definition'
+import { domainPackageDefinition as domainPackageDefinition6 } from '@sciforge/domain-evidence-dag/definition'
+import { domainPackageDefinition as domainPackageDefinition7 } from '@sciforge/domain-git-checkpoints/definition'
+import { domainPackageDefinition as domainPackageDefinition8 } from '@sciforge/domain-life-science-preview/definition'
+import { domainPackageDefinition as domainPackageDefinition9 } from '@sciforge/domain-paper-radar/definition'
+import { domainPackageDefinition as domainPackageDefinition10 } from '@sciforge/domain-project-dag/definition'
+import { domainPackageDefinition as domainPackageDefinition11 } from '@sciforge/domain-remote-ssh/definition'
+import { domainPackageDefinition as domainPackageDefinition12 } from '@sciforge/domain-terminal/definition'
+import { domainPackageDefinition as domainPackageDefinition13 } from '@sciforge/domain-visual-review/definition'
 
 export const installedDomainPackages = defineInstalledDomainPackageSet([
   domainPackageDefinition0,
@@ -27,5 +28,6 @@ export const installedDomainPackages = defineInstalledDomainPackageSet([
   domainPackageDefinition9,
   domainPackageDefinition10,
   domainPackageDefinition11,
-  domainPackageDefinition12
+  domainPackageDefinition12,
+  domainPackageDefinition13
 ])

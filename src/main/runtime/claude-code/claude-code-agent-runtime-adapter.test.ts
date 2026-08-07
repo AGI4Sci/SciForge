@@ -29,11 +29,13 @@ describe('createClaudeCodeAgentRuntimeAdapter', () => {
       runtimeId: 'claude',
       threadId: 'thread-seeded-governance',
       text: 'Host prepared text',
-      workspace: '/tmp/workspace'
+      workspace: '/tmp/workspace',
+      allowedTools: ['sciforge_discover']
     })
 
     expect(received).toEqual([expect.objectContaining({
       threadId: 'thread-seeded-governance',
+      allowedTools: ['sciforge_discover'],
       ownedVisualToolsAvailable: true,
       nativeVisualProofChainPending: true
     })])

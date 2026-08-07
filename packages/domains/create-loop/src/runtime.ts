@@ -9,6 +9,9 @@ import type {
   DomainMainRuntimeLifecycleContext
 } from '@sciforge/domain-sdk/host'
 import {
+  type DomainWorkflowExecutionReceiptProvider
+} from '@sciforge/domain-sdk/workflow-template'
+import {
   type CreateLoopSnapshot,
   type WorkflowApprovalDecision,
   type WorkflowCodeCheckResult,
@@ -33,7 +36,7 @@ import {
 const SCHEMA_VERSION = 1
 const SCHEDULER_POLL_MS = 30_000
 const MAX_NODE_EXECUTIONS = 200
-const MAX_RUN_DURATION_MS = 30 * 60_000
+const DEFAULT_MAX_RUN_DURATION_MS = 30 * 60_000
 const CODE_TIMEOUT_MS = 30_000
 
 type PersistedState = {
@@ -56,6 +59,7 @@ type ApprovalWaiter = {
 
 export type CreateLoopRuntimeOptions = Readonly<{
   statePath: string
+  executionReceiptProviders?: readonly DomainWorkflowExecutionReceiptProvider[]
   now?: () => Date
   createId?: () => string
   setInterval?: (handler: () => void, delay: number) => unknown
@@ -68,6 +72,7 @@ export class CreateLoopRuntime {
   readonly #createId: () => string
   readonly #setInterval: (handler: () => void, delay: number) => unknown
   readonly #clearInterval: (handle: unknown) => void
+  readonly #executionReceiptProviders: readonly DomainWorkflowExecutionReceiptProvider[]
   #context: DomainMainRuntimeLifecycleContext | null = null
   #state: PersistedState | null = null
   #stateOperation: Promise<unknown> = Promise.resolve()
@@ -82,6 +87,7 @@ export class CreateLoopRuntime {
 
   constructor(options: CreateLoopRuntimeOptions) {
     this.#statePath = path.resolve(options.statePath)
+    this.#executionReceiptProviders = Object.freeze([...(options.executionReceiptProviders ?? [])])
     this.#now = options.now ?? (() => new Date())
     this.#createId = options.createId ?? randomUUID
     this.#setInterval = options.setInterval ??
@@ -328,7 +334,7 @@ export class CreateLoopRuntime {
           results,
           callerWorkspaceRoot
         ),
-        MAX_RUN_DURATION_MS,
+        this.#workflowTimeoutMs(workflow),
         signal
       )
     } catch (error) {
@@ -336,7 +342,7 @@ export class CreateLoopRuntime {
       message = signal.aborted ? 'Workflow stopped.' : errorMessage(error)
     }
     const finishedAt = this.#now().toISOString()
-    const run: WorkflowRunV1 = {
+    let run: WorkflowRunV1 = {
       id: runId,
       trigger,
       status,
@@ -345,6 +351,26 @@ export class CreateLoopRuntime {
       message,
       nodeResults: results
     }
+    const receiptProvider = this.#executionReceiptProvider(workflow)
+    if (receiptProvider?.writeRunReceipt) {
+      try {
+        const reportPath = await receiptProvider.writeRunReceipt({
+          statePath: this.#statePath,
+          workflow,
+          run,
+          workspaceRoot: callerWorkspaceRoot
+        })
+        run = { ...run, reportPath }
+      } catch (error) {
+        run = {
+          ...run,
+          status: 'error',
+          message: `Workflow audit report failed: ${errorMessage(error)}`
+        }
+      }
+    }
+    status = run.status
+    message = run.message
     await this.#mutate((current) => {
       const workflows = current.settings.workflows.map((candidate) =>
         candidate.id === workflow.id
@@ -429,16 +455,38 @@ export class CreateLoopRuntime {
       [node.id]: 'running'
     }
     const retries = Math.min(10, Math.max(0, node.retries ?? 0))
+    const receiptProvider = this.#executionReceiptProvider(workflow)
+    const timeoutMs = receiptProvider?.nodeTimeoutMs?.(workflow, node) ?? 0
+    const timeoutDeadline = timeoutMs > 0 ? Date.now() + timeoutMs : 0
     for (let attempt = 0; attempt <= retries; attempt += 1) {
       try {
-        const output = await this.#nodeOutput(
-          workflow,
-          node,
-          payload,
-          runId,
-          signal,
-          callerWorkspaceRoot
-        )
+        const remainingTimeoutMs = timeoutMs > 0
+          ? Math.max(1, timeoutDeadline - Date.now())
+          : 0
+        const output = timeoutMs > 0
+          ? await withAbortTimeout(
+              (nodeSignal) => this.#nodeOutput(
+                workflow,
+                node,
+                payload,
+                runId,
+                nodeSignal,
+                callerWorkspaceRoot,
+                startedAt
+              ),
+              remainingTimeoutMs,
+              signal,
+              `Node '${node.id}' timed out after ${timeoutMs} ms.`
+            )
+          : await this.#nodeOutput(
+              workflow,
+              node,
+              payload,
+              runId,
+              signal,
+              callerWorkspaceRoot,
+              startedAt
+            )
         return {
           nodeId: node.id,
           status: 'success',
@@ -452,10 +500,36 @@ export class CreateLoopRuntime {
           error: ''
         }
       } catch (error) {
-        if (signal.aborted) throw error
-        if (attempt < retries) {
+        const timeoutBudgetExhausted = timeoutMs > 0 && Date.now() >= timeoutDeadline
+        if (!signal.aborted && !timeoutBudgetExhausted && attempt < retries) {
           await abortableDelay(Math.max(0, node.retryDelayMs ?? 0), signal)
           continue
+        }
+        if (!signal.aborted && receiptProvider?.recoverAgentResult) {
+          try {
+            const recoveredText = await receiptProvider.recoverAgentResult({
+              workflow,
+              node,
+              incoming: payload.json,
+              workspaceRoot: callerWorkspaceRoot,
+              nodeStartedAt: startedAt
+            })
+            return {
+              nodeId: node.id,
+              status: 'success',
+              startedAt,
+              finishedAt: this.#now().toISOString(),
+              message: recoveredText,
+              outputJson: JSON.stringify({ text: recoveredText }),
+              inputJson: JSON.stringify(payload.json),
+              retries: attempt,
+              threadId: '',
+              error: `Recovered from immutable execution receipt '${receiptProvider.id}' after Agent failure: ${errorMessage(error)}`
+            }
+          } catch {
+            // Preserve the original Agent failure when the package-owned
+            // receipt provider cannot prove a recoverable execution.
+          }
         }
         if (node.onError === 'fallback') {
           const fallback = parseJsonOrText(node.fallbackJson ?? '{}')
@@ -495,7 +569,8 @@ export class CreateLoopRuntime {
     payload: Payload,
     runId: string,
     signal: AbortSignal,
-    callerWorkspaceRoot: string
+    callerWorkspaceRoot: string,
+    nodeStartedAt: string
   ): Promise<{ payload: Payload; message: string; threadId?: string }> {
     if (node.disabled) return { payload, message: 'Skipped disabled node.' }
     switch (node.type) {
@@ -506,7 +581,13 @@ export class CreateLoopRuntime {
         return { payload, message: 'Trigger received.' }
       case 'llm': {
         const prompt = interpolate(node.config.prompt, payload)
-        const text = await this.#reason(prompt, node.config.model, signal)
+        const responseText = await this.#reason(prompt, node.config.model, signal)
+        const text = this.#executionReceiptProvider(workflow)?.normalizeModelOutput?.({
+          workflow,
+          node,
+          incoming: payload,
+          responseText
+        }) ?? responseText
         return { payload: { json: { text }, text }, message: text }
       }
       case 'ai-agent': {
@@ -528,19 +609,33 @@ export class CreateLoopRuntime {
           throw new Error('AI Agent nodes require an active or configured workspace.')
         }
         const result = await context.agentExecution.run({
-          runtimeId: node.config.runtimeId ?? 'sciforge',
+          ...(node.config.runtimeId ? { runtimeId: node.config.runtimeId } : {}),
           prompt: interpolate(node.config.prompt, payload),
           workspaceRoot,
           ...(node.config.model.trim() ? { model: node.config.model.trim() } : {}),
           ...(node.config.reasoningEffort === 'off'
             ? {}
             : { reasoningEffort: node.config.reasoningEffort }),
+          ...(node.config.allowedTools
+            ? { allowedTools: node.config.allowedTools }
+            : {}),
           mode: node.config.mode,
           signal
         })
+        const receiptProvider = this.#executionReceiptProvider(workflow)
+        const resultText = receiptProvider?.hydrateAgentResult
+          ? await receiptProvider.hydrateAgentResult({
+              workflow,
+              node,
+              text: result.text,
+              workspaceRoot,
+              incoming: payload.json,
+              nodeStartedAt
+            })
+          : result.text
         return {
-          payload: { json: { text: result.text }, text: result.text },
-          message: result.text,
+          payload: { json: { text: resultText }, text: resultText },
+          message: resultText,
           ...(result.threadId ? { threadId: result.threadId } : {})
         }
       }
@@ -581,7 +676,9 @@ export class CreateLoopRuntime {
       }
       case 'json': {
         if (node.config.mode === 'parse') {
-          const json = parseJson(payload.text)
+          const json = node.config.strict
+            ? JSON.parse(payload.text) as unknown
+            : parseJson(payload.text)
           return { payload: { json, text: payload.text }, message: 'JSON parsed.' }
         }
         const text = JSON.stringify(payload.json)
@@ -703,16 +800,42 @@ export class CreateLoopRuntime {
         let current = payload
         let count = 0
         while (count < maxIterations) {
+          const iterationResults: WorkflowNodeRunResultV1[] = []
           current = await this.#executeGraph(
             target,
             trigger.id,
             current,
             runId,
             signal,
-            [],
+            iterationResults,
             callerWorkspaceRoot
           )
           count += 1
+          if (current.json && typeof current.json === 'object' && !Array.isArray(current.json)) {
+            const currentRecord = current.json as Record<string, unknown>
+            const existingTrace = Array.isArray(currentRecord.loopExecutionTrace)
+              ? currentRecord.loopExecutionTrace
+              : []
+            const nextJson = {
+              ...currentRecord,
+              loopExecutionTrace: [
+                ...existingTrace,
+                {
+                  round: count,
+                  nodes: iterationResults.map((result) => ({
+                    nodeId: result.nodeId,
+                    status: result.status,
+                    retries: result.retries ?? 0,
+                    threadId: result.threadId,
+                    startedAt: result.startedAt,
+                    finishedAt: result.finishedAt,
+                    error: result.error
+                  }))
+                }
+              ]
+            }
+            current = { json: nextJson, text: JSON.stringify(nextJson) }
+          }
           if (evaluateCondition(
             valueAt(current, node.config.leftExpr),
             node.config.operator,
@@ -999,6 +1122,17 @@ export class CreateLoopRuntime {
     if (!this.#enabled) throw new Error('Create Loop package is disabled.')
   }
 
+  #executionReceiptProvider(
+    workflow: WorkflowV1
+  ): DomainWorkflowExecutionReceiptProvider | undefined {
+    return this.#executionReceiptProviders.find((provider) => provider.matches(workflow))
+  }
+
+  #workflowTimeoutMs(workflow: WorkflowV1): number {
+    return this.#executionReceiptProvider(workflow)?.workflowTimeoutMs?.(workflow)
+      ?? DEFAULT_MAX_RUN_DURATION_MS
+  }
+
   #log(level: 'debug' | 'info' | 'warn' | 'error', message: string, detail?: unknown): void {
     this.#context?.log({ level, message, ...(detail === undefined ? {} : { detail }) })
   }
@@ -1047,7 +1181,12 @@ function payloadFromInput(input: unknown): Payload {
 function payloadFromResult(result: WorkflowNodeRunResultV1): Payload {
   if (!result.outputJson) return { json: {}, text: result.message }
   const json = parseJson(result.outputJson)
-  return { json, text: isRecord(json) && typeof json.text === 'string' ? json.text : result.message || result.outputJson }
+  return {
+    json,
+    text: isRecord(json) && typeof json.text === 'string'
+      ? json.text
+      : result.outputJson
+  }
 }
 
 function branchFromMessage(message: string): string | null {
@@ -1230,7 +1369,102 @@ function writeJsonResponse(
 }
 
 function parseJson(text: string): unknown {
-  return JSON.parse(text)
+  const trimmed = text.trim()
+  const candidates = [trimmed]
+  for (const match of trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
+    candidates.push(match[1]!.trim())
+  }
+  candidates.push(...extractBalancedJsonValues(trimmed).reverse())
+  let lastError: unknown
+  for (const candidate of [...new Set(candidates)]) {
+    for (const value of [candidate, repairJsonLike(candidate)]) {
+      try {
+        return JSON.parse(value)
+      } catch (error) {
+        lastError = error
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Invalid JSON.')
+}
+
+function repairJsonLike(text: string): string {
+  return escapeUnquotedQuotesInStrings(text
+    .replace(/^\uFEFF/u, '')
+    .replace(/([{,]\s*)'([^'\\\r\n]+)'(\s*:)/gu, '$1"$2"$3')
+    .replace(/([{,]\s*)([A-Za-z_$][A-Za-z0-9_$-]*)(\s*:)/gu, '$1"$2"$3')
+    .replace(/,\s*([}\]])/gu, '$1'))
+}
+
+function escapeUnquotedQuotesInStrings(text: string): string {
+  let repaired = ''
+  let inString = false
+  let escaped = false
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index]!
+    if (!inString) {
+      repaired += character
+      if (character === '"') inString = true
+      continue
+    }
+    if (escaped) {
+      repaired += character
+      escaped = false
+      continue
+    }
+    if (character === '\\') {
+      repaired += character
+      escaped = true
+      continue
+    }
+    if (character !== '"') {
+      repaired += character
+      continue
+    }
+    const nextSignificant = text.slice(index + 1).match(/^\s*([,:}\]])/u)?.[1]
+    if (nextSignificant || text.slice(index + 1).trim() === '') {
+      repaired += character
+      inString = false
+    } else {
+      repaired += '\\"'
+    }
+  }
+  return repaired
+}
+
+function extractBalancedJsonValues(text: string): string[] {
+  const values: string[] = []
+  for (let start = 0; start < text.length; start += 1) {
+    const opening = text[start]
+    if (opening !== '{' && opening !== '[') continue
+    const stack: string[] = [opening]
+    let inString = false
+    let escaped = false
+    for (let index = start + 1; index < text.length; index += 1) {
+      const character = text[index]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (character === '\\') escaped = true
+        else if (character === '"') inString = false
+        continue
+      }
+      if (character === '"') {
+        inString = true
+        continue
+      }
+      if (character === '{' || character === '[') stack.push(character)
+      else if (character === '}' || character === ']') {
+        const expected = character === '}' ? '{' : '['
+        if (stack.pop() !== expected) break
+        if (stack.length === 0) {
+          values.push(text.slice(start, index + 1))
+          start = index
+          break
+        }
+      }
+    }
+  }
+  return values
 }
 
 function parseJsonOrText(text: string): unknown {
@@ -1274,5 +1508,27 @@ async function withTimeout<T>(
     return await Promise.race([promise, timeout])
   } finally {
     if (timer) clearTimeout(timer)
+  }
+}
+
+async function withAbortTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  parentSignal: AbortSignal,
+  timeoutMessage: string
+): Promise<T> {
+  const controller = new AbortController()
+  const relayAbort = () => controller.abort(parentSignal.reason)
+  if (parentSignal.aborted) relayAbort()
+  else parentSignal.addEventListener('abort', relayAbort, { once: true })
+  const timer = setTimeout(() => controller.abort(new Error(timeoutMessage)), timeoutMs)
+  const aborted = new Promise<never>((_resolve, reject) => {
+    controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true })
+  })
+  try {
+    return await Promise.race([operation(controller.signal), aborted])
+  } finally {
+    clearTimeout(timer)
+    parentSignal.removeEventListener('abort', relayAbort)
   }
 }

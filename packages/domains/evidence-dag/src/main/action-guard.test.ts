@@ -147,6 +147,7 @@ function lifecycleContext(userDataDir: string): DomainMainRuntimeLifecycleContex
         model: 'sciforge-router'
       })
     },
+    workflowExecutionReceipts: [],
     enablement: {
       isEnabled: async () => true,
       subscribe: () => () => undefined

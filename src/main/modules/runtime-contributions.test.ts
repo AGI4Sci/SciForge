@@ -9,6 +9,10 @@ import {
   type DomainAgentArtifactConsumer,
   type DomainMainRuntimeLifecycleContext
 } from '@sciforge/domain-sdk/host'
+import {
+  MAIN_WORKFLOW_EXECUTION_RECEIPT_PROVIDER_CONTRIBUTION_KIND,
+  defineDomainWorkflowExecutionReceiptProvider
+} from '@sciforge/domain-sdk/workflow-template'
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { CapabilityBroker } from '../capabilities/broker'
@@ -93,6 +97,36 @@ describe('main runtime contributions', () => {
     await expect(activateMainRuntimeContributions(catalog, runtimeHost()))
       .rejects.toMatchObject({ code: 'invalid_contribution_value' })
     expect(activate).not.toHaveBeenCalled()
+  })
+
+  it('projects package-owned workflow receipt providers through the public lifecycle contract', async () => {
+    const contexts: DomainMainRuntimeLifecycleContext[] = []
+    const provider = defineDomainWorkflowExecutionReceiptProvider({
+      id: 'fixture.receipts',
+      matches: (workflow) => workflow === 'fixture'
+    })
+    const catalog = new DomainModuleCatalog()
+    catalog.registerModule(fixtureEntry('fixture.workflow', '@fixture/workflow', 100, [
+      {
+        id: 'fixture.workflow.receipts',
+        kind: MAIN_WORKFLOW_EXECUTION_RECEIPT_PROVIDER_CONTRIBUTION_KIND,
+        value: provider
+      },
+      {
+        id: 'fixture.workflow.runtime',
+        kind: MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
+        value: {
+          activate: (context: DomainMainRuntimeLifecycleContext) => {
+            contexts.push(context)
+          }
+        }
+      }
+    ]))
+
+    const activated = await activateMainRuntimeContributions(catalog, runtimeHost())
+    expect(contexts[0]?.workflowExecutionReceipts).toEqual([provider])
+    expect(Object.isFrozen(contexts[0]?.workflowExecutionReceipts)).toBe(true)
+    await activated.dispose()
   })
 
   it('rolls back already activated runtimes when a later activation fails', async () => {

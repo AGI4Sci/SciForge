@@ -84,6 +84,7 @@ export function createClaudeCodeAgentRuntimeAdapter(
         displayText: input.displayText,
         workspace: input.workspace,
         reasoningEffort: input.reasoningEffort,
+        ...(input.allowedTools ? { allowedTools: input.allowedTools } : {}),
         ownedVisualToolsAvailable:
           context.turnGovernanceSnapshot?.ownedVisualToolsAvailable === true,
         nativeVisualProofChainPending:

@@ -5,14 +5,15 @@ import { createDomainRendererEntry as createDomainRendererEntry0 } from '@scifor
 import { createDomainRendererEntry as createDomainRendererEntry1 } from '@sciforge/domain-browser-preview/renderer'
 import { createDomainRendererEntry as createDomainRendererEntry2 } from '@sciforge/domain-change-inspector/renderer'
 import { createDomainRendererEntry as createDomainRendererEntry3 } from '@sciforge/domain-create-loop/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry4 } from '@sciforge/domain-evidence-dag/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry5 } from '@sciforge/domain-git-checkpoints/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry6 } from '@sciforge/domain-life-science-preview/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry7 } from '@sciforge/domain-paper-radar/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry8 } from '@sciforge/domain-project-dag/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry9 } from '@sciforge/domain-remote-ssh/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry10 } from '@sciforge/domain-terminal/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry11 } from '@sciforge/domain-visual-review/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry4 } from '@sciforge/domain-dataset-api/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry5 } from '@sciforge/domain-evidence-dag/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry6 } from '@sciforge/domain-git-checkpoints/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry7 } from '@sciforge/domain-life-science-preview/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry8 } from '@sciforge/domain-paper-radar/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry9 } from '@sciforge/domain-project-dag/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry10 } from '@sciforge/domain-remote-ssh/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry11 } from '@sciforge/domain-terminal/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry12 } from '@sciforge/domain-visual-review/renderer'
 import { installedDomainPackages } from '@shared/installed-domain-packages'
 import type { VisibleContextComponentSnapshot } from '@shared/visible-context'
 import { rendererCapabilityClient } from '../lib/capability-client'
@@ -64,6 +65,7 @@ export const installedRendererDomainEntrySet = defineInstalledRendererDomainEntr
     createDomainRendererEntry8(domainHost),
     createDomainRendererEntry9(domainHost),
     createDomainRendererEntry10(domainHost),
-    createDomainRendererEntry11(domainHost)
+    createDomainRendererEntry11(domainHost),
+    createDomainRendererEntry12(domainHost)
   ]
 )
