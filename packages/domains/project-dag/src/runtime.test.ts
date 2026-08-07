@@ -432,6 +432,7 @@ function lifecycleContext(
         model: 'sciforge-router'
       })
     },
+    workflowExecutionReceipts: [],
     enablement: {
       isEnabled: () => true,
       subscribe: () => () => undefined

@@ -13,6 +13,7 @@ import type {
   DomainRendererWorkspaceFilePickerRequest,
   DomainRendererWorkspacePickResult
 } from './renderer-contributions.js'
+import type { DomainWorkflowExecutionReceiptProvider } from './workflow-template.js'
 import type { DomainMainVisualCaptureHost } from './visual-capture.js'
 import type {
   WorkspaceHostArtifact,
@@ -22,6 +23,7 @@ export * from './agent-execution.js'
 export * from './power.js'
 export * from './renderer-contributions.js'
 export * from './visual-capture.js'
+export * from './workflow-template.js'
 
 export const MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND = 'main.runtime-lifecycle' as const
 export const MAIN_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION_KIND =
@@ -181,10 +183,11 @@ export type DomainMainRuntimeLifecycleHost = Readonly<{
 
 export type DomainMainRuntimeLifecycleContext =
   Omit<DomainMainRuntimeLifecycleHost, 'enablement'> & Readonly<{
-  owner: DomainRuntimeContributionOwner
-  signal: AbortSignal
-  enablement: DomainMainModuleEnablement
-}>
+    owner: DomainRuntimeContributionOwner
+    signal: AbortSignal
+    enablement: DomainMainModuleEnablement
+    workflowExecutionReceipts: readonly DomainWorkflowExecutionReceiptProvider[]
+  }>
 
 export type DomainMainRuntimeDisposer = () => void | Promise<void>
 

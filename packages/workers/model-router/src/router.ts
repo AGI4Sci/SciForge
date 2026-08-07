@@ -1409,7 +1409,7 @@ async function routeResponsesRequest(
   const requestWithSafeTextInput = typeof request.input === 'string'
     ? { ...requestWithoutContinuationHandle, input: extracted.userText }
     : requestWithoutContinuationHandle;
-  const requestForTextReasoner = hasToolTranscriptInput
+  const unrestrictedRequestForTextReasoner = hasToolTranscriptInput
     ? {
       ...requestWithSafeTextInput,
       input: repairResponseToolTranscriptInput(
@@ -1422,8 +1422,9 @@ async function routeResponsesRequest(
       ),
     }
     : requestWithSafeTextInput;
+  const requestForTextReasoner = unrestrictedRequestForTextReasoner;
   const textReasonerRequestOptions = textReasonerOptionsFromResponsesRequest(requestForTextReasoner);
-  const toolNameAliases = chatToolNameAliasesFromResponsesTools(request.tools);
+  const toolNameAliases = chatToolNameAliasesFromResponsesTools(requestForTextReasoner.tools);
   const textReasonerMessages = hasToolTranscriptInput || hasAssistantReasoningInput
     ? chatMessagesFromResponsesRequest(requestForTextReasoner, profile.textReasoner.model)
     : [];

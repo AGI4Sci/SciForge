@@ -7,6 +7,8 @@ import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
 import type { z } from 'zod'
 import {
   CREATE_LOOP_CAPABILITY_IDS,
+  createDatasetLoopInputSchema,
+  createDatasetLoopOutputSchema,
   createLoopApprovalInputSchema,
   createLoopApprovalOutputSchema,
   createLoopCheckCodeInputSchema,
@@ -29,6 +31,7 @@ import {
   type WorkflowCodeLanguage,
   type WorkflowSettingsV1
 } from './contract.js'
+import { buildDatasetGenerationLoop } from './dataset-loop-builder.js'
 import {
   WORKFLOW_AUTOMATION_CAPABILITY_FACTORY_CONTRIBUTION,
   WORKFLOW_AUTOMATION_DOMAIN_MODULE_ID,
@@ -119,7 +122,10 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
     activate: async (context) => {
       if (owned || activation) throw new Error('Create Loop runtime lifecycle is already active.')
       const pending = (async (): Promise<OwnedRuntime> => {
-        const runtime = createRuntime({ statePath: createLoopStatePath(context.userDataDir) })
+        const runtime = createRuntime({
+          statePath: createLoopStatePath(context.userDataDir),
+          executionReceiptProviders: context.workflowExecutionReceipts
+        })
         try {
           const deactivate = await runtime.activate(context)
           const record = { runtime, deactivate }
@@ -177,13 +183,16 @@ export function createCreateLoopCapabilityFactory<CapabilityDefinition>(
     input: Omit<
       CreateLoopCapabilityOptions,
       'version' | 'audiences' | 'scope' | 'tags'
-    > & Readonly<{ audiences?: readonly ('ui' | 'agent' | 'system')[] }>
+    > & Readonly<{
+      audiences?: readonly ('ui' | 'agent' | 'system')[]
+      tags?: readonly string[]
+    }>
   ): CreateLoopCapabilityOptions => ({
     ...input,
     version: '1.0.0',
     audiences: input.audiences ?? ['ui', 'agent'],
     scope: 'workspace',
-    tags: ['workflow', 'automation', 'loop']
+    tags: input.tags ?? ['workflow', 'automation', 'loop']
   })
   const capability = (
     id: string,
@@ -196,7 +205,8 @@ export function createCreateLoopCapabilityFactory<CapabilityDefinition>(
     concurrency: CreateLoopCapabilityOptions['concurrency'] = {
       revision: 'none',
       idempotency: effect === 'read' ? 'none' : 'required'
-    }
+    },
+    tags?: readonly string[]
   ): CapabilityDefinition => options.defineCapability(define({
     id,
     title,
@@ -206,6 +216,7 @@ export function createCreateLoopCapabilityFactory<CapabilityDefinition>(
       ? 'confirmation'
       : 'none',
     concurrency,
+    tags,
     inputSchema,
     outputSchema,
     handler
@@ -243,6 +254,72 @@ export function createCreateLoopCapabilityFactory<CapabilityDefinition>(
           }
         },
         { revision: 'none', idempotency: 'required' }
+      ),
+      capability(
+        CREATE_LOOP_CAPABILITY_IDS.buildDataset,
+        'Build and run a dataset generation loop',
+        'Compiles confirmed conversational data requirements into editable Create Loop workflows that use Dataset API grounding, candidate generation, quality evaluation, retry, materialization, validation, and versioned publication. This dynamically builds workflows and does not use a preset or a separate feature module.',
+        'external-write',
+        createDatasetLoopInputSchema,
+        createDatasetLoopOutputSchema,
+        async (raw, context) => {
+          const input = createDatasetLoopInputSchema.parse(raw)
+          const runtime = options.getRuntime()
+          const snapshot = await runtime.read()
+          const built = buildDatasetGenerationLoop(input, {
+            defaultModel: snapshot.settings.model
+          })
+          const generatedWorkflows = built.workflows.map((workflow) =>
+            createLoopWorkflowSchema.parse(workflow)
+          )
+          const rootWorkflow = generatedWorkflows.find(
+            (workflow) => workflow.id === built.rootWorkflowId
+          )
+          if (!rootWorkflow) throw new Error('Generated workflow template has no root workflow.')
+          const nestedWorkflow = generatedWorkflows.find(
+            (workflow) => workflow.id !== built.rootWorkflowId
+          )
+          if (!nestedWorkflow) throw new Error('Generated dataset template requires an iteration workflow.')
+          const existingCoordinator = snapshot.settings.workflows.find(
+            (workflow) => workflow.id === rootWorkflow.id
+          )
+          const existingIteration = snapshot.settings.workflows.find(
+            (workflow) => workflow.id === nestedWorkflow.id
+          )
+          const created = !existingCoordinator || !existingIteration
+          let revision = snapshot.revision
+          if (created || !snapshot.settings.enabled) {
+            const generatedIds = new Set(generatedWorkflows.map((workflow) => workflow.id))
+            const saved = await runtime.save({
+              ...snapshot.settings,
+              enabled: true,
+              workflows: [
+                ...snapshot.settings.workflows.filter((workflow) => !generatedIds.has(workflow.id)),
+                existingIteration ?? nestedWorkflow,
+                existingCoordinator ?? rootWorkflow
+              ]
+            }, snapshot.revision)
+            revision = saved.revision
+          }
+          const run = input.run
+            ? await runtime.runWorkflow(
+                rootWorkflow.id,
+                built.initialInput,
+                context.caller.workspaceId?.trim() ?? ''
+              )
+            : null
+          return {
+            output: {
+              workflowId: rootWorkflow.id,
+              iterationWorkflowId: nestedWorkflow.id,
+              created,
+              revision,
+              run
+            }
+          }
+        },
+        undefined,
+        ['workflow', 'automation', 'loop', 'dataset', 'generation']
       ),
       capability(
         CREATE_LOOP_CAPABILITY_IDS.run,

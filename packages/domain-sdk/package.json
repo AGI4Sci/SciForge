@@ -22,7 +22,8 @@
     "./visual-capture": "./src/visual-capture.ts",
     "./workspace-host": "./src/workspace-host.ts",
     "./workspace-server": "./src/workspace-server.ts",
-    "./workspace-preview": "./src/workspace-preview.ts"
+    "./workspace-preview": "./src/workspace-preview.ts",
+    "./workflow-template": "./src/workflow-template.ts"
   },
   "files": [
     "src",

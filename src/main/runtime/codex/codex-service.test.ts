@@ -2100,7 +2100,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     }))
   })
 
-  it('advertises fixed capability tools and routes them first with trusted thread workspace context', async () => {
+  it('advertises only Host-allowed capability tools and routes them with trusted thread workspace context', async () => {
     const storageRoot = await tempRoot()
     const client = controllableClient()
     let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
@@ -2131,17 +2131,17 @@ describe('CodexRuntimeService compatibility operations', () => {
 
     await expect(service.startThread({
       title: 'Capability thread',
-      workspace: '/tmp/capability-workspace'
+      workspace: '/tmp/capability-workspace',
+      allowedTools: [CAPABILITY_AGENT_TOOL_NAMES.discover]
     })).resolves.toMatchObject({ ok: true })
 
     const startParams = vi.mocked(client.startThread).mock.calls[0]?.[0] as {
       dynamicTools?: Array<{ name: string }>
     }
     const dynamicTools = startParams.dynamicTools ?? []
-    expect(dynamicTools).toEqual(expect.arrayContaining(
-      Object.values(CAPABILITY_AGENT_TOOL_NAMES).map((name) => expect.objectContaining({ name }))
-    ))
-    expect(dynamicTools.filter((tool) => tool.name === CAPABILITY_AGENT_TOOL_NAMES.discover)).toHaveLength(1)
+    expect(dynamicTools.map((tool) => tool.name)).toEqual([
+      CAPABILITY_AGENT_TOOL_NAMES.discover
+    ])
 
     await expect(pendingServerRequests?.onToolCallRequest?.({
       requestId: 'capability-request-1',

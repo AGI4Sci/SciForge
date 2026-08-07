@@ -271,6 +271,7 @@ function runtimeContext(
         model: 'sciforge-router'
       })
     },
+    workflowExecutionReceipts: [],
     enablement: {
       isEnabled: async () => true,
       subscribe: () => () => undefined

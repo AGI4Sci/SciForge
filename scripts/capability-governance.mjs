@@ -4,7 +4,6 @@ import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { tsImport } from 'tsx/esm/api'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const APPLICATION_COMPOSITION_PATH = path.join(ROOT, 'src/main/modules/index.ts')
@@ -250,7 +249,7 @@ async function loadApplicationCapabilityModel() {
 
   let module
   try {
-    module = await tsImport(pathToFileURL(APPLICATION_COMPOSITION_PATH).href, { parentURL: import.meta.url })
+    module = await import(pathToFileURL(APPLICATION_COMPOSITION_PATH).href)
   } catch (error) {
     throw new GovernanceError(
       `Unable to import ${relativePath(APPLICATION_COMPOSITION_PATH)}: ${error instanceof Error ? error.message : String(error)}`
@@ -302,7 +301,7 @@ async function loadApplicationCapabilityModel() {
   validateDomainPolicyCoverage(descriptors, migratedDomains)
   let agentToolsModule
   try {
-    agentToolsModule = await tsImport(pathToFileURL(AGENT_TOOLS_PATH).href, { parentURL: import.meta.url })
+    agentToolsModule = await import(pathToFileURL(AGENT_TOOLS_PATH).href)
   } catch (error) {
     throw new GovernanceError(
       `Unable to import ${relativePath(AGENT_TOOLS_PATH)}: ${error instanceof Error ? error.message : String(error)}`
