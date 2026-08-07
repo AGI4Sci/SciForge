@@ -9,7 +9,7 @@ import {
   type ScientificTraceValidationResult
 } from './scientific.js'
 
-export type ScientificJobScenario = 'success' | 'blocked' | 'rerun'
+export type ScientificJobScenario = 'success' | 'blocked' | 'rerun' | 'human-interaction'
 
 export type ScientificJobState =
   | 'submitted'
@@ -220,6 +220,8 @@ type ScenarioEventOptions = {
 }
 
 function createScenarioEvents(options: ScenarioEventOptions): ScientificTraceEvent[] {
+  if (options.scenario === 'human-interaction') return createHumanInteractionScenarioEvents(options)
+
   const events: ScientificTraceEventInput[] = []
   const input = eventId(options.jobId, 'input')
   const plan = eventId(options.jobId, 'plan')
@@ -362,6 +364,188 @@ function createScenarioEvents(options: ScenarioEventOptions): ScientificTraceEve
     attempt: 2,
     relatedEvents: [failed, cancelled, resumed]
   })
+  return prepareScenarioEvents(events)
+}
+
+function createHumanInteractionScenarioEvents(options: ScenarioEventOptions): ScientificTraceEvent[] {
+  const events: ScientificTraceEventInput[] = []
+  const input = eventId(options.jobId, 'hci-input')
+  const confirmationRequest = eventId(options.jobId, 'hci-confirmation-request')
+  const confirmation = eventId(options.jobId, 'hci-confirmation')
+  const plan = eventId(options.jobId, 'hci-plan')
+  const submitRequested = eventId(options.jobId, 'hci-submit-requested')
+  const submitted = eventId(options.jobId, 'hci-submitted')
+  const started = eventId(options.jobId, 'hci-started')
+  const monitored = eventId(options.jobId, 'hci-monitored')
+  const finished = eventId(options.jobId, 'hci-finished')
+  const resultCollected = eventId(options.jobId, 'hci-result-collected')
+  const artifact = options.artifacts[0] as ScientificJobArtifact
+  const artifactEvent = eventId(options.jobId, 'hci-artifact')
+  const evidence = eventId(options.jobId, 'hci-evidence')
+  const usage = eventId(options.jobId, 'hci-usage')
+  const acceptance = eventId(options.jobId, 'hci-acceptance')
+
+  events.push(
+    baseEvent(options, {
+      eventId: input,
+      type: 'USER_INPUT',
+      actor: { type: 'human', id: 'researcher' },
+      payload: {
+        text: 'Submit the local low-cost scientific fixture from the workbench UI.',
+        interactionStep: 'user-submit',
+        inputRef: options.fixture.inputRef,
+        sequenceId: options.fixture.sequenceId
+      },
+      links: { inputs: [options.fixture.inputRef] }
+    }),
+    baseEvent(options, {
+      eventId: confirmationRequest,
+      type: 'HUMAN_REVIEW_REQUESTED',
+      parentEventId: input,
+      actor: { type: 'system', id: 'workbench-ui' },
+      payload: {
+        interactionStep: 'pre-run-confirmation-request',
+        prompt: 'Confirm running the local fixture with zero GPU and zero API cost.',
+        requiredDecision: true
+      }
+    }),
+    baseEvent(options, {
+      eventId: confirmation,
+      type: 'HUMAN_REVIEW_RECORDED',
+      parentEventId: confirmationRequest,
+      actor: { type: 'human', id: options.reviewerId },
+      payload: {
+        interactionStep: 'pre-run-confirmation',
+        reviewerId: options.reviewerId,
+        decision: 'approved',
+        reason: 'Approved because the fixture is local, deterministic, and records GPU/API cost as zero.'
+      },
+      links: { reviews: [`review://${options.reviewerId}/${options.jobId}/pre-run`] }
+    }),
+    baseEvent(options, {
+      eventId: plan,
+      type: 'AGENT_ACTION',
+      parentEventId: confirmation,
+      actor: { type: 'agent', id: 'codex-runtime' },
+      payload: {
+        interactionStep: 'agent-prepares-job',
+        action: 'prepare_scientific_compute_job',
+        command: options.fixture.command,
+        parameters: options.fixture.parameters
+      }
+    }),
+    baseEvent(options, {
+      eventId: submitRequested,
+      type: 'TOOL_CALL_REQUESTED',
+      parentEventId: plan,
+      actor: { type: 'agent', id: 'codex-runtime' },
+      payload: {
+        interactionStep: 'agent-requests-scheduler-submit',
+        toolName: 'scheduler.submit',
+        jobId: options.jobId,
+        scheduler: options.scheduler
+      }
+    }),
+    baseEvent(options, {
+      eventId: submitted,
+      type: 'JOB_SUBMITTED',
+      parentEventId: submitRequested,
+      actor: { type: 'scheduler', id: options.scheduler },
+      payload: {
+        interactionStep: 'scheduler-submitted',
+        jobId: options.jobId,
+        scheduler: options.scheduler,
+        queue: 'local-fixture',
+        resources: {
+          cpuCores: 1,
+          gpuCount: 0,
+          walltimeSeconds: 30
+        }
+      }
+    }),
+    baseEvent(options, {
+      eventId: started,
+      type: 'JOB_STARTED',
+      parentEventId: submitted,
+      actor: { type: 'scheduler', id: options.scheduler },
+      payload: {
+        interactionStep: 'scheduler-started',
+        jobId: options.jobId,
+        attempt: 0,
+        status: 'running'
+      }
+    }),
+    monitorEvent(options, monitored, started, {
+      attempt: 0,
+      status: 'running'
+    }),
+    baseEvent(options, {
+      eventId: finished,
+      type: 'JOB_FINISHED',
+      parentEventId: monitored,
+      actor: { type: 'scheduler', id: options.scheduler },
+      payload: {
+        interactionStep: 'scheduler-finished',
+        jobId: options.jobId,
+        attempt: 0,
+        status: 'finished',
+        resultPath: artifact.path
+      },
+      links: { artifacts: [`artifact://${artifact.artifactId}`] }
+    }),
+    baseEvent(options, {
+      eventId: resultCollected,
+      type: 'TOOL_CALL_COMPLETED',
+      parentEventId: finished,
+      actor: { type: 'tool', id: 'result-collector' },
+      payload: {
+        interactionStep: 'result-collected',
+        toolName: 'result.collector.collect',
+        jobId: options.jobId,
+        collectedPath: artifact.path,
+        sha256: artifact.sha256
+      },
+      links: { artifacts: [`artifact://${artifact.artifactId}`] }
+    }),
+    baseEvent(options, {
+      eventId: artifactEvent,
+      type: 'ARTIFACT_CREATED',
+      parentEventId: resultCollected,
+      actor: { type: 'agent', id: 'codex-runtime' },
+      payload: {
+        interactionStep: 'artifact-created',
+        artifactId: artifact.artifactId,
+        path: artifact.path,
+        sha256: artifact.sha256,
+        mediaType: 'text/plain',
+        role: 'scientific-compute-result'
+      },
+      links: { artifacts: [`artifact://${artifact.artifactId}`] }
+    }),
+    baseEvent(options, {
+      eventId: evidence,
+      type: 'EVIDENCE_ATTACHED',
+      parentEventId: artifactEvent,
+      actor: { type: 'agent', id: 'codex-runtime' },
+      payload: {
+        interactionStep: 'evidence-attached',
+        evidenceId: `evidence-${artifact.artifactId}`,
+        evidenceType: 'hci-result-hash-and-reviewable-output',
+        target: artifactEvent,
+        validationSummary: 'The UI-submitted fixture produced a deterministic result hash for review.'
+      },
+      links: {
+        artifacts: [`artifact://${artifact.artifactId}`],
+        evidence: [`evidence://${artifact.artifactId}/hci-review`]
+      }
+    }),
+    resourceUsageEvent(options, usage, evidence),
+    humanReviewEvent(options, acceptance, evidence, {
+      decision: 'accepted',
+      reason: 'The researcher accepted the HCI fixture because submission, confirmation, monitoring, result collection, evidence, and zero-cost usage are all traceable.'
+    })
+  )
+
   return prepareScenarioEvents(events)
 }
 
@@ -625,7 +809,7 @@ function createScenarioArtifacts(
 }
 
 function stateForScenario(scenario: ScientificJobScenario): ScientificJobState {
-  if (scenario === 'success' || scenario === 'rerun') return 'finished'
+  if (scenario === 'success' || scenario === 'rerun' || scenario === 'human-interaction') return 'finished'
   return 'blocked'
 }
 

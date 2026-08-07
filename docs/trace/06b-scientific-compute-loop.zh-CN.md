@@ -29,6 +29,7 @@
 - `createScientificJobBaselineJsonl()` JSONL baseline 导出函数；
 - `validateScientificJobBaselineTrace()` 06B baseline 校验函数；
 - 成功、阻塞、复跑三类 baseline Trace；
+- 人机交互 baseline Trace：用户提交、人工确认、Agent 调度、状态监控、结果回收、人工验收；
 - 资源使用记录：人工时间、GPU 小时、API tokens、存储、估算费用；
 - 科研验收记录：每条 baseline Trace 都包含人工 review reason；
 - 单元测试验证 baseline Trace 能通过 06A closure validation，并能写入现有 JSONL Trace Store。
@@ -90,6 +91,25 @@ USER_INPUT
   -> EVIDENCE_ATTACHED
   -> RESOURCE_USAGE_RECORDED
   -> HUMAN_REVIEW_RECORDED
+```
+
+人机交互 baseline：
+
+```text
+USER_INPUT(user submits from UI)
+  -> HUMAN_REVIEW_REQUESTED(pre-run confirmation)
+  -> HUMAN_REVIEW_RECORDED(pre-run approval with reason)
+  -> AGENT_ACTION
+  -> TOOL_CALL_REQUESTED(scheduler.submit)
+  -> JOB_SUBMITTED
+  -> JOB_STARTED
+  -> TOOL_CALL_COMPLETED(scheduler.poll)
+  -> JOB_FINISHED
+  -> TOOL_CALL_COMPLETED(result.collector.collect)
+  -> ARTIFACT_CREATED
+  -> EVIDENCE_ATTACHED
+  -> RESOURCE_USAGE_RECORDED
+  -> HUMAN_REVIEW_RECORDED(scientific acceptance with reason)
 ```
 
 ## 4. 为什么这样设计
@@ -177,6 +197,7 @@ npm --workspace @sciforge/full-trace run typecheck
 - 成功 baseline Trace；
 - 失败/阻塞 baseline Trace；
 - 取消/恢复/复跑 baseline Trace；
+- 人机交互 baseline Trace；
 - baseline JSONL 可解析；
 - baseline Trace 可通过 06A closure validation；
 - baseline events 可通过 06A Collector 写入 LocalTraceStore；

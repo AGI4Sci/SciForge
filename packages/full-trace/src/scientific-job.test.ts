@@ -118,6 +118,37 @@ describe('scientific compute job loop baseline traces', () => {
     assert.equal(countEvents(trace.events, 'JOB_FINISHED'), 1)
   })
 
+  test('creates a human-in-the-loop interaction trace for UI submission and review', () => {
+    const trace = createScientificJobBaselineTrace({ scenario: 'human-interaction' })
+
+    assert.equal(trace.validation.ok, true)
+    assert.equal(validateScientificJobBaselineTrace(trace).ok, true)
+    assert.equal(trace.state, 'finished')
+    assertEventTypes(trace.events, [
+      'USER_INPUT',
+      'HUMAN_REVIEW_REQUESTED',
+      'HUMAN_REVIEW_RECORDED',
+      'AGENT_ACTION',
+      'TOOL_CALL_REQUESTED',
+      'JOB_SUBMITTED',
+      'JOB_STARTED',
+      'TOOL_CALL_COMPLETED',
+      'JOB_FINISHED',
+      'ARTIFACT_CREATED',
+      'EVIDENCE_ATTACHED',
+      'RESOURCE_USAGE_RECORDED'
+    ])
+    assert.equal(
+      trace.events.some((event) => event.payload.interactionStep === 'pre-run-confirmation'),
+      true
+    )
+    assert.equal(
+      trace.events.some((event) => event.payload.interactionStep === 'result-collected'),
+      true
+    )
+    assert.equal(countEvents(trace.events, 'HUMAN_REVIEW_RECORDED'), 2)
+  })
+
   test('serializes baseline events as JSONL that can be parsed and closure-validated', () => {
     const jsonl = createScientificJobBaselineJsonl({ scenario: 'success' })
     const events = jsonl
