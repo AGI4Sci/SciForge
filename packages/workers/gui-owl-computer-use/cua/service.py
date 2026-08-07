@@ -66,6 +66,7 @@ class ComputerUseService:
         self._approval_proof = "legacy-trust-boundary"
         self._server_instance_id = server_instance_id or f"cua-{uuid.uuid4()}"
         self._request_contexts: dict[str, dict[str, Any]] = {}
+        self._open_cleanup_pending: dict[str, dict[str, Any]] = {}
         self._recent_rejections: deque[dict[str, Any]] = deque(maxlen=20)
 
     def configure_approval_proof(self, mode: str) -> None:
@@ -74,6 +75,26 @@ class ComputerUseService:
         self._approval_proof = (
             "invocation-proof-v1" if mode == "required" else "legacy-trust-boundary"
         )
+
+    def configure_cdp_adapter(
+        self, adapter_url: str, token: str, *, expected_adapter_url: str = "",
+    ) -> dict[str, Any]:
+        from driver.backends.cdp_adapter import CdpAdapterBackend
+
+        with self._lifecycle_lock:
+            if self._lifecycle_state != "running":
+                return R.err("UNAVAILABLE", "computer use service is shutting down")
+            backend = next((
+                item for item in self.router.backends()
+                if isinstance(item, CdpAdapterBackend)
+            ), None)
+            if backend is None:
+                return R.err("BACKEND_UNAVAILABLE", "CDP backend is not installed")
+            if not adapter_url and expected_adapter_url:
+                cleared = backend.clear_configuration_if_matches(expected_adapter_url)
+                return R.ok({"configured": not cleared, "cleared": cleared})
+            backend.configure(adapter_url, token)
+        return R.ok({"configured": bool(adapter_url and token), "cleared": False})
 
     def run(
         self,
@@ -121,6 +142,7 @@ class ComputerUseService:
         request_started = False
         terminal_state = RequestState.FAILED
         terminal_reason = "request_failed"
+        retain_open_lease = False
         result: dict[str, Any]
         try:
             session, ephemeral = self._resolve_session(request, invocation)
@@ -189,6 +211,19 @@ class ComputerUseService:
         except RoutingError as error:
             terminal_reason = error.code.lower()
             result = R.err(error.code, str(error), details=error.details)
+            retain_open_lease = error.details.get("retainLease") is True
+            if retain_open_lease:
+                with self._channels_lock:
+                    self._open_cleanup_pending[request_id] = {
+                        "requestId": request_id,
+                        "sessionId": session_id or "unknown",
+                        "targetId": str(error.details.get("targetId") or "unknown"),
+                        "leaseId": str(error.details.get("leaseId") or "unknown"),
+                        "backend": str(error.details.get("backend") or "unknown"),
+                        "closed": False,
+                        "leaseReleased": False,
+                        "errors": ["backend open outcome is unknown; lease is quarantined"],
+                    }
         except RegistryError as error:
             terminal_reason = error.code.lower()
             result = R.err(error.code, str(error), details=error.details)
@@ -210,7 +245,7 @@ class ComputerUseService:
             terminal_state, terminal_reason = self._terminal_from_result(result)
 
         cleanup = channel.close(terminal_reason) if channel is not None else None
-        cleanup_complete = cleanup is None or cleanup.lease_released
+        cleanup_complete = not retain_open_lease and (cleanup is None or cleanup.lease_released)
         if cleanup is not None and cleanup.errors:
             result.setdefault("warnings", []).extend(cleanup.errors)
         if cleanup is not None and not cleanup.lease_released:
@@ -489,6 +524,7 @@ class ComputerUseService:
     def cleanup_pending(self) -> list[dict[str, Any]]:
         with self._channels_lock:
             channels = list(self._channels.values())
+            open_pending = list(self._open_cleanup_pending.values())
         return [
             {
                 "requestId": channel.request_id,
@@ -502,7 +538,7 @@ class ComputerUseService:
             }
             for channel in channels
             if channel.cleanup.errors or channel.cancelled or self._lifecycle_state != "running"
-        ]
+        ] + open_pending
 
     def _remember_rejection(self, result: dict[str, Any], *, request_id: str) -> None:
         error = result.get("error") if isinstance(result, dict) else None
@@ -607,7 +643,10 @@ class ComputerUseService:
 
     def shutdown(self) -> dict[str, Any]:
         with self._lifecycle_lock:
-            self._lifecycle_state = "shutting-down"
+            # This value is part of the cross-language runtime status contract.
+            # Keep it aligned with the TypeScript `running | stopping | stopped`
+            # schema so cleanup remains visible while shutdown is in progress.
+            self._lifecycle_state = "stopping"
             self.registry.begin_shutdown()
             self._reaper_stop.set()
             reaper = self._reaper_thread

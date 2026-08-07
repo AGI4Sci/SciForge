@@ -64,10 +64,15 @@ class BackendOperationError(RuntimeError):
         *,
         may_have_taken_effect: bool = False,
         code: str | None = None,
+        safe_to_retry: bool = False,
     ):
         super().__init__(message)
         self.may_have_taken_effect = may_have_taken_effect
         self.code = code
+        # `open()` failures are retryable only when the backend explicitly
+        # proves that no handle or external resource was created. Generic
+        # exceptions default to quarantine rather than optimistic rerouting.
+        self.safe_to_retry = safe_to_retry
 
 
 @runtime_checkable

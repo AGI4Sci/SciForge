@@ -23,6 +23,7 @@ import io
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
+from urllib.parse import urlsplit
 
 from PIL import Image
 
@@ -139,6 +140,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path not in (
             "/computer-use/run", "/computer-use/cancel",
             "/computer-use/sessions/bind", "/computer-use/sessions/release",
+            "/computer-use/backends/cdp/configure",
         ):
             return self._send(404, R.err("NOT_FOUND", f"no route {self.path}"))
         auth_error = _check_auth(self.headers.get("Authorization"), self.config)
@@ -153,6 +155,43 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(n) or b"{}")
         except Exception as e:  # noqa: BLE001
             return self._send(400, R.err("INVALID_ARGUMENT", f"bad json: {e}"))
+        if self.path == "/computer-use/backends/cdp/configure":
+            if not self.config.service_token:
+                return self._send(403, R.err(
+                    "UNAUTHENTICATED",
+                    "CDP adapter configuration requires an authenticated sidecar",
+                ))
+            adapter_url = str(body.get("adapterUrl") or "").strip().rstrip("/")
+            adapter_token = str(body.get("adapterToken") or "").strip()
+            expected_adapter_url = str(body.get("expectedAdapterUrl") or "").strip().rstrip("/")
+            if bool(adapter_url) != bool(adapter_token):
+                return self._send(400, R.err(
+                    "INVALID_ARGUMENT", "adapterUrl and adapterToken must be set or cleared together",
+                ))
+            if adapter_url:
+                parsed = urlsplit(adapter_url)
+                if parsed.scheme not in {"http", "https"} or parsed.hostname not in {
+                    "127.0.0.1", "localhost", "::1",
+                } or parsed.username or parsed.password:
+                    return self._send(400, R.err(
+                        "INVALID_ARGUMENT", "CDP adapter URL must be credential-free loopback HTTP(S)",
+                    ))
+                if len(adapter_token) < 32 or len(adapter_token) > 4096:
+                    return self._send(400, R.err(
+                        "INVALID_ARGUMENT", "CDP adapter token length is invalid",
+                    ))
+            if expected_adapter_url:
+                expected = urlsplit(expected_adapter_url)
+                if expected.scheme not in {"http", "https"} or expected.hostname not in {
+                    "127.0.0.1", "localhost", "::1",
+                } or expected.username or expected.password:
+                    return self._send(400, R.err(
+                        "INVALID_ARGUMENT", "expectedAdapterUrl must be credential-free loopback HTTP(S)",
+                    ))
+            res = self.service.configure_cdp_adapter(
+                adapter_url, adapter_token, expected_adapter_url=expected_adapter_url,
+            )
+            return self._send(200 if res.get("ok") else 409, res)
         invocation = None
         try:
             proof_arguments = dict(body)

@@ -12,6 +12,7 @@ type FixtureCase = {
   name: string
   input: unknown
   protocolVersion?: number
+  normalizedPublic?: unknown
 }
 
 const fixtures = fixturePayload as { valid: FixtureCase[]; invalid: FixtureCase[] }
@@ -19,13 +20,16 @@ const fixtures = fixturePayload as { valid: FixtureCase[]; invalid: FixtureCase[
 describe('computer-use shared v2 contract', () => {
   it('exposes the structured isolated desktop unavailable code', () => {
     expect(COMPUTER_USE_ERROR_CODES).toContain('ISOLATED_DESKTOP_UNAVAILABLE')
+    expect(COMPUTER_USE_ERROR_CODES).toContain('APPROVAL_PROOF_CAPACITY')
   })
 
   for (const fixture of fixtures.valid) {
     it(`accepts ${fixture.name}`, () => {
       const parsed = computerUseRunInputSchema.parse(fixture.input)
       expect(isComputerUseV2Input(parsed)).toBe(fixture.protocolVersion === 2)
-      expect(normalizeComputerUseRunInput(fixture.input).protocolVersion).toBe(fixture.protocolVersion)
+      const normalized = normalizeComputerUseRunInput(fixture.input)
+      expect(normalized.protocolVersion).toBe(fixture.protocolVersion)
+      expect(normalized).toEqual(fixture.normalizedPublic)
     })
   }
 

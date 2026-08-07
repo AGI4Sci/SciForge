@@ -217,10 +217,16 @@ class SessionInputChannel:
                 evidence={**dict(receipt.backend_evidence), **dict(evidence.details)},
             )
         except BackendOperationError as error:
-            code = error.code or (
-                "ACTION_OUTCOME_UNKNOWN" if error.may_have_taken_effect else "ACTION_UNSUPPORTED"
-            )
-            raise ChannelError(code, str(error)) from error
+            if error.may_have_taken_effect:
+                # A more specific transport/target code must never weaken the
+                # unknown-outcome contract after dispatch may have occurred.
+                # Callers must inspect state before any retry.
+                raise ChannelError(
+                    "ACTION_OUTCOME_UNKNOWN",
+                    "backend action may have taken effect but its outcome is unknown",
+                    details={"backendCode": error.code},
+                ) from error
+            raise ChannelError(error.code or "ACTION_UNSUPPORTED", str(error)) from error
         finally:
             try:
                 self.registry.finish_action(self.lease.lease_id)

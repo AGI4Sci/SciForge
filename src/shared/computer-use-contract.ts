@@ -40,7 +40,8 @@ export const COMPUTER_USE_ERROR_CODES = [
   'ACTION_UNVERIFIED', 'ACTION_OUTCOME_UNKNOWN', 'LEASE_EXPIRED',
   'CANCEL_PENDING', 'CLEANUP_INCOMPLETE',
   'APPROVAL_PROOF_REQUIRED', 'APPROVAL_PROOF_INVALID', 'APPROVAL_PROOF_EXPIRED',
-  'APPROVAL_PROOF_REPLAYED', 'INVOCATION_IDENTITY_MISMATCH',
+  'APPROVAL_PROOF_REPLAYED', 'APPROVAL_PROOF_CAPACITY',
+  'INVOCATION_IDENTITY_MISMATCH',
   'QUEUE_NOT_SUPPORTED'
 ] as const
 
@@ -184,7 +185,10 @@ export const computerUseBackendCapabilitiesSchema = z.object({
   supportsReadback: z.array(z.string()),
   leaseScope: computerUseLeaseScopeSchema,
   maxConcurrency: z.number().int().nonnegative(),
-  reason: z.string().nullable()
+  reason: z.string().nullable(),
+  mayActivateTarget: z.boolean().optional(),
+  instanceId: z.string().min(1).max(128).nullable().optional(),
+  generation: z.string().min(1).max(128).nullable().optional()
 }).strict()
 
 export const computerUseRuntimeStatusSchema = z.object({

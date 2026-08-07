@@ -42,6 +42,9 @@ class CdpAdapterHandle:
     target: TargetDescriptor
     context: BackendOpenContext
     adapter_handle_id: str
+    generation: str
+    adapter_url: str
+    token: str = field(repr=False)
     revision: str = ""
     verification: dict[str, Mapping[str, Any]] = field(default_factory=dict)
     closed: bool = False
@@ -66,13 +69,35 @@ class CdpAdapterBackend:
             "SCIFORGE_CUA_CDP_ADAPTER_TOKEN", ""
         )).strip()
         self.timeout_s = timeout_s
+        self._config_lock = threading.RLock()
         # The production backend is shared by ThreadingHTTPServer requests.
         # Use a fresh requests session per call instead of sharing mutable
         # connection state across request threads. Tests may inject a transport.
         self._session = session
 
+    def configure(self, adapter_url: str, token: str) -> None:
+        """Atomically replace routing for future handles.
+
+        Existing handles retain their original endpoint and credential so
+        reconfiguration cannot redirect their actions or cleanup.
+        """
+        with self._config_lock:
+            self.adapter_url = adapter_url.strip().rstrip("/")
+            self.token = token.strip()
+
+    def clear_configuration_if_matches(self, adapter_url: str) -> bool:
+        with self._config_lock:
+            if self.adapter_url != adapter_url.strip().rstrip("/"):
+                return False
+            self.adapter_url = ""
+            self.token = ""
+            return True
+
     def probe(self) -> BackendCapabilities:
         reason: str | None = None
+        instance_id: str | None = None
+        generation: str | None = None
+        target_kinds = (TargetKind.BROWSER_PAGE,)
         available = bool(self.adapter_url and self.token)
         if not available:
             reason = "CDP adapter URL/token is not configured"
@@ -80,14 +105,36 @@ class CdpAdapterBackend:
             try:
                 payload = self._request("GET", "/v1/capabilities")
                 available = payload.get("available") is True
-                reason = None if available else str(payload.get("reason") or "CDP adapter unavailable")
-            except Exception as error:  # availability probes must not break other backends
+                instance_id = payload.get("adapterInstanceId") if isinstance(
+                    payload.get("adapterInstanceId"), str
+                ) else None
+                generation = payload.get("generation") if isinstance(
+                    payload.get("generation"), str
+                ) else None
+                reported_kinds = payload.get("supportedTargetKinds")
+                if isinstance(reported_kinds, list):
+                    parsed_kinds = tuple(
+                        kind for kind in (
+                            TargetKind.BROWSER_PAGE,
+                            TargetKind.ELECTRON_WEBCONTENTS,
+                        ) if kind.value in reported_kinds
+                    )
+                    if parsed_kinds:
+                        target_kinds = parsed_kinds
+                if available and (not instance_id or not generation):
+                    available = False
+                    reason = "CDP adapter omitted lifecycle identity"
+                if available:
+                    reason = None
+                elif reason is None:
+                    reason = str(payload.get("reason") or "CDP adapter unavailable")
+            except Exception:  # availability probes must not break other backends
                 available = False
-                reason = f"CDP adapter probe failed: {error}"
+                reason = "CDP adapter probe failed"
         return BackendCapabilities(
             backend=BackendId.BROWSER_CDP,
             available=available,
-            target_kinds=(TargetKind.BROWSER_PAGE,),
+            target_kinds=target_kinds,
             actions=_ACTIONS,
             effective_isolation=IsolationLevel.HOST_APP_SCOPED,
             background_input=BackgroundInput.SEMANTIC,
@@ -98,6 +145,9 @@ class CdpAdapterBackend:
             lease_scope=LeaseScope.TARGET,
             max_concurrency=64 if available else 0,
             reason=reason,
+            may_activate_target=True,
+            instance_id=instance_id,
+            generation=generation,
         )
 
     def discover_targets(self, filters: Mapping[str, Any] | None = None) -> list[TargetDescriptor]:
@@ -108,29 +158,63 @@ class CdpAdapterBackend:
         return [parse_target_descriptor(item, generate_id=False) for item in targets]
 
     def open(self, target: TargetDescriptor, context: BackendOpenContext) -> CdpAdapterHandle:
-        if target.kind is not TargetKind.BROWSER_PAGE:
-            raise BackendOperationError("CDP backend only accepts browser-page targets")
-        payload = self._request("POST", "/v1/handles/open", {
+        if target.kind not in {
+            TargetKind.BROWSER_PAGE, TargetKind.ELECTRON_WEBCONTENTS,
+        }:
+            raise BackendOperationError(
+                "CDP backend only accepts browser-page or electron-webcontents targets",
+                safe_to_retry=True,
+            )
+        if not target.generation:
+            raise BackendOperationError(
+                "CDP target is missing adapter generation", code="TARGET_LOST", safe_to_retry=True,
+            )
+        request = {
             "requestId": context.request_id,
             "target": target.to_dict(include_sensitive=True),
-        })
+        }
+        adapter_url, token = self._configuration()
+        # Open is keyed by requestId in the trusted adapter. One replay can
+        # recover a response lost after handle creation without duplicating it.
+        try:
+            payload = self._request_at(adapter_url, token, "POST", "/v1/handles/open", request)
+        except CdpAdapterResponseError as error:
+            raise BackendOperationError(
+                str(error), code=error.code, safe_to_retry=error.code == "TARGET_LOST",
+            ) from error
+        except Exception:
+            try:
+                payload = self._request_at(adapter_url, token, "POST", "/v1/handles/open", request)
+            except Exception as error:
+                raise BackendOperationError(
+                    "CDP adapter open outcome is unknown after idempotent recovery failed",
+                ) from error
         handle_id = payload.get("handleId")
         if not isinstance(handle_id, str) or not handle_id:
-            raise RuntimeError("CDP adapter did not return a handleId")
-        return CdpAdapterHandle(target, context, handle_id)
+            raise BackendOperationError("CDP adapter did not return a handleId")
+        if payload.get("targetId") != target.target_id or payload.get("generation") != target.generation:
+            raise BackendOperationError("CDP adapter open returned mismatched identity")
+        return CdpAdapterHandle(
+            target, context, handle_id, target.generation, adapter_url, token,
+        )
 
     def observe(self, handle: object) -> Observation:
         h = self._handle(handle)
         with h.lock:
             self._ensure_open(h)
             try:
-                payload = self._request("POST", "/v1/observe", {"handleId": h.adapter_handle_id})
+                payload = self._request_at(
+                    h.adapter_url, h.token, "POST", "/v1/observe",
+                    {"handleId": h.adapter_handle_id},
+                )
             except CdpAdapterResponseError as error:
                 if error.code in {"TARGET_LOST", "BACKEND_UNAVAILABLE"}:
                     raise BackendOperationError(str(error), code=error.code) from error
                 raise
             if payload.get("targetId") != h.target.target_id:
                 raise BackendOperationError("CDP adapter observed a different target")
+            if payload.get("generation") != h.generation:
+                raise BackendOperationError("CDP adapter generation changed", code="TARGET_LOST")
             revision = payload.get("revision")
             encoded = payload.get("imageBase64")
             if not isinstance(revision, str) or not isinstance(encoded, str):
@@ -162,7 +246,7 @@ class CdpAdapterBackend:
         try:
             with h.lock:
                 self._ensure_open(h)
-                payload = self._request("POST", "/v1/action", {
+                payload = self._request_at(h.adapter_url, h.token, "POST", "/v1/action", {
                     "handleId": h.adapter_handle_id,
                     "actionId": action_id,
                     "expectedRevision": expected_revision,
@@ -184,6 +268,12 @@ class CdpAdapterBackend:
             ) from error
         if payload.get("targetId") != h.target.target_id:
             raise BackendOperationError("CDP adapter action returned a different target", may_have_taken_effect=True)
+        if payload.get("generation") != h.generation:
+            raise BackendOperationError(
+                "CDP adapter generation changed during action",
+                code="TARGET_LOST",
+                may_have_taken_effect=True,
+            )
         verification = payload.get("verification")
         if not isinstance(verification, Mapping):
             raise BackendOperationError("CDP adapter omitted verification", may_have_taken_effect=True)
@@ -225,7 +315,7 @@ class CdpAdapterBackend:
         h = self._handle(handle)
         h.context.cancellation.set()
         if not h.closed:
-            self._request("POST", "/v1/handles/cancel", {
+            self._request_at(h.adapter_url, h.token, "POST", "/v1/handles/cancel", {
                 "handleId": h.adapter_handle_id, "reason": reason,
             })
 
@@ -234,22 +324,40 @@ class CdpAdapterBackend:
         with h.lock:
             if h.closed:
                 return
-            self._request("POST", "/v1/handles/close", {
+            self._request_at(h.adapter_url, h.token, "POST", "/v1/handles/close", {
                 "handleId": h.adapter_handle_id, "reason": reason,
             })
             h.closed = True
 
     def _request(self, method: str, path: str, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        if not self.adapter_url or not self.token:
+        adapter_url, token = self._configuration()
+        return self._request_at(adapter_url, token, method, path, body)
+
+    def _configuration(self) -> tuple[str, str]:
+        with self._config_lock:
+            return self.adapter_url, self.token
+
+    def _request_at(
+        self,
+        adapter_url: str,
+        token: str,
+        method: str,
+        path: str,
+        body: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if not adapter_url or not token:
             raise RuntimeError("CDP adapter is not configured")
         sender = self._session.request if self._session is not None else requests.request
-        response = sender(
-            method,
-            f"{self.adapter_url}{path}",
-            headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
-            json=dict(body) if body is not None else None,
-            timeout=self.timeout_s,
-        )
+        try:
+            response = sender(
+                method,
+                f"{adapter_url}{path}",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json=dict(body) if body is not None else None,
+                timeout=self.timeout_s,
+            )
+        except Exception as error:
+            raise RuntimeError("CDP adapter transport is unavailable") from error
         try:
             payload = response.json()
         except Exception as error:

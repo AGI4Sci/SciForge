@@ -20,6 +20,12 @@ FIXTURES = json.loads(
 def test_shared_valid_contract_fixtures(case):
     normalized = contract.normalize_run_input(case["input"])
     assert normalized["protocolVersion"] == case["protocolVersion"]
+    public = {
+        key: value
+        for key, value in normalized.items()
+        if key not in {"execute", "approve", "imagePath", "imageBase64", "requestId"}
+    }
+    assert public == case["normalizedPublic"]
 
 
 @pytest.mark.parametrize("case", FIXTURES["invalid"], ids=lambda case: case["name"])

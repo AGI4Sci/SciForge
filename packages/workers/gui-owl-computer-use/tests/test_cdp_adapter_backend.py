@@ -36,16 +36,27 @@ class AdapterSession:
         self.fail_action = False
         self.lose_on_observe = False
         self.unavailable_on_observe = False
+        self.lose_first_open_response = False
+        self.open_attempts = 0
+        self.invalid_action_generation = False
 
     def request(self, method, url, **kwargs):
         self.calls.append((method, url, kwargs))
         path = "/" + url.split("/v1/", 1)[1]
         if path == "/capabilities":
-            return Response({"ok": True, "data": {"available": True}})
+            return Response({"ok": True, "data": {
+                "available": True, "adapterInstanceId": "adapter-1", "generation": "generation-1",
+                "supportedTargetKinds": ["browser-page", "electron-webcontents"],
+            }})
         if path == "/targets":
             return Response({"ok": True, "data": {"targets": [target_value()]}})
         if path == "/handles/open":
-            return Response({"ok": True, "data": {"handleId": "handle-1"}})
+            self.open_attempts += 1
+            if self.lose_first_open_response and self.open_attempts == 1:
+                raise TimeoutError("open response lost after creation")
+            return Response({"ok": True, "data": {
+                "handleId": "handle-1", "targetId": "page-1", "generation": "generation-1",
+            }})
         if path == "/observe":
             if self.unavailable_on_observe:
                 return Response({"ok": False, "error": {
@@ -58,14 +69,18 @@ class AdapterSession:
                     "message": "page.screenshot: target page has been closed",
                 }}, status=400)
             return Response({"ok": True, "data": {
-                "targetId": "page-1", "revision": "cdp:1", "imageBase64": png_base64(),
+                "targetId": "page-1",
+                "generation": "generation-1",
+                "revision": "cdp:1", "imageBase64": png_base64(),
                 "metadata": {"url": "https://example.test/"},
             }})
         if path == "/action":
             if self.fail_action:
                 raise TimeoutError("response lost")
             return Response({"ok": True, "data": {
-                "targetId": "page-1", "committed": True, "mayHaveTakenEffect": True,
+                "targetId": "page-1",
+                "generation": "wrong-generation" if self.invalid_action_generation else "generation-1",
+                "committed": True, "mayHaveTakenEffect": True,
                 "verification": {"status": "verified", "revisionAfter": "cdp:2", "details": {"value": "abc"}},
             }})
         if path in {"/handles/cancel", "/handles/close"}:
@@ -76,6 +91,7 @@ class AdapterSession:
 def target_value():
     return {
         "targetId": "page-1", "kind": "browser-page", "ownership": "attached",
+        "generation": "generation-1",
         "locator": {"cdpEndpoint": "http://127.0.0.1:9222", "cdpTargetId": "target-1"},
     }
 
@@ -95,6 +111,12 @@ def test_probe_and_discovery_report_target_scoped_cdp_capability():
     assert capability.backend is BackendId.BROWSER_CDP
     assert capability.available is True
     assert capability.affects_user_input is False
+    assert capability.may_activate_target is True
+    assert {kind.value for kind in capability.target_kinds} == {
+        "browser-page", "electron-webcontents",
+    }
+    assert capability.instance_id == "adapter-1"
+    assert capability.generation == "generation-1"
     assert backend.discover_targets()[0].target_id == "page-1"
     assert session.calls[0][2]["headers"]["Authorization"] == "Bearer secret"
 
@@ -114,12 +136,43 @@ def test_observe_action_verify_and_idempotent_close():
     assert len(close_calls) == 1
 
 
+def test_existing_handle_keeps_original_adapter_routing_after_reconfiguration():
+    backend, handle, session = backend_and_handle()
+    backend.configure("http://127.0.0.1:4999", "replacement-secret")
+    backend.close(handle, "done")
+    close_call = next(call for call in session.calls if call[1].endswith("/handles/close"))
+    assert close_call[1].startswith("http://127.0.0.1:3909/")
+    assert close_call[2]["headers"]["Authorization"] == "Bearer secret"
+
+
+def test_open_replays_same_request_once_to_recover_lost_response():
+    session = AdapterSession()
+    session.lose_first_open_response = True
+    backend = CdpAdapterBackend(
+        adapter_url="http://127.0.0.1:3909", token="secret", session=session,
+    )
+    context = BackendOpenContext("request-open-recovery", True, 0, False, threading.Event())
+    handle = backend.open(parse_target_descriptor(target_value()), context)
+    assert handle.adapter_handle_id == "handle-1"
+    assert session.open_attempts == 2
+
+
 def test_action_transport_failure_is_unknown_and_never_safe_to_replay():
     backend, handle, session = backend_and_handle()
     before = backend.observe(handle)
     session.fail_action = True
     with pytest.raises(BackendOperationError) as caught:
         backend.perform(handle, {"action": "click", "coordinate": [1, 2]}, before.revision)
+    assert caught.value.may_have_taken_effect is True
+
+
+def test_invalid_action_identity_is_unknown_and_cannot_be_reported_as_success():
+    backend, handle, session = backend_and_handle()
+    before = backend.observe(handle)
+    session.invalid_action_generation = True
+    with pytest.raises(BackendOperationError) as caught:
+        backend.perform(handle, {"action": "type", "text": "abc"}, before.revision)
+    assert caught.value.code == "TARGET_LOST"
     assert caught.value.may_have_taken_effect is True
 
 

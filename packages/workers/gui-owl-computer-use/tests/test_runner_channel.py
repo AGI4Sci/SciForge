@@ -1,4 +1,5 @@
 import json
+import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 
@@ -92,6 +93,31 @@ def test_model_failure_still_closes_channel_and_writes_terminal_manifest(monkeyp
     assert manifest["terminal"] == "failed"
     assert manifest["cleanup"]["leaseReleased"] is True
     assert service.registry.get_request("request-model").state is RequestState.FAILED
+    assert backend.open_handle_count == 0
+
+
+def test_model_response_after_deadline_cannot_be_reported_as_success(monkeypatch, tmp_path):
+    backend = FakeBackend()
+    service = ComputerUseService(router=BackendRouter([backend]))
+    bind(service)
+
+    def delayed_answer(*_args, **_kwargs):
+        time.sleep(0.02)
+        return '<tool_call>{"arguments":{"action":"answer","text":"too late"}}</tool_call>'
+
+    monkeypatch.setattr("cua.runner.owl_agent.call_owl", delayed_answer)
+    cfg = config(tmp_path)
+    result = service.run(
+        {
+            "instruction": "expire during model",
+            "sessionId": "session-1",
+            "requestId": "request-model-deadline",
+            "deadlineMs": 5,
+        },
+        lambda request, channel: run_task(cfg, request["instruction"], channel),
+    )
+    assert result["error"]["code"] == "TIMEOUT"
+    assert service.registry.snapshot_counts()["activeLeases"] == 0
     assert backend.open_handle_count == 0
 
 

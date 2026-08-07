@@ -84,7 +84,7 @@ class FakeBackend:
 
     def open(self, target: TargetDescriptor, context: BackendOpenContext) -> FakeHandle:
         if self.fail_open:
-            raise RuntimeError("fake open failed")
+            raise BackendOperationError("fake open failed before handle creation", safe_to_retry=True)
         with self._lock:
             self._open_handles += 1
             self._revisions.setdefault(target.target_id, 0)

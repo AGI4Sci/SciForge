@@ -15,7 +15,7 @@ from cua.isolation import (
 from cua.session_registry import LeaseScope, RegistryError, SessionRegistry, TargetLease
 from cua.target import TargetDescriptor, TargetKind
 
-from .backend import BackendOpenContext, InputBackend
+from .backend import BackendOpenContext, BackendOperationError, InputBackend
 
 
 class RoutingError(RuntimeError):
@@ -40,6 +40,9 @@ class BackendRouter:
 
     def capabilities(self) -> tuple[BackendCapabilities, ...]:
         return tuple(backend.probe() for backend in self._backends)
+
+    def backends(self) -> tuple[InputBackend, ...]:
+        return self._backends
 
     def discover_targets(self) -> list[TargetDescriptor]:
         targets: dict[str, TargetDescriptor] = {}
@@ -127,18 +130,40 @@ class BackendRouter:
                 raise RoutingError(error.code, str(error), details=error.details) from error
             try:
                 handle = backend.open(target, open_context)
-            except Exception as error:  # open has not returned a usable handle
-                registry.release_lease(lease.lease_id, "backend_open_failed")
-                last_open_error = error
-                continue
+            except Exception as error:
+                # An exception does not prove that a remote/native open had no
+                # side effect. Only an explicit backend classification permits
+                # releasing the lease and trying another candidate. Otherwise
+                # retain the lease/request as cleanup-pending so a possibly
+                # live handle can never overlap with a different backend.
+                if isinstance(error, BackendOperationError) and error.safe_to_retry:
+                    registry.release_lease(lease.lease_id, "backend_open_failed_safe")
+                    last_open_error = error
+                    continue
+                raise RoutingError(
+                    "CLEANUP_INCOMPLETE",
+                    f"backend {capability.backend.value} open outcome is unknown; lease retained",
+                    details={
+                        "requestId": request_id,
+                        "targetId": target.target_id,
+                        "leaseId": lease.lease_id,
+                        "backend": capability.backend.value,
+                        "retainLease": True,
+                    },
+                ) from error
             # Once open() returns, the handle and lease must have one cleanup
             # owner. The service immediately wraps this selection in a Channel,
             # which handles cancellation and retryable close failures without a
             # second, divergent teardown path in the router.
             return RouterSelection(backend, capability, decision, lease, handle)
 
+        final_code = (
+            last_open_error.code
+            if isinstance(last_open_error, BackendOperationError) and last_open_error.code
+            else "BACKEND_UNAVAILABLE"
+        )
         raise RoutingError(
-            "BACKEND_UNAVAILABLE",
+            final_code,
             f"all matching backends failed before opening target {target.target_id}: {last_open_error}",
             details={"targetId": target.target_id},
         )

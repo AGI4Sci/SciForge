@@ -179,6 +179,9 @@ def _run_loop(
         except Exception as error:  # noqa: BLE001
             if isinstance(error, ChannelError):
                 raise
+            remaining = channel.remaining_seconds
+            if remaining is not None and remaining <= 0:
+                raise ChannelError("TIMEOUT", "request deadline expired during model call") from error
             return R.err(
                 "UNAVAILABLE",
                 f"model call failed: {error}",
@@ -188,6 +191,9 @@ def _run_loop(
             ), "failed"
         if channel.cancelled:
             raise ChannelError("CANCEL_PENDING", "request was cancelled during model call")
+        remaining = channel.remaining_seconds
+        if remaining is not None and remaining <= 0:
+            raise ChannelError("TIMEOUT", "request deadline expired during model call")
 
         args = owl_agent.extract_action(output_text)
         action_type = (args.get("action") if args else "") or ""

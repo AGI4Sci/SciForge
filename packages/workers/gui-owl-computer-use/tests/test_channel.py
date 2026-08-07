@@ -3,7 +3,7 @@ import pytest
 from cua.isolation import RequestedIsolation
 from cua.session_registry import RequestState, SessionOwner, SessionRegistry
 from cua.target import parse_target_descriptor
-from driver.backend import BackendOpenContext
+from driver.backend import BackendOpenContext, BackendOperationError
 from driver.channel import ChannelError, SessionInputChannel
 from driver.router import BackendRouter
 from tests.fakes.fake_backend import FakeBackend
@@ -107,4 +107,25 @@ def test_channel_surfaces_unknown_action_outcome_as_non_retryable_classification
     with pytest.raises(ChannelError) as caught:
         channel.perform({"action": "write", "value": "maybe"}, expected_revision=observation.revision)
     assert caught.value.code == "ACTION_OUTCOME_UNKNOWN"
+    channel.close("outcome_unknown")
+
+
+def test_channel_never_downgrades_post_dispatch_target_loss_to_safe_retry():
+    backend = FakeBackend()
+
+    def lost_after_dispatch(_handle, _action, _revision):
+        raise BackendOperationError(
+            "target closed after dispatch", code="TARGET_LOST", may_have_taken_effect=True,
+        )
+
+    backend.perform = lost_after_dispatch
+    _, _, channel = make_channel(backend=backend)
+    observation = channel.observe()
+    with pytest.raises(ChannelError) as caught:
+        channel.perform(
+            {"action": "write", "value": "maybe"},
+            expected_revision=observation.revision,
+        )
+    assert caught.value.code == "ACTION_OUTCOME_UNKNOWN"
+    assert caught.value.details["backendCode"] == "TARGET_LOST"
     channel.close("outcome_unknown")

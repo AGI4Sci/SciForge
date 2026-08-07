@@ -44,9 +44,11 @@ def _proof(tool, arguments, *, request_id="proof-request-1", proof_id="proof-1")
     ).decode().rstrip("=")
 
 
-def _post(port, path, body, proof=None):
+def _post(port, path, body, proof=None, token=None):
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
     headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     if proof:
         headers["X-Sciforge-CUA-Invocation"] = proof
     connection.request("POST", path, json.dumps(body), headers)
@@ -135,6 +137,110 @@ def test_dynamic_status_get_reuses_sidecar_bearer_auth(monkeypatch):
         )
         assert status == 200
         assert payload["data"]["serverInstanceId"] == "instance-http-1"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
+def test_cdp_adapter_registration_requires_bearer_and_clears_only_matching_owner():
+    from driver.backends.cdp_adapter import CdpAdapterBackend
+
+    backend = CdpAdapterBackend(adapter_url="", token="")
+    service = ComputerUseService(router=BackendRouter([backend]))
+    config = Config(service_token="sidecar-token", allow_execute=False)
+    verifier = InvocationProofVerifier(SECRET, mode="required")
+    httpd = server_module.create_http_server(
+        service, config, verifier, address=("127.0.0.1", 0),
+    )
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    adapter_url = "http://127.0.0.1:41234"
+    adapter_token = "a" * 32
+    try:
+        status, payload = _post(
+            httpd.server_port, "/computer-use/backends/cdp/configure",
+            {"adapterUrl": adapter_url, "adapterToken": adapter_token},
+        )
+        assert status == 401
+        assert payload["error"]["code"] == "UNAUTHENTICATED"
+
+        status, payload = _post(
+            httpd.server_port, "/computer-use/backends/cdp/configure",
+            {"adapterUrl": adapter_url, "adapterToken": adapter_token},
+            token="sidecar-token",
+        )
+        assert status == 200
+        assert payload["data"]["configured"] is True
+        assert backend._configuration() == (adapter_url, adapter_token)
+
+        _post(
+            httpd.server_port, "/computer-use/backends/cdp/configure",
+            {"adapterUrl": "", "adapterToken": "", "expectedAdapterUrl": "http://127.0.0.1:49999"},
+            token="sidecar-token",
+        )
+        assert backend._configuration() == (adapter_url, adapter_token)
+
+        status, payload = _post(
+            httpd.server_port, "/computer-use/backends/cdp/configure",
+            {"adapterUrl": "", "adapterToken": "", "expectedAdapterUrl": adapter_url},
+            token="sidecar-token",
+        )
+        assert status == 200
+        assert payload["data"]["cleared"] is True
+        assert backend._configuration() == ("", "")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
+def test_http_proof_capacity_fails_closed_with_stable_error_code():
+    service = ComputerUseService(router=BackendRouter([]))
+    service.configure_approval_proof("required")
+    verifier = InvocationProofVerifier(SECRET, mode="required", max_entries=1)
+    config = Config(service_token="", allow_execute=False)
+    httpd = server_module.create_http_server(
+        service, config, verifier, address=("127.0.0.1", 0),
+    )
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        first_body = {
+            "sessionId": "capacity-session-1",
+            "target": {
+                "targetId": "capacity-target-1",
+                "kind": "static-image",
+                "locator": {"imageRef": "capacity-image-1"},
+            },
+        }
+        first_status, first_payload = _post(
+            httpd.server_port,
+            "/computer-use/sessions/bind",
+            first_body,
+            _proof("computer_use_bind_target", first_body, proof_id="capacity-1"),
+        )
+        assert first_status == 200
+        assert first_payload["ok"] is True
+
+        second_body = {
+            "sessionId": "capacity-session-2",
+            "target": {
+                "targetId": "capacity-target-2",
+                "kind": "static-image",
+                "locator": {"imageRef": "capacity-image-2"},
+            },
+        }
+        second_status, second_payload = _post(
+            httpd.server_port,
+            "/computer-use/sessions/bind",
+            second_body,
+            _proof("computer_use_bind_target", second_body, proof_id="capacity-2"),
+        )
+        assert second_status == 403
+        assert second_payload["error"]["code"] == "APPROVAL_PROOF_CAPACITY"
+        assert second_payload["error"]["retryable"] is False
+        assert second_payload["error"]["failureClass"] == "permission"
     finally:
         httpd.shutdown()
         httpd.server_close()

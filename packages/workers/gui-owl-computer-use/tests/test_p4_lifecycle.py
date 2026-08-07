@@ -169,8 +169,12 @@ def test_shutdown_reports_failed_cleanup_and_retries_idempotently():
         wait_for_channels(service, 1)
         first = service.shutdown()
         assert first["cleanupComplete"] is False
+        assert first["lifecycleState"] == "stopping"
         assert first["activeLeases"] == 1
         assert len(first["cleanupPending"]) == 1
+        stopping_status = service.status()
+        assert stopping_status["lifecycleState"] == "stopping"
+        assert stopping_status["cleanupPending"][0]["leaseReleased"] is False
 
         backend.fail_close = False
         second = service.shutdown()

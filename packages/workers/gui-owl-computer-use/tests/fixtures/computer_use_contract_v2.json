@@ -3,7 +3,14 @@
     {
       "name": "legacy instruction stays v1",
       "input": {"instruction": "inspect the screen"},
-      "protocolVersion": 1
+      "protocolVersion": 1,
+      "normalizedPublic": {
+        "instruction": "inspect the screen",
+        "requestedIsolation": "auto",
+        "allowDegraded": false,
+        "queueIfBusy": false,
+        "protocolVersion": 1
+      }
     },
     {
       "name": "browser session request",
@@ -25,7 +32,26 @@
         "queueIfBusy": true,
         "deadlineMs": 30000
       },
-      "protocolVersion": 2
+      "protocolVersion": 2,
+      "normalizedPublic": {
+        "instruction": "type the query",
+        "sessionId": "session-browser-1",
+        "target": {
+          "targetId": "target-browser-1",
+          "kind": "browser-page",
+          "ownership": "attached",
+          "locator": {
+            "cdpEndpoint": "http://127.0.0.1:9222",
+            "cdpTargetId": "page-1"
+          },
+          "display": {"scaleFactor": 1.25, "viewport": [1280, 720]}
+        },
+        "requestedIsolation": "host-app-scoped",
+        "allowDegraded": false,
+        "queueIfBusy": true,
+        "deadlineMs": 30000,
+        "protocolVersion": 2
+      }
     },
     {
       "name": "explicit host desktop request",
@@ -39,7 +65,20 @@
         "requestedIsolation": "host-approved",
         "allowDegraded": true
       },
-      "protocolVersion": 2
+      "protocolVersion": 2,
+      "normalizedPublic": {
+        "instruction": "click the approved point",
+        "target": {
+          "targetId": "host-desktop:default",
+          "kind": "host-desktop",
+          "ownership": "attached",
+          "locator": {"monitorId": "1"}
+        },
+        "requestedIsolation": "host-approved",
+        "allowDegraded": true,
+        "queueIfBusy": false,
+        "protocolVersion": 2
+      }
     }
   ],
   "invalid": [

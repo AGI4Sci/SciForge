@@ -28,6 +28,7 @@ ERROR_CODES = {
     "CLEANUP_INCOMPLETE",
     "APPROVAL_PROOF_REQUIRED", "APPROVAL_PROOF_INVALID",
     "APPROVAL_PROOF_EXPIRED", "APPROVAL_PROOF_REPLAYED",
+    "APPROVAL_PROOF_CAPACITY",
     "INVOCATION_IDENTITY_MISMATCH",
     "QUEUE_NOT_SUPPORTED",
 }
@@ -45,6 +46,7 @@ _FAILURE_CLASS = {
     "ACTION_OUTCOME_UNKNOWN": "outcome-unknown", "CLEANUP_INCOMPLETE": "cleanup",
     "APPROVAL_PROOF_REQUIRED": "permission", "APPROVAL_PROOF_INVALID": "permission",
     "APPROVAL_PROOF_EXPIRED": "permission", "APPROVAL_PROOF_REPLAYED": "permission",
+    "APPROVAL_PROOF_CAPACITY": "permission",
     "INVOCATION_IDENTITY_MISMATCH": "permission",
 }
 
@@ -135,4 +137,6 @@ def _recovery_guidance(code: str) -> str:
         return "inspect target state before deciding whether to retry"
     if code == "CLEANUP_INCOMPLETE":
         return "do not reuse the lease; inspect status and cleanup diagnostics"
+    if code == "APPROVAL_PROOF_CAPACITY":
+        return "wait for live proof tombstones to expire; do not bypass proof verification"
     return "correct the request or inspect service diagnostics"

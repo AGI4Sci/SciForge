@@ -46,6 +46,9 @@ class BackendCapabilities:
     lease_scope: LeaseScope
     max_concurrency: int
     reason: str | None = None
+    may_activate_target: bool = False
+    instance_id: str | None = None
+    generation: str | None = None
 
     def __post_init__(self) -> None:
         if self.max_concurrency < 0:
@@ -70,4 +73,7 @@ class BackendCapabilities:
             "leaseScope": self.lease_scope.value,
             "maxConcurrency": self.max_concurrency,
             "reason": self.reason,
+            "mayActivateTarget": self.may_activate_target,
+            "instanceId": self.instance_id,
+            "generation": self.generation,
         }

@@ -6,7 +6,7 @@ from cua.capabilities import BackendId
 from cua.isolation import IsolationLevel, RequestedIsolation
 from cua.session_registry import LeaseScope, SessionOwner, SessionRegistry
 from cua.target import TargetKind, host_desktop_target, parse_target_descriptor
-from driver.backend import BackendOpenContext
+from driver.backend import BackendOpenContext, BackendOperationError
 from driver.router import BackendRouter, RoutingError
 from tests.fakes.fake_backend import FakeBackend
 
@@ -97,3 +97,50 @@ def test_router_retries_only_after_open_failed_before_handle_exists():
     )
     assert selection.backend is second
     assert registry.snapshot_counts()["activeLeases"] == 1
+
+
+def test_router_quarantines_unclassified_open_failure_without_trying_fallback():
+    first = FakeBackend()
+    second = FakeBackend()
+
+    def unknown_open(_target, _context):
+        raise RuntimeError("transport disappeared after open dispatch")
+
+    first.open = unknown_open
+    registry = SessionRegistry()
+    target = uia_target()
+    registry.bind_session(SessionOwner("runtime", "thread"), target, session_id="session-1")
+    registry.begin_request("session-1", "request-1")
+
+    with pytest.raises(RoutingError) as caught:
+        BackendRouter([first, second]).route(
+            registry=registry,
+            request_id="request-1",
+            target=target,
+            requested=RequestedIsolation.AUTO,
+            allow_degraded=False,
+            approval_context=False,
+            required_actions=("observe", "write"),
+            open_context=BackendOpenContext(
+                "request-1", False, 0, False, threading.Event(),
+            ),
+        )
+
+    assert caught.value.code == "CLEANUP_INCOMPLETE"
+    assert caught.value.details["retainLease"] is True
+    assert registry.snapshot_counts()["activeLeases"] == 1
+    assert second.open_handle_count == 0
+
+
+def test_router_preserves_structured_safe_open_failure_when_no_candidate_succeeds():
+    backend = FakeBackend()
+
+    def stale_generation(_target, _context):
+        raise BackendOperationError(
+            "adapter generation changed", code="TARGET_LOST", safe_to_retry=True,
+        )
+
+    backend.open = stale_generation
+    with pytest.raises(RoutingError) as caught:
+        route(backend)
+    assert caught.value.code == "TARGET_LOST"

@@ -1,3 +1,5 @@
+import time
+
 from cua.service import ComputerUseService
 from driver.router import BackendRouter
 from tests.fakes.fake_backend import FakeBackend
@@ -84,3 +86,63 @@ def test_v2_bound_session_executes_through_channel_and_cleans_request_and_lease(
     counts = service.registry.snapshot_counts()
     assert counts["requests"] == counts["activeLeases"] == 0
     assert counts["sessions"] == 1
+
+
+def test_deadline_ms_expires_at_channel_boundary_and_releases_all_active_resources():
+    backend = FakeBackend()
+    service = ComputerUseService(router=BackendRouter([backend]))
+    service.bind_session({
+        "sessionId": "session-deadline",
+        "owner": {"runtimeId": "runtime-1", "threadId": "thread-1"},
+        "target": uia_target("target-deadline"),
+    })
+
+    def execute(_request, channel):
+        time.sleep(0.01)
+        channel.observe()
+        raise AssertionError("expired channel must not observe")
+
+    result = service.run({
+        "instruction": "expire",
+        "sessionId": "session-deadline",
+        "requestId": "request-deadline",
+        "deadlineMs": 1,
+    }, execute)
+    assert result["error"]["code"] == "TIMEOUT"
+    assert result["error"]["retryable"] is True
+    counts = service.registry.snapshot_counts()
+    assert counts["requests"] == counts["activeLeases"] == 0
+    assert backend.open_handle_count == 0
+
+
+def test_unknown_backend_open_outcome_stays_visible_and_keeps_lease_quarantined():
+    backend = FakeBackend()
+
+    def unknown_open(_target, _context):
+        raise TimeoutError("response lost after open dispatch")
+
+    backend.open = unknown_open
+    service = ComputerUseService(router=BackendRouter([backend]))
+    result = service.run({
+        "instruction": "observe",
+        "target": uia_target("target-open-unknown"),
+        "requestId": "request-open-unknown",
+    }, lambda _request, _channel: {"ok": True})
+
+    assert result["error"]["code"] == "CLEANUP_INCOMPLETE"
+    status = service.status()
+    assert status["registry"]["counts"]["requests"] == 1
+    assert status["registry"]["counts"]["activeLeases"] == 1
+    assert status["cleanupPending"] == [{
+        "requestId": "request-open-unknown",
+        "sessionId": status["cleanupPending"][0]["sessionId"],
+        "targetId": "target-open-unknown",
+        "leaseId": status["cleanupPending"][0]["leaseId"],
+        "backend": "windows-uia",
+        "closed": False,
+        "leaseReleased": False,
+        "errors": ["backend open outcome is unknown; lease is quarantined"],
+    }]
+    shutdown = service.shutdown()
+    assert shutdown["lifecycleState"] == "stopping"
+    assert shutdown["cleanupComplete"] is False
