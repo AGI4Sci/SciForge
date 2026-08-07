@@ -811,13 +811,13 @@ const SENSITIVE_FIELD_NAMES = new Set([
   'token',
   'apikey',
   'secret',
-  '邮箱',
-  '手机号',
-  '电话',
-  '身份证',
-  '银行卡',
-  '银行账号',
-  '付款账号'
+  '\u90ae\u7bb1',
+  '\u624b\u673a\u53f7',
+  '\u7535\u8bdd',
+  '\u8eab\u4efd\u8bc1',
+  '\u94f6\u884c\u5361',
+  '\u94f6\u884c\u8d26\u53f7',
+  '\u4ed8\u6b3e\u8d26\u53f7',
 ])
 
 const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i

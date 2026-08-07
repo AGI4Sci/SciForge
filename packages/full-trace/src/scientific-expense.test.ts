@@ -137,6 +137,16 @@ describe('scientific finance expense loop baseline traces', () => {
       'REAL_SUBMISSION_FORBIDDEN',
       'PAYMENT_FORBIDDEN'
     ]))
+
+    const chineseFieldValidation = validator.validate({
+      ...createScientificExpenseBaselineTrace({ scenario: 'normal-sanitized' }).fixture,
+      ['\u94f6\u884c\u8d26\u53f7']: 'should-not-enter-trace'
+    } as unknown as Parameters<ScientificExpenseValidator['validate']>[0])
+    assert.equal(chineseFieldValidation.ok, false)
+    assert.equal(
+      chineseFieldValidation.issues.some((issue) => issue.code === 'PII_DETECTED'),
+      true
+    )
   })
 
   test('recognizes expense lines and creates deterministic draft artifacts', () => {

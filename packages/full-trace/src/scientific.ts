@@ -268,8 +268,12 @@ export function validateScientificTraceClosure(events: readonly ScientificTraceE
     issues.push(errorIssue('MISSING_INPUT', undefined, 'Trace must include at least one valid USER_INPUT event.'))
   }
 
-  if (!events.some((event) => isArtifactEventType(event.type) && hasArtifact(event))) {
-    issues.push(errorIssue('MISSING_ARTIFACT', undefined, 'Trace must include at least one Artifact-producing event.'))
+  if (!events.some((event) => isArtifactEventType(event.type) && hasArtifact(event) && hasArtifactIntegrity(event))) {
+    issues.push(errorIssue(
+      'MISSING_ARTIFACT',
+      undefined,
+      'Trace must include at least one Artifact-producing event with identity and integrity metadata.'
+    ))
   }
 
   if (!events.some((event) => event.type === 'EVIDENCE_ATTACHED' && hasEvidence(event))) {

@@ -70,6 +70,18 @@ describe('scientific trace validation', () => {
       'MISSING_PARENT_EVENT',
       'MISSING_HUMAN_REASON'
     ])
+
+    const traceWithArtifactWithoutIntegrity = closedTraceEvents().map((event) => {
+      if (event.type !== 'ARTIFACT_CREATED') return event
+      return {
+        ...event,
+        payload: {
+          artifactId: 'artifact-without-integrity',
+          path: 'results/missing-hash.txt'
+        }
+      }
+    })
+    assertIssueCodes(validateScientificTraceClosure(traceWithArtifactWithoutIntegrity), ['MISSING_ARTIFACT'])
   })
 
   test('rejects individual events that miss parent, artifact, evidence, review, or input data', () => {
