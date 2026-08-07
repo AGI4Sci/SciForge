@@ -125,9 +125,13 @@ export class LocalScientificFixtureScheduler implements ScientificJobScheduler {
 
   async poll(jobId: string): Promise<ScientificJobState> {
     const current = this.states.get(jobId)
-    if (current === 'submitted' || !current) {
+    if (current === 'submitted' || current === 'resumed' || !current) {
       this.states.set(jobId, 'running')
       return 'running'
+    }
+    if (current === 'running') {
+      this.states.set(jobId, 'finished')
+      return 'finished'
     }
     return current
   }
@@ -143,6 +147,10 @@ export class LocalScientificFixtureScheduler implements ScientificJobScheduler {
   }
 
   async collectResult(jobId: string): Promise<ScientificJobArtifact> {
+    const current = this.states.get(jobId)
+    if (current !== 'finished') {
+      throw new Error(`Cannot collect result for ${jobId} before it is finished`)
+    }
     const content = `fixture-result:${jobId}`
     return {
       artifactId: `artifact-${jobId}-result`,

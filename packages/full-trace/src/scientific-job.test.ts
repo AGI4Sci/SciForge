@@ -36,6 +36,10 @@ describe('scientific compute job loop baseline traces', () => {
       jobId: trace.jobId,
       state: 'running'
     })
+    await assert.rejects(
+      async () => manager.collectResult(trace.jobId),
+      /before it is finished/
+    )
     assert.deepEqual(await manager.cancel(trace.jobId, 'manual pause'), {
       jobId: trace.jobId,
       state: 'cancelled'
@@ -43,6 +47,14 @@ describe('scientific compute job loop baseline traces', () => {
     assert.deepEqual(await manager.resume(trace.jobId), {
       jobId: trace.jobId,
       state: 'resumed'
+    })
+    assert.deepEqual(await manager.monitor(trace.jobId), {
+      jobId: trace.jobId,
+      state: 'running'
+    })
+    assert.deepEqual(await manager.monitor(trace.jobId), {
+      jobId: trace.jobId,
+      state: 'finished'
     })
 
     const artifact = await manager.collectResult(trace.jobId)
