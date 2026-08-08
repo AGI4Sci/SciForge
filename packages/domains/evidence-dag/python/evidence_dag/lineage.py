@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional, TYPE_CHECKING
 
-from .artifacts import ArtifactRegistry
+from .artifact_versions import ArtifactVersionProjectionClient
 from .model import EdgeRel, Node, NodeType
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -39,7 +39,7 @@ _EXPLICIT_RELATIONS = frozenset({
 def ingest_trace_lineage(
     graph: "ThreadGraph",
     trace: list[dict[str, Any]],
-    registry: ArtifactRegistry,
+    registry: ArtifactVersionProjectionClient,
     *,
     created_by: str = "structured-lineage-extractor",
     created_at: Optional[str] = None,
@@ -84,7 +84,7 @@ def ingest_trace_lineage(
 def _ingest_envelope(
     graph: "ThreadGraph",
     envelope: dict[str, Any],
-    registry: ArtifactRegistry,
+    registry: ArtifactVersionProjectionClient,
     *,
     trace_ref: str,
     created_by: str,
@@ -188,7 +188,7 @@ def _add_declared_node(
     *,
     allowed: frozenset[NodeType],
     default_type: Optional[NodeType],
-    registry: ArtifactRegistry,
+    registry: ArtifactVersionProjectionClient,
     trace_ref: str,
     created_by: str,
     created_at: Optional[str],
@@ -215,6 +215,10 @@ def _add_declared_node(
         # Presence is significant: an explicitly empty parameter map is a
         # complete declaration, whereas an absent map is an L4 breakpoint.
         attributes["parametersDeclared"] = "parameters" in raw
+    projection_status = registry.status_for_trace([trace_ref])
+    if projection_status and projection_status.get("status") in {"pending", "failed"}:
+        attributes["artifactVersionProvenanceStatus"] = projection_status["status"]
+        attributes["artifactVersionProvenanceReason"] = projection_status.get("reason")
 
     extra: dict[str, Any] = {"external_id": external_id, "attributes": attributes}
     attached = _register_artifact(raw.get("artifact"), registry)
@@ -229,11 +233,16 @@ def _add_declared_node(
     )
     if attached is not None:
         artifact, version = attached
-        graph.attach_registry_records(artifact=artifact, artifact_version=version)
+        graph.attach_registry_records(
+            artifact=artifact, artifact_version=version,
+            artifact_version_ref=registry.refs.get(version.version_id),
+        )
     return node
 
 
-def _register_artifact(raw: Any, registry: ArtifactRegistry) -> Optional[tuple[Any, Any]]:
+def _register_artifact(
+    raw: Any, registry: ArtifactVersionProjectionClient,
+) -> Optional[tuple[Any, Any]]:
     if not isinstance(raw, dict) or _nonempty(raw.get("locator")) is None:
         return None
     try:
@@ -427,18 +436,24 @@ def _resolve_ref(graph: "ThreadGraph", refs: dict[str, str], value: Any) -> Opti
 
 
 def _lineage_envelope(payload: Any) -> Optional[dict[str, Any]]:
-    if not isinstance(payload, dict):
-        return None
-    for key in ("evidenceLineage", "evidence_lineage"):
-        value = payload.get(key)
-        if isinstance(value, dict):
-            return value
-    metadata = payload.get("metadata")
-    if isinstance(metadata, dict):
+    current = payload
+    for _ in range(4):
+        if not isinstance(current, dict):
+            return None
         for key in ("evidenceLineage", "evidence_lineage"):
-            value = metadata.get(key)
+            value = current.get(key)
             if isinstance(value, dict):
                 return value
+        metadata = current.get("metadata")
+        if isinstance(metadata, dict):
+            for key in ("evidenceLineage", "evidence_lineage"):
+                value = metadata.get(key)
+                if isinstance(value, dict):
+                    return value
+        current = next((
+            current.get(key) for key in ("output", "result", "value")
+            if isinstance(current.get(key), dict)
+        ), None)
     return None
 
 

@@ -16,8 +16,9 @@ from . import analysis as _analysis
 from . import audit as _audit
 from . import metrics as _metrics
 from . import provjson
+from .products import export_snapshot_products as _export_snapshot_products
 from . import reconcile as _reconcile
-from .artifacts import ArtifactRegistry
+from .artifact_versions import ArtifactVersionProjectionClient
 from .assessment import assessment_identity, bind_target_digest, run_a0, run_a1, run_a2
 from .digraph import descendants
 from .human_review import (
@@ -93,7 +94,6 @@ class Engine:
         self._audit_runs: dict[str, list[dict]] = {}
         self._updated: dict[str, float] = {}
         self._last_delta: dict[str, dict] = {}
-        self._registries: dict[str, ArtifactRegistry] = {}
         self._lock = threading.RLock()
         self._compile_locks: dict[str, threading.RLock] = {}
         # Read-path caches keyed by file mtime; snapshot files are immutable
@@ -185,24 +185,6 @@ class Engine:
         scope_key = f"workspace:{hashlib.sha256(identity.encode('utf-8')).hexdigest()}"
         return workspace, project, scope_key
 
-    def _registry(
-        self, *, workspace_root: str, project_root: Optional[str],
-    ) -> ArtifactRegistry:
-        workspace, project, scope_key = self._workspace_scope(workspace_root, project_root)
-        # Guard the check-then-create: concurrent HTTP handlers must never end
-        # up with two Registry instances writing the same persistent file.
-        with self._lock:
-            registry = self._registries.get(scope_key)
-            if registry is None:
-                registry_path = os.path.join(
-                    self.storage_dir, "artifact-registries", f"{self._safe_key(scope_key)}.json",
-                ) if self.storage_dir else None
-                registry = ArtifactRegistry(
-                    registry_path, workspace_roots=(project,), locator_root=workspace,
-                )
-                self._registries[scope_key] = registry
-            return registry
-
     def _compile_lock(self, thread_id: str) -> threading.RLock:
         """Serialize one thread without blocking independent DAG compiles or readers."""
         with self._lock:
@@ -256,7 +238,6 @@ class Engine:
             workspace, project, _scope_key = self._workspace_scope(
                 workspace_root, project_root,
             )
-            registry = self._registry(workspace_root=workspace, project_root=project)
             staged = self._trace_staging.begin(
                 thread_id=thread_id,
                 target_watermark=str(target_watermark),
@@ -265,10 +246,14 @@ class Engine:
                 rebuild=rebuild,
             )
             incremental_trace = list(staged.trace)
-            registry_digest = registry.state_digest()
-            committed_registry_digest = (
-                current_graph.meta.get("artifactRegistryDigest")
-                if current_graph is not None else None
+            artifact_versions = ArtifactVersionProjectionClient(
+                incremental_trace, workspace_roots=(project,), locator_root=workspace,
+            )
+            committed_projection_digest = current_graph.meta.get(
+                "artifactVersionProjectionDigest"
+            ) if current_graph is not None else None
+            projection_digest = artifact_versions.state_digest() if incremental_trace else (
+                committed_projection_digest or artifact_versions.state_digest()
             )
             no_op_against_committed = bool(
                 current is not None
@@ -276,7 +261,7 @@ class Engine:
                 and not rebuild
                 and not incremental_trace
                 and str(target_watermark) == current.input_watermark
-                and committed_registry_digest == registry_digest
+                and committed_projection_digest == projection_digest
                 and current_graph.meta.get("inputDigest")
             )
             input_digest = str(current_graph.meta["inputDigest"]) \
@@ -285,10 +270,7 @@ class Engine:
                     trace=incremental_trace, workspace_root=workspace, project_root=project,
                     rebuild=rebuild, threshold=threshold,
                     access_policy=access_policy, rebuild_rationale=rebuild_rationale,
-                    # Artifact lifecycle is an input even when the runtime trace and
-                    # watermark are unchanged. Omitting it would make content changes
-                    # incorrectly replay the old snapshot.
-                    registry_digest=registry_digest,
+                    artifact_version_projection_digest=projection_digest,
                 )
             previous_status = self._updates.get(thread_id) or self._load_update_status(thread_id)
             prior_input_digest = (previous_status or {}).get("inputDigest") or (
@@ -367,7 +349,8 @@ class Engine:
                     if self.llm is None:
                         raise RuntimeError("no independent Model Router client configured for extraction/review")
                     extracted = extract_dag(
-                        incremental_trace, self.llm, thread_id, artifact_registry=registry,
+                        incremental_trace, self.llm, thread_id,
+                        artifact_versions=artifact_versions,
                     )
                     if rebuild or base is None:
                         extracted.meta.update(graph.meta)
@@ -378,22 +361,18 @@ class Engine:
                 else:
                     delta = {"new_nodes": [], "new_edges": []}
 
-                # Extraction may register the first observed ArtifactVersion.
-                # Persist the post-extraction Registry digest so replaying the
-                # same trace remains idempotent while later lifecycle changes
-                # still invalidate the compiler input.
                 input_digest = self._update_input_digest(
                     thread_id=thread_id, target_watermark=str(target_watermark), reason=reason,
                     trace=incremental_trace, workspace_root=workspace, project_root=project,
                     rebuild=rebuild, threshold=threshold,
                     access_policy=access_policy, rebuild_rationale=rebuild_rationale,
-                    registry_digest=registry.state_digest(),
+                    artifact_version_projection_digest=projection_digest,
                 )
                 graph.meta["inputDigest"] = input_digest
                 graph.meta["traceIngestion"] = self._trace_staging.committed_metadata(staged)
-                graph.meta["artifactRegistryDigest"] = registry.state_digest()
+                graph.meta["artifactVersionProjectionDigest"] = projection_digest
                 status["inputDigest"] = input_digest
-                self._sync_registry(graph, registry)
+                self._sync_artifact_versions(graph, artifact_versions)
                 self._trace_staging.persist_provisional_graph(
                     staged, graph, phase="verification",
                     temporary_edge_count=len(delta.get("new_edges") or []),
@@ -532,7 +511,8 @@ class Engine:
     def _update_input_digest(
         *, thread_id: str, target_watermark: str, reason: str, trace: Optional[list[dict]],
         workspace_root: str, project_root: Optional[str], rebuild: bool,
-        threshold: float, access_policy: Optional[dict[str, Any]], registry_digest: str,
+        threshold: float, access_policy: Optional[dict[str, Any]],
+        artifact_version_projection_digest: str,
         rebuild_rationale: Optional[str],
     ) -> str:
         payload = json.dumps({
@@ -542,7 +522,8 @@ class Engine:
             "rebuild": rebuild, "threshold": threshold, "accessPolicy": access_policy or {},
             "rebuildRationale": rebuild_rationale,
             "schemaVersion": SCHEMA_VERSION, "extractorVersion": EXTRACTOR_VERSION,
-            "verifierVersion": VERIFIER_VERSION, "artifactRegistryDigest": registry_digest,
+            "verifierVersion": VERIFIER_VERSION,
+            "artifactVersionProjectionDigest": artifact_version_projection_digest,
         }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
 
@@ -583,29 +564,108 @@ class Engine:
         """Return the isolated compile candidate, never the committed read model."""
         return self._trace_staging.provisional_graph(thread_id)
 
-    def _sync_registry(self, graph: ThreadGraph, registry: ArtifactRegistry) -> None:
+    def _sync_artifact_versions(
+        self, graph: ThreadGraph, projection: ArtifactVersionProjectionClient,
+    ) -> None:
+        """Apply the owner domain's read-only refs/events without rewriting pins."""
+        for version_id, ref in projection.refs.items():
+            if version_id not in graph.artifact_versions:
+                continue
+            prior = graph.artifact_version_refs.get(version_id)
+            if prior is not None and prior != ref:
+                raise ValueError(f"conflicting immutable ArtifactVersionRef: {version_id}")
+            graph.artifact_version_refs[version_id] = ref
+
+        graph.meta["artifactVersionLifecycleWatermark"] = max(
+            int(graph.meta.get("artifactVersionLifecycleWatermark") or 0),
+            projection.lifecycle_last_sequence,
+        )
+        if projection.lifecycle_observed:
+            graph.meta["artifactVersionLifecyclePending"] = projection.lifecycle_pending
+        lifecycle_pending = bool(graph.meta.get("artifactVersionLifecyclePending"))
+
+        stale_versions: set[str] = set()
+        restored_versions: set[str] = set()
+        review_versions: dict[str, str] = {}
+        for event in projection.lifecycle_events:
+            version = graph.artifact_versions.get(event.version_id)
+            if event.event_type in {"artifact-missing"}:
+                if version is not None:
+                    version.availability = "missing"
+                stale_versions.add(event.version_id)
+                review_versions[event.version_id] = "artifact-missing"
+            elif event.event_type in {"artifact-restored"}:
+                if version is not None:
+                    version.availability = "available"
+                restored_versions.add(event.version_id)
+            elif event.event_type == "availability-changed":
+                availability = event.detail.get("availability")
+                if version is not None and availability in {"available", "missing", "remote"}:
+                    version.availability = availability
+                if availability == "missing":
+                    stale_versions.add(event.version_id)
+            elif event.event_type == "artifact-content-changed":
+                # A refresh event without a new committed version proves that
+                # the bytes no longer match this pinned digest.
+                if event.previous_version_id:
+                    stale_versions.add(event.previous_version_id)
+                    review_versions[event.previous_version_id] = "artifact-content-changed"
+                else:
+                    stale_versions.add(event.version_id)
+                    review_versions[event.version_id] = "artifact-content-changed"
+            elif event.event_type == "artifact-moved":
+                review_versions[event.version_id] = "artifact-moved"
+            elif event.event_type in {"version-committed", "current-changed"} \
+                    and event.previous_version_id:
+                stale_versions.add(event.previous_version_id)
+
         stale_roots: list[str] = []
         for node in graph.nodes.values():
+            projection_status = str(
+                node.attributes.get("artifactVersionProvenanceStatus") or ""
+            ).strip().lower()
+            if projection_status in {"pending", "failed"}:
+                node.freshness = "stale"
+                stale_roots.append(node.id)
+                continue
             if not node.artifact_id:
                 continue
-            artifact = registry.artifacts.get(node.artifact_id)
-            referenced = registry.versions.get(node.artifact_version_id or "")
+            prior_review_reason = node.attributes.get("artifactVersionReviewReason")
+            if lifecycle_pending:
+                node.attributes["artifactVersionReviewRequired"] = True
+                node.attributes["artifactVersionReviewReason"] = "lifecycle-backlog"
+                node.freshness = "stale"
+                stale_roots.append(node.id)
+                continue
+            if prior_review_reason == "lifecycle-backlog":
+                node.attributes.pop("artifactVersionReviewRequired", None)
+                node.attributes.pop("artifactVersionReviewReason", None)
+                node.freshness = "fresh"
+            projected_artifact = projection.artifacts.get(node.artifact_id)
+            if projected_artifact is not None:
+                graph.artifacts[projected_artifact.artifact_id] = type(projected_artifact).from_dict(
+                    projected_artifact.to_dict()
+                )
+            artifact = graph.artifacts.get(node.artifact_id)
+            referenced = graph.artifact_versions.get(node.artifact_version_id or "")
             if not artifact or not referenced:
                 node.freshness = "stale"
                 stale_roots.append(node.id)
                 continue
-            graph.artifacts[artifact.artifact_id] = type(artifact).from_dict(artifact.to_dict())
-            graph.artifact_versions[referenced.version_id] = type(referenced).from_dict(referenced.to_dict())
-            current = registry.versions.get(artifact.current_version_id)
-            if current:
-                graph.artifact_versions[current.version_id] = type(current).from_dict(current.to_dict())
-            if node.source_anchor_id and node.source_anchor_id in registry.anchors:
-                anchor = registry.anchors[node.source_anchor_id]
+            if referenced.version_id in review_versions:
+                node.attributes["artifactVersionReviewRequired"] = True
+                node.attributes["artifactVersionReviewReason"] = review_versions[
+                    referenced.version_id
+                ]
+            if node.source_anchor_id and node.source_anchor_id in projection.anchors:
+                anchor = projection.anchors[node.source_anchor_id]
                 graph.source_anchors[anchor.anchor_id] = type(anchor).from_dict(anchor.to_dict())
-            if referenced.availability == "missing" or artifact.current_version_id != referenced.version_id:
+            if referenced.availability == "missing" or referenced.version_id in stale_versions \
+                    or artifact.current_version_id != referenced.version_id:
                 node.freshness = "stale"
                 stale_roots.append(node.id)
-            else:
+            elif node.freshness != "stale" or referenced.version_id in restored_versions \
+                    or referenced.version_id in projection.refs:
                 node.freshness = "fresh"
         if not stale_roots:
             return
@@ -615,108 +675,6 @@ class Engine:
             stale_downstream.update(descendants(support_graph, root))
         for node_id in stale_downstream:
             graph.nodes[node_id].freshness = "stale"
-
-    # --- Artifact Registry commands --------------------------------------
-    def register_artifact(
-        self, *, workspace_root: str, project_root: Optional[str], payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        registry = self._registry(workspace_root=workspace_root, project_root=project_root)
-        artifact, version, outcome = registry.register(
-            kind=payload.get("kind", "other"), locator=payload.get("locator", ""),
-            content_digest=payload.get("contentDigest"), version=payload.get("version"),
-            size=payload.get("size"), media_type=payload.get("mediaType"),
-            retention=payload.get("retention", "reference"),
-            access_policy=payload.get("accessPolicy") if isinstance(payload.get("accessPolicy"), dict) else None,
-        )
-        anchor = None
-        if isinstance(payload.get("selector"), dict):
-            anchor = registry.create_anchor(
-                artifact.artifact_id, payload["selector"], anchor_digest=payload.get("anchorDigest"),
-                artifact_version_id=version.version_id,
-            )
-        return {"outcome": outcome, "artifact": artifact.to_dict(), "artifactVersion": version.to_dict(),
-                "sourceAnchor": anchor.to_dict() if anchor else None}
-
-    def resolve_artifact(
-        self, artifact_id: str, *, workspace_root: str,
-        project_root: Optional[str], candidate_locators: list[str],
-    ) -> dict[str, Any]:
-        result = self._registry(
-            workspace_root=workspace_root, project_root=project_root,
-        ).resolve(
-            artifact_id, candidate_locators=candidate_locators,
-        )
-        event = result.get("event")
-        if isinstance(event, dict):
-            workspace, project, _scope_key = self._workspace_scope(
-                workspace_root, project_root,
-            )
-            result = {**result, "domainEvent": self._event_store.append_lifecycle(
-                event, workspace_root=workspace, project_root=project,
-            )}
-        return result
-
-    def resolve_artifacts(
-        self, *, workspace_root: str, project_root: Optional[str],
-    ) -> dict[str, Any]:
-        """Scan one workspace-scoped Registry and locate affected Evidence snapshots."""
-        workspace, project, _scope_key = self._workspace_scope(workspace_root, project_root)
-        registry = self._registry(
-            workspace_root=workspace, project_root=project,
-        )
-        events = registry.resolve_all()
-        domain_events = [
-            self._event_store.append_lifecycle(
-                event, workspace_root=workspace, project_root=project,
-            )
-            for event in events
-        ]
-        changed_ids = {event["artifactId"] for event in events}
-        affected: list[dict[str, Any]] = []
-        if changed_ids:
-            for thread_id in self.list_threads():
-                graph = self.get(thread_id)
-                if graph is None:
-                    continue
-                scope = (graph.meta or {}).get("scope") or {}
-                if (
-                    scope.get("workspaceRoot") != workspace
-                    or scope.get("projectRoot") != project
-                ):
-                    continue
-                used = sorted({
-                    node.artifact_id for node in graph.nodes.values()
-                    if node.artifact_id in changed_ids
-                })
-                if not used:
-                    continue
-                snapshot = self.latest_snapshot(thread_id)
-                if snapshot is None:
-                    continue
-                affected.append({
-                    "threadId": thread_id,
-                    "targetWatermark": snapshot.input_watermark,
-                    "artifactIds": used,
-                })
-        return {
-            "events": events,
-            "domainEvents": domain_events,
-            "affectedThreads": affected,
-            "scope": {
-                "workspaceRoot": workspace,
-                "projectRoot": project,
-            },
-        }
-
-    def acknowledge_artifact_events(
-        self, *, workspace_root: str, project_root: Optional[str],
-        event_ids: list[str],
-    ) -> dict[str, Any]:
-        registry = self._registry(
-            workspace_root=workspace_root, project_root=project_root,
-        )
-        acknowledged = registry.acknowledge_events(event_ids)
-        return {"acknowledged": acknowledged, "pending": len(registry.pending_events)}
 
     # --- read models / audit side chain ----------------------------------
     def get(self, thread_id: str) -> Optional[ThreadGraph]:
@@ -1180,6 +1138,17 @@ class Engine:
 
     def export_prov_json(self, thread_id: str) -> dict:
         return provjson.to_prov_json(self.require(thread_id))
+
+    def export_snapshot_products(
+        self,
+        thread_id: str,
+        *,
+        snapshot_digest: str,
+        datacite_metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Project one exact historical snapshot without consulting current/latest."""
+        graph, snapshot = self.snapshot_graph(thread_id, snapshot_digest)
+        return _export_snapshot_products(graph, snapshot, datacite_metadata)
 
     # --- atomic persistence -----------------------------------------------
     def _commit_snapshot(self, graph: ThreadGraph, snapshot: EvidenceSnapshot) -> None:

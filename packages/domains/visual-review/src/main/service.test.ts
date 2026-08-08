@@ -9,6 +9,7 @@ import {
   createVisualCandidateRevision,
   exportVisualReviewPacket,
   openVisualReviewDocument,
+  preflightVisualCandidateAcceptance,
   readVisualReviewImage,
   rejectVisualCandidateRevision,
   saveVisualDocumentAnnotations,
@@ -154,6 +155,60 @@ describe('VisualDocument engine', () => {
       }
     })).rejects.toThrow()
     await expect(access(documentPath)).rejects.toThrow()
+  })
+
+  it('fails closed when source bytes, size, or media type disagree with a bound ArtifactVersionRef', async () => {
+    const root = await workspace()
+    const sourcePath = join(root, 'bound-source.png')
+    const sourceBytes = Buffer.from('version-bound source bytes')
+    await writeFile(sourcePath, sourceBytes)
+    const validRef = {
+      artifactId: 'artifact:bound-source',
+      versionId: 'artifact-version:bound-source-v1',
+      contentDigest: createHash('sha256').update(sourceBytes).digest('hex'),
+      byteLength: sourceBytes.byteLength,
+      mediaType: 'image/png',
+      availability: 'available' as const,
+      retention: 'snapshot' as const,
+      accessPolicy: {
+        visibility: 'workspace' as const,
+        principals: [],
+        allowExport: true
+      }
+    }
+
+    await expect(openVisualReviewDocument({
+      workspaceRoot: root,
+      documentId: 'digest-mismatch',
+      artifact: {
+        kind: 'image',
+        sourcePath,
+        versionRef: { ...validRef, contentDigest: 'a'.repeat(64) },
+        mimeType: 'image/png'
+      }
+    })).rejects.toThrow('bytes do not match')
+
+    await expect(openVisualReviewDocument({
+      workspaceRoot: root,
+      documentId: 'size-mismatch',
+      artifact: {
+        kind: 'image',
+        sourcePath,
+        versionRef: { ...validRef, byteLength: validRef.byteLength + 1 },
+        mimeType: 'image/png'
+      }
+    })).rejects.toThrow('byte length')
+
+    await expect(openVisualReviewDocument({
+      workspaceRoot: root,
+      documentId: 'media-mismatch',
+      artifact: {
+        kind: 'image',
+        sourcePath,
+        versionRef: { ...validRef, mediaType: 'image/jpeg' },
+        mimeType: 'image/png'
+      }
+    })).rejects.toThrow('media type')
   })
 
   it('inherits the manuscript visual style unless the caller explicitly disables it', async () => {
@@ -302,10 +357,25 @@ describe('VisualDocument engine', () => {
       width: 2000,
       height: 1200
     })
+    const versionRef = {
+      artifactId: 'artifact:figure',
+      versionId: 'artifact-version:figure-v1',
+      contentDigest: staged.revision.artifactHash,
+      byteLength: Buffer.byteLength('accepted content'),
+      mediaType: 'image/png',
+      availability: 'available' as const,
+      retention: 'snapshot' as const,
+      accessPolicy: {
+        visibility: 'workspace' as const,
+        principals: [],
+        allowExport: true
+      }
+    }
     const accepted = await acceptVisualCandidateRevision({
       workspaceRoot: root,
       documentId: 'figure',
-      revisionId: staged.revision.id
+      revisionId: staged.revision.id,
+      artifactVersionRef: versionRef
     })
     expect(await readFile(sourcePath, 'utf8')).toBe('accepted content')
     expect(await readFile(accepted.revision.backupPath!, 'utf8')).toBe('original')
@@ -313,6 +383,100 @@ describe('VisualDocument engine', () => {
     expect(accepted.document.acceptedRevisionId).toBe(staged.revision.id)
     expect(accepted.document.activeCandidateRevisionId).toBeNull()
     expect(accepted.revision.status).toBe('accepted')
+    expect(accepted.revision.versionRef).toEqual(versionRef)
+    expect(accepted.document.artifact?.versionRef).toEqual(versionRef)
+  })
+
+  it('recovers idempotently after version commit and a partial local acceptance', async () => {
+    const { root, sourcePath, inserted } = await seededDocument('recoverable')
+    const candidatePath = join(root, 'recoverable-candidate.svg')
+    const candidateBytes = Buffer.from('recoverable accepted content')
+    await writeFile(candidatePath, candidateBytes)
+    const staged = await createVisualCandidateRevision({
+      workspaceRoot: root,
+      documentId: 'recoverable',
+      candidatePath,
+      summary: 'Recover after a local write interruption',
+      reviewEvidence: passingReviewEvidence(candidatePath, candidateBytes)
+    })
+    const prepared = await preflightVisualCandidateAcceptance({
+      workspaceRoot: root,
+      documentId: 'recoverable',
+      revisionId: staged.revision.id
+    })
+    expect(prepared).toMatchObject({ acceptanceState: 'prepared', newlyPrepared: true })
+
+    const versionRef = {
+      artifactId: 'artifact:recoverable',
+      versionId: 'artifact-version:recoverable-v2',
+      contentDigest: staged.revision.artifactHash,
+      byteLength: candidateBytes.byteLength,
+      mediaType: 'image/svg+xml',
+      availability: 'available' as const,
+      retention: 'snapshot' as const,
+      accessPolicy: {
+        visibility: 'workspace' as const,
+        principals: [],
+        allowExport: true
+      }
+    }
+    const receiptPath = join(
+      root,
+      '.sciforge',
+      'visual-documents',
+      'recoverable',
+      'acceptance-outbox',
+      `${staged.revision.id}.json`
+    )
+    const receipt = JSON.parse(await readFile(receiptPath, 'utf8'))
+    await writeFile(receiptPath, `${JSON.stringify({
+      ...receipt,
+      state: 'version-committed',
+      artifactVersionRef: versionRef
+    }, null, 2)}\n`)
+
+    // Simulate a crash after the source replacement but before the working
+    // copy and document were updated.
+    await writeFile(sourcePath, candidateBytes)
+    const resumed = await preflightVisualCandidateAcceptance({
+      workspaceRoot: root,
+      documentId: 'recoverable',
+      revisionId: staged.revision.id
+    })
+    expect(resumed).toMatchObject({
+      acceptanceState: 'version-committed',
+      newlyPrepared: false,
+      committedVersionRef: versionRef
+    })
+    await expect(rejectVisualCandidateRevision({
+      workspaceRoot: root,
+      documentId: 'recoverable',
+      revisionId: staged.revision.id
+    })).rejects.toThrow('pending acceptance receipt')
+
+    const accepted = await acceptVisualCandidateRevision({
+      workspaceRoot: root,
+      documentId: 'recoverable',
+      revisionId: staged.revision.id,
+      artifactVersionRef: versionRef
+    })
+    expect(await readFile(sourcePath, 'utf8')).toBe(candidateBytes.toString())
+    expect(await readFile(inserted.document.artifact!.workingCopyPath, 'utf8'))
+      .toBe(candidateBytes.toString())
+    expect(await readFile(accepted.revision.backupPath!, 'utf8')).toBe('original')
+    expect(accepted.revision.versionRef).toEqual(versionRef)
+
+    const replay = await acceptVisualCandidateRevision({
+      workspaceRoot: root,
+      documentId: 'recoverable',
+      revisionId: staged.revision.id,
+      artifactVersionRef: versionRef
+    })
+    expect(replay).toEqual(accepted)
+    expect(JSON.parse(await readFile(receiptPath, 'utf8'))).toMatchObject({
+      state: 'completed',
+      artifactVersionRef: versionRef
+    })
   })
 
   it('derives raster candidate dimensions from its bytes instead of trusting caller hints', async () => {

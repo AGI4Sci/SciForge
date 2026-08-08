@@ -1496,36 +1496,6 @@ export const scientificPlottingMcpConfigPayloadSchema = z
   })
   .strict()
 
-export const scientificPlottingStatusPayloadSchema = z
-  .object({
-    workspaceRoot: z.string().trim().max(MAX_PATH_LENGTH).optional()
-  })
-  .strict()
-
-const scientificPlottingCropBoxPayloadSchema = z
-  .object({
-    unit: z.enum(['ratio', 'pixel']).optional(),
-    x: z.number().finite().nonnegative(),
-    y: z.number().finite().nonnegative(),
-    width: z.number().finite().positive(),
-    height: z.number().finite().positive()
-  })
-  .strict()
-
-export const scientificPlottingPrepareReferencePayloadSchema = z
-  .object({
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    sourcePath: trimmedString(MAX_PATH_LENGTH),
-    sourceType: z.enum(['image', 'pdf']).optional(),
-    page: z.number().int().positive().max(10_000).optional(),
-    cropBox: scientificPlottingCropBoxPayloadSchema.optional(),
-    figureId: z.string().trim().max(128).optional(),
-    outputDir: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    dpi: z.number().int().min(72).max(600).optional(),
-    extractStyle: z.boolean().optional()
-  })
-  .strict()
-
 export const scientificSkillsInstallPayloadSchema = z
   .object({
     workspaceRoot: trimmedString(MAX_PATH_LENGTH),

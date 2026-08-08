@@ -37,6 +37,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@sciforge/domain-artifact-versions": "^0.1.0",
     "@sciforge/image-generation": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@napi-rs/canvas": "^0.1.100",

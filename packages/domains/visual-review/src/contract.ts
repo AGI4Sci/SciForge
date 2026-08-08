@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { domainPackageJsonValueSchema } from '@sciforge/domain-sdk/contract'
+import { artifactVersionRefV1Schema } from '@sciforge/domain-artifact-versions/contract'
 
 export * from './types.js'
 import type {
@@ -77,6 +78,7 @@ export const visualReviewArtifactKindSchema = z.enum([
 export const visualReviewArtifactActivationSchema = z.object({
   kind: visualReviewArtifactKindSchema,
   sourcePath: reviewImagePathSchema,
+  versionRef: artifactVersionRefV1Schema.optional(),
   manifestPath: pathSchema.optional(),
   title: z.string().trim().min(1).max(1_000).optional(),
   caption: z.string().trim().min(1).max(10_000).optional(),
@@ -231,7 +233,8 @@ const visualReviewArtifactSchema = z.object({
   height: z.number().int().positive().max(100_000).optional(),
   manifestPath: pathSchema.optional(),
   title: z.string().min(1).max(1_000).optional(),
-  caption: z.string().min(1).max(10_000).optional()
+  caption: z.string().min(1).max(10_000).optional(),
+  versionRef: artifactVersionRefV1Schema.optional()
 }).strict()
 
 const visualReviewRevisionSchema = z.object({
@@ -246,7 +249,8 @@ const visualReviewRevisionSchema = z.object({
   reviewEvidence: reviewEvidenceSchema,
   createdAt: isoDateTimeSchema,
   decidedAt: isoDateTimeSchema.optional(),
-  backupPath: pathSchema.optional()
+  backupPath: pathSchema.optional(),
+  versionRef: artifactVersionRefV1Schema.optional()
 }).strict()
 
 export const visualReviewDocumentSchema = z.object({

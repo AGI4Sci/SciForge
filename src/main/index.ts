@@ -1811,7 +1811,6 @@ app.whenReady().then(async () => {
     getMainPerformanceSnapshot: () => mainPerformanceMonitor.snapshot(),
     logError,
     getScientificSkillsMcpLaunchConfig,
-    getScientificPlottingMcpLaunchConfig,
     getBgcDiscoveryMcpLaunchConfig,
     getImageGenerationMcpLaunchConfig,
     getPptMasterMcpLaunchConfig

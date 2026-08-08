@@ -1,0 +1,75 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-artifact-versions",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
+  "module": {
+    "id": "sciforge.artifact-versions",
+    "displayName": "Artifact Versions",
+    "version": "1.0.0",
+    "hostApi": {
+      "minimum": "1.0.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 170
+  },
+  "contributionContracts": {
+    "artifact-versions.workbench-right-panel": {
+      "location": "workbench.right-panel",
+      "title": "Artifact Versions",
+      "resourceKind": "artifact-version"
+    },
+    "artifact-versions.workbench-toolbar-action": {
+      "location": "workbench.topbar",
+      "commandId": "artifact-versions.open",
+      "label": "rightPanelArtifactVersions"
+    }
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        {
+          "kind": "main.capability-factory",
+          "id": "artifact-versions.capabilities",
+          "priority": 170
+        },
+        {
+          "kind": "main.runtime-lifecycle",
+          "id": "artifact-versions.runtime-lifecycle",
+          "priority": 170
+        }
+      ]
+    },
+    {
+      "process": "renderer",
+      "export": "./renderer",
+      "contributions": [
+        {
+          "kind": "renderer.workbench-right-panel",
+          "id": "artifact-versions.workbench-right-panel",
+          "priority": 170
+        },
+        {
+          "kind": "renderer.command",
+          "id": "artifact-versions.open",
+          "priority": 170
+        },
+        {
+          "kind": "renderer.workbench-toolbar-action",
+          "id": "artifact-versions.workbench-toolbar-action",
+          "priority": 170
+        },
+        {
+          "kind": "renderer.i18n-resource",
+          "id": "artifact-versions.translations",
+          "priority": 170
+        }
+      ]
+    }
+  ]
+}

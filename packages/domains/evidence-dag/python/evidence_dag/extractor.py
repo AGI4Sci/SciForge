@@ -14,7 +14,7 @@ import re
 from typing import Any, Optional
 from urllib.parse import quote, unquote, urlparse
 
-from .artifacts import ArtifactRegistry, digest_bytes
+from .artifact_versions import ArtifactVersionProjectionClient, ArtifactVersionProjectionError
 from .graph import ThreadGraph
 from .lineage import ingest_trace_lineage
 from .llm import (
@@ -229,7 +229,7 @@ def extract_dag(
     *,
     created_by: str = "extractor",
     created_at: Optional[str] = None,
-    artifact_registry: Optional[ArtifactRegistry] = None,
+    artifact_versions: Optional[ArtifactVersionProjectionClient] = None,
 ) -> ThreadGraph:
     rendered = render_trace(trace)
     trace_prompt = f"TRACE (thread {thread_id}):\n{rendered}"
@@ -265,17 +265,15 @@ def extract_dag(
                     exc.detail,
                     attempts=attempt,
                 ) from exc
-    if artifact_registry is not None:
-        prepare_trace_artifact_hints(parsed, trace, artifact_registry, thread_id)
     graph = build_graph(
         parsed, thread_id, created_by=created_by, created_at=created_at,
-        artifact_registry=artifact_registry,
+        artifact_versions=artifact_versions,
     )
     resolve_trace_refs(graph, trace)
-    if artifact_registry is not None:
-        attach_trace_artifacts(graph, trace, artifact_registry)
+    if artifact_versions is not None:
+        attach_trace_artifacts(graph, trace, artifact_versions)
         ingest_trace_lineage(
-            graph, trace, artifact_registry, created_by=created_by, created_at=created_at,
+            graph, trace, artifact_versions, created_by=created_by, created_at=created_at,
         )
     return graph
 
@@ -347,167 +345,61 @@ _IMAGE_SUFFIXES = frozenset({".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".
 _MODEL_SUFFIXES = frozenset({".ckpt", ".joblib", ".onnx", ".pkl", ".pt", ".pth", ".safetensors"})
 
 
-def prepare_trace_artifact_hints(
-    parsed: dict[str, Any], trace: list[dict], registry: ArtifactRegistry, thread_id: str,
-) -> int:
-    """Add deterministic provenance fields before semantic node IDs are built.
-
-    SourceAssertion identity is scoped by logical Artifact ID.  Preparing the
-    fields before ``build_graph`` prevents equal text read from two independent
-    files from collapsing into one source node.
-    """
-    raw_nodes = parsed.get("nodes") if isinstance(parsed, dict) else None
-    if not isinstance(raw_nodes, list):
-        return 0
-    contexts = _trace_contexts(trace)
-    prepared = 0
-    for raw_node in raw_nodes:
-        if not isinstance(raw_node, dict) or raw_node.get("type") != NodeType.SOURCE_ASSERTION.value:
-            continue
-        supplied = raw_node.get("artifact") if isinstance(raw_node.get("artifact"), dict) else {}
-        ref = raw_node.get("ref") if isinstance(raw_node.get("ref"), dict) else {}
-        context = contexts.get(str(raw_node.get("trace_ref") or ""))
-        if context is None:
-            continue
-        call_item, source_item = context
-        selected_content = _bounded_excerpt(
-            _source_text(source_item), str(raw_node.get("content") or ""),
-        ) or _bounded_excerpt(
-            _canonical_trace_content(source_item), str(raw_node.get("content") or ""),
-        )
-        if not selected_content:
-            continue
-        descriptor = _trace_artifact_descriptor(call_item, source_item, registry)
-        if descriptor is None:
-            if supplied.get("locator") or any(ref.get(key) for key in ("url", "doi", "citation")):
-                # No stronger deterministic observation exists; retain the
-                # explicit source identity extracted from visible prose.
-                continue
-            if _trace_kind(source_item) not in {"tool_result", "function_result", "tool_output"}:
-                continue
-            descriptor = {
-                "kind": "log",
-                "locator": _runtime_locator(
-                    thread_id, _trace_source_id(source_item) or _trace_id(call_item),
-                ),
-                "content_digest": digest_bytes(
-                    _canonical_trace_content(source_item).encode("utf-8")
-                ),
-                "media_type": "application/json" if not isinstance(_trace_payload(source_item), str)
-                else "text/plain",
-                "retention": "reference",
-                "_source_is_artifact_content": True,
-            }
-        source_is_artifact_content = bool(descriptor.pop("_source_is_artifact_content"))
-        raw_node["artifact"] = {
-            "kind": descriptor.get("kind"),
-            "locator": descriptor.get("locator"),
-            "contentDigest": descriptor.get("content_digest"),
-            "version": descriptor.get("version"),
-            "mediaType": descriptor.get("media_type"),
-            "retention": descriptor.get("retention", "reference"),
-        }
-        raw_node["artifact"] = {
-            key: value for key, value in raw_node["artifact"].items() if value is not None
-        }
-        if source_is_artifact_content:
-            raw_node["selector"] = _trace_selector(
-                source_item, str(descriptor["locator"]), selected_content,
-            )
-            raw_node.pop("anchorDigest", None)
-        else:
-            # A tool receipt may identify a real file without exposing its
-            # bytes. Never retain a model-invented selector for that receipt.
-            raw_node.pop("selector", None)
-            raw_node.pop("anchorDigest", None)
-        prepared += 1
-    return prepared
-
-
 def attach_trace_artifacts(
-    graph: ThreadGraph, trace: list[dict], registry: ArtifactRegistry,
+    graph: ThreadGraph, trace: list[dict], registry: ArtifactVersionProjectionClient,
 ) -> int:
-    """Ground SourceAssertions in the exact visible runtime input.
+    """Attach only exact refs supplied by the ArtifactVersion owner.
 
-    The model remains responsible for semantic extraction.  This deterministic
-    pass only resolves the already-extracted assertion's stable trace reference
-    to a structured file/URL/tool result and fills ArtifactVersion/SourceAnchor
-    records.  When there is no unique external locator it records the canonical
-    runtime payload itself; that is intentionally L0 provenance, not a fabricated
-    external source.
+    No locator is opened, hashed, registered, or rebound here.  Ambiguous,
+    pending, and failed projections remain explicit fail-closed provenance.
     """
     contexts = _trace_contexts(trace)
     attached = 0
     for node in graph.nodes.values():
         if node.type != NodeType.SOURCE_ASSERTION:
             continue
+        status = registry.status_for_trace(node.trace_refs)
+        if status and status.get("status") in {"pending", "failed"}:
+            node.attributes["artifactVersionProvenanceStatus"] = status["status"]
+            node.attributes["artifactVersionProvenanceReason"] = status.get("reason")
+            node.freshness = "stale"
+            continue
+        records = registry.records_for_trace(node.trace_refs)
+        if node.artifact_version_id:
+            records = [record for record in records if record.ref.version_id == node.artifact_version_id]
+        if len(records) != 1:
+            if records:
+                node.attributes["artifactVersionProvenanceStatus"] = "failed"
+                node.attributes["artifactVersionProvenanceReason"] = (
+                    "Trace item maps to multiple ArtifactVersion refs."
+                )
+                node.freshness = "stale"
+            continue
+        record = records[0]
+        artifact, version = record.artifact, record.version
+        node.artifact_id = artifact.artifact_id
+        node.artifact_version_id = version.version_id
+        node.attributes.pop("artifactVersionProvenanceStatus", None)
+        node.attributes.pop("artifactVersionProvenanceReason", None)
         context = next((contexts[ref] for ref in node.trace_refs if ref in contexts), None)
-        if context is None:
-            continue
-        item, source_item = context
-        source_item_id = _trace_id(source_item)
-        if source_item_id and source_item_id not in node.trace_refs:
-            node.trace_refs.append(source_item_id)
-        canonical_content = _canonical_trace_content(source_item)
-        selected_content = _bounded_excerpt(_source_text(source_item), node.content)
-        if not selected_content:
-            selected_content = _bounded_excerpt(canonical_content, node.content)
-        if not selected_content:
-            continue
-
-        artifact = registry.artifacts.get(node.artifact_id or "")
-        version = registry.versions.get(node.artifact_version_id or "")
-        observed = _trace_artifact_descriptor(item, source_item, registry)
-        observed_is_content = bool(observed and observed.get("_source_is_artifact_content"))
-        source_is_artifact_content = False
-        if observed is not None and (
-            artifact is None or version is None or version.artifact_id != artifact.artifact_id
-            or version.locator != observed.get("locator")
-        ):
-            descriptor = dict(observed)
-            source_is_artifact_content = bool(descriptor.pop("_source_is_artifact_content"))
-            artifact, version, _ = registry.register(**descriptor)
-            node.artifact_id = artifact.artifact_id
-            node.artifact_version_id = version.version_id
-            node.source_anchor_id = None
-        elif artifact is None or version is None or version.artifact_id != artifact.artifact_id:
-            descriptor = observed
-            if descriptor is None:
-                if _trace_kind(source_item) not in {"tool_result", "function_result", "tool_output"}:
-                    # Chat text is L0 trace provenance, not an external scientific
-                    # Artifact.  Leave the explicit artifact_not_linked breakpoint.
-                    continue
-                locator = _runtime_locator(graph.thread_id, _trace_source_id(source_item) or _trace_id(item))
-                artifact, version, _ = registry.register(
-                    kind="log", locator=locator, content_digest=digest_bytes(canonical_content.encode("utf-8")),
-                    media_type="application/json" if not isinstance(_trace_payload(source_item), str)
-                    else "text/plain",
-                    retention="reference",
+        anchor = None
+        if context is not None:
+            _item, source_item = context
+            source_item_id = _trace_id(source_item)
+            if source_item_id and source_item_id not in node.trace_refs:
+                node.trace_refs.append(source_item_id)
+            selected_content = _bounded_excerpt(_source_text(source_item), node.content) or \
+                _bounded_excerpt(_canonical_trace_content(source_item), node.content)
+            if selected_content:
+                selector = _trace_selector(source_item, version.locator, selected_content)
+                anchor = registry.create_anchor(
+                    artifact.artifact_id, selector, selected_content=selected_content,
+                    artifact_version_id=version.version_id,
                 )
-                source_is_artifact_content = True
-            else:
-                source_is_artifact_content = bool(descriptor.pop("_source_is_artifact_content"))
-                artifact, version, _ = registry.register(**descriptor)
-            node.artifact_id = artifact.artifact_id
-            node.artifact_version_id = version.version_id
-        else:
-            if version.locator.lower().startswith(("runtime:", "trace:")):
-                source_is_artifact_content = True
-            else:
-                source_is_artifact_content = bool(
-                    observed and observed.get("locator") == version.locator and observed_is_content
-                )
-
-        anchor = registry.anchors.get(node.source_anchor_id or "")
-        if anchor is None and source_is_artifact_content:
-            selector = _trace_selector(source_item, version.locator, selected_content)
-            anchor = registry.create_anchor(
-                artifact.artifact_id, selector, selected_content=selected_content,
-                artifact_version_id=version.version_id,
-            )
-            node.source_anchor_id = anchor.anchor_id
+                node.source_anchor_id = anchor.anchor_id
         graph.attach_registry_records(
             artifact=artifact, artifact_version=version, source_anchor=anchor,
+            artifact_version_ref=record.ref,
         )
         attached += 1
     return attached
@@ -597,7 +489,8 @@ def _bounded_excerpt(value: str, semantic_hint: str, *, limit: int = 1200) -> st
 
 
 def _trace_artifact_descriptor(
-    call_item: dict[str, Any], source_item: dict[str, Any], registry: ArtifactRegistry,
+    call_item: dict[str, Any], source_item: dict[str, Any],
+    registry: ArtifactVersionProjectionClient,
 ) -> Optional[dict[str, Any]]:
     # Failed tools prove the failure itself, not the requested file/URL bytes.
     if bool(source_item.get("isError") or source_item.get("is_error")):
@@ -794,7 +687,7 @@ def build_graph(
     *,
     created_by: str = "extractor",
     created_at: Optional[str] = None,
-    artifact_registry: Optional[ArtifactRegistry] = None,
+    artifact_versions: Optional[ArtifactVersionProjectionClient] = None,
 ) -> ThreadGraph:
     """Turn the extractor's JSON into a deduped ThreadGraph. Pure + testable.
 
@@ -830,13 +723,26 @@ def build_graph(
             cr = raw_node.get("credibility")
             if isinstance(cr, str) and cr.strip().lower() in ("high", "medium", "low"):
                 extra["credibility"] = cr.strip().lower()
-            if artifact_registry is not None:
-                try:
-                    attached = _register_source(raw_node, artifact_registry)
-                except (OSError, TypeError, ValueError):
-                    attached = None
+            if artifact_versions is not None:
+                pinned = artifact_versions.records_for_trace([
+                    str(raw_node.get("trace_ref") or "")
+                ])
+                if len(pinned) == 1:
+                    record = pinned[0]
+                    attached = (record.artifact, record.version, None, record.ref)
+                else:
+                    try:
+                        resolved = _register_source(raw_node, artifact_versions)
+                        if resolved is not None:
+                            artifact, artifact_version, source_anchor = resolved
+                            attached = (
+                                artifact, artifact_version, source_anchor,
+                                artifact_versions.refs.get(artifact_version.version_id),
+                            )
+                    except (OSError, TypeError, ValueError):
+                        attached = None
                 if attached is not None:
-                    artifact, artifact_version, source_anchor = attached
+                    artifact, artifact_version, source_anchor, _ref = attached
                     extra.update({
                         "artifact_id": artifact.artifact_id,
                         "artifact_version_id": artifact_version.version_id,
@@ -851,9 +757,10 @@ def build_graph(
             **extra,
         )
         if attached is not None:
-            artifact, artifact_version, source_anchor = attached
+            artifact, artifact_version, source_anchor, pinned_ref = attached
             graph.attach_registry_records(
                 artifact=artifact, artifact_version=artifact_version, source_anchor=source_anchor,
+                artifact_version_ref=pinned_ref,
             )
         if raw_node.get("tmp_id"):
             tmp_to_id[str(raw_node["tmp_id"])] = node.id
@@ -876,7 +783,7 @@ def build_graph(
     return graph
 
 
-def _register_source(raw_node: dict[str, Any], registry: ArtifactRegistry):
+def _register_source(raw_node: dict[str, Any], registry: ArtifactVersionProjectionClient):
     ref = raw_node.get("ref") if isinstance(raw_node.get("ref"), dict) else {}
     supplied = raw_node.get("artifact") if isinstance(raw_node.get("artifact"), dict) else {}
     locator = supplied.get("locator")

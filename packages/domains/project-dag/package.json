@@ -22,9 +22,9 @@
     "README.md"
   ],
   "scripts": {
-    "start": "python -c \"import sys; sys.path[:0] = ['python', '../evidence-dag/python']; from project_dag.server import main; main()\"",
+    "start": "python3 -c \"import sys; sys.path[:0] = ['python', '../evidence-dag/python']; from project_dag.server import main; main()\"",
     "serve": "npm run start",
-    "python:test": "PYTHONPATH=python:../evidence-dag/python python -m unittest discover -s tests -p 'test_*.py' -v",
+    "python:test": "PYTHONPATH=python:../evidence-dag/python python3 -m unittest discover -s tests -p 'test_*.py' -v",
     "desktop:test": "node --import tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "npm run desktop:test && npm run python:test"

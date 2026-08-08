@@ -11,6 +11,8 @@ import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
 import type { z } from 'zod'
 import {
   EVIDENCE_DAG_CAPABILITY_IDS,
+  evidenceDagExportSnapshotProductsInputSchema,
+  evidenceDagExportSnapshotProductsOutputSchema,
   evidenceDagPreviewInputSchema,
   evidenceDagPreviewOutputSchema,
   evidenceDagPriorityInputSchema,
@@ -35,8 +37,18 @@ import {
 import { EVIDENCE_DAG_WRITE_EXPORT_ACTION } from './main/gate.js'
 
 export { evidenceTraceFromThread } from './main/artifacts.js'
+export {
+  artifactVersionCommitPort,
+  artifactVersionEventListPort,
+  artifactVersionReadPort,
+  createEvidenceArtifactVersionClient,
+  type EvidenceArtifactVersionClient
+} from './main/artifact-version-client.js'
 
 type CapabilityAudience = 'ui' | 'agent' | 'system'
+type EvidenceDagCapabilityContext = Readonly<{
+  caller: Readonly<{ workspaceId?: string }>
+}>
 
 export type EvidenceDagCapabilityOptions = Readonly<{
   id: string
@@ -45,7 +57,7 @@ export type EvidenceDagCapabilityOptions = Readonly<{
   description: string
   audiences: readonly CapabilityAudience[]
   scope: 'global' | 'workspace' | 'resource'
-  effect: 'read' | 'compute' | 'external-write'
+  effect: 'read' | 'compute' | 'workspace-write' | 'external-write'
   approval: 'none' | 'confirmation'
   concurrency: Readonly<{
     revision: 'none' | 'optimistic'
@@ -54,7 +66,7 @@ export type EvidenceDagCapabilityOptions = Readonly<{
   tags: readonly string[]
   inputSchema: z.ZodType
   outputSchema: z.ZodType
-  handler: (input: any) => Promise<Readonly<{
+  handler: (input: any, context?: EvidenceDagCapabilityContext) => Promise<Readonly<{
     output: unknown
     changed?: boolean
   }>>
@@ -210,14 +222,17 @@ export function createEvidenceDagCapabilityFactory<CapabilityDefinition>(
 ): EvidenceDagCapabilityFactory<CapabilityDefinition> {
   const define = (
     input: Omit<EvidenceDagCapabilityOptions, 'version' | 'audiences' | 'scope' | 'tags'> &
-      Readonly<{ audiences?: readonly CapabilityAudience[] }>
+      Readonly<{
+        audiences?: readonly CapabilityAudience[]
+        scope?: EvidenceDagCapabilityOptions['scope']
+      }>
   ) => {
-    const { audiences = ['ui', 'agent'], ...definition } = input
+    const { audiences = ['ui', 'agent'], scope = 'global', ...definition } = input
     return options.defineCapability({
       ...definition,
       version: '1.0.0',
       audiences,
-      scope: 'global',
+      scope,
       tags: ['evidence', 'dag', 'provenance']
     })
   }
@@ -234,47 +249,99 @@ export function createEvidenceDagCapabilityFactory<CapabilityDefinition>(
         id: EVIDENCE_DAG_CAPABILITY_IDS.view,
         title: 'View Evidence DAG',
         description: 'Reads the last committed Evidence graph and its separate pending delta.',
+        scope: 'workspace',
         effect: 'read',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'none' },
         audiences: ['ui', 'agent', 'system'],
         inputSchema: evidenceDagViewInputSchema,
         outputSchema: evidenceDagViewOutputSchema,
-        handler: async (input) => ({ output: await options.getRuntime().view(input) })
+        handler: async (input, context) => ({
+          output: await options.getRuntime().view({
+            ...input,
+            workspaceRoot: evidenceWorkspaceFromCaller(context)
+          })
+        })
       }),
       define({
         id: EVIDENCE_DAG_CAPABILITY_IDS.update,
         title: 'Update Evidence DAG',
         description: 'Queues one durable Evidence-only update for a completed agent thread.',
+        scope: 'workspace',
         effect: 'compute',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'required' },
         inputSchema: evidenceDagUpdateInputSchema,
         outputSchema: evidenceDagUpdateOutputSchema,
-        handler: async (input) => ({ output: await options.getRuntime().update(input) })
+        handler: async (input, context) => ({
+          output: await options.getRuntime().update({
+            ...input,
+            workspaceRoot: evidenceWorkspaceFromCaller(context)
+          })
+        })
       }),
       define({
         id: EVIDENCE_DAG_CAPABILITY_IDS.priority,
         title: 'Set Evidence DAG priority',
         description: 'Adjusts scheduling priority without creating another update path.',
+        scope: 'workspace',
         effect: 'compute',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'required' },
         inputSchema: evidenceDagPriorityInputSchema,
         outputSchema: evidenceDagPriorityOutputSchema,
-        handler: async (input) => ({ output: await options.getRuntime().priority(input) })
+        handler: async (input, context) => ({
+          output: await options.getRuntime().priority({
+            ...input,
+            workspaceRoot: evidenceWorkspaceFromCaller(context)
+          })
+        })
       }),
       define({
         id: EVIDENCE_DAG_CAPABILITY_IDS.resolvePreview,
         title: 'Resolve Evidence preview',
         description: 'Resolves a pinned provenance tuple to a verified workspace-local file.',
+        scope: 'workspace',
         effect: 'read',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'none' },
         inputSchema: evidenceDagPreviewInputSchema,
         outputSchema: evidenceDagPreviewOutputSchema,
-        handler: async (input) => ({ output: await options.getRuntime().preview(input) })
+        handler: async (input, context) => ({
+          output: await options.getRuntime().preview({
+            ...input,
+            workspaceRoot: evidenceWorkspaceFromCaller(context)
+          })
+        })
+      }),
+      define({
+        id: EVIDENCE_DAG_CAPABILITY_IDS.exportSnapshotProducts,
+        title: 'Export versioned Evidence Snapshot products',
+        description: 'Projects one pinned snapshot to PROV, RO-Crate, DataCite, audit, and reproduction artifacts in one atomic version commit.',
+        scope: 'workspace',
+        effect: 'workspace-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: evidenceDagExportSnapshotProductsInputSchema,
+        outputSchema: evidenceDagExportSnapshotProductsOutputSchema,
+        handler: async (input, context) => {
+          const workspaceRoot = evidenceWorkspaceFromCaller(context)
+          return {
+            output: await options.getRuntime().exportSnapshotProducts({
+              ...input,
+              workspaceRoot
+            })
+          }
+        }
       })
     ]
   })
+}
+
+function evidenceWorkspaceFromCaller(context?: EvidenceDagCapabilityContext): string {
+  const workspaceRoot = context?.caller.workspaceId?.trim()
+  if (!workspaceRoot) {
+    throw new Error('Evidence DAG capability requires a workspace-scoped caller.')
+  }
+  return workspaceRoot
 }

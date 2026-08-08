@@ -29,16 +29,17 @@ The package follows [`docs/evidence-project-dag-design.zh-CN.md`](../../../docs/
 - Semantic nodes use domain-separated normalized semantic IDs. Artifact bytes use separate `sha256:` content digests.
 - The canonical source node type is `source_assertion`.
 - A SourceAssertion PROV entity links through `edag:artifact_id`, `edag:artifact_version_id`, and `edag:source_anchor_id`.
-- `edag:artifactRegistry` contains exactly `artifacts`, `artifactVersions`, and `sourceAnchors`.
+- `edag:artifactRegistry` is the historical snapshot projection key. New snapshots may also contain exact `artifactVersionRefs`; it is not a writable Registry.
 - SourceAnchor selectors are structured (`pdf|text|table|figure|code|dataset|web`) and carry a digest of the selected content.
-- The compiler accepts native Runtime `kind/toolName/callId/output` items and the desktop canonical `type/tool_name/content/source_refs` shape. It pairs calls and results, decodes canonical JSON result envelopes, prefers a unique structured file/URL/DOI locator, and derives bounded exact selectors only from source-reading results.
-- A canonical tool result without a unique external locator can be retained as a `runtime:` log Artifact, but provenance resolution keeps it at `L0` with an `external_artifact_not_identified` breakpoint. Chat/agent summaries alone are never promoted into scientific Artifacts.
-- Same-path byte changes append an ArtifactVersion. A moved file is rebound only when the old locator is missing and its digest has exactly one candidate inside the configured Project scope.
+- The main-process adapter commits only explicit reference candidates with locator, digest, and byte length, or consumes an already-pinned `ArtifactVersionRefV1`. The Python compiler never opens a locator, hashes a file, creates an Artifact identity, or rebinds a version.
+- Missing, incomplete, or ambiguous artifact provenance remains `pending`/`failed` and fails closed at L0. Chat/agent summaries and raw tool receipts are never promoted into scientific Artifacts.
+- Artifact identity, version commits, access policy, source availability, moves, and content-change detection are owned by `@sciforge/domain-artifact-versions`. On activation and on a bounded background interval, Evidence drains that durable lifecycle outbox to empty by workspace. Evidence persists its sequence cursor, exact thread/version associations, and idempotent queue receipts in `artifact-version-lifecycle.json`; a cursor advances only after every affected thread update is durably accepted by the existing Evidence queue. Restart replays the same receipt safely. Missing/content/current-change events mark affected current projections stale, moves require review, and old snapshots and pinned IDs/digests are never rewritten.
+- Scientific Plotting publishes immutable `pending` receipts under `.sciforge/evidence-dag/inbox/scientific-plotting/<sha256(operationId)>.json`. Evidence validates the routed thread/workspace, all five committed refs, every lineage ref, and the stored bytes before appending a synthetic structured trace to its durable queue. It writes a separate `enqueued` delivery receipt only after that queue write is durable; `enqueued` means hand-off accepted, not Evidence Snapshot or L4 completion. Missing services/threads and any scope or digest mismatch leave the producer receipt pending for restart-safe retry.
 - A0, A1, and A2 assessments are append-only records bound to the committed snapshot digest. A1/A2 use prompts and context independent from extraction.
 - ExperimentRun, AnalysisRun, DatasetVersion, SoftwareVersion, Environment, Observation, Artifact, and Agent are first-class source-layer objects. PROV export maps runs to `activity`, actors to `agent`, and other records to `entity`; `used`, `wasGeneratedBy`, `wasDerivedFrom`, `wasAssociatedWith`, and `wasAttributedTo` retain their native PROV-JSON forms.
 - Lineage edges have explicit families. Causal provenance and version relations are cycle-checked; contradiction, identity, and replication relations may cycle by design.
 - A Finding is promoted to `L4` only when every linked run has a stable visible run record, verifiable input, exact software, an explicit parameter map, a verifiable environment, and verifiable log/output ArtifactVersions. Stochastic runs additionally require an explicit random seed. Missing metadata becomes a named provenance breakpoint and is never inferred from prose.
-- `EvidenceUpdateQueued`, `EvidenceSnapshotCommitted`, `ArtifactMoved`, `ArtifactContentChanged`, `AuditCompleted`, and `FindingOpened` form one durable idempotent event outbox. Events are fsynced before they are returned to callers/readers; they observe the shared compiler and audit side chain and never write a graph.
+- `EvidenceUpdateQueued`, `EvidenceSnapshotCommitted`, `AuditCompleted`, and `FindingOpened` form the Evidence-owned durable idempotent outbox. Historical `ArtifactMoved`/`ArtifactContentChanged` mirrors remain readable, but new artifact lifecycle events are written only by Artifact Versions.
 
 ## Structured run lineage
 
@@ -63,7 +64,8 @@ Visible `tool_result` / `function_result` / `tool_output` items can declare a ca
       "artifact": {
         "kind": "dataset",
         "locator": "data/measurements-v2.csv",
-        "contentDigest": "sha256:<64 hex>"
+        "contentDigest": "sha256:<64 hex>",
+        "byteLength": 1234
       }
     }],
     "software": [{
@@ -80,13 +82,13 @@ Visible `tool_result` / `function_result` / `tool_output` items can declare a ca
     "logs": [{
       "id": "artifact:run-log",
       "name": "run log",
-      "artifact": {"kind": "log", "locator": "logs/run-42.log", "contentDigest": "sha256:<64 hex>"}
+      "artifact": {"kind": "log", "locator": "logs/run-42.log", "contentDigest": "sha256:<64 hex>", "byteLength": 321}
     }],
     "outputs": [{
       "id": "artifact:result-table",
       "type": "artifact",
       "name": "result table",
-      "artifact": {"kind": "dataset", "locator": "results/table.csv", "contentDigest": "sha256:<64 hex>"}
+      "artifact": {"kind": "dataset", "locator": "results/table.csv", "contentDigest": "sha256:<64 hex>", "byteLength": 456}
     }],
     "agents": [{"id": "agent:stats-worker", "name": "Statistics worker", "agentType": "software_agent"}],
     "relations": [
@@ -181,6 +183,34 @@ the detached SHA-256 digest plus authoritative Project/ArtifactVersion
 identities, and rejects unknown fields, invalid identifiers, invented content
 digests, or relation mismatches. It does not create or mutate a DAG.
 
+## Versioned snapshot products
+
+The public `evidence-dag.export-snapshot-products` capability publishes five
+Evidence-owned projections for one caller-pinned snapshot digest: PROV-JSON,
+RO-Crate, DataCite metadata, an L0 audit report, and a reproduction report.
+`runtimeId`, `threadId`, `workspaceRoot`, `snapshotDigest`, an idempotency key,
+and explicit DataCite DOI/title/creators/publisher/publication year/project
+identity are required. Evidence never substitutes current/latest when the
+pinned historical snapshot is missing or corrupt.
+
+Before writing, the Python engine validates every snapshot-referenced
+ArtifactVersion against its immutable `ArtifactVersionRefV1`. The main runtime
+then resolves each exact version through Artifact Versions, verifies the bytes
+and full ref, and rejects unavailable, mismatched, non-exportable, or
+over-limit sources. All five canonical JSON byte streams are submitted through
+one `ArtifactVersionCommitTransaction`; every output depends on all exact
+source refs and carries `threadId + snapshotDigest` metadata. No receipt is
+returned if the atomic commit fails. Optional per-product
+`artifactId + expectedCurrentVersionId` targets provide optimistic CAS when an
+export is appended to an existing product identity; otherwise the first
+idempotent transaction creates the identities.
+
+The reproduction report says `L4` only when every included run/claim/finding
+passes the existing strict lineage checks. Otherwise it is explicitly
+`incomplete` and preserves named breakpoints. The audit export is generated
+deterministically against the exact requested snapshot and declares that
+binding; an unrelated audit run is never relabeled as current.
+
 ## HTTP API
 
 All JSON routes except `/health` require `Authorization: Bearer $SCIFORGE_EVIDENCE_DAG_API_KEY`.
@@ -201,14 +231,9 @@ GET  /events?threadId=<id>&type=<type>&afterSequence=<n>&limit=<n>
 POST /updates
 GET  /updates/status?threadId=<id>
 
-POST /artifacts
-POST /artifacts/resolve
-POST /artifacts/events/ack
-POST /artifacts/{id}/resolve
-POST /artifacts/{id}/confirm-rebind
-
 POST /audits
 GET  /audits?threadId=<id>
+POST /snapshot-products                     # exact snapshot projection; desktop commits bytes
 ```
 
 Canonical update body:
@@ -229,10 +254,10 @@ Canonical update body:
 }
 ```
 
-`workspaceRoot` is the required public scope identity. The service normalizes it,
-validates that an optional `projectRoot` stays contained within it, and derives
-the durable Artifact Registry key internally; callers do not duplicate another
-domain's project-key rules.
+`workspaceRoot` is the required public scope identity. The service normalizes it
+and validates that an optional `projectRoot` stays contained within it. The main
+runtime uses that exact workspace root when invoking Artifact Versions commit
+and lifecycle-list contracts.
 
 The three scheduling fields are optional transport metadata. When supplied, they preserve end-to-end queue time, delivery identity, and correlation. An identical canonical input digest is returned from the latest committed snapshot without another model call or duplicate queue/snapshot event. Artifact/decision changes use a different reason or effective payload and compile normally.
 

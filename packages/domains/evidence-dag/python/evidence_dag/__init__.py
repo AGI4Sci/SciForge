@@ -1,5 +1,9 @@
 """SciForge Evidence DAG compiler and immutable snapshot contracts."""
-from .artifacts import ArtifactRegistry
+from .artifact_versions import (
+    ArtifactVersionProjectionClient,
+    ArtifactVersionProjectionError,
+    ArtifactVersionRefV1,
+)
 from .datacite import (
     DataCiteCreator,
     DataCiteDescription,
@@ -42,6 +46,7 @@ from .rocrate import (
     read_ro_crate,
     write_ro_crate,
 )
+from .products import export_snapshot_products, source_artifact_version_refs
 from .service import Engine
 from .snapshot import EvidenceSnapshot
 
@@ -50,7 +55,9 @@ __version__ = "1.0.0"
 __all__ = [
     "ThreadGraph", "Engine",
     "Node", "Edge", "NodeType", "NodeStatus", "EdgeRel", "EdgeFamily",
-    "Artifact", "ArtifactVersion", "ArtifactRegistry", "SourceAnchor", "SourceSelector",
+    "Artifact", "ArtifactVersion", "ArtifactVersionRefV1",
+    "ArtifactVersionProjectionClient", "ArtifactVersionProjectionError",
+    "SourceAnchor", "SourceSelector",
     "Assessment", "EvidenceSnapshot", "HumanReview", "HumanReviewLevel",
     "HumanReviewStatus", "HumanReviewActorType", "HumanReviewAuthority",
     "HumanReviewChecker", "HumanReviewReason", "ReviewPacket",
@@ -60,5 +67,6 @@ __all__ = [
     "DataCiteCreator", "DataCiteDescription", "DataCiteProject", "DataCiteResource",
     "GitCommit", "RelatedIdentifier", "ImportedDataCite",
     "datacite_digest", "export_datacite", "import_datacite",
+    "export_snapshot_products", "source_artifact_version_refs",
     "__version__",
 ]

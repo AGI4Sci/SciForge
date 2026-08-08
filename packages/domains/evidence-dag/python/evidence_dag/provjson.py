@@ -108,6 +108,11 @@ def to_prov_json(graph: ThreadGraph) -> dict[str, Any]:
         },
         "edag:assessments": [item.to_dict() for item in graph.assessments],
     }
+    if graph.artifact_version_refs:
+        result["edag:artifactRegistry"]["artifactVersionRefs"] = [
+            graph.artifact_version_refs[key].to_dict()
+            for key in sorted(graph.artifact_version_refs)
+        ]
     if graph.review_policy_version or graph.review_packets:
         from .human_review import human_review_summary
         result["edag:humanReview"] = human_review_summary(graph)
@@ -193,6 +198,10 @@ def from_prov_json(doc: dict[str, Any]) -> ThreadGraph:
     for raw in registry.get("artifactVersions") or []:
         item = ArtifactVersion.from_dict(raw)
         graph.artifact_versions[item.version_id] = item
+    from .artifact_versions import ArtifactVersionRefV1
+    for raw in registry.get("artifactVersionRefs") or []:
+        item = ArtifactVersionRefV1.from_dict(raw)
+        graph.artifact_version_refs[item.version_id] = item
     for raw in registry.get("sourceAnchors") or []:
         item = SourceAnchor.from_dict(raw)
         graph.source_anchors[item.anchor_id] = item

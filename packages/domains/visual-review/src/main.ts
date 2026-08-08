@@ -1,3 +1,14 @@
+import { createHash } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import {
+  ARTIFACT_VERSION_COMMIT_CONTRACT,
+  ARTIFACT_VERSION_READ_CONTRACT,
+  type ArtifactVersionCommitInputV1,
+  type ArtifactVersionCommitResultV1,
+  type ArtifactVersionReadInputV1,
+  type ArtifactVersionReadResultV1,
+  type ArtifactVersionRefV1
+} from '@sciforge/domain-artifact-versions/contract'
 import type { DomainMainHost } from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
 import type { z } from 'zod'
@@ -25,9 +36,11 @@ import {
 } from './definition.js'
 import {
   acceptVisualCandidateRevision,
+  abortPreparedVisualCandidateAcceptance,
   createVisualCandidateRevision,
   exportVisualReviewPacket,
   openVisualReviewDocument,
+  preflightVisualCandidateAcceptance,
   readVisualReviewImage,
   rejectVisualCandidateRevision,
   saveVisualDocumentAnnotations,
@@ -71,6 +84,8 @@ export type VisualReviewServicePort = Readonly<{
   saveAnnotations: typeof saveVisualDocumentAnnotations
   exportReviewPacket: typeof exportVisualReviewPacket
   createCandidate: typeof createVisualCandidateRevision
+  preflightAcceptCandidate: typeof preflightVisualCandidateAcceptance
+  abortPreparedAcceptance: typeof abortPreparedVisualCandidateAcceptance
   acceptCandidate: typeof acceptVisualCandidateRevision
   rejectCandidate: typeof rejectVisualCandidateRevision
 }>
@@ -97,6 +112,8 @@ const defaultService = (): VisualReviewServicePort => Object.freeze({
   saveAnnotations: saveVisualDocumentAnnotations,
   exportReviewPacket: exportVisualReviewPacket,
   createCandidate: createVisualCandidateRevision,
+  preflightAcceptCandidate: preflightVisualCandidateAcceptance,
+  abortPreparedAcceptance: abortPreparedVisualCandidateAcceptance,
   acceptCandidate: acceptVisualCandidateRevision,
   rejectCandidate: rejectVisualCandidateRevision
 })
@@ -117,7 +134,24 @@ export function createDomainMainEntry(
         defineCapability: host.defineCapability as (
           options: VisualReviewCapabilityOptions
         ) => unknown,
-        getService
+        getService,
+        commitArtifactVersion: async (input, workspaceRoot) => {
+          if (!host.capabilities) {
+            throw new Error('Artifact Versions capability is unavailable; refusing to accept an unversioned candidate.')
+          }
+          return host.capabilities.invoke(ARTIFACT_VERSION_COMMIT_CONTRACT, input, {
+            workspaceId: workspaceRoot,
+            idempotencyKey: input.idempotencyKey
+          })
+        },
+        readArtifactVersion: async (input, workspaceRoot) => {
+          if (!host.capabilities) {
+            throw new Error('Artifact Versions capability is unavailable; refusing an unverified version binding.')
+          }
+          return host.capabilities.invoke(ARTIFACT_VERSION_READ_CONTRACT, input, {
+            workspaceId: workspaceRoot
+          })
+        }
       }),
       onDispose: () => {
         service = undefined
@@ -129,6 +163,14 @@ export function createDomainMainEntry(
 export function createVisualReviewCapabilityFactory<CapabilityDefinition>(options: Readonly<{
   defineCapability: (options: VisualReviewCapabilityOptions) => CapabilityDefinition
   getService: () => VisualReviewServicePort
+  commitArtifactVersion?: (
+    input: ArtifactVersionCommitInputV1,
+    workspaceRoot: string
+  ) => Promise<ArtifactVersionCommitResultV1>
+  readArtifactVersion?: (
+    input: ArtifactVersionReadInputV1,
+    workspaceRoot: string
+  ) => Promise<ArtifactVersionReadResultV1>
 }>): VisualReviewCapabilityFactory<CapabilityDefinition> {
   const define = (
     input: Omit<VisualReviewCapabilityOptions, 'version' | 'scope' | 'tags'> &
@@ -161,16 +203,22 @@ export function createVisualReviewCapabilityFactory<CapabilityDefinition>(option
         outputSchema: visualReviewOpenOutputSchema,
         handler: async (input, context) => {
           const workspaceRoot = requireWorkspace(context)
+          if (input.artifact?.versionRef) {
+            await requireVerifiedArtifactVersion(
+              options.readArtifactVersion,
+              workspaceRoot,
+              input.artifact.versionRef,
+              visualArtifactVersionKind(input.artifact.kind)
+            )
+          }
           const opened = await options.getService().open({
             workspaceRoot,
             documentId: input.documentId,
             ...(input.artifact ? { artifact: input.artifact } : {})
           })
           const { changed, ...output } = opened
-          return {
-            output,
-            changed
-          }
+          void changed
+          return { output }
         }
       }),
       define({
@@ -225,8 +273,7 @@ export function createVisualReviewCapabilityFactory<CapabilityDefinition>(option
             workspaceRoot: requireWorkspace(context),
             ...input,
             ...(input.nodes ? { nodes: input.nodes as VisualNode[] } : {})
-          }),
-          changed: true
+          })
         })
       }),
       define({
@@ -243,8 +290,7 @@ export function createVisualReviewCapabilityFactory<CapabilityDefinition>(option
           output: await options.getService().saveAnnotations({
             workspaceRoot: requireWorkspace(context),
             ...input
-          }),
-          changed: true
+          })
         })
       }),
       define({
@@ -261,8 +307,7 @@ export function createVisualReviewCapabilityFactory<CapabilityDefinition>(option
           output: await options.getService().exportReviewPacket({
             workspaceRoot: requireWorkspace(context),
             ...input
-          }),
-          changed: true
+          })
         })
       }),
       define({
@@ -279,8 +324,7 @@ export function createVisualReviewCapabilityFactory<CapabilityDefinition>(option
           output: await options.getService().createCandidate({
             workspaceRoot: requireWorkspace(context),
             ...input
-          }),
-          changed: true
+          })
         })
       }),
       define({
@@ -293,13 +337,116 @@ export function createVisualReviewCapabilityFactory<CapabilityDefinition>(option
         concurrency: { revision: 'none', idempotency: 'required' },
         inputSchema: visualReviewRevisionDecisionInputSchema,
         outputSchema: visualReviewRevisionDecisionOutputSchema,
-        handler: async (input, context) => ({
-          output: await options.getService().acceptCandidate({
-            workspaceRoot: requireWorkspace(context),
-            ...input
-          }),
-          changed: true
-        })
+        handler: async (input, context) => {
+          const workspaceRoot = requireWorkspace(context)
+          const commitArtifactVersion = options.commitArtifactVersion
+          if (!commitArtifactVersion) {
+            throw new Error('Artifact Versions capability is unavailable; refusing to accept an unversioned candidate.')
+          }
+          const service = options.getService()
+          const decision = {
+            workspaceRoot,
+            documentId: input.documentId,
+            revisionId: input.revisionId
+          }
+          const preflight = await service.preflightAcceptCandidate(decision)
+          if (preflight.alreadyAccepted) {
+            return { output: preflight.alreadyAccepted, changed: false }
+          }
+          const { artifact, candidate } = preflight
+          let bytes: Buffer
+          try {
+            bytes = await readFile(candidate.artifactPath)
+            const digest = createHash('sha256').update(bytes).digest('hex')
+            if (digest !== candidate.artifactHash || digest !== candidate.reviewEvidence.reviewedArtifactHash) {
+              throw new Error('Candidate bytes no longer match the reviewed artifact; refusing to version them.')
+            }
+          } catch (error) {
+            if (!preflight.committedVersionRef) {
+              await service.abortPreparedAcceptance(decision)
+            }
+            throw error
+          }
+          if (preflight.committedVersionRef) {
+            await requireVerifiedArtifactVersion(
+              options.readArtifactVersion,
+              workspaceRoot,
+              preflight.committedVersionRef,
+              visualArtifactVersionKind(artifact.kind),
+              false
+            )
+            return {
+              output: await service.acceptCandidate({
+                workspaceRoot,
+                ...input,
+                artifactVersionRef: preflight.committedVersionRef
+              })
+            }
+          }
+          const currentRef = artifact.versionRef
+          let currentVersion: Awaited<ReturnType<typeof requireVerifiedArtifactVersion>> | undefined
+          try {
+            currentVersion = currentRef && preflight.newlyPrepared !== false
+              ? await requireVerifiedArtifactVersion(
+                  options.readArtifactVersion,
+                  workspaceRoot,
+                  currentRef,
+                  visualArtifactVersionKind(artifact.kind)
+                )
+              : undefined
+          } catch (error) {
+            await service.abortPreparedAcceptance(decision)
+            throw error
+          }
+          const commitInput: ArtifactVersionCommitInputV1 = {
+            idempotencyKey: `visual-review:${preflight.document.documentId}:${candidate.id}:accept`,
+            candidates: [{
+              candidateId: `visual-review:${candidate.id}`,
+              ...(currentRef ? { artifactId: currentRef.artifactId } : {}),
+              expectedCurrentVersionId: currentRef?.versionId ?? null,
+              kind: currentVersion?.artifact.kind ?? visualArtifactVersionKind(artifact.kind),
+              label: artifact.title ?? `Visual Review ${preflight.document.documentId}`,
+              intent: 'save',
+              content: {
+                mode: 'snapshot',
+                dataBase64: bytes.toString('base64'),
+                ...(artifact.mimeType ? { mediaType: artifact.mimeType } : {})
+              },
+              ...(currentRef ? {
+                dependencies: [{
+                  role: 'reviewed-from',
+                  required: true,
+                  target: { kind: 'version', ref: currentRef }
+                }]
+              } : {}),
+              accessPolicy: {
+                visibility: 'workspace',
+                principals: [],
+                allowExport: true
+              },
+              metadata: {
+                producer: 'visual-review',
+                documentId: preflight.document.documentId,
+                revisionId: candidate.id,
+                reviewEvidenceDigest: candidate.reviewEvidence.reviewedArtifactHash
+              }
+            }]
+          }
+          const committed = await commitArtifactVersion(commitInput, workspaceRoot)
+          if (!committed.ok) {
+            await service.abortPreparedAcceptance(decision)
+            throw new Error(`Artifact version commit failed (${committed.issue.code}): ${committed.issue.message}`)
+          }
+          const committedItem = committed.value.versions[0]
+          if (!committedItem) throw new Error('Artifact version commit returned no version reference.')
+          return {
+            output: await service.acceptCandidate({
+              workspaceRoot,
+              ...input,
+              artifactVersionRef: committedItem.ref
+            })
+          }
+        }
       }),
       define({
         id: VISUAL_REVIEW_CAPABILITY_IDS.rejectCandidate,
@@ -315,8 +462,7 @@ export function createVisualReviewCapabilityFactory<CapabilityDefinition>(option
           output: await options.getService().rejectCandidate({
             workspaceRoot: requireWorkspace(context),
             ...input
-          }),
-          changed: true
+          })
         })
       })
     ]
@@ -327,4 +473,39 @@ function requireWorkspace(context: VisualReviewCapabilityContext): string {
   const workspaceRoot = context.caller.workspaceId?.trim()
   if (!workspaceRoot) throw new Error('Visual Review requires a workspace-scoped caller.')
   return workspaceRoot
+}
+
+function visualArtifactVersionKind(kind: string): string {
+  if (kind === 'scientific_plot') return 'scientific-plot'
+  if (kind === 'presentation_slide') return 'presentation-slide'
+  return 'figure'
+}
+
+async function requireVerifiedArtifactVersion(
+  read: ((
+    input: ArtifactVersionReadInputV1,
+    workspaceRoot: string
+  ) => Promise<ArtifactVersionReadResultV1>) | undefined,
+  workspaceRoot: string,
+  expected: ArtifactVersionRefV1,
+  expectedKind: string,
+  requireCurrent = true
+) {
+  if (!read) {
+    throw new Error('Artifact Versions read capability is unavailable; refusing an unverified version binding.')
+  }
+  const result = await read({ versionId: expected.versionId }, workspaceRoot)
+  if (!result.ok) {
+    throw new Error(`ArtifactVersion verification failed (${result.issue.code}): ${result.issue.message}`)
+  }
+  if (JSON.stringify(result.value.ref) !== JSON.stringify(expected)) {
+    throw new Error('ArtifactVersion verification returned a different immutable reference.')
+  }
+  if (result.value.artifact.kind !== expectedKind) {
+    throw new Error(`Visual artifact kind does not match ArtifactVersion kind ${result.value.artifact.kind}.`)
+  }
+  if (requireCurrent && result.value.artifact.currentVersionId !== expected.versionId) {
+    throw new Error('Visual Review requires the bound ArtifactVersion to be current.')
+  }
+  return result.value
 }

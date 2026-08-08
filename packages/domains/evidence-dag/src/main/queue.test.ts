@@ -551,6 +551,232 @@ test('manual retry preserves appended suffixes but resets a changed committed pr
   await queue.close()
 })
 
+test('durably deduplicates lifecycle enqueue receipts across restart', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'evidence-domain-idempotent-lifecycle-'))
+  const storagePath = join(root, 'queue.json')
+  const first = new EvidenceDagQueue({
+    storagePath,
+    submit: async () => snapshot
+  })
+  await first.start(false)
+  const accepted = await first.enqueue({
+    ...queueInput('7', 'background'),
+    idempotencyKey: 'artifact-lifecycle:receipt-1:codex:thread-1',
+    reason: 'artifact_version_lifecycle'
+  })
+  await first.close()
+
+  const restarted = new EvidenceDagQueue({
+    storagePath,
+    submit: async () => snapshot
+  })
+  await restarted.start(false)
+  const replay = await restarted.enqueue({
+    ...queueInput('7', 'background'),
+    idempotencyKey: 'artifact-lifecycle:receipt-1:codex:thread-1',
+    reason: 'artifact_version_lifecycle'
+  })
+  const stored = JSON.parse(await readFile(storagePath, 'utf8')) as {
+    jobs: Array<{ id: string; idempotencyKey?: string }>
+  }
+
+  assert.equal(replay.jobId, accepted.jobId)
+  assert.equal(replay.coalesced, true)
+  assert.equal(stored.jobs.length, 1)
+  assert.equal(stored.jobs[0]?.idempotencyKey, 'artifact-lifecycle:receipt-1:codex:thread-1')
+  await restarted.close()
+})
+
+test('never evicts active lifecycle jobs when terminal history is compacted', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'evidence-domain-active-retention-'))
+  const storagePath = join(root, 'queue.json')
+  const timestamp = '2026-08-06T08:00:00.000Z'
+  await writeFile(storagePath, JSON.stringify({
+    version: 1,
+    jobs: Array.from({ length: 205 }, (_, index) => ({
+      id: `active-${index}`,
+      idempotencyKey: `artifact-lifecycle:active-${index}`,
+      runtimeId: 'codex',
+      threadId: `thread-${index}`,
+      engineThreadId: `codex:thread-${index}`,
+      targetWatermark: '7',
+      reason: 'artifact_version_lifecycle',
+      priority: 'background',
+      trace: [{ id: `artifact-${index}` }],
+      workspaceRoot: '/workspace',
+      status: 'queued',
+      attempt: 0,
+      consecutiveNoProgressFailures: 0,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    }))
+  }), 'utf8')
+  const queue = new EvidenceDagQueue({ storagePath, submit: async () => snapshot })
+  await queue.start(false)
+  await queue.enqueue({
+    ...queueInput('8', 'background', 'thread-new'),
+    idempotencyKey: 'artifact-lifecycle:active-new',
+    reason: 'artifact_version_lifecycle'
+  })
+  const stored = JSON.parse(await readFile(storagePath, 'utf8')) as { jobs: unknown[] }
+
+  assert.equal(stored.jobs.length, 206)
+  await queue.close()
+})
+
+test('retains unresolved lifecycle failures beyond the ordinary terminal history cap', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'evidence-domain-failure-retention-'))
+  const storagePath = join(root, 'queue.json')
+  const timestamp = '2026-08-06T08:00:00.000Z'
+  const error = evidenceDagTypedErrorSchema.parse({
+    code: 'internal_error',
+    message: 'Lifecycle compilation failed.',
+    retryable: false,
+    occurredAt: timestamp
+  })
+  await writeFile(storagePath, JSON.stringify({
+    version: 1,
+    jobs: Array.from({ length: 205 }, (_, index) => ({
+      id: `failed-${index}`,
+      idempotencyKey: `artifact-lifecycle:failed-${index}`,
+      runtimeId: 'codex',
+      threadId: `thread-${index}`,
+      engineThreadId: `codex:thread-${index}`,
+      targetWatermark: `7:artifact-lifecycle:${index + 1}`,
+      reason: 'artifact_version_lifecycle',
+      priority: 'background',
+      trace: [{ id: `artifact-${index}` }],
+      workspaceRoot: '/workspace',
+      status: 'failed',
+      attempt: 5,
+      consecutiveNoProgressFailures: 5,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      error
+    }))
+  }), 'utf8')
+  const queue = new EvidenceDagQueue({ storagePath, submit: async () => snapshot })
+  await queue.start(false)
+  await queue.enqueue({
+    ...queueInput('8', 'background', 'thread-new'),
+    idempotencyKey: 'artifact-lifecycle:active-after-failures',
+    reason: 'artifact_version_lifecycle'
+  })
+  const stored = JSON.parse(await readFile(storagePath, 'utf8')) as { jobs: unknown[] }
+
+  assert.equal(stored.jobs.length, 206)
+  await queue.close()
+})
+
+test('later ordinary success cannot hide a failed lifecycle receipt and immediate retry revives it', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'evidence-domain-lifecycle-revive-'))
+  const storagePath = join(root, 'queue.json')
+  const failedAt = '2026-08-06T08:00:00.000Z'
+  const succeededAt = '2026-08-06T08:01:00.000Z'
+  const error = evidenceDagTypedErrorSchema.parse({
+    code: 'internal_error',
+    message: 'Lifecycle compilation failed.',
+    retryable: false,
+    occurredAt: failedAt
+  })
+  await writeFile(storagePath, JSON.stringify({
+    version: 1,
+    jobs: [{
+      id: 'lifecycle-failed',
+      idempotencyKey: 'artifact-lifecycle:receipt-failed:codex:thread-1',
+      ...queueInput('7:artifact-lifecycle:4'),
+      reason: 'artifact_version_lifecycle',
+      status: 'failed',
+      attempt: 5,
+      consecutiveNoProgressFailures: 5,
+      createdAt: failedAt,
+      updatedAt: failedAt,
+      error
+    }, {
+      id: 'ordinary-success',
+      ...queueInput('8'),
+      status: 'succeeded',
+      attempt: 1,
+      consecutiveNoProgressFailures: 0,
+      createdAt: succeededAt,
+      updatedAt: succeededAt,
+      snapshot: { ...snapshot, version: 2, inputWatermark: '8' }
+    }]
+  }), 'utf8')
+  const queue = new EvidenceDagQueue({ storagePath, submit: async () => snapshot })
+  await queue.start(false)
+
+  assert.equal((await queue.pending('codex', 'thread-1'))?.state, 'failed')
+  const retry = await queue.enqueue({
+    ...queueInput('8', 'immediate'),
+    reason: 'manual_immediate'
+  })
+  const pending = await queue.pending('codex', 'thread-1')
+  const stored = JSON.parse(await readFile(storagePath, 'utf8')) as {
+    jobs: Array<{
+      id: string
+      idempotencyKey?: string
+      targetWatermark: string
+      trace: unknown[]
+    }>
+  }
+  const revived = stored.jobs.find((job) => job.id === 'lifecycle-failed')
+
+  assert.equal(retry.jobId, 'lifecycle-failed')
+  assert.equal(pending?.state, 'queued')
+  assert.match(pending?.targetWatermark ?? '', /^8:artifact-lifecycle-retry:/u)
+  assert.equal(revived?.idempotencyKey, 'artifact-lifecycle:receipt-failed:codex:thread-1')
+  assert.match(revived?.targetWatermark ?? '', /^8:artifact-lifecycle-retry:/u)
+  assert.equal(revived?.trace.length, 2)
+  await queue.close()
+})
+
+test('holds later lifecycle pages behind an earlier failure until immediate retry succeeds', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'evidence-domain-lifecycle-order-'))
+  const submissions: string[] = []
+  let failFirst = true
+  const queue = new EvidenceDagQueue({
+    storagePath: join(root, 'queue.json'),
+    submit: async (input) => {
+      submissions.push(input.targetWatermark)
+      if (failFirst && input.targetWatermark === '7:artifact-lifecycle:2') {
+        failFirst = false
+        throw new EvidenceDagServiceError(evidenceDagTypedErrorSchema.parse({
+          code: 'internal_error',
+          message: 'First lifecycle page failed.',
+          retryable: false,
+          occurredAt: '2026-08-06T08:00:00.000Z'
+        }))
+      }
+      return { ...snapshot, inputWatermark: input.targetWatermark }
+    }
+  })
+  await queue.start(false)
+  await queue.enqueue({
+    ...queueInput('7:artifact-lifecycle:2', 'background'),
+    idempotencyKey: 'artifact-lifecycle:page-1',
+    reason: 'artifact_version_lifecycle'
+  })
+  await queue.enqueue({
+    ...queueInput('7:artifact-lifecycle:4', 'background'),
+    idempotencyKey: 'artifact-lifecycle:page-2',
+    reason: 'artifact_version_lifecycle'
+  })
+  await queue.setEnabled(true)
+  await waitFor(async () => (await queue.pending('codex', 'thread-1'))?.state === 'failed')
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.deepEqual(submissions, ['7:artifact-lifecycle:2'])
+
+  await queue.enqueue({
+    ...queueInput('7', 'immediate'),
+    reason: 'manual_immediate'
+  })
+  await waitFor(async () => submissions.length === 3)
+  assert.match(submissions[1] ?? '', /^7:artifact-lifecycle-retry:/u)
+  assert.equal(submissions[2], '7:artifact-lifecycle:4')
+  await queue.close()
+})
+
 function queueInput(
   targetWatermark: string,
   priority: 'background' | 'normal' | 'high' | 'immediate' = 'normal',

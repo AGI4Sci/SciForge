@@ -173,7 +173,7 @@ describe('scientific plotting engine', () => {
     })).resolves.toMatchObject({
       ok: true,
       recommendedTemplate: 'attention-map',
-      controlledTool: 'scientific_plotting_render',
+      controlledTool: 'sciforge_invoke',
       templateAlternatives: expect.any(Array),
       planningWarnings: expect.any(Array)
     })
@@ -185,7 +185,7 @@ describe('scientific plotting engine', () => {
     })).resolves.toMatchObject({
       ok: true,
       recommendedTemplate: 'attention-map',
-      controlledTool: 'scientific_plotting_render',
+      controlledTool: 'sciforge_invoke',
       figureNeed: expect.objectContaining({
         recommendedNextTool: 'visual_generate'
       })
@@ -198,7 +198,7 @@ describe('scientific plotting engine', () => {
     })).resolves.toMatchObject({
       ok: true,
       recommendedTemplate: 'box-violin',
-      controlledTool: 'scientific_plotting_render'
+      controlledTool: 'sciforge_invoke'
     })
 
     await expect(planScientificPlotting({
@@ -206,7 +206,7 @@ describe('scientific plotting engine', () => {
     })).resolves.toMatchObject({
       ok: true,
       recommendedTemplate: 'histogram-density',
-      controlledTool: 'scientific_plotting_render'
+      controlledTool: 'sciforge_invoke'
     })
 
     await expect(planScientificPlotting({
@@ -214,7 +214,7 @@ describe('scientific plotting engine', () => {
     })).resolves.toMatchObject({
       ok: true,
       recommendedTemplate: 'box-violin',
-      controlledTool: 'scientific_plotting_render'
+      controlledTool: 'sciforge_invoke'
     })
 
     await expect(planScientificPlotting({
@@ -222,7 +222,7 @@ describe('scientific plotting engine', () => {
     })).resolves.toMatchObject({
       ok: true,
       recommendedTemplate: 'multi-panel',
-      controlledTool: 'scientific_plotting_render'
+      controlledTool: 'sciforge_invoke'
     })
 
     const flowchartPlan = await planScientificPlotting({
@@ -231,7 +231,7 @@ describe('scientific plotting engine', () => {
     expect(flowchartPlan).toMatchObject({
       ok: true,
       recommendedTemplate: 'flowchart',
-      controlledTool: 'scientific_plotting_render',
+      controlledTool: 'sciforge_invoke',
       templateSelection: expect.objectContaining({
         selectedTemplate: 'flowchart',
         selectedBy: 'taskIntent',
@@ -257,7 +257,7 @@ describe('scientific plotting engine', () => {
     expect(transformerPlan).toMatchObject({
       ok: true,
       recommendedTemplate: 'flowchart',
-      controlledTool: 'scientific_plotting_render',
+      controlledTool: 'sciforge_invoke',
       figureNeed: expect.objectContaining({
         primaryNeed: 'model_architecture',
         route: 'needs_clarification',
@@ -272,7 +272,7 @@ describe('scientific plotting engine', () => {
     expect(cellLineStatsPlan).toMatchObject({
       ok: true,
       recommendedTemplate: 'box-violin',
-      controlledTool: 'scientific_plotting_render',
+      controlledTool: 'sciforge_invoke',
       figureNeed: expect.objectContaining({
         primaryNeed: 'statistical_comparison',
         route: 'needs_clarification',
@@ -286,7 +286,7 @@ describe('scientific plotting engine', () => {
     expect(plainBarPlan).toMatchObject({
       ok: true,
       recommendedTemplate: 'bar',
-      controlledTool: 'scientific_plotting_render'
+      controlledTool: 'sciforge_invoke'
     })
     if (plainBarPlan.ok) {
       expect(plainBarPlan.externalSkillCatalog?.recommendedSkillIds).not.toContain('nature-figure')
@@ -299,7 +299,7 @@ describe('scientific plotting engine', () => {
     expect(annotatedBarPlan).toMatchObject({
       ok: true,
       recommendedTemplate: 'bar',
-      controlledTool: 'scientific_plotting_render'
+      controlledTool: 'sciforge_invoke'
     })
 
     const proseFlowchartPlan = await planScientificPlotting({
@@ -308,7 +308,7 @@ describe('scientific plotting engine', () => {
     expect(proseFlowchartPlan).toMatchObject({
       ok: true,
       recommendedTemplate: 'flowchart',
-      controlledTool: 'scientific_plotting_render'
+      controlledTool: 'sciforge_invoke'
     })
   })
 
@@ -335,7 +335,7 @@ describe('scientific plotting engine', () => {
 
     expect(cnsPlan).toMatchObject({
       ok: true,
-      controlledTool: 'scientific_plotting_render',
+      controlledTool: 'sciforge_invoke',
       figureNeed: expect.objectContaining({
         primaryNeed: 'mechanism_schematic',
         route: 'needs_clarification',
@@ -570,6 +570,7 @@ describe('scientific plotting engine', () => {
     const workspace = await tempWorkspace()
     try {
       const distribution = await mapScientificPlottingData({
+        operationId: 'test:map:distribution:0001',
         workspaceRoot: workspace,
         task: 'Create a violin plot comparing treatment distributions.',
         figureId: 'mapped-violin',
@@ -603,6 +604,7 @@ describe('scientific plotting engine', () => {
       })
 
       const trend = await mapScientificPlottingData({
+        operationId: 'test:map:trend:0000000001',
         workspaceRoot: workspace,
         task: 'Draw a time series line plot.',
         data: [
@@ -644,6 +646,7 @@ describe('scientific plotting engine', () => {
     const workspace = await tempWorkspace()
     try {
       const mapping = await mapScientificPlottingData({
+        operationId: 'test:map:attention:000001',
         workspaceRoot: workspace,
         task: 'Render an attention token alignment matrix.',
         figureId: 'mapped-attention',
@@ -698,6 +701,7 @@ describe('scientific plotting engine', () => {
         }]
       }
       const mapping = await mapScientificPlottingDataEngine({
+        operationId: 'test:map:visual-scene:00001',
         workspaceRoot: workspace,
         task: 'Render the supplied exact vector scene.',
         data: scene,
@@ -732,6 +736,7 @@ describe('scientific plotting engine', () => {
     const workspace = await tempWorkspace()
     try {
       const mapping = await mapScientificPlottingData({
+        operationId: 'test:map:scene:000000001',
         workspaceRoot: workspace,
         task: 'Render a vector scene.',
         data: { primitives: [{ type: 'circle', x: 0.5, y: 0.5, radius: 0.1 }] }
@@ -756,6 +761,7 @@ describe('scientific plotting engine', () => {
     const workspace = await tempWorkspace()
     try {
       const rendered = await renderScientificPlot({
+        operationId: 'test:render:print-scale:001',
         workspaceRoot: workspace,
         template: 'bar',
         figureId: 'scaled-bar',
@@ -801,6 +807,7 @@ describe('scientific plotting engine', () => {
     const workspace = await tempWorkspace()
     try {
       const rendered = await renderScientificPlot({
+        operationId: 'test:render:horizontal-bar:1',
         workspaceRoot: workspace,
         template: 'bar',
         figureId: 'horizontal-bar',
@@ -856,6 +863,7 @@ describe('scientific plotting engine', () => {
     const workspace = await tempWorkspace()
     try {
       const errorbar = await renderScientificPlot({
+        operationId: 'test:render:errorbar:000001',
         workspaceRoot: workspace,
         template: 'errorbar-bar',
         figureId: 'errorbar-bar-smoke',
@@ -894,6 +902,7 @@ describe('scientific plotting engine', () => {
       expect(errorbarManifest.attempts[0]?.rendererDiagnostics?.legendPlacement).toBe('outside-right')
 
       const attention = await renderScientificPlot({
+        operationId: 'test:render:attention:00001',
         workspaceRoot: workspace,
         template: 'attention-map',
         figureId: 'attention-map-smoke',
@@ -917,6 +926,7 @@ describe('scientific plotting engine', () => {
       expect((await stat(attention.outputPath)).size).toBeGreaterThan(1000)
 
       const flowchart = await renderScientificPlot({
+        operationId: 'test:render:flowchart:00001',
         workspaceRoot: workspace,
         template: 'flowchart',
         figureId: 'flowchart-smoke',
@@ -954,6 +964,7 @@ describe('scientific plotting engine', () => {
     const workspace = await tempWorkspace()
     try {
       const result = await renderScientificPlot({
+        operationId: 'test:render:oversized-flow:1',
         workspaceRoot: workspace,
         template: 'flowchart',
         figureId: 'dense-flowchart',
@@ -1063,6 +1074,7 @@ describe('scientific plotting engine', () => {
     const workspace = await tempWorkspace()
     try {
       const boxViolin = await renderScientificPlot({
+        operationId: 'test:render:box-violin:0001',
         workspaceRoot: workspace,
         template: 'box-violin',
         figureId: 'box-violin-smoke',
@@ -1093,6 +1105,7 @@ describe('scientific plotting engine', () => {
       })
 
       const histogram = await renderScientificPlot({
+        operationId: 'test:render:histogram:00001',
         workspaceRoot: workspace,
         template: 'histogram-density',
         figureId: 'histogram-density-smoke',
@@ -1115,6 +1128,7 @@ describe('scientific plotting engine', () => {
       expect((await stat(histogram.outputPath)).size).toBeGreaterThan(1000)
 
       const heatmapWithAliasLabels = await renderScientificPlot({
+        operationId: 'test:render:heatmap-alias:001',
         workspaceRoot: workspace,
         template: 'heatmap',
         figureId: 'heatmap-alias-labels-smoke',
@@ -1138,6 +1152,7 @@ describe('scientific plotting engine', () => {
       expect(heatmapWithAliasLabels.attempts[0]?.rendererDiagnostics?.categoryLabelRotation).toBeGreaterThan(0)
 
       const schematicWithAliasEdges = await renderScientificPlot({
+        operationId: 'test:render:schematic-alias:1',
         workspaceRoot: workspace,
         template: 'schematic-grid',
         figureId: 'schematic-source-target-smoke',
@@ -1187,6 +1202,7 @@ describe('scientific plotting engine', () => {
       })
 
       const multiPanel = await renderScientificPlot({
+        operationId: 'test:render:multi-panel:0001',
         workspaceRoot: workspace,
         template: 'multi-panel',
         figureId: 'multi-panel-smoke',
@@ -1234,6 +1250,7 @@ describe('scientific plotting engine', () => {
       })
 
       const scatterWithErrors = await renderScientificPlot({
+        operationId: 'test:render:scatter-errors:01',
         workspaceRoot: workspace,
         template: 'scatter',
         figureId: 'scatter-errorbar-smoke',
@@ -1257,6 +1274,7 @@ describe('scientific plotting engine', () => {
       expect((await stat(scatterWithErrors.outputPath)).size).toBeGreaterThan(1000)
 
       const multiPanelScatterWithErrors = await renderScientificPlot({
+        operationId: 'test:render:multi-errors:0001',
         workspaceRoot: workspace,
         template: 'multi-panel',
         figureId: 'multi-panel-scatter-errorbar-smoke',
@@ -1322,6 +1340,7 @@ describe('scientific plotting engine', () => {
     const workspace = await tempWorkspace()
     try {
       const result = await renderScientificPlot({
+        operationId: 'test:render:cjk-labels:00001',
         workspaceRoot: workspace,
         template: 'line',
         figureId: 'cjk-label-smoke',
@@ -1373,6 +1392,7 @@ describe('scientific plotting engine', () => {
     const workspace = await tempWorkspace()
     try {
       const result = await renderScientificPlot({
+        operationId: 'test:render:self-review:0001',
         workspaceRoot: workspace,
         template: 'line',
         figureId: 'line-smoke',
@@ -1445,6 +1465,7 @@ describe('scientific plotting engine', () => {
     const workspace = await tempWorkspace()
     try {
       const mapping = await mapScientificPlottingData({
+        operationId: 'test:map:style-profile:00001',
         workspaceRoot: workspace,
         task: 'Create a Nature-style response curve.',
         styleProfileId: 'nature-2021-alphafold-fig2',
@@ -1473,6 +1494,7 @@ describe('scientific plotting engine', () => {
       })
       if (!mapping.ok) return
       const result = await renderScientificPlot({
+        operationId: 'test:render:style-profile:001',
         ...mapping.renderRequest,
         figureId: 'style-profile-smoke'
       })
@@ -1518,6 +1540,7 @@ describe('scientific plotting engine', () => {
       })
 
       const result = await renderScientificPlot({
+        operationId: 'test:render:review-packet:001',
         workspaceRoot: workspace,
         template: 'bar',
         figureId: 'packet-bar-smoke',
@@ -1603,6 +1626,7 @@ describe('scientific plotting engine', () => {
         }
       }
       const result = await renderScientificPlot({
+        operationId: 'test:render:typography:000001',
         workspaceRoot: workspace,
         template: 'line',
         figureId: 'typography-clamp-smoke',
@@ -1646,6 +1670,7 @@ describe('scientific plotting engine', () => {
     const workspace = await tempWorkspace()
     try {
       const result = await renderScientificPlot({
+        operationId: 'test:render:dense-legend:00001',
         workspaceRoot: workspace,
         template: 'line',
         figureId: 'legend-layout-qa-smoke',
@@ -1743,7 +1768,8 @@ describe('scientific plotting engine', () => {
         nextWorkflow: {
           referencePath: result.croppedImagePath,
           suggestedPlanTool: 'visual_generate',
-          suggestedRenderTool: 'scientific_plotting_render',
+          suggestedRenderTool: 'sciforge_invoke',
+          suggestedRenderCapability: 'scientific-plotting.render',
           suggestedReviewTool: 'image_generation_review_candidate'
         }
       })
@@ -1789,6 +1815,7 @@ describe('scientific plotting engine', () => {
     const workspace = await tempWorkspace()
     try {
       const result = await renderScientificPlot({
+        operationId: 'test:render:outside-workspace:1',
         workspaceRoot: workspace,
         template: 'line',
         outputDir: '../outside',

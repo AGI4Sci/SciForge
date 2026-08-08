@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from .artifact_versions import ArtifactVersionRefV1
 from .digraph import DirectedGraph, strongly_connected_components, topological_generations
 from .model import (
     ACYCLIC_LINEAGE_RELS,
@@ -36,6 +37,9 @@ class ThreadGraph:
         self.edges: dict[str, Edge] = {}
         self.artifacts: dict[str, Artifact] = {}
         self.artifact_versions: dict[str, ArtifactVersion] = {}
+        # Exact public contract refs are pinned alongside the legacy Evidence
+        # read-model projection.  Older snapshots legitimately omit this map.
+        self.artifact_version_refs: dict[str, ArtifactVersionRefV1] = {}
         self.source_anchors: dict[str, SourceAnchor] = {}
         self.assessments: list[Assessment] = []
         self.review_policy_version: Optional[str] = None
@@ -114,11 +118,19 @@ class ThreadGraph:
         artifact: Artifact,
         artifact_version: ArtifactVersion,
         source_anchor: Optional[SourceAnchor] = None,
+        artifact_version_ref: Optional[ArtifactVersionRefV1] = None,
     ) -> None:
         self.artifacts[artifact.artifact_id] = Artifact.from_dict(artifact.to_dict())
         self.artifact_versions[artifact_version.version_id] = ArtifactVersion.from_dict(
             artifact_version.to_dict()
         )
+        if artifact_version_ref is not None:
+            if artifact_version_ref.version_id != artifact_version.version_id:
+                raise ValueError("ArtifactVersionRef does not match ArtifactVersion")
+            prior = self.artifact_version_refs.get(artifact_version_ref.version_id)
+            if prior is not None and prior != artifact_version_ref:
+                raise ValueError("conflicting immutable ArtifactVersionRef")
+            self.artifact_version_refs[artifact_version_ref.version_id] = artifact_version_ref
         if source_anchor is not None:
             self.source_anchors[source_anchor.anchor_id] = SourceAnchor.from_dict(source_anchor.to_dict())
 
@@ -217,6 +229,11 @@ class ThreadGraph:
             new_edges.append(eid)
         self.artifacts.update(other.artifacts)
         self.artifact_versions.update(other.artifact_versions)
+        for version_id, ref in other.artifact_version_refs.items():
+            prior = self.artifact_version_refs.get(version_id)
+            if prior is not None and prior != ref:
+                raise ValueError("conflicting immutable ArtifactVersionRef")
+            self.artifact_version_refs[version_id] = ref
         self.source_anchors.update(other.source_anchors)
         for assessment in other.assessments:
             self.append_assessment(assessment)
@@ -372,10 +389,28 @@ class ThreadGraph:
             level = 0
             artifact = self.artifacts.get(assertion.artifact_id or "")
             version = self.artifact_versions.get(assertion.artifact_version_id or "")
+            projection_status = str(
+                assertion.attributes.get("artifactVersionProvenanceStatus") or ""
+            ).strip().lower()
+            if projection_status in {"pending", "failed"}:
+                breakpoints.append({
+                    "targetId": assertion.id,
+                    "reason": f"artifact_version_{projection_status}",
+                    **({"detail": assertion.attributes.get("artifactVersionProvenanceReason")}
+                       if assertion.attributes.get("artifactVersionProvenanceReason") else {}),
+                })
             trace_only = bool(
                 version and version.locator.lower().startswith(("runtime:", "trace:"))
             )
-            if artifact is not None and trace_only:
+            unavailable = bool(version and version.availability == "missing")
+            if projection_status in {"pending", "failed"}:
+                pass
+            elif artifact is not None and unavailable:
+                breakpoints.append({
+                    "targetId": assertion.id,
+                    "reason": "artifact_version_unavailable",
+                })
+            elif artifact is not None and trace_only:
                 breakpoints.append({
                     "targetId": assertion.id,
                     "reason": "external_artifact_not_identified",
@@ -385,7 +420,8 @@ class ThreadGraph:
             else:
                 breakpoints.append({"targetId": assertion.id, "reason": "artifact_not_linked"})
             anchor = self.source_anchors.get(assertion.source_anchor_id or "")
-            if anchor is not None and not trace_only:
+            if anchor is not None and not trace_only and not unavailable \
+                    and projection_status not in {"pending", "failed"}:
                 level = max(level, 2)
             elif level >= 1:
                 breakpoints.append({"targetId": assertion.id, "reason": "source_anchor_missing"})
@@ -426,6 +462,10 @@ class ThreadGraph:
                                      if x in self.artifact_versions],
                 "sourceAnchors": [self.source_anchors[x].to_dict() for x in sorted(anchor_ids)
                                   if x in self.source_anchors],
+                **({"artifactVersionRefs": [
+                    self.artifact_version_refs[x].to_dict() for x in sorted(version_ids)
+                    if x in self.artifact_version_refs
+                ]} if any(x in self.artifact_version_refs for x in version_ids) else {}),
             },
             "assessments": [a.to_dict() for a in self.assessments
                             if a.target_id in seen_nodes or a.target_id in seen_edge_ids],
@@ -454,6 +494,11 @@ class ThreadGraph:
             },
             "assessments": [a.to_dict() for a in self.assessments],
         }
+        if self.artifact_version_refs:
+            result["artifact_registry"]["artifactVersionRefs"] = [
+                self.artifact_version_refs[key].to_dict()
+                for key in sorted(self.artifact_version_refs)
+            ]
         if self.review_policy_version or self.review_packets:
             from .human_review import human_review_summary
             result["humanReview"] = human_review_summary(self)
@@ -475,6 +520,9 @@ class ThreadGraph:
         for raw in registry.get("artifactVersions") or []:
             version = ArtifactVersion.from_dict(raw)
             g.artifact_versions[version.version_id] = version
+        for raw in registry.get("artifactVersionRefs") or []:
+            ref = ArtifactVersionRefV1.from_dict(raw)
+            g.artifact_version_refs[ref.version_id] = ref
         for raw in registry.get("sourceAnchors") or []:
             anchor = SourceAnchor.from_dict(raw)
             g.source_anchors[anchor.anchor_id] = anchor

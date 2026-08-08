@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
@@ -19,6 +19,7 @@ import {
 export type EvidenceDagQueuePriority = EvidenceDagUpdateSubmission['priority']
 
 export type EvidenceDagQueueInput = Readonly<{
+  idempotencyKey?: string
   runtimeId: string
   threadId: string
   engineThreadId: string
@@ -41,6 +42,7 @@ type QueueJobStatus = 'queued' | 'running' | 'retrying' | 'failed' | 'succeeded'
 
 type QueueJob = {
   id: string
+  idempotencyKey?: string
   runtimeId: string
   threadId: string
   engineThreadId: string
@@ -112,13 +114,24 @@ export class EvidenceDagQueue {
   async enqueue(input: EvidenceDagQueueInput): Promise<EvidenceDagQueueEnqueueResult> {
     await this.load()
     if (!input.trace.length) throw new Error('Evidence DAG update requires at least one artifact.')
-    const latest = this.jobs
+    if (input.idempotencyKey) {
+      const replay = this.jobs.find((job) => job.idempotencyKey === input.idempotencyKey)
+      if (replay) {
+        return { jobId: replay.id, coalesced: true, itemCount: replay.trace.length }
+      }
+    }
+    const matching = this.jobs
       .filter((job) => job.engineThreadId === input.engineThreadId)
       .sort((left, right) =>
         right.createdAt.localeCompare(left.createdAt) ||
         right.updatedAt.localeCompare(left.updatedAt)
-      )[0]
-    const existing = latest && (
+      )
+    const latest = input.priority === 'immediate'
+      ? matching.find((job) =>
+          job.status === 'failed' && isArtifactLifecycleJob(job)
+        ) ?? matching[0]
+      : matching[0]
+    const existing = !input.idempotencyKey && latest && (
       latest.status === 'queued' ||
       latest.status === 'retrying' ||
       (latest.status === 'failed' && input.priority === 'immediate')
@@ -127,6 +140,7 @@ export class EvidenceDagQueue {
       : undefined
     if (existing) {
       const revivingFailed = existing.status === 'failed'
+      const revivingArtifactLifecycle = revivingFailed && isArtifactLifecycleJob(existing)
       if (existing.workspaceRoot !== input.workspaceRoot) {
         throw new Error('Cannot coalesce Evidence DAG updates from different workspaces.')
       }
@@ -142,7 +156,9 @@ export class EvidenceDagQueue {
         existing.reason === input.reason &&
         Boolean(existing.rebuild) === Boolean(input.rebuild) &&
         existing.rebuildRationale === input.rebuildRationale
-      existing.targetWatermark = input.targetWatermark
+      existing.targetWatermark = revivingArtifactLifecycle
+        ? artifactLifecycleRetryWatermark(input.targetWatermark, existing.idempotencyKey!)
+        : input.targetWatermark
       existing.trace = mergedTrace
       existing.reason = input.reason
       if (revivingFailed) {
@@ -178,6 +194,7 @@ export class EvidenceDagQueue {
     const timestamp = this.nowIso()
     const job: QueueJob = {
       id: randomUUID(),
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
       runtimeId: input.runtimeId,
       threadId: input.threadId,
       engineThreadId: input.engineThreadId,
@@ -202,12 +219,17 @@ export class EvidenceDagQueue {
 
   async pending(runtimeId: string, threadId: string): Promise<EvidenceDagPendingUpdate | null> {
     await this.load()
-    const latest = this.jobs
+    const matching = this.jobs
       .filter((job) => job.runtimeId === runtimeId && job.threadId === threadId)
       .sort((left, right) =>
         right.createdAt.localeCompare(left.createdAt) ||
         right.updatedAt.localeCompare(left.updatedAt)
-      )[0]
+      )
+    const latest = matching.find((job) =>
+      job.status === 'failed' && isArtifactLifecycleJob(job)
+    ) ?? matching.find((job) =>
+      job.status !== 'succeeded' && isArtifactLifecycleJob(job)
+    ) ?? matching[0]
     if (!latest || latest.status === 'succeeded') return null
     const base = {
       jobId: latest.id,
@@ -358,6 +380,7 @@ export class EvidenceDagQueue {
       const job = this.jobs
         .filter((candidate) =>
           !activeThreads.has(candidate.engineThreadId) &&
+          !this.hasPriorFailedLifecycle(candidate) &&
           (candidate.priority !== 'background' || canRunBackground) &&
           (candidate.status === 'queued' ||
             (candidate.status === 'retrying' && candidate.nextAttemptAt! <= now))
@@ -467,10 +490,36 @@ export class EvidenceDagQueue {
     }
   }
 
+  private hasPriorFailedLifecycle(candidate: QueueJob): boolean {
+    const candidateIndex = this.jobs.indexOf(candidate)
+    return candidateIndex > 0 && this.jobs.slice(0, candidateIndex).some((job) =>
+      job.engineThreadId === candidate.engineThreadId &&
+      job.status === 'failed' &&
+      isArtifactLifecycleJob(job)
+    )
+  }
+
   private persist(): Promise<void> {
+    const unresolvedLifecycleFailureIds = new Set<string>()
+    for (const job of this.jobs) {
+      if (
+        job.status === 'failed' &&
+        isArtifactLifecycleJob(job)
+      ) {
+        unresolvedLifecycleFailureIds.add(job.id)
+      }
+    }
+    const retainedTerminalIds = new Set(this.jobs
+      .filter((job) => job.status === 'failed' || job.status === 'succeeded')
+      .slice(-200)
+      .map((job) => job.id))
     const file: QueueFile = {
       version: 1,
-      jobs: this.jobs.slice(-200)
+      jobs: this.jobs.filter((job) =>
+        job.status !== 'failed' && job.status !== 'succeeded' ||
+        retainedTerminalIds.has(job.id) ||
+        unresolvedLifecycleFailureIds.has(job.id)
+      )
     }
     this.jobs = file.jobs
     this.writing = this.writing.then(async () => {
@@ -489,6 +538,15 @@ export class EvidenceDagQueue {
   private nowIso(): string {
     return this.now().toISOString()
   }
+}
+
+function isArtifactLifecycleJob(job: Pick<QueueJob, 'idempotencyKey'>): boolean {
+  return job.idempotencyKey?.startsWith('artifact-lifecycle:') === true
+}
+
+function artifactLifecycleRetryWatermark(targetWatermark: string, idempotencyKey: string): string {
+  const receipt = createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 16)
+  return `${targetWatermark}:artifact-lifecycle-retry:${receipt}`
 }
 
 function canonicalJob(value: unknown): QueueJob | null {
@@ -533,6 +591,9 @@ function canonicalJob(value: unknown): QueueJob | null {
   const snapshot = canonicalStoredSnapshot(job.snapshot)
   return {
     id,
+    ...(stringValue(job.idempotencyKey)
+      ? { idempotencyKey: stringValue(job.idempotencyKey) }
+      : {}),
     runtimeId,
     threadId,
     engineThreadId,

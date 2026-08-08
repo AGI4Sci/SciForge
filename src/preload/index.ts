@@ -129,8 +129,6 @@ const api = {
   pickFile: (request) => ipcRenderer.invoke('workspace:pick-file', request),
   buildScientificSkillsMcpConfig: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:scientific-skills-config', { workspaceRoot }),
-  buildScientificPlottingMcpConfig: (workspaceRoot) =>
-    ipcRenderer.invoke('mcp:scientific-plotting-config', { workspaceRoot }),
   buildBgcDiscoveryMcpConfig: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:bgc-discovery-config', { workspaceRoot }),
   buildImageGenerationMcpConfig: (workspaceRoot) =>
@@ -141,10 +139,6 @@ const api = {
     ipcRenderer.invoke('mcp:scientific-skills-status', { workspaceRoot }),
   installScientificSkills: (request) =>
     ipcRenderer.invoke('scientific-skills:install', request),
-  getScientificPlottingStatus: (workspaceRoot) =>
-    ipcRenderer.invoke('scientific-plotting:status', { workspaceRoot }),
-  prepareScientificPlottingReference: (request) =>
-    ipcRenderer.invoke('scientific-plotting:prepare-reference', request),
   extractVisualStyleProfile: (request) =>
     ipcRenderer.invoke('visual-style:extract-profile', request),
   saveVisualStyleProfile: (request) =>

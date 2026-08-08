@@ -84,8 +84,8 @@ export type VisualGenerateRequest = {
 }
 
 export type VisualProductionExecutionTool =
-  | 'scientific_plotting_map_data'
-  | 'scientific_plotting_render'
+  | 'sciforge_discover'
+  | 'sciforge_invoke'
   | 'scientific_plotting_composite'
   | 'image_generation_prepare'
   | 'image_generation_render'
@@ -98,6 +98,7 @@ export type VisualProductionExecutionStage = {
   purpose: string
   consumes: string[]
   produces: string[]
+  capabilityId?: 'scientific-plotting.map-data' | 'scientific-plotting.render'
   locked: boolean
 }
 
@@ -133,7 +134,7 @@ export type VisualGenerateResult =
       failPolicy: {
         mode: 'fail_closed'
         crossRouteFallback: false
-        sameRouteRetry: { allowed: true; maxAttemptsPerStage: 2 }
+        sameRouteRetry: { allowed: true; maxAttemptsPerStage: 2; reuseOperationId: true }
         routeChangeRequiresNewPlan: true
         preserveCompletedStageArtifacts: true
         failureStatus: 'route_failed'
@@ -264,7 +265,7 @@ export function planVisualProduction(request: VisualGenerateRequest): VisualGene
     failPolicy: {
       mode: 'fail_closed',
       crossRouteFallback: false,
-      sameRouteRetry: { allowed: true, maxAttemptsPerStage: 2 },
+      sameRouteRetry: { allowed: true, maxAttemptsPerStage: 2, reuseOperationId: true },
       routeChangeRequiresNewPlan: true,
       preserveCompletedStageArtifacts: true,
       failureStatus: 'route_failed'
@@ -296,15 +297,11 @@ function firstExecutionCall(
     }
   }
   return {
-    tool: 'scientific_plotting_map_data',
+    tool: 'sciforge_discover',
     arguments: {
-      workspaceRoot,
-      task,
-      visualPlan: handoff,
-      data: handoff.scene ?? handoff.structuredData ?? {
-        reproducibleInputs: handoff.reproducibleInputs,
-        inlineSpecification: handoff.inlineSpecification
-      }
+      capabilityId: 'scientific-plotting.map-data',
+      includeSchema: true,
+      limit: 1
     }
   }
 }
@@ -386,8 +383,10 @@ function executionStages(route: VisualProductionRoute, action: 'create' | 'revis
   }
   if (route === 'code') {
     return [
-      stage('map_data', 'scientific_plotting_map_data', 'Map reproducible files or inline structured data into a controlled code render request.', ['handoff', 'reproducibleInputs|inlineSpecification|structuredData'], ['controlledRenderRequest']),
-      stage('render_code', 'scientific_plotting_render', 'Render exact elements with the controlled code renderer.', ['controlledRenderRequest', 'handoff'], ['renderedArtifact', 'renderedManifest']),
+      stage('discover_map_data', 'sciforge_discover', 'Discover the governed scientific plotting data-mapping capability.', ['handoff'], ['mapDataOperation'], 'scientific-plotting.map-data'),
+      stage('map_data', 'sciforge_invoke', 'Map reproducible files or inline structured data with a caller-persisted operationId into a controlled code render request.', ['mapDataOperation', 'operationId', 'handoff', 'reproducibleInputs|inlineSpecification|structuredData'], ['controlledRenderRequest'], 'scientific-plotting.map-data'),
+      stage('discover_render', 'sciforge_discover', 'Discover the governed versioned scientific plotting render capability.', ['controlledRenderRequest'], ['renderOperation'], 'scientific-plotting.render'),
+      stage('render_code', 'sciforge_invoke', 'Render and version exact elements through the capability broker, reusing the same operationId on transport retries.', ['renderOperation', 'operationId', 'controlledRenderRequest', 'handoff'], ['renderedArtifact', 'renderedManifest', 'artifactVersionRefs', 'evidenceLineage', 'evidenceDelivery'], 'scientific-plotting.render'),
       stage('review_visual', 'image_generation_review_candidate', 'Run manifest-bound candidate and release QA against the handoff and artifact hash.', ['renderedArtifact', 'renderedManifest', 'handoff'], ['reviewResult'])
     ]
   }
@@ -399,8 +398,10 @@ function executionStages(route: VisualProductionRoute, action: 'create' | 'revis
     ]
   }
   return [
-    stage('map_truth', 'scientific_plotting_map_data', 'Map reproducible files or inline structured data for the code-owned truth layer.', ['handoff', 'reproducibleInputs|inlineSpecification|structuredData'], ['controlledRenderRequest']),
-    stage('render_truth', 'scientific_plotting_render', 'Render the code-owned truth layer.', ['controlledRenderRequest', 'handoff'], ['truthArtifact', 'truthManifest']),
+    stage('discover_map_truth', 'sciforge_discover', 'Discover the governed scientific plotting data-mapping capability.', ['handoff'], ['mapDataOperation'], 'scientific-plotting.map-data'),
+    stage('map_truth', 'sciforge_invoke', 'Map reproducible files or inline structured data for the code-owned truth layer with a caller-persisted operationId.', ['mapDataOperation', 'operationId', 'handoff', 'reproducibleInputs|inlineSpecification|structuredData'], ['controlledRenderRequest'], 'scientific-plotting.map-data'),
+    stage('discover_render_truth', 'sciforge_discover', 'Discover the governed versioned scientific plotting render capability.', ['controlledRenderRequest'], ['renderOperation'], 'scientific-plotting.render'),
+    stage('render_truth', 'sciforge_invoke', 'Render and version the code-owned truth layer through the capability broker, reusing the same operationId on transport retries.', ['renderOperation', 'operationId', 'controlledRenderRequest', 'handoff'], ['truthArtifact', 'truthManifest', 'artifactVersionRefs', 'evidenceLineage', 'evidenceDelivery'], 'scientific-plotting.render'),
     stage('prepare_model', 'image_generation_prepare', 'Prepare the model-owned visual layer around controlled artifacts.', ['task', 'truthArtifact', 'truthManifest', 'handoff'], ['imageRenderRecipe']),
     stage('render_visual', 'image_generation_render', 'Render only the model-owned visual layer around controlled artifacts.', ['imageRenderRecipe', 'truthArtifact', 'truthManifest', 'handoff'], ['visualLayerArtifact', 'visualLayerManifest']),
     stage('deterministic_composite', 'scientific_plotting_composite', 'Composite the code-owned truth layer over the model-owned visual layer without redrawing locked elements.', ['truthArtifact', 'truthManifest', 'visualLayerArtifact', 'visualLayerManifest', 'handoff'], ['compositeArtifact', 'compositeManifest']),
@@ -423,9 +424,10 @@ function stage(
   tool: VisualProductionExecutionTool,
   purpose: string,
   consumes: string[],
-  produces: string[]
+  produces: string[],
+  capabilityId?: VisualProductionExecutionStage['capabilityId']
 ): VisualProductionExecutionStage {
-  return { id, tool, purpose, consumes, produces, locked: true }
+  return { id, tool, purpose, consumes, produces, ...(capabilityId ? { capabilityId } : {}), locked: true }
 }
 
 function normalizeRequirements(value: VisualProductionRequirements): VisualProductionRequirements {

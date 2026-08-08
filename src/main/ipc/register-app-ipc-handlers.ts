@@ -88,9 +88,7 @@ import {
   visualStyleExtractPayloadSchema,
   visualStyleSaveProfilePayloadSchema,
   pptMasterMcpConfigPayloadSchema,
-  scientificPlottingPrepareReferencePayloadSchema,
   scientificPlottingMcpConfigPayloadSchema,
-  scientificPlottingStatusPayloadSchema,
   scientificSkillsInstallPayloadSchema,
   scientificSkillsMcpConfigPayloadSchema,
   gitBranchPayloadSchema,
@@ -147,10 +145,6 @@ import {
   type ScientificSkillsMcpLaunchConfig
 } from '../scientific-skills-mcp-config'
 import {
-  buildScientificPlottingMcpConfigFragment,
-  type ScientificPlottingMcpLaunchConfig
-} from '../scientific-plotting-mcp-config'
-import {
   buildBgcDiscoveryMcpConfigFragment,
   type BgcDiscoveryMcpLaunchConfig
 } from '../bgc-discovery-mcp-config'
@@ -162,10 +156,6 @@ import {
   buildPptMasterMcpConfigFragment,
   type PptMasterMcpLaunchConfig
 } from '../ppt-master-mcp-config'
-import {
-  getScientificPlottingStatus,
-  prepareScientificPlottingReference
-} from '../../../packages/workers/scientific-plotting/src/scientific-plotting-engine'
 import {
   buildScientificSkillsIndex,
   buildScientificSkillsStatusSummary
@@ -184,11 +174,6 @@ import type {
   VisualStyleSaveProfileRequest,
   VisualStyleSaveProfileResult
 } from '../../shared/visual-style'
-import type {
-  ScientificPlottingPrepareReferenceRequest,
-  ScientificPlottingPrepareReferenceResult,
-  ScientificPlottingStatusResult
-} from '../../shared/scientific-plotting'
 import type {
   AgentRuntimeAuxiliaryInput,
   AgentRuntimeCapabilities,
@@ -374,15 +359,10 @@ export type RegisterAppIpcHandlersOptions = {
   resolveLogDirectory: () => string
   getMainPerformanceSnapshot?: () => unknown
   getScientificSkillsMcpLaunchConfig?: () => ScientificSkillsMcpLaunchConfig
-  getScientificPlottingMcpLaunchConfig?: () => ScientificPlottingMcpLaunchConfig
   getBgcDiscoveryMcpLaunchConfig?: () => BgcDiscoveryMcpLaunchConfig
   getImageGenerationMcpLaunchConfig?: () => ImageGenerationMcpLaunchConfig
   getPptMasterMcpLaunchConfig?: () => PptMasterMcpLaunchConfig
   installScientificSkills?: (request: ScientificSkillsInstallRequest) => Promise<ScientificSkillsInstallResult>
-  getScientificPlottingStatus?: () => Promise<ScientificPlottingStatusResult>
-  prepareScientificPlottingReference?: (
-    request: ScientificPlottingPrepareReferenceRequest
-  ) => Promise<ScientificPlottingPrepareReferenceResult>
   extractVisualStyleProfile?: (request: VisualStyleExtractRequest) => Promise<VisualStyleExtractResult>
   saveVisualStyleProfile?: (request: VisualStyleSaveProfileRequest) => Promise<VisualStyleSaveProfileResult>
   logError: (category: string, message: string, detail?: unknown) => void
@@ -501,13 +481,10 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     resolveLogDirectory,
     getMainPerformanceSnapshot,
     getScientificSkillsMcpLaunchConfig,
-    getScientificPlottingMcpLaunchConfig,
     getBgcDiscoveryMcpLaunchConfig,
     getImageGenerationMcpLaunchConfig,
     getPptMasterMcpLaunchConfig,
     installScientificSkills: installScientificSkillsHandler = installScientificSkills,
-    getScientificPlottingStatus: getScientificPlottingStatusHandler = getScientificPlottingStatus,
-    prepareScientificPlottingReference: prepareScientificPlottingReferenceHandler = prepareScientificPlottingReference,
     extractVisualStyleProfile: extractVisualStyleProfileHandler = extractVisualStyleProfile,
     saveVisualStyleProfile: saveVisualStyleProfileOverride,
     logError,
@@ -1475,30 +1452,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
-  handleInvoke('mcp:scientific-plotting-config', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'mcp:scientific-plotting-config',
-      scientificPlottingMcpConfigPayloadSchema,
-      payload
-    )
-    try {
-      const launch = getScientificPlottingMcpLaunchConfig?.() ?? {
-        appPath: app.getAppPath(),
-        execPath: process.execPath,
-        isPackaged: app.isPackaged
-      }
-      return {
-        ok: true as const,
-        config: buildScientificPlottingMcpConfigFragment(launch, request.workspaceRoot)
-      }
-    } catch (error) {
-      return {
-        ok: false as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
   handleInvoke('mcp:bgc-discovery-config', async (_, payload: unknown) => {
     const request = parseIpcPayload(
       'mcp:bgc-discovery-config',
@@ -1547,39 +1500,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     } catch (error) {
       return {
         ok: false as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('scientific-plotting:status', async (_, payload: unknown) => {
-    parseIpcPayload(
-      'scientific-plotting:status',
-      scientificPlottingStatusPayloadSchema,
-      payload
-    )
-    try {
-      return getScientificPlottingStatusHandler()
-    } catch (error) {
-      return {
-        ok: false as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('scientific-plotting:prepare-reference', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'scientific-plotting:prepare-reference',
-      scientificPlottingPrepareReferencePayloadSchema,
-      payload
-    )
-    try {
-      return prepareScientificPlottingReferenceHandler(request)
-    } catch (error) {
-      return {
-        ok: false as const,
-        status: 'invalid_request' as const,
         message: error instanceof Error ? error.message : String(error)
       }
     }

@@ -3,8 +3,9 @@
 The module returns structured evidence (graph, provenance, metrics) only —
 never a user-level final answer or completion truth.
 
-All graph writes enter POST /updates. Audit and Artifact commands are separate
-side-chain/registry commands and never mutate a committed graph in place.
+All graph writes enter POST /updates. Artifact identities and lifecycle writes
+belong to the independent Artifact Versions domain; this service consumes only
+pinned refs and lifecycle projections carried by an update.
 """
 from __future__ import annotations
 
@@ -418,28 +419,28 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, ok(run,
                                           summary=f"{run['risk_digest']['total_findings']} finding(s)",
                                           operation="audits.create", request_id=rid, started=started))
-            if path == "/artifacts":
-                result = self.engine.register_artifact(
-                    workspace_root=str(body.get("workspaceRoot") or ""),
-                    project_root=body.get("projectRoot"), payload=body,
+            if path == "/snapshot-products":
+                thread_id = str(body.get("threadId") or "").strip()
+                snapshot_digest = str(body.get("snapshotDigest") or "").strip().lower()
+                datacite_metadata = body.get("datacite")
+                if not thread_id:
+                    raise ValueError("threadId is required")
+                if re.fullmatch(r"sha256:[0-9a-f]{64}", snapshot_digest) is None:
+                    raise ValueError("snapshotDigest must be an exact SHA-256 Evidence Snapshot digest")
+                if not isinstance(datacite_metadata, dict):
+                    raise ValueError("explicit DataCite metadata is required")
+                products = self.engine.export_snapshot_products(
+                    thread_id,
+                    snapshot_digest=snapshot_digest,
+                    datacite_metadata=datacite_metadata,
                 )
-                return self._send(200, ok(result, operation="artifacts.register",
-                                          request_id=rid, started=started))
-            if path == "/artifacts/resolve":
-                result = self.engine.resolve_artifacts(
-                    workspace_root=str(body.get("workspaceRoot") or ""),
-                    project_root=body.get("projectRoot"),
-                )
-                return self._send(200, ok(result, operation="artifacts.resolve",
-                                          request_id=rid, started=started))
-            if path == "/artifacts/events/ack":
-                result = self.engine.acknowledge_artifact_events(
-                    workspace_root=str(body.get("workspaceRoot") or ""),
-                    project_root=body.get("projectRoot"),
-                    event_ids=body.get("eventIds") if isinstance(body.get("eventIds"), list) else [],
-                )
-                return self._send(200, ok(result, operation="artifacts.events.ack",
-                                          request_id=rid, started=started))
+                return self._send(200, ok(
+                    products,
+                    summary=f"{len(products['products'])} immutable snapshot product(s) projected",
+                    operation="snapshot-products.export",
+                    request_id=rid,
+                    started=started,
+                ))
             review_match = re.fullmatch(
                 r"/threads/([^/]+)/reviews/([^/]+)/decision", path,
             )
@@ -461,24 +462,6 @@ class Handler(BaseHTTPRequestHandler):
                     summary=f"Review decision {result['decision']['action']} recorded",
                     operation="reviews.decision", request_id=rid, started=started,
                 ))
-            artifact_match = re.fullmatch(r"/artifacts/([^/]+)/(resolve|confirm-rebind)", path)
-            if artifact_match:
-                artifact_id = unquote(artifact_match.group(1))
-                if artifact_match.group(2) == "resolve":
-                    result = self.engine.resolve_artifact(
-                        artifact_id,
-                        workspace_root=str(body.get("workspaceRoot") or ""),
-                        project_root=body.get("projectRoot"),
-                        candidate_locators=body.get("candidateLocators") or [],
-                    )
-                else:
-                    registry = self.engine._registry(
-                        workspace_root=str(body.get("workspaceRoot") or ""),
-                        project_root=body.get("projectRoot"),
-                    )
-                    result = registry.confirm_rebind(artifact_id, str(body.get("locator") or ""))
-                return self._send(200, ok(result, operation=f"artifacts.{artifact_match.group(2)}",
-                                          request_id=rid, started=started))
             if not tid:
                 return self._send(404, err("NOT_FOUND", f"no route for {self.path}", operation="post",
                                            request_id=rid, started=started))

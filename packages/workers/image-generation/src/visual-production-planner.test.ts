@@ -114,7 +114,7 @@ describe('visual production planner', () => {
     {
       route: 'code',
       requirements: { lockedElements: ['numeric values'], modelOwnedElements: [], reproducibleInputs: ['results.csv'] },
-      tools: ['scientific_plotting_map_data', 'scientific_plotting_render', 'image_generation_review_candidate']
+      tools: ['sciforge_discover', 'sciforge_invoke', 'sciforge_discover', 'sciforge_invoke', 'image_generation_review_candidate']
     },
     {
       route: 'model',
@@ -127,10 +127,18 @@ describe('visual production planner', () => {
       ok: true,
       status: 'ready',
       handoff: { route, routeLocked: true, fallbackPolicy: 'fail_closed' },
-      failPolicy: { crossRouteFallback: false, routeChangeRequiresNewPlan: true }
+      failPolicy: {
+        crossRouteFallback: false,
+        routeChangeRequiresNewPlan: true,
+        sameRouteRetry: { reuseOperationId: true }
+      }
     })
     if (!result.ok || result.status === 'needs_context') return
     expect(result.execution.stages.map((stage) => stage.tool)).toEqual(tools)
+    if (route === 'code') {
+      expect(result.execution.stages.find(({ id }) => id === 'map_data')?.consumes).toContain('operationId')
+      expect(result.execution.stages.find(({ id }) => id === 'render_code')?.produces).toContain('evidenceDelivery')
+    }
   })
 
   it('uses deterministic truth and final composite stages for hybrid work', () => {
@@ -154,7 +162,9 @@ describe('visual production planner', () => {
     })
     if (!result.ok || result.status === 'needs_context') return
     expect(result.execution.stages.map((stage) => stage.id)).toEqual([
+      'discover_map_truth',
       'map_truth',
+      'discover_render_truth',
       'render_truth',
       'prepare_model',
       'render_visual',
@@ -189,11 +199,11 @@ describe('visual production planner', () => {
       },
       execution: {
         nextCall: {
-          tool: 'scientific_plotting_map_data',
+          tool: 'sciforge_discover',
           arguments: {
-            workspaceRoot: '/workspace',
-            visualPlan: { route: 'code' },
-            data: structuredData
+            capabilityId: 'scientific-plotting.map-data',
+            includeSchema: true,
+            limit: 1
           }
         }
       }
@@ -238,8 +248,12 @@ describe('visual production planner', () => {
       handoff: { route: 'hybrid', scene },
       execution: {
         nextCall: {
-          tool: 'scientific_plotting_map_data',
-          arguments: { data: scene }
+          tool: 'sciforge_discover',
+          arguments: {
+            capabilityId: 'scientific-plotting.map-data',
+            includeSchema: true,
+            limit: 1
+          }
         }
       }
     })

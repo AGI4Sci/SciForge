@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import tempfile
 import threading
@@ -56,7 +57,40 @@ class TestTrustedEvidencePreview(unittest.TestCase):
             target_watermark="item-1",
             reason="turn_committed",
             priority="P2",
-            trace=[{"id": "item-1", "type": "message", "content": "result"}],
+            trace=[{
+                "id": "item-1",
+                "type": "tool_result",
+                "output": {
+                    "content": "measured effect\n",
+                    "path": "evidence/source.txt",
+                    "startLine": 1,
+                    "endLine": 1,
+                },
+                "evidenceArtifactVersions": {
+                    "status": "ready",
+                    "versions": [{
+                        "ref": {
+                            "artifactId": "artifact:preview-source",
+                            "versionId": "artifact-version:preview-source-1",
+                            "contentDigest": hashlib.sha256(b"measured effect\n").hexdigest(),
+                            "byteLength": len(b"measured effect\n"),
+                            "mediaType": "text/plain",
+                            "availability": "available",
+                            "retention": "reference",
+                            "accessPolicy": {
+                                "visibility": "workspace",
+                                "principals": [],
+                                "allowExport": False,
+                            },
+                        },
+                        "kind": "dataset",
+                        "locator": "evidence/source.txt",
+                        "observedAt": "2026-08-06T08:00:00Z",
+                    }],
+                    "lifecycleEvents": [],
+                    "lastSequence": 0,
+                },
+            }],
             workspace_root=workspace,
             project_root=workspace,
                         access_policy=access_policy,
