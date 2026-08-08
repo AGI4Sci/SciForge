@@ -106,7 +106,10 @@ def run_a0(graph: ThreadGraph) -> list[Assessment]:
             ))
     from .lineage import reproducibility_report
     for node in graph.nodes.values():
-        if node.type not in {NodeType.EXPERIMENT_RUN, NodeType.ANALYSIS_RUN}:
+        if node.type not in {
+            NodeType.EXPERIMENT_RUN, NodeType.ANALYSIS_RUN,
+            NodeType.WORKFLOW_RUN, NodeType.TOOL_INVOCATION,
+        }:
             continue
         report = reproducibility_report(graph, node.id)
         assessments.append(_assessment(
@@ -169,7 +172,10 @@ def run_a2(
     targets = [
         node for node in graph.nodes.values()
         if (target_ids is None or node.id in target_ids)
-        and node.type in {NodeType.CLAIM, NodeType.FINDING, NodeType.ASSUMPTION}
+        and node.type in {
+            NodeType.CLAIM, NodeType.CONCLUSION,
+            NodeType.FINDING, NodeType.ASSUMPTION,
+        }
     ]
 
     def _review(node) -> Assessment:

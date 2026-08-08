@@ -24,6 +24,12 @@ test('reconciles pending work only when the committed watermark fully covers its
     evidenceDagWatermarkCovers('7:artifact-lifecycle:1', '7:artifact-lifecycle:1'),
     true
   )
+  assert.equal(evidenceDagWatermarkCovers('20:event-new', '19:event-old'), true)
+  assert.equal(evidenceDagWatermarkCovers('19:event-old', '20:event-new'), false)
+  assert.equal(
+    evidenceDagWatermarkCovers('20:event-new:batch:3/4', '20:event-new:batch:1/4'),
+    true
+  )
   assert.equal(
     evidenceDagWatermarkCovers(
       '2026-07-26T07:00:00.000Z',
@@ -135,6 +141,70 @@ test('does not enqueue an artifact event that has no workspace scope', async () 
   })
   await new Promise((resolve) => setTimeout(resolve, 20))
   assert.equal(submitted, false)
+  await runtime.close()
+})
+
+test('routes a threadless completed execution through the canonical synthetic scope', async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'evidence-runtime-execution-'))
+  const submissions: Record<string, unknown>[] = []
+  const runtime = new EvidenceDagRuntime({
+    userDataDir,
+    sidecar: {
+      configure: () => undefined,
+      endpoint: () => ({ baseUrl: 'http://127.0.0.1:3897', apiKey: 'service-key' }),
+      ensureReady: async () => undefined,
+      stop: async () => undefined
+    },
+    fetchImpl: async (_url, init) => {
+      submissions.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+      return new Response(JSON.stringify({
+        ok: true,
+        data: {
+          snapshot: {
+            threadId: 'domain:sciforge.create-loop:execution:workflow-9',
+            version: 1,
+            digest: `sha256:${'a'.repeat(64)}`,
+            inputWatermark: 'event-9',
+            schemaVersion: 'evidence.v3',
+            extractorVersion: 'extractor.v3',
+            verifierVersion: 'verifier.v3',
+            artifactDigests: [],
+            createdAt: '2026-08-05T00:00:00.000Z',
+            status: 'committed'
+          }
+        }
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+  })
+  await runtime.activate(runtimeContext(userDataDir))
+  await runtime.consume({
+    contractVersion: 1,
+    kind: 'execution-completed',
+    producer: { moduleId: 'sciforge.create-loop', moduleVersion: '1.0.0' },
+    executionId: 'workflow-9',
+    runId: 'run-9',
+    targetWatermark: 'event-9',
+    workspaceRoot: '/workspace',
+    occurredAt: '2026-08-05T00:00:00.000Z',
+    artifacts: [{
+      schemaVersion: 'sciforge.execution-event.v1',
+      eventId: 'event-9',
+      phase: 'run_completed'
+    }]
+  })
+  await waitFor(() => submissions.length === 1)
+  assert.equal(
+    submissions[0]!.threadId,
+    'domain:sciforge.create-loop:execution:workflow-9'
+  )
+  assert.equal(submissions[0]!.reason, 'execution_completed')
+  assert.equal(
+    (submissions[0]!.trace as Array<Record<string, unknown>>)[0]!.id,
+    'execution:workflow-9:run-9:artifact:0'
+  )
   await runtime.close()
 })
 
@@ -376,6 +446,9 @@ function runtimeContext(
         apiKey: 'router-key',
         model: 'sciforge-router'
       })
+    },
+    executionEvents: {
+      publish: async () => { throw new Error('Unexpected execution event.') }
     },
     enablement: {
       isEnabled: async () => true,

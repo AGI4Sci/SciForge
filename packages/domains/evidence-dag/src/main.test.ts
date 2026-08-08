@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type {
-  DomainAgentArtifactEvent,
+  DomainArtifactEvent,
   DomainMainActionGuard,
   DomainMainRuntimeLifecycleContext
 } from '@sciforge/domain-sdk/host'
@@ -110,7 +110,7 @@ test('lazily activates one runtime shared by every Evidence contribution', async
   assert.deepEqual(entry.contributions.map(({ kind, id }) => `${kind}:${id}`), [
     'main.capability-factory:evidence-dag.capabilities',
     'main.runtime-lifecycle:evidence-dag.runtime-lifecycle',
-    'main.agent-artifact-consumer:evidence-dag.agent-artifact-consumer',
+    'main.artifact-consumer:evidence-dag.artifact-consumer',
     'main.action-guard:evidence-dag.write-export-guard'
   ])
 
@@ -158,7 +158,7 @@ test('lazily activates one runtime shared by every Evidence contribution', async
   assert.equal(hostUserDataDirReads, 0)
   assert.deepEqual(runtimeUserDataDirs, [context.userDataDir])
   const consumer = entry.contributions[2]!.value as {
-    consume(event: DomainAgentArtifactEvent): Promise<void>
+    consume(event: DomainArtifactEvent): Promise<void>
   }
   await consumer.consume({
     contractVersion: 1,
@@ -423,6 +423,9 @@ function lifecycleContext(signal: AbortSignal): DomainMainRuntimeLifecycleContex
         apiKey: 'router-key',
         model: 'sciforge-router'
       })
+    },
+    executionEvents: {
+      publish: async () => { throw new Error('Unexpected execution event.') }
     },
     enablement: {
       isEnabled: async () => true,

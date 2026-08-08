@@ -9,11 +9,12 @@ import type {
 } from '@sciforge/domain-artifact-versions/contract'
 import { domainPackageJsonValueSchema } from '@sciforge/domain-sdk'
 import type {
-  DomainAgentArtifactEvent,
+  DomainArtifactEvent,
   DomainMainActionGuardResult,
   DomainMainRuntimeLifecycleContext,
   DomainMainRuntimeDisposer
 } from '@sciforge/domain-sdk/host'
+import { domainArtifactEventScope } from '@sciforge/domain-sdk/host'
 import {
   evidenceDagActivationPayloadSchema,
   evidenceDagCanonicalStatusSchema,
@@ -66,6 +67,7 @@ import {
   evaluateEvidenceDagHighImpactGate
 } from './gate.js'
 import { EvidenceDagQueue } from './queue.js'
+import { evidenceDagWatermarkCoversValue } from './watermark.js'
 import {
   EvidenceDagSidecar,
   type EvidenceDagSidecarPort
@@ -81,7 +83,7 @@ import {
 
 export type EvidenceDagRuntimePort = Readonly<{
   activate(context: DomainMainRuntimeLifecycleContext): Promise<DomainMainRuntimeDisposer>
-  consume(event: DomainAgentArtifactEvent): Promise<void>
+  consume(event: DomainArtifactEvent): Promise<void>
   view(input: EvidenceDagViewInput): Promise<EvidenceDagViewOutput>
   update(input: EvidenceDagUpdateInput): Promise<EvidenceDagUpdateOutput>
   priority(input: EvidenceDagPriorityInput): Promise<EvidenceDagCanonicalStatus>
@@ -248,35 +250,38 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
     }
   }
 
-  async consume(event: DomainAgentArtifactEvent): Promise<void> {
-    if (!this.context || !this.enabled || !event.artifacts.length || !event.workspaceRoot) return
+  async consume(event: DomainArtifactEvent): Promise<void> {
+    if (!this.context || !this.enabled || !event.artifacts.length) return
+    const scope = domainArtifactEventScope(event)
+    if (!scope.workspaceRoot) return
     const trace = await this.artifactVersions.pinTrace(
       evidenceTraceFromArtifactEvent(event),
       {
-        runtimeId: event.runtimeId,
-        threadId: event.threadId,
-        operationId: event.turnId,
-        workspaceRoot: event.workspaceRoot,
+        runtimeId: scope.runtimeId,
+        threadId: scope.threadId,
+        operationId: event.kind === 'turn-completed' ? event.turnId : event.runId,
+        workspaceRoot: scope.workspaceRoot,
         occurredAt: event.occurredAt
       }
     )
     if (!trace.length) return
+    const { runtimeId, threadId, workspaceRoot } = scope
     await this.artifactVersionLifecycle.rememberThread({
-      runtimeId: event.runtimeId,
-      threadId: event.threadId,
-      workspaceRoot: event.workspaceRoot,
+      runtimeId,
+      threadId,
+      workspaceRoot,
       targetWatermark: event.targetWatermark,
       trace
     })
     await this.queue.enqueue({
-      runtimeId: event.runtimeId,
-      threadId: event.threadId,
-      engineThreadId: evidenceDagThreadId(event.runtimeId, event.threadId),
+      runtimeId,
+      threadId,
+      engineThreadId: evidenceDagThreadId(runtimeId, threadId),
       targetWatermark: event.targetWatermark,
-      reason: 'turn_committed',
+      reason: event.kind === 'turn-completed' ? 'turn_committed' : 'execution_completed',
       priority: 'background',
       trace,
-      workspaceRoot: event.workspaceRoot
+      workspaceRoot
     })
     this.artifactVersionLifecycle.requestPoll()
   }
@@ -632,21 +637,7 @@ export function parseEvidenceDagActivation(value: unknown) {
 }
 
 export function evidenceDagWatermarkCovers(committed: string, target: string): boolean {
-  if (committed === target) return true
-  if (committed.startsWith(`${target}:batch:`)) {
-    const match = /:batch:(\d+)\/(\d+)$/u.exec(committed)
-    return Boolean(match && match[1] === match[2])
-  }
-  if (target.includes(':artifact-lifecycle')) return false
-  const committedSequence = leadingSequence(committed)
-  const targetSequence = leadingSequence(target)
-  if (committedSequence !== null && targetSequence !== null) {
-    return committedSequence > targetSequence
-  }
-  const committedTime = Date.parse(committed)
-  const targetTime = Date.parse(target)
-  return Number.isFinite(committedTime) && Number.isFinite(targetTime) &&
-    committedTime > targetTime
+  return evidenceDagWatermarkCoversValue(committed, target)
 }
 
 export function evidenceDagWorkspaceRoot(
@@ -661,13 +652,6 @@ export function evidenceDagWorkspaceRoot(
     throw new Error('Evidence DAG update requires a workspace root.')
   }
   return workspaceRoot
-}
-
-function leadingSequence(value: string): number | null {
-  const match = /^(\d+)(?::|$)/u.exec(value)
-  if (!match) return null
-  const sequence = Number(match[1])
-  return Number.isSafeInteger(sequence) ? sequence : null
 }
 
 function genericGuardDecision(decision: ReturnType<typeof evaluateEvidenceDagHighImpactGate>) {

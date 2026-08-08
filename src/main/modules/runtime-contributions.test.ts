@@ -4,9 +4,9 @@ import {
 } from '@sciforge/domain-sdk'
 import {
   MAIN_ACTION_GUARD_CONTRIBUTION_KIND,
-  MAIN_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
+  MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
   MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
-  type DomainAgentArtifactConsumer,
+  type DomainArtifactConsumer,
   type DomainMainRuntimeLifecycleContext
 } from '@sciforge/domain-sdk/host'
 import { describe, expect, it, vi } from 'vitest'
@@ -18,7 +18,7 @@ import {
   activateMainRuntimeContributions,
   createMainActionGuardEvaluator,
   createMainSystemCapabilityInvoker,
-  listMainAgentArtifactConsumers
+  listMainArtifactConsumers
 } from './runtime-contributions'
 
 describe('main runtime contributions', () => {
@@ -85,7 +85,7 @@ describe('main runtime contributions', () => {
       }]),
       fixtureEntry('fixture.invalid', '@fixture/invalid', 10, [{
         id: 'fixture.invalid.consumer',
-        kind: MAIN_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
+        kind: MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
         value: { consume: 'invalid' }
       }])
     ])
@@ -121,15 +121,15 @@ describe('main runtime contributions', () => {
   })
 
   it('projects artifact consumers without exposing catalog metadata to callers', async () => {
-    const consumer: DomainAgentArtifactConsumer = { consume: vi.fn() }
+    const consumer: DomainArtifactConsumer = { consume: vi.fn() }
     const catalog = new DomainModuleCatalog()
     catalog.registerModule(fixtureEntry('fixture.consumer', '@fixture/consumer', 100, [{
       id: 'fixture.consumer.artifacts',
-      kind: MAIN_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
+      kind: MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
       value: consumer
     }]))
 
-    expect(listMainAgentArtifactConsumers(catalog)).toEqual([consumer])
+    expect(listMainArtifactConsumers(catalog)).toEqual([consumer])
     const activated = await activateMainRuntimeContributions(catalog, runtimeHost())
 
     expect(activated.artifactConsumers).toEqual([consumer])
@@ -410,6 +410,16 @@ function runtimeHost() {
     },
     capabilities: {
       invoke: vi.fn(async (_contract, input) => input)
+    },
+    executionEvents: {
+      publish: vi.fn(async (owner, event) => ({
+        ...event,
+        schemaVersion: 'sciforge.execution-event.v1' as const,
+        eventId: event.eventId ?? 'execution-event-fixture',
+        producer: owner,
+        occurredAt: event.occurredAt ?? '2026-08-05T00:00:00.000Z',
+        artifacts: event.artifacts ?? []
+      }))
     },
     modelAccess: {
       textReasoner: vi.fn(async () => null)

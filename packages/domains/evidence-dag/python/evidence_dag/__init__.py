@@ -47,6 +47,13 @@ from .rocrate import (
     write_ro_crate,
 )
 from .products import export_snapshot_products, source_artifact_version_refs
+from .rerun import (
+    RERUN_SCHEMA_VERSION,
+    build_rerun_spec,
+    compare_rerun_specs,
+    output_values_for_spec,
+    validate_rerun_spec,
+)
 from .service import Engine
 from .snapshot import EvidenceSnapshot
 
@@ -68,5 +75,7 @@ __all__ = [
     "GitCommit", "RelatedIdentifier", "ImportedDataCite",
     "datacite_digest", "export_datacite", "import_datacite",
     "export_snapshot_products", "source_artifact_version_refs",
+    "RERUN_SCHEMA_VERSION", "build_rerun_spec", "compare_rerun_specs",
+    "output_values_for_spec", "validate_rerun_spec",
     "__version__",
 ]

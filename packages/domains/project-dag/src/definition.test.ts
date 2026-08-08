@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   PROJECT_DAG_CAPABILITY_FACTORY_CONTRIBUTION,
-  PROJECT_DAG_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION,
+  PROJECT_DAG_ARTIFACT_CONSUMER_CONTRIBUTION,
   PROJECT_DAG_DOMAIN_MODULE_ID,
   PROJECT_DAG_DOMAIN_PACKAGE_NAME,
   PROJECT_DAG_RENDERER_COMMAND_CONTRIBUTION,
@@ -25,7 +25,7 @@ test('Project DAG manifest owns main lifecycle and renderer contributions', () =
     [
       PROJECT_DAG_CAPABILITY_FACTORY_CONTRIBUTION,
       PROJECT_DAG_RUNTIME_LIFECYCLE_CONTRIBUTION,
-      PROJECT_DAG_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION,
+      PROJECT_DAG_ARTIFACT_CONSUMER_CONTRIBUTION,
       PROJECT_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION,
       PROJECT_DAG_RENDERER_COMMAND_CONTRIBUTION,
       PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
@@ -41,8 +41,8 @@ test('Project DAG manifest owns main lifecycle and renderer contributions', () =
         id: 'project-dag.runtime-lifecycle'
       },
       {
-        kind: 'main.agent-artifact-consumer',
-        id: 'project-dag.turn-completed'
+        kind: 'main.artifact-consumer',
+        id: 'project-dag.artifacts'
       },
       {
         kind: 'renderer.workbench-right-panel',

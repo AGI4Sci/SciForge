@@ -1,9 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type {
-  DomainAgentArtifactConsumer,
-  DomainAgentArtifactEvent,
-  DomainMainTurnLifecycleEvent
+  DomainMainTurnLifecycleEvent,
+  DomainTurnArtifactEvent
 } from '@sciforge/domain-sdk/host'
 import {
   getActiveAgentRuntime,
@@ -83,6 +82,10 @@ import {
 import { AgentRuntimeContextCompactor } from './context-compactor'
 import type { LspCodeNavigationService } from '../../services/lsp-code-navigation-service'
 import type { AgentRuntimeTraceRecorder } from '../../services/agent-runtime-trace-service'
+import type {
+  TurnArtifactIntentPublisher
+} from '../../services/turn-artifact-handoff-service'
+import type { TurnArtifactIntent } from '../../services/turn-artifact-outbox'
 import type { RuntimeContextStateService } from '../../services/runtime-context-state-service'
 import type { SharedMemoryService } from '../../services/shared-memory-service'
 import type { WorkspaceReferenceService } from '../../services/workspace-reference-service'
@@ -138,7 +141,7 @@ export type AgentRuntimeHostOptions = {
     | Partial<Record<AgentRuntimeId, AgentRuntimeAdapter>>
   services?: AgentRuntimeHostServices
   nativeVisualToolsAvailable?: () => boolean
-  artifactConsumers?: readonly DomainAgentArtifactConsumer[]
+  turnArtifacts?: TurnArtifactIntentPublisher
   subagentStoreRoot?: string
 }
 
@@ -205,7 +208,6 @@ export class AgentRuntimeHost {
   private readonly turnGovernanceProfiles = new Map<string, AgentRuntimeGovernanceProfile>()
   private readonly turnWorkspaces = new Map<string, string>()
   private readonly threadWorkspaceHosts = new Map<string, WorkspaceHostPlacement>()
-  private readonly artifactBroadcastTurns = new Set<string>()
   private readonly turnLifecycleSubscribers = new Set<
     (event: DomainMainTurnLifecycleEvent) => void | Promise<void>
   >()
@@ -617,7 +619,7 @@ export class AgentRuntimeHost {
       await this.options.services?.contextLedger?.observeEvent(event).catch(() => undefined)
       this.observeThreadTurnLifecycle(adapter.id, event)
       await this.publishTerminalTurnLifecycle(adapter.id, context, event)
-      this.broadcastCompletedTurnArtifacts(adapter, context, event)
+      await this.publishCompletedTurnArtifactIntent(adapter.id, event)
     }
     const governEvent = (
       event: AgentRuntimeEvent,
@@ -874,7 +876,6 @@ export class AgentRuntimeHost {
     this.capabilityApprovalSubscribers.clear()
     this.capabilityApprovals.clear()
     this.capabilityApprovalOrder.splice(0)
-    this.artifactBroadcastTurns.clear()
   }
 
   async resolveUserInput(input: AgentRuntimeUserInputResolveInput): Promise<void> {
@@ -2887,63 +2888,100 @@ export class AgentRuntimeHost {
     return this.turnGovernanceProfiles.get(turnGovernanceKey(runtimeId, threadId, turnId))
   }
 
-  private broadcastCompletedTurnArtifacts(
-    adapter: AgentRuntimeAdapter,
-    context: AgentRuntimeAdapterContext,
+  private async publishCompletedTurnArtifactIntent(
+    runtimeId: AgentRuntimeId,
     event: AgentRuntimeEvent
-  ): void {
-    const consumers = this.options.artifactConsumers
-    if (!consumers?.length) return
-    if (event.kind !== 'turn_lifecycle' || event.state !== 'completed') return
+  ): Promise<void> {
+    const publisher = this.options.turnArtifacts
+    if (!publisher) return
+    if (
+      event.kind !== 'turn_lifecycle' ||
+      normalizeAgentRuntimeTurnState(event.state) !== 'completed'
+    ) return
     const threadId = event.threadId.trim()
     const turnId = event.turnId?.trim()
     if (!threadId || !turnId) return
-    const key = turnGovernanceKey(adapter.id, threadId, turnId)
-    if (this.artifactBroadcastTurns.has(key)) return
-    this.artifactBroadcastTurns.add(key)
+    const key = turnGovernanceKey(runtimeId, threadId, turnId)
+    await publisher.publish(Object.freeze({
+      runtimeId,
+      threadId,
+      turnId,
+      ...(event.seq === undefined ? {} : { sequence: event.seq }),
+      ...(this.turnWorkspaces.get(key)
+        ? { workspaceRoot: this.turnWorkspaces.get(key) }
+        : {}),
+      occurredAt: durableTurnOccurredAt(event)
+    }))
+  }
 
-    void (async () => {
-      try {
-        const detail = await adapter.readThread(context, {
-          runtimeId: adapter.id,
-          threadId
-        })
-        const turn = detail.turns?.find((candidate) => candidate.id === turnId)
-        let workspaceRoot: string | undefined = detail.workspace?.trim() ||
-          this.turnWorkspaces.get(key) ||
-          context.settings.workspaceRoot?.trim() ||
-          undefined
-        if (!workspaceRoot) {
-          workspaceRoot = await adapter.listThreads(context, {
-            limit: 1_000,
-            includeArchived: true,
-            includeSide: true
-          }).then((threads) => threads.find((thread) => thread.id === threadId)?.workspace?.trim())
-            .catch(() => undefined)
-        }
-        const artifacts = turn?.items?.length
-          ? turn.items
-          : (detail.items ?? []).filter((item) => item.turnId === turnId)
-        const artifactEvent: DomainAgentArtifactEvent = Object.freeze({
-          contractVersion: 1,
-          kind: 'turn-completed',
-          runtimeId: adapter.id,
-          threadId,
-          turnId,
-          targetWatermark: event.seq === undefined
-            ? String(detail.latestSeq || turnId)
-            : String(event.seq),
-          ...(event.seq === undefined ? {} : { sequence: event.seq }),
-          ...(workspaceRoot ? { workspaceRoot } : {}),
-          occurredAt: event.createdAt || turn?.completedAt || new Date().toISOString(),
-          artifacts: Object.freeze([...artifacts])
-        })
-        await Promise.allSettled(consumers.map((consumer) => consumer.consume(artifactEvent)))
-      } catch {
-        // A failed materialization can be retried by replaying the completed event.
-        this.artifactBroadcastTurns.delete(key)
-      }
-    })()
+  /** Materializes one already-durable turn intent exactly once before fan-out. */
+  async materializeCompletedTurnArtifact(
+    intent: TurnArtifactIntent
+  ): Promise<DomainTurnArtifactEvent> {
+    const runtimeId = optionalRuntimeId(intent.runtimeId)
+    if (!runtimeId) throw new Error(`Unsupported Agent runtime: ${intent.runtimeId}`)
+    const { adapter, context } = await this.resolveRequiredRuntime(runtimeId, intent.threadId)
+    const detail = await adapter.readThread(context, {
+      runtimeId,
+      threadId: intent.threadId
+    })
+    if (detail.id.trim() !== intent.threadId || detail.runtimeId !== runtimeId) {
+      throw new Error(
+        `Completed Agent turn ${runtimeId}:${intent.threadId}:${intent.turnId} resolved to a different thread.`
+      )
+    }
+    const turn = detail.turns?.find((candidate) => candidate.id === intent.turnId)
+    const latestTurnMatches = detail.latestTurnId?.trim() === intent.turnId
+    const turnState = normalizeAgentRuntimeTurnState(
+      turn?.status ?? (latestTurnMatches ? detail.latestTurnStatus : undefined)
+    )
+    if (turnState !== 'completed') {
+      throw new Error(
+        `Completed Agent turn ${runtimeId}:${intent.threadId}:${intent.turnId} is not durably completed yet.`
+      )
+    }
+    if (
+      intent.sequence !== undefined &&
+      (!Number.isSafeInteger(detail.latestSeq) || detail.latestSeq < intent.sequence)
+    ) {
+      throw new Error(
+        `Completed Agent turn ${runtimeId}:${intent.threadId}:${intent.turnId} has not reached sequence ${intent.sequence}.`
+      )
+    }
+    const artifacts = turn?.items?.length
+      ? turn.items
+      : (detail.items ?? []).filter((item) => item.turnId === intent.turnId)
+    if (!artifacts.length) {
+      throw new Error(
+        `Completed Agent turn ${runtimeId}:${intent.threadId}:${intent.turnId} is not materialized yet.`
+      )
+    }
+    const workspaceRoot = detail.workspace?.trim()
+    if (!workspaceRoot) {
+      throw new Error(
+        `Completed Agent turn ${runtimeId}:${intent.threadId}:${intent.turnId} has no authoritative workspace.`
+      )
+    }
+    if (
+      intent.workspaceRoot &&
+      path.resolve(intent.workspaceRoot) !== path.resolve(workspaceRoot)
+    ) {
+      throw new Error(
+        `Completed Agent turn ${runtimeId}:${intent.threadId}:${intent.turnId} changed workspace before materialization.`
+      )
+    }
+    return Object.freeze({
+      contractVersion: 1,
+      kind: 'turn-completed',
+      runtimeId,
+      threadId: intent.threadId,
+      turnId: intent.turnId,
+      targetWatermark: String(intent.sequence ?? intent.turnId),
+      ...(intent.sequence === undefined ? {} : { sequence: intent.sequence }),
+      workspaceRoot,
+      occurredAt: intent.occurredAt,
+      artifacts: Object.freeze([...artifacts])
+    })
   }
 }
 
@@ -3245,6 +3283,19 @@ function nullableString(value: unknown): string | null {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function durableTurnOccurredAt(event: AgentRuntimeEvent): string {
+  const createdAt = event.createdAt?.trim()
+  if (createdAt && Number.isFinite(Date.parse(createdAt))) {
+    return new Date(createdAt).toISOString()
+  }
+  const sequence = typeof event.seq === 'number' &&
+    Number.isSafeInteger(event.seq) &&
+    event.seq >= 0
+    ? Math.min(event.seq, 8_640_000_000_000_000)
+    : 0
+  return new Date(sequence).toISOString()
 }
 
 function optionalRuntimeId(value: unknown): AgentRuntimeId | undefined {

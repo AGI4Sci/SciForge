@@ -1,0 +1,432 @@
+{
+  "dsv": 1,
+  "kind": "workflow",
+  "app": "sciforge",
+  "exportedAt": "2026-08-06T10:00:00.000Z",
+  "workflow": {
+    "id": "workflow-reproducible-dag-v3-demo",
+    "name": "DAG v3 复杂可复跑演示",
+    "enabled": false,
+    "callableByAgent": false,
+    "env": [
+      {
+        "key": "DEMO_PROFILE",
+        "type": "string",
+        "value": "controlled"
+      },
+      {
+        "key": "DEMO_TIMEZONE",
+        "type": "string",
+        "value": "UTC"
+      },
+      {
+        "key": "DEMO_RUNTIME",
+        "type": "string",
+        "value": "javascript-vm"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "demo-input",
+        "type": "manual-trigger",
+        "name": "01 固定输入 Input",
+        "position": {
+          "x": 40,
+          "y": 260
+        },
+        "disabled": false,
+        "config": {
+          "workspaceRoot": "",
+          "inputSchema": [
+            {
+              "key": "sampleId",
+              "label": "样本标识",
+              "type": "text",
+              "required": true,
+              "options": [],
+              "defaultValue": "controlled-sample-A",
+              "description": "固定输入身份，用于复跑时验证输入指纹。"
+            },
+            {
+              "key": "baselineScore",
+              "label": "基线分数",
+              "type": "number",
+              "required": true,
+              "options": [],
+              "defaultValue": "100",
+              "description": "被比较的基线值。"
+            },
+            {
+              "key": "observedScore",
+              "label": "观测分数",
+              "type": "number",
+              "required": true,
+              "options": [],
+              "defaultValue": "99.96",
+              "description": "确定性分析产生的观测值。"
+            },
+            {
+              "key": "tolerance",
+              "label": "解释容差",
+              "type": "number",
+              "required": true,
+              "options": [],
+              "defaultValue": "0.1",
+              "description": "容差比较工具使用的显式参数。"
+            },
+            {
+              "key": "comparisonMode",
+              "label": "比较策略",
+              "type": "select",
+              "required": true,
+              "options": [
+                "exact",
+                "tolerance"
+              ],
+              "defaultValue": "tolerance",
+              "description": "在精确比较和容差比较两条工具路径之间路由。"
+            }
+          ]
+        }
+      },
+      {
+        "id": "demo-parameters",
+        "type": "set-fields",
+        "name": "02 固定参数 Parameter",
+        "position": {
+          "x": 300,
+          "y": 260
+        },
+        "disabled": false,
+        "config": {
+          "fields": [
+            {
+              "key": "randomSeed",
+              "value": "20260805"
+            },
+            {
+              "key": "precision",
+              "value": "2"
+            },
+            {
+              "key": "reproSchema",
+              "value": "sciforge.rerun.v1"
+            },
+            {
+              "key": "profile",
+              "value": "controlled"
+            }
+          ],
+          "keepIncoming": true,
+          "scope": "payload"
+        }
+      },
+      {
+        "id": "demo-environment",
+        "type": "code",
+        "name": "03 冻结环境 Environment",
+        "position": {
+          "x": 560,
+          "y": 260
+        },
+        "disabled": false,
+        "config": {
+          "language": "javascript",
+          "code": "return {\n  ...$json,\n  environment: {\n    profile: 'controlled',\n    runtime: 'javascript-vm',\n    timezone: 'UTC',\n    locale: 'C',\n    architecture: 'portable',\n    dependencyLock: 'sciforge-create-loop@1.0.0'\n  }\n};"
+        }
+      },
+      {
+        "id": "demo-code",
+        "type": "code",
+        "name": "04 代码快照 Code",
+        "position": {
+          "x": 820,
+          "y": 260
+        },
+        "disabled": false,
+        "config": {
+          "language": "javascript",
+          "code": "const baselineScore = Number($json.baselineScore ?? 100);\nconst observedScore = Number($json.observedScore ?? baselineScore);\nconst tolerance = Number($json.tolerance ?? 0.1);\nreturn {\n  ...$json,\n  baselineScore,\n  observedScore,\n  tolerance,\n  parameters: {\n    randomSeed: Number($json.randomSeed ?? 20260805),\n    precision: Number($json.precision ?? 2),\n    comparisonMode: String($json.comparisonMode ?? 'tolerance'),\n    tolerance\n  },\n  codeSnapshot: {\n    id: 'code:dag-v3-difference-v2',\n    language: 'javascript',\n    version: '2.0.0',\n    algorithm: 'absolute-difference-v1',\n    contentDigest: 'sha256:79cbf430cbf0e6f189064a91c5f8eac35bdc303eb56099177207772a06723e47'\n  }\n};"
+        }
+      },
+      {
+        "id": "demo-strategy",
+        "type": "switch",
+        "name": "05 复跑策略 Branch",
+        "position": {
+          "x": 1080,
+          "y": 260
+        },
+        "disabled": false,
+        "config": {
+          "rules": [
+            {
+              "leftExpr": "json.comparisonMode",
+              "operator": "equals",
+              "rightValue": "exact",
+              "caseSensitive": false
+            },
+            {
+              "leftExpr": "json.comparisonMode",
+              "operator": "equals",
+              "rightValue": "tolerance",
+              "caseSensitive": false
+            }
+          ],
+          "fallback": true
+        }
+      },
+      {
+        "id": "demo-tool-exact",
+        "type": "code",
+        "name": "06A 精确比较 Tool",
+        "position": {
+          "x": 1340,
+          "y": 120
+        },
+        "disabled": false,
+        "config": {
+          "language": "javascript",
+          "code": "const delta = Math.round(Math.abs(Number($json.observedScore) - Number($json.baselineScore)) * 1000000) / 1000000;\nconst passed = delta === 0;\nreturn {\n  ...$json,\n  tool: {\n    id: 'tool:exact-comparator-v1',\n    name: 'Exact comparator',\n    version: '1.0.0',\n    contentDigest: 'sha256:36393db7e722d7040809c53d9a5b1d969a076a332fcc4bae51a52a1b949b32a7'\n  },\n  comparison: {\n    mode: 'exact',\n    comparator: 'exact-digest',\n    baseline: Number($json.baselineScore),\n    observed: Number($json.observedScore),\n    delta,\n    tolerance: 0,\n    passed,\n    reasonCode: passed ? 'exact_match' : 'exact_value_changed'\n  }\n};"
+        }
+      },
+      {
+        "id": "demo-tool-tolerance",
+        "type": "code",
+        "name": "06B 容差比较 Tool",
+        "position": {
+          "x": 1340,
+          "y": 400
+        },
+        "disabled": false,
+        "config": {
+          "language": "javascript",
+          "code": "const tolerance = Number($json.tolerance);\nconst delta = Math.round(Math.abs(Number($json.observedScore) - Number($json.baselineScore)) * 1000000) / 1000000;\nconst passed = delta <= tolerance;\nreturn {\n  ...$json,\n  tool: {\n    id: 'tool:tolerance-comparator-v1',\n    name: 'Tolerance comparator',\n    version: '1.0.0',\n    contentDigest: 'sha256:01a6628819acf60b29f5afc1ebe573cd813e1ba04dc4c38d57f00b2d16a98d6f'\n  },\n  comparison: {\n    mode: 'tolerance',\n    comparator: 'numeric-absolute-tolerance',\n    baseline: Number($json.baselineScore),\n    observed: Number($json.observedScore),\n    delta,\n    tolerance,\n    passed,\n    reasonCode: passed ? 'within_tolerance' : 'outside_tolerance'\n  }\n};"
+        }
+      },
+      {
+        "id": "demo-comparison-merge",
+        "type": "merge",
+        "name": "07 比较结果 Merge",
+        "position": {
+          "x": 1600,
+          "y": 260
+        },
+        "disabled": false,
+        "config": {
+          "mode": "object"
+        }
+      },
+      {
+        "id": "demo-quality-gate",
+        "type": "condition",
+        "name": "08 质量门 Condition",
+        "position": {
+          "x": 1860,
+          "y": 260
+        },
+        "disabled": false,
+        "config": {
+          "leftExpr": "json.comparison.passed",
+          "operator": "equals",
+          "rightValue": "true",
+          "caseSensitive": false
+        }
+      },
+      {
+        "id": "demo-artifact-match",
+        "type": "code",
+        "name": "09A 匹配 Artifact",
+        "position": {
+          "x": 2120,
+          "y": 120
+        },
+        "disabled": false,
+        "config": {
+          "language": "javascript",
+          "code": "const artifactUri = 'urn:sciforge:artifact:dag-v3-controlled-report:v2';\nconst contentDigest = 'sha256:40d20ecadee0e7b143c36afe7665e8bb331be9e2a288cbf532cd735230763de1';\nconst score = Number($json.observedScore);\nconst comparisonName = `${$json.comparison.comparator}: delta=${$json.comparison.delta}`;\nreturn {\n  ...$json,\n  artifactUri,\n  contentDigest,\n  mediaType: 'application/vnd.sciforge.reproducibility+json',\n  artifact: {\n    id: 'artifact:dag-v3-controlled-report-v2',\n    status: 'matched',\n    comparison: $json.comparison\n  },\n  evidenceLineage: {\n    evidence: [\n      {\n        id: 'evidence:dag-v3-controlled-score',\n        type: 'finding',\n        name: `固定输入产生分数 ${score}`,\n        score,\n        sampleId: String($json.sampleId)\n      },\n      {\n        id: 'evidence:dag-v3-comparison-match',\n        type: 'observation',\n        name: comparisonName,\n        comparator: $json.comparison.comparator,\n        delta: $json.comparison.delta,\n        tolerance: $json.comparison.tolerance\n      },\n      {\n        id: 'evidence:dag-v3-controlled-artifact',\n        type: 'artifact',\n        name: 'DAG v3 确定性比较报告',\n        artifact: {\n          kind: 'analysis-result',\n          locator: artifactUri,\n          contentDigest,\n          version: '2',\n          mediaType: 'application/vnd.sciforge.reproducibility+json',\n          retention: 'reference'\n        }\n      },\n      {\n        id: 'evidence:dag-v3-environment-lock',\n        type: 'observation',\n        name: '受控环境与依赖锁已固定',\n        environment: $json.environment,\n        codeDigest: $json.codeSnapshot.contentDigest\n      }\n    ],\n    conclusions: [\n      {\n        id: 'conclusion:dag-v3-controlled-rerun',\n        name: '该结论可追溯到完整执行证据并可按规范重跑',\n        replicationStatus: 'matched'\n      },\n      {\n        id: 'conclusion:dag-v3-evidence-package-complete',\n        name: '输入、环境、代码、工具与 Artifact 证据包完整',\n        evidenceCount: 4\n      }\n    ],\n    relations: [\n      {\n        src: 'evidence:dag-v3-controlled-score',\n        dst: 'conclusion:dag-v3-controlled-rerun',\n        rel: 'supports'\n      },\n      {\n        src: 'evidence:dag-v3-comparison-match',\n        dst: 'conclusion:dag-v3-controlled-rerun',\n        rel: 'supports'\n      },\n      {\n        src: 'evidence:dag-v3-controlled-artifact',\n        dst: 'conclusion:dag-v3-evidence-package-complete',\n        rel: 'supports'\n      },\n      {\n        src: 'evidence:dag-v3-environment-lock',\n        dst: 'conclusion:dag-v3-evidence-package-complete',\n        rel: 'supports'\n      },\n      {\n        src: 'conclusion:dag-v3-evidence-package-complete',\n        dst: 'conclusion:dag-v3-controlled-rerun',\n        rel: 'prerequisite'\n      },\n      {\n        src: 'evidence:dag-v3-comparison-match',\n        dst: 'evidence:dag-v3-controlled-score',\n        rel: 'refines'\n      },\n      {\n        src: 'evidence:dag-v3-controlled-artifact',\n        dst: 'evidence:dag-v3-comparison-match',\n        rel: 'derived_from'\n      }\n    ]\n  }\n};"
+        }
+      },
+      {
+        "id": "demo-artifact-deviation",
+        "type": "code",
+        "name": "09B 差异 Artifact",
+        "position": {
+          "x": 2120,
+          "y": 400
+        },
+        "disabled": false,
+        "config": {
+          "language": "javascript",
+          "code": "const artifactUri = 'urn:sciforge:artifact:dag-v3-deviation-report:v2';\nconst contentDigest = 'sha256:07b0a3f215f63fdd13f180f46a5fb6b498d23b1d3c835fafcf36be82f4f4f216';\nconst score = Number($json.observedScore);\nreturn {\n  ...$json,\n  artifactUri,\n  contentDigest,\n  mediaType: 'application/vnd.sciforge.reproducibility+json',\n  artifact: {\n    id: 'artifact:dag-v3-deviation-report-v2',\n    status: 'different',\n    comparison: $json.comparison\n  },\n  evidenceLineage: {\n    evidence: [\n      {\n        id: 'evidence:dag-v3-controlled-score',\n        type: 'finding',\n        name: `固定输入产生分数 ${score}`,\n        score,\n        sampleId: String($json.sampleId)\n      },\n      {\n        id: 'evidence:dag-v3-comparison-difference',\n        type: 'observation',\n        name: `比较差异 delta=${$json.comparison.delta}`,\n        comparator: $json.comparison.comparator,\n        reasonCode: $json.comparison.reasonCode\n      },\n      {\n        id: 'evidence:dag-v3-deviation-artifact',\n        type: 'artifact',\n        name: 'DAG v3 可解释差异报告',\n        artifact: {\n          kind: 'analysis-result',\n          locator: artifactUri,\n          contentDigest,\n          version: '2',\n          mediaType: 'application/vnd.sciforge.reproducibility+json',\n          retention: 'reference'\n        }\n      },\n      {\n        id: 'evidence:dag-v3-environment-lock',\n        type: 'observation',\n        name: '受控环境与依赖锁已固定',\n        environment: $json.environment,\n        codeDigest: $json.codeSnapshot.contentDigest\n      }\n    ],\n    conclusions: [\n      {\n        id: 'conclusion:dag-v3-controlled-difference',\n        name: '本次结果与基线存在可解释差异',\n        replicationStatus: 'different'\n      },\n      {\n        id: 'conclusion:dag-v3-evidence-review-required',\n        name: '证据包完整，但发布前需要复核差异原因',\n        evidenceCount: 4\n      }\n    ],\n    relations: [\n      {\n        src: 'evidence:dag-v3-controlled-score',\n        dst: 'conclusion:dag-v3-controlled-difference',\n        rel: 'supports'\n      },\n      {\n        src: 'evidence:dag-v3-comparison-difference',\n        dst: 'conclusion:dag-v3-controlled-difference',\n        rel: 'supports'\n      },\n      {\n        src: 'evidence:dag-v3-deviation-artifact',\n        dst: 'conclusion:dag-v3-evidence-review-required',\n        rel: 'supports'\n      },\n      {\n        src: 'evidence:dag-v3-environment-lock',\n        dst: 'conclusion:dag-v3-evidence-review-required',\n        rel: 'supports'\n      },\n      {\n        src: 'conclusion:dag-v3-evidence-review-required',\n        dst: 'conclusion:dag-v3-controlled-difference',\n        rel: 'prerequisite'\n      },\n      {\n        src: 'evidence:dag-v3-comparison-difference',\n        dst: 'evidence:dag-v3-controlled-score',\n        rel: 'refines'\n      },\n      {\n        src: 'evidence:dag-v3-deviation-artifact',\n        dst: 'evidence:dag-v3-comparison-difference',\n        rel: 'derived_from'\n      }\n    ]\n  }\n};"
+        }
+      },
+      {
+        "id": "demo-evidence-merge",
+        "type": "code",
+        "name": "10 证据绑定 Evidence",
+        "position": {
+          "x": 2380,
+          "y": 260
+        },
+        "disabled": false,
+        "config": {
+          "language": "javascript",
+          "code": "const lineage = $json.evidenceLineage ?? {};\nconst evidence = Array.isArray(lineage.evidence) ? lineage.evidence : [];\nconst normalizedEvidence = evidence.map((item) => {\n  if (item?.type !== 'artifact' || !item.artifact) return item;\n  const locator = String(item.artifact.locator ?? '').replace(\n    'urn:sciforge:artifact:',\n    'runtime:sciforge.create-loop/'\n  );\n  return {\n    ...item,\n    artifact: {\n      ...item.artifact,\n      kind: 'other',\n      locator\n    }\n  };\n});\nconst generatedBy = normalizedEvidence.map((item) => ({\n  src: item.id,\n  dst: '$execution',\n  rel: 'generated_by'\n}));\nreturn {\n  ...$json,\n  evidenceLineage: {\n    ...lineage,\n    evidence: normalizedEvidence,\n    relations: [...(lineage.relations ?? []), ...generatedBy]\n  }\n};"
+        }
+      },
+      {
+        "id": "demo-approval",
+        "type": "human-approval",
+        "name": "11 发布审批 Approval",
+        "position": {
+          "x": 2640,
+          "y": 260
+        },
+        "disabled": false,
+        "config": {
+          "title": "确认 DAG v3 复跑证据包",
+          "instruction": "请检查固定输入、参数、环境、代码、比较工具、Artifact 与 Evidence 后再发布 Conclusion；每次复跑都必须重新审批。",
+          "timeoutMs": 0,
+          "onTimeout": "rejected"
+        }
+      },
+      {
+        "id": "demo-output",
+        "type": "output",
+        "name": "12 可追溯结论 Conclusion",
+        "position": {
+          "x": 2910,
+          "y": 260
+        },
+        "disabled": false,
+        "config": {
+          "mode": "auto",
+          "textTemplate": "",
+          "jsonPath": ""
+        }
+      }
+    ],
+    "connections": [
+      {
+        "id": "edge-input-parameters",
+        "source": "demo-input",
+        "sourceHandle": "out",
+        "target": "demo-parameters",
+        "targetHandle": "in"
+      },
+      {
+        "id": "edge-parameters-environment",
+        "source": "demo-parameters",
+        "sourceHandle": "out",
+        "target": "demo-environment",
+        "targetHandle": "in"
+      },
+      {
+        "id": "edge-environment-code",
+        "source": "demo-environment",
+        "sourceHandle": "out",
+        "target": "demo-code",
+        "targetHandle": "in"
+      },
+      {
+        "id": "edge-code-strategy",
+        "source": "demo-code",
+        "sourceHandle": "out",
+        "target": "demo-strategy",
+        "targetHandle": "in"
+      },
+      {
+        "id": "edge-strategy-exact",
+        "source": "demo-strategy",
+        "sourceHandle": "case-0",
+        "target": "demo-tool-exact",
+        "targetHandle": "in"
+      },
+      {
+        "id": "edge-strategy-tolerance",
+        "source": "demo-strategy",
+        "sourceHandle": "case-1",
+        "target": "demo-tool-tolerance",
+        "targetHandle": "in"
+      },
+      {
+        "id": "edge-strategy-fallback",
+        "source": "demo-strategy",
+        "sourceHandle": "fallback",
+        "target": "demo-tool-tolerance",
+        "targetHandle": "in"
+      },
+      {
+        "id": "edge-exact-comparison-merge",
+        "source": "demo-tool-exact",
+        "sourceHandle": "out",
+        "target": "demo-comparison-merge",
+        "targetHandle": "in"
+      },
+      {
+        "id": "edge-tolerance-comparison-merge",
+        "source": "demo-tool-tolerance",
+        "sourceHandle": "out",
+        "target": "demo-comparison-merge",
+        "targetHandle": "in"
+      },
+      {
+        "id": "edge-comparison-merge-quality",
+        "source": "demo-comparison-merge",
+        "sourceHandle": "out",
+        "target": "demo-quality-gate",
+        "targetHandle": "in"
+      },
+      {
+        "id": "edge-quality-match",
+        "source": "demo-quality-gate",
+        "sourceHandle": "true",
+        "target": "demo-artifact-match",
+        "targetHandle": "in"
+      },
+      {
+        "id": "edge-quality-deviation",
+        "source": "demo-quality-gate",
+        "sourceHandle": "false",
+        "target": "demo-artifact-deviation",
+        "targetHandle": "in"
+      },
+      {
+        "id": "edge-match-evidence-merge",
+        "source": "demo-artifact-match",
+        "sourceHandle": "out",
+        "target": "demo-evidence-merge",
+        "targetHandle": "in"
+      },
+      {
+        "id": "edge-deviation-evidence-merge",
+        "source": "demo-artifact-deviation",
+        "sourceHandle": "out",
+        "target": "demo-evidence-merge",
+        "targetHandle": "in"
+      },
+      {
+        "id": "edge-evidence-approval",
+        "source": "demo-evidence-merge",
+        "sourceHandle": "out",
+        "target": "demo-approval",
+        "targetHandle": "in"
+      },
+      {
+        "id": "edge-approval-output",
+        "source": "demo-approval",
+        "sourceHandle": "approved",
+        "target": "demo-output",
+        "targetHandle": "in"
+      }
+    ],
+    "createdAt": "2026-08-06T10:00:00.000Z",
+    "updatedAt": "2026-08-06T10:00:00.000Z",
+    "lastRunAt": "",
+    "nextRunAt": "",
+    "lastStatus": "idle",
+    "lastMessage": "",
+    "runs": []
+  }
+}

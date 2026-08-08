@@ -13,6 +13,7 @@
   },
   "files": [
     "src",
+    "samples",
     "sciforge.domain.json",
     "package.json",
     "README.md"

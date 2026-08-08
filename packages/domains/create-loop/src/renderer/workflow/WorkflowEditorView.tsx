@@ -23,7 +23,10 @@ import type {
   WorkflowNodeV1,
   WorkflowV1
 } from '../../contract.js'
-import type { CreateLoopRendererSettings } from '../runtime-bridge.js'
+import {
+  useCreateLoopRuntime,
+  type CreateLoopRendererSettings
+} from '../runtime-bridge.js'
 import {
   NODE_ICONS,
   WorkflowNodeActionsContext,
@@ -124,6 +127,7 @@ function WorkflowEditorInner({
   onBack
 }: Props): ReactElement {
   const { t } = useTranslation('common')
+  const runtime = useCreateLoopRuntime()
   const [name, setName] = useState(workflow.name)
   const [enabled, setEnabled] = useState(workflow.enabled)
   const [nodes, setNodes] = useState<WorkflowFlowNode[]>(() => toFlowNodes(workflow.nodes))
@@ -419,7 +423,14 @@ function WorkflowEditorInner({
       </div>
 
       {historyOpen ? (
-        <WorkflowRunHistory runs={workflow.runs} nodes={flowToWorkflowGraph(nodes, edges).nodes} onClose={() => setHistoryOpen(false)} />
+        <WorkflowRunHistory
+          workspaceRoot={settings.workspaceRoot}
+          workflowId={workflow.id}
+          runtime={runtime}
+          runs={workflow.runs}
+          nodes={flowToWorkflowGraph(nodes, edges).nodes}
+          onClose={() => setHistoryOpen(false)}
+        />
       ) : null}
     </div>
   )

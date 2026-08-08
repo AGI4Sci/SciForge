@@ -60,6 +60,7 @@ import {
   domainPackagePublisherIdSchema,
   domainPackageVersionSchema
 } from '@sciforge/domain-sdk'
+import { TRACE_EVENT_KINDS } from '@sciforge/full-trace'
 import {
   WORKSPACE_HOST_LIMITS,
   workspaceHostResumeSchema,
@@ -181,16 +182,7 @@ const agentThreadIdsSchema = z.object({
   claude: z.string().max(MAX_ID_LENGTH).optional()
 }).strict()
 const agentRuntimeGovernanceProfileSchema = z.enum(['default', 'write', 'remote_guard'])
-const traceEventKindSchema = z.enum([
-  'model_request',
-  'model_response_headers',
-  'model_response_chunk',
-  'model_response_end',
-  'agent_event',
-  'usage',
-  'error',
-  'lifecycle'
-])
+const traceEventKindSchema = z.enum(TRACE_EVENT_KINDS)
 const traceIdListSchema = z.array(trimmedString(MAX_ID_LENGTH)).max(500).optional()
 const traceQueryFields = {
   traceIds: traceIdListSchema,
@@ -207,7 +199,7 @@ const traceQueryFields = {
 export const traceReadPayloadSchema = z.object({
   ...traceQueryFields,
   requestId: optionalTrimmedString(MAX_ID_LENGTH),
-  kinds: z.array(traceEventKindSchema).max(8).optional()
+  kinds: z.array(traceEventKindSchema).max(TRACE_EVENT_KINDS.length).optional()
 }).strict()
 
 export const traceSummariesPayloadSchema = z.object(traceQueryFields).strict()

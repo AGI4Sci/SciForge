@@ -29,6 +29,22 @@ EVIDENTIAL_RELS = {EdgeRel.SUPPORTS}
 _LAYOUT_RELS = EVIDENTIAL_RELS | {EdgeRel.REFINES, EdgeRel.PREREQUISITE}
 
 
+def _valid_sha256(value: object) -> bool:
+    if not isinstance(value, str) or not value.startswith("sha256:"):
+        return False
+    digest = value[7:]
+    return len(digest) == 64 and all(char in "0123456789abcdef" for char in digest)
+
+
+def _approval_accepted(node: Node) -> bool:
+    values = [
+        str(node.attributes[key]).strip().lower()
+        for key in ("observedStatus", "observedDecision", "status", "decision")
+        if node.attributes.get(key) not in (None, "")
+    ]
+    return bool(values) and all(value in {"approve", "approved"} for value in values)
+
+
 class ThreadGraph:
     def __init__(self, thread_id: str, meta: Optional[dict] = None) -> None:
         self.thread_id = thread_id
@@ -355,6 +371,7 @@ class ThreadGraph:
                         neighbor = edge.dst
                     elif edge.dst == current and self.nodes[current].type in {
                         NodeType.EXPERIMENT_RUN, NodeType.ANALYSIS_RUN,
+                        NodeType.WORKFLOW_RUN, NodeType.TOOL_INVOCATION,
                     }:
                         neighbor = edge.src
                 elif edge.rel in {EdgeRel.REPLICATES, EdgeRel.FAILS_TO_REPLICATE}:
@@ -471,6 +488,299 @@ class ThreadGraph:
                             if a.target_id in seen_nodes or a.target_id in seen_edge_ids],
         }
 
+    def conclusion_lineage(self, node_id: str) -> dict:
+        """Return the complete, deterministic lineage for one conclusion.
+
+        Unlike the legacy support-only ``provenance_path`` view, this view keeps
+        supporting, contradicting, qualifying, and prerequisite evidence, then
+        follows the selected evidence through activities, exact inputs, code,
+        parameters, environment, tools, approvals, and ArtifactVersions.
+        """
+        if node_id not in self.nodes:
+            raise KeyError(node_id)
+        root = self.nodes[node_id]
+        if root.type not in {NodeType.CLAIM, NodeType.CONCLUSION, NodeType.FINDING} \
+                and root.attributes.get("semanticRole") != "conclusion":
+            raise ValueError("conclusion lineage requires a conclusion-like node")
+
+        by_src, by_dst = self._edge_indexes()
+        semantic_rels = {
+            EdgeRel.SUPPORTS, EdgeRel.CONTRADICTS,
+            EdgeRel.REFINES, EdgeRel.PREREQUISITE,
+        }
+        activity_types = {
+            NodeType.EXPERIMENT_RUN, NodeType.ANALYSIS_RUN,
+            NodeType.WORKFLOW_RUN, NodeType.TOOL_INVOCATION,
+        }
+        lineage_rels = {
+            EdgeRel.GENERATED_BY, EdgeRel.USED, EdgeRel.DERIVED_FROM,
+            EdgeRel.EXTRACTED_FROM,
+            EdgeRel.ASSOCIATED_WITH, EdgeRel.ATTRIBUTED_TO,
+            EdgeRel.VERSION_OF, EdgeRel.SUPERSEDES,
+            EdgeRel.PART_OF, EdgeRel.AUTHORIZED_BY, EdgeRel.RERUN_OF,
+            EdgeRel.REPLICATES, EdgeRel.FAILS_TO_REPLICATE,
+        }
+
+        seen_nodes: set[str] = {node_id}
+        selected_edges: dict[str, Edge] = {}
+        attempt_node_ids: set[str] = set()
+        attempt_edges: dict[str, Edge] = {}
+        stack = [node_id]
+        while stack:
+            current = stack.pop()
+            for edge in by_dst.get(current, ()):
+                if edge.rel not in semantic_rels:
+                    continue
+                selected_edges[edge.id] = edge
+                if edge.src not in seen_nodes:
+                    seen_nodes.add(edge.src)
+                    stack.append(edge.src)
+
+        lineage_stack = list(seen_nodes)
+        expanded: set[str] = set()
+        while lineage_stack:
+            current = lineage_stack.pop()
+            if current in expanded:
+                continue
+            expanded.add(current)
+            current_type = self.nodes[current].type
+            for edge in (*by_src.get(current, ()), *by_dst.get(current, ())):
+                if edge.rel not in lineage_rels:
+                    continue
+                neighbor: Optional[str] = None
+                if edge.rel == EdgeRel.GENERATED_BY:
+                    if edge.src == current:
+                        neighbor = edge.dst
+                    elif edge.dst == current and current_type in activity_types:
+                        neighbor = edge.src
+                elif edge.rel == EdgeRel.PART_OF:
+                    if edge.src == current:
+                        neighbor = edge.dst
+                    elif edge.dst == current and current_type in activity_types:
+                        neighbor = edge.src
+                elif edge.rel in {
+                    EdgeRel.RERUN_OF, EdgeRel.REPLICATES, EdgeRel.FAILS_TO_REPLICATE,
+                }:
+                    # Attempt history is audit context, not a baseline
+                    # prerequisite. Only a positively matched replication joins
+                    # the structural closure; failed/inconclusive attempts remain
+                    # visible in the separate attemptHistory projection below.
+                    if edge.dst == current:
+                        attempt_node_ids.add(edge.src)
+                        attempt_edges[edge.id] = edge
+                        if edge.rel == EdgeRel.REPLICATES:
+                            neighbor = edge.src
+                elif edge.src == current:
+                    neighbor = edge.dst
+                if neighbor is None:
+                    continue
+                selected_edges[edge.id] = edge
+                if neighbor not in seen_nodes:
+                    seen_nodes.add(neighbor)
+                    lineage_stack.append(neighbor)
+
+        def role(node: Node) -> Optional[str]:
+            value = node.attributes.get("semanticRole")
+            return str(value) if isinstance(value, str) and value else None
+
+        evidence_ids = sorted(
+            nid for nid in seen_nodes
+            if role(self.nodes[nid]) == "evidence" or self.nodes[nid].type in {
+                NodeType.SOURCE_ASSERTION, NodeType.FINDING, NodeType.OBSERVATION,
+            }
+        )
+        conclusion_ids = sorted(
+            nid for nid in seen_nodes
+            if role(self.nodes[nid]) == "conclusion" or self.nodes[nid].type in {
+                NodeType.CLAIM, NodeType.CONCLUSION,
+            }
+        )
+
+        artifact_ids = {
+            self.nodes[nid].artifact_id for nid in seen_nodes if self.nodes[nid].artifact_id
+        }
+        version_ids = {
+            self.nodes[nid].artifact_version_id for nid in seen_nodes
+            if self.nodes[nid].artifact_version_id
+        }
+        anchor_ids = {
+            self.nodes[nid].source_anchor_id for nid in seen_nodes
+            if self.nodes[nid].source_anchor_id
+        }
+
+        grounded_terminals: set[str] = set()
+        invalid_artifact_nodes: list[str] = []
+        for nid in sorted(seen_nodes):
+            node = self.nodes[nid]
+            if node.type == NodeType.OBSERVATION and all(
+                key in node.attributes for key in ("value", "unit", "observedAt")
+            ):
+                grounded_terminals.add(nid)
+            content_digest = node.attributes.get("contentDigest")
+            if _valid_sha256(content_digest):
+                grounded_terminals.add(nid)
+            if not node.artifact_id and not node.artifact_version_id:
+                continue
+            artifact = self.artifacts.get(node.artifact_id or "")
+            version = self.artifact_versions.get(node.artifact_version_id or "")
+            if artifact and version and version.artifact_id == artifact.artifact_id \
+                    and _valid_sha256(version.content_digest):
+                grounded_terminals.add(nid)
+            else:
+                invalid_artifact_nodes.append(nid)
+
+        adjacency: dict[str, set[str]] = {}
+        for edge in selected_edges.values():
+            if edge.rel in lineage_rels:
+                # Canonical lineage relations point from an entity/activity to
+                # the activity/entity it depends on.  Do not cross back through
+                # the conclusion and accidentally let one grounded Evidence
+                # item make every sibling look grounded.
+                adjacency.setdefault(edge.src, set()).add(edge.dst)
+
+        def connected_to_ground(nid: str) -> bool:
+            pending, visited = [nid], {nid}
+            while pending:
+                current = pending.pop()
+                if current in grounded_terminals:
+                    return True
+                for neighbor in adjacency.get(current, ()):
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        pending.append(neighbor)
+            return False
+
+        ungrounded_evidence = [nid for nid in evidence_ids if not connected_to_ground(nid)]
+        missing_approvals = []
+        unapproved_approvals = []
+        for nid in sorted(seen_nodes):
+            node = self.nodes[nid]
+            if node.type not in activity_types \
+                    or node.attributes.get("approvalRequired") is not True:
+                continue
+            approval_nodes = [
+                self.nodes[edge.dst] for edge in by_src.get(nid, ())
+                if edge.rel == EdgeRel.AUTHORIZED_BY
+                and edge.dst in self.nodes
+                and self.nodes[edge.dst].type == NodeType.APPROVAL_DECISION
+            ]
+            if not approval_nodes:
+                missing_approvals.append(nid)
+            elif not any(_approval_accepted(node) for node in approval_nodes):
+                unapproved_approvals.extend(node.id for node in approval_nodes)
+        unobserved_approvals = [
+            nid for nid in sorted(seen_nodes)
+            if self.nodes[nid].type == NodeType.APPROVAL_DECISION
+            and self.nodes[nid].attributes.get("freshDecisionRequired") is True
+            and "observedStatus" not in self.nodes[nid].attributes
+            and "observedDecision" not in self.nodes[nid].attributes
+        ]
+        failed_activities = [
+            nid for nid in sorted(seen_nodes)
+            if self.nodes[nid].type in activity_types
+            and str(self.nodes[nid].attributes.get("status") or "").strip().lower()
+            in {"failed", "error", "cancelled", "canceled", "interrupted", "inconclusive"}
+        ]
+
+        breakpoints: list[dict] = []
+        if not evidence_ids:
+            breakpoints.append({"component": "evidence", "reason": "evidence_not_linked", "nodeIds": []})
+        if ungrounded_evidence:
+            breakpoints.append({
+                "component": "evidence", "reason": "evidence_not_grounded",
+                "nodeIds": ungrounded_evidence,
+            })
+        if invalid_artifact_nodes:
+            breakpoints.append({
+                "component": "artifact", "reason": "artifact_version_unverifiable",
+                "nodeIds": invalid_artifact_nodes,
+            })
+        if missing_approvals:
+            breakpoints.append({
+                "component": "approval", "reason": "required_approval_not_linked",
+                "nodeIds": missing_approvals,
+            })
+        if unobserved_approvals:
+            breakpoints.append({
+                "component": "approval", "reason": "required_approval_not_observed",
+                "nodeIds": unobserved_approvals, "blocking": False,
+            })
+        if unapproved_approvals:
+            breakpoints.append({
+                "component": "approval", "reason": "required_approval_not_approved",
+                "nodeIds": sorted(set(unapproved_approvals)),
+            })
+        if failed_activities:
+            breakpoints.append({
+                "component": "execution", "reason": "prerequisite_execution_not_successful",
+                "nodeIds": failed_activities,
+            })
+
+        components = {
+            "inputs": sorted(nid for nid in seen_nodes if role(self.nodes[nid]) == "input"),
+            "code": sorted(nid for nid in seen_nodes if role(self.nodes[nid]) == "code"),
+            "environment": sorted(nid for nid in seen_nodes
+                                  if self.nodes[nid].type == NodeType.ENVIRONMENT),
+            "parameters": sorted(nid for nid in seen_nodes
+                                 if self.nodes[nid].type == NodeType.PARAMETER_SET),
+            "tools": sorted(nid for nid in seen_nodes
+                            if self.nodes[nid].type == NodeType.TOOL_INVOCATION),
+            "approvals": sorted(nid for nid in seen_nodes
+                                if self.nodes[nid].type == NodeType.APPROVAL_DECISION),
+            "artifacts": sorted(
+                nid for nid in seen_nodes
+                if self.nodes[nid].type == NodeType.ARTIFACT or self.nodes[nid].artifact_id
+            ),
+            "evidence": evidence_ids,
+            "conclusions": conclusion_ids,
+            "activities": sorted(nid for nid in seen_nodes
+                                 if self.nodes[nid].type in activity_types),
+        }
+        edge_ids = set(selected_edges)
+        structurally_complete = bool(evidence_ids) and not breakpoints
+        return {
+            "root": node_id,
+            "snapshotBound": True,
+            "nodes": [self.nodes[nid].to_dict() for nid in sorted(seen_nodes)],
+            "edges": [selected_edges[eid].to_dict() for eid in sorted(selected_edges)],
+            "artifactRegistry": {
+                "artifacts": [self.artifacts[item].to_dict() for item in sorted(artifact_ids)
+                              if item in self.artifacts],
+                "artifactVersions": [self.artifact_versions[item].to_dict()
+                                     for item in sorted(version_ids)
+                                     if item in self.artifact_versions],
+                "sourceAnchors": [self.source_anchors[item].to_dict() for item in sorted(anchor_ids)
+                                  if item in self.source_anchors],
+            },
+            "assessments": [item.to_dict() for item in self.assessments
+                            if item.target_id in seen_nodes or item.target_id in edge_ids],
+            "attemptHistory": {
+                "nodes": [self.nodes[nid].to_dict() for nid in sorted(attempt_node_ids)
+                          if nid in self.nodes],
+                "edges": [attempt_edges[eid].to_dict() for eid in sorted(attempt_edges)],
+                "includedInPrerequisiteClosure": sorted(
+                    edge.src for edge in attempt_edges.values()
+                    if edge.rel == EdgeRel.REPLICATES
+                ),
+            },
+            "coverage": {
+                "complete": structurally_complete,
+                "structuralClosureComplete": structurally_complete,
+                "scientificSufficiency": {
+                    "status": "not_assessed",
+                    "sufficient": None,
+                    "reason": "structural_lineage_does_not_establish_scientific_sufficiency",
+                },
+                "evidenceCount": len(evidence_ids),
+                "groundedEvidenceCount": len(evidence_ids) - len(ungrounded_evidence),
+                "groundingRatio": (
+                    (len(evidence_ids) - len(ungrounded_evidence)) / len(evidence_ids)
+                    if evidence_ids else 0.0
+                ),
+                "components": components,
+                "breakpoints": breakpoints,
+            },
+        }
     def incoming_supports(self, node_id: str) -> list[Edge]:
         return [e for e in self.edges_by_dst().get(node_id, ()) if e.rel in EVIDENTIAL_RELS]
 

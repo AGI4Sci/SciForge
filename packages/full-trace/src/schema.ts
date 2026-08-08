@@ -11,15 +11,19 @@ export const TRACE_CORRELATION_HEADERS = {
   parentRequestId: 'x-sciforge-parent-request-id'
 } as const
 
-export type TraceEventKind =
-  | 'model_request'
-  | 'model_response_headers'
-  | 'model_response_chunk'
-  | 'model_response_end'
-  | 'agent_event'
-  | 'usage'
-  | 'error'
-  | 'lifecycle'
+export const TRACE_EVENT_KINDS = [
+  'model_request',
+  'model_response_headers',
+  'model_response_chunk',
+  'model_response_end',
+  'agent_event',
+  'execution_event',
+  'usage',
+  'error',
+  'lifecycle'
+] as const
+
+export type TraceEventKind = (typeof TRACE_EVENT_KINDS)[number]
 
 export type AgentTraceEventKind =
   | 'lifecycle'
@@ -83,6 +87,22 @@ export type AgentTracePayload = {
   [key: string]: unknown
 }
 
+export type ExecutionTracePayload = {
+  schemaVersion: 'sciforge.execution-event.v1'
+  phase: string
+  producer: {
+    moduleId: string
+    moduleVersion: string
+  }
+  executionId: string
+  runId: string
+  activityId?: string
+  specDigest?: string
+  rerunOfRunId?: string
+  event: unknown
+  [key: string]: unknown
+}
+
 export type ErrorTracePayload = {
   message: string
   name?: string
@@ -104,6 +124,7 @@ export type TracePayloadByKind = {
   model_response_chunk: ModelResponseChunkTracePayload
   model_response_end: ModelResponseEndTracePayload
   agent_event: AgentTracePayload
+  execution_event: ExecutionTracePayload
   usage: TraceUsage
   error: ErrorTracePayload
   lifecycle: LifecycleTracePayload
@@ -138,6 +159,8 @@ export type TraceEvent = TraceCorrelation & {
 }
 
 export type TraceReadQuery = {
+  /** Bounded exact lookup used by durable Host recovery paths. */
+  eventIds?: readonly string[]
   traceIds?: readonly string[]
   runtimeId?: string
   threadId?: string
@@ -310,15 +333,21 @@ export function deriveTraceId(input: {
   return `trace_${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`
 }
 
+/** Derives the durable trace identity for a package-owned execution. */
+export function deriveExecutionTraceId(input: {
+  moduleId: string
+  executionId: string
+}): string {
+  assertNonEmpty('moduleId', input.moduleId)
+  assertNonEmpty('executionId', input.executionId)
+  const canonical = [input.moduleId, input.executionId]
+    .map((part) => `${Buffer.byteLength(part, 'utf8')}:${part}`)
+    .join('|')
+  return `trace_${createHash('sha256').update(`execution-v1|${canonical}`).digest('hex').slice(0, 32)}`
+}
+
 export function isTraceEventKind(value: unknown): value is TraceEventKind {
-  return value === 'model_request' ||
-    value === 'model_response_headers' ||
-    value === 'model_response_chunk' ||
-    value === 'model_response_end' ||
-    value === 'agent_event' ||
-    value === 'usage' ||
-    value === 'error' ||
-    value === 'lifecycle'
+  return typeof value === 'string' && (TRACE_EVENT_KINDS as readonly string[]).includes(value)
 }
 
 export function isTraceEvent(value: unknown): value is TraceEvent {
@@ -377,6 +406,16 @@ function payloadIsValid(kind: TraceEventKind, value: unknown): boolean {
       Object.hasOwn(value, 'body')
   }
   if (kind === 'agent_event') return isAgentTraceEventKind(value.eventKind) && Object.hasOwn(value, 'event')
+  if (kind === 'execution_event') {
+    return value.schemaVersion === 'sciforge.execution-event.v1' &&
+      typeof value.phase === 'string' && value.phase.length > 0 &&
+      isRecord(value.producer) &&
+      typeof value.producer.moduleId === 'string' && value.producer.moduleId.length > 0 &&
+      typeof value.producer.moduleVersion === 'string' && value.producer.moduleVersion.length > 0 &&
+      typeof value.executionId === 'string' && value.executionId.length > 0 &&
+      typeof value.runId === 'string' && value.runId.length > 0 &&
+      Object.hasOwn(value, 'event')
+  }
   if (kind === 'error') return typeof value.message === 'string'
   if (kind === 'lifecycle') return typeof value.phase === 'string' && value.phase.length > 0
   return true

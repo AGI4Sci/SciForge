@@ -1,5 +1,15 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rmdir,
+  stat,
+  writeFile
+} from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import test from 'node:test'
@@ -22,6 +32,35 @@ const snapshot: EvidenceDagCommittedSnapshot = {
   artifactDigests: [],
   createdAt: '2026-07-26T06:00:02.000Z'
 }
+
+test('coalescing preserves the maximum composite and batch watermark under reordering', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'evidence-domain-watermark-order-'))
+  const queue = new EvidenceDagQueue({
+    storagePath: join(root, 'queue.json'),
+    submit: async () => snapshot
+  })
+  await queue.start(false)
+
+  await queue.enqueue(queueInput('20:event-new'))
+  await queue.enqueue(queueInput('19:event-old'))
+  assert.equal(
+    (await queue.pending('codex', 'thread-1'))?.targetWatermark,
+    '20:event-new'
+  )
+
+  await queue.enqueue(queueInput('20:event-new:batch:3/4', 'normal', 'batch-thread'))
+  await queue.enqueue(queueInput('20:event-new:batch:1/4', 'normal', 'batch-thread'))
+  assert.equal(
+    (await queue.pending('codex', 'batch-thread'))?.targetWatermark,
+    '20:event-new:batch:3/4'
+  )
+  await queue.enqueue(queueInput('20:event-new:batch:4/4', 'normal', 'batch-thread'))
+  assert.equal(
+    (await queue.pending('codex', 'batch-thread'))?.targetWatermark,
+    '20:event-new:batch:4/4'
+  )
+  await queue.close()
+})
 
 test('a newer success makes an older terminal failure historical only', async () => {
   const root = await mkdtemp(join(tmpdir(), 'evidence-domain-queue-'))
@@ -587,7 +626,7 @@ test('durably deduplicates lifecycle enqueue receipts across restart', async () 
   await restarted.close()
 })
 
-test('never evicts active lifecycle jobs when terminal history is compacted', async () => {
+test('never evicts active lifecycle jobs and fails closed at active capacity', async () => {
   const root = await mkdtemp(join(tmpdir(), 'evidence-domain-active-retention-'))
   const storagePath = join(root, 'queue.json')
   const timestamp = '2026-08-06T08:00:00.000Z'
@@ -613,14 +652,17 @@ test('never evicts active lifecycle jobs when terminal history is compacted', as
   }), 'utf8')
   const queue = new EvidenceDagQueue({ storagePath, submit: async () => snapshot })
   await queue.start(false)
-  await queue.enqueue({
-    ...queueInput('8', 'background', 'thread-new'),
-    idempotencyKey: 'artifact-lifecycle:active-new',
-    reason: 'artifact_version_lifecycle'
-  })
+  await assert.rejects(
+    queue.enqueue({
+      ...queueInput('8', 'background', 'thread-new'),
+      idempotencyKey: 'artifact-lifecycle:active-new',
+      reason: 'artifact_version_lifecycle'
+    }),
+    /at capacity/u
+  )
   const stored = JSON.parse(await readFile(storagePath, 'utf8')) as { jobs: unknown[] }
 
-  assert.equal(stored.jobs.length, 206)
+  assert.equal(stored.jobs.length, 205)
   await queue.close()
 })
 
@@ -777,6 +819,186 @@ test('holds later lifecycle pages behind an earlier failure until immediate retr
   await queue.close()
 })
 
+test('load and restart preserve every active job above the history capacity', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'evidence-domain-active-overflow-'))
+  const storagePath = join(root, 'queue.json')
+  const activeJobs = Array.from({ length: 205 }, (_, index) =>
+    storedQueueJob(index, 'running'))
+  await writeFile(storagePath, JSON.stringify({ version: 1, jobs: activeJobs }), 'utf8')
+
+  const first = new EvidenceDagQueue({
+    storagePath,
+    submit: async () => snapshot
+  })
+  await first.start(false)
+  let stored = JSON.parse(await readFile(storagePath, 'utf8')) as {
+    jobs: Array<{ status: string }>
+  }
+  assert.equal(stored.jobs.length, 205)
+  assert.ok(stored.jobs.every((job) => job.status === 'queued'))
+  assert.equal((await first.pending('codex', 'thread-0'))?.state, 'queued')
+  assert.equal((await first.pending('codex', 'thread-204'))?.state, 'queued')
+  await first.close()
+
+  const restarted = new EvidenceDagQueue({
+    storagePath,
+    submit: async () => snapshot
+  })
+  await restarted.start(false)
+  assert.equal((await restarted.pending('codex', 'thread-0'))?.state, 'queued')
+  assert.equal((await restarted.pending('codex', 'thread-204'))?.state, 'queued')
+  stored = JSON.parse(await readFile(storagePath, 'utf8')) as {
+    jobs: Array<{ status: string }>
+  }
+  assert.equal(stored.jobs.length, 205)
+  await restarted.close()
+})
+
+test('enqueue fails closed when all capacity slots contain active jobs', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'evidence-domain-capacity-'))
+  const storagePath = join(root, 'queue.json')
+  const activeJobs = Array.from({ length: 200 }, (_, index) => storedQueueJob(index))
+  await writeFile(storagePath, JSON.stringify({ version: 1, jobs: activeJobs }), 'utf8')
+  const queue = new EvidenceDagQueue({
+    storagePath,
+    submit: async () => snapshot
+  })
+  await queue.start(false)
+  const before = await readFile(storagePath, 'utf8')
+
+  await assert.rejects(
+    queue.enqueue(queueInput('overflow', 'normal', 'overflow-thread')),
+    /at capacity/u
+  )
+
+  assert.equal(await readFile(storagePath, 'utf8'), before)
+  assert.equal(await queue.pending('codex', 'overflow-thread'), null)
+  assert.equal((await queue.pending('codex', 'thread-0'))?.state, 'queued')
+  assert.equal((await queue.pending('codex', 'thread-199'))?.state, 'queued')
+  await queue.close()
+})
+
+test('capacity pruning removes only the deterministically oldest terminal job', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'evidence-domain-terminal-prune-'))
+  const storagePath = join(root, 'queue.json')
+  const activeJobs = Array.from({ length: 198 }, (_, index) => storedQueueJob(index))
+  const oldestTerminal = {
+    ...storedQueueJob(198, 'failed'),
+    id: 'terminal-oldest',
+    threadId: 'terminal-oldest',
+    engineThreadId: 'codex:terminal-oldest',
+    createdAt: '2025-01-01T00:00:00.000Z',
+    updatedAt: '2025-01-01T00:00:00.000Z'
+  }
+  const newerTerminal = {
+    ...storedQueueJob(199, 'failed'),
+    id: 'terminal-newer',
+    threadId: 'terminal-newer',
+    engineThreadId: 'codex:terminal-newer',
+    createdAt: '2025-01-02T00:00:00.000Z',
+    updatedAt: '2025-01-02T00:00:00.000Z'
+  }
+  await writeFile(storagePath, JSON.stringify({
+    version: 1,
+    jobs: [...activeJobs, newerTerminal, oldestTerminal]
+  }), 'utf8')
+  const queue = new EvidenceDagQueue({
+    storagePath,
+    submit: async () => snapshot
+  })
+  await queue.start(false)
+  await queue.enqueue(queueInput('new', 'normal', 'new-thread'))
+
+  const stored = JSON.parse(await readFile(storagePath, 'utf8')) as {
+    jobs: Array<{ id: string; status: string }>
+  }
+  const ids = new Set(stored.jobs.map((job) => job.id))
+  assert.equal(stored.jobs.length, 200)
+  assert.equal(ids.has('terminal-oldest'), false)
+  assert.equal(ids.has('terminal-newer'), true)
+  assert.equal(stored.jobs.filter((job) => job.status === 'queued').length, 199)
+  await queue.close()
+})
+
+test('load rejects a malformed job instead of silently discarding it', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'evidence-domain-strict-load-'))
+  const storagePath = join(root, 'queue.json')
+  const contents = JSON.stringify({
+    version: 1,
+    jobs: [storedQueueJob(0), { ...storedQueueJob(1), status: 'corrupt' }]
+  })
+  await writeFile(storagePath, contents, 'utf8')
+  const queue = new EvidenceDagQueue({
+    storagePath,
+    submit: async () => snapshot
+  })
+
+  await assert.rejects(queue.start(false), /invalid job at index 1/u)
+  assert.equal(await readFile(storagePath, 'utf8'), contents)
+  await queue.close()
+})
+
+test('load and atomic replacement enforce private directory and file modes', {
+  skip: process.platform === 'win32'
+}, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'evidence-domain-permissions-'))
+  const directory = join(root, 'private-queue')
+  const storagePath = join(directory, 'queue.json')
+  await mkdir(directory, { mode: 0o755 })
+  await writeFile(storagePath, JSON.stringify({ version: 1, jobs: [] }), 'utf8')
+  await chmod(directory, 0o755)
+  await chmod(storagePath, 0o644)
+  const queue = new EvidenceDagQueue({
+    storagePath,
+    submit: async () => snapshot
+  })
+
+  await queue.start(false)
+  assert.equal((await stat(directory)).mode & 0o777, 0o700)
+  assert.equal((await stat(storagePath)).mode & 0o777, 0o600)
+  await queue.enqueue(queueInput('1'))
+  assert.equal((await stat(directory)).mode & 0o777, 0o700)
+  assert.equal((await stat(storagePath)).mode & 0o777, 0o600)
+  assert.deepEqual((await readdir(directory)).sort(), ['queue.json'])
+  await queue.close()
+})
+
+test('a failed atomic write rolls back the complete in-memory mutation and cleans its temp', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'evidence-domain-write-rollback-'))
+  const storagePath = join(root, 'queue.json')
+  const backupPath = join(root, 'queue.backup.json')
+  await writeFile(storagePath, JSON.stringify({
+    version: 1,
+    jobs: [storedQueueJob(1)]
+  }), 'utf8')
+  const queue = new EvidenceDagQueue({
+    storagePath,
+    submit: async () => snapshot
+  })
+  await queue.start(false)
+  await rename(storagePath, backupPath)
+  await mkdir(storagePath)
+
+  await assert.rejects(
+    queue.enqueue(queueInput('2')),
+    /Failed to persist the Evidence DAG update queue/u
+  )
+  const pending = await queue.pending('codex', 'thread-1')
+  assert.equal(pending?.state, 'queued')
+  assert.equal(pending?.targetWatermark, '1')
+  assert.deepEqual(
+    (await readdir(root)).filter((name) => name.endsWith('.tmp')),
+    []
+  )
+
+  await rmdir(storagePath)
+  await rename(backupPath, storagePath)
+  const retried = await queue.enqueue(queueInput('2'))
+  assert.equal(retried.coalesced, true)
+  assert.equal((await queue.pending('codex', 'thread-1'))?.targetWatermark, '2')
+  await queue.close()
+})
+
 function queueInput(
   targetWatermark: string,
   priority: 'background' | 'normal' | 'high' | 'immediate' = 'normal',
@@ -792,6 +1014,53 @@ function queueInput(
     workspaceRoot: '/workspace',
     trace: [{ id: `artifact-${targetWatermark}` }]
   }
+}
+
+function storedQueueJob(
+  index: number,
+  status: 'queued' | 'running' | 'retrying' | 'failed' | 'succeeded' = 'queued'
+): Record<string, unknown> {
+  const timestamp = new Date(Date.UTC(2026, 0, 1) + index * 1_000).toISOString()
+  const base = {
+    id: `job-${index}`,
+    runtimeId: 'codex',
+    threadId: `thread-${index}`,
+    engineThreadId: `codex:thread-${index}`,
+    targetWatermark: String(index),
+    reason: 'turn_committed',
+    priority: 'normal',
+    trace: [{ id: `artifact-${index}` }],
+    workspaceRoot: '/workspace',
+    status,
+    attempt: 0,
+    consecutiveNoProgressFailures: 0,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  }
+  if (status === 'retrying' || status === 'failed') {
+    return {
+      ...base,
+      ...(status === 'retrying' ? { nextAttemptAt: timestamp } : {}),
+      error: {
+        code: 'upstream_timeout',
+        message: 'Timed out.',
+        retryable: true,
+        occurredAt: timestamp
+      }
+    }
+  }
+  if (status === 'succeeded') {
+    return {
+      ...base,
+      snapshot: {
+        ...snapshot,
+        threadId: `codex:thread-${index}`,
+        inputWatermark: String(index),
+        version: index
+      }
+    }
+  }
+  return base
 }
 
 async function waitFor(predicate: () => Promise<boolean>): Promise<void> {

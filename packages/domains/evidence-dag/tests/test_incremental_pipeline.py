@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import tempfile
@@ -8,8 +9,13 @@ import unittest
 
 from evidence_dag.llm import LLMCallError, StubLLM
 from evidence_dag.graph import ThreadGraph
-from evidence_dag.incremental import RECENT_ANCHOR_LIMIT, TraceStagingCache
-from evidence_dag.service import Engine
+from evidence_dag.incremental import (
+    RECENT_ANCHOR_LIMIT,
+    TraceStagingCache,
+    compare_watermarks,
+    watermark_regresses,
+)
+from evidence_dag.service import Engine, _is_canonical_execution_bundle
 
 
 def _extract(trace_ref: str, suffix: str) -> str:
@@ -57,6 +63,236 @@ def _command(workspace: str, *, watermark: str, trace: list[dict]) -> dict:
 
 
 class IncrementalTracePipelineTests(unittest.TestCase):
+    def test_composite_and_batch_watermarks_are_monotonic_under_reordering(self) -> None:
+        self.assertEqual(compare_watermarks("20:event-new", "19:event-old"), 1)
+        self.assertTrue(watermark_regresses("20:event-new", "19:event-old"))
+        self.assertFalse(watermark_regresses("19:event-old", "20:event-new"))
+        self.assertEqual(
+            compare_watermarks(
+                "20:event-new:batch:3/4", "20:event-new:batch:1/4",
+            ),
+            1,
+        )
+        self.assertEqual(
+            compare_watermarks("20:event-new:batch:4/4", "20:event-new"),
+            0,
+        )
+
+    def test_canonical_execution_bundle_commits_without_model_access(self) -> None:
+        lineage_envelope = {
+            "activity": {
+                "id": "analysis:run-1",
+                "type": "analysis_run",
+                "name": "Deterministic analysis",
+                "status": "completed",
+                "parameters": {"score": 100},
+            },
+            "evidence": [{
+                "id": "evidence:score-100",
+                "type": "source_assertion",
+                "name": "Observed score is 100",
+            }],
+            "conclusions": [{
+                "id": "conclusion:score-controlled",
+                "type": "conclusion",
+                "name": "The controlled run reproduced the score",
+            }],
+            "relations": [{
+                "src": "evidence:score-100",
+                "dst": "conclusion:score-controlled",
+                "rel": "supports",
+            }],
+        }
+        digest = "sha256:" + "a" * 64
+        manifest = {
+            "schema": "sciforge.create-loop.run.v2",
+            "source": "workflow",
+            "workflow": {"id": "workflow-1", "name": "Workflow 1", "nodes": []},
+            "input": {"score": 100},
+            "context": {"platform": "darwin", "architecture": "arm64"},
+            "comparator": {"kind": "exact-digest"},
+            "determinism": {
+                "control": "controlled", "reasonCodes": [], "stochasticNodeIds": [],
+            },
+            "workflowFingerprint": digest,
+            "inputFingerprint": digest,
+            "specFingerprint": digest,
+            "contextFingerprint": digest,
+            "outputFingerprint": digest,
+            "outputJson": json.dumps({"evidenceLineage": lineage_envelope}),
+            "approvalFingerprint": digest,
+            "artifactRefs": [],
+            "approvals": [],
+        }
+        event = {
+            "id": "execution:run-1",
+            "schemaVersion": "sciforge.execution-event.v1",
+            "eventId": "event:run-1",
+            "phase": "run_completed",
+            "producer": {"moduleId": "sciforge.create-loop", "moduleVersion": "1.0.0"},
+            "executionId": "execution-1",
+            "runId": "run-1",
+            "occurredAt": "2026-08-05T00:00:00Z",
+            "artifacts": [{
+                "kind": "sciforge.create-loop.run-manifest",
+                "runId": "run-1",
+                "workflowId": "workflow-1",
+                "manifest": manifest,
+            }],
+        }
+        marker = {
+            "trustedBoundary": "sciforge.host.execution-completed.v1",
+            "eventKind": "execution-completed",
+            "hostBinding": {
+                "contractVersion": 1,
+                "acceptanceSequence": 1,
+                "workspaceBinding": "unbound",
+            },
+            "producer": event["producer"],
+            "executionId": "execution-1",
+            "runId": "run-1",
+            "runtimeId": "domain:sciforge.create-loop",
+            "threadId": "execution:execution-1",
+            "occurredAt": event["occurredAt"],
+            "targetWatermark": "1:event:run-1",
+        }
+        event["sciforgeEvidenceEvent"] = marker
+        canonical_trace = [
+            event,
+            {
+                **event["artifacts"][0],
+                "id": "execution:run-1:manifest",
+                "sciforgeEvidenceEvent": marker,
+            },
+        ]
+        self.assertTrue(_is_canonical_execution_bundle(canonical_trace))
+        for mutate in (
+            lambda trace: trace[0].update({
+                "scope": {"runtimeId": "runtime:other", "threadId": "thread:other"},
+            }),
+            lambda trace: trace[0].update({
+                "scope": {"runtimeId": "runtime-without-thread"},
+            }),
+            lambda trace: trace[0]["sciforgeEvidenceEvent"].update({"unknown": True}),
+            lambda trace: trace[0]["sciforgeEvidenceEvent"]["hostBinding"].update({
+                "unknown": True,
+            }),
+        ):
+            hostile = copy.deepcopy(canonical_trace)
+            mutate(hostile)
+            self.assertFalse(_is_canonical_execution_bundle(hostile))
+
+        for marker_field, hostile_value in (
+            ("runtimeId", "runtime:ATTACKER"),
+            ("threadId", "thread:ATTACKER"),
+            ("turnId", "turn:ATTACKER"),
+            ("activityId", "activity:ATTACKER"),
+        ):
+            hostile = copy.deepcopy(canonical_trace)
+            hostile[1]["sciforgeEvidenceEvent"][marker_field] = hostile_value
+            self.assertFalse(
+                _is_canonical_execution_bundle(hostile),
+                f"flattened artifact marker changed {marker_field}",
+            )
+
+        hostile = copy.deepcopy(canonical_trace)
+        hostile[0]["artifacts"][0]["workflowId"] = "workflow-ATTACKER"
+        self.assertFalse(_is_canonical_execution_bundle(hostile))
+        hostile = copy.deepcopy(canonical_trace)
+        hostile[1]["workflowId"] = "workflow-ATTACKER"
+        self.assertFalse(_is_canonical_execution_bundle(hostile))
+        self.assertFalse(_is_canonical_execution_bundle(canonical_trace[:1]))
+        self.assertFalse(_is_canonical_execution_bundle([
+            *canonical_trace,
+            copy.deepcopy(canonical_trace[1]),
+        ]))
+
+        workspace_bound = copy.deepcopy(canonical_trace)
+        for item in workspace_bound:
+            item["sciforgeEvidenceEvent"]["hostBinding"] = {
+                "contractVersion": 1,
+                "acceptanceSequence": 1,
+                "workspaceBinding": "capability-caller",
+                "workspaceRoot": "/trusted/workspace",
+            }
+            item["sciforgeEvidenceEvent"]["workspaceRoot"] = "/trusted/workspace"
+        workspace_bound[0]["workspaceRoot"] = "/trusted/workspace"
+        self.assertTrue(_is_canonical_execution_bundle(workspace_bound))
+        workspace_bound[0]["workspaceRoot"] = "/different/workspace"
+        self.assertFalse(_is_canonical_execution_bundle(workspace_bound))
+
+        class ExplodingLLM:
+            calls = 0
+
+            def chat(self, messages, *, temperature=0.0, max_tokens=2048):
+                self.calls += 1
+                raise AssertionError("canonical execution bundles must not call the model")
+
+        with tempfile.TemporaryDirectory() as workspace:
+            llm = ExplodingLLM()
+            engine = Engine(llm, storage_dir=os.path.join(workspace, ".edag"))
+            result = engine.update(**_command(
+                workspace,
+                watermark="1:event:run-1",
+                trace=canonical_trace,
+            ))
+
+            self.assertEqual(llm.calls, 0)
+            self.assertEqual(result["update"]["graphState"], "committed")
+            self.assertEqual(result["verification"]["mode"], "declared-execution-lineage")
+            graph = engine.require("thread")
+            self.assertEqual(graph.meta["extractionMode"], "declared-execution-lineage")
+            conclusion = next(
+                node for node in graph.nodes.values()
+                if node.external_id == "conclusion:score-controlled"
+            )
+            self.assertEqual(conclusion.status.value, "fragile")
+            lineage = graph.conclusion_lineage(conclusion.id)
+            self.assertIn(
+                "evidence:score-100",
+                {node.get("external_id") for node in lineage["nodes"]},
+            )
+            self.assertEqual(sum(
+                node.external_id == "conclusion:score-controlled"
+                for node in graph.nodes.values()
+            ), 1)
+
+    def test_mixed_execution_and_semantic_trace_does_not_bypass_model(self) -> None:
+        class ExplodingLLM:
+            calls = 0
+
+            def chat(self, messages, *, temperature=0.0, max_tokens=2048):
+                self.calls += 1
+                raise AssertionError("mixed traces require semantic extraction")
+
+        llm = ExplodingLLM()
+        event = {
+            "id": "execution:run-1",
+            "schemaVersion": "sciforge.execution-event.v1",
+            "phase": "run_completed",
+            "executionId": "execution-1",
+            "runId": "run-1",
+            "evidenceLineage": {
+                "activity": {
+                    "id": "analysis:run-1", "type": "analysis_run",
+                    "name": "Run 1", "parameters": {},
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            engine = Engine(llm, storage_dir=os.path.join(workspace, ".edag"))
+            with self.assertRaisesRegex(AssertionError, "mixed traces require"):
+                engine.update(**_command(
+                    workspace,
+                    watermark="1",
+                    trace=[event, {
+                        "id": "message-1",
+                        "type": "message",
+                        "content": "A semantic claim that still requires extraction.",
+                    }],
+                ))
+        self.assertEqual(llm.calls, 1)
+
     def test_typed_llm_failure_persists_diagnostics_and_keeps_committed_snapshot(self) -> None:
         class FailedResponseLLM:
             def chat(self, messages, *, temperature=0.0, max_tokens=2048):

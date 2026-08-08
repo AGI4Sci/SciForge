@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import path from 'node:path'
 import { runInNewContext } from 'node:vm'
@@ -9,14 +9,25 @@ import type {
   DomainMainRuntimeLifecycleContext
 } from '@sciforge/domain-sdk/host'
 import {
+  SCIFORGE_REPRO_SPEC_RESOURCE_KIND,
+  domainExecutionEventSchema,
+  type DomainExecutionEventInput,
+  type DomainExecutionEventV1,
+  type SciForgeReproSpecV1
+} from '@sciforge/domain-sdk/reproducibility'
+import {
   type CreateLoopSnapshot,
   type WorkflowApprovalDecision,
+  type WorkflowApprovalRecordV2,
   type WorkflowCodeCheckResult,
   type WorkflowCodeLanguage,
+  type WorkflowExecutionSnapshotV1,
   type WorkflowNodeRunResultV1,
   type WorkflowNodeTestResult,
   type WorkflowNodeV1,
   type WorkflowPendingApprovalV1,
+  type WorkflowRunComparatorV1,
+  type WorkflowRunContextV2,
   type WorkflowRunResult,
   type WorkflowRunStatus,
   type WorkflowRunV1,
@@ -25,22 +36,60 @@ import {
   type WorkflowV1
 } from './contract.js'
 import {
+  EXACT_OUTPUT_COMPARATOR,
+  activityFingerprint,
+  assertCreateLoopReproSpecTrustedByRun,
+  assertWorkflowGraphIntegrity,
+  collectWorkflowSecretValues,
+  compareWorkflowRunToSpec,
+  createWorkflowReproSpec,
+  createWorkflowExecutionSnapshot,
+  createWorkflowRunContext,
+  createWorkflowRunManifest,
+  discoverWorkflowArtifactReferences,
+  parseCreateLoopReproSpec,
+  redactWorkflowKnownSecretValues,
+  redactWorkflowNodeResults,
+  toJsonValue,
+  type ParsedCreateLoopReproSpec,
+  workflowFingerprint
+} from './rerun.js'
+import {
   MAX_WORKFLOW_RUNS,
   defaultWorkflowSettings,
   normalizeWorkflowSettings
 } from './workflow-settings.js'
 
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 3
 const SCHEDULER_POLL_MS = 30_000
 const MAX_NODE_EXECUTIONS = 200
 const MAX_RUN_DURATION_MS = 30 * 60_000
 const CODE_TIMEOUT_MS = 30_000
+const MAX_PENDING_EXECUTION_EVENTS = 10_000
+const MAX_TRUSTED_RERUN_EXPORTS = 10_000
+
+type PendingExecutionEvent = Omit<
+  DomainExecutionEventV1,
+  'schemaVersion' | 'producer'
+> & Readonly<{
+  phase: 'run_completed' | 'run_failed'
+}>
 
 type PersistedState = {
   schemaVersion: typeof SCHEMA_VERSION
   revision: number
   settings: WorkflowSettingsV1
+  approvalJournal: WorkflowApprovalRecordV2[]
+  pendingExecutionEvents: PendingExecutionEvent[]
+  trustedRerunExports: TrustedRerunExport[]
 }
+
+type TrustedRerunExport = Readonly<{
+  specDigest: string
+  sourceSnapshotDigest: string
+  workflowId: string
+  runId: string
+}>
 
 type Payload = { json: unknown; text: string }
 type ActiveRun = {
@@ -51,13 +100,25 @@ type ActiveRun = {
 }
 type ApprovalWaiter = {
   approval: WorkflowPendingApprovalV1
-  resolve: (decision: WorkflowApprovalDecision) => void
+  claim: (
+    decision: WorkflowApprovalDecision,
+    actor: string,
+    rationale?: string
+  ) => Promise<void> | null
+}
+type RunExecutionMetadata = {
+  source: 'workflow' | 'rerun'
+  context: WorkflowRunContextV2
+  comparator: WorkflowRunComparatorV1
+  activityId?: string
+  rerun?: ParsedCreateLoopReproSpec
 }
 
 export type CreateLoopRuntimeOptions = Readonly<{
   statePath: string
   now?: () => Date
   createId?: () => string
+  maxPendingExecutionEvents?: number
   setInterval?: (handler: () => void, delay: number) => unknown
   clearInterval?: (handle: unknown) => void
 }>
@@ -66,15 +127,18 @@ export class CreateLoopRuntime {
   readonly #statePath: string
   readonly #now: () => Date
   readonly #createId: () => string
+  readonly #maxPendingExecutionEvents: number
   readonly #setInterval: (handler: () => void, delay: number) => unknown
   readonly #clearInterval: (handle: unknown) => void
   #context: DomainMainRuntimeLifecycleContext | null = null
   #state: PersistedState | null = null
   #stateOperation: Promise<unknown> = Promise.resolve()
   #activeRuns = new Map<string, ActiveRun>()
+  #pendingExecutionEventReservations = 0
   #nodeStatus: WorkflowRuntimeStatus['nodeStatus'] = {}
   #nodeResults: WorkflowRuntimeStatus['nodeResults'] = {}
   #approvals = new Map<string, ApprovalWaiter>()
+  #runSecretValues = new Map<string, Set<string>>()
   #scheduler: unknown = null
   #webhookServer: Server | null = null
   #disposed = false
@@ -84,6 +148,16 @@ export class CreateLoopRuntime {
     this.#statePath = path.resolve(options.statePath)
     this.#now = options.now ?? (() => new Date())
     this.#createId = options.createId ?? randomUUID
+    const requestedPendingLimit = options.maxPendingExecutionEvents ?? MAX_PENDING_EXECUTION_EVENTS
+    this.#maxPendingExecutionEvents = Math.min(
+      MAX_PENDING_EXECUTION_EVENTS,
+      Math.max(
+        1,
+        Number.isFinite(requestedPendingLimit)
+          ? Math.floor(requestedPendingLimit)
+          : MAX_PENDING_EXECUTION_EVENTS
+      )
+    )
     this.#setInterval = options.setInterval ??
       ((handler, delay) => globalThis.setInterval(handler, delay))
     this.#clearInterval = options.clearInterval ??
@@ -96,6 +170,7 @@ export class CreateLoopRuntime {
     }
     this.#context = context
     await this.#load()
+    await this.#replayPendingExecutionEvents()
     const applyEnablement = (enabled: boolean): void => {
       this.#enabled = enabled
       if (enabled) {
@@ -128,6 +203,7 @@ export class CreateLoopRuntime {
     await Promise.allSettled([...this.#activeRuns.values()].map((run) => run.promise))
     this.#activeRuns.clear()
     this.#approvals.clear()
+    this.#runSecretValues.clear()
     this.#context = null
   }
 
@@ -143,6 +219,9 @@ export class CreateLoopRuntime {
   ): Promise<CreateLoopSnapshot> {
     this.#requireActive()
     const normalized = normalizeWorkflowSettings(settings)
+    normalized.workflows.forEach((workflow) => {
+      assertWorkflowGraphIntegrity(createWorkflowExecutionSnapshot(workflow), undefined, false)
+    })
     const result = await this.#mutate((current) => {
       if (expectedRevision !== undefined && current.revision !== expectedRevision) {
         throw new Error(
@@ -152,7 +231,10 @@ export class CreateLoopRuntime {
       return {
         schemaVersion: SCHEMA_VERSION,
         revision: current.revision + 1,
-        settings: normalized
+        settings: normalized,
+        approvalJournal: current.approvalJournal,
+        pendingExecutionEvents: current.pendingExecutionEvents,
+        trustedRerunExports: current.trustedRerunExports
       }
     })
     await this.#syncWebhook()
@@ -186,13 +268,132 @@ export class CreateLoopRuntime {
     const trigger = workflow.nodes.find((node) => node.type === 'manual-trigger') ??
       workflow.nodes.find((node) => node.type.endsWith('-trigger'))
     if (!trigger) return { ok: false, message: 'Workflow has no trigger node.' }
+    const frozenWorkflow: WorkflowV1 = {
+      ...structuredClone(workflow),
+      runs: []
+    }
+    const context = createWorkflowRunContext(
+      createWorkflowExecutionSnapshot(frozenWorkflow),
+      callerWorkspaceRoot,
+      this.#context?.owner,
+      nodeRuntimeIdentity()
+    )
     return this.#startRun(
-      workflow,
+      frozenWorkflow,
       trigger.id,
       payloadFromInput(input),
       'manual',
-      callerWorkspaceRoot
+      callerWorkspaceRoot,
+      {
+        source: 'workflow',
+        context,
+        comparator: EXACT_OUTPUT_COMPARATOR
+      }
     )
+  }
+
+  async runRerun(
+    value: SciForgeReproSpecV1 | unknown,
+    callerWorkspaceRoot = '',
+    activityId?: string
+  ): Promise<WorkflowRunResult> {
+    this.#requireEnabled()
+    const rerun = parseCreateLoopReproSpec(value, activityId)
+    const workflow = runtimeWorkflowFromSnapshot(rerun.payload.workflow)
+    const targetId = rerun.executor.target.kind === 'node'
+      ? rerun.executor.target.id
+      : rerun.payload.triggerNodeId
+    if (!targetId || !workflow.nodes.some((node) => node.id === targetId)) {
+      return { ok: false, message: 'Rerun workflow target is missing.' }
+    }
+    let workspaceRoot: string
+    try {
+      workspaceRoot = await this.#resolveRunWorkspaceRoot(
+        workflow,
+        targetId,
+        payloadFromInput(rerun.payload.input),
+        callerWorkspaceRoot
+      )
+    } catch (error) {
+      return { ok: false, message: errorMessage(error) }
+    }
+    if (!workspaceRoot) return missingWorkspaceResult()
+    const state = await this.#load()
+    const trustedExport = state.trustedRerunExports.find((entry) => (
+      entry.specDigest === rerun.spec.specDigest &&
+      entry.sourceSnapshotDigest === rerun.spec.source.snapshotDigest &&
+      entry.workflowId === rerun.payload.workflow.id &&
+      entry.runId === rerun.payload.baseline.runId
+    ))
+    if (!trustedExport) {
+      throw new Error(
+        'Rerun execution is blocked because the specification was not exported by this Create Loop instance.'
+      )
+    }
+    const trustedRun = state.settings.workflows
+      .find((candidate) => candidate.id === rerun.payload.workflow.id)?.runs
+      .find((candidate) => candidate.id === rerun.payload.baseline.runId)
+    if (!trustedRun) {
+      throw new Error(
+        'Rerun execution is blocked because its source is not a locally trusted Create Loop run.'
+      )
+    }
+    assertCreateLoopReproSpecTrustedByRun(rerun, trustedRun)
+    if (this.#activeRuns.has(workflow.id)) {
+      const active = this.#activeRuns.get(workflow.id)!
+      return { ok: true, runId: active.runId, status: 'running', message: 'Workflow is already running.' }
+    }
+    const currentContext = createWorkflowRunContext(
+      rerun.payload.workflow,
+      workspaceRoot,
+      this.#context?.owner,
+      nodeRuntimeIdentity()
+    )
+    const comparator = rerun.activity.outputs.find(
+      (output) => output.role === 'primary-output'
+    )?.comparator ?? EXACT_OUTPUT_COMPARATOR
+    return this.#startRun(
+      workflow,
+      targetId,
+      payloadFromInput(rerun.payload.input),
+      targetId,
+      workspaceRoot,
+      {
+        source: 'rerun',
+        context: currentContext,
+        comparator,
+        activityId: rerun.activity.id,
+        rerun
+      }
+    )
+  }
+
+  async exportReproSpec(
+    workflowId: string,
+    runId: string,
+    comparator: WorkflowRunComparatorV1 = EXACT_OUTPUT_COMPARATOR
+  ): Promise<SciForgeReproSpecV1> {
+    this.#requireActive()
+    const workflow = (await this.#load()).settings.workflows.find(
+      (candidate) => candidate.id === workflowId
+    )
+    const run = workflow?.runs.find((candidate) => candidate.id === runId)
+    if (!run) throw new Error('Workflow run not found.')
+    const spec = createWorkflowReproSpec(run, comparator)
+    const trustedExport: TrustedRerunExport = {
+      specDigest: spec.specDigest,
+      sourceSnapshotDigest: spec.source.snapshotDigest,
+      workflowId,
+      runId
+    }
+    await this.#mutate((current) => ({
+      ...current,
+      trustedRerunExports: [
+        ...current.trustedRerunExports.filter((entry) => entry.specDigest !== spec.specDigest),
+        trustedExport
+      ].slice(-MAX_TRUSTED_RERUN_EXPORTS)
+    }))
+    return spec
   }
 
   async stopWorkflow(workflowId: string): Promise<WorkflowRunResult> {
@@ -203,12 +404,18 @@ export class CreateLoopRuntime {
     return { ok: true, runId: run.runId, status: 'error', message: 'Stop requested.' }
   }
 
-  resolveApproval(token: string, decision: WorkflowApprovalDecision): boolean {
+  async resolveApproval(
+    token: string,
+    decision: WorkflowApprovalDecision,
+    actor = 'user',
+    rationale?: string
+  ): Promise<boolean> {
     this.#requireActive()
     const waiter = this.#approvals.get(token)
     if (!waiter) return false
-    this.#approvals.delete(token)
-    waiter.resolve(decision)
+    const operation = waiter.claim(decision, actor, rationale)
+    if (!operation) return false
+    await operation
     return true
   }
 
@@ -222,22 +429,44 @@ export class CreateLoopRuntime {
     const workflow = state.settings.workflows.find((candidate) => candidate.id === workflowId)
     const node = workflow?.nodes.find((candidate) => candidate.id === nodeId)
     if (!workflow || !node) return { ok: false, message: 'Workflow node not found.' }
+    const payload = { json: {}, text: '' }
+    let workspaceRoot: string
+    try {
+      workspaceRoot = await this.#resolveRunWorkspaceRoot(
+        workflow,
+        node.id,
+        payload,
+        callerWorkspaceRoot
+      )
+    } catch (error) {
+      return { ok: false, message: errorMessage(error) }
+    }
+    if (!workspaceRoot) return missingWorkspaceResult()
     const runId = this.#createId()
-    const result = await this.#executeNode(
-      workflow,
-      node,
-      { json: {}, text: '' },
-      runId,
-      new AbortController().signal,
-      callerWorkspaceRoot
-    )
-    this.#nodeStatus[workflowId] = { [nodeId]: result.status }
-    this.#nodeResults[workflowId] = { [nodeId]: result }
-    return {
-      ok: result.status === 'success',
-      runId,
-      status: result.status === 'success' ? 'success' : 'error',
-      message: result.message || result.error
+    this.#registerRunSecretValues(runId, workflow, payload.json)
+    try {
+      const result = await this.#executeNode(
+        workflow,
+        node,
+        payload,
+        runId,
+        new AbortController().signal,
+        workspaceRoot
+      )
+      const safeResult = redactWorkflowNodeResults(
+        [result],
+        this.#knownSecretValues(runId)
+      )[0]!
+      this.#nodeStatus[workflowId] = { [nodeId]: safeResult.status }
+      this.#nodeResults[workflowId] = { [nodeId]: safeResult }
+      return {
+        ok: safeResult.status === 'success',
+        runId,
+        status: safeResult.status === 'success' ? 'success' : 'error',
+        message: safeResult.message || safeResult.error
+      }
+    } finally {
+      this.#runSecretValues.delete(runId)
     }
   }
 
@@ -258,15 +487,43 @@ export class CreateLoopRuntime {
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) }
     }
-    const result = await this.#executeNode(
-      workflow,
-      node,
-      { json: parsed, text: typeof parsed === 'string' ? parsed : JSON.stringify(parsed) },
-      this.#createId(),
-      new AbortController().signal,
-      callerWorkspaceRoot
-    )
-    return result.status === 'success' ? { ok: true, result } : { ok: false, message: result.error || result.message }
+    const payload = {
+      json: parsed,
+      text: typeof parsed === 'string' ? parsed : JSON.stringify(parsed)
+    }
+    let workspaceRoot: string
+    try {
+      workspaceRoot = await this.#resolveRunWorkspaceRoot(
+        workflow,
+        node.id,
+        payload,
+        callerWorkspaceRoot
+      )
+    } catch (error) {
+      return { ok: false, message: errorMessage(error) }
+    }
+    if (!workspaceRoot) return { ok: false, message: missingWorkspaceResult().message }
+    const runId = this.#createId()
+    this.#registerRunSecretValues(runId, workflow, payload.json)
+    try {
+      const result = await this.#executeNode(
+        workflow,
+        node,
+        payload,
+        runId,
+        new AbortController().signal,
+        workspaceRoot
+      )
+      const safeResult = redactWorkflowNodeResults(
+        [result],
+        this.#knownSecretValues(runId)
+      )[0]!
+      return safeResult.status === 'success'
+        ? { ok: true, result: safeResult }
+        : { ok: false, message: safeResult.error || safeResult.message }
+    } finally {
+      this.#runSecretValues.delete(runId)
+    }
   }
 
   async #startRun(
@@ -274,12 +531,83 @@ export class CreateLoopRuntime {
     triggerNodeId: string,
     input: Payload,
     trigger: string,
-    callerWorkspaceRoot = ''
+    callerWorkspaceRoot = '',
+    metadata?: RunExecutionMetadata
   ): Promise<WorkflowRunResult> {
+    let resolvedWorkspaceRoot: string
+    try {
+      resolvedWorkspaceRoot = await this.#resolveRunWorkspaceRoot(
+        workflow,
+        triggerNodeId,
+        input,
+        callerWorkspaceRoot
+      )
+    } catch (error) {
+      return { ok: false, message: errorMessage(error) }
+    }
+    if (!resolvedWorkspaceRoot) return missingWorkspaceResult()
+    await this.#replayPendingExecutionEvents()
+    if ((await this.#load()).pendingExecutionEvents.length +
+      this.#pendingExecutionEventReservations >= this.#maxPendingExecutionEvents) {
+      return {
+        ok: false,
+        message: 'Workflow execution is blocked because terminal event delivery is backlogged.'
+      }
+    }
     const runId = this.#createId()
+    this.#registerRunSecretValues(runId, workflow, input.json)
+    const runMetadata: RunExecutionMetadata & { activityId: string } = {
+      ...(metadata ?? {
+        source: 'workflow' as const,
+        context: createWorkflowRunContext(
+          createWorkflowExecutionSnapshot(workflow),
+          callerWorkspaceRoot,
+          this.#context?.owner,
+          nodeRuntimeIdentity()
+        ),
+        comparator: EXACT_OUTPUT_COMPARATOR
+      }),
+      activityId: metadata?.activityId ?? `workflow-run:${runId}`,
+      context: createWorkflowRunContext(
+        createWorkflowExecutionSnapshot(workflow),
+        resolvedWorkspaceRoot,
+        this.#context?.owner,
+        nodeRuntimeIdentity()
+      )
+    }
     const controller = new AbortController()
+    const runInput = clone(input.json)
     this.#nodeStatus[workflow.id] = {}
     this.#nodeResults[workflow.id] = {}
+    this.#pendingExecutionEventReservations += 1
+    try {
+      await this.#publishExecutionEvent(workflow.id, {
+        phase: 'run_started',
+        executionId: runId,
+        runId,
+        activityId: runMetadata.activityId,
+        ...(runMetadata.rerun ? {
+          specDigest: runMetadata.rerun.spec.specDigest,
+          rerunOfRunId: runMetadata.rerun.payload.baseline.runId
+        } : {}),
+        ...(resolvedWorkspaceRoot ? { workspaceRoot: resolvedWorkspaceRoot } : {}),
+        occurredAt: this.#now().toISOString(),
+        payload: toJsonValue({
+          source: runMetadata.source,
+          workflowId: workflow.id,
+          workflowFingerprint: workflowFingerprint(createWorkflowExecutionSnapshot(workflow)),
+          inputFingerprint: workflowFingerprint(runInput),
+          contextFingerprint: workflowFingerprint(runMetadata.context)
+        })
+      })
+    } catch (error) {
+      this.#pendingExecutionEventReservations = Math.max(
+        0,
+        this.#pendingExecutionEventReservations - 1
+      )
+      this.#runSecretValues.delete(runId)
+      throw error
+    }
     const promise = this.#executeRun(
       workflow,
       triggerNodeId,
@@ -287,10 +615,21 @@ export class CreateLoopRuntime {
       trigger,
       runId,
       controller.signal,
-      callerWorkspaceRoot
+      resolvedWorkspaceRoot,
+      runMetadata,
+      runInput
     )
-      .catch((error) => this.#log('error', `Workflow ${workflow.id} failed.`, error))
+      .catch((error) => this.#log(
+        'error',
+        `Workflow ${workflow.id} failed.`,
+        redactWorkflowKnownSecretValues(errorMessage(error), this.#knownSecretValues(runId))
+      ))
       .finally(() => {
+        this.#pendingExecutionEventReservations = Math.max(
+          0,
+          this.#pendingExecutionEventReservations - 1
+        )
+        this.#runSecretValues.delete(runId)
         this.#activeRuns.delete(workflow.id)
         const cleanup = setTimeout(() => {
           if (!this.#activeRuns.has(workflow.id)) {
@@ -311,14 +650,17 @@ export class CreateLoopRuntime {
     trigger: string,
     runId: string,
     signal: AbortSignal,
-    callerWorkspaceRoot: string
+    callerWorkspaceRoot: string,
+    metadata: RunExecutionMetadata,
+    runInput: unknown
   ): Promise<void> {
     const startedAt = this.#now().toISOString()
     let status: WorkflowRunStatus = 'success'
     let message = 'Workflow completed.'
     const results: WorkflowNodeRunResultV1[] = []
+    let finalOutput: Payload = input
     try {
-      await withTimeout(
+      finalOutput = await withTimeout(
         this.#executeGraph(
           workflow,
           triggerNodeId,
@@ -336,15 +678,112 @@ export class CreateLoopRuntime {
       message = signal.aborted ? 'Workflow stopped.' : errorMessage(error)
     }
     const finishedAt = this.#now().toISOString()
-    const run: WorkflowRunV1 = {
+    const approvals = (await this.#load()).approvalJournal.filter(
+      (record) => record.runId === runId
+    )
+    this.#registerRunSecretValues(runId, finalOutput.json, results, approvals, message)
+    const secretValues = this.#knownSecretValues(runId)
+    const persistedMessage = redactWorkflowKnownSecretValues(message, secretValues)
+    const persistedRunInput = redactWorkflowKnownSecretValues(runInput, secretValues)
+    const persistedOutput = redactWorkflowKnownSecretValues(finalOutput.json, secretValues)
+    const persistedApprovals = redactWorkflowKnownSecretValues(approvals, secretValues)
+    const persistedWorkflow = redactWorkflowKnownSecretValues(
+      createWorkflowExecutionSnapshot(workflow),
+      secretValues
+    )
+    const persistedContext = redactWorkflowKnownSecretValues(metadata.context, secretValues)
+    const persistedNodes = new Map(persistedWorkflow.nodes.map((node) => [node.id, node]))
+    const persistedResults = redactWorkflowNodeResults(results, secretValues).map((result) => {
+      const persistedNode = persistedNodes.get(result.nodeId)
+      if (!persistedNode) return result
+      const componentFingerprint = activityFingerprint(persistedNode)
+      return {
+        ...result,
+        componentFingerprint,
+        attempts: result.attempts.map((attempt) => ({
+          ...attempt,
+          activityFingerprint: componentFingerprint
+        }))
+      }
+    })
+    let manifest = createWorkflowRunManifest({
+      source: metadata.source,
+      workflow: persistedWorkflow,
+      triggerNodeId,
+      runInput: persistedRunInput,
+      context: persistedContext,
+      output: persistedOutput,
+      nodeResults: persistedResults,
+      approvals: persistedApprovals,
+      comparator: metadata.comparator,
+      ...(metadata.rerun ? {
+        rerunOfRunId: metadata.rerun.payload.baseline.runId,
+        rerunSpecDigest: metadata.rerun.spec.specDigest
+      } : {})
+    })
+    let run: WorkflowRunV1 = {
       id: runId,
       trigger,
       status,
       startedAt,
       finishedAt,
-      message,
-      nodeResults: results
+      message: persistedMessage,
+      nodeResults: persistedResults,
+      manifest
     }
+    if (metadata.rerun) {
+      const comparison = compareWorkflowRunToSpec(metadata.rerun, run)
+      manifest = { ...manifest, comparison }
+      run = { ...run, manifest }
+      try {
+        await this.#publishExecutionEvent(workflow.id, {
+          phase: 'comparison_completed',
+          executionId: runId,
+          runId,
+          activityId: metadata.activityId,
+          specDigest: metadata.rerun.spec.specDigest,
+          rerunOfRunId: metadata.rerun.payload.baseline.runId,
+          occurredAt: finishedAt,
+          ...(callerWorkspaceRoot.trim() ? { workspaceRoot: callerWorkspaceRoot.trim() } : {}),
+          payload: toJsonValue(comparison)
+        })
+      } catch (error) {
+        this.#log('warn', `Create Loop comparison event ${runId} could not be published.`, error)
+      }
+    }
+    const reproSpec = createWorkflowReproSpec(run, manifest.comparator)
+    const terminalPhase = status === 'success' ? 'run_completed' : 'run_failed'
+    const terminalIntent = redactExecutionEventSecrets<PendingExecutionEvent>({
+      eventId: terminalExecutionEventId(workflow.id, runId, terminalPhase),
+      phase: terminalPhase,
+      executionId: runId,
+      runId,
+      ...(metadata.activityId ? { activityId: metadata.activityId } : {}),
+      occurredAt: finishedAt,
+      scope: this.#workflowExecutionEventScope(workflow.id),
+      ...(metadata.rerun ? {
+        specDigest: metadata.rerun.spec.specDigest,
+        rerunOfRunId: metadata.rerun.payload.baseline.runId
+      } : {}),
+      ...(callerWorkspaceRoot.trim() ? { workspaceRoot: callerWorkspaceRoot.trim() } : {}),
+      payload: toJsonValue({
+        workflowId: workflow.id,
+        status,
+        message: persistedMessage,
+        manifestDigest: workflowFingerprint(manifest),
+        comparison: manifest.comparison ?? null
+      }),
+      artifacts: [toJsonValue({
+        kind: 'sciforge.create-loop.run-manifest',
+        contractVersion: 2,
+        workflowId: workflow.id,
+        runId,
+        manifest
+      }), toJsonValue({
+        kind: SCIFORGE_REPRO_SPEC_RESOURCE_KIND,
+        spec: reproSpec
+      })]
+    }, secretValues)
     await this.#mutate((current) => {
       const workflows = current.settings.workflows.map((candidate) =>
         candidate.id === workflow.id
@@ -352,7 +791,7 @@ export class CreateLoopRuntime {
               ...candidate,
               lastRunAt: finishedAt,
               lastStatus: status,
-              lastMessage: message,
+              lastMessage: persistedMessage,
               runs: [...candidate.runs, run].slice(-MAX_WORKFLOW_RUNS)
             }
           : candidate
@@ -360,9 +799,16 @@ export class CreateLoopRuntime {
       return {
         ...current,
         revision: current.revision + 1,
-        settings: { ...current.settings, workflows }
+        settings: { ...current.settings, workflows },
+        approvalJournal: current.approvalJournal.filter((record) => record.runId !== runId),
+        pendingExecutionEvents: enqueuePendingExecutionEvent(
+          current.pendingExecutionEvents,
+          terminalIntent,
+          this.#maxPendingExecutionEvents
+        )
       }
     })
+    await this.#replayPendingExecutionEvents()
   }
 
   async #executeGraph(
@@ -393,13 +839,18 @@ export class CreateLoopRuntime {
         callerWorkspaceRoot
       )
       results.push(result)
+      this.#registerRunSecretValues(runId, result)
+      const safeResult = redactWorkflowNodeResults(
+        [result],
+        this.#knownSecretValues(runId)
+      )[0]!
       this.#nodeStatus[workflow.id] = {
         ...(this.#nodeStatus[workflow.id] ?? {}),
-        [node.id]: result.status
+        [node.id]: safeResult.status
       }
       this.#nodeResults[workflow.id] = {
         ...(this.#nodeResults[workflow.id] ?? {}),
-        [node.id]: result
+        [node.id]: safeResult
       }
       if (result.status !== 'success') {
         if (node.onError === 'continue') continue
@@ -424,12 +875,53 @@ export class CreateLoopRuntime {
     callerWorkspaceRoot = ''
   ): Promise<WorkflowNodeRunResultV1> {
     const startedAt = this.#now().toISOString()
+    this.#registerRunSecretValues(runId, workflow, node, payload.json)
+    const executionWorkspaceRoot = node.type === 'ai-agent'
+      ? interpolate(node.config.workspaceRoot, payload).trim() || callerWorkspaceRoot.trim()
+      : callerWorkspaceRoot.trim()
+    const snapshotNode = createWorkflowExecutionSnapshot(workflow).nodes.find(
+      (candidate) => candidate.id === node.id
+    )
+    const componentFingerprint = activityFingerprint(snapshotNode ?? node)
+    const inputFingerprint = workflowFingerprint(payload.json)
+    const attempts: WorkflowNodeRunResultV1['attempts'] = []
     this.#nodeStatus[workflow.id] = {
       ...(this.#nodeStatus[workflow.id] ?? {}),
       [node.id]: 'running'
     }
+    await this.#publishExecutionEvent(workflow.id, {
+      phase: 'activity_started',
+      executionId: runId,
+      runId,
+      activityId: node.id,
+      occurredAt: startedAt,
+      ...(executionWorkspaceRoot ? { workspaceRoot: executionWorkspaceRoot } : {}),
+      payload: toJsonValue({
+        workflowId: workflow.id,
+        nodeId: node.id,
+        nodeType: node.type,
+        componentFingerprint,
+        inputFingerprint
+      })
+    })
     const retries = Math.min(10, Math.max(0, node.retries ?? 0))
     for (let attempt = 0; attempt <= retries; attempt += 1) {
+      const attemptStartedAt = this.#now().toISOString()
+      await this.#publishExecutionEvent(workflow.id, {
+        phase: 'tool_attempted',
+        executionId: runId,
+        runId,
+        activityId: node.id,
+        occurredAt: attemptStartedAt,
+        ...(executionWorkspaceRoot ? { workspaceRoot: executionWorkspaceRoot } : {}),
+        payload: toJsonValue({
+          workflowId: workflow.id,
+          nodeId: node.id,
+          attempt,
+          componentFingerprint,
+          inputFingerprint
+        })
+      })
       try {
         const output = await this.#nodeOutput(
           workflow,
@@ -437,21 +929,97 @@ export class CreateLoopRuntime {
           payload,
           runId,
           signal,
-          callerWorkspaceRoot
+          executionWorkspaceRoot
         )
+        this.#registerRunSecretValues(runId, output.payload.json, output.message)
+        const finishedAt = this.#now().toISOString()
+        const artifactRefs = discoverWorkflowArtifactReferences(output.payload.json)
+        const outputFingerprint = workflowFingerprint(output.payload.json)
+        const receipt = {
+          status: 'success' as const,
+          outcome: 'progress' as const,
+          outputFingerprint,
+          detail: output.message
+        }
+        const recordedAttempt = {
+          attempt,
+          startedAt: attemptStartedAt,
+          finishedAt,
+          activityFingerprint: componentFingerprint,
+          inputFingerprint,
+          receiptFingerprint: workflowFingerprint(receipt),
+          receipt,
+          artifactRefs
+        }
+        attempts.push(recordedAttempt)
+        await this.#publishExecutionEvent(workflow.id, {
+          phase: 'activity_completed',
+          executionId: runId,
+          runId,
+          activityId: node.id,
+          occurredAt: finishedAt,
+          ...(executionWorkspaceRoot ? { workspaceRoot: executionWorkspaceRoot } : {}),
+          payload: toJsonValue({
+            workflowId: workflow.id,
+            nodeId: node.id,
+            attempt,
+            receipt: recordedAttempt.receipt
+          }),
+          artifacts: artifactRefs.map((reference) => toJsonValue(reference))
+        })
         return {
           nodeId: node.id,
           status: 'success',
           startedAt,
-          finishedAt: this.#now().toISOString(),
+          finishedAt,
           message: output.message,
           outputJson: JSON.stringify(output.payload.json),
           inputJson: JSON.stringify(payload.json),
           retries: attempt,
           threadId: output.threadId ?? '',
-          error: ''
+          error: '',
+          componentFingerprint,
+          inputFingerprint,
+          outputFingerprint,
+          attempts,
+          artifactRefs
         }
       } catch (error) {
+        const finishedAt = this.#now().toISOString()
+        const terminal = signal.aborted || attempt >= retries
+        const errorDetail = errorMessage(error)
+        this.#registerRunSecretValues(runId, errorDetail)
+        const receipt = {
+          status: 'error' as const,
+          outcome: terminal ? 'fatal_error' as const : 'retryable_error' as const,
+          errorCode: signal.aborted ? 'aborted' : 'node_execution_failed',
+          detail: errorDetail
+        }
+        const recordedAttempt = {
+          attempt,
+          startedAt: attemptStartedAt,
+          finishedAt,
+          activityFingerprint: componentFingerprint,
+          inputFingerprint,
+          receiptFingerprint: workflowFingerprint(receipt),
+          receipt,
+          artifactRefs: []
+        }
+        attempts.push(recordedAttempt)
+        await this.#publishExecutionEvent(workflow.id, {
+          phase: terminal ? 'activity_completed' : 'tool_attempted',
+          executionId: runId,
+          runId,
+          activityId: node.id,
+          occurredAt: finishedAt,
+          ...(executionWorkspaceRoot ? { workspaceRoot: executionWorkspaceRoot } : {}),
+          payload: toJsonValue({
+            workflowId: workflow.id,
+            nodeId: node.id,
+            attempt,
+            receipt
+          })
+        })
         if (signal.aborted) throw error
         if (attempt < retries) {
           await abortableDelay(Math.max(0, node.retryDelayMs ?? 0), signal)
@@ -459,30 +1027,42 @@ export class CreateLoopRuntime {
         }
         if (node.onError === 'fallback') {
           const fallback = parseJsonOrText(node.fallbackJson ?? '{}')
+          const outputFingerprint = workflowFingerprint(fallback)
+          const artifactRefs = discoverWorkflowArtifactReferences(fallback)
           return {
             nodeId: node.id,
             status: 'success',
             startedAt,
-            finishedAt: this.#now().toISOString(),
+            finishedAt,
             message: 'Node fallback applied.',
             outputJson: JSON.stringify(fallback),
             inputJson: JSON.stringify(payload.json),
             retries: attempt,
             threadId: '',
-            error: errorMessage(error)
+            error: errorDetail,
+            componentFingerprint,
+            inputFingerprint,
+            outputFingerprint,
+            attempts,
+            artifactRefs
           }
         }
         return {
           nodeId: node.id,
           status: 'error',
           startedAt,
-          finishedAt: this.#now().toISOString(),
+          finishedAt,
           message: '',
           outputJson: '',
           inputJson: JSON.stringify(payload.json),
           retries: attempt,
           threadId: '',
-          error: errorMessage(error)
+          error: errorDetail,
+          componentFingerprint,
+          inputFingerprint,
+          outputFingerprint: workflowFingerprint(null),
+          attempts,
+          artifactRefs: []
         }
       }
     }
@@ -506,7 +1086,7 @@ export class CreateLoopRuntime {
         return { payload, message: 'Trigger received.' }
       case 'llm': {
         const prompt = interpolate(node.config.prompt, payload)
-        const text = await this.#reason(prompt, node.config.model, signal)
+        const text = await this.#reason(prompt, node.config.model, signal, runId)
         return { payload: { json: { text }, text }, message: text }
       }
       case 'ai-agent': {
@@ -546,14 +1126,14 @@ export class CreateLoopRuntime {
       }
       case 'parameter-extractor': {
         const instruction = `${node.config.instruction}\nReturn JSON only.\nInput:\n${interpolate(node.config.source || '{{text}}', payload)}`
-        const text = await this.#reason(instruction, node.config.model, signal)
+        const text = await this.#reason(instruction, node.config.model, signal, runId)
         const json = parseJson(text)
         return { payload: { json, text }, message: text }
       }
       case 'question-classifier': {
         const labels = node.config.categories.map((category) => `${category.id}: ${category.label}`).join('\n')
         const prompt = `${node.config.instruction}\nChoose one category id and return only that id.\n${labels}\nInput:\n${payload.text}`
-        const selected = (await this.#reason(prompt, node.config.model, signal)).trim()
+        const selected = (await this.#reason(prompt, node.config.model, signal, runId)).trim()
         return { payload, message: `branch:${selected}` }
       }
       case 'condition':
@@ -640,7 +1220,13 @@ export class CreateLoopRuntime {
         return { payload, message: payload.text }
       }
       case 'human-approval': {
-        const decision = await this.#waitForApproval(workflow, node, runId, signal)
+        const decision = await this.#waitForApproval(
+          workflow,
+          node,
+          runId,
+          signal,
+          callerWorkspaceRoot
+        )
         if (decision === 'rejected') throw new Error('Human approval rejected.')
         return { payload, message: 'Human approval granted.' }
       }
@@ -764,9 +1350,15 @@ export class CreateLoopRuntime {
     }
   }
 
-  async #reason(prompt: string, requestedModel: string, signal: AbortSignal): Promise<string> {
+  async #reason(
+    prompt: string,
+    requestedModel: string,
+    signal: AbortSignal,
+    runId: string
+  ): Promise<string> {
     const access = await this.#requireContext().modelAccess.textReasoner()
     if (!access) throw new Error('No text reasoner is configured.')
+    if (access.apiKey) this.#addRunSecretValues(runId, access.apiKey)
     const base = access.baseUrl.replace(/\/+$/, '')
     const url = base.endsWith('/v1') ? `${base}/responses` : `${base}/v1/responses`
     const response = await fetch(url, {
@@ -790,45 +1382,182 @@ export class CreateLoopRuntime {
     workflow: WorkflowV1,
     node: Extract<WorkflowNodeV1, { type: 'human-approval' }>,
     runId: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    workspaceRoot: string
   ): Promise<WorkflowApprovalDecision> {
     const token = this.#createId()
-    return new Promise<WorkflowApprovalDecision>((resolve, reject) => {
-      const approval: WorkflowPendingApprovalV1 = {
-        token,
+    const requestedAt = this.#now().toISOString()
+    const presentation = redactWorkflowKnownSecretValues({
+      nodeName: node.name,
+      title: node.config.title,
+      instruction: node.config.instruction
+    }, this.#knownSecretValues(runId))
+    const approval: WorkflowPendingApprovalV1 = {
+      token,
+      workflowId: workflow.id,
+      runId,
+      nodeId: node.id,
+      nodeName: presentation.nodeName,
+      title: presentation.title,
+      instruction: presentation.instruction,
+      createdAt: requestedAt
+    }
+    const record: WorkflowApprovalRecordV2 = {
+      requestId: token,
+      workflowId: workflow.id,
+      runId,
+      nodeId: node.id,
+      nodeName: presentation.nodeName,
+      title: presentation.title,
+      instruction: presentation.instruction,
+      requestedAt,
+      status: 'pending'
+    }
+    await this.#mutate((current) => ({
+      ...current,
+      revision: current.revision + 1,
+      approvalJournal: [...current.approvalJournal, record].slice(-10_000)
+    }))
+    await this.#publishExecutionEvent(workflow.id, {
+      phase: 'approval_requested',
+      executionId: runId,
+      runId,
+      activityId: node.id,
+      occurredAt: requestedAt,
+      ...(workspaceRoot ? { workspaceRoot } : {}),
+      payload: toJsonValue({
         workflowId: workflow.id,
-        runId,
+        requestId: token,
         nodeId: node.id,
-        nodeName: node.name,
-        title: node.config.title,
-        instruction: node.config.instruction,
-        createdAt: this.#now().toISOString()
-      }
+        freshDecisionRequired: true
+      })
+    })
+    return new Promise<WorkflowApprovalDecision>((resolve, reject) => {
       let timer: ReturnType<typeof setTimeout> | undefined
-      const finish = (decision: WorkflowApprovalDecision): void => {
+      let claimed = false
+      let abort = (): void => undefined
+      const claim = (
+        decision: WorkflowApprovalDecision,
+        actor: string,
+        rationale?: string,
+        rejectRun = false,
+        rejectionReason?: unknown
+      ): Promise<void> | null => {
+        if (claimed) return null
+        claimed = true
+        this.#approvals.delete(token)
         if (timer) clearTimeout(timer)
         signal.removeEventListener('abort', abort)
-        resolve(decision)
+        return this.#resolveApprovalRecord(record, decision, actor, rationale, workspaceRoot)
+          .then(() => {
+            if (rejectRun) reject(rejectionReason ?? new Error('Approval wait aborted.'))
+            else resolve(decision)
+          }, (error) => {
+            reject(error)
+            throw error
+          })
       }
-      const abort = (): void => {
-        if (timer) clearTimeout(timer)
-        this.#approvals.delete(token)
-        reject(signal.reason)
+      abort = (): void => {
+        const operation = claim(
+          'rejected',
+          'system',
+          'Run aborted.',
+          true,
+          signal.reason
+        )
+        void operation?.catch(() => undefined)
       }
-      signal.addEventListener('abort', abort, { once: true })
       this.#approvals.set(token, {
         approval,
-        resolve: (decision) => {
-          finish(decision)
-        }
+        claim: (decision, actor, rationale) => claim(decision, actor, rationale)
       })
-      if (node.config.timeoutMs > 0) {
+      signal.addEventListener('abort', abort, { once: true })
+      if (signal.aborted) abort()
+      if (!claimed && node.config.timeoutMs > 0) {
         timer = setTimeout(() => {
-          this.#approvals.delete(token)
-          finish(node.config.onTimeout)
+          const operation = claim(
+            node.config.onTimeout,
+            'system',
+            'Approval timed out.'
+          )
+          void operation?.catch(() => undefined)
         }, node.config.timeoutMs)
       }
     })
+  }
+
+  async #resolveApprovalRecord(
+    pending: WorkflowApprovalRecordV2,
+    decision: WorkflowApprovalDecision,
+    actor: string,
+    rationale?: string,
+    workspaceRoot = ''
+  ): Promise<void> {
+    const resolvedAt = this.#now().toISOString()
+    this.#registerRunSecretValues(pending.runId, actor, rationale ?? '')
+    const resolved = redactWorkflowKnownSecretValues<WorkflowApprovalRecordV2>({
+      ...pending,
+      status: decision,
+      decision,
+      resolvedAt,
+      actor,
+      ...(rationale ? { rationale } : {})
+    }, this.#knownSecretValues(pending.runId))
+    await this.#mutate((current) => ({
+      ...current,
+      revision: current.revision + 1,
+      approvalJournal: current.approvalJournal.map((record) => (
+        record.requestId === pending.requestId ? resolved : record
+      ))
+    }))
+    await this.#publishExecutionEvent(pending.workflowId, {
+      phase: 'approval_resolved',
+      executionId: pending.runId,
+      runId: pending.runId,
+      activityId: pending.nodeId,
+      occurredAt: resolvedAt,
+      ...(workspaceRoot ? { workspaceRoot } : {}),
+      payload: toJsonValue({
+        workflowId: pending.workflowId,
+        requestId: pending.requestId,
+        nodeId: pending.nodeId,
+        decision,
+        actor,
+        rationale: rationale ?? null,
+        freshDecisionRequired: true
+      })
+    })
+  }
+
+  async #resolveRunWorkspaceRoot(
+    workflow: WorkflowV1,
+    triggerNodeId: string,
+    input: Payload,
+    callerWorkspaceRoot: string
+  ): Promise<string> {
+    const caller = callerWorkspaceRoot.trim()
+    if (caller) return caller
+    const trigger = workflow.nodes.find((node) => node.id === triggerNodeId)
+    const configured = trigger && 'workspaceRoot' in trigger.config
+      ? interpolate(trigger.config.workspaceRoot ?? '', input).trim()
+      : ''
+    if (configured) return configured
+    const reachableNodeIds = workflowReachableNodeIds(workflow, triggerNodeId)
+    const executionRoots = [...new Set(workflow.nodes.flatMap((node) => (
+      node.id !== triggerNodeId && !node.disabled && reachableNodeIds.has(node.id) &&
+        'workspaceRoot' in node.config
+        ? [interpolate(node.config.workspaceRoot ?? '', input).trim()]
+        : []
+    )).filter(Boolean))]
+    if (executionRoots.length === 1) return executionRoots[0]!
+    const defaultWorkspaceRoot = (await this.#load()).settings.defaultWorkspaceRoot.trim()
+    if (defaultWorkspaceRoot) return defaultWorkspaceRoot
+    if (executionRoots.length > 1) {
+      throw new Error(
+        'Workflow nodes declare multiple workspace roots; provide an explicit caller or default workspace.'
+      )
+    }
+    return ''
   }
 
   #startScheduler(): void {
@@ -928,21 +1657,44 @@ export class CreateLoopRuntime {
 
   #cancelAll(message: string): void {
     for (const run of this.#activeRuns.values()) run.controller.abort(new Error(message))
-    for (const [token, waiter] of this.#approvals) {
-      this.#approvals.delete(token)
-      waiter.resolve('rejected')
+    for (const waiter of this.#approvals.values()) {
+      void waiter.claim('rejected', 'system', message)?.catch(() => undefined)
     }
   }
 
   async #load(): Promise<PersistedState> {
     if (this.#state) return this.#state
+    let needsMigration = false
     try {
       const parsed = JSON.parse(await readFile(this.#statePath, 'utf8')) as Partial<PersistedState>
+      await chmod(path.dirname(this.#statePath), 0o700)
+      await chmod(this.#statePath, 0o600)
+      const pendingExecutionEvents = Array.isArray(parsed.pendingExecutionEvents)
+        ? parsed.pendingExecutionEvents
+            .map(normalizePendingExecutionEvent)
+            .filter((event): event is PendingExecutionEvent => event !== null)
+        : []
+      const trustedRerunExports = Array.isArray(parsed.trustedRerunExports)
+        ? parsed.trustedRerunExports
+            .filter(isTrustedRerunExport)
+            .slice(-MAX_TRUSTED_RERUN_EXPORTS)
+            .map((entry) => structuredClone(entry))
+        : []
       this.#state = {
         schemaVersion: SCHEMA_VERSION,
         revision: Number.isInteger(parsed.revision) ? Math.max(0, Number(parsed.revision)) : 0,
-        settings: normalizeWorkflowSettings(parsed.settings)
+        settings: normalizeWorkflowSettings(parsed.settings),
+        approvalJournal: Array.isArray(parsed.approvalJournal)
+          ? parsed.approvalJournal.filter(isApprovalRecord).slice(-10_000)
+          : [],
+        pendingExecutionEvents,
+        trustedRerunExports
       }
+      needsMigration = parsed.schemaVersion !== SCHEMA_VERSION ||
+        !Array.isArray(parsed.pendingExecutionEvents) ||
+        pendingExecutionEvents.length !== parsed.pendingExecutionEvents.length ||
+        !Array.isArray(parsed.trustedRerunExports) ||
+        trustedRerunExports.length !== parsed.trustedRerunExports.length
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         await this.#quarantineCorruptState()
@@ -950,10 +1702,15 @@ export class CreateLoopRuntime {
       this.#state = {
         schemaVersion: SCHEMA_VERSION,
         revision: 0,
-        settings: defaultWorkflowSettings()
+        settings: defaultWorkflowSettings(),
+        approvalJournal: [],
+        pendingExecutionEvents: [],
+        trustedRerunExports: []
       }
       await this.#persist(this.#state)
+      return this.#state
     }
+    if (needsMigration) await this.#persist(this.#state)
     return this.#state
   }
 
@@ -970,12 +1727,29 @@ export class CreateLoopRuntime {
   }
 
   async #persist(state: PersistedState): Promise<void> {
-    await mkdir(path.dirname(this.#statePath), { recursive: true })
+    const directory = path.dirname(this.#statePath)
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    await chmod(directory, 0o700)
     const temp = `${this.#statePath}.${process.pid}.${this.#createId()}.tmp`
+    let tempHandle: Awaited<ReturnType<typeof open>> | null = null
     try {
-      await writeFile(temp, `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+      tempHandle = await open(temp, 'wx', 0o600)
+      await tempHandle.chmod(0o600)
+      await tempHandle.writeFile(`${JSON.stringify(state, null, 2)}\n`, 'utf8')
+      await tempHandle.sync()
+      await tempHandle.close()
+      tempHandle = null
       await rename(temp, this.#statePath)
+      if (process.platform !== 'win32') {
+        const directoryHandle = await open(directory, 'r')
+        try {
+          await directoryHandle.sync()
+        } finally {
+          await directoryHandle.close()
+        }
+      }
     } finally {
+      await tempHandle?.close().catch(() => undefined)
       await rm(temp, { force: true }).catch(() => undefined)
     }
   }
@@ -997,6 +1771,93 @@ export class CreateLoopRuntime {
   #requireEnabled(): void {
     this.#requireActive()
     if (!this.#enabled) throw new Error('Create Loop package is disabled.')
+  }
+
+  async #replayPendingExecutionEvents(): Promise<void> {
+    const pending = [...(await this.#load()).pendingExecutionEvents]
+    for (const event of pending) {
+      await this.#deliverPendingExecutionEvent(event)
+    }
+  }
+
+  async #deliverPendingExecutionEvent(event: PendingExecutionEvent): Promise<boolean> {
+    try {
+      const workflowId = workflowIdFromExecutionEvent(event)
+      const workflow = (await this.#load()).settings.workflows.find(
+        (candidate) => candidate.id === workflowId
+      )
+      const secretValues = collectWorkflowSecretValues(workflow, event)
+      const safeEvent = redactExecutionEventSecrets(event, secretValues)
+      if (workflowFingerprint(safeEvent) !== workflowFingerprint(event)) {
+        await this.#mutate((current) => ({
+          ...current,
+          pendingExecutionEvents: current.pendingExecutionEvents.map((candidate) => (
+            candidate.eventId === event.eventId ? safeEvent : candidate
+          ))
+        }))
+      }
+      await this.#requireContext().executionEvents.publish(structuredClone(safeEvent))
+      await this.#mutate((current) => ({
+        ...current,
+        pendingExecutionEvents: current.pendingExecutionEvents.filter(
+          (candidate) => candidate.eventId !== event.eventId
+        )
+      }))
+      return true
+    } catch (error) {
+      this.#log(
+        'warn',
+        `Create Loop terminal event ${event.eventId} remains pending for replay.`,
+        error
+      )
+      return false
+    }
+  }
+
+  #workflowExecutionEventScope(workflowId: string): NonNullable<DomainExecutionEventInput['scope']> {
+    return {
+      runtimeId: this.#requireContext().owner.moduleId,
+      threadId: `workflow:${workflowId}`
+    }
+  }
+
+  async #publishExecutionEvent(
+    workflowId: string,
+    event: DomainExecutionEventInput
+  ): Promise<void> {
+    const context = this.#requireContext()
+    const runId = event.runId ?? event.executionId
+    this.#registerRunSecretValues(
+      runId,
+      event.payload,
+      event.artifacts,
+      event.workspaceRoot ?? ''
+    )
+    const safeEvent = redactExecutionEventSecrets(event, this.#knownSecretValues(runId))
+    await context.executionEvents.publish({
+      ...safeEvent,
+      scope: this.#workflowExecutionEventScope(workflowId)
+    })
+  }
+
+  #registerRunSecretValues(runId: string, ...values: readonly unknown[]): void {
+    if (!runId) return
+    const secrets = this.#runSecretValues.get(runId) ?? new Set<string>()
+    for (const value of collectWorkflowSecretValues(...values)) secrets.add(value)
+    this.#runSecretValues.set(runId, secrets)
+  }
+
+  #addRunSecretValues(runId: string, ...values: readonly string[]): void {
+    if (!runId) return
+    const secrets = this.#runSecretValues.get(runId) ?? new Set<string>()
+    for (const value of values) {
+      if (value.trim()) secrets.add(value.trim())
+    }
+    this.#runSecretValues.set(runId, secrets)
+  }
+
+  #knownSecretValues(runId: string): string[] {
+    return [...(this.#runSecretValues.get(runId) ?? [])]
   }
 
   #log(level: 'debug' | 'info' | 'warn' | 'error', message: string, detail?: unknown): void {
@@ -1034,8 +1895,144 @@ function snapshot(state: PersistedState): CreateLoopSnapshot {
   return { revision: state.revision, settings: clone(state.settings) }
 }
 
+function runtimeWorkflowFromSnapshot(
+  workflow: WorkflowExecutionSnapshotV1,
+  source?: WorkflowV1
+): WorkflowV1 {
+  const now = new Date().toISOString()
+  return {
+    id: workflow.id,
+    name: workflow.name,
+    enabled: source?.enabled ?? true,
+    callableByAgent: source?.callableByAgent ?? false,
+    env: structuredClone(workflow.env),
+    nodes: structuredClone(workflow.nodes),
+    connections: structuredClone(workflow.connections),
+    createdAt: source?.createdAt ?? now,
+    updatedAt: source?.updatedAt ?? now,
+    lastRunAt: '',
+    nextRunAt: '',
+    lastStatus: 'idle',
+    lastMessage: '',
+    runs: []
+  }
+}
+
+function workflowReachableNodeIds(workflow: WorkflowV1, triggerNodeId: string): Set<string> {
+  const reachable = new Set<string>()
+  const queue = [triggerNodeId]
+  while (queue.length > 0) {
+    const nodeId = queue.shift()!
+    if (reachable.has(nodeId)) continue
+    reachable.add(nodeId)
+    for (const connection of workflow.connections) {
+      if (connection.source === nodeId && !reachable.has(connection.target)) {
+        queue.push(connection.target)
+      }
+    }
+  }
+  return reachable
+}
+
 function clone<T>(value: T): T {
   return structuredClone(value)
+}
+
+function isApprovalRecord(value: unknown): value is WorkflowApprovalRecordV2 {
+  if (!isRecord(value)) return false
+  return typeof value.requestId === 'string' && typeof value.workflowId === 'string' &&
+    typeof value.runId === 'string' && typeof value.nodeId === 'string' &&
+    typeof value.nodeName === 'string' && typeof value.title === 'string' &&
+    typeof value.instruction === 'string' && typeof value.requestedAt === 'string' &&
+    (value.status === 'pending' || value.status === 'approved' || value.status === 'rejected')
+}
+
+function isTrustedRerunExport(value: unknown): value is TrustedRerunExport {
+  if (!isRecord(value)) return false
+  return typeof value.specDigest === 'string' &&
+    /^sha256:[0-9a-f]{64}$/u.test(value.specDigest) &&
+    typeof value.sourceSnapshotDigest === 'string' &&
+    /^sha256:[0-9a-f]{64}$/u.test(value.sourceSnapshotDigest) &&
+    typeof value.workflowId === 'string' && value.workflowId.trim().length > 0 &&
+    typeof value.runId === 'string' && value.runId.trim().length > 0
+}
+
+function normalizePendingExecutionEvent(value: unknown): PendingExecutionEvent | null {
+  if (!isRecord(value)) return null
+  const parsed = domainExecutionEventSchema.safeParse({
+    ...value,
+    schemaVersion: 'sciforge.execution-event.v1',
+    producer: {
+      moduleId: 'sciforge.create-loop',
+      moduleVersion: 'migration'
+    }
+  })
+  if (!parsed.success || (
+    parsed.data.phase !== 'run_completed' && parsed.data.phase !== 'run_failed'
+  )) return null
+  const {
+    schemaVersion: _schemaVersion,
+    producer: _producer,
+    ...event
+  } = parsed.data
+  return event as PendingExecutionEvent
+}
+
+function workflowIdFromExecutionEvent(event: PendingExecutionEvent): string {
+  if (isRecord(event.payload) && typeof event.payload.workflowId === 'string') {
+    return event.payload.workflowId
+  }
+  const threadId = event.scope?.threadId ?? ''
+  return threadId.startsWith('workflow:') ? threadId.slice('workflow:'.length) : ''
+}
+
+function redactExecutionEventSecrets<T extends DomainExecutionEventInput | PendingExecutionEvent>(
+  event: T,
+  knownSecretValues: readonly string[]
+): T {
+  const secretValues = [
+    ...knownSecretValues,
+    ...collectWorkflowSecretValues(event.payload, event.artifacts, event.workspaceRoot ?? '')
+  ]
+  return {
+    ...event,
+    ...(event.workspaceRoot === undefined
+      ? {}
+      : { workspaceRoot: redactWorkflowKnownSecretValues(event.workspaceRoot, secretValues) }),
+    payload: redactWorkflowKnownSecretValues(event.payload, secretValues),
+    ...(event.artifacts === undefined
+      ? {}
+      : { artifacts: redactWorkflowKnownSecretValues(event.artifacts, secretValues) })
+  }
+}
+
+function enqueuePendingExecutionEvent(
+  pending: readonly PendingExecutionEvent[],
+  event: PendingExecutionEvent,
+  maximumPendingEvents: number
+): PendingExecutionEvent[] {
+  const existing = pending.find((candidate) => candidate.eventId === event.eventId)
+  if (existing) {
+    if (workflowFingerprint(existing) !== workflowFingerprint(event)) {
+      throw new Error(`Create Loop terminal eventId collision: ${event.eventId}`)
+    }
+    return [...pending]
+  }
+  if (pending.length >= maximumPendingEvents) {
+    throw new Error(
+      `Create Loop terminal event outbox is full (${maximumPendingEvents}); refusing to discard an unacknowledged event.`
+    )
+  }
+  return [...pending, structuredClone(event)]
+}
+
+function terminalExecutionEventId(
+  workflowId: string,
+  runId: string,
+  phase: PendingExecutionEvent['phase']
+): string {
+  const digest = workflowFingerprint({ workflowId, runId, phase })
+  return `create-loop-terminal:${digest.slice('sha256:'.length)}`
 }
 
 function payloadFromInput(input: unknown): Payload {
@@ -1247,6 +2244,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function missingWorkspaceResult(): WorkflowRunResult {
+  return {
+    ok: false,
+    message: 'Workflow execution requires a non-empty workspace root.'
+  }
+}
+
+function nodeRuntimeIdentity(): {
+  nodeVersion: string
+  platform: string
+  architecture: string
+} {
+  return {
+    nodeVersion: process.version,
+    platform: process.platform,
+    architecture: process.arch
+  }
 }
 
 async function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {

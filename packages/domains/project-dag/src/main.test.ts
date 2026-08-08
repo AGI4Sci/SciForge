@@ -34,7 +34,7 @@ test('main entry lazily owns one lifecycle runtime shared by capabilities and co
     update: async () => ({ marker: 'update' }),
     saveGoal: async () => ({ marker: 'goal' }),
     resolveEvidencePreview: async () => ({ marker: 'preview' }),
-    consumeTurnCompleted: async () => {
+    consumeArtifact: async () => {
       calls.push('consume')
     }
   } as unknown as ProjectDagRuntime

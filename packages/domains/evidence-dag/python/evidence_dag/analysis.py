@@ -25,7 +25,8 @@ from .model import EdgeRel, NodeType
 from .verifier import noisy_or
 
 _ROOT = "__sources_root__"
-_DERIVED = (NodeType.CLAIM, NodeType.REASONING)
+_DERIVED = (NodeType.CLAIM, NodeType.CONCLUSION, NodeType.REASONING)
+_CONCLUSIONS = frozenset({NodeType.CLAIM, NodeType.CONCLUSION})
 
 
 def _dominator_chain(idom: dict, node: str) -> list[str]:
@@ -131,7 +132,7 @@ def analyze(graph: ThreadGraph, *, threshold: float = 0.7) -> dict:
     shared_source_of: dict[str, list[str]] = {}
     shared_reasoning_of: dict[str, list[str]] = {}
     for c in derived:
-        if graph.nodes[c].type != NodeType.CLAIM or n_parents.get(c, 0) < 2:
+        if graph.nodes[c].type not in _CONCLUSIONS or n_parents.get(c, 0) < 2:
             continue
         # A claim that LOOKS multi-supported (>=2 incoming edges) but whose every
         # evidence path funnels through ONE dominator is only as strong as that
@@ -154,7 +155,7 @@ def analyze(graph: ThreadGraph, *, threshold: float = 0.7) -> dict:
         if shared_rea:
             bottleneck.append("reasoning")
         pseudo_robust.append({
-            "id": c, "type": "claim", "content": brief(c),
+            "id": c, "type": graph.nodes[c].type.value, "content": brief(c),
             "n_support_edges": n_parents[c],          # 看上去几路支持
             "bottleneck": bottleneck,                 # which kind(s) of single point
             "shared_source": shared_src,              # 实际就这一个(几个)来源
@@ -178,7 +179,7 @@ def analyze(graph: ThreadGraph, *, threshold: float = 0.7) -> dict:
         nsrc = n_sources_of[c]
         contra_strength = contra_strength_of.get(c, 0.0)
         is_contested = contra_strength >= threshold        # by STRENGTH, not count
-        is_claim = node.type == NodeType.CLAIM
+        is_conclusion = node.type in _CONCLUSIONS
         is_pseudo = c in shared_source_of or c in shared_reasoning_of
         reasons = []
         if nsrc == 0:
@@ -190,7 +191,7 @@ def analyze(graph: ThreadGraph, *, threshold: float = 0.7) -> dict:
                 reasons.append(f"pseudo-robust — {n} supports funnel through one source")
             else:
                 reasons.append(f"pseudo-robust — {n} supports funnel through one shared assumption")
-        elif nsrc == 1 and is_claim:
+        elif nsrc == 1 and is_conclusion:
             reasons.append("rests on a single source")
         if is_contested:
             reasons.append(f"contested by a contradicts edge (strength {contra_strength:.2f})")
@@ -223,7 +224,7 @@ def analyze(graph: ThreadGraph, *, threshold: float = 0.7) -> dict:
         {"id": c, "content": brief(c),
          "support_strength": strength_of[c], "n_sources": n_sources_of[c]}
         for c in derived
-        if graph.nodes[c].type == NodeType.CLAIM
+        if graph.nodes[c].type in _CONCLUSIONS
         and n_sources_of[c] > 0 and strength_of[c] < threshold
     ]
     weakly_supported.sort(key=lambda x: (x["support_strength"], x["id"]))

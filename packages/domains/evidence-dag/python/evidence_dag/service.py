@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 from dataclasses import replace
+from datetime import datetime
 from typing import Any, Optional
 
 from . import analysis as _analysis
@@ -18,6 +19,25 @@ from . import metrics as _metrics
 from . import provjson
 from .products import export_snapshot_products as _export_snapshot_products
 from . import reconcile as _reconcile
+from .access import (
+    artifact_restricted,
+    availability_restricted,
+    graph_restricted,
+    lineage_restricted,
+    policy_restricted,
+    project_event,
+    project_graph,
+    project_lineage,
+    project_metrics,
+    project_prov_json,
+    project_registry_result,
+    project_snapshot,
+    project_summary,
+    project_update_result,
+    project_update_status,
+    require_unrestricted,
+    scope_restricted,
+)
 from .artifact_versions import ArtifactVersionProjectionClient
 from .assessment import assessment_identity, bind_target_digest, run_a0, run_a1, run_a2
 from .digraph import descendants
@@ -31,8 +51,10 @@ from .events import EventStore, utc_now_iso
 from .extractor import ExtractionOutputError, extract_dag
 from .graph import ThreadGraph
 from .incremental import TraceStagingCache, watermark_regresses
+from .lineage import ingest_trace_lineage
 from .llm import LLM, LLMCallError
-from .model import EdgeRel, HumanReviewStatus
+from .model import EdgeRel, HumanReviewStatus, NodeStatus, NodeType
+from .rerun import build_rerun_spec, compare_rerun_specs, output_values_for_spec
 from .snapshot import (
     EXTRACTOR_VERSION,
     SCHEMA_VERSION,
@@ -49,6 +71,303 @@ from .verifier import verify as _verify
 
 class ReviewDecisionConflict(RuntimeError):
     """Raised when a decision is not bound to the current immutable snapshot."""
+
+
+_EXECUTION_EVENT_SCHEMA = "sciforge.execution-event.v1"
+_RUN_MANIFEST_KIND = "sciforge.create-loop.run-manifest"
+_RUN_MANIFEST_SCHEMA = "sciforge.create-loop.run.v2"
+_RERUN_SPEC_KIND = "sciforge.repro-spec"
+_RERUN_SPEC_SCHEMA = "sciforge.rerun.v1"
+_HOST_EXECUTION_BOUNDARY = "sciforge.host.execution-completed.v1"
+_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_EVENT_KEYS = frozenset({
+    "schemaVersion", "eventId", "phase", "producer", "executionId", "runId",
+    "activityId", "specDigest", "rerunOfRunId", "traceId", "scope",
+    "workspaceRoot", "occurredAt", "payload", "artifacts",
+})
+_TRACE_WRAPPER_KEYS = frozenset({"id", "source_item_id", "sciforgeEvidenceEvent"})
+_MARKER_KEYS = frozenset({
+    "trustedBoundary", "eventKind", "hostBinding", "producer", "executionId", "runId",
+    "activityId", "runtimeId", "threadId", "turnId", "occurredAt", "targetWatermark",
+    "workspaceRoot",
+})
+
+
+def _bounded_text(value: Any, maximum: int = 512) -> Optional[str]:
+    if not isinstance(value, str) or not value.strip() or value != value.strip():
+        return None
+    return value if len(value) <= maximum else None
+
+
+def _valid_timestamp(value: Any) -> bool:
+    text = _bounded_text(value, 128)
+    if text is None:
+        return False
+    try:
+        datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        return False
+    return True
+
+
+def _valid_producer(value: Any) -> bool:
+    return isinstance(value, dict) and set(value) == {"moduleId", "moduleVersion"} \
+        and _bounded_text(value.get("moduleId")) is not None \
+        and _bounded_text(value.get("moduleVersion"), 128) is not None
+
+
+def _trusted_execution_marker(item: dict[str, Any]) -> Optional[dict[str, Any]]:
+    marker = item.get("sciforgeEvidenceEvent")
+    if not isinstance(marker, dict) or not set(marker).issubset(_MARKER_KEYS):
+        return None
+    required = {
+        "trustedBoundary", "eventKind", "hostBinding", "producer", "executionId", "runId",
+        "runtimeId", "threadId", "occurredAt", "targetWatermark",
+    }
+    if not required.issubset(marker) \
+            or marker.get("trustedBoundary") != _HOST_EXECUTION_BOUNDARY \
+            or marker.get("eventKind") != "execution-completed" \
+            or not _valid_producer(marker.get("producer")) \
+            or any(_bounded_text(marker.get(key)) is None for key in (
+                "executionId", "runId", "runtimeId", "threadId", "targetWatermark",
+            )) \
+            or not _valid_timestamp(marker.get("occurredAt")):
+        return None
+    binding = marker.get("hostBinding")
+    if not isinstance(binding, dict) or binding.get("contractVersion") != 1:
+        return None
+    sequence = binding.get("acceptanceSequence")
+    watermark = str(marker["targetWatermark"])
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1 \
+            or watermark.split(":", 1)[0] != str(sequence):
+        return None
+    workspace_binding = binding.get("workspaceBinding")
+    if workspace_binding == "capability-caller":
+        if set(binding) != {
+            "contractVersion", "acceptanceSequence", "workspaceBinding", "workspaceRoot",
+        }:
+            return None
+        root = _bounded_text(binding.get("workspaceRoot"), 4096)
+        if root is None or marker.get("workspaceRoot") != root:
+            return None
+    elif workspace_binding == "unbound":
+        if set(binding) != {
+            "contractVersion", "acceptanceSequence", "workspaceBinding",
+        } or "workspaceRoot" in marker:
+            return None
+    else:
+        return None
+    expected_keys = set(required)
+    if workspace_binding == "capability-caller":
+        expected_keys.add("workspaceRoot")
+    for key in ("activityId", "turnId"):
+        if key in marker:
+            if _bounded_text(marker.get(key)) is None:
+                return None
+            expected_keys.add(key)
+    if set(marker) != expected_keys:
+        return None
+    return marker
+
+
+def _valid_execution_event(item: dict[str, Any], marker: dict[str, Any]) -> bool:
+    event = {key: value for key, value in item.items() if key not in _TRACE_WRAPPER_KEYS}
+    required = {
+        "schemaVersion", "eventId", "phase", "producer", "executionId", "runId",
+        "occurredAt", "artifacts",
+    }
+    if not required.issubset(event) or not set(event).issubset(_EVENT_KEYS) \
+            or event.get("schemaVersion") != _EXECUTION_EVENT_SCHEMA \
+            or event.get("phase") not in {"run_completed", "run_failed"} \
+            or not _valid_producer(event.get("producer")) \
+            or any(_bounded_text(event.get(key)) is None for key in (
+                "eventId", "executionId", "runId",
+            )) \
+            or not _valid_timestamp(event.get("occurredAt")) \
+            or not isinstance(event.get("artifacts"), list) \
+            or len(event["artifacts"]) > 10_000:
+        return False
+    if event["producer"] != marker["producer"] \
+            or event["executionId"] != marker["executionId"] \
+            or event["runId"] != marker["runId"] \
+            or event["occurredAt"] != marker["occurredAt"] \
+            or event.get("activityId") != marker.get("activityId"):
+        return False
+    binding = marker["hostBinding"]
+    if binding["workspaceBinding"] == "capability-caller":
+        if event.get("workspaceRoot") != binding["workspaceRoot"]:
+            return False
+    elif "workspaceRoot" in event:
+        return False
+    if "specDigest" in event and not _SHA256_RE.fullmatch(str(event["specDigest"])):
+        return False
+    if "rerunOfRunId" in event and _bounded_text(event.get("rerunOfRunId")) is None:
+        return False
+    if "traceId" in event and _bounded_text(event.get("traceId")) is None:
+        return False
+    scope = event.get("scope")
+    if scope is not None and (
+        not isinstance(scope, dict) or not set(scope).issubset({"runtimeId", "threadId", "turnId"})
+        or any(_bounded_text(value) is None for value in scope.values())
+    ):
+        return False
+    normalized_scope = scope if isinstance(scope, dict) else {}
+    explicit_runtime = normalized_scope.get("runtimeId")
+    explicit_thread = normalized_scope.get("threadId")
+    if bool(explicit_runtime) != bool(explicit_thread):
+        return False
+    if explicit_runtime:
+        if explicit_runtime != marker["runtimeId"] or explicit_thread != marker["threadId"]:
+            return False
+    elif marker["runtimeId"] != f"domain:{event['producer']['moduleId']}" \
+            or marker["threadId"] != f"execution:{event['executionId']}":
+        return False
+    if normalized_scope.get("turnId") != marker.get("turnId"):
+        return False
+    try:
+        json.dumps(event, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError, UnicodeError):
+        return False
+    return True
+
+
+def _valid_run_manifest(value: Any) -> bool:
+    if not isinstance(value, dict) or value.get("schema") != _RUN_MANIFEST_SCHEMA:
+        return False
+    required = {
+        "source", "workflow", "input", "context", "comparator", "determinism",
+        "workflowFingerprint", "inputFingerprint", "specFingerprint",
+        "contextFingerprint", "outputFingerprint", "outputJson",
+        "approvalFingerprint", "artifactRefs", "approvals",
+    }
+    if not required.issubset(value) or any(
+        not _SHA256_RE.fullmatch(str(value.get(key) or "")) for key in (
+            "workflowFingerprint", "inputFingerprint", "specFingerprint",
+            "contextFingerprint", "outputFingerprint", "approvalFingerprint",
+        )
+    ) or not isinstance(value.get("artifactRefs"), list) \
+            or not isinstance(value.get("approvals"), list):
+        return False
+    try:
+        json.dumps(value, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError, UnicodeError):
+        return False
+    return True
+
+
+def _is_canonical_execution_bundle(trace: list[dict[str, Any]]) -> bool:
+    """Return true only for a complete SDK execution-event artifact bundle.
+
+    These items already carry typed, digest-bound lineage.  Sending them through
+    semantic extraction would make durable provenance depend on model availability
+    and could also reinterpret canonical executor records.  Mixed or unrecognised
+    traces deliberately fall back to the normal LLM extraction/review path.
+    """
+    if not trace:
+        return False
+    saw_terminal_event = False
+    bundle_marker: Optional[dict[str, Any]] = None
+    declared_artifacts: list[str] = []
+    observed_artifacts: list[str] = []
+    for item in trace:
+        if not isinstance(item, dict):
+            return False
+        marker = _trusted_execution_marker(item)
+        if marker is None:
+            return False
+        if bundle_marker is None:
+            bundle_marker = marker
+        elif bundle_marker != marker:
+            return False
+        if item.get("schemaVersion") == _EXECUTION_EVENT_SCHEMA:
+            if saw_terminal_event or not _valid_execution_event(item, marker):
+                return False
+            saw_terminal_event = True
+            for artifact in item["artifacts"]:
+                canonical = _canonical_bundle_artifact(artifact)
+                if canonical is None:
+                    return False
+                declared_artifacts.append(canonical)
+            continue
+        kind = item.get("kind")
+        if kind == _RUN_MANIFEST_KIND:
+            manifest = item.get("manifest")
+            if not _valid_run_manifest(manifest):
+                return False
+        elif kind == _RERUN_SPEC_KIND:
+            spec = item.get("spec")
+            if not isinstance(spec, dict) or spec.get("schemaVersion") != _RERUN_SPEC_SCHEMA:
+                return False
+            try:
+                validate_rerun_spec(spec)
+            except (TypeError, ValueError):
+                return False
+        else:
+            return False
+        canonical = _canonical_bundle_artifact(item)
+        if canonical is None:
+            return False
+        observed_artifacts.append(canonical)
+    return saw_terminal_event and bool(declared_artifacts) \
+        and sorted(declared_artifacts) == sorted(observed_artifacts)
+
+
+def _canonical_bundle_artifact(value: Any) -> Optional[str]:
+    """Canonicalize an embedded/flattened artifact for exact multiset binding."""
+    if not isinstance(value, dict):
+        return None
+    projected = {
+        key: item for key, item in value.items()
+        if key not in _TRACE_WRAPPER_KEYS
+    }
+    try:
+        return json.dumps(
+            projected, ensure_ascii=False, allow_nan=False,
+            sort_keys=True, separators=(",", ":"),
+        )
+    except (TypeError, ValueError, UnicodeError):
+        return None
+
+
+def _historical_rerun_refs(trace: list[dict[str, Any]]) -> frozenset[str]:
+    refs: set[str] = set()
+    for item in trace:
+        if item.get("schemaVersion") == _EXECUTION_EVENT_SCHEMA:
+            value = _bounded_text(item.get("rerunOfRunId"))
+            if value:
+                refs.add(value)
+        manifest = item.get("manifest") if item.get("kind") == _RUN_MANIFEST_KIND else None
+        if isinstance(manifest, dict):
+            value = _bounded_text(manifest.get("rerunOfRunId"))
+            if value:
+                refs.add(value)
+    return frozenset(refs)
+
+
+def _mark_declared_semantic_nodes(graph: ThreadGraph) -> list[dict[str, str]]:
+    """Expose declared execution conclusions without claiming NLI verification.
+
+    Project DAG intentionally ignores ``open`` nodes.  A canonical executor has
+    authoritatively declared these semantic records, but no independent model has
+    judged their entailment, so ``fragile`` is the strongest honest promotion.
+    Source assertions retain the verifier's normal trusted-terminal treatment.
+    """
+    changes: list[dict[str, str]] = []
+    for node in graph.nodes.values():
+        role = node.attributes.get("semanticRole")
+        target: Optional[NodeStatus] = None
+        if role == "evidence" and node.type == NodeType.SOURCE_ASSERTION:
+            target = NodeStatus.SUPPORTED
+        elif role in {"evidence", "conclusion"} and node.type in {
+            NodeType.CLAIM, NodeType.CONCLUSION, NodeType.FINDING,
+        }:
+            target = NodeStatus.FRAGILE
+        if target is None or node.status == target:
+            continue
+        before = node.status
+        node.status = target
+        changes.append({"node": node.id, "from": before.value, "to": target.value})
+    return changes
 
 
 def evidence_update_error(error: BaseException) -> dict[str, Any]:
@@ -217,6 +536,8 @@ class Engine:
             raise ValueError("reason and priority are required")
         if trace is not None and not isinstance(trace, list):
             raise ValueError("trace must be a list when supplied")
+        if access_policy is not None and not isinstance(access_policy, dict):
+            raise ValueError("accessPolicy must be an object when supplied")
         if rebuild and reason not in {"schema_upgrade", "corruption_recovery", "reinterpretation"}:
             raise ValueError("rebuild requires an explicit advanced rebuild reason")
         if rebuild and not str(rebuild_rationale or "").strip():
@@ -305,6 +626,7 @@ class Engine:
                     "id": f"evidence-update:{uuid.uuid4().hex}", "threadId": thread_id,
                     "state": "fresh", "desiredWatermark": str(target_watermark),
                     "currentWatermark": current.input_watermark, "reason": reason, "priority": priority,
+                    "accessPolicy": dict(access_policy or {}),
                     "inputDigest": input_digest, "snapshotDigest": current.digest,
                     "eventIdempotencyKey": event_key, "queuedEventId": queued_event["eventId"],
                     "startedAt": utc_now_iso(), "completedAt": utc_now_iso(), "error": None,
@@ -325,6 +647,7 @@ class Engine:
                 "desiredWatermark": str(target_watermark),
                 "reason": reason,
                 "priority": priority,
+                "accessPolicy": dict(access_policy or {}),
                 "inputDigest": input_digest,
                 "eventIdempotencyKey": event_key,
                 "queuedEventId": queued_event["eventId"],
@@ -345,19 +668,52 @@ class Engine:
                     "accessPolicy": dict(access_policy or {}),
                 }
 
+                declared_execution_bundle = False
                 if incremental_trace:
-                    if self.llm is None:
-                        raise RuntimeError("no independent Model Router client configured for extraction/review")
-                    extracted = extract_dag(
-                        incremental_trace, self.llm, thread_id,
-                        artifact_versions=artifact_versions,
-                    )
-                    if rebuild or base is None:
-                        extracted.meta.update(graph.meta)
-                        graph = extracted
-                        delta = {"new_nodes": list(graph.nodes), "new_edges": list(graph.edges)}
-                    else:
-                        delta = graph.merge_from(extracted)
+                    if _is_canonical_execution_bundle(incremental_trace):
+                        # Parse deterministic execution lineage against the cloned
+                        # committed graph.  A rerun manifest can name a baseline
+                        # run from an earlier snapshot; parsing it in an empty
+                        # delta graph would make that external id look dangling
+                        # and silently discard rerun_of/replication edges.
+                        before_nodes = set(graph.nodes)
+                        before_edges = set(graph.edges)
+                        lineage_delta = ingest_trace_lineage(
+                            graph, incremental_trace, artifact_versions,
+                            created_by="sdk-execution-lineage",
+                            allowed_historical_rerun_refs=_historical_rerun_refs(
+                                incremental_trace
+                            ),
+                        )
+                        declared_execution_bundle = lineage_delta["envelopes"] > 0
+                        if declared_execution_bundle:
+                            graph.meta["extractionMode"] = "declared-execution-lineage"
+                            graph.meta["declaredLineage"] = dict(lineage_delta)
+                            delta = {
+                                "new_nodes": [
+                                    node_id for node_id in graph.nodes
+                                    if node_id not in before_nodes
+                                ],
+                                "new_edges": [
+                                    edge_id for edge_id in graph.edges
+                                    if edge_id not in before_edges
+                                ],
+                            }
+                    if not declared_execution_bundle:
+                        if self.llm is None:
+                            raise RuntimeError(
+                                "no independent Model Router client configured for extraction/review"
+                            )
+                        extracted = extract_dag(
+                            incremental_trace, self.llm, thread_id,
+                            artifact_versions=artifact_versions,
+                        )
+                        if rebuild or base is None:
+                            extracted.meta.update(graph.meta)
+                            graph = extracted
+                            delta = {"new_nodes": list(graph.nodes), "new_edges": list(graph.edges)}
+                        else:
+                            delta = graph.merge_from(extracted)
                 else:
                     delta = {"new_nodes": [], "new_edges": []}
 
@@ -382,7 +738,26 @@ class Engine:
                     "traceStaging": staged.summary(),
                 })
                 self._persist_update_status(thread_id)
-                if graph.edges:
+                if declared_execution_bundle:
+                    declared_status_changes = _mark_declared_semantic_nodes(graph)
+                    verification = {
+                        "threshold": threshold,
+                        "supports_edges_scored": 0,
+                        "supports_edges_total": sum(
+                            edge.rel == EdgeRel.SUPPORTS for edge in graph.edges.values()
+                        ),
+                        "contradicts_edges_scored": 0,
+                        "status_changes": declared_status_changes,
+                        "aggregates": {},
+                        "mode": "declared-execution-lineage",
+                        "status": "deferred",
+                        "reason": "canonical_executor_records_preserved_without_model_scoring",
+                    }
+                    graph.meta["semanticVerification"] = {
+                        "status": "deferred",
+                        "reason": verification["reason"],
+                    }
+                elif graph.edges:
                     if self.llm is None:
                         raise RuntimeError("no independent verifier configured")
                     verification = _verify(
@@ -395,7 +770,7 @@ class Engine:
                         "status_changes": [], "aggregates": {},
                     }
 
-                semantic_edge_ids = {
+                semantic_edge_ids = set() if declared_execution_bundle else {
                     edge_id for edge_id in (delta.get("new_edges") or [])
                     if edge_id in graph.edges and graph.edges[edge_id].rel in {
                         EdgeRel.SUPPORTS, EdgeRel.CONTRADICTS,
@@ -410,7 +785,12 @@ class Engine:
                     changed_node_ids=delta.get("new_nodes") or [],
                     changed_edge_ids=delta.get("new_edges") or [],
                 )
-                if self.llm is not None:
+                if declared_execution_bundle:
+                    graph.meta["adversarialReview"] = {
+                        "status": "deferred",
+                        "reason": "canonical_executor_records_preserved_without_model_review",
+                    }
+                elif self.llm is not None:
                     pending.extend(run_a2(
                         graph, self.llm, reviewer_version=VERIFIER_VERSION,
                         target_ids=set(a2_targets),
@@ -540,7 +920,7 @@ class Engine:
             and isinstance(status.get("error"), dict)
         ):
             staging = {**staging, "error": dict(status["error"])}
-        return {
+        result = {
             "threadId": thread_id,
             "status": status.get("state", "fresh" if snapshot else "dirty"),
             "desiredWatermark": status.get("desiredWatermark"),
@@ -559,10 +939,56 @@ class Engine:
             ),
             "staging": staging,
         }
+        access_graph = committed_graph or self.provisional_graph(thread_id)
+        if policy_restricted(status.get("accessPolicy")):
+            synthetic = ThreadGraph(thread_id, {
+                "scope": {"accessPolicy": status.get("accessPolicy")},
+            })
+            return project_update_status(synthetic, result)
+        if access_graph is not None:
+            return project_update_status(access_graph, result)
+        return result
 
     def provisional_graph(self, thread_id: str) -> Optional[ThreadGraph]:
         """Return the isolated compile candidate, never the committed read model."""
         return self._trace_staging.provisional_graph(thread_id)
+
+    def graph_view(self, thread_id: str) -> dict[str, Any]:
+        """Return the committed graph after applying fail-closed read projection."""
+        return project_graph(self.require(thread_id))
+
+    def update_result_view(
+        self, thread_id: str, result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Project a command response before it crosses the HTTP boundary."""
+        graph = self.require(thread_id)
+        update = result.get("update")
+        if isinstance(update, dict) and policy_restricted(update.get("accessPolicy")):
+            graph = ThreadGraph(thread_id, {
+                "scope": {"accessPolicy": update.get("accessPolicy")},
+            })
+        return project_update_result(graph, result)
+
+    def graph_summary(self, thread_id: str) -> dict[str, Any]:
+        """Return a summary without parallel identity/cycle-path leakage."""
+        return project_summary(self.require(thread_id))
+
+    def snapshot_view(self, thread_id: str) -> dict[str, Any]:
+        """Return committed snapshot metadata through the access projector."""
+        graph = self.require(thread_id)
+        snapshot = self.latest_snapshot(thread_id)
+        if snapshot is None:
+            raise KeyError(thread_id)
+        return project_snapshot(graph, snapshot.to_dict())
+
+    def provisional_graph_view(self, thread_id: str) -> Optional[dict[str, Any]]:
+        """Return the staging graph after applying the same read projection."""
+        graph = self.provisional_graph(thread_id)
+        return project_graph(graph) if graph is not None else None
+
+    def provisional_graph_summary(self, thread_id: str) -> Optional[dict[str, Any]]:
+        graph = self.provisional_graph(thread_id)
+        return project_summary(graph) if graph is not None else None
 
     def _sync_artifact_versions(
         self, graph: ThreadGraph, projection: ArtifactVersionProjectionClient,
@@ -812,6 +1238,7 @@ class Engine:
                     "snapshot changed; reload review packets before recording a decision"
                 )
             graph = self.require(thread_id)
+            require_unrestricted(graph, "human review decision")
             if not any(packet.review_packet_id == packet_id for packet in graph.review_packets):
                 raise KeyError(packet_id)
             decision_time = utc_now_iso()
@@ -900,23 +1327,112 @@ class Engine:
             found[thread_id] = max(found.get(thread_id, 0.0), self._updated.get(thread_id, 0.0))
         return [key for key, _ in sorted(found.items(), key=lambda item: (-item[1], item[0]))]
 
+    def list_threads_for_read(self) -> list[str]:
+        """Hide restricted aggregate identities from the global thread index."""
+        visible: list[str] = []
+        for thread_id in self.list_threads():
+            try:
+                graph = self.get(thread_id)
+            except (OSError, TypeError, ValueError):
+                # A graph that cannot be verified is not a safe public index row.
+                continue
+            if graph is not None and not graph_restricted(graph):
+                visible.append(thread_id)
+        return visible
+
     def last_delta(self, thread_id: str) -> dict:
-        return self._last_delta.get(thread_id, {"new_nodes": [], "new_edges": []})
+        delta = self._last_delta.get(thread_id, {"new_nodes": [], "new_edges": []})
+        graph = self.get(thread_id)
+        if graph is None or not graph_restricted(graph):
+            return dict(delta)
+        return {
+            "new_node_count": len(delta.get("new_nodes") or []),
+            "new_edge_count": len(delta.get("new_edges") or []),
+            "accessRestricted": True,
+        }
 
     def provenance(self, thread_id: str, node_id: str) -> dict:
-        return self.require(thread_id).provenance_path(node_id)
+        graph = self.require(thread_id)
+        return project_lineage(graph, graph.provenance_path(node_id))
+
+    def conclusion_lineage(
+        self, thread_id: str, *, target_digest: str, conclusion_id: str,
+    ) -> dict[str, Any]:
+        graph, snapshot = self.snapshot_graph(thread_id, target_digest)
+        result = graph.conclusion_lineage(conclusion_id)
+        return {
+            **project_lineage(graph, result),
+            "snapshot": project_snapshot(graph, snapshot.to_dict()),
+        }
+
+    def rerun_spec(
+        self, thread_id: str, *, target_digest: str, conclusion_id: str,
+    ) -> dict[str, Any]:
+        graph, snapshot = self.snapshot_graph(thread_id, target_digest)
+        if lineage_restricted(graph, graph.conclusion_lineage(conclusion_id)):
+            raise PermissionError("rerun export is unavailable for restricted evidence")
+        return build_rerun_spec(graph, snapshot, conclusion_id)
+
+    def compare_reruns(
+        self,
+        thread_id: str,
+        *,
+        baseline_digest: str,
+        baseline_conclusion_id: str,
+        candidate_digest: str,
+        candidate_conclusion_id: str,
+    ) -> dict[str, Any]:
+        baseline_graph, baseline_snapshot = self.snapshot_graph(thread_id, baseline_digest)
+        candidate_graph, candidate_snapshot = self.snapshot_graph(thread_id, candidate_digest)
+        if lineage_restricted(
+            baseline_graph, baseline_graph.conclusion_lineage(baseline_conclusion_id),
+        ) or lineage_restricted(
+            candidate_graph, candidate_graph.conclusion_lineage(candidate_conclusion_id),
+        ):
+            raise PermissionError("rerun comparison is unavailable for restricted evidence")
+        baseline = build_rerun_spec(
+            baseline_graph, baseline_snapshot, baseline_conclusion_id,
+        )
+        candidate = build_rerun_spec(
+            candidate_graph, candidate_snapshot, candidate_conclusion_id,
+        )
+        return {
+            "baseline": baseline,
+            "candidate": candidate,
+            "comparison": compare_rerun_specs(
+                baseline,
+                candidate,
+                baseline_output_values=output_values_for_spec(baseline_graph, baseline),
+                candidate_output_values=output_values_for_spec(candidate_graph, candidate),
+            ),
+        }
 
     def metrics(self, thread_id: str) -> dict:
+        graph = self.require(thread_id)
         snapshot = self.latest_snapshot(thread_id)
-        return _metrics.all_metrics(
-            self.require(thread_id),
-            events=self.events(thread_id=thread_id, limit=5000),
-            audits=self.audit_runs(thread_id),
+        result = _metrics.all_metrics(
+            graph,
+            events=self._events_raw(thread_id=thread_id, limit=5000),
+            audits=self._audit_runs_raw(thread_id),
             snapshot=snapshot.to_dict() if snapshot else None,
             snapshot_history=self._snapshot_history(thread_id),
         )
+        return project_metrics(graph, result)
 
     def events(
+        self, *, thread_id: Optional[str] = None, event_types=(),
+        after_sequence: int = 0, limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        events = self._events_raw(
+            thread_id=thread_id, event_types=event_types,
+            after_sequence=after_sequence, limit=limit,
+        )
+        return [
+            project_event(event, restricted=self._event_restricted(event))
+            for event in events
+        ]
+
+    def _events_raw(
         self, *, thread_id: Optional[str] = None, event_types=(),
         after_sequence: int = 0, limit: int = 500,
     ) -> list[dict[str, Any]]:
@@ -936,6 +1452,41 @@ class Engine:
                     and event["payload"].get("threadId") == thread_id)
             ]
         return events[:limit]
+
+    def _event_restricted(self, event: dict[str, Any]) -> bool:
+        """Resolve event access from its owning thread/artifact; unknown is closed."""
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        thread_id = payload.get("threadId")
+        if not isinstance(thread_id, str) and event.get("aggregateType") == "EvidenceThread":
+            thread_id = event.get("aggregateId")
+        if isinstance(thread_id, str) and thread_id:
+            try:
+                graph = self.get(thread_id)
+            except (OSError, TypeError, ValueError):
+                return True
+            return graph is None or graph_restricted(graph)
+
+        artifact_id = payload.get("artifactId")
+        if not isinstance(artifact_id, str) and event.get("aggregateType") == "Artifact":
+            artifact_id = event.get("aggregateId")
+        if isinstance(artifact_id, str) and artifact_id:
+            found = False
+            for graph_thread_id in self.list_threads():
+                try:
+                    graph = self.get(graph_thread_id)
+                except (OSError, TypeError, ValueError):
+                    return True
+                if graph is None or artifact_id not in graph.artifacts:
+                    continue
+                found = True
+                if artifact_restricted(graph, artifact_id):
+                    return True
+            # Lifecycle payloads contain absolute paths.  If ownership cannot be
+            # reconstructed after restart, do not guess that they are public.
+            return not found
+        # Global/system events have no graph from which a public grant can be
+        # established.  Their payload is opaque unless an owner resolves.
+        return True
 
     def _snapshot_history(self, thread_id: str) -> list[dict[str, Any]]:
         directory = self._snapshot_dir(thread_id)
@@ -963,12 +1514,16 @@ class Engine:
         return sorted(snapshots.values(), key=lambda item: int(item["version"]))
 
     def analysis(self, thread_id: str, *, threshold: float = 0.7) -> dict:
-        return _analysis.analyze(self.require(thread_id), threshold=threshold)
+        graph = self.require(thread_id)
+        require_unrestricted(graph, "analysis")
+        return _analysis.analyze(graph, threshold=threshold)
 
     def reconcile(self, thread_id: str, *, remove_nodes=(), remove_edges=(),
                   add_contradicts=(), threshold: float = 0.7) -> dict:
+        graph = self.require(thread_id)
+        require_unrestricted(graph, "reconcile preview")
         return _reconcile.reconcile(
-            self.require(thread_id), remove_nodes=remove_nodes, remove_edges=remove_edges,
+            graph, remove_nodes=remove_nodes, remove_edges=remove_edges,
             add_contradicts=add_contradicts, threshold=threshold,
         )
 
@@ -1010,6 +1565,13 @@ class Engine:
                 "message": "Pinned committed Evidence Snapshot was not found or failed verification.",
             }
 
+        if scope_restricted(graph):
+            return {
+                "resolved": False,
+                "code": "access_restricted",
+                "message": "Evidence preview is unavailable under the current access policy.",
+            }
+
         assertion = graph.nodes.get(source_assertion_id)
         if (
             assertion is None
@@ -1039,6 +1601,12 @@ class Engine:
                 "code": "provenance_mismatch",
                 "message": "Committed ArtifactVersion and SourceAnchor links are inconsistent.",
             }
+        if artifact_restricted(graph, assertion.artifact_id):
+            return {
+                "resolved": False,
+                "code": "access_restricted",
+                "message": "Evidence preview is unavailable under the current access policy.",
+            }
         scope = graph.meta.get("scope") if isinstance(graph.meta.get("scope"), dict) else {}
         return {
             "resolved": True,
@@ -1057,9 +1625,10 @@ class Engine:
         trigger: str = "manual", threshold: float = 0.7,
     ) -> dict:
         graph, snapshot = self.snapshot_graph(thread_id, target_digest)
+        require_unrestricted(graph, "audit")
         if trigger == "auto":
             existing = next((
-                run for run in self.audit_runs(thread_id)
+                run for run in self._audit_runs_raw(thread_id)
                 if run.get("target_digest") == target_digest and run.get("trigger") == trigger and
                 run.get("threshold") == threshold
             ), None)
@@ -1070,7 +1639,7 @@ class Engine:
             graph, threshold=threshold, trigger=trigger, level=level,
             run_id=f"audit:{uuid.uuid4().hex[:12]}", target_digest=snapshot.digest,
         )
-        runs = [run, *self.audit_runs(thread_id)]
+        runs = [run, *self._audit_runs_raw(thread_id)]
         self._audit_runs[thread_id] = runs[:50]
         self._persist_audit(thread_id)
         self._record_audit_events(run)
@@ -1120,6 +1689,11 @@ class Engine:
             )
 
     def audit_runs(self, thread_id: str) -> list[dict]:
+        graph = self.require(thread_id)
+        require_unrestricted(graph, "audit history")
+        return self._audit_runs_raw(thread_id)
+
+    def _audit_runs_raw(self, thread_id: str) -> list[dict]:
         if thread_id in self._audit_runs:
             return self._mark_audit_staleness(thread_id, self._audit_runs[thread_id])
         path = self._audit_path(thread_id)
@@ -1137,7 +1711,8 @@ class Engine:
         return [{**run, "stale": run.get("target_digest") != current} for run in runs]
 
     def export_prov_json(self, thread_id: str) -> dict:
-        return provjson.to_prov_json(self.require(thread_id))
+        graph = self.require(thread_id)
+        return project_prov_json(graph, provjson.to_prov_json(graph))
 
     def export_snapshot_products(
         self,

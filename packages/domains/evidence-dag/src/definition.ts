@@ -20,9 +20,9 @@ export const EVIDENCE_DAG_RUNTIME_LIFECYCLE_CONTRIBUTION = contributionFor(
   'main',
   'main.runtime-lifecycle'
 )
-export const EVIDENCE_DAG_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION = contributionFor(
+export const EVIDENCE_DAG_ARTIFACT_CONSUMER_CONTRIBUTION = contributionFor(
   'main',
-  'main.agent-artifact-consumer'
+  'main.artifact-consumer'
 )
 export const EVIDENCE_DAG_WRITE_EXPORT_ACTION_GUARD_CONTRIBUTION = contributionFor(
   'main',

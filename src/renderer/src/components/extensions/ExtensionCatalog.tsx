@@ -116,7 +116,7 @@ function contributionKindLabel(
   if (kind.endsWith('.workbench-toolbar-action')) return t('extensionContributionToolbar')
   if (kind.endsWith('.workspace-preview-plugin')) return t('extensionContributionPreviews')
   if (kind.endsWith('.runtime-lifecycle')) return t('extensionContributionRuntime')
-  if (kind.endsWith('.agent-artifact-consumer')) return t('extensionContributionArtifacts')
+  if (kind.endsWith('.artifact-consumer')) return t('extensionContributionArtifacts')
   if (kind.endsWith('.action-guard')) return t('extensionContributionGuards')
   if (kind.endsWith('.lifecycle')) return t('extensionContributionLifecycle')
   if (kind.endsWith('.i18n-resource')) return t('extensionContributionTranslations')

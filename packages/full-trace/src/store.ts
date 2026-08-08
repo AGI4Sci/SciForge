@@ -51,6 +51,8 @@ const RETENTION_MARKER_NAME = '.retention.json'
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1_000
 const DIRECTORY_MODE = 0o700
 const FILE_MODE = 0o600
+const MAX_EVENT_ID_LOOKUP = 10_000
+const MAX_STORED_MATCHES_PER_EVENT_ID = 2
 
 export type LocalTraceStoreOptions = {
   /** Application user-data directory. Traces are placed in its full-traces child. */
@@ -171,6 +173,19 @@ export class LocalTraceStore {
     await this.initialize()
     return this.enqueue(async () => {
       const event = this.normalizeEvent(input)
+      if (event.kind === 'execution_event' && input.eventId) {
+        const existing = (await this.readSegmentsByEventIds(
+          new Set([event.eventId])
+        )).events.find(
+          (candidate) => candidate.eventId === event.eventId
+        )
+        if (existing) {
+          if (!sameLogicalTraceEvent(existing, event)) {
+            throw new Error(`Trace eventId collision: ${event.eventId}`)
+          }
+          return existing
+        }
+      }
       await this.appendEvents([event])
       return event
     })
@@ -326,18 +341,26 @@ export class LocalTraceStore {
       } finally {
         await handle.close()
       }
+      await syncDirectory(path.dirname(segment))
     }
   }
 
   private async readInternal(query: TraceReadQuery): Promise<TraceReadResult> {
+    const eventIds = query.eventIds ? new Set(query.eventIds) : undefined
     const traceIds = query.traceIds ? new Set(query.traceIds) : undefined
     const kinds = query.kinds ? new Set(query.kinds) : undefined
     const from = query.from ? Date.parse(query.from) : undefined
     const to = query.to ? Date.parse(query.to) : undefined
-    const parsed = await this.readAllSegments()
+    // Durable migration normally asks for a handful of exact terminal ids.
+    // Stream every segment but retain only those matches, rather than loading
+    // the entire retention window into memory before applying the filter.
+    const parsed = eventIds
+      ? await this.readSegmentsByEventIds(eventIds)
+      : await this.readAllSegments()
     let events = parsed.events.filter((event) => {
       const timestamp = Date.parse(event.timestamp)
-      return (!traceIds || traceIds.has(event.traceId)) &&
+      return (!eventIds || eventIds.has(event.eventId)) &&
+        (!traceIds || traceIds.has(event.traceId)) &&
         (!query.runtimeId || event.runtimeId === query.runtimeId) &&
         (!query.threadId || event.threadId === query.threadId) &&
         (!query.turnId || event.turnId === query.turnId) &&
@@ -361,6 +384,29 @@ export class LocalTraceStore {
       const parsed = await readSegment(file, this.sanitizationOptions())
       events.push(...parsed.events)
       corruptLines += parsed.corruptLines
+    }
+    return { events, corruptLines }
+  }
+
+  private async readSegmentsByEventIds(eventIds: ReadonlySet<string>): Promise<ParsedEvents> {
+    const events: TraceEvent[] = []
+    const matches = new Map<string, number>()
+    let corruptLines = 0
+    for (const file of await this.segmentFiles()) {
+      const parsed = await readSegmentByEventIds(
+        file,
+        this.sanitizationOptions(),
+        eventIds
+      )
+      corruptLines += parsed.corruptLines
+      for (const event of parsed.events) {
+        const count = (matches.get(event.eventId) ?? 0) + 1
+        if (count > MAX_STORED_MATCHES_PER_EVENT_ID) {
+          throw new Error(`Trace eventId has too many durable records: ${event.eventId}`)
+        }
+        matches.set(event.eventId, count)
+        events.push(event)
+      }
     }
     return { events, corruptLines }
   }
@@ -430,6 +476,12 @@ export class LocalTraceStore {
     this.operationQueue = result.then(() => undefined, () => undefined)
     return result
   }
+}
+
+function sameLogicalTraceEvent(left: TraceEvent, right: TraceEvent): boolean {
+  const { recordedAt: _leftRecordedAt, ...leftLogical } = left
+  const { recordedAt: _rightRecordedAt, ...rightLogical } = right
+  return JSON.stringify(leftLogical) === JSON.stringify(rightLogical)
 }
 
 export function deriveRequestSummaries(
@@ -617,6 +669,18 @@ export function deriveSummaries(events: readonly TraceEvent[]): TraceSummary[] {
         summary.failed = true
         summary.error ??= stringValue(agentPayload?.message) ?? 'Agent error'
       }
+    } else if (event.kind === 'execution_event') {
+      const phase = stringValue(payload?.phase)?.toLowerCase()
+      const execution = asRecord(payload?.event)
+      summary.preview ??= [
+        stringValue(asRecord(payload?.producer)?.moduleId),
+        stringValue(payload?.runId)
+      ].filter(Boolean).join(' · ') || undefined
+      if (phase === 'run_completed') summary.completed = true
+      if (phase === 'run_failed') {
+        summary.failed = true
+        summary.error ??= stringValue(asRecord(execution?.payload)?.message) ?? 'Domain execution failed'
+      }
     } else if (event.kind === 'error') {
       if (requestIsRoot) {
         summary.errorCount += 1
@@ -731,6 +795,34 @@ async function readSegment(file: string, sanitization: TraceSanitizationOptions)
   return { events, corruptLines }
 }
 
+async function readSegmentByEventIds(
+  file: string,
+  sanitization: TraceSanitizationOptions,
+  eventIds: ReadonlySet<string>
+): Promise<ParsedEvents> {
+  const events: TraceEvent[] = []
+  let corruptLines = 0
+  const lines = createInterface({
+    input: createReadStream(file, { encoding: 'utf8' }),
+    crlfDelay: Infinity
+  })
+  for await (const line of lines) {
+    if (!line.trim()) continue
+    try {
+      const value: unknown = JSON.parse(line)
+      if (!isTraceEvent(value)) {
+        corruptLines += 1
+        continue
+      }
+      const event = sanitizeStoredEvent(value, sanitization)
+      if (eventIds.has(event.eventId)) events.push(event)
+    } catch {
+      corruptLines += 1
+    }
+  }
+  return { events, corruptLines }
+}
+
 async function writeExclusiveExport(
   destination: string,
   manifest: TraceExportManifest,
@@ -780,6 +872,7 @@ async function replaceSegment(file: string, events: readonly TraceEvent[]): Prom
   try {
     await rename(temporary, file)
     await chmod(file, FILE_MODE)
+    await syncDirectory(path.dirname(file))
   } finally {
     await unlink(temporary).catch(() => undefined)
   }
@@ -802,8 +895,19 @@ async function writeOwnerOnlyJson(file: string, value: unknown): Promise<void> {
   try {
     await rename(temporary, file)
     await chmod(file, FILE_MODE)
+    await syncDirectory(path.dirname(file))
   } finally {
     await unlink(temporary).catch(() => undefined)
+  }
+}
+
+async function syncDirectory(directory: string): Promise<void> {
+  if (process.platform === 'win32') return
+  const handle = await open(directory, 'r')
+  try {
+    await handle.sync()
+  } finally {
+    await handle.close()
   }
 }
 
@@ -849,6 +953,19 @@ function noFollowFlag(): number {
 
 function validateReadQuery(query: TraceReadQuery): void {
   if (query.limit !== undefined) validateLimit(query.limit)
+  if (query.eventIds !== undefined) {
+    if (
+      query.eventIds.length > MAX_EVENT_ID_LOOKUP ||
+      new Set(query.eventIds).size !== query.eventIds.length ||
+      query.eventIds.some((eventId) => (
+        typeof eventId !== 'string' || !eventId.trim() || eventId.length > 512
+      ))
+    ) {
+      throw new Error(
+        `eventIds must contain at most ${MAX_EVENT_ID_LOOKUP} unique bounded identifiers`
+      )
+    }
+  }
   for (const [name, value] of [['from', query.from], ['to', query.to]] as const) {
     if (value !== undefined && !Number.isFinite(Date.parse(value))) {
       throw new Error(`${name} must be a valid ISO-8601 date`)

@@ -1,12 +1,19 @@
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Clock3, X } from 'lucide-react'
+import { Clock3, Download, RotateCcw, X } from 'lucide-react'
+import type { SciForgeReproSpecV1 } from '@sciforge/domain-sdk/reproducibility'
 import type {
   WorkflowNodeRunResultV1,
   WorkflowNodeRunStatus,
   WorkflowNodeV1,
   WorkflowRunV1
 } from '../../contract.js'
+import type { CreateLoopRuntimeBridge } from '../runtime-bridge.js'
+
+type RunHistoryRuntime = Pick<
+  CreateLoopRuntimeBridge,
+  'exportWorkflowRerun' | 'rerunWorkflow'
+>
 
 function marker(status: WorkflowNodeRunStatus | WorkflowRunV1['status'] | undefined): string {
   if (status === 'running') return 'bg-amber-500'
@@ -32,10 +39,16 @@ function elapsed(startedAt: string, finishedAt: string): string {
 }
 
 export function WorkflowRunHistory({
+  workspaceRoot,
+  workflowId,
+  runtime,
   runs,
   nodes,
   onClose
 }: {
+  workspaceRoot: string
+  workflowId: string
+  runtime: RunHistoryRuntime
   runs: WorkflowRunV1[]
   nodes: WorkflowNodeV1[]
   onClose: () => void
@@ -43,6 +56,11 @@ export function WorkflowRunHistory({
   const { t } = useTranslation('common')
   const newestFirst = useMemo(() => [...runs].reverse(), [runs])
   const [selectedId, setSelectedId] = useState<string | null>(newestFirst[0]?.id ?? null)
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState('')
+  const [exportedSpec, setExportedSpec] = useState<SciForgeReproSpecV1 | null>(null)
+  const [rerunning, setRerunning] = useState(false)
+  const [rerunError, setRerunError] = useState('')
   const selected = newestFirst.find((run) => run.id === selectedId) ?? newestFirst[0] ?? null
   const nodeNames = useMemo(
     () => new Map(nodes.map((node) => [node.id, node.name.trim() || t(`workflowNode_${node.type}`)])),
@@ -53,6 +71,43 @@ export function WorkflowRunHistory({
     if (selectedId && newestFirst.some((run) => run.id === selectedId)) return
     setSelectedId(newestFirst[0]?.id ?? null)
   }, [newestFirst, selectedId])
+
+  useEffect(() => {
+    setExportError('')
+    setExportedSpec(null)
+    setRerunError('')
+  }, [selected?.id])
+
+  const exportSelected = async (): Promise<void> => {
+    if (!selected || exporting || rerunning) return
+    setExporting(true)
+    setExportError('')
+    setRerunError('')
+    try {
+      const spec = await runtime.exportWorkflowRerun(workflowId, selected.id)
+      downloadRerunSpec(spec, workflowId, selected.id)
+      setExportedSpec(spec)
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const rerunSelected = async (): Promise<void> => {
+    if (!selected || exporting || rerunning) return
+    setRerunning(true)
+    setExportError('')
+    setRerunError('')
+    try {
+      const result = await rerunWorkflowRun(runtime, workflowId, selected.id, onClose)
+      if (!result.ok) throw new Error(result.message)
+    } catch (error) {
+      setRerunError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setRerunning(false)
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6" onClick={onClose}>
@@ -106,18 +161,114 @@ export function WorkflowRunHistory({
             <div className="min-w-0 flex-1 overflow-y-auto p-5">
               {selected ? (
                 <div className="flex flex-col gap-3">
-                  <div className="flex flex-wrap items-center gap-2 text-[12px] text-ds-muted">
-                    <span className={`h-2 w-2 rounded-full ${marker(selected.status)}`} />
-                    <span className="font-medium text-ds-ink">{t(`workflowRunStatus_${selected.status}`)}</span>
-                    <span className="text-ds-faint">·</span>
-                    <span>{timestamp(selected.startedAt)}</span>
-                    {elapsed(selected.startedAt, selected.finishedAt) ? (
-                      <>
-                        <span className="text-ds-faint">·</span>
-                        <span>{elapsed(selected.startedAt, selected.finishedAt)}</span>
-                      </>
-                    ) : null}
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-2 text-[12px] text-ds-muted">
+                      <span className={`h-2 w-2 rounded-full ${marker(selected.status)}`} />
+                      <span className="font-medium text-ds-ink">{t(`workflowRunStatus_${selected.status}`)}</span>
+                      <span className="text-ds-faint">·</span>
+                      <span>{timestamp(selected.startedAt)}</span>
+                      {elapsed(selected.startedAt, selected.finishedAt) ? (
+                        <>
+                          <span className="text-ds-faint">·</span>
+                          <span>{elapsed(selected.startedAt, selected.finishedAt)}</span>
+                        </>
+                      ) : null}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => { void exportSelected() }}
+                        disabled={exporting || rerunning}
+                        title={`${t('workflowExportRerun')} · ${workspaceRoot}`}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-ds-border px-2.5 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
+                      >
+                        <Download className="h-3.5 w-3.5" strokeWidth={1.8} />
+                        {exporting ? t('workflowExportingRerun') : t('workflowExportRerun')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { void rerunSelected() }}
+                        disabled={exporting || rerunning}
+                        title={`${t('workflowRerunFromSpec')} · ${workspaceRoot}`}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-ds-userbubble px-2.5 text-[11.5px] font-semibold text-ds-userbubbleFg transition hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" strokeWidth={1.9} />
+                        {rerunning ? t('workflowRerunningFromSpec') : t('workflowRerunFromSpec')}
+                      </button>
+                    </div>
                   </div>
+
+                  {exportedSpec ? (
+                    <div className="rounded-lg border border-ds-border bg-ds-subtle px-3 py-2 text-[11.5px] leading-5 text-ds-muted">
+                      <div className="flex flex-wrap gap-x-3 gap-y-1">
+                        <span className="font-medium text-ds-ink">
+                          {exportedSpec.executionReady
+                            ? t('workflowReproSpecReady')
+                            : t('workflowReproSpecBlocked')}
+                        </span>
+                        <span>{t('workflowReproducibility', { status: exportedSpec.reproducibility })}</span>
+                        <span>{t('workflowReproBreakpoints', { count: exportedSpec.breakpoints.length })}</span>
+                      </div>
+                      {exportedSpec.breakpoints.length > 0 ? (
+                        <p className="mt-1 break-words font-mono text-[10.5px] text-ds-faint">
+                          {exportedSpec.breakpoints.map((point) => point.code).join(', ')}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {selected.manifest?.comparison ? (
+                    <div className="rounded-lg border border-ds-border px-3 py-2 text-[11.5px] text-ds-muted">
+                      <p>
+                        {t('workflowReproComparison', {
+                          status: selected.manifest.comparison.replicationStatus,
+                          classification: selected.manifest.comparison.classification
+                        })}
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {selected.manifest.comparison.reasonCodes.map((reason) => (
+                          <span
+                            key={reason}
+                            className="rounded bg-ds-subtle px-1.5 py-0.5 font-mono text-[10px] text-ds-faint"
+                          >
+                            {reason}
+                          </span>
+                        ))}
+                      </div>
+                      {selected.manifest.comparison.differences.length > 0 ? (
+                        <div className="mt-2 divide-y divide-ds-border/60 border-t border-ds-border/60">
+                          {selected.manifest.comparison.differences.map((difference, index) => (
+                            <div
+                              key={`${difference.component}:${difference.nodeId ?? ''}:${difference.reasonCode}:${index}`}
+                              className="grid grid-cols-[minmax(90px,0.4fr)_minmax(0,1fr)] gap-x-2 py-1.5 font-mono text-[10px]"
+                            >
+                              <span className="text-ds-muted">
+                                {difference.component}{difference.nodeId ? ` · ${difference.nodeId}` : ''}
+                              </span>
+                              <span className="min-w-0 break-all text-ds-faint">
+                                {difference.reasonCode}
+                                {difference.baselineFingerprint || difference.candidateFingerprint
+                                  ? ` · ${shortFingerprint(difference.baselineFingerprint)} → ${shortFingerprint(difference.candidateFingerprint)}`
+                                  : ''}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {exportError ? (
+                    <p className="rounded-lg bg-red-500/10 px-3 py-2 text-[11.5px] text-red-600">
+                      {t('workflowExportRerunError', { message: exportError })}
+                    </p>
+                  ) : null}
+
+                  {rerunError ? (
+                    <p className="rounded-lg bg-red-500/10 px-3 py-2 text-[11.5px] text-red-600">
+                      {t('workflowRerunFromSpecError', { message: rerunError })}
+                    </p>
+                  ) : null}
 
                   {selected.message ? (
                     <p className="rounded-lg bg-ds-subtle px-3 py-2 text-[12px] leading-5 text-ds-muted">
@@ -140,6 +291,39 @@ export function WorkflowRunHistory({
       </section>
     </div>
   )
+}
+
+export function rerunSpecFileName(workflowId: string, runId: string): string {
+  const safe = (value: string, fallback: string) =>
+    value.replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '') || fallback
+  return `${safe(workflowId, 'workflow')}-${safe(runId, 'run')}.sciforge-rerun.json`
+}
+
+export async function rerunWorkflowRun(
+  runtime: RunHistoryRuntime,
+  workflowId: string,
+  runId: string,
+  onRerunStarted: () => void
+): ReturnType<CreateLoopRuntimeBridge['rerunWorkflow']> {
+  const spec = await runtime.exportWorkflowRerun(workflowId, runId)
+  const result = await runtime.rerunWorkflow(spec)
+  if (result.ok) onRerunStarted()
+  return result
+}
+
+function downloadRerunSpec(spec: SciForgeReproSpecV1, workflowId: string, runId: string): void {
+  const blob = new Blob([`${JSON.stringify(spec, null, 2)}\n`], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = rerunSpecFileName(workflowId, runId)
+  anchor.click()
+  setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
+function shortFingerprint(value: string | undefined): string {
+  if (!value) return '∅'
+  return value.length > 22 ? `${value.slice(0, 18)}…` : value
 }
 
 function HistoryResult({ result, name }: { result: WorkflowNodeRunResultV1; name: string }): ReactElement {
