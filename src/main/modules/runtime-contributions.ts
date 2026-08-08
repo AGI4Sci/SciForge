@@ -5,12 +5,12 @@ import {
 } from '@sciforge/domain-sdk'
 import {
   MAIN_ACTION_GUARD_CONTRIBUTION_KIND,
-  MAIN_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
+  MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
   MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
-  isDomainAgentArtifactConsumer,
+  isDomainArtifactConsumer,
   isDomainMainActionGuard,
   isDomainMainRuntimeLifecycleContribution,
-  type DomainAgentArtifactConsumer,
+  type DomainArtifactConsumer,
   type DomainMainActionGuard,
   type DomainMainActionGuardInput,
   type DomainMainRuntimeDisposer,
@@ -18,6 +18,7 @@ import {
   type DomainMainRuntimeLifecycleHost,
   type DomainMainSystemCapabilityInvoker
 } from '@sciforge/domain-sdk/host'
+import type { DomainExecutionEventInput } from '@sciforge/domain-sdk/reproducibility'
 import { capabilityJsonValueSchema } from '../../shared/capability-broker'
 import { CapabilityBroker } from '../capabilities/broker'
 import { DomainModuleCatalog } from './catalog'
@@ -28,7 +29,7 @@ type ActivatedLifecycle = Readonly<{
 }>
 
 export type ActivatedMainRuntimeContributions = Readonly<{
-  artifactConsumers: readonly DomainAgentArtifactConsumer[]
+  artifactConsumers: readonly DomainArtifactConsumer[]
   readonly disposed: boolean
   dispose: () => Promise<void>
 }>
@@ -43,12 +44,12 @@ export type MainActionGuardEvaluator = Readonly<{
   evaluate: (input: DomainMainActionGuardInput) => Promise<MainActionGuardEvaluation>
 }>
 
-export function listMainAgentArtifactConsumers(
+export function listMainArtifactConsumers(
   catalog: DomainModuleCatalog
-): readonly DomainAgentArtifactConsumer[] {
+): readonly DomainArtifactConsumer[] {
   return Object.freeze(catalog.listContributions(
-    MAIN_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
-    (value): value is DomainAgentArtifactConsumer => isDomainAgentArtifactConsumer(value)
+    MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
+    (value): value is DomainArtifactConsumer => isDomainArtifactConsumer(value)
   ).map((contribution) => contribution.value))
 }
 
@@ -188,14 +189,14 @@ export async function activateMainRuntimeContributions(
     (value): value is DomainMainRuntimeLifecycleContribution =>
       isDomainMainRuntimeLifecycleContribution(value)
   )
-  const artifactConsumers = listMainAgentArtifactConsumers(catalog)
+  const artifactConsumers = listMainArtifactConsumers(catalog)
 
   const activated: ActivatedLifecycle[] = []
   try {
     for (const contribution of lifecycleContributions) {
       const controller = new AbortController()
       const owner = Object.freeze({ ...contribution.owner })
-      const { enablement, ...sharedHost } = host
+      const { enablement, executionEvents, ...sharedHost } = host
       const lifecycle: { controller: AbortController; disposer?: DomainMainRuntimeDisposer } = {
         controller
       }
@@ -203,6 +204,9 @@ export async function activateMainRuntimeContributions(
       const disposer = await contribution.value.activate(Object.freeze({
         ...sharedHost,
         owner,
+        executionEvents: Object.freeze({
+          publish: (event: DomainExecutionEventInput) => executionEvents.publish(owner, event)
+        }),
         enablement: Object.freeze({
           isEnabled: () => enablement.isEnabled(owner.moduleId),
           subscribe: (listener: (enabled: boolean) => void) =>

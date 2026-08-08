@@ -25,7 +25,7 @@ from .graph import ThreadGraph
 from .model import EdgeRel, NodeType
 from .verifier import noisy_or
 
-_DERIVED = (NodeType.CLAIM, NodeType.REASONING)
+_DERIVED = (NodeType.CLAIM, NodeType.CONCLUSION, NodeType.REASONING)
 
 
 def _surviving_supports(graph: ThreadGraph, rm_nodes: set[str], rm_edges: set[str]):

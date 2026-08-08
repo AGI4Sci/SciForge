@@ -28,7 +28,7 @@ const dagDomainPackages = [
       main: [
         'main.capability-factory',
         'main.runtime-lifecycle',
-        'main.agent-artifact-consumer'
+        'main.artifact-consumer'
       ],
       renderer: ['renderer.workbench-right-panel', 'renderer.i18n-resource']
     }
@@ -42,7 +42,7 @@ const dagDomainPackages = [
       main: [
         'main.capability-factory',
         'main.runtime-lifecycle',
-        'main.agent-artifact-consumer'
+        'main.artifact-consumer'
       ],
       renderer: ['renderer.workbench-right-panel', 'renderer.i18n-resource']
     }

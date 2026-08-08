@@ -4,6 +4,10 @@ import type {
   DomainMainRuntimeLifecycleContribution
 } from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
+import {
+  sciforgeReproSpecSchema,
+  type SciForgeReproSpecV1
+} from '@sciforge/domain-sdk/reproducibility'
 import type { z } from 'zod'
 import {
   CREATE_LOOP_CAPABILITY_IDS,
@@ -14,6 +18,7 @@ import {
   createLoopDslInputSchema,
   createLoopDslOutputSchema,
   createLoopExportInputSchema,
+  createLoopExportRerunInputSchema,
   createLoopNodeTestResultSchema,
   createLoopReadInputSchema,
   createLoopRunNodeInputSchema,
@@ -27,6 +32,7 @@ import {
   createLoopWorkflowSchema,
   type WorkflowApprovalDecision,
   type WorkflowCodeLanguage,
+  type WorkflowRunComparatorV1,
   type WorkflowSettingsV1
 } from './contract.js'
 import {
@@ -252,13 +258,24 @@ export function createCreateLoopCapabilityFactory<CapabilityDefinition>(
         createLoopWorkflowInputSchema,
         createLoopRunResultSchema,
         async (input, context) => {
-          const request = input as { workflowId: string; input?: unknown }
+          const request = input as {
+            workflowId?: string
+            input?: unknown
+            rerunSpec?: SciForgeReproSpecV1
+            activityId?: string
+          }
           return {
-            output: await options.getRuntime().runWorkflow(
-              request.workflowId,
-              request.input,
-              context.caller.workspaceId
-            )
+            output: request.rerunSpec
+              ? await options.getRuntime().runRerun(
+                  request.rerunSpec,
+                  context.caller.workspaceId,
+                  request.activityId
+                )
+              : await options.getRuntime().runWorkflow(
+                  request.workflowId!,
+                  request.input,
+                  context.caller.workspaceId
+                )
           }
         }
       ),
@@ -290,10 +307,20 @@ export function createCreateLoopCapabilityFactory<CapabilityDefinition>(
         createLoopApprovalInputSchema,
         createLoopApprovalOutputSchema,
         async (input) => {
-          const request = input as { token: string; decision: WorkflowApprovalDecision }
+          const request = input as {
+            token: string
+            decision: WorkflowApprovalDecision
+            actor?: string
+            rationale?: string
+          }
           return {
             output: {
-              resolved: options.getRuntime().resolveApproval(request.token, request.decision)
+              resolved: await options.getRuntime().resolveApproval(
+                request.token,
+                request.decision,
+                request.actor,
+                request.rationale
+              )
             }
           }
         }
@@ -379,6 +406,28 @@ export function createCreateLoopCapabilityFactory<CapabilityDefinition>(
             output: {
               dsl: serializeWorkflowDsl(workflow, 'sciforge', new Date().toISOString())
             }
+          }
+        }
+      ),
+      capability(
+        CREATE_LOOP_CAPABILITY_IDS.exportRerun,
+        'Export rerun specification',
+        'Exports one run as the canonical portable sciforge.rerun.v1 resource.',
+        'read',
+        createLoopExportRerunInputSchema,
+        sciforgeReproSpecSchema,
+        async (input) => {
+          const request = input as {
+            workflowId: string
+            runId: string
+            comparator?: WorkflowRunComparatorV1
+          }
+          return {
+            output: await options.getRuntime().exportReproSpec(
+              request.workflowId,
+              request.runId,
+              request.comparator
+            )
           }
         }
       )

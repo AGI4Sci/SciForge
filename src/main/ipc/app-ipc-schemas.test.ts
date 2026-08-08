@@ -127,13 +127,13 @@ describe('app-ipc-schemas', () => {
     expect(traceReadPayloadSchema.parse({
       runtimeId: 'codex',
       threadId: ' thread-1 ',
-      kinds: ['model_request', 'agent_event'],
+      kinds: ['model_request', 'agent_event', 'execution_event'],
       order: 'desc',
       limit: 20
     })).toEqual({
       runtimeId: 'codex',
       threadId: 'thread-1',
-      kinds: ['model_request', 'agent_event'],
+      kinds: ['model_request', 'agent_event', 'execution_event'],
       order: 'desc',
       limit: 20
     })

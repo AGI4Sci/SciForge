@@ -34,7 +34,7 @@ test('sidecar configuration is package-owned and derives only generic lifecycle 
 
   assert.equal(config.baseUrl, 'http://127.0.0.1:3898')
   assert.equal(config.runtimeToken, 'stable-project-token')
-  assert.equal(config.command, process.platform === 'win32' ? 'python.exe' : 'python')
+  assert.equal(config.command, process.platform === 'win32' ? 'python.exe' : 'python3')
   assert.deepEqual(config.args, ['-m', 'project_dag.server'])
   assert.equal(config.cwd, '/Applications/SciForge/packages/domains/project-dag')
   assert.equal(config.sessionDir, '/data/evidence')
@@ -229,6 +229,11 @@ function lifecycleContext(
     },
     modelAccess: {
       textReasoner
+    },
+    executionEvents: {
+      publish: async () => {
+        throw new Error('Unexpected execution event publication.')
+      }
     },
     enablement: {
       isEnabled: async () => true,

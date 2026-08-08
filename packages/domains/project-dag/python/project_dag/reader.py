@@ -29,7 +29,7 @@ from .human_review import normalize_upstream_review
 # included on purpose: a claim contested inside one session is exactly the
 # kind the project layer should adjudicate across sessions.
 ELIGIBLE_STATUS = {NodeStatus.SUPPORTED, NodeStatus.FRAGILE, NodeStatus.CONFLICTED}
-ELIGIBLE_NODE_TYPES = {NodeType.CLAIM, NodeType.FINDING}
+ELIGIBLE_NODE_TYPES = {NodeType.CLAIM, NodeType.CONCLUSION, NodeType.FINDING}
 _UPSTREAM_RELS = {EdgeRel.SUPPORTS, EdgeRel.REFINES, EdgeRel.PREREQUISITE}
 
 CREDIBILITY_SCORE = {"high": 0.9, "medium": 0.6, "low": 0.3}

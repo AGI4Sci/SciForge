@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  EVIDENCE_DAG_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION,
+  EVIDENCE_DAG_ARTIFACT_CONSUMER_CONTRIBUTION,
   EVIDENCE_DAG_CAPABILITY_FACTORY_CONTRIBUTION,
   EVIDENCE_DAG_DOMAIN_MODULE_ID,
   EVIDENCE_DAG_DOMAIN_PACKAGE_NAME,
@@ -37,7 +37,7 @@ test('declares every required contribution without a host feature map', () => {
     [
       'main.capability-factory:evidence-dag.capabilities',
       'main.runtime-lifecycle:evidence-dag.runtime-lifecycle',
-      'main.agent-artifact-consumer:evidence-dag.agent-artifact-consumer',
+      'main.artifact-consumer:evidence-dag.artifact-consumer',
       'main.action-guard:evidence-dag.write-export-guard',
       'renderer.workbench-right-panel:evidence-dag.workbench-right-panel',
       'renderer.command:evidence-dag.open',
@@ -48,8 +48,8 @@ test('declares every required contribution without a host feature map', () => {
   assert.equal(EVIDENCE_DAG_CAPABILITY_FACTORY_CONTRIBUTION.id, 'evidence-dag.capabilities')
   assert.equal(EVIDENCE_DAG_RUNTIME_LIFECYCLE_CONTRIBUTION.id, 'evidence-dag.runtime-lifecycle')
   assert.equal(
-    EVIDENCE_DAG_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION.id,
-    'evidence-dag.agent-artifact-consumer'
+    EVIDENCE_DAG_ARTIFACT_CONSUMER_CONTRIBUTION.id,
+    'evidence-dag.artifact-consumer'
   )
   assert.equal(
     EVIDENCE_DAG_WRITE_EXPORT_ACTION_GUARD_CONTRIBUTION.id,

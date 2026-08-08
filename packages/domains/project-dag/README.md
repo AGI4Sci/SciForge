@@ -8,6 +8,9 @@ receipts、主进程 lifecycle/capability、可选 workbench UI 与进程无关�
 compiler 的 HTTP 旁路。Project DAG 仅通过 Evidence DAG 的公开合同与正式
 Python 依赖消费 Evidence，不依赖宿主私有路径或相邻目录注入。
 
+可复跑节点、边、权限与比较语义见
+[`docs/reproducible-dag-v3.zh-CN.md`](../../../docs/reproducible-dag-v3.zh-CN.md)。
+
 ## 唯一更新链路
 
 所有自动提交、手动立即更新、Goal 变化、DecisionEvent 和恢复重试最终都写入同一 `project_update_job`：
@@ -37,6 +40,11 @@ Project DAG 只按 Goal、scope 与 policy 编译派生视图。
 
 Evidence commit 可以只携带变化 session；worker 只与该 `projectKey` 已持久化 membership/vector 合并，绝不扫描全局 Evidence store 扩大 scope。显式 scope 命令必须携带完整 captured scope。每个 Project Snapshot 固化实际 included/excluded/isolated 集合与精确 digest vector。
 
+桌面集成只注册一个 SDK `main.artifact-consumer`。`turn-completed` 与
+`execution-completed` 都先转换为 `DomainArtifactEvent`，再进入同一个 durable
+handoff outbox；执行完成事件没有 Agent thread 时使用 SDK 定义的 synthetic
+runtime/thread scope。不存在第二条 execution 直连编译路径。
+
 `POST /updates` 返回 durable receipt，而不是要求调用方猜测全局 queue 是否 idle：
 
 ```json
@@ -50,7 +58,7 @@ Evidence commit 可以只携带变化 session；worker 只与该 `projectKey` �
 
 同一活跃 desired input 重复提交返回同一个 receipt，不推进 generation；输入变化才在同一个 per-project lane 接受新 generation。desired identity 固化 Evidence digest、已验证的 snapshot version/input watermark、captured scope、Goal、policy、Decision 与 compiler version。相对当前 accepted/committed Evidence version 的回退会被拒绝；较新的 generation 提交后，只有 scope/policy/context 相同且每个 thread snapshot version 单调不降，旧 generation 才会从 `superseded` 变为 `covered`。
 
-P2 worker 按项目合并触发、每项目同时最多一个 generation。编译 graph、Project Snapshot 和该 generation 的 `committed` receipt 在同一个 SQLite 事务提交，失败不会暴露中间图；即使进程在 commit 后、lane 收尾前退出，重启也会从 receipt 完成收尾而不重复编译。可重试失败保留真实 `lastError / attempts / nextAttemptAt`；超过上限后 receipt 进入终态 `failed`，可通过 `POST /updates/{jobId}/retry` 重新进入同一编译 lane。v1 数据库会一次性事务升级为 v2 receipt schema，保留 Goal、Decision、Snapshot 和 queue 数据；运行时没有 v1/v2 双路径。
+P2 worker 按项目合并触发、每项目同时最多一个 generation。编译 graph、Project Snapshot 和该 generation 的 `committed` receipt 在同一个 SQLite 事务提交，失败不会暴露中间图；即使进程在 commit 后、lane 收尾前退出，重启也会从 receipt 完成收尾而不重复编译。可重试失败保留真实 `lastError / attempts / nextAttemptAt`；超过上限后 receipt 进入终态 `failed`，可通过 `POST /updates/{jobId}/retry` 重新进入同一编译 lane。旧数据库按 v1 → v2 → v3 单向事务迁移：v2 receipt 数据完整保留，v3 增加 typed immutable EvidenceRef、`conclusion` Claim 类型和复现关系词汇；运行时没有旧 schema 双路径。
 
 Snapshot 提交事务只把绑定该 immutable digest 的 L0 请求写入独立 `audit_run` durable queue，不执行审计。P3 audit worker 使用独立数据库连接低优先级消费；进程退出后恢复 running job，失败同样持久化错误和指数退避。新 Project Snapshot 提交会把旧 digest 的 queued/running/completed/failed 审计统一标记为 `stale`，不会用旧 Finding 覆盖新图。审计/注意力是 fail-open 只读侧链，失败不会反向把已经提交的 Project job 标为失败。
 
@@ -96,13 +104,30 @@ ReviewItem 保存结构化 `remediationCandidate`。它只描述下一步和目�
 
 ## 跨层 provenance
 
+Evidence 原生 `Conclusion` 提升为 `claim_type=conclusion` 的 Project Claim，不会被
+降级成 Finding，也不会混入 Project `DecisionEvent` 语义。Project graph 对该结论
+只保存 `thread_id + snapshot_digest + node_id + node_type` 的不可变 EvidenceRef；
+输入、代码、环境、参数、工具、审批、产物、Evidence 与 Conclusion 的内容仍由
+Evidence Snapshot 唯一拥有。
+
 resolver 严格消费 Evidence PROV 顶层：
 
 - `edag:meta.snapshot`（status 必须为 `committed`）
 - `edag:artifactRegistry` 的 `artifacts/artifactVersions/sourceAnchors`
 - `edag:source_assertion` 的 `artifact_id/artifact_version_id/source_anchor_id`
 
-返回 Project Claim → session origin → SourceAssertion → structured SourceAnchor → ArtifactVersion/Artifact 的完整路径、`reachesArtifact`、L0–L4 和明确断点。无 anchor 不能达到 L2，无内容/anchor digest 不能达到 L3。
+返回 Project Conclusion → session origin → 完整 `conclusion_lineage` 的跨层图，包含
+tool `part_of` run、输入/代码/环境/参数/审批/输出和 Artifact Registry 记录；传统
+SourceAssertion 路径仍返回 structured SourceAnchor → ArtifactVersion/Artifact、
+`reachesArtifact`、L0–L4 和明确断点。无 anchor 不能达到 L2，无内容/anchor digest
+不能达到 L3。
+
+可执行 lineage 只通过 Evidence `build_rerun_spec` 导出共享
+`sciforge.rerun.v1`，Project 不维护第二套 manifest/schema。非受限详情返回完整
+canonical `rerunSpecs` 和 digest references，Inspector 可下载原样
+`.sciforge-rerun.json`；受限路径只返回 thread/conclusion/spec 等不可逆哈希引用与
+breakpoint，不返回规范内容或下载入口。历史审批永远标记为
+`freshDecisionRequired`，不会在重跑时复用。
 
 resolver 在同一条读取链路上执行 fail-closed 访问策略继承：Project Snapshot/graph/scope、Project Claim、session Claim、SourceAssertion、ArtifactVersion、SourceAnchor、Artifact 和 run 任一环节受限，都会在没有宿主注入的可信授权判定时脱敏该 provenance path。脱敏结果只保留不可逆对象哈希、内容/anchor digest、存在性、L0–L4 和 `access_restricted` breakpoint；不会返回 statement/content、locator/历史路径/重绑定候选、selector/quote/query、run 输入/代码/参数/环境/输出或 ACL 内容。存储的 `accessPolicy` 只是约束 metadata，不能作为调用者给自己的授权；未知的非空策略结构默认按 restricted 处理。
 
@@ -114,4 +139,4 @@ npm --workspace @sciforge/domain-project-dag test
 npm --workspace @sciforge/domain-project-dag run typecheck
 ```
 
-Python 测试覆盖 committed-only 输入、不可变 vector、跨 workspace scope、原子失败回滚、编译退避/人工 retry、P3 审计入队与重启恢复、审计失败退避/人工 retry/stale、A0–A3、三自治模式、Decision supersession、分层 audit、跨层 L3 provenance、注意力前沿和 Runtime release permission。TypeScript 测试覆盖公共合同、domain definition、capability、lifecycle、sidecar 与 renderer contribution。
+Python 测试覆盖 committed-only 输入、不可变 vector、跨 workspace scope、v2→v3 数据保留与原子失败回滚、原生 Conclusion 全 lineage、canonical rerun spec 与访问脱敏、编译退避/人工 retry、P3 审计入队与重启恢复、审计失败退避/人工 retry/stale、A0–A3、三自治模式、Decision supersession、分层 audit、注意力前沿和 Runtime release permission。TypeScript 测试覆盖公共合同、统一 artifact consumer/durable handoff、domain definition、capability、lifecycle、sidecar、renderer contribution 与 rerun 导出 UI 合同。

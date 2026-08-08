@@ -61,7 +61,12 @@ _CONTEXT: list[Any] = [
     },
 ]
 
-_RUN_TYPES = frozenset({NodeType.EXPERIMENT_RUN, NodeType.ANALYSIS_RUN})
+_RUN_TYPES = frozenset({
+    NodeType.EXPERIMENT_RUN,
+    NodeType.ANALYSIS_RUN,
+    NodeType.WORKFLOW_RUN,
+    NodeType.TOOL_INVOCATION,
+})
 
 
 @dataclass(frozen=True)
@@ -132,6 +137,11 @@ def _edge_prov_record(edge: Edge, node_iris: dict[str, str]) -> dict[str, Any]:
             **common, "@type": ["prov:Usage", "edag:EvidenceEdge"],
             "prov:activity": _ref(src), "prov:entity": _ref(dst),
         }
+    if edge.rel == EdgeRel.RERUN_OF:
+        return {
+            **common, "@type": ["prov:Communication", "edag:EvidenceEdge"],
+            "prov:informed": _ref(src), "prov:informant": _ref(dst),
+        }
     if edge.rel == EdgeRel.GENERATED_BY:
         return {
             **common, "@type": ["prov:Generation", "edag:EvidenceEdge"],
@@ -165,6 +175,8 @@ def _add_direct_prov_relation(
     dst = node_iris[edge.dst]
     if edge.rel == EdgeRel.USED:
         _append_ref(node_records[edge.src], "prov:used", dst)
+    elif edge.rel == EdgeRel.RERUN_OF:
+        _append_ref(node_records[edge.src], "prov:wasInformedBy", dst)
     elif edge.rel == EdgeRel.GENERATED_BY:
         _append_ref(node_records[edge.src], "prov:wasGeneratedBy", dst)
     elif edge.rel == EdgeRel.DERIVED_FROM:
@@ -194,11 +206,23 @@ def _validate_graph_references(graph: ThreadGraph) -> None:
     validation_graph = ThreadGraph(graph.thread_id)
     validation_graph.nodes = dict(graph.nodes)
     for node in graph.nodes.values():
-        identity_scope = (
+        legacy_scope = (
             node.artifact_id if node.type == NodeType.SOURCE_ASSERTION and node.artifact_id
             else node.external_id
         )
-        if node.id != make_node_id(node.type, node.content, identity_scope):
+        identity_scopes = {legacy_scope}
+        if node.external_id and node.artifact_version_id:
+            identity_scopes.add(
+                f"{node.external_id}|artifact-version:{node.artifact_version_id}"
+            )
+        content_digest = node.attributes.get("contentDigest")
+        if node.external_id and isinstance(content_digest, str) \
+                and len(content_digest) == 71 and content_digest.startswith("sha256:") \
+                and all(char in "0123456789abcdef" for char in content_digest[7:]):
+            identity_scopes.add(f"{node.external_id}|content:{content_digest}")
+        if node.id not in {
+            make_node_id(node.type, node.content, scope) for scope in identity_scopes
+        }:
             raise ValueError(f"RO-Crate node identity is not canonical: {node.id}")
     for edge in graph.edges.values():
         if edge.src not in graph.nodes or edge.dst not in graph.nodes:
@@ -486,6 +510,9 @@ def _require_prov_shape(
     if edge.rel == EdgeRel.USED:
         _require_ref(record.get("prov:activity"), src, "prov:activity")
         _require_ref(record.get("prov:entity"), dst, "prov:entity")
+    elif edge.rel == EdgeRel.RERUN_OF:
+        _require_ref(record.get("prov:informed"), src, "prov:informed")
+        _require_ref(record.get("prov:informant"), dst, "prov:informant")
     elif edge.rel == EdgeRel.GENERATED_BY:
         _require_ref(record.get("prov:entity"), src, "prov:entity")
         _require_ref(record.get("prov:activity"), dst, "prov:activity")

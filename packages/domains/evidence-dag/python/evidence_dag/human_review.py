@@ -147,7 +147,10 @@ def select_a2_targets(
 
     selected: dict[str, tuple[HumanReviewReason, ...]] = {}
     for node in graph.nodes.values():
-        if node.type not in {NodeType.CLAIM, NodeType.FINDING, NodeType.ASSUMPTION}:
+        if node.type not in {
+            NodeType.CLAIM, NodeType.CONCLUSION,
+            NodeType.FINDING, NodeType.ASSUMPTION,
+        }:
             continue
         if has_delta_filter and node.id not in impacted:
             continue

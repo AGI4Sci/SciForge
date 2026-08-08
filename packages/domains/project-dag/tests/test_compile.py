@@ -13,18 +13,20 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python"))
 
-from evidence_dag import provjson
+from evidence_dag import provjson, rerun as rerun_module
+from evidence_dag.artifacts import ArtifactRegistry
 from evidence_dag.graph import ThreadGraph
+from evidence_dag.lineage import ingest_trace_lineage
 from evidence_dag.llm import LLMCallError
 from evidence_dag.model import (
     Artifact, ArtifactVersion, EdgeRel, NodeStatus, NodeType, SourceAnchor, SourceSelector,
 )
 from evidence_dag.snapshot import build_snapshot, snapshot_filename, snapshot_storage_key
 
-from project_dag.contracts import remediation_candidate, select_a3_action
+from project_dag.contracts import digest_json, remediation_candidate, select_a3_action
 from project_dag.judge import Judge, ProjectJudgementError, StubJudge
 from project_dag.service import Engine
-from project_dag.store import Store
+from project_dag.store import Store, _upgrade_v2_to_v3
 
 
 def make_judge() -> StubJudge:
@@ -71,6 +73,21 @@ def make_judge() -> StubJudge:
     })
 
 
+class ExplodingJudge:
+    """Fail the test if any Project model/Judge path is touched."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, *_args, **_kwargs) -> dict:
+        self.calls += 1
+        raise AssertionError("canonical Evidence promotion must not call Judge")
+
+    def warm_many(self, *_args, **_kwargs) -> list[dict]:
+        self.calls += 1
+        raise AssertionError("canonical Evidence promotion must not warm Judge")
+
+
 def _sha(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
 
@@ -78,7 +95,9 @@ def _sha(text: str) -> str:
 def write_snapshot(directory: str, thread_id: str, claims: list[tuple[str, str]],
                    version: int = 1, node_type: NodeType = NodeType.CLAIM,
                    artifact_kind: str = "paper", artifact_locator: str | None = None,
-                   node_status: NodeStatus = NodeStatus.SUPPORTED) -> dict:
+                   node_status: NodeStatus = NodeStatus.SUPPORTED,
+                   node_created_by: str | None = None,
+                   node_attributes: dict | None = None) -> dict:
     graph = ThreadGraph(thread_id)
     for index, (claim_text, source_text) in enumerate(claims):
         artifact_id = f"artifact:{thread_id}:{index}"
@@ -109,7 +128,10 @@ def write_snapshot(directory: str, thread_id: str, claims: list[tuple[str, str]]
             artifact_version_id=version_id, source_anchor_id=anchor_id,
             source_quality=0.9,
         )
-        claim = graph.add_or_get_node(node_type, claim_text)
+        claim = graph.add_or_get_node(
+            node_type, claim_text, created_by=node_created_by,
+            attributes=dict(node_attributes or {}),
+        )
         claim.status = node_status
         graph.add_edge(source.id, claim.id, EdgeRel.SUPPORTS, nli_score=0.94)
     snapshot = build_snapshot(graph, version=version, input_watermark=f"turn:{version}")
@@ -125,6 +147,196 @@ def write_snapshot(directory: str, thread_id: str, claims: list[tuple[str, str]]
     with open(historical_path, "x", encoding="utf-8") as handle:
         handle.write(serialized)
     return snapshot.to_dict()
+
+
+def write_execution_lineage_snapshot(
+        directory: str, thread_id: str, *, version: int = 1) -> tuple[dict, str]:
+    """Write one native Conclusion with the complete reproducibility closure."""
+    graph = ThreadGraph(thread_id)
+    registry = ArtifactRegistry(workspace_roots=(directory,), locator_root=directory)
+    workflow = {
+        "id": "workflow:project-integration",
+        "name": "Project integration workflow",
+        "env": [{
+            # The workflow records an environment-variable indirection, never
+            # a credential value. It is safe to preserve byte-for-byte.
+            "key": "API_TOKEN", "value": "${API_TOKEN}",
+        }],
+        "nodes": [],
+        "connections": [],
+    }
+    executor_input = {"datasetDigest": _sha("dataset-v1")}
+    executor_context = {
+        "workspaceRoot": directory,
+        "packageOwner": "sciforge.create-loop",
+        "packageVersion": "1.0.0",
+        "nodeVersion": "v24.0.0",
+        "platform": "darwin",
+        "architecture": "arm64",
+        "environment": [],
+    }
+    baseline_output = {"resultDigest": _sha("result-v1")}
+    workflow_fingerprint = rerun_module._digest(workflow)
+    input_fingerprint = rerun_module._digest(executor_input)
+    context_fingerprint = rerun_module._digest(executor_context)
+    output_fingerprint = rerun_module._digest(baseline_output)
+    comparator = {"kind": "exact-digest"}
+    approval_requirements = [{
+        "id": "approval:historical:project-integration",
+        "kind": "workflow-human-approval",
+        "subjectId": "tool:statistics:v4",
+        "mode": "confirm",
+        "freshDecisionRequired": True,
+        "policyDigest": _sha("approval-policy-v1"),
+    }]
+    spec_fingerprint = rerun_module._digest({
+        "workflowFingerprint": workflow_fingerprint,
+        "inputFingerprint": input_fingerprint,
+        "contextFingerprint": context_fingerprint,
+        "approvalRequirements": approval_requirements,
+        "comparator": comparator,
+    })
+    executor_payload = {
+        "schemaVersion": "sciforge.create-loop.executor.v1",
+        "workflow": workflow,
+        "input": executor_input,
+        "context": executor_context,
+        "baseline": {
+            "runId": "baseline-run:project-integration",
+            "workflowFingerprint": workflow_fingerprint,
+            "inputFingerprint": input_fingerprint,
+            "specFingerprint": spec_fingerprint,
+            "contextFingerprint": context_fingerprint,
+            "outputFingerprint": output_fingerprint,
+            "outputJson": rerun_module._canonical_json(baseline_output),
+            "approvalFingerprint": rerun_module._digest([]),
+            "nodeResults": [],
+        },
+    }
+    envelope = {
+        "workflowRun": {
+            "id": "workflow-run:project-integration",
+            "name": "Project integration workflow",
+            "status": "completed",
+            "parameters": {"alpha": 0.05},
+            "stochastic": False,
+            "inputFingerprint": input_fingerprint,
+            "specFingerprint": spec_fingerprint,
+            "contextFingerprint": context_fingerprint,
+            "outputFingerprint": output_fingerprint,
+            "executor": {
+                "kind": "create-loop",
+                "workflow": executor_payload,
+                "workflowDigest": rerun_module._digest(executor_payload),
+                "target": {"kind": "workflow", "id": "workflow:project-integration"},
+            },
+        },
+        "inputs": [{
+            "id": "input:dataset:v1",
+            "type": "dataset_version",
+            "name": "RAW_INPUT_CANARY",
+            "contentDigest": _sha("dataset-v1"),
+            "version": "1",
+            "artifact": {
+                "kind": "dataset", "locator": "inputs/data-v1.csv",
+                "contentDigest": _sha("dataset-v1"), "version": "1",
+                "mediaType": "text/csv",
+            },
+        }],
+        "software": [{
+            "id": "software:analysis:commit-1",
+            "type": "software_version",
+            "name": "RAW_CODE_CANARY",
+            "contentDigest": _sha("commit-1"),
+            "version": "commit-1",
+            "artifact": {
+                "kind": "code", "locator": "src/analysis.py",
+                "contentDigest": _sha("commit-1"), "version": "commit-1",
+                "mediaType": "text/x-python",
+            },
+        }],
+        "environment": [{
+            "id": "environment:oci:v1",
+            "name": "RAW_ENVIRONMENT_CANARY",
+            "containerDigest": _sha("oci-image-v1"),
+            "platform": "linux", "architecture": "arm64",
+            "runtimeVersions": {"python": "3.12.4"},
+        }],
+        "parameters": {
+            "id": "parameters:project-integration",
+            "name": "RAW_PARAMETERS_CANARY",
+            "values": {"alpha": 0.05, "method": "welch"},
+            "randomSeed": 73,
+        },
+        "tools": [{
+            "id": "tool:statistics:v4",
+            "name": "RAW_TOOL_CANARY",
+            "providerId": "sciforge", "actionId": "statistics.run",
+            "version": "4.2.0", "arguments": {"method": "welch"},
+            "supportsSeed": True,
+            "parentId": "workflow-run:project-integration",
+        }],
+        "approvals": [{
+            "id": "approval:historical:project-integration",
+            "name": "RAW_APPROVAL_CANARY",
+            "kind": "workflow-human-approval", "mode": "confirm",
+            "subjectId": "tool:statistics:v4", "status": "approved",
+            "policyDigest": _sha("approval-policy-v1"),
+        }],
+        "outputs": [{
+            "id": "artifact:result:v1",
+            "type": "artifact",
+            "name": "RAW_ARTIFACT_CANARY",
+            "contentDigest": output_fingerprint,
+            "comparator": comparator,
+            "value": baseline_output,
+            "artifact": {
+                "kind": "other", "locator": "outputs/result-v1.json",
+                "contentDigest": output_fingerprint, "version": "1",
+                "mediaType": "application/json",
+            },
+        }],
+        "evidence": [{
+            "id": "evidence:finding:project-integration",
+            "type": "finding",
+            "name": "The deterministic output supports the conclusion.",
+        }],
+        "conclusion": {
+            "id": "conclusion:project-integration",
+            "name": "The recorded workflow supports the final conclusion.",
+        },
+        "relations": [
+            {"src": "evidence:finding:project-integration",
+             "dst": "workflow-run:project-integration", "rel": "generated_by"},
+            {"src": "evidence:finding:project-integration",
+             "dst": "conclusion:project-integration", "rel": "supports"},
+        ],
+    }
+    delta = ingest_trace_lineage(graph, [{
+        "id": "execution-result:project-integration",
+        "kind": "tool_result",
+        "evidenceLineage": envelope,
+    }], registry, created_by="sdk-execution-lineage")
+    if delta["envelopes"] != 1:
+        raise AssertionError("execution lineage envelope was not ingested")
+    finding = graph.nodes_of(NodeType.FINDING)[0]
+    conclusion = graph.nodes_of(NodeType.CONCLUSION)[0]
+    finding.status = NodeStatus.FRAGILE
+    conclusion.status = NodeStatus.FRAGILE
+    snapshot = build_snapshot(
+        graph, version=version, input_watermark=f"execution:{version}")
+    graph.meta["snapshot"] = snapshot.to_dict()
+    serialized = provjson.dumps(graph)
+    with open(os.path.join(directory, snapshot_filename(thread_id)), "w",
+              encoding="utf-8") as handle:
+        handle.write(serialized)
+    historical_dir = os.path.join(directory, "snapshots", snapshot_storage_key(thread_id))
+    os.makedirs(historical_dir, exist_ok=True)
+    with open(os.path.join(
+        historical_dir, f"{snapshot.version:08d}-{snapshot.digest[7:]}.prov.json",
+    ), "x", encoding="utf-8") as handle:
+        handle.write(serialized)
+    return snapshot.to_dict(), conclusion.id
 
 
 class WorkflowTests(unittest.TestCase):
@@ -188,6 +400,285 @@ class WorkflowTests(unittest.TestCase):
                                      if a["level"] in {"A1", "A2"}})
         self.assertGreaterEqual(len(runs), 1)
 
+    def test_native_conclusion_promotes_with_full_lineage_and_canonical_rerun_spec(self):
+        exploding_judge = ExplodingJudge()
+        self.engine.judge = exploding_judge
+        self.engine._compiler.judge = exploding_judge
+        evidence, evidence_conclusion_id = write_execution_lineage_snapshot(
+            self.sessions, "execution-lineage-session",
+        )
+        self.enqueue([evidence], reason="execution_completed")
+        self.engine.process_updates(self.project)
+
+        latest = self.engine.workflow.latest_snapshot(self.project)
+        self.assertIsNotNone(latest)
+        claims = latest["graph"]["claims"]
+        self.assertEqual(len(claims), 2)
+        claim = next(item for item in claims if item["claim_type"] == "conclusion")
+        finding_claim = next(item for item in claims if item["claim_type"] == "finding")
+        self.assertEqual(
+            claim["statement"], "The recorded workflow supports the final conclusion.")
+        self.assertEqual(claim["claim_type"], "conclusion")
+        self.assertEqual(
+            finding_claim["statement"],
+            "The deterministic output supports the conclusion.",
+        )
+        self.assertEqual({item["status"] for item in claims}, {"fragile"})
+        self.assertEqual({item["confidence"] for item in claims}, {0.0})
+        self.assertTrue(all(item["goal_id"] is None for item in claims))
+        self.assertEqual(latest["graph"]["entities"], [])
+        self.assertFalse(any(
+            edge["edge_type"] in {"addresses", "mentions"}
+            for edge in latest["graph"]["edges"]
+        ))
+        self.assertEqual(exploding_judge.calls, 0)
+        self.assertFalse(any(item["claim_type"] == "decision" for item in claims))
+        self.assertEqual(latest["graph"]["decisions"], [])
+        self.assertIsNone(self.engine.store.q1(
+            "SELECT id FROM decision_event WHERE project_key=? LIMIT 1", (self.project,),
+        ))
+
+        evidence_refs = latest["graph"]["evidence"]
+        self.assertTrue(evidence_refs)
+        self.assertTrue(all(set(item) == {
+            "id", "project_key", "thread_id", "snapshot_digest", "node_id", "node_type",
+        } for item in evidence_refs))
+        expected_node_types = {
+            "dataset_version", "software_version", "environment", "parameter_set",
+            "tool_invocation", "approval_decision", "artifact", "finding",
+            "workflow_run", "conclusion",
+        }
+        self.assertTrue(expected_node_types.issubset({
+            item["node_type"] for item in evidence_refs
+        }))
+        self.assertTrue(any(
+            item["node_type"] == "conclusion" and item["node_id"] == evidence_conclusion_id
+            for item in evidence_refs
+        ))
+        attached_ref_ids = {
+            endpoint
+            for edge in latest["graph"]["edges"]
+            if edge["edge_type"] in {"supports", "derived_from"}
+            and claim["id"] in {edge["src"], edge["dst"]}
+            for endpoint in (edge["src"], edge["dst"])
+            if endpoint != claim["id"]
+        }
+        self.assertEqual(attached_ref_ids, {item["id"] for item in evidence_refs})
+
+        orphan = self.engine.store.q1(
+            "SELECT payload FROM review WHERE project_key=?"
+            " AND review_type='orphan_claims'", (self.project,),
+        )
+        self.assertIsNotNone(orphan)
+        candidates = json.loads(orphan["payload"])["candidates"]
+        self.assertEqual({item["claim_type"] for item in candidates}, {
+            "finding", "conclusion",
+        })
+        conclusion_candidate = next(
+            item for item in candidates if item["claim_type"] == "conclusion"
+        )
+        finding_candidate = next(
+            item for item in candidates if item["claim_type"] == "finding"
+        )
+        finding_node_id = next(
+            item["node_id"] for item in evidence_refs if item["node_type"] == "finding"
+        )
+        self.assertEqual(
+            set(conclusion_candidate["source_node_ids"]),
+            {evidence_conclusion_id, finding_node_id},
+        )
+        self.assertEqual(finding_candidate["source_node_ids"], [finding_node_id])
+        self.assertNotIn(
+            "conclusion:project-integration", conclusion_candidate["source_node_ids"])
+
+        stored_payload = self.engine.store.q1(
+            "SELECT payload FROM project_snapshot WHERE digest=?", (latest["digest"],),
+        )["payload"]
+        for canary in (
+            "RAW_INPUT_CANARY", "RAW_CODE_CANARY", "RAW_ENVIRONMENT_CANARY",
+            "RAW_PARAMETERS_CANARY", "RAW_TOOL_CANARY", "RAW_APPROVAL_CANARY",
+            "RAW_ARTIFACT_CANARY",
+        ):
+            self.assertNotIn(canary, stored_payload)
+
+        provenance = self.engine.resolve_provenance(
+            self.project, claim["id"], latest["digest"],
+        )
+        self.assertEqual(provenance["provenanceLevel"], "L4")
+        lineage_nodes = {
+            item["id"]: item for item in provenance["lineageGraph"]["nodes"]
+        }
+        self.assertTrue(expected_node_types.issubset({
+            item["nodeType"] for item in lineage_nodes.values()
+        }))
+        self.assertTrue(any(
+            edge["relation"] == "part_of"
+            and lineage_nodes[edge["src"]]["nodeType"] == "tool_invocation"
+            and lineage_nodes[edge["dst"]]["nodeType"] == "workflow_run"
+            for edge in provenance["lineageGraph"]["edges"]
+            if edge["src"] in lineage_nodes and edge["dst"] in lineage_nodes
+        ))
+
+        self.assertEqual(len(provenance["rerunSpecs"]), 1)
+        spec = provenance["rerunSpecs"][0]
+        self.assertEqual(set(spec), {
+            "schemaVersion", "specId", "specDigest", "source", "target",
+            "executionReady", "reproducibility", "activities", "dependencies",
+            "secretSlots", "breakpoints", "createdAt",
+        })
+        self.assertEqual(spec["schemaVersion"], "sciforge.rerun.v1")
+        self.assertTrue(spec["executionReady"])
+        self.assertTrue(spec["activities"][0]["approvals"][0]["freshDecisionRequired"])
+        self.assertEqual(spec["secretSlots"], [])
+        self.assertEqual(
+            spec["activities"][0]["executor"]["workflow"]["workflow"]["env"][0]["value"],
+            "${API_TOKEN}",
+        )
+        self.assertEqual(len(provenance["rerunSpecReferences"]), 1)
+        self.assertEqual(
+            provenance["rerunSpecReferences"][0]["specDigest"], spec["specDigest"],
+        )
+        self.assertEqual(
+            provenance["paths"][0]["rerunSpecReference"]["specDigest"],
+            spec["specDigest"],
+        )
+
+    def test_incremental_declared_snapshot_bypasses_all_judgements_with_live_candidates(self):
+        """A later canonical digest stays model-free with prior Project state.
+
+        Two sessions intentionally declare the same Finding and Conclusion so
+        the second compile has live semantic candidates from another session.
+        Advancing one Evidence Snapshot also refreshes its earlier Project
+        claims. Neither condition may re-enter distill, equivalence, entity,
+        contradiction, or judgement warm-up.
+        """
+        advancing_v1, _ = write_execution_lineage_snapshot(
+            self.sessions, "incremental-declared-advancing", version=1,
+        )
+        stable_v1, _ = write_execution_lineage_snapshot(
+            self.sessions, "incremental-declared-stable", version=1,
+        )
+        self.enqueue([advancing_v1, stable_v1], reason="execution_completed")
+        first = self.engine.process_updates(self.project)
+        self.assertEqual(first["job"]["status"], "succeeded")
+        first_snapshot = first["snapshot"]
+        first_advancing_claim_ids = {
+            row["claim_id"] for row in self.engine.store.q(
+                "SELECT claim_id FROM claim_origin"
+                " WHERE project_key=? AND session_id=? ORDER BY claim_id",
+                (self.project, "incremental-declared-advancing"),
+            )
+        }
+        self.assertEqual(len(first_advancing_claim_ids), 2)
+        self.assertEqual(len(first_snapshot["graph"]["claims"]), 4)
+
+        exploding_judge = ExplodingJudge()
+        self.engine.judge = exploding_judge
+        self.engine._compiler.judge = exploding_judge
+        self.engine.workflow.compiler.judge = exploding_judge
+        advancing_v2, _ = write_execution_lineage_snapshot(
+            self.sessions, "incremental-declared-advancing", version=2,
+        )
+        self.enqueue([advancing_v2, stable_v1], reason="execution_completed")
+        second = self.engine.process_updates(self.project)
+
+        self.assertEqual(exploding_judge.calls, 0)
+        self.assertEqual(second["job"]["status"], "succeeded")
+        self.assertEqual(second["compile"]["stats"]["sessions_compiled"], 1)
+        self.assertEqual(second["compile"]["stats"]["claims_added"], 2)
+        self.assertEqual(second["compile"]["stats"]["claims_merged"], 0)
+        self.assertEqual(second["compile"]["stats"]["conflicts"], 0)
+        self.assertEqual(second["snapshot"]["evidenceVector"], [
+            {"threadId": "incremental-declared-advancing",
+             "digest": advancing_v2["digest"]},
+            {"threadId": "incremental-declared-stable", "digest": stable_v1["digest"]},
+        ])
+
+        second_advancing_claim_ids = {
+            row["claim_id"] for row in self.engine.store.q(
+                "SELECT claim_id FROM claim_origin"
+                " WHERE project_key=? AND session_id=? ORDER BY claim_id",
+                (self.project, "incremental-declared-advancing"),
+            )
+        }
+        self.assertEqual(len(second_advancing_claim_ids), 2)
+        self.assertTrue(first_advancing_claim_ids.isdisjoint(second_advancing_claim_ids))
+        self.assertEqual(
+            self.engine.store.q1(
+                "SELECT COUNT(*) AS n FROM claim WHERE project_key=?"
+                " AND id IN (?,?) AND t_invalid IS NOT NULL",
+                (self.project, *sorted(first_advancing_claim_ids)),
+            )["n"],
+            2,
+        )
+        live_claims = second["snapshot"]["graph"]["claims"]
+        self.assertEqual(len(live_claims), 4)
+        self.assertEqual(
+            {claim["claim_type"] for claim in live_claims},
+            {"finding", "conclusion"},
+        )
+        advancing_refs = [
+            ref for ref in second["snapshot"]["graph"]["evidence"]
+            if ref["thread_id"] == "incremental-declared-advancing"
+        ]
+        self.assertTrue(advancing_refs)
+        self.assertEqual(
+            {ref["snapshot_digest"] for ref in advancing_refs},
+            {advancing_v2["digest"]},
+        )
+
+    def test_sdk_declared_finding_promotes_without_distill(self):
+        statement = "The SDK-declared analysis found a measured effect."
+        evidence = write_snapshot(
+            self.sessions, "sdk-declared-finding",
+            [(statement, "The recorded output contains the measured effect.")],
+            node_type=NodeType.FINDING,
+            node_status=NodeStatus.FRAGILE,
+            node_created_by="sdk-execution-lineage",
+            node_attributes={"lineageRole": "evidence", "semanticRole": "evidence"},
+        )
+        self.engine.judge.calls.clear()
+        self.enqueue([evidence], reason="execution_completed")
+        self.engine.process_updates(self.project)
+
+        claim = self.engine.workflow.latest_snapshot(self.project)["graph"]["claims"][0]
+        self.assertEqual(claim["statement"], statement)
+        self.assertEqual(claim["claim_type"], "finding")
+        self.assertEqual(claim["confidence"], 0.0)
+        self.assertEqual(claim["status"], "fragile")
+        self.assertIsNone(claim["goal_id"])
+        self.assertEqual(self.engine.judge.calls, [])
+
+    def test_mixed_declared_and_unknown_nodes_distill_only_the_unknown_node(self):
+        declared, _ = write_execution_lineage_snapshot(
+            self.sessions, "mixed-declared-session",
+        )
+        unknown_statement = "The legacy evidence node still requires interpretation."
+        unknown = write_snapshot(
+            self.sessions, "mixed-unknown-session",
+            [(unknown_statement, "The legacy source supports its statement.")],
+        )
+        self.engine.judge.calls.clear()
+        self.enqueue([declared, unknown], reason="execution_completed")
+        self.engine.process_updates(self.project)
+
+        distilled = [
+            payload["claim"] for task, payload in self.engine.judge.calls
+            if task == "distill"
+        ]
+        self.assertEqual(distilled, [unknown_statement])
+        self.assertEqual(
+            [task for task, _payload in self.engine.judge.calls], ["distill"])
+        claims = self.engine.workflow.latest_snapshot(self.project)["graph"]["claims"]
+        declared_claim = next(
+            item for item in claims if item["claim_type"] == "conclusion"
+        )
+        self.assertEqual(
+            declared_claim["statement"],
+            "The recorded workflow supports the final conclusion.",
+        )
+        self.assertEqual(declared_claim["confidence"], 0.0)
+
     def test_projects_with_different_goals_reuse_the_same_evidence_reference(self):
         evidence = write_snapshot(
             self.sessions, "shared-evidence",
@@ -223,7 +714,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIsNone(table)
         columns = {row["name"] for row in self.engine.store.q("PRAGMA table_info(evidence)")}
         self.assertEqual(columns, {
-            "id", "project_key", "thread_id", "snapshot_digest", "node_id",
+            "id", "project_key", "thread_id", "snapshot_digest", "node_id", "node_type",
         })
         canary = "RAW_SOURCE_CONTENT_MUST_NOT_ENTER_PROJECT_DB"
         evidence = write_snapshot(
@@ -289,6 +780,31 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(len(latest["graph"]["claims"]), 1)
         self.assertEqual(latest["graph"]["claims"][0]["claim_type"], "finding")
         self.assertEqual(latest["graph"]["origins"][0]["session_id"], "analysis-session")
+
+    def test_native_conclusion_never_merges_into_same_text_finding(self):
+        statement = "The shared statement has distinct epistemic semantics."
+        finding = write_snapshot(
+            self.sessions, "finding-semantics", [(statement, "finding source")],
+            node_type=NodeType.FINDING,
+        )
+        conclusion = write_snapshot(
+            self.sessions, "conclusion-semantics", [(statement, "conclusion source")],
+            node_type=NodeType.CONCLUSION,
+        )
+        self.enqueue([finding, conclusion], reason="manual_immediate")
+        self.engine.process_updates(self.project)
+
+        latest = self.engine.workflow.latest_snapshot(self.project)
+        self.assertEqual(
+            sorted(item["claim_type"] for item in latest["graph"]["claims"]),
+            ["conclusion", "finding"],
+        )
+        self.assertEqual(latest["graph"]["decisions"], [])
+        self.assertEqual(
+            len([item for item in latest["graph"]["evidence"]
+                 if item["node_type"] == "conclusion"]),
+            1,
+        )
 
     def test_no_goal_claims_remain_visible_and_are_rematched_after_goal_creation(self):
         project = "path:/workspace/no-goal"
@@ -777,6 +1293,46 @@ class WorkflowTests(unittest.TestCase):
         retried = self.engine.retry_update(failed["id"], actor="researcher")
         self.assertEqual(retried["status"], "queued")
         self.assertIsNone(retried["next_attempt_at"])
+
+    def test_project_snapshot_reads_reject_payload_and_row_tampering(self):
+        snapshot = write_snapshot(self.sessions, "integrity", [("claim", "source")])
+        self.enqueue([snapshot]); self.drain()
+        committed = self.engine.workflow.latest_snapshot(self.project)
+        row = self.engine.store.q1(
+            "SELECT * FROM project_snapshot WHERE digest=?", (committed["digest"],))
+
+        tampered = json.loads(row["payload"])
+        tampered["graph"]["claims"][0]["statement"] = "TAMPERED PROJECT CLAIM"
+        self.engine.store.x(
+            "UPDATE project_snapshot SET payload=? WHERE digest=?",
+            (json.dumps(tampered), row["digest"]),
+        )
+        self.engine.store.conn.commit()
+        with self.assertRaisesRegex(ValueError, "Project Snapshot digest mismatch"):
+            self.engine.workflow.latest_snapshot(self.project)
+
+        self.engine.store.x(
+            "UPDATE project_snapshot SET payload=?,evidence_vector=? WHERE digest=?",
+            (row["payload"], "[]", row["digest"]),
+        )
+        self.engine.store.conn.commit()
+        with self.assertRaisesRegex(ValueError, "evidenceVector.*database row"):
+            self.engine.graph(self.project)
+
+        rebound = json.loads(row["payload"])
+        rebound["version"] = int(rebound["version"]) + 1
+        rebound.pop("digest", None)
+        rebound_digest = digest_json(rebound, "project")
+        rebound["digest"] = rebound_digest
+        self.engine.store.x(
+            "UPDATE project_snapshot SET digest=?,payload=?,evidence_vector=?"
+            " WHERE project_key=? AND version=?",
+            (rebound_digest, json.dumps(rebound), row["evidence_vector"],
+             row["project_key"], row["version"]),
+        )
+        self.engine.store.conn.commit()
+        with self.assertRaisesRegex(ValueError, "version.*database row"):
+            self.engine.workflow.snapshot(rebound_digest)
 
     def test_active_update_receipt_is_idempotent_and_does_not_advance_generation(self):
         snapshot = write_snapshot(self.sessions, "receipt", [("claim", "source")])
@@ -1360,6 +1916,189 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "requires a clean project-view database"):
             Store(db_path)
 
+    def test_v2_to_v3_migration_is_atomic_and_preserves_graph_history(self):
+        db_path = os.path.join(self.tmp.name, "v2-project.db")
+        current = Store(db_path)
+        current.x(
+            "INSERT INTO claim"
+            " (id,project_key,statement,claim_type,status,confidence,goal_id,t_valid,"
+            "t_invalid,t_created,load_bearing,blast_radius,needs_regoal)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("claim:v2", self.project, "Preserved v2 claim", "finding", "invalidated",
+             0.77, None, "2026-07-01T00:00:00Z", "2026-07-03T00:00:00Z",
+             "2026-07-01T00:00:00Z", 0.4, 2, 0),
+        )
+        current.x(
+            "INSERT INTO evidence"
+            " (id,project_key,thread_id,snapshot_digest,node_id,node_type)"
+            " VALUES (?,?,?,?,?,?)",
+            ("evidence:v2", self.project, "thread:v2", _sha("snapshot-v2"),
+             "source:v2", "source_assertion"),
+        )
+        current.x(
+            "INSERT INTO edge (id,src,dst,edge_type,t_valid,t_invalid,meta)"
+            " VALUES (?,?,?,?,?,?,?)",
+            ("edge:v2", "evidence:v2", "claim:v2", "supports",
+             "2026-07-01T00:00:00Z", "2026-07-03T00:00:00Z",
+             '{"session":"thread:v2","claim_node":"source:v2"}'),
+        )
+        legacy_evidence_digest = _sha("snapshot-v2")
+        legacy_payload = {
+            "projectKey": self.project, "version": 1,
+            "goalVersion": "goal:v2",
+            "policyVersion": 1,
+            "evidenceVector": [{
+                "threadId": "thread:v2", "digest": legacy_evidence_digest,
+            }],
+            "excludedSessions": [], "isolatedSessions": [],
+            "compilerVersion": "project-compiler.v2",
+            "createdAt": "2026-07-03T00:00:00Z", "status": "committed",
+            "autonomyMode": "checkpointed",
+            "graph": {
+                "goals": [], "claims": [{
+                    "id": "claim:v2", "project_key": self.project,
+                    "statement": "Preserved v2 claim", "claim_type": "finding",
+                    "status": "invalidated",
+                }],
+                # Historical v2 payloads intentionally have no node_type.
+                "evidence": [{
+                    "id": "evidence:v2", "project_key": self.project,
+                    "thread_id": "thread:v2", "snapshot_digest": legacy_evidence_digest,
+                    "node_id": "source:v2",
+                }],
+                "entities": [], "edges": [], "origins": [], "decisions": [],
+            },
+            "assessments": [],
+        }
+        legacy_snapshot_digest = digest_json(legacy_payload, "project")
+        legacy_payload["digest"] = legacy_snapshot_digest
+        current.x(
+            "INSERT INTO project_snapshot"
+            " (project_key,version,digest,goal_version,policy_version,evidence_vector,"
+            "excluded_sessions,isolated_sessions,compiler_version,created_at,status,payload)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,'committed',?)",
+            (self.project, 1, legacy_snapshot_digest, "goal:v2", 1,
+             json.dumps(legacy_payload["evidenceVector"]), "[]", "[]",
+             "project-compiler.v2", "2026-07-03T00:00:00Z",
+             json.dumps(legacy_payload)),
+        )
+        current.conn.commit()
+        current.close()
+
+        connection = sqlite3.connect(db_path)
+        connection.executescript("""
+        ALTER TABLE claim RENAME TO claim_v3;
+        CREATE TABLE claim (
+          id TEXT PRIMARY KEY, project_key TEXT NOT NULL, statement TEXT NOT NULL,
+          claim_type TEXT CHECK(claim_type IN
+            ('hypothesis','finding','method_result','negative_result','decision')),
+          status TEXT NOT NULL CHECK(status IN
+            ('supported','conflicted','invalidated','fragile','undetermined')),
+          confidence REAL, goal_id TEXT, t_valid TEXT NOT NULL, t_invalid TEXT,
+          t_created TEXT NOT NULL, load_bearing REAL NOT NULL DEFAULT 0,
+          blast_radius INTEGER NOT NULL DEFAULT 0, needs_regoal INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO claim SELECT * FROM claim_v3;
+        DROP TABLE claim_v3;
+
+        DROP INDEX idx_evidence_ref;
+        ALTER TABLE evidence RENAME TO evidence_v3;
+        CREATE TABLE evidence (
+          id TEXT PRIMARY KEY, project_key TEXT NOT NULL, thread_id TEXT NOT NULL,
+          snapshot_digest TEXT NOT NULL, node_id TEXT NOT NULL,
+          UNIQUE(project_key,thread_id,snapshot_digest,node_id)
+        );
+        INSERT INTO evidence (id,project_key,thread_id,snapshot_digest,node_id)
+          SELECT id,project_key,thread_id,snapshot_digest,node_id FROM evidence_v3;
+        DROP TABLE evidence_v3;
+        CREATE INDEX idx_evidence_ref
+          ON evidence(project_key,thread_id,snapshot_digest,node_id);
+
+        DROP INDEX idx_edge_src;
+        DROP INDEX idx_edge_dst;
+        ALTER TABLE edge RENAME TO edge_v3;
+        CREATE TABLE edge (
+          id TEXT PRIMARY KEY, src TEXT NOT NULL, dst TEXT NOT NULL,
+          edge_type TEXT NOT NULL CHECK(edge_type IN
+            ('decomposes_to','addresses','supports','contradicts','derived_from',
+             'same_as','mentions')),
+          t_valid TEXT NOT NULL, t_invalid TEXT, meta TEXT
+        );
+        INSERT INTO edge SELECT * FROM edge_v3;
+        DROP TABLE edge_v3;
+        CREATE INDEX idx_edge_src ON edge(src, edge_type);
+        CREATE INDEX idx_edge_dst ON edge(dst, edge_type);
+
+        DROP TABLE project_schema;
+        CREATE TABLE project_schema (version INTEGER PRIMARY KEY CHECK(version=2));
+        INSERT INTO project_schema(version) VALUES (2);
+        CREATE TABLE edge_v2 (sentinel TEXT);
+        """)
+        connection.commit()
+
+        with self.assertRaises(sqlite3.OperationalError):
+            _upgrade_v2_to_v3(connection)
+        self.assertEqual(
+            connection.execute("SELECT version FROM project_schema").fetchone()[0], 2,
+        )
+        self.assertNotIn(
+            "node_type", {row[1] for row in connection.execute("PRAGMA table_info(evidence)")},
+        )
+        self.assertEqual(
+            connection.execute("SELECT statement FROM claim WHERE id='claim:v2'").fetchone()[0],
+            "Preserved v2 claim",
+        )
+        self.assertEqual(
+            connection.execute("SELECT node_id FROM evidence WHERE id='evidence:v2'").fetchone()[0],
+            "source:v2",
+        )
+        self.assertEqual(
+            connection.execute("SELECT t_invalid FROM edge WHERE id='edge:v2'").fetchone()[0],
+            "2026-07-03T00:00:00Z",
+        )
+
+        connection.execute("DROP TABLE edge_v2")
+        connection.commit()
+        _upgrade_v2_to_v3(connection)
+        self.assertEqual(
+            connection.execute("SELECT version FROM project_schema").fetchone()[0], 3,
+        )
+        claim_row = connection.execute(
+            "SELECT statement,t_valid,t_invalid FROM claim WHERE id='claim:v2'",
+        ).fetchone()
+        self.assertEqual(claim_row, (
+            "Preserved v2 claim", "2026-07-01T00:00:00Z", "2026-07-03T00:00:00Z",
+        ))
+        evidence_row = connection.execute(
+            "SELECT thread_id,snapshot_digest,node_id,node_type"
+            " FROM evidence WHERE id='evidence:v2'",
+        ).fetchone()
+        self.assertEqual(evidence_row, (
+            "thread:v2", _sha("snapshot-v2"), "source:v2", "source_assertion",
+        ))
+        edge_row = connection.execute(
+            "SELECT src,dst,edge_type,t_valid,t_invalid,meta FROM edge WHERE id='edge:v2'",
+        ).fetchone()
+        self.assertEqual(edge_row, (
+            "evidence:v2", "claim:v2", "supports", "2026-07-01T00:00:00Z",
+            "2026-07-03T00:00:00Z",
+            '{"session":"thread:v2","claim_node":"source:v2"}',
+        ))
+        self.assertIn("idx_evidence_ref", {
+            row[1] for row in connection.execute("PRAGMA index_list(evidence)")
+        })
+        self.assertTrue({"idx_edge_src", "idx_edge_dst"}.issubset({
+            row[1] for row in connection.execute("PRAGMA index_list(edge)")
+        }))
+        connection.close()
+
+        reopened = Engine(db_path, self.sessions, judge=make_judge())
+        legacy_graph = reopened.graph(self.project)
+        self.assertEqual(legacy_graph["snapshot"]["digest"], legacy_snapshot_digest)
+        self.assertEqual(legacy_graph["evidence"][0]["node_id"], "source:v2")
+        self.assertNotIn("node_type", legacy_graph["evidence"][0])
+        reopened.store.close()
+
     def test_v1_database_is_transactionally_upgraded_without_losing_user_data(self):
         db_path = os.path.join(self.tmp.name, "v1-project.db")
         v2 = Store(db_path)
@@ -1420,7 +2159,7 @@ class WorkflowTests(unittest.TestCase):
 
         upgraded = Store(db_path)
         self.assertEqual(
-            upgraded.q1("SELECT version FROM project_schema")["version"], 2)
+            upgraded.q1("SELECT version FROM project_schema")["version"], 3)
         self.assertEqual(
             upgraded.q1("SELECT title FROM goal WHERE id=?", (goal["id"],))["title"],
             "Preserve this goal")

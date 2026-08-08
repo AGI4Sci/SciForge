@@ -60,7 +60,9 @@ Node types:
   cited study says (that is a `source`). Emit a SEPARATE reasoning node per
   distinct step, comparison, trade-off, or sub-conclusion. NEVER collapse a whole
   multi-step analysis into a single node.
-- claim: a specific assertion/conclusion the agent stated.
+- claim: a legacy-compatible intermediate assertion the agent stated.
+- conclusion: a terminal conclusion the agent stated. Prefer this for the final
+  answer or a clearly labelled sub-conclusion.
 
 Edge relations (src -> dst):
 - supports:     src is evidence for dst (evidence -> conclusion)
@@ -94,7 +96,7 @@ Rules:
   the start of the trace line it came from. COPY that token verbatim — do not
   invent, renumber, or abbreviate it (ids look arbitrary, e.g. "item_7f3a", not "step-N").
 - Output STRICT JSON only, no prose, no code fences:
-{"nodes":[{"tmp_id":"n1","type":"source_assertion|reasoning|claim|finding|assumption","content":"...",
+{"nodes":[{"tmp_id":"n1","type":"source_assertion|reasoning|claim|finding|assumption|conclusion","content":"...",
 "trace_ref":"<exact id copied from the [ ] bracket>","ref":{"url":"...","doi":"...","citation":"..."},
 "artifact":{"kind":"paper|dataset|code|notebook|image|log|model|other","locator":"URL, DOI, SWHID, or workspace-relative path","contentDigest":"sha256:...","version":"...","mediaType":"..."},
 "selector":{"type":"pdf|text|table|figure|code|dataset|web","page":1,"section":"...","table":"...","figure":"...","rowRange":"1:4","columnNames":["..."],"lineRange":"1:4","quote":"exact bounded excerpt"},
@@ -822,6 +824,14 @@ def build_graph(
         if not content:
             continue
         extra: dict[str, Any] = {}
+        semantic_role = (
+            "evidence" if ntype in {
+                NodeType.SOURCE_ASSERTION, NodeType.FINDING, NodeType.OBSERVATION,
+            } else
+            "conclusion" if ntype in {NodeType.CLAIM, NodeType.CONCLUSION} else None
+        )
+        if semantic_role:
+            extra["attributes"] = {"semanticRole": semantic_role}
         attached = None
         if ntype == NodeType.SOURCE_ASSERTION:
             st = raw_node.get("source_type")

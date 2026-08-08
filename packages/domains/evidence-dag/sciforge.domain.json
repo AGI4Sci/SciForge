@@ -56,8 +56,8 @@
           "priority": 160
         },
         {
-          "kind": "main.agent-artifact-consumer",
-          "id": "evidence-dag.agent-artifact-consumer",
+          "kind": "main.artifact-consumer",
+          "id": "evidence-dag.artifact-consumer",
           "priority": 160
         },
         {

@@ -1,6 +1,6 @@
 import type {
-  DomainAgentArtifactConsumer,
-  DomainAgentArtifactEvent,
+  DomainArtifactConsumer,
+  DomainArtifactEvent,
   DomainMainHost,
   DomainMainActionGuard,
   DomainMainRuntimeDisposer,
@@ -21,7 +21,7 @@ import {
   evidenceDagViewOutputSchema
 } from './contract.js'
 import {
-  EVIDENCE_DAG_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION,
+  EVIDENCE_DAG_ARTIFACT_CONSUMER_CONTRIBUTION,
   EVIDENCE_DAG_CAPABILITY_FACTORY_CONTRIBUTION,
   EVIDENCE_DAG_DOMAIN_MODULE_ID,
   EVIDENCE_DAG_RUNTIME_LIFECYCLE_CONTRIBUTION,
@@ -74,7 +74,7 @@ export type EvidenceDagCapabilityFactory<CapabilityDefinition = unknown> = Reado
 export type EvidenceDagMainContribution<CapabilityDefinition = unknown> =
   | EvidenceDagCapabilityFactory<CapabilityDefinition>
   | DomainMainRuntimeLifecycleContribution
-  | DomainAgentArtifactConsumer
+  | DomainArtifactConsumer
   | DomainMainActionGuard
 
 type EvidenceDagMainHost = DomainMainHost & Readonly<{
@@ -162,8 +162,8 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
       }
     }
   })
-  const artifactConsumer: DomainAgentArtifactConsumer = Object.freeze({
-    consume: (event: DomainAgentArtifactEvent) => requireRuntime().consume(event)
+  const artifactConsumer: DomainArtifactConsumer = Object.freeze({
+    consume: (event: DomainArtifactEvent) => requireRuntime().consume(event)
   })
   const actionGuard: DomainMainActionGuard = Object.freeze({
     actions: Object.freeze([EVIDENCE_DAG_WRITE_EXPORT_ACTION]),
@@ -191,7 +191,7 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
         }
       },
       {
-        ...EVIDENCE_DAG_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION,
+        ...EVIDENCE_DAG_ARTIFACT_CONSUMER_CONTRIBUTION,
         value: artifactConsumer
       },
       {

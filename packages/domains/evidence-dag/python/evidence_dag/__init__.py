@@ -42,6 +42,13 @@ from .rocrate import (
     read_ro_crate,
     write_ro_crate,
 )
+from .rerun import (
+    RERUN_SCHEMA_VERSION,
+    build_rerun_spec,
+    compare_rerun_specs,
+    output_values_for_spec,
+    validate_rerun_spec,
+)
 from .service import Engine
 from .snapshot import EvidenceSnapshot
 
@@ -60,5 +67,7 @@ __all__ = [
     "DataCiteCreator", "DataCiteDescription", "DataCiteProject", "DataCiteResource",
     "GitCommit", "RelatedIdentifier", "ImportedDataCite",
     "datacite_digest", "export_datacite", "import_datacite",
+    "RERUN_SCHEMA_VERSION", "build_rerun_spec", "compare_rerun_specs",
+    "output_values_for_spec", "validate_rerun_spec",
     "__version__",
 ]

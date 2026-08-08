@@ -19,9 +19,9 @@ export const PROJECT_DAG_RUNTIME_LIFECYCLE_CONTRIBUTION = contributionFor(
   'main',
   'main.runtime-lifecycle'
 )
-export const PROJECT_DAG_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION = contributionFor(
+export const PROJECT_DAG_ARTIFACT_CONSUMER_CONTRIBUTION = contributionFor(
   'main',
-  'main.agent-artifact-consumer'
+  'main.artifact-consumer'
 )
 export const PROJECT_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION = contributionFor(
   'renderer',

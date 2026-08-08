@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # to its nli handler; the real model reads the framing below.
 SUPPORT_SYSTEM = """EDAG-TASK: nli (support)
 You judge EVIDENTIAL SUPPORT. Given a PREMISE (evidence) and a HYPOTHESIS (a
-claim or reasoning step), output how strongly the premise SUPPORTS the
+claim, conclusion, or reasoning step), output how strongly the premise SUPPORTS the
 hypothesis — how much it raises belief in it. This is INDUCTIVE support, NOT
 strict logical entailment: concrete findings, data, study results, statistics,
 and partial evidence all count to the degree they back the hypothesis. Use ONLY
@@ -185,7 +185,7 @@ def _clamp(x: float) -> float:
 
 def verify(graph: ThreadGraph, llm: LLM, *, threshold: float = 0.7,
            only_unscored: bool = False) -> dict:
-    """Fill ν on supports edges, then (re)assign claim/reasoning status.
+    """Fill ν on supports edges, then (re)assign conclusion/reasoning status.
 
     `only_unscored=True` runs NLI ONLY on edges that have no ν yet — i.e. the
     edges a merge just added. Existing edges keep their scores (no redundant LLM

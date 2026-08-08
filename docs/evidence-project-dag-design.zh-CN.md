@@ -1,12 +1,17 @@
 # SciForge 科研 Evidence DAG 与 Project DAG 设计
 
-Last updated: 2026-07-10
+Last updated: 2026-08-05
 
 ## 文档状态
 
 本文记录 SciForge 科研证据图的目标设计，覆盖线程级 Evidence DAG、项目级 Project DAG、原始证据溯源、后台更新、异步审计、人机交互和科研发布门禁。
 
 本文中的产品原则已经确认，可作为后续实现、测试和验收的基线。批处理等待时间、并发数、缓存容量等运行参数不在本文中固定，应根据真实负载测试配置。
+
+输入、代码、环境、参数、工具、审批、Artifact、Evidence 与 Conclusion 的 v3
+可复跑扩展见 [`reproducible-dag-v3.zh-CN.md`](./reproducible-dag-v3.zh-CN.md)。本文继续定义
+Evidence/Project 的总体所有权、审计与自治边界；扩展文档定义 execution event、完整
+Conclusion lineage、canonical rerun spec 和重跑差异判定。
 
 规范用语：
 
