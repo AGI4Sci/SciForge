@@ -22,7 +22,9 @@
       "requiredPaths": [
         "pyproject.toml",
         "python/evidence_dag/__init__.py",
+        "python/evidence_dag/artifact_versions.py",
         "python/evidence_dag/digraph.py",
+        "python/evidence_dag/products.py",
         "python/evidence_dag/server.py",
         "ui/index.html"
       ]
@@ -56,8 +58,8 @@
           "priority": 160
         },
         {
-          "kind": "main.agent-artifact-consumer",
-          "id": "evidence-dag.agent-artifact-consumer",
+          "kind": "main.artifact-consumer",
+          "id": "evidence-dag.artifact-consumer",
           "priority": 160
         },
         {

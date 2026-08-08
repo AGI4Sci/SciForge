@@ -56,8 +56,8 @@
           "id": "project-dag.runtime-lifecycle"
         },
         {
-          "kind": "main.agent-artifact-consumer",
-          "id": "project-dag.turn-completed"
+          "kind": "main.artifact-consumer",
+          "id": "project-dag.artifacts"
         }
       ]
     },

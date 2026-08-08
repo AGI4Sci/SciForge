@@ -2,10 +2,14 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { createScientificPlottingCapabilityHarness } from './scientific-plotting-capability-harness.mjs'
 
 const workspaceRoot = process.cwd()
 const entry = join(workspaceRoot, 'out/main/scientific-plotting-mcp-node-entry.js')
 const outputDir = process.env.SCIFORGE_PLOTTING_REGRESSION_OUTPUT ?? 'tmp/scientific-plotting-style-regression'
+const operationRunId = normalizeOperationPart(
+  process.env.SCIFORGE_PLOTTING_OPERATION_RUN_ID ?? `${Date.now()}-${process.pid}`
+)
 
 const oversizedTypographyStyle = {
   version: 1,
@@ -348,6 +352,15 @@ const mappedRenderChecks = [
   }
 ]
 
+function normalizeOperationPart(value) {
+  const normalized = String(value).replace(/[^A-Za-z0-9._:-]+/gu, '-').replace(/^-+|-+$/gu, '')
+  return normalized || 'run'
+}
+
+function plottingOperationId(label) {
+  return `smoke:style:${operationRunId}:${normalizeOperationPart(label)}`.slice(0, 240)
+}
+
 async function assertFile(relativePath) {
   try {
     await access(join(workspaceRoot, relativePath))
@@ -371,12 +384,70 @@ async function skipWhenSmokeAssetsMissing(relativePaths) {
     if (!await fileExists(relativePath)) missing.push(relativePath)
   }
   if (missing.length === 0) return
+  const capabilityProbe = await runCapabilityRouteProbe()
   console.log(JSON.stringify({
-    status: 'skipped',
-    reason: 'Missing local paper smoke assets. Populate tmp/figure-style-paper-smoke to run this regression.',
-    missing
+    status: capabilityProbe.ok ? 'capability_probe_passed' : 'capability_probe_failed',
+    reason: 'The broker-backed plotting route was exercised, but optional local paper assets are missing. Populate tmp/figure-style-paper-smoke to run the full style regression.',
+    missing,
+    capabilityProbe
   }, null, 2))
-  process.exit(0)
+  process.exit(capabilityProbe.ok ? 0 : 1)
+}
+
+async function runCapabilityRouteProbe() {
+  const probeOutputDir = join(outputDir, 'capability-probe')
+  await mkdir(join(workspaceRoot, probeOutputDir), { recursive: true })
+  const plotting = await createScientificPlottingCapabilityHarness({
+    workspaceRoot,
+    userDataDir: join(workspaceRoot, probeOutputDir, '.artifact-version-runtime')
+  })
+  try {
+    const status = await plotting.status()
+    const operationId = plottingOperationId('asset-independent-probe')
+    const mapping = await plotting.mapData({
+      operationId,
+      visualPlan: {
+        planId: 'scientific-plotting-smoke-capability-probe',
+        route: 'code',
+        routeLocked: true,
+        rationale: 'Exercise the governed plotting capability route without optional paper assets.',
+        sourceArtifacts: [],
+        reproducibleInputs: ['inline smoke data'],
+        lockedElements: ['data', 'labels'],
+        modelOwnedElements: [],
+        contextStatus: 'ready',
+        contextStopReason: 'sufficient',
+        contextEvidenceIds: [],
+        unresolvedContext: [],
+        releaseCeiling: 'publication_ready',
+        fallbackPolicy: 'fail_closed'
+      },
+      task: 'Render a minimal bar chart that verifies the broker-backed plotting route.',
+      templateHint: 'bar',
+      figureId: 'scientific-plotting-capability-probe',
+      labels: { title: 'Capability route probe', x: 'Group', y: 'Value' },
+      data: {
+        categories: ['Control', 'Treatment'],
+        series: [{ name: 'Value', values: [1, 2] }]
+      },
+      outputDir: probeOutputDir
+    })
+    const render = mapping.ok
+      ? await plotting.render({
+          ...mapping.renderRequest,
+          outputDir: probeOutputDir,
+          autoRepair: { enabled: false, maxAttempts: 0 }
+        })
+      : null
+    return {
+      ok: status.ok === true && mapping.ok === true && render?.ok === true,
+      status,
+      mapping,
+      render
+    }
+  } finally {
+    await plotting.dispose()
+  }
 }
 
 function scoreFrom(result) {
@@ -529,6 +600,10 @@ await skipWhenSmokeAssetsMissing([
 ])
 await assertFile('out/main/scientific-plotting-mcp-node-entry.js')
 await mkdir(join(workspaceRoot, outputDir), { recursive: true })
+const plotting = await createScientificPlottingCapabilityHarness({
+  workspaceRoot,
+  userDataDir: join(workspaceRoot, outputDir, '.artifact-version-runtime')
+})
 
 const transport = new StdioClientTransport({
   command: process.execPath,
@@ -566,10 +641,7 @@ const controlledPlotPlan = {
 }
 
 const tools = await client.listTools()
-const status = await client.callTool({
-  name: 'scientific_plotting_status',
-  arguments: {}
-})
+const status = await plotting.status()
 const styleProfiles = await client.callTool({
   name: 'scientific_plotting_style_profiles',
   arguments: {
@@ -606,41 +678,35 @@ for (const item of referencePreparationChecks) {
   })
 }
 
-const unifiedMappingResponse = await client.callTool({
-  name: 'scientific_plotting_map_data',
-  arguments: {
-    visualPlan: controlledPlotPlan,
-    task: 'Use the reference paper style to draw a benchmark comparison bar chart.',
-    figureId: 'v2-scientific-plotting-style-transfer',
-    referencePath: 'tmp/figure-style-paper-smoke/references/nature-2021-alphafold-fig2.png',
-    labels: {
-      title: 'Benchmark comparison',
-      x: 'Model',
-      y: 'Score',
-      panel: 'V2'
-    },
-    data: {
-      rows: [
-        { model: 'Baseline', score: 0.61 },
-        { model: 'SciForge', score: 0.78 },
-        { model: 'Ablated', score: 0.69 }
-      ]
-    },
-    outputDir
-  }
-}, undefined, { timeout: 60_000 })
-const unifiedMapping = unifiedMappingResponse.structuredContent?.mapping
+const unifiedOperationId = plottingOperationId('unified-style-transfer')
+const unifiedMapping = await plotting.mapData({
+  operationId: unifiedOperationId,
+  visualPlan: controlledPlotPlan,
+  task: 'Use the reference paper style to draw a benchmark comparison bar chart.',
+  figureId: 'v2-scientific-plotting-style-transfer',
+  referencePath: 'tmp/figure-style-paper-smoke/references/nature-2021-alphafold-fig2.png',
+  labels: {
+    title: 'Benchmark comparison',
+    x: 'Model',
+    y: 'Score',
+    panel: 'V2'
+  },
+  data: {
+    rows: [
+      { model: 'Baseline', score: 0.61 },
+      { model: 'SciForge', score: 0.78 },
+      { model: 'Ablated', score: 0.69 }
+    ]
+  },
+  outputDir
+})
 let unifiedRender = null
 if (unifiedMapping?.ok) {
-  const unifiedRenderResponse = await client.callTool({
-    name: 'scientific_plotting_render',
-    arguments: {
-      ...unifiedMapping.renderRequest,
-      outputDir,
-      autoRepair: { enabled: true, maxAttempts: 1, minOverall: 0.82 }
-    }
-  }, undefined, { timeout: 90_000 })
-  unifiedRender = unifiedRenderResponse.structuredContent?.result
+  unifiedRender = await plotting.render({
+    ...unifiedMapping.renderRequest,
+    outputDir,
+    autoRepair: { enabled: true, maxAttempts: 1, minOverall: 0.82 }
+  })
 }
 const unifiedWorkflow = unifiedMapping?.ok && unifiedRender?.ok
   ? { ok: true, status: 'rendered', mapping: unifiedMapping, render: unifiedRender }
@@ -654,66 +720,58 @@ const unifiedWorkflow = unifiedMapping?.ok && unifiedRender?.ok
 
 const results = []
 for (const item of cases) {
-  const response = await client.callTool({
-    name: 'scientific_plotting_render',
-    arguments: {
-      visualPlan: controlledPlotPlan,
-      template: item.template,
-      figureId: `regression-${item.id}`,
-      labels: item.labels,
-      data: item.data,
-      ...(item.styleSpecPath ? { styleSpecPath: item.styleSpecPath } : {}),
-      ...(item.styleSpec ? { styleSpec: item.styleSpec } : {}),
-      ...(item.styleProfileId ? { styleProfileId: item.styleProfileId } : {}),
-      ...(item.referencePath ? { referencePath: item.referencePath } : {}),
-      outputDir,
-      autoRepair: {
-        enabled: true,
-        maxAttempts: 1,
-        minOverall: 0.82
-      }
+  const result = await plotting.render({
+    operationId: plottingOperationId(`case-${item.id}`),
+    visualPlan: controlledPlotPlan,
+    template: item.template,
+    figureId: `regression-${item.id}`,
+    labels: item.labels,
+    data: item.data,
+    ...(item.styleSpecPath ? { styleSpecPath: item.styleSpecPath } : {}),
+    ...(item.styleSpec ? { styleSpec: item.styleSpec } : {}),
+    ...(item.styleProfileId ? { styleProfileId: item.styleProfileId } : {}),
+    ...(item.referencePath ? { referencePath: item.referencePath } : {}),
+    outputDir,
+    autoRepair: {
+      enabled: true,
+      maxAttempts: 1,
+      minOverall: 0.82
     }
-  }, undefined, { timeout: 90_000 })
+  })
   results.push({
     id: item.id,
     label: item.label,
     template: item.template,
     ...(item.styleProfileId ? { styleProfileId: item.styleProfileId } : {}),
     ...(item.referencePath ? { referencePath: join(workspaceRoot, item.referencePath) } : {}),
-    result: response.structuredContent?.result
+    result
   })
 }
 
 const mappedRenders = []
 for (const item of mappedRenderChecks) {
-  const mappingResponse = await client.callTool({
-    name: 'scientific_plotting_map_data',
-    arguments: {
-      visualPlan: controlledPlotPlan,
-      task: item.task,
-      data: item.data,
-      labels: item.labels,
-      styleSpecPath: item.styleSpecPath,
-      figureId: `regression-${item.id}`,
-      outputDir
-    }
-  }, undefined, { timeout: 60_000 })
-  const mapping = mappingResponse.structuredContent?.mapping
+  const operationId = plottingOperationId(`mapped-${item.id}`)
+  const mapping = await plotting.mapData({
+    operationId,
+    visualPlan: controlledPlotPlan,
+    task: item.task,
+    data: item.data,
+    labels: item.labels,
+    styleSpecPath: item.styleSpecPath,
+    figureId: `regression-${item.id}`,
+    outputDir
+  })
   let renderResult = null
   if (mapping?.ok) {
-    const renderResponse = await client.callTool({
-      name: 'scientific_plotting_render',
-      arguments: {
-        ...mapping.renderRequest,
-        outputDir,
-        autoRepair: {
-          enabled: true,
-          maxAttempts: 1,
-          minOverall: 0.82
-        }
+    renderResult = await plotting.render({
+      ...mapping.renderRequest,
+      outputDir,
+      autoRepair: {
+        enabled: true,
+        maxAttempts: 1,
+        minOverall: 0.82
       }
-    }, undefined, { timeout: 90_000 })
-    renderResult = renderResponse.structuredContent?.result
+    })
     results.push({
       id: item.id,
       label: item.label,
@@ -743,13 +801,13 @@ const reviewPacketResponse = await client.callTool({
 }, undefined, { timeout: 60_000 })
 const reviewPacket = reviewPacketResponse.structuredContent?.packet
 
-await client.close()
+await Promise.allSettled([client.close(), plotting.dispose()])
 
 const payload = {
   generatedAt: new Date().toISOString(),
   outputDir: join(workspaceRoot, outputDir),
   toolNames: tools.tools.map((tool) => tool.name).sort(),
-  status: status.structuredContent?.status,
+  status,
   styleProfiles: styleProfiles.structuredContent?.profiles,
   referenceStyleProfiles: referenceStyleProfiles.structuredContent?.profiles,
   unifiedWorkflow,

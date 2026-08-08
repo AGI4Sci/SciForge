@@ -1,7 +1,14 @@
+import {
+  domainPackageJsonValueSchema
+} from '@sciforge/domain-sdk'
 import type {
   DomainRendererCapabilityContract,
   DomainRendererCapabilityInvoker
 } from '@sciforge/domain-sdk/host'
+import {
+  sciforgeReproSpecSchema,
+  type SciForgeReproSpecV1
+} from '@sciforge/domain-sdk/reproducibility'
 import {
   CREATE_LOOP_CAPABILITY_IDS,
   createLoopApprovalInputSchema,
@@ -11,6 +18,7 @@ import {
   createLoopDslInputSchema,
   createLoopDslOutputSchema,
   createLoopExportInputSchema,
+  createLoopExportRerunInputSchema,
   createLoopNodeTestResultSchema,
   createLoopReadInputSchema,
   createLoopRunNodeInputSchema,
@@ -29,6 +37,7 @@ import {
   type WorkflowNodeTestResult,
   type WorkflowRunResult,
   type WorkflowRuntimeStatus,
+  type WorkflowRunComparatorV1,
   type WorkflowSettingsV1,
   type WorkflowV1
 } from '../contract.js'
@@ -74,6 +83,12 @@ export const createLoopCapabilityContracts = Object.freeze({
     'read',
     createLoopExportInputSchema,
     createLoopDslOutputSchema
+  ),
+  exportRerun: contract(
+    CREATE_LOOP_CAPABILITY_IDS.exportRerun,
+    'read',
+    createLoopExportRerunInputSchema,
+    sciforgeReproSpecSchema
   )
 })
 
@@ -97,6 +112,11 @@ export type CreateLoopCapabilityClient = Readonly<{
     workspaceRoot: string,
     workflowId: string,
     input?: unknown
+  ) => Promise<WorkflowRunResult>
+  rerun: (
+    workspaceRoot: string,
+    spec: SciForgeReproSpecV1,
+    activityId?: string
   ) => Promise<WorkflowRunResult>
   stop: (workspaceRoot: string, workflowId: string) => Promise<WorkflowRunResult>
   status: (workspaceRoot: string) => Promise<WorkflowRuntimeStatus>
@@ -123,6 +143,12 @@ export type CreateLoopCapabilityClient = Readonly<{
   ) => Promise<WorkflowCodeCheckResult>
   importDsl: (workspaceRoot: string, dsl: string) => Promise<WorkflowV1>
   exportDsl: (workspaceRoot: string, workflowId: string) => Promise<{ dsl: string }>
+  exportRerun: (
+    workspaceRoot: string,
+    workflowId: string,
+    runId: string,
+    comparator?: WorkflowRunComparatorV1
+  ) => Promise<SciForgeReproSpecV1>
 }>
 
 export function createCreateLoopCapabilityClient(
@@ -147,7 +173,16 @@ export function createCreateLoopCapabilityClient(
     run: (workspaceRoot, workflowId, input) =>
       invoker.invoke(
         createLoopCapabilityContracts.run,
-        { workflowId, ...(input === undefined ? {} : { input }) },
+        {
+          workflowId,
+          ...(input === undefined ? {} : { input: domainPackageJsonValueSchema.parse(input) })
+        },
+        confirmedOptions(workspaceRoot)
+      ),
+    rerun: (workspaceRoot, spec, activityId) =>
+      invoker.invoke(
+        createLoopCapabilityContracts.run,
+        { rerunSpec: spec, ...(activityId ? { activityId } : {}) },
         confirmedOptions(workspaceRoot)
       ),
     stop: (workspaceRoot, workflowId) =>
@@ -188,6 +223,12 @@ export function createCreateLoopCapabilityClient(
       invoker.invoke(
         createLoopCapabilityContracts.exportDsl,
         { workflowId },
+        options(workspaceRoot)
+      ),
+    exportRerun: (workspaceRoot, workflowId, runId, comparator) =>
+      invoker.invoke(
+        createLoopCapabilityContracts.exportRerun,
+        { workflowId, runId, ...(comparator ? { comparator } : {}) },
         options(workspaceRoot)
       )
   })

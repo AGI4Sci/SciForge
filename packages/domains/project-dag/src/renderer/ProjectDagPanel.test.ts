@@ -68,6 +68,14 @@ test('uses only URL and committed digest for iframe remounts', () => {
     projectDagFrameUrl('http://127.0.0.1:9000/', 'claim-1', 'node-1'),
     'http://127.0.0.1:9000/?claim=claim-1&node=node-1'
   )
+  const source = readFileSync(
+    new URL('./ProjectDagPanel.tsx', import.meta.url),
+    'utf8'
+  )
+  assert.match(
+    source,
+    /sandbox="allow-downloads allow-forms allow-same-origin allow-scripts"/u
+  )
 })
 
 test('derives update scope and polls failed attempts only while visible', () => {

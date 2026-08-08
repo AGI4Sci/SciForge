@@ -82,6 +82,10 @@ import {
   renderVisualSource
 } from '@sciforge/domain-sdk/visual-source'
 import { AgentRuntimeTraceRecorder } from './services/agent-runtime-trace-service'
+import { DomainExecutionEventOutbox } from './services/domain-execution-event-outbox'
+import { DomainExecutionEventService } from './services/domain-execution-event-service'
+import { TurnArtifactHandoffService } from './services/turn-artifact-handoff-service'
+import { TurnArtifactOutbox } from './services/turn-artifact-outbox'
 import { CurrentTraceSensitiveSettings } from './trace-sensitive-settings'
 import { RuntimeContextStateService } from './services/runtime-context-state-service'
 import { RuntimeContextLedgerService } from './services/runtime-context-ledger-service'
@@ -164,7 +168,7 @@ import {
   createApplicationDomainCatalog,
   createMainActionGuardEvaluator,
   createMainSystemCapabilityInvoker,
-  listMainAgentArtifactConsumers,
+  listMainArtifactConsumers,
   listMainVisualSourceContributions,
   listMainWorkspacePreviewPluginContributions,
   type ActivatedMainRuntimeContributions
@@ -414,6 +418,8 @@ let codexRuntime: CodexRuntimeService | null = null
 let capabilityAgentTools: CapabilityAgentToolSurface | null = null
 let agentRuntimeTools: AgentRuntimeToolSurface | null = null
 let agentRuntimeHostForShutdown: AgentRuntimeHost | null = null
+let domainExecutionEventsForShutdown: DomainExecutionEventService | null = null
+let turnArtifactHandoffForShutdown: TurnArtifactHandoffService | null = null
 let runtimeMcpToolGateway: RuntimeMcpToolGateway | null = null
 let claudeCodeRuntime: ClaudeCodeRuntimeService | null = null
 let codeNavigationService: LspCodeNavigationService | null = null
@@ -759,18 +765,27 @@ async function stopManagedRuntimes(): Promise<void> {
       discordBotRuntime?.stop()
       zulipBotRuntime?.stop()
       remoteChannelRuntime?.stop()
+      // Stop every producer before closing the durable execution/turn sinks.
+      // Otherwise a disposer or a final runtime event can be accepted after
+      // retry timers are gone and remain invisible until the next launch.
+      agentRuntimeHostForShutdown?.dispose()
+      agentRuntimeHostForShutdown = null
+      await claudeCodeRuntime?.stop()
+      await codexRuntime?.stop()
       const runtimeContributions = mainRuntimeContributions
       mainRuntimeContributions = null
       await runtimeContributions?.dispose().catch((error) => {
         logWarn('domain-runtime', 'Failed to dispose domain runtime contributions.', error)
       })
-      agentRuntimeHostForShutdown?.dispose()
-      agentRuntimeHostForShutdown = null
       const workspaceHostSessions = workspaceHostSessionManagerForShutdown
       workspaceHostSessionManagerForShutdown = null
       await workspaceHostSessions?.dispose().catch((error) => {
         logWarn('workspace-host', 'Failed to close Workspace Host sessions.', error)
       })
+      await domainExecutionEventsForShutdown?.close()
+      domainExecutionEventsForShutdown = null
+      await turnArtifactHandoffForShutdown?.close()
+      turnArtifactHandoffForShutdown = null
       const workspaceEgress = workspaceEgressServiceForShutdown
       workspaceEgressServiceForShutdown = null
       await workspaceEgress?.close().catch((error) => {
@@ -781,8 +796,6 @@ async function stopManagedRuntimes(): Promise<void> {
       domainModuleCatalog = null
       catalog?.dispose()
       stopWeixinBridgeRuntime()
-      await claudeCodeRuntime?.stop()
-      await codexRuntime?.stop()
       await runtimeMcpToolGateway?.close('service_shutdown')
       runtimeMcpToolGateway = null
       // Drain model clients before terminating the shared access sidecar so an
@@ -1385,12 +1398,54 @@ app.whenReady().then(async () => {
       void workspacePlacement.disposeOwner(callerId)
     }
   })
-  const artifactConsumers = listMainAgentArtifactConsumers(catalog)
+  const artifactConsumers = listMainArtifactConsumers(catalog)
+  const domainExecutionOutbox = new DomainExecutionEventOutbox(app.getPath('userData'), {
+    resolveLegacyTerminalEvents: async (eventIds) => {
+      const wanted = new Set(eventIds)
+      const { events } = await fullTraceStore.read({
+        eventIds,
+        kinds: ['execution_event'],
+        order: 'asc'
+      })
+      return events.flatMap((traceEvent) => {
+        if (!wanted.has(traceEvent.eventId)) return []
+        const payload = traceEvent.payload
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return []
+        const event = (payload as Record<string, unknown>).event
+        return event === undefined ? [] : [event]
+      })
+    }
+  })
+  const domainExecutionEvents = new DomainExecutionEventService({
+    trace: fullTraceStore,
+    consumers: artifactConsumers,
+    outbox: domainExecutionOutbox,
+    resolveCallerWorkspace: () => capabilityBroker.currentInvocation()?.caller.workspaceId,
+    log: (level, message, detail) => {
+      if (level === 'error') logError('domain-execution-events', message, detail)
+      else logWarn('domain-execution-events', message, detail)
+    }
+  })
+  domainExecutionEventsForShutdown = domainExecutionEvents
+  const turnArtifactHandoff = new TurnArtifactHandoffService({
+    outbox: new TurnArtifactOutbox(app.getPath('userData')),
+    consumers: artifactConsumers,
+    materialize: async (intent) => {
+      const host = agentRuntimeHostRef.current
+      if (!host) throw new Error('Agent runtime Host is unavailable for turn materialization.')
+      return host.materializeCompletedTurnArtifact(intent)
+    },
+    log: (level, message, detail) => {
+      if (level === 'error') logError('turn-artifact-handoff', message, detail)
+      else logWarn('turn-artifact-handoff', message, detail)
+    }
+  })
+  turnArtifactHandoffForShutdown = turnArtifactHandoff
   const agentRuntimeHost = createAgentRuntimeHost({
     settings: async () => store.load(),
     nativeVisualToolsAvailable: () => Boolean(capabilityAgentTools),
     subagentStoreRoot: join(app.getPath('userData'), 'agent-runtime', 'subagents'),
-    artifactConsumers,
+    turnArtifacts: turnArtifactHandoff,
     adapters: [
       createPlacementAwareAgentRuntimeAdapter(
         createCodexAgentRuntimeAdapter(getCodexRuntime()),
@@ -1629,6 +1684,7 @@ app.whenReady().then(async () => {
         })
       }
     },
+    executionEvents: domainExecutionEvents,
     enablement: {
       isEnabled: (moduleId) => catalog.hasModule(moduleId),
       subscribe: () => () => undefined
@@ -1642,6 +1698,12 @@ app.whenReady().then(async () => {
         logInfo('domain-runtime', entry.message)
       }
     }
+  })
+  void domainExecutionEvents.replayPending().catch((error) => {
+    logError('domain-execution-events', 'Durable execution event replay failed.', error)
+  })
+  void turnArtifactHandoff.replayPending().catch((error) => {
+    logError('turn-artifact-handoff', 'Durable completed turn replay failed.', error)
   })
   scheduleRuntime = createScheduleRuntime({
     store,
@@ -1867,7 +1929,6 @@ app.whenReady().then(async () => {
     getMainPerformanceSnapshot: () => mainPerformanceMonitor.snapshot(),
     logError,
     getScientificSkillsMcpLaunchConfig,
-    getScientificPlottingMcpLaunchConfig,
     getBgcDiscoveryMcpLaunchConfig,
     getImageGenerationMcpLaunchConfig,
     getPptMasterMcpLaunchConfig

@@ -39,7 +39,33 @@ const REQUIRED_CAPABILITY_IDS = Object.freeze([
   'workspace-preview.list',
   'workspace-preview.open',
   'workspace-preview.apply-edit',
-  'workspace-preview.release'
+  'workspace-preview.release',
+  'artifact-versions.commit',
+  'artifact-versions.observe',
+  'artifact-versions.read',
+  'artifact-versions.list',
+  'artifact-versions.materialize',
+  'artifact-versions.restore-as-new',
+  'artifact-versions.compare',
+  'artifact-versions.bundle.export',
+  'artifact-versions.bundle.import',
+  'artifact-versions.bundle.verify',
+  'artifact-versions.events.list',
+  'artifact-versions.lifecycle.refresh',
+  'evidence-dag.view',
+  'evidence-dag.update',
+  'evidence-dag.priority',
+  'evidence-dag.resolve-evidence-preview',
+  'evidence-dag.export-snapshot-products',
+  'scientific-plotting.status',
+  'scientific-plotting.map-data',
+  'scientific-plotting.render',
+  'scientific-plotting.rerun',
+  'scientific-plotting.compare',
+  'visual-review.open',
+  'visual-review.read-document',
+  'visual-review.accept-candidate',
+  'visual-review.reject-candidate'
 ])
 const PROCESS_FAILURE_PATTERNS = Object.freeze([
   /\[sciforge\] failed to load preload/iu,
@@ -483,6 +509,38 @@ async function smokeRendererWorkflow({ requiredCapabilityIds, workspaceDirectory
   })
   if (released.output !== true) throw new Error('Workspace Preview release failed.')
 
+  const artifactHistory = await api.capabilities.invoke({
+    workspaceId: workspaceDirectory,
+    request: { actionId: 'artifact-versions.list', input: { limit: 1 } }
+  })
+  if (!artifactHistory.output?.ok || !Array.isArray(artifactHistory.output.value?.items)) {
+    throw new Error('Artifact Versions did not return workspace-scoped history.')
+  }
+  const plottingStatus = await api.capabilities.invoke({
+    request: { actionId: 'scientific-plotting.status', input: {} }
+  })
+  if (plottingStatus.actionId !== 'scientific-plotting.status' || !plottingStatus.output) {
+    throw new Error('Scientific Plotting status was not reachable through the capability broker.')
+  }
+  const evidenceView = await api.capabilities.invoke({
+    workspaceId: workspaceDirectory,
+    request: { actionId: 'evidence-dag.view', input: {} }
+  })
+  if (evidenceView.actionId !== 'evidence-dag.view' || !evidenceView.output?.status) {
+    throw new Error('Evidence DAG view was not reachable through the workspace capability path.')
+  }
+  const visualReview = await api.capabilities.invoke({
+    workspaceId: workspaceDirectory,
+    request: {
+      actionId: 'visual-review.open',
+      invocationId: 'electron-smoke-visual-review-open',
+      input: { documentId: 'electron-smoke-review' }
+    }
+  })
+  if (visualReview.actionId !== 'visual-review.open' || !visualReview.output?.document) {
+    throw new Error('Visual Review did not open through the workspace capability path.')
+  }
+
   return {
     title: document.title,
     url: location.href,
@@ -497,7 +555,11 @@ async function smokeRendererWorkflow({ requiredCapabilityIds, workspaceDirectory
     workspacePreviewActionId: plugins.actionId,
     previewPluginCount: Array.isArray(plugins.output) ? plugins.output.length : null,
     workspacePreviewPluginId: opened.output.session?.pluginId,
-    workspacePreviewReleased: released.output
+    workspacePreviewReleased: released.output,
+    artifactVersionsActionId: artifactHistory.actionId,
+    evidenceDagActionId: evidenceView.actionId,
+    scientificPlottingActionId: plottingStatus.actionId,
+    visualReviewActionId: visualReview.actionId
   }
 }
 
@@ -537,6 +599,18 @@ function validateSmokeResult(result, { expectedRendererUrl }) {
   if (result.workspacePreviewActionId !== 'workspace-preview.list') throw new Error('Workspace Preview list action mismatch.')
   if (result.workspacePreviewPluginId !== 'markdown') throw new Error('Workspace Preview did not select Markdown.')
   if (result.workspacePreviewReleased !== true) throw new Error('Workspace Preview session was not released.')
+  if (result.artifactVersionsActionId !== 'artifact-versions.list') {
+    throw new Error('Artifact Versions capability path mismatch.')
+  }
+  if (result.evidenceDagActionId !== 'evidence-dag.view') {
+    throw new Error('Evidence DAG capability path mismatch.')
+  }
+  if (result.scientificPlottingActionId !== 'scientific-plotting.status') {
+    throw new Error('Scientific Plotting capability path mismatch.')
+  }
+  if (result.visualReviewActionId !== 'visual-review.open') {
+    throw new Error('Visual Review capability path mismatch.')
+  }
   if (result.datasetLoopCreated !== true || result.datasetLoopWorkflowCount !== 2) {
     throw new Error('Dynamic Dataset Create Loop creation did not pass the real capability transport.')
   }

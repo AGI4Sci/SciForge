@@ -1,4 +1,10 @@
 import type { VisualProductionHandoff } from '@sciforge/image-generation/visual-production-planner'
+import type {
+  ArtifactVersionCommitPortV1,
+  ArtifactVersionReadPortV1,
+  ArtifactVersionCommitResultV1,
+  ArtifactVersionRefV1
+} from '@sciforge/domain-artifact-versions/contract'
 
 export type { VisualProductionHandoff } from '@sciforge/image-generation/visual-production-planner'
 
@@ -465,6 +471,347 @@ export type ScientificPlottingLabels = {
   panel?: string
 }
 
+export type ScientificPlottingReproducibilityMode = 'standard' | 'reproducible'
+
+type DataSourceRefBase = {
+  schemaVersion: 1
+  sourceId: string
+  locator: string
+  sha256: string
+  datasetVersion?: string
+  mediaType?: string
+  selection?: {
+    sheet?: string
+    columns?: string[]
+    rowFilter?: string
+  }
+}
+
+export type DataSourceRef =
+  | DataSourceRefBase & {
+      kind: 'workspace-file' | 'inline'
+    }
+  | DataSourceRefBase & {
+      kind: 'artifact-version'
+      /** Complete immutable upstream version identity used as the commit dependency. */
+      artifactVersion: ArtifactVersionRefV1
+    }
+
+export type ScientificPlotTransformationV1 = {
+  schemaVersion: 1
+  transformationId: string
+  kind:
+    | 'identity'
+    | 'tabular-map'
+    | 'matrix-map'
+    | 'vector-map'
+    | 'scene-map'
+    | 'group-aggregate'
+    | 'caller-supplied'
+  description: string
+  parameters: Record<string, unknown>
+  inputHash: string
+  outputHash: string
+}
+
+export type DerivedTableReceipt = {
+  schemaVersion: 1
+  receiptId: string
+  inputSourceIds: string[]
+  operation: ScientificPlotTransformationV1['kind']
+  inputHash: string
+  outputHash: string
+  transformationIds: string[]
+  rowCount?: number
+  columnCount?: number
+  columns?: string[]
+  warnings: string[]
+}
+
+export type StatisticalResultRefV1 = {
+  sourceId: string
+  locator: string
+  sha256: string
+  resultKey?: string
+}
+
+export type StatisticalComparisonV1 = {
+  comparisonId: string
+  groups: [string, string]
+  test: string
+  alternative: 'two-sided' | 'less' | 'greater'
+  correction?: string
+  alpha?: number
+  resultRef: StatisticalResultRefV1
+}
+
+export type StatisticalDefinitionV1 = {
+  schemaVersion: 1
+  estimator: 'none' | 'raw' | 'mean' | 'median' | 'count' | 'density'
+  aggregation?: {
+    method: 'none' | 'mean' | 'median' | 'sum' | 'count'
+    groupBy: string[]
+  }
+  uncertainty?: {
+    kind: 'sd' | 'sem' | 'ci'
+    confidenceLevel?: number
+    sourceColumn?: string
+    suppliedBy: 'source' | 'computed'
+  }
+  comparisons?: StatisticalComparisonV1[]
+  missingValues: 'reject' | 'drop' | 'explicit'
+  sampleUnit?: string
+  seed?: number
+  notes?: string[]
+}
+
+export type ScientificPlotEnvironmentV1 = {
+  schemaVersion: 1
+  pythonCommand: string
+  pythonExecutable: string
+  pythonVersion: string
+  platform: string
+  packages: Record<string, string>
+  fontFingerprint: string
+  environmentDigest: string
+}
+
+export type ScientificPlotExecutionV1 = {
+  schemaVersion: 1
+  renderer: 'sciforge-scientific-plotting-mcp'
+  rendererVersion: string
+  rendererCodeSha256: string
+  command: string[]
+  cwd: string
+  timeoutMs: number
+}
+
+export type ScientificPlotMatplotlibParametersV1 = {
+  schemaVersion: 1
+  rcParams: Record<string, string | number | boolean>
+  palette: string[]
+  heatmapCmap?:
+    | {
+        kind: 'named'
+        name: string
+      }
+    | {
+        kind: 'linear-segmented'
+        name: 'sciforge_style_heatmap' | 'sciforge_attention_map'
+        colors: string[]
+      }
+}
+
+export type ScientificPlotRecipeV1 = {
+  schemaVersion: 1
+  recipeId: string
+  figureId: string
+  template: ScientificPlottingTemplate
+  data: unknown
+  dataHash: string
+  labels: ScientificPlottingLabels
+  visualPlan: VisualProductionHandoff
+  dataSources: DataSourceRef[]
+  derivedTables: DerivedTableReceipt[]
+  transformations: ScientificPlotTransformationV1[]
+  statistics?: StatisticalDefinitionV1
+  style: {
+    resolvedSpec: FigureStyleSpec
+    resolvedSpecHash: string
+    styleProfileId?: string
+    styleSpecPath?: string
+    referencePath?: string
+  }
+  render: {
+    outputScale: number
+    /**
+     * The concrete parameters consumed by the renderer. This is optional only
+     * so manifests written before render-parameter pinning remain readable;
+     * every newly committed recipe includes it.
+     */
+    matplotlib?: ScientificPlotMatplotlibParametersV1
+    autoRepair: {
+      enabled: boolean
+      maxAttempts: 0 | 1
+      minOverall?: number
+    }
+    reviewTask?: string
+  }
+  environment: ScientificPlotEnvironmentV1
+  execution: ScientificPlotExecutionV1
+  reproducibilityMode: ScientificPlottingReproducibilityMode
+  provenanceWarnings: string[]
+}
+
+export type ScientificPlotVersioningRequestV1 = {
+  artifactId?: string
+  expectedCurrentVersionId?: string | null
+  intent?: 'save' | 'observe' | 'rerun' | 'restore' | 'import'
+}
+
+export type ScientificPlotEvidenceDeliveryState = 'pending' | 'enqueued' | 'failed'
+
+export type ScientificPlotEvidenceDeliveryV1 = {
+  state: ScientificPlotEvidenceDeliveryState
+  receiptPath: string
+  message?: string
+}
+
+export type ScientificPlottingEngineDependencies = {
+  artifactVersionCommitPort?: ArtifactVersionCommitPortV1
+  artifactVersionReadPort?: ArtifactVersionReadPortV1
+}
+
+export type ScientificPlotVersionCommitReceipt = {
+  contract: 'artifact-versions.commit'
+  candidateIds: {
+    derivedData: string
+    recipe: string
+    figure: string
+    renderManifest: string
+    attemptLog: string
+  }
+  result: ArtifactVersionCommitResultV1
+}
+
+export type ScientificPlotEvidenceArtifactV1 = {
+  kind: string
+  locator: string
+  contentDigest: string
+  size: number
+  mediaType?: string
+  retention: ArtifactVersionRefV1['retention']
+  accessPolicy: ArtifactVersionRefV1['accessPolicy']
+  artifactVersionRef: ArtifactVersionRefV1
+}
+
+export type ScientificPlotEvidenceLineageV1 = {
+  activity: {
+    id: string
+    type: 'analysis_run'
+    name: string
+    status: 'completed'
+    parameters: Record<string, unknown>
+    stochastic?: boolean
+    randomSeed?: number
+  }
+  inputs: Array<{
+    id: string
+    type: 'dataset_version'
+    name: string
+    artifact?: ScientificPlotEvidenceArtifactV1
+    provenanceBreakpoint?: string
+  }>
+  software: Array<{
+    id: string
+    type: 'software_version'
+    name: string
+    version?: string
+    contentDigest: string
+  }>
+  environment: {
+    id: string
+    type: 'environment'
+    name: string
+    contentDigest: string
+    pythonVersion: string
+    packages: Record<string, string>
+    fontFingerprint: string
+  }
+  logs: Array<{
+    id: string
+    type: 'artifact'
+    name: string
+    artifact: ScientificPlotEvidenceArtifactV1
+  }>
+  outputs: Array<{
+    id: string
+    type: 'artifact' | 'dataset_version'
+    name: string
+    artifact: ScientificPlotEvidenceArtifactV1
+  }>
+  relations: Array<{
+    src: string
+    dst: string
+    rel: 'replicates' | 'fails_to_replicate' | 'derived_from'
+  }>
+}
+
+export type ScientificPlotEvidenceCommitRefsV1 = {
+  derivedData: ArtifactVersionRefV1
+  recipe: ArtifactVersionRefV1
+  figure: ArtifactVersionRefV1
+  renderManifest: ArtifactVersionRefV1
+  attemptLog: ArtifactVersionRefV1
+}
+
+/**
+ * Durable hand-off written by Scientific Plotting after the atomic Artifact
+ * Versions commit. Evidence DAG treats this file as immutable input and writes
+ * its own delivery receipt instead of mutating the producer record.
+ */
+export type ScientificPlotEvidenceOutboxReceiptV1 = {
+  schemaVersion: 1
+  producer: 'scientific-plotting'
+  operationId: string
+  state: 'pending'
+  createdAt: string
+  runtimeId?: string
+  threadId?: string
+  commitRefs: ScientificPlotEvidenceCommitRefsV1
+  evidenceLineage: ScientificPlotEvidenceLineageV1
+}
+
+export type ScientificPlotEvidenceEnqueueReceiptV1 = {
+  schemaVersion: 1
+  consumer: 'evidence-dag'
+  producer: 'scientific-plotting'
+  operationId: string
+  state: 'enqueued'
+  createdAt: string
+  runtimeId: string
+  threadId: string
+  jobId: string
+  sourceDigest: string
+}
+
+export type ScientificPlottingOperationReceiptV1 = {
+  schemaVersion: 1
+  producer: 'scientific-plotting'
+  operationId: string
+  requestHash: string
+  state: 'prepared' | 'complete'
+  createdAt: string
+  plotVersionId: string
+  manifestPath: string
+  preCommitManifestPath: string
+  preparedDigests: {
+    derivedData: string
+    recipe: string
+    figure: string
+    renderManifest: string
+    attemptLog: string
+  }
+}
+
+export type ScientificPlotProvenanceBreakpointV1 = {
+  schemaVersion: 1
+  code:
+    | 'artifact-version-capability-unavailable'
+    | 'artifact-version-unavailable'
+    | 'artifact-version-access-denied'
+    | 'artifact-version-digest-mismatch'
+    | 'recipe-link-mismatch'
+    | 'environment-unavailable'
+    | 'render-failed'
+    | 'artifact-version-commit-failed'
+    | 'exact-rerun-failed'
+  stage: 'baseline' | 'input' | 'environment' | 'render' | 'commit'
+  message: string
+  retryable: boolean
+  artifactVersionRef?: ArtifactVersionRefV1
+}
+
 export type ScientificPlottingAutoRepairOptions = {
   enabled?: boolean
   maxAttempts?: 0 | 1
@@ -518,10 +865,10 @@ export type ScientificPlottingStyleProfilesResult =
       referenceProfile?: ScientificPlottingReferenceProfile
       recommendedNextTools: Array<
         | 'visual_generate'
-        | 'scientific_plotting_map_data'
-        | 'scientific_plotting_render'
+        | 'sciforge_invoke'
         | 'image_generation_review_candidate'
       >
+      recommendedCapabilityIds: Array<'scientific-plotting.map-data' | 'scientific-plotting.render'>
       warnings: string[]
     }
   | {
@@ -579,7 +926,8 @@ export type ScientificPlottingReferenceManifest = {
     suggestedStyleProfileId?: string
     suggestedProfileTool: 'scientific_plotting_style_profiles'
     suggestedPlanTool: 'visual_generate'
-    suggestedRenderTool: 'scientific_plotting_render'
+    suggestedRenderTool: 'sciforge_invoke'
+    suggestedRenderCapability: 'scientific-plotting.render'
     suggestedReviewTool: 'image_generation_review_candidate'
     guardrails: string[]
   }
@@ -625,15 +973,26 @@ export type ScientificPlottingPrepareReferenceResult =
 
 export type ScientificPlottingRenderRequest = {
   workspaceRoot: string
+  /** Caller-owned durable retry identity. Reuse only for the same logical save. */
+  operationId: string
   visualPlan: VisualProductionHandoff
   template: ScientificPlottingTemplate
   data: unknown
+  reproducibilityMode?: ScientificPlottingReproducibilityMode
+  dataSources?: DataSourceRef[]
+  derivedTableReceipts?: DerivedTableReceipt[]
+  transformations?: ScientificPlotTransformationV1[]
+  statistics?: StatisticalDefinitionV1
+  provenanceWarnings?: string[]
+  versioning?: ScientificPlotVersioningRequestV1
   reviewTask?: string
   labels?: ScientificPlottingLabels
   figureId?: string
   styleSpec?: FigureStyleSpec
   styleSpecPath?: string
   styleProfileId?: string
+  /** Pin an already-resolved renderer configuration, primarily for reruns. */
+  matplotlib?: ScientificPlotMatplotlibParametersV1
   referencePath?: string
   reviewReferencePath?: string
   outputDir?: string
@@ -644,6 +1003,7 @@ export type ScientificPlottingRenderRequest = {
    */
   outputScale?: number
   visualDocumentId?: string
+  runtimeId?: string
   threadId?: string
   autoRepair?: ScientificPlottingAutoRepairOptions
 }
@@ -714,9 +1074,17 @@ export type ScientificPlottingPlanRequest = {
 
 export type ScientificPlottingDataMappingRequest = {
   workspaceRoot: string
+  /** Passed unchanged into the governed render request. */
+  operationId: string
   visualPlan: VisualProductionHandoff
   task: string
   data: unknown
+  reproducibilityMode?: ScientificPlottingReproducibilityMode
+  dataSources?: DataSourceRef[]
+  derivedTableReceipts?: DerivedTableReceipt[]
+  transformations?: ScientificPlotTransformationV1[]
+  statistics?: StatisticalDefinitionV1
+  versioning?: ScientificPlotVersioningRequestV1
   labels?: ScientificPlottingLabels
   templateHint?: ScientificPlottingTemplate
   styleSpec?: FigureStyleSpec
@@ -728,6 +1096,7 @@ export type ScientificPlottingDataMappingRequest = {
   outputDir?: string
   outputScale?: number
   visualDocumentId?: string
+  runtimeId?: string
   threadId?: string
   autoRepair?: ScientificPlottingAutoRepairOptions
 }
@@ -801,7 +1170,8 @@ export type ScientificPlottingPlanResult =
       }>
       requiredInputs: string[]
       styleInputs: string[]
-      controlledTool: string
+      controlledTool: 'sciforge_invoke'
+      controlledCapability: 'scientific-plotting.render'
       planningWarnings: string[]
       guardrails: string[]
       skillHints: {
@@ -936,6 +1306,8 @@ export type ScientificPlottingReviewPacketResult =
 export type ScientificPlottingAttempt = {
   attempt: number
   outputPath: string
+  outputHash: string
+  executedAt: string
   repaired: boolean
   review?: ScientificPlottingReviewResult
   rcParamsPatch?: Record<string, string | number | boolean>
@@ -981,16 +1353,22 @@ export type ScientificPlottingManifest = {
   rendererVersion: string
   tool: 'scientific_plotting_render'
   template: ScientificPlottingTemplate
-      referenceProfile?: ScientificPlottingReferenceProfile
-      templateAdvice?: ScientificPlottingTemplateAdvice
-      styleProfileId?: string
-      styleProfile?: ScientificPlottingStyleProfileSummary
-      createdAt: string
+  referenceProfile?: ScientificPlottingReferenceProfile
+  templateAdvice?: ScientificPlottingTemplateAdvice
+  styleProfileId?: string
+  styleProfile?: ScientificPlottingStyleProfileSummary
+  createdAt: string
+  /** Present on manifests produced by the durable-operation contract. */
+  operationId?: string
+  plotVersionId: string
   requestHash: string
+  recipePath: string
+  recipe: ScientificPlotRecipeV1
   outputPath: string
   outputHash: string
   visualPlan: VisualProductionHandoff
   visualDocumentId?: string
+  runtimeId?: string
   threadId?: string
   outputScale?: number
   artifactManifestPath?: string
@@ -998,6 +1376,9 @@ export type ScientificPlottingManifest = {
   referencePath?: string
   attempts: ScientificPlottingAttempt[]
   finalReview?: VisualStyleReviewResult
+  versionCommit?: ScientificPlotVersionCommitReceipt
+  evidenceLineage?: ScientificPlotEvidenceLineageV1
+  evidenceDelivery?: ScientificPlotEvidenceDeliveryV1
   warnings: string[]
 }
 
@@ -1007,7 +1388,14 @@ export type ScientificPlottingRenderResult =
       status: 'rendered' | 'repaired' | 'review_failed'
       outputPath: string
       manifestPath: string
+      recipePath: string
+      operationId: string
+      plotVersionId: string
+      recipe: ScientificPlotRecipeV1
       artifactManifestPath?: string
+      versionCommit?: ScientificPlotVersionCommitReceipt
+      evidenceLineage?: ScientificPlotEvidenceLineageV1
+      evidenceDelivery?: ScientificPlotEvidenceDeliveryV1
       attempts: ScientificPlottingAttempt[]
       review?: ScientificPlottingReviewResult
       referenceProfile?: ScientificPlottingReferenceProfile
@@ -1028,4 +1416,68 @@ export type ScientificPlottingRenderResult =
       stdoutTail?: string
       stderrTail?: string
       warnings?: string[]
+    }
+
+export type ScientificPlottingRerunRequest = {
+  workspaceRoot: string
+  operationId: string
+  baselineFigureVersionRef: ArtifactVersionRefV1
+  recipeVersionRef: ArtifactVersionRefV1
+  expectedCurrentVersionId: string
+  runtimeId?: string
+  threadId?: string
+}
+
+export type ScientificPlottingComparison = {
+  exactOutput: boolean
+  recipeEquivalent: boolean
+  dataEquivalent: boolean
+  sourcesEquivalent: boolean
+  transformationsEquivalent: boolean
+  statisticsEquivalent: boolean
+  styleEquivalent: boolean
+  environmentEquivalent: boolean
+  changedSections: Array<
+    'output' | 'recipe' | 'data' | 'sources' | 'transformations' | 'statistics' | 'style' | 'environment'
+  >
+}
+
+export type ScientificPlottingCompareRequest = {
+  workspaceRoot: string
+  baselineManifestVersionRef: ArtifactVersionRefV1
+  candidateManifestVersionRef: ArtifactVersionRefV1
+}
+
+export type ScientificPlottingCompareResult =
+  | {
+      ok: true
+      status: 'compared'
+      baselineManifestVersionRef: ArtifactVersionRefV1
+      candidateManifestVersionRef: ArtifactVersionRefV1
+      comparison: ScientificPlottingComparison
+    }
+  | {
+      ok: false
+      status: 'invalid_workspace' | 'version_read_failed' | 'manifest_read_failed'
+      message: string
+    }
+
+export type ScientificPlottingRerunResult =
+  | {
+      ok: true
+      status: 'rerun_complete'
+      baselineFigureVersionRef: ArtifactVersionRefV1
+      recipeVersionRef: ArtifactVersionRefV1
+      render: Extract<ScientificPlottingRenderResult, { ok: true }>
+      comparison: ScientificPlottingComparison
+      reproductionRelation: 'replicates' | 'fails_to_replicate'
+      evidenceLineage?: ScientificPlotEvidenceLineageV1
+      evidenceDelivery?: ScientificPlotEvidenceDeliveryV1
+    }
+  | {
+      ok: false
+      status: 'invalid_workspace' | 'version_read_failed' | 'rerun_failed'
+      message: string
+      render?: Extract<ScientificPlottingRenderResult, { ok: false }>
+      provenanceBreakpoints: ScientificPlotProvenanceBreakpointV1[]
     }

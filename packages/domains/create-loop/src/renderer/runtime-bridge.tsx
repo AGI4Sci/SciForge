@@ -5,9 +5,11 @@ import {
   type PropsWithChildren,
   type ReactElement
 } from 'react'
+import type { SciForgeReproSpecV1 } from '@sciforge/domain-sdk/reproducibility'
 import type {
   WorkflowApprovalDecision,
   WorkflowCodeLanguage,
+  WorkflowRunComparatorV1,
   WorkflowSettingsPatchV1
 } from '../contract.js'
 import { mergeWorkflowSettings } from '../workflow-settings.js'
@@ -34,6 +36,15 @@ export type CreateLoopRuntimeBridge = Readonly<{
     ReturnType<CreateLoopCapabilityClient['testNode']>
   checkWorkflowCode: (language: WorkflowCodeLanguage, code: string) =>
     ReturnType<CreateLoopCapabilityClient['checkCode']>
+  exportWorkflowRerun: (
+    workflowId: string,
+    runId: string,
+    comparator?: WorkflowRunComparatorV1
+  ) => ReturnType<CreateLoopCapabilityClient['exportRerun']>
+  rerunWorkflow: (
+    spec: SciForgeReproSpecV1,
+    activityId?: string
+  ) => ReturnType<CreateLoopCapabilityClient['rerun']>
 }>
 
 const RuntimeContext = createContext<CreateLoopRuntimeBridge | null>(null)
@@ -46,37 +57,49 @@ export function CreateLoopRuntimeProvider({
   client: CreateLoopCapabilityClient
   workspaceRoot: string
 }>): ReactElement {
-  const bridge = useMemo<CreateLoopRuntimeBridge>(() => {
-    let revision: number | undefined
-    return Object.freeze({
-      getSettings: async () => {
-        const snapshot = await client.read(workspaceRoot)
-        revision = snapshot.revision
-        return { workspaceRoot, workflow: snapshot.settings }
-      },
-      setSettings: async (patch) => {
-        const current = await client.read(workspaceRoot)
-        const next = mergeWorkflowSettings(current.settings, patch.workflow)
-        const snapshot = await client.save(workspaceRoot, next, revision ?? current.revision)
-        revision = snapshot.revision
-        return { workspaceRoot, workflow: snapshot.settings }
-      },
-      getWorkflowStatus: () => client.status(workspaceRoot),
-      runWorkflow: (workflowId, input) => client.run(workspaceRoot, workflowId, input),
-      stopWorkflow: (workflowId) => client.stop(workspaceRoot, workflowId),
-      resolveWorkflowApproval: async (token, decision) => {
-        const result = await client.resolveApproval(workspaceRoot, token, decision)
-        return { ok: result.resolved }
-      },
-      runWorkflowNode: (workflowId, nodeId) =>
-        client.runNode(workspaceRoot, workflowId, nodeId),
-      testWorkflowNode: (workflowId, nodeId, mockJson) =>
-        client.testNode(workspaceRoot, workflowId, nodeId, mockJson),
-      checkWorkflowCode: (language, code) =>
-        client.checkCode(workspaceRoot, language, code)
-    })
-  }, [client, workspaceRoot])
+  const bridge = useMemo(
+    () => createCreateLoopRuntimeBridge(client, workspaceRoot),
+    [client, workspaceRoot]
+  )
   return <RuntimeContext.Provider value={bridge}>{children}</RuntimeContext.Provider>
+}
+
+export function createCreateLoopRuntimeBridge(
+  client: CreateLoopCapabilityClient,
+  workspaceRoot: string
+): CreateLoopRuntimeBridge {
+  let revision: number | undefined
+  return Object.freeze({
+    getSettings: async () => {
+      const snapshot = await client.read(workspaceRoot)
+      revision = snapshot.revision
+      return { workspaceRoot, workflow: snapshot.settings }
+    },
+    setSettings: async (patch) => {
+      const current = await client.read(workspaceRoot)
+      const next = mergeWorkflowSettings(current.settings, patch.workflow)
+      const snapshot = await client.save(workspaceRoot, next, revision ?? current.revision)
+      revision = snapshot.revision
+      return { workspaceRoot, workflow: snapshot.settings }
+    },
+    getWorkflowStatus: () => client.status(workspaceRoot),
+    runWorkflow: (workflowId, input) => client.run(workspaceRoot, workflowId, input),
+    stopWorkflow: (workflowId) => client.stop(workspaceRoot, workflowId),
+    resolveWorkflowApproval: async (token, decision) => {
+      const result = await client.resolveApproval(workspaceRoot, token, decision)
+      return { ok: result.resolved }
+    },
+    runWorkflowNode: (workflowId, nodeId) =>
+      client.runNode(workspaceRoot, workflowId, nodeId),
+    testWorkflowNode: (workflowId, nodeId, mockJson) =>
+      client.testNode(workspaceRoot, workflowId, nodeId, mockJson),
+    checkWorkflowCode: (language, code) =>
+      client.checkCode(workspaceRoot, language, code),
+    exportWorkflowRerun: (workflowId, runId, comparator) =>
+      client.exportRerun(workspaceRoot, workflowId, runId, comparator),
+    rerunWorkflow: (spec, activityId) =>
+      client.rerun(workspaceRoot, spec, activityId)
+  })
 }
 
 export function useCreateLoopRuntime(): CreateLoopRuntimeBridge {

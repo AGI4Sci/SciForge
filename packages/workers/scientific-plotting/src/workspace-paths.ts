@@ -1,7 +1,7 @@
 import { type Dirent } from 'node:fs'
-import { access, readdir, realpath, stat } from 'node:fs/promises'
+import { access, lstat, readdir, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 export type WorkspaceDirectoryTarget = {
   path?: string
@@ -130,11 +130,62 @@ async function findUniqueFileByBasename(root: string, fileName: string): Promise
   return matches[0] ?? null
 }
 
-export async function canonicalPath(targetPath: string): Promise<string> {
+function isMissingPathError(error: unknown): boolean {
+  if (!error || typeof error !== 'object' || !('code' in error)) return false
+  const code = String(error.code)
+  return code === 'ENOENT' || code === 'ENOTDIR'
+}
+
+async function canonicalExistingPath(targetPath: string): Promise<string> {
   try {
-    return await realpath(targetPath)
+    return await realpath(resolve(targetPath))
   } catch {
-    return resolve(targetPath)
+    throw new Error(`Path is unavailable: ${targetPath}`)
+  }
+}
+
+/**
+ * Resolve a path through its nearest existing ancestor. This is important for
+ * write targets: realpath() cannot resolve a file that has not been created,
+ * but every existing ancestor (including directory symlinks) must still be
+ * canonicalized before the workspace boundary is checked.
+ */
+export async function canonicalPath(targetPath: string): Promise<string> {
+  let cursor = resolve(targetPath)
+  const missingSegments: string[] = []
+
+  while (true) {
+    try {
+      const canonicalAncestor = await realpath(cursor)
+      if (missingSegments.length === 0) return canonicalAncestor
+
+      const info = await stat(canonicalAncestor)
+      if (!info.isDirectory()) {
+        throw new Error(`Path ancestor is not a directory: ${cursor}`)
+      }
+      return resolve(canonicalAncestor, ...missingSegments.reverse())
+    } catch (error) {
+      if (!isMissingPathError(error)) throw error
+    }
+
+    // A dangling symlink is not a safe "missing" ancestor. Following it later
+    // could create a file outside the workspace, so reject it explicitly.
+    try {
+      const info = await lstat(cursor)
+      if (info.isSymbolicLink()) {
+        throw new Error(`Path contains an unavailable symbolic link: ${cursor}`)
+      }
+      throw new Error(`Path cannot be canonicalized: ${cursor}`)
+    } catch (error) {
+      if (!isMissingPathError(error)) throw error
+    }
+
+    const parent = dirname(cursor)
+    if (parent === cursor) {
+      throw new Error(`Path cannot be canonicalized: ${targetPath}`)
+    }
+    missingSegments.push(basename(cursor))
+    cursor = parent
   }
 }
 
@@ -147,12 +198,21 @@ async function enforceWorkspaceBoundary(targetPath: string, workspaceRoot?: stri
   const rawWorkspace = workspaceRoot?.trim()
   if (!rawWorkspace) return targetPath
 
-  const workspacePath = await canonicalPath(resolve(expandHomePath(rawWorkspace)))
-  const canonicalTarget = await canonicalPath(targetPath)
+  const workspacePath = await canonicalWorkspacePath(rawWorkspace)
+  const canonicalTarget = await canonicalExistingPath(targetPath)
   if (!isWithinWorkspace(workspacePath, canonicalTarget)) {
     throw new Error('Path must stay within the selected workspace.')
   }
   return canonicalTarget
+}
+
+async function canonicalWorkspacePath(workspaceRoot: string): Promise<string> {
+  const workspacePath = await canonicalExistingPath(expandHomePath(workspaceRoot))
+  const info = await stat(workspacePath)
+  if (!info.isDirectory()) {
+    throw new Error('Workspace root is not a directory.')
+  }
+  return workspacePath
 }
 
 export async function resolveTargetPathWithinWorkspace(rawPath: string, workspaceRoot?: string): Promise<string> {
@@ -165,26 +225,13 @@ export async function resolveTargetPathWithinWorkspace(rawPath: string, workspac
     return isAbsolute(expanded) ? resolve(expanded) : resolve(expanded)
   }
 
-  const workspacePath = await canonicalPath(resolve(expandHomePath(rawWorkspace)))
-  if (!isAbsolute(expanded)) {
-    const direct = resolve(workspacePath, expanded)
-    if (!isWithinWorkspace(workspacePath, direct)) {
-      throw new Error('Path must stay within the selected workspace.')
-    }
-    return direct
+  const workspacePath = await canonicalWorkspacePath(rawWorkspace)
+  const direct = isAbsolute(expanded) ? resolve(expanded) : resolve(workspacePath, expanded)
+  const canonicalTarget = await canonicalPath(direct)
+  if (!isWithinWorkspace(workspacePath, canonicalTarget)) {
+    throw new Error('Path must stay within the selected workspace.')
   }
-
-  const direct = resolve(expanded)
-  if (isWithinWorkspace(workspacePath, direct)) {
-    return direct
-  }
-  if (await pathExists(direct)) {
-    const canonicalTarget = await canonicalPath(direct)
-    if (isWithinWorkspace(workspacePath, canonicalTarget)) {
-      return canonicalTarget
-    }
-  }
-  throw new Error('Path must stay within the selected workspace.')
+  return canonicalTarget
 }
 
 export async function resolveOpenTargetPath(
@@ -196,7 +243,9 @@ export async function resolveOpenTargetPath(
   if (!value) throw new Error('File path is required.')
 
   const expanded = expandHomePath(value)
-  const workspace = workspaceRoot?.trim() ? expandHomePath(workspaceRoot) : ''
+  const workspace = workspaceRoot?.trim()
+    ? await canonicalWorkspacePath(workspaceRoot)
+    : ''
   const allowBasenameFallback = options?.allowBasenameFallback ?? true
   const direct = isAbsolute(expanded)
     ? resolve(expanded)
@@ -205,13 +254,13 @@ export async function resolveOpenTargetPath(
       : resolve(expanded)
 
   if (await pathExists(direct)) {
-    return enforceWorkspaceBoundary(direct, workspaceRoot)
+    return enforceWorkspaceBoundary(direct, workspace)
   }
 
   if (allowBasenameFallback && workspace && !hasPathSeparator(expanded)) {
     const match = await findUniqueFileByBasename(resolve(workspace), expanded)
     if (match) {
-      return enforceWorkspaceBoundary(match, workspaceRoot)
+      return enforceWorkspaceBoundary(match, workspace)
     }
   }
 
@@ -228,7 +277,7 @@ export async function resolveWorkspaceDirectory(
 
   const targetPath = payload.path?.trim()
     ? await resolveOpenTargetPath(payload.path, workspaceRoot, { allowBasenameFallback: false })
-    : await canonicalPath(resolve(expandHomePath(workspaceRoot)))
+    : await canonicalWorkspacePath(workspaceRoot)
   const info = await stat(targetPath)
   if (!info.isDirectory()) {
     throw new Error('Target path is not a directory.')

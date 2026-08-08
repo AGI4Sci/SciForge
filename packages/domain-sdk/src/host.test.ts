@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
-  isDomainAgentArtifactConsumer,
+  domainArtifactEventScope,
+  isDomainArtifactConsumer,
   isDomainMainActionGuard,
   isDomainMainRuntimeLifecycleContribution,
   type DomainMainTurnLifecycleEvent,
@@ -20,10 +21,26 @@ describe('domain host contracts', () => {
     assert.equal(isDomainMainRuntimeLifecycleContribution({
       activate: 'not-a-function'
     }), false)
-    assert.equal(isDomainAgentArtifactConsumer({
+    assert.equal(isDomainArtifactConsumer({
       consume: () => undefined
     }), true)
-    assert.equal(isDomainAgentArtifactConsumer(null), false)
+    assert.equal(isDomainArtifactConsumer(null), false)
+  })
+
+  it('derives one stable synthetic DAG scope for threadless executions', () => {
+    assert.deepEqual(domainArtifactEventScope({
+      contractVersion: 1,
+      kind: 'execution-completed',
+      producer: { moduleId: 'sciforge.create-loop', moduleVersion: '1.0.0' },
+      executionId: 'execution-42',
+      runId: 'run-42',
+      targetWatermark: 'event-42',
+      occurredAt: '2026-08-05T00:00:00.000Z',
+      artifacts: []
+    }), {
+      runtimeId: 'domain:sciforge.create-loop',
+      threadId: 'execution:execution-42'
+    })
   })
 
   it('validates action guard contributions structurally', () => {

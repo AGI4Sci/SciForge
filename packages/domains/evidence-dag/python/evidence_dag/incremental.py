@@ -7,6 +7,7 @@ live below ``staging/`` and are never returned by the committed graph readers.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 import hashlib
 import json
 import os
@@ -22,13 +23,63 @@ TRACE_INGESTION_VERSION = 1
 RECENT_ANCHOR_LIMIT = 64
 
 
+_BATCH_WATERMARK = re.compile(r":batch:(\d+)/(\d+)$")
+_LEADING_WATERMARK = re.compile(r"^(\d+)(?::(.*))?$")
+_TRAILING_WATERMARK = re.compile(r"^(.*?)(\d+)$")
+
+
+def compare_watermarks(left: str, right: str) -> Optional[int]:
+    """Compare numeric, composite, timestamp, and batched runtime watermarks."""
+    if str(left) == str(right):
+        return 0
+    parsed_left = _parse_watermark(left)
+    parsed_right = _parse_watermark(right)
+    if parsed_left is None or parsed_right is None or parsed_left[0] != parsed_right[0]:
+        return None
+    _family, left_sequence, left_discriminator, left_num, left_den = parsed_left
+    _, right_sequence, right_discriminator, right_num, right_den = parsed_right
+    if left_sequence != right_sequence:
+        return -1 if left_sequence < right_sequence else 1
+    if left_discriminator != right_discriminator:
+        return -1 if left_discriminator < right_discriminator else 1
+    left_progress = left_num * right_den
+    right_progress = right_num * left_den
+    return -1 if left_progress < right_progress else 1 if left_progress > right_progress else 0
+
+
 def watermark_regresses(current: str, target: str) -> bool:
-    """Compare runtime sequence watermarks when both are unambiguously numeric."""
-    current_text = str(current).strip()
-    target_text = str(target).strip()
-    if not current_text.isdigit() or not target_text.isdigit():
-        return False
-    return int(target_text) < int(current_text)
+    return compare_watermarks(str(target).strip(), str(current).strip()) == -1
+
+
+def _parse_watermark(value: Any) -> Optional[tuple[str, int, str, int, int]]:
+    text = str(value).strip()
+    if not text:
+        return None
+    batch = _BATCH_WATERMARK.search(text)
+    base = text[:batch.start()] if batch else text
+    numerator = int(batch.group(1)) if batch else 1
+    denominator = int(batch.group(2)) if batch else 1
+    if numerator < 1 or denominator < 1 or numerator > denominator:
+        return None
+    leading = _LEADING_WATERMARK.fullmatch(base)
+    if leading:
+        return (
+            "leading-sequence", int(leading.group(1)), leading.group(2) or "",
+            numerator, denominator,
+        )
+    try:
+        timestamp = datetime.fromisoformat(base[:-1] + "+00:00" if base.endswith("Z") else base)
+    except ValueError:
+        timestamp = None
+    if timestamp is not None:
+        return ("timestamp", int(timestamp.timestamp() * 1000), "", numerator, denominator)
+    trailing = _TRAILING_WATERMARK.fullmatch(base)
+    if trailing and trailing.group(1):
+        return (
+            f"trailing-sequence:{trailing.group(1)}", int(trailing.group(2)), "",
+            numerator, denominator,
+        )
+    return None
 
 
 def _canonical_bytes(value: Any) -> bytes:

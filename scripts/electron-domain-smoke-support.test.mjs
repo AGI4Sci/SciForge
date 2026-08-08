@@ -127,7 +127,7 @@ test('CLI parser normalizes paths and validates bounded timeouts', () => {
   ])
   assert.equal(parsed.timeoutMs, 60_000)
   assert.equal(parsed.repositoryRoot, resolve('.'))
-  assert.equal(parsed.distDirectory, resolve('dist'))
+  assert.equal(parsed.distDirectory, resolve('./dist'))
   assert.throws(() => parseSmokeCliOptions(['--timeout-ms', '1']), /between 1000 and 300000/u)
   assert.throws(() => parseSmokeCliOptions(['--unknown', 'value']), /Unknown/u)
 })

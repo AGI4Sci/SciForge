@@ -46,9 +46,9 @@ CREATE INDEX IF NOT EXISTS idx_project_receipt_project
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS project_schema (
-  version INTEGER PRIMARY KEY CHECK(version=2)
+  version INTEGER PRIMARY KEY CHECK(version=3)
 );
-INSERT OR IGNORE INTO project_schema(version) VALUES (2);
+INSERT OR IGNORE INTO project_schema(version) VALUES (3);
 
 CREATE TABLE IF NOT EXISTS goal (
   id          TEXT PRIMARY KEY,
@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS claim (
   project_key   TEXT NOT NULL,
   statement     TEXT NOT NULL,
   claim_type    TEXT CHECK(claim_type IN
-                ('hypothesis','finding','method_result','negative_result','decision')),
+                ('hypothesis','finding','method_result','negative_result','decision','conclusion')),
   status        TEXT NOT NULL DEFAULT 'supported' CHECK(status IN
                 ('supported','conflicted','invalidated','fragile','undetermined')),
   confidence    REAL,
@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS evidence (
   thread_id     TEXT NOT NULL,
   snapshot_digest TEXT NOT NULL,
   node_id       TEXT NOT NULL,
+  node_type     TEXT NOT NULL CHECK(length(trim(node_type)) > 0),
   UNIQUE(project_key,thread_id,snapshot_digest,node_id)
 );
 CREATE INDEX IF NOT EXISTS idx_evidence_ref
@@ -113,7 +114,7 @@ CREATE TABLE IF NOT EXISTS edge (
   dst       TEXT NOT NULL,
   edge_type TEXT NOT NULL CHECK(edge_type IN (
     'decomposes_to','addresses','supports','contradicts','derived_from',
-    'same_as','mentions')),
+    'same_as','mentions','replicates','fails_to_replicate','rerun_of')),
   t_valid   TEXT NOT NULL,
   t_invalid TEXT,
   meta      TEXT                          -- JSON: adjudication reason, confidence...
@@ -513,6 +514,102 @@ def _upgrade_v1_to_v2(conn: sqlite3.Connection) -> None:
         raise
 
 
+def _upgrade_v2_to_v3(conn: sqlite3.Connection) -> None:
+    """Upgrade Project graph references and relation vocabulary atomically.
+
+    v3 keeps Evidence as immutable cross-DAG references.  The new ``node_type``
+    column is descriptive routing metadata copied from the referenced Evidence
+    node, never an Evidence payload or Snapshot envelope.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("ALTER TABLE claim RENAME TO claim_v2")
+        conn.execute("""
+            CREATE TABLE claim (
+              id TEXT PRIMARY KEY,
+              project_key TEXT NOT NULL,
+              statement TEXT NOT NULL,
+              claim_type TEXT CHECK(claim_type IN
+                ('hypothesis','finding','method_result','negative_result','decision','conclusion')),
+              status TEXT NOT NULL DEFAULT 'supported' CHECK(status IN
+                ('supported','conflicted','invalidated','fragile','undetermined')),
+              confidence REAL,
+              goal_id TEXT,
+              t_valid TEXT NOT NULL,
+              t_invalid TEXT,
+              t_created TEXT NOT NULL,
+              load_bearing REAL NOT NULL DEFAULT 0,
+              blast_radius INTEGER NOT NULL DEFAULT 0,
+              needs_regoal INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("""
+            INSERT INTO claim
+              (id,project_key,statement,claim_type,status,confidence,goal_id,t_valid,
+               t_invalid,t_created,load_bearing,blast_radius,needs_regoal)
+            SELECT id,project_key,statement,claim_type,status,confidence,goal_id,t_valid,
+                   t_invalid,t_created,load_bearing,blast_radius,needs_regoal
+            FROM claim_v2
+        """)
+        conn.execute("DROP TABLE claim_v2")
+
+        conn.execute("ALTER TABLE evidence RENAME TO evidence_v2")
+        conn.execute("""
+            CREATE TABLE evidence (
+              id TEXT PRIMARY KEY,
+              project_key TEXT NOT NULL,
+              thread_id TEXT NOT NULL,
+              snapshot_digest TEXT NOT NULL,
+              node_id TEXT NOT NULL,
+              node_type TEXT NOT NULL CHECK(length(trim(node_type)) > 0),
+              UNIQUE(project_key,thread_id,snapshot_digest,node_id)
+            )
+        """)
+        conn.execute("""
+            INSERT INTO evidence
+              (id,project_key,thread_id,snapshot_digest,node_id,node_type)
+            SELECT id,project_key,thread_id,snapshot_digest,node_id,'source_assertion'
+            FROM evidence_v2
+        """)
+        conn.execute("DROP TABLE evidence_v2")
+        conn.execute("""
+            CREATE INDEX idx_evidence_ref
+            ON evidence(project_key,thread_id,snapshot_digest,node_id)
+        """)
+
+        conn.execute("ALTER TABLE edge RENAME TO edge_v2")
+        conn.execute("""
+            CREATE TABLE edge (
+              id TEXT PRIMARY KEY,
+              src TEXT NOT NULL,
+              dst TEXT NOT NULL,
+              edge_type TEXT NOT NULL CHECK(edge_type IN (
+                'decomposes_to','addresses','supports','contradicts','derived_from',
+                'same_as','mentions','replicates','fails_to_replicate','rerun_of')),
+              t_valid TEXT NOT NULL,
+              t_invalid TEXT,
+              meta TEXT
+            )
+        """)
+        conn.execute("""
+            INSERT INTO edge (id,src,dst,edge_type,t_valid,t_invalid,meta)
+            SELECT id,src,dst,edge_type,t_valid,t_invalid,meta FROM edge_v2
+        """)
+        conn.execute("DROP TABLE edge_v2")
+        conn.execute("CREATE INDEX idx_edge_src ON edge(src, edge_type)")
+        conn.execute("CREATE INDEX idx_edge_dst ON edge(dst, edge_type)")
+
+        conn.execute("DROP TABLE project_schema")
+        conn.execute(
+            "CREATE TABLE project_schema"
+            " (version INTEGER PRIMARY KEY CHECK(version=3))")
+        conn.execute("INSERT INTO project_schema(version) VALUES (3)")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -544,7 +641,11 @@ class Store:
                       if "project_schema" in existing_tables else None)
             if schema is not None and schema["version"] == 1:
                 _upgrade_v1_to_v2(self.conn)
-            elif schema is None or schema["version"] != 2:
+                schema = {"version": 2}
+            if schema is not None and schema["version"] == 2:
+                _upgrade_v2_to_v3(self.conn)
+                schema = {"version": 3}
+            if schema is None or schema["version"] != 3:
                 self.conn.close()
                 raise RuntimeError("Project DAG requires a clean project-view database")
         self.conn.executescript(SCHEMA)

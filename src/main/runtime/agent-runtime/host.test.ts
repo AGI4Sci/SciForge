@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createExecutionReceipt } from '@sciforge/execution-governance'
-import type { DomainAgentArtifactEvent } from '@sciforge/domain-sdk/host'
 import { WORKSPACE_HOST_PROTOCOL_VERSION } from '@sciforge/domain-sdk/workspace-host'
 import {
   sanitizeTraceTextChunks,
@@ -56,6 +55,7 @@ import { RuntimeContextLedgerService } from '../../services/runtime-context-ledg
 import { SharedMemoryService } from '../../services/shared-memory-service'
 import { RuntimeGoalService } from '../../services/runtime-goal-service'
 import { WorkspaceReferenceService } from '../../services/workspace-reference-service'
+import type { TurnArtifactIntent } from '../../services/turn-artifact-outbox'
 import { readWorkspaceFile } from '../../services/workspace-files'
 import { composerReferenceFromWorkspaceReference } from '../../../renderer/src/lib/workspace-reference-composer'
 import { buildComposerFileContextPrompt } from '../../../renderer/src/lib/composer-file-references'
@@ -4173,7 +4173,7 @@ describe('AgentRuntimeHost', () => {
         runtimeId: 'claude',
         threadId: 'claude-thread',
         turnId: 'turn-1',
-        state: 'completed',
+        state: 'success',
         seq: 2
       } satisfies AgentRuntimeEvent
     })
@@ -4195,7 +4195,7 @@ describe('AgentRuntimeHost', () => {
     expect(claude.readThread).not.toHaveBeenCalled()
   })
 
-  it('broadcasts each completed turn once to injected artifact consumers', async () => {
+  it('publishes replayable completed-turn intents without materializing in the event loop', async () => {
     const claude = fakeAdapter('claude', {
       id: 'claude-thread',
       runtimeId: 'claude',
@@ -4227,15 +4227,16 @@ describe('AgentRuntimeHost', () => {
         runtimeId: 'claude',
         threadId: 'claude-thread',
         turnId: 'turn-1',
-        state: 'completed',
-        seq: 7
+        state: 'success',
+        seq: 7,
+        createdAt: '2026-07-26T09:00:00.000Z'
       } satisfies AgentRuntimeEvent
     })
-    const consume = vi.fn(async (_event: DomainAgentArtifactEvent) => undefined)
+    const publish = vi.fn(async (_intent: TurnArtifactIntent) => undefined)
     const host = createAgentRuntimeHost({
       settings: async () => settings('claude'),
       adapters: [claude],
-      artifactConsumers: [{ consume }]
+      turnArtifacts: { publish }
     })
 
     for (let replay = 0; replay < 2; replay += 1) {
@@ -4248,9 +4249,23 @@ describe('AgentRuntimeHost', () => {
       }
     }
 
-    await vi.waitFor(() => expect(consume).toHaveBeenCalledOnce())
-    expect(claude.readThread).toHaveBeenCalledOnce()
-    expect(consume).toHaveBeenCalledWith({
+    expect(publish).toHaveBeenCalledTimes(2)
+    expect(claude.readThread).not.toHaveBeenCalled()
+    expect(publish).toHaveBeenNthCalledWith(1, {
+      runtimeId: 'claude',
+      threadId: 'claude-thread',
+      turnId: 'turn-1',
+      sequence: 7,
+      occurredAt: '2026-07-26T09:00:00.000Z'
+    })
+
+    vi.mocked(claude.readThread).mockRejectedValueOnce(new Error('thread still materializing'))
+    await expect(host.materializeCompletedTurnArtifact(
+      publish.mock.calls[0]![0]
+    )).rejects.toThrow('thread still materializing')
+    const materialized = await host.materializeCompletedTurnArtifact(publish.mock.calls[0]![0])
+    expect(claude.readThread).toHaveBeenCalledTimes(2)
+    expect(materialized).toEqual({
       contractVersion: 1,
       kind: 'turn-completed',
       runtimeId: 'claude',
@@ -4265,6 +4280,103 @@ describe('AgentRuntimeHost', () => {
         { id: 'a1', turnId: 'turn-1', kind: 'assistant_message', text: 'answer' }
       ]
     })
+  })
+
+  it('fails closed when a completed-turn intent is partial or crosses workspaces', async () => {
+    const claude = fakeAdapter('claude', {
+      id: 'claude-thread',
+      runtimeId: 'claude',
+      title: 'Claude',
+      workspace: '/workspace/authoritative',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('claude'),
+      adapters: [claude],
+      turnArtifacts: { publish: vi.fn(async () => undefined) }
+    })
+    const intent: TurnArtifactIntent = {
+      runtimeId: 'claude',
+      threadId: 'claude-thread',
+      turnId: 'turn-1',
+      sequence: 7,
+      workspaceRoot: '/workspace/claimed',
+      occurredAt: '2026-07-26T09:00:00.000Z'
+    }
+    vi.mocked(claude.readThread).mockResolvedValueOnce({
+      id: 'claude-thread',
+      runtimeId: 'claude',
+      title: 'Claude',
+      workspace: '/workspace/authoritative',
+      updatedAt: '2026-06-10T00:00:00.000Z',
+      latestSeq: 6,
+      latestTurnId: 'turn-1',
+      latestTurnStatus: 'running',
+      items: [{ id: 'a1', turnId: 'turn-1', kind: 'assistant_message', text: 'partial' }]
+    })
+    await expect(host.materializeCompletedTurnArtifact(intent)).rejects.toThrow(
+      'not durably completed yet'
+    )
+
+    vi.mocked(claude.readThread).mockResolvedValueOnce({
+      id: 'claude-thread',
+      runtimeId: 'claude',
+      title: 'Claude',
+      workspace: '/workspace/authoritative',
+      updatedAt: '2026-06-10T00:00:00.000Z',
+      latestSeq: 7,
+      turns: [{
+        id: 'turn-1',
+        threadId: 'claude-thread',
+        status: 'completed',
+        items: [{ id: 'a1', turnId: 'turn-1', kind: 'assistant_message', text: 'done' }]
+      }]
+    })
+    await expect(host.materializeCompletedTurnArtifact(intent)).rejects.toThrow(
+      'changed workspace before materialization'
+    )
+  })
+
+  it('derives the same durable timestamp when a replayed completion omits createdAt', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      workspace: '/tmp/workspace',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.subscribeEvents).mockImplementation(async function* () {
+      yield {
+        kind: 'turn_lifecycle',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'turn-without-time',
+        state: 'completed',
+        seq: 9
+      } satisfies AgentRuntimeEvent
+    })
+    const publish = vi.fn(async (_intent: TurnArtifactIntent) => undefined)
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      turnArtifacts: { publish }
+    })
+
+    for (let replay = 0; replay < 2; replay += 1) {
+      for await (const _event of host.subscribeEvents({
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        sinceSeq: 0
+      })) {
+        // Drain both identical adapter replays.
+      }
+    }
+
+    expect(publish).toHaveBeenCalledTimes(2)
+    expect(publish.mock.calls.map(([intent]) => intent.occurredAt)).toEqual([
+      '1970-01-01T00:00:00.009Z',
+      '1970-01-01T00:00:00.009Z'
+    ])
   })
 
   it('steers repeated tool activity once before interrupting the next exact repeat', async () => {

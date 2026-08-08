@@ -55,7 +55,10 @@ describe('installed Dataset API domain package', () => {
     if (discovery.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) {
       throw new Error('Expected Dataset capability discovery result.')
     }
-    expect(discovery.value).toHaveLength(Object.keys(DATASET_API_CAPABILITY_IDS).length)
+    // `dataset` is a cross-domain tag, while credential-bearing registration
+    // actions are intentionally UI-only. Assert the operations exercised by
+    // this Agent integration instead of coupling discovery to the contract's
+    // total action count.
 
     const register = discovery.value.find(({ title }) =>
       title === 'Register a built-in dataset provider'
@@ -87,6 +90,7 @@ describe('installed Dataset API domain package', () => {
     const list = discovery.value.find(({ title }) =>
       title === 'List registered dataset databases'
     )
+    expect(list).toBeDefined()
     const listed = await agent.call({
       name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
       arguments: { operationRef: list?.operationRef, input: {} },

@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import type { DomainMainRuntimeLifecycleContext } from '@sciforge/domain-sdk/host'
+import { domainExecutionEventSchema } from '@sciforge/domain-sdk/reproducibility'
 import { createDatasetWorkflowExecutionReceiptProvider } from '@sciforge/domain-dataset-api/receipt-provider'
 import { buildDatasetGenerationLoop } from './dataset-loop-builder.js'
 import {
@@ -782,6 +783,17 @@ function runtimeContext(
     },
     capabilities: { invoke: async () => { throw new Error('not used') } },
     modelAccess: { textReasoner: async () => null },
+    executionEvents: {
+      publish: async (event) => domainExecutionEventSchema.parse({
+        schemaVersion: 'sciforge.execution-event.v1',
+        eventId: event.eventId ?? 'dataset-loop-builder-event',
+        producer: { moduleId: 'sciforge.create-loop', moduleVersion: '1.0.0' },
+        occurredAt: event.occurredAt ?? '2026-08-06T00:00:00.000Z',
+        artifacts: event.artifacts ?? [],
+        ...event,
+        payload: event.payload ?? null
+      })
+    },
     workflowExecutionReceipts: [],
     enablement: { isEnabled: () => true, subscribe: () => (() => undefined) },
     log: () => undefined,

@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type {
-  DomainAgentArtifactEvent,
+  DomainArtifactEvent,
   DomainMainActionGuard,
   DomainMainRuntimeLifecycleContext
 } from '@sciforge/domain-sdk/host'
 import {
   EVIDENCE_DAG_CAPABILITY_IDS,
-  type EvidenceDagCanonicalStatus
+  type EvidenceDagCanonicalStatus,
+  type EvidenceDagExportSnapshotProductsOutput
 } from './contract.js'
 import {
   createDomainMainEntry,
@@ -21,6 +22,29 @@ const status: EvidenceDagCanonicalStatus = {
   committed: null,
   pending: null,
   updatedAt: now
+}
+const exportSnapshotProductsOutput: EvidenceDagExportSnapshotProductsOutput = {
+  runtimeId: 'codex',
+  threadId: 'thread-1',
+  snapshotDigest: `sha256:${'a'.repeat(64)}`,
+  transactionId: 'artifact-commit:evidence-products',
+  idempotentReplay: false,
+  products: [
+    'prov-json', 'ro-crate', 'datacite', 'audit-report', 'reproduction-report'
+  ].map((product, index) => ({
+    product: product as EvidenceDagExportSnapshotProductsOutput['products'][number]['product'],
+    ref: {
+      artifactId: `artifact:evidence-product-${index + 1}`,
+      versionId: `artifact-version:evidence-product-${index + 1}`,
+      contentDigest: `${index + 1}`.repeat(64),
+      byteLength: index + 1,
+      mediaType: 'application/json',
+      availability: 'available',
+      retention: 'snapshot',
+      accessPolicy: { visibility: 'workspace', principals: [], allowExport: true }
+    }
+  })),
+  sourceArtifactVersionRefs: []
 }
 
 test('lazily activates one runtime shared by every Evidence contribution', async () => {
@@ -56,6 +80,10 @@ test('lazily activates one runtime shared by every Evidence contribution', async
       calls.push(`${instance}:preview`)
       return { ok: false, code: 'file_unavailable', message: 'Unavailable.' }
     },
+    exportSnapshotProducts: async () => {
+      calls.push(`${instance}:export`)
+      throw new Error('Not exercised by this lifecycle test.')
+    },
     guardWriteExport: async () => {
       calls.push(`${instance}:guard`)
       return { allowed: true, metadata: { policy: 'evidence-dag-high-impact-gate' } }
@@ -82,7 +110,7 @@ test('lazily activates one runtime shared by every Evidence contribution', async
   assert.deepEqual(entry.contributions.map(({ kind, id }) => `${kind}:${id}`), [
     'main.capability-factory:evidence-dag.capabilities',
     'main.runtime-lifecycle:evidence-dag.runtime-lifecycle',
-    'main.agent-artifact-consumer:evidence-dag.agent-artifact-consumer',
+    'main.artifact-consumer:evidence-dag.artifact-consumer',
     'main.action-guard:evidence-dag.write-export-guard'
   ])
 
@@ -93,21 +121,28 @@ test('lazily activates one runtime shared by every Evidence contribution', async
   assert.equal(hostUserDataDirReads, 0)
   assert.deepEqual(runtimeUserDataDirs, [])
   assert.deepEqual(capabilities.map(({ id }) => id), Object.values(EVIDENCE_DAG_CAPABILITY_IDS))
-  assert.partialDeepStrictEqual(
-    capabilities.find(({ id }) => id === EVIDENCE_DAG_CAPABILITY_IDS.update),
-    {
-      effect: 'compute',
-      approval: 'none',
-      concurrency: { revision: 'none', idempotency: 'required' }
-    }
+  const updateCapability = capabilities.find(
+    ({ id }) => id === EVIDENCE_DAG_CAPABILITY_IDS.update
   )
+  assert.equal(updateCapability?.effect, 'compute')
+  assert.equal(updateCapability?.approval, 'none')
+  assert.deepEqual(updateCapability?.concurrency, {
+    revision: 'none', idempotency: 'required'
+  })
+  const exportCapability = capabilities.find(
+    ({ id }) => id === EVIDENCE_DAG_CAPABILITY_IDS.exportSnapshotProducts
+  )
+  assert.equal(exportCapability?.effect, 'workspace-write')
+  assert.equal(exportCapability?.approval, 'none')
+  assert.deepEqual(exportCapability?.concurrency, {
+    revision: 'none', idempotency: 'required'
+  })
   assert.deepEqual(factory.policy.directTransportPrefixes, ['evidenceDag:'])
   assert.deepEqual(factory.policy.allowedDirectTransports, [])
-  assert.ok(capabilities.every((definition) =>
-    definition.tags.includes('evidence') && definition.scope === 'global'
-  ))
+  assert.ok(capabilities.every((definition) => definition.tags.includes('evidence')))
+  assert.ok(capabilities.every((definition) => definition.scope === 'workspace'))
   await assert.rejects(
-    () => capabilities[0]!.handler({}),
+    () => capabilities[0]!.handler({}, { caller: { workspaceId: '/workspace' } }),
     /Evidence DAG runtime is not active/
   )
   assert.deepEqual(runtimeUserDataDirs, [])
@@ -123,7 +158,7 @@ test('lazily activates one runtime shared by every Evidence contribution', async
   assert.equal(hostUserDataDirReads, 0)
   assert.deepEqual(runtimeUserDataDirs, [context.userDataDir])
   const consumer = entry.contributions[2]!.value as {
-    consume(event: DomainAgentArtifactEvent): Promise<void>
+    consume(event: DomainArtifactEvent): Promise<void>
   }
   await consumer.consume({
     contractVersion: 1,
@@ -135,7 +170,7 @@ test('lazily activates one runtime shared by every Evidence contribution', async
     occurredAt: now,
     artifacts: []
   })
-  await capabilities[0]!.handler({})
+  await capabilities[0]!.handler({}, { caller: { workspaceId: '/workspace' } })
   const actionGuard = entry.contributions[3]!.value as DomainMainActionGuard
   assert.deepEqual(actionGuard.actions, ['write.export'])
   assert.deepEqual(await actionGuard.evaluate({
@@ -161,7 +196,7 @@ test('lazily activates one runtime shared by every Evidence contribution', async
     '1:deactivate'
   ])
   await assert.rejects(
-    () => capabilities[0]!.handler({}),
+    () => capabilities[0]!.handler({}, { caller: { workspaceId: '/workspace' } }),
     /Evidence DAG runtime is not active/
   )
 
@@ -170,7 +205,7 @@ test('lazily activates one runtime shared by every Evidence contribution', async
     userDataDir: '/tmp/evidence-domain-second'
   }
   const secondDispose = await lifecycle.activate(secondContext)
-  await capabilities[0]!.handler({})
+  await capabilities[0]!.handler({}, { caller: { workspaceId: '/workspace' } })
   entry.contributions[1]!.onDispose?.()
   entry.contributions[1]!.onDispose?.()
   await secondDispose()
@@ -217,6 +252,9 @@ test('disposal during activation stays fail-closed and deactivates exactly once'
       code: 'file_unavailable',
       message: 'Unavailable.'
     }),
+    exportSnapshotProducts: async () => {
+      throw new Error('Not exercised by this lifecycle test.')
+    },
     guardWriteExport: async () => ({ allowed: true }),
     close: async () => { calls.push('close') }
   }
@@ -253,12 +291,13 @@ test('disposal during activation stays fail-closed and deactivates exactly once'
   )
   assert.deepEqual(calls, ['activate', 'deactivate'])
   await assert.rejects(
-    () => view.handler({}),
+    () => view.handler({}, { caller: { workspaceId: '/workspace' } }),
     /Evidence DAG runtime is not active/
   )
 })
 
 test('keeps system access read-only and never reports a changed global resource', async () => {
+  let exportInput: unknown
   const runtime: EvidenceDagRuntimePort = {
     activate: async () => () => undefined,
     consume: async () => undefined,
@@ -277,6 +316,10 @@ test('keeps system access read-only and never reports a changed global resource'
       code: 'file_unavailable',
       message: 'Unavailable.'
     }),
+    exportSnapshotProducts: async (input) => {
+      exportInput = input
+      return exportSnapshotProductsOutput
+    },
     guardWriteExport: async () => ({ allowed: true }),
     close: async () => undefined
   }
@@ -304,6 +347,9 @@ test('keeps system access read-only and never reports a changed global resource'
   const view = capabilities.find(({ id }) => id === EVIDENCE_DAG_CAPABILITY_IDS.view)!
   const update = capabilities.find(({ id }) => id === EVIDENCE_DAG_CAPABILITY_IDS.update)!
   const priority = capabilities.find(({ id }) => id === EVIDENCE_DAG_CAPABILITY_IDS.priority)!
+  const exportProducts = capabilities.find(
+    ({ id }) => id === EVIDENCE_DAG_CAPABILITY_IDS.exportSnapshotProducts
+  )!
 
   assert.deepEqual(view.audiences, ['ui', 'agent', 'system'])
   assert.deepEqual(update.audiences, ['ui', 'agent'])
@@ -311,7 +357,7 @@ test('keeps system access read-only and never reports a changed global resource'
   assert.deepEqual(await update.handler({
     runtimeId: 'codex',
     threadId: 'thread-1'
-  }), {
+  }, { caller: { workspaceId: '/workspace' } }), {
     output: {
       url: 'http://127.0.0.1:3897/',
       threadId: 'codex:thread-1',
@@ -325,7 +371,25 @@ test('keeps system access read-only and never reports a changed global resource'
     runtimeId: 'codex',
     threadId: 'thread-1',
     visible: true
-  }), false)
+  }, { caller: { workspaceId: '/workspace' } }), false)
+  const exported = await exportProducts.handler({
+    runtimeId: 'codex',
+    threadId: 'thread-1',
+    workspaceRoot: '/spoofed',
+    snapshotDigest: `sha256:${'a'.repeat(64)}`,
+    idempotencyKey: 'evidence-export-test',
+    datacite: {
+      doi: '10.12345/evidence.snapshot',
+      title: 'Evidence Snapshot',
+      creators: [{ name: 'SciForge' }],
+      publisher: 'SciForge',
+      publicationYear: 2026,
+      projectId: 'project:test'
+    }
+  }, { caller: { workspaceId: '/workspace' } })
+  assert.deepEqual(exported, { output: exportSnapshotProductsOutput })
+  assert.equal('changed' in exported, false)
+  assert.equal((exportInput as { workspaceRoot: string }).workspaceRoot, '/workspace')
   await dispose()
   entry.contributions[1]!.onDispose?.()
 })
@@ -359,6 +423,9 @@ function lifecycleContext(signal: AbortSignal): DomainMainRuntimeLifecycleContex
         apiKey: 'router-key',
         model: 'sciforge-router'
       })
+    },
+    executionEvents: {
+      publish: async () => { throw new Error('Unexpected execution event.') }
     },
     workflowExecutionReceipts: [],
     enablement: {

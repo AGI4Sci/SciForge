@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import tempfile
 import unittest
 
-from evidence_dag.artifacts import ArtifactRegistry
 from evidence_dag.graph import ThreadGraph
 from evidence_dag.model import (
+    Artifact,
+    ArtifactVersion,
     Assessment,
     AssessmentDimension,
     AssessmentLevel,
     AssessmentResult,
     EdgeRel,
     NodeType,
+    SourceAnchor,
+    SourceSelector,
 )
 from evidence_dag.rocrate import (
     CRATE_SCHEMA_VERSION,
@@ -33,6 +37,23 @@ SHA_B = "sha256:" + "b" * 64
 SHA_C = "sha256:" + "c" * 64
 SHA_D = "sha256:" + "d" * 64
 SHA_E = "sha256:" + "e" * 64
+NOW = "2026-07-10T01:00:00Z"
+
+
+def _artifact_pair(token, kind, locator, digest, *, version=None, media_type=None,
+                   current_version_id=None, supersedes=None):
+    version_id = f"artifact-version:{token}-{version or '1'}"
+    artifact = Artifact(
+        artifact_id=f"artifact:{token}", kind=kind, created_at=NOW,
+        current_version_id=current_version_id or version_id,
+    )
+    artifact_version = ArtifactVersion(
+        version_id=version_id, artifact_id=artifact.artifact_id, locator=locator,
+        content_digest=digest, version=version, size=0, media_type=media_type,
+        observed_at=NOW, availability="available", retention="reference",
+        supersedes=supersedes,
+    )
+    return artifact, artifact_version
 
 
 def _record_of_type(document: dict, type_name: str) -> list[dict]:
@@ -46,24 +67,27 @@ def _record_of_type(document: dict, type_name: str) -> list[dict]:
 
 
 def build_crate_graph(workspace: str):
-    registry = ArtifactRegistry(workspace_roots=(workspace,), locator_root=workspace)
     graph = ThreadGraph("runtime:ro-crate-thread", {"scope": {
         "workspaceRoot": workspace,
         "projectRoot": workspace,
     }})
 
-    paper, paper_v1, _ = registry.register(
-        kind="paper", locator="https://example.test/paper-v2.pdf",
-        content_digest=SHA_A, version="1", media_type="application/pdf",
+    paper, paper_v1 = _artifact_pair(
+        "paper", "paper", "https://example.test/paper-v2.pdf", SHA_A, version="1",
+        media_type="application/pdf", current_version_id="artifact-version:paper-2",
     )
-    paper, paper_version, _ = registry.register(
-        kind="paper", locator="https://example.test/paper-v2.pdf",
-        content_digest=SHA_E, version="2", media_type="application/pdf",
+    paper, paper_version = _artifact_pair(
+        "paper", "paper", "https://example.test/paper-v2.pdf", SHA_E, version="2",
+        media_type="application/pdf", supersedes=paper_v1.version_id,
     )
-    anchor = registry.create_anchor(
-        paper.artifact_id,
-        {"type": "pdf", "page": 7, "section": "Results", "quote": "Exact result."},
-        selected_content="Exact result.", artifact_version_id=paper_version.version_id,
+    anchor = SourceAnchor(
+        anchor_id="anchor:paper-results", artifact_id=paper.artifact_id,
+        artifact_version_id=paper_version.version_id,
+        selector=SourceSelector.from_dict({
+            "type": "pdf", "page": 7, "section": "Results", "quote": "Exact result.",
+        }),
+        anchor_digest=f"sha256:{hashlib.sha256(b'Exact result.').hexdigest()}",
+        created_at=NOW,
     )
     graph.attach_registry_records(
         artifact=paper, artifact_version=paper_version, source_anchor=anchor,
@@ -81,8 +105,8 @@ def build_crate_graph(workspace: str):
     )
     graph.add_edge(assertion.id, finding.id, EdgeRel.SUPPORTS, nli_score=0.94)
 
-    dataset_artifact, dataset_version, _ = registry.register(
-        kind="dataset", locator="runtime:crate/data-v3", content_digest=SHA_B,
+    dataset_artifact, dataset_version = _artifact_pair(
+        "dataset", "dataset", "runtime:crate/data-v3", SHA_B,
         version="3", media_type="text/csv",
     )
     graph.attach_registry_records(
@@ -118,9 +142,8 @@ def build_crate_graph(workspace: str):
     graph.add_edge(run.id, software.id, EdgeRel.USED)
     graph.add_edge(run.id, environment.id, EdgeRel.USED)
 
-    log_artifact, log_version, _ = registry.register(
-        kind="log", locator="runtime:crate/run-42.log", content_digest=SHA_C,
-        media_type="text/plain",
+    log_artifact, log_version = _artifact_pair(
+        "log", "log", "runtime:crate/run-42.log", SHA_C, media_type="text/plain",
     )
     graph.attach_registry_records(artifact=log_artifact, artifact_version=log_version)
     log = graph.add_or_get_node(
@@ -128,8 +151,8 @@ def build_crate_graph(workspace: str):
         identity_scope="artifact:run-42-log", artifact_id=log_artifact.artifact_id,
         artifact_version_id=log_version.version_id, attributes={"lineageRole": "log"},
     )
-    result_artifact, result_version, _ = registry.register(
-        kind="dataset", locator="runtime:crate/results-v1", content_digest=SHA_D,
+    result_artifact, result_version = _artifact_pair(
+        "results", "dataset", "runtime:crate/results-v1", SHA_D,
         version="1", media_type="text/csv",
     )
     graph.attach_registry_records(artifact=result_artifact, artifact_version=result_version)

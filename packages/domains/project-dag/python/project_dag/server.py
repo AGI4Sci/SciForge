@@ -19,6 +19,12 @@ SERVICE_ID = "project-dag-engine"
 API_TOKEN_ENV = "SCIFORGE_PROJECT_DAG_API_KEY"
 _UI_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "ui", "index.html")
 MAX_BODY = int(os.environ.get("SCIFORGE_PROJECT_DAG_MAX_BODY_BYTES", 1_048_576))
+_STATIC_ROUTE_SEGMENTS = {
+    "analysis", "assessments", "attention", "audits", "claims", "decision",
+    "decisions", "findings", "goals", "graph", "health", "history", "latest",
+    "policy", "provenance", "releases", "retry", "reviews", "snapshots", "status",
+    "updates", "version",
+}
 
 
 @dataclass(frozen=True)
@@ -50,6 +56,13 @@ class RuntimeActors:
 
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _operation_name(method: str, parts: list[str]) -> str:
+    """Describe the route without reflecting caller-controlled identifiers."""
+    path = "/" + "/".join(
+        part if part in _STATIC_ROUTE_SEGMENTS else ":id" for part in parts)
+    return f"{method} {path}"
 
 
 def ok(data: Any, op: str, rid: str, started: str) -> dict:
@@ -109,7 +122,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         parts = [unquote(part) for part in parsed.path.split("/") if part]
         query = {key: values[0] for key, values in parse_qs(parsed.query).items()}
-        op = f"{method} {parsed.path}"
+        op = _operation_name(method, parts)
         if parsed.path == "/health":
             return self._send(200, {"ok": True, "service": SERVICE_ID})
         if parsed.path == "/" and method == "GET":
@@ -188,9 +201,9 @@ class Handler(BaseHTTPRequestHandler):
             body = self._body()
             return engine.retry_update(parts[1], actor=body.get("actorId", "human"))
         if method == "GET" and parts == ["snapshots", "latest"]:
-            return engine.workflow.latest_snapshot(self._project_key(query))
+            return engine.snapshot_view(self._project_key(query))
         if method == "GET" and len(parts) == 2 and parts[0] == "snapshots":
-            return engine.workflow.snapshot(parts[1])
+            return engine.snapshot_view(self._project_key(query), parts[1])
         if method == "GET" and parts == ["goals"]:
             return engine.goal_tree(self._project_key(query))
         if method == "POST" and parts == ["goals"]:
@@ -223,24 +236,24 @@ class Handler(BaseHTTPRequestHandler):
             return engine.resolve_provenance(
                 self._project_key(query), parts[1], query["snapshotDigest"])
         if method == "GET" and parts == ["findings"]:
-            return engine.workflow.findings(self._project_key(query), query.get("status"))
+            return engine.findings(self._project_key(query), query.get("status"))
         if method == "GET" and parts == ["reviews"]:
-            return engine.workflow.reviews(self._project_key(query), query.get("status", "open"))
+            return engine.reviews(self._project_key(query), query.get("status", "open"))
         if method == "POST" and len(parts) == 3 and parts[0] == "reviews" \
                 and parts[2] == "decision":
             body = self._body()
             return engine.record_review_result(
                 self._project_key(query, body), parts[1], body)
         if method == "GET" and parts == ["attention"]:
-            return engine.workflow.attention(self._project_key(query), query.get("snapshotDigest"))
+            return engine.attention(self._project_key(query), query.get("snapshotDigest"))
         if method == "GET" and parts == ["assessments"]:
-            return engine.workflow.assessments(
+            return engine.assessments(
                 self._project_key(query), query.get("snapshotDigest"))
         if method == "GET" and parts == ["audits"]:
-            return engine.workflow.audits(
+            return engine.audits(
                 self._project_key(query), int(query.get("limit", 20)))
         if method == "GET" and len(parts) == 2 and parts[0] == "audits":
-            return engine.workflow.audit(parts[1])
+            return engine.audit(parts[1])
         if method == "POST" and parts == ["audits"]:
             body = self._body()
             body["projectKey"] = self._project_key(query, body)
@@ -256,15 +269,8 @@ class Handler(BaseHTTPRequestHandler):
             return engine.configure_policy(self._project_key(query, body), body)
         if method == "POST" and parts == ["releases"]:
             body = self._body()
-            return engine.workflow.create_release(
-                project_key=self._project_key(query, body),
-                project_snapshot_digest=body["projectSnapshotDigest"],
-                audit_digest=body["auditDigest"], created_by=body["createdBy"],
-                output_artifacts=body.get("outputArtifacts") or [],
-                requested_status=body.get("requestedStatus", "candidate"),
-                runtime_authorization=body.get("runtimeAuthorization"),
-                external_action=bool(body.get("externalAction", False)),
-            )
+            body["projectKey"] = self._project_key(query, body)
+            return engine.create_release(body)
         return None
 
     def do_GET(self):

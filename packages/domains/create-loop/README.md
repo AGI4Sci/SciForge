@@ -28,6 +28,49 @@ Node implementations use public lifecycle ports. Operations whose public ports
 are unavailable fail closed instead of importing a Host service or creating a
 parallel transport.
 
+## Reproducible runs
+
+Every new run stores a `sciforge.create-loop.run.v2` manifest containing the
+immutable workflow snapshot, embedded input, execution context, parameter and
+approval fingerprints, per-node receipts, discovered Artifact references,
+determinism classification, canonical output, and comparator. Secret-valued
+workflow environment entries are represented only as required secret slots and
+fingerprints; raw values are not persisted into run manifests, execution events,
+or rerun specifications. Until a secure rerun secret resolver is available,
+every required slot is a blocking breakpoint: import/export still works, but
+execution fails closed instead of substituting an empty value.
+
+`create-loop.export-rerun` exports the SDK-owned `sciforge.rerun.v1` document.
+Legacy runs remain exportable with a blocking breakpoint. A runnable document
+contains a versioned Create Loop executor payload and is checked at two levels:
+the digest of the complete executor payload and the nested workflow fingerprint.
+Conclusion-targeted documents with more than one executable Activity require an
+explicit Activity selection.
+
+Reruns always request fresh workflow and Runtime approvals. Exact digest is the
+default result comparator; numeric, table, and structural JSON tolerances are
+used only when explicitly declared. The run history shows and downloads the
+canonical specification, comparison status, reason codes, and component-level
+differences. Unseeded or unseedable stochastic mismatch is inconclusive and is
+never classified as a replication failure.
+
+All execution phases are emitted through the generic Host execution-event port.
+Runs of the same workflow use one stable Evidence scope, while every event keeps
+the resolved workspace root. Terminal events include both the observed run
+manifest and the canonical rerun resource so Evidence can preserve executable
+metadata without reconstructing a private workflow format.
+
+The completed run and its deterministic terminal intent are committed in the
+same owner-only state update. File and parent-directory sync make the atomic
+rename durable. Pending intents are replayed independently with the same event
+ID and bytes; capacity exhaustion rejects a new run before `run_started` and
+never evicts an unacknowledged terminal event.
+
+The end-to-end contract is documented in
+[`docs/reproducible-dag-v3.zh-CN.md`](../../../docs/reproducible-dag-v3.zh-CN.md).
+
+## Dynamic dataset construction
+
 Generated workflows use the versioned template bundle and execution-receipt adapter from
 `@sciforge/domain-sdk/workflow-template`. AI Agent nodes pass a structured `allowedTools` policy
 to the Host; Codex and Claude filter both tool publication and dispatch from that policy. Prompts

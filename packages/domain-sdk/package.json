@@ -15,6 +15,7 @@
     "./node/electron-node-executable": "./src/node/electron-node-executable.ts",
     "./node/workspace-paths": "./src/node/workspace-paths.ts",
     "./power": "./src/power.ts",
+    "./reproducibility": "./src/reproducibility.ts",
     "./renderer": "./src/renderer.ts",
     "./renderer-contributions": "./src/renderer-contributions.ts",
     "./visual-source": "./src/visual-source.ts",

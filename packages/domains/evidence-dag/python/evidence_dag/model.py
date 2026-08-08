@@ -28,6 +28,11 @@ class NodeType(str, Enum):
     SOFTWARE_VERSION = "software_version"
     ENVIRONMENT = "environment"
     AGENT = "agent"
+    PARAMETER_SET = "parameter_set"
+    TOOL_INVOCATION = "tool_invocation"
+    APPROVAL_DECISION = "approval_decision"
+    WORKFLOW_RUN = "workflow_run"
+    CONCLUSION = "conclusion"
 
 
 class NodeStatus(str, Enum):
@@ -55,6 +60,9 @@ class EdgeRel(str, Enum):
     INVALIDATES = "invalidates"
     REPLICATES = "replicates"
     FAILS_TO_REPLICATE = "fails_to_replicate"
+    PART_OF = "part_of"
+    AUTHORIZED_BY = "authorized_by"
+    RERUN_OF = "rerun_of"
 
 
 class EdgeFamily(str, Enum):
@@ -65,6 +73,7 @@ class EdgeFamily(str, Enum):
     VERSION = "version"
     INVALIDATION = "invalidation"
     REPLICATION = "replication"
+    GOVERNANCE = "governance"
 
 
 EDGE_FAMILY: dict[EdgeRel, EdgeFamily] = {
@@ -84,6 +93,9 @@ EDGE_FAMILY: dict[EdgeRel, EdgeFamily] = {
     EdgeRel.INVALIDATES: EdgeFamily.INVALIDATION,
     EdgeRel.REPLICATES: EdgeFamily.REPLICATION,
     EdgeRel.FAILS_TO_REPLICATE: EdgeFamily.REPLICATION,
+    EdgeRel.PART_OF: EdgeFamily.PROVENANCE,
+    EdgeRel.AUTHORIZED_BY: EdgeFamily.GOVERNANCE,
+    EdgeRel.RERUN_OF: EdgeFamily.REPLICATION,
 }
 
 # These relations describe causal/source derivation and must remain acyclic.
@@ -96,6 +108,9 @@ ACYCLIC_LINEAGE_RELS = frozenset({
     EdgeRel.DERIVED_FROM,
     EdgeRel.VERSION_OF,
     EdgeRel.SUPERSEDES,
+    EdgeRel.PART_OF,
+    EdgeRel.AUTHORIZED_BY,
+    EdgeRel.RERUN_OF,
 })
 
 
@@ -691,6 +706,30 @@ class Node:
             if value not in self.trace_refs:
                 self.trace_refs.append(value)
         if self.external_id and other.external_id == self.external_id:
+            immutable_entity = self.type in {
+                NodeType.ARTIFACT,
+                NodeType.DATASET_VERSION,
+                NodeType.OBSERVATION,
+                NodeType.SOURCE_ASSERTION,
+                NodeType.FINDING,
+            }
+            if immutable_entity:
+                conflicting_attributes = sorted(
+                    key for key, value in other.attributes.items()
+                    if key in self.attributes and self.attributes[key] != value
+                )
+                conflicting_links = sorted(
+                    field_name for field_name in (
+                        "artifact_id", "artifact_version_id", "source_anchor_id",
+                    )
+                    if getattr(self, field_name) and getattr(other, field_name)
+                    and getattr(self, field_name) != getattr(other, field_name)
+                )
+                if conflicting_attributes or conflicting_links:
+                    fields = ", ".join([*conflicting_attributes, *conflicting_links])
+                    raise ValueError(
+                        f"immutable node external_id {self.external_id!r} conflicts on {fields}"
+                    )
             # A later trace item may complete an in-flight run. Historical
             # snapshots remain immutable; the next snapshot carries the most
             # recently observed explicit metadata for that same run identity.

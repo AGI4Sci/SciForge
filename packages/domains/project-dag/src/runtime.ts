@@ -7,11 +7,13 @@ import {
   type EvidenceDagSnapshotIdentity
 } from '@sciforge/domain-evidence-dag/contract'
 import type {
-  DomainAgentArtifactEvent,
+  DomainArtifactEvent,
   DomainAgentThread,
   DomainMainRuntimeDisposer,
   DomainMainRuntimeLifecycleContext
 } from '@sciforge/domain-sdk/host'
+import { domainArtifactEventScope } from '@sciforge/domain-sdk/host'
+import { resolve } from 'node:path'
 import {
   projectDagCapturedScopeSchema,
   projectDagCommittedSnapshotSchema,
@@ -60,7 +62,12 @@ type ServiceResult =
 
 export type ProjectDagEvidenceSnapshotReader = (
   engineThreadId: string,
-  context: DomainMainRuntimeLifecycleContext
+  context: DomainMainRuntimeLifecycleContext,
+  scope?: Readonly<{
+    runtimeId: string
+    threadId: string
+    workspaceRoot: string
+  }>
 ) => Promise<EvidenceDagCommittedSnapshot>
 
 export type ProjectDagRuntimeOptions = Readonly<{
@@ -104,7 +111,7 @@ export class ProjectDagRuntime {
     this.#fetchImpl = options.fetchImpl ?? globalThis.fetch
     this.#requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     this.#readEvidenceSnapshotImpl = options.readEvidenceSnapshot ??
-      ((threadId, context) => this.#readEvidenceSnapshot(threadId, context))
+      ((threadId, context, scope) => this.#readEvidenceSnapshot(threadId, context, scope))
     this.#outbox = options.handoffOutbox ??
       (options.userDataDir ? new ProjectDagHandoffOutbox(options.userDataDir) : null)
     this.#autoProcessHandoffs = options.autoProcessHandoffs !== false
@@ -162,13 +169,38 @@ export class ProjectDagRuntime {
     this.#context = null
   }
 
-  async consumeTurnCompleted(event: DomainAgentArtifactEvent): Promise<void> {
-    if (!event.workspaceRoot?.trim() || !this.#outbox) return
+  async consumeArtifact(event: DomainArtifactEvent): Promise<void> {
+    const context = this.#context
+    if (!context || this.#disposed || !this.#enabled) return
+    const scope = domainArtifactEventScope(event)
+    if (event.kind === 'execution-completed' && !scope.workspaceRoot?.trim()) {
+      throw projectError(
+        'access_restricted',
+        'Package execution handoff has no authoritative Host workspace binding.',
+        false
+      )
+    }
+    if (!scope.workspaceRoot?.trim() || !this.#outbox) return
+    const workspaceRoot = scope.workspaceRoot.trim()
+    const source = event.kind === 'turn-completed'
+      ? await authoritativeAgentHandoffScope(
+          scope.runtimeId,
+          scope.threadId,
+          workspaceRoot,
+          context
+        )
+      : packageExecutionHandoffScope(
+          event,
+          scope.runtimeId,
+          scope.threadId,
+          workspaceRoot
+        )
     await this.#outbox.enqueue({
-      workspaceRoot: event.workspaceRoot,
-      runtimeId: event.runtimeId,
-      threadId: event.threadId,
-      targetWatermark: event.targetWatermark
+      workspaceRoot,
+      runtimeId: scope.runtimeId,
+      threadId: scope.threadId,
+      targetWatermark: event.targetWatermark,
+      ...source
     })
     if (this.#autoProcessHandoffs) this.#scheduleHandoffDrain(0)
   }
@@ -422,19 +454,30 @@ export class ProjectDagRuntime {
 
   async #readEvidenceSnapshot(
     engineThreadId: string,
-    context: DomainMainRuntimeLifecycleContext
+    context: DomainMainRuntimeLifecycleContext,
+    scope?: Readonly<{
+      runtimeId: string
+      threadId: string
+      workspaceRoot: string
+    }>
   ): Promise<EvidenceDagCommittedSnapshot> {
-    const separator = engineThreadId.indexOf(':')
-    if (separator <= 0 || separator === engineThreadId.length - 1) {
-      throw projectError(
-        'evidence_snapshot_unavailable',
-        `Project session ${engineThreadId} is not a canonical runtime/thread identity.`,
-        false
-      )
+    let runtimeId = scope?.runtimeId.trim()
+    let threadId = scope?.threadId.trim()
+    if (!runtimeId || !threadId) {
+      const separator = engineThreadId.indexOf(':')
+      if (separator <= 0 || separator === engineThreadId.length - 1) {
+        throw projectError(
+          'evidence_snapshot_unavailable',
+          `Project session ${engineThreadId} is not a canonical runtime/thread identity.`,
+          false
+        )
+      }
+      runtimeId = engineThreadId.slice(0, separator)
+      threadId = engineThreadId.slice(separator + 1)
     }
-    const runtimeId = engineThreadId.slice(0, separator)
-    const threadId = engineThreadId.slice(separator + 1)
-    const thread = await context.agentThreads.read({ runtimeId, threadId })
+    const capturedWorkspaceRoot = scope?.workspaceRoot.trim() || (
+      await context.agentThreads.read({ runtimeId, threadId })
+    ).workspaceRoot
     const view = await context.capabilities.invoke(
       {
         actionId: EVIDENCE_DAG_CAPABILITY_IDS.view,
@@ -444,7 +487,7 @@ export class ProjectDagRuntime {
       },
       { runtimeId, threadId },
       {
-        ...(thread.workspaceRoot ? { workspaceId: thread.workspaceRoot } : {})
+        ...(capturedWorkspaceRoot ? { workspaceId: capturedWorkspaceRoot } : {})
       }
     )
     const parsed = evidenceDagCommittedSnapshotSchema.safeParse(view.status.committed)
@@ -495,8 +538,26 @@ export class ProjectDagRuntime {
     record: ProjectDagHandoffRecord,
     context: DomainMainRuntimeLifecycleContext
   ): Promise<void> {
+    if (record.sourceKind === 'agent-thread') {
+      await authoritativeAgentHandoffScope(
+        record.runtimeId,
+        record.threadId,
+        record.workspaceRoot,
+        context
+      )
+    } else {
+      assertPackageExecutionIdentity(record)
+    }
     const triggerId = `${record.runtimeId}:${record.threadId}`
-    const trigger = await this.#readEvidenceSnapshotImpl(triggerId, context)
+    const trigger = await this.#readEvidenceSnapshotImpl(
+      triggerId,
+      context,
+      {
+        runtimeId: record.runtimeId,
+        threadId: record.threadId,
+        workspaceRoot: record.workspaceRoot
+      }
+    )
     if (!evidenceWatermarkCovers(trigger.inputWatermark, record.targetWatermark)) {
       throw projectError(
         'evidence_snapshot_unavailable',
@@ -682,20 +743,231 @@ async function projectSessionsForUpdate(
   current: ProjectDagStatus,
   context: DomainMainRuntimeLifecycleContext
 ): Promise<string[]> {
-  if (Array.isArray(input.scope)) return uniqueSorted(input.scope)
-  if (input.sessions?.length) return uniqueSorted(input.sessions)
-  const workspaceRoot = input.workspaceRoot ?? input.projectRoot
+  const workspaceRoot = projectWorkspaceRoot(input)
+  if (!workspaceRoot) {
+    throw projectError(
+      'invalid_request',
+      'Project DAG update requires a caller-bound workspaceRoot or projectRoot.',
+      false
+    )
+  }
+  const explicit = Array.isArray(input.scope)
+    ? uniqueSorted(input.scope)
+    : input.sessions?.length
+      ? uniqueSorted(input.sessions)
+      : null
+  if (explicit) {
+    await Promise.all(explicit.map((sessionId) =>
+      authoritativeProjectSession(sessionId, workspaceRoot, context)
+    ))
+    return explicit
+  }
   const threads = await context.agentThreads.list({
     limit: 500,
     includeArchived: false,
     includeSide: false
   })
   const matching = threads.filter((thread) =>
-    !workspaceRoot || thread.workspaceRoot === workspaceRoot
+    sameWorkspace(thread.workspaceRoot, workspaceRoot)
   )
   const discovered = uniqueSorted(matching.map(engineThreadId))
   if (discovered.length > 0) return discovered
-  return current.scope.includedSessions
+  const retained = uniqueSorted(current.scope.includedSessions)
+  await Promise.all(retained.map((sessionId) =>
+    authoritativeProjectSession(sessionId, workspaceRoot, context)
+  ))
+  return retained
+}
+
+function projectWorkspaceRoot(input: ProjectDagTarget): string | undefined {
+  const workspaceRoot = input.workspaceRoot?.trim()
+  const projectRoot = input.projectRoot?.trim()
+  if (workspaceRoot && projectRoot && !sameWorkspace(workspaceRoot, projectRoot)) {
+    throw projectError(
+      'invalid_request',
+      'Project DAG workspaceRoot and projectRoot must identify the same workspace.',
+      false
+    )
+  }
+  return workspaceRoot || projectRoot
+}
+
+async function authoritativeProjectSession(
+  engineId: string,
+  workspaceRoot: string,
+  context: DomainMainRuntimeLifecycleContext
+): Promise<void> {
+  const identity = splitEngineThreadId(engineId)
+  let thread: Awaited<ReturnType<DomainMainRuntimeLifecycleContext['agentThreads']['read']>>
+  try {
+    thread = await context.agentThreads.read(identity)
+  } catch (error) {
+    throw projectError(
+      'access_restricted',
+      `Project session ${engineId} has no authoritative Agent thread binding.`,
+      false,
+      { cause: error instanceof Error ? error.message : String(error) }
+    )
+  }
+  if (
+    thread.runtimeId.trim() !== identity.runtimeId ||
+    thread.id.trim() !== identity.threadId ||
+    !sameWorkspace(thread.workspaceRoot, workspaceRoot)
+  ) {
+    throw projectError(
+      'access_restricted',
+      `Project session ${engineId} does not belong to the requested workspace.`,
+      false
+    )
+  }
+}
+
+async function authoritativeAgentHandoffScope(
+  runtimeId: string,
+  threadId: string,
+  workspaceRoot: string,
+  context: DomainMainRuntimeLifecycleContext
+): Promise<{ sourceKind: 'agent-thread' }> {
+  let thread: Awaited<ReturnType<DomainMainRuntimeLifecycleContext['agentThreads']['read']>>
+  try {
+    thread = await context.agentThreads.read({ runtimeId, threadId })
+  } catch (error) {
+    throw projectError(
+      'access_restricted',
+      `Project handoff ${runtimeId}:${threadId} has no authoritative Agent thread.`,
+      false,
+      { cause: error instanceof Error ? error.message : String(error) }
+    )
+  }
+  if (
+    thread.runtimeId.trim() !== runtimeId.trim() ||
+    thread.id.trim() !== threadId.trim() ||
+    !sameWorkspace(thread.workspaceRoot, workspaceRoot)
+  ) {
+    throw projectError(
+      'access_restricted',
+      `Project handoff ${runtimeId}:${threadId} has a mismatched workspace binding.`,
+      false
+    )
+  }
+  return { sourceKind: 'agent-thread' }
+}
+
+function packageExecutionHandoffScope(
+  event: Extract<DomainArtifactEvent, { kind: 'execution-completed' }>,
+  runtimeId: string,
+  threadId: string,
+  workspaceRoot: string
+): {
+  sourceKind: 'package-execution'
+  producerModuleId: string
+  executionId: string
+  hostAcceptanceSequence: number
+  hostWorkspaceBinding: 'capability-caller'
+} {
+  const producerModuleId = event.producer.moduleId.trim()
+  const executionId = event.executionId.trim()
+  const explicitRuntime = event.runtimeId?.trim()
+  const explicitThread = event.threadId?.trim()
+  const binding = event.hostBinding
+  const acceptanceSequence = binding?.acceptanceSequence
+  if (
+    binding?.contractVersion !== 1 ||
+    binding.workspaceBinding !== 'capability-caller' ||
+    !binding.workspaceRoot?.trim() ||
+    !event.workspaceRoot?.trim() ||
+    !sameWorkspace(binding.workspaceRoot, event.workspaceRoot) ||
+    !sameWorkspace(binding.workspaceRoot, workspaceRoot) ||
+    !Number.isSafeInteger(acceptanceSequence) ||
+    (acceptanceSequence ?? 0) <= 0 ||
+    leadingWatermarkSequence(event.targetWatermark) !== acceptanceSequence
+  ) {
+    throw projectError(
+      'access_restricted',
+      'Package execution handoff has no valid authoritative Host workspace binding.',
+      false
+    )
+  }
+  if (Boolean(explicitRuntime) !== Boolean(explicitThread)) {
+    throw projectError(
+      'access_restricted',
+      'Package execution handoff must bind runtimeId and threadId together.',
+      false
+    )
+  }
+  if (
+    !producerModuleId ||
+    !executionId ||
+    !threadId.trim() ||
+    (runtimeId !== producerModuleId && runtimeId !== `domain:${producerModuleId}`)
+  ) {
+    throw projectError(
+      'access_restricted',
+      'Package execution handoff is not bound to its producer identity.',
+      false
+    )
+  }
+  if (!explicitRuntime && threadId !== `execution:${executionId}`) {
+    throw projectError(
+      'access_restricted',
+      'Synthetic execution handoff is not bound to its execution id.',
+      false
+    )
+  }
+  return {
+    sourceKind: 'package-execution',
+    producerModuleId,
+    executionId,
+    hostAcceptanceSequence: acceptanceSequence,
+    hostWorkspaceBinding: 'capability-caller'
+  }
+}
+
+function assertPackageExecutionIdentity(record: ProjectDagHandoffRecord): void {
+  const producer = record.producerModuleId?.trim()
+  if (
+    !producer ||
+    !record.executionId?.trim() ||
+    record.hostWorkspaceBinding !== 'capability-caller' ||
+    !Number.isSafeInteger(record.hostAcceptanceSequence) ||
+    (record.hostAcceptanceSequence ?? 0) <= 0 ||
+    leadingWatermarkSequence(record.targetWatermark) !== record.hostAcceptanceSequence ||
+    (record.runtimeId !== producer && record.runtimeId !== `domain:${producer}`)
+  ) {
+    throw projectError(
+      'access_restricted',
+      'Persisted package execution handoff has no trusted Host producer/workspace binding.',
+      false
+    )
+  }
+}
+
+function leadingWatermarkSequence(value: string): number | null {
+  const match = /^(\d+):/u.exec(value.trim())
+  if (!match) return null
+  const parsed = Number(match[1])
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+function splitEngineThreadId(value: string): { runtimeId: string; threadId: string } {
+  const normalized = value.trim()
+  const separator = normalized.indexOf(':')
+  if (separator <= 0 || separator === normalized.length - 1) {
+    throw projectError(
+      'invalid_request',
+      `Project session ${value} is not a canonical runtime/thread identity.`,
+      false
+    )
+  }
+  return {
+    runtimeId: normalized.slice(0, separator),
+    threadId: normalized.slice(separator + 1)
+  }
+}
+
+function sameWorkspace(left: string | undefined, right: string | undefined): boolean {
+  if (!left?.trim() || !right?.trim()) return false
+  return resolve(left.trim()) === resolve(right.trim())
 }
 
 function engineThreadId(thread: DomainAgentThread): string {

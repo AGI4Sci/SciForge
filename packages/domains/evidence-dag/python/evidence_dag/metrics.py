@@ -27,8 +27,8 @@ from .graph import ThreadGraph
 from .lineage import reproducibility_report
 from .model import EdgeRel, NodeType
 
-_DERIVED = (NodeType.CLAIM, NodeType.REASONING)
-_RESEARCH_CONCLUSIONS = (NodeType.CLAIM, NodeType.FINDING)
+_DERIVED = (NodeType.CLAIM, NodeType.CONCLUSION, NodeType.REASONING)
+_RESEARCH_CONCLUSIONS = (NodeType.CLAIM, NodeType.FINDING, NodeType.CONCLUSION)
 
 
 def _paths_of(graph: ThreadGraph, types: tuple[NodeType, ...],
@@ -192,7 +192,7 @@ def _provenance_rates(
 def _reproducible_finding_rate(graph: ThreadGraph) -> tuple[Optional[float], dict[str, Any]]:
     eligible: list[dict[str, Any]] = []
     for node in graph.nodes.values():
-        if node.type != NodeType.FINDING:
+        if node.type not in {NodeType.FINDING, NodeType.CONCLUSION}:
             continue
         report = reproducibility_report(graph, node.id)
         # A literature Finding with no ExperimentRun/AnalysisRun is outside the

@@ -28,12 +28,14 @@ you NEVER invent facts.
 Input JSON: {claim, subgraph:{nodes:[{id,type,content}],edges}, active_goals:[{id,title,description}]}
 Output STRICT JSON only:
 {"statement":"<one self-contained sentence, past-tense finding>",
- "claim_type":"hypothesis|finding|method_result|negative_result|decision",
+ "claim_type":"hypothesis|finding|method_result|negative_result|decision|conclusion",
  "mentioned_entities":["<dataset/variable/material/method names in the statement>"],
  "addresses_goal":"<goal id or 'none'>",
  "source_node_ids":["<ids from subgraph.nodes that ground the statement>"],
  "confidence":0.0}
-source_node_ids MUST be copied verbatim from subgraph.nodes ids.""",
+Use conclusion only for an asserted synthesis/result, never for an untested
+hypothesis or a governance decision. source_node_ids MUST be copied verbatim
+from subgraph.nodes ids.""",
 
     "entity_same": """PDAG-TASK: entity_same
 Decide whether NAME refers to the SAME real-world entity as CANDIDATE (a

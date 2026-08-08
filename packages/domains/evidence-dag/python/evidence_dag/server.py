@@ -3,8 +3,9 @@
 The module returns structured evidence (graph, provenance, metrics) only —
 never a user-level final answer or completion truth.
 
-All graph writes enter POST /updates. Audit and Artifact commands are separate
-side-chain/registry commands and never mutate a committed graph in place.
+All graph writes enter POST /updates. Artifact identities and lifecycle writes
+belong to the independent Artifact Versions domain; this service consumes only
+pinned refs and lifecycle projections carried by an update.
 """
 from __future__ import annotations
 
@@ -272,7 +273,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, ok({"version": __version__, "service": SERVICE_ID},
                                       operation="version", request_id=rid, started=started))
         if path == "/threads":
-            return self._send(200, ok({"threads": self.engine.list_threads()},
+            return self._send(200, ok({"threads": self.engine.list_threads_for_read()},
                                       operation="threads", request_id=rid, started=started))
         if path == "/updates/status":
             tid = (qs.get("threadId") or [None])[0]
@@ -310,6 +311,11 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 self.engine.require(tid)
                 runs = self.engine.audit_runs(tid)
+            except PermissionError as exc:
+                return self._send(403, err(
+                    "ACCESS_RESTRICTED", str(exc), operation="audits.list",
+                    request_id=rid, started=started,
+                ))
             except KeyError as exc:
                 return self._send(404, err("NOT_FOUND", str(exc), operation="audits.list",
                                            request_id=rid, started=started))
@@ -321,16 +327,17 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if action == "graph":
                 g = self.engine.require(tid)
-                snapshot = self.engine.latest_snapshot(tid)
-                return self._send(200, ok({"summary": g.summary(), "graph": g.to_dict(),
-                                           "snapshot": snapshot.to_dict() if snapshot else None},
+                return self._send(200, ok({
+                                           "summary": self.engine.graph_summary(tid),
+                                           "graph": self.engine.graph_view(tid),
+                                           "snapshot": self.engine.snapshot_view(tid)},
                                           summary=f"{len(g.nodes)} nodes / {len(g.edges)} edges",
                                           operation="graph", request_id=rid, started=started))
             if action == "staging":
                 g = self.engine.provisional_graph(tid)
                 if g is None:
                     raise KeyError(tid)
-                return self._send(200, ok({"summary": g.summary(), "graph": g.to_dict(),
+                return self._send(200, ok({"summary": self.engine.provisional_graph_summary(tid), "graph": self.engine.provisional_graph_view(tid),
                                            "snapshot": None, "layer": "staging"},
                                           summary=f"{len(g.nodes)} provisional nodes / {len(g.edges)} provisional edges",
                                           operation="staging", request_id=rid, started=started))
@@ -340,10 +347,7 @@ class Handler(BaseHTTPRequestHandler):
                 thr = float((qs.get("threshold") or ["0.7"])[0])
                 return self._send(200, ok(self.engine.analysis(tid, threshold=thr), operation="analysis", request_id=rid, started=started))
             if action == "snapshot":
-                snapshot = self.engine.latest_snapshot(tid)
-                if snapshot is None:
-                    raise KeyError(tid)
-                return self._send(200, ok(snapshot.to_dict(), operation="snapshot",
+                return self._send(200, ok(self.engine.snapshot_view(tid), operation="snapshot",
                                           request_id=rid, started=started))
             if action == "evidence-preview":
                 preview_args = {
@@ -369,8 +373,58 @@ class Handler(BaseHTTPRequestHandler):
                 if not node:
                     return self._send(400, err("INVALID_ARGUMENT", "?node= required", operation="provenance", request_id=rid, started=started))
                 return self._send(200, ok(self.engine.provenance(tid, node), operation="provenance", request_id=rid, started=started))
+            if action == "conclusion-lineage":
+                target_digest = (qs.get("snapshotDigest") or [""])[0].strip()
+                conclusion_id = (qs.get("conclusionId") or [""])[0].strip()
+                if not target_digest or not conclusion_id:
+                    return self._send(400, err(
+                        "INVALID_ARGUMENT", "snapshotDigest and conclusionId are required",
+                        operation="conclusion-lineage", request_id=rid, started=started,
+                    ))
+                return self._send(200, ok(
+                    self.engine.conclusion_lineage(
+                        tid, target_digest=target_digest, conclusion_id=conclusion_id,
+                    ), operation="conclusion-lineage", request_id=rid, started=started,
+                ))
+            if action == "rerun-spec":
+                target_digest = (qs.get("snapshotDigest") or [""])[0].strip()
+                conclusion_id = (qs.get("conclusionId") or [""])[0].strip()
+                if not target_digest or not conclusion_id:
+                    return self._send(400, err(
+                        "INVALID_ARGUMENT", "snapshotDigest and conclusionId are required",
+                        operation="rerun-spec", request_id=rid, started=started,
+                    ))
+                return self._send(200, ok(
+                    self.engine.rerun_spec(
+                        tid, target_digest=target_digest, conclusion_id=conclusion_id,
+                    ), operation="rerun-spec", request_id=rid, started=started,
+                ))
+            if action == "rerun-compare":
+                values = {
+                    "baseline_digest": (qs.get("baselineDigest") or [""])[0].strip(),
+                    "baseline_conclusion_id": (
+                        qs.get("baselineConclusionId") or [""]
+                    )[0].strip(),
+                    "candidate_digest": (qs.get("candidateDigest") or [""])[0].strip(),
+                    "candidate_conclusion_id": (
+                        qs.get("candidateConclusionId") or [""]
+                    )[0].strip(),
+                }
+                if not all(values.values()):
+                    return self._send(400, err(
+                        "INVALID_ARGUMENT",
+                        "baselineDigest, baselineConclusionId, candidateDigest and "
+                        "candidateConclusionId are required",
+                        operation="rerun-compare", request_id=rid, started=started,
+                    ))
+                return self._send(200, ok(
+                    self.engine.compare_reruns(tid, **values), operation="rerun-compare",
+                    request_id=rid, started=started,
+                ))
             if action == "prov-json":
                 return self._send(200, ok(self.engine.export_prov_json(tid), operation="prov-json.export", request_id=rid, started=started))
+        except PermissionError as exc:
+            return self._send(403, err("ACCESS_RESTRICTED", str(exc), operation=action or "get", request_id=rid, started=started))
         except KeyError as exc:
             return self._send(404, err("NOT_FOUND", f"not found: {exc}", operation=action or "get", request_id=rid, started=started))
         except Exception as exc:  # noqa: BLE001
@@ -394,14 +448,23 @@ class Handler(BaseHTTPRequestHandler):
                     project_root=body.get("projectRoot"), rebuild=bool(body.get("rebuild", False)),
                     rebuild_rationale=body.get("rebuildRationale"),
                     threshold=float(body.get("threshold", 0.7)),
-                    access_policy=body.get("accessPolicy") if isinstance(body.get("accessPolicy"), dict) else None,
+                    access_policy=body.get("accessPolicy"),
                     queued_at=body.get("queuedAt"),
                     correlation_id=body.get("correlationId"),
                     idempotency_key=body.get("idempotencyKey"),
                 )
-                snapshot = result["snapshot"]
-                return self._send(200, ok(result,
-                                          summary=f"Evidence Snapshot {snapshot['version']} committed at {snapshot['inputWatermark']}",
+                result_view = self.engine.update_result_view(str(body.get("threadId") or ""), result)
+                snapshot_view = result_view.get("snapshot") \
+                    if isinstance(result_view.get("snapshot"), dict) else {}
+                response_summary = (
+                    "Restricted Evidence Snapshot committed"
+                    if result_view.get("accessRestricted") is True
+                    else "Evidence Snapshot "
+                    f"{snapshot_view.get('version')} committed at "
+                    f"{snapshot_view.get('inputWatermark')}"
+                )
+                return self._send(200, ok(result_view,
+                                          summary=response_summary,
                                           operation="updates.create", request_id=rid, started=started))
             if path == "/audits":
                 tid = str(body.get("threadId") or "")
@@ -418,28 +481,28 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, ok(run,
                                           summary=f"{run['risk_digest']['total_findings']} finding(s)",
                                           operation="audits.create", request_id=rid, started=started))
-            if path == "/artifacts":
-                result = self.engine.register_artifact(
-                    workspace_root=str(body.get("workspaceRoot") or ""),
-                    project_root=body.get("projectRoot"), payload=body,
+            if path == "/snapshot-products":
+                thread_id = str(body.get("threadId") or "").strip()
+                snapshot_digest = str(body.get("snapshotDigest") or "").strip().lower()
+                datacite_metadata = body.get("datacite")
+                if not thread_id:
+                    raise ValueError("threadId is required")
+                if re.fullmatch(r"sha256:[0-9a-f]{64}", snapshot_digest) is None:
+                    raise ValueError("snapshotDigest must be an exact SHA-256 Evidence Snapshot digest")
+                if not isinstance(datacite_metadata, dict):
+                    raise ValueError("explicit DataCite metadata is required")
+                products = self.engine.export_snapshot_products(
+                    thread_id,
+                    snapshot_digest=snapshot_digest,
+                    datacite_metadata=datacite_metadata,
                 )
-                return self._send(200, ok(result, operation="artifacts.register",
-                                          request_id=rid, started=started))
-            if path == "/artifacts/resolve":
-                result = self.engine.resolve_artifacts(
-                    workspace_root=str(body.get("workspaceRoot") or ""),
-                    project_root=body.get("projectRoot"),
-                )
-                return self._send(200, ok(result, operation="artifacts.resolve",
-                                          request_id=rid, started=started))
-            if path == "/artifacts/events/ack":
-                result = self.engine.acknowledge_artifact_events(
-                    workspace_root=str(body.get("workspaceRoot") or ""),
-                    project_root=body.get("projectRoot"),
-                    event_ids=body.get("eventIds") if isinstance(body.get("eventIds"), list) else [],
-                )
-                return self._send(200, ok(result, operation="artifacts.events.ack",
-                                          request_id=rid, started=started))
+                return self._send(200, ok(
+                    products,
+                    summary=f"{len(products['products'])} immutable snapshot product(s) projected",
+                    operation="snapshot-products.export",
+                    request_id=rid,
+                    started=started,
+                ))
             review_match = re.fullmatch(
                 r"/threads/([^/]+)/reviews/([^/]+)/decision", path,
             )
@@ -461,24 +524,6 @@ class Handler(BaseHTTPRequestHandler):
                     summary=f"Review decision {result['decision']['action']} recorded",
                     operation="reviews.decision", request_id=rid, started=started,
                 ))
-            artifact_match = re.fullmatch(r"/artifacts/([^/]+)/(resolve|confirm-rebind)", path)
-            if artifact_match:
-                artifact_id = unquote(artifact_match.group(1))
-                if artifact_match.group(2) == "resolve":
-                    result = self.engine.resolve_artifact(
-                        artifact_id,
-                        workspace_root=str(body.get("workspaceRoot") or ""),
-                        project_root=body.get("projectRoot"),
-                        candidate_locators=body.get("candidateLocators") or [],
-                    )
-                else:
-                    registry = self.engine._registry(
-                        workspace_root=str(body.get("workspaceRoot") or ""),
-                        project_root=body.get("projectRoot"),
-                    )
-                    result = registry.confirm_rebind(artifact_id, str(body.get("locator") or ""))
-                return self._send(200, ok(result, operation=f"artifacts.{artifact_match.group(2)}",
-                                          request_id=rid, started=started))
             if not tid:
                 return self._send(404, err("NOT_FOUND", f"no route for {self.path}", operation="post",
                                            request_id=rid, started=started))
@@ -504,6 +549,11 @@ class Handler(BaseHTTPRequestHandler):
         except ReviewDecisionConflict as exc:
             return self._send(409, err(
                 "SNAPSHOT_CONFLICT", str(exc), operation="reviews.decision",
+                request_id=rid, started=started,
+            ))
+        except PermissionError as exc:
+            return self._send(403, err(
+                "ACCESS_RESTRICTED", str(exc), operation=action or "post",
                 request_id=rid, started=started,
             ))
         except (LLMCallError, ExtractionOutputError) as exc:

@@ -27,6 +27,13 @@ PREFIX = {
     "edag": "https://sciforge.ai/ns/evidence-dag#",
 }
 
+_ACTIVITY_TYPES = frozenset({
+    NodeType.EXPERIMENT_RUN,
+    NodeType.ANALYSIS_RUN,
+    NodeType.WORKFLOW_RUN,
+    NodeType.TOOL_INVOCATION,
+})
+
 # node fields serialised as edag: attributes on the entity
 _NODE_ATTRS = (
     "content", "status", "trace_refs", "created_at", "created_by", "atms_label",
@@ -46,7 +53,7 @@ def to_prov_json(graph: ThreadGraph) -> dict[str, Any]:
         ent: dict[str, Any] = {"prov:type": f"edag:{n.type.value}"}
         for attr in _NODE_ATTRS:
             ent[f"edag:{attr}"] = d[attr]
-        if n.type in {NodeType.EXPERIMENT_RUN, NodeType.ANALYSIS_RUN}:
+        if n.type in _ACTIVITY_TYPES:
             activities[n.id] = ent
         elif n.type == NodeType.AGENT:
             agents[n.id] = ent
@@ -59,6 +66,7 @@ def to_prov_json(graph: ThreadGraph) -> dict[str, Any]:
     derived: dict[str, Any] = {}
     associated: dict[str, Any] = {}
     attributed: dict[str, Any] = {}
+    informed: dict[str, Any] = {}
     for e in graph.edges.values():
         common: dict[str, Any] = {
             "edag:rel": e.rel.value,
@@ -68,7 +76,11 @@ def to_prov_json(graph: ThreadGraph) -> dict[str, Any]:
         # both supports and contradicts edges carry a ν now; persist any score.
         if e.nli_score is not None:
             common["edag:nli_score"] = e.nli_score
-        if e.rel == EdgeRel.USED:
+        if e.rel == EdgeRel.RERUN_OF:
+            informed[e.id] = {
+                "prov:informed": e.src, "prov:informant": e.dst, **common,
+            }
+        elif e.rel == EdgeRel.USED:
             used[e.id] = {"prov:activity": e.src, "prov:entity": e.dst, **common}
         elif e.rel == EdgeRel.GENERATED_BY:
             generated[e.id] = {"prov:entity": e.src, "prov:activity": e.dst, **common}
@@ -95,6 +107,7 @@ def to_prov_json(graph: ThreadGraph) -> dict[str, Any]:
         "wasDerivedFrom": derived,
         "wasAssociatedWith": associated,
         "wasAttributedTo": attributed,
+        "wasInformedBy": informed,
         "wasInfluencedBy": influenced,
         "edag:order": {
             "nodes": list(graph.nodes),
@@ -108,6 +121,11 @@ def to_prov_json(graph: ThreadGraph) -> dict[str, Any]:
         },
         "edag:assessments": [item.to_dict() for item in graph.assessments],
     }
+    if graph.artifact_version_refs:
+        result["edag:artifactRegistry"]["artifactVersionRefs"] = [
+            graph.artifact_version_refs[key].to_dict()
+            for key in sorted(graph.artifact_version_refs)
+        ]
     if graph.review_policy_version or graph.review_packets:
         from .human_review import human_review_summary
         result["edag:humanReview"] = human_review_summary(graph)
@@ -128,7 +146,7 @@ def from_prov_json(doc: dict[str, Any]) -> ThreadGraph:
                 continue
             ntype = str(ent.get("prov:type", f"edag:{fallback}")).split(":", 1)[-1]
             if section == "activity" and ntype not in {
-                NodeType.EXPERIMENT_RUN.value, NodeType.ANALYSIS_RUN.value,
+                item.value for item in _ACTIVITY_TYPES
             }:
                 continue
             if section == "agent" and ntype != NodeType.AGENT.value:
@@ -159,6 +177,7 @@ def from_prov_json(doc: dict[str, Any]) -> ThreadGraph:
         ("wasDerivedFrom", "prov:generatedEntity", "prov:usedEntity", EdgeRel.DERIVED_FROM),
         ("wasAssociatedWith", "prov:activity", "prov:agent", EdgeRel.ASSOCIATED_WITH),
         ("wasAttributedTo", "prov:entity", "prov:agent", EdgeRel.ATTRIBUTED_TO),
+        ("wasInformedBy", "prov:informed", "prov:informant", EdgeRel.RERUN_OF),
     )
     for section, src_key, dst_key, fallback_rel in relation_sections:
         for eid, rel in (doc.get(section) or {}).items():
@@ -193,6 +212,10 @@ def from_prov_json(doc: dict[str, Any]) -> ThreadGraph:
     for raw in registry.get("artifactVersions") or []:
         item = ArtifactVersion.from_dict(raw)
         graph.artifact_versions[item.version_id] = item
+    from .artifact_versions import ArtifactVersionRefV1
+    for raw in registry.get("artifactVersionRefs") or []:
+        item = ArtifactVersionRefV1.from_dict(raw)
+        graph.artifact_version_refs[item.version_id] = item
     for raw in registry.get("sourceAnchors") or []:
         item = SourceAnchor.from_dict(raw)
         graph.source_anchors[item.anchor_id] = item

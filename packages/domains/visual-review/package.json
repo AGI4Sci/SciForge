@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@napi-rs/canvas": "^0.1.100",
+    "@sciforge/domain-artifact-versions": "^0.1.0",
     "@sciforge/domain-sdk": "^0.1.0",
     "@sciforge/scientific-plotting": "^0.1.0",
     "lucide-react": "^0.544.0",

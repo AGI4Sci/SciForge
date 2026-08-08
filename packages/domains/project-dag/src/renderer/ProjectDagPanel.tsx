@@ -472,7 +472,7 @@ export function ProjectDagPanel({
             title={t('rightPanelProjectDag')}
             className="ds-no-drag block h-full w-full border-0 bg-ds-main"
             data-dag-layer="committed"
-            sandbox="allow-forms allow-same-origin allow-scripts"
+            sandbox="allow-downloads allow-forms allow-same-origin allow-scripts"
             referrerPolicy="no-referrer"
           />
         ) : (

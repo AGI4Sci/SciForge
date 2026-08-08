@@ -15,6 +15,7 @@ import path from 'node:path'
 import {
   LocalTraceStore,
   TRACE_REDACTION_MARKER,
+  deriveExecutionTraceId,
   deriveTraceId,
   sanitizeTraceHeaders,
   sanitizeTraceText,
@@ -678,6 +679,111 @@ test('deriveTraceId is stable, scoped, and does not expose source identifiers', 
   assert.notEqual(first, otherTurn)
   assert.equal(first.includes('runtime'), false)
   assert.match(first, /^trace_[a-f0-9]{32}$/)
+})
+
+test('deriveExecutionTraceId is stable and scoped to owner plus execution', () => {
+  const first = deriveExecutionTraceId({ moduleId: 'domain.create-loop', executionId: 'run-1' })
+  const repeated = deriveExecutionTraceId({ moduleId: 'domain.create-loop', executionId: 'run-1' })
+  const other = deriveExecutionTraceId({ moduleId: 'domain.create-loop', executionId: 'run-2' })
+  assert.equal(first, repeated)
+  assert.notEqual(first, other)
+  assert.equal(first.includes('create-loop'), false)
+  assert.match(first, /^trace_[a-f0-9]{32}$/)
+})
+
+test('execution events complete the same durable trace summary', async () => {
+  const directory = await createTemporaryDirectory()
+  const store = new LocalTraceStore({ storageDirectory: directory })
+  const traceId = deriveExecutionTraceId({ moduleId: 'domain.create-loop', executionId: 'run-1' })
+  await store.append({
+    traceId,
+    source: 'domain-execution:domain.create-loop',
+    kind: 'execution_event',
+    payload: {
+      schemaVersion: 'sciforge.execution-event.v1',
+      phase: 'run_completed',
+      producer: { moduleId: 'domain.create-loop', moduleVersion: '1.0.0' },
+      executionId: 'run-1',
+      runId: 'run-1',
+      event: { artifacts: [] }
+    }
+  })
+  const summaries = await store.summaries({ traceIds: [traceId] })
+  assert.equal(summaries[0]?.status, 'completed')
+  assert.equal(summaries[0]?.preview, 'domain.create-loop · run-1')
+})
+
+test('execution event replay is idempotent by stable eventId and rejects collisions', async () => {
+  const directory = await createTemporaryDirectory()
+  const store = new LocalTraceStore({ storageDirectory: directory })
+  const input = {
+    eventId: 'execution-event-stable',
+    traceId: 'trace-execution-stable',
+    source: 'domain-execution:domain.create-loop',
+    kind: 'execution_event' as const,
+    timestamp: '2026-08-05T00:00:00.000Z',
+    payload: {
+      schemaVersion: 'sciforge.execution-event.v1' as const,
+      phase: 'run_completed',
+      producer: { moduleId: 'domain.create-loop', moduleVersion: '1.0.0' },
+      executionId: 'execution-stable',
+      runId: 'run-stable',
+      event: { artifacts: [] }
+    }
+  }
+
+  const first = await store.append(input)
+  const replayed = await store.append(input)
+  assert.equal(replayed.recordedAt, first.recordedAt)
+  assert.equal((await store.read({ traceIds: [input.traceId] })).total, 1)
+  await assert.rejects(
+    store.append({
+      ...input,
+      payload: { ...input.payload, phase: 'run_failed' }
+    }),
+    /eventId collision/u
+  )
+})
+
+test('exact event id reads are bounded and retain only matching trace records', async () => {
+  const directory = await createTemporaryDirectory()
+  const store = new LocalTraceStore({ storageDirectory: directory })
+  const input = (eventId: string, sequence: number) => ({
+    eventId,
+    traceId: `trace-lookup-${sequence}`,
+    source: 'full-trace-test',
+    kind: 'lifecycle' as const,
+    timestamp: `2026-08-05T00:00:0${sequence}.000Z`,
+    payload: { phase: `phase-${sequence}` }
+  })
+  await store.appendMany([
+    input('lookup-first', 1),
+    input('lookup-second', 2),
+    input('lookup-third', 3)
+  ])
+
+  const exact = await store.read({ eventIds: ['lookup-second'] })
+  assert.equal(exact.total, 1)
+  assert.deepEqual(exact.events.map((event) => event.eventId), ['lookup-second'])
+  await assert.rejects(
+    store.read({ eventIds: ['lookup-second', 'lookup-second'] }),
+    /unique bounded identifiers/u
+  )
+  await assert.rejects(
+    store.read({ eventIds: Array.from({ length: 10_001 }, (_, index) => `event-${index}`) }),
+    /at most 10000/u
+  )
+
+  // A forged segment cannot turn one exact-id migration into unbounded memory.
+  await store.appendMany([
+    input('lookup-duplicated', 4),
+    input('lookup-duplicated', 5),
+    input('lookup-duplicated', 6)
+  ])
+  await assert.rejects(
+    store.read({ eventIds: ['lookup-duplicated'] }),
+    /too many durable records/u
+  )
 })
 
 test('correlation headers carry one contract across process boundaries', () => {

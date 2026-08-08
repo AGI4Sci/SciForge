@@ -16,15 +16,17 @@ from typing import Any, Iterable, Optional
 
 
 SCHEMA_VERSION = "evidence-domain-events.v1"
-EVENT_TYPES = frozenset({
+WRITABLE_EVENT_TYPES = frozenset({
     "EvidenceUpdateQueued",
     "EvidenceSnapshotCommitted",
-    "ArtifactMoved",
-    "ArtifactContentChanged",
     "AuditCompleted",
     "FindingOpened",
     "HumanReviewDecisionRecorded",
 })
+# Historical Evidence outboxes may contain the two lifecycle mirrors emitted
+# before Artifact Versions became an independent owner.  They remain readable,
+# but no new Evidence writer can append them.
+EVENT_TYPES = WRITABLE_EVENT_TYPES | frozenset({"ArtifactMoved", "ArtifactContentChanged"})
 
 
 def utc_now_iso() -> str:
@@ -91,7 +93,7 @@ class EventStore:
         causation_id: Optional[str] = None,
     ) -> dict[str, Any]:
         event_type = str(event_type)
-        if event_type not in EVENT_TYPES:
+        if event_type not in WRITABLE_EVENT_TYPES:
             raise ValueError(f"unsupported Evidence event type: {event_type}")
         aggregate_id = str(aggregate_id or "").strip()
         idempotency_key = str(idempotency_key or "").strip()
@@ -114,44 +116,6 @@ class EventStore:
             occurred_at=occurred_at,
             correlation_id=correlation_id,
             causation_id=causation_id,
-        )
-
-    def append_lifecycle(
-        self,
-        event: dict[str, Any],
-        *,
-        workspace_root: str,
-        project_root: str,
-        correlation_id: Optional[str] = None,
-    ) -> dict[str, Any]:
-        """Mirror an already-persisted Artifact Registry lifecycle event.
-
-        The Registry event ID is retained so acknowledgement can happen only
-        after the same durable semantic event exists in this stream.
-        """
-        event_type = str(event.get("type") or "")
-        if event_type not in {"ArtifactMoved", "ArtifactContentChanged"}:
-            raise ValueError(f"unsupported Artifact lifecycle event: {event_type}")
-        event_id = str(event.get("eventId") or "").strip()
-        artifact_id = str(event.get("artifactId") or "").strip()
-        if not event_id or not artifact_id:
-            raise ValueError("Artifact lifecycle eventId and artifactId are required")
-        return self._append_event(
-            event_id=event_id,
-            event_type=event_type,
-            aggregate_type="Artifact",
-            aggregate_id=artifact_id,
-            idempotency_key=event_id,
-            payload={
-                **event,
-                "scope": {
-                    "workspaceRoot": workspace_root,
-                    "projectRoot": project_root,
-                },
-            },
-            occurred_at=event.get("occurredAt"),
-            correlation_id=correlation_id,
-            causation_id=None,
         )
 
     def _append_event(

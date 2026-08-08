@@ -36,6 +36,16 @@
     --reasoning-soft: #f4efff;
     --claim: #b77912;
     --claim-soft: #fff8e8;
+    --repro-input: #0f766e;
+    --repro-input-soft: #ecfdf5;
+    --repro-spec: #6d28d9;
+    --repro-spec-soft: #f5f3ff;
+    --activity: #0369a1;
+    --activity-soft: #f0f9ff;
+    --evidence: #15803d;
+    --evidence-soft: #f0fdf4;
+    --conclusion: #b91c1c;
+    --conclusion-soft: #fff1f2;
     --support: #16a34a;
     --contra: #dc2626;
     --warn: #d97706;
@@ -228,6 +238,10 @@
   .node-card.reasoning::before { background: var(--reasoning); }
   .node-card.claim { background: linear-gradient(180deg, #fff, var(--claim-soft)); }
   .node-card.claim::before { background: var(--claim); }
+  .node-card[data-node-type] {
+    background: linear-gradient(180deg, #fff, var(--node-soft, var(--accent-soft)));
+  }
+  .node-card[data-node-type]::before { background: var(--node-accent, var(--accent)); }
   .node-card.staging {
     border-color: #60a5fa;
     border-style: dashed;
@@ -340,6 +354,12 @@
   .edge-path.contradicts { stroke: var(--contra); stroke-dasharray: 6 4; }
   .edge-path.refines { stroke: var(--accent); stroke-dasharray: 2 4; }
   .edge-path.prerequisite { stroke: var(--warn); stroke-dasharray: 7 4; }
+  .edge-path.used, .edge-path.generated_by { stroke: #0284c7; }
+  .edge-path.part_of { stroke: #7c3aed; stroke-dasharray: 3 3; }
+  .edge-path.authorized_by { stroke: #c2410c; stroke-dasharray: 7 3; }
+  .edge-path.rerun_of { stroke: #475569; stroke-dasharray: 9 4; }
+  .edge-path.replicates { stroke: var(--support); stroke-width: 2.6; }
+  .edge-path.fails_to_replicate { stroke: var(--contra); stroke-width: 2.6; stroke-dasharray: 6 4; }
   .edge-path.staging { stroke: #3b82f6; stroke-dasharray: 5 5; opacity: .7; }
   .edge-label.staging { opacity: .72; }
   .edge-path.faded { opacity: .12; }
@@ -455,6 +475,27 @@
     font-size: 11px;
   }
   .preview-status.error { border-color: #fecaca; background: #fef2f2; color: #991b1b; }
+  .lineage-box {
+    margin-top: 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #f8fafc;
+    padding: 8px;
+    color: #334155;
+    font-size: 11px;
+  }
+  .lineage-box.blocked { border-color: #fca5a5; background: #fff5f5; color: #991b1b; }
+  .lineage-components { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .lineage-breakpoints { margin: 6px 0 0; padding-left: 18px; }
+  .metadata-json {
+    margin-top: 8px;
+    max-height: 210px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #475569;
+    font: 10.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
   .mini-list {
     display: flex;
     flex-direction: column;
@@ -520,6 +561,7 @@
     color: var(--muted);
     font-size: 11px;
   }
+  .legend-group-title { width: 100%; color: #334155; font-weight: 760; }
   .sw {
     display: inline-block;
     width: 13px;
@@ -555,7 +597,9 @@
       <div class="graph-strip" id="graphSummary">
         <span class="strip-stat"><b id="sumNodes">0</b> nodes</span>
         <span class="strip-stat"><b id="sumEdges">0</b> edges</span>
-        <span class="strip-stat"><b id="sumClaims">0</b> claims</span>
+        <span class="strip-stat"><b id="sumEvidence">0</b> evidence</span>
+        <span class="strip-stat"><b id="sumActivities">0</b> activities</span>
+        <span class="strip-stat"><b id="sumConclusions">0</b> conclusions</span>
         <span class="strip-hint" id="sumHint">Select a node to inspect its evidence path.</span>
       </div>
       <div id="stageScroll">
@@ -610,11 +654,7 @@
       </div>
       <details class="panel-section legend">
         <summary>Legend</summary>
-        <div class="legend-row">
-          <span><i class="sw" style="background:var(--source-soft);border-color:var(--source)"></i>Source</span>
-          <span><i class="sw" style="background:var(--reasoning-soft);border-color:var(--reasoning)"></i>Reasoning</span>
-          <span><i class="sw" style="background:var(--claim-soft);border-color:var(--claim)"></i>Claim</span>
-        </div>
+        <div id="typeLegend"></div>
         <div class="legend-row">
           <span><i class="sw" style="background:#fff7ed;border:2px solid #f8c77e"></i>H1 optional</span>
           <span><i class="sw" style="background:#fff7ed;border:3px solid #e89127"></i>H2 recommended</span>
@@ -625,6 +665,9 @@
           <span><i class="sw" style="width:22px;height:0;border:0;border-top:3px solid var(--support);border-radius:0"></i>Support</span>
           <span><i class="sw" style="width:22px;height:0;border:0;border-top:3px dashed var(--contra);border-radius:0"></i>Contradicts</span>
           <span><i class="sw" style="width:22px;height:0;border:0;border-top:3px dashed var(--warn);border-radius:0"></i>Prerequisite</span>
+          <span>used / generated_by</span>
+          <span>part_of / authorized_by</span>
+          <span>rerun_of / replicates / fails_to_replicate</span>
         </div>
       </details>
     </aside>
@@ -651,11 +694,24 @@ function readAuthToken() {
 
 const AUTH_TOKEN = readAuthToken();
 const TYPE_META = {
-  source_assertion: { label: 'SOURCE ASSERTION', icon: 'DOC', floor: 0 },
-  reasoning: { label: 'REASONING', icon: 'THINK', floor: 1 },
-  assumption: { label: 'ASSUMPTION', icon: 'ASSUME', floor: 1 },
-  claim: { label: 'CLAIM', icon: 'CLAIM', floor: 2 },
-  finding: { label: 'FINDING', icon: 'FIND', floor: 2 }
+  source_assertion: { label: 'SOURCE ASSERTION', icon: 'DOC', floor: 0, group: 'Evidence inputs', color: '#0d9488', soft: '#ecfdf5' },
+  artifact: { label: 'ARTIFACT', icon: 'FILE', floor: 0, group: 'Evidence inputs', color: '#0f766e', soft: '#ecfdf5' },
+  dataset_version: { label: 'DATASET VERSION', icon: 'DATA', floor: 0, group: 'Evidence inputs', color: '#0f766e', soft: '#ecfdf5' },
+  observation: { label: 'OBSERVATION', icon: 'OBS', floor: 0, group: 'Evidence inputs', color: '#0f766e', soft: '#ecfdf5' },
+  software_version: { label: 'SOFTWARE VERSION', icon: 'CODE', floor: 1, group: 'Reproducibility spec', color: '#6d28d9', soft: '#f5f3ff' },
+  environment: { label: 'ENVIRONMENT', icon: 'ENV', floor: 1, group: 'Reproducibility spec', color: '#6d28d9', soft: '#f5f3ff' },
+  parameter_set: { label: 'PARAMETER SET', icon: 'PARAM', floor: 1, group: 'Reproducibility spec', color: '#6d28d9', soft: '#f5f3ff' },
+  agent: { label: 'AGENT', icon: 'AGENT', floor: 1, group: 'Reproducibility spec', color: '#6d28d9', soft: '#f5f3ff' },
+  approval_decision: { label: 'APPROVAL DECISION', icon: 'APPROVE', floor: 1, group: 'Reproducibility spec', color: '#c2410c', soft: '#fff7ed' },
+  experiment_run: { label: 'EXPERIMENT RUN', icon: 'EXP', floor: 2, group: 'Execution activities', color: '#0369a1', soft: '#f0f9ff' },
+  analysis_run: { label: 'ANALYSIS RUN', icon: 'ANALYZE', floor: 2, group: 'Execution activities', color: '#0369a1', soft: '#f0f9ff' },
+  workflow_run: { label: 'WORKFLOW RUN', icon: 'FLOW', floor: 2, group: 'Execution activities', color: '#0369a1', soft: '#f0f9ff' },
+  tool_invocation: { label: 'TOOL INVOCATION', icon: 'TOOL', floor: 2, group: 'Execution activities', color: '#0369a1', soft: '#f0f9ff' },
+  reasoning: { label: 'REASONING', icon: 'THINK', floor: 3, group: 'Scientific evidence', color: '#7c3aed', soft: '#f4efff' },
+  assumption: { label: 'ASSUMPTION', icon: 'ASSUME', floor: 3, group: 'Scientific evidence', color: '#b77912', soft: '#fff8e8' },
+  finding: { label: 'FINDING', icon: 'FIND', floor: 3, group: 'Scientific evidence', color: '#15803d', soft: '#f0fdf4' },
+  claim: { label: 'CLAIM', icon: 'CLAIM', floor: 4, group: 'Conclusions', color: '#b77912', soft: '#fff8e8' },
+  conclusion: { label: 'CONCLUSION', icon: 'CONCLUDE', floor: 4, group: 'Conclusions', color: '#b91c1c', soft: '#fff1f2' }
 };
 const NODE_W = 232;
 const NODE_H = 78;
@@ -663,6 +719,19 @@ const COL_GAP = 94;
 const ROW_GAP = 28;
 const PAD_X = 34;
 const PAD_Y = 72;
+
+function renderTypeLegend() {
+  const groups = new Map();
+  Object.entries(TYPE_META).forEach(([type, meta]) => {
+    if (!groups.has(meta.group)) groups.set(meta.group, []);
+    groups.get(meta.group).push({ type, ...meta });
+  });
+  $('typeLegend').innerHTML = [...groups.entries()].map(([group, items]) => `
+    <div class="legend-row">
+      <span class="legend-group-title">${esc(group)}</span>
+      ${items.map((item) => `<span title="${escAttr(item.type)}"><i class="sw" style="background:${escAttr(item.soft)};border-color:${escAttr(item.color)}"></i>${esc(item.label)}</span>`).join('')}
+    </div>`).join('');
+}
 
 let currentThread = Q_THREAD || null;
 let lastGraph = null;
@@ -679,6 +748,7 @@ let blastState = null;
 let requestedNodeId = Q_NODE || null;
 let previewFeedback = null;
 const pendingPreviewRequests = new Map();
+const rerunSpecCache = new Map();
 
 function esc(value) {
   return String(value == null ? '' : value)
@@ -870,12 +940,16 @@ function renderReviewQueue(graph = lastGraph) {
 function graphCounts(graph) {
   const nodes = graph?.nodes || [];
   const edges = graph?.edges || [];
+  const activityTypes = new Set(['experiment_run', 'analysis_run', 'workflow_run', 'tool_invocation']);
+  const evidenceTypes = new Set(['source_assertion', 'artifact', 'dataset_version', 'observation', 'finding']);
   return {
     nodes: nodes.length,
     edges: edges.length,
     sources: nodes.filter((n) => n.type === 'source_assertion').length,
     reasoning: nodes.filter((n) => n.type === 'reasoning').length,
-    claims: nodes.filter((n) => n.type === 'claim').length
+    evidence: nodes.filter((n) => evidenceTypes.has(n.type)).length,
+    activities: nodes.filter((n) => activityTypes.has(n.type)).length,
+    conclusions: nodes.filter((n) => n.type === 'claim' || n.type === 'conclusion' || object(n.attributes).semanticRole === 'conclusion').length
   };
 }
 
@@ -883,8 +957,10 @@ function updateSummary(graph) {
   const counts = graphCounts(graph);
   $('sumNodes').textContent = counts.nodes;
   $('sumEdges').textContent = counts.edges;
-  $('sumClaims').textContent = counts.claims;
-  $('sumHint').textContent = `${counts.sources} sources · ${counts.reasoning} reasoning · ${counts.claims} claims`;
+  $('sumEvidence').textContent = counts.evidence;
+  $('sumActivities').textContent = counts.activities;
+  $('sumConclusions').textContent = counts.conclusions;
+  $('sumHint').textContent = `${counts.sources} sources · ${counts.reasoning} reasoning · ${counts.activities} activities`;
 }
 
 function buildGraphModel(graph) {
@@ -991,13 +1067,8 @@ function bary(id, edgeMap, index, incomingMode) {
 }
 
 function layerLabel(model, layer, index) {
-  const types = new Set(layer.map((id) => model.nodeById[id]?.type));
-  if (types.size === 1) {
-    const type = [...types][0];
-    if (type === 'source_assertion') return 'Evidence Sources';
-    if (type === 'reasoning') return `Reasoning ${index + 1}`;
-    if (type === 'claim') return 'Claims';
-  }
+  const groups = new Set(layer.map((id) => TYPE_META[model.nodeById[id]?.type]?.group).filter(Boolean));
+  if (groups.size === 1) return [...groups][0];
   return `Layer ${index + 1}`;
 }
 
@@ -1065,9 +1136,9 @@ function nodeHtml(node, pos) {
     ref ? compact(ref, 38) : ''
   ].filter(Boolean).join(' · ');
   return `
-    <div class="node-card ${escAttr(node.type)} ${escAttr(reviewClass(review))} ${node._dagLayer === 'staging' ? 'staging' : ''}" data-node-id="${escAttr(node.id)}" data-dag-layer="${escAttr(node._dagLayer || 'committed')}" data-human-review-level="${escAttr(review.level)}" data-human-review-status="${escAttr(review.status)}" role="button" tabindex="0"
+    <div class="node-card ${escAttr(node.type)} ${escAttr(reviewClass(review))} ${node._dagLayer === 'staging' ? 'staging' : ''}" data-node-id="${escAttr(node.id)}" data-node-type="${escAttr(node.type)}" data-dag-layer="${escAttr(node._dagLayer || 'committed')}" data-human-review-level="${escAttr(review.level)}" data-human-review-status="${escAttr(review.status)}" role="button" tabindex="0"
       aria-label="${escAttr(`${meta.label}: ${node.content || node.id}; human review ${REVIEW_LEVEL_LABEL[review.level]} ${REVIEW_STATUS_LABEL[review.status]}`)}"
-      style="left:${pos.x}px;top:${pos.y}px">
+      style="left:${pos.x}px;top:${pos.y}px;--node-accent:${escAttr(meta.color || '#2563eb')};--node-soft:${escAttr(meta.soft || '#e8f1ff')}">
       <div class="node-head">
         <span class="node-type"><span>${esc(meta.icon)}</span><span>${esc(meta.label)}</span></span>
         <span class="node-head-spacer"></span>
@@ -1314,11 +1385,122 @@ function requestEvidencePreview(node) {
   window.parent.postMessage(message, '*');
 }
 
+function isConclusionLike(node) {
+  return ['claim', 'conclusion', 'finding'].includes(node?.type) ||
+    object(node?.attributes).semanticRole === 'conclusion';
+}
+
+function nodeMetadataHtml(node) {
+  const metadata = {
+    ...(node.external_id ? { externalId: node.external_id } : {}),
+    ...(node.attributes && Object.keys(object(node.attributes)).length ? { attributes: node.attributes } : {})
+  };
+  if (!Object.keys(metadata).length) return '';
+  return `<details><summary>Structured metadata</summary><pre class="metadata-json">${esc(JSON.stringify(metadata, null, 2))}</pre></details>`;
+}
+
+function conclusionQuery(node) {
+  if (!currentThread || !currentSnapshot?.digest || !node?.id) return null;
+  const base = `/threads/${encodeURIComponent(currentThread)}`;
+  const query = `snapshotDigest=${encodeURIComponent(currentSnapshot.digest)}&conclusionId=${encodeURIComponent(node.id)}`;
+  return { base, query, cacheKey: `${currentSnapshot.digest}\0${node.id}` };
+}
+
+function lineageCoverageHtml(lineage) {
+  const coverage = object(lineage?.coverage);
+  const structuralComplete = coverage.structuralClosureComplete ?? coverage.complete === true;
+  const sufficiency = object(coverage.scientificSufficiency);
+  const sufficiencyLabel = sufficiency.status === 'assessed'
+    ? (sufficiency.sufficient === true ? 'sufficient' : sufficiency.sufficient === false ? 'insufficient' : 'undetermined')
+    : 'not assessed by structural closure';
+  const components = object(coverage.components);
+  const badges = Object.entries(components)
+    .filter(([, values]) => Array.isArray(values) && values.length)
+    .map(([name, values]) => `<span class="badge info">${esc(name)} ${values.length}</span>`)
+    .join('');
+  const breakpoints = Array.isArray(coverage.breakpoints) ? coverage.breakpoints : [];
+  return `<div class="lineage-box ${structuralComplete ? '' : 'blocked'}">
+    <b>Structural trace closure · ${structuralComplete ? 'closed' : 'open'}</b><br/>
+    Scientific sufficiency · ${esc(sufficiencyLabel)}<br/>
+    ${Number(coverage.groundedEvidenceCount || 0)} / ${Number(coverage.evidenceCount || 0)} evidence grounded
+    <div class="lineage-components">${badges || '<span class="badge warn">no components</span>'}</div>
+    ${breakpoints.length ? `<ul class="lineage-breakpoints">${breakpoints.map((point) => `<li><b>${esc(point.component || 'lineage')}</b>: ${esc(point.reason || 'incomplete')} ${Array.isArray(point.nodeIds) && point.nodeIds.length ? `(${point.nodeIds.length} node(s))` : ''}</li>`).join('')}</ul>` : ''}
+  </div>`;
+}
+
+function rerunStatusHtml(spec) {
+  const breakpoints = Array.isArray(spec?.breakpoints) ? spec.breakpoints : [];
+  const blocked = spec?.executionReady !== true;
+  return `<div class="lineage-box ${blocked ? 'blocked' : ''}">
+    <b>Rerun spec · executionReady=${spec?.executionReady === true ? 'true' : 'false'}</b><br/>
+    ${esc(spec?.reproducibility || 'unknown')} · ${breakpoints.length} breakpoint(s)
+    ${breakpoints.length ? `<ul class="lineage-breakpoints">${breakpoints.map((point) => `<li>${point.blocking ? '<b>BLOCKING</b> ' : ''}${esc(point.component || 'lineage')}: ${esc(point.message || point.code || '')}</li>`).join('')}</ul>` : ''}
+  </div>`;
+}
+
+async function loadConclusionDetails(node) {
+  const query = conclusionQuery(node);
+  const lineageContainer = $('detailLineage');
+  const rerunContainer = $('detailRerunStatus');
+  if (!query || !lineageContainer || !rerunContainer) {
+    if (lineageContainer) lineageContainer.innerHTML = '<div class="lineage-box blocked">No committed Snapshot is available.</div>';
+    return;
+  }
+  const [lineageResponse, rerunResponse] = await Promise.all([
+    api(`${query.base}/conclusion-lineage?${query.query}`).catch((error) => ({ ok: false, error: { message: error.message } })),
+    api(`${query.base}/rerun-spec?${query.query}`).catch((error) => ({ ok: false, error: { message: error.message } }))
+  ]);
+  if (selectedNodeId !== node.id || !$('detailLineage')) return;
+  lineageContainer.innerHTML = lineageResponse?.ok
+    ? lineageCoverageHtml(lineageResponse.data)
+    : `<div class="lineage-box blocked">Lineage unavailable: ${esc(lineageResponse?.error?.message || 'unknown error')}</div>`;
+  if (rerunResponse?.ok) {
+    rerunSpecCache.set(query.cacheKey, rerunResponse.data);
+    rerunContainer.innerHTML = rerunStatusHtml(rerunResponse.data);
+  } else {
+    rerunContainer.innerHTML = `<div class="lineage-box blocked">Rerun spec unavailable: ${esc(rerunResponse?.error?.message || 'unknown error')}</div>`;
+  }
+}
+
+async function downloadRerunSpec(node) {
+  const query = conclusionQuery(node);
+  if (!query) {
+    setStatus('rerun export unavailable: no committed snapshot');
+    return;
+  }
+  let spec = rerunSpecCache.get(query.cacheKey);
+  if (!spec) {
+    const response = await api(`${query.base}/rerun-spec?${query.query}`).catch((error) => ({ ok: false, error: { message: error.message } }));
+    if (!response?.ok) {
+      setStatus(`rerun export failed: ${response?.error?.message || 'unknown error'}`);
+      return;
+    }
+    spec = response.data;
+    rerunSpecCache.set(query.cacheKey, spec);
+  }
+  const blob = new Blob([JSON.stringify(spec, null, 2) + '\n'], { type: 'application/json' });
+  const href = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = href;
+  const stem = String(spec.specId || spec.specDigest || 'sciforge-rerun')
+    .replace(/[^a-z0-9._-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 120) || 'sciforge-rerun';
+  anchor.download = `${stem}.sciforge-rerun.json`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 0);
+  setStatus(spec.executionReady === true
+    ? 'rerun spec downloaded · executionReady=true'
+    : `rerun spec downloaded · executionReady=false · ${(spec.breakpoints || []).filter((point) => point.blocking).length} blocking breakpoint(s)`);
+}
+
 function showNodeDetail(id) {
   const node = stageModel.nodeById[id];
   const meta = TYPE_META[node.type] || { label: node.type, icon: 'NODE' };
   const support = supportStrength(id);
-  const refRows = node.type === 'source_assertion' ? refHtml(node) : '';
+  const refRows = refHtml(node);
   const preview = sourcePreviewModel(node);
   const incoming = (stageModel.incoming[id] || []).slice(0, 6);
   const outgoing = (stageModel.outgoing[id] || []).slice(0, 6);
@@ -1340,10 +1522,13 @@ function showNodeDetail(id) {
     ${refRows}
     ${node.type === 'source_assertion' ? `<div class="row"><span class="lab">preview</span><span class="val">${esc(preview.message)}</span></div>` : ''}
     <div class="content">${esc(node.content || '')}</div>
+    ${nodeMetadataHtml(node)}
+    ${isConclusionLike(node) ? '<div id="detailLineage"><div class="lineage-box">Loading conclusion lineage…</div></div><div id="detailRerunStatus"><div class="lineage-box">Loading rerun readiness…</div></div>' : ''}
     <div id="detailPreviewFeedback" aria-live="polite"></div>
     <div class="detail-actions">
       <button id="detailClear">Clear</button>
       ${preview.kind === 'local' ? '<button id="detailPreview" class="primary">查看原始证据</button>' : ''}
+      ${isConclusionLike(node) ? '<button id="detailRerunDownload" class="primary">Download rerun spec</button>' : ''}
       <button id="detailWhatIf" class="primary">What if removed?</button>
     </div>
     ${connectedHtml('Incoming', incoming, true)}
@@ -1351,12 +1536,14 @@ function showNodeDetail(id) {
   `;
   $('detailClear').onclick = clearSelection;
   if ($('detailPreview')) $('detailPreview').onclick = () => requestEvidencePreview(node);
+  if ($('detailRerunDownload')) $('detailRerunDownload').onclick = () => downloadRerunSpec(node);
   $('detailWhatIf').onclick = () => whatIf(id);
   $('nodeInspector').querySelectorAll('.mini-item[data-node-id]').forEach((item) => {
     item.onclick = () => selectNode(item.dataset.nodeId);
   });
   bindHumanReviewActions($('nodeInspector'));
   renderPreviewFeedback();
+  if (isConclusionLike(node)) void loadConclusionDetails(node);
 }
 
 function humanReviewDetailHtml(review) {
@@ -1396,6 +1583,7 @@ function bindHumanReviewActions(container) {
 
 function refHtml(node) {
   const rows = [];
+  if (node.external_id) rows.push(`<div class="row"><span class="lab">external</span><span class="val">${esc(node.external_id)}</span></div>`);
   if (node.source_type) rows.push(`<div class="row"><span class="lab">source</span><span class="val">${esc(node.source_type)}${node.credibility ? ` · ${esc(node.credibility)} credibility` : ''}</span></div>`);
   if (node.artifact_id) rows.push(`<div class="row"><span class="lab">artifact</span><span class="val">${esc(node.artifact_id)}</span></div>`);
   if (node.artifact_version_id) rows.push(`<div class="row"><span class="lab">version</span><span class="val">${esc(node.artifact_version_id)}</span></div>`);
@@ -1742,6 +1930,7 @@ $('stageScroll').addEventListener('click', (event) => {
 
 // Human-review heat overlay is always on; change watching is always on.
 document.body.dataset.reviewHeat = '1';
+renderTypeLegend();
 // A URL-scoped thread can paint immediately; the thread picker (and its
 // /threads listing) only matters in the standalone, non-locked view.
 const THREAD_LOCKED = document.documentElement.dataset.threadLocked === '1';

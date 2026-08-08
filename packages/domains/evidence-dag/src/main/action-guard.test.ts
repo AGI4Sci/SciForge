@@ -147,6 +147,9 @@ function lifecycleContext(userDataDir: string): DomainMainRuntimeLifecycleContex
         model: 'sciforge-router'
       })
     },
+    executionEvents: {
+      publish: async () => { throw new Error('Unexpected execution event.') }
+    },
     workflowExecutionReceipts: [],
     enablement: {
       isEnabled: async () => true,

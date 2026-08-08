@@ -156,8 +156,8 @@
     "ppt-master:start": "npm --workspace @sciforge/ppt-master run start",
     "ppt-master:test": "npm --workspace @sciforge/ppt-master run test",
     "ppt-master:typecheck": "npm --workspace @sciforge/ppt-master run typecheck",
-    "smoke:scientific-plotting-style": "node ./scripts/scientific-plotting-style-regression.mjs",
-    "smoke:scientific-plotting-alphafold3": "node ./scripts/scientific-plotting-alphafold3-eval.mjs"
+    "smoke:scientific-plotting-style": "node --import tsx ./scripts/scientific-plotting-style-regression.mjs",
+    "smoke:scientific-plotting-alphafold3": "node --import tsx ./scripts/scientific-plotting-alphafold3-eval.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.185",

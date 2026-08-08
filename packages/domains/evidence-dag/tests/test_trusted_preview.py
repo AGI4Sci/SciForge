@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import tempfile
 import threading
@@ -56,7 +57,40 @@ class TestTrustedEvidencePreview(unittest.TestCase):
             target_watermark="item-1",
             reason="turn_committed",
             priority="P2",
-            trace=[{"id": "item-1", "type": "message", "content": "result"}],
+            trace=[{
+                "id": "item-1",
+                "type": "tool_result",
+                "output": {
+                    "content": "measured effect\n",
+                    "path": "evidence/source.txt",
+                    "startLine": 1,
+                    "endLine": 1,
+                },
+                "evidenceArtifactVersions": {
+                    "status": "ready",
+                    "versions": [{
+                        "ref": {
+                            "artifactId": "artifact:preview-source",
+                            "versionId": "artifact-version:preview-source-1",
+                            "contentDigest": hashlib.sha256(b"measured effect\n").hexdigest(),
+                            "byteLength": len(b"measured effect\n"),
+                            "mediaType": "text/plain",
+                            "availability": "available",
+                            "retention": "reference",
+                            "accessPolicy": {
+                                "visibility": "workspace",
+                                "principals": [],
+                                "allowExport": False,
+                            },
+                        },
+                        "kind": "dataset",
+                        "locator": "evidence/source.txt",
+                        "observedAt": "2026-08-06T08:00:00Z",
+                    }],
+                    "lifecycleEvents": [],
+                    "lastSequence": 0,
+                },
+            }],
             workspace_root=workspace,
             project_root=workspace,
                         access_policy=access_policy,
@@ -149,10 +183,15 @@ class TestTrustedEvidencePreview(unittest.TestCase):
             self.assertTrue(resolved["resolved"])
             self.assertEqual(resolved["snapshotDigest"], first["digest"])
 
-    def test_returns_committed_scope_acl_for_main_process_enforcement(self):
+    def test_restricted_scope_fails_closed_before_preview_serialization(self):
         with tempfile.TemporaryDirectory() as workspace:
             engine, snapshot, source = self._committed(
-                workspace, access_policy={"redacted": True, "read": False},
+                workspace,
+                access_policy={
+                    "redacted": True,
+                    "read": False,
+                    "reason": "TOP-SECRET preview policy canary",
+                },
             )
             resolved = engine.trusted_evidence_preview(
                 "codex:thread-1",
@@ -161,8 +200,13 @@ class TestTrustedEvidencePreview(unittest.TestCase):
                 artifact_version_id=source.artifact_version_id or "",
                 source_anchor_id=source.source_anchor_id or "",
             )
-            self.assertTrue(resolved["resolved"])
-            self.assertEqual(resolved["accessPolicy"], {"redacted": True, "read": False})
+            self.assertEqual(resolved, {
+                "resolved": False,
+                "code": "access_restricted",
+                "message": "Evidence preview is unavailable under the current access policy.",
+            })
+            self.assertNotIn(workspace, json.dumps(resolved))
+            self.assertNotIn("TOP-SECRET", json.dumps(resolved))
 
     def test_authenticated_http_endpoint_returns_the_verified_tuple(self):
         with tempfile.TemporaryDirectory() as workspace:

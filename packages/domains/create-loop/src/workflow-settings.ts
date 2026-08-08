@@ -24,6 +24,7 @@ import {
   type WorkflowModuleFieldType,
   type WorkflowModuleFieldV1,
   type WorkflowNodeKind,
+  type WorkflowNodeAttemptV2,
   type WorkflowNodeRunResultV1,
   type WorkflowNodePresetV1,
   type WorkflowNodeRunStatus,
@@ -32,6 +33,8 @@ import {
   type WorkflowResearchIntent,
   type WorkflowResearchSource,
   type WorkflowRunV1,
+  type WorkflowRunManifestV2,
+  type WorkflowArtifactReferenceV2,
   type WorkflowScheduleV1,
   type WorkflowSwitchRuleV1,
   type WorkflowWebhookMethod,
@@ -40,6 +43,7 @@ import {
   type WorkflowTriggerScheduleKind,
   type WorkflowV1
 } from './contract.js'
+import { workflowFingerprint } from './rerun.js'
 function normalizeBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback
 }
@@ -716,15 +720,24 @@ function normalizeNodeRunStatus(value: unknown): WorkflowNodeRunStatus {
 
 function normalizeNodeResult(value: unknown): WorkflowNodeRunResultV1 {
   const r = record(value)
+  const inputJson = r.inputJson === undefined ? '' : asText(r.inputJson)
+  const outputJson = asText(r.outputJson)
   return {
     nodeId: asTrimmed(r.nodeId),
     status: normalizeNodeRunStatus(r.status),
     startedAt: asTrimmed(r.startedAt),
     finishedAt: asTrimmed(r.finishedAt),
     message: asText(r.message),
-    outputJson: asText(r.outputJson),
+    outputJson,
     threadId: asTrimmed(r.threadId),
     error: asText(r.error),
+    componentFingerprint: fingerprint(r.componentFingerprint) ?? workflowFingerprint({
+      legacyNodeId: asTrimmed(r.nodeId)
+    }),
+    inputFingerprint: fingerprint(r.inputFingerprint) ?? workflowFingerprint(parseJsonOrText(inputJson)),
+    outputFingerprint: fingerprint(r.outputFingerprint) ?? workflowFingerprint(parseJsonOrText(outputJson)),
+    attempts: Array.isArray(r.attempts) ? r.attempts.filter(isNodeAttempt) : [],
+    artifactRefs: Array.isArray(r.artifactRefs) ? r.artifactRefs.filter(isArtifactReference) : [],
     ...(r.inputJson !== undefined ? { inputJson: asText(r.inputJson) } : {}),
     ...(r.retries !== undefined ? { retries: normalizePositiveInteger(r.retries, 0, 0, 100) } : {})
   }
@@ -740,7 +753,59 @@ function normalizeRun(value: unknown, index: number): WorkflowRunV1 {
     finishedAt: asTrimmed(r.finishedAt),
     message: asText(r.message),
     nodeResults: Array.isArray(r.nodeResults) ? r.nodeResults.map(normalizeNodeResult) : [],
+    ...(isRunManifest(r.manifest) ? { manifest: structuredClone(r.manifest) } : {}),
     ...(asTrimmed(r.reportPath) ? { reportPath: asTrimmed(r.reportPath) } : {})
+  }
+}
+
+function fingerprint(value: unknown): `sha256:${string}` | undefined {
+  return typeof value === 'string' && /^sha256:[0-9a-f]{64}$/u.test(value)
+    ? value as `sha256:${string}`
+    : undefined
+}
+
+function isArtifactReference(value: unknown): value is WorkflowArtifactReferenceV2 {
+  const r = record(value)
+  return typeof r.ref === 'string' &&
+    (r.kind === 'artifact' || r.kind === 'manifest' || r.kind === 'file' || r.kind === 'uri') &&
+    (r.digest === undefined || fingerprint(r.digest) !== undefined) &&
+    (r.mediaType === undefined || typeof r.mediaType === 'string')
+}
+
+function isNodeAttempt(value: unknown): value is WorkflowNodeAttemptV2 {
+  const r = record(value)
+  return Number.isInteger(r.attempt) && typeof r.startedAt === 'string' &&
+    typeof r.finishedAt === 'string' && fingerprint(r.activityFingerprint) !== undefined &&
+    fingerprint(r.inputFingerprint) !== undefined && fingerprint(r.receiptFingerprint) !== undefined &&
+    typeof r.receipt === 'object' && r.receipt !== null && Array.isArray(r.artifactRefs) &&
+    r.artifactRefs.every(isArtifactReference)
+}
+
+function isRunManifest(value: unknown): value is WorkflowRunManifestV2 {
+  const r = record(value)
+  const comparator = record(r.comparator)
+  return r.schema === 'sciforge.create-loop.run.v2' && isWorkflowSnapshot(r.workflow) &&
+    typeof r.context === 'object' && r.context !== null &&
+    (comparator.kind === 'exact-digest' || comparator.kind === 'json-structural' ||
+      comparator.kind === 'numeric' || comparator.kind === 'table') &&
+    fingerprint(r.workflowFingerprint) !== undefined && fingerprint(r.inputFingerprint) !== undefined &&
+    fingerprint(r.specFingerprint) !== undefined && fingerprint(r.contextFingerprint) !== undefined &&
+    fingerprint(r.outputFingerprint) !== undefined && fingerprint(r.approvalFingerprint) !== undefined &&
+    typeof r.outputJson === 'string' && Array.isArray(r.artifactRefs) &&
+    r.artifactRefs.every(isArtifactReference) && Array.isArray(r.approvals)
+}
+
+function isWorkflowSnapshot(value: unknown): boolean {
+  const r = record(value)
+  return typeof r.id === 'string' && typeof r.name === 'string' &&
+    Array.isArray(r.env) && Array.isArray(r.nodes) && Array.isArray(r.connections)
+}
+
+function parseJsonOrText(value: string): unknown {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return value
   }
 }
 
