@@ -243,10 +243,6 @@ function createApi(): SciForgeApi {
       invoke('mcp:scientific-skills-status', { workspaceRoot }),
     installScientificSkills: (request) =>
       invoke('scientific-skills:install', request),
-    extractVisualStyleProfile: (request) =>
-      invoke('visual-style:extract-profile', request),
-    saveVisualStyleProfile: (request) =>
-      invoke('visual-style:save-profile', request),
     listSkills: (workspaceRoot) => invoke('skill:list', { workspaceRoot }),
     saveSkillFile: (rootPath, skillName, content) =>
       invoke('skill:save-file', { rootPath, skillName, content }),

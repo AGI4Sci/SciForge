@@ -235,6 +235,7 @@ function lifecycleContext(
         throw new Error('Unexpected execution event publication.')
       }
     },
+    workflowExecutionReceipts: [],
     enablement: {
       isEnabled: async () => true,
       subscribe: () => () => undefined

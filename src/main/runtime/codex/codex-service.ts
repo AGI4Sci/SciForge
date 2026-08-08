@@ -85,6 +85,7 @@ import {
   type CodexPlanGatewayLaunchConfig
 } from './codex-config'
 import {
+  filterAgentRuntimeToolSurface,
   nativeAgentToolExecutionMetadata,
   type AgentRuntimeToolSurface
 } from '../agent-runtime/agent-tool-surface'
@@ -284,6 +285,7 @@ export class CodexRuntimeService {
   private readonly usageStore: CodexUsageStore | null
   private readonly preToolUseGovernanceBridge: CodexPreToolUseGovernanceBridge | null
   private readonly activeSubagents = new Map<string, ActiveCodexSubagent>()
+  private readonly allowedToolsByThread = new Map<string, ReadonlySet<string>>()
   private usageBackfillPromise: Promise<void> | null = null
   private readonly activeTurns = new Map<string, string>()
   private readonly turnTimings = new Map<string, CodexTurnTiming>()
@@ -523,7 +525,7 @@ export class CodexRuntimeService {
           latencyMs: elapsedMs(startedAtMs)
         }, { persist: false })
       }
-      const dynamicTools = await this.codexDynamicTools(settings)
+      const dynamicTools = await this.codexDynamicTools(settings, payload.allowedTools)
       const response = await client.startThread({
         ...baseThreadParams(settings, workspace, {
           subagentsConfigured: this.isSubagentDelegationConfigured(settings),
@@ -562,6 +564,17 @@ export class CodexRuntimeService {
       }, {
         ...(payload.threadId ? { guiThreadId: payload.threadId } : {})
       })
+      if (payload.allowedTools !== undefined) {
+        const allowed = new Set(payload.allowedTools)
+        for (const id of [
+          payload.threadId,
+          thread.id,
+          storedThread?.guiThreadId,
+          storedThread?.codexThreadId
+        ]) {
+          if (id?.trim()) this.allowedToolsByThread.set(id.trim(), allowed)
+        }
+      }
       await this.emitRuntimeStatus({
         threadId: storedThread?.guiThreadId ?? thread.id,
         phase: 'thread_start_done',
@@ -816,6 +829,9 @@ export class CodexRuntimeService {
       let response: unknown
       preparedGovernance = await this.prepareCodexTurnGovernance({
         sessionId: codexThreadId,
+        allowedTools: this.allowedToolsByThread.has(payload.threadId)
+          ? [...this.allowedToolsByThread.get(payload.threadId)!]
+          : undefined,
         ownedVisualToolsAvailable: payload.ownedVisualToolsAvailable === true,
         nativeVisualProofChainPending:
           payload.nativeVisualProofChainPending === true
@@ -846,6 +862,9 @@ export class CodexRuntimeService {
         codexThreadId = replacement.codexThreadId
         preparedGovernance = await this.prepareCodexTurnGovernance({
           sessionId: codexThreadId,
+          allowedTools: this.allowedToolsByThread.has(payload.threadId)
+            ? [...this.allowedToolsByThread.get(payload.threadId)!]
+            : undefined,
           ownedVisualToolsAvailable: payload.ownedVisualToolsAvailable === true,
           nativeVisualProofChainPending:
             payload.nativeVisualProofChainPending === true
@@ -928,6 +947,7 @@ export class CodexRuntimeService {
 
   private async prepareCodexTurnGovernance(input: {
     sessionId: string
+    allowedTools?: readonly string[]
     ownedVisualToolsAvailable?: boolean
     nativeVisualProofChainPending?: boolean
     parent?: CodexPreparedTurnGovernance['parent']
@@ -935,7 +955,7 @@ export class CodexRuntimeService {
     const sessionId = input.sessionId.trim()
     if (!sessionId) throw new Error('Codex turn governance requires a session id.')
     if (!this.preToolUseGovernanceBridge) {
-      if (input.nativeVisualProofChainPending || input.parent) {
+      if (input.nativeVisualProofChainPending || input.parent || input.allowedTools !== undefined) {
         throw new Error(
           'Codex native visual execution requires the SciForge pre-tool governance bridge.'
         )
@@ -960,7 +980,7 @@ export class CodexRuntimeService {
       ownedVisualToolsAvailable: input.ownedVisualToolsAvailable === true,
       nativeVisualProofChainPending:
         input.nativeVisualProofChainPending === true
-    })
+    }, input.allowedTools)
     return { sessionId }
   }
 
@@ -1573,9 +1593,13 @@ export class CodexRuntimeService {
   }
 
   private async codexDynamicTools(
-    _settings?: AppSettingsV1
+    _settings?: AppSettingsV1,
+    allowedTools?: readonly string[]
   ): Promise<RuntimeToolDefinition[]> {
-    const capabilityTools = this.options.capabilityAgentTools?.tools() ?? []
+    const source = this.options.capabilityAgentTools
+    const capabilityTools = source
+      ? filterAgentRuntimeToolSurface(source, allowedTools).tools()
+      : []
     return capabilityTools.map((tool) => ({
       type: tool.type,
       name: tool.name,
@@ -1630,6 +1654,9 @@ export class CodexRuntimeService {
 
   private canHandleCapabilityAgentTool(request: RuntimeToolCallRequest): boolean {
     if (request.namespace || !this.options.capabilityAgentTools) return false
+    const threadId = stringValue(request.threadId).trim()
+    const allowed = threadId ? this.allowedToolsByThread.get(threadId) : undefined
+    if (allowed && !allowed.has(request.tool)) return false
     return this.options.capabilityAgentTools.tools().some((tool) => tool.name === request.tool)
   }
 
@@ -2789,7 +2816,11 @@ export class CodexRuntimeService {
     storedThread: CodexStoredThread | null
     workspace: string
   }): Promise<CodexStoredThread> {
-    const dynamicTools = await this.codexDynamicTools(input.settings)
+    const allowedTools = this.allowedToolsByThread.get(input.guiThreadId)
+    const dynamicTools = await this.codexDynamicTools(
+      input.settings,
+      allowedTools ? [...allowedTools] : undefined
+    )
     const response = await input.client.startThread({
       ...baseThreadParams(input.settings, input.workspace, {
         subagentsConfigured: this.isSubagentDelegationConfigured(input.settings),
@@ -2807,6 +2838,10 @@ export class CodexRuntimeService {
       title: input.storedThread?.title || thread.title
     })
     if (!stored) throw new Error('Codex thread store is unavailable.')
+    if (allowedTools) {
+      this.allowedToolsByThread.set(stored.guiThreadId, allowedTools)
+      this.allowedToolsByThread.set(stored.codexThreadId, allowedTools)
+    }
     return stored
   }
 

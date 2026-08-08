@@ -89,8 +89,6 @@ export const DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS = [
   'extensions:rollback',
   'extensions:set-enabled',
   'extensions:uninstall',
-  'visual-style:extract-profile',
-  'visual-style:save-profile',
   'file:copy-workspace-entry',
   'file:create-workspace',
   'file:create-workspace-directory',

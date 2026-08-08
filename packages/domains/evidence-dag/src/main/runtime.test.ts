@@ -450,6 +450,7 @@ function runtimeContext(
     executionEvents: {
       publish: async () => { throw new Error('Unexpected execution event.') }
     },
+    workflowExecutionReceipts: [],
     enablement: {
       isEnabled: async () => true,
       subscribe: () => () => undefined

@@ -145,9 +145,9 @@ export type ScientificSkillPlanResult = {
     nextControlledTool: string
     styleReference?: {
       detected: boolean
-      extractionTool: 'visual-style:extract-profile'
+      extractionTool: 'visual-review.apply-style-reference'
       outputArtifact: 'VisualStyleProfile v1'
-      acceptedSourceTypes: Array<'image' | 'pdf'>
+      acceptedSourceTypes: Array<'image'>
       nextControlledTool: string
       guardrails: string[]
     }
@@ -861,7 +861,7 @@ function buildNextSciForgeActions(styleReferenceTask: boolean): string[] {
   ]
   if (!styleReferenceTask) return actions
   return [
-    'If the user provided a reference paper or figure image, call the controlled visual-style:extract-profile IPC/tool first to produce VisualStyleProfile v1.',
+    'If the user provided a reference figure image, call the governed visual-review.apply-style-reference capability first to produce and apply VisualStyleProfile v1.',
     ...actions
   ]
 }
@@ -906,9 +906,9 @@ function buildPlottingWorkflow(
       ? {
           styleReference: {
             detected: true,
-            extractionTool: 'visual-style:extract-profile' as const,
+            extractionTool: 'visual-review.apply-style-reference' as const,
             outputArtifact: 'VisualStyleProfile v1' as const,
-            acceptedSourceTypes: ['image' as const, 'pdf' as const],
+            acceptedSourceTypes: ['image' as const],
             nextControlledTool: 'SciForge DataFigure Engine',
             guardrails: [
               'Use the reference only for style guidance; do not copy original data, labels, or protected figure content.',

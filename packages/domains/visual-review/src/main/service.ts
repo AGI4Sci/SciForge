@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { loadImage } from '@napi-rs/canvas'
+import { extractVisualStyleProfile } from '@sciforge/scientific-plotting/visual-style-extractor'
 import { constants } from 'node:fs'
 import {
   access,
@@ -34,6 +35,8 @@ import {
   type VisualDocumentOpenRequest,
   type VisualDocumentOpenResult,
   type VisualDocumentPaths,
+  type VisualDocumentApplyStyleReferenceRequest,
+  type VisualDocumentApplyStyleReferenceResult,
   type VisualDocumentRevisionDecisionRequest,
   type VisualDocumentRevisionDecisionResult,
   type VisualDocumentSaveAnnotationsRequest,
@@ -610,6 +613,49 @@ export async function updateVisualDocumentContext(
   }
   await writeDocument(paths.documentPath, updated)
   return { ok: true, status: 'updated', document: updated }
+}
+
+export async function applyVisualStyleReference(
+  request: VisualDocumentApplyStyleReferenceRequest
+): Promise<VisualDocumentApplyStyleReferenceResult> {
+  const { root, document } = await loadRequiredDocument(request.workspaceRoot, request.documentId)
+  const extracted = await extractVisualStyleProfile({
+    workspaceRoot: root,
+    sourcePath: request.sourcePath,
+    sourceType: 'image',
+    sourceKind: 'reference',
+    scope: 'manuscript'
+  })
+  if (!extracted.ok) throw new Error(extracted.message)
+
+  const styleProfileRef = DEFAULT_MANUSCRIPT_STYLE_REF
+  await atomicWrite(
+    join(root, styleProfileRef),
+    `${JSON.stringify({
+      profile: extracted.profile,
+      diagnostics: extracted.diagnostics
+    }, null, 2)}\n`
+  )
+  const updated = await updateVisualDocumentContext({
+    workspaceRoot: root,
+    documentId: document.documentId,
+    styleProfileRef
+  })
+  return {
+    ok: true,
+    status: 'style_applied',
+    document: updated.document,
+    styleProfileRef,
+    profile: {
+      id: extracted.profile.id,
+      semanticDescription: extracted.profile.semanticDescription,
+      palette: {
+        colors: extracted.profile.tokens.palette.colors,
+        accent: extracted.profile.tokens.palette.accent
+      },
+      confidence: extracted.profile.confidence.overall
+    }
+  }
 }
 
 export async function exportVisualReviewPacket(

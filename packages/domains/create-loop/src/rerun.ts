@@ -9,6 +9,7 @@ import {
   type SciForgeReproSpecV1
 } from '@sciforge/domain-sdk/reproducibility'
 import type {
+  WorkflowActivityReceiptV2,
   WorkflowApprovalRecordV2,
   WorkflowArtifactReferenceV2,
   WorkflowExecutionSnapshotV1,
@@ -126,6 +127,16 @@ export type WorkflowExecutionSnapshotCaptureV1 = Readonly<{
 export function workflowFingerprint(value: unknown): WorkflowFingerprint {
   const json = toJsonValue(value)
   return `sha256:${sha256Hex(canonicalizeReproValue(json))}`
+}
+
+/** Hash receipt diagnostics semantically so JSON key order cannot create a false rerun difference. */
+export function workflowActivityReceiptFingerprint(
+  receipt: WorkflowActivityReceiptV2
+): WorkflowFingerprint {
+  return workflowFingerprint({
+    ...receipt,
+    ...(receipt.detail === undefined ? {} : { detail: parseJsonOrText(receipt.detail) })
+  })
 }
 
 export function captureWorkflowExecutionSnapshot(
@@ -346,7 +357,7 @@ export function redactWorkflowNodeResults(
           ...structuredClone(attempt),
           inputFingerprint,
           receipt,
-          receiptFingerprint: workflowFingerprint(receipt)
+          receiptFingerprint: workflowActivityReceiptFingerprint(receipt)
         }
       })
     }
@@ -591,7 +602,9 @@ export function createWorkflowReproSpec(
         componentFingerprint: result.componentFingerprint,
         inputFingerprint: result.inputFingerprint,
         outputFingerprint: result.outputFingerprint,
-        receiptFingerprints: result.attempts.map((attempt) => attempt.receiptFingerprint),
+        receiptFingerprints: result.attempts.map((attempt) =>
+          workflowActivityReceiptFingerprint(attempt.receipt)
+        ),
         artifactFingerprints: result.artifactRefs.map(artifactReferenceFingerprint)
       }))
     }
@@ -992,7 +1005,10 @@ export function compareWorkflowRunToSpec(
     }
     addDifference(differences, 'node', baseline.componentFingerprint, observed.componentFingerprint, 'node_component_changed', nodeId)
     addDifference(differences, 'node', baseline.inputFingerprint, observed.inputFingerprint, 'node_input_changed', nodeId)
-    if (!sameArray(baseline.receiptFingerprints, observed.attempts.map((attempt) => attempt.receiptFingerprint))) {
+    if (!sameArray(
+      baseline.receiptFingerprints,
+      observed.attempts.map((attempt) => workflowActivityReceiptFingerprint(attempt.receipt))
+    )) {
       differences.push({ component: 'node', nodeId, reasonCode: 'node_receipt_changed' })
     }
     if (!sameArray(baseline.artifactFingerprints, observed.artifactRefs.map(artifactReferenceFingerprint))) {
@@ -1254,7 +1270,10 @@ function candidateNodeResultsAreIntegrityBound(
     if (!result.attempts.every((attempt) => (
       attempt.activityFingerprint === componentDigest &&
       attempt.inputFingerprint === inputDigest &&
-      attempt.receiptFingerprint === workflowFingerprint(attempt.receipt) &&
+      (
+        attempt.receiptFingerprint === workflowActivityReceiptFingerprint(attempt.receipt) ||
+        attempt.receiptFingerprint === workflowFingerprint(attempt.receipt)
+      ) &&
       (attempt.receipt.outputFingerprint === undefined ||
         attempt.receipt.outputFingerprint === outputDigest)
     ))) return false

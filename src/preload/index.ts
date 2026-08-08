@@ -139,10 +139,6 @@ const api = {
     ipcRenderer.invoke('mcp:scientific-skills-status', { workspaceRoot }),
   installScientificSkills: (request) =>
     ipcRenderer.invoke('scientific-skills:install', request),
-  extractVisualStyleProfile: (request) =>
-    ipcRenderer.invoke('visual-style:extract-profile', request),
-  saveVisualStyleProfile: (request) =>
-    ipcRenderer.invoke('visual-style:save-profile', request),
   listSkills: (workspaceRoot) =>
     ipcRenderer.invoke('skill:list', { workspaceRoot }),
   saveSkillFile: (rootPath, skillName, content) =>

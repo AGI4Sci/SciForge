@@ -276,6 +276,13 @@ export function WorkflowRunHistory({
                     </p>
                   ) : null}
 
+                  {selected.reportPath ? (
+                    <div className="rounded-lg border border-ds-border bg-ds-subtle px-3 py-2">
+                      <p className="text-[10.5px] font-semibold uppercase tracking-wide text-ds-faint">{t('workflowRunReport')}</p>
+                      <p className="mt-1 break-all font-mono text-[11px] text-ds-muted">{selected.reportPath}</p>
+                    </div>
+                  ) : null}
+
                   {selected.nodeResults.map((result) => (
                     <HistoryResult
                       key={result.nodeId}

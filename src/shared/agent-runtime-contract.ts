@@ -497,6 +497,8 @@ export type AgentRuntimeThreadStartInput = {
   parentTurnId?: string
   threadSource?: string
   sidebarVisibility?: AgentRuntimeThreadSidebarVisibility
+  /** Host-enforced runtime tool allowlist. An empty list disables all runtime tools. */
+  allowedTools?: string[]
 }
 
 export type AgentRuntimeThreadReadInput = {
@@ -578,6 +580,8 @@ export type AgentRuntimeTurnStartInput = {
   mode?: string
   model?: string
   reasoningEffort?: string
+  /** Host-enforced runtime tool allowlist. An empty list disables all runtime tools. */
+  allowedTools?: string[]
   governanceProfile?: AgentRuntimeGovernanceProfile
   displayText?: string
   visibleContextOwnerThreadId?: string

@@ -85,8 +85,6 @@ import {
   domainExtensionPackagePayloadSchema,
   domainExtensionSetEnabledPayloadSchema,
   domainExtensionSummarySchema,
-  visualStyleExtractPayloadSchema,
-  visualStyleSaveProfilePayloadSchema,
   pptMasterMcpConfigPayloadSchema,
   scientificPlottingMcpConfigPayloadSchema,
   scientificSkillsInstallPayloadSchema,
@@ -165,15 +163,6 @@ import {
   type ScientificSkillsInstallRequest,
   type ScientificSkillsInstallResult
 } from '../../../packages/workers/scientific-plotting/src/scientific-skills-installer'
-import {
-  extractVisualStyleProfile
-} from '../../../packages/workers/scientific-plotting/src/visual-style-extractor'
-import type {
-  VisualStyleExtractRequest,
-  VisualStyleExtractResult,
-  VisualStyleSaveProfileRequest,
-  VisualStyleSaveProfileResult
-} from '../../shared/visual-style'
 import type {
   AgentRuntimeAuxiliaryInput,
   AgentRuntimeCapabilities,
@@ -258,9 +247,21 @@ export type AppBridgeSender = {
   removeListener: (event: 'destroyed', listener: () => void) => unknown
 }
 
+function isElectronBridgeSender(sender: AppBridgeSender | undefined): boolean {
+  return typeof (sender as { capturePage?: unknown } | undefined)?.capturePage === 'function'
+}
+
 function visibleContextWindowId(sender: AppBridgeSender): string {
-  const nativeCapture = (sender as { capturePage?: unknown }).capturePage
-  return `${typeof nativeCapture === 'function' ? 'electron' : 'browser'}:${sender.id}`
+  return `${isElectronBridgeSender(sender) ? 'electron' : 'browser'}:${sender.id}`
+}
+
+function dialogParentForSender(
+  sender: AppBridgeSender,
+  getMainWindow: () => BrowserWindow | null
+): BrowserWindow | null {
+  if (!isElectronBridgeSender(sender)) return null
+  const mainWindow = getMainWindow()
+  return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
 }
 
 type AppBridgeInvokeEvent = {
@@ -363,8 +364,6 @@ export type RegisterAppIpcHandlersOptions = {
   getImageGenerationMcpLaunchConfig?: () => ImageGenerationMcpLaunchConfig
   getPptMasterMcpLaunchConfig?: () => PptMasterMcpLaunchConfig
   installScientificSkills?: (request: ScientificSkillsInstallRequest) => Promise<ScientificSkillsInstallResult>
-  extractVisualStyleProfile?: (request: VisualStyleExtractRequest) => Promise<VisualStyleExtractResult>
-  saveVisualStyleProfile?: (request: VisualStyleSaveProfileRequest) => Promise<VisualStyleSaveProfileResult>
   logError: (category: string, message: string, detail?: unknown) => void
   transcribeSpeech?: (
     settings: AppSettingsV1,
@@ -485,8 +484,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     getImageGenerationMcpLaunchConfig,
     getPptMasterMcpLaunchConfig,
     installScientificSkills: installScientificSkillsHandler = installScientificSkills,
-    extractVisualStyleProfile: extractVisualStyleProfileHandler = extractVisualStyleProfile,
-    saveVisualStyleProfile: saveVisualStyleProfileOverride,
     logError,
     transcribeSpeech = requestSpeechTranscription
   } = options
@@ -571,7 +568,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   handleInvoke('traces:summaries', async (_, payload: unknown) =>
     requireTraceStore().summaries(parseIpcPayload('traces:summaries', traceSummariesPayloadSchema, payload ?? {}))
   )
-  handleInvoke('traces:export', async (_, payload: unknown) => {
+  handleInvoke('traces:export', async (event, payload: unknown) => {
     const request = parseIpcPayload('traces:export', traceExportPayloadSchema, payload ?? {})
     const date = new Date().toISOString().slice(0, 10)
     const saveOptions = {
@@ -579,9 +576,9 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       defaultPath: `sciforge-trace-${date}.jsonl`,
       filters: [{ name: 'SciForge Full Trace', extensions: ['jsonl'] }]
     }
-    const mainWindow = getMainWindow()
-    const selection = mainWindow
-      ? await dialog.showSaveDialog(mainWindow, saveOptions)
+    const dialogParent = dialogParentForSender(event.sender, getMainWindow)
+    const selection = dialogParent
+      ? await dialog.showSaveDialog(dialogParent, saveOptions)
       : await dialog.showSaveDialog(saveOptions)
     if (selection.canceled || !selection.filePath) return { canceled: true as const }
     const result = await requireTraceStore().export({
@@ -657,20 +654,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         await requireExtensionManager().setEnabled(request)
       )
     )
-  })
-
-  const saveVisualStyleProfileHandler = saveVisualStyleProfileOverride ?? (async (
-    request: VisualStyleSaveProfileRequest
-  ): Promise<VisualStyleSaveProfileResult> => {
-    const path = request.path?.trim() || `.sciforge/visual-styles/${request.profile.id}.json`
-    return writeWorkspaceFile({
-      workspaceRoot: request.workspaceRoot,
-      path,
-      content: `${JSON.stringify({
-        profile: request.profile,
-        diagnostics: request.diagnostics
-      }, null, 2)}\n`
-    })
   })
 
   const disposeWorkspaceFileWatch = async (watchId: string): Promise<boolean> => {
@@ -1325,7 +1308,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     })
   })
 
-  handleInvoke('workspace:pick-directory', async (_, defaultPath: unknown): Promise<WorkspacePickResult> => {
+  handleInvoke('workspace:pick-directory', async (event, defaultPath: unknown): Promise<WorkspacePickResult> => {
     const normalizedDefaultPath = parseIpcPayload(
       'workspace:pick-directory',
       z.object({ defaultPath: defaultPathSchema }).strict(),
@@ -1336,9 +1319,9 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       defaultPath: normalizedDefaultPath,
       properties: ['openDirectory', 'createDirectory', 'dontAddToRecent']
     }
-    const mainWindow = getMainWindow()
-    const result = mainWindow
-      ? await dialog.showOpenDialog(mainWindow, options)
+    const dialogParent = dialogParentForSender(event.sender, getMainWindow)
+    const result = dialogParent
+      ? await dialog.showOpenDialog(dialogParent, options)
       : await dialog.showOpenDialog(options)
     return {
       canceled: result.canceled,
@@ -1346,7 +1329,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
-  handleInvoke('workspace:pick-file', async (_, payload: unknown): Promise<WorkspacePickResult> => {
+  handleInvoke('workspace:pick-file', async (event, payload: unknown): Promise<WorkspacePickResult> => {
     const request = parseIpcPayload(
       'workspace:pick-file',
       z.object({
@@ -1367,9 +1350,9 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       properties: ['openFile', 'dontAddToRecent'],
       filters: request.filters
     }
-    const mainWindow = getMainWindow()
-    const result = mainWindow
-      ? await dialog.showOpenDialog(mainWindow, options)
+    const dialogParent = dialogParentForSender(event.sender, getMainWindow)
+    const result = dialogParent
+      ? await dialog.showOpenDialog(dialogParent, options)
       : await dialog.showOpenDialog(options)
     return {
       canceled: result.canceled,
@@ -1517,38 +1500,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       return {
         ok: false as const,
         status: 'unexpected_error' as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('visual-style:extract-profile', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'visual-style:extract-profile',
-      visualStyleExtractPayloadSchema,
-      payload
-    )
-    try {
-      return extractVisualStyleProfileHandler(request)
-    } catch (error) {
-      return {
-        ok: false as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('visual-style:save-profile', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'visual-style:save-profile',
-      visualStyleSaveProfilePayloadSchema,
-      payload
-    )
-    try {
-      return saveVisualStyleProfileHandler(request)
-    } catch (error) {
-      return {
-        ok: false as const,
         message: error instanceof Error ? error.message : String(error)
       }
     }

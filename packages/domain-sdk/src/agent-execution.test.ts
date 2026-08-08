@@ -24,6 +24,7 @@ describe('agent execution host contract', () => {
       workspaceRoot: '/workspace/project',
       model: 'frontier',
       reasoningEffort: 'high',
+      allowedTools: ['sciforge_discover', 'sciforge_invoke'],
       mode: 'agent',
       signal: controller.signal
     })
@@ -34,13 +35,11 @@ describe('agent execution host contract', () => {
     })
   })
 
-  it('defaults execution mode and rejects host-private or unbounded fields', () => {
+  it('defaults execution mode, inherits the active runtime, and rejects host-private fields', () => {
     assert.deepEqual(domainMainAgentExecutionRequestSchema.parse({
-      runtimeId: 'sciforge',
       prompt: 'Continue.',
       workspaceRoot: '/workspace'
     }), {
-      runtimeId: 'sciforge',
       prompt: 'Continue.',
       workspaceRoot: '/workspace',
       mode: 'agent'
@@ -65,6 +64,19 @@ describe('agent execution host contract', () => {
     assert.throws(() => domainMainAgentExecutionResultSchema.parse({
       text: 'Done.',
       providerResponse: {}
+    }), z.ZodError)
+  })
+
+  it('accepts an explicit empty tool policy and rejects duplicate names', () => {
+    assert.deepEqual(domainMainAgentExecutionRequestSchema.parse({
+      prompt: 'Work without tools.',
+      workspaceRoot: '/workspace',
+      allowedTools: []
+    }).allowedTools, [])
+    assert.throws(() => domainMainAgentExecutionRequestSchema.parse({
+      prompt: 'Work.',
+      workspaceRoot: '/workspace',
+      allowedTools: ['sciforge_invoke', 'sciforge_invoke']
     }), z.ZodError)
   })
 })

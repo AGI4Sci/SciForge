@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -204,38 +204,6 @@ function writeExportPayload(overrides: Record<string, unknown> = {}) {
     runtimeId: 'codex',
     threadId: 'thread-1',
     ...overrides
-  }
-}
-
-function visualStyleExtractionFixture() {
-  const profile = {
-    version: 1 as const,
-    id: 'manuscript-default',
-    scope: 'manuscript' as const,
-    source: { type: 'reference' as const, path: 'figures/reference.png', figureId: 'Fig. 2A' },
-    tokens: {
-      canvas: { width: 640, height: 420, aspectRatio: 1.52, background: '#ffffff' },
-      palette: { colors: ['#222222', '#d24b4b'], background: '#ffffff', ink: '#222222', accent: ['#d24b4b'], colorMode: 'limited' as const },
-      typography: { fontFamily: 'Arial', axisSize: 8, labelSize: 9, titleSize: 11, weight: 'regular' as const },
-      strokes: { ink: '#222222', primaryWidth: 1.2, secondaryWidth: 0.6, lineCap: 'round' as const },
-      spacing: { margin: { left: 0.1, right: 0.1, top: 0.1, bottom: 0.1 }, gutter: 'balanced' as const, density: 'balanced' as const },
-      shapes: { fillMode: 'mixed' as const, shadow: 'none' as const }
-    },
-    semanticDescription: 'Compact scientific figure with a restrained red accent.',
-    confidence: { overall: 0.72, palette: 0.8, spacing: 0.7, plots: 0.5, typography: 0.35, generatedAssets: 0.2 }
-  }
-
-  return {
-    ok: true as const,
-    profile,
-    diagnostics: {
-      analyzedAt: '2026-07-07T00:00:00.000Z',
-      sampledPixels: 10,
-      foregroundRatio: 0.3,
-      darkPixelRatio: 0.2,
-      chromaRatio: 0.1,
-      warnings: []
-    }
   }
 }
 
@@ -621,65 +589,6 @@ describe('registerAppIpcHandlers', () => {
     expect([...handlers.keys()].filter((channel) => channel.startsWith('visual-document:'))).toEqual([])
   })
 
-  it('routes visual style profile extraction through its single IPC command', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const extraction = visualStyleExtractionFixture()
-    const extractVisualStyleProfile = vi.fn(async () => extraction)
-
-    registerAppIpcHandlers(registerOptions({
-      extractVisualStyleProfile
-    }))
-
-    const result = await handlers.get('visual-style:extract-profile')?.({}, {
-      workspaceRoot: '/tmp/workspace',
-      sourcePath: ' figures/reference.png ',
-      sourceType: 'image',
-      sourceKind: 'reference',
-      scope: 'manuscript',
-      figureId: ' Fig. 2A ',
-      notes: ' style only '
-    })
-
-    expect(extractVisualStyleProfile).toHaveBeenCalledWith({
-      workspaceRoot: '/tmp/workspace',
-      sourcePath: 'figures/reference.png',
-      sourceType: 'image',
-      sourceKind: 'reference',
-      scope: 'manuscript',
-      figureId: 'Fig. 2A',
-      notes: 'style only'
-    })
-    expect(result).toEqual(extraction)
-  })
-
-  it('saves visual style profiles through the dedicated IPC command', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const workspaceRoot = realpathSync(mkdtempSync(join(tmpdir(), 'sciforge-visual-style-')))
-    const extraction = visualStyleExtractionFixture()
-    try {
-      registerAppIpcHandlers(registerOptions())
-
-      const result = await handlers.get('visual-style:save-profile')?.({}, {
-        workspaceRoot,
-        path: ' .sciforge/visual-styles/manuscript-default.json ',
-        profile: extraction.profile,
-        diagnostics: extraction.diagnostics
-      })
-
-      expect(result).toMatchObject({
-        ok: true,
-        path: join(workspaceRoot, '.sciforge/visual-styles/manuscript-default.json')
-      })
-      const saved = JSON.parse(readFileSync(join(workspaceRoot, '.sciforge/visual-styles/manuscript-default.json'), 'utf8'))
-      expect(saved).toEqual({
-        profile: extraction.profile,
-        diagnostics: extraction.diagnostics
-      })
-    } finally {
-      rmSync(workspaceRoot, { recursive: true, force: true })
-    }
-  })
-
   it('routes Research Cards IPC requests through the service', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
     const researchCards = {
@@ -880,16 +789,16 @@ describe('registerAppIpcHandlers', () => {
 
   it('uses one validated generic file picker for domain-declared filters', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    registerAppIpcHandlers(registerOptions())
+    const dispatcher = registerAppIpcHandlers(registerOptions())
 
-    const result = await handlers.get('workspace:pick-file')?.({}, {
+    const result = await dispatcher.invoke('workspace:pick-file', {
       title: ' Select data asset ',
       defaultPath: ' /tmp/workspace ',
       filters: [
         { name: ' Data ', extensions: ['csv', 'tsv', 'nii.gz'] },
         { name: ' All files ', extensions: ['*'] }
       ]
-    })
+    }, createSender(11))
 
     expect(showOpenDialog).toHaveBeenCalledWith({
       title: 'Select data asset',
@@ -901,6 +810,35 @@ describe('registerAppIpcHandlers', () => {
       ]
     })
     expect(result).toEqual({ canceled: false, path: '/tmp/workspace/data.csv' })
+  })
+
+  it('parents file pickers only to the Electron window that invoked them', async () => {
+    const mainWindow = { isDestroyed: vi.fn(() => false) }
+    const electronSender = {
+      ...createSender(13),
+      capturePage: vi.fn()
+    }
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const dispatcher = registerAppIpcHandlers(registerOptions({
+      getMainWindow: () => mainWindow as never
+    }))
+    const request = {
+      title: 'Open image',
+      defaultPath: '/tmp/workspace',
+      filters: [{ name: 'Images', extensions: ['png'] }]
+    }
+
+    await dispatcher.invoke('workspace:pick-file', request, electronSender)
+    expect(showOpenDialog).toHaveBeenLastCalledWith(mainWindow, {
+      ...request,
+      properties: ['openFile', 'dontAddToRecent']
+    })
+
+    await dispatcher.invoke('workspace:pick-file', request, createSender(14))
+    expect(showOpenDialog).toHaveBeenLastCalledWith({
+      ...request,
+      properties: ['openFile', 'dontAddToRecent']
+    })
   })
 
   it('rejects unconstrained generic file-picker payloads', async () => {

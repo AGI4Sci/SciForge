@@ -68,3 +68,36 @@ never evicts an unacknowledged terminal event.
 
 The end-to-end contract is documented in
 [`docs/reproducible-dag-v3.zh-CN.md`](../../../docs/reproducible-dag-v3.zh-CN.md).
+
+## Dynamic dataset construction
+
+Generated workflows use the versioned template bundle and execution-receipt adapter from
+`@sciforge/domain-sdk/workflow-template`. AI Agent nodes pass a structured `allowedTools` policy
+to the Host; Codex and Claude filter both tool publication and dispatch from that policy. Prompts
+are instructions only and are never parsed as an authorization mechanism.
+
+`create-loop.build-dataset` accepts confirmed conversational data requirements
+(objective, sources, optional output schema, quality thresholds, models, and
+release target), then dynamically compiles and saves an editable coordinator
+workflow plus its generation-round workflow. When the caller omits the output
+schema, the first workflow stage designs a bounded schema, a task rubric, a
+Dataset API processing recipe, and an initial generation recipe from the user
+objective.
+
+The generated graph uses existing AI/LLM, loop, condition, code, approval, and
+output nodes to:
+
+- acquire, clean, and integrate real Dataset API artifacts;
+- generate candidates with a Challenger and evaluate them with Weak/Strong
+  Solvers plus a Judge;
+- run a separate task Verifier for leakage, rubric coverage, question quality,
+  verifiability, grounding, evidence coverage, and duplication;
+- analyze the complete rejection trajectory and revise the generation recipe
+  and Challenger prompt before retrying;
+- materialize, validate, and publish the accepted batch as a versioned dataset;
+- write one Markdown audit report containing the designed schema and recipes,
+  node status and retries, Judge and Verifier results, strategy revisions,
+  quality metrics, lineage, artifact hashes, and publication receipt.
+
+This is dynamically constructed from normal Create Loop nodes. It is not a
+built-in preset and does not introduce a separate synthetic-data domain.

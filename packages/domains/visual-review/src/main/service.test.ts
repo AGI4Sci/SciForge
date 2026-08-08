@@ -6,6 +6,7 @@ import { createCanvas } from '@napi-rs/canvas'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   acceptVisualCandidateRevision,
+  applyVisualStyleReference,
   createVisualCandidateRevision,
   exportVisualReviewPacket,
   openVisualReviewDocument,
@@ -224,6 +225,47 @@ describe('VisualDocument engine', () => {
     expect(disabled.document.styleProfileRef).toBeNull()
   })
 
+  it('extracts a reference image style and applies the canonical manuscript profile', async () => {
+    const root = await workspace()
+    const sourcePath = join(root, 'source.png')
+    const referencePath = join(root, 'reference.png')
+    await writePng(sourcePath, 80, 60)
+    await writePng(referencePath, 120, 90)
+    await openVisualReviewDocument({
+      workspaceRoot: root,
+      documentId: 'styled-figure',
+      artifact: { kind: 'image', sourcePath }
+    })
+
+    const applied = await applyVisualStyleReference({
+      workspaceRoot: root,
+      documentId: 'styled-figure',
+      sourcePath: referencePath
+    })
+
+    expect(applied).toMatchObject({
+      ok: true,
+      status: 'style_applied',
+      styleProfileRef: '.sciforge/visual-styles/manuscript-default.json',
+      document: {
+        documentId: 'styled-figure',
+        styleProfileRef: '.sciforge/visual-styles/manuscript-default.json'
+      },
+      profile: {
+        id: expect.stringMatching(/^visual-style-/u),
+        semanticDescription: expect.any(String),
+        confidence: expect.any(Number)
+      }
+    })
+    expect(applied.profile.palette.colors.length).toBeGreaterThan(0)
+    const saved = JSON.parse(await readFile(
+      join(root, '.sciforge', 'visual-styles', 'manuscript-default.json'),
+      'utf8'
+    ))
+    expect(saved.profile.id).toBe(applied.profile.id)
+    expect(saved.diagnostics.analyzedAt).toEqual(expect.any(String))
+  })
+
   it('inserts one protected artifact with reusable semantic nodes and context', async () => {
     const root = await workspace()
     const sourcePath = join(root, 'figure.svg')
@@ -275,12 +317,24 @@ describe('VisualDocument engine', () => {
       }, {
         geometry: { kind: 'arrow', from: { x: 0.4, y: 0.4 }, to: { x: 0.7, y: 0.6 } },
         instruction: 'Simplify this relationship.'
+      }, {
+        geometry: {
+          kind: 'freehand',
+          points: [
+            { x: 0.2, y: 0.25 },
+            { x: 0.3, y: 0.2 },
+            { x: 0.38, y: 0.3 },
+            { x: 0.2, y: 0.25 }
+          ]
+        },
+        instruction: 'Revise the circled structure.'
       }]
     })
-    expect(saved.annotations).toHaveLength(2)
+    expect(saved.annotations).toHaveLength(3)
+    expect(saved.annotations[2]?.geometry.kind).toBe('freehand')
     const exported = await exportVisualReviewPacket({ workspaceRoot: root, documentId: 'figure' })
     expect(exported.packet.sourceArtifact.width).toBe(1600)
-    expect(exported.packet.annotations).toHaveLength(2)
+    expect(exported.packet.annotations).toHaveLength(3)
     expect(exported.packet.revisionContext.selectedNodeIds).toEqual([nodeId])
     expect(exported.packet.revisionContext.preserve).toEqual(['Preserve labels'])
     expect(exported.packet.styleProfileRef).toContain('paper.json')

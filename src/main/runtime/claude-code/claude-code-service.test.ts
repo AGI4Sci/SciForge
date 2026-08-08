@@ -1256,7 +1256,8 @@ describe('ClaudeCodeRuntimeService', () => {
     const turn = await service.startTurn({
       threadId: thread.thread.id,
       text: 'use the screen',
-      workspace: '/tmp/workspace'
+      workspace: '/tmp/workspace',
+      allowedTools: ['sciforge_discover']
     })
     if (!turn.ok) throw new Error(turn.message)
 
@@ -1266,6 +1267,46 @@ describe('ClaudeCodeRuntimeService', () => {
       }
     })
     expect(Object.keys(calls[0]?.options?.mcpServers ?? {})).toEqual(['sciforge_runtime_tools'])
+    expect(calls[0]?.options?.tools).toEqual([
+      'mcp__sciforge_runtime_tools__sciforge_discover'
+    ])
+    expect(calls[0]?.options?.allowedTools).toEqual([
+      'mcp__sciforge_runtime_tools__sciforge_discover'
+    ])
+  })
+
+  it('publishes no Claude runtime tool server for an explicit empty Host allowlist', async () => {
+    const { sdk, calls } = fakeSdk(() => [
+      init('claude-session-no-tools'),
+      result('Done.', 'claude-session-no-tools')
+    ])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      managedConfigDir: '/tmp/sciforge-claude-config',
+      agentTools: {
+        tools: () => [{
+          type: 'function',
+          name: 'sciforge_discover',
+          description: 'Discover operations.',
+          inputSchema: { type: 'object', properties: {} }
+        }],
+        call: async () => ({ tool: 'sciforge_discover', value: [] })
+      },
+      claudeAgentSdk: sdk
+    })
+    const thread = await service.startThread({ workspace: '/tmp/workspace', title: 'No tools' })
+    if (!thread.ok) throw new Error(thread.message)
+    const turn = await service.startTurn({
+      threadId: thread.thread.id,
+      text: 'work from context only',
+      workspace: '/tmp/workspace',
+      allowedTools: []
+    })
+    if (!turn.ok) throw new Error(turn.message)
+    expect(calls[0]?.options?.mcpServers).toBeUndefined()
+    expect(calls[0]?.options?.tools).toEqual([])
+    expect(calls[0]?.options?.allowedTools).toEqual([])
   })
 
   it('maps Task and Workflow tool output and reads canonical child transcripts', async () => {

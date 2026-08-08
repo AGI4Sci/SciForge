@@ -631,6 +631,25 @@ export type AgentRuntimeToolSessionContext = Readonly<{
   requestId?: string | number
 }>
 
+/** Narrows both publication and dispatch to one explicit per-run tool policy. */
+export function filterAgentRuntimeToolSurface(
+  surface: AgentRuntimeToolSurface,
+  allowedTools: readonly string[] | undefined
+): AgentRuntimeToolSurface {
+  if (allowedTools === undefined) return surface
+  const allowed = new Set(allowedTools)
+  return {
+    tools: () => surface.tools().filter((tool) => allowed.has(tool.name)),
+    call: (request, options) => {
+      if (!allowed.has(request.name)) {
+        throw new Error(`AgentRuntime tool is not allowed for this execution: ${request.name}`)
+      }
+      return surface.call(request, options)
+    },
+    abortTurn: (identity, reason) => surface.abortTurn?.(identity, reason) ?? 0
+  }
+}
+
 /** Composes runtime-neutral tool owners while rejecting ambiguous tool names. */
 export function composeAgentRuntimeToolSurfaces(
   surfaces: readonly AgentRuntimeToolSurface[]

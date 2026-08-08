@@ -174,7 +174,11 @@ operation:
   The host owns target lookup, sensitive-target policy, redaction, callout rendering, and PNG byte
   limits; packages cannot submit DOM selectors or redaction bounds.
 - `@sciforge/domain-sdk/agent-execution` runs an agent thread through a host-owned runtime while
-  exposing only stable request and result data, plus optional cancellation.
+  exposing only stable request and result data, an optional Host-enforced tool allowlist, plus
+  optional cancellation.
+- `@sciforge/domain-sdk/workflow-template` defines the versioned workflow-template bundle and the
+  package-owned execution-receipt adapter used by workflow engines. Engines consume these generic
+  contracts instead of another domain's private artifact directories or receipt layout.
 - `@sciforge/domain-sdk/power` acquires an application keep-awake lease whose release belongs to
   the package lifecycle. Packages cannot choose native power-blocker implementations.
 - `@sciforge/domain-sdk/workspace-host` defines the bounded, versioned locator, session,

@@ -1,11 +1,16 @@
 import { z } from 'zod'
 
 export const domainMainAgentExecutionRequestSchema = z.object({
-  runtimeId: z.string().trim().min(1).max(128),
+  runtimeId: z.string().trim().min(1).max(128).optional(),
   prompt: z.string().min(1).max(1_000_000),
   workspaceRoot: z.string().min(1).max(4_096),
   model: z.string().trim().min(1).max(256).optional(),
   reasoningEffort: z.string().trim().min(1).max(64).optional(),
+  allowedTools: z.array(
+    z.string().trim().min(1).max(192).regex(/^[A-Za-z0-9_.-]+$/)
+  ).max(128).refine((tools) => new Set(tools).size === tools.length, {
+    message: 'Allowed tool names must be unique.'
+  }).optional(),
   mode: z.enum(['agent', 'plan']).default('agent'),
   signal: z.instanceof(AbortSignal).optional()
 }).strict()
@@ -24,7 +29,8 @@ export type DomainMainAgentExecutionResult = z.infer<
 
 /**
  * Runs an agent through a host-owned runtime without exposing the host's
- * provider, thread, turn, or transport implementations.
+ * provider, thread, turn, or transport implementations. Omitting runtimeId
+ * selects the user's active runtime through the Host.
  */
 export type DomainMainAgentExecutionHost = Readonly<{
   run: (

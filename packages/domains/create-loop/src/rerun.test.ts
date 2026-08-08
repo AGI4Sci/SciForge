@@ -24,6 +24,7 @@ import {
   createWorkflowRunContext,
   createWorkflowRunManifest,
   parseCreateLoopReproSpec,
+  workflowActivityReceiptFingerprint,
   workflowFingerprint
 } from './rerun.js'
 
@@ -877,7 +878,7 @@ function nodeResult(
       finishedAt: '2026-08-05T00:00:01.000Z',
       activityFingerprint: componentFingerprint,
       inputFingerprint,
-      receiptFingerprint: workflowFingerprint(receipt),
+      receiptFingerprint: workflowActivityReceiptFingerprint(receipt),
       receipt,
       artifactRefs: []
     }],

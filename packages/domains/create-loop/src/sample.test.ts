@@ -217,7 +217,15 @@ test('complex DAG v3 sample runs offline and an approved rerun matches its basel
   assert.equal(runs[1]!.manifest!.comparison?.sameExecutionContext, true)
   assert.equal(runs[1]!.manifest!.comparison?.comparisonVerifiable, true)
   assert.equal(runs[1]!.manifest!.comparison?.resultMatch, true)
-  assert.deepEqual(runs[1]!.manifest!.comparison?.reasonCodes, ['all_fingerprints_match'])
+  assert.deepEqual(
+    runs[1]!.manifest!.comparison?.reasonCodes,
+    ['all_fingerprints_match'],
+    JSON.stringify({
+      comparison: runs[1]!.manifest!.comparison,
+      baselineOutput: firstRun.nodeResults.filter((result) => result.nodeId === 'demo-output'),
+      rerunOutput: runs[1]!.nodeResults.filter((result) => result.nodeId === 'demo-output')
+    }, null, 2)
+  )
   assert.deepEqual(runs[1]!.manifest!.comparison?.differences, [])
 
   const deviation = await runtime.runWorkflow(workflow.id, {
@@ -335,6 +343,7 @@ function runtimeContext(): DomainMainRuntimeLifecycleContext {
         ...event
       } as DomainExecutionEventV1)
     },
+    workflowExecutionReceipts: [],
     enablement: {
       isEnabled: () => true,
       subscribe: () => (() => undefined)

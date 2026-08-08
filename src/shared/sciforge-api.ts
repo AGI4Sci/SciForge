@@ -143,12 +143,6 @@ import type {
 } from './visible-context'
 import type { RemoteWorkspaceApi } from './remote-workspace'
 import type {
-  VisualStyleExtractRequest,
-  VisualStyleExtractResult,
-  VisualStyleSaveProfileRequest,
-  VisualStyleSaveProfileResult
-} from './visual-style'
-import type {
   ResearchCard,
   ResearchCardArchiveInput,
   ResearchCardCreateInput,
@@ -864,8 +858,6 @@ export type SciForgeApi = {
   buildPptMasterMcpConfig: (workspaceRoot?: string) => Promise<PptMasterMcpConfigResult>
   getScientificSkillsStatus: (workspaceRoot?: string) => Promise<ScientificSkillsStatusResult>
   installScientificSkills: (request: ScientificSkillsInstallRequest) => Promise<ScientificSkillsInstallResult>
-  extractVisualStyleProfile: (request: VisualStyleExtractRequest) => Promise<VisualStyleExtractResult>
-  saveVisualStyleProfile: (request: VisualStyleSaveProfileRequest) => Promise<VisualStyleSaveProfileResult>
   listSkills: (workspaceRoot?: string) => Promise<SkillListResult>
   saveSkillFile: (rootPath: string, skillName: string, content: string) => Promise<SkillSaveResult>
   openSkillRoot: (rootPath: string) => Promise<PathOpenResult>

@@ -229,6 +229,30 @@ export type VisualDocumentUpdateContextResult = {
   document: VisualDocument
 }
 
+export type VisualStyleProfileSummary = {
+  id: string
+  semanticDescription: string
+  palette: {
+    colors: string[]
+    accent: string[]
+  }
+  confidence: number
+}
+
+export type VisualDocumentApplyStyleReferenceRequest = {
+  workspaceRoot: string
+  documentId?: string
+  sourcePath: string
+}
+
+export type VisualDocumentApplyStyleReferenceResult = {
+  ok: true
+  status: 'style_applied'
+  document: VisualDocument
+  styleProfileRef: string
+  profile: VisualStyleProfileSummary
+}
+
 export type VisualReviewPacket = {
   schemaVersion: 1
   packetId: string

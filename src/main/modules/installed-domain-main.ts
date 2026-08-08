@@ -7,14 +7,15 @@ import { createDomainMainEntry as createDomainMainEntry2 } from '@sciforge/domai
 import { createDomainMainEntry as createDomainMainEntry3 } from '@sciforge/domain-browser-preview/main'
 import { createDomainMainEntry as createDomainMainEntry4 } from '@sciforge/domain-change-inspector/main'
 import { createDomainMainEntry as createDomainMainEntry5 } from '@sciforge/domain-create-loop/main'
-import { createDomainMainEntry as createDomainMainEntry6 } from '@sciforge/domain-evidence-dag/main'
-import { createDomainMainEntry as createDomainMainEntry7 } from '@sciforge/domain-git-checkpoints/main'
-import { createDomainMainEntry as createDomainMainEntry8 } from '@sciforge/domain-life-science-preview/main'
-import { createDomainMainEntry as createDomainMainEntry9 } from '@sciforge/domain-paper-radar/main'
-import { createDomainMainEntry as createDomainMainEntry10 } from '@sciforge/domain-project-dag/main'
-import { createDomainMainEntry as createDomainMainEntry11 } from '@sciforge/domain-remote-ssh/main'
-import { createDomainMainEntry as createDomainMainEntry12 } from '@sciforge/domain-scientific-plotting/main'
-import { createDomainMainEntry as createDomainMainEntry13 } from '@sciforge/domain-visual-review/main'
+import { createDomainMainEntry as createDomainMainEntry6 } from '@sciforge/domain-dataset-api/main'
+import { createDomainMainEntry as createDomainMainEntry7 } from '@sciforge/domain-evidence-dag/main'
+import { createDomainMainEntry as createDomainMainEntry8 } from '@sciforge/domain-git-checkpoints/main'
+import { createDomainMainEntry as createDomainMainEntry9 } from '@sciforge/domain-life-science-preview/main'
+import { createDomainMainEntry as createDomainMainEntry10 } from '@sciforge/domain-paper-radar/main'
+import { createDomainMainEntry as createDomainMainEntry11 } from '@sciforge/domain-project-dag/main'
+import { createDomainMainEntry as createDomainMainEntry12 } from '@sciforge/domain-remote-ssh/main'
+import { createDomainMainEntry as createDomainMainEntry13 } from '@sciforge/domain-scientific-plotting/main'
+import { createDomainMainEntry as createDomainMainEntry14 } from '@sciforge/domain-visual-review/main'
 import type { z } from 'zod'
 import { installedDomainPackages } from '../../shared/installed-domain-packages'
 import { defineCapability, type DefineCapabilityOptions } from '../capabilities/registry'
@@ -44,7 +45,8 @@ export function createInstalledMainDomainEntries(host: InstalledMainDomainHost) 
       createDomainMainEntry10(domainHost),
       createDomainMainEntry11(domainHost),
       createDomainMainEntry12(domainHost),
-      createDomainMainEntry13(domainHost)
+      createDomainMainEntry13(domainHost),
+      createDomainMainEntry14(domainHost)
     ]
   ).entries
 }

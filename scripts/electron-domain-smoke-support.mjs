@@ -33,6 +33,9 @@ const REQUIRED_CAPABILITY_IDS = Object.freeze([
   'paper-radar.status',
   'paper-radar.profiles.list',
   'paper-radar.profiles.save',
+  'create-loop.build-dataset',
+  'create-loop.read',
+  'dataset-api.materialize',
   'workspace-preview.list',
   'workspace-preview.open',
   'workspace-preview.apply-edit',
@@ -391,6 +394,64 @@ async function smokeRendererWorkflow({ requiredCapabilityIds, workspaceDirectory
     throw new Error('Paper Radar profile did not survive save/list through the capability transport.')
   }
 
+  const datasetLoopRequest = {
+    actionId: 'create-loop.build-dataset',
+    invocationId: 'electron-smoke-dataset-loop-build',
+    input: {
+      name: 'Electron smoke dataset loop',
+      objective: 'Create one grounded protein question for runtime composition verification.',
+      sourceIds: ['uniprot'],
+      outputSchema: {
+        question: { type: 'string', required: true },
+        answer: { type: 'string', required: true },
+        evidence: { type: 'array', required: true }
+      },
+      quality: {
+        criteria: ['The answer must be grounded in the selected source.'],
+        targetCount: 1,
+        maxIterations: 2,
+        minQualityScore: 0.7,
+        minStrongScore: 0.7,
+        maxWeakScore: 0.4,
+        minScoreGap: 0.3,
+        maxDuplicateFraction: 0
+      },
+      output: {
+        datasetName: 'electron-smoke-dataset',
+        fileName: 'electron-smoke-dataset.jsonl',
+        format: 'jsonl'
+      },
+      humanReview: false,
+      run: false
+    }
+  }
+  const builtDatasetLoop = await api.capabilities.invoke({
+    workspaceId: workspaceDirectory,
+    request: datasetLoopRequest,
+    approval: { mode: 'confirmation' }
+  })
+  const createLoopSnapshot = await api.capabilities.invoke({
+    workspaceId: workspaceDirectory,
+    request: { actionId: 'create-loop.read', input: {} }
+  })
+  const builtWorkflowIds = [
+    builtDatasetLoop.output?.workflowId,
+    builtDatasetLoop.output?.iterationWorkflowId
+  ]
+  const savedWorkflows = createLoopSnapshot.output?.settings?.workflows
+  if (builtDatasetLoop.output?.created !== true ||
+      builtWorkflowIds.some((id) => typeof id !== 'string') ||
+      !Array.isArray(savedWorkflows) ||
+      !builtWorkflowIds.every((id) => savedWorkflows.some((workflow) => workflow.id === id)) ||
+      createLoopSnapshot.output?.settings?.presets?.length !== 0) {
+    throw new Error(`Dynamic Dataset Create Loop was not saved as two editable workflows without a preset: ${JSON.stringify({
+      created: builtDatasetLoop.output?.created,
+      builtWorkflowIds,
+      savedWorkflowIds: Array.isArray(savedWorkflows) ? savedWorkflows.map((workflow) => workflow.id) : null,
+      presetCount: createLoopSnapshot.output?.settings?.presets?.length
+    })}`)
+  }
+
   const plugins = await api.capabilities.invoke({
     workspaceId: workspaceDirectory,
     request: { actionId: 'workspace-preview.list', input: {} }
@@ -487,6 +548,8 @@ async function smokeRendererWorkflow({ requiredCapabilityIds, workspaceDirectory
     version: await api.getAppVersion(),
     readiness: readiness.status,
     capabilityCount: readiness.availableCapabilityIds.length,
+    datasetLoopCreated: true,
+    datasetLoopWorkflowCount: builtWorkflowIds.length,
     paperRadarActionId: paperRadarStatus.actionId,
     paperRadarProfileCount: listedProfiles.output.data.profiles.length,
     workspacePreviewActionId: plugins.actionId,
@@ -548,6 +611,9 @@ function validateSmokeResult(result, { expectedRendererUrl }) {
   if (result.visualReviewActionId !== 'visual-review.open') {
     throw new Error('Visual Review capability path mismatch.')
   }
+  if (result.datasetLoopCreated !== true || result.datasetLoopWorkflowCount !== 2) {
+    throw new Error('Dynamic Dataset Create Loop creation did not pass the real capability transport.')
+  }
   if (!Number.isSafeInteger(result.previewPluginCount) || result.previewPluginCount < 1) {
     throw new Error('Workspace Preview returned no registered plugins.')
   }
@@ -567,9 +633,10 @@ function validateSmokeResult(result, { expectedRendererUrl }) {
     nativeVisual.cropped !== true ||
     nativeVisual.nativeImageBindingValidated !== true ||
     nativeVisual.proofChainValidated !== true ||
+    nativeVisual.datasetLoopCapabilitiesDiscoverable !== true ||
     nativeVisual.unavailableRouteFailedVisibly !== true
   ) {
-    throw new Error('Native visual smoke did not validate capture, bindings, proofs, and failure behavior.')
+    throw new Error('Native visual smoke did not validate capture, bindings, proofs, dataset Loop discovery, and failure behavior.')
   }
   const codexHook = result.codexPreToolUseHook
   if (

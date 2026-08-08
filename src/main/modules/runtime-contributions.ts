@@ -19,6 +19,11 @@ import {
   type DomainMainSystemCapabilityInvoker
 } from '@sciforge/domain-sdk/host'
 import type { DomainExecutionEventInput } from '@sciforge/domain-sdk/reproducibility'
+import {
+  MAIN_WORKFLOW_EXECUTION_RECEIPT_PROVIDER_CONTRIBUTION_KIND,
+  isDomainWorkflowExecutionReceiptProvider,
+  type DomainWorkflowExecutionReceiptProvider
+} from '@sciforge/domain-sdk/workflow-template'
 import { capabilityJsonValueSchema } from '../../shared/capability-broker'
 import { CapabilityBroker } from '../capabilities/broker'
 import { DomainModuleCatalog } from './catalog'
@@ -50,6 +55,16 @@ export function listMainArtifactConsumers(
   return Object.freeze(catalog.listContributions(
     MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
     (value): value is DomainArtifactConsumer => isDomainArtifactConsumer(value)
+  ).map((contribution) => contribution.value))
+}
+
+export function listMainWorkflowExecutionReceiptProviders(
+  catalog: DomainModuleCatalog
+): readonly DomainWorkflowExecutionReceiptProvider[] {
+  return Object.freeze(catalog.listContributions(
+    MAIN_WORKFLOW_EXECUTION_RECEIPT_PROVIDER_CONTRIBUTION_KIND,
+    (value): value is DomainWorkflowExecutionReceiptProvider =>
+      isDomainWorkflowExecutionReceiptProvider(value)
   ).map((contribution) => contribution.value))
 }
 
@@ -190,6 +205,7 @@ export async function activateMainRuntimeContributions(
       isDomainMainRuntimeLifecycleContribution(value)
   )
   const artifactConsumers = listMainArtifactConsumers(catalog)
+  const workflowExecutionReceipts = listMainWorkflowExecutionReceiptProviders(catalog)
 
   const activated: ActivatedLifecycle[] = []
   try {
@@ -207,6 +223,7 @@ export async function activateMainRuntimeContributions(
         executionEvents: Object.freeze({
           publish: (event: DomainExecutionEventInput) => executionEvents.publish(owner, event)
         }),
+        workflowExecutionReceipts,
         enablement: Object.freeze({
           isEnabled: () => enablement.isEnabled(owner.moduleId),
           subscribe: (listener: (enabled: boolean) => void) =>

@@ -347,6 +347,7 @@ export class AgentRuntimeHost {
     const pending = adapter.readThread(context, input)
       .then((detail) => withWorkspaceHostOnThread(detail, context.workspaceHost))
       .then((detail) => this.withSharedGoalOnThread(adapter.id, detail))
+      .then((detail) => this.withCapabilityApprovalsOnThread(adapter.id, detail))
       .finally(() => {
         if (this.threadReadsInFlight.get(key) === pending) this.threadReadsInFlight.delete(key)
       })
@@ -2256,6 +2257,48 @@ export class AgentRuntimeHost {
     const adapter = [...this.adapters.values()].find((candidate) => candidate.id === runtimeId)
     if (!adapter) throw new Error(`Agent runtime adapter not registered: ${runtimeId}`)
     return adapter.id
+  }
+
+  private withCapabilityApprovalsOnThread(
+    runtimeId: AgentRuntimeId,
+    detail: AgentRuntimeThreadDetail
+  ): AgentRuntimeThreadDetail {
+    const key = threadTurnKey(runtimeId, detail.id)
+    const approvals = this.capabilityApprovalOrder
+      .map((approvalId) => this.capabilityApprovals.get(approvalId))
+      .filter((record): record is CapabilityApprovalRecord => Boolean(
+        record && capabilityApprovalRecordKey(record) === key
+      ))
+      .map((record): AgentRuntimeItem => ({
+        id: record.approvalId,
+        turnId: record.turnId,
+        kind: 'approval',
+        summary: record.requestedEvent.summary,
+        status: record.resolve
+          ? 'pending'
+          : record.event.kind === 'approval_resolved' && record.event.decision === 'allowed'
+            ? 'success'
+            : 'error',
+        createdAt: record.requestedEvent.createdAt,
+        meta: {
+          ...(record.requestedEvent.meta ?? {}),
+          approvalId: record.approvalId,
+          toolName: record.requestedEvent.toolName
+        }
+      }))
+    if (approvals.length === 0) return detail
+    const merge = (items: AgentRuntimeItem[] | undefined, additions: AgentRuntimeItem[]): AgentRuntimeItem[] => {
+      const additionIds = new Set(additions.map((item) => item.id))
+      return [...(items ?? []).filter((item) => !additionIds.has(item.id)), ...additions]
+    }
+    return {
+      ...detail,
+      items: merge(detail.items, approvals),
+      turns: detail.turns?.map((turn) => ({
+        ...turn,
+        items: merge(turn.items, approvals.filter((item) => item.turnId === turn.id))
+      }))
+    }
   }
 
   private subscribeCapabilityApprovalEvents(
