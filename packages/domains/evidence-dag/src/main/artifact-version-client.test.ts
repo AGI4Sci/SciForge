@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import type {
   ArtifactVersionCommitPortV1,
   ArtifactVersionEventListPortV1,
   ArtifactVersionLifecycleEventV1,
+  ArtifactVersionReadPortV1,
   ArtifactVersionRefV1
 } from '@sciforge/domain-artifact-versions/contract'
 import {
@@ -18,11 +20,12 @@ const accessPolicy = {
   principals: [],
   allowExport: true
 }
+const refBytes = Buffer.from('alpha canonical artifact bytes', 'utf8')
 const ref: ArtifactVersionRefV1 = {
   artifactId: 'artifact:alpha',
   versionId: 'artifact-version:alpha-1',
-  contentDigest: 'a'.repeat(64),
-  byteLength: 42,
+  contentDigest: createHash('sha256').update(refBytes).digest('hex'),
+  byteLength: refBytes.byteLength,
   mediaType: 'text/csv',
   availability: 'available',
   retention: 'reference',
@@ -38,8 +41,10 @@ const context = {
 
 test('pins an explicit ref without committing or implicitly pulling lifecycle state', async () => {
   let commits = 0
+  const reads: string[] = []
   const client = createEvidenceArtifactVersionClient(
-    () => ({ commit: async () => { commits += 1; throw new Error('must not commit') } })
+    () => ({ commit: async () => { commits += 1; throw new Error('must not commit') } }),
+    canonicalReadFactory(reads)
   )
 
   const [item] = await client.pinTrace([{
@@ -50,6 +55,7 @@ test('pins an explicit ref without committing or implicitly pulling lifecycle st
   }], context)
 
   assert.equal(commits, 0)
+  assert.deepEqual(reads, [workspaceRoot])
   const projection = item?.evidenceArtifactVersions as Record<string, unknown>
   assert.equal(projection.status, 'ready')
   assert.deepEqual((projection.versions as Array<{ ref: ArtifactVersionRefV1 }>)[0]?.ref, ref)
@@ -58,7 +64,8 @@ test('pins an explicit ref without committing or implicitly pulling lifecycle st
 test('pins explicit lineage refs nested in the generic capability invocation envelope', async () => {
   let commits = 0
   const client = createEvidenceArtifactVersionClient(
-    () => ({ commit: async () => { commits += 1; throw new Error('must not commit') } })
+    () => ({ commit: async () => { commits += 1; throw new Error('must not commit') } }),
+    canonicalReadFactory()
   )
 
   const [item] = await client.pinTrace([{
@@ -100,7 +107,8 @@ test('pins explicit lineage refs nested in the generic capability invocation env
 test('keeps mixed complete and incomplete lineage pending without a partial commit', async () => {
   let commits = 0
   const client = createEvidenceArtifactVersionClient(
-    () => ({ commit: async () => { commits += 1; throw new Error('must fail closed') } })
+    () => ({ commit: async () => { commits += 1; throw new Error('must fail closed') } }),
+    canonicalReadFactory()
   )
 
   const [item] = await client.pinTrace([{
@@ -192,7 +200,7 @@ test('commits only an explicit canonical reference through the real workspace sc
       }
     }
   })
-  const client = createEvidenceArtifactVersionClient(commitFactory)
+  const client = createEvidenceArtifactVersionClient(commitFactory, unusedReadFactory)
 
   const [item] = await client.pinTrace([{
     id: 'trace-2',
@@ -230,7 +238,8 @@ test('pulls lifecycle pages from an explicit caller-owned watermark and merges t
     detail: { previousContentDigest: 'a'.repeat(64), contentDigest: 'c'.repeat(64) }
   }
   const client = createEvidenceArtifactVersionClient(
-    () => ({ commit: async () => { throw new Error('must not commit incomplete provenance') } })
+    () => ({ commit: async () => { throw new Error('must not commit incomplete provenance') } }),
+    unusedReadFactory
   )
   const port: (workspaceRoot: string) => ArtifactVersionEventListPortV1 = () => ({
       listEvents: async (input) => {
@@ -288,7 +297,8 @@ test('marks a full lifecycle page as pending so the next update drains the backl
     detail: { locator: `workspace:data-${index + 1}.csv` }
   }))
   const client = createEvidenceArtifactVersionClient(
-    () => ({ commit: async () => { throw new Error('not used') } })
+    () => ({ commit: async () => { throw new Error('not used') } }),
+    unusedReadFactory
   )
   const pulled = await pullArtifactVersionLifecyclePage(
     workspaceRoot,
@@ -310,4 +320,115 @@ test('marks a full lifecycle page as pending so the next update drains the backl
   }
   assert.equal(projection.lifecyclePending, true)
   assert.equal(projection.lastSequence, 512)
+})
+
+test('fails closed when an explicit ref is absent from the authoritative workspace', async () => {
+  let commits = 0
+  const client = createEvidenceArtifactVersionClient(
+    () => ({ commit: async () => { commits += 1; throw new Error('must not commit') } }),
+    () => ({ read: async () => ({
+      ok: false,
+      issue: { code: 'version-not-found', message: 'Version does not exist in this workspace.' }
+    }) })
+  )
+
+  const [item] = await client.pinTrace([{ artifactVersionRef: ref }], context)
+
+  assert.equal(commits, 0)
+  assert.deepEqual(item?.evidenceArtifactVersions, {
+    status: 'failed',
+    issue: { code: 'version-not-found', message: 'Version does not exist in this workspace.' }
+  })
+  assert.deepEqual(client.identities([item!]), [])
+})
+
+test('rejects a schema-valid ref that differs from the canonical full reference', async () => {
+  const forged = { ...ref, mediaType: 'application/json' }
+  const client = createEvidenceArtifactVersionClient(
+    () => ({ commit: async () => { throw new Error('must not commit') } }),
+    canonicalReadFactory()
+  )
+
+  const [item] = await client.pinTrace([{ artifactVersionRef: forged }], context)
+
+  const projection = item?.evidenceArtifactVersions as {
+    status: string
+    issue: { code: string; message: string }
+  }
+  assert.equal(projection.status, 'failed')
+  assert.equal(projection.issue.code, 'content-mismatch')
+  assert.match(projection.issue.message, /canonical reference/u)
+})
+
+test('revalidates an injected ready projection and rejects mismatched bytes', async () => {
+  const client = createEvidenceArtifactVersionClient(
+    () => ({ commit: async () => { throw new Error('must not commit') } }),
+    canonicalReadFactory([], Buffer.from('tampered bytes', 'utf8'))
+  )
+  const [item] = await client.pinTrace([{
+    evidenceArtifactVersions: {
+      status: 'ready',
+      versions: [{ ref }],
+      lifecycleEvents: []
+    }
+  }], context)
+
+  const projection = item?.evidenceArtifactVersions as {
+    status: string
+    issue: { code: string; message: string }
+  }
+  assert.equal(projection.status, 'failed')
+  assert.equal(projection.issue.code, 'content-mismatch')
+  assert.match(projection.issue.message, /bytes/u)
+})
+
+function canonicalReadFactory(
+  scopes: string[] = [],
+  bytes: Buffer = refBytes
+): (scope: string) => ArtifactVersionReadPortV1 {
+  return (scope) => ({
+    read: async (input) => {
+      scopes.push(scope)
+      assert.equal(input.versionId, ref.versionId)
+      return {
+        ok: true,
+        value: {
+          artifact: {
+            artifactId: ref.artifactId,
+            kind: 'dataset',
+            createdAt: occurredAt,
+            updatedAt: occurredAt,
+            currentVersionId: ref.versionId,
+            versionCount: 1
+          },
+          version: {
+            schemaVersion: 1,
+            versionId: ref.versionId,
+            artifactId: ref.artifactId,
+            sequence: 1,
+            transactionId: 'artifact-commit:alpha',
+            createdAt: occurredAt,
+            intent: 'observe',
+            storage: {
+              mode: 'reference',
+              locator: 'workspace:data/input.csv',
+              contentDigest: ref.contentDigest,
+              byteLength: ref.byteLength,
+              mediaType: ref.mediaType,
+              availability: ref.availability
+            },
+            dependencies: [],
+            accessPolicy: ref.accessPolicy,
+            metadata: {}
+          },
+          ref,
+          dataBase64: bytes.toString('base64')
+        }
+      }
+    }
+  })
+}
+
+const unusedReadFactory = (): ArtifactVersionReadPortV1 => ({
+  read: async () => { throw new Error('must not read without an explicit ref') }
 })

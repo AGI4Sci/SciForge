@@ -15,6 +15,10 @@ SciForge SHALL assign research Artifact identity, immutable Version records, ver
 - **WHEN** an existing Artifact commit supplies an expected current Version that no longer matches
 - **THEN** the whole transaction is rejected as stale and no candidate becomes current
 
+#### Scenario: Evidence receives an externally supplied version ref
+- **WHEN** a trace or prebuilt ready projection supplies an `ArtifactVersionRefV1`
+- **THEN** Evidence exact-reads that Version in the current workspace, verifies the complete canonical ref and bytes, and marks the projection failed without tracking lifecycle identity when any field, byte, permission, or workspace lookup differs
+
 ### Requirement: Durable lifecycle propagation without historical mutation
 Evidence DAG SHALL consume ordered Artifact lifecycle events with durable cursors and idempotent receipts, SHALL enqueue every affected thread before advancing its cursor, and SHALL create a new Evidence Snapshot for changed status.
 
@@ -73,3 +77,11 @@ Artifact bundle export SHALL include only explicitly selected Versions and their
 #### Scenario: A bundle object is corrupted
 - **WHEN** object bytes do not match the manifest digest
 - **THEN** verification and import fail without partially installing records
+
+#### Scenario: A bundle export omits its selection
+- **WHEN** neither a non-empty Artifact ID list nor a non-empty Version ID list is supplied
+- **THEN** export is rejected instead of implicitly exporting the workspace
+
+#### Scenario: A bundle rewrites graph metadata and recomputes its digest
+- **WHEN** a dependency target differs from the complete canonical ref or parent/dependency edges branch or form a cycle
+- **THEN** verification and import fail even when the attacker has recomputed the outer bundle digest

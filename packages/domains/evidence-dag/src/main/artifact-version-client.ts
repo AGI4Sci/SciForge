@@ -11,6 +11,7 @@ import {
   type ArtifactVersionEventListPortV1,
   type ArtifactVersionReadInputV1,
   type ArtifactVersionReadPortV1,
+  type ArtifactVersionRefV1,
   type ArtifactVersionIssueV1,
   type ArtifactVersionLifecycleEventV1
 } from '@sciforge/domain-artifact-versions/contract'
@@ -97,12 +98,13 @@ export function artifactVersionReadPort(
 }
 
 export function createEvidenceArtifactVersionClient(
-  commitPort: (workspaceRoot: string) => ArtifactVersionCommitPortV1
+  commitPort: (workspaceRoot: string) => ArtifactVersionCommitPortV1,
+  readPort: (workspaceRoot: string) => ArtifactVersionReadPortV1
 ): EvidenceArtifactVersionClient {
   return Object.freeze({
     pinTrace: async (trace, context) => {
       return Promise.all(
-        trace.map((item) => pinTraceItem(item, context, commitPort))
+        trace.map((item) => pinTraceItem(item, context, commitPort, readPort))
       )
     },
     withLifecycle: mergeLifecycleProjection,
@@ -201,14 +203,6 @@ export function evidenceArtifactVersionIdentities(
         })
       }
     }
-    for (const descriptor of artifactDescriptors(item)) {
-      const parsed = artifactVersionRefV1Schema.safeParse(descriptor.artifactVersionRef)
-      if (!parsed.success) continue
-      identities.set(parsed.data.versionId, {
-        artifactId: parsed.data.artifactId,
-        versionId: parsed.data.versionId
-      })
-    }
   }
   return [...identities.values()].sort((left, right) =>
     left.artifactId.localeCompare(right.artifactId) ||
@@ -228,12 +222,41 @@ function dedupeLifecycleEvents(
 async function pinTraceItem(
   input: Readonly<Record<string, unknown>>,
   context: EvidenceArtifactVersionPinContext,
-  commitPort: (workspaceRoot: string) => ArtifactVersionCommitPortV1
+  commitPort: (workspaceRoot: string) => ArtifactVersionCommitPortV1,
+  readPort: (workspaceRoot: string) => ArtifactVersionReadPortV1
 ): Promise<Readonly<Record<string, unknown>>> {
   const existing = evidenceDagArtifactVersionProjectionV1Schema.safeParse(
     input.evidenceArtifactVersions
   )
-  if (existing.success) return input
+  if (existing.success) {
+    if (existing.data.status !== 'ready') return input
+    const verifiedRecords: EvidenceDagArtifactVersionRecordV1[] = []
+    for (const record of existing.data.versions) {
+      const verified = await verifyArtifactVersionRef(
+        record.ref,
+        context.workspaceRoot,
+        readPort
+      )
+      if (!verified.ok) {
+        return withProjection(input, {
+          status: 'failed',
+          issue: verified.issue,
+          lifecycleEvents: existing.data.lifecycleEvents,
+          ...(existing.data.lastSequence !== undefined
+            ? { lastSequence: existing.data.lastSequence }
+            : {}),
+          ...(existing.data.lifecyclePending !== undefined
+            ? { lifecyclePending: existing.data.lifecyclePending }
+            : {})
+        })
+      }
+      verifiedRecords.push(verified.record)
+    }
+    return withProjection(input, {
+      ...existing.data,
+      versions: verifiedRecords
+    })
+  }
 
   const descriptors = artifactDescriptors(input)
   if (!descriptors.length) return input
@@ -244,12 +267,15 @@ async function pinTraceItem(
   for (const [index, descriptor] of descriptors.entries()) {
     const parsedRef = artifactVersionRefV1Schema.safeParse(descriptor.artifactVersionRef)
     if (parsedRef.success) {
-      records.push({
-        ref: parsedRef.data,
-        ...(text(descriptor.kind) ? { kind: normalizedKind(descriptor.kind) } : {}),
-        ...(text(descriptor.locator) ? { locator: text(descriptor.locator) } : {}),
-        observedAt: context.occurredAt
-      })
+      const verified = await verifyArtifactVersionRef(
+        parsedRef.data,
+        context.workspaceRoot,
+        readPort
+      )
+      if (!verified.ok) {
+        return withProjection(input, { status: 'failed', issue: verified.issue })
+      }
+      records.push(verified.record)
       continue
     }
 
@@ -355,6 +381,62 @@ async function pinTraceItem(
     })
   }
   return input
+}
+
+type VerifiedArtifactVersionRef =
+  | Readonly<{ ok: true; record: EvidenceDagArtifactVersionRecordV1 }>
+  | Readonly<{ ok: false; issue: ArtifactVersionIssueV1 }>
+
+async function verifyArtifactVersionRef(
+  expectedRef: ArtifactVersionRefV1,
+  workspaceRoot: string,
+  readPort: (workspaceRoot: string) => ArtifactVersionReadPortV1
+): Promise<VerifiedArtifactVersionRef> {
+  try {
+    const result = await readPort(workspaceRoot).read({ versionId: expectedRef.versionId })
+    if (!result.ok) return { ok: false, issue: result.issue }
+    if (stableJson(result.value.ref) !== stableJson(expectedRef)) {
+      return {
+        ok: false,
+        issue: {
+          code: 'content-mismatch',
+          message: `Artifact version ${expectedRef.versionId} does not match its canonical reference.`
+        }
+      }
+    }
+    const bytes = Buffer.from(result.value.dataBase64, 'base64')
+    const contentDigest = createHash('sha256').update(bytes).digest('hex')
+    if (bytes.byteLength !== expectedRef.byteLength || contentDigest !== expectedRef.contentDigest) {
+      return {
+        ok: false,
+        issue: {
+          code: 'content-mismatch',
+          message: `Artifact version ${expectedRef.versionId} bytes do not match its canonical reference.`
+        }
+      }
+    }
+    return {
+      ok: true,
+      record: {
+        ref: result.value.ref,
+        artifact: result.value.artifact,
+        version: result.value.version,
+        kind: result.value.artifact.kind,
+        ...(result.value.version.storage.mode === 'reference'
+          ? { locator: result.value.version.storage.locator }
+          : {}),
+        observedAt: result.value.version.createdAt
+      }
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      issue: {
+        code: 'io-failure',
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  }
 }
 
 function withProjection(

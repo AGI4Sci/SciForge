@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -313,11 +314,12 @@ test('manual update carries the panel workspace through the queue to the service
 
 test('activation proactively consumes ArtifactVersion lifecycle into a new queued snapshot', async () => {
   const userDataDir = await mkdtemp(join(tmpdir(), 'evidence-runtime-lifecycle-'))
+  const bytes = Buffer.from('dataset bytes', 'utf8')
   const ref: ArtifactVersionRefV1 = {
     artifactId: 'artifact:dataset',
     versionId: 'artifact-version:dataset-1',
-    contentDigest: 'a'.repeat(64),
-    byteLength: 12,
+    contentDigest: createHash('sha256').update(bytes).digest('hex'),
+    byteLength: bytes.byteLength,
     mediaType: 'text/csv',
     availability: 'available',
     retention: 'reference',
@@ -334,6 +336,43 @@ test('activation proactively consumes ArtifactVersion lifecycle into a new queue
     },
     artifactVersionCommitPort: {
       commit: async () => { throw new Error('Explicit refs must not commit.') }
+    },
+    artifactVersionReadPort: {
+      read: async () => ({
+        ok: true,
+        value: {
+          artifact: {
+            artifactId: ref.artifactId,
+            kind: 'dataset',
+            createdAt: '2026-08-06T08:00:00.000Z',
+            updatedAt: '2026-08-06T08:00:00.000Z',
+            currentVersionId: ref.versionId,
+            versionCount: 1
+          },
+          version: {
+            schemaVersion: 1,
+            versionId: ref.versionId,
+            artifactId: ref.artifactId,
+            sequence: 1,
+            transactionId: 'artifact-commit:dataset',
+            createdAt: '2026-08-06T08:00:00.000Z',
+            intent: 'observe',
+            storage: {
+              mode: 'reference',
+              locator: 'workspace:data/dataset.csv',
+              contentDigest: ref.contentDigest,
+              byteLength: ref.byteLength,
+              mediaType: ref.mediaType,
+              availability: ref.availability
+            },
+            dependencies: [],
+            accessPolicy: ref.accessPolicy,
+            metadata: {}
+          },
+          ref,
+          dataBase64: bytes.toString('base64')
+        }
+      })
     },
     artifactVersionEventListPort: {
       listEvents: async (input) => input.afterSequence === 1

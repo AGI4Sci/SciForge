@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -6,6 +7,7 @@ import test from 'node:test'
 import type {
   ArtifactVersionEventListPortV1,
   ArtifactVersionLifecycleEventV1,
+  ArtifactVersionReadPortV1,
   ArtifactVersionRefV1
 } from '@sciforge/domain-artifact-versions/contract'
 import { createEvidenceArtifactVersionClient } from './artifact-version-client.js'
@@ -34,7 +36,7 @@ test('durably drains every lifecycle page and enqueues only affected threads', a
   const enqueued: EvidenceDagQueueInput[] = []
   const client = createEvidenceArtifactVersionClient(() => ({
     commit: async () => { throw new Error('Explicit refs must not commit.') }
-  }))
+  }), lifecycleReadFactory)
   const threads = [thread('alpha-thread', alpha), thread('beta-thread', beta)]
   const consumer = new EvidenceArtifactVersionLifecycleConsumer({
     storagePath,
@@ -110,7 +112,7 @@ test('does not advance a cursor while a durably tracked affected thread is unava
   const alpha = artifactRef('alpha', 'a')
   const client = createEvidenceArtifactVersionClient(() => ({
     commit: async () => { throw new Error('Explicit refs must not commit.') }
-  }))
+  }), lifecycleReadFactory)
   const tracked = thread('alpha-thread', alpha)
   const logs: string[] = []
   const first = new EvidenceArtifactVersionLifecycleConsumer({
@@ -162,7 +164,7 @@ test('activation actively drains an exact full page and clears backlog state', a
   const enqueued: EvidenceDagQueueInput[] = []
   const client = createEvidenceArtifactVersionClient(() => ({
     commit: async () => { throw new Error('Explicit refs must not commit.') }
-  }))
+  }), lifecycleReadFactory)
   const activeThread = thread('alpha-thread', alpha)
   const consumer = new EvidenceArtifactVersionLifecycleConsumer({
     storagePath: join(root, 'lifecycle.json'),
@@ -192,17 +194,69 @@ test('activation actively drains an exact full page and clears backlog state', a
 })
 
 function artifactRef(name: string, digestPrefix: string): ArtifactVersionRefV1 {
+  const bytes = Buffer.from(`${name}:${digestPrefix}`, 'utf8')
   return {
     artifactId: `artifact:${name}`,
     versionId: `artifact-version:${name}-1`,
-    contentDigest: digestPrefix.repeat(64),
-    byteLength: 42,
+    contentDigest: createHash('sha256').update(bytes).digest('hex'),
+    byteLength: bytes.byteLength,
     mediaType: 'text/csv',
     availability: 'available',
     retention: 'reference',
     accessPolicy
   }
 }
+
+const lifecycleReadFactory = (): ArtifactVersionReadPortV1 => ({
+  read: async ({ versionId }) => {
+    const match = /^artifact-version:(alpha|beta)-1$/u.exec(versionId)
+    if (!match) {
+      return {
+        ok: false,
+        issue: { code: 'version-not-found', message: `Unknown lifecycle version ${versionId}.` }
+      }
+    }
+    const name = match[1]!
+    const digestPrefix = name === 'alpha' ? 'a' : 'b'
+    const canonicalRef = artifactRef(name, digestPrefix)
+    const bytes = Buffer.from(`${name}:${digestPrefix}`, 'utf8')
+    return {
+      ok: true,
+      value: {
+        artifact: {
+          artifactId: canonicalRef.artifactId,
+          kind: 'dataset',
+          createdAt: occurredAt,
+          updatedAt: occurredAt,
+          currentVersionId: canonicalRef.versionId,
+          versionCount: 1
+        },
+        version: {
+          schemaVersion: 1,
+          versionId: canonicalRef.versionId,
+          artifactId: canonicalRef.artifactId,
+          sequence: 1,
+          transactionId: `artifact-commit:${name}`,
+          createdAt: occurredAt,
+          intent: 'observe',
+          storage: {
+            mode: 'reference',
+            locator: `workspace:${name}.csv`,
+            contentDigest: canonicalRef.contentDigest,
+            byteLength: canonicalRef.byteLength,
+            mediaType: canonicalRef.mediaType,
+            availability: canonicalRef.availability
+          },
+          dependencies: [],
+          accessPolicy: canonicalRef.accessPolicy,
+          metadata: {}
+        },
+        ref: canonicalRef,
+        dataBase64: bytes.toString('base64')
+      }
+    }
+  }
+})
 
 function lifecycleEvent(
   sequence: number,

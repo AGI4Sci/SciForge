@@ -23,3 +23,9 @@
 - [x] 4.1 Regenerate installed-domain composition and capability governance outputs.
 - [x] 4.2 Run package and repository typecheck, tests, production build, and source/packaged capability-path checks.
 - [x] 4.3 Finalize the Claude Science capability matrix with separate promotion, documentation, static, and fixture evidence.
+
+## 5. Merge-readiness audit fixes
+
+- [x] 5.1 Verify every externally supplied `ArtifactVersionRefV1`, including prebuilt ready projections, through the workspace-scoped authoritative read before Evidence marks it ready or tracks its lifecycle identity.
+- [x] 5.2 Require explicit bundle export selection and verify complete canonical dependency refs, linear histories, unique sequences, and an acyclic parent/dependency graph before verify or import succeeds.
+- [x] 5.3 Update the adoption record and run focused package checks, repository regression tests, capability governance, lint, and production build.

@@ -402,11 +402,18 @@ export const artifactVersionBundleV1Schema = z.object({
 
 export const artifactVersionBundleExportInputV1Schema = z.object({
   idempotencyKey: z.string().trim().min(8).max(512),
-  artifactIds: z.array(artifactIdSchema).max(10_000).optional(),
-  versionIds: z.array(versionIdSchema).max(10_000).optional(),
+  artifactIds: z.array(artifactIdSchema).min(1).max(10_000).optional(),
+  versionIds: z.array(versionIdSchema).min(1).max(10_000).optional(),
   destinationPath: pathSchema,
   overwrite: z.boolean().optional()
-}).strict()
+}).strict().superRefine((value, context) => {
+  if (value.artifactIds?.length || value.versionIds?.length) return
+  context.addIssue({
+    code: 'custom',
+    path: ['versionIds'],
+    message: 'Bundle export requires at least one explicit artifactId or versionId.'
+  })
+})
 export const artifactVersionBundleReceiptV1Schema = z.object({
   bundleDigest: sha256Schema,
   path: pathSchema,

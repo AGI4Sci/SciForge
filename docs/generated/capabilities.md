@@ -4417,6 +4417,7 @@ Exports selected version histories and content-addressed snapshot objects.
           "type": "string"
         },
         "maxItems": 10000,
+        "minItems": 1,
         "type": "array"
       },
       "destinationPath": {
@@ -4440,6 +4441,7 @@ Exports selected version histories and content-addressed snapshot objects.
           "type": "string"
         },
         "maxItems": 10000,
+        "minItems": 1,
         "type": "array"
       }
     },

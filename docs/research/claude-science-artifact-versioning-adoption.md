@@ -1,6 +1,6 @@
 # Claude Science 版本化设计与 SciForge 落地矩阵
 
-更新日期：2026-08-06
+更新日期：2026-08-08
 
 ## 证据口径
 
@@ -27,7 +27,7 @@ Claude Science 一列来自用户提供的《Claude Science 科学产物版本�
 | 异步 provenance 与 pending | 未作为依据 | 未核验 | lineage 可异步补充并通知前端 | Artifact commit 与 Evidence 编译分离；Plot 在 commit 后原子写 immutable pending outbox，Evidence exact-read 五个 refs 后幂等 enqueue，并只写 `enqueued` 回执；Snapshot/L4 仍是唯一完成真相 | Evidence backlog、服务失败、outbox 重启恢复、跨 workspace 拒绝和 pending L0 测试通过 | **adapt**：使用 durable event cursor、producer outbox 和幂等重试，不把 saved/enqueued 冒充完成 |
 | 生命周期变化与 stale | 未作为依据 | 未核验 | checksum 可用于漂移检测 | moved、missing、content-changed、restored 等 durable events；Evidence 消费后生成新状态 | missing/content/current change 传播 stale；moved 进入 needs-review；旧 snapshot 不改写 | **adapt** |
 | 通用恢复 | 未作为依据 | 未核验 | 调研未发现通用一键 restore，通常读取旧版本后另存 | `restore-as-new` 是公共 capability，记录 restored-from | 恢复后 current 前进，历史版本未覆盖 | **adopt** SciForge 扩展 |
-| 可验证 bundle | 未作为依据 | 未核验 | 输入报告未证明通用 clean-room bundle | export/import/verify 覆盖精确版本依赖闭包、manifest、refs 和 snapshot object digest | treatment-response 从历史 Figure v1 导出、空目录导入后仅凭 CAS refs 精确复跑；完整性校验和原子导入通过 | **adopt** SciForge 扩展 |
+| 可验证 bundle | 未作为依据 | 未核验 | 输入报告未证明通用 clean-room bundle | export 必须显式选择 Artifact/Version；export/import/verify 覆盖精确版本依赖闭包、完整 canonical refs、线性历史、无环 parent/dependency 图和 snapshot object digest | treatment-response 从历史 Figure v1 导出、空目录导入后仅凭 CAS refs 精确复跑；重算外层 digest 的伪造 ref 与循环图仍被 verify/import 拒绝 | **adopt** SciForge 扩展 |
 | 图表数据来源与统计定义 | 未作为依据 | 未核验 | 输入报告只覆盖通用 artifact provenance | `DataSourceRef`、`DerivedTableReceiptV1`、`ScientificPlotTransformationV1`、`StatisticalDefinitionV1` | treatment-response fixture 验证数据/统计不变而样式变更 | **adopt** SciForge 扩展 |
 | 图表精确复跑与差异解释 | 未作为依据 | 未核验 | 输入报告未证明图表级 recipe 契约 | recipe 固定数据版本、转换、统计、样式、renderer、字体和环境；rerun 从 CAS 读取精确 Recipe/Figure/输入版本 | treatment-response 与 single-cell fixture 固定旧输入复跑；比较区分 data/source/style/statistics/environment/output | **adopt** SciForge 扩展 |
 | 专业二进制格式 fail closed | 未作为依据 | 未核验 | 输入报告未覆盖绘图解析边界 | 绘图只消费领域工具生成的派生表；原始格式可登记为版本 | H5AD extractor 缺失或 hash 不符时不静默回退 | **adopt** |
@@ -63,11 +63,11 @@ Artifact Versions 是唯一的 Artifact identity、Version、bytes、current poi
 | 边界 | 关键输入 | 正式输出 | 完整性与失败语义 |
 | --- | --- | --- | --- |
 | Artifact commit | intent、idempotency key、每个既有 Artifact 的 expected current、snapshot/reference bytes、access/retention、精确依赖 | 一次事务的 Artifact/Version/ref 回执与 lifecycle events | stale-base、依赖无效或任一 bytes 失败时整批不提交；显式 save/rerun/restore 即使同 bytes 也保留语义版本 |
-| Evidence compile | runtime trace、固定 ArtifactVersionRef 投影、lifecycle page、workspace scope | SourceAnchor、Run、Claim、关系、评估与 immutable Evidence Snapshot digest | 不读 latest；版本已保存但 Evidence 未完成时保持 pending/failed，不冒充 L4 |
+| Evidence compile | runtime trace、固定 ArtifactVersionRef 投影、lifecycle page、workspace scope | SourceAnchor、Run、Claim、关系、评估与 immutable Evidence Snapshot digest | 每个外部 ref（含预置 ready 投影）先在当前 workspace exact-read 并核对完整 canonical ref 与 bytes；失败不进入 lifecycle identity；不读 latest，不冒充 L4 |
 | Evidence products | runtime/thread、明确 Snapshot digest、显式 DataCite DOI/creator/publisher/year/project、可选既有输出 Artifact CAS targets | PROV-JSON、RO-Crate JSON-LD、DataCite JSON、L0 audit JSON、reproduction report JSON 的五个 ArtifactVersion refs | 先重建并校验固定历史 Snapshot，再 exact-read 所有 source refs；五文件一次原子 commit；复现不完整时 `level=null` 并列出 breakpoints |
 | Scientific plot save | caller-owned operationId、数据版本/selector、转换步骤、StatisticalDefinition、resolved style/Matplotlib 参数、renderer/environment、review 状态、可选 Evidence runtime/thread | 派生表、ScientificPlotRecipe、PNG、render manifest、log 的一次版本事务、prepared operation receipt 及 immutable Evidence outbox | operationId 冲突、prepared bytes 变化、重复聚合、SD/SEM/CI、缺失值、seed 和显著性依据均 fail closed；review 未接受不产生正式 Figure Version；`enqueued` 不等于 Snapshot/L4 完成 |
 | Exact rerun | 新 operationId、Recipe Version ref、baseline Figure Version ref、expected current | 新 AnalysisRun/Figure Version 与 `replicates` 或 `fails-to-replicate` | 只读 CAS 精确版本；输入、权限、extractor、hash 或环境缺失时返回类型化 provenance breakpoints，显式失败且不回退到 latest |
-| Portable bundle | 选定 Version IDs 与依赖闭包、目标 bundle path | manifest、精确记录与 CAS objects | 只含选定版本、必要 parent 和递归精确依赖；导入前校验每个 digest，失败不部分安装 |
+| Portable bundle | 显式非空 Artifact/Version IDs、目标 bundle path | manifest、精确记录与 CAS objects | 只含选定版本、必要 parent 和递归精确依赖；导入前校验完整 refs、线性历史、无环 DAG 和每个 digest，失败不部分安装 |
 
 ## 失败案例与设计决定
 
@@ -81,6 +81,7 @@ Artifact Versions 是唯一的 Artifact identity、Version、bytes、current poi
 8. **审核提交后本地落盘中断**：Visual Review 在正式 commit 前保存 prepared receipt 与原始备份，commit 后先持久化新 Version ref；重试只完成尚未完成的本地步骤，不重复提交版本，也不允许在“可能已提交”状态下 reject。
 9. **绘图 commit 响应丢失**：同一 caller-owned operationId 固定 plotVersion、prepared digests 和 Artifact commit key；重试校验并复用原 bytes，Artifact receipt 幂等回放，不创建第二组版本。
 10. **绘图已保存但 Evidence 暂不可用**：producer pending outbox 保持不变；Evidence 服务恢复后 exact-read refs、幂等 enqueue 并另写 `enqueued` 回执。只有新的 committed Evidence Snapshot 才能提升复现状态。
+11. **外部 ref 或 bundle manifest 被伪造**：Evidence 必须通过当前 workspace 的权威读取重新核对完整 ref 与 bytes；bundle 即使重算外层 digest，也必须通过完整 dependency ref、线性历史和联合 DAG 校验，否则 verify/import 失败。
 
 ## 首期结论
 
@@ -90,8 +91,8 @@ Artifact Versions 是唯一的 Artifact identity、Version、bytes、current poi
 
 ## 最终实现验证
 
-- capability governance 对 141 个注册 action 和 17 条迁移策略通过，源码中没有 Scientific Plotting 旧业务 MCP/私有 IPC 旁路。
-- Artifact Versions 20/20、Evidence desktop 77/77 与 Python 207/207、Project DAG Python 72/72、Scientific Plotting worker 67/67 与领域 fixture 10/10、Visual Review 36/36、Image Generation 50/50 均通过。
-- 根仓 TypeScript 检查通过；根 Vitest 355 个测试文件、3096/3096 通过；production build 通过。
+- capability governance 对 173 个注册 action 和 18 条迁移策略通过，16 个领域包的生成式 composition 保持最新，源码中没有架构旁路。
+- Artifact Versions 21/21、Evidence desktop 95/95 与 Python 260/260、Project DAG desktop 55/55 与 Python 90/90、Scientific Plotting 领域 fixture 10/10、Visual Review 39/39 均通过。
+- 根仓 TypeScript 检查通过；完整 `npm test` 通过全部领域包回归，根 Vitest 358 个测试文件、3125/3125 通过；production build 通过。
 - source/out 与 packaged/unpacked Electron 烟测均通过同一 capability path，实际到达 Artifact Versions、Evidence DAG、Scientific Plotting 与 Visual Review。
 - 两个遗留绘图 smoke 已改走领域 capability：style smoke 在缺少可选论文素材时仍完成资产无关的五产物版本提交探针；AlphaFold 3 smoke 的首轮绘图通过 capability 生成，Scientific Plotting MCP 仅保留非领域业务辅助工具。

@@ -1076,9 +1076,6 @@ class ArtifactVersionWorkspaceStore {
       const artifactMap = new Map(index.artifacts.map((artifact) => [artifact.artifactId, artifact]))
       const versionMap = new Map(index.versions.map((version) => [version.versionId, version]))
       const selectedVersionIds = new Set<string>()
-      if (!input.artifactIds?.length && !input.versionIds?.length) {
-        index.versions.forEach((version) => selectedVersionIds.add(version.versionId))
-      }
       for (const artifactId of input.artifactIds ?? []) {
         if (!artifactMap.has(artifactId)) {
           throw domainError('artifact-not-found', `Artifact not found: ${artifactId}`)
@@ -2394,14 +2391,12 @@ function verifyBundleBytes(bytes: Uint8Array): Readonly<{
         issues.push(`Dependency target is missing: ${dependency.target.versionId}`)
         continue
       }
-      if (
-        target.storage.contentDigest !== dependency.target.contentDigest ||
-        target.storage.byteLength !== dependency.target.byteLength
-      ) {
-        issues.push(`Dependency target integrity mismatch: ${dependency.target.versionId}`)
+      if (stableStringify(versionRef(target)) !== stableStringify(dependency.target)) {
+        issues.push(`Dependency target reference mismatch: ${dependency.target.versionId}`)
       }
     }
   }
+  validateBundleGraph(bundle, versionMap, issues)
   return {
     bundle,
     verification: artifactVersionBundleVerificationV1Schema.parse({
@@ -2413,6 +2408,96 @@ function verifyBundleBytes(bytes: Uint8Array): Readonly<{
       issues
     })
   }
+}
+
+function validateBundleGraph(
+  bundle: ArtifactVersionBundleV1,
+  versionMap: ReadonlyMap<string, ArtifactVersionV1>,
+  issues: string[]
+): void {
+  const versionsByArtifact = new Map<string, ArtifactVersionV1[]>()
+  const sequenceOwners = new Map<number, string>()
+  for (const version of bundle.versions) {
+    const sequenceOwner = sequenceOwners.get(version.sequence)
+    if (sequenceOwner && sequenceOwner !== version.versionId) {
+      issues.push(
+        `Duplicate version sequence ${version.sequence}: ${sequenceOwner}, ${version.versionId}`
+      )
+    } else {
+      sequenceOwners.set(version.sequence, version.versionId)
+    }
+    const history = versionsByArtifact.get(version.artifactId) ?? []
+    history.push(version)
+    versionsByArtifact.set(version.artifactId, history)
+  }
+
+  for (const artifact of bundle.artifacts) {
+    const history = versionsByArtifact.get(artifact.artifactId) ?? []
+    if (!history.length) continue
+    const roots = history.filter((version) => !version.parentVersionId)
+    if (roots.length !== 1) {
+      issues.push(`Artifact history must have exactly one root: ${artifact.artifactId}`)
+    }
+    const childByParent = new Map<string, ArtifactVersionV1>()
+    for (const version of history) {
+      if (!version.parentVersionId) continue
+      const parent = versionMap.get(version.parentVersionId)
+      if (!parent || parent.artifactId !== artifact.artifactId) continue
+      const existingChild = childByParent.get(parent.versionId)
+      if (existingChild && existingChild.versionId !== version.versionId) {
+        issues.push(`Artifact history branches at version: ${parent.versionId}`)
+      } else {
+        childByParent.set(parent.versionId, version)
+      }
+      if (parent.sequence >= version.sequence) {
+        issues.push(`Artifact history sequence is not increasing: ${version.versionId}`)
+      }
+    }
+    const current = versionMap.get(artifact.currentVersionId)
+    if (current && childByParent.has(current.versionId)) {
+      issues.push(`Artifact current version is not the history tip: ${artifact.artifactId}`)
+    }
+    if (roots.length === 1) {
+      const visited = new Set<string>()
+      let cursor: ArtifactVersionV1 | undefined = roots[0]
+      while (cursor && !visited.has(cursor.versionId)) {
+        visited.add(cursor.versionId)
+        cursor = childByParent.get(cursor.versionId)
+      }
+      if (visited.size !== history.length) {
+        issues.push(`Artifact history is disconnected or cyclic: ${artifact.artifactId}`)
+      }
+      if (!visited.has(artifact.currentVersionId)) {
+        issues.push(`Artifact current version is outside its history: ${artifact.artifactId}`)
+      }
+    }
+  }
+
+  const edges = new Map<string, string[]>()
+  for (const version of bundle.versions) {
+    edges.set(version.versionId, [
+      ...(version.parentVersionId ? [version.parentVersionId] : []),
+      ...version.dependencies.map((dependency) => dependency.target.versionId)
+    ].filter((versionId) => versionMap.has(versionId)))
+  }
+  const visiting = new Set<string>()
+  const visited = new Set<string>()
+  const reported = new Set<string>()
+  const visit = (versionId: string): void => {
+    if (visited.has(versionId)) return
+    if (visiting.has(versionId)) {
+      if (!reported.has(versionId)) {
+        issues.push(`Artifact version graph contains a cycle involving: ${versionId}`)
+        reported.add(versionId)
+      }
+      return
+    }
+    visiting.add(versionId)
+    for (const target of edges.get(versionId) ?? []) visit(target)
+    visiting.delete(versionId)
+    visited.add(versionId)
+  }
+  for (const versionId of edges.keys()) visit(versionId)
 }
 
 class ArtifactVersionDomainError extends Error {

@@ -35,6 +35,10 @@ idempotent replays enforce the same policy. History projections omit inaccessibl
 dependencies, and bundle export fails as a whole if any exact version in the closure is hidden or
 sets `allowExport: false`.
 
+Bundle export requires an explicit non-empty Artifact or Version selection. Verification and
+import reject incomplete canonical dependency refs, non-linear histories, duplicate sequences,
+parent/dependency cycles, manifest changes, and corrupt CAS objects before installing records.
+
 ## Durable layout
 
 Data lives below the host-provided user data directory, partitioned by a SHA-256 workspace key:

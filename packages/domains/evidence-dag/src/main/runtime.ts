@@ -150,7 +150,7 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
       }
       return artifactVersionEventListPort(this.context, workspaceRoot)
     }
-    this.artifactVersions = createEvidenceArtifactVersionClient(commitPort)
+    this.artifactVersions = createEvidenceArtifactVersionClient(commitPort, readPort)
     this.artifactVersionCommit = commitPort
     this.artifactVersionRead = readPort
     this.queue = options.queue ?? new EvidenceDagQueue({

@@ -4,6 +4,7 @@ import {
   ARTIFACT_VERSION_COMMIT_CONTRACT,
   ARTIFACT_VERSION_EVENT_LIST_CONTRACT,
   ARTIFACT_VERSIONS_CAPABILITY_IDS,
+  artifactVersionBundleExportInputV1Schema,
   artifactVersionCommitInputV1Schema,
   artifactVersionIssueV1Schema,
   artifactVersionRefV1Schema
@@ -80,4 +81,20 @@ test('commit contract rejects ambiguous bases and duplicate candidates', () => {
   assert.equal(ARTIFACT_VERSION_COMMIT_CONTRACT.effect, 'workspace-write')
   assert.equal(ARTIFACT_VERSION_EVENT_LIST_CONTRACT.actionId, 'artifact-versions.events.list')
   assert.equal(ARTIFACT_VERSION_EVENT_LIST_CONTRACT.effect, 'read')
+})
+
+test('bundle export requires an explicit non-empty artifact or version selection', () => {
+  const base = {
+    idempotencyKey: 'bundle:explicit-selection',
+    destinationPath: 'exports/result.bundle.json'
+  }
+  assert.equal(artifactVersionBundleExportInputV1Schema.safeParse(base).success, false)
+  assert.equal(artifactVersionBundleExportInputV1Schema.safeParse({
+    ...base,
+    artifactIds: []
+  }).success, false)
+  assert.equal(artifactVersionBundleExportInputV1Schema.safeParse({
+    ...base,
+    versionIds: ['artifact-version:result-1']
+  }).success, true)
 })

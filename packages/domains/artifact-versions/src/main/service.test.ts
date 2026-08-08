@@ -22,6 +22,7 @@ import {
   ArtifactVersionService,
   type ArtifactVersionAccessContext
 } from './service.js'
+import { stableStringify } from './safe-files.js'
 
 const SYSTEM_ACCESS: ArtifactVersionAccessContext = Object.freeze({
   audience: 'system',
@@ -86,6 +87,16 @@ type Fixture = {
   service: TrustedTestService
 }
 
+type MutableBundle = Record<string, unknown> & {
+  versions: Array<{
+    artifactId: string
+    versionId: string
+    sequence: number
+    parentVersionId?: string
+    dependencies: Array<{ target: { mediaType?: string } }>
+  }>
+}
+
 async function fixture(name: string): Promise<Fixture> {
   const root = await mkdtemp(join(tmpdir(), `artifact-versions-${name}-`))
   const userDataDir = join(root, 'user-data')
@@ -119,6 +130,12 @@ function valueOf<T>(result: { ok: true; value: T } | { ok: false; issue: unknown
 
 function digest(text: string): string {
   return createHash('sha256').update(text).digest('hex')
+}
+
+function refreshBundleDigest(bundle: Record<string, unknown>): void {
+  const base = structuredClone(bundle)
+  delete base.bundleDigest
+  bundle.bundleDigest = digest(stableStringify(base))
 }
 
 async function legacyRegistryPath(f: Fixture): Promise<string> {
@@ -649,8 +666,15 @@ test('exports, verifies, imports, and detects tampered content-addressed bundles
         content: snapshot('# Result\n42\n', 'text/markdown')
       }]
     }))
+    const implicit = await f.service.exportBundle(f.workspace, {
+      idempotencyKey: 'bundle:export:implicit',
+      destinationPath: 'exports/implicit.artifact-bundle.json'
+    })
+    assert.equal(implicit.ok, false)
+    if (!implicit.ok) assert.equal(implicit.issue.code, 'invalid-input')
     const exported = valueOf(await f.service.exportBundle(f.workspace, {
       idempotencyKey: 'bundle:export:1',
+      versionIds: [committed.versions[0]!.version.versionId],
       destinationPath: 'exports/result.artifact-bundle.json'
     }))
     const verified = valueOf(await f.service.verifyBundle(f.workspace, {
@@ -854,6 +878,53 @@ test('exports an old version with only its exact recursive dependency and parent
         expectedBytes.get(object.contentDigest)
       )
     }
+
+    const forgedDependencyBundle = structuredClone(bundle) as MutableBundle
+    const versionWithDependency = forgedDependencyBundle.versions
+      .find((version) => version.dependencies.length > 0)!
+    versionWithDependency.dependencies[0].target.mediaType = 'application/octet-stream'
+    refreshBundleDigest(forgedDependencyBundle)
+    await writeFile(
+      join(f.workspace, 'exports', 'forged-dependency.artifact-bundle.json'),
+      JSON.stringify(forgedDependencyBundle)
+    )
+    const forgedDependency = valueOf(await f.service.verifyBundle(f.workspace, {
+      bundlePath: 'exports/forged-dependency.artifact-bundle.json'
+    }))
+    assert.equal(forgedDependency.valid, false)
+    assert.ok(forgedDependency.issues.some((issue) =>
+      issue.includes('Dependency target reference mismatch')
+    ))
+    const rejectedDependencyImport = await f.service.importBundle(f.workspace, {
+      idempotencyKey: 'bundle:exact:import:forged-dependency',
+      bundlePath: 'exports/forged-dependency.artifact-bundle.json'
+    })
+    assert.equal(rejectedDependencyImport.ok, false)
+    if (!rejectedDependencyImport.ok) {
+      assert.equal(rejectedDependencyImport.issue.code, 'bundle-invalid')
+    }
+
+    const cyclicBundle = structuredClone(bundle) as MutableBundle
+    const figureHistory = cyclicBundle.versions
+      .filter((version) => version.artifactId === figureV1.artifact.artifactId)
+      .sort((left, right) => left.sequence - right.sequence)
+    figureHistory[0]!.parentVersionId = figureHistory.at(-1)!.versionId
+    refreshBundleDigest(cyclicBundle)
+    await writeFile(
+      join(f.workspace, 'exports', 'cyclic.artifact-bundle.json'),
+      JSON.stringify(cyclicBundle)
+    )
+    const cyclic = valueOf(await f.service.verifyBundle(f.workspace, {
+      bundlePath: 'exports/cyclic.artifact-bundle.json'
+    }))
+    assert.equal(cyclic.valid, false)
+    assert.ok(cyclic.issues.some((issue) => issue.includes('cycle')))
+    const rejectedCyclicImport = await f.service.importBundle(f.workspace, {
+      idempotencyKey: 'bundle:exact:import:cyclic',
+      bundlePath: 'exports/cyclic.artifact-bundle.json'
+    })
+    assert.equal(rejectedCyclicImport.ok, false)
+    if (!rejectedCyclicImport.ok) assert.equal(rejectedCyclicImport.issue.code, 'bundle-invalid')
 
     const targetWorkspace = join(f.root, 'exact-target-workspace')
     await mkdir(targetWorkspace)
