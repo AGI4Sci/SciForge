@@ -7,7 +7,7 @@ import {
   type ScientificTraceEvent,
   type ScientificTraceEventInput,
   type ScientificTraceValidationResult
-} from './scientific.js'
+} from '@sciforge/full-trace'
 
 export type ScientificExpenseScenario = 'normal-sanitized' | 'missing-fields' | 'duplicate-conflict'
 
@@ -221,6 +221,16 @@ export class ScientificExpenseDraftBuilder {
     recognizedExpenses: readonly ScientificExpenseLineItem[]
     validation: ScientificExpenseValidationResult
   }): ScientificExpenseDraftArtifact {
+    assertDraftBuildAllowed(input.fixture)
+    const blockingIssue = input.validation.issues.find((validationIssue) =>
+      BLOCKING_EXPENSE_DRAFT_ISSUES.has(validationIssue.code)
+    )
+    if (blockingIssue) {
+      throw new Error(
+        `Refusing to create expense draft artifact because ${blockingIssue.code} was detected.`
+      )
+    }
+
     const draftId = `expense-draft-${input.requestId}`
     const content = JSON.stringify({
       draftId,
@@ -707,6 +717,24 @@ function issue(
   }
 }
 
+function assertDraftBuildAllowed(fixture: ScientificExpenseFixtureInput): void {
+  if (fixture.requestedAction !== 'draft-only') {
+    throw new Error(
+      'Refusing to create expense draft artifact because REAL_SUBMISSION_FORBIDDEN was detected.'
+    )
+  }
+  if (fixture.paymentRequested) {
+    throw new Error(
+      'Refusing to create expense draft artifact because PAYMENT_FORBIDDEN was detected.'
+    )
+  }
+  if (containsSensitiveValue(fixture)) {
+    throw new Error(
+      'Refusing to create expense draft artifact because PII_DETECTED was detected.'
+    )
+  }
+}
+
 function questionForValidation(validation: ScientificExpenseValidationResult): string {
   const codes = new Set(validation.issues.map((validationIssue) => validationIssue.code))
   if (codes.has('DUPLICATE_EXPENSE') || codes.has('AMOUNT_CONFLICT')) {
@@ -825,3 +853,9 @@ const CHINA_MAINLAND_PHONE_PATTERN = /\b1[3-9]\d{9}\b/
 const CHINA_ID_CARD_PATTERN = /\b\d{17}[\dXx]\b/
 const BANK_CARD_PATTERN = /\b(?:\d[ -]*?){16,19}\b/
 const SECRET_PATTERN = /\b(?:sk|ghp|github_pat|xoxb)-[A-Za-z0-9_-]{12,}\b/
+
+const BLOCKING_EXPENSE_DRAFT_ISSUES = new Set<ScientificExpenseValidationIssueCode>([
+  'PII_DETECTED',
+  'REAL_SUBMISSION_FORBIDDEN',
+  'PAYMENT_FORBIDDEN'
+])

@@ -39,9 +39,11 @@ Resource Usage
 
 相关文件：
 
-- `packages/full-trace/src/scientific-expense.ts`
-- `packages/full-trace/src/scientific-expense.test.ts`
-- `packages/full-trace/src/index.ts`
+- `packages/domains/finance-expense/src/scientific-expense.ts`
+- `packages/domains/finance-expense/src/scientific-expense.test.ts`
+- `packages/domains/finance-expense/src/definition.ts`
+- `packages/domains/finance-expense/src/main.ts`
+- `packages/full-trace/src/scientific.ts`
 
 ## 3. 三类 baseline Trace
 

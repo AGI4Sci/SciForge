@@ -4,16 +4,18 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  LocalTraceStore,
   ScientificExpenseDraftBuilder,
   ScientificExpenseRecognizer,
   ScientificExpenseValidator,
-  ScientificTraceCollector,
   createScientificExpenseBaselineJsonl,
   createScientificExpenseBaselineTrace,
-  validateScientificExpenseBaselineTrace,
+  validateScientificExpenseBaselineTrace
+} from './scientific-expense.js'
+import {
+  LocalTraceStore,
+  ScientificTraceCollector,
   type ScientificTraceEvent
-} from './index.js'
+} from '@sciforge/full-trace'
 
 const temporaryDirectories: string[] = []
 
@@ -110,26 +112,26 @@ describe('scientific finance expense loop baseline traces', () => {
 
   test('blocks real submission, payment, and personal/payment information', () => {
     const validator = new ScientificExpenseValidator()
-    const trace = createScientificExpenseBaselineTrace({
-      scenario: 'normal-sanitized',
-      fixture: {
-        requestedAction: 'pay',
-        paymentRequested: true,
-        lines: [{
-          usageId: 'usage-pii-001',
-          resourceKind: 'api',
-          quantity: 1,
-          unit: 'token',
-          unitCostUsd: 1,
-          amountUsd: 1,
-          occurredAt: '2026-08-07',
-          projectId: 'project-pii',
-          purpose: 'This contains private email researcher@example.com',
-          receiptId: 'receipt-pii-001'
-        }]
-      }
-    })
-    const validation = validator.validate(trace.fixture)
+    const unsafeFixture = {
+      ...createScientificExpenseBaselineTrace({ scenario: 'normal-sanitized' }).fixture,
+      requestedAction: 'pay' as const,
+      paymentRequested: true,
+      lines: [{
+        usageId: 'usage-pii-001',
+        resourceKind: 'api' as const,
+        quantity: 1,
+        unit: 'token',
+        unitCostUsd: 1,
+        amountUsd: 1,
+        occurredAt: '2026-08-07',
+        projectId: 'project-pii',
+        purpose: 'This contains private email researcher@example.com',
+        receiptId: 'receipt-pii-001',
+        receiptHash: 'receipt has card 4111 1111 1111 1111',
+        bankAccount: '6222020202020202020'
+      }]
+    }
+    const validation = validator.validate(unsafeFixture)
 
     assert.equal(validation.ok, false)
     assert.deepEqual(new Set(validation.issues.map((issue) => issue.code)), new Set([
@@ -137,6 +139,39 @@ describe('scientific finance expense loop baseline traces', () => {
       'REAL_SUBMISSION_FORBIDDEN',
       'PAYMENT_FORBIDDEN'
     ]))
+    assert.throws(
+      () => new ScientificExpenseDraftBuilder().build({
+        scenario: 'normal-sanitized',
+        requestId: unsafeFixture.requestId,
+        state: 'rejected',
+        fixture: unsafeFixture,
+        recognizedExpenses: [],
+        validation
+      }),
+      /Refusing to create expense draft artifact/
+    )
+    assert.throws(
+      () => new ScientificExpenseDraftBuilder().build({
+        scenario: 'normal-sanitized',
+        requestId: unsafeFixture.requestId,
+        state: 'rejected',
+        fixture: unsafeFixture,
+        recognizedExpenses: [],
+        validation: { ok: true, issues: [] }
+      }),
+      /REAL_SUBMISSION_FORBIDDEN|PAYMENT_FORBIDDEN|PII_DETECTED/
+    )
+    assert.throws(
+      () => createScientificExpenseBaselineTrace({
+        scenario: 'normal-sanitized',
+        fixture: {
+          requestedAction: 'pay',
+          paymentRequested: true,
+          lines: unsafeFixture.lines
+        }
+      }),
+      /Refusing to create expense draft artifact/
+    )
 
     const chineseFieldValidation = validator.validate({
       ...createScientificExpenseBaselineTrace({ scenario: 'normal-sanitized' }).fixture,

@@ -2706,12 +2706,23 @@ describe('AgentRuntimeHost', () => {
       expect(visibleAssistant).toMatchObject({
         text: `visible output from /Users/alice/private-${runtimeId} with token=runtime-secret`
       })
-      expect(append).toHaveBeenCalledTimes(4)
-      expect(append.mock.calls.map(([event]) => event.payload.eventKind).sort()).toEqual([
+      const rawRuntimeEvents = append.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.source === 'agent-runtime')
+      const scientificEvents = append.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.source === 'scientific-trace-collector')
+      expect(rawRuntimeEvents).toHaveLength(4)
+      expect(rawRuntimeEvents.map((event) => event.payload.eventKind).sort()).toEqual([
         'assistant',
         'lifecycle',
         'tool',
         'usage'
+      ])
+      expect(scientificEvents.map((event) => (event.payload.event as { type?: string }).type).sort()).toEqual([
+        'RESOURCE_USAGE_RECORDED',
+        'TOOL_CALL_COMPLETED',
+        'TRACE_STARTED'
       ])
       expect(append).toHaveBeenCalledWith(expect.objectContaining({
         runtimeId,

@@ -1,0 +1,35 @@
+{
+  "name": "@sciforge/domain-finance-expense",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "private": false,
+  "description": "Finance expense loop domain package for SciForge.",
+  "exports": {
+    "./contract": "./src/contract.ts",
+    "./definition": "./src/definition.ts",
+    "./main": "./src/main.ts",
+    "./scientific-expense": "./src/scientific-expense.ts"
+  },
+  "files": [
+    "src",
+    "sciforge.domain.json",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "pretest": "npm --workspace @sciforge/full-trace run build",
+    "pretypecheck": "npm --workspace @sciforge/full-trace run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@sciforge/domain-sdk": "^0.1.0",
+    "@sciforge/full-trace": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.22.4",
+    "typescript": "^5.8.2"
+  }
+}

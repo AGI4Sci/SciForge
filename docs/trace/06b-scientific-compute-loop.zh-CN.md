@@ -36,9 +36,11 @@
 
 相关文件：
 
-- `packages/full-trace/src/scientific-job.ts`
-- `packages/full-trace/src/scientific-job.test.ts`
-- `packages/full-trace/src/index.ts`
+- `packages/domains/scientific-compute/src/scientific-job.ts`
+- `packages/domains/scientific-compute/src/scientific-job.test.ts`
+- `packages/domains/scientific-compute/src/definition.ts`
+- `packages/domains/scientific-compute/src/main.ts`
+- `packages/full-trace/src/scientific.ts`
 
 ## 3. 当前事件链
 

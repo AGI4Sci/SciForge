@@ -5,14 +5,16 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   LocalScientificFixtureScheduler,
-  LocalTraceStore,
   ScientificJobManager,
-  ScientificTraceCollector,
   createScientificJobBaselineJsonl,
   createScientificJobBaselineTrace,
-  validateScientificJobBaselineTrace,
+  validateScientificJobBaselineTrace
+} from './scientific-job.js'
+import {
+  LocalTraceStore,
+  ScientificTraceCollector,
   type ScientificTraceEvent
-} from './index.js'
+} from '@sciforge/full-trace'
 
 const temporaryDirectories: string[] = []
 

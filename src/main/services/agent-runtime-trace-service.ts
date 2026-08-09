@@ -85,6 +85,17 @@ export class AgentRuntimeTraceRecorder {
     }
   }
 
+  async flushAll(): Promise<void> {
+    const turns = [...this.turns.values()]
+    for (const turn of turns) {
+      await this.flushTurn(turn.runtimeId, turn.threadId, turn.turnId)
+    }
+  }
+
+  async dispose(): Promise<void> {
+    await this.flushAll()
+  }
+
   private async appendObservedEvent(runtimeId: AgentRuntimeId, observed: ObservedAgentEvent): Promise<void> {
     await this.sink.append(this.traceInput(runtimeId, observed))
     await this.recordScientificEvents(runtimeId, [observed])

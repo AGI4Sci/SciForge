@@ -102,6 +102,22 @@ describe('AgentRuntimeTraceRecorder', () => {
     expect(append).toHaveBeenCalledTimes(2)
   })
 
+  it('flushes buffered turn events on recorder disposal', async () => {
+    const { recorder, append } = fakeRecorder()
+    await recorder.observeEvent('codex', {
+      kind: 'assistant_delta',
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      itemId: 'assistant-1',
+      text: 'buffered final text'
+    })
+
+    expect(append).not.toHaveBeenCalled()
+    await recorder.dispose()
+    expect(rawAppendInputs(append)).toHaveLength(1)
+  })
+
   it('persists tools, approvals, usage, errors, and lifecycle before buffered deltas flush', async () => {
     const { recorder, append, appendMany } = fakeRecorder()
     const base = {

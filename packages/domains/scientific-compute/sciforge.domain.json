@@ -1,0 +1,26 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-scientific-compute",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
+  "module": {
+    "id": "sciforge.scientific-compute",
+    "displayName": "Scientific Compute",
+    "version": "0.1.0",
+    "hostApi": {
+      "minimum": "1.0.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 155
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": []
+    }
+  ]
+}

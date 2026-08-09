@@ -99,6 +99,7 @@ export type ScientificTraceValidationIssueCode =
   | 'MISSING_ARTIFACT'
   | 'MISSING_HUMAN_REASON'
   | 'MISSING_PARENT_EVENT'
+  | 'INVALID_TRACE_LINK'
   | 'SECRET_DETECTED'
   | 'PII_DETECTED'
   | 'INVALID_SCHEMA'
@@ -262,7 +263,17 @@ export function validateScientificTraceEvent(input: unknown): ScientificTraceVal
 
 export function validateScientificTraceClosure(events: readonly ScientificTraceEvent[]): ScientificTraceValidationResult {
   const issues: ScientificTraceValidationIssue[] = []
-  const eventIds = new Set(events.map((event) => event.eventId))
+  const eventsById = new Map<string, ScientificTraceEvent>()
+  const artifactRefs = new Set<string>()
+  for (const event of events) {
+    if (eventsById.has(event.eventId)) {
+      issues.push(errorIssue('INVALID_TRACE_LINK', event.eventId, `Trace repeats eventId ${event.eventId}.`))
+    }
+    eventsById.set(event.eventId, event)
+    if (isArtifactEventType(event.type)) {
+      for (const ref of artifactRefsForEvent(event)) artifactRefs.add(ref)
+    }
+  }
 
   if (!events.some((event) => event.type === 'USER_INPUT' && hasUserInput(event))) {
     issues.push(errorIssue('MISSING_INPUT', undefined, 'Trace must include at least one valid USER_INPUT event.'))
@@ -289,12 +300,36 @@ export function validateScientificTraceClosure(events: readonly ScientificTraceE
   }
 
   for (const event of events) {
-    if (isRootScientificEventType(event.type)) continue
-    if (!event.parentEventId || !eventIds.has(event.parentEventId)) {
+    if (isRootScientificEventType(event.type)) {
+      if (event.parentEventId) {
+        issues.push(errorIssue(
+          'INVALID_TRACE_LINK',
+          event.eventId,
+          `${event.type} is a root event and must not reference a parent event.`
+        ))
+      }
+      continue
+    }
+    if (!event.parentEventId || !eventsById.has(event.parentEventId)) {
       issues.push(errorIssue(
         'MISSING_PARENT_EVENT',
         event.eventId,
         `${event.type} must reference an existing parent event.`
+      ))
+      continue
+    }
+    const chain = parentChainForEvent(event, eventsById)
+    if (chain.cycle) {
+      issues.push(errorIssue(
+        'INVALID_TRACE_LINK',
+        event.eventId,
+        `${event.type} parent chain contains a cycle.`
+      ))
+    } else if (!chain.terminatedAtRoot) {
+      issues.push(errorIssue(
+        'MISSING_PARENT_EVENT',
+        event.eventId,
+        `${event.type} parent chain must terminate at TRACE_STARTED or USER_INPUT.`
       ))
     }
   }
@@ -302,6 +337,30 @@ export function validateScientificTraceClosure(events: readonly ScientificTraceE
   for (const event of events) {
     if (event.type === 'HUMAN_REVIEW_RECORDED' && !hasHumanReviewReason(event)) {
       issues.push(errorIssue('MISSING_HUMAN_REASON', event.eventId, 'Human review must include a reason.'))
+    }
+    if (event.type === 'HUMAN_REVIEW_RECORDED' && hasHumanReviewReason(event)) {
+      const parentTypes = parentChainForEvent(event, eventsById).events.map((parent) => parent.type)
+      const anchoredToReviewableEvidence = parentTypes.includes('EVIDENCE_ATTACHED') ||
+        parentTypes.includes('HUMAN_REVIEW_REQUESTED') ||
+        parentTypes.includes('BUDGET_APPROVAL_REQUESTED')
+      if (!anchoredToReviewableEvidence) {
+        issues.push(errorIssue(
+          'INVALID_TRACE_LINK',
+          event.eventId,
+          'Human review must depend on evidence or an explicit approval/review request.'
+        ))
+      }
+    }
+    if (
+      event.type === 'EVIDENCE_ATTACHED' &&
+      hasEvidence(event) &&
+      !evidenceReferencesKnownArtifact(event, eventsById, artifactRefs)
+    ) {
+      issues.push(errorIssue(
+        'INVALID_TRACE_LINK',
+        event.eventId,
+        'Evidence must reference an artifact created in the same trace.'
+      ))
     }
   }
 
@@ -408,6 +467,99 @@ function hasEvidence(event: Partial<ScientificTraceEvent>): boolean {
 function hasHumanReviewReason(event: Partial<ScientificTraceEvent>): boolean {
   const payload = isRecord(event.payload) ? event.payload : {}
   return nonEmptyString(payload.reason)
+}
+
+function parentChainForEvent(
+  event: ScientificTraceEvent,
+  eventsById: ReadonlyMap<string, ScientificTraceEvent>
+): {
+  events: ScientificTraceEvent[]
+  terminatedAtRoot: boolean
+  cycle: boolean
+} {
+  const parents: ScientificTraceEvent[] = []
+  const visited = new Set<string>([event.eventId])
+  let cursor = event
+  while (cursor.parentEventId) {
+    if (visited.has(cursor.parentEventId)) {
+      return {
+        events: parents,
+        terminatedAtRoot: false,
+        cycle: true
+      }
+    }
+    visited.add(cursor.parentEventId)
+    const parent = eventsById.get(cursor.parentEventId)
+    if (!parent) {
+      return {
+        events: parents,
+        terminatedAtRoot: false,
+        cycle: false
+      }
+    }
+    parents.push(parent)
+    if (isRootScientificEventType(parent.type)) {
+      return {
+        events: parents,
+        terminatedAtRoot: true,
+        cycle: false
+      }
+    }
+    cursor = parent
+  }
+  return {
+    events: parents,
+    terminatedAtRoot: isRootScientificEventType(event.type),
+    cycle: false
+  }
+}
+
+function artifactRefsForEvent(event: ScientificTraceEvent): string[] {
+  const payload = isRecord(event.payload) ? event.payload : {}
+  const candidates = [
+    ...stringArray(event.links?.artifacts),
+    payload.artifactId,
+    payload.plotId,
+    payload.documentId,
+    payload.versionId,
+    payload.draftId,
+    payload.path,
+    payload.uri,
+    payload.storageRef
+  ].filter(nonEmptyString)
+  const refs = new Set<string>()
+  for (const candidate of candidates) {
+    refs.add(candidate)
+    if (!candidate.includes('://')) refs.add(`artifact://${candidate}`)
+  }
+  refs.add(event.eventId)
+  return [...refs]
+}
+
+function evidenceReferencesKnownArtifact(
+  event: ScientificTraceEvent,
+  eventsById: ReadonlyMap<string, ScientificTraceEvent>,
+  artifactRefs: ReadonlySet<string>
+): boolean {
+  const payload = isRecord(event.payload) ? event.payload : {}
+  if (nonEmptyString(payload.target)) {
+    const targetEvent = eventsById.get(payload.target)
+    if (targetEvent && isArtifactEventType(targetEvent.type)) return true
+  }
+  return [
+    ...stringArray(event.links?.artifacts),
+    payload.artifactId,
+    payload.targetArtifactId,
+    payload.target
+  ].filter(nonEmptyString).some((candidate) => {
+    if (artifactRefs.has(candidate)) return true
+    return !candidate.includes('://') && artifactRefs.has(`artifact://${candidate}`)
+  })
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter(nonEmptyString)
 }
 
 function sanitizeScientificPiiValue(value: TraceJsonValue): TraceJsonValue {

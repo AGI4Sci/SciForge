@@ -84,6 +84,56 @@ describe('scientific trace validation', () => {
     assertIssueCodes(validateScientificTraceClosure(traceWithArtifactWithoutIntegrity), ['MISSING_ARTIFACT'])
   })
 
+  test('rejects traces with broken causal links between artifacts, evidence, reviews, and roots', () => {
+    const closed = closedTraceEvents()
+    const evidenceWithoutLocalArtifact = closed.map((event) => {
+      if (event.type !== 'EVIDENCE_ATTACHED') return event
+      return scientificEvent({
+        eventId: event.eventId,
+        type: 'EVIDENCE_ATTACHED',
+        parentEventId: event.parentEventId,
+        payload: {
+          evidenceId: 'evidence-external-artifact',
+          evidenceType: 'result-file',
+          target: 'artifact://not-created-in-this-trace'
+        },
+        links: {
+          evidence: ['evidence://external'],
+          artifacts: ['artifact://not-created-in-this-trace']
+        }
+      })
+    })
+    assertIssueCodes(validateScientificTraceClosure(evidenceWithoutLocalArtifact), ['INVALID_TRACE_LINK'])
+
+    const unanchoredReview = closed.map((event) => {
+      if (event.type !== 'HUMAN_REVIEW_RECORDED') return event
+      return scientificEvent({
+        eventId: event.eventId,
+        type: 'HUMAN_REVIEW_RECORDED',
+        parentEventId: 'event-agent-action',
+        payload: {
+          decision: 'approved',
+          reason: 'This review skips evidence and approval request linkage.'
+        }
+      })
+    })
+    assertIssueCodes(validateScientificTraceClosure(unanchoredReview), ['INVALID_TRACE_LINK'])
+
+    const cycleA = scientificEvent({
+      eventId: 'event-cycle-a',
+      type: 'AGENT_ACTION',
+      parentEventId: 'event-cycle-b',
+      payload: { summary: 'A cycle start.' }
+    })
+    const cycleB = scientificEvent({
+      eventId: 'event-cycle-b',
+      type: 'TOOL_CALL_COMPLETED',
+      parentEventId: 'event-cycle-a',
+      payload: { toolName: 'cycle.fixture' }
+    })
+    assertIssueCodes(validateScientificTraceClosure([...closed, cycleA, cycleB]), ['INVALID_TRACE_LINK'])
+  })
+
   test('rejects individual events that miss parent, artifact, evidence, review, or input data', () => {
     assertIssueCodes(validateScientificTraceEvent(scientificEvent({
       type: 'AGENT_ACTION',

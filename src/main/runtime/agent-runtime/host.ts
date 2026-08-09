@@ -861,7 +861,7 @@ export class AgentRuntimeHost {
     )
   }
 
-  dispose(): void {
+  async dispose(): Promise<void> {
     if (this.disposed) return
     this.disposed = true
     this.subagentToolBridge?.dispose()
@@ -875,6 +875,7 @@ export class AgentRuntimeHost {
     this.capabilityApprovals.clear()
     this.capabilityApprovalOrder.splice(0)
     this.artifactBroadcastTurns.clear()
+    await this.options.services?.trace?.dispose()
   }
 
   async resolveUserInput(input: AgentRuntimeUserInputResolveInput): Promise<void> {

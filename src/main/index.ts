@@ -763,7 +763,9 @@ async function stopManagedRuntimes(): Promise<void> {
       await runtimeContributions?.dispose().catch((error) => {
         logWarn('domain-runtime', 'Failed to dispose domain runtime contributions.', error)
       })
-      agentRuntimeHostForShutdown?.dispose()
+      await agentRuntimeHostForShutdown?.dispose().catch((error) => {
+        logWarn('agent-runtime', 'Failed to flush agent runtime trace recorder.', error)
+      })
       agentRuntimeHostForShutdown = null
       const workspaceHostSessions = workspaceHostSessionManagerForShutdown
       workspaceHostSessionManagerForShutdown = null

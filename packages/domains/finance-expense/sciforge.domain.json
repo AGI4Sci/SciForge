@@ -1,0 +1,26 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-finance-expense",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
+  "module": {
+    "id": "sciforge.finance-expense",
+    "displayName": "Finance Expense",
+    "version": "0.1.0",
+    "hostApi": {
+      "minimum": "1.0.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 154
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": []
+    }
+  ]
+}

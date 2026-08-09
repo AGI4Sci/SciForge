@@ -7,7 +7,7 @@ import {
   type ScientificTraceEvent,
   type ScientificTraceEventInput,
   type ScientificTraceValidationResult
-} from './scientific.js'
+} from '@sciforge/full-trace'
 
 export type ScientificJobScenario = 'success' | 'blocked' | 'rerun' | 'human-interaction'
 
