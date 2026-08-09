@@ -6,6 +6,22 @@ import {
 } from '../agent-runtime/execution-integrity-guard'
 
 describe('createCodexAgentRuntimeAdapter', () => {
+  it('binds the Host tool allowlist when the Codex thread is created', async () => {
+    const startThread = vi.fn(async () => ({
+      ok: true as const,
+      thread: { id: 'thread-policy', title: 'Policy', workspace: '/tmp/workspace' }
+    }))
+    const adapter = createCodexAgentRuntimeAdapter({ startThread } as never)
+    await adapter.startThread({ settings: {} as never }, {
+      runtimeId: 'codex',
+      workspace: '/tmp/workspace',
+      allowedTools: ['sciforge_discover', 'sciforge_invoke']
+    })
+    expect(startThread).toHaveBeenCalledWith(expect.objectContaining({
+      allowedTools: ['sciforge_discover', 'sciforge_invoke']
+    }))
+  })
+
   it('forwards turn governance snapshots to the Codex pre-tool bridge', async () => {
     const updateTurnGovernanceSnapshot = vi.fn(async () => ({ ok: true as const }))
     const adapter = createCodexAgentRuntimeAdapter({

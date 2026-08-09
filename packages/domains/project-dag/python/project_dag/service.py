@@ -7,15 +7,68 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Optional
 
 from .compiler import Compiler
-from .contracts import canonical_json
+from .contracts import canonical_json, digest_json
 from .judge import Judge
 from .provenance import ProvenanceResolver
 from .reader import SessionReader
 from .store import Store, new_id, now_iso
 from .workflow import ProjectWorkflow
+
+
+_SAFE_PROJECT_STATUSES = {
+    "active", "completed", "abandoned", "supported", "conflicted", "invalidated",
+    "fragile", "undetermined", "pending", "approved", "rejected", "deferred",
+    "open", "closed", "accepted", "failed", "committed", "not_needed",
+    "restricted", "queued", "running", "succeeded", "superseded", "covered",
+    "updating", "update_failed", "retry_scheduled", "fresh", "empty", "not_run", "stale",
+    "resolved", "blocked", "candidate", "certified",
+}
+_SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def _safe_project_status(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    return normalized if normalized in _SAFE_PROJECT_STATUSES else None
+
+
+def _restricted_project_ref(kind: str, value: Any) -> dict[str, Any]:
+    item = value if isinstance(value, dict) else {}
+    identifier = next((
+        item.get(key) for key in (
+            "id", "root_id", "rootId", "reviewPacketId", "claim_id", "claimId",
+            "target_id", "targetId", "threadId", "jobId", "digest",
+        ) if item.get(key) is not None
+    ), value)
+    status = _safe_project_status(
+        item.get("status") or item.get("state") or item.get("gateStatus"))
+    return {
+        "idHash": digest_json({"kind": kind, "id": identifier}),
+        **({"status": status} if status else {}),
+        "exists": value is not None,
+        "accessLevel": "restricted",
+    }
+
+
+def _restricted_project_vector(vector: Any) -> list[dict[str, Any]]:
+    result = []
+    for entry in vector if isinstance(vector, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        digest = entry.get("digest")
+        result.append({
+            "idHash": digest_json({"kind": "evidence-vector", "id": entry.get("threadId")}),
+            **({"contentDigest": digest}
+               if isinstance(digest, str) and _SHA256.fullmatch(digest) else {}),
+            "exists": True,
+            "accessLevel": "restricted",
+        })
+    return result
 
 
 class Engine:
@@ -37,7 +90,7 @@ class Engine:
         unknown = sorted(set(payload) - self.UPDATE_FIELDS)
         if unknown:
             raise ValueError(f"unknown update fields: {unknown}")
-        return self.workflow.enqueue_update(
+        result = self.workflow.enqueue_update(
             project_key=payload.get("projectKey"),
             evidence_vector=payload.get("evidenceVector") or [],
             captured_scope=payload.get("capturedScope"),
@@ -46,30 +99,234 @@ class Engine:
             autonomy_mode=payload.get("autonomyMode"),
             actor=actor,
         )
+        return self._project_response(
+            result["projectKey"], "project-update-receipt", result)
 
     def process_updates(self, project_key: Optional[str] = None) -> Optional[dict]:
         return self.workflow.process_next(project_key)
 
     def retry_update(self, job_id: str, *, actor: str = "human") -> dict:
-        return self.workflow.retry_update(job_id, actor=actor)
+        result = self.workflow.retry_update(job_id, actor=actor)
+        return self._project_response(
+            result["project_key"], "project-update-job", result)
 
     def update_status(self, project_key: str) -> dict:
-        return self.workflow.status(project_key)
+        status = self.workflow.status(project_key)
+        raw_snapshots = {
+            field: status.get(field)
+            for field in ("committedSnapshot", "previousCommittedSnapshot")
+        }
+        for field in ("committedSnapshot", "previousCommittedSnapshot"):
+            snapshot = status.get(field)
+            if isinstance(snapshot, dict) and isinstance(snapshot.get("digest"), str):
+                status[field] = self.snapshot_view(project_key, snapshot["digest"])
+        access = self._project_read_access(project_key)
+        if access is None or not access["redacted"]:
+            return status
+        return {
+            "projectHash": digest_json({"kind": "project", "id": project_key}),
+            "state": _safe_project_status(status.get("state")) or "restricted",
+            "committedSnapshot": self._restricted_snapshot_projection(
+                raw_snapshots["committedSnapshot"], access)
+                if isinstance(raw_snapshots["committedSnapshot"], dict) else None,
+            "previousCommittedSnapshot": self._restricted_snapshot_projection(
+                raw_snapshots["previousCommittedSnapshot"], access)
+                if isinstance(raw_snapshots["previousCommittedSnapshot"], dict) else None,
+            "desiredEvidenceVector": _restricted_project_vector(
+                status.get("desiredEvidenceVector")),
+            "pending": bool(status.get("pending")),
+            "jobs": [
+                _restricted_project_ref("project-update-job", job)
+                for job in status.get("jobs") or [] if isinstance(job, dict)
+            ],
+            "latestReceipt": (
+                _restricted_project_ref("project-update-receipt", status["latestReceipt"])
+                if isinstance(status.get("latestReceipt"), dict) else None
+            ),
+            "activeReceipt": (
+                _restricted_project_ref("project-update-receipt", status["activeReceipt"])
+                if isinstance(status.get("activeReceipt"), dict) else None
+            ),
+            "auditStatus": _safe_project_status(status.get("auditStatus")) or "restricted",
+            "auditPending": bool(status.get("auditPending")),
+            "auditStale": bool(status.get("auditStale")),
+            "attentionPending": bool(status.get("attentionCount")),
+            "humanReview": _restricted_project_ref(
+                "human-review-summary", status.get("humanReview")),
+            "access": {
+                "level": "restricted", "redacted": True, "authorized": False,
+            },
+        }
 
     def update_receipt_status(self, job_id: str, accepted_request_version: int,
                               desired_fingerprint: str) -> dict:
-        return self.workflow.receipt_status(
+        receipt = self.workflow.receipt_status(
             job_id, accepted_request_version, desired_fingerprint)
+        access = self._project_read_access(receipt["projectKey"])
+        if access and access["redacted"]:
+            return _restricted_project_ref("project-update-receipt", receipt)
+        return receipt
 
     def update_history(self, project_key: str, limit: int = 20) -> list[dict]:
         rows = self.store.q(
             "SELECT id FROM project_update_job WHERE project_key=?"
             " ORDER BY updated_at DESC LIMIT ?", (project_key, limit))
-        return [self.workflow.job(row["id"]) for row in rows]  # type: ignore[list-item]
+        history = [self.workflow.job(row["id"]) for row in rows]
+        access = self._project_read_access(project_key)
+        if access and access["redacted"]:
+            return [
+                _restricted_project_ref("project-update-job", job)
+                for job in history if isinstance(job, dict)
+            ]
+        return history  # type: ignore[return-value]
+
+    def _snapshot_read_access(self, snapshot: dict) -> dict:
+        """Aggregate Project and downstream Evidence access for side reads.
+
+        Graph and Claim views can project individual restricted branches.  A
+        status row, audit record, review, or job has no equally precise public
+        ownership boundary, so those views are fail-closed when *any* Claim
+        closure reaches restricted Evidence/Artifact data.
+        """
+        access = self.provenance_resolver.project_access(snapshot["digest"])
+        if access["redacted"]:
+            return access
+        for claim in snapshot.get("graph", {}).get("claims", []):
+            claim_id = claim.get("id") if isinstance(claim, dict) else None
+            if not isinstance(claim_id, str) or not claim_id:
+                return {
+                    "level": "restricted", "redacted": True, "authorized": False,
+                    "breakpoints": [],
+                }
+            try:
+                closure = self.provenance_resolver.resolve(claim_id, snapshot["digest"])
+            except Exception:  # noqa: BLE001 - access-check failures are fail-closed
+                # A malformed or unavailable closure cannot prove public
+                # visibility and therefore cannot authorize a side read.
+                return {
+                    "level": "restricted", "redacted": True, "authorized": False,
+                    "breakpoints": [],
+                }
+            closure_access = closure.get("access") or {}
+            if closure_access.get("redacted") is True:
+                return {
+                    "level": "restricted", "redacted": True, "authorized": False,
+                    "breakpoints": [],
+                }
+        return access
+
+    def _project_read_access(self, project_key: str,
+                             snapshot_digest: Optional[str] = None) -> Optional[dict]:
+        """Return the access decision for a Project read boundary.
+
+        Read facades must not call ``workflow`` query helpers directly because
+        those helpers intentionally return persistence rows.  Prefer the
+        explicitly requested immutable Snapshot and otherwise use the latest
+        committed Snapshot for the Project.
+        """
+        latest = self.workflow.latest_snapshot(project_key)
+        if latest is not None:
+            latest_access = self._snapshot_read_access(latest)
+            # A restricted current Project cannot be opened through a public
+            # or malformed historical identifier.
+            if latest_access["redacted"] or not snapshot_digest:
+                return latest_access
+        if snapshot_digest:
+            snapshot = self.workflow.snapshot(snapshot_digest)
+            if snapshot is not None and snapshot.get("projectKey") == project_key:
+                return self._snapshot_read_access(snapshot)
+        if latest is not None:
+            return self._snapshot_read_access(latest)
+
+        # A first accepted update has externally readable receipts before its
+        # first Project Snapshot commits.  Use the immutable Evidence vector
+        # from the accepted receipt as a provisional policy boundary; otherwise
+        # restricted input identities, scope and reasons would be exposed in
+        # exactly that pre-commit window.
+        pending = self.store.q1(
+            "SELECT desired_vector FROM project_update_receipt WHERE project_key=?"
+            " ORDER BY accepted_at DESC,rowid DESC LIMIT 1",
+            (project_key,),
+        )
+        if pending is None:
+            pending = self.store.q1(
+                "SELECT desired_vector FROM project_update_job WHERE project_key=?"
+                " ORDER BY updated_at DESC,rowid DESC LIMIT 1",
+                (project_key,),
+            )
+        if pending is None:
+            return None
+        try:
+            vector = json.loads(pending["desired_vector"])
+        except (KeyError, TypeError, ValueError):
+            return {
+                "level": "restricted", "redacted": True, "authorized": False,
+                "breakpoints": [],
+            }
+        return self.provenance_resolver.evidence_vector_access(vector)
+
+    def _project_response(self, project_key: str, kind: str, value: dict,
+                          snapshot_digest: Optional[str] = None) -> dict:
+        access = self._project_read_access(project_key, snapshot_digest)
+        if access and access["redacted"]:
+            return _restricted_project_ref(kind, value)
+        return value
+
+    def findings(self, project_key: str,
+                 status: Optional[str] = None) -> list[dict]:
+        findings = self.workflow.findings(project_key, status)
+        access = self._project_read_access(project_key)
+        if access and access["redacted"]:
+            return [_restricted_project_ref("finding", item) for item in findings]
+        return findings
+
+    def reviews(self, project_key: str, status: str = "open") -> list[dict]:
+        reviews = self.workflow.reviews(project_key, status)
+        access = self._project_read_access(project_key)
+        if access and access["redacted"]:
+            return [_restricted_project_ref("review", item) for item in reviews]
+        return reviews
+
+    def attention(self, project_key: str,
+                  snapshot_digest: Optional[str] = None) -> list[dict]:
+        attention = self.workflow.attention(project_key, snapshot_digest)
+        access = self._project_read_access(project_key, snapshot_digest)
+        if access and access["redacted"]:
+            return [_restricted_project_ref("attention", item) for item in attention]
+        return attention
+
+    def assessments(self, project_key: str,
+                    snapshot_digest: Optional[str] = None) -> list[dict]:
+        assessments = self.workflow.assessments(project_key, snapshot_digest)
+        access = self._project_read_access(project_key, snapshot_digest)
+        if access and access["redacted"]:
+            return [_restricted_project_ref("assessment", item) for item in assessments]
+        return assessments
+
+    def audits(self, project_key: str, limit: int = 20) -> list[dict]:
+        audits = self.workflow.audits(project_key, limit)
+        access = self._project_read_access(project_key)
+        if access and access["redacted"]:
+            return [_restricted_project_ref("audit", item) for item in audits]
+        return audits
+
+    def audit(self, audit_id: str) -> Optional[dict]:
+        audit = self.workflow.audit(audit_id)
+        if audit is None:
+            return None
+        project_key = audit.get("project_key")
+        if not isinstance(project_key, str):
+            return _restricted_project_ref("audit", audit)
+        target_digest = audit.get("target_digest")
+        access = self._project_read_access(
+            project_key, target_digest if isinstance(target_digest, str) else None)
+        if access and access["redacted"]:
+            return _restricted_project_ref("audit", audit)
+        return audit
 
     # ----------------------------------------------------------- P3 audit lane
     def enqueue_audit(self, payload: dict, *, actor: str = "runtime") -> dict:
-        return self.workflow.enqueue_audit(
+        result = self.workflow.enqueue_audit(
             project_key=payload.get("projectKey"),
             target_digest=payload.get("targetDigest"),
             level=payload.get("level"),
@@ -78,12 +335,16 @@ class Engine:
             autonomy_mode=payload.get("autonomyMode"),
             actor=actor,
         )
+        return self._project_response(
+            result["project_key"], "audit", result, result.get("target_digest"))
 
     def process_audits(self, project_key: Optional[str] = None) -> Optional[dict]:
         return self.workflow.process_next_audit(project_key)
 
     def retry_audit(self, audit_id: str, *, actor: str = "human") -> dict:
-        return self.workflow.retry_audit(audit_id, actor=actor)
+        result = self.workflow.retry_audit(audit_id, actor=actor)
+        return self._project_response(
+            result["project_key"], "audit", result, result.get("target_digest"))
 
     def _enqueue_after_domain_change(self, project_key: str, reason: str,
                                      autonomy_mode: Optional[str] = None) -> Optional[dict]:
@@ -132,7 +393,11 @@ class Engine:
         def build(parent: Optional[str]) -> list[dict]:
             return [{**goal, "children": build(goal["root_id"])}
                     for goal in by_parent.get(parent, [])]
-        return build(None)
+        tree = build(None)
+        access = self._project_read_access(project_key)
+        if access and access["redacted"]:
+            return [_restricted_project_ref("goal", goal) for goal in tree]
+        return tree
 
     def create_goal(self, project_key: str, title: str, description: str = "",
                     parent_root: Optional[str] = None,
@@ -152,7 +417,7 @@ class Engine:
         })
         self.store.conn.commit()
         self._enqueue_after_domain_change(project_key, "goal_changed")
-        return goal
+        return self._project_response(project_key, "goal", goal)
 
     def update_goal(self, project_key: str, root_id: str, *, actor_type: str,
                     actor_id: str, reframe: bool = False, **changes: Any) -> dict:
@@ -178,7 +443,9 @@ class Engine:
             self.workflow._event(project_key, "GoalReframeProposed", actor_id,
                                  {"reviewId": review_id, **payload})
             self.store.conn.commit()
-            return {"proposal": True, "reviewId": review_id, "goal": current}
+            return self._project_response(project_key, "goal-reframe-proposal", {
+                "proposal": True, "reviewId": review_id, "goal": current,
+            })
         if actor_type == "agent" and changes_intent:
             raise ValueError("root reframe must be accepted by a human DecisionEvent")
         goal = self.store.update_goal(root_id, **changes)
@@ -187,7 +454,7 @@ class Engine:
         })
         self.store.conn.commit()
         self._enqueue_after_domain_change(project_key, "goal_changed")
-        return goal
+        return self._project_response(project_key, "goal", goal)
 
     # ----------------------------------------------------------- graph/query
     def _resolved_graph(self, snapshot: dict) -> dict:
@@ -206,10 +473,219 @@ class Engine:
 
     def claims(self, project_key: str, goal_id: Optional[str] = None) -> list[dict]:
         snapshot = self.workflow.latest_snapshot(project_key)
-        claims = list((snapshot or {}).get("graph", {}).get("claims", []))
+        if snapshot is None:
+            return []
+        project_access = self.provenance_resolver.project_access(snapshot["digest"])
+        claims = self._access_project_claims(snapshot, project_access)
+        if project_access["redacted"]:
+            return claims
         if goal_id:
             claims = [claim for claim in claims if claim.get("goal_id") == goal_id]
         return sorted(claims, key=lambda claim: claim.get("t_created", ""), reverse=True)
+
+    def _access_project_claims(self, snapshot: dict,
+                               project_access: Optional[dict] = None) -> list[dict]:
+        access = project_access or self.provenance_resolver.project_access(snapshot["digest"])
+        raw_claims = snapshot.get("graph", {}).get("claims", [])
+        if access["redacted"]:
+            return [_restricted_project_ref("claim", claim) for claim in raw_claims]
+        claims = []
+        for claim in raw_claims:
+            result = self.provenance_resolver.resolve(claim["id"], snapshot["digest"])
+            if (result.get("access") or {}).get("redacted"):
+                resolved_claim = result.get("claim") or {}
+                claims.append({
+                    "id": claim["id"],
+                    "contentDigest": resolved_claim.get("contentDigest") or digest_json(
+                        claim.get("statement"), "restricted_claim"),
+                    "exists": True,
+                    "accessLevel": "restricted",
+                })
+            else:
+                claims.append(json.loads(json.dumps(claim)))
+        return claims
+
+    def _restricted_project_graph(self, graph: dict, snapshot: dict,
+                                  project_access: dict) -> dict:
+        collections = {
+            "goals": "goal",
+            "claims": "claim",
+            "evidence": "evidence",
+            "entities": "entity",
+            "edges": "edge",
+            "origins": "origin",
+            "decisions": "decision",
+            "assessments": "assessment",
+            "humanReviews": "human-review",
+            "reviewPackets": "review-packet",
+        }
+        projected = {
+            key: [
+                _restricted_project_ref(kind, item)
+                for item in (graph.get(key) or [])
+                if isinstance(item, dict)
+            ]
+            for key, kind in collections.items()
+        }
+        projected["humanReview"] = _restricted_project_ref(
+            "human-review-summary", graph.get("humanReview"))
+        scope = snapshot.get("capturedScope") or snapshot.get("scope") \
+            or (snapshot.get("graph") or {}).get("scope")
+        if scope is not None:
+            projected["scope"] = _restricted_project_ref("project-scope", scope)
+        if graph.get("meta") is not None:
+            projected["meta"] = _restricted_project_ref("project-meta", graph["meta"])
+        snapshot_ref = _restricted_project_ref("project-snapshot", snapshot)
+        if isinstance(snapshot.get("digest"), str) and _SHA256.fullmatch(snapshot["digest"]):
+            snapshot_ref["contentDigest"] = snapshot["digest"]
+        snapshot_ref["evidenceVector"] = _restricted_project_vector(
+            snapshot.get("evidenceVector"))
+        projected["snapshot"] = snapshot_ref
+        projected["access"] = {
+            "level": "restricted",
+            "redacted": True,
+            "authorized": False,
+        }
+        return projected
+
+    def _access_project_graph(self, graph: dict, snapshot: dict,
+                              project_access: Optional[dict] = None) -> dict:
+        projected = json.loads(json.dumps(graph))
+        access = project_access or self.provenance_resolver.project_access(snapshot["digest"])
+        if access["redacted"]:
+            return self._restricted_project_graph(projected, snapshot, access)
+        raw_claims = list(projected.get("claims") or [])
+        access_claims = {
+            claim["id"]: claim for claim in self._access_project_claims(snapshot, access)
+        }
+        by_id = {
+            claim["id"]: (
+                access_claims[claim["id"]]
+                if access_claims[claim["id"]].get("accessLevel") == "restricted"
+                else claim
+            )
+            for claim in raw_claims
+        }
+        restricted_ids = {
+            claim_id for claim_id, claim in by_id.items()
+            if claim.get("accessLevel") == "restricted"
+        }
+        projected["claims"] = [by_id[claim["id"]] for claim in raw_claims]
+        if not restricted_ids:
+            return projected
+
+        projected.pop("accessPolicy", None)
+        projected["edges"] = [
+            edge for edge in projected.get("edges") or []
+            if edge.get("src") not in restricted_ids and edge.get("dst") not in restricted_ids
+        ]
+        projected["origins"] = [
+            origin for origin in projected.get("origins") or []
+            if origin.get("claim_id") not in restricted_ids
+        ]
+        retained_edge_ids = {
+            endpoint
+            for edge in projected["edges"]
+            for endpoint in (edge.get("src"), edge.get("dst"))
+        }
+        projected["evidence"] = [
+            evidence for evidence in projected.get("evidence") or []
+            if evidence.get("id") in retained_edge_ids
+        ]
+        projected["entities"] = [
+            entity for entity in projected.get("entities") or []
+            if entity.get("id") in retained_edge_ids
+        ]
+        projected["assessments"] = [
+            assessment for assessment in projected.get("assessments") or []
+            if (assessment.get("target_id") or assessment.get("targetId"))
+            not in restricted_ids
+        ]
+        projected["humanReviews"] = []
+        projected["reviewPackets"] = []
+        projected["decisions"] = []
+        projected["humanReview"] = {
+            "gateStatus": "restricted",
+            "pendingCount": 0,
+            "blockingPacketIds": [],
+            "reviewPackets": [],
+        }
+        for collection in ("goals", "claims", "decisions"):
+            for node in projected.get(collection) or []:
+                if isinstance(node, dict):
+                    node.pop("humanReview", None)
+
+        visible_threads = {
+            evidence.get("thread_id") for evidence in projected["evidence"]
+            if evidence.get("thread_id")
+        } | {
+            origin.get("session_id") for origin in projected["origins"]
+            if origin.get("session_id")
+        }
+        snapshot_view = projected.get("snapshot")
+        if isinstance(snapshot_view, dict):
+            snapshot_view["evidenceVector"] = [
+                entry if entry.get("threadId") in visible_threads else {
+                    "digest": entry.get("digest"),
+                    "exists": True,
+                    "accessLevel": "restricted",
+                }
+                for entry in snapshot_view.get("evidenceVector") or []
+                if isinstance(entry, dict)
+            ]
+            snapshot_view["excludedSessions"] = []
+            snapshot_view["isolatedSessions"] = []
+        return projected
+
+    def _restricted_snapshot_projection(self, snapshot: dict,
+                                        project_access: dict) -> dict:
+        graph = json.loads(json.dumps(snapshot.get("graph") or {}))
+        graph["assessments"] = json.loads(json.dumps(snapshot.get("assessments") or []))
+        graph["humanReview"] = json.loads(json.dumps(snapshot.get("humanReview") or {}))
+        projected = self._restricted_project_graph(graph, snapshot, project_access)
+        return {
+            **projected["snapshot"],
+            "graph": {key: value for key, value in projected.items()
+                      if key not in {"snapshot", "access"}},
+            "access": projected["access"],
+        }
+
+    def snapshot_view(self, project_key: str,
+                      snapshot_digest: Optional[str] = None) -> Optional[dict]:
+        snapshot = (self.workflow.snapshot(snapshot_digest) if snapshot_digest
+                    else self.workflow.latest_snapshot(project_key))
+        if snapshot is None or snapshot.get("projectKey") != project_key:
+            return None
+        access = self._project_read_access(project_key, snapshot["digest"])
+        if access is None:
+            return None
+        if access["redacted"]:
+            return self._restricted_snapshot_projection(snapshot, access)
+        graph = json.loads(json.dumps(snapshot.get("graph") or {}))
+        graph["assessments"] = json.loads(json.dumps(snapshot.get("assessments") or []))
+        graph["humanReview"] = json.loads(json.dumps(snapshot.get("humanReview") or {}))
+        graph["snapshot"] = {
+            key: snapshot[key] for key in (
+                "projectKey", "version", "digest", "goalVersion", "policyVersion",
+                "evidenceVector", "excludedSessions", "isolatedSessions", "createdAt", "status",
+            ) if key in snapshot
+        }
+        projected = self._access_project_graph(graph, snapshot, access)
+        snapshot_view = {
+            key: json.loads(json.dumps(snapshot[key]))
+            for key in (
+                "projectKey", "version", "digest", "goalVersion", "policyVersion",
+                "compilerVersion", "createdAt", "status", "autonomyMode",
+            ) if key in snapshot
+        }
+        projected_snapshot = projected.pop("snapshot", {})
+        snapshot_view["evidenceVector"] = projected_snapshot.get("evidenceVector", [])
+        snapshot_view["excludedSessions"] = projected_snapshot.get("excludedSessions", [])
+        snapshot_view["isolatedSessions"] = projected_snapshot.get("isolatedSessions", [])
+        snapshot_view["assessments"] = projected.pop("assessments", [])
+        snapshot_view["humanReview"] = projected.get("humanReview", {})
+        snapshot_view["graph"] = projected
+        return snapshot_view
 
     def claim_detail(self, project_key: str, claim_id: str,
                      snapshot_digest: Optional[str] = None) -> Optional[dict]:
@@ -217,6 +693,21 @@ class Engine:
                     else self.workflow.latest_snapshot(project_key))
         if snapshot is None or snapshot["projectKey"] != project_key:
             return None
+        access = self._project_read_access(project_key, snapshot["digest"])
+        if access and access["redacted"]:
+            claim = next((
+                item for item in (snapshot.get("graph") or {}).get("claims", [])
+                if isinstance(item, dict) and item.get("id") == claim_id
+            ), None)
+            if claim is None:
+                return None
+            claim_ref = _restricted_project_ref("claim", claim)
+            return {
+                **claim_ref,
+                "supports": [], "contradicts": [], "origins": [], "assessments": [],
+                "provenance": self._restricted_provenance_projection(
+                    snapshot, claim_ref, access),
+            }
         graph = self._resolved_graph(snapshot)
         claim = next((item for item in graph["claims"] if item["id"] == claim_id), None)
         if claim is None:
@@ -295,24 +786,50 @@ class Engine:
             graph["reviewPackets"] = packets
             graph["humanReview"] = self.workflow.human_review_summary(
                 project_key, latest["digest"])
-            return {**graph, "snapshot": {
+            response = {**graph, "snapshot": {
                 key: latest[key] for key in (
                     "projectKey", "version", "digest", "goalVersion", "policyVersion",
                     "evidenceVector",
                     "excludedSessions", "isolatedSessions", "createdAt", "status")
             }}
-        return {"goals": self.goal_tree(project_key), "claims": [], "evidence": [],
-                "entities": [], "edges": [], "origins": [], "decisions": [],
-                "assessments": [], "humanReviews": [], "reviewPackets": [],
-                "humanReview": self.workflow.human_review_summary(project_key),
-                "snapshot": None}
+            return self._access_project_graph(response, latest)
+        response = {"goals": self.goal_tree(project_key), "claims": [], "evidence": [],
+                    "entities": [], "edges": [], "origins": [], "decisions": [],
+                    "assessments": [], "humanReviews": [], "reviewPackets": [],
+                    "humanReview": self.workflow.human_review_summary(project_key),
+                    "snapshot": None}
+        access = self._project_read_access(project_key)
+        if access and access["redacted"]:
+            response["humanReview"] = _restricted_project_ref(
+                "human-review-summary", response["humanReview"])
+            response["access"] = {
+                "level": "restricted", "redacted": True, "authorized": False,
+            }
+        return response
 
     def analysis(self, project_key: str, goal_id: Optional[str] = None,
                  threshold: float = 0.7) -> dict:
         snapshot = self.workflow.latest_snapshot(project_key)
         if snapshot is None:
-            return {"summary": {"n_sources": 0, "n_derived": 0}, "fragile": [],
-                    "snapshotDigest": None}
+            response = {"summary": {"n_sources": 0, "n_derived": 0}, "fragile": [],
+                        "snapshotDigest": None}
+            access = self._project_read_access(project_key)
+            if access and access["redacted"]:
+                response["access"] = {
+                    "level": "restricted", "redacted": True, "authorized": False,
+                }
+            return response
+        access = self._snapshot_read_access(snapshot)
+        if access["redacted"]:
+            raw_claims = snapshot.get("graph", {}).get("claims", [])
+            return {
+                "summary": {"n_sources": 0, "n_derived": len(raw_claims)},
+                "fragile": [], "conflicted": [], "threshold": threshold,
+                "snapshotDigest": snapshot["digest"],
+                "access": {
+                    "level": "restricted", "redacted": True, "authorized": False,
+                },
+            }
         claims = self.claims(project_key, goal_id)
         claim_ids = {claim["id"] for claim in claims}
         supports = [edge for edge in snapshot["graph"]["edges"]
@@ -320,17 +837,46 @@ class Engine:
         source_ids = {edge["src"] for edge in supports}
         return {
             "summary": {"n_sources": len(source_ids), "n_derived": len(claims)},
-            "fragile": [claim["id"] for claim in claims if claim["status"] == "fragile"],
-            "conflicted": [claim["id"] for claim in claims if claim["status"] == "conflicted"],
+            "fragile": [claim["id"] for claim in claims if claim.get("status") == "fragile"],
+            "conflicted": [claim["id"] for claim in claims if claim.get("status") == "conflicted"],
             "threshold": threshold, "snapshotDigest": snapshot["digest"],
         }
 
     def resolve_provenance(self, project_key: str, target_id: str,
                            snapshot_digest: str) -> dict:
-        result = self.provenance_resolver.resolve(target_id, snapshot_digest)
-        if result["claim"]["project_key"] != project_key:
+        snapshot = self.workflow.snapshot(snapshot_digest)
+        if snapshot is None or snapshot.get("projectKey") != project_key:
             raise KeyError(target_id)
+        access = self._project_read_access(project_key, snapshot_digest)
+        if access and access["redacted"]:
+            claim = next((
+                item for item in (snapshot.get("graph") or {}).get("claims", [])
+                if isinstance(item, dict) and item.get("id") == target_id
+            ), None)
+            if claim is None:
+                raise KeyError(target_id)
+            return self._restricted_provenance_projection(
+                snapshot, _restricted_project_ref("claim", claim), access)
+        result = self.provenance_resolver.resolve(target_id, snapshot_digest)
         return result
+
+    @staticmethod
+    def _restricted_provenance_projection(snapshot: dict, claim_ref: dict,
+                                          access: dict) -> dict:
+        """Minimal current-policy projection for a historical provenance read."""
+        return {
+            "claim": claim_ref,
+            "evidenceVector": _restricted_project_vector(
+                snapshot.get("evidenceVector")),
+            "paths": [],
+            "breakpoints": json.loads(json.dumps(access.get("breakpoints") or [])),
+            "lineageGraph": {"nodes": [], "edges": []},
+            "rerunSpecReferences": [], "rerunSpecs": [],
+            "reachesArtifact": False, "provenanceLevel": "L0",
+            "access": {
+                "level": "restricted", "redacted": True, "authorized": False,
+            },
+        }
 
     # ------------------------------------------------------ governance facade
     def record_decision(self, payload: dict) -> dict:
@@ -346,7 +892,7 @@ class Engine:
         )
         self._enqueue_after_domain_change(payload["projectKey"], "decision_recorded",
                                           payload["autonomyMode"])
-        return result
+        return self._project_response(payload["projectKey"], "decision", result)
 
     def configure_policy(self, project_key: str, payload: dict) -> dict:
         policy = self.workflow.configure_policy(
@@ -357,17 +903,32 @@ class Engine:
         )
         self._enqueue_after_domain_change(
             project_key, "policy_changed", policy["autonomy_mode"])
-        return policy
+        return self._project_response(project_key, "project-policy", policy)
 
     def record_review_result(self, project_key: str, packet_id: str,
                              payload: dict) -> dict:
-        return self.workflow.record_review_result(
+        result = self.workflow.record_review_result(
             project_key=project_key, packet_id=packet_id,
             action=payload["action"], actor_id=payload.get("actorId", "human"),
             rationale=payload.get("rationale", "Human review disposition"),
             confidence=float(payload.get("confidence", 1.0)),
             expected_snapshot_digest=payload.get("expectedSnapshotDigest"),
         )
+        return self._project_response(project_key, "human-review", result)
+
+    def create_release(self, payload: dict) -> dict:
+        result = self.workflow.create_release(
+            project_key=payload["projectKey"],
+            project_snapshot_digest=payload["projectSnapshotDigest"],
+            audit_digest=payload["auditDigest"], created_by=payload["createdBy"],
+            output_artifacts=payload.get("outputArtifacts") or [],
+            requested_status=payload.get("requestedStatus", "candidate"),
+            runtime_authorization=payload.get("runtimeAuthorization"),
+            external_action=bool(payload.get("externalAction", False)),
+        )
+        return self._project_response(
+            payload["projectKey"], "release", result,
+            payload["projectSnapshotDigest"])
 
     # --------------------------------------------------------------- helpers
     @staticmethod

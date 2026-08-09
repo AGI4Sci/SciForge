@@ -2,10 +2,35 @@ import { describe, expect, it } from 'vitest'
 
 import {
   AgentRuntimeToolError,
+  filterAgentRuntimeToolSurface,
   nativeAgentToolExecutionMetadata,
   nativeVisualResourceIdentity,
   normalizeNativeVisualToolError
 } from './agent-tool-surface'
+
+describe('filterAgentRuntimeToolSurface', () => {
+  it('filters publication and rejects dispatch outside the same allowlist', async () => {
+    const calls: string[] = []
+    const source = {
+      tools: () => [
+        { type: 'function' as const, name: 'sciforge_discover', description: 'discover', inputSchema: {} },
+        { type: 'function' as const, name: 'sciforge_invoke', description: 'invoke', inputSchema: {} }
+      ],
+      call: async (request: { name: string }) => {
+        calls.push(request.name)
+        return { tool: request.name, value: {} }
+      }
+    }
+    const filtered = filterAgentRuntimeToolSurface(source as never, ['sciforge_discover'])
+    expect(filtered.tools().map((tool) => tool.name)).toEqual(['sciforge_discover'])
+    expect(() => filtered.call({
+      name: 'sciforge_invoke',
+      arguments: {},
+      context: { requestId: 'request', runtimeId: 'codex' }
+    })).toThrow(/not allowed/)
+    expect(calls).toEqual([])
+  })
+})
 
 const refs = {
   source: `res_${'s'.repeat(24)}`,

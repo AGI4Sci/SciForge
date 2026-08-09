@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import tempfile
 import unittest
 
 from evidence_dag import provjson
-from evidence_dag.artifacts import ArtifactRegistry
+from evidence_dag.artifact_versions import ArtifactVersionProjectionClient
 from evidence_dag.assessment import run_a0
 from evidence_dag.graph import ThreadGraph
 from evidence_dag.lineage import ingest_trace_lineage, reproducibility_report
@@ -17,6 +18,43 @@ from evidence_dag.service import Engine
 SHA_A = "sha256:" + "a" * 64
 SHA_B = "sha256:" + "b" * 64
 SHA_C = "sha256:" + "c" * 64
+ACCESS = {"visibility": "workspace", "principals": [], "allowExport": True}
+
+
+def _projection(payload: dict, trace_id: str) -> dict:
+    lineage = payload.get("evidenceLineage") or payload.get("evidence_lineage") or {}
+    values = []
+    for key in ("inputs", "software", "logs", "outputs"):
+        values.extend(lineage.get(key) if isinstance(lineage.get(key), list) else [])
+    environment = lineage.get("environment")
+    values.extend(environment if isinstance(environment, list) else [environment])
+    records = []
+    for index, value in enumerate(values):
+        artifact = value.get("artifact") if isinstance(value, dict) else None
+        if not isinstance(artifact, dict) or not artifact.get("locator") \
+                or not artifact.get("contentDigest"):
+            continue
+        locator = str(artifact["locator"])
+        token = hashlib.sha256(f"{index}|{locator}".encode()).hexdigest()[:16]
+        digest = str(artifact["contentDigest"]).removeprefix("sha256:")
+        records.append({
+            "ref": {
+                "artifactId": f"artifact:lineage-{token}",
+                "versionId": f"artifact-version:lineage-{token}",
+                "contentDigest": digest,
+                "byteLength": int(artifact.get("size") or 0),
+                **({"mediaType": artifact["mediaType"]} if artifact.get("mediaType") else {}),
+                "availability": "available",
+                "retention": "reference",
+                "accessPolicy": ACCESS,
+            },
+            "kind": artifact.get("kind") or "other",
+            "locator": locator,
+            "observedAt": "2026-07-10T01:02:00Z",
+        })
+    return {
+        "status": "ready", "versions": records, "lifecycleEvents": [], "lastSequence": 0,
+    }
 
 
 def complete_lineage(finding_id: str) -> dict:
@@ -90,20 +128,21 @@ class TestStructuredRunLineage(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.registry = ArtifactRegistry(
-            workspace_roots=(self.temp.name,), locator_root=self.temp.name,
-        )
         self.graph = ThreadGraph("thread")
         self.finding = self.graph.add_or_get_node(
             NodeType.FINDING, "Treatment changed the measured endpoint.", trace_ref="finding-item",
         )
 
     def ingest(self, payload: dict) -> dict[str, int]:
-        return ingest_trace_lineage(self.graph, [{
+        trace = [{
             "id": "tool-result-1",
             "kind": "tool_result",
             "output": json.dumps(payload),
-        }], self.registry)
+            "evidenceArtifactVersions": _projection(payload, "tool-result-1"),
+        }]
+        return ingest_trace_lineage(
+            self.graph, trace, ArtifactVersionProjectionClient(trace),
+        )
 
     def test_complete_manifest_reaches_strict_l4_and_full_provenance(self):
         delta = self.ingest(complete_lineage(self.finding.id))
@@ -154,17 +193,38 @@ class TestStructuredRunLineage(unittest.TestCase):
         }, {
             "id": "tool-result-1", "type": "tool_result",
             "content": {"run": {"id": "looks-explicit-but-is-not-the-contract"}},
-        }], self.registry)
+        }], ArtifactVersionProjectionClient([]))
         self.assertEqual(delta, {"envelopes": 0, "nodes": 0, "edges": 0})
         self.assertEqual(len(self.graph.nodes), 1)
 
     def test_explicit_item_metadata_envelope_is_ingested(self):
-        delta = ingest_trace_lineage(self.graph, [{
+        payload = complete_lineage(self.finding.id)
+        trace = [{
             "id": "tool-result-1", "type": "tool_result", "content": "completed",
-            "metadata": complete_lineage(self.finding.id),
-        }], self.registry)
+            "metadata": payload,
+            "evidenceArtifactVersions": _projection(payload, "tool-result-1"),
+        }]
+        delta = ingest_trace_lineage(
+            self.graph, trace, ArtifactVersionProjectionClient(trace),
+        )
         self.assertEqual(delta["envelopes"], 1)
         self.assertTrue(reproducibility_report(self.graph, self.finding.id)["complete"])
+
+    def test_generic_capability_output_preserves_explicit_lineage(self):
+        payload = complete_lineage(self.finding.id)
+        trace = [{
+            "id": "tool-result-broker", "kind": "tool_result",
+            "output": {
+                "operationRef": "op_scientific_plotting_render",
+                "output": payload,
+            },
+            "evidenceArtifactVersions": _projection(payload, "tool-result-broker"),
+        }]
+        delta = ingest_trace_lineage(
+            self.graph, trace, ArtifactVersionProjectionClient(trace),
+        )
+        self.assertEqual(delta["envelopes"], 1)
+        self.assertEqual(len(self.graph.nodes_of(NodeType.ANALYSIS_RUN)), 1)
 
     def test_experiment_run_accepts_explicit_raw_observation_input(self):
         payload = complete_lineage(self.finding.id)
@@ -261,6 +321,9 @@ class TestLineageEngineEndToEnd(unittest.TestCase):
             trace = [{
                 "id": "tool-result-1", "kind": "tool_result", "toolName": "run_analysis",
                 "output": complete_lineage(finding_id),
+                "evidenceArtifactVersions": _projection(
+                    complete_lineage(finding_id), "tool-result-1",
+                ),
             }]
             result = engine.update(
                 thread_id="runtime:lineage-thread", target_watermark="tool-result-1",

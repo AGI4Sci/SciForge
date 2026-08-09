@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { loadImage } from '@napi-rs/canvas'
+import { extractVisualStyleProfile } from '@sciforge/scientific-plotting/visual-style-extractor'
 import { constants } from 'node:fs'
 import {
   access,
@@ -13,6 +14,10 @@ import {
   writeFile
 } from 'node:fs/promises'
 import { basename, dirname, extname, join, resolve } from 'node:path'
+import {
+  artifactVersionRefV1Schema,
+  type ArtifactVersionRefV1
+} from '@sciforge/domain-artifact-versions/contract'
 import {
   VISUAL_ARTIFACT_KINDS,
   VISUAL_DOCUMENT_SCHEMA_VERSION,
@@ -30,6 +35,8 @@ import {
   type VisualDocumentOpenRequest,
   type VisualDocumentOpenResult,
   type VisualDocumentPaths,
+  type VisualDocumentApplyStyleReferenceRequest,
+  type VisualDocumentApplyStyleReferenceResult,
   type VisualDocumentRevisionDecisionRequest,
   type VisualDocumentRevisionDecisionResult,
   type VisualDocumentSaveAnnotationsRequest,
@@ -65,6 +72,21 @@ const REVIEW_IMAGE_MIME_TYPES = new Map([
   ['.webp', 'image/webp']
 ])
 const MAX_REVIEW_IMAGE_BYTES = 47 * 1024 * 1024
+const ACCEPTANCE_RECEIPT_SCHEMA_VERSION = 1 as const
+
+type VisualAcceptanceReceipt = {
+  schemaVersion: typeof ACCEPTANCE_RECEIPT_SCHEMA_VERSION
+  documentId: string
+  revisionId: string
+  state: 'prepared' | 'version-committed' | 'completed'
+  candidateHash: string
+  sourceHash: string
+  workingCopyHash: string
+  backupPath: string
+  preparedAt: string
+  artifactVersionRef?: ArtifactVersionRefV1
+  completedAt?: string
+}
 
 function safeId(raw: string | undefined, fallback = DEFAULT_DOCUMENT_ID): string {
   const id = (raw?.trim() || fallback).replace(/[^a-zA-Z0-9._-]+/g, '-')
@@ -137,6 +159,108 @@ async function atomicCopy(sourcePath: string, targetPath: string): Promise<void>
 async function hashFile(path: string): Promise<string> {
   const bytes = await readFile(path)
   return createHash('sha256').update(bytes).digest('hex')
+}
+
+function acceptanceReceiptPath(paths: VisualDocumentPaths, revisionId: string): string {
+  return join(paths.documentDir, 'acceptance-outbox', `${safeId(revisionId)}.json`)
+}
+
+function acceptanceBackupPath(
+  paths: VisualDocumentPaths,
+  revisionId: string,
+  sourcePath: string
+): string {
+  return join(paths.backupsDir, `accept-${safeId(revisionId)}-${basename(sourcePath)}`)
+}
+
+function sameArtifactVersionRef(left: ArtifactVersionRefV1, right: ArtifactVersionRefV1): boolean {
+  return left.artifactId === right.artifactId
+    && left.versionId === right.versionId
+    && left.contentDigest === right.contentDigest
+    && left.byteLength === right.byteLength
+    && left.mediaType === right.mediaType
+    && left.availability === right.availability
+    && left.retention === right.retention
+    && left.accessPolicy.visibility === right.accessPolicy.visibility
+    && left.accessPolicy.allowExport === right.accessPolicy.allowExport
+    && left.accessPolicy.principals.length === right.accessPolicy.principals.length
+    && left.accessPolicy.principals.every(
+      (principal, index) => principal === right.accessPolicy.principals[index]
+    )
+}
+
+function parseAcceptanceReceipt(value: unknown): VisualAcceptanceReceipt {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid Visual Review acceptance receipt.')
+  }
+  const receipt = value as Record<string, unknown>
+  const state = receipt.state
+  if (receipt.schemaVersion !== ACCEPTANCE_RECEIPT_SCHEMA_VERSION
+    || typeof receipt.documentId !== 'string'
+    || typeof receipt.revisionId !== 'string'
+    || (state !== 'prepared' && state !== 'version-committed' && state !== 'completed')
+    || typeof receipt.candidateHash !== 'string'
+    || typeof receipt.sourceHash !== 'string'
+    || typeof receipt.workingCopyHash !== 'string'
+    || typeof receipt.backupPath !== 'string'
+    || typeof receipt.preparedAt !== 'string') {
+    throw new Error('Invalid Visual Review acceptance receipt.')
+  }
+  for (const [name, digest] of [
+    ['candidateHash', receipt.candidateHash],
+    ['sourceHash', receipt.sourceHash],
+    ['workingCopyHash', receipt.workingCopyHash]
+  ] as const) {
+    if (!/^[a-f0-9]{64}$/u.test(digest)) {
+      throw new Error(`Invalid ${name} in Visual Review acceptance receipt.`)
+    }
+  }
+  const versionRef = receipt.artifactVersionRef === undefined
+    ? undefined
+    : artifactVersionRefV1Schema.parse(receipt.artifactVersionRef)
+  if (state === 'version-committed' && !versionRef) {
+    throw new Error('A version-committed acceptance receipt requires an ArtifactVersionRef.')
+  }
+  if (receipt.completedAt !== undefined && typeof receipt.completedAt !== 'string') {
+    throw new Error('Invalid completedAt in Visual Review acceptance receipt.')
+  }
+  return {
+    schemaVersion: ACCEPTANCE_RECEIPT_SCHEMA_VERSION,
+    documentId: receipt.documentId,
+    revisionId: receipt.revisionId,
+    state,
+    candidateHash: receipt.candidateHash,
+    sourceHash: receipt.sourceHash,
+    workingCopyHash: receipt.workingCopyHash,
+    backupPath: receipt.backupPath,
+    preparedAt: receipt.preparedAt,
+    ...(versionRef ? { artifactVersionRef: versionRef } : {}),
+    ...(typeof receipt.completedAt === 'string' ? { completedAt: receipt.completedAt } : {})
+  }
+}
+
+async function readAcceptanceReceipt(
+  paths: VisualDocumentPaths,
+  revisionId: string
+): Promise<VisualAcceptanceReceipt | null> {
+  const path = acceptanceReceiptPath(paths, revisionId)
+  if (!(await exists(path))) return null
+  try {
+    return parseAcceptanceReceipt(JSON.parse(await readFile(path, 'utf8')))
+  } catch (error) {
+    const detail = error instanceof Error ? ` ${error.message}` : ''
+    throw new Error(`Could not read Visual Review acceptance receipt.${detail}`)
+  }
+}
+
+async function writeAcceptanceReceipt(
+  paths: VisualDocumentPaths,
+  receipt: VisualAcceptanceReceipt
+): Promise<void> {
+  await atomicWrite(
+    acceptanceReceiptPath(paths, receipt.revisionId),
+    `${JSON.stringify(receipt, null, 2)}\n`
+  )
 }
 
 function now(): string {
@@ -335,6 +459,20 @@ async function insertVisualDocumentArtifact(
   try {
     await atomicCopy(sourcePath, workingCopyPath)
     const sourceHash = await hashFile(sourcePath)
+    if (request.versionRef) {
+      if (request.versionRef.availability !== 'available') {
+        throw new Error('The bound ArtifactVersion is not available for review.')
+      }
+      if (sourceHash !== request.versionRef.contentDigest) {
+        throw new Error('Source artifact bytes do not match the bound ArtifactVersion digest.')
+      }
+      if (sourceInfo.size !== request.versionRef.byteLength) {
+        throw new Error('Source artifact byte length does not match the bound ArtifactVersion.')
+      }
+      if (request.mimeType && request.versionRef.mediaType && request.mimeType !== request.versionRef.mediaType) {
+        throw new Error('Source artifact media type does not match the bound ArtifactVersion.')
+      }
+    }
     const artifact: VisualArtifact = {
       id: artifactId,
       kind: request.kind,
@@ -342,12 +480,15 @@ async function insertVisualDocumentArtifact(
       sourceHash,
       workingCopyPath,
       workingCopyHash: sourceHash,
-      ...(request.mimeType ? { mimeType: request.mimeType } : {}),
+      ...((request.mimeType ?? request.versionRef?.mediaType)
+        ? { mimeType: request.mimeType ?? request.versionRef!.mediaType }
+        : {}),
       ...(request.width ? { width: request.width } : {}),
       ...(request.height ? { height: request.height } : {}),
       ...(request.manifestPath ? { manifestPath: await resolveOpenTargetPath(request.manifestPath, opened.workspaceRoot) } : {}),
       ...(request.title ? { title: request.title.trim() } : {}),
-      ...(request.caption ? { caption: request.caption.trim() } : {})
+      ...(request.caption ? { caption: request.caption.trim() } : {}),
+      ...(request.versionRef ? { versionRef: request.versionRef } : {})
     }
     const nodes = request.nodes?.length ? request.nodes : [rootArtifactNode(artifact)]
     nodes.forEach(assertNode)
@@ -474,6 +615,49 @@ export async function updateVisualDocumentContext(
   return { ok: true, status: 'updated', document: updated }
 }
 
+export async function applyVisualStyleReference(
+  request: VisualDocumentApplyStyleReferenceRequest
+): Promise<VisualDocumentApplyStyleReferenceResult> {
+  const { root, document } = await loadRequiredDocument(request.workspaceRoot, request.documentId)
+  const extracted = await extractVisualStyleProfile({
+    workspaceRoot: root,
+    sourcePath: request.sourcePath,
+    sourceType: 'image',
+    sourceKind: 'reference',
+    scope: 'manuscript'
+  })
+  if (!extracted.ok) throw new Error(extracted.message)
+
+  const styleProfileRef = DEFAULT_MANUSCRIPT_STYLE_REF
+  await atomicWrite(
+    join(root, styleProfileRef),
+    `${JSON.stringify({
+      profile: extracted.profile,
+      diagnostics: extracted.diagnostics
+    }, null, 2)}\n`
+  )
+  const updated = await updateVisualDocumentContext({
+    workspaceRoot: root,
+    documentId: document.documentId,
+    styleProfileRef
+  })
+  return {
+    ok: true,
+    status: 'style_applied',
+    document: updated.document,
+    styleProfileRef,
+    profile: {
+      id: extracted.profile.id,
+      semanticDescription: extracted.profile.semanticDescription,
+      palette: {
+        colors: extracted.profile.tokens.palette.colors,
+        accent: extracted.profile.tokens.palette.accent
+      },
+      confidence: extracted.profile.confidence.overall
+    }
+  }
+}
+
 export async function exportVisualReviewPacket(
   request: VisualDocumentExportReviewPacketRequest
 ): Promise<VisualDocumentExportReviewPacketResult> {
@@ -570,34 +754,69 @@ export async function createVisualCandidateRevision(
 export async function acceptVisualCandidateRevision(
   request: VisualDocumentRevisionDecisionRequest
 ): Promise<VisualDocumentRevisionDecisionResult> {
-  const { paths, document } = await loadRequiredDocument(request.workspaceRoot, request.documentId)
-  if (!document.artifact) throw new Error('VisualDocument has no artifact.')
-  if (document.activeCandidateRevisionId !== request.revisionId) throw new Error('Only the active candidate can be accepted.')
-  const index = document.revisions.findIndex((revision) => revision.id === request.revisionId)
-  const candidate = document.revisions[index]
-  if (!candidate || candidate.status !== 'candidate') throw new Error('Candidate revision not found.')
-  if (candidate.basedOnHash !== document.artifact.workingCopyHash) throw new Error('Candidate is stale.')
-  if (await hashFile(document.artifact.sourcePath) !== document.artifact.sourceHash) {
-    throw new Error('Source artifact changed outside SciForge; refusing to overwrite it.')
+  const preflight = await preflightVisualCandidateAcceptance(request)
+  if (preflight.alreadyAccepted) return preflight.alreadyAccepted
+  const { paths, document, artifact, candidate, index } = preflight
+  let receipt = await readAcceptanceReceipt(paths, candidate.id)
+  if (!receipt) throw new Error('Visual Review acceptance receipt disappeared after preflight.')
+
+  if (request.artifactVersionRef) {
+    const candidateInfo = await stat(candidate.artifactPath)
+    if (request.artifactVersionRef.availability !== 'available'
+      || request.artifactVersionRef.contentDigest !== candidate.artifactHash
+      || request.artifactVersionRef.byteLength !== candidateInfo.size
+      || (artifact.mimeType && request.artifactVersionRef.mediaType !== artifact.mimeType)
+      || (artifact.versionRef
+        && request.artifactVersionRef.artifactId !== artifact.versionRef.artifactId)) {
+      throw new Error('Committed ArtifactVersionRef does not match the reviewed candidate bytes.')
+    }
+    if (receipt.artifactVersionRef
+      && !sameArtifactVersionRef(receipt.artifactVersionRef, request.artifactVersionRef)) {
+      throw new Error('Acceptance receipt is already bound to a different ArtifactVersionRef.')
+    }
+    receipt = {
+      ...receipt,
+      state: 'version-committed',
+      artifactVersionRef: request.artifactVersionRef
+    }
+    // This write is the durable cross-service receipt. It happens before any
+    // source or working-copy replacement so retries can finish local acceptance
+    // after the shared version service has already advanced its current pointer.
+    await writeAcceptanceReceipt(paths, receipt)
   }
-  if (await hashFile(candidate.artifactPath) !== candidate.artifactHash) throw new Error('Candidate artifact changed after creation.')
+
+  const boundVersionRef = request.artifactVersionRef ?? receipt.artifactVersionRef
+  const sourceHash = await hashFile(artifact.sourcePath)
+  const workingCopyHash = await hashFile(artifact.workingCopyPath)
+  if (sourceHash !== receipt.candidateHash) {
+    if (sourceHash !== receipt.sourceHash) {
+      throw new Error('Source artifact has an unexpected hash during acceptance recovery.')
+    }
+    await atomicCopy(candidate.artifactPath, artifact.sourcePath)
+  }
+  if (workingCopyHash !== receipt.candidateHash) {
+    if (workingCopyHash !== receipt.workingCopyHash) {
+      throw new Error('Working copy has an unexpected hash during acceptance recovery.')
+    }
+    await atomicCopy(candidate.artifactPath, artifact.workingCopyPath)
+  }
 
   const decidedAt = now()
-  const backupPath = join(
-    paths.backupsDir,
-    `${decidedAt.replace(/[:.]/g, '-')}-${basename(document.artifact.sourcePath)}`
-  )
-  await atomicCopy(document.artifact.sourcePath, backupPath)
-  await atomicCopy(candidate.artifactPath, document.artifact.sourcePath)
-  await atomicCopy(candidate.artifactPath, document.artifact.workingCopyPath)
   const acceptedHash = candidate.artifactHash
-  const accepted: VisualRevision = { ...candidate, status: 'accepted', decidedAt, backupPath }
+  const accepted: VisualRevision = {
+    ...candidate,
+    status: 'accepted',
+    decidedAt,
+    backupPath: receipt.backupPath,
+    ...(boundVersionRef ? { versionRef: boundVersionRef } : {})
+  }
   const updated: VisualDocument = {
     ...document,
     artifact: {
-      ...document.artifact,
+      ...artifact,
       sourceHash: acceptedHash,
       workingCopyHash: acceptedHash,
+      ...(boundVersionRef ? { versionRef: boundVersionRef } : {}),
       ...(accepted.width ? { width: accepted.width } : {}),
       ...(accepted.height ? { height: accepted.height } : {})
     },
@@ -607,13 +826,241 @@ export async function acceptVisualCandidateRevision(
     updatedAt: decidedAt
   }
   await writeDocument(paths.documentPath, updated)
+  await writeAcceptanceReceipt(paths, {
+    ...receipt,
+    state: 'completed',
+    ...(boundVersionRef ? { artifactVersionRef: boundVersionRef } : {}),
+    completedAt: decidedAt
+  })
   return { ok: true, status: 'accepted', revision: accepted, document: updated }
+}
+
+/**
+ * Performs every deterministic acceptance check and durably writes a prepared
+ * outbox receipt before the shared version service may advance current.
+ */
+export async function preflightVisualCandidateAcceptance(
+  request: VisualDocumentRevisionDecisionRequest
+): Promise<Readonly<{
+  paths: VisualDocumentPaths
+  document: VisualDocument
+  artifact: VisualArtifact
+  candidate: VisualRevision
+  index: number
+  acceptanceState: VisualAcceptanceReceipt['state']
+  newlyPrepared: boolean
+  committedVersionRef?: ArtifactVersionRefV1
+  alreadyAccepted?: VisualDocumentRevisionDecisionResult
+}>> {
+  const { paths, document } = await loadRequiredDocument(request.workspaceRoot, request.documentId)
+  if (!document.artifact) throw new Error('VisualDocument has no artifact.')
+  const index = document.revisions.findIndex((revision) => revision.id === request.revisionId)
+  const candidate = document.revisions[index]
+  const receipt = await readAcceptanceReceipt(paths, request.revisionId)
+
+  if (candidate?.status === 'accepted' && document.acceptedRevisionId === request.revisionId) {
+    if (document.activeCandidateRevisionId !== null) {
+      throw new Error('Accepted Visual Review document still has an active candidate.')
+    }
+    if (candidate.versionRef && document.artifact.versionRef
+      && !sameArtifactVersionRef(candidate.versionRef, document.artifact.versionRef)) {
+      throw new Error('Accepted revision and document artifact bind different ArtifactVersionRefs.')
+    }
+    if (receipt) {
+      assertAcceptanceReceiptMatches(
+        receipt,
+        paths,
+        document,
+        candidate,
+        document.artifact,
+        true
+      )
+      if (receipt.artifactVersionRef && candidate.versionRef
+        && !sameArtifactVersionRef(receipt.artifactVersionRef, candidate.versionRef)) {
+        throw new Error('Completed acceptance receipt binds a different ArtifactVersionRef.')
+      }
+      if (!(await exists(receipt.backupPath))
+        || await hashFile(receipt.backupPath) !== receipt.sourceHash
+        || await hashFile(document.artifact.sourcePath) !== candidate.artifactHash
+        || await hashFile(document.artifact.workingCopyPath) !== candidate.artifactHash) {
+        throw new Error('Completed Visual Review acceptance files are missing or corrupt.')
+      }
+      if (receipt.state !== 'completed') {
+        await writeAcceptanceReceipt(paths, {
+          ...receipt,
+          state: 'completed',
+          ...(candidate.versionRef ? { artifactVersionRef: candidate.versionRef } : {}),
+          completedAt: candidate.decidedAt ?? now()
+        })
+      }
+    }
+    const alreadyAccepted: VisualDocumentRevisionDecisionResult = {
+      ok: true,
+      status: 'accepted',
+      revision: candidate,
+      document
+    }
+    return {
+      paths,
+      document,
+      artifact: document.artifact,
+      candidate,
+      index,
+      acceptanceState: 'completed',
+      newlyPrepared: false,
+      ...(candidate.versionRef ? { committedVersionRef: candidate.versionRef } : {}),
+      alreadyAccepted
+    }
+  }
+
+  if (document.activeCandidateRevisionId !== request.revisionId) {
+    throw new Error('Only the active candidate can be accepted.')
+  }
+  if (!candidate || candidate.status !== 'candidate') throw new Error('Candidate revision not found.')
+  if (candidate.basedOnHash !== document.artifact.workingCopyHash) throw new Error('Candidate is stale.')
+  if (await hashFile(candidate.artifactPath) !== candidate.artifactHash) {
+    throw new Error('Candidate artifact changed after creation.')
+  }
+  if (candidate.artifactHash !== candidate.reviewEvidence.reviewedArtifactHash) {
+    throw new Error('Candidate no longer matches the reviewed artifact hash.')
+  }
+
+  if (receipt) {
+    if (receipt.state === 'completed') {
+      throw new Error('Completed acceptance receipt cannot target an active candidate.')
+    }
+    assertAcceptanceReceiptMatches(receipt, paths, document, candidate, document.artifact)
+    await assertRecoverableAcceptanceFiles(receipt, document.artifact)
+    return {
+      paths,
+      document,
+      artifact: document.artifact,
+      candidate,
+      index,
+      acceptanceState: receipt.state,
+      newlyPrepared: false,
+      ...(receipt.artifactVersionRef
+        ? { committedVersionRef: receipt.artifactVersionRef }
+        : {})
+    }
+  }
+
+  if (await hashFile(document.artifact.sourcePath) !== document.artifact.sourceHash) {
+    throw new Error('Source artifact changed outside SciForge; refusing to overwrite it.')
+  }
+  if (await hashFile(document.artifact.workingCopyPath) !== document.artifact.workingCopyHash) {
+    throw new Error('Working copy changed outside SciForge; refusing to accept the candidate.')
+  }
+  const backupPath = acceptanceBackupPath(
+    paths,
+    candidate.id,
+    document.artifact.sourcePath
+  )
+  if (await exists(backupPath)) {
+    if (await hashFile(backupPath) !== document.artifact.sourceHash) {
+      throw new Error('Prepared acceptance backup does not match the source artifact.')
+    }
+  } else {
+    await atomicCopy(document.artifact.sourcePath, backupPath)
+  }
+  const prepared: VisualAcceptanceReceipt = {
+    schemaVersion: ACCEPTANCE_RECEIPT_SCHEMA_VERSION,
+    documentId: document.documentId,
+    revisionId: candidate.id,
+    state: 'prepared',
+    candidateHash: candidate.artifactHash,
+    sourceHash: document.artifact.sourceHash,
+    workingCopyHash: document.artifact.workingCopyHash,
+    backupPath,
+    preparedAt: now()
+  }
+  await writeAcceptanceReceipt(paths, prepared)
+  return {
+    paths,
+    document,
+    artifact: document.artifact,
+    candidate,
+    index,
+    acceptanceState: 'prepared',
+    newlyPrepared: true
+  }
+}
+
+function assertAcceptanceReceiptMatches(
+  receipt: VisualAcceptanceReceipt,
+  paths: VisualDocumentPaths,
+  document: VisualDocument,
+  candidate: VisualRevision,
+  artifact: VisualArtifact,
+  accepted = false
+): void {
+  const expectedBackupPath = acceptanceBackupPath(paths, candidate.id, artifact.sourcePath)
+  if (receipt.documentId !== document.documentId
+    || receipt.revisionId !== candidate.id
+    || receipt.candidateHash !== candidate.artifactHash
+    || (accepted
+      ? artifact.sourceHash !== candidate.artifactHash
+        || artifact.workingCopyHash !== candidate.artifactHash
+      : receipt.sourceHash !== artifact.sourceHash
+        || receipt.workingCopyHash !== artifact.workingCopyHash)
+    || receipt.backupPath !== expectedBackupPath) {
+    throw new Error('Visual Review acceptance receipt does not match the candidate state.')
+  }
+}
+
+async function assertRecoverableAcceptanceFiles(
+  receipt: VisualAcceptanceReceipt,
+  artifact: VisualArtifact
+): Promise<void> {
+  if (!(await exists(receipt.backupPath)) || await hashFile(receipt.backupPath) !== receipt.sourceHash) {
+    throw new Error('Visual Review acceptance backup is missing or corrupt.')
+  }
+  const sourceHash = await hashFile(artifact.sourcePath)
+  if (sourceHash !== receipt.sourceHash && sourceHash !== receipt.candidateHash) {
+    throw new Error('Source artifact has an unexpected hash during acceptance recovery.')
+  }
+  const workingCopyHash = await hashFile(artifact.workingCopyPath)
+  if (workingCopyHash !== receipt.workingCopyHash && workingCopyHash !== receipt.candidateHash) {
+    throw new Error('Working copy has an unexpected hash during acceptance recovery.')
+  }
+}
+
+/**
+ * Clears a prepared receipt only when the caller knows no external version was
+ * committed. Receipts with uncertain or confirmed commit state are retained so
+ * the accept operation must be replayed to completion.
+ */
+export async function abortPreparedVisualCandidateAcceptance(
+  request: VisualDocumentRevisionDecisionRequest
+): Promise<void> {
+  const { paths, document } = await loadRequiredDocument(request.workspaceRoot, request.documentId)
+  const receipt = await readAcceptanceReceipt(paths, request.revisionId)
+  if (!receipt) return
+  if (receipt.state !== 'prepared') {
+    throw new Error('Cannot abort an acceptance receipt after its ArtifactVersion was recorded.')
+  }
+  if (!document.artifact || document.activeCandidateRevisionId !== request.revisionId) {
+    throw new Error('Cannot abort an acceptance receipt outside its active candidate.')
+  }
+  const candidate = document.revisions.find(({ id }) => id === request.revisionId)
+  if (!candidate || candidate.status !== 'candidate') {
+    throw new Error('Cannot abort an acceptance receipt without its active candidate.')
+  }
+  assertAcceptanceReceiptMatches(receipt, paths, document, candidate, document.artifact)
+  if (await hashFile(document.artifact.sourcePath) !== receipt.sourceHash
+    || await hashFile(document.artifact.workingCopyPath) !== receipt.workingCopyHash) {
+    throw new Error('Cannot abort after local acceptance replacement may have started.')
+  }
+  await unlink(acceptanceReceiptPath(paths, request.revisionId))
 }
 
 export async function rejectVisualCandidateRevision(
   request: VisualDocumentRevisionDecisionRequest
 ): Promise<VisualDocumentRevisionDecisionResult> {
   const { paths, document } = await loadRequiredDocument(request.workspaceRoot, request.documentId)
+  if (await readAcceptanceReceipt(paths, request.revisionId)) {
+    throw new Error('Candidate has a pending acceptance receipt; retry acceptance before rejecting it.')
+  }
   if (document.activeCandidateRevisionId !== request.revisionId) throw new Error('Only the active candidate can be rejected.')
   const index = document.revisions.findIndex((revision) => revision.id === request.revisionId)
   const candidate = document.revisions[index]

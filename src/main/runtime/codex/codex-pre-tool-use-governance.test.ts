@@ -145,6 +145,54 @@ describe('CodexPreToolUseGovernanceBridge', () => {
     }))).resolves.toEqual({})
   })
 
+  it('enforces a Host-bound tool allowlist before Codex executes native tools', async () => {
+    const bridge = await createBridge()
+    await bridge.seedSession('session-policy', {
+      ownedVisualToolsAvailable: false,
+      nativeVisualProofChainPending: false
+    }, ['sciforge_discover'])
+
+    await expect(bridge.evaluate({
+      ...hookInput('sciforge_discover', {}),
+      session_id: 'session-policy',
+      turn_id: 'pending-turn'
+    })).resolves.toEqual({})
+    await expect(bridge.evaluate({
+      ...hookInput('Bash', { command: 'pwd' }),
+      session_id: 'session-policy',
+      turn_id: 'pending-turn'
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining('tool_policy_denied')
+      }
+    })
+
+    await bridge.bindTurn({
+      threadId: 'thread-policy',
+      turnId: 'turn-policy',
+      sessionId: 'session-policy'
+    })
+    await bridge.updateSnapshot({
+      runtimeId: 'codex',
+      threadId: 'thread-policy',
+      turnId: 'turn-policy',
+      snapshot: {
+        ownedVisualToolsAvailable: false,
+        nativeVisualProofChainPending: false
+      }
+    })
+    await expect(bridge.evaluate({
+      ...hookInput('Bash', { command: 'pwd' }),
+      turn_id: 'turn-policy'
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining('tool_policy_denied')
+      }
+    })
+  })
+
   it('binds child sessions and turns to the live parent Host governance snapshot', async () => {
     const bridge = await createBridge()
     await bridge.updateSnapshot({

@@ -4,11 +4,15 @@ import {
 } from '@sciforge/domain-sdk'
 import {
   MAIN_ACTION_GUARD_CONTRIBUTION_KIND,
-  MAIN_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
+  MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
   MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
-  type DomainAgentArtifactConsumer,
+  type DomainArtifactConsumer,
   type DomainMainRuntimeLifecycleContext
 } from '@sciforge/domain-sdk/host'
+import {
+  MAIN_WORKFLOW_EXECUTION_RECEIPT_PROVIDER_CONTRIBUTION_KIND,
+  defineDomainWorkflowExecutionReceiptProvider
+} from '@sciforge/domain-sdk/workflow-template'
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { CapabilityBroker } from '../capabilities/broker'
@@ -18,7 +22,7 @@ import {
   activateMainRuntimeContributions,
   createMainActionGuardEvaluator,
   createMainSystemCapabilityInvoker,
-  listMainAgentArtifactConsumers
+  listMainArtifactConsumers
 } from './runtime-contributions'
 
 describe('main runtime contributions', () => {
@@ -85,7 +89,7 @@ describe('main runtime contributions', () => {
       }]),
       fixtureEntry('fixture.invalid', '@fixture/invalid', 10, [{
         id: 'fixture.invalid.consumer',
-        kind: MAIN_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
+        kind: MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
         value: { consume: 'invalid' }
       }])
     ])
@@ -93,6 +97,36 @@ describe('main runtime contributions', () => {
     await expect(activateMainRuntimeContributions(catalog, runtimeHost()))
       .rejects.toMatchObject({ code: 'invalid_contribution_value' })
     expect(activate).not.toHaveBeenCalled()
+  })
+
+  it('projects package-owned workflow receipt providers through the public lifecycle contract', async () => {
+    const contexts: DomainMainRuntimeLifecycleContext[] = []
+    const provider = defineDomainWorkflowExecutionReceiptProvider({
+      id: 'fixture.receipts',
+      matches: (workflow) => workflow === 'fixture'
+    })
+    const catalog = new DomainModuleCatalog()
+    catalog.registerModule(fixtureEntry('fixture.workflow', '@fixture/workflow', 100, [
+      {
+        id: 'fixture.workflow.receipts',
+        kind: MAIN_WORKFLOW_EXECUTION_RECEIPT_PROVIDER_CONTRIBUTION_KIND,
+        value: provider
+      },
+      {
+        id: 'fixture.workflow.runtime',
+        kind: MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
+        value: {
+          activate: (context: DomainMainRuntimeLifecycleContext) => {
+            contexts.push(context)
+          }
+        }
+      }
+    ]))
+
+    const activated = await activateMainRuntimeContributions(catalog, runtimeHost())
+    expect(contexts[0]?.workflowExecutionReceipts).toEqual([provider])
+    expect(Object.isFrozen(contexts[0]?.workflowExecutionReceipts)).toBe(true)
+    await activated.dispose()
   })
 
   it('rolls back already activated runtimes when a later activation fails', async () => {
@@ -121,15 +155,15 @@ describe('main runtime contributions', () => {
   })
 
   it('projects artifact consumers without exposing catalog metadata to callers', async () => {
-    const consumer: DomainAgentArtifactConsumer = { consume: vi.fn() }
+    const consumer: DomainArtifactConsumer = { consume: vi.fn() }
     const catalog = new DomainModuleCatalog()
     catalog.registerModule(fixtureEntry('fixture.consumer', '@fixture/consumer', 100, [{
       id: 'fixture.consumer.artifacts',
-      kind: MAIN_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
+      kind: MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
       value: consumer
     }]))
 
-    expect(listMainAgentArtifactConsumers(catalog)).toEqual([consumer])
+    expect(listMainArtifactConsumers(catalog)).toEqual([consumer])
     const activated = await activateMainRuntimeContributions(catalog, runtimeHost())
 
     expect(activated.artifactConsumers).toEqual([consumer])
@@ -410,6 +444,16 @@ function runtimeHost() {
     },
     capabilities: {
       invoke: vi.fn(async (_contract, input) => input)
+    },
+    executionEvents: {
+      publish: vi.fn(async (owner, event) => ({
+        ...event,
+        schemaVersion: 'sciforge.execution-event.v1' as const,
+        eventId: event.eventId ?? 'execution-event-fixture',
+        producer: owner,
+        occurredAt: event.occurredAt ?? '2026-08-05T00:00:00.000Z',
+        artifacts: event.artifacts ?? []
+      }))
     },
     modelAccess: {
       textReasoner: vi.fn(async () => null)

@@ -1,11 +1,18 @@
 import {
+  artifactVersionRefV1Schema,
+} from '@sciforge/domain-artifact-versions/contract'
+import {
   evidenceDagCommittedSnapshotSchema,
+  evidenceDagDataCiteMetadataV1Schema,
+  evidenceDagExportProductKindSchema,
   evidenceDagTypedErrorSchema,
   type EvidenceDagCommittedSnapshot,
+  type EvidenceDagDataCiteMetadataV1,
+  type EvidenceDagExportProductKind,
   type EvidenceDagPreviewInput,
   type EvidenceDagTypedError
 } from '../contract.js'
-import type { z } from 'zod'
+import { z } from 'zod'
 
 export const DEFAULT_EVIDENCE_DAG_SERVICE_URL = 'http://127.0.0.1:3897'
 export const EVIDENCE_DAG_SERVICE_URL_ENV = 'SCIFORGE_EVIDENCE_DAG_SERVICE_URL'
@@ -39,6 +46,49 @@ export type EvidenceDagUpdateProgress = Readonly<{
   completedBatches: number
   totalBatches: number
   snapshot: EvidenceDagCommittedSnapshot
+}>
+
+const evidenceDagSnapshotProductProjectionSchema = z.object({
+  product: evidenceDagExportProductKindSchema,
+  fileName: z.string().trim().min(1).max(512),
+  mediaType: z.string().trim().regex(/^[^\s/]+\/[^\s/]+$/u).max(256),
+  content: z.string().max(128 * 1024 * 1024),
+  contentDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+  byteLength: z.number().int().nonnegative()
+}).strict()
+
+const evidenceDagSnapshotProductsProjectionSchema = z.object({
+  schemaVersion: z.literal('sciforge-evidence-products.v1'),
+  threadId: z.string().trim().min(1).max(512),
+  snapshotDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
+  sourceArtifactVersionRefs: z.array(artifactVersionRefV1Schema).max(10_000),
+  products: z.array(evidenceDagSnapshotProductProjectionSchema).length(5)
+}).strict().superRefine((value, context) => {
+  const products = new Set(value.products.map((item) => item.product))
+  if (products.size !== evidenceDagExportProductKindSchema.options.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['products'],
+      message: 'The sidecar must return each snapshot product exactly once.'
+    })
+  }
+})
+
+export type EvidenceDagSnapshotProductProjection = Readonly<{
+  product: EvidenceDagExportProductKind
+  fileName: string
+  mediaType: string
+  content: string
+  contentDigest: string
+  byteLength: number
+}>
+
+export type EvidenceDagSnapshotProductsProjection = Readonly<{
+  schemaVersion: 'sciforge-evidence-products.v1'
+  threadId: string
+  snapshotDigest: string
+  sourceArtifactVersionRefs: readonly z.infer<typeof artifactVersionRefV1Schema>[]
+  products: readonly EvidenceDagSnapshotProductProjection[]
 }>
 
 export class EvidenceDagServiceError extends Error {
@@ -184,6 +234,22 @@ export class EvidenceDagServiceClient {
         threshold: 0.7
       })
     })
+  }
+
+  async snapshotProducts(
+    threadId: string,
+    snapshotDigest: string,
+    datacite: EvidenceDagDataCiteMetadataV1
+  ): Promise<EvidenceDagSnapshotProductsProjection> {
+    const data = await this.request('/snapshot-products', {
+      method: 'POST',
+      body: JSON.stringify({
+        threadId,
+        snapshotDigest,
+        datacite: evidenceDagDataCiteMetadataV1Schema.parse(datacite)
+      })
+    })
+    return evidenceDagSnapshotProductsProjectionSchema.parse(data)
   }
 
   private async request(

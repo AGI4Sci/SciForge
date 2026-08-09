@@ -3,12 +3,15 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { createCanvas, loadImage } from '@napi-rs/canvas'
 import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
+import { createScientificPlottingCapabilityHarness } from './scientific-plotting-capability-harness.mjs'
 
 const workspaceRoot = process.cwd()
 const outputDir = 'tmp/scientific-plotting-cns-quality-eval/alphafold3'
 const outputRoot = join(workspaceRoot, outputDir)
-const scientificEntry = join(workspaceRoot, 'out/main/scientific-plotting-mcp-node-entry.js')
 const imageEntry = join(workspaceRoot, 'out/main/image-generation-mcp-node-entry.js')
+const operationRunId = normalizeOperationPart(
+  process.env.SCIFORGE_PLOTTING_OPERATION_RUN_ID ?? `${Date.now()}-${process.pid}`
+)
 
 const alphaFold3Paper = {
   title: 'Accurate structure prediction of biomolecular interactions with AlphaFold 3',
@@ -168,11 +171,13 @@ const cases = [
 ]
 
 async function main() {
-  await assertFile(scientificEntry)
   await assertFile(imageEntry)
   await mkdir(outputRoot, { recursive: true })
 
-  const scientific = await connectMcp(scientificEntry, '--scientific-plotting-mcp-server', 'alphafold3-scientific-plotting-eval')
+  const plotting = await createScientificPlottingCapabilityHarness({
+    workspaceRoot,
+    userDataDir: join(outputRoot, '.artifact-version-runtime')
+  })
   const image = await connectMcp(imageEntry, '--image-generation-mcp-server', 'alphafold3-image-polish-eval')
 
   const startedAt = new Date().toISOString()
@@ -189,11 +194,11 @@ async function main() {
   }
 
   try {
-    summary.status.scientificPlotting = await callStructured(scientific.client, 'scientific_plotting_status', {}, 'status', 30_000)
+    summary.status.scientificPlotting = await plotting.status()
     summary.status.imageGeneration = await callStructured(image.client, 'image_generation_status', {}, 'status', 30_000)
     for (const item of cases) {
       const first = item.firstKind === 'scientific_plotting'
-        ? await renderScientificFirst(scientific.client, item)
+        ? await renderScientificFirst(plotting, item)
         : await renderImageFirst(image.client, item)
 
       const polish = await renderPolish(image.client, item, first)
@@ -225,7 +230,7 @@ async function main() {
       contactSheetPath
     }, null, 2))
   } finally {
-    await Promise.allSettled([scientific.client.close(), image.client.close()])
+    await Promise.allSettled([plotting.dispose(), image.client.close()])
   }
 }
 
@@ -244,7 +249,7 @@ async function connectMcp(entry, flag, name) {
   return { client, transport }
 }
 
-async function renderScientificFirst(client, item) {
+async function renderScientificFirst(plotting, item) {
   const visualPlan = {
     planId: `visual-plan-${item.id}-code`,
     route: 'code',
@@ -261,8 +266,8 @@ async function renderScientificFirst(client, item) {
     releaseCeiling: 'publication_ready',
     fallbackPolicy: 'fail_closed'
   }
-  const response = await callStructured(client, 'scientific_plotting_render', {
-    workspaceRoot,
+  const response = await plotting.render({
+    operationId: plottingOperationId(item.id),
     visualPlan,
     template: item.template,
     figureId: item.figureId,
@@ -275,7 +280,7 @@ async function renderScientificFirst(client, item) {
       maxAttempts: 1,
       minOverall: 0.8
     }
-  }, 'result', 120_000)
+  })
   return normalizeRenderResult(response)
 }
 
@@ -553,6 +558,15 @@ async function writeMarkdownSummary(path, summary) {
 
 async function writeJson(path, value) {
   await writeFile(path, JSON.stringify(value, null, 2) + '\n')
+}
+
+function normalizeOperationPart(value) {
+  const normalized = String(value).replace(/[^A-Za-z0-9._:-]+/gu, '-').replace(/^-+|-+$/gu, '')
+  return normalized || 'run'
+}
+
+function plottingOperationId(label) {
+  return `smoke:alphafold3:${operationRunId}:${normalizeOperationPart(label)}`.slice(0, 240)
 }
 
 async function assertFile(path) {

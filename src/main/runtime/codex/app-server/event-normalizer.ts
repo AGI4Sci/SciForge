@@ -38,10 +38,12 @@ export function normalizeCodexEvent(
     stringValue(params.turn_id) ||
     stringValue(asRecord(params.turn)?.id) ||
     stringValue(context.turnId)
+  const sequence = nullableInteger(event.seq) ?? nullableInteger(params.seq)
   if (isAgentMessageDelta(method)) {
     return {
       threadId,
       ...(turnId ? { turnId } : {}),
+      ...(sequence !== null ? { seq: sequence } : {}),
       deltas: [{ text: deltaText(params), kind: 'agent_message' }]
     }
   }
@@ -49,6 +51,7 @@ export function normalizeCodexEvent(
     return {
       threadId,
       ...(turnId ? { turnId } : {}),
+      ...(sequence !== null ? { seq: sequence } : {}),
       deltas: [{ text: deltaText(params), kind: 'agent_reasoning' }]
     }
   }

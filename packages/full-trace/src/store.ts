@@ -8,7 +8,8 @@ import {
   readFile,
   rename,
   chmod,
-  unlink
+  unlink,
+  type FileHandle
 } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import path from 'node:path'
@@ -51,6 +52,11 @@ const RETENTION_MARKER_NAME = '.retention.json'
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1_000
 const DIRECTORY_MODE = 0o700
 const FILE_MODE = 0o600
+const MAX_EVENT_ID_LOOKUP = 10_000
+const MAX_STORED_MATCHES_PER_EVENT_ID = 2
+const PREVIEW_LENGTH = 240
+const PREVIEW_SOURCE_LENGTH = 1_024
+const EXPORT_COPY_BUFFER_SIZE = 64 * 1_024
 
 export type LocalTraceStoreOptions = {
   /** Application user-data directory. Traces are placed in its full-traces child. */
@@ -67,9 +73,19 @@ export type TracePruneOptions = {
   force?: boolean
 }
 
-type ParsedEvents = {
-  events: TraceEvent[]
+type TraceScanResult = {
+  total: number
   corruptLines: number
+}
+
+type TraceScanVisitor = (event: TraceEvent) => void | Promise<void>
+
+type TraceSpoolIndexEntry = {
+  timestamp: string
+  recordedAt: string
+  eventId: string
+  offset: number
+  byteLength: number
 }
 
 type MutableSummary = {
@@ -79,6 +95,7 @@ type MutableSummary = {
   turnId?: string
   sources: Set<string>
   model?: string
+  modelStartedAt?: string
   startedAt: string
   endedAt: string
   completed: boolean
@@ -171,6 +188,19 @@ export class LocalTraceStore {
     await this.initialize()
     return this.enqueue(async () => {
       const event = this.normalizeEvent(input)
+      if (event.kind === 'execution_event' && input.eventId) {
+        const existing = (await this.readInternal({
+          eventIds: [event.eventId]
+        })).events.find(
+          (candidate) => candidate.eventId === event.eventId
+        )
+        if (existing) {
+          if (!sameLogicalTraceEvent(existing, event)) {
+            throw new Error(`Trace eventId collision: ${event.eventId}`)
+          }
+          return existing
+        }
+      }
       await this.appendEvents([event])
       return event
     })
@@ -198,28 +228,27 @@ export class LocalTraceStore {
   }
 
   async summaries(query: TraceSummaryQuery = {}): Promise<TraceSummary[]> {
-    const { limit, order = 'desc', ...readQuery } = query
-    const { events } = await this.read({ ...readQuery, order: 'asc' })
-    const summaries = deriveSummaries(events)
-    summaries.sort((left, right) => (
-      order === 'asc'
-        ? left.startedAt.localeCompare(right.startedAt)
-        : right.startedAt.localeCompare(left.startedAt)
-    ))
-    return limit === undefined ? summaries : summaries.slice(0, validateLimit(limit))
+    await this.initialize()
+    validateReadQuery(query)
+    return this.enqueue(async () => {
+      const accumulator = new TraceSummaryAccumulator()
+      await this.scan(query, (event) => accumulator.add(event))
+      return orderAndLimitSummaries(accumulator.summaries(), query)
+    })
   }
 
   /** Derives request-level cards from the same durable events as summaries(). */
   async requestSummaries(query: TraceRequestSummaryQuery = {}): Promise<TraceRequestSummary[]> {
-    const { limit, order = 'desc', scope = 'all', ...readQuery } = query
-    const { events } = await this.read({ ...readQuery, order: 'asc' })
-    const summaries = deriveRequestSummaries(events, scope)
-    summaries.sort((left, right) => (
-      order === 'asc'
-        ? left.startedAt.localeCompare(right.startedAt)
-        : right.startedAt.localeCompare(left.startedAt)
-    ))
-    return limit === undefined ? summaries : summaries.slice(0, validateLimit(limit))
+    await this.initialize()
+    validateReadQuery(query)
+    return this.enqueue(async () => {
+      const accumulator = new TraceSummaryAccumulator()
+      await this.scan(query, (event) => accumulator.add(event))
+      return orderAndLimitSummaries(
+        accumulator.requestSummaries(query.scope ?? 'all'),
+        query
+      )
+    })
   }
 
   async export(options: TraceExportOptions): Promise<TraceExportResult> {
@@ -231,28 +260,37 @@ export class LocalTraceStore {
     if (isPathInside(this.directory, destination)) {
       throw new Error('Trace exports must be written outside the trace store')
     }
-    const exportedAt = this.now().toISOString()
-    const result = await this.read({
+    const query: TraceReadQuery = {
       traceIds: options.traceIds,
       from: options.from,
-      to: options.to,
-      order: 'asc'
+      to: options.to
+    }
+    validateReadQuery(query)
+    return this.enqueue(async () => {
+      const exportedAt = this.now().toISOString()
+      const traceIds = new Set<string>()
+      let eventCount = 0
+      await writeExclusiveExport(destination, async (writeEvent) => {
+        const scanned = await this.scan(query, async (event) => {
+          traceIds.add(event.traceId)
+          await writeEvent(event)
+        })
+        eventCount = scanned.total
+        return {
+          format: TRACE_EXPORT_FORMAT,
+          schemaVersion: TRACE_SCHEMA_VERSION,
+          exportedAt,
+          eventCount,
+          traceCount: traceIds.size
+        }
+      })
+      return {
+        destination,
+        exportedAt,
+        eventCount,
+        traceCount: traceIds.size
+      }
     })
-    const traceCount = new Set(result.events.map((event) => event.traceId)).size
-    const manifest: TraceExportManifest = {
-      format: TRACE_EXPORT_FORMAT,
-      schemaVersion: TRACE_SCHEMA_VERSION,
-      exportedAt,
-      eventCount: result.events.length,
-      traceCount
-    }
-    await writeExclusiveExport(destination, manifest, result.events, this.sanitizationOptions())
-    return {
-      destination,
-      exportedAt,
-      eventCount: result.events.length,
-      traceCount
-    }
   }
 
   async clear(): Promise<TraceClearResult> {
@@ -326,43 +364,41 @@ export class LocalTraceStore {
       } finally {
         await handle.close()
       }
+      await syncDirectory(path.dirname(segment))
     }
   }
 
   private async readInternal(query: TraceReadQuery): Promise<TraceReadResult> {
-    const traceIds = query.traceIds ? new Set(query.traceIds) : undefined
-    const kinds = query.kinds ? new Set(query.kinds) : undefined
-    const from = query.from ? Date.parse(query.from) : undefined
-    const to = query.to ? Date.parse(query.to) : undefined
-    const parsed = await this.readAllSegments()
-    let events = parsed.events.filter((event) => {
-      const timestamp = Date.parse(event.timestamp)
-      return (!traceIds || traceIds.has(event.traceId)) &&
-        (!query.runtimeId || event.runtimeId === query.runtimeId) &&
-        (!query.threadId || event.threadId === query.threadId) &&
-        (!query.turnId || event.turnId === query.turnId) &&
-        (!query.requestId || event.requestId === query.requestId) &&
-        (!query.parentRequestId || event.parentRequestId === query.parentRequestId) &&
-        (!kinds || kinds.has(event.kind)) &&
-        (from === undefined || timestamp >= from) &&
-        (to === undefined || timestamp <= to)
+    const events: TraceEvent[] = []
+    const order = query.order ?? 'asc'
+    const result = await this.scan(query, (event) => {
+      retainOrderedEvent(events, event, order, query.limit)
     })
-    events.sort(compareEvents)
-    if (query.order === 'desc') events.reverse()
-    const total = events.length
-    if (query.limit !== undefined) events = events.slice(0, query.limit)
-    return { events, total, corruptLines: parsed.corruptLines }
+    events.sort(order === 'desc' ? compareEventsDescending : compareEvents)
+    return { events, total: result.total, corruptLines: result.corruptLines }
   }
 
-  private async readAllSegments(): Promise<ParsedEvents> {
-    const events: TraceEvent[] = []
+  private async scan(query: TraceReadQuery, visit: TraceScanVisitor): Promise<TraceScanResult> {
+    const eventIds = query.eventIds ? new Set(query.eventIds) : undefined
+    const matches = createTraceMatcher(query, eventIds)
+    const eventIdMatches = query.eventIds ? new Map<string, number>() : undefined
+    let total = 0
     let corruptLines = 0
     for (const file of await this.segmentFiles()) {
-      const parsed = await readSegment(file, this.sanitizationOptions())
-      events.push(...parsed.events)
-      corruptLines += parsed.corruptLines
+      corruptLines += await scanSegment(file, this.sanitizationOptions(), async (event) => {
+        if (eventIds?.has(event.eventId) && eventIdMatches) {
+          const count = (eventIdMatches.get(event.eventId) ?? 0) + 1
+          if (count > MAX_STORED_MATCHES_PER_EVENT_ID) {
+            throw new Error(`Trace eventId has too many durable records: ${event.eventId}`)
+          }
+          eventIdMatches.set(event.eventId, count)
+        }
+        if (!matches(event)) return
+        total += 1
+        await visit(event)
+      })
     }
-    return { events, corruptLines }
+    return { total, corruptLines }
   }
 
   private async segmentFiles(): Promise<string[]> {
@@ -403,18 +439,13 @@ export class LocalTraceStore {
         continue
       }
       if (segmentStart < cutoff.getTime()) {
-        const parsed = await readSegment(file, this.sanitizationOptions())
-        const retained = parsed.events.filter((event) => Date.parse(event.recordedAt) >= cutoff.getTime())
-        const removed = parsed.events.length - retained.length + parsed.corruptLines
-        if (removed > 0) {
-          deletedEvents += removed
-          if (retained.length === 0) {
-            await unlink(file)
-            deletedFiles += 1
-          } else {
-            await replaceSegment(file, retained)
-          }
-        }
+        const compacted = await compactSegment(
+          file,
+          this.sanitizationOptions(),
+          (event) => Date.parse(event.recordedAt) >= cutoff.getTime()
+        )
+        deletedEvents += compacted.removedEvents
+        if (compacted.deletedFile) deletedFiles += 1
       }
     }
     await writeOwnerOnlyJson(path.join(this.directory, RETENTION_MARKER_NAME), { lastRunDate: today })
@@ -432,17 +463,177 @@ export class LocalTraceStore {
   }
 }
 
+function sameLogicalTraceEvent(left: TraceEvent, right: TraceEvent): boolean {
+  const { recordedAt: _leftRecordedAt, ...leftLogical } = left
+  const { recordedAt: _rightRecordedAt, ...rightLogical } = right
+  return JSON.stringify(leftLogical) === JSON.stringify(rightLogical)
+}
+
 export function deriveRequestSummaries(
   events: readonly TraceEvent[],
   scope: TraceRequestSummaryScope = 'all'
 ): TraceRequestSummary[] {
-  const grouped = new Map<string, MutableRequestSummary>()
-  for (const event of [...events].sort(compareEvents)) {
+  const accumulator = new TraceSummaryAccumulator()
+  for (const event of [...events].sort(compareEvents)) accumulator.add(event)
+  return accumulator.requestSummaries(scope)
+}
+
+export function deriveSummaries(events: readonly TraceEvent[]): TraceSummary[] {
+  const accumulator = new TraceSummaryAccumulator()
+  for (const event of [...events].sort(compareEvents)) accumulator.add(event)
+  return accumulator.summaries()
+}
+
+class TraceSummaryAccumulator {
+  private readonly requests = new Map<string, MutableRequestSummary>()
+  private readonly traces = new Map<string, MutableSummary>()
+
+  add(event: TraceEvent): void {
+    this.addRequestEvent(event)
+    this.addTraceEvent(event)
+  }
+
+  requestSummaries(scope: TraceRequestSummaryScope): TraceRequestSummary[] {
+    const modelRequests = [...this.requests.entries()].filter(([, summary]) => summary.hasModelRequest)
+    const modelRequestKeys = new Set(modelRequests.map(([key]) => key))
+    const childCounts = new Map<string, number>()
+    for (const [, summary] of modelRequests) {
+      if (summary.parentRequestId) {
+        const parentKey = requestKey(summary.traceId, summary.parentRequestId)
+        if (modelRequestKeys.has(parentKey)) {
+          childCounts.set(parentKey, (childCounts.get(parentKey) ?? 0) + 1)
+        }
+      }
+    }
+    return modelRequests
+      .map(([, summary]) => summary)
+      .filter((summary) => (
+        scope === 'all' ||
+        !summary.parentRequestId ||
+        !modelRequestKeys.has(requestKey(summary.traceId, summary.parentRequestId))
+      ))
+      .map<TraceRequestSummary>((summary) => ({
+        requestId: summary.requestId,
+        ...(summary.parentRequestId ? { parentRequestId: summary.parentRequestId } : {}),
+        traceId: summary.traceId,
+        ...(summary.runtimeId ? { runtimeId: summary.runtimeId } : {}),
+        ...(summary.threadId ? { threadId: summary.threadId } : {}),
+        ...(summary.turnId ? { turnId: summary.turnId } : {}),
+        sources: [...summary.sources].sort(),
+        ...(summary.model ? { model: summary.model } : {}),
+        ...(summary.protocol ? { protocol: summary.protocol } : {}),
+        ...(summary.retry !== undefined ? { retry: summary.retry } : {}),
+        startedAt: summary.startedAt,
+        endedAt: summary.endedAt,
+        durationMs: Math.max(0, Date.parse(summary.endedAt) - Date.parse(summary.startedAt)),
+        status: summary.failed ? 'error' : summary.completed ? 'completed' : 'active',
+        eventCount: summary.eventCount,
+        childRequestCount: childCounts.get(requestKey(summary.traceId, summary.requestId)) ?? 0,
+        errorCount: summary.errorCount,
+        ...(summary.preview ? { preview: summary.preview } : {}),
+        ...(summary.error ? { error: summary.error } : {}),
+        ...((summary.usageEventSeen ? summary.usage : summary.responseUsage)
+          ? { usage: summary.usageEventSeen ? summary.usage : summary.responseUsage }
+          : {})
+      }))
+  }
+
+  summaries(): TraceSummary[] {
+    const requestSummaries = this.requestSummaries('all')
+    const requestsByKey = new Map(
+      requestSummaries.map((summary) => [requestKey(summary.traceId, summary.requestId), summary])
+    )
+    const rootRequestsByTrace = new Map<string, TraceRequestSummary[]>()
+    for (const request of requestSummaries) {
+      if (!isRootRequest(request, requestsByKey)) continue
+      const grouped = rootRequestsByTrace.get(request.traceId) ?? []
+      grouped.push(request)
+      rootRequestsByTrace.set(request.traceId, grouped)
+    }
+    const unmodeledRequestsByTrace = new Map<string, MutableRequestSummary[]>()
+    for (const request of this.requests.values()) {
+      if (request.hasModelRequest || request.parentRequestId) continue
+      const grouped = unmodeledRequestsByTrace.get(request.traceId) ?? []
+      grouped.push(request)
+      unmodeledRequestsByTrace.set(request.traceId, grouped)
+    }
+    return [...this.traces.values()].map((summary) => {
+      let completed = summary.completed
+      let failed = summary.failed
+      let errorCount = summary.errorCount
+      let error = summary.error
+      let model = summary.model
+      let preview = summary.preview
+      let modelStartedAt = summary.modelStartedAt
+      const requestIds = new Set(summary.requestIds)
+      const usage = { ...summary.usage }
+      const usageTarget: MutableSummary = { ...summary, usage }
+
+      for (const request of rootRequestsByTrace.get(summary.traceId) ?? []) {
+        requestIds.add(request.requestId)
+        if (!modelStartedAt || request.startedAt.localeCompare(modelStartedAt) < 0) {
+          modelStartedAt = request.startedAt
+          model = request.model
+          preview = request.preview
+        }
+        if (request.status === 'completed') completed = true
+        if (request.status === 'error') {
+          failed = true
+          error ??= request.error
+        }
+        errorCount += request.errorCount
+        addUsageValues(usageTarget, request.usage)
+      }
+
+      // Request-correlated events without a model_request were historically
+      // treated as root events only when they had no parent correlation.
+      for (const request of unmodeledRequestsByTrace.get(summary.traceId) ?? []) {
+        if (request.completed) completed = true
+        if (request.failed) {
+          failed = true
+          errorCount += request.errorCount
+          error ??= request.error
+        }
+        addUsageValues(
+          usageTarget,
+          request.usageEventSeen ? request.usage : request.responseUsage
+        )
+      }
+
+      return {
+        traceId: summary.traceId,
+        ...(summary.runtimeId ? { runtimeId: summary.runtimeId } : {}),
+        ...(summary.threadId ? { threadId: summary.threadId } : {}),
+        ...(summary.turnId ? { turnId: summary.turnId } : {}),
+        sources: [...summary.sources].sort(),
+        ...(model ? { model } : {}),
+        startedAt: summary.startedAt,
+        endedAt: summary.endedAt,
+        durationMs: Math.max(0, Date.parse(summary.endedAt) - Date.parse(summary.startedAt)),
+        status: errorCount > 0 || failed ? 'error' : completed ? 'completed' : 'active',
+        requestCount: requestIds.size,
+        eventCount: summary.eventCount,
+        agentEventCount: summary.agentEventCount,
+        errorCount,
+        ...(preview ? { preview } : {}),
+        ...(error ? { error } : {}),
+        ...(usage.hasValue ? {
+          usage: {
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            totalTokens: usage.totalTokens
+          }
+        } : {})
+      }
+    })
+  }
+
+  private addRequestEvent(event: TraceEvent): void {
     const requestId = event.requestId
-    if (!requestId) continue
+    if (!requestId) return
     const payload = asRecord(event.payload)
     const key = requestKey(event.traceId, requestId)
-    let summary = grouped.get(key)
+    let summary = this.requests.get(key)
     if (!summary) {
       summary = {
         requestId,
@@ -461,7 +652,7 @@ export function deriveRequestSummaries(
         usageEventSeen: false,
         hasModelRequest: false
       }
-      grouped.set(key, summary)
+      this.requests.set(key, summary)
     }
     summary.parentRequestId ??= event.parentRequestId
     summary.runtimeId ??= event.runtimeId
@@ -478,7 +669,7 @@ export function deriveRequestSummaries(
       summary.protocol ??= stringValue(payload?.protocol)
       summary.retry ??= numericValue(payload?.retry)
       summary.preview ??= previewValue(payload?.body)
-      continue
+      return
     }
     if (event.kind === 'model_response_end') {
       const status = numericValue(payload?.status)
@@ -491,13 +682,13 @@ export function deriveRequestSummaries(
         summary.responseUsage,
         usageFromPayload(payload?.usage)
       )
-      continue
+      return
     }
     if (event.kind === 'error') {
       summary.errorCount += 1
       summary.failed = true
       summary.error = stringValue(payload?.message) ?? summary.error ?? 'Trace error'
-      continue
+      return
     }
     if (event.kind === 'usage') {
       const usage = usageFromPayload(payload)
@@ -508,59 +699,8 @@ export function deriveRequestSummaries(
     }
   }
 
-  const modelRequests = [...grouped.entries()].filter(([, summary]) => summary.hasModelRequest)
-  const modelRequestKeys = new Set(modelRequests.map(([key]) => key))
-  const childCounts = new Map<string, number>()
-  for (const [, summary] of modelRequests) {
-    if (summary.parentRequestId) {
-      const parentKey = requestKey(summary.traceId, summary.parentRequestId)
-      if (modelRequestKeys.has(parentKey)) {
-        childCounts.set(parentKey, (childCounts.get(parentKey) ?? 0) + 1)
-      }
-    }
-  }
-  const summaries = modelRequests
-    .map(([, summary]) => summary)
-    .filter((summary) => (
-      scope === 'all' ||
-      !summary.parentRequestId ||
-      !modelRequestKeys.has(requestKey(summary.traceId, summary.parentRequestId))
-    ))
-    .map<TraceRequestSummary>((summary) => ({
-      requestId: summary.requestId,
-      ...(summary.parentRequestId ? { parentRequestId: summary.parentRequestId } : {}),
-      traceId: summary.traceId,
-      ...(summary.runtimeId ? { runtimeId: summary.runtimeId } : {}),
-      ...(summary.threadId ? { threadId: summary.threadId } : {}),
-      ...(summary.turnId ? { turnId: summary.turnId } : {}),
-      sources: [...summary.sources].sort(),
-      ...(summary.model ? { model: summary.model } : {}),
-      ...(summary.protocol ? { protocol: summary.protocol } : {}),
-      ...(summary.retry !== undefined ? { retry: summary.retry } : {}),
-      startedAt: summary.startedAt,
-      endedAt: summary.endedAt,
-      durationMs: Math.max(0, Date.parse(summary.endedAt) - Date.parse(summary.startedAt)),
-      status: summary.failed ? 'error' : summary.completed ? 'completed' : 'active',
-      eventCount: summary.eventCount,
-      childRequestCount: childCounts.get(requestKey(summary.traceId, summary.requestId)) ?? 0,
-      errorCount: summary.errorCount,
-      ...(summary.preview ? { preview: summary.preview } : {}),
-      ...(summary.error ? { error: summary.error } : {}),
-      ...((summary.usageEventSeen ? summary.usage : summary.responseUsage)
-        ? { usage: summary.usageEventSeen ? summary.usage : summary.responseUsage }
-        : {})
-    }))
-  return summaries
-}
-
-export function deriveSummaries(events: readonly TraceEvent[]): TraceSummary[] {
-  const requestSummaries = deriveRequestSummaries(events, 'all')
-  const requestsByKey = new Map(
-    requestSummaries.map((summary) => [requestKey(summary.traceId, summary.requestId), summary])
-  )
-  const grouped = new Map<string, MutableSummary>()
-  for (const event of [...events].sort(compareEvents)) {
-    let summary = grouped.get(event.traceId)
+  private addTraceEvent(event: TraceEvent): void {
+    let summary = this.traces.get(event.traceId)
     if (!summary) {
       summary = {
         traceId: event.traceId,
@@ -576,9 +716,10 @@ export function deriveSummaries(events: readonly TraceEvent[]): TraceSummary[] {
         eventCount: 0,
         agentEventCount: 0,
         errorCount: 0,
+        modelStartedAt: undefined,
         usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, hasValue: false }
       }
-      grouped.set(event.traceId, summary)
+      this.traces.set(event.traceId, summary)
     }
     summary.runtimeId ??= event.runtimeId
     summary.threadId ??= event.threadId
@@ -589,20 +730,17 @@ export function deriveSummaries(events: readonly TraceEvent[]): TraceSummary[] {
     summary.eventCount += 1
 
     const payload = asRecord(event.payload)
-    const request = event.requestId
-      ? requestsByKey.get(requestKey(event.traceId, event.requestId))
-      : undefined
-    const requestIsRoot = request
-      ? isRootRequest(request, requestsByKey)
-      : event.parentRequestId === undefined
     if (event.kind === 'model_request') {
-      if (requestIsRoot) {
+      if (!event.requestId && !event.parentRequestId) {
         summary.requestIds.add(event.requestId ?? event.eventId)
-        summary.model ??= stringValue(payload?.model) ?? stringValue(asRecord(payload?.body)?.model)
-        summary.preview ??= previewValue(payload?.body)
+        if (!summary.modelStartedAt || event.timestamp.localeCompare(summary.modelStartedAt) < 0) {
+          summary.modelStartedAt = event.timestamp
+          summary.model = stringValue(payload?.model) ?? stringValue(asRecord(payload?.body)?.model)
+          summary.preview = previewValue(payload?.body)
+        }
       }
     } else if (event.kind === 'model_response_end') {
-      if (requestIsRoot) {
+      if (!event.requestId && !event.parentRequestId) {
         const status = numericValue(payload?.status)
         if (status === undefined || (status >= 200 && status < 300)) summary.completed = true
         else summary.failed = true
@@ -617,8 +755,20 @@ export function deriveSummaries(events: readonly TraceEvent[]): TraceSummary[] {
         summary.failed = true
         summary.error ??= stringValue(agentPayload?.message) ?? 'Agent error'
       }
+    } else if (event.kind === 'execution_event') {
+      const phase = stringValue(payload?.phase)?.toLowerCase()
+      const execution = asRecord(payload?.event)
+      summary.preview ??= [
+        stringValue(asRecord(payload?.producer)?.moduleId),
+        stringValue(payload?.runId)
+      ].filter(Boolean).join(' · ') || undefined
+      if (phase === 'run_completed') summary.completed = true
+      if (phase === 'run_failed') {
+        summary.failed = true
+        summary.error ??= stringValue(asRecord(execution?.payload)?.message) ?? 'Domain execution failed'
+      }
     } else if (event.kind === 'error') {
-      if (requestIsRoot) {
+      if (!event.requestId && !event.parentRequestId) {
         summary.errorCount += 1
         summary.failed = true
         summary.error = stringValue(payload?.message) ?? summary.error ?? 'Trace error'
@@ -626,7 +776,7 @@ export function deriveSummaries(events: readonly TraceEvent[]): TraceSummary[] {
     } else if (event.kind === 'usage') {
       // Request-scoped usage is folded in once below. Uncorrelated usage still
       // belongs to the trajectory and is retained here.
-      if (!event.requestId || (request === undefined && !event.parentRequestId)) {
+      if (!event.requestId && !event.parentRequestId) {
         addUsage(summary, payload)
       }
     } else if (event.kind === 'lifecycle') {
@@ -634,48 +784,6 @@ export function deriveSummaries(events: readonly TraceEvent[]): TraceSummary[] {
       applyLifecyclePhase(summary, phase)
     }
   }
-
-  for (const request of requestSummaries) {
-    if (!isRootRequest(request, requestsByKey)) continue
-    const summary = grouped.get(request.traceId)
-    if (!summary) continue
-    if (request.status === 'completed') summary.completed = true
-    if (request.status === 'error') {
-      summary.failed = true
-      summary.error ??= request.error
-    }
-    addUsageValues(summary, request.usage)
-  }
-
-  return [...grouped.values()].map((summary) => ({
-    traceId: summary.traceId,
-    ...(summary.runtimeId ? { runtimeId: summary.runtimeId } : {}),
-    ...(summary.threadId ? { threadId: summary.threadId } : {}),
-    ...(summary.turnId ? { turnId: summary.turnId } : {}),
-    sources: [...summary.sources].sort(),
-    ...(summary.model ? { model: summary.model } : {}),
-    startedAt: summary.startedAt,
-    endedAt: summary.endedAt,
-    durationMs: Math.max(0, Date.parse(summary.endedAt) - Date.parse(summary.startedAt)),
-    status: summary.errorCount > 0 || summary.failed
-      ? 'error'
-      : summary.completed
-        ? 'completed'
-        : 'active',
-    requestCount: summary.requestIds.size,
-    eventCount: summary.eventCount,
-    agentEventCount: summary.agentEventCount,
-    errorCount: summary.errorCount,
-    ...(summary.preview ? { preview: summary.preview } : {}),
-    ...(summary.error ? { error: summary.error } : {}),
-    ...(summary.usage.hasValue ? {
-      usage: {
-        inputTokens: summary.usage.inputTokens,
-        outputTokens: summary.usage.outputTokens,
-        totalTokens: summary.usage.totalTokens
-      }
-    } : {})
-  }))
 }
 
 function sanitizeTraceIdentifier(value: string, options: TraceSanitizationOptions): string {
@@ -711,77 +819,150 @@ function sanitizeStoredEvent(
   }
 }
 
-async function readSegment(file: string, sanitization: TraceSanitizationOptions): Promise<ParsedEvents> {
-  const events: TraceEvent[] = []
+async function scanSegment(
+  file: string,
+  sanitization: TraceSanitizationOptions,
+  visit: TraceScanVisitor
+): Promise<number> {
   let corruptLines = 0
   const lines = createInterface({ input: createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity })
   for await (const line of lines) {
     if (!line.trim()) continue
+    let event: TraceEvent
     try {
       const value: unknown = JSON.parse(line)
       if (!isTraceEvent(value)) {
         corruptLines += 1
         continue
       }
-      events.push(sanitizeStoredEvent(value, sanitization))
+      event = sanitizeStoredEvent(value, sanitization)
     } catch {
       corruptLines += 1
+      continue
     }
+    await visit(event)
   }
-  return { events, corruptLines }
+  return corruptLines
 }
 
-async function writeExclusiveExport(
-  destination: string,
-  manifest: TraceExportManifest,
-  events: readonly TraceEvent[],
-  sanitization: TraceSanitizationOptions
-): Promise<void> {
-  const parent = path.dirname(destination)
-  await mkdir(parent, { recursive: true })
-  const temporary = path.join(parent, `.${path.basename(destination)}.${randomUUID()}.tmp`)
-  const handle = await open(
-    temporary,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollowFlag(),
-    FILE_MODE
-  )
-  try {
-    await handle.chmod(FILE_MODE)
-    await handle.writeFile(`${JSON.stringify({ recordType: 'manifest', ...manifest })}\n`, 'utf8')
-    for (const event of events) {
-      await handle.writeFile(`${JSON.stringify(sanitizeStoredEvent(event, sanitization))}\n`, 'utf8')
-    }
-    await handle.sync()
-  } finally {
-    await handle.close()
-  }
-  try {
-    await copyFile(temporary, destination, constants.COPYFILE_EXCL)
-    await chmod(destination, FILE_MODE)
-  } finally {
-    await unlink(temporary).catch(() => undefined)
-  }
-}
-
-async function replaceSegment(file: string, events: readonly TraceEvent[]): Promise<void> {
+async function compactSegment(
+  file: string,
+  sanitization: TraceSanitizationOptions,
+  retain: (event: TraceEvent) => boolean
+): Promise<{ removedEvents: number; deletedFile: boolean }> {
   const temporary = `${file}.${randomUUID()}.tmp`
   const handle = await open(
     temporary,
     constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollowFlag(),
     FILE_MODE
   )
+  let validEvents = 0
+  let retainedEvents = 0
+  let corruptLines = 0
   try {
-    await handle.chmod(FILE_MODE)
-    await handle.writeFile(events.map((event) => `${JSON.stringify(event)}\n`).join(''), 'utf8')
-    await handle.sync()
-  } finally {
-    await handle.close()
+    try {
+      await handle.chmod(FILE_MODE)
+      corruptLines = await scanSegment(file, sanitization, async (event) => {
+        validEvents += 1
+        if (!retain(event)) return
+        retainedEvents += 1
+        await handle.writeFile(`${JSON.stringify(event)}\n`, 'utf8')
+      })
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+  } catch (error) {
+    await unlink(temporary).catch(() => undefined)
+    throw error
   }
+
+  const removedEvents = validEvents - retainedEvents + corruptLines
   try {
+    if (removedEvents === 0) return { removedEvents: 0, deletedFile: false }
+    if (retainedEvents === 0) {
+      await unlink(file)
+      return { removedEvents, deletedFile: true }
+    }
     await rename(temporary, file)
     await chmod(file, FILE_MODE)
+    await syncDirectory(path.dirname(file))
+    return { removedEvents, deletedFile: false }
   } finally {
     await unlink(temporary).catch(() => undefined)
+  }
+}
+
+async function writeExclusiveExport(
+  destination: string,
+  produce: (writeEvent: TraceScanVisitor) => Promise<TraceExportManifest>
+): Promise<void> {
+  const parent = path.dirname(destination)
+  await mkdir(parent, { recursive: true })
+  const nonce = randomUUID()
+  const spool = path.join(parent, `.${path.basename(destination)}.${nonce}.events.tmp`)
+  const temporary = path.join(parent, `.${path.basename(destination)}.${nonce}.tmp`)
+  const spoolHandle = await open(
+    spool,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollowFlag(),
+    FILE_MODE
+  )
+  let manifest: TraceExportManifest
+  const index: TraceSpoolIndexEntry[] = []
+  let spoolOffset = 0
+  try {
+    try {
+      await spoolHandle.chmod(FILE_MODE)
+      manifest = await produce(async (event) => {
+        const serialized = `${JSON.stringify(event)}\n`
+        const byteLength = Buffer.byteLength(serialized)
+        index.push({
+          timestamp: event.timestamp,
+          recordedAt: event.recordedAt,
+          eventId: event.eventId,
+          offset: spoolOffset,
+          byteLength
+        })
+        await spoolHandle.writeFile(serialized, 'utf8')
+        spoolOffset += byteLength
+      })
+      await spoolHandle.sync()
+    } finally {
+      await spoolHandle.close()
+    }
+  } catch (error) {
+    await unlink(spool).catch(() => undefined)
+    throw error
+  }
+
+  try {
+    const handle = await open(
+      temporary,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollowFlag(),
+      FILE_MODE
+    )
+    try {
+      await handle.chmod(FILE_MODE)
+      await handle.writeFile(`${JSON.stringify({ recordType: 'manifest', ...manifest })}\n`, 'utf8')
+      index.sort(compareSpoolIndexEntries)
+      const spoolReadHandle = await open(spool, constants.O_RDONLY | noFollowFlag())
+      try {
+        const buffer = Buffer.allocUnsafe(EXPORT_COPY_BUFFER_SIZE)
+        for (const entry of index) {
+          await copySpoolRange(spoolReadHandle, handle, entry, buffer)
+        }
+      } finally {
+        await spoolReadHandle.close()
+      }
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+    await copyFile(temporary, destination, constants.COPYFILE_EXCL)
+    await chmod(destination, FILE_MODE)
+  } finally {
+    await unlink(temporary).catch(() => undefined)
+    await unlink(spool).catch(() => undefined)
   }
 }
 
@@ -802,8 +983,19 @@ async function writeOwnerOnlyJson(file: string, value: unknown): Promise<void> {
   try {
     await rename(temporary, file)
     await chmod(file, FILE_MODE)
+    await syncDirectory(path.dirname(file))
   } finally {
     await unlink(temporary).catch(() => undefined)
+  }
+}
+
+async function syncDirectory(directory: string): Promise<void> {
+  if (process.platform === 'win32') return
+  const handle = await open(directory, 'r')
+  try {
+    await handle.sync()
+  } finally {
+    await handle.close()
   }
 }
 
@@ -849,6 +1041,19 @@ function noFollowFlag(): number {
 
 function validateReadQuery(query: TraceReadQuery): void {
   if (query.limit !== undefined) validateLimit(query.limit)
+  if (query.eventIds !== undefined) {
+    if (
+      query.eventIds.length > MAX_EVENT_ID_LOOKUP ||
+      new Set(query.eventIds).size !== query.eventIds.length ||
+      query.eventIds.some((eventId) => (
+        typeof eventId !== 'string' || !eventId.trim() || eventId.length > 512
+      ))
+    ) {
+      throw new Error(
+        `eventIds must contain at most ${MAX_EVENT_ID_LOOKUP} unique bounded identifiers`
+      )
+    }
+  }
   for (const [name, value] of [['from', query.from], ['to', query.to]] as const) {
     if (value !== undefined && !Number.isFinite(Date.parse(value))) {
       throw new Error(`${name} must be a valid ISO-8601 date`)
@@ -861,10 +1066,97 @@ function validateLimit(limit: number): number {
   return limit
 }
 
+function createTraceMatcher(
+  query: TraceReadQuery,
+  eventIds: ReadonlySet<string> | undefined
+): (event: TraceEvent) => boolean {
+  const traceIds = query.traceIds ? new Set(query.traceIds) : undefined
+  const kinds = query.kinds ? new Set(query.kinds) : undefined
+  const from = query.from ? Date.parse(query.from) : undefined
+  const to = query.to ? Date.parse(query.to) : undefined
+  return (event) => {
+    const timestamp = Date.parse(event.timestamp)
+    return (!eventIds || eventIds.has(event.eventId)) &&
+      (!traceIds || traceIds.has(event.traceId)) &&
+      (!query.runtimeId || event.runtimeId === query.runtimeId) &&
+      (!query.threadId || event.threadId === query.threadId) &&
+      (!query.turnId || event.turnId === query.turnId) &&
+      (!query.requestId || event.requestId === query.requestId) &&
+      (!query.parentRequestId || event.parentRequestId === query.parentRequestId) &&
+      (!kinds || kinds.has(event.kind)) &&
+      (from === undefined || timestamp >= from) &&
+      (to === undefined || timestamp <= to)
+  }
+}
+
+function retainOrderedEvent(
+  retained: TraceEvent[],
+  event: TraceEvent,
+  order: 'asc' | 'desc',
+  limit: number | undefined
+): void {
+  if (limit === undefined) {
+    retained.push(event)
+    return
+  }
+  const compare = order === 'desc' ? compareEventsDescending : compareEvents
+  if (retained.length < limit) {
+    retained.push(event)
+    retained.sort(compare)
+    return
+  }
+  const last = retained[retained.length - 1]
+  if (last && compare(event, last) < 0) {
+    retained[retained.length - 1] = event
+    retained.sort(compare)
+  }
+}
+
+function orderAndLimitSummaries<Summary extends { startedAt: string }>(
+  summaries: Summary[],
+  query: { order?: 'asc' | 'desc'; limit?: number }
+): Summary[] {
+  const order = query.order ?? 'desc'
+  summaries.sort((left, right) => (
+    order === 'asc'
+      ? left.startedAt.localeCompare(right.startedAt)
+      : right.startedAt.localeCompare(left.startedAt)
+  ))
+  return query.limit === undefined ? summaries : summaries.slice(0, validateLimit(query.limit))
+}
+
 function compareEvents(left: TraceEvent, right: TraceEvent): number {
   return left.timestamp.localeCompare(right.timestamp) ||
     left.recordedAt.localeCompare(right.recordedAt) ||
     left.eventId.localeCompare(right.eventId)
+}
+
+function compareEventsDescending(left: TraceEvent, right: TraceEvent): number {
+  return compareEvents(right, left)
+}
+
+function compareSpoolIndexEntries(left: TraceSpoolIndexEntry, right: TraceSpoolIndexEntry): number {
+  return left.timestamp.localeCompare(right.timestamp) ||
+    left.recordedAt.localeCompare(right.recordedAt) ||
+    left.eventId.localeCompare(right.eventId)
+}
+
+async function copySpoolRange(
+  source: FileHandle,
+  destination: FileHandle,
+  entry: TraceSpoolIndexEntry,
+  buffer: Buffer
+): Promise<void> {
+  let position = entry.offset
+  let remaining = entry.byteLength
+  while (remaining > 0) {
+    const length = Math.min(buffer.byteLength, remaining)
+    const { bytesRead } = await source.read(buffer, 0, length, position)
+    if (bytesRead === 0) throw new Error('Unexpected end of trace export spool')
+    await destination.writeFile(buffer.subarray(0, bytesRead))
+    position += bytesRead
+    remaining -= bytesRead
+  }
 }
 
 function isPathInside(parent: string, candidate: string): boolean {
@@ -893,10 +1185,101 @@ function isRootRequest(
 
 function previewValue(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined
-  const text = typeof value === 'string' ? value : JSON.stringify(value)
-  const compact = text.replaceAll(/\s+/g, ' ').trim()
+  if (typeof value === 'string') return compactPreview(value, false)
+  const serialized = jsonPrefix(value, PREVIEW_SOURCE_LENGTH)
+  return compactPreview(serialized.text, serialized.truncated)
+}
+
+function compactPreview(text: string, sourceTruncated: boolean): string | undefined {
+  let compact = ''
+  let pendingSpace = false
+  let truncated = sourceTruncated
+  for (const character of text) {
+    if (/\s/.test(character)) {
+      pendingSpace = compact.length > 0
+      continue
+    }
+    if (pendingSpace) compact += ' '
+    compact += character
+    pendingSpace = false
+    if (compact.length > PREVIEW_LENGTH) {
+      truncated = true
+      break
+    }
+  }
   if (!compact) return undefined
-  return compact.length <= 240 ? compact : `${compact.slice(0, 237)}...`
+  return truncated || compact.length > PREVIEW_LENGTH
+    ? `${compact.slice(0, PREVIEW_LENGTH - 3)}...`
+    : compact
+}
+
+function jsonPrefix(value: unknown, limit: number): { text: string; truncated: boolean } {
+  const chunks: string[] = []
+  let length = 0
+  let truncated = false
+  const append = (text: string): boolean => {
+    if (length >= limit) {
+      truncated = true
+      return false
+    }
+    const remaining = limit - length
+    chunks.push(text.slice(0, remaining))
+    length += Math.min(text.length, remaining)
+    if (text.length > remaining) truncated = true
+    return !truncated
+  }
+  const appendString = (text: string): void => {
+    if (!append('"')) return
+    for (const character of text) {
+      const encoded = JSON.stringify(character).slice(1, -1)
+      if (!append(encoded)) return
+    }
+    append('"')
+  }
+  const appendValue = (current: unknown): void => {
+    if (truncated) return
+    if (current === null) {
+      append('null')
+      return
+    }
+    if (typeof current === 'string') {
+      appendString(current)
+      return
+    }
+    if (typeof current === 'number' || typeof current === 'boolean') {
+      append(JSON.stringify(current))
+      return
+    }
+    if (Array.isArray(current)) {
+      if (!append('[')) return
+      for (let index = 0; index < current.length; index += 1) {
+        if (index > 0 && !append(',')) return
+        appendValue(current[index])
+        if (truncated) return
+      }
+      append(']')
+      return
+    }
+    const record = asRecord(current)
+    if (record) {
+      if (!append('{')) return
+      let index = 0
+      for (const key in record) {
+        if (!Object.prototype.hasOwnProperty.call(record, key)) continue
+        if (index > 0 && !append(',')) return
+        appendString(key)
+        if (!append(':')) return
+        appendValue(record[key])
+        if (truncated) return
+        index += 1
+      }
+      append('}')
+      return
+    }
+    append('null')
+  }
+  appendValue(value)
+  return { text: chunks.join(''), truncated }
 }
 
 function addUsage(summary: MutableSummary, payload: Record<string, unknown> | undefined): void {

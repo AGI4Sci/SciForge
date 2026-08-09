@@ -36,7 +36,6 @@ import {
 export type WriteAssistServiceOptions = {
   workspaceRoot?: string
   maxTextFileBytes?: number
-  maxPdfBytes?: number
   maxIndexFiles?: number
   maxIndexChunks?: number
   maxScanEntries?: number
@@ -124,7 +123,6 @@ const MAX_INDEX_BUILD_MS = 2_500
 const DEFAULT_MAX_SCAN_ENTRIES = 8_000
 const DEFAULT_MAX_INDEX_FILES = 160
 const DEFAULT_MAX_TEXT_FILE_BYTES = 600_000
-const DEFAULT_MAX_PDF_BYTES = 64 * 1024 * 1024
 const DEFAULT_MAX_INDEX_CHUNKS = 720
 const MAX_CHUNK_CHARS = 900
 const MIN_CHUNK_CHARS = 48
@@ -212,7 +210,6 @@ let pdfStandardFontDataUrlCache: string | undefined
 export class WriteAssistService {
   readonly workspaceRoot?: string
   readonly maxTextFileBytes: number
-  readonly maxPdfBytes: number
   readonly maxIndexFiles: number
   readonly maxIndexChunks: number
   readonly maxScanEntries: number
@@ -226,7 +223,6 @@ export class WriteAssistService {
   constructor(options: WriteAssistServiceOptions = {}) {
     this.workspaceRoot = cleanOptionalPath(options.workspaceRoot)
     this.maxTextFileBytes = clampInteger(options.maxTextFileBytes ?? DEFAULT_MAX_TEXT_FILE_BYTES, 1, DEFAULT_MAX_TEXT_FILE_BYTES)
-    this.maxPdfBytes = clampInteger(options.maxPdfBytes ?? DEFAULT_MAX_PDF_BYTES, 1, DEFAULT_MAX_PDF_BYTES)
     this.maxIndexFiles = clampInteger(options.maxIndexFiles ?? DEFAULT_MAX_INDEX_FILES, 1, DEFAULT_MAX_INDEX_FILES)
     this.maxIndexChunks = clampInteger(options.maxIndexChunks ?? DEFAULT_MAX_INDEX_CHUNKS, 1, DEFAULT_MAX_INDEX_CHUNKS)
     this.maxScanEntries = clampInteger(options.maxScanEntries ?? DEFAULT_MAX_SCAN_ENTRIES, 1, DEFAULT_MAX_SCAN_ENTRIES)
@@ -326,10 +322,6 @@ export class WriteAssistService {
       if (extname(target.absolutePath).toLowerCase() !== '.pdf') {
         throw serviceError('not_pdf', 'This file is not a PDF document.', 'Choose a .pdf file inside the workspace.')
       }
-      if (target.stats.size > this.maxPdfBytes) {
-        throw serviceError('file_too_large', 'This PDF is too large to extract in the write-assist worker.', 'Use a smaller PDF or split the document.')
-      }
-
       const document = await this.loadPdfDocumentText(target)
       this.pdfResourceWorkspaceRoots.set(resourcePathKey(target.relativePath), target.workspaceRoot)
       const pageStart = request.pageStart ?? 1
@@ -485,10 +477,6 @@ export class WriteAssistService {
         const fileInfo = await stat(path)
         let fileChunks: IndexedChunk[] = []
         if (ext === '.pdf') {
-          if (fileInfo.size > this.maxPdfBytes) {
-            skippedFiles.tooLarge += 1
-            continue
-          }
           fileChunks = await this.chunkPdf(path, workspaceRoot, relativePath)
           if (fileChunks.length === 0) skippedFiles.pdfFailed += 1
         } else {
@@ -684,7 +672,6 @@ export function writeAssistConfigFromEnv(env: NodeJS.ProcessEnv = process.env): 
   return compactObject({
     workspaceRoot: cleanOptionalPath(env.SCIFORGE_WRITE_ASSIST_ROOT) ?? cleanOptionalPath(env.SCIFORGE_WORKSPACE_PATH),
     maxTextFileBytes: parsePositiveInteger(env.SCIFORGE_WRITE_ASSIST_MAX_TEXT_FILE_BYTES),
-    maxPdfBytes: parsePositiveInteger(env.SCIFORGE_WRITE_ASSIST_MAX_PDF_BYTES),
     maxIndexFiles: parsePositiveInteger(env.SCIFORGE_WRITE_ASSIST_MAX_INDEX_FILES),
     maxIndexChunks: parsePositiveInteger(env.SCIFORGE_WRITE_ASSIST_MAX_INDEX_CHUNKS)
   })
@@ -727,9 +714,9 @@ export function tokenizeWriteRetrievalText(text = ''): string[] {
 async function extractPdfDocumentText(targetPath: string, size: number, mtimeMs: number): Promise<PdfDocumentText> {
   try {
     const pdfjs = await loadPdfJs()
-    const bytes = await readFile(targetPath)
     const loadingTask = pdfjs.getDocument({
-      data: new Uint8Array(bytes),
+      url: targetPath,
+      disableAutoFetch: true,
       disableFontFace: true,
       disableWorker: true,
       isEvalSupported: false,
@@ -783,7 +770,7 @@ async function extractPdfDocumentText(targetPath: string, size: number, mtimeMs:
     }
   } catch (error) {
     if (error instanceof WriteAssistServiceError) throw error
-    throw serviceError('pdf_extract_failed', `PDF text extraction failed: ${errorMessage(error)}`, false, 'Use a valid, text-based PDF or try a smaller document.')
+    throw serviceError('pdf_extract_failed', `PDF text extraction failed: ${errorMessage(error)}`, false, 'Use a valid, text-based PDF document.')
   }
 }
 

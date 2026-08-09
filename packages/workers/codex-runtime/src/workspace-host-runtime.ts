@@ -504,7 +504,7 @@ export class CodexWorkspaceHostRuntime {
     )
     const response = await client.startTurn({
       threadId: binding?.codexThreadId ?? guiThreadId,
-      input: [{ type: 'text', text }],
+      input: [{ type: 'text', text, text_elements: [] }],
       cwd: workspace,
       ...(stringValue(input.model) ? { model: stringValue(input.model) } : {}),
       approvalPolicy: 'on-request',
@@ -559,7 +559,7 @@ export class CodexWorkspaceHostRuntime {
     await client.steerTurn({
       threadId: this.#threads.get(guiThreadId)?.codexThreadId ?? guiThreadId,
       expectedTurnId: turnId,
-      input: [{ type: 'text', text }]
+      input: [{ type: 'text', text, text_elements: [] }]
     })
     return null
   }

@@ -85,6 +85,7 @@ import {
   type CodexPlanGatewayLaunchConfig
 } from './codex-config'
 import {
+  filterAgentRuntimeToolSurface,
   nativeAgentToolExecutionMetadata,
   type AgentRuntimeToolSurface
 } from '../agent-runtime/agent-tool-surface'
@@ -144,6 +145,10 @@ type CodexTurnTiming = {
   startedAtMs: number
   firstActivitySeen: boolean
   firstDeltaSeen: boolean
+}
+
+type CodexModelDeltaDedupeState = {
+  identities: Set<string>
 }
 
 type CodexPreparedTurnGovernance = {
@@ -258,6 +263,8 @@ const CODEX_SUBAGENT_DEVELOPER_INSTRUCTIONS = [
 ].join('\n')
 const CODEX_THREAD_FALLBACK_TITLE = 'Codex thread'
 const MAX_CODEX_THREAD_TITLE_LENGTH = 80
+const MAX_CODEX_MODEL_DELTA_IDENTITIES_PER_TURN = 4_096
+const MAX_CODEX_MODEL_DELTA_TURNS = 64
 const CODEX_PLACEHOLDER_THREAD_TITLES = new Set([
   'New Thread',
   'New chat',
@@ -284,6 +291,7 @@ export class CodexRuntimeService {
   private readonly usageStore: CodexUsageStore | null
   private readonly preToolUseGovernanceBridge: CodexPreToolUseGovernanceBridge | null
   private readonly activeSubagents = new Map<string, ActiveCodexSubagent>()
+  private readonly allowedToolsByThread = new Map<string, ReadonlySet<string>>()
   private usageBackfillPromise: Promise<void> | null = null
   private readonly activeTurns = new Map<string, string>()
   private readonly turnTimings = new Map<string, CodexTurnTiming>()
@@ -291,7 +299,7 @@ export class CodexRuntimeService {
   private readonly pendingTurnRecoveries = new Map<string, CodexPendingTurnRecovery>()
   private readonly turnsWithRecordedUsage = new Set<string>()
   private readonly firstActivityTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  private readonly seenModelDeltaKeys = new Set<string>()
+  private readonly modelDeltaDedupeByTurn = new Map<string, CodexModelDeltaDedupeState>()
   private readonly eventSubscribers = new Set<CodexRuntimeEventSubscriber>()
   private readonly pendingToolItemsByTurn = new Map<string, Set<string>>()
   private readonly terminalToolItemsByTurn = new Map<string, Set<string>>()
@@ -523,7 +531,7 @@ export class CodexRuntimeService {
           latencyMs: elapsedMs(startedAtMs)
         }, { persist: false })
       }
-      const dynamicTools = await this.codexDynamicTools(settings)
+      const dynamicTools = await this.codexDynamicTools(settings, payload.allowedTools)
       const response = await client.startThread({
         ...baseThreadParams(settings, workspace, {
           subagentsConfigured: this.isSubagentDelegationConfigured(settings),
@@ -562,6 +570,17 @@ export class CodexRuntimeService {
       }, {
         ...(payload.threadId ? { guiThreadId: payload.threadId } : {})
       })
+      if (payload.allowedTools !== undefined) {
+        const allowed = new Set(payload.allowedTools)
+        for (const id of [
+          payload.threadId,
+          thread.id,
+          storedThread?.guiThreadId,
+          storedThread?.codexThreadId
+        ]) {
+          if (id?.trim()) this.allowedToolsByThread.set(id.trim(), allowed)
+        }
+      }
       await this.emitRuntimeStatus({
         threadId: storedThread?.guiThreadId ?? thread.id,
         phase: 'thread_start_done',
@@ -816,6 +835,9 @@ export class CodexRuntimeService {
       let response: unknown
       preparedGovernance = await this.prepareCodexTurnGovernance({
         sessionId: codexThreadId,
+        allowedTools: this.allowedToolsByThread.has(payload.threadId)
+          ? [...this.allowedToolsByThread.get(payload.threadId)!]
+          : undefined,
         ownedVisualToolsAvailable: payload.ownedVisualToolsAvailable === true,
         nativeVisualProofChainPending:
           payload.nativeVisualProofChainPending === true
@@ -846,6 +868,9 @@ export class CodexRuntimeService {
         codexThreadId = replacement.codexThreadId
         preparedGovernance = await this.prepareCodexTurnGovernance({
           sessionId: codexThreadId,
+          allowedTools: this.allowedToolsByThread.has(payload.threadId)
+            ? [...this.allowedToolsByThread.get(payload.threadId)!]
+            : undefined,
           ownedVisualToolsAvailable: payload.ownedVisualToolsAvailable === true,
           nativeVisualProofChainPending:
             payload.nativeVisualProofChainPending === true
@@ -928,6 +953,7 @@ export class CodexRuntimeService {
 
   private async prepareCodexTurnGovernance(input: {
     sessionId: string
+    allowedTools?: readonly string[]
     ownedVisualToolsAvailable?: boolean
     nativeVisualProofChainPending?: boolean
     parent?: CodexPreparedTurnGovernance['parent']
@@ -935,7 +961,7 @@ export class CodexRuntimeService {
     const sessionId = input.sessionId.trim()
     if (!sessionId) throw new Error('Codex turn governance requires a session id.')
     if (!this.preToolUseGovernanceBridge) {
-      if (input.nativeVisualProofChainPending || input.parent) {
+      if (input.nativeVisualProofChainPending || input.parent || input.allowedTools !== undefined) {
         throw new Error(
           'Codex native visual execution requires the SciForge pre-tool governance bridge.'
         )
@@ -960,7 +986,7 @@ export class CodexRuntimeService {
       ownedVisualToolsAvailable: input.ownedVisualToolsAvailable === true,
       nativeVisualProofChainPending:
         input.nativeVisualProofChainPending === true
-    })
+    }, input.allowedTools)
     return { sessionId }
   }
 
@@ -1224,7 +1250,7 @@ export class CodexRuntimeService {
           this.governanceBindingsByTurn.clear()
           this.turnsWithRecordedUsage.clear()
           this.clearAllFirstActivityTimers()
-          this.seenModelDeltaKeys.clear()
+          this.modelDeltaDedupeByTurn.clear()
           this.clearPendingToolBarrier()
           this.clearCodingPlanAccountState(
             input.failure
@@ -1573,9 +1599,13 @@ export class CodexRuntimeService {
   }
 
   private async codexDynamicTools(
-    _settings?: AppSettingsV1
+    _settings?: AppSettingsV1,
+    allowedTools?: readonly string[]
   ): Promise<RuntimeToolDefinition[]> {
-    const capabilityTools = this.options.capabilityAgentTools?.tools() ?? []
+    const source = this.options.capabilityAgentTools
+    const capabilityTools = source
+      ? filterAgentRuntimeToolSurface(source, allowedTools).tools()
+      : []
     return capabilityTools.map((tool) => ({
       type: tool.type,
       name: tool.name,
@@ -1630,6 +1660,9 @@ export class CodexRuntimeService {
 
   private canHandleCapabilityAgentTool(request: RuntimeToolCallRequest): boolean {
     if (request.namespace || !this.options.capabilityAgentTools) return false
+    const threadId = stringValue(request.threadId).trim()
+    const allowed = threadId ? this.allowedToolsByThread.get(threadId) : undefined
+    if (allowed && !allowed.has(request.tool)) return false
     return this.options.capabilityAgentTools.tools().some((tool) => tool.name === request.tool)
   }
 
@@ -2175,10 +2208,11 @@ export class CodexRuntimeService {
       if (event.type === 'event') {
         if (await this.handleCodingPlanNotification(event.payload, client)) continue
         const normalized = this.normalizeClientEvent(event.payload)
-        const deduped = normalized ? this.dedupeModelDeltas(normalized) : null
+        const guiEvent = normalized ? await this.eventForGuiThread(normalized) : null
+        const deduped = guiEvent ? this.dedupeModelDeltas(guiEvent) : null
         if (deduped) {
-          const guiEvent = this.withCorrelatedToolExecutionFacts(await this.eventForGuiThread(deduped))
-          for (const runtimeEvent of this.eventsAfterPendingToolBarrier(guiEvent)) {
+          const correlatedEvent = this.withCorrelatedToolExecutionFacts(deduped)
+          for (const runtimeEvent of this.eventsAfterPendingToolBarrier(correlatedEvent)) {
             await this.publishClientEvent(runtimeEvent)
           }
         }
@@ -2225,23 +2259,48 @@ export class CodexRuntimeService {
     const deltas = event.deltas ?? []
     if (deltas.length === 0) return event
     const turnId = event.turnId || event.userMessage?.turnId || ''
-    if (!turnId) return event
+    if (!turnId || this.activeTurns.get(event.threadId) !== turnId) return event
 
-    const nextDeltas = deltas.filter((delta) => {
-      const text = canonicalModelText(delta.text)
-      const shouldTrack = Boolean(text)
-      if (!shouldTrack) return true
-      const key = `${event.threadId}\u0000${turnId}\u0000${delta.kind}\u0000${text}`
-      const duplicated = this.seenModelDeltaKeys.has(key)
-      this.seenModelDeltaKeys.add(key)
-      const shouldFilterDuplicate = delta.snapshot === true || event.turnComplete === true || text.length >= 16
-      if (duplicated && shouldFilterDuplicate) return false
+    const nextDeltas = deltas.filter((delta, index) => {
+      const sequenceIdentity = modelDeltaSequenceIdentity(event, delta, index)
+      const contentIdentity = modelDeltaContentIdentity(delta, index)
+      if (delta.snapshot === true) {
+        const identity = sequenceIdentity ?? contentIdentity
+        if (!identity) return true
+        return this.rememberModelDeltaIdentity(event.threadId, turnId, identity)
+      }
+      if (sequenceIdentity) {
+        return this.rememberModelDeltaIdentity(event.threadId, turnId, sequenceIdentity)
+      }
+      // Unsequenced deltas must remain visible even when their text repeats. Their
+      // fixed digest only prevents an identical completion snapshot from replaying
+      // the same content through a second app-server event shape.
+      if (contentIdentity) this.rememberModelDeltaIdentity(event.threadId, turnId, contentIdentity)
       return true
     })
     if (nextDeltas.length === deltas.length) return event
     if (nextDeltas.length > 0) return { ...event, deltas: nextDeltas }
     const { deltas: _deltas, ...withoutDeltas } = event
     return eventHasNonDeltaPayload(withoutDeltas) ? withoutDeltas : null
+  }
+
+  private rememberModelDeltaIdentity(threadId: string, turnId: string, identity: string): boolean {
+    const turnKey = turnTimingKey(threadId, turnId)
+    let state = this.modelDeltaDedupeByTurn.get(turnKey)
+    if (!state) {
+      while (this.modelDeltaDedupeByTurn.size >= MAX_CODEX_MODEL_DELTA_TURNS) {
+        const oldestTurnKey = this.modelDeltaDedupeByTurn.keys().next().value
+        if (oldestTurnKey === undefined) break
+        this.modelDeltaDedupeByTurn.delete(oldestTurnKey)
+      }
+      state = { identities: new Set<string>() }
+      this.modelDeltaDedupeByTurn.set(turnKey, state)
+    }
+    if (state.identities.has(identity)) return false
+    if (state.identities.size < MAX_CODEX_MODEL_DELTA_IDENTITIES_PER_TURN) {
+      state.identities.add(identity)
+    }
+    return true
   }
 
   private contextForClientEvent(payload: unknown): CodexEventNormalizeContext {
@@ -2789,7 +2848,11 @@ export class CodexRuntimeService {
     storedThread: CodexStoredThread | null
     workspace: string
   }): Promise<CodexStoredThread> {
-    const dynamicTools = await this.codexDynamicTools(input.settings)
+    const allowedTools = this.allowedToolsByThread.get(input.guiThreadId)
+    const dynamicTools = await this.codexDynamicTools(
+      input.settings,
+      allowedTools ? [...allowedTools] : undefined
+    )
     const response = await input.client.startThread({
       ...baseThreadParams(input.settings, input.workspace, {
         subagentsConfigured: this.isSubagentDelegationConfigured(input.settings),
@@ -2807,6 +2870,10 @@ export class CodexRuntimeService {
       title: input.storedThread?.title || thread.title
     })
     if (!stored) throw new Error('Codex thread store is unavailable.')
+    if (allowedTools) {
+      this.allowedToolsByThread.set(stored.guiThreadId, allowedTools)
+      this.allowedToolsByThread.set(stored.codexThreadId, allowedTools)
+    }
     return stored
   }
 
@@ -2819,6 +2886,11 @@ export class CodexRuntimeService {
     const normalizedThreadId = threadId.trim()
     const normalizedTurnId = turnId.trim()
     if (!normalizedThreadId || !normalizedTurnId) return
+    const previousTurnId = this.activeTurns.get(normalizedThreadId)
+    if (previousTurnId && previousTurnId !== normalizedTurnId) {
+      this.modelDeltaDedupeByTurn.delete(turnTimingKey(normalizedThreadId, previousTurnId))
+    }
+    this.modelDeltaDedupeByTurn.delete(turnTimingKey(normalizedThreadId, normalizedTurnId))
     this.activeTurns.set(normalizedThreadId, normalizedTurnId)
     this.turnTimings.set(turnTimingKey(normalizedThreadId, normalizedTurnId), {
       startedAtMs,
@@ -2872,6 +2944,7 @@ export class CodexRuntimeService {
     this.turnModelHints.delete(key)
     this.pendingTurnRecoveries.delete(key)
     this.governanceBindingsByTurn.delete(key)
+    this.modelDeltaDedupeByTurn.delete(key)
     this.clearFirstActivityTimer(key)
     this.clearPendingToolBarrierForTurn(key)
     await Promise.all([
@@ -3649,7 +3722,7 @@ function turnStartParams(input: {
       runtime_id: 'codex',
       gui_thread_id: input.guiThreadId
     },
-    input: [textInput(input.text), ...modelObjectInputs(input.fileReferences)],
+    input: [textInput(input.text), ...fileReferenceInputs(input.fileReferences)],
     cwd: input.workspace,
     ...(input.model ? { model: input.model } : {}),
     approvalPolicy: mapApprovalPolicy(input.runtime.approvalPolicy, input.runtime.sandboxMode),
@@ -3678,16 +3751,16 @@ function mapTurnSandboxMode(mode: SandboxMode, cwd: string): CodexAppServerTurnS
   return { type: 'workspaceWrite', writableRoots: [cwd], networkAccess: true }
 }
 
-function modelObjectInputs(fileReferences: CodexTurnStartPayload['fileReferences']): CodexAppServerInputItem[] {
+function fileReferenceInputs(fileReferences: CodexTurnStartPayload['fileReferences']): CodexAppServerInputItem[] {
   return (fileReferences ?? [])
     .filter((reference) => reference.modelRouterObject === true && reference.relativePath.trim().length > 0)
-    .map((reference) => ({
-      type: 'input_object',
-      ref: reference.relativePath.trim(),
-      path: reference.relativePath.trim(),
-      title: reference.name,
-      ...(reference.mimeType ? { mimeType: reference.mimeType } : {})
-    }))
+    .map((reference) => {
+      const referencePath = reference.relativePath.trim()
+      if (reference.kind === 'image') {
+        return { type: 'localImage', path: referencePath }
+      }
+      return { type: 'mention', name: reference.name, path: referencePath }
+    })
 }
 
 function textInput(text: string): CodexAppServerInputItem {
@@ -4292,6 +4365,28 @@ function booleanValue(value: unknown): boolean | undefined {
 
 function canonicalModelText(value: string): string {
   return value.trim().replace(/\s+/g, ' ')
+}
+
+function modelDeltaSequenceIdentity(
+  event: Pick<CodexThreadEventPayload, 'seq' | 'turnId'>,
+  delta: NonNullable<CodexThreadEventPayload['deltas']>[number],
+  index: number
+): string | null {
+  const sequence = event.seq ?? delta.seq
+  if (typeof sequence === 'number' && Number.isFinite(sequence)) {
+    return `sequence:${codexModelDeltaItemId(event, delta, index)}`
+  }
+  return null
+}
+
+function modelDeltaContentIdentity(
+  delta: NonNullable<CodexThreadEventPayload['deltas']>[number],
+  index: number
+): string | null {
+  const text = canonicalModelText(delta.text)
+  if (!text) return null
+  const digest = createHash('sha256').update(text, 'utf8').digest('hex')
+  return `content:${delta.kind}:${Math.max(0, Math.floor(index))}:${digest}`
 }
 
 function numberValue(value: unknown): number | undefined {

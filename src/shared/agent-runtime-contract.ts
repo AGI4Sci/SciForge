@@ -497,6 +497,8 @@ export type AgentRuntimeThreadStartInput = {
   parentTurnId?: string
   threadSource?: string
   sidebarVisibility?: AgentRuntimeThreadSidebarVisibility
+  /** Host-enforced runtime tool allowlist. An empty list disables all runtime tools. */
+  allowedTools?: string[]
 }
 
 export type AgentRuntimeThreadReadInput = {
@@ -578,6 +580,8 @@ export type AgentRuntimeTurnStartInput = {
   mode?: string
   model?: string
   reasoningEffort?: string
+  /** Host-enforced runtime tool allowlist. An empty list disables all runtime tools. */
+  allowedTools?: string[]
   governanceProfile?: AgentRuntimeGovernanceProfile
   displayText?: string
   visibleContextOwnerThreadId?: string
@@ -634,15 +638,29 @@ export type AgentRuntimeUsage = {
 
 export type AgentRuntimeUsageGroupBy = 'day' | 'model' | 'thread'
 
-export type AgentRuntimeUsageQuery = {
-  runtimeId?: AgentRuntimeId
-  groupBy: AgentRuntimeUsageGroupBy
+type AgentRuntimeUsageQueryBase = {
   from?: string
   to?: string
   timezone?: string
+}
+
+export type AgentRuntimeThreadUsageQuery = AgentRuntimeUsageQueryBase & {
+  runtimeId: AgentRuntimeId
+  groupBy: 'thread'
+  threadId: string
+  workspaceLocator?: WorkspaceLocator
+}
+
+export type AgentRuntimeAggregateUsageQuery = AgentRuntimeUsageQueryBase & {
+  runtimeId?: AgentRuntimeId
+  groupBy: Exclude<AgentRuntimeUsageGroupBy, 'thread'>
   threadId?: string
   workspaceLocator?: WorkspaceLocator
 }
+
+export type AgentRuntimeUsageQuery =
+  | AgentRuntimeThreadUsageQuery
+  | AgentRuntimeAggregateUsageQuery
 
 export type AgentRuntimeUsageResponse =
   | {

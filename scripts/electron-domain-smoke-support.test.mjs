@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   createSourceSmokeConfiguration,
@@ -126,8 +126,8 @@ test('CLI parser normalizes paths and validates bounded timeouts', () => {
     '--timeout-ms', '60000'
   ])
   assert.equal(parsed.timeoutMs, 60_000)
-  assert.ok(parsed.repositoryRoot.endsWith('DeepSeek-GUI'))
-  assert.ok(parsed.distDirectory.endsWith('DeepSeek-GUI/dist'))
+  assert.equal(parsed.repositoryRoot, resolve('.'))
+  assert.equal(parsed.distDirectory, resolve('./dist'))
   assert.throws(() => parseSmokeCliOptions(['--timeout-ms', '1']), /between 1000 and 300000/u)
   assert.throws(() => parseSmokeCliOptions(['--unknown', 'value']), /Unknown/u)
 })

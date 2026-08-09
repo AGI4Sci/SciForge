@@ -71,6 +71,7 @@ export function createVisualReviewRightPanelContribution(
           onCollapse={onCollapse}
           client={client}
           workbench={workbench}
+          workspace={host.workspace}
         />
       )
     }

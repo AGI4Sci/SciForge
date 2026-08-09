@@ -91,7 +91,8 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
         parentThreadId: input.parentThreadId,
         parentTurnId: input.parentTurnId,
         threadSource: input.threadSource,
-        sidebarVisibility: input.sidebarVisibility
+        sidebarVisibility: input.sidebarVisibility,
+        ...(input.allowedTools ? { allowedTools: input.allowedTools } : {})
       })
       if (!result.ok) throw codexFailure(result)
       return mapCodexThread(result.thread)

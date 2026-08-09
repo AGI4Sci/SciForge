@@ -9,7 +9,6 @@ import {
 } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
   workspacePreviewContentKey,
   type WorkspaceObservation,
   type WorkspacePreviewEditOperation,
@@ -36,7 +35,6 @@ import type {
   WorkspacePreviewPresentationStateChangeHandler
 } from './presentation-state'
 
-export const PDF_WORKSPACE_VIEWER_MAX_BYTES = WORKSPACE_PREVIEW_MAX_RANGE_BYTES
 const StableWritePdfViewer = memo(WritePdfViewer)
 const EMPTY_PDF_ANNOTATION_OVERLAYS: WritePdfAnnotationOverlay[] = []
 
@@ -91,7 +89,6 @@ export type PdfWorkspaceViewerProps = {
   observation?: WorkspaceObservation | null
   asset?: WorkspacePreviewAssetTransportDescriptor | null
   transport?: WorkspacePreviewAssetTransportClient | null
-  maxBytes?: number
   model?: PdfWorkspaceViewerModel
   previewState?: PdfWorkspaceViewerPreviewState
   documentContentKey?: string
@@ -189,7 +186,6 @@ export async function loadPdfWorkspacePreviewData(input: {
   observation?: WorkspaceObservation | null
   asset?: WorkspacePreviewAssetTransportDescriptor | null
   transport?: WorkspacePreviewAssetTransportClient | null
-  maxBytes?: number
 }): Promise<PdfWorkspaceViewerLoadResult> {
   const descriptor = input.asset ?? input.transport?.descriptor ?? null
   const model = buildPdfWorkspaceViewerModel({
@@ -231,35 +227,10 @@ export async function loadPdfWorkspacePreviewData(input: {
     }
   }
 
-  const maxBytes = input.maxBytes ?? PDF_WORKSPACE_VIEWER_MAX_BYTES
-  const result = await input.transport.readBytesIfWithin(maxBytes)
-  if (!result.ok) {
-    return {
-      kind: 'fallback',
-      title: 'PDF bytes unavailable',
-      message: pdfReadFailureMessage({
-        descriptor,
-        maxBytes,
-        message: result.message
-      })
-    }
-  }
-
-  if (result.bytes.length === 0) {
-    return {
-      kind: 'fallback',
-      title: 'PDF bytes unavailable',
-      message: 'The PDF asset is empty.'
-    }
-  }
-
   return {
-    kind: 'ready',
-    title: 'PDF bytes ready',
-    message: `${formatBytes(result.bytesRead)} loaded through workspace preview transport.`,
-    data: result.bytes,
-    mimeType: model.mimeType ?? 'application/pdf',
-    bytesRead: result.bytesRead
+    kind: 'fallback',
+    title: 'PDF stream unavailable',
+    message: 'The workspace preview URL transport is unavailable for this PDF.'
   }
 }
 
@@ -267,7 +238,6 @@ export function PdfWorkspaceViewer({
   observation,
   asset,
   transport,
-  maxBytes = PDF_WORKSPACE_VIEWER_MAX_BYTES,
   model,
   previewState,
   documentContentKey,
@@ -344,8 +314,7 @@ export function PdfWorkspaceViewer({
     void loadPdfWorkspacePreviewData({
       observation: current.observation,
       asset: current.asset,
-      transport: current.transport,
-      maxBytes
+      transport: current.transport
     })
       .then((result) => {
         if (!cancelled) setLoadedPreviewState(result)
@@ -364,7 +333,6 @@ export function PdfWorkspaceViewer({
     }
   }, [
     documentRevisionKey,
-    maxBytes,
     previewState
   ])
 
@@ -545,17 +513,6 @@ function isPdfObservation(input: {
     hasPdfExtension(input.asset?.file.relativePath) ||
     hasPdfExtension(input.asset?.file.name)
   )
-}
-
-function pdfReadFailureMessage(input: {
-  descriptor: WorkspacePreviewAssetTransportDescriptor
-  maxBytes: number
-  message: string
-}): string {
-  if (input.descriptor.range.size > input.maxBytes) {
-    return `This PDF is ${formatBytes(input.descriptor.range.size)}; inline PDF preview is limited to ${formatBytes(input.maxBytes)}.`
-  }
-  return input.message
 }
 
 function buildPdfFileSummary(

@@ -1,3 +1,5 @@
+import type { ArtifactVersionRefV1 } from '@sciforge/domain-artifact-versions/contract'
+
 export const VISUAL_DOCUMENT_SCHEMA_VERSION = 1 as const
 
 export const VISUAL_ARTIFACT_KINDS = [
@@ -82,6 +84,8 @@ export type VisualArtifact = {
   manifestPath?: string
   title?: string
   caption?: string
+  /** Exact immutable version accepted through the shared artifact-version domain. */
+  versionRef?: ArtifactVersionRefV1
 }
 
 export type VisualRevision = {
@@ -97,6 +101,8 @@ export type VisualRevision = {
   createdAt: string
   decidedAt?: string
   backupPath?: string
+  /** Present only after this candidate has been committed as a formal artifact version. */
+  versionRef?: ArtifactVersionRefV1
 }
 
 export type VisualCandidateReviewEvidence = {
@@ -170,6 +176,8 @@ export type VisualDocumentInsertArtifactRequest = {
   documentId?: string
   kind: VisualArtifactKind
   sourcePath: string
+  /** Exact immutable source version when review starts from a versioned artifact. */
+  versionRef?: ArtifactVersionRefV1
   manifestPath?: string
   title?: string
   caption?: string
@@ -219,6 +227,30 @@ export type VisualDocumentUpdateContextResult = {
   ok: true
   status: 'updated'
   document: VisualDocument
+}
+
+export type VisualStyleProfileSummary = {
+  id: string
+  semanticDescription: string
+  palette: {
+    colors: string[]
+    accent: string[]
+  }
+  confidence: number
+}
+
+export type VisualDocumentApplyStyleReferenceRequest = {
+  workspaceRoot: string
+  documentId?: string
+  sourcePath: string
+}
+
+export type VisualDocumentApplyStyleReferenceResult = {
+  ok: true
+  status: 'style_applied'
+  document: VisualDocument
+  styleProfileRef: string
+  profile: VisualStyleProfileSummary
 }
 
 export type VisualReviewPacket = {
@@ -274,6 +306,8 @@ export type VisualDocumentRevisionDecisionRequest = {
   workspaceRoot: string
   documentId?: string
   revisionId: string
+  /** Injected by the governed main-process orchestration, never trusted from UI input. */
+  artifactVersionRef?: ArtifactVersionRefV1
 }
 
 export type VisualDocumentRevisionDecisionResult = {

@@ -1,10 +1,19 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { basename, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { visualSceneToScientificData } from '@sciforge/image-generation/visual-scene'
 import { createCanvas, loadImage } from '@napi-rs/canvas'
+import {
+  ARTIFACT_VERSION_COMMIT_CONTRACT,
+  artifactVersionAccessPolicyV1Schema,
+  artifactVersionCommitInputV1Schema,
+  artifactVersionCommitResultV1Schema,
+  artifactVersionReadResultV1Schema,
+  artifactVersionRefV1Schema
+} from '@sciforge/domain-artifact-versions/contract'
+import type { ArtifactVersionRefV1 } from '@sciforge/domain-artifact-versions/contract'
 import type {
   FigureStyleSpec,
   VisualStyleReviewResult,
@@ -13,10 +22,28 @@ import type {
 import {
   SCIENTIFIC_PLOTTING_TEMPLATES,
   SCIENTIFIC_PLOTTING_TEMPLATE_GUIDES,
+  type DataSourceRef,
+  type DerivedTableReceipt,
   type ScientificExternalSkillCatalogItem,
   type ScientificExternalSkillSourceKind,
   type ScientificFigureNeed,
   type ScientificFigureNeedClassification,
+  type ScientificPlotEnvironmentV1,
+  type ScientificPlotEvidenceArtifactV1,
+  type ScientificPlotEvidenceCommitRefsV1,
+  type ScientificPlotEvidenceDeliveryV1,
+  type ScientificPlotEvidenceEnqueueReceiptV1,
+  type ScientificPlotEvidenceLineageV1,
+  type ScientificPlotEvidenceOutboxReceiptV1,
+  type ScientificPlotExecutionV1,
+  type ScientificPlotMatplotlibParametersV1,
+  type ScientificPlotRecipeV1,
+  type ScientificPlotTransformationV1,
+  type ScientificPlotVersionCommitReceipt,
+  type ScientificPlottingCompareRequest,
+  type ScientificPlottingCompareResult,
+  type ScientificPlottingComparison,
+  type ScientificPlottingEngineDependencies,
   type ScientificPlottingAttempt,
   type ScientificPlottingAutoRepairOptions,
   type ScientificPlottingCompositeLayer,
@@ -27,12 +54,15 @@ import {
   type ScientificPlottingDataMappingResult,
   type ScientificPlottingLabels,
   type ScientificPlottingManifest,
+  type ScientificPlottingOperationReceiptV1,
   type ScientificPlottingPlanRequest,
   type ScientificPlottingPlanResult,
   type ScientificPlottingPrepareReferenceRequest,
   type ScientificPlottingPrepareReferenceResult,
   type ScientificPlottingReferenceManifest,
   type ScientificPlottingReferenceProfile,
+  type ScientificPlottingRerunRequest,
+  type ScientificPlottingRerunResult,
   type ScientificPlottingRenderRequest,
   type ScientificPlottingRenderResult,
   type ScientificPlottingReviewPacket,
@@ -45,13 +75,21 @@ import {
   type ScientificPlottingStyleProfile,
   type ScientificPlottingStyleProfileMatch,
   type ScientificPlottingStyleProfileSummary,
+  type ScientificPlotProvenanceBreakpointV1,
   type ScientificPlottingStyleProfilesRequest,
   type ScientificPlottingStyleProfilesResult,
   type ScientificPlottingTemplate,
   type ScientificPlottingTemplateAdvice,
   type ScientificPlottingTemplateGuide,
-  type ScientificPlottingTemplateSelection
+  type ScientificPlottingTemplateSelection,
+  type StatisticalDefinitionV1
 } from './types'
+import {
+  scientificPlotEvidenceEnqueueReceiptV1Schema,
+  scientificPlotEvidenceOutboxReceiptV1Schema,
+  scientificPlottingOperationIdSchema,
+  scientificPlottingOperationReceiptV1Schema
+} from './contract'
 import {
   EXCLUDED_SCIENTIFIC_PLOTTING_RESEARCH_SOURCES,
   buildScientificExternalSkillCatalog
@@ -90,6 +128,7 @@ type RenderPayload = {
   styleSpec: FigureStyleSpec
   rcParams: Record<string, string | number | boolean>
   palette: string[]
+  heatmapCmapName?: string
   heatmapCmapColors?: string[]
 }
 
@@ -104,6 +143,14 @@ type DataMappingCandidate = {
   reasons: string[]
   warnings: string[]
   summary: DataSummary
+  aggregationApplied?: {
+    method: 'mean'
+    groupBy: string[]
+  }
+  inferredUncertainty?: {
+    kind: 'sd' | 'sem' | 'ci' | 'ambiguous'
+    sourceColumn: string
+  }
 }
 
 type TabularColumnProfile = {
@@ -128,9 +175,14 @@ type PythonRunResult =
   | { ok: false; stdout: string; stderr: string; message: string }
 
 const RENDERER_VERSION = '0.1.0'
+const RENDER_TIMEOUT_MS = 45_000
+const MATPLOTLIB_PROBE_TIMEOUT_MS = 30_000
 const PYTHON_COMMAND = process.env.SCIFORGE_PYTHON?.trim() || 'python3'
 const PDFTOPPM_COMMAND = process.env.SCIFORGE_PDFTOPPM?.trim() || 'pdftoppm'
 const DEFAULT_OUTPUT_RELATIVE_DIR = '.sciforge/figures'
+const PLOTTING_OPERATION_RECEIPT_RELATIVE_DIR = '.sciforge/scientific-plotting/operations'
+const EVIDENCE_OUTBOX_RELATIVE_DIR = '.sciforge/evidence-dag/inbox/scientific-plotting'
+const EVIDENCE_DELIVERY_RECEIPT_RELATIVE_DIR = '.sciforge/evidence-dag/delivery-receipts/scientific-plotting'
 const DEFAULT_REFERENCE_RELATIVE_DIR = '.sciforge/figure-references'
 const DEFAULT_REVIEW_PACKET_RELATIVE_DIR = '.sciforge/figure-reviews'
 const PDF_RENDER_RELATIVE_DIR = '.sciforge/pdf-render-cache'
@@ -148,7 +200,6 @@ const MIN_COMPOSITE_SIZE = 128
 const MAX_COMPOSITE_SIZE = 4096
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp'])
 const MAX_REFERENCE_IMAGE_BYTES = 32 * 1024 * 1024
-const MAX_REFERENCE_PDF_BYTES = 120 * 1024 * 1024
 const MAX_REVIEW_PACKET_ITEMS = 30
 const STYLE_PROFILE_REGISTRY_VERSION = 1
 
@@ -248,10 +299,10 @@ export async function listScientificPlottingStyleProfiles(
       selectedProfile: shapeStyleProfileForResult(selected, request.includeStyleSpec === true),
       recommendedNextTools: [
         'visual_generate',
-        'scientific_plotting_map_data',
-        'scientific_plotting_render',
+        'sciforge_invoke',
         'image_generation_review_candidate'
       ],
+      recommendedCapabilityIds: ['scientific-plotting.map-data', 'scientific-plotting.render'],
       warnings
     }
   }
@@ -274,10 +325,10 @@ export async function listScientificPlottingStyleProfiles(
       referenceProfile,
       recommendedNextTools: [
         'visual_generate',
-        'scientific_plotting_map_data',
-        'scientific_plotting_render',
+        'sciforge_invoke',
         'image_generation_review_candidate'
       ],
+      recommendedCapabilityIds: ['scientific-plotting.map-data', 'scientific-plotting.render'],
       warnings
     }
   }
@@ -308,10 +359,10 @@ export async function listScientificPlottingStyleProfiles(
     total: matched.length,
     recommendedNextTools: [
       'visual_generate',
-      'scientific_plotting_map_data',
-      'scientific_plotting_render',
+      'sciforge_invoke',
       'image_generation_review_candidate'
     ],
+    recommendedCapabilityIds: ['scientific-plotting.map-data', 'scientific-plotting.render'],
     warnings
   }
 }
@@ -430,7 +481,7 @@ export async function planScientificPlotting(
   const recommendedSkillIds = recommendedSkillIdsForPlan(planSkillCatalog, figureNeed, {
     includeCns: false
   })
-  const controlledTool = 'scientific_plotting_render'
+  const controlledTool = 'sciforge_invoke'
   return {
     ok: true,
     recommendedTemplate: template,
@@ -460,6 +511,7 @@ export async function planScientificPlotting(
       ? ['Optional styleProfileId, FigureStyleSpec, or reference image path for post-render review.']
       : ['Optional styleProfileId or FigureStyleSpec for publication styling.'],
     controlledTool,
+    controlledCapability: 'scientific-plotting.render',
     planningWarnings: [
       ...warnings,
       ...figureNeed.warnings,
@@ -505,7 +557,7 @@ export async function mapScientificPlottingData(
     return {
       ok: false,
       status: 'invalid_request',
-      message: 'scientific_plotting_map_data requires a route-locked code or hybrid handoff from visual_generate.',
+        message: 'scientific-plotting.map-data requires a route-locked code or hybrid handoff from visual_generate.',
       missingInputs: ['visualPlan'],
       warnings
     }
@@ -529,6 +581,8 @@ export async function mapScientificPlottingData(
     }
   }
   try {
+    scientificPlottingOperationIdSchema.parse(request.operationId)
+    validateEvidenceRouting(request)
     const workspaceRoot = await resolveWorkspaceRoot(request.workspaceRoot)
     const styleProfile = styleProfileForPlanning(
       request.styleSpec || request.styleSpecPath?.trim() ? undefined : request.styleProfileId,
@@ -563,7 +617,9 @@ export async function mapScientificPlottingData(
       labels: request.labels,
       taskTemplate,
       templateHint: sceneData ? 'schematic-grid' : request.templateHint,
-      referenceProfile
+      referenceProfile,
+      reproducibilityMode: request.reproducibilityMode ?? 'standard',
+      statistics: request.statistics
     })
     if (candidates.length === 0) {
       return {
@@ -593,6 +649,67 @@ export async function mapScientificPlottingData(
       }
     }
 
+    const reproducibilityMode = request.reproducibilityMode ?? 'standard'
+    if (
+      reproducibilityMode === 'reproducible'
+      && selected.aggregationApplied
+      && !declaresAggregation(request.statistics, selected.aggregationApplied)
+    ) {
+      return {
+        ok: false,
+        status: 'needs_clarification',
+        message: 'Duplicate summary rows require an explicit matching statistics.aggregation declaration in reproducible mode.',
+        missingInputs: ['statistics.aggregation.method=mean', `statistics.aggregation.groupBy=${selected.aggregationApplied.groupBy.join(',')}`],
+        warnings: [...warnings, ...selected.warnings]
+      }
+    }
+    if (
+      reproducibilityMode === 'reproducible'
+      && selected.inferredUncertainty?.kind === 'ambiguous'
+      && !request.statistics?.uncertainty
+    ) {
+      return {
+        ok: false,
+        status: 'needs_clarification',
+        message: `Uncertainty column ${selected.inferredUncertainty.sourceColumn} is ambiguous; declare whether it is SD, SEM, or CI.`,
+        missingInputs: ['statistics.uncertainty.kind'],
+        warnings: [...warnings, ...selected.warnings]
+      }
+    }
+    if (
+      reproducibilityMode === 'reproducible'
+      && selected.inferredUncertainty?.kind === 'ci'
+      && (
+        !request.statistics?.uncertainty
+        || (
+          request.statistics.uncertainty.kind === 'ci'
+          && request.statistics.uncertainty.confidenceLevel === undefined
+        )
+      )
+    ) {
+      return {
+        ok: false,
+        status: 'needs_clarification',
+        message: `CI column ${selected.inferredUncertainty.sourceColumn} requires an explicit confidenceLevel in reproducible mode.`,
+        missingInputs: ['statistics.uncertainty.confidenceLevel'],
+        warnings: [...warnings, ...selected.warnings]
+      }
+    }
+    if (
+      selected.inferredUncertainty
+      && selected.inferredUncertainty.kind !== 'ambiguous'
+      && request.statistics?.uncertainty
+      && request.statistics.uncertainty.kind !== selected.inferredUncertainty.kind
+    ) {
+      return {
+        ok: false,
+        status: 'invalid_request',
+        message: `Declared uncertainty kind ${request.statistics.uncertainty.kind} conflicts with column ${selected.inferredUncertainty.sourceColumn}.`,
+        missingInputs: [],
+        warnings: [...warnings, ...selected.warnings]
+      }
+    }
+
     const selectedBy = request.templateHint && selected.template === request.templateHint
       ? 'templateHint'
       : selected.template === taskTemplate
@@ -602,11 +719,38 @@ export async function mapScientificPlottingData(
           : 'dataShape'
     const labels = mergeLabels(request.labels, selected.labels)
     const templateAdvice = buildTemplateAdvice(selected.template, referenceProfile, undefined)
+    const sourceInputHash = hashStableJson(mappedInput)
+    const mappedOutputHash = hashStableJson(selected.data)
+    const dataSources = request.dataSources?.length
+      ? request.dataSources
+      : [inlineDataSourceRef(sourceInputHash, 'scientific-plotting.map-data.data')]
+    const mappingTransformation = buildMappingTransformation({
+      inputHash: sourceInputHash,
+      outputHash: mappedOutputHash,
+      selected,
+      selectedBy
+    })
+    const transformations = [...(request.transformations ?? []), mappingTransformation]
+    const derivedTableReceipt = buildDerivedTableReceipt({
+      selected,
+      sourceIds: dataSources.map((source) => source.sourceId),
+      transformation: mappingTransformation
+    })
+    const statistics = request.statistics ?? inferredStatisticsForCandidate(selected)
+    const provenanceWarnings = uniqueStrings([...warnings, ...selected.warnings])
     const renderRequest: ScientificPlottingRenderRequest = {
       workspaceRoot,
+      operationId: request.operationId,
       visualPlan: request.visualPlan,
       template: selected.template,
       data: selected.data,
+      reproducibilityMode,
+      dataSources,
+      derivedTableReceipts: [...(request.derivedTableReceipts ?? []), derivedTableReceipt],
+      transformations,
+      ...(statistics ? { statistics } : {}),
+      provenanceWarnings,
+      ...(request.versioning ? { versioning: request.versioning } : {}),
       reviewTask: task,
       ...(Object.keys(labels).length > 0 ? { labels } : {}),
       ...(request.figureId ? { figureId: request.figureId } : {}),
@@ -619,6 +763,7 @@ export async function mapScientificPlottingData(
       ...(request.outputDir ? { outputDir: request.outputDir } : {}),
       ...(request.outputScale ? { outputScale: request.outputScale } : {}),
       ...(request.visualDocumentId ? { visualDocumentId: request.visualDocumentId } : {}),
+      ...(request.runtimeId ? { runtimeId: request.runtimeId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {}),
       ...(request.autoRepair ? { autoRepair: request.autoRepair } : {})
     }
@@ -655,7 +800,7 @@ export async function mapScientificPlottingData(
         'This tool maps data into a controlled render request; it does not render or write files.',
         'Mapping may reshape records into template JSON, but it must not execute user code.',
         'If duplicate summary rows are aggregated, review the mapping warning before rendering.',
-        'Use scientific_plotting_render for artifact creation and image_generation_review_candidate for manifest-bound candidate release QA.'
+        'Use sciforge_invoke with capability scientific-plotting.render for artifact creation, then image_generation_review_candidate for manifest-bound candidate release QA.'
       ]
     }
   } catch (error) {
@@ -796,10 +941,6 @@ export async function prepareScientificPlottingReference(
     if (sourceType === 'image' && sourceInfo.size > MAX_REFERENCE_IMAGE_BYTES) {
       throw new Error('Reference image is too large.')
     }
-    if (sourceType === 'pdf' && sourceInfo.size > MAX_REFERENCE_PDF_BYTES) {
-      throw new Error('Reference PDF is too large.')
-    }
-
     const outputDir = await resolveReferenceOutputDir(workspaceRoot, request.outputDir)
     await mkdir(outputDir, { recursive: true })
     const figureId = slugForFigureId(request.figureId ?? `${basename(sourcePath, extensionFromName(sourcePath))}-reference`)
@@ -884,7 +1025,8 @@ export async function prepareScientificPlottingReference(
         ...(recommendedStyleProfile ? { suggestedStyleProfileId: recommendedStyleProfile.id } : {}),
         suggestedProfileTool: 'scientific_plotting_style_profiles',
         suggestedPlanTool: 'visual_generate',
-        suggestedRenderTool: 'scientific_plotting_render',
+        suggestedRenderTool: 'sciforge_invoke',
+        suggestedRenderCapability: 'scientific-plotting.render',
         suggestedReviewTool: 'image_generation_review_candidate',
         guardrails: [
           'Use the cropped PNG as the review reference, not the full paper page.',
@@ -927,22 +1069,51 @@ export async function prepareScientificPlottingReference(
   }
 }
 
+type ScientificPlotRerunContext = Readonly<{
+  baselineFigureVersionRef: ArtifactVersionRefV1
+}>
+
 export async function renderScientificPlot(
-  request: ScientificPlottingRenderRequest
+  request: ScientificPlottingRenderRequest,
+  dependencies: ScientificPlottingEngineDependencies = {},
+  rerunContext?: ScientificPlotRerunContext
 ): Promise<ScientificPlottingRenderResult> {
-  const warnings: string[] = []
+  const warnings: string[] = uniqueStrings(request.provenanceWarnings ?? [])
   try {
     if (!isControlledPlottingPlan(request.visualPlan)) {
       return {
         ok: false,
         status: 'invalid_request',
-        message: 'scientific_plotting_render requires a route-locked code or hybrid handoff from visual_generate.',
+        message: 'scientific-plotting.render requires a route-locked code or hybrid handoff from visual_generate.',
         warnings
       }
     }
     validateRenderRequestShape(request)
+    const operationId = scientificPlottingOperationIdSchema.parse(request.operationId)
+    validateEvidenceRouting(request)
     const workspaceRoot = await resolveWorkspaceRoot(request.workspaceRoot)
+    const requestHash = hashRequest(request, rerunContext)
+    const operationReceiptPath = scientificPlotOperationReceiptPath(workspaceRoot, operationId)
+    await assertSafeWorkspaceWritePath(workspaceRoot, operationReceiptPath)
+    const existingOperation = await readScientificPlotOperationReceipt(workspaceRoot, operationReceiptPath)
+    if (existingOperation) {
+      return await resumeScientificPlotOperation({
+        request,
+        workspaceRoot,
+        dependencies,
+        rerunContext,
+        requestHash,
+        operationReceiptPath,
+        receipt: existingOperation
+      })
+    }
     validateTemplateData(request.template, request.data)
+    validateReproducibleStatisticalClaims(request)
+    assertVersionedSourcesForFormalReproducibleSave(
+      request,
+      request.dataSources ?? [],
+      dependencies
+    )
     if (request.styleProfileId?.trim() && (request.styleSpec || request.styleSpecPath?.trim())) {
       warnings.push('styleProfileId was ignored because explicit styleSpec/styleSpecPath was provided.')
     }
@@ -959,8 +1130,7 @@ export async function renderScientificPlot(
       task: request.labels?.title
     })
     const templateAdvice = buildTemplateAdvice(request.template, referenceProfile, undefined)
-    const outputDir = await resolveOutputDir(workspaceRoot, request.outputDir)
-    await mkdir(outputDir, { recursive: true })
+    const outputRoot = await resolveOutputDir(workspaceRoot, request.outputDir)
 
     const matplotlib = await checkMatplotlib(workspaceRoot)
     if (!matplotlib.available) {
@@ -972,15 +1142,35 @@ export async function renderScientificPlot(
       }
     }
 
+    const environment = await captureScientificPlotEnvironment(workspaceRoot)
     const figureId = slugForFigureId(request.figureId ?? `${request.template}-${new Date().toISOString()}`)
+    const dataSources = await resolveAndVerifyDataSourceRefs(request, workspaceRoot)
+    const autoRepair = normalizeAutoRepairOptions(request.autoRepair)
+    let finalMatplotlib = resolveMatplotlibRenderParameters(request, styleSpec)
+    let recipe = buildScientificPlotRecipe({
+      request,
+      workspaceRoot,
+      figureId,
+      styleSpec,
+      matplotlib: finalMatplotlib,
+      outputScale,
+      autoRepair,
+      environment,
+      dataSources
+    })
+    const plotVersionId = `plot-${hashStableJson({ operationId }).slice(0, 28)}`
+    const outputDir = join(outputRoot, figureId, 'versions', plotVersionId)
+    await mkdir(outputDir, { recursive: true })
+    const recipePath = join(outputDir, `${figureId}.recipe.json`)
+    await writeFile(recipePath, `${JSON.stringify(recipe, null, 2)}\n`, 'utf8')
     const baseOutputPath = join(outputDir, `${figureId}.png`)
     const referencePath = request.referencePath ?? request.reviewReferencePath
     const attempts: ScientificPlottingAttempt[] = []
-    const autoRepair = normalizeAutoRepairOptions(request.autoRepair)
     const first = await renderAttempt({
       request,
       workspaceRoot,
       styleSpec,
+      matplotlib: finalMatplotlib,
       outputPath: baseOutputPath
     })
     if (!first.ok) return first.error
@@ -988,6 +1178,7 @@ export async function renderScientificPlot(
     let finalOutputPath = baseOutputPath
     let finalReview: ScientificPlottingReviewResult | undefined
     let status: 'rendered' | 'repaired' | 'review_failed' = 'rendered'
+    const firstOutputHash = await hashFile(baseOutputPath)
 
     let firstReview: VisualStyleReviewResult | undefined
     if (referencePath) {
@@ -1005,6 +1196,8 @@ export async function renderScientificPlot(
     attempts.push({
       attempt: 1,
       outputPath: baseOutputPath,
+      outputHash: firstOutputHash,
+      executedAt: new Date().toISOString(),
       repaired: false,
       ...(finalReview ? { review: finalReview } : {}),
       ...(first.rendererDiagnostics ? { rendererDiagnostics: first.rendererDiagnostics } : {}),
@@ -1016,16 +1209,24 @@ export async function renderScientificPlot(
       firstReview?.ok &&
       firstReview.repairSuggestion.shouldRerender &&
       autoRepair.enabled &&
-      autoRepair.maxAttempts > 0
+      autoRepair.maxAttempts > 0 &&
+      // Pinned parameters represent an exact replay contract. Adaptive
+      // mutation would no longer be a rerun of that recorded recipe.
+      !request.matplotlib
     ) {
       const repairedOutputPath = join(outputDir, `${figureId}-repaired.png`)
+      finalMatplotlib = resolveMatplotlibRenderParameters(
+        request,
+        styleSpec,
+        firstReview.repairSuggestion.rcParamsPatch,
+        firstReview.repairSuggestion.palette
+      )
       const repair = await renderAttempt({
         request,
         workspaceRoot,
         styleSpec,
-        outputPath: repairedOutputPath,
-        rcParamsPatch: firstReview.repairSuggestion.rcParamsPatch,
-        paletteOverride: firstReview.repairSuggestion.palette
+        matplotlib: finalMatplotlib,
+        outputPath: repairedOutputPath
       })
       if (!repair.ok) return repair.error
       const repairedReview = await reviewVisualStyleSimilarity({
@@ -1035,16 +1236,42 @@ export async function renderScientificPlot(
       })
       finalOutputPath = repairedOutputPath
       finalReview = decorateReviewWithPlottingContext(repairedReview, request.template, referenceProfile)
-      status = 'repaired'
+      status = repairedReview.ok ? 'repaired' : 'review_failed'
+      if (!repairedReview.ok) warnings.push(repairedReview.message)
+      const repairedOutputHash = await hashFile(repairedOutputPath)
       attempts.push({
         attempt: 2,
         outputPath: repairedOutputPath,
+        outputHash: repairedOutputHash,
+        executedAt: new Date().toISOString(),
         repaired: true,
         review: finalReview,
         rcParamsPatch: firstReview.repairSuggestion.rcParamsPatch,
         ...(repair.rendererDiagnostics ? { rendererDiagnostics: repair.rendererDiagnostics } : {}),
         warnings: repairedReview.ok ? repairedReview.metric.warnings : [repairedReview.message]
       })
+    }
+
+    // Auto-repair can change the concrete rcParams and palette. Rebuild the
+    // immutable recipe after the final attempt so it records what produced the
+    // committed bytes rather than only the pre-review rendering intent.
+    recipe = buildScientificPlotRecipe({
+      request,
+      workspaceRoot,
+      figureId,
+      styleSpec,
+      matplotlib: finalMatplotlib,
+      outputScale,
+      autoRepair,
+      environment,
+      dataSources
+    })
+    await writeFile(recipePath, `${JSON.stringify(recipe, null, 2)}\n`, 'utf8')
+
+    if (!dependencies.artifactVersionCommitPort) {
+      warnings.push('Artifact version commit capability is unavailable; the render remains unversioned and cannot claim complete Evidence provenance.')
+    } else if (status === 'review_failed') {
+      warnings.push('Visual review failed; the render attempt was retained locally but no formal Figure ArtifactVersion was committed.')
     }
 
     const manifestPath = join(outputDir, `${figureId}.manifest.json`)
@@ -1062,11 +1289,16 @@ export async function renderScientificPlot(
         styleProfile: shapeStyleProfileForResult(styleProfile, false)
       } : {}),
       createdAt: new Date().toISOString(),
-      requestHash: hashRequest(request),
+      operationId,
+      plotVersionId,
+      requestHash,
+      recipePath,
+      recipe,
       outputPath: finalOutputPath,
       outputHash,
       visualPlan: request.visualPlan,
       ...(request.visualDocumentId ? { visualDocumentId: request.visualDocumentId } : {}),
+      ...(request.runtimeId ? { runtimeId: request.runtimeId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {}),
       ...(outputScale > 1 ? { outputScale } : {}),
       ...(request.styleSpecPath ? { styleSpecPath: request.styleSpecPath } : {}),
@@ -1075,21 +1307,56 @@ export async function renderScientificPlot(
       ...(finalReview ? { finalReview } : {}),
       warnings
     }
-    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+    const preCommitManifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+    const preCommitManifestPath = `${manifestPath}.precommit`
+    await writeFile(preCommitManifestPath, preCommitManifestBytes)
+    await writeFile(manifestPath, preCommitManifestBytes)
+    if (dependencies.artifactVersionCommitPort && status !== 'review_failed') {
+      const preparedDigests = await computeScientificPlotPreparedDigests(manifest, preCommitManifestBytes)
+      await writeJsonAtomic(workspaceRoot, operationReceiptPath, {
+        schemaVersion: 1,
+        producer: 'scientific-plotting',
+        operationId,
+        requestHash,
+        state: 'prepared',
+        createdAt: manifest.createdAt,
+        plotVersionId,
+        manifestPath,
+        preCommitManifestPath,
+        preparedDigests
+      } satisfies ScientificPlottingOperationReceiptV1)
+      return await finalizePreparedScientificPlotOperation({
+        request,
+        workspaceRoot,
+        dependencies,
+        rerunContext,
+        operationReceiptPath,
+        manifest,
+        preCommitManifestBytes
+      })
+    }
     const artifactManifestPath = await writeScientificPlottingArtifactManifest({
       workspaceRoot,
       figureId,
+      plotVersionId,
       outputPath: finalOutputPath,
       manifestPath,
+      recipePath,
+      recipe,
       request,
-      styleSpec,
       review: finalReview
     })
+    manifest.artifactManifestPath = artifactManifestPath
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
     return {
       ok: true,
       status,
       outputPath: finalOutputPath,
       manifestPath,
+      recipePath,
+      operationId,
+      plotVersionId,
+      recipe,
       artifactManifestPath,
       attempts,
       ...(finalReview ? { review: finalReview } : {}),
@@ -1109,6 +1376,313 @@ export async function renderScientificPlot(
       warnings
     }
   }
+}
+
+export async function rerunScientificPlot(
+  request: ScientificPlottingRerunRequest,
+  dependencies: ScientificPlottingEngineDependencies = {}
+): Promise<ScientificPlottingRerunResult> {
+  try {
+    scientificPlottingOperationIdSchema.parse(request.operationId)
+    validateEvidenceRouting(request)
+    const workspaceRoot = await resolveWorkspaceRoot(request.workspaceRoot)
+    if (!dependencies.artifactVersionReadPort || !dependencies.artifactVersionCommitPort) {
+      throw new Error('Exact plot rerun requires Artifact Versions read and commit capabilities.')
+    }
+    const recipe = await readVersionedPlotBaseline(
+      request.baselineFigureVersionRef,
+      request.recipeVersionRef,
+      dependencies
+    )
+    await verifyPinnedRecipeInputs(recipe, dependencies)
+    const render = await renderScientificPlot({
+      workspaceRoot,
+      operationId: request.operationId,
+      visualPlan: recipe.visualPlan,
+      template: recipe.template,
+      data: recipe.data,
+      reproducibilityMode: recipe.reproducibilityMode,
+      dataSources: recipe.dataSources,
+      derivedTableReceipts: recipe.derivedTables,
+      transformations: recipe.transformations,
+      ...(recipe.statistics ? { statistics: recipe.statistics } : {}),
+      provenanceWarnings: recipe.provenanceWarnings,
+      versioning: {
+        artifactId: request.baselineFigureVersionRef.artifactId,
+        expectedCurrentVersionId: request.expectedCurrentVersionId,
+        intent: 'rerun'
+      },
+      ...(recipe.render.reviewTask ? { reviewTask: recipe.render.reviewTask } : {}),
+      labels: recipe.labels,
+      figureId: recipe.figureId,
+      styleSpec: recipe.style.resolvedSpec,
+      ...(recipe.style.styleProfileId ? { styleProfileId: recipe.style.styleProfileId } : {}),
+      matplotlib: recipe.render.matplotlib ?? resolveLegacyMatplotlibRenderParameters(recipe),
+      outputScale: recipe.render.outputScale,
+      autoRepair: recipe.render.autoRepair,
+      ...(request.runtimeId ? { runtimeId: request.runtimeId } : {}),
+      ...(request.threadId ? { threadId: request.threadId } : {})
+    }, dependencies, { baselineFigureVersionRef: request.baselineFigureVersionRef })
+    if (!render.ok) {
+      return {
+        ok: false,
+        status: 'rerun_failed',
+        message: render.message,
+        render,
+        provenanceBreakpoints: [scientificPlotRerunBreakpoint(render.message, 'render')]
+      }
+    }
+    const candidate = await readVerifiedScientificPlotManifest(workspaceRoot, render.manifestPath)
+    const comparison = compareScientificPlotManifestValues({
+      outputHash: request.baselineFigureVersionRef.contentDigest,
+      recipe
+    }, candidate)
+    const reproductionRelation = comparison.exactOutput ? 'replicates' : 'fails_to_replicate'
+    const evidenceLineage = render.evidenceLineage
+    return {
+      ok: true,
+      status: 'rerun_complete',
+      baselineFigureVersionRef: request.baselineFigureVersionRef,
+      recipeVersionRef: request.recipeVersionRef,
+      render,
+      comparison,
+      reproductionRelation,
+      ...(evidenceLineage ? { evidenceLineage } : {}),
+      ...(render.evidenceDelivery ? { evidenceDelivery: render.evidenceDelivery } : {})
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return {
+      ok: false,
+      status: message.includes('workspace') ? 'invalid_workspace' : 'version_read_failed',
+      message,
+      provenanceBreakpoints: [scientificPlotRerunBreakpoint(message, 'baseline', request.baselineFigureVersionRef)]
+    }
+  }
+}
+
+async function readVersionedPlotBaseline(
+  figureRef: ArtifactVersionRefV1,
+  recipeRef: ArtifactVersionRefV1,
+  dependencies: ScientificPlottingEngineDependencies
+): Promise<ScientificPlotRecipeV1> {
+  const figure = await readExactArtifactVersion(figureRef, dependencies)
+  if (figure.artifact.kind !== 'scientific-plot') {
+    throw new Error(`Expected a scientific-plot ArtifactVersion, received ${figure.artifact.kind}.`)
+  }
+  const pinnedRecipe = figure.version.dependencies.find((dependency) => (
+    dependency.role === 'recipe' && dependency.target.versionId === recipeRef.versionId
+  ))
+  if (!pinnedRecipe || canonicalJson(pinnedRecipe.target) !== canonicalJson(recipeRef)) {
+    throw new Error('The Figure version does not pin the supplied recipe ArtifactVersionRef.')
+  }
+  const recipeVersion = await readExactArtifactVersion(recipeRef, dependencies)
+  if (recipeVersion.artifact.kind !== 'scientific-plot-recipe') {
+    throw new Error(`Expected a scientific-plot-recipe ArtifactVersion, received ${recipeVersion.artifact.kind}.`)
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(Buffer.from(recipeVersion.dataBase64, 'base64').toString('utf8'))
+  } catch (error) {
+    throw new Error(`Could not parse versioned scientific plot recipe: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  if (!isScientificPlotRecipeV1(parsed)) {
+    throw new Error('Versioned scientific plot recipe does not match ScientificPlotRecipeV1.')
+  }
+  if (hashStableJson(parsed.data) !== parsed.dataHash) {
+    throw new Error('Versioned scientific plot recipe data hash mismatch.')
+  }
+  const { recipeId, ...recipeContent } = parsed
+  if (recipeId !== `plot-recipe:${hashStableJson(recipeContent)}`) {
+    throw new Error('Versioned scientific plot recipe identity mismatch.')
+  }
+  return parsed
+}
+
+async function verifyPinnedRecipeInputs(
+  recipe: ScientificPlotRecipeV1,
+  dependencies: ScientificPlottingEngineDependencies
+): Promise<void> {
+  for (const source of recipe.dataSources) {
+    if (source.kind !== 'artifact-version') continue
+    await readExactArtifactVersion(source.artifactVersion, dependencies)
+  }
+}
+
+async function readExactArtifactVersion(
+  expected: ArtifactVersionRefV1,
+  dependencies: ScientificPlottingEngineDependencies
+) {
+  const port = dependencies.artifactVersionReadPort
+  if (!port) throw new Error('Artifact Versions read capability is unavailable.')
+  const result = artifactVersionReadResultV1Schema.parse(await port.read({
+    versionId: expected.versionId
+  }))
+  if (!result.ok) {
+    throw new Error(`ArtifactVersion ${expected.versionId} is unavailable: ${result.issue.message}`)
+  }
+  if (canonicalJson(result.value.ref) !== canonicalJson(expected)) {
+    throw new Error(`ArtifactVersion ${expected.versionId} does not match its pinned reference.`)
+  }
+  return result.value
+}
+
+export async function compareScientificPlotVersions(
+  request: ScientificPlottingCompareRequest,
+  dependencies: ScientificPlottingEngineDependencies = {}
+): Promise<ScientificPlottingCompareResult> {
+  try {
+    await resolveWorkspaceRoot(request.workspaceRoot)
+    const [baseline, candidate] = await Promise.all([
+      readVersionedScientificPlotManifest(request.baselineManifestVersionRef, dependencies),
+      readVersionedScientificPlotManifest(request.candidateManifestVersionRef, dependencies)
+    ])
+    return {
+      ok: true,
+      status: 'compared',
+      baselineManifestVersionRef: request.baselineManifestVersionRef,
+      candidateManifestVersionRef: request.candidateManifestVersionRef,
+      comparison: compareScientificPlotManifestValues(baseline, candidate)
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return {
+      ok: false,
+      status: message.includes('workspace')
+        ? 'invalid_workspace'
+        : message.includes('ArtifactVersion') || message.includes('Artifact Versions')
+          ? 'version_read_failed'
+          : 'manifest_read_failed',
+      message
+    }
+  }
+}
+
+async function readVersionedScientificPlotManifest(
+  manifestRef: ArtifactVersionRefV1,
+  dependencies: ScientificPlottingEngineDependencies
+): Promise<ScientificPlottingManifest> {
+  const manifestVersion = await readExactArtifactVersion(manifestRef, dependencies)
+  if (manifestVersion.artifact.kind !== 'scientific-plot-render-manifest') {
+    throw new Error(
+      `Expected a scientific-plot-render-manifest ArtifactVersion, received ${manifestVersion.artifact.kind}.`
+    )
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(Buffer.from(manifestVersion.dataBase64, 'base64').toString('utf8'))
+  } catch (error) {
+    throw new Error(
+      `Could not parse versioned scientific plot manifest: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+  const manifest = parseScientificPlottingManifest(parsed)
+  if (!manifest) throw new Error('Versioned scientific plot manifest does not match ScientificPlottingManifest v1.')
+  if (hashStableJson(manifest.recipe.data) !== manifest.recipe.dataHash) {
+    throw new Error('Versioned scientific plot manifest recipe data identity mismatch.')
+  }
+  const { recipeId, ...recipeContent } = manifest.recipe
+  if (recipeId !== `plot-recipe:${hashStableJson(recipeContent)}`) {
+    throw new Error('Versioned scientific plot manifest recipe identity mismatch.')
+  }
+
+  const recipeDependency = manifestVersion.version.dependencies.find(({ role }) => role === 'recipe')
+  const figureDependency = manifestVersion.version.dependencies.find(({ role }) => role === 'figure')
+  if (!recipeDependency || !figureDependency) {
+    throw new Error('Versioned scientific plot manifest must pin recipe and figure ArtifactVersions.')
+  }
+  const [recipeVersion, figureVersion] = await Promise.all([
+    readExactArtifactVersion(recipeDependency.target, dependencies),
+    readExactArtifactVersion(figureDependency.target, dependencies)
+  ])
+  if (recipeVersion.artifact.kind !== 'scientific-plot-recipe') {
+    throw new Error(`Expected a scientific-plot-recipe ArtifactVersion, received ${recipeVersion.artifact.kind}.`)
+  }
+  if (figureVersion.artifact.kind !== 'scientific-plot') {
+    throw new Error(`Expected a scientific-plot ArtifactVersion, received ${figureVersion.artifact.kind}.`)
+  }
+  if (figureDependency.target.contentDigest !== manifest.outputHash) {
+    throw new Error('Versioned scientific plot manifest output identity does not match its pinned Figure version.')
+  }
+  let pinnedRecipe: unknown
+  try {
+    pinnedRecipe = JSON.parse(Buffer.from(recipeVersion.dataBase64, 'base64').toString('utf8'))
+  } catch (error) {
+    throw new Error(
+      `Could not parse pinned scientific plot recipe: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+  if (!isScientificPlotRecipeV1(pinnedRecipe) || canonicalJson(pinnedRecipe) !== canonicalJson(manifest.recipe)) {
+    throw new Error('Versioned scientific plot manifest recipe does not match its pinned Recipe version.')
+  }
+  return manifest
+}
+
+async function readVerifiedScientificPlotManifest(
+  workspaceRoot: string,
+  manifestPath: string
+): Promise<ScientificPlottingManifest> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(await readFile(manifestPath, 'utf8'))
+  } catch (error) {
+    throw new Error(`Could not read scientific plot manifest: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  const manifest = parseScientificPlottingManifest(parsed)
+  if (!manifest) throw new Error(`Invalid scientific plot manifest: ${manifestPath}`)
+  const outputPath = await resolveTargetPathWithinWorkspace(manifest.outputPath, workspaceRoot)
+  const actualHash = await hashFile(outputPath)
+  if (actualHash !== manifest.outputHash) throw new Error(`Scientific plot output hash mismatch: ${manifestPath}`)
+  if (hashStableJson(manifest.recipe.data) !== manifest.recipe.dataHash) {
+    throw new Error(`Scientific plot recipe data hash mismatch: ${manifestPath}`)
+  }
+  const { recipeId, ...recipeContent } = manifest.recipe
+  if (recipeId !== `plot-recipe:${hashStableJson(recipeContent)}`) {
+    throw new Error(`Scientific plot recipe identity mismatch: ${manifestPath}`)
+  }
+  const recipePath = await resolveTargetPathWithinWorkspace(manifest.recipePath, workspaceRoot)
+  let recipeFile: unknown
+  try {
+    recipeFile = JSON.parse(await readFile(recipePath, 'utf8'))
+  } catch (error) {
+    throw new Error(`Could not read scientific plot recipe: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  if (!isScientificPlotRecipeV1(recipeFile) || hashStableJson(recipeFile) !== hashStableJson(manifest.recipe)) {
+    throw new Error(`Scientific plot recipe file does not match the render manifest: ${manifestPath}`)
+  }
+  return manifest
+}
+
+function compareScientificPlotManifestValues(
+  baseline: Pick<ScientificPlottingManifest, 'outputHash' | 'recipe'>,
+  candidate: Pick<ScientificPlottingManifest, 'outputHash' | 'recipe'>
+): ScientificPlottingComparison {
+  const equality = {
+    exactOutput: baseline.outputHash === candidate.outputHash,
+    recipeEquivalent: baseline.recipe.recipeId === candidate.recipe.recipeId,
+    dataEquivalent: baseline.recipe.dataHash === candidate.recipe.dataHash,
+    sourcesEquivalent: hashStableJson(baseline.recipe.dataSources) === hashStableJson(candidate.recipe.dataSources),
+    transformationsEquivalent: hashStableJson({
+      derivedTables: baseline.recipe.derivedTables,
+      transformations: baseline.recipe.transformations
+    }) === hashStableJson({
+      derivedTables: candidate.recipe.derivedTables,
+      transformations: candidate.recipe.transformations
+    }),
+    statisticsEquivalent: hashStableJson(baseline.recipe.statistics ?? null) === hashStableJson(candidate.recipe.statistics ?? null),
+    styleEquivalent: hashStableJson(baseline.recipe.style) === hashStableJson(candidate.recipe.style),
+    environmentEquivalent: baseline.recipe.environment.environmentDigest === candidate.recipe.environment.environmentDigest
+  }
+  const changedSections: ScientificPlottingComparison['changedSections'] = []
+  if (!equality.exactOutput) changedSections.push('output')
+  if (!equality.recipeEquivalent) changedSections.push('recipe')
+  if (!equality.dataEquivalent) changedSections.push('data')
+  if (!equality.sourcesEquivalent) changedSections.push('sources')
+  if (!equality.transformationsEquivalent) changedSections.push('transformations')
+  if (!equality.statisticsEquivalent) changedSections.push('statistics')
+  if (!equality.styleEquivalent) changedSections.push('style')
+  if (!equality.environmentEquivalent) changedSections.push('environment')
+  return { ...equality, changedSections }
 }
 
 export async function compositeScientificPlotLayers(
@@ -1331,28 +1905,22 @@ async function renderAttempt(input: {
   request: ScientificPlottingRenderRequest
   workspaceRoot: string
   styleSpec: FigureStyleSpec
+  matplotlib: ScientificPlotMatplotlibParametersV1
   outputPath: string
-  rcParamsPatch?: Record<string, string | number | boolean>
-  paletteOverride?: string[]
 }): Promise<{ ok: true; rendererDiagnostics?: RendererDiagnostics } | { ok: false; error: ScientificPlottingRenderResult }> {
-  const styleAdapter = buildMatplotlibStyleAdapterFromFigureStyleSpec(input.styleSpec)
-  const rcParams = enforceReadableTextColors(enforcePublicationTypography({
-    ...styleAdapter.rcParams,
-    ...(input.rcParamsPatch ?? {})
-  }))
   const payload: RenderPayload = {
     template: input.request.template,
     data: input.request.data,
     labels: input.request.labels ?? {},
     outputPath: input.outputPath,
     styleSpec: input.styleSpec,
-    rcParams,
-    palette: input.paletteOverride ?? styleAdapter.palette,
-    ...heatmapCmapForRequest(
-      input.request,
-      input.styleSpec,
-      input.paletteOverride ?? styleAdapter.palette
-    )
+    rcParams: input.matplotlib.rcParams,
+    palette: input.matplotlib.palette,
+    ...(input.matplotlib.heatmapCmap?.kind === 'named'
+      ? { heatmapCmapName: input.matplotlib.heatmapCmap.name }
+      : input.matplotlib.heatmapCmap?.kind === 'linear-segmented'
+        ? { heatmapCmapColors: input.matplotlib.heatmapCmap.colors }
+        : {})
   }
   const run = await runPythonRenderer(payload, input.workspaceRoot)
   if (!run.ok) {
@@ -1519,27 +2087,36 @@ function parseLayoutRisk(value: unknown): 'none' | 'low' | 'medium' | 'high' | u
 async function writeScientificPlottingArtifactManifest(input: {
   workspaceRoot: string
   figureId: string
+  plotVersionId: string
   outputPath: string
   manifestPath: string
+  recipePath: string
+  recipe: ScientificPlotRecipeV1
   request: ScientificPlottingRenderRequest
-  styleSpec: FigureStyleSpec
   review?: ScientificPlottingReviewResult
+  versionCommit?: ScientificPlotVersionCommitReceipt
 }): Promise<string> {
-  const artifactsDir = join(input.workspaceRoot, '.sciforge', 'artifacts')
+  const artifactsDir = join(input.workspaceRoot, '.sciforge', 'artifacts', input.figureId, 'versions')
   await mkdir(artifactsDir, { recursive: true })
-  const artifactManifestPath = join(artifactsDir, input.figureId + '.scientific-plot.artifact.json')
+  const artifactManifestPath = join(artifactsDir, `${input.plotVersionId}.scientific-plot.artifact.json`)
   const artifactManifest = {
     version: 1,
     kind: 'sciforge_artifact',
     createdAt: new Date().toISOString(),
     sourceTool: 'scientific_plotting',
     artifactKind: 'scientific_plot',
+    operationId: input.request.operationId,
+    plotVersionId: input.plotVersionId,
     path: input.outputPath,
     outputPath: input.outputPath,
     outputHash: createHash('sha256').update(await readFile(input.outputPath)).digest('hex'),
     manifestPath: input.manifestPath,
+    recipePath: input.recipePath,
+    recipe: input.recipe,
     visualPlan: input.request.visualPlan,
+    ...(input.versionCommit ? { versionCommit: input.versionCommit } : {}),
     ...(input.request.visualDocumentId ? { visualDocumentId: input.request.visualDocumentId } : {}),
+    ...(input.request.runtimeId ? { runtimeId: input.request.runtimeId } : {}),
     ...(input.request.threadId ? { threadId: input.request.threadId } : {}),
     ...(input.request.outputScale ? { outputScale: normalizeOutputScale(input.request.outputScale) } : {}),
     ...(input.request.styleSpecPath ? { styleSpecPath: input.request.styleSpecPath } : {}),
@@ -1591,9 +2168,27 @@ function parseScientificPlottingManifest(value: unknown): ScientificPlottingMani
   if (!SCIENTIFIC_PLOTTING_TEMPLATES.includes(value.template as ScientificPlottingTemplate)) return null
   if (typeof value.outputPath !== 'string' || !value.outputPath.trim()) return null
   if (typeof value.outputHash !== 'string' || !/^[a-f0-9]{64}$/.test(value.outputHash)) return null
+  if (
+    value.operationId !== undefined
+    && !scientificPlottingOperationIdSchema.safeParse(value.operationId).success
+  ) return null
+  if (typeof value.plotVersionId !== 'string' || !value.plotVersionId.trim()) return null
+  if (typeof value.recipePath !== 'string' || !value.recipePath.trim()) return null
+  if (!isScientificPlotRecipeV1(value.recipe)) return null
   if (!isControlledPlottingPlan(value.visualPlan as ScientificPlottingRenderRequest['visualPlan'] | undefined)) return null
   if (!Array.isArray(value.attempts)) return null
   return value as ScientificPlottingManifest
+}
+
+function isScientificPlotRecipeV1(value: unknown): value is ScientificPlotRecipeV1 {
+  if (!isRecord(value) || value.schemaVersion !== 1) return false
+  if (typeof value.recipeId !== 'string' || !value.recipeId.startsWith('plot-recipe:')) return false
+  if (!SCIENTIFIC_PLOTTING_TEMPLATES.includes(value.template as ScientificPlottingTemplate)) return false
+  if (typeof value.dataHash !== 'string' || !/^[a-f0-9]{64}$/.test(value.dataHash)) return false
+  if (!Array.isArray(value.dataSources) || !Array.isArray(value.derivedTables) || !Array.isArray(value.transformations)) return false
+  if (!isRecord(value.environment) || !isRecord(value.execution) || !isRecord(value.style) || !isRecord(value.render)) return false
+  if (value.render.matplotlib !== undefined && !isScientificPlotMatplotlibParametersV1(value.render.matplotlib)) return false
+  return true
 }
 
 function buildReviewPacketItem(input: {
@@ -1842,7 +2437,7 @@ async function checkMatplotlib(workspaceRoot?: string): Promise<MatplotlibStatus
     ['-c', 'import matplotlib; print(matplotlib.__version__)'],
     '',
     workspaceRoot,
-    12_000
+    MATPLOTLIB_PROBE_TIMEOUT_MS
   )
   if (!run.ok) {
     return {
@@ -1882,7 +2477,7 @@ function pdftoppmCandidates(): string[] {
 }
 
 async function runPythonRenderer(payload: RenderPayload, workspaceRoot: string): Promise<PythonRunResult> {
-  return runPython(['-c', PYTHON_RENDERER_SOURCE], JSON.stringify(payload), workspaceRoot, 45_000)
+  return runPython(['-c', PYTHON_RENDERER_SOURCE], JSON.stringify(payload), workspaceRoot, RENDER_TIMEOUT_MS)
 }
 
 async function runCommand(
@@ -1959,6 +2554,7 @@ async function runPython(
   await mkdir(mplConfigDir, { recursive: true })
   return new Promise((resolvePromise) => {
     const child = spawn(PYTHON_COMMAND, args, {
+      ...(workspaceRoot ? { cwd: workspaceRoot } : {}),
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
@@ -2623,7 +3219,7 @@ function buildTemplateAdvice(
   ) {
     compatible = false
     messages.push(`Reference profile looks closer to ${referenceProfile.recommendedTemplate} than ${selectedTemplate}.`)
-    nextActions.push(`Try scientific_plotting_render with template=${referenceProfile.recommendedTemplate} before manual style tuning.`)
+    nextActions.push(`Invoke capability scientific-plotting.render with template=${referenceProfile.recommendedTemplate} before manual style tuning.`)
   }
   if (score && score.marks < 0.62) {
     messages.push('Foreground mark density differs; this often requires a better template or semantic renderer, not another style-only repair.')
@@ -2682,26 +3278,108 @@ function buildTemplateAlternatives(
   return alternatives.slice(0, 3)
 }
 
-function heatmapCmapForRequest(
+function resolveMatplotlibRenderParameters(
   request: ScientificPlottingRenderRequest,
   styleSpec: FigureStyleSpec,
+  rcParamsPatch: Record<string, string | number | boolean> = {},
+  paletteOverride?: string[]
+): ScientificPlotMatplotlibParametersV1 {
+  if (request.matplotlib) {
+    return canonicalClone(request.matplotlib) as ScientificPlotMatplotlibParametersV1
+  }
+  const styleAdapter = buildMatplotlibStyleAdapterFromFigureStyleSpec(styleSpec)
+  const palette = paletteOverride?.length
+    ? [...paletteOverride]
+    : styleAdapter.palette.length
+      ? [...styleAdapter.palette]
+      : ['#0072b2', '#d55e00', '#009e73', '#cc79a7', '#000000']
+  const rcParams = enforceReadableTextColors(enforcePublicationTypography({
+    ...styleAdapter.rcParams,
+    ...rcParamsPatch
+  }))
+  return {
+    schemaVersion: 1,
+    rcParams,
+    palette,
+    ...resolveHeatmapCmap({
+      template: request.template,
+      data: request.data,
+      styleSpec,
+      palette,
+      useStylePalette: Boolean(
+        request.styleSpec
+        || request.styleSpecPath
+        || request.referencePath
+        || request.reviewReferencePath
+      )
+    })
+  }
+}
+
+function resolveLegacyMatplotlibRenderParameters(
+  recipe: ScientificPlotRecipeV1
+): ScientificPlotMatplotlibParametersV1 {
+  const styleAdapter = buildMatplotlibStyleAdapterFromFigureStyleSpec(recipe.style.resolvedSpec)
+  const palette = styleAdapter.palette.length
+    ? [...styleAdapter.palette]
+    : ['#0072b2', '#d55e00', '#009e73', '#cc79a7', '#000000']
+  const sourcePath = recipe.style.resolvedSpec.source?.path
+  const likelyInlineStyle = !recipe.style.styleProfileId
+    && !recipe.style.styleSpecPath
+    && sourcePath !== undefined
+    && sourcePath !== 'sciforge-default'
+  return {
+    schemaVersion: 1,
+    rcParams: enforceReadableTextColors(enforcePublicationTypography(styleAdapter.rcParams)),
+    palette,
+    ...resolveHeatmapCmap({
+      template: recipe.template,
+      data: recipe.data,
+      styleSpec: recipe.style.resolvedSpec,
+      palette,
+      // Older recipes did not retain the inline-style bit. The source marker
+      // recovers the common case while default/profile renders keep their
+      // historical named colormap behavior.
+      useStylePalette: Boolean(recipe.style.styleSpecPath || recipe.style.referencePath || likelyInlineStyle)
+    })
+  }
+}
+
+function resolveHeatmapCmap(input: {
+  template: ScientificPlottingTemplate
+  data: unknown
+  styleSpec: FigureStyleSpec
   palette: string[]
-): { heatmapCmapColors?: string[] } {
-  if (request.template !== 'heatmap' && request.template !== 'attention-map') return {}
-  if (!request.styleSpec && !request.styleSpecPath && !request.referencePath && !request.reviewReferencePath) return {}
-  const data = isRecord(request.data) ? request.data : {}
-  const requestedCmap = typeof data.cmap === 'string' ? data.cmap.toLowerCase() : ''
-  if (requestedCmap && !['viridis', 'cividis', 'plasma', 'magma'].includes(requestedCmap)) return {}
-  const background = styleSpec.canvas.background
-  const accents = uniqueHexStrings(palette)
+  useStylePalette: boolean
+}): { heatmapCmap?: NonNullable<ScientificPlotMatplotlibParametersV1['heatmapCmap']> } {
+  if (input.template !== 'heatmap' && input.template !== 'attention-map') return {}
+  const data = isRecord(input.data) ? input.data : {}
+  const requestedCmap = typeof data.cmap === 'string' && data.cmap.trim()
+    ? data.cmap.trim()
+    : input.template === 'attention-map'
+      ? 'magma'
+      : 'cividis'
+  if (!input.useStylePalette || !['viridis', 'cividis', 'plasma', 'magma'].includes(requestedCmap.toLowerCase())) {
+    return { heatmapCmap: { kind: 'named', name: requestedCmap } }
+  }
+  const background = input.styleSpec.canvas.background
+  const accents = uniqueHexStrings(input.palette)
     .filter((color) => color.toLowerCase() !== background.toLowerCase())
     .filter((color) => hexDistance(color, background) > 34)
     .slice(0, 5)
-  if (accents.length === 0) return {}
+  if (accents.length === 0) return { heatmapCmap: { kind: 'named', name: requestedCmap } }
   const colors = hexLuminance(background) < 88
     ? uniqueHexStrings([background, ...accents])
     : uniqueHexStrings(['#ffffff', ...accents])
-  return colors.length >= 2 ? { heatmapCmapColors: colors } : {}
+  return colors.length >= 2
+    ? {
+        heatmapCmap: {
+          kind: 'linear-segmented',
+          name: input.template === 'attention-map' ? 'sciforge_attention_map' : 'sciforge_style_heatmap',
+          colors
+        }
+      }
+    : { heatmapCmap: { kind: 'named', name: requestedCmap } }
 }
 
 function buildDataMappingCandidates(
@@ -2712,6 +3390,8 @@ function buildDataMappingCandidates(
     taskTemplate: ScientificPlottingTemplate
     templateHint?: ScientificPlottingTemplate
     referenceProfile?: ScientificPlottingReferenceProfile
+    reproducibilityMode: 'standard' | 'reproducible'
+    statistics?: StatisticalDefinitionV1
   }
 ): DataMappingCandidate[] {
   const candidates: DataMappingCandidate[] = []
@@ -2877,6 +3557,8 @@ function tabularMappingCandidates(
     task: string
     labels?: ScientificPlottingLabels
     taskTemplate: ScientificPlottingTemplate
+    reproducibilityMode?: 'standard' | 'reproducible'
+    statistics?: StatisticalDefinitionV1
   }
 ): DataMappingCandidate[] {
   const profiles = profileTabularColumns(rows)
@@ -2895,6 +3577,9 @@ function tabularMappingCandidates(
   const valueKey = chooseColumn(numericColumns, [/^(value|score|response|measurement|metric|accuracy|auroc|f1|loss)$/i, /value|score|response|metric|measurement/i])
     ?? numericColumns.find((profile) => !/error|sem|sd|ci|stderr/i.test(profile.key))?.key
   const errorKey = chooseColumn(numericColumns, [/^(error|sem|sd|ci|stderr)$/i, /error|sem|sd|ci|stderr/i])
+  const inferredUncertainty = errorKey
+    ? { kind: uncertaintyKindForColumn(errorKey), sourceColumn: errorKey }
+    : undefined
   const categoryKey = chooseColumn(categoricalColumns, [/^(condition|treatment|group|category|class|target|cohort)$/i, /condition|treatment|group|category|class|target|cohort/i])
     ?? categoricalColumns.find((profile) => profile.key !== valueKey)?.key
   const seriesKey = chooseColumn(
@@ -2994,6 +3679,8 @@ function tabularMappingCandidates(
         dataSignals: [template],
         reasons: [`Rows contain categorical ${categoryKey} and summary-like numeric ${valueKey} values.`],
         warnings: bar.warnings,
+        ...(bar.aggregationApplied ? { aggregationApplied: bar.aggregationApplied } : {}),
+        ...(inferredUncertainty ? { inferredUncertainty } : {}),
         summary: {
           ...baseSummary,
           seriesCount: bar.seriesCount,
@@ -3182,8 +3869,15 @@ function barDataFromRows(
     seriesKey?: string
     errorKey?: string
   }
-): { data: { categories: string[]; series: Array<{ name?: string; values: number[]; error?: number[] }> }; seriesCount: number; categoryCount: number; warnings: string[] } | null {
+): {
+  data: { categories: string[]; series: Array<{ name?: string; values: number[]; error?: number[] }> }
+  seriesCount: number
+  categoryCount: number
+  warnings: string[]
+  aggregationApplied?: { method: 'mean'; groupBy: string[] }
+} | null {
   const warnings: string[] = []
+  let aggregated = false
   const categories = uniqueStrings(
     rows
       .map((row) => stringFromCell(row[input.categoryKey]))
@@ -3207,7 +3901,10 @@ function barDataFromRows(
         .map((row) => numberFromCell(row[input.valueKey]))
         .filter((value): value is number => value !== undefined)
       if (finite.length === 0) return null
-      if (finite.length > 1) warnings.push(`Averaged ${finite.length} rows for ${seriesName}/${category}; verify this summary is intended.`)
+      if (finite.length > 1) {
+        aggregated = true
+        warnings.push(`Averaged ${finite.length} rows for ${seriesName}/${category}; this aggregation must be declared for reproducible rendering.`)
+      }
       values.push(mean(finite))
       if (input.errorKey) {
         const errorValues = matching
@@ -3229,8 +3926,22 @@ function barDataFromRows(
     },
     seriesCount: series.length,
     categoryCount: categories.length,
-    warnings: uniqueStrings(warnings).slice(0, 8)
+    warnings: uniqueStrings(warnings).slice(0, 8),
+    ...(aggregated ? {
+      aggregationApplied: {
+        method: 'mean' as const,
+        groupBy: input.seriesKey ? [input.seriesKey, input.categoryKey] : [input.categoryKey]
+      }
+    } : {})
   }
+}
+
+function uncertaintyKindForColumn(column: string): 'sd' | 'sem' | 'ci' | 'ambiguous' {
+  const normalized = column.trim().toLowerCase()
+  if (/^(sd|std|standard[_\s-]?deviation)$/.test(normalized)) return 'sd'
+  if (/^(sem|stderr|standard[_\s-]?error)$/.test(normalized)) return 'sem'
+  if (/^(ci|confidence[_\s-]?interval)$/.test(normalized)) return 'ci'
+  return 'ambiguous'
 }
 
 function rawMatrixFromData(data: unknown): number[][] | null {
@@ -3301,6 +4012,125 @@ function defaultHistogramBins(pointCount: number): number {
   return Math.max(5, Math.min(40, Math.ceil(Math.sqrt(Math.max(1, pointCount)))))
 }
 
+function declaresAggregation(
+  statistics: StatisticalDefinitionV1 | undefined,
+  applied: NonNullable<DataMappingCandidate['aggregationApplied']>
+): boolean {
+  if (statistics?.aggregation?.method !== applied.method) return false
+  const declared = new Set(statistics.aggregation.groupBy.map((item) => item.trim()).filter(Boolean))
+  const actual = new Set(applied.groupBy)
+  return declared.size === actual.size && [...actual].every((item) => declared.has(item))
+}
+
+function inlineDataSourceRef(sha256: string, locator: string): DataSourceRef {
+  return {
+    schemaVersion: 1,
+    sourceId: `inline-${sha256.slice(0, 16)}`,
+    kind: 'inline',
+    locator: `inline:${locator}`,
+    sha256,
+    mediaType: 'application/json'
+  }
+}
+
+function buildMappingTransformation(input: {
+  inputHash: string
+  outputHash: string
+  selected: DataMappingCandidate
+  selectedBy: 'templateHint' | 'dataShape' | 'task' | 'referenceProfile'
+}): ScientificPlotTransformationV1 {
+  const kind: ScientificPlotTransformationV1['kind'] = input.selected.aggregationApplied
+    ? 'group-aggregate'
+    : input.selected.inputShape === 'tabular'
+      ? 'tabular-map'
+      : input.selected.inputShape === 'matrix'
+        ? 'matrix-map'
+        : input.selected.inputShape === 'vector'
+          ? 'vector-map'
+          : input.selected.inputShape === 'network'
+            ? 'scene-map'
+            : 'identity'
+  const parameters = {
+    template: input.selected.template,
+    selectedBy: input.selectedBy,
+    reasons: input.selected.reasons,
+    ...(input.selected.aggregationApplied ? { aggregation: input.selected.aggregationApplied } : {})
+  }
+  return {
+    schemaVersion: 1,
+    transformationId: `transform-${hashStableJson({
+      kind,
+      inputHash: input.inputHash,
+      outputHash: input.outputHash,
+      parameters
+    }).slice(0, 20)}`,
+    kind,
+    description: input.selected.aggregationApplied
+      ? `Map tabular data to ${input.selected.template} and apply the explicitly declared group aggregation.`
+      : `Map input data to the controlled ${input.selected.template} schema.`,
+    parameters,
+    inputHash: input.inputHash,
+    outputHash: input.outputHash
+  }
+}
+
+function buildDerivedTableReceipt(input: {
+  selected: DataMappingCandidate
+  sourceIds: string[]
+  transformation: ScientificPlotTransformationV1
+}): DerivedTableReceipt {
+  const summary = input.selected.summary
+  return {
+    schemaVersion: 1,
+    receiptId: `derived-${hashStableJson({
+      sources: input.sourceIds,
+      transformationId: input.transformation.transformationId
+    }).slice(0, 20)}`,
+    inputSourceIds: input.sourceIds,
+    operation: input.transformation.kind,
+    inputHash: input.transformation.inputHash,
+    outputHash: input.transformation.outputHash,
+    transformationIds: [input.transformation.transformationId],
+    ...(summary.rowCount !== undefined ? { rowCount: summary.rowCount } : {}),
+    ...(summary.columnCount !== undefined ? { columnCount: summary.columnCount } : {}),
+    ...(summary.numericColumns || summary.categoricalColumns
+      ? { columns: uniqueStrings([...(summary.numericColumns ?? []), ...(summary.categoricalColumns ?? [])]) }
+      : {}),
+    warnings: [...input.selected.warnings]
+  }
+}
+
+function inferredStatisticsForCandidate(candidate: DataMappingCandidate): StatisticalDefinitionV1 | undefined {
+  const statisticalTemplate = candidate.template === 'box-violin'
+    || candidate.template === 'histogram-density'
+    || candidate.template === 'errorbar-bar'
+  if (!statisticalTemplate && !candidate.aggregationApplied && !candidate.inferredUncertainty) return undefined
+  const estimator: StatisticalDefinitionV1['estimator'] = candidate.template === 'histogram-density'
+    ? 'density'
+    : candidate.aggregationApplied
+      ? 'mean'
+      : 'raw'
+  return {
+    schemaVersion: 1,
+    estimator,
+    ...(candidate.aggregationApplied ? {
+      aggregation: {
+        method: candidate.aggregationApplied.method,
+        groupBy: [...candidate.aggregationApplied.groupBy]
+      }
+    } : {}),
+    ...(candidate.inferredUncertainty?.kind && candidate.inferredUncertainty.kind !== 'ambiguous' ? {
+      uncertainty: {
+        kind: candidate.inferredUncertainty.kind,
+        sourceColumn: candidate.inferredUncertainty.sourceColumn,
+        suppliedBy: 'source' as const
+      }
+    } : {}),
+    missingValues: 'reject',
+    notes: ['Inferred from the controlled data mapping; provide an explicit definition to override.']
+  }
+}
+
 function mean(values: number[]): number {
   return Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(6))
 }
@@ -3316,7 +4146,30 @@ function validateRenderRequestShape(request: ScientificPlottingRenderRequest): v
   if (request.styleSpec && !isFigureStyleSpec(request.styleSpec)) {
     throw new Error('styleSpec must be a FigureStyleSpec v1 object.')
   }
+  if (request.matplotlib && !isScientificPlotMatplotlibParametersV1(request.matplotlib)) {
+    throw new Error('matplotlib must contain finite rcParams, a non-empty palette, and a valid heatmap cmap.')
+  }
+  if (request.matplotlib) validatePinnedMatplotlibForTemplate(request.template, request.matplotlib)
   normalizeOutputScale(request.outputScale)
+}
+
+function validatePinnedMatplotlibForTemplate(
+  template: ScientificPlottingTemplate,
+  matplotlib: ScientificPlotMatplotlibParametersV1
+): void {
+  const isHeatmap = template === 'heatmap' || template === 'attention-map'
+  if (isHeatmap && !matplotlib.heatmapCmap) {
+    throw new Error(`Pinned Matplotlib parameters for ${template} require heatmapCmap.`)
+  }
+  if (!isHeatmap && matplotlib.heatmapCmap) {
+    throw new Error(`Pinned Matplotlib parameters for ${template} cannot declare heatmapCmap.`)
+  }
+  if (matplotlib.heatmapCmap?.kind === 'linear-segmented') {
+    const expected = template === 'attention-map' ? 'sciforge_attention_map' : 'sciforge_style_heatmap'
+    if (matplotlib.heatmapCmap.name !== expected) {
+      throw new Error(`Pinned Matplotlib heatmap cmap name must be ${expected} for ${template}.`)
+    }
+  }
 }
 
 function validateTemplateData(template: ScientificPlottingTemplate, data: unknown): void {
@@ -4220,6 +5073,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function isScientificPlotMatplotlibParametersV1(
+  value: unknown
+): value is ScientificPlotMatplotlibParametersV1 {
+  if (!isRecord(value) || value.schemaVersion !== 1 || !isRecord(value.rcParams)) return false
+  if (!Object.entries(value.rcParams).every(([key, item]) =>
+    key.trim().length > 0
+    && (typeof item === 'string' || typeof item === 'boolean' || (typeof item === 'number' && Number.isFinite(item)))
+  )) return false
+  if (!isStringArray(value.palette, 1, 256)) return false
+  if (value.heatmapCmap === undefined) return true
+  if (!isRecord(value.heatmapCmap)) return false
+  if (value.heatmapCmap.kind === 'named') {
+    return typeof value.heatmapCmap.name === 'string' && value.heatmapCmap.name.trim().length > 0
+  }
+  return value.heatmapCmap.kind === 'linear-segmented'
+    && (value.heatmapCmap.name === 'sciforge_style_heatmap' || value.heatmapCmap.name === 'sciforge_attention_map')
+    && isStringArray(value.heatmapCmap.colors, 2, 256)
+}
+
 function isFiniteNumberArray(value: unknown, minLength: number, maxLength: number): value is number[] {
   return Array.isArray(value) &&
     value.length >= minLength &&
@@ -4257,18 +5129,1183 @@ function slugForFigureId(raw: string): string {
   return slug || randomUUID()
 }
 
-function hashRequest(request: ScientificPlottingRenderRequest): string {
+function validateReproducibleStatisticalClaims(request: ScientificPlottingRenderRequest): void {
+  if ((request.reproducibilityMode ?? 'standard') !== 'reproducible') return
+  if (!request.dataSources?.length) {
+    throw new Error('reproducible mode requires at least one content-bound dataSources entry.')
+  }
+  const statisticsRequired = request.template === 'box-violin'
+    || request.template === 'histogram-density'
+    || request.template === 'errorbar-bar'
+    || dataContainsErrorBars(request.data)
+    || collectRenderedComparisons(request.data).length > 0
+  if (statisticsRequired && !request.statistics) {
+    throw new Error(`reproducible ${request.template} rendering requires statistics.`)
+  }
+  if (dataContainsErrorBars(request.data) && !request.statistics?.uncertainty) {
+    throw new Error('reproducible error bars require statistics.uncertainty.kind=sd|sem|ci.')
+  }
+  if (request.statistics?.uncertainty?.kind === 'ci') {
+    const level = request.statistics.uncertainty.confidenceLevel
+    if (level === undefined || !Number.isFinite(level) || level <= 0 || level >= 1) {
+      throw new Error('CI uncertainty requires a confidenceLevel between 0 and 1.')
+    }
+  }
+  const renderedComparisons = collectRenderedComparisons(request.data)
+  for (const comparison of renderedComparisons) {
+    if (!isSignificanceLabel(comparison.label)) continue
+    const definition = request.statistics?.comparisons?.find((candidate) => {
+      const expected = new Set(candidate.groups.map(normalizeComparisonGroup))
+      return expected.has(normalizeComparisonGroup(comparison.from))
+        && expected.has(normalizeComparisonGroup(comparison.to))
+    })
+    if (!definition?.resultRef) {
+      throw new Error(`Significance label ${comparison.label} for ${comparison.from}/${comparison.to} requires a statistics.comparisons resultRef.`)
+    }
+    const resultSource = request.dataSources.find((source) => source.sourceId === definition.resultRef.sourceId)
+    if (!resultSource) {
+      throw new Error(`Statistical result source ${definition.resultRef.sourceId} is not declared in dataSources.`)
+    }
+    if (resultSource.sha256 !== definition.resultRef.sha256) {
+      throw new Error(`Statistical result ${definition.resultRef.sourceId} digest does not match its declared data source.`)
+    }
+    if (resultSource.locator !== definition.resultRef.locator) {
+      throw new Error(`Statistical result ${definition.resultRef.sourceId} locator does not match its declared data source.`)
+    }
+  }
+}
+
+function dataContainsErrorBars(data: unknown): boolean {
+  if (!isRecord(data)) return false
+  if (Array.isArray(data.series) && data.series.some((series) => (
+    isRecord(series) && (Array.isArray(series.error) || Array.isArray(series.xerr) || Array.isArray(series.yerr))
+  ))) return true
+  if (Array.isArray(data.panels)) {
+    return data.panels.some((panel) => isRecord(panel) && dataContainsErrorBars(panel.data))
+  }
+  return false
+}
+
+function collectRenderedComparisons(data: unknown): Array<{ from: string; to: string; label: string }> {
+  if (!isRecord(data)) return []
+  const comparisons = Array.isArray(data.comparisons)
+    ? data.comparisons.flatMap((value) => {
+        if (!isRecord(value)) return []
+        const from = comparisonGroupValue(value.from ?? value.a ?? value.left ?? value.groupA)
+        const to = comparisonGroupValue(value.to ?? value.b ?? value.right ?? value.groupB)
+        const label = typeof (value.label ?? value.text ?? value.p) === 'string'
+          ? String(value.label ?? value.text ?? value.p).trim()
+          : ''
+        return from && to ? [{ from, to, label }] : []
+      })
+    : []
+  if (!Array.isArray(data.panels)) return comparisons
+  return [
+    ...comparisons,
+    ...data.panels.flatMap((panel) => isRecord(panel) ? collectRenderedComparisons(panel.data) : [])
+  ]
+}
+
+function comparisonGroupValue(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return undefined
+}
+
+function normalizeComparisonGroup(value: string): string {
+  return value.trim().toLowerCase()
+}
+
+function isSignificanceLabel(value: string): boolean {
+  return /\*|\bp\s*(?:[<=>]|≤|≥)|significant/i.test(value)
+}
+
+async function resolveAndVerifyDataSourceRefs(
+  request: ScientificPlottingRenderRequest,
+  workspaceRoot: string
+): Promise<DataSourceRef[]> {
+  const requested = request.dataSources?.length
+    ? request.dataSources
+    : [inlineDataSourceRef(hashStableJson(request.data), 'scientific-plotting.render.data')]
+  const seen = new Set<string>()
+  const resolved: DataSourceRef[] = []
+  for (const source of requested) {
+    if (source.schemaVersion !== 1 || !source.sourceId.trim()) throw new Error('DataSourceRef v1 requires sourceId.')
+    if (seen.has(source.sourceId)) throw new Error(`Duplicate data source id: ${source.sourceId}`)
+    seen.add(source.sourceId)
+    if (!/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error(`Data source ${source.sourceId} requires a lowercase SHA-256 digest.`)
+    if (source.kind === 'artifact-version') {
+      const artifactVersion = artifactVersionRefV1Schema.parse(source.artifactVersion)
+      if (artifactVersion.contentDigest !== source.sha256) {
+        throw new Error(`Artifact-version data source ${source.sourceId} digest does not match its immutable version ref.`)
+      }
+      if (source.mediaType && artifactVersion.mediaType && source.mediaType !== artifactVersion.mediaType) {
+        throw new Error(`Artifact-version data source ${source.sourceId} media type does not match its immutable version ref.`)
+      }
+      resolved.push({ ...structuredClone(source), artifactVersion })
+      continue
+    }
+    if (source.kind === 'workspace-file') {
+      const sourcePath = await resolveOpenTargetPath(source.locator, workspaceRoot, { allowBasenameFallback: false })
+      const actualHash = await hashFile(sourcePath)
+      if (actualHash !== source.sha256) {
+        throw new Error(`Data source hash mismatch for ${source.sourceId}.`)
+      }
+      resolved.push({ ...source, locator: sourcePath })
+      continue
+    }
+    resolved.push(structuredClone(source))
+  }
+  validateProvenanceChain(request, resolved)
+  return resolved
+}
+
+function validateProvenanceChain(request: ScientificPlottingRenderRequest, sources: DataSourceRef[]): void {
+  const sourceIds = new Set(sources.map((source) => source.sourceId))
+  const receiptIds = new Set<string>()
+  for (const receipt of request.derivedTableReceipts ?? []) {
+    if (receiptIds.has(receipt.receiptId)) throw new Error(`Duplicate derived table receipt id: ${receipt.receiptId}`)
+    receiptIds.add(receipt.receiptId)
+    for (const sourceId of receipt.inputSourceIds) {
+      if (!sourceIds.has(sourceId)) throw new Error(`Derived table receipt references undeclared source ${sourceId}.`)
+    }
+  }
+  const transformationsById = new Map<string, ScientificPlotTransformationV1>()
+  for (const transformation of request.transformations ?? []) {
+    if (transformationsById.has(transformation.transformationId)) {
+      throw new Error(`Duplicate transformation id: ${transformation.transformationId}`)
+    }
+    if (!/^[a-f0-9]{64}$/.test(transformation.inputHash) || !/^[a-f0-9]{64}$/.test(transformation.outputHash)) {
+      throw new Error(`Transformation ${transformation.transformationId} requires lowercase SHA-256 input/output hashes.`)
+    }
+    transformationsById.set(transformation.transformationId, transformation)
+  }
+  for (const receipt of request.derivedTableReceipts ?? []) {
+    if (receipt.transformationIds.length === 0) {
+      throw new Error(`Derived table receipt ${receipt.receiptId} requires at least one transformation.`)
+    }
+    const receiptTransformations: ScientificPlotTransformationV1[] = []
+    for (const transformationId of receipt.transformationIds) {
+      const transformation = transformationsById.get(transformationId)
+      if (!transformation) {
+        throw new Error(`Derived table receipt references unknown transformation ${transformationId}.`)
+      }
+      receiptTransformations.push(transformation)
+    }
+    for (let index = 1; index < receiptTransformations.length; index += 1) {
+      if (receiptTransformations[index - 1]!.outputHash !== receiptTransformations[index]!.inputHash) {
+        throw new Error(`Derived table receipt ${receipt.receiptId} contains a disconnected transformation chain.`)
+      }
+    }
+    if (receiptTransformations[0]!.inputHash !== receipt.inputHash) {
+      throw new Error(`Derived table receipt ${receipt.receiptId} input hash does not match its first transformation.`)
+    }
+    if (receiptTransformations.at(-1)!.outputHash !== receipt.outputHash) {
+      throw new Error(`Derived table receipt ${receipt.receiptId} output hash does not match its final transformation.`)
+    }
+  }
+  if ((request.reproducibilityMode ?? 'standard') !== 'reproducible') return
+  const dataHash = hashStableJson(request.data)
+  const terminalOutputs = new Set([
+    ...(request.transformations ?? []).map((item) => item.outputHash),
+    ...(request.derivedTableReceipts ?? []).map((item) => item.outputHash),
+    ...sources.map((source) => source.sha256)
+  ])
+  if (!terminalOutputs.has(dataHash)) {
+    throw new Error('Reproducible data does not match any declared source or transformation output hash.')
+  }
+}
+
+async function captureScientificPlotEnvironment(workspaceRoot: string): Promise<ScientificPlotEnvironmentV1> {
+  const probe = await runPython(
+    ['-c', PYTHON_ENVIRONMENT_PROBE_SOURCE],
+    '',
+    workspaceRoot,
+    MATPLOTLIB_PROBE_TIMEOUT_MS
+  )
+  if (!probe.ok) throw new Error(`Could not capture plotting environment: ${probe.message}`)
+  const lastLine = probe.stdout.trim().split('\n').at(-1)
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(lastLine ?? '')
+  } catch {
+    throw new Error('Could not parse plotting environment probe output.')
+  }
+  if (!isRecord(parsed)) throw new Error('Plotting environment probe returned an invalid record.')
+  const pythonExecutable = typeof parsed.pythonExecutable === 'string' ? parsed.pythonExecutable : PYTHON_COMMAND
+  const pythonVersion = typeof parsed.pythonVersion === 'string' ? parsed.pythonVersion : 'unknown'
+  const platform = typeof parsed.platform === 'string' ? parsed.platform : 'unknown'
+  const fontFingerprint = typeof parsed.fontFingerprint === 'string' ? parsed.fontFingerprint : hashStableJson([])
+  const packages = isRecord(parsed.packages)
+    ? Object.fromEntries(Object.entries(parsed.packages).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+    : {}
+  const content = {
+    schemaVersion: 1 as const,
+    pythonCommand: PYTHON_COMMAND,
+    pythonExecutable,
+    pythonVersion,
+    platform,
+    packages,
+    fontFingerprint
+  }
+  return {
+    ...content,
+    environmentDigest: hashStableJson(content)
+  }
+}
+
+function buildScientificPlotRecipe(input: {
+  request: ScientificPlottingRenderRequest
+  workspaceRoot: string
+  figureId: string
+  styleSpec: FigureStyleSpec
+  matplotlib: ScientificPlotMatplotlibParametersV1
+  outputScale: number
+  autoRepair: ReturnType<typeof normalizeAutoRepairOptions>
+  environment: ScientificPlotEnvironmentV1
+  dataSources: DataSourceRef[]
+}): ScientificPlotRecipeV1 {
+  const dataHash = hashStableJson(input.request.data)
+  const transformations = input.request.transformations?.length
+    ? structuredClone(input.request.transformations)
+    : [{
+        schemaVersion: 1 as const,
+        transformationId: `transform-${dataHash.slice(0, 20)}`,
+        kind: 'identity' as const,
+        description: 'Use caller-supplied template-ready plotting data without transformation.',
+        parameters: {},
+        inputHash: dataHash,
+        outputHash: dataHash
+      }]
+  const derivedTables = input.request.derivedTableReceipts?.length
+    ? structuredClone(input.request.derivedTableReceipts)
+    : [{
+        schemaVersion: 1 as const,
+        receiptId: `derived-${dataHash.slice(0, 20)}`,
+        inputSourceIds: input.dataSources.map((source) => source.sourceId),
+        operation: transformations[0]?.kind ?? 'identity',
+        inputHash: transformations[0]?.inputHash ?? dataHash,
+        outputHash: dataHash,
+        transformationIds: transformations.map((item) => item.transformationId),
+        warnings: []
+      }]
+  const execution: ScientificPlotExecutionV1 = {
+    schemaVersion: 1,
+    renderer: 'sciforge-scientific-plotting-mcp',
+    rendererVersion: RENDERER_VERSION,
+    rendererCodeSha256: createHash('sha256').update(PYTHON_RENDERER_SOURCE).digest('hex'),
+    command: [PYTHON_COMMAND, '-c', '<sciforge-scientific-plotting-renderer>'],
+    cwd: input.workspaceRoot,
+    timeoutMs: RENDER_TIMEOUT_MS
+  }
+  const content = {
+    schemaVersion: 1 as const,
+    figureId: input.figureId,
+    template: input.request.template,
+    data: canonicalClone(input.request.data),
+    dataHash,
+    labels: canonicalClone(input.request.labels ?? {}) as ScientificPlottingLabels,
+    visualPlan: canonicalClone(input.request.visualPlan) as ScientificPlotRecipeV1['visualPlan'],
+    dataSources: canonicalClone(input.dataSources) as DataSourceRef[],
+    derivedTables: canonicalClone(derivedTables) as DerivedTableReceipt[],
+    transformations: canonicalClone(transformations) as ScientificPlotTransformationV1[],
+    ...(input.request.statistics ? { statistics: canonicalClone(input.request.statistics) as StatisticalDefinitionV1 } : {}),
+    style: {
+      resolvedSpec: canonicalClone(input.styleSpec) as FigureStyleSpec,
+      resolvedSpecHash: hashStableJson(input.styleSpec),
+      ...(input.request.styleProfileId ? { styleProfileId: input.request.styleProfileId } : {}),
+      ...(input.request.styleSpecPath ? { styleSpecPath: input.request.styleSpecPath } : {}),
+      ...(input.request.referencePath || input.request.reviewReferencePath
+        ? { referencePath: input.request.reviewReferencePath ?? input.request.referencePath }
+        : {})
+    },
+    render: {
+      outputScale: input.outputScale,
+      matplotlib: canonicalClone(input.matplotlib) as ScientificPlotMatplotlibParametersV1,
+      autoRepair: canonicalClone(input.autoRepair) as ReturnType<typeof normalizeAutoRepairOptions>,
+      ...(input.request.reviewTask ? { reviewTask: input.request.reviewTask } : {})
+    },
+    environment: input.environment,
+    execution,
+    reproducibilityMode: input.request.reproducibilityMode ?? 'standard',
+    provenanceWarnings: uniqueStrings(input.request.provenanceWarnings ?? [])
+  }
+  return {
+    ...content,
+    recipeId: `plot-recipe:${hashStableJson(content)}`
+  }
+}
+
+const MAX_PLOTTING_RECEIPT_BYTES = 16 * 1024 * 1024
+const MAX_PRECOMMIT_MANIFEST_BYTES = 64 * 1024 * 1024
+
+function validateEvidenceRouting(value: { runtimeId?: string; threadId?: string }): void {
+  if (Boolean(value.runtimeId?.trim()) === Boolean(value.threadId?.trim())) return
+  throw new Error('runtimeId and threadId must be supplied together for Evidence delivery.')
+}
+
+function assertVersionedSourcesForFormalReproducibleSave(
+  request: ScientificPlottingRenderRequest,
+  sources: DataSourceRef[],
+  dependencies: ScientificPlottingEngineDependencies
+): void {
+  if ((request.reproducibilityMode ?? 'standard') !== 'reproducible') return
+  if (!dependencies.artifactVersionCommitPort && !request.versioning) return
+  const unversioned = sources.filter((source) => source.kind !== 'artifact-version')
+  if (unversioned.length === 0) return
+  throw new Error(
+    `Formal reproducible saves require pinned ArtifactVersionRefV1 inputs; unversioned sources: ${unversioned.map((source) => source.sourceId).join(', ')}.`
+  )
+}
+
+function scientificPlotRerunBreakpoint(
+  message: string,
+  fallbackStage: ScientificPlotProvenanceBreakpointV1['stage'],
+  artifactVersionRef?: ArtifactVersionRefV1
+): ScientificPlotProvenanceBreakpointV1 {
+  const normalized = message.toLowerCase()
+  let code: ScientificPlotProvenanceBreakpointV1['code'] = 'exact-rerun-failed'
+  let stage = fallbackStage
+  let retryable = false
+  if (normalized.includes('capabilit')) {
+    code = 'artifact-version-capability-unavailable'
+    stage = 'baseline'
+    retryable = true
+  } else if (normalized.includes('access') || normalized.includes('denied') || normalized.includes('restricted')) {
+    code = 'artifact-version-access-denied'
+    stage = 'input'
+  } else if (normalized.includes('digest') || normalized.includes('hash mismatch')) {
+    code = 'artifact-version-digest-mismatch'
+    stage = 'input'
+  } else if (normalized.includes('does not pin') || normalized.includes('recipe') && normalized.includes('mismatch')) {
+    code = 'recipe-link-mismatch'
+    stage = 'baseline'
+  } else if (normalized.includes('unavailable') || normalized.includes('missing')) {
+    code = 'artifact-version-unavailable'
+    stage = 'input'
+    retryable = true
+  } else if (normalized.includes('environment') || normalized.includes('python') || normalized.includes('matplotlib')) {
+    code = 'environment-unavailable'
+    stage = 'environment'
+    retryable = true
+  } else if (normalized.includes('artifact version commit') || normalized.includes('artifactversion commit')) {
+    code = 'artifact-version-commit-failed'
+    stage = 'commit'
+    retryable = true
+  } else if (fallbackStage === 'render') {
+    code = 'render-failed'
+    stage = 'render'
+    retryable = true
+  }
+  return {
+    schemaVersion: 1,
+    code,
+    stage,
+    message,
+    retryable,
+    ...(artifactVersionRef ? { artifactVersionRef } : {})
+  }
+}
+
+function operationFileName(operationId: string): string {
+  return `${createHash('sha256').update(operationId, 'utf8').digest('hex')}.json`
+}
+
+function scientificPlotOperationReceiptPath(workspaceRoot: string, operationId: string): string {
+  return join(workspaceRoot, PLOTTING_OPERATION_RECEIPT_RELATIVE_DIR, operationFileName(operationId))
+}
+
+function scientificPlotEvidenceOutboxPath(workspaceRoot: string, operationId: string): string {
+  return join(workspaceRoot, EVIDENCE_OUTBOX_RELATIVE_DIR, operationFileName(operationId))
+}
+
+function scientificPlotEvidenceDeliveryReceiptPath(workspaceRoot: string, operationId: string): string {
+  return join(workspaceRoot, EVIDENCE_DELIVERY_RECEIPT_RELATIVE_DIR, operationFileName(operationId))
+}
+
+async function readBoundedWorkspaceFile(
+  workspaceRoot: string,
+  path: string,
+  maxBytes: number
+): Promise<Buffer | undefined> {
+  try {
+    const info = await lstat(path)
+    if (!info.isFile() || info.isSymbolicLink()) throw new Error(`Expected a regular receipt file: ${path}`)
+    if (info.size > maxBytes) throw new Error(`Receipt exceeds ${maxBytes} bytes: ${path}`)
+    const [workspaceReal, fileReal] = await Promise.all([
+      realpath(resolve(workspaceRoot)),
+      realpath(path)
+    ])
+    if (!isWithinWorkspace(workspaceReal, fileReal)) {
+      throw new Error(`Receipt path escapes the workspace: ${path}`)
+    }
+    return await readFile(fileReal)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  }
+}
+
+async function assertSafeWorkspaceWritePath(workspaceRoot: string, path: string): Promise<void> {
+  const resolvedWorkspace = resolve(workspaceRoot)
+  const resolvedTarget = resolve(path)
+  if (!isWithinWorkspace(resolvedWorkspace, resolvedTarget)) {
+    throw new Error(`Scientific Plotting receipt path escapes the workspace: ${path}`)
+  }
+  const workspaceReal = await realpath(resolvedWorkspace)
+  let ancestor = dirname(resolvedTarget)
+  while (true) {
+    try {
+      await lstat(ancestor)
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      const parent = dirname(ancestor)
+      if (parent === ancestor) throw new Error(`No safe ancestor exists for receipt path: ${path}`)
+      ancestor = parent
+    }
+  }
+  const ancestorReal = await realpath(ancestor)
+  if (!isWithinWorkspace(workspaceReal, ancestorReal)) {
+    throw new Error(`Scientific Plotting receipt directory escapes the workspace: ${path}`)
+  }
+}
+
+async function writeJsonAtomic(
+  workspaceRoot: string,
+  path: string,
+  value: unknown,
+  maxBytes = MAX_PLOTTING_RECEIPT_BYTES
+): Promise<Buffer> {
+  const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8')
+  if (bytes.byteLength > maxBytes) throw new Error(`Receipt exceeds ${maxBytes} bytes: ${path}`)
+  await assertSafeWorkspaceWritePath(workspaceRoot, path)
+  await mkdir(dirname(path), { recursive: true })
+  const [workspaceReal, directoryReal] = await Promise.all([
+    realpath(resolve(workspaceRoot)),
+    realpath(dirname(path))
+  ])
+  if (!isWithinWorkspace(workspaceReal, directoryReal)) {
+    throw new Error(`Scientific Plotting receipt directory escapes the workspace: ${path}`)
+  }
+  const temporaryPath = `${path}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporaryPath, bytes, { flag: 'wx' })
+    await rename(temporaryPath, path)
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => undefined)
+    throw error
+  }
+  return bytes
+}
+
+async function readScientificPlotOperationReceipt(
+  workspaceRoot: string,
+  path: string
+): Promise<ScientificPlottingOperationReceiptV1 | undefined> {
+  const bytes = await readBoundedWorkspaceFile(workspaceRoot, path, MAX_PLOTTING_RECEIPT_BYTES)
+  if (!bytes) return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(bytes.toString('utf8'))
+  } catch (error) {
+    throw new Error(`Could not parse Scientific Plotting operation receipt: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  return scientificPlottingOperationReceiptV1Schema.parse(parsed)
+}
+
+function scientificPlotAttemptLogBytes(
+  plotVersionId: string,
+  recipeId: string,
+  attempts: ScientificPlottingAttempt[]
+): Buffer {
+  return Buffer.from(canonicalJson({
+    schemaVersion: 1,
+    plotVersionId,
+    recipeId,
+    renderer: 'sciforge-scientific-plotting-mcp',
+    rendererVersion: RENDERER_VERSION,
+    attempts
+  }), 'utf8')
+}
+
+async function computeScientificPlotPreparedDigests(
+  manifest: ScientificPlottingManifest,
+  preCommitManifestBytes: Uint8Array
+): Promise<ScientificPlottingOperationReceiptV1['preparedDigests']> {
+  const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
+  return {
+    derivedData: digest(Buffer.from(canonicalJson(manifest.recipe.data), 'utf8')),
+    recipe: digest(Buffer.from(canonicalJson(manifest.recipe), 'utf8')),
+    figure: digest(await readFile(manifest.outputPath)),
+    renderManifest: digest(preCommitManifestBytes),
+    attemptLog: digest(scientificPlotAttemptLogBytes(
+      manifest.plotVersionId,
+      manifest.recipe.recipeId,
+      manifest.attempts
+    ))
+  }
+}
+
+function assertPreparedDigests(
+  expected: ScientificPlottingOperationReceiptV1['preparedDigests'],
+  actual: ScientificPlottingOperationReceiptV1['preparedDigests']
+): void {
+  for (const key of Object.keys(expected) as Array<keyof typeof expected>) {
+    if (expected[key] !== actual[key]) {
+      throw new Error(`Prepared Scientific Plotting ${key} bytes were changed before idempotent commit recovery.`)
+    }
+  }
+}
+
+function scientificPlotEvidenceCommitRefs(
+  commit: ScientificPlotVersionCommitReceipt
+): ScientificPlotEvidenceCommitRefsV1 {
+  if (!commit.result.ok) throw new Error('A failed ArtifactVersion commit has no Evidence references.')
+  const committed = new Map(commit.result.value.versions.map((item) => [item.candidateId, item.ref]))
+  const ref = (candidateId: string): ArtifactVersionRefV1 => {
+    const value = committed.get(candidateId)
+    if (!value) throw new Error(`ArtifactVersion commit is missing Evidence reference ${candidateId}.`)
+    return artifactVersionRefV1Schema.parse(value)
+  }
+  return {
+    derivedData: ref(commit.candidateIds.derivedData),
+    recipe: ref(commit.candidateIds.recipe),
+    figure: ref(commit.candidateIds.figure),
+    renderManifest: ref(commit.candidateIds.renderManifest),
+    attemptLog: ref(commit.candidateIds.attemptLog)
+  }
+}
+
+async function writeScientificPlotEvidenceOutbox(input: {
+  workspaceRoot: string
+  request: ScientificPlottingRenderRequest
+  createdAt: string
+  commit: ScientificPlotVersionCommitReceipt
+  evidenceLineage: ScientificPlotEvidenceLineageV1
+}): Promise<ScientificPlotEvidenceDeliveryV1> {
+  const outboxPath = scientificPlotEvidenceOutboxPath(input.workspaceRoot, input.request.operationId)
+  const receipt = scientificPlotEvidenceOutboxReceiptV1Schema.parse({
+    schemaVersion: 1,
+    producer: 'scientific-plotting',
+    operationId: input.request.operationId,
+    state: 'pending',
+    createdAt: input.createdAt,
+    ...(input.request.runtimeId && input.request.threadId
+      ? { runtimeId: input.request.runtimeId, threadId: input.request.threadId }
+      : {}),
+    commitRefs: scientificPlotEvidenceCommitRefs(input.commit),
+    evidenceLineage: input.evidenceLineage
+  }) as ScientificPlotEvidenceOutboxReceiptV1
+  let sourceBytes = await readBoundedWorkspaceFile(
+    input.workspaceRoot,
+    outboxPath,
+    MAX_PLOTTING_RECEIPT_BYTES
+  )
+  if (sourceBytes) {
+    let existing: ScientificPlotEvidenceOutboxReceiptV1
+    try {
+      existing = scientificPlotEvidenceOutboxReceiptV1Schema.parse(JSON.parse(sourceBytes.toString('utf8')))
+    } catch (error) {
+      throw new Error(`Invalid existing Scientific Plotting Evidence outbox receipt: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    if (canonicalJson(existing) !== canonicalJson(receipt)) {
+      throw new Error(`Evidence outbox operation ${input.request.operationId} conflicts with an existing immutable receipt.`)
+    }
+  } else {
+    sourceBytes = await writeJsonAtomic(input.workspaceRoot, outboxPath, receipt)
+  }
+
+  const deliveryPath = scientificPlotEvidenceDeliveryReceiptPath(input.workspaceRoot, input.request.operationId)
+  const deliveryBytes = await readBoundedWorkspaceFile(
+    input.workspaceRoot,
+    deliveryPath,
+    MAX_PLOTTING_RECEIPT_BYTES
+  )
+  if (!deliveryBytes) return { state: 'pending', receiptPath: outboxPath }
+  try {
+    const delivery = scientificPlotEvidenceEnqueueReceiptV1Schema.parse(
+      JSON.parse(deliveryBytes.toString('utf8'))
+    ) as ScientificPlotEvidenceEnqueueReceiptV1
+    const sourceDigest = createHash('sha256').update(sourceBytes).digest('hex')
+    if (
+      delivery.operationId !== receipt.operationId
+      || delivery.sourceDigest !== sourceDigest
+      || delivery.runtimeId !== receipt.runtimeId
+      || delivery.threadId !== receipt.threadId
+    ) {
+      throw new Error('Evidence enqueue receipt does not match the immutable producer receipt.')
+    }
+    return { state: 'enqueued', receiptPath: deliveryPath }
+  } catch (error) {
+    return {
+      state: 'failed',
+      receiptPath: deliveryPath,
+      message: error instanceof Error ? error.message : String(error)
+    }
+  }
+}
+
+function manifestRenderStatus(
+  manifest: ScientificPlottingManifest
+): Extract<ScientificPlottingRenderResult, { ok: true }>['status'] {
+  const status = inferManifestRenderStatus(manifest)
+  if (status === 'unknown') throw new Error('Prepared Scientific Plotting manifest has no render status.')
+  return status
+}
+
+function renderResultFromManifest(
+  manifestPath: string,
+  manifest: ScientificPlottingManifest,
+  evidenceDelivery = manifest.evidenceDelivery
+): Extract<ScientificPlottingRenderResult, { ok: true }> {
+  const operationId = scientificPlottingOperationIdSchema.parse(manifest.operationId)
+  return {
+    ok: true,
+    status: manifestRenderStatus(manifest),
+    outputPath: manifest.outputPath,
+    manifestPath,
+    recipePath: manifest.recipePath,
+    operationId,
+    plotVersionId: manifest.plotVersionId,
+    recipe: manifest.recipe,
+    ...(manifest.artifactManifestPath ? { artifactManifestPath: manifest.artifactManifestPath } : {}),
+    ...(manifest.versionCommit ? { versionCommit: manifest.versionCommit } : {}),
+    ...(manifest.evidenceLineage ? { evidenceLineage: manifest.evidenceLineage } : {}),
+    ...(evidenceDelivery ? { evidenceDelivery } : {}),
+    attempts: manifest.attempts,
+    ...(manifest.finalReview ? { review: manifest.finalReview } : {}),
+    ...(manifest.referenceProfile ? { referenceProfile: manifest.referenceProfile } : {}),
+    ...(manifest.templateAdvice ? { templateAdvice: manifest.templateAdvice } : {}),
+    ...(manifest.styleProfileId ? { styleProfileId: manifest.styleProfileId } : {}),
+    ...(manifest.styleProfile ? { styleProfile: manifest.styleProfile } : {}),
+    warnings: manifest.warnings
+  }
+}
+
+async function finalizePreparedScientificPlotOperation(input: {
+  request: ScientificPlottingRenderRequest
+  workspaceRoot: string
+  dependencies: ScientificPlottingEngineDependencies
+  rerunContext?: ScientificPlotRerunContext
+  operationReceiptPath: string
+  manifest: ScientificPlottingManifest
+  preCommitManifestBytes: Uint8Array
+}): Promise<Extract<ScientificPlottingRenderResult, { ok: true }>> {
+  const port = input.dependencies.artifactVersionCommitPort
+  if (!port) throw new Error('Prepared Scientific Plotting commit requires Artifact Versions commit capability.')
+  const operationReceipt = await readScientificPlotOperationReceipt(
+    input.workspaceRoot,
+    input.operationReceiptPath
+  )
+  if (!operationReceipt || operationReceipt.state !== 'prepared') {
+    throw new Error('Prepared Scientific Plotting operation receipt is missing or is not recoverable.')
+  }
+  const actualDigests = await computeScientificPlotPreparedDigests(input.manifest, input.preCommitManifestBytes)
+  assertPreparedDigests(operationReceipt.preparedDigests, actualDigests)
+  const versionCommit = await commitScientificPlotVersion({
+    port,
+    request: input.request,
+    figureId: input.manifest.recipe.figureId,
+    plotVersionId: input.manifest.plotVersionId,
+    recipe: input.manifest.recipe,
+    recipePath: input.manifest.recipePath,
+    manifestPath: operationReceipt.manifestPath,
+    preCommitManifestBytes: input.preCommitManifestBytes,
+    attempts: input.manifest.attempts,
+    outputPath: input.manifest.outputPath,
+    outputHash: input.manifest.outputHash
+  })
+  const evidenceLineage = buildScientificPlotEvidenceLineage(input.manifest.recipe, versionCommit)
+  if (input.rerunContext) {
+    evidenceLineage.relations.push({
+      src: evidenceLineage.activity.id,
+      dst: `plot-run:${input.rerunContext.baselineFigureVersionRef.versionId.slice('artifact-version:'.length)}`,
+      rel: input.manifest.outputHash === input.rerunContext.baselineFigureVersionRef.contentDigest
+        ? 'replicates'
+        : 'fails_to_replicate'
+    })
+  }
+  const evidenceDelivery = await writeScientificPlotEvidenceOutbox({
+    workspaceRoot: input.workspaceRoot,
+    request: input.request,
+    createdAt: input.manifest.createdAt,
+    commit: versionCommit,
+    evidenceLineage
+  })
+  input.manifest.versionCommit = versionCommit
+  input.manifest.evidenceLineage = evidenceLineage
+  input.manifest.evidenceDelivery = evidenceDelivery
+  input.manifest.warnings = uniqueStrings([
+    ...input.manifest.warnings,
+    evidenceDelivery.state === 'enqueued'
+      ? 'Evidence lineage is durably enqueued; this does not by itself establish an Evidence Snapshot or L4 completion.'
+      : evidenceDelivery.state === 'failed'
+        ? `Evidence delivery receipt failed validation: ${evidenceDelivery.message ?? 'unknown error'}`
+        : 'Artifact versions are saved; Evidence lineage is pending durable Evidence DAG ingestion.'
+  ])
+  const artifactManifestPath = await writeScientificPlottingArtifactManifest({
+    workspaceRoot: input.workspaceRoot,
+    figureId: input.manifest.recipe.figureId,
+    plotVersionId: input.manifest.plotVersionId,
+    outputPath: input.manifest.outputPath,
+    manifestPath: operationReceipt.manifestPath,
+    recipePath: input.manifest.recipePath,
+    recipe: input.manifest.recipe,
+    request: input.request,
+    review: input.manifest.finalReview,
+    versionCommit
+  })
+  input.manifest.artifactManifestPath = artifactManifestPath
+  await writeJsonAtomic(
+    input.workspaceRoot,
+    operationReceipt.manifestPath,
+    input.manifest,
+    MAX_PRECOMMIT_MANIFEST_BYTES
+  )
+  await writeJsonAtomic(input.workspaceRoot, input.operationReceiptPath, {
+    ...operationReceipt,
+    state: 'complete'
+  } satisfies ScientificPlottingOperationReceiptV1)
+  return renderResultFromManifest(operationReceipt.manifestPath, input.manifest)
+}
+
+async function resumeScientificPlotOperation(input: {
+  request: ScientificPlottingRenderRequest
+  workspaceRoot: string
+  dependencies: ScientificPlottingEngineDependencies
+  rerunContext?: ScientificPlotRerunContext
+  requestHash: string
+  operationReceiptPath: string
+  receipt: ScientificPlottingOperationReceiptV1
+}): Promise<ScientificPlottingRenderResult> {
+  if (input.receipt.operationId !== input.request.operationId) {
+    throw new Error('Scientific Plotting operation receipt identity does not match operationId.')
+  }
+  if (input.receipt.requestHash !== input.requestHash) {
+    throw new Error(`operationId ${input.request.operationId} was already used for a different plotting request.`)
+  }
+  const manifestPath = await resolveTargetPathWithinWorkspace(input.receipt.manifestPath, input.workspaceRoot)
+  const preCommitManifestPath = await resolveTargetPathWithinWorkspace(
+    input.receipt.preCommitManifestPath,
+    input.workspaceRoot
+  )
+  const preCommitManifestBytes = await readBoundedWorkspaceFile(
+    input.workspaceRoot,
+    preCommitManifestPath,
+    MAX_PRECOMMIT_MANIFEST_BYTES
+  )
+  if (!preCommitManifestBytes) throw new Error('Prepared Scientific Plotting manifest bytes are missing.')
+  let preparedManifest: ScientificPlottingManifest | null = null
+  try {
+    preparedManifest = parseScientificPlottingManifest(
+      JSON.parse(preCommitManifestBytes.toString('utf8'))
+    )
+  } catch (error) {
+    throw new Error(`Could not parse prepared Scientific Plotting manifest: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  if (!preparedManifest) throw new Error('Prepared Scientific Plotting manifest is invalid.')
+  if (
+    preparedManifest.operationId !== input.receipt.operationId
+    || preparedManifest.requestHash !== input.receipt.requestHash
+    || preparedManifest.plotVersionId !== input.receipt.plotVersionId
+  ) {
+    throw new Error('Prepared Scientific Plotting manifest does not match its operation receipt.')
+  }
+  const actualDigests = await computeScientificPlotPreparedDigests(preparedManifest, preCommitManifestBytes)
+  assertPreparedDigests(input.receipt.preparedDigests, actualDigests)
+  await readVerifiedScientificPlotManifest(input.workspaceRoot, preCommitManifestPath)
+  if (input.receipt.state === 'prepared') {
+    return await finalizePreparedScientificPlotOperation({
+      request: input.request,
+      workspaceRoot: input.workspaceRoot,
+      dependencies: input.dependencies,
+      rerunContext: input.rerunContext,
+      operationReceiptPath: input.operationReceiptPath,
+      manifest: preparedManifest,
+      preCommitManifestBytes
+    })
+  }
+  const manifest = await readVerifiedScientificPlotManifest(input.workspaceRoot, manifestPath)
+  if (
+    manifest.operationId !== input.receipt.operationId
+    || manifest.requestHash !== input.receipt.requestHash
+    || manifest.plotVersionId !== input.receipt.plotVersionId
+    || !manifest.versionCommit
+    || !manifest.evidenceLineage
+  ) {
+    throw new Error('Completed Scientific Plotting manifest does not match its operation receipt.')
+  }
+  const evidenceDelivery = await writeScientificPlotEvidenceOutbox({
+    workspaceRoot: input.workspaceRoot,
+    request: input.request,
+    createdAt: manifest.createdAt,
+    commit: manifest.versionCommit,
+    evidenceLineage: manifest.evidenceLineage
+  })
+  return renderResultFromManifest(manifestPath, manifest, evidenceDelivery)
+}
+
+async function commitScientificPlotVersion(input: {
+  port: NonNullable<ScientificPlottingEngineDependencies['artifactVersionCommitPort']>
+  request: ScientificPlottingRenderRequest
+  figureId: string
+  plotVersionId: string
+  recipe: ScientificPlotRecipeV1
+  recipePath: string
+  manifestPath: string
+  preCommitManifestBytes: Uint8Array
+  attempts: ScientificPlottingAttempt[]
+  outputPath: string
+  outputHash: string
+}): Promise<ScientificPlotVersionCommitReceipt> {
+  const artifactId = input.request.versioning?.artifactId?.trim()
+  const expectedCurrentVersionId = input.request.versioning?.expectedCurrentVersionId
+  if (artifactId && expectedCurrentVersionId === undefined) {
+    throw new Error('Committing an existing plot artifact requires versioning.expectedCurrentVersionId.')
+  }
+  const candidateStem = `${input.figureId}:${input.plotVersionId}`
+  const candidateIds = {
+    derivedData: `derived-data:${candidateStem}`,
+    recipe: `plot-recipe:${candidateStem}`,
+    figure: `plot-figure:${candidateStem}`,
+    renderManifest: `render-manifest:${candidateStem}`,
+    attemptLog: `render-log:${candidateStem}`
+  }
+  const intent = input.request.versioning?.intent ?? 'save'
+  const generatedAccessPolicyWithMaterialization = {
+    visibility: 'workspace' as const,
+    principals: [],
+    allowExport: true,
+    allowMaterialize: true
+  }
+  const generatedAccessPolicy = artifactVersionAccessPolicyV1Schema.safeParse(
+    generatedAccessPolicyWithMaterialization
+  ).success
+    ? generatedAccessPolicyWithMaterialization
+    : {
+        visibility: 'workspace' as const,
+        principals: [],
+        allowExport: true
+      }
+  const derivedDataBytes = Buffer.from(canonicalJson(input.recipe.data), 'utf8')
+  const recipeBytes = Buffer.from(canonicalJson(input.recipe), 'utf8')
+  const figureBytes = await readFile(input.outputPath)
+  const manifestBytes = Buffer.from(input.preCommitManifestBytes)
+  const attemptLogBytes = scientificPlotAttemptLogBytes(
+    input.plotVersionId,
+    input.recipe.recipeId,
+    input.attempts
+  )
+  const upstreamDependencies = input.recipe.dataSources.flatMap((source, index) => (
+    source.kind === 'artifact-version'
+      ? [{
+          role: `input-${index + 1}`,
+          required: true,
+          target: {
+            kind: 'version' as const,
+            ref: source.artifactVersion
+          }
+        }]
+      : []
+  ))
+  const candidateDependency = (role: string, candidateId: string) => ({
+    role,
+    required: true,
+    target: {
+      kind: 'candidate' as const,
+      candidateId
+    }
+  })
+  const snapshotContent = (bytes: Uint8Array, mediaType: string) => ({
+    mode: 'snapshot' as const,
+    dataBase64: Buffer.from(bytes).toString('base64'),
+    mediaType
+  })
+  const commitInput = artifactVersionCommitInputV1Schema.parse({
+    idempotencyKey: `scientific-plot:${input.request.operationId}`,
+    candidates: [
+      {
+        candidateId: candidateIds.derivedData,
+        expectedCurrentVersionId: null,
+        kind: 'scientific-plot-derived-data',
+        label: `${input.request.labels?.title ?? input.figureId} — derived data`,
+        intent,
+        content: snapshotContent(derivedDataBytes, 'application/json'),
+        dependencies: upstreamDependencies,
+        accessPolicy: generatedAccessPolicy,
+        metadata: canonicalClone({
+          plotVersionId: input.plotVersionId,
+          dataHash: input.recipe.dataHash,
+          sourceIds: input.recipe.dataSources.map((source) => source.sourceId)
+        })
+      },
+      {
+        candidateId: candidateIds.recipe,
+        expectedCurrentVersionId: null,
+        kind: 'scientific-plot-recipe',
+        label: `${input.request.labels?.title ?? input.figureId} — recipe`,
+        intent,
+        content: snapshotContent(recipeBytes, 'application/json'),
+        dependencies: [candidateDependency('derived-data', candidateIds.derivedData)],
+        accessPolicy: generatedAccessPolicy,
+        metadata: canonicalClone({
+          plotVersionId: input.plotVersionId,
+          recipeId: input.recipe.recipeId,
+          recipePath: input.recipePath,
+          dataHash: input.recipe.dataHash,
+          environmentDigest: input.recipe.environment.environmentDigest,
+          rendererCodeSha256: input.recipe.execution.rendererCodeSha256
+        })
+      },
+      {
+        candidateId: candidateIds.figure,
+        ...(artifactId ? { artifactId } : {}),
+        expectedCurrentVersionId: artifactId ? expectedCurrentVersionId : null,
+        kind: 'scientific-plot',
+        label: input.request.labels?.title ?? input.figureId,
+        intent,
+        content: snapshotContent(figureBytes, 'image/png'),
+        dependencies: [candidateDependency('recipe', candidateIds.recipe)],
+        accessPolicy: generatedAccessPolicy,
+        metadata: canonicalClone({
+          plotVersionId: input.plotVersionId,
+          recipeId: input.recipe.recipeId,
+          outputPath: input.outputPath,
+          outputHash: input.outputHash
+        })
+      },
+      {
+        candidateId: candidateIds.renderManifest,
+        expectedCurrentVersionId: null,
+        kind: 'scientific-plot-render-manifest',
+        label: `${input.request.labels?.title ?? input.figureId} — render manifest`,
+        intent,
+        content: snapshotContent(manifestBytes, 'application/json'),
+        dependencies: [
+          candidateDependency('recipe', candidateIds.recipe),
+          candidateDependency('figure', candidateIds.figure)
+        ],
+        accessPolicy: generatedAccessPolicy,
+        metadata: canonicalClone({
+          plotVersionId: input.plotVersionId,
+          manifestPath: input.manifestPath,
+          preCommitManifestSha256: createHash('sha256').update(manifestBytes).digest('hex')
+        })
+      },
+      {
+        candidateId: candidateIds.attemptLog,
+        expectedCurrentVersionId: null,
+        kind: 'scientific-plot-render-log',
+        label: `${input.request.labels?.title ?? input.figureId} — render log`,
+        intent,
+        content: snapshotContent(attemptLogBytes, 'application/json'),
+        dependencies: [
+          candidateDependency('recipe', candidateIds.recipe),
+          candidateDependency('figure', candidateIds.figure)
+        ],
+        accessPolicy: generatedAccessPolicy,
+        metadata: canonicalClone({
+          plotVersionId: input.plotVersionId,
+          attemptCount: input.attempts.length,
+          attemptLogSha256: createHash('sha256').update(attemptLogBytes).digest('hex')
+        })
+      }
+    ]
+  })
+  const result = artifactVersionCommitResultV1Schema.parse(await input.port.commit(commitInput))
+  if (!result.ok) throw new Error(`Artifact version commit failed: ${result.issue.message}`)
+  const committedCandidateIds = new Set(result.value.versions.map((item) => item.candidateId))
+  for (const candidateId of Object.values(candidateIds)) {
+    if (!committedCandidateIds.has(candidateId)) {
+      throw new Error(`Artifact version commit receipt is missing candidate ${candidateId}.`)
+    }
+  }
+  return {
+    contract: ARTIFACT_VERSION_COMMIT_CONTRACT.actionId as 'artifact-versions.commit',
+    candidateIds,
+    result
+  }
+}
+
+function buildScientificPlotEvidenceLineage(
+  recipe: ScientificPlotRecipeV1,
+  commit: ScientificPlotVersionCommitReceipt
+): ScientificPlotEvidenceLineageV1 {
+  if (!commit.result.ok) {
+    throw new Error('A failed ArtifactVersion commit cannot produce Evidence lineage.')
+  }
+  const committed = new Map(
+    commit.result.value.versions.map((item) => [item.candidateId, item])
+  )
+  const artifactForCandidate = (candidateId: string): ScientificPlotEvidenceArtifactV1 => {
+    const item = committed.get(candidateId)
+    if (!item) throw new Error(`Evidence lineage is missing committed candidate ${candidateId}.`)
+    return evidenceArtifact(item.artifact.kind, `snapshot:${item.ref.versionId}`, item.ref)
+  }
+  const inputs: ScientificPlotEvidenceLineageV1['inputs'] = recipe.dataSources.map((source) => ({
+    id: `plot-input:${source.sourceId}`,
+    type: 'dataset_version',
+    name: source.sourceId,
+    ...(source.kind === 'artifact-version'
+      ? {
+          artifact: evidenceArtifact(
+            'dataset',
+            source.locator,
+            source.artifactVersion
+          )
+        }
+      : {
+          provenanceBreakpoint: 'Input is content-bound but has no pinned ArtifactVersionRefV1.'
+        })
+  }))
+  const derivedDataId = `plot-output:${commit.candidateIds.derivedData}`
+  const recipeId = `plot-output:${commit.candidateIds.recipe}`
+  const figureId = `plot-output:${commit.candidateIds.figure}`
+  const manifestId = `plot-output:${commit.candidateIds.renderManifest}`
+  const figureCommit = committed.get(commit.candidateIds.figure)
+  if (!figureCommit) {
+    throw new Error(`Evidence lineage is missing committed candidate ${commit.candidateIds.figure}.`)
+  }
+  const activityId = `plot-run:${figureCommit.ref.versionId.slice('artifact-version:'.length)}`
+  const randomSeed = recipe.statistics?.seed
+  return {
+    activity: {
+      id: activityId,
+      type: 'analysis_run',
+      name: `Render ${recipe.figureId}`,
+      status: 'completed',
+      parameters: canonicalClone({
+        recipeId: recipe.recipeId,
+        template: recipe.template,
+        dataHash: recipe.dataHash,
+        statistics: recipe.statistics ?? null,
+        transformations: recipe.transformations,
+        resolvedStyleHash: recipe.style.resolvedSpecHash,
+        matplotlib: recipe.render.matplotlib ?? null,
+        rendererCodeSha256: recipe.execution.rendererCodeSha256
+      }) as Record<string, unknown>,
+      ...(randomSeed !== undefined ? { stochastic: true, randomSeed } : {})
+    },
+    inputs,
+    software: [{
+      id: `software:sciforge-scientific-plotting:${recipe.execution.rendererVersion}`,
+      type: 'software_version',
+      name: 'SciForge Scientific Plotting',
+      version: recipe.execution.rendererVersion,
+      contentDigest: recipe.execution.rendererCodeSha256
+    }, {
+      id: `software:matplotlib:${recipe.environment.packages.matplotlib ?? 'unknown'}`,
+      type: 'software_version',
+      name: 'Matplotlib',
+      ...(recipe.environment.packages.matplotlib
+        ? { version: recipe.environment.packages.matplotlib }
+        : {}),
+      contentDigest: recipe.execution.rendererCodeSha256
+    }],
+    environment: {
+      id: `environment:${recipe.environment.environmentDigest}`,
+      type: 'environment',
+      name: 'Pinned scientific plotting environment',
+      contentDigest: recipe.environment.environmentDigest,
+      pythonVersion: recipe.environment.pythonVersion,
+      packages: { ...recipe.environment.packages },
+      fontFingerprint: recipe.environment.fontFingerprint
+    },
+    logs: [{
+      id: `plot-log:${commit.candidateIds.attemptLog}`,
+      type: 'artifact',
+      name: 'Scientific plot render attempts',
+      artifact: artifactForCandidate(commit.candidateIds.attemptLog)
+    }],
+    outputs: [{
+      id: derivedDataId,
+      type: 'dataset_version',
+      name: 'Plot-ready derived data',
+      artifact: artifactForCandidate(commit.candidateIds.derivedData)
+    }, {
+      id: recipeId,
+      type: 'artifact',
+      name: 'Scientific plot recipe',
+      artifact: artifactForCandidate(commit.candidateIds.recipe)
+    }, {
+      id: figureId,
+      type: 'artifact',
+      name: 'Scientific figure',
+      artifact: artifactForCandidate(commit.candidateIds.figure)
+    }, {
+      id: manifestId,
+      type: 'artifact',
+      name: 'Scientific plot render manifest',
+      artifact: artifactForCandidate(commit.candidateIds.renderManifest)
+    }],
+    relations: [
+      ...inputs.map((input) => ({
+        src: derivedDataId,
+        dst: input.id,
+        rel: 'derived_from' as const
+      })),
+      {
+        src: figureId,
+        dst: recipeId,
+        rel: 'derived_from'
+      }
+    ]
+  }
+}
+
+function evidenceArtifact(
+  kind: string,
+  locator: string,
+  ref: ArtifactVersionRefV1
+): ScientificPlotEvidenceArtifactV1 {
+  return {
+    kind,
+    locator,
+    contentDigest: ref.contentDigest,
+    size: ref.byteLength,
+    ...(ref.mediaType ? { mediaType: ref.mediaType } : {}),
+    retention: ref.retention,
+    accessPolicy: ref.accessPolicy,
+    artifactVersionRef: ref
+  }
+}
+
+async function hashFile(path: string): Promise<string> {
+  return createHash('sha256').update(await readFile(path)).digest('hex')
+}
+
+function hashRequest(
+  request: ScientificPlottingRenderRequest,
+  rerunContext?: ScientificPlotRerunContext
+): string {
   return hashStableJson({
+    operationId: request.operationId,
+    visualPlan: request.visualPlan,
     template: request.template,
     data: request.data,
+    reproducibilityMode: request.reproducibilityMode,
+    dataSources: request.dataSources,
+    derivedTableReceipts: request.derivedTableReceipts,
+    transformations: request.transformations,
+    statistics: request.statistics,
+    provenanceWarnings: request.provenanceWarnings,
+    versioning: request.versioning,
+    reviewTask: request.reviewTask,
     labels: request.labels,
     figureId: request.figureId,
     styleSpec: request.styleSpec,
     styleSpecPath: request.styleSpecPath,
     styleProfileId: request.styleProfileId,
+    matplotlib: request.matplotlib,
     referencePath: request.referencePath ?? request.reviewReferencePath,
+    outputDir: request.outputDir,
     outputScale: request.outputScale,
-    autoRepair: request.autoRepair
+    visualDocumentId: request.visualDocumentId,
+    runtimeId: request.runtimeId,
+    threadId: request.threadId,
+    autoRepair: request.autoRepair,
+    rerunBaselineFigureVersionRef: rerunContext?.baselineFigureVersionRef
   })
 }
 
@@ -4286,8 +6323,30 @@ function hashPrepareReferenceRequest(request: ScientificPlottingPrepareReference
 }
 
 function hashStableJson(value: unknown): string {
-  const stable = JSON.stringify(value)
-  return createHash('sha256').update(stable).digest('hex')
+  return createHash('sha256').update(canonicalJson(value)).digest('hex')
+}
+
+function canonicalClone<T>(value: T): unknown {
+  return JSON.parse(canonicalJson(value)) as unknown
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null) return 'null'
+  if (typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value)
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error('Scientific plotting provenance only accepts finite JSON numbers.')
+    return JSON.stringify(value)
+  }
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item === undefined ? null : item)).join(',')}]`
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    const entries = Object.keys(record)
+      .filter((key) => record[key] !== undefined)
+      .sort((left, right) => left.localeCompare(right))
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+    return `{${entries.join(',')}}`
+  }
+  throw new Error(`Scientific plotting provenance cannot serialize ${typeof value}.`)
 }
 
 function enforceReadableTextColors(
@@ -4403,6 +6462,38 @@ function uniqueHexStrings(colors: string[]): string[] {
 function tail(value: string, max = 4000): string {
   return value.length <= max ? value : value.slice(value.length - max)
 }
+
+const PYTHON_ENVIRONMENT_PROBE_SOURCE = String.raw`
+import hashlib
+import json
+import platform
+import sys
+
+import matplotlib
+from matplotlib import font_manager
+
+try:
+    import numpy
+    numpy_version = numpy.__version__
+except Exception:
+    numpy_version = "unavailable"
+
+fonts = sorted(
+    f"{getattr(item, 'name', '')}|{getattr(item, 'fname', '')}"
+    for item in font_manager.fontManager.ttflist
+)
+font_fingerprint = hashlib.sha256("\n".join(fonts).encode("utf-8")).hexdigest()
+print(json.dumps({
+    "pythonExecutable": sys.executable,
+    "pythonVersion": platform.python_version(),
+    "platform": platform.platform(),
+    "packages": {
+        "matplotlib": matplotlib.__version__,
+        "numpy": numpy_version,
+    },
+    "fontFingerprint": font_fingerprint,
+}, sort_keys=True))
+`
 
 const PYTHON_RENDERER_SOURCE = String.raw`
 import json
@@ -4999,7 +7090,7 @@ elif template == "heatmap":
     if isinstance(heatmap_colors, list) and len(heatmap_colors) >= 2:
         cmap = LinearSegmentedColormap.from_list("sciforge_style_heatmap", heatmap_colors)
     else:
-        cmap = data.get("cmap") or "cividis"
+        cmap = payload.get("heatmapCmapName") or data.get("cmap") or "cividis"
     im = ax.imshow(matrix, aspect="auto", cmap=cmap)
     x_labels = data.get("xLabels") or data.get("colLabels") or data.get("columnLabels") or data.get("columns") or data.get("x")
     y_labels = data.get("yLabels") or data.get("rowLabels") or data.get("row_labels") or data.get("targets") or data.get("y")
@@ -5020,7 +7111,7 @@ elif template == "attention-map":
     if isinstance(heatmap_colors, list) and len(heatmap_colors) >= 2:
         cmap = LinearSegmentedColormap.from_list("sciforge_attention_map", heatmap_colors)
     else:
-        cmap = data.get("cmap") or "magma"
+        cmap = payload.get("heatmapCmapName") or data.get("cmap") or "magma"
     im = ax.imshow(matrix, aspect="auto", cmap=cmap, interpolation="nearest")
     x_labels = data.get("xLabels") or data.get("colLabels") or data.get("columnLabels") or data.get("columns") or data.get("x")
     y_labels = data.get("yLabels") or data.get("rowLabels") or data.get("row_labels") or data.get("targets") or data.get("y")

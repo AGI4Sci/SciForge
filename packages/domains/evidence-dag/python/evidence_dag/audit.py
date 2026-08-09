@@ -19,6 +19,7 @@ from .model import NodeStatus, NodeType
 
 VALID_TRIGGERS = {"auto", "manual"}
 _SEVERITY_ORDER = {"info": 0, "minor": 1, "major": 2, "blocker": 3}
+_CONCLUSION_TYPES = frozenset({NodeType.CLAIM, NodeType.CONCLUSION})
 
 
 def _now_iso() -> str:
@@ -194,7 +195,7 @@ def run_audit(
                 metadata={"reasons": reasons},
             )
         elif item.get("n_sources") == 1 and graph.nodes.get(target_id, None) is not None \
-                and graph.nodes[target_id].type == NodeType.CLAIM:
+                and graph.nodes[target_id].type in _CONCLUSION_TYPES:
             add(
                 target_id,
                 "single_source_dependency",
@@ -234,7 +235,7 @@ def run_audit(
         )
 
     for node in graph.nodes.values():
-        if node.type == NodeType.CLAIM and node.status == NodeStatus.CONFLICTED:
+        if node.type in _CONCLUSION_TYPES and node.status == NodeStatus.CONFLICTED:
             add(
                 node.id,
                 "conflicted_status",
@@ -244,7 +245,7 @@ def run_audit(
                 "Resolve or qualify the conflict before using the claim in a decision or external artifact.",
                 evidence_refs=[node.id],
             )
-        elif node.type == NodeType.CLAIM and node.status == NodeStatus.UNDETERMINED:
+        elif node.type in _CONCLUSION_TYPES and node.status == NodeStatus.UNDETERMINED:
             add(
                 node.id,
                 "undetermined_claim",

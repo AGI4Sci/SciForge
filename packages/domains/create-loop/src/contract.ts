@@ -1,5 +1,13 @@
 import { z } from 'zod'
-import { domainPackageJsonValueSchema } from '@sciforge/domain-sdk'
+import {
+  domainPackageJsonValueSchema,
+  type DomainPackageJsonValue
+} from '@sciforge/domain-sdk'
+import {
+  reproOutputComparatorSchema,
+  sciforgeReproSpecSchema,
+  type SciForgeReproSpecV1
+} from '@sciforge/domain-sdk/reproducibility'
 
 export type ScheduleKind = 'manual' | 'interval' | 'daily' | 'at'
 export type ScheduleRunMode = 'agent' | 'plan'
@@ -77,6 +85,8 @@ export const WORKFLOW_NODE_KINDS: readonly WorkflowNodeKind[] = [
 
 export type WorkflowRunStatus = 'idle' | 'running' | 'success' | 'error'
 export type WorkflowNodeRunStatus = 'pending' | 'running' | 'success' | 'error' | 'skipped'
+/** Runtime-validated by the shared lowercase sha256 schema at every portable boundary. */
+export type WorkflowFingerprint = string
 
 /** Schedule trigger extends the scheduled-task schedule kinds with cron. */
 export type WorkflowTriggerScheduleKind = ScheduleKind | 'cron'
@@ -209,6 +219,8 @@ export type WorkflowAiAgentConfigV1 = {
   model: string
   reasoningEffort: ScheduleReasoningEffort
   mode: ScheduleRunMode
+  /** Host-enforced runtime tool allowlist. Empty disables all runtime tools. */
+  allowedTools?: string[]
 }
 
 export type WorkflowLlmConfigV1 = {
@@ -570,6 +582,136 @@ export type WorkflowConnectionV1 = {
   targetHandle: string
 }
 
+/** Immutable workflow definition executed by one run. Runtime history is deliberately excluded. */
+export type WorkflowExecutionSnapshotV1 = {
+  id: string
+  name: string
+  env: WorkflowEnvVarV1[]
+  nodes: WorkflowNodeV1[]
+  connections: WorkflowConnectionV1[]
+}
+
+export type WorkflowArtifactReferenceV2 = {
+  ref: string
+  kind: 'artifact' | 'manifest' | 'file' | 'uri'
+  digest?: WorkflowFingerprint
+  mediaType?: string
+}
+
+export type WorkflowActivityReceiptV2 = {
+  status: 'success' | 'error'
+  outcome: 'progress' | 'retryable_error' | 'fatal_error'
+  outputFingerprint?: WorkflowFingerprint
+  errorCode?: string
+  detail?: string
+}
+
+export type WorkflowNodeAttemptV2 = {
+  attempt: number
+  startedAt: string
+  finishedAt: string
+  activityFingerprint: WorkflowFingerprint
+  inputFingerprint: WorkflowFingerprint
+  receiptFingerprint: WorkflowFingerprint
+  receipt: WorkflowActivityReceiptV2
+  artifactRefs: WorkflowArtifactReferenceV2[]
+}
+
+export type WorkflowApprovalRecordV2 = {
+  requestId: string
+  workflowId: string
+  runId: string
+  nodeId: string
+  nodeName: string
+  title: string
+  instruction: string
+  requestedAt: string
+  status: 'pending' | WorkflowApprovalDecision
+  decision?: WorkflowApprovalDecision
+  resolvedAt?: string
+  actor?: string
+  rationale?: string
+}
+
+export type WorkflowRunContextV2 = {
+  workspaceRoot: string
+  packageOwner: string
+  packageVersion: string
+  nodeVersion: string
+  platform: string
+  architecture: string
+  environment: Array<{
+    key: string
+    type: WorkflowEnvVarV1['type']
+    required: boolean
+    valueFingerprint?: WorkflowFingerprint
+  }>
+}
+
+export type WorkflowRunDeterminismV2 = {
+  control: 'controlled' | 'uncontrolled'
+  reasonCodes: string[]
+  stochasticNodeIds: string[]
+}
+
+/** Create Loop stores the SDK comparator directly; it does not define a second rerun dialect. */
+export type WorkflowRunComparatorV1 =
+  SciForgeReproSpecV1['activities'][number]['outputs'][number]['comparator']
+
+export type WorkflowRunDifferenceV1 = {
+  component: 'workflow' | 'input' | 'spec' | 'context' | 'output' | 'node' | 'artifact' | 'approval'
+  nodeId?: string
+  baselineFingerprint?: WorkflowFingerprint
+  candidateFingerprint?: WorkflowFingerprint
+  reasonCode: string
+}
+
+export type WorkflowRunComparisonV1 = {
+  classification:
+    | 'match'
+    | 'input_changed'
+    | 'spec_changed'
+    | 'context_changed'
+    | 'component_changed'
+    | 'output_changed'
+    | 'unverifiable'
+  matches: boolean
+  /** Explicit comparability facts consumed by Evidence lineage. */
+  sameInput: boolean
+  sameSpec: boolean
+  sameExecutionContext: boolean
+  resultMatch: boolean
+  comparisonVerifiable: boolean
+  /** A stochastic/uncontrolled mismatch is inconclusive, never a replication failure. */
+  replicationStatus: 'matched' | 'failed' | 'inconclusive'
+  comparator: WorkflowRunComparatorV1
+  reasonCodes: string[]
+  differences: WorkflowRunDifferenceV1[]
+}
+
+export type WorkflowRunManifestV2 = {
+  schema: 'sciforge.create-loop.run.v2'
+  source: 'workflow' | 'rerun' | 'migrated'
+  workflow: WorkflowExecutionSnapshotV1
+  input: DomainPackageJsonValue
+  context: WorkflowRunContextV2
+  comparator: WorkflowRunComparatorV1
+  determinism: WorkflowRunDeterminismV2
+  workflowFingerprint: WorkflowFingerprint
+  inputFingerprint: WorkflowFingerprint
+  specFingerprint: WorkflowFingerprint
+  contextFingerprint: WorkflowFingerprint
+  outputFingerprint: WorkflowFingerprint
+  outputJson: string
+  approvalFingerprint: WorkflowFingerprint
+  artifactRefs: WorkflowArtifactReferenceV2[]
+  approvals: WorkflowApprovalRecordV2[]
+  rerunOfRunId?: string
+  rerunSpecDigest?: WorkflowFingerprint
+  comparison?: WorkflowRunComparisonV1
+  legacyIncomplete?: boolean
+}
+
 export type WorkflowNodeRunResultV1 = {
   nodeId: string
   status: WorkflowNodeRunStatus
@@ -586,6 +728,11 @@ export type WorkflowNodeRunResultV1 = {
   /** For ai-agent nodes: the local runtime thread it created. */
   threadId: string
   error: string
+  componentFingerprint: WorkflowFingerprint
+  inputFingerprint: WorkflowFingerprint
+  outputFingerprint: WorkflowFingerprint
+  attempts: WorkflowNodeAttemptV2[]
+  artifactRefs: WorkflowArtifactReferenceV2[]
 }
 
 /** Result of a single-node test run (not persisted to history). */
@@ -614,6 +761,10 @@ export type WorkflowRunV1 = {
   finishedAt: string
   message: string
   nodeResults: WorkflowNodeRunResultV1[]
+  /** Missing only on legacy history; exporting such a run produces a blocked shared spec. */
+  manifest?: WorkflowRunManifestV2
+  /** Human-readable audit report generated for dataset-construction runs. */
+  reportPath?: string
 }
 
 /** A workflow-scoped variable readable via {{$env.key}} in node expressions. */
@@ -748,6 +899,7 @@ export const CREATE_LOOP_RESOURCE_KIND = 'create-loop-settings'
 export const CREATE_LOOP_CAPABILITY_IDS = Object.freeze({
   read: 'create-loop.read',
   save: 'create-loop.save',
+  buildDataset: 'create-loop.build-dataset',
   run: 'create-loop.run',
   stop: 'create-loop.stop',
   status: 'create-loop.status',
@@ -756,7 +908,8 @@ export const CREATE_LOOP_CAPABILITY_IDS = Object.freeze({
   testNode: 'create-loop.test-node',
   checkCode: 'create-loop.check-code',
   importDsl: 'create-loop.import-dsl',
-  exportDsl: 'create-loop.export-dsl'
+  exportDsl: 'create-loop.export-dsl',
+  exportRerun: 'create-loop.export-rerun'
 } as const)
 
 export type CreateLoopSnapshot = Readonly<{
@@ -778,6 +931,84 @@ const createLoopWorkflowWireSchema = domainPackageJsonValueSchema.refine(
   ),
   'Expected a canonical Create Loop workflow.'
 )
+const workflowFingerprintSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/u)
+const workflowArtifactReferenceSchema = z.object({
+  ref: z.string().trim().min(1).max(4_096),
+  kind: z.enum(['artifact', 'manifest', 'file', 'uri']),
+  digest: workflowFingerprintSchema.optional(),
+  mediaType: z.string().trim().min(1).max(512).optional()
+}).strict()
+const workflowActivityReceiptSchema = z.object({
+  status: z.enum(['success', 'error']),
+  outcome: z.enum(['progress', 'retryable_error', 'fatal_error']),
+  outputFingerprint: workflowFingerprintSchema.optional(),
+  errorCode: z.string().trim().min(1).max(256).optional(),
+  detail: z.string().max(10_000).optional()
+}).strict()
+const workflowNodeAttemptSchema = z.object({
+  attempt: z.number().int().nonnegative().max(100),
+  startedAt: z.string().max(128),
+  finishedAt: z.string().max(128),
+  activityFingerprint: workflowFingerprintSchema,
+  inputFingerprint: workflowFingerprintSchema,
+  receiptFingerprint: workflowFingerprintSchema,
+  receipt: workflowActivityReceiptSchema,
+  artifactRefs: z.array(workflowArtifactReferenceSchema).max(1_000)
+}).strict()
+
+const generatedDatasetFieldSchema = z.object({
+  type: z.enum(['string', 'number', 'boolean', 'object', 'array']),
+  description: z.string().trim().min(1).max(1000).optional(),
+  required: z.boolean().optional()
+}).strict()
+
+export const createDatasetLoopInputSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  objective: z.string().trim().min(1).max(8000),
+  sourceIds: z.array(z.string().trim().min(1).max(160)).min(1).max(50),
+  outputSchema: z.record(
+    z.string().trim().min(1).max(512),
+    generatedDatasetFieldSchema
+  ).refine((value) => Object.keys(value).length > 0, 'At least one output field is required.').optional(),
+  quality: z.object({
+    criteria: z.array(z.string().trim().min(1).max(1000)).min(1).max(100),
+    targetCount: z.number().int().min(1).max(100).default(20),
+    maxIterations: z.number().int().min(1).max(100).default(25),
+    minQualityScore: z.number().min(0).max(1).default(0.7),
+    minStrongScore: z.number().min(0).max(1).default(0.65),
+    maxWeakScore: z.number().min(0).max(1).default(0.5),
+    minScoreGap: z.number().min(0).max(1).default(0.2),
+    minRubricCoverage: z.number().min(0).max(1).default(0.8),
+    minQuestionQuality: z.number().min(0).max(1).default(0.7),
+    maxDuplicateFraction: z.number().min(0).max(1).default(0.05)
+  }).strict().superRefine((quality, context) => {
+    if (quality.maxIterations < quality.targetCount) {
+      context.addIssue({
+        code: 'custom',
+        path: ['maxIterations'],
+        message: 'maxIterations must be at least targetCount because each round produces at most one accepted record.'
+      })
+    }
+  }),
+  models: z.object({
+    designer: z.string().trim().max(256).optional(),
+    challenger: z.string().trim().max(256).optional(),
+    weak: z.string().trim().max(256).optional(),
+    strong: z.string().trim().max(256).optional(),
+    judge: z.string().trim().max(256).optional(),
+    verifier: z.string().trim().max(256).optional(),
+    strategist: z.string().trim().max(256).optional()
+  }).strict().optional(),
+  output: z.object({
+    datasetName: z.string().trim().min(1).max(80).regex(/^[a-z0-9][a-z0-9_-]*$/),
+    fileName: z.string().trim().min(1).max(255),
+    format: z.enum(['json', 'jsonl', 'csv', 'tsv']).default('jsonl')
+  }).strict(),
+  humanReview: z.boolean().default(true),
+  run: z.boolean().default(true)
+}).strict()
+
+export type CreateDatasetLoopInput = z.infer<typeof createDatasetLoopInputSchema>
 const createLoopNodeRunResultSchema = z.object({
   nodeId: z.string().max(256),
   status: z.enum(['pending', 'running', 'success', 'error', 'skipped']),
@@ -788,7 +1019,12 @@ const createLoopNodeRunResultSchema = z.object({
   inputJson: z.string().max(5_000_000).optional(),
   retries: z.number().int().nonnegative().optional(),
   threadId: z.string().max(512),
-  error: z.string().max(1_000_000)
+  error: z.string().max(1_000_000),
+  componentFingerprint: workflowFingerprintSchema,
+  inputFingerprint: workflowFingerprintSchema,
+  outputFingerprint: workflowFingerprintSchema,
+  attempts: z.array(workflowNodeAttemptSchema).max(100),
+  artifactRefs: z.array(workflowArtifactReferenceSchema).max(1_000)
 }).strict()
 const createLoopPendingApprovalSchema = z.object({
   token: z.string().max(512),
@@ -807,15 +1043,40 @@ export const createLoopSaveInputSchema = z.object({
   expectedRevision: z.number().int().min(0).optional()
 }).strict()
 export const createLoopWorkflowInputSchema = z.object({
-  workflowId: z.string().trim().min(1).max(256),
-  input: domainPackageJsonValueSchema.optional()
-}).strict()
+  workflowId: z.string().trim().min(1).max(256).optional(),
+  input: domainPackageJsonValueSchema.optional(),
+  rerunSpec: sciforgeReproSpecSchema.optional(),
+  activityId: z.string().trim().min(1).max(512).optional()
+}).strict().superRefine((value, context) => {
+  if (Boolean(value.workflowId) === Boolean(value.rerunSpec)) {
+    context.addIssue({
+      code: 'custom',
+      message: 'Provide exactly one of workflowId or rerunSpec.'
+    })
+  }
+  if (value.rerunSpec && value.input !== undefined) {
+    context.addIssue({
+      code: 'custom',
+      path: ['input'],
+      message: 'A rerun uses the immutable input embedded in rerunSpec.'
+    })
+  }
+  if (value.activityId && !value.rerunSpec) {
+    context.addIssue({
+      code: 'custom',
+      path: ['activityId'],
+      message: 'activityId is only valid when rerunSpec is provided.'
+    })
+  }
+})
 export const createLoopStopInputSchema = z.object({
   workflowId: z.string().trim().min(1).max(256)
 }).strict()
 export const createLoopApprovalInputSchema = z.object({
   token: z.string().trim().min(1).max(512),
-  decision: z.enum(['approved', 'rejected'])
+  decision: z.enum(['approved', 'rejected']),
+  actor: z.string().trim().min(1).max(512).optional(),
+  rationale: z.string().max(10_000).optional()
 }).strict()
 export const createLoopRunNodeInputSchema = z.object({
   workflowId: z.string().trim().min(1).max(256),
@@ -830,6 +1091,11 @@ export const createLoopCheckCodeInputSchema = z.object({
 }).strict()
 export const createLoopDslInputSchema = z.object({ dsl: z.string().max(5_000_000) }).strict()
 export const createLoopExportInputSchema = z.object({ workflowId: z.string().trim().min(1).max(256) }).strict()
+export const createLoopExportRerunInputSchema = z.object({
+  workflowId: z.string().trim().min(1).max(256),
+  runId: z.string().trim().min(1).max(256),
+  comparator: reproOutputComparatorSchema.optional()
+}).strict()
 
 export const createLoopSnapshotSchema = z.object({
   revision: z.number().int().nonnegative(),
@@ -847,6 +1113,13 @@ export const createLoopRunResultSchema = z.discriminatedUnion('ok', [
     message: z.string().max(1_000_000)
   }).strict()
 ])
+export const createDatasetLoopOutputSchema = z.object({
+  workflowId: z.string().max(256),
+  iterationWorkflowId: z.string().max(256),
+  created: z.boolean(),
+  revision: z.number().int().nonnegative(),
+  run: createLoopRunResultSchema.nullable()
+}).strict()
 export const createLoopRuntimeStatusSchema = z.object({
   runningWorkflowIds: z.array(z.string().max(256)).max(10_000),
   nodeStatus: z.record(

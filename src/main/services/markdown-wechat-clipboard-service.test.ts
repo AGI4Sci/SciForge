@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   MARKDOWN_COPY_FOR_WECHAT_ACTION_ID,
-  MARKDOWN_WECHAT_LIMITS,
-  markdownWechatCopyResultSchema
+  markdownWechatCopyResultSchema,
+  markdownWechatRenderInputSchema
 } from '../../shared/markdown-wechat'
 
 const electronMocks = vi.hoisted(() => ({
@@ -231,6 +231,29 @@ describe('markdown-wechat-clipboard-service', () => {
     expect(result.counts.embeddedImages).toBe(1)
   })
 
+  it('renders publication HTML beyond the former image and output byte limits', async () => {
+    const dataUrl = `data:image/png;base64,${'A'.repeat(12_000_000)}`
+    const readWorkspaceImage = vi.fn(async () => ({
+      ok: true as const,
+      path: '/workspace/large.png',
+      dataUrl,
+      mimeType: 'image/png',
+      size: 9_000_000,
+      revision: 'large-revision'
+    }))
+
+    const result = await renderMarkdownForWechat({
+      sourcePath: '/workspace/article.md',
+      workspaceRoot: '/workspace',
+      markdown: '![Large one](./large.png)\n\n![Large two](./large.png)'
+    }, { readWorkspaceImage })
+
+    expect(readWorkspaceImage).toHaveBeenCalledTimes(1)
+    expect(result.counts.embeddedImages).toBe(2)
+    expect(result.outputBytes).toBeGreaterThan(20_000_000)
+    expect(result.html.match(/data:image\/png;base64/g)).toHaveLength(2)
+  })
+
   it('delegates traversal-shaped image paths to the workspace-safe reader and preserves alt text on rejection', async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-wechat-workspace-'))
     const readWorkspaceImage = vi.fn(async () => ({
@@ -285,13 +308,27 @@ describe('markdown-wechat-clipboard-service', () => {
     }))
   })
 
-  it('does not touch the clipboard when mandatory preflight fails', async () => {
-    await expect(copyMarkdownForWechat({
+  it('accepts long Markdown and unbounded output metadata', () => {
+    expect(markdownWechatRenderInputSchema.safeParse({
       sourcePath: '/workspace/article.md',
       workspaceRoot: '/workspace',
-      markdown: 'x'.repeat(MARKDOWN_WECHAT_LIMITS.maxMarkdownChars + 1)
-    })).rejects.toThrow()
-    expect(electronMocks.clipboardWrite).not.toHaveBeenCalled()
+      markdown: 'x'.repeat(1_000_001)
+    }).success).toBe(true)
+
+    expect(markdownWechatCopyResultSchema.safeParse({
+      copiedAt: new Date().toISOString(),
+      outputBytes: 50_000_000,
+      counts: {
+        formulas: 25_000,
+        inlineFormulas: 10_000,
+        displayFormulas: 15_000,
+        codeBlocks: 20_000,
+        embeddedImages: 15_000,
+        remoteImages: 12_000
+      },
+      warnings: [],
+      effect: 'clipboard-write'
+    }).success).toBe(true)
   })
 
   it('publishes the stable action id and rejects malformed action results', () => {

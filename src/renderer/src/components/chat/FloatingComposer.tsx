@@ -832,6 +832,7 @@ export function FloatingComposer({
   const showThreadUsageFooter = !compact && route === 'chat' && Boolean(activeThreadId) && runtimeReady
   const threadUsageState = useThreadUsageState(
     activeThreadId,
+    activeThread?.runtimeId,
     showThreadUsageFooter,
     `${activeThread?.updatedAt ?? ''}:${busy ? 'busy' : 'idle'}:${usageRefreshKey}`
   )

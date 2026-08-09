@@ -25,10 +25,21 @@ export type CodexAppServerTurnSandboxPolicy =
     excludeSlashTmp?: boolean
   }
 
-export type CodexAppServerInputItem = {
-  type: string
-  [key: string]: unknown
-}
+export type CodexAppServerInputItem =
+  | {
+      type: 'text'
+      text: string
+      text_elements: Array<{
+        byteRange: { start: number; end: number }
+        placeholder: string | null
+      }>
+    }
+  | { type: 'image'; detail?: 'auto' | 'low' | 'high' | 'original'; url: string }
+  | { type: 'localImage'; detail?: 'auto' | 'low' | 'high' | 'original'; path: string }
+  | { type: 'audio'; url: string }
+  | { type: 'localAudio'; path: string }
+  | { type: 'skill'; name: string; path: string }
+  | { type: 'mention'; name: string; path: string }
 
 export type CodexAppServerClientInfo = {
   name: string

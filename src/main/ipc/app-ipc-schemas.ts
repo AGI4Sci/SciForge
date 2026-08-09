@@ -60,6 +60,7 @@ import {
   domainPackagePublisherIdSchema,
   domainPackageVersionSchema
 } from '@sciforge/domain-sdk'
+import { TRACE_EVENT_KINDS } from '@sciforge/full-trace'
 import {
   WORKSPACE_HOST_LIMITS,
   workspaceHostResumeSchema,
@@ -142,7 +143,6 @@ const uiFontScaleSchema = z.enum(['small', 'medium', 'large'])
 const agentRuntimeIdSchema = z.enum(['sciforge', 'codex', 'claude'])
 const agentRuntimeThreadRelationSchema = z.string().trim().pipe(z.enum(['primary', 'fork', 'side']))
 const agentRuntimeThreadSidebarVisibilitySchema = z.string().trim().pipe(z.enum(['main', 'side', 'hidden']))
-const agentRuntimeUsageGroupBySchema = z.string().trim().pipe(z.enum(['day', 'model', 'thread']))
 const agentRuntimeAuxiliaryOperationSchema = z.enum(AGENT_RUNTIME_AUXILIARY_OPERATIONS)
 const agentRuntimeAuxiliaryRuntimeIdRequiredOperations = new Set<AgentRuntimeAuxiliaryOperation>(
   AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS
@@ -181,16 +181,7 @@ const agentThreadIdsSchema = z.object({
   claude: z.string().max(MAX_ID_LENGTH).optional()
 }).strict()
 const agentRuntimeGovernanceProfileSchema = z.enum(['default', 'write', 'remote_guard'])
-const traceEventKindSchema = z.enum([
-  'model_request',
-  'model_response_headers',
-  'model_response_chunk',
-  'model_response_end',
-  'agent_event',
-  'usage',
-  'error',
-  'lifecycle'
-])
+const traceEventKindSchema = z.enum(TRACE_EVENT_KINDS)
 const traceIdListSchema = z.array(trimmedString(MAX_ID_LENGTH)).max(500).optional()
 const traceQueryFields = {
   traceIds: traceIdListSchema,
@@ -206,8 +197,9 @@ const traceQueryFields = {
 
 export const traceReadPayloadSchema = z.object({
   ...traceQueryFields,
+  limit: traceQueryFields.limit.default(500),
   requestId: optionalTrimmedString(MAX_ID_LENGTH),
-  kinds: z.array(traceEventKindSchema).max(8).optional()
+  kinds: z.array(traceEventKindSchema).max(TRACE_EVENT_KINDS.length).optional()
 }).strict()
 
 export const traceSummariesPayloadSchema = z.object(traceQueryFields).strict()
@@ -400,15 +392,28 @@ export const agentRuntimeThreadRelationPayloadSchema = z.object({
   workspaceLocator: workspaceLocatorSchema.optional()
 }).strict()
 
-export const agentRuntimeUsagePayloadSchema = z.object({
-  runtimeId: agentRuntimeIdSchema.optional(),
-  groupBy: agentRuntimeUsageGroupBySchema,
+const agentRuntimeUsageRangePayloadSchema = {
   from: z.string().trim().max(64).optional(),
   to: z.string().trim().max(64).optional(),
-  timezone: z.string().trim().max(128).optional(),
-  threadId: optionalTrimmedString(MAX_ID_LENGTH),
-  workspaceLocator: workspaceLocatorSchema.optional()
-}).strict()
+  timezone: z.string().trim().max(128).optional()
+}
+
+export const agentRuntimeUsagePayloadSchema = z.discriminatedUnion('groupBy', [
+  z.object({
+    ...agentRuntimeUsageRangePayloadSchema,
+    runtimeId: agentRuntimeIdSchema,
+    groupBy: z.literal('thread'),
+    threadId: trimmedString(MAX_ID_LENGTH),
+    workspaceLocator: workspaceLocatorSchema.optional()
+  }).strict(),
+  z.object({
+    ...agentRuntimeUsageRangePayloadSchema,
+    runtimeId: agentRuntimeIdSchema.optional(),
+    groupBy: z.enum(['day', 'model']),
+    threadId: optionalTrimmedString(MAX_ID_LENGTH),
+    workspaceLocator: workspaceLocatorSchema.optional()
+  }).strict()
+])
 
 const agentRuntimeAuxiliaryRuntimeScopedPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
@@ -1496,173 +1501,11 @@ export const scientificPlottingMcpConfigPayloadSchema = z
   })
   .strict()
 
-export const scientificPlottingStatusPayloadSchema = z
-  .object({
-    workspaceRoot: z.string().trim().max(MAX_PATH_LENGTH).optional()
-  })
-  .strict()
-
-const scientificPlottingCropBoxPayloadSchema = z
-  .object({
-    unit: z.enum(['ratio', 'pixel']).optional(),
-    x: z.number().finite().nonnegative(),
-    y: z.number().finite().nonnegative(),
-    width: z.number().finite().positive(),
-    height: z.number().finite().positive()
-  })
-  .strict()
-
-export const scientificPlottingPrepareReferencePayloadSchema = z
-  .object({
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    sourcePath: trimmedString(MAX_PATH_LENGTH),
-    sourceType: z.enum(['image', 'pdf']).optional(),
-    page: z.number().int().positive().max(10_000).optional(),
-    cropBox: scientificPlottingCropBoxPayloadSchema.optional(),
-    figureId: z.string().trim().max(128).optional(),
-    outputDir: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    dpi: z.number().int().min(72).max(600).optional(),
-    extractStyle: z.boolean().optional()
-  })
-  .strict()
-
 export const scientificSkillsInstallPayloadSchema = z
   .object({
     workspaceRoot: trimmedString(MAX_PATH_LENGTH),
     backend: z.enum(['git', 'npx']).optional(),
     ref: z.string().trim().min(1).max(128).optional()
-  })
-  .strict()
-
-export const visualStyleExtractPayloadSchema = z
-  .object({
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    sourcePath: trimmedString(MAX_PATH_LENGTH),
-    sourceType: z.enum(['image', 'pdf']).optional(),
-    sourceKind: z.enum(['reference', 'current']).optional(),
-    scope: z.enum(['manuscript', 'workspace', 'artifact']).optional(),
-    figureId: z.string().trim().max(128).optional(),
-    notes: z.string().trim().max(1_000).optional()
-  })
-  .strict()
-
-const visualStyleProfileSchema = z.object({
-  version: z.literal(1),
-  id: z.string().trim().min(1).max(200),
-  scope: z.enum(['manuscript', 'workspace', 'artifact']),
-  source: z.discriminatedUnion('type', [
-    z.object({
-      type: z.literal('reference'),
-      path: trimmedString(MAX_PATH_LENGTH),
-      figureId: z.string().trim().max(128).optional(),
-      notes: z.string().trim().max(1_000).optional()
-    }).strict(),
-    z.object({ type: z.literal('preset'), presetId: trimmedString(200) }).strict(),
-    z.object({ type: z.literal('inherited'), profileId: trimmedString(200) }).strict(),
-    z.object({ type: z.literal('current'), artifactPath: trimmedString(MAX_PATH_LENGTH).optional() }).strict()
-  ]),
-  tokens: z.object({
-    canvas: z.object({
-      width: z.number().finite().positive(),
-      height: z.number().finite().positive(),
-      aspectRatio: z.number().finite().positive(),
-      background: trimmedString(100)
-    }).strict(),
-    palette: z.object({
-      colors: z.array(trimmedString(100)).min(1).max(64),
-      background: trimmedString(100),
-      ink: trimmedString(100),
-      accent: z.array(trimmedString(100)).max(32),
-      colorMode: z.enum(['monochrome', 'limited', 'multi-hue'])
-    }).strict(),
-    typography: z.object({
-      fontFamily: trimmedString(200),
-      axisSize: z.number().finite().nonnegative(),
-      labelSize: z.number().finite().nonnegative(),
-      titleSize: z.number().finite().nonnegative(),
-      weight: z.enum(['regular', 'medium', 'bold'])
-    }).strict(),
-    strokes: z.object({
-      ink: trimmedString(100),
-      primaryWidth: z.number().finite().nonnegative(),
-      secondaryWidth: z.number().finite().nonnegative(),
-      lineCap: z.enum(['butt', 'round', 'square', 'unknown'])
-    }).strict(),
-    spacing: z.object({
-      margin: z.object({
-        left: z.number().finite(),
-        right: z.number().finite(),
-        top: z.number().finite(),
-        bottom: z.number().finite()
-      }).strict(),
-      gutter: z.enum(['compact', 'balanced', 'spacious']),
-      density: z.enum(['sparse', 'balanced', 'dense'])
-    }).strict(),
-    shapes: z.object({
-      fillMode: z.enum(['solid', 'outlined', 'mixed', 'unknown']),
-      cornerRadius: z.number().finite().nonnegative().optional(),
-      borderWidth: z.number().finite().nonnegative().optional(),
-      shadow: z.enum(['none', 'subtle', 'prominent', 'unknown'])
-    }).strict(),
-    plots: z.object({
-      panelGrid: z.string().trim().max(100),
-      panelLabels: z.enum(['none', 'A/B/C', 'a/b/c', 'numeric', 'unknown']),
-      axes: z.object({
-        spine: z.enum(['none', 'left-bottom', 'box', 'minimal', 'unknown']),
-        tickDirection: z.enum(['in', 'out', 'none', 'unknown']),
-        grid: z.boolean(),
-        gridTone: z.enum(['none', 'light', 'medium']),
-        gridColor: trimmedString(100),
-        gridAlpha: z.number().finite(),
-        gridLineWidth: z.number().finite().nonnegative()
-      }).strict(),
-      marks: z.object({
-        lineWidth: z.number().finite().nonnegative(),
-        markerSize: z.number().finite().nonnegative(),
-        errorBarStyle: z.enum(['none', 'caps', 'unknown']),
-        density: z.enum(['sparse', 'balanced', 'dense'])
-      }).strict(),
-      annotations: z.object({
-        significance: z.enum(['none', 'stars', 'brackets', 'unknown']),
-        legend: z.enum(['none', 'frameless', 'boxed', 'unknown'])
-      }).strict(),
-      export: z.object({
-        formats: z.array(z.enum(['pdf', 'svg', 'png'])).min(1).max(3),
-        dpi: z.number().finite().positive(),
-        transparent: z.boolean()
-      }).strict()
-    }).strict().optional(),
-    generatedAssets: z.object({
-      visualTreatment: z.enum(['flat', 'illustrative', 'photorealistic', 'mixed', 'unknown']),
-      backgroundTreatment: z.enum(['transparent', 'solid', 'textured', 'unknown']),
-      edgeTreatment: z.enum(['crisp', 'soft', 'mixed', 'unknown']),
-      detailLevel: z.enum(['sparse', 'balanced', 'rich', 'unknown'])
-    }).strict().optional()
-  }).strict(),
-  semanticDescription: z.string().trim().max(4_000),
-  confidence: z.object({
-    overall: z.number().min(0).max(1),
-    palette: z.number().min(0).max(1),
-    spacing: z.number().min(0).max(1),
-    plots: z.number().min(0).max(1),
-    typography: z.number().min(0).max(1),
-    generatedAssets: z.number().min(0).max(1)
-  }).strict()
-}).strict()
-
-export const visualStyleSaveProfilePayloadSchema = z
-  .object({
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    path: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    profile: visualStyleProfileSchema,
-    diagnostics: z.object({
-      analyzedAt: z.string().datetime(),
-      sampledPixels: z.number().int().nonnegative(),
-      foregroundRatio: z.number().min(0).max(1),
-      darkPixelRatio: z.number().min(0).max(1),
-      chromaRatio: z.number().min(0).max(1),
-      warnings: z.array(z.string().trim().max(2_000)).max(100)
-    }).strict()
   })
   .strict()
 

@@ -16,7 +16,7 @@ import remarkRehype from 'remark-rehype'
 import { unified } from 'unified'
 import { visit } from 'unist-util-visit'
 import {
-  MARKDOWN_WECHAT_LIMITS,
+  MARKDOWN_WECHAT_FEEDBACK_LIMITS,
   markdownWechatCopyResultSchema,
   markdownWechatRenderInputSchema,
   type MarkdownWechatCopyCounts,
@@ -378,7 +378,9 @@ const INPUT_SANITIZE_SCHEMA: RehypeSanitizeOptions = {
   }
 }
 
-type WorkspaceImageReader = typeof readWorkspaceImage
+type WorkspaceImageReader = (
+  payload: Parameters<typeof readWorkspaceImage>[0]
+) => ReturnType<typeof readWorkspaceImage>
 
 export type MarkdownWechatClipboardServiceDependencies = {
   readWorkspaceImage?: WorkspaceImageReader
@@ -406,15 +408,14 @@ type RenderState = {
   imageCount: number
   embeddedImageCount: number
   remoteImageCount: number
-  totalEmbeddedImageBytes: number
   localImageCache: Map<string, Promise<LocalImageResolution>>
 }
 
 type LocalImageResolution =
-  | { ok: true; dataUrl: string; size: number }
+  | { ok: true; dataUrl: string }
   | {
       ok: false
-      code: Extract<MarkdownWechatWarningCode, 'image-unavailable' | 'image-unsafe' | 'image-too-large'>
+      code: Extract<MarkdownWechatWarningCode, 'image-unavailable' | 'image-unsafe'>
       message: string
     }
 
@@ -432,7 +433,6 @@ function createRenderState(input: MarkdownWechatRenderInput): RenderState {
     imageCount: 0,
     embeddedImageCount: 0,
     remoteImageCount: 0,
-    totalEmbeddedImageBytes: 0,
     localImageCache: new Map()
   }
 }
@@ -443,8 +443,8 @@ function addWarning(
   message: string,
   index?: number
 ): void {
-  if (state.warnings.length >= MARKDOWN_WECHAT_LIMITS.maxWarnings) return
-  const boundedMessage = message.trim().slice(0, MARKDOWN_WECHAT_LIMITS.maxWarningMessageChars)
+  if (state.warnings.length >= MARKDOWN_WECHAT_FEEDBACK_LIMITS.maxWarnings) return
+  const boundedMessage = message.trim().slice(0, MARKDOWN_WECHAT_FEEDBACK_LIMITS.maxWarningMessageChars)
   const key = `${code}\u0000${boundedMessage}\u0000${index ?? ''}`
   if (!boundedMessage || state.warningKeys.has(key)) return
   state.warningKeys.add(key)
@@ -526,11 +526,6 @@ function prepareHastTree(tree: Root, state: RenderState): void {
         (child.tagName === 'code' && classes.includes('language-math'))
       if (displayMath || inlineMath) {
         state.formulaCount += 1
-        if (state.formulaCount > MARKDOWN_WECHAT_LIMITS.maxFormulas) {
-          throw new Error(
-            `Markdown contains more than ${MARKDOWN_WECHAT_LIMITS.maxFormulas} formulas.`
-          )
-        }
         if (displayMath) state.displayFormulaCount += 1
         else state.inlineFormulaCount += 1
         parent.children[index] = element(
@@ -582,14 +577,6 @@ function imageFallback(alt: string): Element {
   )
 }
 
-function estimatedDataUrlBytes(value: string): number | null {
-  const match = /^data:([^;,]+)(?:;[^,]*)?;base64,([a-z0-9+/=_-]+)$/i.exec(value)
-  if (!match) return null
-  const encoded = match[2]
-  const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0
-  return Math.max(0, Math.floor(encoded.length * 3 / 4) - padding)
-}
-
 async function resolveLocalImage(
   state: RenderState,
   resolvedPath: string,
@@ -617,13 +604,6 @@ async function resolveLocalImage(
         message: 'A local image could not be read from the active workspace.'
       }
     }
-    if (result.size > MARKDOWN_WECHAT_LIMITS.maxImageBytes) {
-      return {
-        ok: false,
-        code: 'image-too-large',
-        message: `A local image exceeded the ${MARKDOWN_WECHAT_LIMITS.maxImageBytes} byte per-image limit.`
-      }
-    }
     const dataUrl = normalizeSafeEmbeddedMediaUrl(result.dataUrl)
     if (!dataUrl || !dataUrl.toLowerCase().startsWith('data:image/')) {
       return {
@@ -632,7 +612,7 @@ async function resolveLocalImage(
         message: 'A local image used an unsupported or unsafe media format.'
       }
     }
-    return { ok: true, dataUrl, size: result.size }
+    return { ok: true, dataUrl }
   })()
 
   state.localImageCache.set(resolvedPath, pending)
@@ -647,15 +627,6 @@ async function resolveImageNode(
   state.imageCount += 1
   const imageIndex = state.imageCount
   const alt = stringProperty(node, 'alt') ?? ''
-  if (imageIndex > MARKDOWN_WECHAT_LIMITS.maxImages) {
-    addWarning(
-      state,
-      'image-limit-exceeded',
-      `Images after the first ${MARKDOWN_WECHAT_LIMITS.maxImages} were omitted.`,
-      MARKDOWN_WECHAT_LIMITS.maxImages
-    )
-    return imageFallback(alt)
-  }
 
   const source = stringProperty(node, 'src')?.trim()
   if (!source) {
@@ -670,19 +641,6 @@ async function resolveImageNode(
       addWarning(state, resolved.code, resolved.message, imageIndex)
       return imageFallback(alt)
     }
-    if (
-      state.totalEmbeddedImageBytes + resolved.size >
-      MARKDOWN_WECHAT_LIMITS.maxTotalImageBytes
-    ) {
-      addWarning(
-        state,
-        'image-too-large',
-        `Embedded images exceeded the ${MARKDOWN_WECHAT_LIMITS.maxTotalImageBytes} byte document limit.`,
-        imageIndex
-      )
-      return imageFallback(alt)
-    }
-    state.totalEmbeddedImageBytes += resolved.size
     state.embeddedImageCount += 1
     node.properties.src = resolved.dataUrl
     return node
@@ -707,19 +665,10 @@ async function resolveImageNode(
 
   if (/^data:/i.test(source)) {
     const normalized = normalizeSafeEmbeddedMediaUrl(source)
-    const size = normalized ? estimatedDataUrlBytes(normalized) : null
-    if (!normalized || size === null) {
+    if (!normalized) {
       addWarning(state, 'image-unsafe', 'An unsafe embedded image was omitted.', imageIndex)
       return imageFallback(alt)
     }
-    if (
-      size > MARKDOWN_WECHAT_LIMITS.maxImageBytes ||
-      state.totalEmbeddedImageBytes + size > MARKDOWN_WECHAT_LIMITS.maxTotalImageBytes
-    ) {
-      addWarning(state, 'image-too-large', 'An embedded image exceeded the publication limit.', imageIndex)
-      return imageFallback(alt)
-    }
-    state.totalEmbeddedImageBytes += size
     state.embeddedImageCount += 1
     node.properties.src = normalized
     return node
@@ -991,7 +940,8 @@ export async function renderMarkdownForWechat(
 ): Promise<MarkdownWechatRenderResult> {
   const input = markdownWechatRenderInputSchema.parse(rawInput)
   const state = createRenderState(input)
-  const readImage = dependencies.readWorkspaceImage ?? readWorkspaceImage
+  const readImage = dependencies.readWorkspaceImage ?? ((payload) =>
+    readWorkspaceImage(payload, { maxBytes: null }))
   const markdown = normalizeMarkdownMathDelimiters(input.markdown)
 
   const processor = unified()
@@ -1068,11 +1018,6 @@ export async function renderMarkdownForWechat(
   assertSerializedOutput(html)
 
   const outputBytes = Buffer.byteLength(html, 'utf8')
-  if (outputBytes > MARKDOWN_WECHAT_LIMITS.maxOutputBytes) {
-    throw new Error(
-      `WeChat HTML is ${outputBytes} bytes, exceeding the ${MARKDOWN_WECHAT_LIMITS.maxOutputBytes} byte limit.`
-    )
-  }
 
   return {
     html,

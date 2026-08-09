@@ -114,7 +114,7 @@ describe('ExecutionGovernorCore', () => {
     })
   })
 
-  it('opens a circuit immediately for a non-retryable semantic failure', () => {
+  it('opens a circuit and steers once for a non-retryable semantic failure', () => {
     const governor = new ExecutionGovernorCore()
     const metadata = {
       objective: 'inspect-current-surface',
@@ -139,9 +139,11 @@ describe('ExecutionGovernorCore', () => {
       recoveryGuidance: 'Return to the bound task before requesting visual evidence.'
     }).decision
     expect(failed).toMatchObject({
-      action: 'deny',
-      code: 'semantic_failure_exhausted'
+      action: 'steer',
+      code: 'semantic_failure_stop'
     })
+    expect(failed.guidance).toContain('Do not retry')
+    expect(failed.guidance).toContain('Report the blocker')
     expect(governor.inspectAttempt(variant)).toMatchObject({
       action: 'deny',
       code: 'semantic_failure_exhausted',
@@ -196,7 +198,10 @@ describe('ExecutionGovernorCore', () => {
       outcome: 'retryable_error',
       retryable: false,
       errorCode: 'range_unavailable'
-    }).decision.action).toBe('deny')
+    }).decision).toMatchObject({
+      action: 'steer',
+      code: 'semantic_failure_stop'
+    })
     expect(governor.inspectAttempt(nextRange).action).toBe('allow')
   })
 
@@ -408,7 +413,10 @@ describe('ExecutionGovernorCore', () => {
       retryable: false,
       errorCode: 'visual_layout_refresh_timeout',
       failureClass: 'layout_unavailable'
-    }).decision.action).toBe('deny')
+    }).decision).toMatchObject({
+      action: 'steer',
+      code: 'semantic_failure_stop'
+    })
 
     const refresh = attempt('sciforge_observe', {
       resourceRef: 'resource_token_b'

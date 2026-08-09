@@ -160,6 +160,8 @@ describe('WritePdfAnnotationsPanel', () => {
     expect(html).toContain('Agent answer')
     expect(html).toContain('anisotropic axis rotates')
     expect(html.match(/ds-markdown ds-chat-answer/g)).toHaveLength(2)
+    expect(html.match(/aria-label="Collapse answer"/g)).toHaveLength(2)
+    expect(html.match(/aria-expanded="true"/g)).toHaveLength(2)
     expect(html.match(/aria-label="Copy message"/g)?.length).toBeGreaterThanOrEqual(4)
     expect(html.match(/ds-selectable-text/g)?.length).toBeGreaterThanOrEqual(4)
     expect(html).not.toContain('A comment on the claim.')
@@ -168,6 +170,13 @@ describe('WritePdfAnnotationsPanel', () => {
     expect(html).toContain('aria-label="Reopen thread"')
     expect(html).toContain('aria-label="Edit annotation"')
     expect(html).toContain('aria-label="Delete thread"')
+    expect(html).toContain('data-testid="annotation-thread-delete-thread-b"')
+    expect(html.indexOf('data-testid="annotation-thread-delete-thread-b"')).toBeLessThan(
+      html.indexOf('anisotropic axis rotates')
+    )
+    expect(html.indexOf('placeholder="Ask a follow-up about this PDF selection..."')).toBeGreaterThan(
+      html.indexOf('Yes, temperature can matter')
+    )
   })
 
   it('opens the inline editor for a newly created empty comment', () => {

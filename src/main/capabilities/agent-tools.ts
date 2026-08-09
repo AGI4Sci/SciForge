@@ -339,9 +339,10 @@ export class CapabilityAgentToolSurface {
             { details: diagnostic }
           )
         }
+        const includeSchema = parsed.includeSchema === true && descriptors.length === 1
         return {
           tool: CAPABILITY_AGENT_TOOL_NAMES.discover,
-          value: descriptors.map((descriptor) => this.#agentOperation(cache, descriptor, false))
+          value: descriptors.map((descriptor) => this.#agentOperation(cache, descriptor, includeSchema))
         }
       }
       case CAPABILITY_AGENT_TOOL_NAMES.observe: {
@@ -964,6 +965,11 @@ function compactSchemaNode(
   }
   if (isCapabilityJsonValue(value.items)) {
     output.items = compactSchemaNode(value.items, depth + 1)
+  }
+  if (typeof value.additionalProperties === 'boolean') {
+    output.additionalProperties = value.additionalProperties
+  } else if (isCapabilityJsonValue(value.additionalProperties)) {
+    output.additionalProperties = compactSchemaNode(value.additionalProperties, depth + 1)
   }
   return output
 }

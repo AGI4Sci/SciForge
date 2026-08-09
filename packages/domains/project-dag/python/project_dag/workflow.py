@@ -21,6 +21,7 @@ from .contracts import (
 from .reader import SessionReader
 from .store import Store, new_id, now_iso
 from .human_review import evaluate_project_human_review
+from .snapshot_integrity import validate_project_snapshot_row
 
 COMPILER_VERSION = "project-dag/1"
 UPDATE_RETRY_BASE_SECONDS = max(
@@ -628,7 +629,12 @@ class ProjectWorkflow:
                 (status, 0 if superseded else attempt, now_iso(), now_iso(), job["id"]),
             )
             self.store.conn.commit()
-        return {"job": self.job(job["id"]), "snapshot": snapshot, "compile": result}
+            # The Store intentionally uses one SQLite connection for this
+            # runtime actor. Keep the response read in the same short critical
+            # section so another project's BEGIN IMMEDIATE cannot interleave
+            # with sqlite3's row cursor on that connection.
+            final_job = self.job(job["id"])
+        return {"job": final_job, "snapshot": snapshot, "compile": result}
 
     def retry_update(self, job_id: str, *, actor: str = "human") -> dict:
         """Make a scheduled or terminal failure immediately eligible again."""
@@ -679,41 +685,56 @@ class ProjectWorkflow:
         edges = self.store.q("SELECT * FROM edge WHERE t_invalid IS NULL ORDER BY id")
         scoped_edges: list[dict] = []
         for edge in edges:
-            if edge["edge_type"] != "supports" or edge["dst"] not in claim_ids:
-                scoped_edges.append(edge)
-                continue
             meta = _loads(edge.get("meta"), {})
             raw_origins = meta.get("origins")
             if isinstance(raw_origins, list):
-                support_origins = [
+                scoped_origins = [
                     origin for origin in raw_origins
                     if isinstance(origin, dict) and origin.get("session") in included_set
                 ]
-            elif meta.get("session") in included_set:
-                support_origins = [{
+                if not scoped_origins:
+                    continue
+                first = scoped_origins[0]
+                scoped_meta = {
+                    **meta,
+                    "session": first.get("session"),
+                    "claim_node": first.get("node"),
+                    "run": first.get("run"),
+                    "origins": scoped_origins,
+                }
+                scoped_edges.append({**edge, "meta": canonical_json(scoped_meta)})
+                continue
+            # Pre-v3 support metadata is still readable in old databases while
+            # Store performs its one-way migration.  New writes always use the
+            # canonical ``origins`` array.
+            if (edge["edge_type"] == "supports" and edge["dst"] in claim_ids
+                    and meta.get("session") is not None):
+                legacy_origins = [{
                     "session": meta.get("session"), "node": meta.get("claim_node"),
                     "run": meta.get("run"),
-                }]
-            else:
-                support_origins = []
-            if not support_origins:
+                }] if meta.get("session") in included_set else []
+                if not legacy_origins:
+                    continue
+                scoped_edges.append({
+                    **edge,
+                    "meta": canonical_json({**meta, "origins": legacy_origins}),
+                })
                 continue
-            first = support_origins[0]
-            scoped_meta = {
-                **meta,
-                "session": first.get("session"),
-                "claim_node": first.get("node"),
-                "run": first.get("run"),
-                "origins": support_origins,
-            }
-            scoped_edges.append({**edge, "meta": canonical_json(scoped_meta)})
+            scoped_edges.append(edge)
         edges = scoped_edges
-        support_ids = {e["src"] for e in edges if e["edge_type"] == "supports"
-                       and e["dst"] in claim_ids}
-        evidence = [e for e in self.store.q(
+        all_evidence = self.store.q(
             "SELECT * FROM evidence WHERE project_key=? ORDER BY id",
             (project_key,),
-        ) if e["id"] in support_ids]
+        )
+        known_evidence_ids = {item["id"] for item in all_evidence}
+        evidence_ids = {
+            endpoint for edge in edges for endpoint in (edge["src"], edge["dst"])
+            if endpoint in known_evidence_ids and (
+                edge["src"] in claim_ids or edge["dst"] in claim_ids
+                or edge["edge_type"] in {"replicates", "fails_to_replicate", "rerun_of"}
+            )
+        }
+        evidence = [item for item in all_evidence if item["id"] in evidence_ids]
         entity_ids = {e["dst"] for e in edges if e["edge_type"] == "mentions"
                       and e["src"] in claim_ids}
         entities = [e for e in self.store.q(
@@ -721,7 +742,7 @@ class ProjectWorkflow:
             (project_key,),
         ) if e["id"] in entity_ids]
         entity_ids = {entity["id"] for entity in entities}
-        keep = claim_ids | {g["root_id"] for g in goals} | support_ids | entity_ids
+        keep = claim_ids | {g["root_id"] for g in goals} | evidence_ids | entity_ids
         edges = [e for e in edges if e["src"] in keep and e["dst"] in keep]
         decisions = self.store.q(
             "SELECT * FROM decision_event WHERE project_key=? ORDER BY created_at,id", (project_key,))
@@ -2176,7 +2197,7 @@ class ProjectWorkflow:
 
     def status(self, project_key: str) -> dict:
         recent_snapshots = self.store.q(
-            "SELECT payload FROM project_snapshot WHERE project_key=? ORDER BY version DESC LIMIT 2",
+            "SELECT * FROM project_snapshot WHERE project_key=? ORDER BY version DESC LIMIT 2",
             (project_key,),
         )
         jobs = self.store.q(
@@ -2185,9 +2206,12 @@ class ProjectWorkflow:
             " FROM project_update_job WHERE project_key=? ORDER BY updated_at DESC LIMIT 20",
             (project_key,),
         )
-        snapshot = _loads(recent_snapshots[0]["payload"], None) if recent_snapshots else None
+        snapshot = (
+            validate_project_snapshot_row(recent_snapshots[0])
+            if recent_snapshots else None
+        )
         previous_snapshot = (
-            _loads(recent_snapshots[1]["payload"], None)
+            validate_project_snapshot_row(recent_snapshots[1])
             if len(recent_snapshots) > 1 else None
         )
         latest_audit = self.store.q1(
@@ -2259,15 +2283,15 @@ class ProjectWorkflow:
         }
 
     def snapshot(self, digest: str) -> Optional[dict]:
-        row = self.store.q1("SELECT payload FROM project_snapshot WHERE digest=?", (digest,))
-        return _loads(row["payload"], None) if row else None
+        row = self.store.q1("SELECT * FROM project_snapshot WHERE digest=?", (digest,))
+        return validate_project_snapshot_row(row) if row else None
 
     def latest_snapshot(self, project_key: str) -> Optional[dict]:
         row = self.store.q1(
-            "SELECT payload FROM project_snapshot WHERE project_key=? ORDER BY version DESC LIMIT 1",
+            "SELECT * FROM project_snapshot WHERE project_key=? ORDER BY version DESC LIMIT 1",
             (project_key,),
         )
-        return _loads(row["payload"], None) if row else None
+        return validate_project_snapshot_row(row) if row else None
 
     def findings(self, project_key: str, status: Optional[str] = None) -> list[dict]:
         sql, args = "SELECT * FROM finding WHERE project_key=?", [project_key]

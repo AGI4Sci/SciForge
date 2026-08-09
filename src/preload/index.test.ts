@@ -540,7 +540,7 @@ describe('preload agentRuntime bridge', () => {
     await api.agentRuntime.forkThread({ runtimeId: 'codex', threadId: 'thread-1', relation: 'side', title: 'Side path' })
     await api.agentRuntime.resumeSession({ runtimeId: 'codex', sessionId: 'session-1', model: 'deepseek-v4-pro', mode: 'agent' })
     await api.agentRuntime.updateThreadRelation({ runtimeId: 'codex', threadId: 'thread-1', relation: 'primary' })
-    await api.agentRuntime.usage({ groupBy: 'thread', threadId: 'thread-1' })
+    await api.agentRuntime.usage({ runtimeId: 'codex', groupBy: 'thread', threadId: 'thread-1' })
     await api.agentRuntime.resolveApproval({
       runtimeId: 'codex',
       threadId: 'thread-1',
@@ -610,6 +610,7 @@ describe('preload agentRuntime bridge', () => {
       relation: 'primary'
     })
     expect(invoke).toHaveBeenCalledWith('agentRuntime:usage', {
+      runtimeId: 'codex',
       groupBy: 'thread',
       threadId: 'thread-1'
     })

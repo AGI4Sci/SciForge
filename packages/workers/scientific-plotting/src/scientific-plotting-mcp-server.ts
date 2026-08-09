@@ -1,26 +1,23 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { normalizeVisualScene, type VisualScene } from '@sciforge/image-generation/visual-scene'
 import {
   SCIENTIFIC_PLOTTING_TEMPLATES,
   type ScientificPlottingCompositeRequest,
-  type ScientificPlottingDataMappingRequest,
   type ScientificPlottingPrepareReferenceRequest,
-  type ScientificPlottingRenderRequest,
   type ScientificPlottingReviewPacketRequest,
   type ScientificPlottingStyleProfilesRequest,
 } from './types'
 import {
   compositeScientificPlotLayers,
   createScientificPlottingReviewPacket,
-  getScientificPlottingStatus,
   listScientificPlottingStyleProfiles,
-  mapScientificPlottingData,
-  prepareScientificPlottingReference,
-  renderScientificPlot
+  prepareScientificPlottingReference
 } from './scientific-plotting-engine'
-import { SCIENTIFIC_PLOTTING_MCP_FLAG } from './contract'
+import {
+  SCIENTIFIC_PLOTTING_MCP_FLAG,
+  controlledPlottingPlanSchema
+} from './contract'
 
 type McpLaunchOptions = {
   workspaceRoot?: string
@@ -39,35 +36,6 @@ const CONTROLLED_WRITE_ANNOTATIONS = {
   idempotentHint: false,
   openWorldHint: false
 } as const
-
-const visualSceneSchema = z.custom<VisualScene>((value) => {
-  try {
-    normalizeVisualScene(value)
-    return true
-  } catch {
-    return false
-  }
-}, 'Invalid normalized VisualScene.')
-
-const controlledPlottingPlanSchema = z.object({
-  planId: z.string().trim().min(1).max(160),
-  route: z.enum(['code', 'hybrid']),
-  routeLocked: z.literal(true),
-  rationale: z.string().trim().min(1).max(2000),
-  sourceArtifacts: z.array(z.string().trim().min(1).max(4096)).max(64),
-  reproducibleInputs: z.array(z.string().trim().min(1).max(1000)).max(64),
-  inlineSpecification: z.string().trim().min(1).max(16000).optional(),
-  structuredData: z.unknown().optional(),
-  scene: visualSceneSchema.optional(),
-  lockedElements: z.array(z.string().trim().min(1).max(1000)).max(64),
-  modelOwnedElements: z.array(z.string().trim().min(1).max(1000)).max(64),
-  contextStatus: z.enum(['ready', 'budget_exhausted']),
-  contextStopReason: z.enum(['sufficient', 'policy_closed', 'round_limit', 'cost_limit', 'token_limit', 'elapsed_time_limit', 'no_information_gain']),
-  contextEvidenceIds: z.array(z.string().trim().min(1).max(160)).max(128),
-  unresolvedContext: z.array(z.string().trim().min(1).max(2000)).max(64),
-  releaseCeiling: z.enum(['publication_ready', 'draft_ready']),
-  fallbackPolicy: z.literal('fail_closed')
-}).strict()
 
 function parseArgValue(argv: string[], flag: string): string | undefined {
   const index = argv.indexOf(flag)
@@ -127,24 +95,6 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
     { capabilities: { logging: {} } }
   )
 
-  server.registerTool('scientific_plotting_status', {
-    title: 'Scientific Plotting MCP Status',
-    description: 'Report the controlled SciForge scientific plotting renderer status, supported templates, model-facing template selection guide, and artifact policy.',
-    annotations: READ_ONLY_ANNOTATIONS
-  }, async () => {
-    try {
-      const status = await getScientificPlottingStatus()
-      return textResult(
-        status.ok && status.degraded
-          ? 'Scientific plotting MCP is available but renderer is degraded.'
-          : 'Scientific plotting MCP is available.',
-        { status }
-      )
-    } catch (error) {
-      return errorResult(`Failed to inspect scientific plotting status: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  })
-
   server.registerTool('scientific_plotting_style_profiles', {
     title: 'List Scientific Plotting Style Profiles',
     description: 'List or read first-party built-in scientific figure style profiles for journal/conference-inspired rendering.',
@@ -180,164 +130,6 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
       )
     } catch (error) {
       return errorResult(`Failed to list scientific plotting style profiles: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  })
-
-  server.registerTool('scientific_plotting_map_data', {
-    title: 'Map Data To Scientific Plot',
-    description: `Map structured data or tabular records into a controlled scientific_plotting_render request after choosing a template. ${TEMPLATE_SELECTION_DESCRIPTION} Does not render or write files.`,
-    inputSchema: {
-      workspaceRoot: z.string().trim().min(1).optional(),
-      visualPlan: controlledPlottingPlanSchema,
-      task: z.string().trim().min(1),
-      data: z.unknown(),
-      labels: z.object({
-        title: z.string().trim().max(300).optional(),
-        x: z.string().trim().max(200).optional(),
-        y: z.string().trim().max(200).optional(),
-        legend: z.boolean().optional(),
-        panel: z.string().trim().max(16).optional()
-      }).strict().optional(),
-      templateHint: templateSchema.optional(),
-      styleSpec: z.unknown().optional(),
-      styleSpecPath: z.string().trim().max(4096).optional(),
-      styleProfileId: z.string().trim().max(160).optional(),
-      referencePath: z.string().trim().max(4096).optional(),
-      reviewReferencePath: z.string().trim().max(4096).optional(),
-      figureId: z.string().trim().max(120).optional(),
-      outputDir: z.string().trim().max(4096).optional(),
-      outputScale: z.number().min(1).max(4).optional(),
-      visualDocumentId: z.string().trim().max(120).optional(),
-      threadId: z.string().trim().max(120).optional(),
-      autoRepair: z.object({
-        enabled: z.boolean().optional(),
-        maxAttempts: z.union([z.literal(0), z.literal(1)]).optional(),
-        minOverall: z.number().min(0.5).max(0.98).optional()
-      }).strict().optional()
-    },
-    annotations: READ_ONLY_ANNOTATIONS
-  }, async (input) => {
-    try {
-      const request: ScientificPlottingDataMappingRequest = {
-        workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
-        visualPlan: input.visualPlan,
-        task: input.task,
-        data: input.data,
-        ...(input.labels ? { labels: input.labels } : {}),
-        ...(input.templateHint ? { templateHint: input.templateHint } : {}),
-        ...(input.styleSpec ? { styleSpec: input.styleSpec as never } : {}),
-        ...(input.styleSpecPath ? { styleSpecPath: input.styleSpecPath } : {}),
-        ...(input.styleProfileId ? { styleProfileId: input.styleProfileId } : {}),
-        ...(input.referencePath ? { referencePath: input.referencePath } : {}),
-        ...(input.reviewReferencePath ? { reviewReferencePath: input.reviewReferencePath } : {}),
-        ...(input.figureId ? { figureId: input.figureId } : {}),
-        ...(input.outputDir ? { outputDir: input.outputDir } : {}),
-        ...(input.outputScale ? { outputScale: input.outputScale } : {}),
-        ...(input.visualDocumentId ? { visualDocumentId: input.visualDocumentId } : {}),
-        ...(input.threadId ? { threadId: input.threadId } : {}),
-        ...(input.autoRepair ? { autoRepair: input.autoRepair } : {})
-      }
-      const mapping = await mapScientificPlottingData(request)
-      const nextCall = mapping.ok
-        ? { tool: 'scientific_plotting_render', arguments: mapping.renderRequest }
-        : undefined
-      return textResult(
-        mapping.ok
-          ? jsonSummary(`Mapped data to template: ${mapping.selectedTemplate}.`, { mapping, nextCall })
-          : jsonSummary(`Scientific plotting data mapping needs input: ${mapping.status}.`, mapping),
-        { mapping, ...(nextCall ? { nextCall } : {}) }
-      )
-    } catch (error) {
-      return errorResult(`Failed to map data for scientific plotting: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  })
-
-  server.registerTool('scientific_plotting_render', {
-    title: 'Render Scientific Plot',
-    description: `Render a PNG artifact from structured JSON data with optional FigureStyleSpec and bounded style auto-repair. ${TEMPLATE_SELECTION_DESCRIPTION} Call visual_generate before choosing a rendering route; use this renderer only when its locked execution stages select it.`,
-    inputSchema: {
-      workspaceRoot: z.string().trim().min(1).optional(),
-      visualPlan: controlledPlottingPlanSchema,
-      template: templateSchema,
-      data: z.unknown(),
-      reviewTask: z.string().trim().min(1).max(16000).optional(),
-      labels: z.object({
-        title: z.string().trim().max(300).optional(),
-        x: z.string().trim().max(200).optional(),
-        y: z.string().trim().max(200).optional(),
-        legend: z.boolean().optional(),
-        panel: z.string().trim().max(16).optional()
-      }).strict().optional(),
-      figureId: z.string().trim().max(120).optional(),
-      styleSpec: z.unknown().optional(),
-      styleSpecPath: z.string().trim().max(4096).optional(),
-      styleProfileId: z.string().trim().max(160).optional(),
-      referencePath: z.string().trim().max(4096).optional(),
-      reviewReferencePath: z.string().trim().max(4096).optional(),
-      outputDir: z.string().trim().max(4096).optional(),
-      outputScale: z.number().min(1).max(4).optional(),
-      visualDocumentId: z.string().trim().max(120).optional(),
-      threadId: z.string().trim().max(120).optional(),
-      autoRepair: z.object({
-        enabled: z.boolean().optional(),
-        maxAttempts: z.union([z.literal(0), z.literal(1)]).optional(),
-        minOverall: z.number().min(0.5).max(0.98).optional()
-      }).strict().optional()
-    },
-    annotations: CONTROLLED_WRITE_ANNOTATIONS
-  }, async (input) => {
-    try {
-      const request: ScientificPlottingRenderRequest = {
-        workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
-        visualPlan: input.visualPlan,
-        template: input.template,
-        data: input.data,
-        ...(input.reviewTask ? { reviewTask: input.reviewTask } : {}),
-        ...(input.labels ? { labels: input.labels } : {}),
-        ...(input.figureId ? { figureId: input.figureId } : {}),
-        ...(input.styleSpec ? { styleSpec: input.styleSpec as never } : {}),
-        ...(input.styleSpecPath ? { styleSpecPath: input.styleSpecPath } : {}),
-        ...(input.styleProfileId ? { styleProfileId: input.styleProfileId } : {}),
-        ...(input.referencePath ? { referencePath: input.referencePath } : {}),
-        ...(input.reviewReferencePath ? { reviewReferencePath: input.reviewReferencePath } : {}),
-        ...(input.outputDir ? { outputDir: input.outputDir } : {}),
-        ...(input.outputScale ? { outputScale: input.outputScale } : {}),
-        ...(input.visualDocumentId ? { visualDocumentId: input.visualDocumentId } : {}),
-        ...(input.threadId ? { threadId: input.threadId } : {}),
-        ...(input.autoRepair ? { autoRepair: input.autoRepair } : {})
-      }
-      const result = await renderScientificPlot(request)
-      const reviewTask = input.reviewTask || input.labels?.title || `Review the ${input.template} artifact against its locked visual plan.`
-      const nextCall = result.ok
-        ? request.visualPlan.route === 'hybrid'
-          ? {
-              tool: 'image_generation_prepare',
-              arguments: {
-                workspaceRoot: request.workspaceRoot,
-                task: reviewTask,
-                referencePath: result.outputPath,
-                visualPlan: request.visualPlan
-              }
-            }
-          : {
-              tool: 'image_generation_review_candidate',
-              arguments: {
-                workspaceRoot: request.workspaceRoot,
-                outputPath: result.outputPath,
-                manifestPath: result.manifestPath,
-                task: reviewTask,
-                ...(request.reviewReferencePath ? { referencePath: request.reviewReferencePath } : {})
-              }
-            }
-        : undefined
-      return textResult(
-        result.ok
-          ? jsonSummary(`Rendered scientific plot: ${result.status}.`, { result, nextCall })
-          : jsonSummary(`Scientific plot render failed: ${result.status}.`, result),
-        { result, ...(nextCall ? { nextCall } : {}) }
-      )
-    } catch (error) {
-      return errorResult(`Failed to render scientific plot: ${error instanceof Error ? error.message : String(error)}`)
     }
   })
 

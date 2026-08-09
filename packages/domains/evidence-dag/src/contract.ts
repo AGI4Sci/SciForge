@@ -1,4 +1,12 @@
 import { z } from 'zod'
+import {
+  artifactV1Schema,
+  artifactVersionIssueV1Schema,
+  artifactVersionLifecycleEventV1Schema,
+  artifactVersionRefV1Schema,
+  artifactVersionV1Schema,
+  type ArtifactVersionRefV1
+} from '@sciforge/domain-artifact-versions/contract'
 
 const boundedIdSchema = z.string().trim().min(1).max(512)
 const runtimeIdSchema = z.string().trim().min(1).max(128)
@@ -12,7 +20,8 @@ export const EVIDENCE_DAG_CAPABILITY_IDS = Object.freeze({
   view: 'evidence-dag.view',
   update: 'evidence-dag.update',
   priority: 'evidence-dag.priority',
-  resolvePreview: 'evidence-dag.resolve-evidence-preview'
+  resolvePreview: 'evidence-dag.resolve-evidence-preview',
+  exportSnapshotProducts: 'evidence-dag.export-snapshot-products'
 } as const)
 
 export const evidenceDagErrorCodeSchema = z.enum([
@@ -100,7 +109,8 @@ export const evidenceDagCanonicalStatusSchema = z.object({
 
 export const evidenceDagViewInputSchema = z.object({
   runtimeId: runtimeIdSchema.optional(),
-  threadId: boundedIdSchema.optional()
+  threadId: boundedIdSchema.optional(),
+  workspaceRoot: z.string().trim().min(1).max(4_096).optional()
 }).strict().superRefine((value, context) => {
   if (Boolean(value.runtimeId) === Boolean(value.threadId)) return
   context.addIssue({
@@ -157,7 +167,8 @@ export const evidenceDagUpdateOutputSchema = z.object({
 export const evidenceDagPriorityInputSchema = z.object({
   runtimeId: runtimeIdSchema,
   threadId: boundedIdSchema,
-  visible: z.boolean()
+  visible: z.boolean(),
+  workspaceRoot: z.string().trim().min(1).max(4_096).optional()
 }).strict()
 
 export const evidenceDagPriorityOutputSchema = evidenceDagCanonicalStatusSchema
@@ -175,9 +186,83 @@ export const evidenceSourceSelectorSchema = z.object({
   query: z.record(z.string().trim().min(1).max(512), z.unknown()).optional()
 }).strict()
 
+/**
+ * Immutable Artifact Version projection accepted by Evidence ingestion.
+ *
+ * `ref` is the authority. The optional records are a denormalized read
+ * projection from the Artifact Versions domain; Evidence never writes them
+ * back and never manufactures an Artifact or version identity.
+ */
+export const evidenceDagArtifactVersionRecordV1Schema = z.object({
+  ref: artifactVersionRefV1Schema,
+  artifact: artifactV1Schema.optional(),
+  version: artifactVersionV1Schema.optional(),
+  kind: z.string().trim().regex(/^[a-z][a-z0-9._-]{0,63}$/).optional(),
+  locator: z.string().trim().min(1).max(8_192).optional(),
+  observedAt: timestampSchema.optional()
+}).strict().superRefine((value, context) => {
+  if (value.artifact && value.artifact.artifactId !== value.ref.artifactId) {
+    context.addIssue({
+      code: 'custom',
+      path: ['artifact', 'artifactId'],
+      message: 'Artifact projection must match the pinned ArtifactVersionRef.'
+    })
+  }
+  if (
+    value.version &&
+    (value.version.artifactId !== value.ref.artifactId ||
+      value.version.versionId !== value.ref.versionId)
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['version'],
+      message: 'Version projection must match the pinned ArtifactVersionRef.'
+    })
+  }
+  if (value.version && (
+    value.version.storage.contentDigest !== value.ref.contentDigest ||
+    value.version.storage.byteLength !== value.ref.byteLength ||
+    value.version.storage.mediaType !== value.ref.mediaType ||
+    value.version.storage.mode !== value.ref.retention ||
+    JSON.stringify(value.version.accessPolicy) !== JSON.stringify(value.ref.accessPolicy)
+  )) {
+    context.addIssue({
+      code: 'custom',
+      path: ['version'],
+      message: 'Version content and access policy must match the pinned ArtifactVersionRef.'
+    })
+  }
+})
+
+export const evidenceDagArtifactVersionProjectionV1Schema = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('ready'),
+    versions: z.array(evidenceDagArtifactVersionRecordV1Schema).max(128),
+    lifecycleEvents: z.array(artifactVersionLifecycleEventV1Schema).max(512),
+    lastSequence: z.number().int().nonnegative().optional(),
+    lifecyclePending: z.boolean().optional(),
+    lifecycleIssue: artifactVersionIssueV1Schema.optional()
+  }).strict(),
+  z.object({
+    status: z.literal('pending'),
+    reason: z.string().trim().min(1).max(4_000),
+    lifecycleEvents: z.array(artifactVersionLifecycleEventV1Schema).max(512).optional(),
+    lastSequence: z.number().int().nonnegative().optional(),
+    lifecyclePending: z.boolean().optional()
+  }).strict(),
+  z.object({
+    status: z.literal('failed'),
+    issue: artifactVersionIssueV1Schema,
+    lifecycleEvents: z.array(artifactVersionLifecycleEventV1Schema).max(512).optional(),
+    lastSequence: z.number().int().nonnegative().optional(),
+    lifecyclePending: z.boolean().optional()
+  }).strict()
+])
+
 export const evidenceDagPreviewInputSchema = z.object({
   runtimeId: runtimeIdSchema,
   threadId: boundedIdSchema,
+  workspaceRoot: z.string().trim().min(1).max(4_096).optional(),
   snapshotDigest: sha256DigestSchema,
   sourceAssertionId: boundedIdSchema,
   artifactVersionId: boundedIdSchema,
@@ -216,6 +301,102 @@ export const evidenceDagPreviewOutputSchema = z.discriminatedUnion('ok', [
   }).strict()
 ])
 
+export const evidenceDagExportProductKindSchema = z.enum([
+  'prov-json',
+  'ro-crate',
+  'datacite',
+  'audit-report',
+  'reproduction-report'
+])
+
+export const evidenceDagDataCiteCreatorV1Schema = z.object({
+  name: z.string().trim().min(1).max(1_000),
+  nameType: z.enum(['Personal', 'Organizational']).optional(),
+  givenName: z.string().trim().min(1).max(512).optional(),
+  familyName: z.string().trim().min(1).max(512).optional(),
+  orcid: z.string().trim().min(1).max(128).optional()
+}).strict().superRefine((value, context) => {
+  if ((value.givenName || value.familyName) && value.nameType !== 'Personal') {
+    context.addIssue({
+      code: 'custom',
+      message: 'DataCite givenName/familyName require nameType Personal.'
+    })
+  }
+})
+
+export const evidenceDagDataCiteDescriptionV1Schema = z.object({
+  description: z.string().trim().min(1).max(20_000),
+  descriptionType: z.enum([
+    'Abstract',
+    'Methods',
+    'SeriesInformation',
+    'TableOfContents',
+    'TechnicalInfo',
+    'Other'
+  ])
+}).strict()
+
+/** Discovery metadata is explicit: Evidence never guesses publication identity. */
+export const evidenceDagDataCiteMetadataV1Schema = z.object({
+  doi: z.string().trim().min(1).max(255),
+  title: z.string().trim().min(1).max(2_000),
+  creators: z.array(evidenceDagDataCiteCreatorV1Schema).min(1).max(1_000),
+  publisher: z.string().trim().min(1).max(1_000),
+  publicationYear: z.number().int().min(1000).max(9999),
+  projectId: boundedIdSchema,
+  resourceType: z.string().trim().min(1).max(1_000).optional(),
+  language: z.string().trim().min(2).max(64).optional(),
+  landingPage: z.string().url().max(4_096).optional(),
+  descriptions: z.array(evidenceDagDataCiteDescriptionV1Schema).max(100).optional()
+}).strict()
+
+const evidenceDagExportTargetV1Schema = z.object({
+  artifactId: z.string().trim().startsWith('artifact:').max(256),
+  expectedCurrentVersionId: z.string().trim().startsWith('artifact-version:').max(256)
+}).strict()
+
+export const evidenceDagExportTargetsV1Schema = z.object({
+  provJson: evidenceDagExportTargetV1Schema.optional(),
+  roCrate: evidenceDagExportTargetV1Schema.optional(),
+  datacite: evidenceDagExportTargetV1Schema.optional(),
+  auditReport: evidenceDagExportTargetV1Schema.optional(),
+  reproductionReport: evidenceDagExportTargetV1Schema.optional()
+}).strict()
+
+export const evidenceDagExportSnapshotProductsInputSchema = z.object({
+  runtimeId: runtimeIdSchema,
+  threadId: boundedIdSchema,
+  workspaceRoot: z.string().trim().min(1).max(4_096).optional(),
+  snapshotDigest: sha256DigestSchema,
+  idempotencyKey: z.string().trim().min(8).max(512),
+  datacite: evidenceDagDataCiteMetadataV1Schema,
+  targets: evidenceDagExportTargetsV1Schema.optional()
+}).strict()
+
+export const evidenceDagExportedProductV1Schema = z.object({
+  product: evidenceDagExportProductKindSchema,
+  ref: artifactVersionRefV1Schema
+}).strict()
+
+export const evidenceDagExportSnapshotProductsOutputSchema = z.object({
+  runtimeId: runtimeIdSchema,
+  threadId: boundedIdSchema,
+  snapshotDigest: sha256DigestSchema,
+  transactionId: z.string().trim().startsWith('artifact-commit:').max(256),
+  idempotentReplay: z.boolean(),
+  products: z.array(evidenceDagExportedProductV1Schema).length(5),
+  sourceArtifactVersionRefs: z.array(artifactVersionRefV1Schema).max(10_000)
+}).strict().superRefine((value, context) => {
+  const products = new Set(value.products.map((item) => item.product))
+  if (products.size !== evidenceDagExportProductKindSchema.options.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['products'],
+      message: 'An export receipt must contain each Evidence product exactly once.'
+    })
+  }
+})
+
 /**
  * JSON-safe payload accepted when a generic workbench activation targets the
  * Evidence DAG contribution. Session identity normally comes from the panel
@@ -249,6 +430,28 @@ export type EvidenceDagUpdateOutput = z.infer<typeof evidenceDagUpdateOutputSche
 export type EvidenceDagPriorityInput = z.infer<typeof evidenceDagPriorityInputSchema>
 export type EvidenceDagPriorityOutput = z.infer<typeof evidenceDagPriorityOutputSchema>
 export type EvidenceSourceSelector = z.infer<typeof evidenceSourceSelectorSchema>
+export type EvidenceDagArtifactVersionRecordV1 = z.infer<
+  typeof evidenceDagArtifactVersionRecordV1Schema
+>
+export type EvidenceDagArtifactVersionProjectionV1 = z.infer<
+  typeof evidenceDagArtifactVersionProjectionV1Schema
+>
+export type { ArtifactVersionRefV1 }
 export type EvidenceDagPreviewInput = z.infer<typeof evidenceDagPreviewInputSchema>
 export type EvidenceDagPreviewOutput = z.infer<typeof evidenceDagPreviewOutputSchema>
+export type EvidenceDagExportProductKind = z.infer<
+  typeof evidenceDagExportProductKindSchema
+>
+export type EvidenceDagDataCiteMetadataV1 = z.infer<
+  typeof evidenceDagDataCiteMetadataV1Schema
+>
+export type EvidenceDagExportTargetsV1 = z.infer<
+  typeof evidenceDagExportTargetsV1Schema
+>
+export type EvidenceDagExportSnapshotProductsInput = z.infer<
+  typeof evidenceDagExportSnapshotProductsInputSchema
+>
+export type EvidenceDagExportSnapshotProductsOutput = z.infer<
+  typeof evidenceDagExportSnapshotProductsOutputSchema
+>
 export type EvidenceDagActivationPayload = z.input<typeof evidenceDagActivationPayloadSchema>

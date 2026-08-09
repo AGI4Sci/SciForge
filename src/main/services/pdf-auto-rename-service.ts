@@ -1,4 +1,4 @@
-import { readFile, stat } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
 import { extname } from 'node:path'
 import { getDocument, type TextContentItem } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import type {
@@ -7,7 +7,6 @@ import type {
 } from '../../shared/workspace-file'
 import { resolveTargetPathWithinWorkspace } from '@sciforge/domain-sdk/node/workspace-paths'
 
-const MAX_PDF_RENAME_BYTES = 64 * 1024 * 1024
 const MAX_PDF_TITLE_LENGTH = 180
 const WINDOWS_RESERVED_FILE_STEM = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu
 
@@ -139,12 +138,10 @@ export async function suggestWorkspacePdfName(
     }
     const info = await stat(pdfPath)
     if (!info.isFile()) return { ok: false, message: 'The selected PDF is not a file.' }
-    if (info.size > MAX_PDF_RENAME_BYTES) {
-      return { ok: false, message: 'This PDF is too large to inspect automatically.' }
-    }
 
     const loadingTask = getDocument({
-      data: new Uint8Array(await readFile(pdfPath)),
+      url: pdfPath,
+      disableAutoFetch: true,
       disableFontFace: true,
       disableWorker: true,
       isEvalSupported: false,

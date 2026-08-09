@@ -10,9 +10,11 @@ from typing import Any, Optional
 
 from .graph import ThreadGraph
 
-SCHEMA_VERSION = "evidence.v2"
-EXTRACTOR_VERSION = "extractor.v2"
-VERIFIER_VERSION = "verifier.v2"
+SCHEMA_VERSION = "evidence.v3"
+EXTRACTOR_VERSION = "extractor.v3"
+VERIFIER_VERSION = "verifier.v3"
+LEGACY_SCHEMA_VERSION = "evidence.v2"
+SUPPORTED_SCHEMA_VERSIONS = frozenset({LEGACY_SCHEMA_VERSION, SCHEMA_VERSION})
 
 
 def snapshot_storage_key(thread_id: str) -> str:
@@ -146,6 +148,12 @@ def compute_snapshot_digest(
     extractor_version: str = EXTRACTOR_VERSION,
     verifier_version: str = VERIFIER_VERSION,
 ) -> str:
+    # ``_digest_payload`` intentionally remains the exact v2 canonical
+    # projection.  v3 adds node/edge enum values and stores new semantics in
+    # existing ``attributes`` fields, so a persisted evidence.v2 envelope can
+    # still be recomputed byte-for-byte instead of being rewritten in place.
+    if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
+        raise ValueError(f"unsupported Evidence Snapshot schema: {schema_version}")
     payload = json.dumps(
         _digest_payload(
             graph, input_watermark=input_watermark, schema_version=schema_version,

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { formatCost, loadThreadUsage } from './use-thread-usage'
+import { buildThreadUsageQuery, formatCost, loadThreadUsage } from './use-thread-usage'
 
 type AgentRuntimeUsage = (input: unknown) => Promise<unknown>
 
@@ -22,6 +22,14 @@ afterEach(() => {
 })
 
 describe('thread usage formatting', () => {
+  it('builds runtime-scoped thread usage queries', () => {
+    expect(buildThreadUsageQuery('codex', 'thread-1')).toEqual({
+      runtimeId: 'codex',
+      groupBy: 'thread',
+      threadId: 'thread-1'
+    })
+  })
+
   it('uses RMB for Chinese locales and USD for English locales', () => {
     expect(formatCost(0.125, 'zh', 0.88)).toBe('￥0.8800')
     expect(formatCost(0.125, 'zh-CN', 0.88)).toBe('￥0.8800')
@@ -47,7 +55,7 @@ describe('thread usage formatting', () => {
     }))
     setAgentRuntimeUsage(agentRuntimeUsage)
 
-    const usage = await loadThreadUsage('thr_cached_only')
+    const usage = await loadThreadUsage('codex', 'thr_cached_only')
 
     expect(usage).toMatchObject({
       inputTokens: 100,
@@ -57,6 +65,7 @@ describe('thread usage formatting', () => {
       cacheHitRate: null
     })
     expect(agentRuntimeUsage).toHaveBeenCalledWith({
+      runtimeId: 'codex',
       groupBy: 'thread',
       threadId: 'thr_cached_only'
     })
@@ -86,7 +95,7 @@ describe('thread usage formatting', () => {
       totals: {}
     }))
 
-    const usage = await loadThreadUsage('thr_aggregate_cache')
+    const usage = await loadThreadUsage('codex', 'thr_aggregate_cache')
 
     expect(usage).toMatchObject({
       cachedTokens: 40,
@@ -119,7 +128,7 @@ describe('thread usage formatting', () => {
       totals: {}
     }))
 
-    const usage = await loadThreadUsage('thr_native_cache')
+    const usage = await loadThreadUsage('codex', 'thr_native_cache')
 
     expect(usage).toMatchObject({
       cachedTokens: 80,
@@ -133,7 +142,7 @@ describe('thread usage formatting', () => {
       throw new Error('thread usage unavailable')
     })
 
-    await expect(loadThreadUsage('thr_error')).rejects.toThrow('thread usage unavailable')
+    await expect(loadThreadUsage('codex', 'thr_error')).rejects.toThrow('thread usage unavailable')
   })
 
   it('returns null when the active runtime reports thread usage as unsupported', async () => {
@@ -145,6 +154,6 @@ describe('thread usage formatting', () => {
       totals: {}
     }))
 
-    await expect(loadThreadUsage('thr_unsupported')).resolves.toBeNull()
+    await expect(loadThreadUsage('codex', 'thr_unsupported')).resolves.toBeNull()
   })
 })

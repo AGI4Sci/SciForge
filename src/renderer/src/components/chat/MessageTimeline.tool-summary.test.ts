@@ -1066,4 +1066,83 @@ describe('MessageTimeline local runtime metadata smoke', () => {
     expect(html).toContain('/tmp/project/src/app.ts')
     expect(html).not.toContain('running timeline detail should stay collapsed')
   })
+
+  it('renders installed Dataset capability results after a completed turn', () => {
+    const blocks: ChatBlock[] = [
+      { kind: 'user', id: 'user_dataset', text: 'load P04637' },
+      toolBlock({
+        id: 'tool_dataset_metadata',
+        summary: 'sciforge_invoke',
+        meta: {
+          toolName: 'sciforge_invoke',
+          success: true
+        },
+        detail: JSON.stringify([{
+          type: 'inputText',
+          text: JSON.stringify({
+            operationRef: 'op_metadata',
+            output: {
+              datasetApi: {
+                actionId: 'dataset-api.metadata',
+                success: true,
+                result: {
+                  source: { id: 'uniprot', name: 'UniProt REST' },
+                  response: { status: 200, bytes: 869335 },
+                  metadata: { primaryAccession: 'P04637' }
+                }
+              }
+            }
+          })
+        }])
+      }),
+      toolBlock({
+        id: 'tool_dataset_raw_data',
+        summary: 'sciforge_invoke',
+        meta: {
+          toolName: 'sciforge_invoke',
+          success: true
+        },
+        detail: JSON.stringify([{
+          type: 'inputText',
+          text: JSON.stringify({
+            operationRef: 'op_raw_data',
+            output: {
+              datasetApi: {
+                actionId: 'dataset-api.raw-data',
+                success: true,
+                result: {
+                  source: { id: 'uniprot', name: 'UniProt REST' },
+                  response: { status: 200, bytes: 490 },
+                  artifact: {
+                    path: '/tmp/project/.sciforge/datasets/raw/uniprot/P04637.fasta',
+                    fileName: 'P04637.fasta',
+                    format: 'fasta',
+                    sha256: '59aace72',
+                    preview: '>sp|P04637|P53_HUMAN Cellular tumor antigen p53\nMEEPQSDPSV'
+                  }
+                }
+              }
+            }
+          })
+        }])
+      })
+    ]
+
+    const html = renderToStaticMarkup(
+      createElement(MessageTimeline, {
+        blocks,
+        liveReasoning: '',
+        live: '',
+        activeThreadId: 'thr_dataset',
+        runtimeConnection: 'ready',
+        onRetryConnection: () => undefined,
+        onOpenSettings: () => undefined
+      })
+    )
+
+    expect(html).toContain('data-timeline-dataset-results')
+    expect(html).toContain('P04637')
+    expect(html).toContain('data-dataset-raw-preview')
+    expect(html).toContain('P53_HUMAN')
+  })
 })

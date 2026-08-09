@@ -144,17 +144,6 @@ import type {
 } from './visible-context'
 import type { RemoteWorkspaceApi } from './remote-workspace'
 import type {
-  VisualStyleExtractRequest,
-  VisualStyleExtractResult,
-  VisualStyleSaveProfileRequest,
-  VisualStyleSaveProfileResult
-} from './visual-style'
-import type {
-  ScientificPlottingPrepareReferenceRequest,
-  ScientificPlottingPrepareReferenceResult,
-  ScientificPlottingStatusResult
-} from './scientific-plotting'
-import type {
   ResearchCard,
   ResearchCardArchiveInput,
   ResearchCardCreateInput,
@@ -281,9 +270,6 @@ export type SkillListResult =
   | { ok: true; skills: SkillListItem[]; validationErrors: Array<{ root: string; message: string }> }
   | { ok: false; message: string }
 export type ScientificSkillsMcpConfigResult =
-  | { ok: true; config: Record<string, unknown> }
-  | { ok: false; message: string }
-export type ScientificPlottingMcpConfigResult =
   | { ok: true; config: Record<string, unknown> }
   | { ok: false; message: string }
 export type BgcDiscoveryMcpConfigResult =
@@ -853,18 +839,11 @@ export type SciForgeApi = {
   pickWorkspaceDirectory: (defaultPath?: string) => Promise<WorkspacePickResult>
   pickFile: (request: WorkspaceFilePickerRequest) => Promise<WorkspacePickResult>
   buildScientificSkillsMcpConfig: (workspaceRoot?: string) => Promise<ScientificSkillsMcpConfigResult>
-  buildScientificPlottingMcpConfig: (workspaceRoot?: string) => Promise<ScientificPlottingMcpConfigResult>
   buildBgcDiscoveryMcpConfig: (workspaceRoot?: string) => Promise<BgcDiscoveryMcpConfigResult>
   buildImageGenerationMcpConfig: (workspaceRoot?: string) => Promise<ImageGenerationMcpConfigResult>
   buildPptMasterMcpConfig: (workspaceRoot?: string) => Promise<PptMasterMcpConfigResult>
   getScientificSkillsStatus: (workspaceRoot?: string) => Promise<ScientificSkillsStatusResult>
   installScientificSkills: (request: ScientificSkillsInstallRequest) => Promise<ScientificSkillsInstallResult>
-  getScientificPlottingStatus: (workspaceRoot?: string) => Promise<ScientificPlottingStatusResult>
-  prepareScientificPlottingReference: (
-    request: ScientificPlottingPrepareReferenceRequest
-  ) => Promise<ScientificPlottingPrepareReferenceResult>
-  extractVisualStyleProfile: (request: VisualStyleExtractRequest) => Promise<VisualStyleExtractResult>
-  saveVisualStyleProfile: (request: VisualStyleSaveProfileRequest) => Promise<VisualStyleSaveProfileResult>
   listSkills: (workspaceRoot?: string) => Promise<SkillListResult>
   saveSkillFile: (rootPath: string, skillName: string, content: string) => Promise<SkillSaveResult>
   openSkillRoot: (rootPath: string) => Promise<PathOpenResult>

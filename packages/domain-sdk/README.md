@@ -174,7 +174,11 @@ operation:
   The host owns target lookup, sensitive-target policy, redaction, callout rendering, and PNG byte
   limits; packages cannot submit DOM selectors or redaction bounds.
 - `@sciforge/domain-sdk/agent-execution` runs an agent thread through a host-owned runtime while
-  exposing only stable request and result data, plus optional cancellation.
+  exposing only stable request and result data, an optional Host-enforced tool allowlist, plus
+  optional cancellation.
+- `@sciforge/domain-sdk/workflow-template` defines the versioned workflow-template bundle and the
+  package-owned execution-receipt adapter used by workflow engines. Engines consume these generic
+  contracts instead of another domain's private artifact directories or receipt layout.
 - `@sciforge/domain-sdk/power` acquires an application keep-awake lease whose release belongs to
   the package lifecycle. Packages cannot choose native power-blocker implementations.
 - `@sciforge/domain-sdk/workspace-host` defines the bounded, versioned locator, session,
@@ -186,6 +190,32 @@ Main runtime lifecycle contributions can subscribe to generic before-turn and te
 events. System capability invocation cannot manufacture user approval. A nested destructive
 operation may request `inherit-current-action`, which the host must reject unless execution is
 already inside a matching approved outer action.
+
+## Execution provenance and reproducibility
+
+`@sciforge/domain-sdk/reproducibility` is the process-neutral contract shared by executable
+domains, Full Trace, Evidence DAG, and Project DAG. It defines the versioned
+`sciforge.execution-event.v1` envelope and the single `sciforge.rerun.v1` specification. Domains
+publish owner-bound events through `DomainMainRuntimeLifecycleHost.executionEvents`; the Host
+persists non-terminal events directly. A terminal event first crosses an owner-only, bounded,
+atomic outbox acceptance boundary, is then written idempotently to Full Trace with the same stable
+event ID, and only then reaches the generic `main.artifact-consumer` contribution. The outbox is
+acknowledged only after every consumer accepts it; failed stages are retried with backoff and
+replayed after Host restart. A package publisher returns once durable acceptance succeeds; bounded
+delivery receipts absorb a repeated intent after a crash, including when the package version has
+changed. Consumers therefore use the event watermark idempotently. The Host does not interpret a
+package's workflow or executor payload.
+
+Rerun specifications explicitly serialize activities, dependencies, inputs, code, environments,
+parameter sets, tools, fresh approval requirements, outputs and comparators, secret slots, and
+breakpoints. Missing executable metadata produces an exportable but blocked specification instead
+of a guessed command. Historical approval is never an authorization for a rerun.
+
+`canonicalizeReproValue` implements the canonical JSON bytes used for digests, and
+`canonicalizeReproSpecForDigest` excludes only `specDigest`. Consumers must validate both the
+strict schema and digest before use. See
+[`docs/reproducible-dag-v3.zh-CN.md`](../../docs/reproducible-dag-v3.zh-CN.md) for ownership,
+lineage, and comparison semantics.
 
 Node-only domain services use stable SDK subpaths for shared host-independent runtime behavior:
 

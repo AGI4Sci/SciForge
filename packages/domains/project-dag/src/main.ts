@@ -1,5 +1,5 @@
 import type {
-  DomainAgentArtifactConsumer,
+  DomainArtifactConsumer,
   DomainMainHost,
   DomainMainRuntimeDisposer,
   DomainMainRuntimeLifecycleContribution
@@ -25,7 +25,7 @@ import {
   type ProjectDagViewInput
 } from './contract.js'
 import {
-  PROJECT_DAG_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION,
+  PROJECT_DAG_ARTIFACT_CONSUMER_CONTRIBUTION,
   PROJECT_DAG_CAPABILITY_FACTORY_CONTRIBUTION,
   PROJECT_DAG_DOMAIN_MODULE_ID,
   PROJECT_DAG_RUNTIME_LIFECYCLE_CONTRIBUTION,
@@ -86,7 +86,7 @@ export type ProjectDagCapabilityFactory<CapabilityDefinition = unknown> = Readon
 export type ProjectDagMainContribution<CapabilityDefinition = unknown> =
   | ProjectDagCapabilityFactory<CapabilityDefinition>
   | DomainMainRuntimeLifecycleContribution
-  | DomainAgentArtifactConsumer
+  | DomainArtifactConsumer
 
 type ProjectDagMainHost = DomainMainHost & Readonly<{
   createProjectDagRuntime?: (
@@ -149,8 +149,8 @@ export function createDomainMainEntry(
       }
     }
   })
-  const artifactConsumer: DomainAgentArtifactConsumer = Object.freeze({
-    consume: async (event) => getRuntime().consumeTurnCompleted(event)
+  const artifactConsumer: DomainArtifactConsumer = Object.freeze({
+    consume: async (event) => getRuntime().consumeArtifact(event)
   })
   return {
     definition: domainPackageDefinition,
@@ -172,7 +172,7 @@ export function createDomainMainEntry(
         }
       },
       {
-        ...PROJECT_DAG_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION,
+        ...PROJECT_DAG_ARTIFACT_CONSUMER_CONTRIBUTION,
         value: artifactConsumer
       }
     ]

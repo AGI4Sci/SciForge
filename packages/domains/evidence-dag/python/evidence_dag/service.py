@@ -10,14 +10,35 @@ import threading
 import time
 import uuid
 from dataclasses import replace
+from datetime import datetime
 from typing import Any, Optional
 
 from . import analysis as _analysis
 from . import audit as _audit
 from . import metrics as _metrics
 from . import provjson
+from .products import export_snapshot_products as _export_snapshot_products
 from . import reconcile as _reconcile
-from .artifacts import ArtifactRegistry
+from .access import (
+    artifact_restricted,
+    availability_restricted,
+    graph_restricted,
+    lineage_restricted,
+    policy_restricted,
+    project_event,
+    project_graph,
+    project_lineage,
+    project_metrics,
+    project_prov_json,
+    project_registry_result,
+    project_snapshot,
+    project_summary,
+    project_update_result,
+    project_update_status,
+    require_unrestricted,
+    scope_restricted,
+)
+from .artifact_versions import ArtifactVersionProjectionClient
 from .assessment import assessment_identity, bind_target_digest, run_a0, run_a1, run_a2
 from .digraph import descendants
 from .human_review import (
@@ -30,8 +51,10 @@ from .events import EventStore, utc_now_iso
 from .extractor import ExtractionOutputError, extract_dag
 from .graph import ThreadGraph
 from .incremental import TraceStagingCache, watermark_regresses
+from .lineage import ingest_trace_lineage
 from .llm import LLM, LLMCallError
-from .model import EdgeRel, HumanReviewStatus
+from .model import EdgeRel, HumanReviewStatus, NodeStatus, NodeType
+from .rerun import build_rerun_spec, compare_rerun_specs, output_values_for_spec
 from .snapshot import (
     EXTRACTOR_VERSION,
     SCHEMA_VERSION,
@@ -48,6 +71,303 @@ from .verifier import verify as _verify
 
 class ReviewDecisionConflict(RuntimeError):
     """Raised when a decision is not bound to the current immutable snapshot."""
+
+
+_EXECUTION_EVENT_SCHEMA = "sciforge.execution-event.v1"
+_RUN_MANIFEST_KIND = "sciforge.create-loop.run-manifest"
+_RUN_MANIFEST_SCHEMA = "sciforge.create-loop.run.v2"
+_RERUN_SPEC_KIND = "sciforge.repro-spec"
+_RERUN_SPEC_SCHEMA = "sciforge.rerun.v1"
+_HOST_EXECUTION_BOUNDARY = "sciforge.host.execution-completed.v1"
+_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_EVENT_KEYS = frozenset({
+    "schemaVersion", "eventId", "phase", "producer", "executionId", "runId",
+    "activityId", "specDigest", "rerunOfRunId", "traceId", "scope",
+    "workspaceRoot", "occurredAt", "payload", "artifacts",
+})
+_TRACE_WRAPPER_KEYS = frozenset({"id", "source_item_id", "sciforgeEvidenceEvent"})
+_MARKER_KEYS = frozenset({
+    "trustedBoundary", "eventKind", "hostBinding", "producer", "executionId", "runId",
+    "activityId", "runtimeId", "threadId", "turnId", "occurredAt", "targetWatermark",
+    "workspaceRoot",
+})
+
+
+def _bounded_text(value: Any, maximum: int = 512) -> Optional[str]:
+    if not isinstance(value, str) or not value.strip() or value != value.strip():
+        return None
+    return value if len(value) <= maximum else None
+
+
+def _valid_timestamp(value: Any) -> bool:
+    text = _bounded_text(value, 128)
+    if text is None:
+        return False
+    try:
+        datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        return False
+    return True
+
+
+def _valid_producer(value: Any) -> bool:
+    return isinstance(value, dict) and set(value) == {"moduleId", "moduleVersion"} \
+        and _bounded_text(value.get("moduleId")) is not None \
+        and _bounded_text(value.get("moduleVersion"), 128) is not None
+
+
+def _trusted_execution_marker(item: dict[str, Any]) -> Optional[dict[str, Any]]:
+    marker = item.get("sciforgeEvidenceEvent")
+    if not isinstance(marker, dict) or not set(marker).issubset(_MARKER_KEYS):
+        return None
+    required = {
+        "trustedBoundary", "eventKind", "hostBinding", "producer", "executionId", "runId",
+        "runtimeId", "threadId", "occurredAt", "targetWatermark",
+    }
+    if not required.issubset(marker) \
+            or marker.get("trustedBoundary") != _HOST_EXECUTION_BOUNDARY \
+            or marker.get("eventKind") != "execution-completed" \
+            or not _valid_producer(marker.get("producer")) \
+            or any(_bounded_text(marker.get(key)) is None for key in (
+                "executionId", "runId", "runtimeId", "threadId", "targetWatermark",
+            )) \
+            or not _valid_timestamp(marker.get("occurredAt")):
+        return None
+    binding = marker.get("hostBinding")
+    if not isinstance(binding, dict) or binding.get("contractVersion") != 1:
+        return None
+    sequence = binding.get("acceptanceSequence")
+    watermark = str(marker["targetWatermark"])
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1 \
+            or watermark.split(":", 1)[0] != str(sequence):
+        return None
+    workspace_binding = binding.get("workspaceBinding")
+    if workspace_binding == "capability-caller":
+        if set(binding) != {
+            "contractVersion", "acceptanceSequence", "workspaceBinding", "workspaceRoot",
+        }:
+            return None
+        root = _bounded_text(binding.get("workspaceRoot"), 4096)
+        if root is None or marker.get("workspaceRoot") != root:
+            return None
+    elif workspace_binding == "unbound":
+        if set(binding) != {
+            "contractVersion", "acceptanceSequence", "workspaceBinding",
+        } or "workspaceRoot" in marker:
+            return None
+    else:
+        return None
+    expected_keys = set(required)
+    if workspace_binding == "capability-caller":
+        expected_keys.add("workspaceRoot")
+    for key in ("activityId", "turnId"):
+        if key in marker:
+            if _bounded_text(marker.get(key)) is None:
+                return None
+            expected_keys.add(key)
+    if set(marker) != expected_keys:
+        return None
+    return marker
+
+
+def _valid_execution_event(item: dict[str, Any], marker: dict[str, Any]) -> bool:
+    event = {key: value for key, value in item.items() if key not in _TRACE_WRAPPER_KEYS}
+    required = {
+        "schemaVersion", "eventId", "phase", "producer", "executionId", "runId",
+        "occurredAt", "artifacts",
+    }
+    if not required.issubset(event) or not set(event).issubset(_EVENT_KEYS) \
+            or event.get("schemaVersion") != _EXECUTION_EVENT_SCHEMA \
+            or event.get("phase") not in {"run_completed", "run_failed"} \
+            or not _valid_producer(event.get("producer")) \
+            or any(_bounded_text(event.get(key)) is None for key in (
+                "eventId", "executionId", "runId",
+            )) \
+            or not _valid_timestamp(event.get("occurredAt")) \
+            or not isinstance(event.get("artifacts"), list) \
+            or len(event["artifacts"]) > 10_000:
+        return False
+    if event["producer"] != marker["producer"] \
+            or event["executionId"] != marker["executionId"] \
+            or event["runId"] != marker["runId"] \
+            or event["occurredAt"] != marker["occurredAt"] \
+            or event.get("activityId") != marker.get("activityId"):
+        return False
+    binding = marker["hostBinding"]
+    if binding["workspaceBinding"] == "capability-caller":
+        if event.get("workspaceRoot") != binding["workspaceRoot"]:
+            return False
+    elif "workspaceRoot" in event:
+        return False
+    if "specDigest" in event and not _SHA256_RE.fullmatch(str(event["specDigest"])):
+        return False
+    if "rerunOfRunId" in event and _bounded_text(event.get("rerunOfRunId")) is None:
+        return False
+    if "traceId" in event and _bounded_text(event.get("traceId")) is None:
+        return False
+    scope = event.get("scope")
+    if scope is not None and (
+        not isinstance(scope, dict) or not set(scope).issubset({"runtimeId", "threadId", "turnId"})
+        or any(_bounded_text(value) is None for value in scope.values())
+    ):
+        return False
+    normalized_scope = scope if isinstance(scope, dict) else {}
+    explicit_runtime = normalized_scope.get("runtimeId")
+    explicit_thread = normalized_scope.get("threadId")
+    if bool(explicit_runtime) != bool(explicit_thread):
+        return False
+    if explicit_runtime:
+        if explicit_runtime != marker["runtimeId"] or explicit_thread != marker["threadId"]:
+            return False
+    elif marker["runtimeId"] != f"domain:{event['producer']['moduleId']}" \
+            or marker["threadId"] != f"execution:{event['executionId']}":
+        return False
+    if normalized_scope.get("turnId") != marker.get("turnId"):
+        return False
+    try:
+        json.dumps(event, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError, UnicodeError):
+        return False
+    return True
+
+
+def _valid_run_manifest(value: Any) -> bool:
+    if not isinstance(value, dict) or value.get("schema") != _RUN_MANIFEST_SCHEMA:
+        return False
+    required = {
+        "source", "workflow", "input", "context", "comparator", "determinism",
+        "workflowFingerprint", "inputFingerprint", "specFingerprint",
+        "contextFingerprint", "outputFingerprint", "outputJson",
+        "approvalFingerprint", "artifactRefs", "approvals",
+    }
+    if not required.issubset(value) or any(
+        not _SHA256_RE.fullmatch(str(value.get(key) or "")) for key in (
+            "workflowFingerprint", "inputFingerprint", "specFingerprint",
+            "contextFingerprint", "outputFingerprint", "approvalFingerprint",
+        )
+    ) or not isinstance(value.get("artifactRefs"), list) \
+            or not isinstance(value.get("approvals"), list):
+        return False
+    try:
+        json.dumps(value, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError, UnicodeError):
+        return False
+    return True
+
+
+def _is_canonical_execution_bundle(trace: list[dict[str, Any]]) -> bool:
+    """Return true only for a complete SDK execution-event artifact bundle.
+
+    These items already carry typed, digest-bound lineage.  Sending them through
+    semantic extraction would make durable provenance depend on model availability
+    and could also reinterpret canonical executor records.  Mixed or unrecognised
+    traces deliberately fall back to the normal LLM extraction/review path.
+    """
+    if not trace:
+        return False
+    saw_terminal_event = False
+    bundle_marker: Optional[dict[str, Any]] = None
+    declared_artifacts: list[str] = []
+    observed_artifacts: list[str] = []
+    for item in trace:
+        if not isinstance(item, dict):
+            return False
+        marker = _trusted_execution_marker(item)
+        if marker is None:
+            return False
+        if bundle_marker is None:
+            bundle_marker = marker
+        elif bundle_marker != marker:
+            return False
+        if item.get("schemaVersion") == _EXECUTION_EVENT_SCHEMA:
+            if saw_terminal_event or not _valid_execution_event(item, marker):
+                return False
+            saw_terminal_event = True
+            for artifact in item["artifacts"]:
+                canonical = _canonical_bundle_artifact(artifact)
+                if canonical is None:
+                    return False
+                declared_artifacts.append(canonical)
+            continue
+        kind = item.get("kind")
+        if kind == _RUN_MANIFEST_KIND:
+            manifest = item.get("manifest")
+            if not _valid_run_manifest(manifest):
+                return False
+        elif kind == _RERUN_SPEC_KIND:
+            spec = item.get("spec")
+            if not isinstance(spec, dict) or spec.get("schemaVersion") != _RERUN_SPEC_SCHEMA:
+                return False
+            try:
+                validate_rerun_spec(spec)
+            except (TypeError, ValueError):
+                return False
+        else:
+            return False
+        canonical = _canonical_bundle_artifact(item)
+        if canonical is None:
+            return False
+        observed_artifacts.append(canonical)
+    return saw_terminal_event and bool(declared_artifacts) \
+        and sorted(declared_artifacts) == sorted(observed_artifacts)
+
+
+def _canonical_bundle_artifact(value: Any) -> Optional[str]:
+    """Canonicalize an embedded/flattened artifact for exact multiset binding."""
+    if not isinstance(value, dict):
+        return None
+    projected = {
+        key: item for key, item in value.items()
+        if key not in _TRACE_WRAPPER_KEYS
+    }
+    try:
+        return json.dumps(
+            projected, ensure_ascii=False, allow_nan=False,
+            sort_keys=True, separators=(",", ":"),
+        )
+    except (TypeError, ValueError, UnicodeError):
+        return None
+
+
+def _historical_rerun_refs(trace: list[dict[str, Any]]) -> frozenset[str]:
+    refs: set[str] = set()
+    for item in trace:
+        if item.get("schemaVersion") == _EXECUTION_EVENT_SCHEMA:
+            value = _bounded_text(item.get("rerunOfRunId"))
+            if value:
+                refs.add(value)
+        manifest = item.get("manifest") if item.get("kind") == _RUN_MANIFEST_KIND else None
+        if isinstance(manifest, dict):
+            value = _bounded_text(manifest.get("rerunOfRunId"))
+            if value:
+                refs.add(value)
+    return frozenset(refs)
+
+
+def _mark_declared_semantic_nodes(graph: ThreadGraph) -> list[dict[str, str]]:
+    """Expose declared execution conclusions without claiming NLI verification.
+
+    Project DAG intentionally ignores ``open`` nodes.  A canonical executor has
+    authoritatively declared these semantic records, but no independent model has
+    judged their entailment, so ``fragile`` is the strongest honest promotion.
+    Source assertions retain the verifier's normal trusted-terminal treatment.
+    """
+    changes: list[dict[str, str]] = []
+    for node in graph.nodes.values():
+        role = node.attributes.get("semanticRole")
+        target: Optional[NodeStatus] = None
+        if role == "evidence" and node.type == NodeType.SOURCE_ASSERTION:
+            target = NodeStatus.SUPPORTED
+        elif role in {"evidence", "conclusion"} and node.type in {
+            NodeType.CLAIM, NodeType.CONCLUSION, NodeType.FINDING,
+        }:
+            target = NodeStatus.FRAGILE
+        if target is None or node.status == target:
+            continue
+        before = node.status
+        node.status = target
+        changes.append({"node": node.id, "from": before.value, "to": target.value})
+    return changes
 
 
 def evidence_update_error(error: BaseException) -> dict[str, Any]:
@@ -93,7 +413,6 @@ class Engine:
         self._audit_runs: dict[str, list[dict]] = {}
         self._updated: dict[str, float] = {}
         self._last_delta: dict[str, dict] = {}
-        self._registries: dict[str, ArtifactRegistry] = {}
         self._lock = threading.RLock()
         self._compile_locks: dict[str, threading.RLock] = {}
         # Read-path caches keyed by file mtime; snapshot files are immutable
@@ -185,24 +504,6 @@ class Engine:
         scope_key = f"workspace:{hashlib.sha256(identity.encode('utf-8')).hexdigest()}"
         return workspace, project, scope_key
 
-    def _registry(
-        self, *, workspace_root: str, project_root: Optional[str],
-    ) -> ArtifactRegistry:
-        workspace, project, scope_key = self._workspace_scope(workspace_root, project_root)
-        # Guard the check-then-create: concurrent HTTP handlers must never end
-        # up with two Registry instances writing the same persistent file.
-        with self._lock:
-            registry = self._registries.get(scope_key)
-            if registry is None:
-                registry_path = os.path.join(
-                    self.storage_dir, "artifact-registries", f"{self._safe_key(scope_key)}.json",
-                ) if self.storage_dir else None
-                registry = ArtifactRegistry(
-                    registry_path, workspace_roots=(project,), locator_root=workspace,
-                )
-                self._registries[scope_key] = registry
-            return registry
-
     def _compile_lock(self, thread_id: str) -> threading.RLock:
         """Serialize one thread without blocking independent DAG compiles or readers."""
         with self._lock:
@@ -235,6 +536,8 @@ class Engine:
             raise ValueError("reason and priority are required")
         if trace is not None and not isinstance(trace, list):
             raise ValueError("trace must be a list when supplied")
+        if access_policy is not None and not isinstance(access_policy, dict):
+            raise ValueError("accessPolicy must be an object when supplied")
         if rebuild and reason not in {"schema_upgrade", "corruption_recovery", "reinterpretation"}:
             raise ValueError("rebuild requires an explicit advanced rebuild reason")
         if rebuild and not str(rebuild_rationale or "").strip():
@@ -256,7 +559,6 @@ class Engine:
             workspace, project, _scope_key = self._workspace_scope(
                 workspace_root, project_root,
             )
-            registry = self._registry(workspace_root=workspace, project_root=project)
             staged = self._trace_staging.begin(
                 thread_id=thread_id,
                 target_watermark=str(target_watermark),
@@ -265,10 +567,14 @@ class Engine:
                 rebuild=rebuild,
             )
             incremental_trace = list(staged.trace)
-            registry_digest = registry.state_digest()
-            committed_registry_digest = (
-                current_graph.meta.get("artifactRegistryDigest")
-                if current_graph is not None else None
+            artifact_versions = ArtifactVersionProjectionClient(
+                incremental_trace, workspace_roots=(project,), locator_root=workspace,
+            )
+            committed_projection_digest = current_graph.meta.get(
+                "artifactVersionProjectionDigest"
+            ) if current_graph is not None else None
+            projection_digest = artifact_versions.state_digest() if incremental_trace else (
+                committed_projection_digest or artifact_versions.state_digest()
             )
             no_op_against_committed = bool(
                 current is not None
@@ -276,7 +582,7 @@ class Engine:
                 and not rebuild
                 and not incremental_trace
                 and str(target_watermark) == current.input_watermark
-                and committed_registry_digest == registry_digest
+                and committed_projection_digest == projection_digest
                 and current_graph.meta.get("inputDigest")
             )
             input_digest = str(current_graph.meta["inputDigest"]) \
@@ -285,10 +591,7 @@ class Engine:
                     trace=incremental_trace, workspace_root=workspace, project_root=project,
                     rebuild=rebuild, threshold=threshold,
                     access_policy=access_policy, rebuild_rationale=rebuild_rationale,
-                    # Artifact lifecycle is an input even when the runtime trace and
-                    # watermark are unchanged. Omitting it would make content changes
-                    # incorrectly replay the old snapshot.
-                    registry_digest=registry_digest,
+                    artifact_version_projection_digest=projection_digest,
                 )
             previous_status = self._updates.get(thread_id) or self._load_update_status(thread_id)
             prior_input_digest = (previous_status or {}).get("inputDigest") or (
@@ -323,6 +626,7 @@ class Engine:
                     "id": f"evidence-update:{uuid.uuid4().hex}", "threadId": thread_id,
                     "state": "fresh", "desiredWatermark": str(target_watermark),
                     "currentWatermark": current.input_watermark, "reason": reason, "priority": priority,
+                    "accessPolicy": dict(access_policy or {}),
                     "inputDigest": input_digest, "snapshotDigest": current.digest,
                     "eventIdempotencyKey": event_key, "queuedEventId": queued_event["eventId"],
                     "startedAt": utc_now_iso(), "completedAt": utc_now_iso(), "error": None,
@@ -343,6 +647,7 @@ class Engine:
                 "desiredWatermark": str(target_watermark),
                 "reason": reason,
                 "priority": priority,
+                "accessPolicy": dict(access_policy or {}),
                 "inputDigest": input_digest,
                 "eventIdempotencyKey": event_key,
                 "queuedEventId": queued_event["eventId"],
@@ -363,37 +668,67 @@ class Engine:
                     "accessPolicy": dict(access_policy or {}),
                 }
 
+                declared_execution_bundle = False
                 if incremental_trace:
-                    if self.llm is None:
-                        raise RuntimeError("no independent Model Router client configured for extraction/review")
-                    extracted = extract_dag(
-                        incremental_trace, self.llm, thread_id, artifact_registry=registry,
-                    )
-                    if rebuild or base is None:
-                        extracted.meta.update(graph.meta)
-                        graph = extracted
-                        delta = {"new_nodes": list(graph.nodes), "new_edges": list(graph.edges)}
-                    else:
-                        delta = graph.merge_from(extracted)
+                    if _is_canonical_execution_bundle(incremental_trace):
+                        # Parse deterministic execution lineage against the cloned
+                        # committed graph.  A rerun manifest can name a baseline
+                        # run from an earlier snapshot; parsing it in an empty
+                        # delta graph would make that external id look dangling
+                        # and silently discard rerun_of/replication edges.
+                        before_nodes = set(graph.nodes)
+                        before_edges = set(graph.edges)
+                        lineage_delta = ingest_trace_lineage(
+                            graph, incremental_trace, artifact_versions,
+                            created_by="sdk-execution-lineage",
+                            allowed_historical_rerun_refs=_historical_rerun_refs(
+                                incremental_trace
+                            ),
+                        )
+                        declared_execution_bundle = lineage_delta["envelopes"] > 0
+                        if declared_execution_bundle:
+                            graph.meta["extractionMode"] = "declared-execution-lineage"
+                            graph.meta["declaredLineage"] = dict(lineage_delta)
+                            delta = {
+                                "new_nodes": [
+                                    node_id for node_id in graph.nodes
+                                    if node_id not in before_nodes
+                                ],
+                                "new_edges": [
+                                    edge_id for edge_id in graph.edges
+                                    if edge_id not in before_edges
+                                ],
+                            }
+                    if not declared_execution_bundle:
+                        if self.llm is None:
+                            raise RuntimeError(
+                                "no independent Model Router client configured for extraction/review"
+                            )
+                        extracted = extract_dag(
+                            incremental_trace, self.llm, thread_id,
+                            artifact_versions=artifact_versions,
+                        )
+                        if rebuild or base is None:
+                            extracted.meta.update(graph.meta)
+                            graph = extracted
+                            delta = {"new_nodes": list(graph.nodes), "new_edges": list(graph.edges)}
+                        else:
+                            delta = graph.merge_from(extracted)
                 else:
                     delta = {"new_nodes": [], "new_edges": []}
 
-                # Extraction may register the first observed ArtifactVersion.
-                # Persist the post-extraction Registry digest so replaying the
-                # same trace remains idempotent while later lifecycle changes
-                # still invalidate the compiler input.
                 input_digest = self._update_input_digest(
                     thread_id=thread_id, target_watermark=str(target_watermark), reason=reason,
                     trace=incremental_trace, workspace_root=workspace, project_root=project,
                     rebuild=rebuild, threshold=threshold,
                     access_policy=access_policy, rebuild_rationale=rebuild_rationale,
-                    registry_digest=registry.state_digest(),
+                    artifact_version_projection_digest=projection_digest,
                 )
                 graph.meta["inputDigest"] = input_digest
                 graph.meta["traceIngestion"] = self._trace_staging.committed_metadata(staged)
-                graph.meta["artifactRegistryDigest"] = registry.state_digest()
+                graph.meta["artifactVersionProjectionDigest"] = projection_digest
                 status["inputDigest"] = input_digest
-                self._sync_registry(graph, registry)
+                self._sync_artifact_versions(graph, artifact_versions)
                 self._trace_staging.persist_provisional_graph(
                     staged, graph, phase="verification",
                     temporary_edge_count=len(delta.get("new_edges") or []),
@@ -403,7 +738,26 @@ class Engine:
                     "traceStaging": staged.summary(),
                 })
                 self._persist_update_status(thread_id)
-                if graph.edges:
+                if declared_execution_bundle:
+                    declared_status_changes = _mark_declared_semantic_nodes(graph)
+                    verification = {
+                        "threshold": threshold,
+                        "supports_edges_scored": 0,
+                        "supports_edges_total": sum(
+                            edge.rel == EdgeRel.SUPPORTS for edge in graph.edges.values()
+                        ),
+                        "contradicts_edges_scored": 0,
+                        "status_changes": declared_status_changes,
+                        "aggregates": {},
+                        "mode": "declared-execution-lineage",
+                        "status": "deferred",
+                        "reason": "canonical_executor_records_preserved_without_model_scoring",
+                    }
+                    graph.meta["semanticVerification"] = {
+                        "status": "deferred",
+                        "reason": verification["reason"],
+                    }
+                elif graph.edges:
                     if self.llm is None:
                         raise RuntimeError("no independent verifier configured")
                     verification = _verify(
@@ -416,7 +770,7 @@ class Engine:
                         "status_changes": [], "aggregates": {},
                     }
 
-                semantic_edge_ids = {
+                semantic_edge_ids = set() if declared_execution_bundle else {
                     edge_id for edge_id in (delta.get("new_edges") or [])
                     if edge_id in graph.edges and graph.edges[edge_id].rel in {
                         EdgeRel.SUPPORTS, EdgeRel.CONTRADICTS,
@@ -431,7 +785,12 @@ class Engine:
                     changed_node_ids=delta.get("new_nodes") or [],
                     changed_edge_ids=delta.get("new_edges") or [],
                 )
-                if self.llm is not None:
+                if declared_execution_bundle:
+                    graph.meta["adversarialReview"] = {
+                        "status": "deferred",
+                        "reason": "canonical_executor_records_preserved_without_model_review",
+                    }
+                elif self.llm is not None:
                     pending.extend(run_a2(
                         graph, self.llm, reviewer_version=VERIFIER_VERSION,
                         target_ids=set(a2_targets),
@@ -532,7 +891,8 @@ class Engine:
     def _update_input_digest(
         *, thread_id: str, target_watermark: str, reason: str, trace: Optional[list[dict]],
         workspace_root: str, project_root: Optional[str], rebuild: bool,
-        threshold: float, access_policy: Optional[dict[str, Any]], registry_digest: str,
+        threshold: float, access_policy: Optional[dict[str, Any]],
+        artifact_version_projection_digest: str,
         rebuild_rationale: Optional[str],
     ) -> str:
         payload = json.dumps({
@@ -542,7 +902,8 @@ class Engine:
             "rebuild": rebuild, "threshold": threshold, "accessPolicy": access_policy or {},
             "rebuildRationale": rebuild_rationale,
             "schemaVersion": SCHEMA_VERSION, "extractorVersion": EXTRACTOR_VERSION,
-            "verifierVersion": VERIFIER_VERSION, "artifactRegistryDigest": registry_digest,
+            "verifierVersion": VERIFIER_VERSION,
+            "artifactVersionProjectionDigest": artifact_version_projection_digest,
         }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
 
@@ -559,7 +920,7 @@ class Engine:
             and isinstance(status.get("error"), dict)
         ):
             staging = {**staging, "error": dict(status["error"])}
-        return {
+        result = {
             "threadId": thread_id,
             "status": status.get("state", "fresh" if snapshot else "dirty"),
             "desiredWatermark": status.get("desiredWatermark"),
@@ -578,34 +939,159 @@ class Engine:
             ),
             "staging": staging,
         }
+        access_graph = committed_graph or self.provisional_graph(thread_id)
+        if policy_restricted(status.get("accessPolicy")):
+            synthetic = ThreadGraph(thread_id, {
+                "scope": {"accessPolicy": status.get("accessPolicy")},
+            })
+            return project_update_status(synthetic, result)
+        if access_graph is not None:
+            return project_update_status(access_graph, result)
+        return result
 
     def provisional_graph(self, thread_id: str) -> Optional[ThreadGraph]:
         """Return the isolated compile candidate, never the committed read model."""
         return self._trace_staging.provisional_graph(thread_id)
 
-    def _sync_registry(self, graph: ThreadGraph, registry: ArtifactRegistry) -> None:
+    def graph_view(self, thread_id: str) -> dict[str, Any]:
+        """Return the committed graph after applying fail-closed read projection."""
+        return project_graph(self.require(thread_id))
+
+    def update_result_view(
+        self, thread_id: str, result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Project a command response before it crosses the HTTP boundary."""
+        graph = self.require(thread_id)
+        update = result.get("update")
+        if isinstance(update, dict) and policy_restricted(update.get("accessPolicy")):
+            graph = ThreadGraph(thread_id, {
+                "scope": {"accessPolicy": update.get("accessPolicy")},
+            })
+        return project_update_result(graph, result)
+
+    def graph_summary(self, thread_id: str) -> dict[str, Any]:
+        """Return a summary without parallel identity/cycle-path leakage."""
+        return project_summary(self.require(thread_id))
+
+    def snapshot_view(self, thread_id: str) -> dict[str, Any]:
+        """Return committed snapshot metadata through the access projector."""
+        graph = self.require(thread_id)
+        snapshot = self.latest_snapshot(thread_id)
+        if snapshot is None:
+            raise KeyError(thread_id)
+        return project_snapshot(graph, snapshot.to_dict())
+
+    def provisional_graph_view(self, thread_id: str) -> Optional[dict[str, Any]]:
+        """Return the staging graph after applying the same read projection."""
+        graph = self.provisional_graph(thread_id)
+        return project_graph(graph) if graph is not None else None
+
+    def provisional_graph_summary(self, thread_id: str) -> Optional[dict[str, Any]]:
+        graph = self.provisional_graph(thread_id)
+        return project_summary(graph) if graph is not None else None
+
+    def _sync_artifact_versions(
+        self, graph: ThreadGraph, projection: ArtifactVersionProjectionClient,
+    ) -> None:
+        """Apply the owner domain's read-only refs/events without rewriting pins."""
+        for version_id, ref in projection.refs.items():
+            if version_id not in graph.artifact_versions:
+                continue
+            prior = graph.artifact_version_refs.get(version_id)
+            if prior is not None and prior != ref:
+                raise ValueError(f"conflicting immutable ArtifactVersionRef: {version_id}")
+            graph.artifact_version_refs[version_id] = ref
+
+        graph.meta["artifactVersionLifecycleWatermark"] = max(
+            int(graph.meta.get("artifactVersionLifecycleWatermark") or 0),
+            projection.lifecycle_last_sequence,
+        )
+        if projection.lifecycle_observed:
+            graph.meta["artifactVersionLifecyclePending"] = projection.lifecycle_pending
+        lifecycle_pending = bool(graph.meta.get("artifactVersionLifecyclePending"))
+
+        stale_versions: set[str] = set()
+        restored_versions: set[str] = set()
+        review_versions: dict[str, str] = {}
+        for event in projection.lifecycle_events:
+            version = graph.artifact_versions.get(event.version_id)
+            if event.event_type in {"artifact-missing"}:
+                if version is not None:
+                    version.availability = "missing"
+                stale_versions.add(event.version_id)
+                review_versions[event.version_id] = "artifact-missing"
+            elif event.event_type in {"artifact-restored"}:
+                if version is not None:
+                    version.availability = "available"
+                restored_versions.add(event.version_id)
+            elif event.event_type == "availability-changed":
+                availability = event.detail.get("availability")
+                if version is not None and availability in {"available", "missing", "remote"}:
+                    version.availability = availability
+                if availability == "missing":
+                    stale_versions.add(event.version_id)
+            elif event.event_type == "artifact-content-changed":
+                # A refresh event without a new committed version proves that
+                # the bytes no longer match this pinned digest.
+                if event.previous_version_id:
+                    stale_versions.add(event.previous_version_id)
+                    review_versions[event.previous_version_id] = "artifact-content-changed"
+                else:
+                    stale_versions.add(event.version_id)
+                    review_versions[event.version_id] = "artifact-content-changed"
+            elif event.event_type == "artifact-moved":
+                review_versions[event.version_id] = "artifact-moved"
+            elif event.event_type in {"version-committed", "current-changed"} \
+                    and event.previous_version_id:
+                stale_versions.add(event.previous_version_id)
+
         stale_roots: list[str] = []
         for node in graph.nodes.values():
+            projection_status = str(
+                node.attributes.get("artifactVersionProvenanceStatus") or ""
+            ).strip().lower()
+            if projection_status in {"pending", "failed"}:
+                node.freshness = "stale"
+                stale_roots.append(node.id)
+                continue
             if not node.artifact_id:
                 continue
-            artifact = registry.artifacts.get(node.artifact_id)
-            referenced = registry.versions.get(node.artifact_version_id or "")
+            prior_review_reason = node.attributes.get("artifactVersionReviewReason")
+            if lifecycle_pending:
+                node.attributes["artifactVersionReviewRequired"] = True
+                node.attributes["artifactVersionReviewReason"] = "lifecycle-backlog"
+                node.freshness = "stale"
+                stale_roots.append(node.id)
+                continue
+            if prior_review_reason == "lifecycle-backlog":
+                node.attributes.pop("artifactVersionReviewRequired", None)
+                node.attributes.pop("artifactVersionReviewReason", None)
+                node.freshness = "fresh"
+            projected_artifact = projection.artifacts.get(node.artifact_id)
+            if projected_artifact is not None:
+                graph.artifacts[projected_artifact.artifact_id] = type(projected_artifact).from_dict(
+                    projected_artifact.to_dict()
+                )
+            artifact = graph.artifacts.get(node.artifact_id)
+            referenced = graph.artifact_versions.get(node.artifact_version_id or "")
             if not artifact or not referenced:
                 node.freshness = "stale"
                 stale_roots.append(node.id)
                 continue
-            graph.artifacts[artifact.artifact_id] = type(artifact).from_dict(artifact.to_dict())
-            graph.artifact_versions[referenced.version_id] = type(referenced).from_dict(referenced.to_dict())
-            current = registry.versions.get(artifact.current_version_id)
-            if current:
-                graph.artifact_versions[current.version_id] = type(current).from_dict(current.to_dict())
-            if node.source_anchor_id and node.source_anchor_id in registry.anchors:
-                anchor = registry.anchors[node.source_anchor_id]
+            if referenced.version_id in review_versions:
+                node.attributes["artifactVersionReviewRequired"] = True
+                node.attributes["artifactVersionReviewReason"] = review_versions[
+                    referenced.version_id
+                ]
+            if node.source_anchor_id and node.source_anchor_id in projection.anchors:
+                anchor = projection.anchors[node.source_anchor_id]
                 graph.source_anchors[anchor.anchor_id] = type(anchor).from_dict(anchor.to_dict())
-            if referenced.availability == "missing" or artifact.current_version_id != referenced.version_id:
+            if referenced.availability == "missing" or referenced.version_id in stale_versions \
+                    or artifact.current_version_id != referenced.version_id:
                 node.freshness = "stale"
                 stale_roots.append(node.id)
-            else:
+            elif node.freshness != "stale" or referenced.version_id in restored_versions \
+                    or referenced.version_id in projection.refs:
                 node.freshness = "fresh"
         if not stale_roots:
             return
@@ -615,108 +1101,6 @@ class Engine:
             stale_downstream.update(descendants(support_graph, root))
         for node_id in stale_downstream:
             graph.nodes[node_id].freshness = "stale"
-
-    # --- Artifact Registry commands --------------------------------------
-    def register_artifact(
-        self, *, workspace_root: str, project_root: Optional[str], payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        registry = self._registry(workspace_root=workspace_root, project_root=project_root)
-        artifact, version, outcome = registry.register(
-            kind=payload.get("kind", "other"), locator=payload.get("locator", ""),
-            content_digest=payload.get("contentDigest"), version=payload.get("version"),
-            size=payload.get("size"), media_type=payload.get("mediaType"),
-            retention=payload.get("retention", "reference"),
-            access_policy=payload.get("accessPolicy") if isinstance(payload.get("accessPolicy"), dict) else None,
-        )
-        anchor = None
-        if isinstance(payload.get("selector"), dict):
-            anchor = registry.create_anchor(
-                artifact.artifact_id, payload["selector"], anchor_digest=payload.get("anchorDigest"),
-                artifact_version_id=version.version_id,
-            )
-        return {"outcome": outcome, "artifact": artifact.to_dict(), "artifactVersion": version.to_dict(),
-                "sourceAnchor": anchor.to_dict() if anchor else None}
-
-    def resolve_artifact(
-        self, artifact_id: str, *, workspace_root: str,
-        project_root: Optional[str], candidate_locators: list[str],
-    ) -> dict[str, Any]:
-        result = self._registry(
-            workspace_root=workspace_root, project_root=project_root,
-        ).resolve(
-            artifact_id, candidate_locators=candidate_locators,
-        )
-        event = result.get("event")
-        if isinstance(event, dict):
-            workspace, project, _scope_key = self._workspace_scope(
-                workspace_root, project_root,
-            )
-            result = {**result, "domainEvent": self._event_store.append_lifecycle(
-                event, workspace_root=workspace, project_root=project,
-            )}
-        return result
-
-    def resolve_artifacts(
-        self, *, workspace_root: str, project_root: Optional[str],
-    ) -> dict[str, Any]:
-        """Scan one workspace-scoped Registry and locate affected Evidence snapshots."""
-        workspace, project, _scope_key = self._workspace_scope(workspace_root, project_root)
-        registry = self._registry(
-            workspace_root=workspace, project_root=project,
-        )
-        events = registry.resolve_all()
-        domain_events = [
-            self._event_store.append_lifecycle(
-                event, workspace_root=workspace, project_root=project,
-            )
-            for event in events
-        ]
-        changed_ids = {event["artifactId"] for event in events}
-        affected: list[dict[str, Any]] = []
-        if changed_ids:
-            for thread_id in self.list_threads():
-                graph = self.get(thread_id)
-                if graph is None:
-                    continue
-                scope = (graph.meta or {}).get("scope") or {}
-                if (
-                    scope.get("workspaceRoot") != workspace
-                    or scope.get("projectRoot") != project
-                ):
-                    continue
-                used = sorted({
-                    node.artifact_id for node in graph.nodes.values()
-                    if node.artifact_id in changed_ids
-                })
-                if not used:
-                    continue
-                snapshot = self.latest_snapshot(thread_id)
-                if snapshot is None:
-                    continue
-                affected.append({
-                    "threadId": thread_id,
-                    "targetWatermark": snapshot.input_watermark,
-                    "artifactIds": used,
-                })
-        return {
-            "events": events,
-            "domainEvents": domain_events,
-            "affectedThreads": affected,
-            "scope": {
-                "workspaceRoot": workspace,
-                "projectRoot": project,
-            },
-        }
-
-    def acknowledge_artifact_events(
-        self, *, workspace_root: str, project_root: Optional[str],
-        event_ids: list[str],
-    ) -> dict[str, Any]:
-        registry = self._registry(
-            workspace_root=workspace_root, project_root=project_root,
-        )
-        acknowledged = registry.acknowledge_events(event_ids)
-        return {"acknowledged": acknowledged, "pending": len(registry.pending_events)}
 
     # --- read models / audit side chain ----------------------------------
     def get(self, thread_id: str) -> Optional[ThreadGraph]:
@@ -854,6 +1238,7 @@ class Engine:
                     "snapshot changed; reload review packets before recording a decision"
                 )
             graph = self.require(thread_id)
+            require_unrestricted(graph, "human review decision")
             if not any(packet.review_packet_id == packet_id for packet in graph.review_packets):
                 raise KeyError(packet_id)
             decision_time = utc_now_iso()
@@ -942,23 +1327,112 @@ class Engine:
             found[thread_id] = max(found.get(thread_id, 0.0), self._updated.get(thread_id, 0.0))
         return [key for key, _ in sorted(found.items(), key=lambda item: (-item[1], item[0]))]
 
+    def list_threads_for_read(self) -> list[str]:
+        """Hide restricted aggregate identities from the global thread index."""
+        visible: list[str] = []
+        for thread_id in self.list_threads():
+            try:
+                graph = self.get(thread_id)
+            except (OSError, TypeError, ValueError):
+                # A graph that cannot be verified is not a safe public index row.
+                continue
+            if graph is not None and not graph_restricted(graph):
+                visible.append(thread_id)
+        return visible
+
     def last_delta(self, thread_id: str) -> dict:
-        return self._last_delta.get(thread_id, {"new_nodes": [], "new_edges": []})
+        delta = self._last_delta.get(thread_id, {"new_nodes": [], "new_edges": []})
+        graph = self.get(thread_id)
+        if graph is None or not graph_restricted(graph):
+            return dict(delta)
+        return {
+            "new_node_count": len(delta.get("new_nodes") or []),
+            "new_edge_count": len(delta.get("new_edges") or []),
+            "accessRestricted": True,
+        }
 
     def provenance(self, thread_id: str, node_id: str) -> dict:
-        return self.require(thread_id).provenance_path(node_id)
+        graph = self.require(thread_id)
+        return project_lineage(graph, graph.provenance_path(node_id))
+
+    def conclusion_lineage(
+        self, thread_id: str, *, target_digest: str, conclusion_id: str,
+    ) -> dict[str, Any]:
+        graph, snapshot = self.snapshot_graph(thread_id, target_digest)
+        result = graph.conclusion_lineage(conclusion_id)
+        return {
+            **project_lineage(graph, result),
+            "snapshot": project_snapshot(graph, snapshot.to_dict()),
+        }
+
+    def rerun_spec(
+        self, thread_id: str, *, target_digest: str, conclusion_id: str,
+    ) -> dict[str, Any]:
+        graph, snapshot = self.snapshot_graph(thread_id, target_digest)
+        if lineage_restricted(graph, graph.conclusion_lineage(conclusion_id)):
+            raise PermissionError("rerun export is unavailable for restricted evidence")
+        return build_rerun_spec(graph, snapshot, conclusion_id)
+
+    def compare_reruns(
+        self,
+        thread_id: str,
+        *,
+        baseline_digest: str,
+        baseline_conclusion_id: str,
+        candidate_digest: str,
+        candidate_conclusion_id: str,
+    ) -> dict[str, Any]:
+        baseline_graph, baseline_snapshot = self.snapshot_graph(thread_id, baseline_digest)
+        candidate_graph, candidate_snapshot = self.snapshot_graph(thread_id, candidate_digest)
+        if lineage_restricted(
+            baseline_graph, baseline_graph.conclusion_lineage(baseline_conclusion_id),
+        ) or lineage_restricted(
+            candidate_graph, candidate_graph.conclusion_lineage(candidate_conclusion_id),
+        ):
+            raise PermissionError("rerun comparison is unavailable for restricted evidence")
+        baseline = build_rerun_spec(
+            baseline_graph, baseline_snapshot, baseline_conclusion_id,
+        )
+        candidate = build_rerun_spec(
+            candidate_graph, candidate_snapshot, candidate_conclusion_id,
+        )
+        return {
+            "baseline": baseline,
+            "candidate": candidate,
+            "comparison": compare_rerun_specs(
+                baseline,
+                candidate,
+                baseline_output_values=output_values_for_spec(baseline_graph, baseline),
+                candidate_output_values=output_values_for_spec(candidate_graph, candidate),
+            ),
+        }
 
     def metrics(self, thread_id: str) -> dict:
+        graph = self.require(thread_id)
         snapshot = self.latest_snapshot(thread_id)
-        return _metrics.all_metrics(
-            self.require(thread_id),
-            events=self.events(thread_id=thread_id, limit=5000),
-            audits=self.audit_runs(thread_id),
+        result = _metrics.all_metrics(
+            graph,
+            events=self._events_raw(thread_id=thread_id, limit=5000),
+            audits=self._audit_runs_raw(thread_id),
             snapshot=snapshot.to_dict() if snapshot else None,
             snapshot_history=self._snapshot_history(thread_id),
         )
+        return project_metrics(graph, result)
 
     def events(
+        self, *, thread_id: Optional[str] = None, event_types=(),
+        after_sequence: int = 0, limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        events = self._events_raw(
+            thread_id=thread_id, event_types=event_types,
+            after_sequence=after_sequence, limit=limit,
+        )
+        return [
+            project_event(event, restricted=self._event_restricted(event))
+            for event in events
+        ]
+
+    def _events_raw(
         self, *, thread_id: Optional[str] = None, event_types=(),
         after_sequence: int = 0, limit: int = 500,
     ) -> list[dict[str, Any]]:
@@ -978,6 +1452,41 @@ class Engine:
                     and event["payload"].get("threadId") == thread_id)
             ]
         return events[:limit]
+
+    def _event_restricted(self, event: dict[str, Any]) -> bool:
+        """Resolve event access from its owning thread/artifact; unknown is closed."""
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        thread_id = payload.get("threadId")
+        if not isinstance(thread_id, str) and event.get("aggregateType") == "EvidenceThread":
+            thread_id = event.get("aggregateId")
+        if isinstance(thread_id, str) and thread_id:
+            try:
+                graph = self.get(thread_id)
+            except (OSError, TypeError, ValueError):
+                return True
+            return graph is None or graph_restricted(graph)
+
+        artifact_id = payload.get("artifactId")
+        if not isinstance(artifact_id, str) and event.get("aggregateType") == "Artifact":
+            artifact_id = event.get("aggregateId")
+        if isinstance(artifact_id, str) and artifact_id:
+            found = False
+            for graph_thread_id in self.list_threads():
+                try:
+                    graph = self.get(graph_thread_id)
+                except (OSError, TypeError, ValueError):
+                    return True
+                if graph is None or artifact_id not in graph.artifacts:
+                    continue
+                found = True
+                if artifact_restricted(graph, artifact_id):
+                    return True
+            # Lifecycle payloads contain absolute paths.  If ownership cannot be
+            # reconstructed after restart, do not guess that they are public.
+            return not found
+        # Global/system events have no graph from which a public grant can be
+        # established.  Their payload is opaque unless an owner resolves.
+        return True
 
     def _snapshot_history(self, thread_id: str) -> list[dict[str, Any]]:
         directory = self._snapshot_dir(thread_id)
@@ -1005,12 +1514,16 @@ class Engine:
         return sorted(snapshots.values(), key=lambda item: int(item["version"]))
 
     def analysis(self, thread_id: str, *, threshold: float = 0.7) -> dict:
-        return _analysis.analyze(self.require(thread_id), threshold=threshold)
+        graph = self.require(thread_id)
+        require_unrestricted(graph, "analysis")
+        return _analysis.analyze(graph, threshold=threshold)
 
     def reconcile(self, thread_id: str, *, remove_nodes=(), remove_edges=(),
                   add_contradicts=(), threshold: float = 0.7) -> dict:
+        graph = self.require(thread_id)
+        require_unrestricted(graph, "reconcile preview")
         return _reconcile.reconcile(
-            self.require(thread_id), remove_nodes=remove_nodes, remove_edges=remove_edges,
+            graph, remove_nodes=remove_nodes, remove_edges=remove_edges,
             add_contradicts=add_contradicts, threshold=threshold,
         )
 
@@ -1052,6 +1565,13 @@ class Engine:
                 "message": "Pinned committed Evidence Snapshot was not found or failed verification.",
             }
 
+        if scope_restricted(graph):
+            return {
+                "resolved": False,
+                "code": "access_restricted",
+                "message": "Evidence preview is unavailable under the current access policy.",
+            }
+
         assertion = graph.nodes.get(source_assertion_id)
         if (
             assertion is None
@@ -1081,6 +1601,12 @@ class Engine:
                 "code": "provenance_mismatch",
                 "message": "Committed ArtifactVersion and SourceAnchor links are inconsistent.",
             }
+        if artifact_restricted(graph, assertion.artifact_id):
+            return {
+                "resolved": False,
+                "code": "access_restricted",
+                "message": "Evidence preview is unavailable under the current access policy.",
+            }
         scope = graph.meta.get("scope") if isinstance(graph.meta.get("scope"), dict) else {}
         return {
             "resolved": True,
@@ -1099,9 +1625,10 @@ class Engine:
         trigger: str = "manual", threshold: float = 0.7,
     ) -> dict:
         graph, snapshot = self.snapshot_graph(thread_id, target_digest)
+        require_unrestricted(graph, "audit")
         if trigger == "auto":
             existing = next((
-                run for run in self.audit_runs(thread_id)
+                run for run in self._audit_runs_raw(thread_id)
                 if run.get("target_digest") == target_digest and run.get("trigger") == trigger and
                 run.get("threshold") == threshold
             ), None)
@@ -1112,7 +1639,7 @@ class Engine:
             graph, threshold=threshold, trigger=trigger, level=level,
             run_id=f"audit:{uuid.uuid4().hex[:12]}", target_digest=snapshot.digest,
         )
-        runs = [run, *self.audit_runs(thread_id)]
+        runs = [run, *self._audit_runs_raw(thread_id)]
         self._audit_runs[thread_id] = runs[:50]
         self._persist_audit(thread_id)
         self._record_audit_events(run)
@@ -1162,6 +1689,11 @@ class Engine:
             )
 
     def audit_runs(self, thread_id: str) -> list[dict]:
+        graph = self.require(thread_id)
+        require_unrestricted(graph, "audit history")
+        return self._audit_runs_raw(thread_id)
+
+    def _audit_runs_raw(self, thread_id: str) -> list[dict]:
         if thread_id in self._audit_runs:
             return self._mark_audit_staleness(thread_id, self._audit_runs[thread_id])
         path = self._audit_path(thread_id)
@@ -1179,7 +1711,19 @@ class Engine:
         return [{**run, "stale": run.get("target_digest") != current} for run in runs]
 
     def export_prov_json(self, thread_id: str) -> dict:
-        return provjson.to_prov_json(self.require(thread_id))
+        graph = self.require(thread_id)
+        return project_prov_json(graph, provjson.to_prov_json(graph))
+
+    def export_snapshot_products(
+        self,
+        thread_id: str,
+        *,
+        snapshot_digest: str,
+        datacite_metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Project one exact historical snapshot without consulting current/latest."""
+        graph, snapshot = self.snapshot_graph(thread_id, snapshot_digest)
+        return _export_snapshot_products(graph, snapshot, datacite_metadata)
 
     # --- atomic persistence -----------------------------------------------
     def _commit_snapshot(self, graph: ThreadGraph, snapshot: EvidenceSnapshot) -> None:

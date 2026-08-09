@@ -43,6 +43,7 @@ import {
   isComputerUseMcpConfigured,
 } from '../../computer-use-mcp-config'
 import {
+  filterAgentRuntimeToolSurface,
   nativeAgentToolExecutionMetadata,
   type AgentRuntimeToolSurface
 } from '../agent-runtime/agent-tool-surface'
@@ -353,6 +354,7 @@ export class ClaudeCodeRuntimeService {
     displayText?: string
     workspace?: string
     reasoningEffort?: string
+    allowedTools?: string[]
     ownedVisualToolsAvailable?: boolean
     nativeVisualProofChainPending?: boolean
     streamingInput?: boolean
@@ -412,9 +414,12 @@ export class ClaudeCodeRuntimeService {
         }
       })
       const abortController = new AbortController()
-      const agentToolServer = this.options.agentTools
+      const agentToolSurface = this.options.agentTools
+        ? filterAgentRuntimeToolSurface(this.options.agentTools, payload.allowedTools)
+        : undefined
+      const agentToolServer = agentToolSurface && agentToolSurface.tools().length > 0
         ? createClaudeCodeAgentToolTransport({
-            surface: this.options.agentTools,
+            surface: agentToolSurface,
             context: {
               runtimeId: 'claude',
               threadId: payload.threadId,
@@ -424,6 +429,11 @@ export class ClaudeCodeRuntimeService {
             }
           })
         : undefined
+      const scopedClaudeTools = payload.allowedTools === undefined
+        ? undefined
+        : payload.allowedTools.map((toolName) =>
+            `mcp__sciforge_runtime_tools__${toolName}`
+          )
       const governanceKey = turnGovernanceKey(payload.threadId, turnId)
       this.turnGovernanceSnapshots.set(governanceKey, Object.freeze({
         ownedVisualToolsAvailable: payload.ownedVisualToolsAvailable === true,
@@ -436,6 +446,12 @@ export class ClaudeCodeRuntimeService {
           prompt: inputStream ?? launch.prompt,
           options: {
             ...launch.sdkOptions,
+            ...(scopedClaudeTools === undefined
+              ? {}
+              : {
+                  tools: scopedClaudeTools,
+                  allowedTools: scopedClaudeTools
+                }),
             hooks: appendClaudePreToolUseHook(
               launch.sdkOptions.hooks,
               this.createPreToolUseGovernanceHook({

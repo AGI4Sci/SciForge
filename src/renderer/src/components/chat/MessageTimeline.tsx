@@ -31,6 +31,7 @@ import { planDisplayNameFromRelativePath } from '../../plan/plan-path'
 import { performanceMonitor } from '../../lib/performance-monitor'
 import { registerVisibleContextComponent } from '../../lib/visible-context'
 import { TimelineScientificObjectsPanel } from './TimelineScientificObjectsPanel'
+import { installedRendererContributions } from '../../domain-modules/installed-renderer-contributions'
 
 export { summarizeToolBlock } from './message-timeline-process'
 
@@ -385,6 +386,7 @@ function MessageTimelineComponent({
               {showForkPoint ? <ThreadForkPoint parentTitle={forkedFromTitle} /> : null}
               <MemoMessageTurn
                 turn={turn}
+                sessionId={activeThreadId ?? undefined}
                 isProcessing={(effectiveBusy && isLatestTurn) || turnPending || hasLiveStream}
                 terminalStatus={turn.user?.turnStatus}
                 liveReasoning={isLatestTurn ? liveReasoning : ''}
@@ -427,6 +429,7 @@ function MessageTimelineComponent({
         {blocks.length === 0 && (live || liveReasoning) ? (
           <MemoMessageTurn
             turn={{ blocks: [] }}
+            sessionId={activeThreadId ?? undefined}
             isProcessing={effectiveBusy}
             liveReasoning={liveReasoning}
             liveReasoningMeta={liveReasoningMeta}
@@ -457,6 +460,7 @@ const MemoMessageTimelineComponent = memo(MessageTimelineComponent)
 
 function MessageTurn({
   turn,
+  sessionId,
   isProcessing,
   terminalStatus,
   liveReasoning,
@@ -473,6 +477,7 @@ function MessageTurn({
   viewportRef
 }: {
   turn: Turn
+  sessionId?: string
   isProcessing: boolean
   terminalStatus?: string
   liveReasoning: string
@@ -632,6 +637,17 @@ function MessageTurn({
 
       <TimelineImageResultsPanel blocks={toolResultImageBlocks} onOpenVisualReview={onOpenImageArtifactInVisualReview} />
 
+      {installedRendererContributions.chatResultPanels.list().map((registered) => (
+        <Fragment key={registered.id}>
+          {registered.contribution.render({
+            blocks: isProcessing ? [] : turn.blocks,
+            workspaceRoot,
+            sessionId,
+            onContinuePrompt: onContinueScientificObject
+          })}
+        </Fragment>
+      ))}
+
       <TimelineScientificObjectsPanel
         blocks={isProcessing ? [] : turn.blocks}
         workspaceRoot={workspaceRoot}
@@ -676,6 +692,7 @@ function LiveTurnProgressRow(): ReactElement {
 
 const MemoMessageTurn = memo(MessageTurn, (prev, next) => (
   sameTurnContent(prev.turn, next.turn) &&
+  prev.sessionId === next.sessionId &&
   prev.isProcessing === next.isProcessing &&
   prev.terminalStatus === next.terminalStatus &&
   prev.liveReasoning === next.liveReasoning &&

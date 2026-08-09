@@ -212,7 +212,236 @@ test('manual update reads committed Evidence through its public capability and p
   await deactivate()
 })
 
-test('turn handoff survives restart, posts once, and never reposts an accepted receipt', async () => {
+test('manual update rejects project-only discovery and cross-workspace explicit sessions', async () => {
+  const requests: Array<{ url: string; method: string }> = []
+  const config: ProjectDagSidecarConfig = {
+    baseUrl: 'http://127.0.0.1:3898',
+    runtimeToken: 'project-token',
+    command: 'npm',
+    args: [],
+    cwd: '/app',
+    env: {},
+    projectPackageRoot: '/app/packages/domains/project-dag',
+    evidencePackageRoot: '/app/packages/domains/evidence-dag',
+    sessionDir: '/data/evidence',
+    dbPath: '/data/project.db',
+    autoStart: false
+  }
+  const runtime = new ProjectDagRuntime({
+    sidecar: {
+      ensure: async () => config,
+      stop: async () => undefined
+    } as unknown as ProjectDagSidecar,
+    fetchImpl: async (input, init) => {
+      requests.push({ url: String(input), method: init?.method ?? 'GET' })
+      return jsonResponse({
+        projectKey,
+        state: 'empty',
+        committedSnapshot: null,
+        latestReceipt: null,
+        activeReceipt: null,
+        autonomy: { autonomy_mode: 'checkpointed' },
+        attentionCount: 0
+      })
+    }
+  })
+  const deactivate = await runtime.activate(lifecycleContext({
+    agentThreads: {
+      list: async () => [],
+      read: async ({ runtimeId, threadId }) => ({
+        id: threadId,
+        runtimeId,
+        workspaceRoot: '/workspace/b',
+        watermark: '1',
+        turns: [],
+        artifacts: []
+      }),
+      hasActiveTurns: () => false
+    }
+  }))
+  try {
+    await assert.rejects(
+      runtime.update({ project: 'project-only', scope: 'all' }),
+      (error: unknown) => error instanceof ProjectDagRuntimeError &&
+        error.error.code === 'invalid_request'
+    )
+    await assert.rejects(
+      runtime.update({
+        workspaceRoot: '/workspace/a',
+        sessions: ['codex:thread-b'],
+        scope: ['codex:thread-b']
+      }),
+      (error: unknown) => error instanceof ProjectDagRuntimeError &&
+        error.error.code === 'access_restricted'
+    )
+    assert.equal(requests.some(({ url, method }) =>
+      url.endsWith('/updates') && method === 'POST'
+    ), false)
+  } finally {
+    await deactivate()
+  }
+})
+
+test('artifact handoff rejects forged Agent workspace and unbound package execution scope', async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'project-runtime-scope-reject-'))
+  const config: ProjectDagSidecarConfig = {
+    baseUrl: 'http://127.0.0.1:3898',
+    runtimeToken: 'project-token',
+    command: 'npm',
+    args: [],
+    cwd: '/app',
+    env: {},
+    projectPackageRoot: '/app/packages/domains/project-dag',
+    evidencePackageRoot: '/app/packages/domains/evidence-dag',
+    sessionDir: '/data/evidence',
+    dbPath: '/data/project.db',
+    autoStart: false
+  }
+  const outbox = new ProjectDagHandoffOutbox(userDataDir)
+  let authoritativeWorkspace = '/workspace/authoritative'
+  const runtime = new ProjectDagRuntime({
+    sidecar: {
+      ensure: async () => config,
+      stop: async () => undefined
+    } as unknown as ProjectDagSidecar,
+    handoffOutbox: outbox,
+    autoProcessHandoffs: false
+  })
+  const deactivate = await runtime.activate(lifecycleContext({
+    userDataDir,
+    agentThreads: {
+      list: async () => [],
+      read: async ({ runtimeId, threadId }) => ({
+        id: threadId,
+        runtimeId,
+        workspaceRoot: authoritativeWorkspace,
+        watermark: '186',
+        turns: [],
+        artifacts: []
+      }),
+      hasActiveTurns: () => false
+    }
+  }))
+  try {
+    await assert.rejects(runtime.consumeArtifact({
+      contractVersion: 1,
+      kind: 'turn-completed',
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      turnId: 'turn-186',
+      targetWatermark: '186',
+      workspaceRoot: '/workspace/forged',
+      occurredAt: now,
+      artifacts: []
+    }), (error: unknown) => error instanceof ProjectDagRuntimeError &&
+      error.error.code === 'access_restricted')
+    await assert.rejects(runtime.consumeArtifact({
+      contractVersion: 1,
+      kind: 'execution-completed',
+      producer: { moduleId: 'sciforge.create-loop', moduleVersion: '1.0.0' },
+      executionId: 'execution-unbound',
+      runId: 'run-unbound',
+      targetWatermark: '7:event-unbound',
+      workspaceRoot: '/workspace/authoritative',
+      occurredAt: now,
+      artifacts: []
+    }), (error: unknown) => error instanceof ProjectDagRuntimeError &&
+      error.error.code === 'access_restricted')
+    await assert.rejects(runtime.consumeArtifact({
+      contractVersion: 1,
+      kind: 'execution-completed',
+      hostBinding: {
+        contractVersion: 1,
+        acceptanceSequence: 7,
+        workspaceBinding: 'unbound'
+      },
+      producer: { moduleId: 'sciforge.create-loop', moduleVersion: '1.0.0' },
+      executionId: 'execution-host-unbound',
+      runId: 'run-host-unbound',
+      targetWatermark: '7:event-host-unbound',
+      occurredAt: now,
+      artifacts: []
+    }), (error: unknown) => error instanceof ProjectDagRuntimeError &&
+      error.error.code === 'access_restricted')
+    await assert.rejects(runtime.consumeArtifact({
+      contractVersion: 1,
+      kind: 'execution-completed',
+      hostBinding: {
+        contractVersion: 1,
+        acceptanceSequence: 7,
+        workspaceBinding: 'capability-caller',
+        workspaceRoot: '/workspace/authoritative'
+      },
+      producer: { moduleId: 'sciforge.create-loop', moduleVersion: '1.0.0' },
+      executionId: 'execution-sequence-mismatch',
+      runId: 'run-sequence-mismatch',
+      targetWatermark: '6:event-sequence-mismatch',
+      workspaceRoot: '/workspace/authoritative',
+      occurredAt: now,
+      artifacts: []
+    }), (error: unknown) => error instanceof ProjectDagRuntimeError &&
+      error.error.code === 'access_restricted')
+    await assert.rejects(runtime.consumeArtifact({
+      contractVersion: 1,
+      kind: 'execution-completed',
+      hostBinding: {
+        contractVersion: 1,
+        acceptanceSequence: 8,
+        workspaceBinding: 'capability-caller',
+        workspaceRoot: '/workspace/authoritative'
+      },
+      producer: { moduleId: 'sciforge.create-loop', moduleVersion: '1.0.0' },
+      executionId: 'execution-1',
+      runId: 'run-1',
+      runtimeId: 'another-package',
+      threadId: 'workflow:one',
+      targetWatermark: '8:event-1',
+      workspaceRoot: '/workspace/authoritative',
+      occurredAt: now,
+      artifacts: []
+    }), (error: unknown) => error instanceof ProjectDagRuntimeError &&
+      error.error.code === 'access_restricted')
+    await assert.rejects(runtime.consumeArtifact({
+      contractVersion: 1,
+      kind: 'execution-completed',
+      hostBinding: {
+        contractVersion: 1,
+        acceptanceSequence: 9,
+        workspaceBinding: 'capability-caller',
+        workspaceRoot: '/workspace/authoritative'
+      },
+      producer: { moduleId: 'sciforge.create-loop', moduleVersion: '1.0.0' },
+      executionId: 'execution-forged-workspace',
+      runId: 'run-forged-workspace',
+      targetWatermark: '9:event-forged-workspace',
+      workspaceRoot: '/workspace/forged',
+      occurredAt: now,
+      artifacts: []
+    }), (error: unknown) => error instanceof ProjectDagRuntimeError &&
+      error.error.code === 'access_restricted')
+    assert.equal(outbox.all().length, 0)
+
+    await runtime.consumeArtifact({
+      contractVersion: 1,
+      kind: 'turn-completed',
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      turnId: 'turn-187',
+      targetWatermark: '187',
+      workspaceRoot: '/workspace/authoritative',
+      occurredAt: now,
+      artifacts: []
+    })
+    authoritativeWorkspace = '/workspace/moved'
+    await runtime.drainHandoffs()
+    assert.equal(outbox.all()[0]?.state, 'failed')
+  } finally {
+    await deactivate()
+    await rm(userDataDir, { recursive: true })
+  }
+})
+
+test('artifact handoff survives restart, posts once, and never reposts an accepted receipt', async () => {
   const userDataDir = await mkdtemp(join(tmpdir(), 'project-runtime-handoff-'))
   let postCount = 0
   const config: ProjectDagSidecarConfig = {
@@ -284,8 +513,8 @@ test('turn handoff survives restart, posts once, and never reposts an accepted r
       artifacts: []
     }
     await Promise.all([
-      first.consumeTurnCompleted(event),
-      first.consumeTurnCompleted(event)
+      first.consumeArtifact(event),
+      first.consumeArtifact(event)
     ])
     assert.equal(firstOutbox.all().length, 1)
     await first.drainHandoffs()
@@ -310,7 +539,116 @@ test('turn handoff survives restart, posts once, and never reposts an accepted r
   }
 })
 
-test('turn handoff terminates on 4xx and retries only retryable 5xx failures', async (t) => {
+test('execution completion uses a Host-bound synthetic scope through the durable handoff lane', async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'project-runtime-execution-'))
+  const config: ProjectDagSidecarConfig = {
+    baseUrl: 'http://127.0.0.1:3898',
+    runtimeToken: 'project-token',
+    command: 'python',
+    args: ['-m', 'project_dag.server'],
+    cwd: '/app/packages/domains/project-dag',
+    env: {},
+    projectPackageRoot: '/app/packages/domains/project-dag',
+    evidencePackageRoot: '/app/packages/domains/evidence-dag',
+    sessionDir: '/data/evidence',
+    dbPath: '/data/project.db',
+    autoStart: false
+  }
+  const sidecar = {
+    ensure: async () => config,
+    stop: async () => undefined
+  } as unknown as ProjectDagSidecar
+  const invoked: Array<{ runtimeId: string; threadId: string }> = []
+  let posted: unknown
+  const runtime = new ProjectDagRuntime({
+    sidecar,
+    handoffOutbox: new ProjectDagHandoffOutbox(userDataDir),
+    autoProcessHandoffs: false,
+    fetchImpl: async (_input, init) => {
+      posted = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined
+      return jsonResponse(receipt())
+    }
+  })
+  const context = lifecycleContext({
+    userDataDir,
+    agentThreads: {
+      list: async () => [],
+      read: async () => {
+        throw new Error('Synthetic execution scope must not read an Agent thread.')
+      },
+      hasActiveTurns: () => false
+    },
+    capabilities: {
+      invoke: async <TInput, TOutput>(
+        _contract: { actionId: string },
+        input: TInput
+      ) => {
+        invoked.push(input as { runtimeId: string; threadId: string })
+        return {
+          url: 'http://127.0.0.1:3897/',
+          threadId: 'execution:execution-9',
+          status: {
+            committed: {
+              threadId: 'domain:sciforge.create-loop:execution:execution-9',
+              version: 1,
+              digest: evidenceDigest,
+              inputWatermark: '9:event-9',
+              schemaVersion: 'evidence.v3',
+              extractorVersion: '1',
+              verifierVersion: '1',
+              artifactDigests: [],
+              createdAt: now
+            },
+            pending: null,
+            updatedAt: now
+          }
+        } as TOutput
+      }
+    }
+  })
+  try {
+    const deactivate = await runtime.activate(context)
+    await runtime.consumeArtifact({
+      contractVersion: 1,
+      kind: 'execution-completed',
+      hostBinding: {
+        contractVersion: 1,
+        acceptanceSequence: 9,
+        workspaceBinding: 'capability-caller',
+        workspaceRoot: '/workspace'
+      },
+      producer: {
+        moduleId: 'sciforge.create-loop',
+        moduleVersion: '1.0.0'
+      },
+      executionId: 'execution-9',
+      runId: 'run-9',
+      targetWatermark: '9:event-9',
+      workspaceRoot: '/workspace',
+      occurredAt: now,
+      artifacts: []
+    })
+    await runtime.drainHandoffs()
+
+    assert.deepEqual(invoked, [{
+      runtimeId: 'domain:sciforge.create-loop',
+      threadId: 'execution:execution-9'
+    }])
+    assert.deepEqual(
+      (posted as { evidenceVector?: unknown }).evidenceVector,
+      [{
+        threadId: 'domain:sciforge.create-loop:execution:execution-9',
+        digest: evidenceDigest
+      }]
+    )
+    await deactivate()
+  } finally {
+    await runtime.dispose()
+    await rm(userDataDir, { recursive: true })
+  }
+})
+
+test('artifact handoff terminates on 4xx and retries only retryable 5xx failures', async (t) => {
   for (const expected of [
     { status: 400, state: 'failed' },
     { status: 503, state: 'retry_scheduled' }
@@ -364,7 +702,7 @@ test('turn handoff terminates on 4xx and retries only retryable 5xx failures', a
       })
       try {
         const deactivate = await runtime.activate(lifecycleContext({ userDataDir }))
-        await runtime.consumeTurnCompleted({
+        await runtime.consumeArtifact({
           contractVersion: 1,
           kind: 'turn-completed',
           runtimeId: 'codex',
@@ -432,6 +770,12 @@ function lifecycleContext(
         model: 'sciforge-router'
       })
     },
+    executionEvents: {
+      publish: async () => {
+        throw new Error('Unexpected execution event publication.')
+      }
+    },
+    workflowExecutionReceipts: [],
     enablement: {
       isEnabled: () => true,
       subscribe: () => () => undefined

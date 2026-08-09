@@ -15,6 +15,7 @@
     "./node/electron-node-executable": "./src/node/electron-node-executable.ts",
     "./node/workspace-paths": "./src/node/workspace-paths.ts",
     "./power": "./src/power.ts",
+    "./reproducibility": "./src/reproducibility.ts",
     "./renderer": "./src/renderer.ts",
     "./renderer-contributions": "./src/renderer-contributions.ts",
     "./visual-source": "./src/visual-source.ts",
@@ -22,7 +23,8 @@
     "./visual-capture": "./src/visual-capture.ts",
     "./workspace-host": "./src/workspace-host.ts",
     "./workspace-server": "./src/workspace-server.ts",
-    "./workspace-preview": "./src/workspace-preview.ts"
+    "./workspace-preview": "./src/workspace-preview.ts",
+    "./workflow-template": "./src/workflow-template.ts"
   },
   "files": [
     "src",

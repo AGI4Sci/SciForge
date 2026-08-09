@@ -143,7 +143,7 @@ export class RuntimeGovernanceSupervisor {
       runtimeId,
       controls,
       decision,
-      'recovery',
+      decision.code === 'semantic_failure_stop' ? 'soft' : 'recovery',
       decision.code === 'semantic_failure_retry' ? 1 : undefined,
       receipt
     )

@@ -108,7 +108,15 @@ export function buildScientificPlottingMcpConfigFragment(
 }
 
 export function scientificPlottingMcpEnabledTools(): string[] {
+  const domainOwned = new Set([
+    'scientific_plotting_status',
+    'scientific_plotting_map_data',
+    'scientific_plotting_render',
+    'scientific_plotting_rerun',
+    'scientific_plotting_compare'
+  ])
   return Object.keys(SCIENTIFIC_PLOTTING_TOOL_SIDE_EFFECTS)
+    .filter((tool) => !domainOwned.has(tool))
 }
 
 function workerMcpEnv(launch: ScientificPlottingMcpLaunchConfig): Record<string, string> {

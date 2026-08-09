@@ -260,6 +260,29 @@ describe('CapabilityAgentToolSurface', () => {
     expect(operation).not.toHaveProperty('id')
     expect(operation).not.toHaveProperty('inputShape')
 
+    const discoveredWithSchema = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {
+        capabilityId: 'test.hot-discovered',
+        includeSchema: true,
+        limit: 1
+      },
+      context
+    })
+    if (discoveredWithSchema.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) {
+      throw new Error('Expected discover result.')
+    }
+    expect(discoveredWithSchema.value[0]).toMatchObject({
+      inputShape: {
+        properties: {
+          query: {
+            pattern: '^query_[A-Za-z0-9_-]{4,32}$',
+            description: 'A caller-generated query identifier.'
+          }
+        }
+      }
+    })
+
     const expanded = await surface.call({
       name: CAPABILITY_AGENT_TOOL_NAMES.discover,
       arguments: { operationRef: operation?.operationRef, includeSchema: true },
@@ -327,6 +350,10 @@ describe('CapabilityAgentToolSurface', () => {
       approval: 'none',
       concurrency: { revision: 'none', idempotency: 'none' },
       inputSchema: nestedArtifactInputSchema.extend({
+        fields: z.record(z.string(), z.object({
+          type: z.enum(['string', 'array']),
+          required: z.boolean().optional()
+        }).strict()),
         request: z.discriminatedUnion('kind', [
           z.object({ kind: z.literal('page'), page: z.number().int().positive() }).strict(),
           z.object({ kind: z.literal('region'), regionId: z.string().min(1) }).strict()
@@ -356,6 +383,17 @@ describe('CapabilityAgentToolSurface', () => {
 
     expect(expanded.value[0]?.inputShape).toMatchObject({
       properties: {
+        fields: {
+          type: 'object',
+          additionalProperties: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', enum: ['string', 'array'], required: true },
+              required: { type: 'boolean', required: false }
+            },
+            additionalProperties: false
+          }
+        },
         artifacts: {
           type: 'array',
           items: {

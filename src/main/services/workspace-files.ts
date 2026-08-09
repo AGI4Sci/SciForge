@@ -69,7 +69,6 @@ import {
 
 const MAX_FILE_PREVIEW_BYTES = 1_500_000
 const MAX_IMAGE_PREVIEW_BYTES = 12 * 1024 * 1024
-const MAX_PDF_PREVIEW_BYTES = 64 * 1024 * 1024
 const MAX_DOCX_PREVIEW_BYTES = 64 * 1024 * 1024
 const WORKSPACE_IMAGE_DIR = 'img'
 const DOCX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
@@ -209,10 +208,6 @@ async function readWorkspacePdfFromResolvedPath(
   fileInfo: WorkspaceFileStat,
   payload: WorkspaceFileTarget
 ): Promise<WorkspaceFileReadPdfResult | { ok: false; message: string }> {
-  if (fileInfo.size > MAX_PDF_PREVIEW_BYTES) {
-    return { ok: false, message: 'This PDF is too large to preview in Write mode.' }
-  }
-
   const bytes = await readFile(targetPath)
   return {
     ok: true,
@@ -447,7 +442,8 @@ export async function readWorkspaceFile(payload: WorkspaceFileTarget): Promise<W
 }
 
 export async function readWorkspaceImage(
-  payload: WorkspaceFileTarget
+  payload: WorkspaceFileTarget,
+  options: { maxBytes?: number | null } = {}
 ): Promise<WorkspaceImageReadResult> {
   try {
     const targetPath = await resolveOpenTargetPath(payload.path, payload.workspaceRoot)
@@ -455,7 +451,8 @@ export async function readWorkspaceImage(
     if (fileInfo.isDirectory()) {
       return { ok: false, message: 'Cannot preview a directory.' }
     }
-    if (fileInfo.size > MAX_IMAGE_PREVIEW_BYTES) {
+    const maxBytes = options.maxBytes === undefined ? MAX_IMAGE_PREVIEW_BYTES : options.maxBytes
+    if (maxBytes !== null && fileInfo.size > maxBytes) {
       return { ok: false, message: 'This image is too large to preview.' }
     }
 

@@ -2,6 +2,10 @@ import type { z } from 'zod'
 
 import type { DomainMainAgentExecutionHost } from './agent-execution.js'
 import type { DomainPackageJsonValue } from './contract.js'
+import type {
+  DomainExecutionEventInput,
+  DomainExecutionEventV1
+} from './reproducibility.js'
 import type { DomainMainPowerHost } from './power.js'
 import type { TrustedDomainProcessEntryInput } from './process-entry.js'
 import type {
@@ -13,6 +17,7 @@ import type {
   DomainRendererWorkspaceFilePickerRequest,
   DomainRendererWorkspacePickResult
 } from './renderer-contributions.js'
+import type { DomainWorkflowExecutionReceiptProvider } from './workflow-template.js'
 import type { DomainMainVisualCaptureHost } from './visual-capture.js'
 import type {
   WorkspaceHostArtifact,
@@ -22,10 +27,11 @@ export * from './agent-execution.js'
 export * from './power.js'
 export * from './renderer-contributions.js'
 export * from './visual-capture.js'
+export * from './workflow-template.js'
 
 export const MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND = 'main.runtime-lifecycle' as const
-export const MAIN_AGENT_ARTIFACT_CONSUMER_CONTRIBUTION_KIND =
-  'main.agent-artifact-consumer' as const
+export const MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND =
+  'main.artifact-consumer' as const
 export const MAIN_ACTION_GUARD_CONTRIBUTION_KIND = 'main.action-guard' as const
 
 export type DomainRuntimeContributionOwner = Readonly<{
@@ -175,16 +181,19 @@ export type DomainMainRuntimeLifecycleHost = Readonly<{
   power?: DomainMainPowerHost
   capabilities: DomainMainSystemCapabilityInvoker
   modelAccess: DomainMainModelAccessHost
+  executionEvents: DomainMainExecutionEventsRouter
   enablement: DomainMainModuleEnablementHost
   log: (entry: DomainMainRuntimeLogEntry) => void
 }>
 
 export type DomainMainRuntimeLifecycleContext =
-  Omit<DomainMainRuntimeLifecycleHost, 'enablement'> & Readonly<{
-  owner: DomainRuntimeContributionOwner
-  signal: AbortSignal
-  enablement: DomainMainModuleEnablement
-}>
+  Omit<DomainMainRuntimeLifecycleHost, 'enablement' | 'executionEvents'> & Readonly<{
+    owner: DomainRuntimeContributionOwner
+    signal: AbortSignal
+    enablement: DomainMainModuleEnablement
+    executionEvents: DomainMainExecutionEventsHost
+    workflowExecutionReceipts: readonly DomainWorkflowExecutionReceiptProvider[]
+  }>
 
 export type DomainMainRuntimeDisposer = () => void | Promise<void>
 
@@ -194,13 +203,8 @@ export type DomainMainRuntimeLifecycleContribution = Readonly<{
   ) => void | DomainMainRuntimeDisposer | Promise<void | DomainMainRuntimeDisposer>
 }>
 
-/**
- * Opaque completed-turn payload delivered to package-owned artifact consumers.
- *
- * Consumers validate the artifact values they own. The host only guarantees the
- * generic turn identity, ordering watermark, and immutable payload envelope.
- */
-export type DomainAgentArtifactEvent = Readonly<{
+/** Opaque completed Agent turn delivered through the canonical artifact stream. */
+export type DomainTurnArtifactEvent = Readonly<{
   contractVersion: 1
   kind: 'turn-completed'
   runtimeId: string
@@ -213,8 +217,89 @@ export type DomainAgentArtifactEvent = Readonly<{
   artifacts: readonly unknown[]
 }>
 
-export type DomainAgentArtifactConsumer = Readonly<{
-  consume: (event: DomainAgentArtifactEvent) => void | Promise<void>
+/** Opaque completed non-Agent execution delivered through the same stream. */
+export type DomainExecutionArtifactEvent = Readonly<{
+  contractVersion: 1
+  kind: 'execution-completed'
+  /** Host-minted delivery facts; package event payloads cannot supply these. */
+  hostBinding?: Readonly<{
+    contractVersion: 1
+    acceptanceSequence: number
+    workspaceBinding: 'capability-caller' | 'unbound'
+    workspaceRoot?: string
+  }>
+  producer: Readonly<{
+    moduleId: string
+    moduleVersion: string
+  }>
+  executionId: string
+  runId: string
+  activityId?: string
+  targetWatermark: string
+  runtimeId?: string
+  threadId?: string
+  turnId?: string
+  workspaceRoot?: string
+  occurredAt: string
+  artifacts: readonly unknown[]
+}>
+
+export type DomainArtifactEvent = DomainTurnArtifactEvent | DomainExecutionArtifactEvent
+
+export type DomainArtifactEventScope = Readonly<{
+  runtimeId: string
+  threadId: string
+  turnId?: string
+  workspaceRoot?: string
+}>
+
+/**
+ * Returns the one canonical DAG scope for both Agent turns and package-owned
+ * executions. Executions that did not originate in a thread receive a stable
+ * synthetic scope shared by every artifact consumer.
+ */
+export function domainArtifactEventScope(
+  event: DomainArtifactEvent
+): DomainArtifactEventScope {
+  if (event.kind === 'turn-completed') {
+    return Object.freeze({
+      runtimeId: event.runtimeId,
+      threadId: event.threadId,
+      ...(event.turnId ? { turnId: event.turnId } : {}),
+      ...(event.workspaceRoot ? { workspaceRoot: event.workspaceRoot } : {})
+    })
+  }
+  return Object.freeze({
+    runtimeId: event.runtimeId?.trim() || `domain:${event.producer.moduleId}`,
+    threadId: event.threadId?.trim() || `execution:${event.executionId}`,
+    ...(event.turnId?.trim() ? { turnId: event.turnId.trim() } : {}),
+    ...(event.workspaceRoot?.trim() ? { workspaceRoot: event.workspaceRoot.trim() } : {})
+  })
+}
+
+export type DomainArtifactConsumer = Readonly<{
+  /**
+   * Delivery is at least once: after a partial fan-out the Host retries the
+   * identical event for every consumer. Implementations must therefore apply
+   * effects idempotently using the event scope and targetWatermark.
+   */
+  consume: (event: DomainArtifactEvent) => void | Promise<void>
+}>
+
+/**
+ * The host persists each event to the single Full Trace stream before making
+ * completed executions visible to artifact consumers.
+ */
+export type DomainMainExecutionEventsHost = Readonly<{
+  publish: (event: DomainExecutionEventInput) => Promise<DomainExecutionEventV1>
+}>
+
+/** Main-process router used to bind a publisher to the activating package owner. */
+export type DomainMainExecutionEventsRouter = Readonly<{
+  publish: (
+    owner: DomainRuntimeContributionOwner,
+    event: DomainExecutionEventInput
+  ) => Promise<DomainExecutionEventV1>
 }>
 
 export type DomainMainActionGuardInput = Readonly<{
@@ -241,9 +326,9 @@ export function isDomainMainRuntimeLifecycleContribution(
   return isRecord(value) && typeof value.activate === 'function'
 }
 
-export function isDomainAgentArtifactConsumer(
+export function isDomainArtifactConsumer(
   value: unknown
-): value is DomainAgentArtifactConsumer {
+): value is DomainArtifactConsumer {
   return isRecord(value) && typeof value.consume === 'function'
 }
 

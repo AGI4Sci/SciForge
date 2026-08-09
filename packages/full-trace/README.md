@@ -41,3 +41,12 @@ capture path. `export` writes a portable owner-only JSONL bundle, and `clear`
 removes trace history. `initialize` performs the daily 30-day retention check
 automatically. All inputs are filtered before persistence, and reads and
 exports apply the same filter again.
+
+Store queries scan JSONL segments one event at a time. Limited reads retain
+only the requested ordered events while still reporting exact totals and
+corrupt-line counts. Summary queries retain only per-trace and per-request
+aggregate fields. Exports scan the store once into an owner-only temporary
+spool and retain only a lightweight byte-range sort index before writing the
+manifest and timestamp-ordered events. Full payload history is never
+accumulated in the main-process heap, and manifest counts match the exported
+event stream.

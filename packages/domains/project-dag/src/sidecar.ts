@@ -244,7 +244,7 @@ export function projectDagSidecarConfig(
     environment.PYTHONPATH?.trim()
   ].filter((value): value is string => Boolean(value)).join(delimiter)
   const command = environment[PYTHON_COMMAND_ENV]?.trim() ||
-    (process.platform === 'win32' ? 'python.exe' : 'python')
+    (process.platform === 'win32' ? 'python.exe' : 'python3')
   const args = ['-m', 'project_dag.server']
   const sessionDir = environment.PDAG_SESSION_DIR?.trim() ||
     environment.EDAG_STORAGE_DIR?.trim() ||

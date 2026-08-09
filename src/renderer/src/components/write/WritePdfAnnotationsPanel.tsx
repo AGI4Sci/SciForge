@@ -9,6 +9,8 @@ import {
 } from 'react'
 import {
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Circle,
   Download,
   EyeOff,
@@ -176,7 +178,7 @@ function ResizableTextarea({
   }
 
   return (
-    <div className="grid gap-1">
+    <div className="grid min-w-0 gap-1">
       <textarea
         autoFocus={autoFocus}
         value={value}
@@ -337,6 +339,7 @@ export function WritePdfAnnotationsPanel({
   const [editingBody, setEditingBody] = useState('')
   const [dismissedAutoEditThreadId, setDismissedAutoEditThreadId] = useState<string | null>(null)
   const [questionDrafts, setQuestionDrafts] = useState<Record<string, string>>({})
+  const [collapsedAnswerKeys, setCollapsedAnswerKeys] = useState<Record<string, boolean>>({})
   const [textareaHeights, setTextareaHeights] = useState<Record<string, number>>({})
   const [pdfReviewScope, setPdfReviewScope] = useState<WritePdfReviewScope>('document')
   const [pdfReviewMaxComments, setPdfReviewMaxComments] = useState(PDF_REVIEW_DEFAULT_MAX_COMMENTS)
@@ -452,6 +455,11 @@ export function WritePdfAnnotationsPanel({
 
   const setQuestionDraft = (threadId: string, value: string): void => {
     setQuestionDrafts((current) => ({ ...current, [threadId]: value }))
+  }
+
+  const toggleAnswerCollapsed = (threadId: string, turnId: string): void => {
+    const key = `${threadId}:${turnId}`
+    setCollapsedAnswerKeys((current) => ({ ...current, [key]: !current[key] }))
   }
 
   const setTextareaHeight = (key: string, value: number): void => {
@@ -891,7 +899,7 @@ export function WritePdfAnnotationsPanel({
               return (
                 <li
                   key={summary.thread.id}
-                  className={`rounded-lg border bg-ds-card shadow-sm transition ${
+                  className={`min-w-0 overflow-hidden rounded-lg border bg-ds-card shadow-sm transition ${
                     selected ? 'border-accent/45 ring-1 ring-accent/20' : 'border-ds-border-muted hover:border-ds-border'
                   }`}
                   onPointerEnter={() => onHoverThread?.(summary.thread.id, summary)}
@@ -1009,11 +1017,136 @@ export function WritePdfAnnotationsPanel({
                       </button>
                     </div>
                   </div>
-                  <div className="border-t border-ds-border-muted/70 px-3 py-2">
+                  <div className="min-w-0 border-t border-ds-border-muted/70 px-3 py-2">
+                    {selected ? (
+                      <div className="mb-2 flex min-w-0 items-center justify-end">
+                        <button
+                          type="button"
+                          onClick={() => onDeleteThread?.(summary.thread.id, summary)}
+                          disabled={!onDeleteThread}
+                          data-testid={`annotation-thread-delete-${summary.thread.id}`}
+                          aria-label={t('writePdfAnnotationsDelete')}
+                          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-rose-500/20 bg-rose-500/5 px-2 text-[11.5px] font-semibold text-rose-600 transition hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-45 dark:text-rose-300"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" strokeWidth={1.9} />
+                          {t('writePdfAnnotationsDelete')}
+                        </button>
+                      </div>
+                    ) : null}
                     {isQuestion ? (
-                      <div className="grid gap-2">
+                      <div className="grid min-w-0 gap-2">
+                        {showQuestionConversation ? (
+                          <div className="grid min-w-0 gap-2">
+                            {questionTurns.map((turn) => {
+                              const assistant = turn.role === 'assistant'
+                              const answerCollapseKey = `${summary.thread.id}:${turn.id}`
+                              const answerCollapsed = assistant && Boolean(collapsedAnswerKeys[answerCollapseKey])
+                              return (
+                                <div
+                                  key={turn.id}
+                                  className={`min-w-0 max-w-full overflow-hidden rounded-lg border px-3 py-2 ${
+                                    assistant
+                                      ? 'border-emerald-500/18 bg-emerald-500/5'
+                                      : 'border-violet-500/18 bg-violet-500/5'
+                                  }`}
+                                >
+                                  <div
+                                    className={`flex min-w-0 items-center gap-1.5 text-[11.5px] font-semibold ${
+                                      assistant
+                                        ? 'text-emerald-700 dark:text-emerald-300'
+                                        : 'text-violet-700 dark:text-violet-300'
+                                    } ${answerCollapsed ? '' : 'mb-1'}`}
+                                  >
+                                    {assistant ? (
+                                      turn.busy ? (
+                                        <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
+                                      ) : (
+                                        <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.9} />
+                                      )
+                                    ) : (
+                                      <MessageSquareText className="h-3.5 w-3.5" strokeWidth={1.9} />
+                                    )}
+                                    <span className="truncate">
+                                      {assistant
+                                        ? turn.busy
+                                          ? t('writePdfAnnotationsAnswering')
+                                          : t('writePdfAnnotationsAnswer')
+                                        : t('writePdfAnnotationsQuestionTurn')}
+                                    </span>
+                                    {assistant ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleAnswerCollapsed(summary.thread.id, turn.id)}
+                                        className="ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-current transition hover:bg-emerald-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/25"
+                                        aria-expanded={!answerCollapsed}
+                                        aria-label={t(answerCollapsed
+                                          ? 'writePdfAnnotationsExpandAnswer'
+                                          : 'writePdfAnnotationsCollapseAnswer')}
+                                        title={t(answerCollapsed
+                                          ? 'writePdfAnnotationsExpandAnswer'
+                                          : 'writePdfAnnotationsCollapseAnswer')}
+                                      >
+                                        {answerCollapsed ? (
+                                          <ChevronRight className="h-3.5 w-3.5" strokeWidth={2} />
+                                        ) : (
+                                          <ChevronDown className="h-3.5 w-3.5" strokeWidth={2} />
+                                        )}
+                                      </button>
+                                    ) : null}
+                                    <CopyTextButton
+                                      text={turn.text}
+                                      iconOnly
+                                      className={assistant ? '-mr-1' : 'ml-auto -mr-1'}
+                                    />
+                                  </div>
+                                  {!answerCollapsed ? (
+                                    <div
+                                      className={`ds-selectable-text min-w-0 max-w-full text-[12px] leading-5 text-ds-ink [overflow-wrap:anywhere] ${
+                                        assistant ? 'ds-markdown ds-chat-answer' : 'whitespace-pre-wrap'
+                                      }`}
+                                    >
+                                      {assistant ? (
+                                        <AssistantMarkdown
+                                          text={turn.text}
+                                          streaming={turn.busy === true}
+                                          className="text-[12px] leading-5 [overflow-wrap:anywhere]"
+                                        />
+                                      ) : turn.text}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              )
+                            })}
+                            {!questionTurns.some((turn) => turn.role === 'assistant' && turn.busy) && answerBusy ? (
+                              <div className="rounded-lg border border-emerald-500/18 bg-emerald-500/5 px-3 py-2">
+                                <div className="mb-1 flex min-w-0 items-center gap-1.5 text-[11.5px] font-semibold text-emerald-700 dark:text-emerald-300">
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
+                                  <span className="truncate">{t('writePdfAnnotationsAnswering')}</span>
+                                </div>
+                                <div className="text-[12px] leading-5 text-ds-faint">
+                                  {t('writePdfAnnotationsAnswerPending')}
+                                </div>
+                              </div>
+                            ) : null}
+                            {answerError ? (
+                              <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 px-3 py-2 text-[12px] leading-5 text-rose-600 [overflow-wrap:anywhere] dark:text-rose-300">
+                                {answerError}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : !selected && questionBody ? (
+                          <div className="ds-selectable-text relative min-w-0 overflow-hidden rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-3 py-2 pr-9 text-[12px] leading-5 text-ds-muted [overflow-wrap:anywhere] dark:bg-white/6">
+                            {questionBody}
+                            <CopyTextButton
+                              text={questionBody}
+                              iconOnly
+                              className="absolute right-1.5 top-1.5"
+                            />
+                          </div>
+                        ) : null}
+
                         {selected ? (
-                          <div className="grid gap-2">
+                          <div className={`grid min-w-0 gap-2 ${showQuestionConversation ? 'border-t border-ds-border-muted/70 pt-2' : ''}`}>
                             <ResizableTextarea
                               value={questionDraft}
                               onChange={(value) => setQuestionDraft(summary.thread.id, value)}
@@ -1062,105 +1195,7 @@ export function WritePdfAnnotationsPanel({
                               </button>
                             </div>
                           </div>
-                        ) : questionBody ? (
-                          <div className="ds-selectable-text relative rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-3 py-2 pr-9 text-[12px] leading-5 text-ds-muted [overflow-wrap:anywhere] dark:bg-white/6">
-                            {questionBody}
-                            <CopyTextButton
-                              text={questionBody}
-                              iconOnly
-                              className="absolute right-1.5 top-1.5"
-                            />
-                          </div>
                         ) : null}
-
-                        {showQuestionConversation ? (
-                          <div className="grid gap-2">
-                            {questionTurns.map((turn) => {
-                              const assistant = turn.role === 'assistant'
-                              return (
-                                <div
-                                  key={turn.id}
-                                  className={`rounded-lg border px-3 py-2 ${
-                                    assistant
-                                      ? 'border-emerald-500/18 bg-emerald-500/5'
-                                      : 'border-violet-500/18 bg-violet-500/5'
-                                  }`}
-                                >
-                                  <div
-                                    className={`mb-1 flex min-w-0 items-center gap-1.5 text-[11.5px] font-semibold ${
-                                      assistant
-                                        ? 'text-emerald-700 dark:text-emerald-300'
-                                        : 'text-violet-700 dark:text-violet-300'
-                                    }`}
-                                  >
-                                    {assistant ? (
-                                      turn.busy ? (
-                                        <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
-                                      ) : (
-                                        <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.9} />
-                                      )
-                                    ) : (
-                                      <MessageSquareText className="h-3.5 w-3.5" strokeWidth={1.9} />
-                                    )}
-                                    <span className="truncate">
-                                      {assistant
-                                        ? turn.busy
-                                          ? t('writePdfAnnotationsAnswering')
-                                          : t('writePdfAnnotationsAnswer')
-                                        : t('writePdfAnnotationsQuestionTurn')}
-                                    </span>
-                                    <CopyTextButton
-                                      text={turn.text}
-                                      iconOnly
-                                      className="ml-auto -mr-1"
-                                    />
-                                  </div>
-                                  <div
-                                    className={`ds-selectable-text text-[12px] leading-5 text-ds-ink [overflow-wrap:anywhere] ${
-                                      assistant ? 'ds-markdown ds-chat-answer' : 'whitespace-pre-wrap'
-                                    }`}
-                                  >
-                                    {assistant ? (
-                                      <AssistantMarkdown
-                                        text={turn.text}
-                                        streaming={turn.busy === true}
-                                        className="text-[12px] leading-5 [overflow-wrap:anywhere]"
-                                      />
-                                    ) : turn.text}
-                                  </div>
-                                </div>
-                              )
-                            })}
-                            {!questionTurns.some((turn) => turn.role === 'assistant' && turn.busy) && answerBusy ? (
-                              <div className="rounded-lg border border-emerald-500/18 bg-emerald-500/5 px-3 py-2">
-                                <div className="mb-1 flex min-w-0 items-center gap-1.5 text-[11.5px] font-semibold text-emerald-700 dark:text-emerald-300">
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
-                                  <span className="truncate">{t('writePdfAnnotationsAnswering')}</span>
-                                </div>
-                                <div className="text-[12px] leading-5 text-ds-faint">
-                                  {t('writePdfAnnotationsAnswerPending')}
-                                </div>
-                              </div>
-                            ) : null}
-                            {answerError ? (
-                              <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 px-3 py-2 text-[12px] leading-5 text-rose-600 [overflow-wrap:anywhere] dark:text-rose-300">
-                                {answerError}
-                              </div>
-                            ) : null}
-                          </div>
-                        ) : null}
-
-                        <div className="flex flex-wrap items-center justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => onDeleteThread?.(summary.thread.id, summary)}
-                            disabled={!onDeleteThread}
-                            className="inline-flex h-7 items-center gap-1.5 rounded-md border border-rose-500/20 bg-rose-500/5 px-2 text-[11.5px] font-semibold text-rose-600 transition hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-45 dark:text-rose-300"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" strokeWidth={1.9} />
-                            {t('writePdfAnnotationsDelete')}
-                          </button>
-                        </div>
                       </div>
                     ) : selected && firstAnnotationId && editing ? (
                       <div className="grid gap-2">

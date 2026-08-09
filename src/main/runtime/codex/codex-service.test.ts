@@ -210,6 +210,23 @@ function scheduleFirstActivityGuard(
   guarded.scheduleFirstActivityTimeout(threadId, turnId)
 }
 
+function modelDeltaDedupeProbe(service: CodexRuntimeService): {
+  readonly states: Map<string, { identities: Set<string> }>
+  recordActiveTurn(threadId: string, turnId: string): void
+  dedupe(event: CodexThreadEventPayload): CodexThreadEventPayload | null
+} {
+  const probed = service as unknown as {
+    modelDeltaDedupeByTurn: Map<string, { identities: Set<string> }>
+    recordActiveTurn(threadId: string, turnId: string): void
+    dedupeModelDeltas(event: CodexThreadEventPayload): CodexThreadEventPayload | null
+  }
+  return {
+    states: probed.modelDeltaDedupeByTurn,
+    recordActiveTurn: (threadId, turnId) => probed.recordActiveTurn(threadId, turnId),
+    dedupe: (event) => probed.dedupeModelDeltas(event)
+  }
+}
+
 async function tempRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'sciforge-codex-service-'))
 }
@@ -2100,7 +2117,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     }))
   })
 
-  it('advertises fixed capability tools and routes them first with trusted thread workspace context', async () => {
+  it('advertises only Host-allowed capability tools and routes them with trusted thread workspace context', async () => {
     const storageRoot = await tempRoot()
     const client = controllableClient()
     let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
@@ -2131,17 +2148,17 @@ describe('CodexRuntimeService compatibility operations', () => {
 
     await expect(service.startThread({
       title: 'Capability thread',
-      workspace: '/tmp/capability-workspace'
+      workspace: '/tmp/capability-workspace',
+      allowedTools: [CAPABILITY_AGENT_TOOL_NAMES.discover]
     })).resolves.toMatchObject({ ok: true })
 
     const startParams = vi.mocked(client.startThread).mock.calls[0]?.[0] as {
       dynamicTools?: Array<{ name: string }>
     }
     const dynamicTools = startParams.dynamicTools ?? []
-    expect(dynamicTools).toEqual(expect.arrayContaining(
-      Object.values(CAPABILITY_AGENT_TOOL_NAMES).map((name) => expect.objectContaining({ name }))
-    ))
-    expect(dynamicTools.filter((tool) => tool.name === CAPABILITY_AGENT_TOOL_NAMES.discover)).toHaveLength(1)
+    expect(dynamicTools.map((tool) => tool.name)).toEqual([
+      CAPABILITY_AGENT_TOOL_NAMES.discover
+    ])
 
     await expect(pendingServerRequests?.onToolCallRequest?.({
       requestId: 'capability-request-1',
@@ -2744,6 +2761,22 @@ process.stdout.write(JSON.stringify({
       type: 'event',
       channel: CODEX_MAIN_IPC_CHANNELS.event,
       payload: {
+        method: 'item/completed',
+        params: {
+          threadId: 'stale-codex-thread',
+          turnId: 'turn-old',
+          item: { id: 'assistant-old', type: 'agentMessage', text: 'partial answer' }
+        }
+      }
+    })
+    await vi.waitFor(() => {
+      expect(modelDeltaDedupeProbe(service).states.size).toBe(1)
+    })
+
+    queued.push({
+      type: 'event',
+      channel: CODEX_MAIN_IPC_CHANNELS.event,
+      payload: {
         method: 'turn/failed',
         params: {
           threadId: 'stale-codex-thread',
@@ -2757,6 +2790,7 @@ process.stdout.write(JSON.stringify({
 
     await vi.waitFor(() => {
       expect(queued.client.startTurn).toHaveBeenCalledTimes(2)
+      expect(modelDeltaDedupeProbe(service).states.size).toBe(0)
     })
     await expect(new CodexPreToolUseGovernanceBridge({ storageRoot }).evaluate({
       hook_event_name: 'PreToolUse',
@@ -3303,6 +3337,58 @@ process.stdout.write(JSON.stringify({
         ]
       })
     })
+  })
+
+  it('encodes structured workspace references with Codex-supported input variants', async () => {
+    const client = controllableClient()
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      createClient: () => client
+    })
+
+    await expect(service.startTurn({
+      threadId: 'thread-1',
+      text: 'Analyze the references',
+      workspace: '/tmp/workspace',
+      fileReferences: [
+        {
+          path: 'papers/large.pdf',
+          relativePath: 'papers/large.pdf',
+          name: 'large.pdf',
+          kind: 'pdf',
+          mimeType: 'application/pdf',
+          modelRouterObject: true
+        },
+        {
+          path: 'figures/cell.png',
+          relativePath: 'figures/cell.png',
+          name: 'cell.png',
+          kind: 'image',
+          mimeType: 'image/png',
+          modelRouterObject: true
+        }
+      ]
+    })).resolves.toMatchObject({ ok: true })
+
+    expect(client.startTurn).toHaveBeenCalledWith(expect.objectContaining({
+      input: [
+        {
+          type: 'text',
+          text: 'Analyze the references',
+          text_elements: []
+        },
+        {
+          type: 'mention',
+          name: 'large.pdf',
+          path: 'papers/large.pdf'
+        },
+        {
+          type: 'localImage',
+          path: 'figures/cell.png'
+        }
+      ]
+    }))
   })
 
   it('treats compact as an explicit no-op without starting app-server JSON-RPC', async () => {
@@ -3985,6 +4071,179 @@ process.stdout.write(JSON.stringify({
     expect(firstDeltaStatusIndex).toBeGreaterThan(assistantDeltaIndex)
     expect(turnDoneStatusIndex).toBeGreaterThan(turnCompleteIndex)
     queued.close()
+  })
+
+  it('deduplicates redelivered sequence identities without suppressing equal incremental text', async () => {
+    const queued = clientWithQueuedEvents()
+    const sink = { send: vi.fn() }
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink,
+      createClient: () => queued.client
+    })
+
+    await expect(service.startTurn({ threadId: 'thread-1', text: 'hello' })).resolves.toMatchObject({
+      ok: true,
+      turnId: 'turn-1'
+    })
+    for (const seq of [1, 2, 2]) {
+      queued.push({
+        type: 'event',
+        channel: CODEX_MAIN_IPC_CHANNELS.event,
+        payload: {
+          method: 'item/agentMessage/delta',
+          params: { threadId: 'thread-1', turnId: 'turn-1', seq, delta: 'same increment' }
+        }
+      })
+    }
+
+    await vi.waitFor(() => {
+      const deltaEvents = sink.send.mock.calls
+        .map((call) => call[1]?.event)
+        .filter((event) => event?.deltas?.some((delta: { text: string }) => delta.text === 'same increment'))
+      expect(deltaEvents).toHaveLength(2)
+    })
+    const identities = [...modelDeltaDedupeProbe(service).states.values()]
+      .flatMap((state) => [...state.identities])
+    expect(identities).toHaveLength(2)
+    expect(identities.every((identity) => !identity.includes('same increment'))).toBe(true)
+
+    queued.push({
+      type: 'event',
+      channel: CODEX_MAIN_IPC_CHANNELS.event,
+      payload: {
+        method: 'turn/completed',
+        params: { threadId: 'thread-1', turnId: 'turn-1' }
+      }
+    })
+    await vi.waitFor(() => {
+      expect(modelDeltaDedupeProbe(service).states.size).toBe(0)
+    })
+    queued.close()
+  })
+
+  it('bounds per-turn delta identities and stores only fixed-size snapshot digests', () => {
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      createClient: () => controllableClient()
+    })
+    const probe = modelDeltaDedupeProbe(service)
+    probe.recordActiveTurn('thread-1', 'turn-1')
+
+    const snapshotText = `private snapshot ${'x'.repeat(4_096)}`
+    expect(probe.dedupe({
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      deltas: [{ kind: 'agent_message', text: snapshotText, snapshot: true }]
+    })).not.toBeNull()
+    expect(probe.dedupe({
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      deltas: [{ kind: 'agent_message', text: snapshotText, snapshot: true }]
+    })).toBeNull()
+
+    for (let seq = 1; seq <= 4_200; seq += 1) {
+      probe.dedupe({
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        seq,
+        deltas: [{ kind: 'agent_message', text: `increment-${seq}` }]
+      })
+    }
+    const [state] = probe.states.values()
+    expect(state?.identities.size).toBe(4_096)
+    expect([...state!.identities].every((identity) => identity.length < 128)).toBe(true)
+    expect([...state!.identities].every((identity) => !identity.includes(snapshotText))).toBe(true)
+
+    for (let turnIndex = 2; turnIndex <= 70; turnIndex += 1) {
+      const turnId = `turn-${turnIndex}`
+      probe.recordActiveTurn(`thread-${turnIndex}`, turnId)
+      probe.dedupe({
+        threadId: `thread-${turnIndex}`,
+        turnId,
+        seq: 1,
+        deltas: [{ kind: 'agent_message', text: 'increment' }]
+      })
+    }
+    expect(probe.states.size).toBe(64)
+  })
+
+  it.each([
+    { method: 'turn/cancelled', params: { reason: 'user interrupted' } },
+    { method: 'turn/failed', params: { error: { message: 'provider failed' } } }
+  ])('clears delta dedupe state on terminal $method events', async ({ method, params }) => {
+    const queued = clientWithQueuedEvents()
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      createClient: () => queued.client
+    })
+    await expect(service.startTurn({ threadId: 'thread-1', text: 'hello' })).resolves.toMatchObject({
+      ok: true,
+      turnId: 'turn-1'
+    })
+    queued.push({
+      type: 'event',
+      channel: CODEX_MAIN_IPC_CHANNELS.event,
+      payload: {
+        method: 'item/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: { id: 'assistant-1', type: 'agentMessage', text: 'answer' }
+        }
+      }
+    })
+    await vi.waitFor(() => {
+      expect(modelDeltaDedupeProbe(service).states.size).toBe(1)
+    })
+
+    queued.push({
+      type: 'event',
+      channel: CODEX_MAIN_IPC_CHANNELS.event,
+      payload: {
+        method,
+        params: { threadId: 'thread-1', turnId: 'turn-1', ...params }
+      }
+    })
+    await vi.waitFor(() => {
+      expect(modelDeltaDedupeProbe(service).states.size).toBe(0)
+    })
+    queued.close()
+  })
+
+  it('clears delta dedupe state when the runtime disconnects', async () => {
+    const queued = clientWithQueuedEvents()
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      createClient: () => queued.client
+    })
+    await expect(service.startTurn({ threadId: 'thread-1', text: 'hello' })).resolves.toMatchObject({
+      ok: true,
+      turnId: 'turn-1'
+    })
+    queued.push({
+      type: 'event',
+      channel: CODEX_MAIN_IPC_CHANNELS.event,
+      payload: {
+        method: 'item/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: { id: 'assistant-1', type: 'agentMessage', text: 'answer' }
+        }
+      }
+    })
+    await vi.waitFor(() => {
+      expect(modelDeltaDedupeProbe(service).states.size).toBe(1)
+    })
+
+    queued.close()
+    await vi.waitFor(() => {
+      expect(modelDeltaDedupeProbe(service).states.size).toBe(0)
+    })
   })
 
   it('deduplicates final assistant messages from multiple app-server event shapes', async () => {
@@ -4820,6 +5079,7 @@ process.stdout.write(JSON.stringify({
 
     await vi.waitFor(async () => {
       await expect(service.usage({
+        runtimeId: 'codex',
         groupBy: 'thread',
         threadId: 'thread-1',
         timezone: 'UTC'
@@ -4886,6 +5146,7 @@ process.stdout.write(JSON.stringify({
 
     await vi.waitFor(async () => {
       await expect(service.usage({
+        runtimeId: 'codex',
         groupBy: 'thread',
         threadId: 'thread-1',
         timezone: 'UTC'
@@ -4930,6 +5191,7 @@ process.stdout.write(JSON.stringify({
     })
 
     await expect(service.usage({
+      runtimeId: 'codex',
       groupBy: 'thread',
       threadId: 'gui-thread-1',
       timezone: 'UTC'
@@ -4959,6 +5221,7 @@ process.stdout.write(JSON.stringify({
       createClient: () => controllableClient()
     })
     await restartedService.usage({
+      runtimeId: 'codex',
       groupBy: 'thread',
       threadId: 'gui-thread-1',
       timezone: 'UTC'

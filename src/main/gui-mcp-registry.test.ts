@@ -162,6 +162,9 @@ describe('GUI MCP runtime registry', () => {
     )
     const scientificPlottingTools = servers.find((server) => server.id === 'scientific_plotting')?.enabledTools
     expect(scientificPlottingTools).not.toContain('visual_generate')
+    expect(scientificPlottingTools).not.toContain('scientific_plotting_render')
+    expect(scientificPlottingTools).not.toContain('scientific_plotting_rerun')
+    expect(scientificPlottingTools).toContain('scientific_plotting_composite')
   })
 
   it('returns no managed servers without launch input', () => {

@@ -314,7 +314,8 @@ describe('FloatingComposer file references', () => {
         name: 'product plan.pdf',
         workspaceRoot: '/workspace/sciforge',
         kind: 'pdf',
-        mimeType: 'application/pdf'
+        mimeType: 'application/pdf',
+        modelRouterObject: true
       },
       mentionToken: '@"texts/product plan.pdf"'
     })

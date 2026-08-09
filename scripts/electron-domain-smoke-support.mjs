@@ -33,10 +33,39 @@ const REQUIRED_CAPABILITY_IDS = Object.freeze([
   'paper-radar.status',
   'paper-radar.profiles.list',
   'paper-radar.profiles.save',
+  'create-loop.build-dataset',
+  'create-loop.read',
+  'dataset-api.materialize',
   'workspace-preview.list',
   'workspace-preview.open',
   'workspace-preview.apply-edit',
-  'workspace-preview.release'
+  'workspace-preview.release',
+  'artifact-versions.commit',
+  'artifact-versions.observe',
+  'artifact-versions.read',
+  'artifact-versions.list',
+  'artifact-versions.materialize',
+  'artifact-versions.restore-as-new',
+  'artifact-versions.compare',
+  'artifact-versions.bundle.export',
+  'artifact-versions.bundle.import',
+  'artifact-versions.bundle.verify',
+  'artifact-versions.events.list',
+  'artifact-versions.lifecycle.refresh',
+  'evidence-dag.view',
+  'evidence-dag.update',
+  'evidence-dag.priority',
+  'evidence-dag.resolve-evidence-preview',
+  'evidence-dag.export-snapshot-products',
+  'scientific-plotting.status',
+  'scientific-plotting.map-data',
+  'scientific-plotting.render',
+  'scientific-plotting.rerun',
+  'scientific-plotting.compare',
+  'visual-review.open',
+  'visual-review.read-document',
+  'visual-review.accept-candidate',
+  'visual-review.reject-candidate'
 ])
 const PROCESS_FAILURE_PATTERNS = Object.freeze([
   /\[sciforge\] failed to load preload/iu,
@@ -365,6 +394,64 @@ async function smokeRendererWorkflow({ requiredCapabilityIds, workspaceDirectory
     throw new Error('Paper Radar profile did not survive save/list through the capability transport.')
   }
 
+  const datasetLoopRequest = {
+    actionId: 'create-loop.build-dataset',
+    invocationId: 'electron-smoke-dataset-loop-build',
+    input: {
+      name: 'Electron smoke dataset loop',
+      objective: 'Create one grounded protein question for runtime composition verification.',
+      sourceIds: ['uniprot'],
+      outputSchema: {
+        question: { type: 'string', required: true },
+        answer: { type: 'string', required: true },
+        evidence: { type: 'array', required: true }
+      },
+      quality: {
+        criteria: ['The answer must be grounded in the selected source.'],
+        targetCount: 1,
+        maxIterations: 2,
+        minQualityScore: 0.7,
+        minStrongScore: 0.7,
+        maxWeakScore: 0.4,
+        minScoreGap: 0.3,
+        maxDuplicateFraction: 0
+      },
+      output: {
+        datasetName: 'electron-smoke-dataset',
+        fileName: 'electron-smoke-dataset.jsonl',
+        format: 'jsonl'
+      },
+      humanReview: false,
+      run: false
+    }
+  }
+  const builtDatasetLoop = await api.capabilities.invoke({
+    workspaceId: workspaceDirectory,
+    request: datasetLoopRequest,
+    approval: { mode: 'confirmation' }
+  })
+  const createLoopSnapshot = await api.capabilities.invoke({
+    workspaceId: workspaceDirectory,
+    request: { actionId: 'create-loop.read', input: {} }
+  })
+  const builtWorkflowIds = [
+    builtDatasetLoop.output?.workflowId,
+    builtDatasetLoop.output?.iterationWorkflowId
+  ]
+  const savedWorkflows = createLoopSnapshot.output?.settings?.workflows
+  if (builtDatasetLoop.output?.created !== true ||
+      builtWorkflowIds.some((id) => typeof id !== 'string') ||
+      !Array.isArray(savedWorkflows) ||
+      !builtWorkflowIds.every((id) => savedWorkflows.some((workflow) => workflow.id === id)) ||
+      createLoopSnapshot.output?.settings?.presets?.length !== 0) {
+    throw new Error(`Dynamic Dataset Create Loop was not saved as two editable workflows without a preset: ${JSON.stringify({
+      created: builtDatasetLoop.output?.created,
+      builtWorkflowIds,
+      savedWorkflowIds: Array.isArray(savedWorkflows) ? savedWorkflows.map((workflow) => workflow.id) : null,
+      presetCount: createLoopSnapshot.output?.settings?.presets?.length
+    })}`)
+  }
+
   const plugins = await api.capabilities.invoke({
     workspaceId: workspaceDirectory,
     request: { actionId: 'workspace-preview.list', input: {} }
@@ -422,6 +509,38 @@ async function smokeRendererWorkflow({ requiredCapabilityIds, workspaceDirectory
   })
   if (released.output !== true) throw new Error('Workspace Preview release failed.')
 
+  const artifactHistory = await api.capabilities.invoke({
+    workspaceId: workspaceDirectory,
+    request: { actionId: 'artifact-versions.list', input: { limit: 1 } }
+  })
+  if (!artifactHistory.output?.ok || !Array.isArray(artifactHistory.output.value?.items)) {
+    throw new Error('Artifact Versions did not return workspace-scoped history.')
+  }
+  const plottingStatus = await api.capabilities.invoke({
+    request: { actionId: 'scientific-plotting.status', input: {} }
+  })
+  if (plottingStatus.actionId !== 'scientific-plotting.status' || !plottingStatus.output) {
+    throw new Error('Scientific Plotting status was not reachable through the capability broker.')
+  }
+  const evidenceView = await api.capabilities.invoke({
+    workspaceId: workspaceDirectory,
+    request: { actionId: 'evidence-dag.view', input: {} }
+  })
+  if (evidenceView.actionId !== 'evidence-dag.view' || !evidenceView.output?.status) {
+    throw new Error('Evidence DAG view was not reachable through the workspace capability path.')
+  }
+  const visualReview = await api.capabilities.invoke({
+    workspaceId: workspaceDirectory,
+    request: {
+      actionId: 'visual-review.open',
+      invocationId: 'electron-smoke-visual-review-open',
+      input: { documentId: 'electron-smoke-review' }
+    }
+  })
+  if (visualReview.actionId !== 'visual-review.open' || !visualReview.output?.document) {
+    throw new Error('Visual Review did not open through the workspace capability path.')
+  }
+
   return {
     title: document.title,
     url: location.href,
@@ -429,12 +548,18 @@ async function smokeRendererWorkflow({ requiredCapabilityIds, workspaceDirectory
     version: await api.getAppVersion(),
     readiness: readiness.status,
     capabilityCount: readiness.availableCapabilityIds.length,
+    datasetLoopCreated: true,
+    datasetLoopWorkflowCount: builtWorkflowIds.length,
     paperRadarActionId: paperRadarStatus.actionId,
     paperRadarProfileCount: listedProfiles.output.data.profiles.length,
     workspacePreviewActionId: plugins.actionId,
     previewPluginCount: Array.isArray(plugins.output) ? plugins.output.length : null,
     workspacePreviewPluginId: opened.output.session?.pluginId,
-    workspacePreviewReleased: released.output
+    workspacePreviewReleased: released.output,
+    artifactVersionsActionId: artifactHistory.actionId,
+    evidenceDagActionId: evidenceView.actionId,
+    scientificPlottingActionId: plottingStatus.actionId,
+    visualReviewActionId: visualReview.actionId
   }
 }
 
@@ -474,6 +599,21 @@ function validateSmokeResult(result, { expectedRendererUrl }) {
   if (result.workspacePreviewActionId !== 'workspace-preview.list') throw new Error('Workspace Preview list action mismatch.')
   if (result.workspacePreviewPluginId !== 'markdown') throw new Error('Workspace Preview did not select Markdown.')
   if (result.workspacePreviewReleased !== true) throw new Error('Workspace Preview session was not released.')
+  if (result.artifactVersionsActionId !== 'artifact-versions.list') {
+    throw new Error('Artifact Versions capability path mismatch.')
+  }
+  if (result.evidenceDagActionId !== 'evidence-dag.view') {
+    throw new Error('Evidence DAG capability path mismatch.')
+  }
+  if (result.scientificPlottingActionId !== 'scientific-plotting.status') {
+    throw new Error('Scientific Plotting capability path mismatch.')
+  }
+  if (result.visualReviewActionId !== 'visual-review.open') {
+    throw new Error('Visual Review capability path mismatch.')
+  }
+  if (result.datasetLoopCreated !== true || result.datasetLoopWorkflowCount !== 2) {
+    throw new Error('Dynamic Dataset Create Loop creation did not pass the real capability transport.')
+  }
   if (!Number.isSafeInteger(result.previewPluginCount) || result.previewPluginCount < 1) {
     throw new Error('Workspace Preview returned no registered plugins.')
   }
@@ -493,9 +633,10 @@ function validateSmokeResult(result, { expectedRendererUrl }) {
     nativeVisual.cropped !== true ||
     nativeVisual.nativeImageBindingValidated !== true ||
     nativeVisual.proofChainValidated !== true ||
+    nativeVisual.datasetLoopCapabilitiesDiscoverable !== true ||
     nativeVisual.unavailableRouteFailedVisibly !== true
   ) {
-    throw new Error('Native visual smoke did not validate capture, bindings, proofs, and failure behavior.')
+    throw new Error('Native visual smoke did not validate capture, bindings, proofs, dataset Loop discovery, and failure behavior.')
   }
   const codexHook = result.codexPreToolUseHook
   if (

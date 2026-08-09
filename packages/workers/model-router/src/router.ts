@@ -1409,7 +1409,7 @@ async function routeResponsesRequest(
   const requestWithSafeTextInput = typeof request.input === 'string'
     ? { ...requestWithoutContinuationHandle, input: extracted.userText }
     : requestWithoutContinuationHandle;
-  const requestForTextReasoner = hasToolTranscriptInput
+  const unrestrictedRequestForTextReasoner = hasToolTranscriptInput
     ? {
       ...requestWithSafeTextInput,
       input: repairResponseToolTranscriptInput(
@@ -1422,8 +1422,9 @@ async function routeResponsesRequest(
       ),
     }
     : requestWithSafeTextInput;
+  const requestForTextReasoner = unrestrictedRequestForTextReasoner;
   const textReasonerRequestOptions = textReasonerOptionsFromResponsesRequest(requestForTextReasoner);
-  const toolNameAliases = chatToolNameAliasesFromResponsesTools(request.tools);
+  const toolNameAliases = chatToolNameAliasesFromResponsesTools(requestForTextReasoner.tools);
   const textReasonerMessages = hasToolTranscriptInput || hasAssistantReasoningInput
     ? chatMessagesFromResponsesRequest(requestForTextReasoner, profile.textReasoner.model)
     : [];
@@ -1632,6 +1633,8 @@ async function routeResponsesRequest(
         messages: textReasonerMessages,
         observations,
         visualFailure: degraded,
+        strictVisualEvidence: strictVisualEvidenceRequired,
+        allowVisualSupplement: supplementRounds < maxSupplementRounds && Boolean(profile.translators.vision && visionSecret),
         calls,
         request: requestForTextReasoner,
         requestOptions: textReasonerRequestOptions,
@@ -1661,7 +1664,7 @@ async function routeResponsesRequest(
       }
 
       const control = parseTextControl(textResult.outputText);
-      if (control?.type === 'final_answer') {
+      if (!strictVisualEvidenceRequired && control?.type === 'final_answer') {
         outputText = publicProviderOutputText(control.content, profile, publicModelAlias, traceRedactionSecrets);
         outputItems = reasoningItems;
         break;
@@ -2930,6 +2933,8 @@ async function callTextReasoner(options: {
   messages: JsonObject[];
   observations: string[];
   visualFailure: boolean;
+  strictVisualEvidence: boolean;
+  allowVisualSupplement: boolean;
   calls: ProviderCallRecord[];
   request: Record<string, unknown>;
   requestOptions: Record<string, unknown>;
@@ -2939,13 +2944,20 @@ async function callTextReasoner(options: {
   preferredProtocol: UpstreamWireProtocol;
   traceSession?: ModelRouterTraceSession;
 }) {
+  const outputContractInstruction = options.strictVisualEvidence
+    ? 'Return only the caller-requested strict visual evidence JSON object. Do not add a control envelope or nest it under another field.'
+    : 'When answering with text instead of a tool call, return strict JSON only: {"type":"final_answer","content":"..."}.';
+  const supplementInstruction = options.allowVisualSupplement
+    ? 'If essential visual evidence is missing, you may instead return strict JSON only: {"type":"need_more_visual_info","target":"<modality_input id>","question":"...","reason":"..."}.'
+    : '';
   const controlInstruction = options.observations.length
     ? [
       'You are the text reasoner for SciForge Model Router.',
       'Use the supplied modality observations as internal multimodal evidence for the final answer.',
       'Do not tell the user you cannot directly access or see the image when a modality observation is available.',
       'Do not mention modality observations, visual observations, translators, or router internals in the final answer.',
-      'When answering with text instead of a tool call, return strict JSON only: {"type":"final_answer","content":"..."}.',
+      outputContractInstruction,
+      supplementInstruction,
       'If the request provides tools and the Agent Host protocol requires one, use the provider tool-call protocol instead of describing the tool call in text.',
       'If any modality_input or visual_input is unavailable, the final answer must explicitly state that the referenced modality could not be inspected.',
       'If any image observation has status=not_sent, the final answer must explicitly state that the image was not sent to the active text-only model and could not be inspected.',

@@ -29,6 +29,7 @@ export function SessionHeader({ compact = false, className = '' }: Props): React
   const [draftTitle, setDraftTitle] = useState('')
   const threadUsage = useThreadUsage(
     activeThreadId,
+    active?.runtimeId,
     runtimeConnection === 'ready',
     `${active?.updatedAt ?? ''}:${busy ? 'busy' : 'idle'}`
   )

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { domainPackageJsonValueSchema } from '@sciforge/domain-sdk/contract'
+import { artifactVersionRefV1Schema } from '@sciforge/domain-artifact-versions/contract'
 
 export * from './types.js'
 import type {
@@ -19,6 +20,7 @@ export const VISUAL_REVIEW_CAPABILITY_IDS = Object.freeze({
   readDocument: 'visual-review.read-document',
   readImage: 'visual-review.read-image',
   updateContext: 'visual-review.update-context',
+  applyStyleReference: 'visual-review.apply-style-reference',
   saveAnnotations: 'visual-review.save-annotations',
   exportReviewPacket: 'visual-review.export-review-packet',
   createCandidate: 'visual-review.create-candidate',
@@ -34,6 +36,10 @@ const pathSchema = z.string().trim().min(1).max(4_096)
 const reviewImagePathSchema = pathSchema.refine(
   (path) => /\.(?:avif|bmp|gif|jpe?g|png|webp)$/iu.test(path),
   'Visual Review supports bounded raster images only.'
+)
+const styleReferenceImagePathSchema = pathSchema.refine(
+  (path) => /\.(?:bmp|jpe?g|png|webp)$/iu.test(path),
+  'Visual style references must be PNG, JPG, WEBP, or BMP images.'
 )
 const isoDateTimeSchema = z.string().datetime({ offset: true })
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u)
@@ -77,6 +83,7 @@ export const visualReviewArtifactKindSchema = z.enum([
 export const visualReviewArtifactActivationSchema = z.object({
   kind: visualReviewArtifactKindSchema,
   sourcePath: reviewImagePathSchema,
+  versionRef: artifactVersionRefV1Schema.optional(),
   manifestPath: pathSchema.optional(),
   title: z.string().trim().min(1).max(1_000).optional(),
   caption: z.string().trim().min(1).max(10_000).optional(),
@@ -157,6 +164,11 @@ export const visualReviewDocumentInputSchema = z.object({
   documentId: identifierSchema
 }).strict()
 
+export const visualReviewApplyStyleReferenceInputSchema = z.object({
+  documentId: identifierSchema,
+  sourcePath: styleReferenceImagePathSchema
+}).strict()
+
 const reviewEvidenceSchema = z.object({
   tool: z.literal('image_generation_review_candidate'),
   ok: z.literal(true),
@@ -231,7 +243,8 @@ const visualReviewArtifactSchema = z.object({
   height: z.number().int().positive().max(100_000).optional(),
   manifestPath: pathSchema.optional(),
   title: z.string().min(1).max(1_000).optional(),
-  caption: z.string().min(1).max(10_000).optional()
+  caption: z.string().min(1).max(10_000).optional(),
+  versionRef: artifactVersionRefV1Schema.optional()
 }).strict()
 
 const visualReviewRevisionSchema = z.object({
@@ -246,7 +259,8 @@ const visualReviewRevisionSchema = z.object({
   reviewEvidence: reviewEvidenceSchema,
   createdAt: isoDateTimeSchema,
   decidedAt: isoDateTimeSchema.optional(),
-  backupPath: pathSchema.optional()
+  backupPath: pathSchema.optional(),
+  versionRef: artifactVersionRefV1Schema.optional()
 }).strict()
 
 export const visualReviewDocumentSchema = z.object({
@@ -317,6 +331,22 @@ export const visualReviewUpdateContextOutputSchema = z.object({
   document: visualReviewDocumentSchema
 }).strict()
 
+export const visualReviewApplyStyleReferenceOutputSchema = z.object({
+  ok: z.literal(true),
+  status: z.literal('style_applied'),
+  document: visualReviewDocumentSchema,
+  styleProfileRef: pathSchema,
+  profile: z.object({
+    id: identifierSchema,
+    semanticDescription: z.string().trim().min(1).max(20_000),
+    palette: z.object({
+      colors: z.array(z.string().trim().min(1).max(100)).min(1).max(64),
+      accent: z.array(z.string().trim().min(1).max(100)).max(32)
+    }).strict(),
+    confidence: z.number().finite().min(0).max(1)
+  }).strict()
+}).strict()
+
 export const visualReviewExportReviewPacketOutputSchema = z.object({
   ok: z.literal(true),
   status: z.literal('exported'),
@@ -343,6 +373,8 @@ export type VisualReviewReadImageInput = z.infer<typeof visualReviewReadImageInp
 export type VisualReviewSaveAnnotationsInput = z.infer<typeof visualReviewSaveAnnotationsInputSchema>
 export type VisualReviewUpdateContextInput = z.infer<typeof visualReviewUpdateContextInputSchema>
 export type VisualReviewDocumentInput = z.infer<typeof visualReviewDocumentInputSchema>
+export type VisualReviewApplyStyleReferenceInput =
+  z.infer<typeof visualReviewApplyStyleReferenceInputSchema>
 export type VisualReviewCreateCandidateInput = z.infer<typeof visualReviewCreateCandidateInputSchema>
 export type VisualReviewRevisionDecisionInput =
   z.infer<typeof visualReviewRevisionDecisionInputSchema>

@@ -25,9 +25,12 @@ from contextlib import contextmanager, nullcontext
 from collections.abc import Iterator
 from typing import Any, Optional
 
+from evidence_dag.model import Node, NodeStatus, NodeType
+
 from .judge import Judge, JudgePreparationRequired
-from .reader import SessionReader, source_ancestors, supporting_subgraph
+from .reader import SessionReader, supporting_subgraph
 from .reconcile import incremental_reconcile
+from .snapshot_integrity import validate_project_snapshot_row
 from .store import Store, new_id, now_iso
 
 _PROJECT_LOCKS: dict[tuple[str, str], threading.Lock] = {}
@@ -36,6 +39,16 @@ _PROJECT_LOCKS_GUARD = threading.Lock()
 AUTO_THRESHOLD = 0.85
 REVIEW_THRESHOLD = 0.60
 POOL_K = 5
+CLAIM_TYPES = frozenset({
+    "hypothesis", "finding", "method_result", "negative_result",
+    "decision", "conclusion",
+})
+_DISTINCT_CLAIM_SEMANTICS = frozenset({"decision", "conclusion"})
+_DECLARED_EXECUTION_ACTOR = "sdk-execution-lineage"
+_DECLARED_PROMOTION_TYPES = {
+    ("evidence", NodeType.FINDING): "finding",
+    ("conclusion", NodeType.CONCLUSION): "conclusion",
+}
 
 
 def _norm(s: str) -> str:
@@ -44,6 +57,46 @@ def _norm(s: str) -> str:
 
 def _sim(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, _norm(a), _norm(b)).ratio()
+
+
+def _claim_type(value: Any) -> str:
+    return str(value) if value in CLAIM_TYPES else "finding"
+
+
+def _declared_semantic_promotion(node: Node, subgraph: dict) -> Optional[dict]:
+    """Map an SDK-declared semantic node without reinterpreting it via a model.
+
+    The actor gate keeps ordinary extracted or legacy Evidence nodes on the
+    existing Judge path.  The exact role/type pairs prevent a malformed role
+    from silently changing epistemic semantics.  Source ids come from the
+    canonical graph view, never from executor-facing external ids.
+    """
+    if (
+        node.created_by != _DECLARED_EXECUTION_ACTOR
+        or node.status != NodeStatus.FRAGILE
+    ):
+        return None
+    role = node.attributes.get("semanticRole")
+    claim_type = _DECLARED_PROMOTION_TYPES.get((role, node.type))
+    statement = node.content.strip() if isinstance(node.content, str) else ""
+    if claim_type is None or not statement:
+        return None
+    source_node_ids = [
+        item["id"] for item in subgraph.get("nodes", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    ]
+    if node.id not in source_node_ids:
+        return None
+    return {
+        "statement": statement,
+        "claim_type": claim_type,
+        "mentioned_entities": [],
+        "addresses_goal": "none",
+        "source_node_ids": source_node_ids,
+        # No semantic judgement was made.  Fragility is derived later from the
+        # single declared Evidence root, not from this numeric placeholder.
+        "confidence": 0.0,
+    }
 
 
 def _support_origin(session_id: str, node_id: str, run_id: Optional[str] = None) -> dict:
@@ -210,6 +263,8 @@ class Compiler:
                 for node_id in delta.new_claim_ids:
                     node = delta.graph.nodes[node_id]
                     subgraph = supporting_subgraph(delta.graph, node_id)
+                    if _declared_semantic_promotion(node, subgraph) is not None:
+                        continue
                     payload = {
                         "claim": node.content,
                         "subgraph": subgraph,
@@ -218,7 +273,7 @@ class Compiler:
                     distill_inputs.append(payload)
                     requests.append(("distill", payload, 0))
 
-        outputs = warm_many(requests)
+        outputs = warm_many(requests) if requests else []
         distill_outputs = outputs[-len(distill_inputs):] if distill_inputs else []
         entity_requests: list[tuple[str, dict, int]] = []
         with self.store.transaction_lock:
@@ -252,7 +307,8 @@ class Compiler:
                         }
                         entity_requests.extend(
                             ("entity_same", payload, vote_seed) for vote_seed in range(3))
-        warm_many(entity_requests)
+        if entity_requests:
+            warm_many(entity_requests)
 
     def _mark_running_failed(self, exc: Exception) -> None:
         stats = json.dumps({"errors": 1}, ensure_ascii=False)
@@ -370,12 +426,12 @@ class Compiler:
         records; the immutable snapshot records their applied output in diff.
         """
         latest = self.store.q1(
-            "SELECT payload FROM project_snapshot WHERE project_key=?"
+            "SELECT * FROM project_snapshot WHERE project_key=?"
             " ORDER BY version DESC LIMIT 1", (project_key,),
         )
         committed: set[str] = set()
         if latest:
-            payload = json.loads(latest["payload"])
+            payload = validate_project_snapshot_row(latest)
             committed = {
                 decision.get("id")
                 for decision in payload.get("graph", {}).get("decisions", [])
@@ -523,11 +579,14 @@ class Compiler:
         for node_id in delta.new_claim_ids:                       # Phase 2
             node = delta.graph.nodes[node_id]
             sub = supporting_subgraph(delta.graph, node_id)
-            out = self.judge("distill", {
-                "claim": node.content,
-                "subgraph": sub,
-                "active_goals": goal_view,
-            })
+            out = _declared_semantic_promotion(node, sub)
+            declared_passthrough = out is not None
+            if not declared_passthrough:
+                out = self.judge("distill", {
+                    "claim": node.content,
+                    "subgraph": sub,
+                    "active_goals": goal_view,
+                })
             statement = out.get("statement")
             if not isinstance(statement, str) or not statement.strip():
                 diff["errors"].append({
@@ -536,7 +595,15 @@ class Compiler:
                     "error": "distill returned no derived statement",
                 })
                 continue
-            out = {**out, "statement": statement.strip()}
+            out = {
+                **out,
+                "statement": statement.strip(),
+                # Evidence owns the native Conclusion identity. Project may
+                # reconcile it, but model distillation cannot silently
+                # downgrade it to a generic Finding during promotion.
+                **({"claim_type": "conclusion"}
+                   if node.type.value == "conclusion" else {}),
+            }
             valid_ids = {n["id"] for n in sub["nodes"]}
             cited = [x for x in out.get("source_node_ids", []) if x in valid_ids]
             if not cited:
@@ -552,27 +619,33 @@ class Compiler:
                 entity_ids = self._resolve_entities(
                     out.get("mentioned_entities", []), out.get("statement", ""), diff,
                     project_key=project_key)
-                evidence_ids = self._register_evidence(delta, cited, project_key=project_key)
+                evidence_registration = self._register_evidence(
+                    delta, node_id, project_key=project_key,
+                    declared_passthrough=declared_passthrough)
                 claim_id = self._match_and_insert(
-                    delta, node_id, out, None, entity_ids, evidence_ids,
-                    run_id, diff, touched, project_key=project_key)
+                    delta, node_id, out, None, entity_ids, evidence_registration,
+                    run_id, diff, touched, project_key=project_key,
+                    declared_passthrough=declared_passthrough)
                 diff["orphans"].append({
                     "session": delta.session_id, "node": node_id,
                     "project_claim_id": claim_id,
                     "statement": out["statement"],
                     "claim_type": out.get("claim_type"),
                     "source_node_ids": cited,
-                    "evidence_ids": evidence_ids,
+                    "evidence_ids": [item["id"] for item in evidence_registration["refs"]],
                 })
                 continue
 
             entity_ids = self._resolve_entities(                  # Phase 3
                 out.get("mentioned_entities", []), out.get("statement", ""), diff,
                 project_key=project_key)
-            evidence_ids = self._register_evidence(delta, cited, project_key=project_key)
+            evidence_registration = self._register_evidence(
+                delta, node_id, project_key=project_key,
+                declared_passthrough=declared_passthrough)
             self._match_and_insert(                                # Phase 4/5
-                delta, node_id, out, goal_id, entity_ids, evidence_ids,
-                run_id, diff, touched, project_key=project_key)
+                delta, node_id, out, goal_id, entity_ids, evidence_registration,
+                run_id, diff, touched, project_key=project_key,
+                declared_passthrough=declared_passthrough)
 
         # A prior promoted claim that no longer has any current session origin
         # is not part of the live graph. Immutable Project Snapshots retain its
@@ -602,41 +675,64 @@ class Compiler:
         return touched
 
     def _drop_support_origin(self, claim_id: str, session_id: str, node_id: str) -> None:
-        """Remove only the support path contributed by one vanished claim node."""
+        """Remove only the graph contribution of one vanished Evidence origin.
+
+        Replication relations can connect two EvidenceRefs without touching the
+        promoted Project Claim.  They still belong to the same origin and must
+        be retired with it.  Project-authored ``derived_from`` edges (for
+        example a claim refinement) have no ``origins`` metadata and are left
+        alone.
+        """
         st = self.store
-        for edge in st.alive_edges(dst=claim_id, edge_type="supports"):
+        claim = st.q1("SELECT project_key FROM claim WHERE id=?", (claim_id,))
+        if claim is None:
+            return
+        project_key = claim["project_key"]
+        project_node_ids = {
+            row["id"] for row in st.q(
+                "SELECT id FROM claim WHERE project_key=? UNION ALL"
+                " SELECT id FROM evidence WHERE project_key=?",
+                (project_key, project_key),
+            )
+        }
+        for edge in st.q(
+                "SELECT * FROM edge WHERE t_invalid IS NULL"
+                " AND edge_type IN ('supports','derived_from','replicates',"
+                " 'fails_to_replicate','rerun_of') ORDER BY id"):
+            if edge["src"] not in project_node_ids or edge["dst"] not in project_node_ids:
+                continue
             meta = _load_edge_meta(edge)
             origins = meta.get("origins")
-            if isinstance(origins, list):
-                kept = [
-                    o for o in origins
-                    if not (
-                        isinstance(o, dict)
-                        and o.get("session") == session_id
-                        and o.get("node") == node_id
-                    )
-                ]
-                if len(kept) == len(origins):
-                    continue
-                if kept:
-                    meta["origins"] = kept
-                    first = next((o for o in kept if isinstance(o, dict)), None)
-                    if first is not None:
-                        meta["session"] = first.get("session")
-                        meta["claim_node"] = first.get("node")
-                        if first.get("run") is not None:
-                            meta["run"] = first.get("run")
-                    st.x("UPDATE edge SET meta=? WHERE id=?",
-                         (json.dumps(meta, ensure_ascii=False), edge["id"]))
-                else:
-                    st.close_edge(edge["id"])
+            if not isinstance(origins, list):
                 continue
-
-            raise ValueError("support edge is missing canonical origins metadata")
+            kept = [
+                origin for origin in origins
+                if not (
+                    isinstance(origin, dict)
+                    and origin.get("session") == session_id
+                    and origin.get("node") == node_id
+                )
+            ]
+            if len(kept) == len(origins):
+                continue
+            if not kept:
+                st.close_edge(edge["id"])
+                continue
+            meta["origins"] = kept
+            first = next((origin for origin in kept if isinstance(origin, dict)), None)
+            if first is not None:
+                meta["session"] = first.get("session")
+                meta["claim_node"] = first.get("node")
+                if first.get("run") is not None:
+                    meta["run"] = first["run"]
+                else:
+                    meta.pop("run", None)
+            st.x("UPDATE edge SET meta=? WHERE id=?",
+                 (json.dumps(meta, ensure_ascii=False), edge["id"]))
         st.x(
-            "DELETE FROM claim_origin WHERE project_key=(SELECT project_key FROM claim WHERE id=?)"
+            "DELETE FROM claim_origin WHERE project_key=?"
             " AND claim_id=? AND session_id=? AND node_id=?",
-            (claim_id, claim_id, session_id, node_id),
+            (project_key, claim_id, session_id, node_id),
         )
 
     # ------------------------------------------------------------ Phase 3: ER
@@ -708,47 +804,117 @@ class Compiler:
         return eid
 
     # ----------------------------------------------------- evidence registration
-    def _register_evidence(self, delta, cited_node_ids: list[str], *,
-                           project_key: str) -> list[str]:
-        """Register immutable Evidence node references for this Project view."""
+    def _register_evidence(self, delta, claim_node_id: str, *,
+                           project_key: str,
+                           declared_passthrough: bool = False) -> dict[str, Any]:
+        """Register the complete deterministic upstream EvidenceRef closure.
+
+        Model-selected citations remain a hallucination guard for distillation,
+        but never define provenance coverage.  Every row is only the immutable
+        ``threadId + snapshotDigest + nodeId + nodeType`` reference.
+        """
         st = self.store
-        out: list[str] = []
-        source_ids: set[str] = set()
-        for nid in cited_node_ids:
-            node = delta.graph.nodes.get(nid)
-            if node is not None and node.type.value == "source_assertion":
-                source_ids.add(nid)
-            source_ids.update(source_ancestors(delta.graph, nid))
-        for sid in sorted(source_ids):
+        lineage = delta.graph.conclusion_lineage(claim_node_id)
+        node_ids = [item["id"] for item in lineage["nodes"]]
+        lineage_edges = lineage["edges"]
+        evidence_node_ids = set(
+            lineage["coverage"]["components"].get("evidence", []))
+        has_source_assertions = any(
+            delta.graph.nodes[node_id].type.value == "source_assertion"
+            for node_id in evidence_node_ids
+        )
+        refs: list[dict[str, str]] = []
+        by_node: dict[str, str] = {}
+        for node_id in node_ids:
+            node = delta.graph.nodes[node_id]
+            # A verbatim declared Finding/Conclusion remains the single direct
+            # EvidenceRef for its Project claim.  Its entire upstream closure
+            # is still attached below, but not reinterpreted as independent
+            # semantic support.  Generic roots retain claim_origin only.
+            if (
+                node_id == claim_node_id
+                and node.type.value != "conclusion"
+                and not declared_passthrough
+            ):
+                continue
+            node_type = node.type.value
             existing = st.q1(
                 "SELECT id FROM evidence WHERE project_key=? AND thread_id=?"
                 " AND snapshot_digest=? AND node_id=?",
-                (project_key, delta.session_id, delta.dag_hash, sid),
+                (project_key, delta.session_id, delta.dag_hash, node_id),
             )
             if existing:
-                out.append(existing["id"])
+                evidence_id = existing["id"]
+            else:
+                evidence_id = new_id("ev")
+                st.x(
+                    "INSERT INTO evidence"
+                    " (id,project_key,thread_id,snapshot_digest,node_id,node_type)"
+                    " VALUES (?,?,?,?,?,?)",
+                    (evidence_id, project_key, delta.session_id, delta.dag_hash,
+                     node_id, node_type),
+                )
+            by_node[node_id] = evidence_id
+            if declared_passthrough:
+                supports_project_claim = node_id == claim_node_id
+            else:
+                supports_project_claim = (
+                    node_type == "source_assertion"
+                    or (
+                        not has_source_assertions
+                        and node_id in evidence_node_ids
+                        and node_id != claim_node_id
+                    )
+                )
+            refs.append({
+                "id": evidence_id,
+                "nodeId": node_id,
+                "nodeType": node_type,
+                "projectEdge": "supports" if supports_project_claim else "derived_from",
+            })
+
+        relations: list[dict[str, str]] = []
+        for edge in lineage_edges:
+            rel = edge["rel"]
+            if rel not in {"replicates", "fails_to_replicate", "rerun_of"}:
                 continue
-            evid = new_id("ev")
-            st.x(
-                "INSERT INTO evidence (id,project_key,thread_id,snapshot_digest,node_id)"
-                " VALUES (?,?,?,?,?)",
-                (evid, project_key, delta.session_id, delta.dag_hash, sid),
-            )
-            out.append(evid)
-        return out
+            src = "target" if edge["src"] == claim_node_id else by_node.get(edge["src"])
+            dst = "target" if edge["dst"] == claim_node_id else by_node.get(edge["dst"])
+            if src and dst and src != dst:
+                relations.append({
+                    "src": src, "dst": dst, "edgeType": rel,
+                    "evidenceEdgeId": edge["id"],
+                })
+        return {"refs": refs, "relations": relations}
 
     # -------------------------------------------- Phase 4/5: match + conflicts
     def _match_and_insert(self, delta, node_id: str, out: dict, goal_id: Optional[str],
-                          entity_ids: list[str], evidence_ids: list[str],
+                          entity_ids: list[str], evidence_registration: dict[str, Any],
                           run_id: str, diff: dict, touched: set[str], *,
-                          project_key: str) -> str:
+                          project_key: str,
+                          declared_passthrough: bool = False) -> str:
         st = self.store
         statement = out.get("statement")
         if not isinstance(statement, str) or not statement.strip():
             raise ValueError("distill returned no derived statement")
         statement = statement.strip()
 
-        pool = self._candidate_pool(project_key, goal_id, entity_ids)
+        claim_type = _claim_type(out.get("claim_type"))
+        if declared_passthrough:
+            # Exact declared facts are inserted without semantic coalescing or
+            # contradiction inference.  Either judgement would require the
+            # model whose absence this deterministic path is designed for.
+            cid = self._insert_claim(
+                delta, node_id, out, statement, goal_id, entity_ids,
+                evidence_registration, run_id, project_key=project_key)
+            touched.add(cid)
+            diff["added_claims"].append({
+                "id": cid, "statement": statement, "goal": goal_id,
+            })
+            return cid
+
+        pool = self._candidate_pool(
+            project_key, goal_id, entity_ids, claim_type=claim_type)
         pool = sorted(pool, key=lambda c: -_sim(statement, c["statement"]))[:POOL_K]
 
         relation, target, conf = "new", None, 1.0
@@ -773,7 +939,7 @@ class Compiler:
                 relation, target = "new", None
 
         if relation == "equivalent" and target and conf >= self.auto_threshold:
-            self._merge_into(target, delta.session_id, node_id, evidence_ids, run_id,
+            self._merge_into(target, delta.session_id, node_id, evidence_registration, run_id,
                              project_key=project_key)
             diff["merged_claims"].append({"into": target, "statement": statement,
                                           "session": delta.session_id})
@@ -781,7 +947,7 @@ class Compiler:
             return target
 
         cid = self._insert_claim(delta, node_id, out, statement, goal_id,
-                                 entity_ids, evidence_ids, run_id,
+                                 entity_ids, evidence_registration, run_id,
                                  project_key=project_key)
         touched.add(cid)
         diff["added_claims"].append({"id": cid, "statement": statement, "goal": goal_id})
@@ -797,12 +963,14 @@ class Compiler:
             touched.add(target)
 
         self._detect_conflicts(cid, statement, project_key, goal_id, entity_ids,
+                               claim_type=claim_type,
                                exclude={target} if target else set(),
                                run_id=run_id, diff=diff, touched=touched)
         return cid
 
     def _candidate_pool(self, project_key: str, goal_id: Optional[str],
-                        entity_ids: list[str]) -> list[dict]:
+                        entity_ids: list[str], *,
+                        claim_type: Optional[str] = None) -> list[dict]:
         """Alive claims on the same goal sharing >=1 entity (structure first,
         semantics second)."""
         st = self.store
@@ -814,6 +982,11 @@ class Compiler:
             rows = st.q(
                 "SELECT * FROM claim WHERE project_key=? AND t_invalid IS NULL"
                 " AND goal_id=?", (project_key, goal_id))
+        if claim_type in _DISTINCT_CLAIM_SEMANTICS:
+            rows = [row for row in rows if row["claim_type"] == claim_type]
+        elif claim_type is not None:
+            rows = [row for row in rows
+                    if row["claim_type"] not in _DISTINCT_CLAIM_SEMANTICS]
         if not entity_ids:
             return rows
         eset = set(entity_ids)
@@ -825,7 +998,8 @@ class Compiler:
         return out
 
     def _insert_claim(self, delta, node_id: str, out: dict, statement: str,
-                      goal_id: Optional[str], entity_ids: list[str], evidence_ids: list[str],
+                      goal_id: Optional[str], entity_ids: list[str],
+                      evidence_registration: dict[str, Any],
                       run_id: str, *, project_key: str) -> str:
         return self._insert_claim_record(
             session_id=delta.session_id,
@@ -834,22 +1008,19 @@ class Compiler:
             statement=statement,
             goal_id=goal_id,
             entity_ids=entity_ids,
-            evidence_ids=evidence_ids,
+            evidence_registration=evidence_registration,
             run_id=run_id,
             project_key=project_key,
         )
 
     def _insert_claim_record(self, *, session_id: str, node_id: str, out: dict,
                              statement: str, goal_id: Optional[str],
-                             entity_ids: list[str], evidence_ids: list[str],
+                             entity_ids: list[str], evidence_registration: dict[str, Any],
                              run_id: str, project_key: str) -> str:
         st = self.store
         cid = new_id("claim")
         t = now_iso()
-        ctype = out.get("claim_type")
-        if ctype not in ("hypothesis", "finding", "method_result",
-                         "negative_result", "decision"):
-            ctype = "finding"
+        ctype = _claim_type(out.get("claim_type"))
         st.x("INSERT INTO claim (id,project_key,statement,claim_type,confidence,goal_id,"
              "status,t_valid,t_created) VALUES (?,?,?,?,?,?,?,?,?)",
              (cid, project_key, statement, ctype, float(out.get("confidence", 0.5)),
@@ -858,29 +1029,67 @@ class Compiler:
             st.add_edge(cid, goal_id, "addresses", meta={"run": run_id})
         for eid in entity_ids:
             st.add_edge(cid, eid, "mentions")
-        for evid in evidence_ids:
-            st.add_edge(evid, cid, "supports",
-                        meta=_support_meta(run_id, session_id, node_id))
+        self._attach_evidence_registration(
+            cid, evidence_registration, session_id, node_id, run_id)
         st.x("INSERT OR IGNORE INTO claim_origin"
              " (claim_id,project_key,session_id,node_id,run_id) VALUES (?,?,?,?,?)",
              (cid, project_key, session_id, node_id, run_id))
         return cid
 
     def _merge_into(self, target: str, session_id: str, node_id: str,
-                    evidence_ids: list[str], run_id: str, *, project_key: str) -> None:
+                    evidence_registration: dict[str, Any], run_id: str, *,
+                    project_key: str) -> None:
         """Equivalent claim re-confirmed: the existing claim gains a new support
         path + origin, no text rewrite. This is the cross-session robustness."""
         st = self.store
-        existing = {e["src"]: e for e in st.alive_edges(dst=target, edge_type="supports")}
-        for evid in evidence_ids:
-            if evid not in existing:
-                st.add_edge(evid, target, "supports",
-                            meta=_support_meta(run_id, session_id, node_id, merged=True))
-            else:
-                self._append_support_origin(existing[evid], session_id, node_id, run_id)
+        self._attach_evidence_registration(
+            target, evidence_registration, session_id, node_id, run_id, merged=True)
         st.x("INSERT OR IGNORE INTO claim_origin"
              " (claim_id,project_key,session_id,node_id,run_id) VALUES (?,?,?,?,?)",
              (target, project_key, session_id, node_id, run_id))
+
+    def _attach_evidence_registration(
+            self, claim_id: str, registration: dict[str, Any], session_id: str,
+            node_id: str, run_id: str, *, merged: bool = False) -> None:
+        """Attach typed refs without flattening provenance roles into support."""
+        st = self.store
+        ref_ids = {item["id"] for item in registration.get("refs", [])}
+        for item in registration.get("refs", []):
+            evidence_id = item["id"]
+            node_type = item["nodeType"]
+            edge_type = item["projectEdge"]
+            src, dst = ((evidence_id, claim_id) if edge_type == "supports"
+                        else (claim_id, evidence_id))
+            existing = self.store.q1(
+                "SELECT * FROM edge WHERE src=? AND dst=? AND edge_type=?"
+                " AND t_invalid IS NULL ORDER BY id LIMIT 1",
+                (src, dst, edge_type),
+            )
+            if existing:
+                self._append_support_origin(existing, session_id, node_id, run_id)
+                continue
+            meta = _support_meta(run_id, session_id, node_id, merged=merged)
+            meta["evidenceNodeType"] = node_type
+            st.add_edge(src, dst, edge_type, meta=meta)
+
+        for relation in registration.get("relations", []):
+            src = claim_id if relation["src"] == "target" else relation["src"]
+            dst = claim_id if relation["dst"] == "target" else relation["dst"]
+            if src != claim_id and src not in ref_ids:
+                continue
+            if dst != claim_id and dst not in ref_ids:
+                continue
+            edge_type = relation["edgeType"]
+            existing = self.store.q1(
+                "SELECT * FROM edge WHERE src=? AND dst=? AND edge_type=?"
+                " AND t_invalid IS NULL LIMIT 1", (src, dst, edge_type),
+            )
+            if existing:
+                self._append_support_origin(existing, session_id, node_id, run_id)
+                continue
+            meta = _support_meta(run_id, session_id, node_id, merged=merged)
+            meta["evidenceEdgeId"] = relation["evidenceEdgeId"]
+            st.add_edge(src, dst, edge_type, meta=meta)
 
     def _append_support_origin(self, edge: dict, session_id: str, node_id: str,
                                run_id: str) -> None:
@@ -909,10 +1118,11 @@ class Compiler:
     # ------------------------------------------------------- Phase 5: conflicts
     def _detect_conflicts(self, cid: str, statement: str, project_key: str,
                           goal_id: Optional[str],
-                          entity_ids: list[str], *, exclude: set,
+                          entity_ids: list[str], *, claim_type: str, exclude: set,
                           run_id: str, diff: dict, touched: set[str]) -> None:
         st = self.store
-        pool = [c for c in self._candidate_pool(project_key, goal_id, entity_ids)
+        pool = [c for c in self._candidate_pool(
+                    project_key, goal_id, entity_ids, claim_type=claim_type)
                 if c["id"] != cid and c["id"] not in exclude]
         pool = sorted(pool, key=lambda c: -_sim(statement, c["statement"]))[:POOL_K]
         for old in pool:

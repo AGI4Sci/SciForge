@@ -1,17 +1,44 @@
-import type {
-  DomainAgentArtifactEvent,
-  DomainAgentThreadDetail
+import {
+  domainArtifactEventScope,
+  type DomainArtifactEvent,
+  type DomainAgentThreadDetail
 } from '@sciforge/domain-sdk/host'
 
 export function evidenceTraceFromArtifactEvent(
-  event: DomainAgentArtifactEvent
+  event: DomainArtifactEvent
 ): readonly Readonly<Record<string, unknown>>[] {
+  const scope = domainArtifactEventScope(event)
+  const prefix = event.kind === 'turn-completed'
+    ? event.turnId
+    : `execution:${event.executionId}:${event.runId}`
+  const eventMetadata = event.kind === 'turn-completed'
+    ? {
+        eventKind: event.kind,
+        turnId: event.turnId,
+        occurredAt: event.occurredAt,
+        targetWatermark: event.targetWatermark
+      }
+    : {
+        ...(Boolean(event.runtimeId?.trim()) === Boolean(event.threadId?.trim()) && event.hostBinding
+          ? {
+              trustedBoundary: 'sciforge.host.execution-completed.v1',
+              hostBinding: event.hostBinding
+            }
+          : {}),
+        eventKind: event.kind,
+        producer: event.producer,
+        executionId: event.executionId,
+        runId: event.runId,
+        ...(event.activityId ? { activityId: event.activityId } : {}),
+        runtimeId: scope.runtimeId,
+        threadId: scope.threadId,
+        ...(scope.turnId ? { turnId: scope.turnId } : {}),
+        ...(scope.workspaceRoot ? { workspaceRoot: scope.workspaceRoot } : {}),
+        occurredAt: event.occurredAt,
+        targetWatermark: event.targetWatermark
+      }
   return event.artifacts.map((artifact, index) =>
-    artifactTraceItem(artifact, `${event.turnId}:artifact:${index}`, {
-      turnId: event.turnId,
-      occurredAt: event.occurredAt,
-      targetWatermark: event.targetWatermark
-    })
+    artifactTraceItem(artifact, `${prefix}:artifact:${index}`, eventMetadata)
   )
 }
 

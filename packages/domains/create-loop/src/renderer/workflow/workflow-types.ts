@@ -100,7 +100,14 @@ export function createWorkflowNode(
       return {
         ...base,
         type: 'ai-agent',
-        config: { prompt: '', workspaceRoot: '', providerId: '', model: '', reasoningEffort: 'medium', mode: 'agent' }
+        config: {
+          prompt: '',
+          workspaceRoot: '',
+          providerId: '',
+          model: '',
+          reasoningEffort: 'medium',
+          mode: 'agent'
+        }
       }
     case 'generate-image':
       return {

@@ -233,8 +233,6 @@ function createApi(): SciForgeApi {
     pickFile: (request) => invoke('workspace:pick-file', request),
     buildScientificSkillsMcpConfig: (workspaceRoot) =>
       invoke('mcp:scientific-skills-config', { workspaceRoot }),
-    buildScientificPlottingMcpConfig: (workspaceRoot) =>
-      invoke('mcp:scientific-plotting-config', { workspaceRoot }),
     buildBgcDiscoveryMcpConfig: (workspaceRoot) =>
       invoke('mcp:bgc-discovery-config', { workspaceRoot }),
     buildImageGenerationMcpConfig: (workspaceRoot) =>
@@ -245,14 +243,6 @@ function createApi(): SciForgeApi {
       invoke('mcp:scientific-skills-status', { workspaceRoot }),
     installScientificSkills: (request) =>
       invoke('scientific-skills:install', request),
-    getScientificPlottingStatus: (workspaceRoot) =>
-      invoke('scientific-plotting:status', { workspaceRoot }),
-    prepareScientificPlottingReference: (request) =>
-      invoke('scientific-plotting:prepare-reference', request),
-    extractVisualStyleProfile: (request) =>
-      invoke('visual-style:extract-profile', request),
-    saveVisualStyleProfile: (request) =>
-      invoke('visual-style:save-profile', request),
     listSkills: (workspaceRoot) => invoke('skill:list', { workspaceRoot }),
     saveSkillFile: (rootPath, skillName, content) =>
       invoke('skill:save-file', { rootPath, skillName, content }),

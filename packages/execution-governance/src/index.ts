@@ -207,6 +207,7 @@ export type ExecutionGovernorDecision = {
   code?:
     | 'exact_repeat'
     | 'semantic_failure_retry'
+    | 'semantic_failure_stop'
     | 'semantic_failure_exhausted'
     | 'fatal_error'
     | 'redundant_read'
@@ -567,13 +568,21 @@ export class ExecutionGovernorCore {
     }
     this.semanticRetryCircuits.set(scope.key, circuit)
     if (!retryable) {
-      return {
-        action: 'deny',
-        code: receipt.outcome === 'fatal_error' ? 'fatal_error' : 'semantic_failure_exhausted',
-        reason,
-        guidance,
-        attempt
-      }
+      return receipt.outcome === 'fatal_error'
+        ? {
+            action: 'deny',
+            code: 'fatal_error',
+            reason,
+            guidance,
+            attempt
+          }
+        : {
+            action: 'steer',
+            code: 'semantic_failure_stop',
+            reason,
+            guidance,
+            attempt
+          }
     }
     return {
       action: 'steer',

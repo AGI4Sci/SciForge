@@ -2793,7 +2793,7 @@ export function Workbench(): ReactElement {
               <ArrowRight className="h-4 w-4" aria-hidden="true" />
             </button>
             <span className="ml-1 min-w-0 truncate text-[11.5px] font-medium text-ds-faint">
-              {workspaceMode ? rightPanelVisibleContextTitle(workspaceMode) : ''}
+              {workspaceMode ? t(rightPanelVisibleContextTitle(workspaceMode)) : ''}
             </span>
           </div>
           <div className="min-h-0 flex-1">

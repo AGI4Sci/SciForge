@@ -5,12 +5,11 @@ import os
 import tempfile
 import unittest
 
-from evidence_dag.artifacts import ArtifactRegistry
 from evidence_dag.events import EventStore
 from evidence_dag.graph import ThreadGraph
 from evidence_dag.llm import StubLLM
 from evidence_dag.metrics import all_metrics
-from evidence_dag.model import EdgeRel, NodeType
+from evidence_dag.model import Artifact, ArtifactVersion, EdgeRel, NodeType
 from evidence_dag.service import Engine
 
 
@@ -143,40 +142,16 @@ class TestEventStore(unittest.TestCase):
                 len({finding["fingerprint"] for finding in audit["findings"]}),
             )
 
-    def test_artifact_scan_mirrors_registry_event_and_ack_does_not_delete_domain_event(self):
-        with tempfile.TemporaryDirectory() as workspace:
-            artifact_path = os.path.join(workspace, "paper.txt")
-            with open(artifact_path, "w", encoding="utf-8") as fh:
-                fh.write("version one")
-            extract = json.dumps({
-                "nodes": [{
-                    "tmp_id": "s", "type": "source_assertion", "content": "Result.",
-                    "trace_ref": "item-1", "artifact": {"kind": "paper", "locator": "paper.txt"},
-                    "selector": {"type": "text", "start": 0, "end": 7, "quote": "Result."},
-                }],
-                "edges": [],
-            })
-            storage = os.path.join(workspace, ".edag")
-            engine = Engine(StubLLM(extract_response=extract), storage_dir=storage)
-            engine.update(
-                thread_id="t", target_watermark="w1", reason="turn_committed", priority="P2",
-                trace=[{"id": "item-1", "type": "message", "content": "result"}],
-                workspace_root=workspace, project_root=workspace,
+    def test_evidence_outbox_rejects_new_artifact_lifecycle_writes(self):
+        store = EventStore(None)
+        with self.assertRaisesRegex(ValueError, "unsupported Evidence event type"):
+            store.append(
+                "ArtifactContentChanged",
+                aggregate_type="Artifact",
+                aggregate_id="artifact:one",
+                idempotency_key="artifact-event:one",
+                payload={"versionId": "artifact-version:one"},
             )
-            with open(artifact_path, "w", encoding="utf-8") as fh:
-                fh.write("version two")
-            scan = engine.resolve_artifacts(
-                workspace_root=workspace, project_root=workspace,
-            )
-            lifecycle = scan["events"][0]
-            self.assertEqual(lifecycle["type"], "ArtifactContentChanged")
-            self.assertEqual(scan["domainEvents"][0]["eventId"], lifecycle["eventId"])
-            engine.acknowledge_artifact_events(
-                workspace_root=workspace, project_root=workspace,
-                event_ids=[lifecycle["eventId"]],
-            )
-            persisted = engine.events(event_types=["ArtifactContentChanged"])
-            self.assertEqual([event["eventId"] for event in persisted], [lifecycle["eventId"]])
 
 
 class TestOperationalMetrics(unittest.TestCase):
@@ -243,12 +218,23 @@ class TestOperationalMetrics(unittest.TestCase):
                 NodeType.ENVIRONMENT, "Container", identity_scope="env-1", external_id="env-1",
                 attributes={"containerDigest": f"sha256:{'a' * 64}"},
             )
-            registry = ArtifactRegistry(workspace_roots=(workspace,), locator_root=workspace)
-            log_artifact, log_version, _ = registry.register(
-                kind="log", locator="doi:log", content_digest="b" * 64,
+            log_artifact = Artifact(
+                "artifact:log", "log", "2026-07-10T00:00:00Z",
+                "artifact-version:log-1",
             )
-            output_artifact, output_version, _ = registry.register(
-                kind="dataset", locator="doi:output", content_digest="c" * 64,
+            log_version = ArtifactVersion(
+                "artifact-version:log-1", log_artifact.artifact_id, "doi:log",
+                f"sha256:{'b' * 64}", "1", 0, None, "2026-07-10T00:00:00Z",
+                "available", "reference",
+            )
+            output_artifact = Artifact(
+                "artifact:output", "dataset", "2026-07-10T00:00:00Z",
+                "artifact-version:output-1",
+            )
+            output_version = ArtifactVersion(
+                "artifact-version:output-1", output_artifact.artifact_id, "doi:output",
+                f"sha256:{'c' * 64}", "1", 0, None, "2026-07-10T00:00:00Z",
+                "available", "reference",
             )
             log = graph.add_or_get_node(
                 NodeType.ARTIFACT, "Run log", identity_scope="log-1", external_id="log-1",
