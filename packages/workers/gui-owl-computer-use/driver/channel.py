@@ -95,6 +95,8 @@ class SessionInputChannel:
         self.lease_ttl_seconds = lease_ttl_seconds
         self._latest_observation: Observation | None = None
         self._close_lock = threading.Lock()
+        self._cancel_lock = threading.Lock()
+        self._backend_cancel_sent = False
         self._state = threading.Condition()
         self._closing = False
         self._in_flight = 0
@@ -282,7 +284,7 @@ class SessionInputChannel:
                 self._close_reason = self._close_reason or reason
             if self.cancelled:
                 try:
-                    self.backend.cancel(self.handle, reason)
+                    self.request_cancel(reason)
                 except Exception as error:  # cleanup must continue
                     self.cleanup.errors.append(f"backend cancel: {error}")
             with self._state:
@@ -311,6 +313,15 @@ class SessionInputChannel:
             with self._state:
                 self._closed = self.cleanup.closed and self.cleanup.lease_released
             return self.cleanup
+
+    def request_cancel(self, reason: str) -> None:
+        """Deliver cancellation without waiting for an in-flight operation."""
+        self.cancellation.set()
+        with self._cancel_lock:
+            if self._backend_cancel_sent:
+                return
+            self.backend.cancel(self.handle, reason)
+            self._backend_cancel_sent = True
 
     def _record_cleanup_error(self, message: str) -> None:
         if message not in self.cleanup.errors:

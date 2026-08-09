@@ -186,6 +186,19 @@ class IsolatedDesktopBackend:
         self._require_available()
         return IsolatedDesktopHandle(target, context, self.provider.connect(target, context))
 
+    def recover_open(
+        self,
+        target: TargetDescriptor,
+        context: BackendOpenContext,
+    ) -> IsolatedDesktopHandle:
+        recover = getattr(self.provider, "recover_connect", None)
+        if not callable(recover):
+            raise BackendOperationError(
+                "isolated provider does not support connect reconciliation",
+                code="OPEN_RECOVERY_UNAVAILABLE",
+            )
+        return IsolatedDesktopHandle(target, context, recover(target, context))
+
     def observe(self, handle: object) -> Observation:
         h = self._handle(handle)
         with h.lock:
@@ -216,9 +229,11 @@ class IsolatedDesktopBackend:
 
     def cancel(self, handle: object, reason: str) -> None:
         h = self._handle(handle, allow_closed=True)
-        with h.lock:
-            if not h.closed:
-                self.provider.cancel(h.provider_handle, reason)
+        # Cancellation is an out-of-band control operation. Waiting for the
+        # operation lock would make it unable to reach a worker whose action
+        # request is currently blocked on the transport.
+        if not h.closed:
+            self.provider.cancel(h.provider_handle, reason)
 
     def close(self, handle: object, reason: str) -> None:
         h = self._handle(handle, allow_closed=True)

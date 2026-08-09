@@ -395,6 +395,15 @@ class ComputerUseService:
                         "request cancellation is pending before channel ownership is established",
                         details={"requestId": request_id, "sessionId": session_id},
                     )
+                try:
+                    channel.request_cancel(reason)
+                except Exception as error:
+                    return R.err(
+                        "CANCEL_DELIVERY_FAILED",
+                        f"force release recorded cancellation but backend delivery failed: {error}",
+                        retryable=True,
+                        details={"requestId": request_id, "sessionId": session_id},
+                    )
                 cleanup = channel.close(reason)
                 if not cleanup.lease_released:
                     return R.err(
@@ -430,12 +439,25 @@ class ComputerUseService:
                 session = self.registry.get_session(active.session_id)
                 self._assert_session_owner(session.owner, invocation)
             request = self.registry.request_cancel(request_id, str(value.get("reason", "user_stop")))
+            reason = str(value.get("reason", "user_stop"))
             terminal = request.state in {
                 RequestState.COMPLETED, RequestState.FAILED, RequestState.CANCELLED,
                 RequestState.TIMED_OUT, RequestState.TARGET_LOST,
             }
             status = "already-terminal" if terminal else "accepted"
             if not terminal:
+                with self._channels_lock:
+                    channel = self._channels.get(request_id)
+                if channel is not None:
+                    try:
+                        channel.request_cancel(reason)
+                    except Exception as error:  # cancellation remains latched locally
+                        return R.err(
+                            "CANCEL_DELIVERY_FAILED",
+                            f"request cancellation was recorded but backend delivery failed: {error}",
+                            retryable=True,
+                            details={"requestId": request_id},
+                        )
                 for lease in self.registry.snapshot()["leases"]:
                     if lease["requestId"] == request_id and lease["inFlightActionCount"] > 0:
                         status = "stopping"
@@ -742,8 +764,6 @@ class ComputerUseService:
             self.registry.begin_shutdown()
             self._reaper_stop.set()
             reaper = self._reaper_thread
-        if reaper is not None and reaper is not threading.current_thread():
-            reaper.join(timeout=max(1.0, (self._reaper_interval_seconds or 0.0) * 2))
         with self._channels_lock:
             channels = list(self._channels.values())
         for channel in channels:
@@ -751,6 +771,12 @@ class ComputerUseService:
                 self.registry.request_cancel(channel.request_id, "server_stop")
             except RegistryError:
                 pass
+            try:
+                channel.request_cancel("server_stop")
+            except Exception as error:  # shutdown remains cleanup-pending
+                channel.cleanup.errors.append(f"backend cancel: {error}")
+        if reaper is not None and reaper is not threading.current_thread():
+            reaper.join(timeout=max(1.0, (self._reaper_interval_seconds or 0.0) * 2))
         with self._channels_lock:
             uncertain_opens = list(self._open_cleanup_pending)
         for request_id in uncertain_opens:

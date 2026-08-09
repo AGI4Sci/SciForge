@@ -3,12 +3,17 @@ from __future__ import annotations
 import base64
 import io
 import threading
+import time
 from dataclasses import replace
 
 import pytest
 from PIL import Image
 
 from cua.capabilities import Verification
+from cua import result as R
+from cua.service import ComputerUseService
+from driver.backends.isolated_desktop import IsolatedDesktopBackend
+from driver.router import BackendRouter
 from driver.backend import BackendOpenContext, BackendOperationError
 from driver.backends.isolated_desktop import ISOLATED_DESKTOP_UNAVAILABLE
 from driver.backends.remote_windows_worker import (
@@ -67,6 +72,13 @@ class FakeTransport:
             return {"ready": True, "identity": dict(self.identity), "maxConcurrency": 1}
         if path == "/v1/handles/connect":
             return {
+                "identity": dict(self.identity),
+                "handleId": "handle-1",
+                "capabilityToken": "test-capability-token",
+            }
+        if path == "/v1/handles/recover":
+            return {
+                "status": "connected",
                 "identity": dict(self.identity),
                 "handleId": "handle-1",
                 "capabilityToken": "test-capability-token",
@@ -213,12 +225,239 @@ def test_cancel_crosses_transport_while_action_response_is_blocked(tmp_path):
     worker.start()
     assert transport.action_entered.wait(timeout=2)
     provider.cancel(handle, "test-cancel")
-    assert any(path == "/v1/handles/cancel" for _, path, _ in transport.requests)
+    assert any(path == "/v1/handles/cancel" for _, path, _ in transport.requests), (
+        lifecycle.is_alive(), lifecycle_results, transport.requests
+    )
     assert worker.is_alive()
     transport.release_action.set()
     worker.join(timeout=5)
     assert not worker.is_alive()
     assert len(outcome) == 1
+
+
+def test_service_cancel_reaches_remote_worker_while_action_is_blocked(tmp_path):
+    class BlockingTransport(FakeTransport):
+        def __init__(self):
+            super().__init__()
+            self.action_entered = threading.Event()
+            self.release_action = threading.Event()
+
+        def request(self, method, path, body=None):
+            if path == "/v1/actions":
+                self.action_entered.set()
+                assert self.release_action.wait(timeout=5)
+            return super().request(method, path, body)
+
+    transport = BlockingTransport()
+    provider = RemoteWindowsWorkerProvider(_config(tmp_path), transport)
+    target = provider.discover_environments()[0]
+    service = ComputerUseService(
+        router=BackendRouter([IsolatedDesktopBackend(provider)]),
+    )
+    results = []
+
+    def execute(_request, channel):
+        before = channel.observe()
+        channel.perform(
+            {"action": "type", "text": "alpha"},
+            expected_revision=before.revision,
+        )
+        return R.ok({"status": "done"})
+
+    worker = threading.Thread(target=lambda: results.append(service.run({
+        "instruction": "remote action",
+        "target": target.to_dict(),
+        "requestId": "remote-service-cancel",
+    }, execute)))
+    worker.start()
+    assert transport.action_entered.wait(timeout=2)
+
+    cancelled = service.cancel({
+        "requestId": "remote-service-cancel",
+        "reason": "test-cancel",
+    })
+
+    assert cancelled["ok"] is True
+    assert cancelled["data"]["status"] == "stopping"
+    assert any(path == "/v1/handles/cancel" for _, path, _ in transport.requests)
+    assert worker.is_alive()
+    transport.release_action.set()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert results[0]["error"]["code"] == "CANCEL_PENDING"
+    assert service.registry.snapshot_counts()["activeLeases"] == 0
+
+
+@pytest.mark.parametrize("lifecycle_operation", ["force-release", "shutdown"])
+def test_force_release_and_shutdown_cancel_before_waiting_for_remote_action(
+    tmp_path, lifecycle_operation,
+):
+    class BlockingTransport(FakeTransport):
+        def __init__(self):
+            super().__init__()
+            self.action_entered = threading.Event()
+            self.release_action = threading.Event()
+
+        def request(self, method, path, body=None):
+            if path == "/v1/actions":
+                self.action_entered.set()
+                assert self.release_action.wait(timeout=5)
+            return super().request(method, path, body)
+
+    transport = BlockingTransport()
+    provider = RemoteWindowsWorkerProvider(_config(tmp_path), transport)
+    target = provider.discover_environments()[0]
+    service = ComputerUseService(
+        router=BackendRouter([IsolatedDesktopBackend(provider)]),
+    )
+    session_id = f"remote-{lifecycle_operation}-session"
+    assert service.bind_session({
+        "sessionId": session_id,
+        "owner": {"runtimeId": "test", "threadId": lifecycle_operation},
+        "target": target.to_dict(),
+    })["ok"] is True
+    run_results = []
+
+    def execute(_request, channel):
+        before = channel.observe()
+        channel.perform(
+            {"action": "type", "text": "alpha"},
+            expected_revision=before.revision,
+        )
+        return R.ok({"status": "done"})
+
+    runner = threading.Thread(target=lambda: run_results.append(service.run({
+        "instruction": "remote lifecycle action",
+        "sessionId": session_id,
+        "requestId": f"remote-{lifecycle_operation}-request",
+    }, execute)))
+    runner.start()
+    assert transport.action_entered.wait(timeout=2)
+    lifecycle_results = []
+    if lifecycle_operation == "force-release":
+        operation = lambda: service.release_session({
+            "sessionId": session_id,
+            "reason": "test-force-release",
+            "force": True,
+        })
+    else:
+        operation = service.shutdown
+    lifecycle = threading.Thread(target=lambda: lifecycle_results.append(operation()))
+    lifecycle.start()
+
+    deadline = time.monotonic() + 2
+    while (
+        not any(path == "/v1/handles/cancel" for _, path, _ in transport.requests)
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.01)
+    assert any(path == "/v1/handles/cancel" for _, path, _ in transport.requests)
+    assert runner.is_alive()
+    assert lifecycle.is_alive()
+
+    transport.release_action.set()
+    runner.join(timeout=5)
+    lifecycle.join(timeout=5)
+    assert not runner.is_alive()
+    assert not lifecycle.is_alive()
+    if lifecycle_operation == "force-release":
+        assert lifecycle_results[0]["ok"] is True
+    else:
+        assert lifecycle_results[0]["cleanupComplete"] is True
+    assert run_results[0]["error"]["code"] == "CANCEL_PENDING"
+    assert service.registry.snapshot_counts()["activeLeases"] == 0
+    assert service.cleanup_pending() == []
+
+
+def test_uncertain_connect_recovers_same_request_handle_and_closes_it(tmp_path):
+    class ReconcileTransport(FakeTransport):
+        def __init__(self):
+            super().__init__()
+            self.created = None
+
+        def request(self, method, path, body=None):
+            body = dict(body or {})
+            if path == "/v1/handles/connect":
+                self.requests.append((method, path, body))
+                self.created = body
+                raise RemoteWorkerTransportError("REMOTE_WORKER_UNAVAILABLE", "response lost")
+            if path == "/v1/handles/recover":
+                self.requests.append((method, path, body))
+                if body != self.created:
+                    raise RemoteWorkerTransportError("CONNECT_IDENTITY_CONFLICT", "mismatch")
+                return {
+                    "status": "connected",
+                    "identity": dict(self.identity),
+                    "handleId": "handle-recovered",
+                    "capabilityToken": "recovered-capability-token",
+                }
+            return super().request(method, path, body)
+
+    transport = ReconcileTransport()
+    provider = RemoteWindowsWorkerProvider(_config(tmp_path), transport)
+    target = provider.discover_environments()[0]
+    service = ComputerUseService(
+        router=BackendRouter([IsolatedDesktopBackend(provider)]),
+    )
+
+    result = service.run({
+        "instruction": "uncertain connect",
+        "target": target.to_dict(),
+        "requestId": "remote-connect-uncertain",
+    }, lambda _request, _channel: R.ok({"status": "incorrect"}))
+
+    assert result["error"]["code"] == "CLEANUP_INCOMPLETE"
+    assert service.registry.snapshot_counts()["activeLeases"] == 1
+    reaped = service.reap_once()
+    assert reaped["cleanedRequests"] == ["remote-connect-uncertain"]
+    assert service.registry.snapshot_counts()["activeLeases"] == 0
+    assert any(path == "/v1/handles/close" for _, path, _ in transport.requests)
+    connect = next(body for _, path, body in transport.requests if path == "/v1/handles/connect")
+    recover = next(body for _, path, body in transport.requests if path == "/v1/handles/recover")
+    assert recover == connect
+
+
+def test_recover_connect_conflict_and_unknown_state_keep_quarantine(tmp_path):
+    class ConflictTransport(FakeTransport):
+        def request(self, method, path, body=None):
+            if path == "/v1/handles/recover":
+                raise RemoteWorkerTransportError("CONNECT_IDENTITY_CONFLICT", "mismatch")
+            return super().request(method, path, body)
+
+    provider = RemoteWindowsWorkerProvider(_config(tmp_path), ConflictTransport())
+    target = provider.discover_environments()[0]
+    with pytest.raises(BackendOperationError) as conflict:
+        provider.recover_connect(target, _context())
+    assert conflict.value.code == "CONNECT_IDENTITY_CONFLICT"
+    assert conflict.value.safe_to_retry is False
+
+    class UnknownTransport(FakeTransport):
+        def request(self, method, path, body=None):
+            if path == "/v1/handles/recover":
+                return {"status": "unknown", "identity": dict(self.identity)}
+            return super().request(method, path, body)
+
+    provider = RemoteWindowsWorkerProvider(_config(tmp_path), UnknownTransport())
+    target = provider.discover_environments()[0]
+    with pytest.raises(BackendOperationError) as unknown:
+        provider.recover_connect(target, _context())
+    assert unknown.value.code == "OPEN_OUTCOME_UNKNOWN"
+    assert unknown.value.safe_to_retry is False
+
+
+def test_recover_connect_not_created_is_the_only_safe_retry_result(tmp_path):
+    class NotCreatedTransport(FakeTransport):
+        def request(self, method, path, body=None):
+            if path == "/v1/handles/recover":
+                return {"status": "not-created", "identity": dict(self.identity)}
+            return super().request(method, path, body)
+
+    provider = RemoteWindowsWorkerProvider(_config(tmp_path), NotCreatedTransport())
+    target = provider.discover_environments()[0]
+    with pytest.raises(BackendOperationError) as caught:
+        provider.recover_connect(target, _context())
+    assert caught.value.code == "OPEN_NOT_CREATED"
+    assert caught.value.safe_to_retry is True
 
 
 def test_managed_lifecycle_is_explicitly_unavailable(tmp_path):

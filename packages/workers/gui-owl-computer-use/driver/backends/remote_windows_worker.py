@@ -39,7 +39,7 @@ from driver.backends.isolated_desktop import (
 REMOTE_WORKER_MANAGED_UNAVAILABLE = "REMOTE_WORKER_MANAGED_UNAVAILABLE"
 _FIXED_PATHS = frozenset({
     "/v1/status", "/v1/handles/connect", "/v1/observe", "/v1/actions",
-    "/v1/verify", "/v1/handles/cancel", "/v1/handles/close",
+    "/v1/verify", "/v1/handles/recover", "/v1/handles/cancel", "/v1/handles/close",
 })
 _MAX_IMAGE_PIXELS = 33_554_432
 _SAFE_REVISION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
@@ -309,17 +309,81 @@ class RemoteWindowsWorkerProvider:
         self._validate_target(target)
         identity, _ = self._status()
         self._match_target_identity(target, identity)
-        payload = self._request("POST", "/v1/handles/connect", {
-            "requestId": context.request_id,
-            "environmentId": identity.environment_id,
-            "expectedIdentity": identity.to_dict(),
-        })
+        body = self._connect_body(target, context, identity)
+        try:
+            payload = self._request("POST", "/v1/handles/connect", body)
+        except RemoteWorkerTransportError as error:
+            raise BackendOperationError(
+                "remote worker connect outcome is unknown; reconciliation is required",
+                code="OPEN_OUTCOME_UNKNOWN",
+            ) from error
+        return self._connected_handle(target, context, identity, payload)
+
+    def recover_connect(
+        self,
+        target: TargetDescriptor,
+        context: BackendOpenContext,
+    ) -> RemoteWorkerHandle:
+        self._validate_target(target)
+        identity, _ = self._status()
+        self._match_target_identity(target, identity)
+        try:
+            payload = self._request(
+                "POST", "/v1/handles/recover",
+                self._connect_body(target, context, identity),
+            )
+        except RemoteWorkerTransportError as error:
+            raise BackendOperationError(
+                "remote worker connect reconciliation was inconclusive",
+                code=error.code,
+            ) from error
+        self._assert_identity(payload, identity)
+        status = payload.get("status")
+        if status == "not-created":
+            raise BackendOperationError(
+                "remote worker proved that connect created no handle",
+                code="OPEN_NOT_CREATED",
+                safe_to_retry=True,
+            )
+        if status != "connected":
+            raise BackendOperationError(
+                "remote worker connect reconciliation returned an unknown state",
+                code="OPEN_OUTCOME_UNKNOWN",
+            )
+        return self._connected_handle(target, context, identity, payload)
+
+    def _connected_handle(
+        self,
+        target: TargetDescriptor,
+        context: BackendOpenContext,
+        identity: RemoteWorkerIdentity,
+        payload: Mapping[str, Any],
+    ) -> RemoteWorkerHandle:
         self._assert_identity(payload, identity)
         handle_id = _safe_id(payload.get("handleId"), "remote worker handleId")
         token = payload.get("capabilityToken")
         if not isinstance(token, str) or not 16 <= len(token) <= 1_024 or any(c in token for c in "\r\n\0"):
             raise BackendOperationError("remote worker capability token is invalid", code="REMOTE_WORKER_PROTOCOL_ERROR")
         return RemoteWorkerHandle(target, context, identity, handle_id, token)
+
+    @staticmethod
+    def _connect_body(
+        target: TargetDescriptor,
+        context: BackendOpenContext,
+        identity: RemoteWorkerIdentity,
+    ) -> dict[str, Any]:
+        connect_key = hashlib.sha256("\0".join((
+            context.request_id,
+            identity.environment_id,
+            target.target_id,
+            target.generation or "",
+        )).encode("utf-8")).hexdigest()
+        return {
+            "requestId": context.request_id,
+            "connectKey": connect_key,
+            "environmentId": identity.environment_id,
+            "expectedIdentity": identity.to_dict(),
+        }
 
     def observe(self, handle: object) -> Observation:
         h = self._handle(handle)
