@@ -2,8 +2,8 @@ import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import type {
+  AgentRuntimeUsageGroupBy,
   AgentRuntimeUsage,
-  AgentRuntimeUsageQuery,
   AgentRuntimeUsageResponse
 } from '../../../shared/agent-runtime-contract'
 import { AppDataJsonlStore, atomicWriteAppDataText } from '../../services/app-data-store'
@@ -31,6 +31,14 @@ export type CodexUsageRecord = {
 export type CodexUsageStoreOptions = {
   rootDir: string
   now?: () => Date
+}
+
+type CodexUsageSummaryQuery = {
+  groupBy: AgentRuntimeUsageGroupBy
+  from?: string
+  to?: string
+  timezone?: string
+  threadId?: string
 }
 
 export type CodexUsageRecordInput = {
@@ -107,7 +115,7 @@ export class CodexUsageStore {
   }
 
   async summary(
-    query: AgentRuntimeUsageQuery,
+    query: CodexUsageSummaryQuery,
     options: { threads?: ThreadTitle[] } = {}
   ): Promise<Extract<AgentRuntimeUsageResponse, { supported: true }>> {
     const records = await this.records()
@@ -279,7 +287,7 @@ function parseRecord(line: string): CodexUsageRecord | null {
 
 function bucketsForGroup(
   records: CodexUsageRecord[],
-  groupBy: AgentRuntimeUsageQuery['groupBy'],
+  groupBy: AgentRuntimeUsageGroupBy,
   bounds: UsageBounds,
   timezone: string,
   titleByThread: Map<string, string>
@@ -388,7 +396,7 @@ type UsageBounds = {
   to: string
 }
 
-function usageBounds(records: CodexUsageRecord[], query: AgentRuntimeUsageQuery, timezone: string): UsageBounds {
+function usageBounds(records: CodexUsageRecord[], query: CodexUsageSummaryQuery, timezone: string): UsageBounds {
   const dates = records.map((record) => dateInTimezone(record.createdAt, timezone)).filter(Boolean)
   const sorted = [...dates].sort()
   return {
@@ -399,7 +407,7 @@ function usageBounds(records: CodexUsageRecord[], query: AgentRuntimeUsageQuery,
 
 function recordInScope(
   record: CodexUsageRecord,
-  query: AgentRuntimeUsageQuery,
+  query: CodexUsageSummaryQuery,
   bounds: UsageBounds,
   timezone: string
 ): boolean {

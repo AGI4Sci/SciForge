@@ -988,7 +988,7 @@ export class AgentRuntimeHost {
   }
 
   async usage(input: AgentRuntimeUsageQuery): Promise<AgentRuntimeUsageResponse> {
-    const { adapter, context } = input.workspaceLocator || input.threadId
+    const { adapter, context } = input.groupBy === 'thread' || input.workspaceLocator || input.threadId
       ? await this.resolveRequiredRuntime(
           input.runtimeId,
           input.threadId,

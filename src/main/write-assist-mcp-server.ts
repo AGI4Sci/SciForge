@@ -19,8 +19,6 @@ function writeAssistOptionsFromArgv(argv: string[]): WriteAssistServiceOptions {
   if (workspaceRoot) options.workspaceRoot = workspaceRoot
   const maxTextFileBytes = positiveIntegerArg(argv, '--max-text-file-bytes')
   if (maxTextFileBytes) options.maxTextFileBytes = maxTextFileBytes
-  const maxPdfBytes = positiveIntegerArg(argv, '--max-pdf-bytes')
-  if (maxPdfBytes) options.maxPdfBytes = maxPdfBytes
   return options
 }
 

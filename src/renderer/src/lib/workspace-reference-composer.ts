@@ -4,6 +4,10 @@ import type { ComposerFileReference } from './composer-file-references'
 export function composerReferenceFromWorkspaceReference(
   reference: AgentRuntimeWorkspaceReference
 ): ComposerFileReference {
+  const modelRouterObject = reference.kind === 'image' ||
+    reference.kind === 'pdf' ||
+    reference.mimeType?.toLocaleLowerCase() === 'application/pdf' ||
+    reference.name.toLocaleLowerCase().endsWith('.pdf')
   return {
     path: reference.relativePath,
     relativePath: reference.relativePath,
@@ -11,6 +15,6 @@ export function composerReferenceFromWorkspaceReference(
     workspaceRoot: reference.workspaceRoot,
     kind: reference.kind,
     ...(reference.mimeType ? { mimeType: reference.mimeType } : {}),
-    ...(reference.kind === 'image' ? { modelRouterObject: true } : {})
+    ...(modelRouterObject ? { modelRouterObject: true } : {})
   }
 }

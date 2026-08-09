@@ -20,6 +20,23 @@ describe('normalizeCodexEvent', () => {
     })
   })
 
+  it('preserves a finite source sequence as the stable delta identity', () => {
+    expect(normalizeCodexEvent({
+      method: 'item/agentMessage/delta',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        seq: 42,
+        delta: 'hello'
+      }
+    })).toEqual({
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      seq: 42,
+      deltas: [{ text: 'hello', kind: 'agent_message' }]
+    })
+  })
+
   it('maps assistant message delta aliases to assistant deltas', () => {
     expect(normalizeCodexEvent({
       method: 'item/assistantMessage/textDelta',

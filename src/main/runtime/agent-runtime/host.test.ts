@@ -781,7 +781,7 @@ describe('AgentRuntimeHost', () => {
     })
 
     await expect(host.capabilities()).resolves.toMatchObject({ runtimeId: 'codex' })
-    await expect(host.usage({ groupBy: 'thread' })).resolves.toMatchObject({ supported: true })
+    await expect(host.usage({ groupBy: 'thread' } as never)).rejects.toThrow('runtimeId is required')
     await expect(host.readThread({ threadId: 'codex-thread' } as never)).rejects.toThrow(
       'runtimeId is required'
     )
@@ -798,6 +798,7 @@ describe('AgentRuntimeHost', () => {
     } as never)[Symbol.asyncIterator]().next()).rejects.toThrow('runtimeId is required')
 
     expect(codex.readThread).not.toHaveBeenCalled()
+    expect(codex.usage).not.toHaveBeenCalled()
     expect(codex.startTurn).not.toHaveBeenCalled()
     expect(codex.renameThread).not.toHaveBeenCalled()
     expect(codex.subscribeEvents).not.toHaveBeenCalled()
@@ -6251,7 +6252,11 @@ describe('createCodexAgentRuntimeAdapter', () => {
         memory: { available: false }
       }
     })
-    await expect(adapter.usage(ctx, { groupBy: 'thread', threadId: 'codex-thread' })).resolves.toEqual({
+    await expect(adapter.usage(ctx, {
+      runtimeId: 'codex',
+      groupBy: 'thread',
+      threadId: 'codex-thread'
+    })).resolves.toEqual({
       supported: false,
       reason: 'usage unsupported',
       groupBy: 'thread',

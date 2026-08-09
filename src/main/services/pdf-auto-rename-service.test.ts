@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PDFDocument } from 'pdf-lib'
@@ -56,4 +56,67 @@ describe('PDF auto rename', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it('inspects PDFs larger than the former 64 MiB limit without loading the whole file first', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-pdf-rename-large-'))
+    const workspaceRoot = join(root, 'workspace')
+    try {
+      await mkdir(workspaceRoot)
+      const parts = [
+        '%PDF-1.7\n',
+        '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+        '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n',
+        '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n',
+        '4 0 obj\n<< /Title (Large-Scale Evidence Synthesis for Scientific Agents) >>\nendobj\n'
+      ].map((value) => Buffer.from(value))
+      const objectOffsets: number[] = []
+      let offset = 0
+      for (const part of parts) {
+        objectOffsets.push(offset)
+        offset += part.length
+      }
+      const paddingBytes = 65 * 1024 * 1024
+      const streamHeader = Buffer.from(`5 0 obj\n<< /Length ${paddingBytes} >>\nstream\n`)
+      objectOffsets.push(offset)
+      offset += streamHeader.length + paddingBytes
+      const streamFooter = Buffer.from('\nendstream\nendobj\n')
+      offset += streamFooter.length
+      const xrefOffset = offset
+      const xrefEntries = objectOffsets
+        .map((entryOffset) => `${entryOffset.toString().padStart(10, '0')} 00000 n \n`)
+        .join('')
+      const footer = Buffer.from(
+        `xref\n0 6\n0000000000 65535 f \n${xrefEntries}` +
+        `trailer\n<< /Size 6 /Root 1 0 R /Info 4 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`
+      )
+      const targetPath = join(workspaceRoot, 'large-paper.pdf')
+      const handle = await open(targetPath, 'w')
+      try {
+        for (const part of parts) await handle.write(part)
+        await handle.write(streamHeader)
+        const chunk = Buffer.alloc(1024 * 1024, 0x20)
+        for (let written = 0; written < paddingBytes; written += chunk.length) {
+          await handle.write(chunk)
+        }
+        await handle.write(streamFooter)
+        await handle.write(footer)
+      } finally {
+        await handle.close()
+      }
+
+      const result = await suggestWorkspacePdfName({
+        workspaceRoot,
+        path: 'large-paper.pdf'
+      })
+
+      expect(result).toEqual({
+        ok: true,
+        title: 'Large-Scale Evidence Synthesis for Scientific Agents',
+        suggestedName: 'Large-Scale Evidence Synthesis for Scientific Agents.pdf',
+        source: 'metadata'
+      })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 20_000)
 })

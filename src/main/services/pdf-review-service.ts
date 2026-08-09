@@ -1,4 +1,4 @@
-import { readFile, stat } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import {
   getDocument,
   type TextContentItem
@@ -38,7 +38,6 @@ const DEFAULT_AUTO_REVIEW_COMMENT_COUNT = 8
 const MAX_PDF_REVIEW_COMMENT_COUNT = 50
 const MAX_PDF_REVIEW_CONTEXT_CHARS = 52_000
 const MAX_PDF_REVIEW_PAGE_CHARS = 3_800
-const MAX_PDF_REVIEW_BYTES = 80 * 1024 * 1024
 const MODEL_REQUEST_TIMEOUT_MS = 120_000
 const MAX_REVIEW_COMPLETION_ATTEMPTS = 3
 
@@ -297,13 +296,9 @@ function wordsFromTextItem(
 }
 
 async function extractPdfText(pdfPath: string): Promise<ExtractedPdf> {
-  const info = await stat(pdfPath)
-  if (info.size > MAX_PDF_REVIEW_BYTES) {
-    throw new Error(`PDF review is limited to files up to ${Math.round(MAX_PDF_REVIEW_BYTES / 1024 / 1024)} MB.`)
-  }
-  const data = new Uint8Array(await readFile(pdfPath))
   const loadingTask = getDocument({
-    data,
+    url: pdfPath,
+    disableAutoFetch: true,
     disableWorker: true,
     useSystemFonts: true
   })

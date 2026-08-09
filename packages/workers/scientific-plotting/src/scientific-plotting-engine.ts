@@ -200,7 +200,6 @@ const MIN_COMPOSITE_SIZE = 128
 const MAX_COMPOSITE_SIZE = 4096
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp'])
 const MAX_REFERENCE_IMAGE_BYTES = 32 * 1024 * 1024
-const MAX_REFERENCE_PDF_BYTES = 120 * 1024 * 1024
 const MAX_REVIEW_PACKET_ITEMS = 30
 const STYLE_PROFILE_REGISTRY_VERSION = 1
 
@@ -942,10 +941,6 @@ export async function prepareScientificPlottingReference(
     if (sourceType === 'image' && sourceInfo.size > MAX_REFERENCE_IMAGE_BYTES) {
       throw new Error('Reference image is too large.')
     }
-    if (sourceType === 'pdf' && sourceInfo.size > MAX_REFERENCE_PDF_BYTES) {
-      throw new Error('Reference PDF is too large.')
-    }
-
     const outputDir = await resolveReferenceOutputDir(workspaceRoot, request.outputDir)
     await mkdir(outputDir, { recursive: true })
     const figureId = slugForFigureId(request.figureId ?? `${basename(sourcePath, extensionFromName(sourcePath))}-reference`)

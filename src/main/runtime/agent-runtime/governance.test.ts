@@ -160,6 +160,45 @@ describe('RuntimeGovernanceSupervisor', () => {
     }))
   })
 
+  it('steers after a non-retryable failure and interrupts only a repeated objective', async () => {
+    const supervisor = new RuntimeGovernanceSupervisor()
+    const controls = controlsSpy()
+
+    supervisor.observe(lookupEvent(1, 'same query'), baseCapabilities, recoverySettings, controls)
+    supervisor.observe(lookupReceiptEvent(1, {
+      retryable: false,
+      errorCode: 'visual_inspection_invalid',
+      failureClass: 'contract_violation',
+      recoveryGuidance: 'Stop this visual path and report the provider contract failure.'
+    }), baseCapabilities, recoverySettings, controls)
+    await Promise.resolve()
+
+    expect(controls.steerTurn).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringMatching(
+        /non-retryable error.*visual_inspection_invalid.*Stop this visual path.*Report the blocker/u
+      )
+    }))
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
+    expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'runtime_status',
+      metadata: expect.objectContaining({
+        level: 'soft',
+        code: 'semantic_failure_stop',
+        failureClass: 'contract_violation',
+        errorCode: 'visual_inspection_invalid'
+      })
+    }))
+
+    supervisor.observe(lookupEvent(2, 'same query'), baseCapabilities, recoverySettings, controls)
+    await Promise.resolve()
+
+    expect(controls.interruptTurn).toHaveBeenCalledTimes(1)
+    expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'error',
+      code: 'runtime_execution_interrupted'
+    }))
+  })
+
   it('waits for every observed call in a parallel recovery batch before interrupting', () => {
     const supervisor = new RuntimeGovernanceSupervisor()
     const controls = controlsSpy()

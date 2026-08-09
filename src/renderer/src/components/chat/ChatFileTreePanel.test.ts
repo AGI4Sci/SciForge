@@ -67,6 +67,23 @@ describe('ChatFileTreePanel helpers', () => {
       mimeType: 'image/png',
       modelRouterObject: true
     })
+
+    expect(composerReferenceFromWorkspaceReference({
+      workspaceRoot: '/tmp/workspace',
+      relativePath: 'papers/large-paper.pdf',
+      name: 'large-paper.pdf',
+      kind: 'pdf',
+      mimeType: 'application/pdf',
+      size: 92_845_141
+    })).toEqual({
+      path: 'papers/large-paper.pdf',
+      relativePath: 'papers/large-paper.pdf',
+      name: 'large-paper.pdf',
+      workspaceRoot: '/tmp/workspace',
+      kind: 'pdf',
+      mimeType: 'application/pdf',
+      modelRouterObject: true
+    })
   })
 
   it('derives renamed workspace paths without moving entries between directories', () => {

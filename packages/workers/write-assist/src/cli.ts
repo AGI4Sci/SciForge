@@ -46,13 +46,6 @@ export function resolveWriteAssistCliOptions(
       }
       continue
     }
-    if (arg === '--max-pdf-bytes') {
-      const value = parsePositiveInteger(argv[index + 1])
-      if (value) {
-        serviceOptions.maxPdfBytes = value
-        index += 1
-      }
-    }
   }
 
   return { quiet, serviceOptions }

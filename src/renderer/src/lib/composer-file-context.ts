@@ -96,8 +96,8 @@ export async function readComposerFileContextEntries(
     if (reference.modelRouterObject) {
       const label = reference.kind === 'image' ? 'Workspace image' : 'Scientific workspace file'
       const guidance = reference.kind === 'image'
-        ? 'This image is attached as a structured model-router object reference when the active model supports visual inputs.'
-        : 'This file is attached as a structured model-router object reference. Let the model router inspect or translate it when supported.'
+        ? 'This image is attached through the active runtime\'s supported local-image or structured-object input.'
+        : 'This file is attached as a structured workspace reference. Use its workspace path with the available document tools.'
       const content = [`${label}: ${reference.relativePath}`, guidance].join('\n')
       entries.push({ relativePath: reference.relativePath, workspaceRoot: referenceWorkspaceRoot, content })
       remainingChars -= content.length

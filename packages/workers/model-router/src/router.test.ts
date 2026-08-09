@@ -5585,6 +5585,16 @@ test('strict evidence policy fails closed when vision translation fails without 
 test('strict evidence policy keeps the text reasoner primary after successful vision translation', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-strict-vision-success-'));
   const calls: CapturedFetch[] = [];
+  const evidence = JSON.stringify({
+    summary: 'The plot contains three blue bars.',
+    claims: [{
+      kind: 'observation',
+      text: 'Three blue bars are visible in the plot.',
+      artifactId: 'vision-1',
+      confidence: 0.98,
+    }],
+    uncertainties: [],
+  });
   const server = await startModelRouterServer({
     port: 0,
     config: testConfig(),
@@ -5592,10 +5602,7 @@ test('strict evidence policy keeps the text reasoner primary after successful vi
     workspaceRoot,
     fetchImpl: captureFetch(calls, [
       chatCompletion('vision-initial', 'Observation: the plot contains three blue bars.'),
-      chatCompletion('text-final', JSON.stringify({
-        type: 'final_answer',
-        content: 'The plot contains three blue bars.',
-      })),
+      chatCompletion('text-final', evidence),
     ]),
   });
 
@@ -5620,12 +5627,84 @@ test('strict evidence policy keeps the text reasoner primary after successful vi
 
     assert.equal(response.status, 200);
     const body = await response.json() as Record<string, unknown>;
-    assert.equal(body.output_text, 'The plot contains three blue bars.');
+    assert.equal(body.output_text, evidence);
     assert.equal(calls.length, 2);
     assert.equal(calls[0]?.url, 'https://vision.example/v1/responses');
     assert.equal(calls[1]?.url, 'https://text.example/v1/responses');
-    assert.match(JSON.stringify(calls[1]?.body), /Observation: the plot contains three blue bars/);
-    assert.doesNotMatch(JSON.stringify(calls[1]?.body), /data:image|base64|tiny-png/i);
+    const textReasonerRequest = JSON.stringify(calls[1]?.body);
+    assert.match(textReasonerRequest, /Observation: the plot contains three blue bars/);
+    assert.match(textReasonerRequest, /Return only the caller-requested strict visual evidence JSON object/);
+    assert.doesNotMatch(textReasonerRequest, /\\"type\\":\\"final_answer\\"/);
+    assert.doesNotMatch(textReasonerRequest, /data:image|base64|tiny-png/i);
+  } finally {
+    await server.close();
+  }
+});
+
+test('strict evidence policy preserves targeted visual supplements before returning direct evidence', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-strict-vision-supplement-'));
+  const config = testConfig();
+  config.profiles.default.translators.vision!.maxSupplementRounds = 1;
+  const calls: CapturedFetch[] = [];
+  const evidence = JSON.stringify({
+    summary: 'The x-axis label is Time (s).',
+    claims: [{
+      kind: 'observation',
+      text: 'The x-axis is labeled Time (s).',
+      artifactId: 'image_1',
+      confidence: 0.99,
+    }],
+    uncertainties: [],
+  });
+  const server = await startModelRouterServer({
+    port: 0,
+    config,
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('vision-initial', 'Observation: a plot is visible, but the x-axis label is unclear.'),
+      chatCompletion('text-supplement-request', JSON.stringify({
+        type: 'need_more_visual_info',
+        target: 'image_1',
+        question: 'What is the exact x-axis label?',
+        reason: 'The initial observation did not resolve the label.',
+      })),
+      chatCompletion('vision-supplement', 'The exact x-axis label is Time (s).'),
+      chatCompletion('text-final', evidence),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({
+        'content-type': 'application/json',
+        'x-sciforge-model-router-evidence-policy': 'required',
+      }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'Read the exact x-axis label.' },
+            { type: 'input_image', image_url: pngDataUrl },
+          ],
+        }],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(body.output_text, evidence);
+    assert.deepEqual(calls.map((call) => call.url), [
+      'https://vision.example/v1/responses',
+      'https://text.example/v1/responses',
+      'https://vision.example/v1/responses',
+      'https://text.example/v1/responses',
+    ]);
+    assert.match(JSON.stringify(calls[1]?.body), /need_more_visual_info/);
+    assert.match(JSON.stringify(calls[2]?.body), /What is the exact x-axis label/);
+    assert.match(JSON.stringify(calls[3]?.body), /The exact x-axis label is Time \(s\)/);
   } finally {
     await server.close();
   }

@@ -7,6 +7,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rm,
   symlink
 } from 'node:fs/promises'
@@ -349,6 +350,100 @@ describe('LocalTraceStore', () => {
     assert.deepEqual(await store.summaries(), [])
   })
 
+  test('keeps limited reads bounded while preserving exact totals and corrupt-line counts', async () => {
+    const temporary = await createTemporaryDirectory()
+    let now = new Date('2026-07-18T10:00:00.000Z')
+    const store = new LocalTraceStore({
+      storageDirectory: path.join(temporary, 'traces'),
+      now: () => now
+    })
+    for (let index = 0; index < 3; index += 1) {
+      await store.append({
+        traceId: `older-${index}`,
+        source: 'agent-runtime',
+        kind: 'lifecycle',
+        timestamp: `2026-07-18T10:00:0${index}.000Z`,
+        payload: { phase: 'completed' }
+      })
+    }
+    await appendFile(path.join(store.directory, '2026-07-18.ndjson'), '{not-json}\n', 'utf8')
+    now = new Date('2026-07-19T10:00:00.000Z')
+    for (let index = 0; index < 2; index += 1) {
+      await store.append({
+        traceId: `newer-${index}`,
+        source: 'agent-runtime',
+        kind: 'lifecycle',
+        timestamp: `2026-07-19T10:00:0${index}.000Z`,
+        payload: { phase: 'completed' }
+      })
+    }
+
+    const descending = await store.read({ order: 'desc', limit: 2 })
+    assert.deepEqual(descending.events.map((event) => event.traceId), ['newer-1', 'newer-0'])
+    assert.equal(descending.events.length, 2)
+    assert.equal(descending.total, 5)
+    assert.equal(descending.corruptLines, 1)
+
+    const ascending = await store.read({ order: 'asc', limit: 2 })
+    assert.deepEqual(ascending.events.map((event) => event.traceId), ['older-0', 'older-1'])
+    assert.equal(ascending.total, 5)
+    assert.equal(ascending.corruptLines, 1)
+  })
+
+  test('streams summaries and exports without materializing a full read result', async () => {
+    class StreamingOnlyTraceStore extends LocalTraceStore {
+      override async read(): Promise<never> {
+        throw new Error('summary and export paths must not materialize read().events')
+      }
+    }
+
+    const temporary = await createTemporaryDirectory()
+    const destination = path.join(temporary, 'exports', 'streamed.jsonl')
+    const store = new StreamingOnlyTraceStore({
+      storageDirectory: path.join(temporary, 'traces'),
+      now: () => new Date('2026-07-19T10:00:00.000Z')
+    })
+    const largePrompt = 'large-prompt '.repeat(40_000)
+    for (const index of [1, 3, 0, 2]) {
+      await store.appendMany([
+        {
+          traceId: `trace-${index}`,
+          requestId: `request-${index}`,
+          source: 'model-router',
+          kind: 'model_request',
+          timestamp: `2026-07-19T10:00:0${index}.000Z`,
+          payload: { model: 'test-model', body: { prompt: largePrompt, index } }
+        },
+        {
+          traceId: `trace-${index}`,
+          requestId: `request-${index}`,
+          source: 'model-router',
+          kind: 'model_response_end',
+          timestamp: `2026-07-19T10:00:0${index}.100Z`,
+          payload: { status: 200 }
+        }
+      ])
+    }
+
+    const summaries = await store.summaries({ order: 'desc', limit: 1 })
+    assert.deepEqual(summaries.map((summary) => summary.traceId), ['trace-3'])
+    assert.equal(summaries[0]?.preview?.length, 240)
+    const requests = await store.requestSummaries({ order: 'desc', limit: 2 })
+    assert.deepEqual(requests.map((summary) => summary.requestId), ['request-3', 'request-2'])
+    assert.equal(requests.every((summary) => (summary.preview?.length ?? 0) <= 240), true)
+
+    const exported = await store.export({ destination })
+    assert.equal(exported.eventCount, 8)
+    assert.equal(exported.traceCount, 4)
+    const exportedLines = (await readFile(destination, 'utf8')).trim().split('\n')
+    assert.equal(exportedLines.length, 9)
+    assert.deepEqual(
+      exportedLines.slice(1).map((line) => (JSON.parse(line) as TraceEvent).traceId),
+      ['trace-0', 'trace-0', 'trace-1', 'trace-1', 'trace-2', 'trace-2', 'trace-3', 'trace-3']
+    )
+    assert.deepEqual(await readdir(path.dirname(destination)), ['streamed.jsonl'])
+  })
+
   test('derives request views and excludes child-attempt failures and usage from trajectory cards', async () => {
     const temporary = await createTemporaryDirectory()
     const recordedAt = new Date('2026-07-19T11:00:00.000Z')
@@ -633,6 +728,7 @@ describe('LocalTraceStore', () => {
     assert.equal(pruned.deletedEvents, 1)
     assert.deepEqual((await store.read()).events.map((event) => event.traceId), ['trace-boundary'])
     assert.equal((await lstat(path.join(store.directory, '2026-06-19.ndjson'))).mode & 0o777, 0o600)
+    assert.equal((await readdir(store.directory)).some((entry) => entry.endsWith('.tmp')), false)
   })
 
   test('keeps JSONL records intact across concurrent store instances', async () => {
@@ -782,6 +878,13 @@ test('exact event id reads are bounded and retain only matching trace records', 
   ])
   await assert.rejects(
     store.read({ eventIds: ['lookup-duplicated'] }),
+    /too many durable records/u
+  )
+  await assert.rejects(
+    store.read({
+      eventIds: ['lookup-duplicated'],
+      traceIds: ['trace-lookup-4']
+    }),
     /too many durable records/u
   )
 })

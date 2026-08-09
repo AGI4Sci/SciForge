@@ -328,6 +328,12 @@ describe('registerAppIpcHandlers', () => {
       deletedFiles: 1,
       deletedEvents: 4
     })
+    await expect(handlers.get('traces:read')?.({}, {})).resolves.toEqual({
+      events: [],
+      total: 0,
+      corruptLines: 0
+    })
+    expect(traces.read).toHaveBeenCalledWith({ limit: 500 })
     await expect(handlers.get('traces:read')?.({}, {
       kinds: ['not-a-trace-kind']
     })).rejects.toThrow(/payload for traces:read/i)

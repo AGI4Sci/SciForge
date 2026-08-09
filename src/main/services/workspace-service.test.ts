@@ -164,6 +164,25 @@ describe('workspace-service boundary checks', () => {
     await expect(readFile(outsideFile, 'utf8')).resolves.toBe('outside')
   })
 
+  it('lets non-preview consumers read workspace images without the preview byte cap', async () => {
+    const imagePath = join(workspaceRoot, 'large.png')
+    const imageSize = 12 * 1024 * 1024 + 1
+    await writeFile(imagePath, Buffer.alloc(imageSize))
+
+    const previewResult = await readWorkspaceImage({ path: imagePath, workspaceRoot })
+    const unboundedResult = await readWorkspaceImage(
+      { path: imagePath, workspaceRoot },
+      { maxBytes: null }
+    )
+
+    expect(previewResult).toEqual({ ok: false, message: 'This image is too large to preview.' })
+    expect(unboundedResult.ok).toBe(true)
+    if (unboundedResult.ok) {
+      expect(unboundedResult.size).toBe(imageSize)
+      expect(unboundedResult.dataUrl).toMatch(/^data:image\/png;base64,/)
+    }
+  })
+
   it('lists directories and files inside the selected workspace', async () => {
     await mkdir(join(workspaceRoot, 'notes'), { recursive: true })
     await writeFile(join(workspaceRoot, 'notes', 'draft.md'), '# draft', 'utf8')

@@ -54,12 +54,10 @@ vi.mock('../components/write/WritePdfViewer', () => ({
 }))
 
 import {
-  PDF_WORKSPACE_VIEWER_MAX_BYTES,
   PdfWorkspaceViewer,
   buildPdfWorkspaceViewerModel,
   loadPdfWorkspacePreviewData,
-  pdfWorkspaceDocumentRevisionKey,
-  resolvePdfMimeType
+  pdfWorkspaceDocumentRevisionKey
 } from './PdfWorkspaceViewer'
 
 function createPdfObservation(
@@ -214,50 +212,6 @@ describe('PdfWorkspaceViewer', () => {
     })).not.toBe(first)
   })
 
-  it('loads PDF bytes through transport and renders WritePdfViewer without file URLs', async () => {
-    const observation = createPdfObservation()
-    const asset = createPdfAssetDescriptor()
-    const bytes = Uint8Array.from([0x25, 0x50, 0x44, 0x46])
-    const transport = createPdfTransportClient({ asset, bytes })
-    const result = await loadPdfWorkspacePreviewData({
-      observation,
-      asset,
-      transport
-    })
-
-    expect(result).toMatchObject({
-      kind: 'ready',
-      mimeType: 'application/pdf',
-      bytesRead: 4
-    })
-    if (result.kind !== 'ready') throw new Error('Expected PDF data to be ready.')
-    expect(result.data).toBeDefined()
-    expect(Array.from(result.data ?? [])).toEqual(Array.from(bytes))
-    expect(transport.readBytesIfWithin).toHaveBeenCalledWith(PDF_WORKSPACE_VIEWER_MAX_BYTES)
-    expect(resolvePdfMimeType({ observation, asset })).toBe('application/pdf')
-
-    const html = renderToStaticMarkup(createElement(PdfWorkspaceViewer, {
-      observation,
-      asset,
-      transport,
-      previewState: result,
-      onPresentationStateChange: vi.fn()
-    }))
-
-    expect(html).toContain('data-workspace-preview-pdf-viewer')
-    expect(html).toContain('data-pdf-ready-shell')
-    expect(html).toContain('data-write-pdf-viewer="true"')
-    expect(html).toContain('data-has-presentation-state-change="true"')
-    expect(html).not.toContain('data-pdf-agent-summary')
-    expect(html).not.toContain('data-pdf-load-summary')
-    expect(html).toContain('data-pdf-data-length="4"')
-    expect(html).not.toContain('data-pdf-data-base64')
-    expect(html).toContain('data-file-path="/workspace/lab/paper.pdf"')
-    expect(html).toContain('data-document-content-key=')
-    expect(html).not.toContain('data-source-url')
-    expect(html).not.toContain('file://')
-  })
-
   it('maps an initial document selection to the initial PDF page without a replayable jump request', () => {
     const observation = createPdfObservation({
       selection: {
@@ -332,7 +286,10 @@ describe('PdfWorkspaceViewer', () => {
   it('enables PDF annotation actions when the shell provides applyEdit', async () => {
     const observation = createPdfObservation()
     const asset = createPdfAssetDescriptor()
-    const transport = createPdfTransportClient({ asset })
+    const transport = createPdfTransportClient({
+      asset,
+      sourceUrl: 'sciforge-resource://content?access=annotation-test'
+    })
     const result = await loadPdfWorkspacePreviewData({
       observation,
       asset,
@@ -371,7 +328,7 @@ describe('PdfWorkspaceViewer', () => {
     expect(html).toContain('data-has-toggle-annotations="true"')
   })
 
-  it('shows a clear fallback when the PDF exceeds the bounded transport read limit', async () => {
+  it('requires streaming URL transport instead of imposing a whole-file PDF size limit', async () => {
     const observation = createPdfObservation()
     const asset = createPdfAssetDescriptor({
       range: {
@@ -381,35 +338,27 @@ describe('PdfWorkspaceViewer', () => {
         size: 16
       }
     })
-    const transport = createPdfTransportClient({
-      asset,
-      readResult: {
-        ok: false,
-        message: 'Asset exceeds the requested read limit.'
-      }
-    })
+    const transport = createPdfTransportClient({ asset })
     const result = await loadPdfWorkspacePreviewData({
       observation,
       asset,
-      transport,
-      maxBytes: 4
+      transport
     })
     const html = renderToStaticMarkup(createElement(PdfWorkspaceViewer, {
       observation,
       asset,
       transport,
-      maxBytes: 4,
       previewState: result
     }))
 
     expect(result).toMatchObject({
       kind: 'fallback',
-      title: 'PDF bytes unavailable',
-      message: 'This PDF is 16 B; inline PDF preview is limited to 4 B.'
+      title: 'PDF stream unavailable',
+      message: 'The workspace preview URL transport is unavailable for this PDF.'
     })
-    expect(transport.readBytesIfWithin).toHaveBeenCalledWith(4)
+    expect(transport.readBytesIfWithin).not.toHaveBeenCalled()
     expect(html).toContain('data-pdf-fallback-summary')
-    expect(html).toContain('inline PDF preview is limited to 4 B')
+    expect(html).toContain('workspace preview URL transport is unavailable')
     expect(html).not.toContain('data-write-pdf-viewer')
     expect(html).not.toContain('file://')
   })

@@ -1,4 +1,8 @@
 import { useEffect, useState } from 'react'
+import type {
+  AgentRuntimeId,
+  AgentRuntimeThreadUsageQuery
+} from '@shared/agent-runtime-contract'
 
 const THREAD_USAGE_REFRESH_DEBOUNCE_MS = 400
 const threadUsageLoads = new Map<string, Promise<ThreadUsageSummary | null>>()
@@ -86,13 +90,19 @@ export function formatPercent(value: number | null): string {
   return `${percent.toFixed(1)}%`
 }
 
-export function buildThreadUsageQuery(threadId: string): { groupBy: 'thread'; threadId: string } {
-  return { groupBy: 'thread', threadId }
+export function buildThreadUsageQuery(
+  runtimeId: AgentRuntimeId,
+  threadId: string
+): AgentRuntimeThreadUsageQuery {
+  return { runtimeId, groupBy: 'thread', threadId }
 }
 
-export async function loadThreadUsage(threadId: string): Promise<ThreadUsageSummary | null> {
+export async function loadThreadUsage(
+  runtimeId: AgentRuntimeId,
+  threadId: string
+): Promise<ThreadUsageSummary | null> {
   if (typeof window.sciforge?.agentRuntime?.usage !== 'function') return null
-  const parsed = await window.sciforge.agentRuntime.usage(buildThreadUsageQuery(threadId)) as {
+  const parsed = await window.sciforge.agentRuntime.usage(buildThreadUsageQuery(runtimeId, threadId)) as {
     supported?: unknown
     groupBy?: unknown
     group_by?: unknown
@@ -162,18 +172,23 @@ export async function loadThreadUsage(threadId: string): Promise<ThreadUsageSumm
   }
 }
 
-function loadThreadUsageSingleflight(threadId: string): Promise<ThreadUsageSummary | null> {
-  const existing = threadUsageLoads.get(threadId)
+function loadThreadUsageSingleflight(
+  runtimeId: AgentRuntimeId,
+  threadId: string
+): Promise<ThreadUsageSummary | null> {
+  const loadKey = `${runtimeId}\u0000${threadId}`
+  const existing = threadUsageLoads.get(loadKey)
   if (existing) return existing
-  const pending = loadThreadUsage(threadId).finally(() => {
-    if (threadUsageLoads.get(threadId) === pending) threadUsageLoads.delete(threadId)
+  const pending = loadThreadUsage(runtimeId, threadId).finally(() => {
+    if (threadUsageLoads.get(loadKey) === pending) threadUsageLoads.delete(loadKey)
   })
-  threadUsageLoads.set(threadId, pending)
+  threadUsageLoads.set(loadKey, pending)
   return pending
 }
 
 export function useThreadUsageState(
   threadId: string | null | undefined,
+  runtimeId: AgentRuntimeId | null | undefined,
   enabled: boolean,
   refreshKey: unknown
 ): ThreadUsageState {
@@ -185,13 +200,13 @@ export function useThreadUsageState(
 
   useEffect(() => {
     let cancelled = false
-    if (!threadId || !enabled) {
+    if (!threadId || !runtimeId || !enabled) {
       setState({ usage: null, loading: false, loaded: false })
       return
     }
     setState((current) => ({ ...current, loading: true }))
     const timer = window.setTimeout(() => {
-      void loadThreadUsageSingleflight(threadId)
+      void loadThreadUsageSingleflight(runtimeId, threadId)
         .then((usage) => {
           if (!cancelled) setState({ usage, loading: false, loaded: true })
         })
@@ -203,15 +218,16 @@ export function useThreadUsageState(
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [enabled, refreshKey, threadId])
+  }, [enabled, refreshKey, runtimeId, threadId])
 
   return state
 }
 
 export function useThreadUsage(
   threadId: string | null | undefined,
+  runtimeId: AgentRuntimeId | null | undefined,
   enabled: boolean,
   refreshKey: unknown
 ): ThreadUsageSummary | null {
-  return useThreadUsageState(threadId, enabled, refreshKey).usage
+  return useThreadUsageState(threadId, runtimeId, enabled, refreshKey).usage
 }

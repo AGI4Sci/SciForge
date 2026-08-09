@@ -638,15 +638,29 @@ export type AgentRuntimeUsage = {
 
 export type AgentRuntimeUsageGroupBy = 'day' | 'model' | 'thread'
 
-export type AgentRuntimeUsageQuery = {
-  runtimeId?: AgentRuntimeId
-  groupBy: AgentRuntimeUsageGroupBy
+type AgentRuntimeUsageQueryBase = {
   from?: string
   to?: string
   timezone?: string
+}
+
+export type AgentRuntimeThreadUsageQuery = AgentRuntimeUsageQueryBase & {
+  runtimeId: AgentRuntimeId
+  groupBy: 'thread'
+  threadId: string
+  workspaceLocator?: WorkspaceLocator
+}
+
+export type AgentRuntimeAggregateUsageQuery = AgentRuntimeUsageQueryBase & {
+  runtimeId?: AgentRuntimeId
+  groupBy: Exclude<AgentRuntimeUsageGroupBy, 'thread'>
   threadId?: string
   workspaceLocator?: WorkspaceLocator
 }
+
+export type AgentRuntimeUsageQuery =
+  | AgentRuntimeThreadUsageQuery
+  | AgentRuntimeAggregateUsageQuery
 
 export type AgentRuntimeUsageResponse =
   | {

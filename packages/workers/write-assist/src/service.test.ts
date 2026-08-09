@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, open, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -87,6 +87,28 @@ test('extracts bounded PDF text with cursor pagination', async (t) => {
   assert.match(second.pages[0]?.text ?? '', /chlorophyll|retrieval|workspace/)
 })
 
+test('extracts text from PDFs larger than the former 64 MiB limit', async (t) => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'write-assist-large-pdf-'))
+  t.after(async () => {
+    await rm(tempRoot, { recursive: true, force: true })
+  })
+  const workspaceRoot = join(tempRoot, 'workspace')
+  await mkdir(workspaceRoot, { recursive: true })
+  await writeLargePdf(
+    join(workspaceRoot, 'large-paper.pdf'),
+    'Large PDF context about scalable scientific evidence retrieval.'
+  )
+
+  const result = await createWriteAssistService().extractPdfText({
+    workspaceRoot,
+    path: 'large-paper.pdf'
+  })
+
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.match(result.pages[0]?.text ?? '', /Large PDF context/)
+})
+
 test('rejects path traversal and symlink escapes for PDF extraction', async (t) => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'write-assist-guard-'))
   t.after(async () => {
@@ -111,7 +133,7 @@ test('rejects path traversal and symlink escapes for PDF extraction', async (t) 
   assert.equal(symlinkRead.error.code, 'path_outside_workspace')
 })
 
-test('reports binary and oversized file boundaries without unbounded reads', async (t) => {
+test('reports binary and oversized text boundaries without unbounded reads', async (t) => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'write-assist-boundary-'))
   t.after(async () => {
     await rm(tempRoot, { recursive: true, force: true })
@@ -120,9 +142,8 @@ test('reports binary and oversized file boundaries without unbounded reads', asy
   await mkdir(workspaceRoot, { recursive: true })
   await writeFile(join(workspaceRoot, 'binary.md'), Buffer.from([0x66, 0x00, 0x67, 0x68]))
   await writeFile(join(workspaceRoot, 'huge.txt'), 'chlorophyll '.repeat(100), 'utf8')
-  await writeFile(join(workspaceRoot, 'huge.pdf'), minimalPdf('small but over configured byte cap'))
 
-  const service = createWriteAssistService({ maxTextFileBytes: 32, maxPdfBytes: 20 })
+  const service = createWriteAssistService({ maxTextFileBytes: 32 })
   const retrieval = await service.retrieveContext({
     workspaceRoot,
     query: 'chlorophyll',
@@ -132,12 +153,53 @@ test('reports binary and oversized file boundaries without unbounded reads', asy
   if (!retrieval.ok) return
   assert.equal(retrieval.stats.skippedFiles.binary, 1)
   assert.equal(retrieval.stats.skippedFiles.tooLarge >= 1, true)
-
-  const pdf = await service.extractPdfText({ workspaceRoot, path: 'huge.pdf' })
-  assert.equal(pdf.ok, false)
-  if (pdf.ok) return
-  assert.equal(pdf.error.code, 'file_too_large')
 })
+
+async function writeLargePdf(path: string, text: string): Promise<void> {
+  const escaped = text.replace(/[\\()]/g, (char) => `\\${char}`)
+  const content = `BT /F1 18 Tf 72 720 Td (${escaped}) Tj ET`
+  const parts = [
+    '%PDF-1.4\n',
+    '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+    '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n',
+    '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n',
+    '4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
+    `5 0 obj\n<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream\nendobj\n`
+  ].map((value) => Buffer.from(value, 'latin1'))
+  const objectOffsets: number[] = []
+  let offset = 0
+  for (const part of parts) {
+    objectOffsets.push(offset)
+    offset += part.length
+  }
+  const paddingBytes = 65 * 1024 * 1024
+  const streamHeader = Buffer.from(`6 0 obj\n<< /Length ${paddingBytes} >>\nstream\n`)
+  objectOffsets.push(offset)
+  offset += streamHeader.length + paddingBytes
+  const streamFooter = Buffer.from('\nendstream\nendobj\n')
+  offset += streamFooter.length
+  const xrefOffset = offset
+  const xrefEntries = objectOffsets
+    .map((entryOffset) => `${entryOffset.toString().padStart(10, '0')} 00000 n \n`)
+    .join('')
+  const footer = Buffer.from(
+    `xref\n0 7\n0000000000 65535 f \n${xrefEntries}` +
+    `trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`
+  )
+  const handle = await open(path, 'w')
+  try {
+    for (const part of parts) await handle.write(part)
+    await handle.write(streamHeader)
+    const chunk = Buffer.alloc(1024 * 1024, 0x20)
+    for (let written = 0; written < paddingBytes; written += chunk.length) {
+      await handle.write(chunk)
+    }
+    await handle.write(streamFooter)
+    await handle.write(footer)
+  } finally {
+    await handle.close()
+  }
+}
 
 function minimalPdf(text: string): Buffer {
   const escaped = text.replace(/[\\()]/g, (char) => `\\${char}`)

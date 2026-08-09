@@ -1287,6 +1287,8 @@
   "writePdfAnnotationsQuestionTurn": "追问",
   "writePdfAnnotationsAnswering": "Agent 回答中",
   "writePdfAnnotationsAnswer": "Agent 回答",
+  "writePdfAnnotationsCollapseAnswer": "折叠回答",
+  "writePdfAnnotationsExpandAnswer": "展开回答",
   "writePdfAnnotationsAnswerPending": "正在等待回答...",
   "writePdfAnnotationQuestionRuntimeUnavailable": "需要先连接运行时并打开一个主会话，才能在右栏直接回答。",
   "writePdfAnnotationQuestionFailed": "未能启动右栏回答。",

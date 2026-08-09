@@ -143,7 +143,6 @@ const uiFontScaleSchema = z.enum(['small', 'medium', 'large'])
 const agentRuntimeIdSchema = z.enum(['sciforge', 'codex', 'claude'])
 const agentRuntimeThreadRelationSchema = z.string().trim().pipe(z.enum(['primary', 'fork', 'side']))
 const agentRuntimeThreadSidebarVisibilitySchema = z.string().trim().pipe(z.enum(['main', 'side', 'hidden']))
-const agentRuntimeUsageGroupBySchema = z.string().trim().pipe(z.enum(['day', 'model', 'thread']))
 const agentRuntimeAuxiliaryOperationSchema = z.enum(AGENT_RUNTIME_AUXILIARY_OPERATIONS)
 const agentRuntimeAuxiliaryRuntimeIdRequiredOperations = new Set<AgentRuntimeAuxiliaryOperation>(
   AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS
@@ -198,6 +197,7 @@ const traceQueryFields = {
 
 export const traceReadPayloadSchema = z.object({
   ...traceQueryFields,
+  limit: traceQueryFields.limit.default(500),
   requestId: optionalTrimmedString(MAX_ID_LENGTH),
   kinds: z.array(traceEventKindSchema).max(TRACE_EVENT_KINDS.length).optional()
 }).strict()
@@ -392,15 +392,28 @@ export const agentRuntimeThreadRelationPayloadSchema = z.object({
   workspaceLocator: workspaceLocatorSchema.optional()
 }).strict()
 
-export const agentRuntimeUsagePayloadSchema = z.object({
-  runtimeId: agentRuntimeIdSchema.optional(),
-  groupBy: agentRuntimeUsageGroupBySchema,
+const agentRuntimeUsageRangePayloadSchema = {
   from: z.string().trim().max(64).optional(),
   to: z.string().trim().max(64).optional(),
-  timezone: z.string().trim().max(128).optional(),
-  threadId: optionalTrimmedString(MAX_ID_LENGTH),
-  workspaceLocator: workspaceLocatorSchema.optional()
-}).strict()
+  timezone: z.string().trim().max(128).optional()
+}
+
+export const agentRuntimeUsagePayloadSchema = z.discriminatedUnion('groupBy', [
+  z.object({
+    ...agentRuntimeUsageRangePayloadSchema,
+    runtimeId: agentRuntimeIdSchema,
+    groupBy: z.literal('thread'),
+    threadId: trimmedString(MAX_ID_LENGTH),
+    workspaceLocator: workspaceLocatorSchema.optional()
+  }).strict(),
+  z.object({
+    ...agentRuntimeUsageRangePayloadSchema,
+    runtimeId: agentRuntimeIdSchema.optional(),
+    groupBy: z.enum(['day', 'model']),
+    threadId: optionalTrimmedString(MAX_ID_LENGTH),
+    workspaceLocator: workspaceLocatorSchema.optional()
+  }).strict()
+])
 
 const agentRuntimeAuxiliaryRuntimeScopedPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,

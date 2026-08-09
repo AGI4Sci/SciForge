@@ -122,6 +122,7 @@ describe('app-ipc-schemas', () => {
   })
 
   it('accepts bounded protocol-neutral full-trace queries', () => {
+    expect(traceReadPayloadSchema.parse({})).toEqual({ limit: 500 })
     expect(traceReadPayloadSchema.parse({
       runtimeId: 'codex',
       threadId: ' thread-1 ',
@@ -439,6 +440,7 @@ describe('app-ipc-schemas', () => {
       ['forkThread', agentRuntimeThreadForkPayloadSchema, { threadId: 'thread-1' }],
       ['resumeSession', agentRuntimeSessionResumePayloadSchema, { sessionId: 'session-1' }],
       ['updateThreadRelation', agentRuntimeThreadRelationPayloadSchema, { threadId: 'thread-1', relation: 'primary' }],
+      ['threadUsage', agentRuntimeUsagePayloadSchema, { groupBy: 'thread', threadId: 'thread-1' }],
       ['resolveApproval', agentRuntimeApprovalResolvePayloadSchema, {
         threadId: 'thread-1',
         approvalId: 'approval-1',
@@ -456,10 +458,19 @@ describe('app-ipc-schemas', () => {
     }
 
     expect(agentRuntimeListThreadsPayloadSchema.parse({ limit: 5 })).toEqual({ limit: 5 })
-    expect(agentRuntimeUsagePayloadSchema.parse({ groupBy: 'thread', threadId: 'thread-1' })).toEqual({
+    expect(agentRuntimeUsagePayloadSchema.parse({
+      runtimeId: 'codex',
+      groupBy: 'thread',
+      threadId: 'thread-1'
+    })).toEqual({
+      runtimeId: 'codex',
       groupBy: 'thread',
       threadId: 'thread-1'
     })
+    expect(() => agentRuntimeUsagePayloadSchema.parse({
+      runtimeId: 'codex',
+      groupBy: 'thread'
+    })).toThrow()
   })
 
   it('accepts shared host-service auxiliary operations', () => {

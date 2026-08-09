@@ -1287,6 +1287,8 @@
   "writePdfAnnotationsQuestionTurn": "Question",
   "writePdfAnnotationsAnswering": "Agent answering",
   "writePdfAnnotationsAnswer": "Agent answer",
+  "writePdfAnnotationsCollapseAnswer": "Collapse answer",
+  "writePdfAnnotationsExpandAnswer": "Expand answer",
   "writePdfAnnotationsAnswerPending": "Waiting for the answer...",
   "writePdfAnnotationQuestionRuntimeUnavailable": "Connect the runtime and open a main session before answering in the right sidebar.",
   "writePdfAnnotationQuestionFailed": "Could not start the right-sidebar answer.",

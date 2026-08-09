@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, symlink, truncate, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, open, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -65,7 +65,7 @@ describe('write PDF text service', () => {
     expect(result.pages[0].text).toContain('PDF BM25 keyword retrieval context')
   })
 
-  it('rejects path traversal, symlink escapes, and oversized PDFs before extraction', async () => {
+  it('rejects path traversal and symlink escapes before extraction', async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'sciforge-write-pdf-guard-'))
     const workspaceRoot = join(tempRoot, 'workspace')
     const outsideRoot = join(tempRoot, 'outside')
@@ -86,16 +86,65 @@ describe('write PDF text service', () => {
     })
     expect(symlinkRead.ok).toBe(false)
 
+  })
+
+  it('extracts text from a PDF larger than the former 64 MiB limit', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-write-large-pdf-'))
     const largePdf = join(workspaceRoot, 'large.pdf')
-    await writeFile(largePdf, '%PDF-1.4\n', 'utf8')
-    await truncate(largePdf, 64 * 1024 * 1024 + 1)
-    const oversized = await readWritePdfText({
+    await writeLargePdf(largePdf, 'Unbounded PDF size with bounded text extraction')
+
+    const result = await readWritePdfText({
       workspaceRoot,
       path: 'large.pdf'
     })
-    expect(oversized.ok).toBe(false)
-    if (!oversized.ok) {
-      expect(oversized.message).toContain('too large')
-    }
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.pages[0]?.text).toContain('Unbounded PDF size')
   })
 })
+
+async function writeLargePdf(path: string, text: string): Promise<void> {
+  const escaped = escapePdfText(text)
+  const content = `BT /F1 18 Tf 72 720 Td (${escaped}) Tj ET`
+  const parts = [
+    '%PDF-1.4\n',
+    '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+    '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n',
+    '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n',
+    '4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
+    `5 0 obj\n<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream\nendobj\n`
+  ].map((value) => Buffer.from(value, 'latin1'))
+  const objectOffsets: number[] = []
+  let offset = 0
+  for (const part of parts) {
+    objectOffsets.push(offset)
+    offset += part.length
+  }
+  const paddingBytes = 65 * 1024 * 1024
+  const streamHeader = Buffer.from(`6 0 obj\n<< /Length ${paddingBytes} >>\nstream\n`)
+  objectOffsets.push(offset)
+  offset += streamHeader.length + paddingBytes
+  const streamFooter = Buffer.from('\nendstream\nendobj\n')
+  offset += streamFooter.length
+  const xrefOffset = offset
+  const xrefEntries = objectOffsets
+    .map((entryOffset) => `${entryOffset.toString().padStart(10, '0')} 00000 n \n`)
+    .join('')
+  const footer = Buffer.from(
+    `xref\n0 7\n0000000000 65535 f \n${xrefEntries}` +
+    `trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`
+  )
+  const handle = await open(path, 'w')
+  try {
+    for (const part of parts) await handle.write(part)
+    await handle.write(streamHeader)
+    const chunk = Buffer.alloc(1024 * 1024, 0x20)
+    for (let written = 0; written < paddingBytes; written += chunk.length) {
+      await handle.write(chunk)
+    }
+    await handle.write(streamFooter)
+    await handle.write(footer)
+  } finally {
+    await handle.close()
+  }
+}
