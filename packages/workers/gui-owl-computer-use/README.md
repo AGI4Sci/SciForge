@@ -73,7 +73,7 @@ model/provider selection and policy.
 | Backend protocol and capability routing | `driver/backend.py`, `driver/router.py` |
 | Target-bound runner facade | `driver/channel.py` |
 | Approved process-global compatibility backend | `driver/backends/legacy_pyautogui.py` |
-| Target-scoped Chromium bridge | `driver/backends/cdp_adapter.py`, `src/main/services/computer-use-cdp-adapter.ts` |
+| Target-scoped Chromium bridge | `driver/backends/cdp_adapter.py`, `packages/domains/computer-use/src/main/services/computer-use-cdp-adapter.ts` |
 | Pattern-driven Windows UI Automation backend | `driver/backends/windows_uia.py` |
 | Isolated environment SPI and optional P6a remote Worker controller (unavailable by default) | `driver/backends/isolated_desktop.py`, `driver/backends/remote_windows_worker.py` |
 | Explicit-hook click-through mouse overlay | `driver/overlay.py` |
@@ -135,7 +135,7 @@ minimal wiring needed to expose it to the agent runtime:
 
 | File | Why |
 |---|---|
-| `src/main/computer-use-mcp-server.ts` | GUI-managed MCP wrapper that exposes `computer_use` and calls this sidecar |
+| `packages/domains/computer-use/src/main/mcp-server.ts` | Domain-owned GUI-managed MCP wrapper that exposes `computer_use` and calls this sidecar |
 | `src/main/gui-mcp-registry.ts` | registers `gui_owl_computer_use` for Codex and Claude Code |
 
 ## Config
@@ -162,7 +162,7 @@ disabling the target-bound channel and backend routing introduced earlier.
 - [Operations, diagnostics and rollback](docs/computer-use-operations.md)
 - [Approval trust boundary ADR](docs/adr-001-approval-trust-boundary.md)
 
-Current local controlled evidence is `202 passed, 16 opt-in skipped` for the
+Current local controlled evidence is `217 passed, 16 opt-in skipped` for the
 default Python suite, `9 passed` for the test-owned headless CDP suite, `4
 passed` for project-owned Win32 UIA windows and `2 passed` for a test-owned
 blank Excel name-box Value round trip plus exact-identity crash cleanup. The
@@ -192,7 +192,7 @@ with the printed loopback URL and the same token:
 ```powershell
 $env:SCIFORGE_CUA_CDP_ENDPOINTS = 'http://127.0.0.1:9222'
 $env:SCIFORGE_CUA_CDP_ADAPTER_TOKEN = '<random-secret>'
-npx tsx src/main/computer-use-cdp-adapter-node-entry.ts
+npx tsx packages/domains/computer-use/src/main/cdp-adapter-node-entry.ts
 
 $env:SCIFORGE_CUA_CDP_ADAPTER_URL = 'http://127.0.0.1:<printed-port>'
 $env:SCIFORGE_CUA_CDP_ADAPTER_TOKEN = '<same-random-secret>'
@@ -210,6 +210,13 @@ each target from its PID/HWND/AutomationId on the request thread. It supports
 only control patterns exposed by the target provider: Value, Invoke, Toggle,
 SelectionItem, RangeValue and Scroll. Value-like writes are read back before a
 `verified` result is returned.
+
+Before a target lease is acquired, the backend resolves a provider-owned
+canonical PID/HWND-or-root/runtime identity. Caller-supplied or generated
+`targetId` values cannot create a second lease for the same physical control.
+Every actionable semantic-tree node also carries an opaque `elementToken`
+bound to that target and observation revision. Actions must use that token;
+`automationId` is display/discovery metadata and is not action authority.
 
 This backend never calls `SetFocus`, PyAutoGUI, PostMessage or the host
 clipboard. A third-party UIA provider may nevertheless activate its own window

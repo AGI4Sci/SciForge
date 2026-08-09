@@ -37,7 +37,9 @@ The Python sidecar is the only Session/Request/Lease authority. Electron
 validates the response, rejects generation regression within one
 `serverInstanceId`, writes an atomic display cache, and shows conservative
 offline/stale state on failure. Cached active resources are never used for
-arbitration and are cleared from the current view when the sidecar is offline.
+arbitration. The UI preserves counts, active resources, cleanup-pending entries,
+recent rejections and reaper state as explicitly labeled **last-known values;
+current state unknown**. It never replaces stale evidence with false zeroes.
 
 Check these fields first:
 
@@ -65,6 +67,14 @@ all `SCIFORGE_CUA_REMOTE_WORKER_*` URL, environment identity, CA, client
 certificate and client key values are present. Partial configuration fails
 closed. The repository does not ship that Guest Worker or provision/destroy a
 VM, so fake transport tests must not be reported as a real isolated desktop.
+Remote action cancellation uses a separate control request and does not wait
+for the action response. Connect uses a request/environment/target identity key;
+response loss keeps the environment lease quarantined until `/handles/recover`
+returns the same handle for close or explicitly reports `not-created`.
+
+The MCP wrapper and runtime status client accept only credential-free `http`
+loopback origins (`127.0.0.1`, `localhost`, or `::1`) and reject redirects.
+Bearer tokens and invocation proofs must never be configured for another host.
 
 `queueIfBusy=true` is not implemented and returns `QUEUE_NOT_SUPPORTED`.
 Callers should use an explicit bounded retry policy for `SESSION_BUSY`,
@@ -77,7 +87,7 @@ Default tests do not open a desktop:
 ```powershell
 $pythonExe = "E:\Research\parttime\03_AI\03_shanghai_ailab_bio_prep\.venv-cua\Scripts\python.exe"
 & $pythonExe -m pytest tests -q
-& $pythonExe -m ruff check --select F,E9 cua driver
+& $pythonExe -m ruff check --select F,E9 cua driver tests
 ```
 
 The following opt-in tests create only controlled resources and require explicit
@@ -156,6 +166,11 @@ does not prove preservation of arbitrary non-text clipboard formats.
 Do not enable Legacy real-input smoke, visible Chromium, Office, ordinary
 Chrome, VS Code, RDP, VM, Sandbox or external model calls without separate
 authorization.
+
+`.github/workflows/computer-use-cross-platform.yml` declares Python 3.11
+collection, default tests and Ruff F/E9 on Windows, macOS and Ubuntu (Ubuntu
+uses Xvfb). Opt-in desktop tests are disabled. Until that workflow is pushed,
+macOS/Linux results are pending CI and must not be reported as passed.
 
 ## Git rollback order
 
