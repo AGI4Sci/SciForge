@@ -82,6 +82,15 @@ protein sequence is translated, while DNA/RNA or nucleotide-ambiguous content fa
 
 `--config` is the single configuration entry and accepts the `ModelRouterConfig` shape exported by `src/router.ts`. Full request and response events are written through the shared trace store under `--user-data-dir` (or its launcher-provided user-data environment); the router does not maintain a second summary or per-profile trace directory. Public UI should show only the router alias/profile/role readiness; upstream URLs, API keys, and raw model slugs remain private router configuration.
 
+Full Trace normalization, secret filtering, serialization, capacity scans, and durable writes run
+in an isolated writer worker. `GET /health` is the Router liveness endpoint and remains responsive
+while that worker initializes or drains a backlog. `GET /healthz` is readiness: its
+`traceCapture` field is `starting`, `ready`, `backlogged`, `failed`, or `disabled`, with queue
+counts in `traceCaptureDiagnostics`. When capture is not ready, model endpoints fail closed before
+an upstream call with `full_trace_disabled`, `full_trace_starting`,
+`full_trace_backlogged`, or `full_trace_failed`
+instead of accepting untraced work or blocking the Router event loop.
+
 ## Capability discovery
 
 Authenticated runtimes negotiate the active registered profile through the same router control plane:

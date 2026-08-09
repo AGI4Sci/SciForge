@@ -105,7 +105,7 @@ function normalizeRuntimeOwner(value: unknown): AgentRuntimeId | undefined {
 }
 
 function runtimeOwnerFromThreadDetail(
-  detail: Awaited<ReturnType<AgentProvider['getThreadDetail']>>
+  detail: Awaited<ReturnType<AgentProvider['getRecentThreadView']>>
 ): AgentRuntimeId | undefined {
   return normalizeRuntimeOwner((detail as { runtimeId?: unknown }).runtimeId)
 }
@@ -534,9 +534,9 @@ export function createSideActions(ctx: SideContext): Pick<
           attachedThread?.workspaceLocator
         )
       }
-      let detail: Awaited<ReturnType<AgentProvider['getThreadDetail']>>
+      let detail: Awaited<ReturnType<AgentProvider['getRecentThreadView']>>
       try {
-        detail = await provider.getThreadDetail(threadId)
+        detail = await provider.getRecentThreadView(threadId)
       } catch (e) {
         ctx.set({ error: ctx.formatRuntimeError(e) })
         return null

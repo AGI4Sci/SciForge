@@ -52,7 +52,7 @@ function installSciForge(activeAgentRuntime: AgentRuntimeId): {
   codexListThreads: ReturnType<typeof vi.fn>
   agentRuntimeListThreads: ReturnType<typeof vi.fn>
   agentRuntimeReadThread: ReturnType<typeof vi.fn>
-  agentRuntimeReadThreadSidebarProbe: ReturnType<typeof vi.fn>
+  agentRuntimeReadThreadPage: ReturnType<typeof vi.fn>
   agentRuntimeResolveApproval: ReturnType<typeof vi.fn>
   agentRuntimeResolveUserInput: ReturnType<typeof vi.fn>
   agentRuntimeForkThread: ReturnType<typeof vi.fn>
@@ -90,10 +90,17 @@ function installSciForge(activeAgentRuntime: AgentRuntimeId): {
       }
     ]
   }))
-  const agentRuntimeReadThreadSidebarProbe = vi.fn(async () => ({
+  const agentRuntimeReadThreadPage = vi.fn(async () => ({
     runtimeId: activeAgentRuntime,
     threadId: 'thread-1',
-    text: 'real prompt'
+    latestSeq: 2,
+    turns: [{
+      id: 'turn-1',
+      threadId: 'thread-1',
+      status: 'completed',
+      items: (await agentRuntimeReadThread()).items
+    }],
+    nextCursor: null
   }))
   const agentRuntimeResolveApproval = vi.fn(async () => undefined)
   const agentRuntimeResolveUserInput = vi.fn(async () => undefined)
@@ -120,8 +127,9 @@ function installSciForge(activeAgentRuntime: AgentRuntimeId): {
           runtimeId: activeAgentRuntime,
           transport: transportForRuntime(activeAgentRuntime)
         })),
-        readThread: agentRuntimeReadThread,
-        readThreadSidebarProbe: agentRuntimeReadThreadSidebarProbe,
+        readThreadStatus: agentRuntimeReadThread,
+        readThreadPage: agentRuntimeReadThreadPage,
+        readToolArtifact: vi.fn(async (input) => ({ ...input, content: '' })),
         resolveApproval: agentRuntimeResolveApproval,
         resolveUserInput: agentRuntimeResolveUserInput,
         forkThread: agentRuntimeForkThread,
@@ -140,7 +148,7 @@ function installSciForge(activeAgentRuntime: AgentRuntimeId): {
     codexListThreads,
     agentRuntimeListThreads,
     agentRuntimeReadThread,
-    agentRuntimeReadThreadSidebarProbe,
+    agentRuntimeReadThreadPage,
     agentRuntimeResolveApproval,
     agentRuntimeResolveUserInput,
     agentRuntimeForkThread,
@@ -198,7 +206,7 @@ describe('registry provider selector', () => {
     const provider = getProvider()
     provider.rememberThreadRuntime?.('thread-1', 'codex')
 
-    await provider.getThreadDetail('thread-1')
+    await provider.getRecentThreadView('thread-1')
     await expect(provider.submitApprovalDecision?.('approval-1', 'deny')).resolves.toBeUndefined()
     await expect(provider.submitUserInputResponse?.('input-1', [
       { id: 'choice', label: 'No', value: 'no' }
@@ -221,23 +229,23 @@ describe('registry provider selector', () => {
     expect(forbiddenDirectCall).not.toHaveBeenCalled()
   })
 
-  it('forwards sidebar thread probes through the neutral provider path', async () => {
+  it('forwards lightweight thread status reads through the neutral provider path', async () => {
     const {
       forbiddenDirectCall,
       codexListThreads,
       agentRuntimeReadThread,
-      agentRuntimeReadThreadSidebarProbe
+      agentRuntimeReadThreadPage
     } = installSciForge('codex')
     const provider = getProvider()
     provider.rememberThreadRuntime?.('thread-1', 'codex')
 
-    await expect(provider.getThreadSidebarProbe?.('thread-1')).resolves.toEqual({ text: 'real prompt' })
+    await expect(provider.getThreadStatus('thread-1')).resolves.toMatchObject({ latestSeq: 2 })
 
-    expect(agentRuntimeReadThreadSidebarProbe).toHaveBeenCalledWith({
+    expect(agentRuntimeReadThread).toHaveBeenCalledWith({
       runtimeId: 'codex',
       threadId: 'thread-1'
     })
-    expect(agentRuntimeReadThread).not.toHaveBeenCalled()
+    expect(agentRuntimeReadThreadPage).not.toHaveBeenCalled()
     expect(codexListThreads).not.toHaveBeenCalled()
     expect(forbiddenDirectCall).not.toHaveBeenCalled()
   })

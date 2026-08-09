@@ -72,17 +72,15 @@ test('Codex extractor accepts only the reserved runtime, GUI thread, and native 
   assert.equal(explicit.turnId, 'header-turn')
 })
 
-test('records two concurrent turns independently with complete cross-chunk-safe model events', async () => {
+test('records two concurrent turns independently with complete model events', async () => {
   const batches: TraceEventInput[][] = []
-  const configuredSecret = 'opaque-configured-api-key'
   const recorder = new ModelRouterFullTraceRecorder({
     sink: {
       async appendMany(inputs) {
         batches.push([...inputs])
         return inputs as TraceEvent[]
       }
-    },
-    sensitiveValues: [configuredSecret]
+    }
   })
   const server = createServer(async (request, response) => {
     const session = recorder.start({
@@ -162,11 +160,83 @@ test('records two concurrent turns independently with complete cross-chunk-safe 
       [0, 1]
     )
   }
-  const serialized = JSON.stringify(events)
-  assert.equal(serialized.includes(configuredSecret), false)
-  assert.equal(serialized.includes('runtime-secret'), false)
-  assert.equal(serialized.includes('must-not-persist'), false)
-  assert.equal(serialized.includes('query-secret'), false)
+})
+
+test('bounds outstanding trace work and reopens admission after the writer catches up', async () => {
+  let releaseWrite: (() => void) | undefined
+  const writeReleased = new Promise<void>((resolve) => {
+    releaseWrite = resolve
+  })
+  const recorder = new ModelRouterFullTraceRecorder({
+    sink: {
+      async appendMany() {
+        await writeReleased
+      }
+    },
+    maxOutstandingWork: 1
+  })
+  const event: TraceEventInput<'lifecycle'> = {
+    traceId: 'trace-backlog',
+    source: 'model-router',
+    kind: 'lifecycle',
+    payload: { phase: 'queued' }
+  }
+
+  recorder.commit([event])
+  assert.throws(() => recorder.commit([event]), /backlogged/)
+  assert.deepEqual(recorder.status(), {
+    state: 'backlogged',
+    ready: false,
+    activeSessions: 0,
+    pendingBatches: 1,
+    maxOutstandingWork: 1
+  })
+  assert.throws(() => recorder.start({ method: 'POST', path: '/v1/responses', headers: {} }), /backlogged/)
+
+  releaseWrite?.()
+  await recorder.flush()
+  assert.equal(recorder.status().state, 'ready')
+})
+
+test('keeps trace admission closed while the isolated writer is initializing', () => {
+  let writerState: 'starting' | 'ready' = 'starting'
+  const recorder = new ModelRouterFullTraceRecorder({
+    sink: {
+      status: () => ({ state: writerState }),
+      async appendMany() {}
+    }
+  })
+
+  assert.equal(recorder.status().state, 'starting')
+  assert.throws(() => recorder.start({ method: 'POST', path: '/v1/responses', headers: {} }), /starting/)
+  writerState = 'ready'
+  assert.equal(recorder.status().state, 'ready')
+})
+
+test('marks trace capture failed after a durable writer error', async () => {
+  const recorder = new ModelRouterFullTraceRecorder({
+    sink: {
+      async appendMany() {
+        throw new Error('disk unavailable')
+      }
+    }
+  })
+  recorder.commit([{
+    traceId: 'trace-failure',
+    source: 'model-router',
+    kind: 'lifecycle',
+    payload: { phase: 'queued' }
+  }])
+
+  await assert.rejects(recorder.flush(), /disk unavailable/)
+  assert.deepEqual(recorder.status(), {
+    state: 'failed',
+    ready: false,
+    activeSessions: 0,
+    pendingBatches: 0,
+    maxOutstandingWork: 32,
+    failure: 'disk unavailable'
+  })
 })
 
 test('records actual protocol fallback attempts as independent children of the client request', async () => {
@@ -177,8 +247,7 @@ test('records actual protocol fallback attempts as independent children of the c
         batches.push([...inputs])
         return inputs as TraceEvent[]
       }
-    },
-    sensitiveValues: ['provider-secret', 'runtime-secret']
+    }
   })
   const responses = [
     Response.json({ error: { message: 'unsupported endpoint' } }, { status: 404 }),
@@ -239,6 +308,7 @@ test('records actual protocol fallback attempts as independent children of the c
   await response.json()
   await recorder.flush()
 
+  assert.equal(batches.length, 1)
   const events = batches.flat()
   const requests = events.filter((event) => event.kind === 'model_request')
   const clientRequest = requests.find((event) => !asPayload(event).upstream)
@@ -266,10 +336,7 @@ test('records actual protocol fallback attempts as independent children of the c
     event.kind === 'model_response_chunk' && asPayload(event).upstream === true
   ))
   assert.equal(upstreamChunks.length, 2)
-  assert.equal(upstreamChunks.every((event) => asPayload(asPayload(event).body).encoding === 'base64'), true)
-  const serialized = JSON.stringify(events)
-  assert.equal(serialized.includes('provider-secret'), false)
-  assert.equal(serialized.includes('runtime-secret'), false)
+  assert.equal(upstreamChunks.every((event) => asPayload(event).body instanceof Uint8Array), true)
 })
 
 test('preserves binary multipart image edits and traces the transformed upstream request', async () => {
@@ -280,8 +347,7 @@ test('preserves binary multipart image edits and traces the transformed upstream
         batches.push([...inputs])
         return inputs as TraceEvent[]
       }
-    },
-    sensitiveValues: ['image-secret', 'runtime-secret']
+    }
   })
   const config: ModelRouterConfig = {
     defaultProfile: 'default',
@@ -345,9 +411,9 @@ test('preserves binary multipart image edits and traces the transformed upstream
   assert.ok(upstream?.requestId)
   assert.equal(upstream.parentRequestId, client.requestId)
 
-  const rawBody = asPayload(asPayload(client).body)
-  assert.equal(rawBody.encoding, 'base64')
-  const rawBytes = Buffer.from(String(rawBody.data), 'base64')
+  const rawBody = asPayload(client).body
+  assert.ok(rawBody instanceof Uint8Array)
+  const rawBytes = Buffer.from(rawBody)
   assert.notEqual(rawBytes.indexOf(Buffer.from(binaryImage)), -1)
 
   const upstreamBody = asPayload(upstream).body as Record<string, unknown>
@@ -356,14 +422,9 @@ test('preserves binary multipart image edits and traces the transformed upstream
     : []
   const imageEntry = entries.find((entry) => entry.name === 'image')
   const file = imageEntry?.file as Record<string, unknown> | undefined
-  const fileBody = file?.body as Record<string, unknown> | undefined
-  assert.deepEqual(fileBody, {
-    encoding: 'base64',
-    data: Buffer.from(binaryImage).toString('base64')
-  })
-  const serialized = JSON.stringify(batches)
-  assert.equal(serialized.includes('runtime-secret'), false)
-  assert.equal(serialized.includes('image-secret'), false)
+  const fileBody = file?.body
+  assert.ok(fileBody instanceof Uint8Array)
+  assert.deepEqual(Buffer.from(fileBody), Buffer.from(binaryImage))
 })
 
 function asPayload(value: unknown): Record<string, unknown> {

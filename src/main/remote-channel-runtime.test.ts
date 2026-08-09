@@ -27,9 +27,20 @@ import {
   splitRemoteChannelReplyText
 } from './remote-channel-runtime-helpers'
 import type { RemoteChannelRuntimeDeps, ThreadDetailJson } from './remote-channel-runtime-helpers'
+import type { AgentRuntimeEvent } from '../shared/agent-runtime-contract'
 
 type TestAgentRuntime = NonNullable<RemoteChannelRuntimeDeps['agentRuntime']>
-type TestThreadDetail = ThreadDetailJson & {
+type LegacyThreadDetailJson = ThreadDetailJson & {
+  latestSeq?: number
+  latestTurnId?: string
+}
+type LegacyThreadReader = (
+  input: { runtimeId?: AgentRuntimeId; threadId: string }
+) => Promise<LegacyThreadDetailJson>
+type LegacyTestAgentRuntime = Partial<TestAgentRuntime> & {
+  readThread?: LegacyThreadReader
+}
+type TestThreadDetail = LegacyThreadDetailJson & {
   id: string
   runtimeId: AgentRuntimeId
   title: string
@@ -152,7 +163,7 @@ function completedThreadDetail(
   threadId: string,
   turnId: string,
   text: string,
-  overrides: Partial<ThreadDetailJson> = {}
+  overrides: Partial<LegacyThreadDetailJson> = {}
 ): TestThreadDetail {
   return {
     id: threadId,
@@ -176,7 +187,7 @@ function completedAgentRuntime(options: {
   threadId?: string
   turnId?: string
   text?: string
-  detail?: ThreadDetailJson | ((input: { runtimeId?: string; threadId: string }) => ThreadDetailJson)
+  detail?: LegacyThreadDetailJson | ((input: Parameters<LegacyThreadReader>[0]) => LegacyThreadDetailJson)
   startThread?: (input: Record<string, unknown>) => Promise<{
     id: string
     runtimeId?: AgentRuntimeId
@@ -184,11 +195,12 @@ function completedAgentRuntime(options: {
     updatedAt?: string
   }>
   startTurn?: (input: Record<string, unknown>) => Promise<{ threadId: string; turnId: string }>
-  readThread?: (input: { runtimeId?: string; threadId: string }) => Promise<ThreadDetailJson>
+  readThread?: LegacyThreadReader
+  subscribeEvents?: TestAgentRuntime['subscribeEvents']
 } = {}): TestAgentRuntime & {
   startThread: ReturnType<typeof vi.fn>
   startTurn: ReturnType<typeof vi.fn>
-  readThread: ReturnType<typeof vi.fn>
+  readThread: ReturnType<typeof vi.fn<LegacyThreadReader>>
 } {
   const defaultThreadId = options.threadId ?? 'thr_1'
   const defaultTurnId = options.turnId ?? 'turn_1'
@@ -203,18 +215,20 @@ function completedAgentRuntime(options: {
     threadId: typeof input.threadId === 'string' ? input.threadId : defaultThreadId,
     turnId: defaultTurnId
   })))
-  const readThread = vi.fn(options.readThread ?? (async (input: { runtimeId?: string; threadId: string }) => {
+  const readThread = vi.fn<LegacyThreadReader>(options.readThread ?? (async (input) => {
     if (typeof options.detail === 'function') return options.detail(input)
     return options.detail ?? completedThreadDetail(input.threadId, defaultTurnId, defaultText)
   }))
+  const subscribeEvents = options.subscribeEvents ?? vi.fn(async function* () {})
   return {
     startThread,
     startTurn,
-    readThread
+    readThread,
+    subscribeEvents
   } as unknown as TestAgentRuntime & {
     startThread: ReturnType<typeof vi.fn>
     startTurn: ReturnType<typeof vi.fn>
-    readThread: ReturnType<typeof vi.fn>
+    readThread: ReturnType<typeof vi.fn<LegacyThreadReader>>
   }
 }
 
@@ -225,6 +239,7 @@ function unusedAgentRuntime(): TestAgentRuntime {
   return {
     startThread: vi.fn(fail),
     readThread: vi.fn(fail),
+    subscribeEvents: vi.fn(async function* () {}),
     startTurn: vi.fn(fail),
     listThreads: vi.fn(fail),
     interruptTurn: vi.fn(fail)
@@ -232,12 +247,55 @@ function unusedAgentRuntime(): TestAgentRuntime {
 }
 
 function createRemoteChannelRuntime(
-  deps: Omit<RemoteChannelRuntimeDeps, 'agentRuntime'> & Partial<Pick<RemoteChannelRuntimeDeps, 'agentRuntime'>>
+  deps: Omit<RemoteChannelRuntimeDeps, 'agentRuntime'> & { agentRuntime?: LegacyTestAgentRuntime }
 ): ReturnType<typeof createProductionRemoteChannelRuntime> {
+  const { agentRuntime = unusedAgentRuntime(), ...rest } = deps
   return createProductionRemoteChannelRuntime({
-    agentRuntime: unusedAgentRuntime(),
-    ...deps
+    ...rest,
+    agentRuntime: canonicalTestAgentRuntime(agentRuntime)
   })
+}
+
+function canonicalTestAgentRuntime(runtime: LegacyTestAgentRuntime): TestAgentRuntime {
+  const subscribeEvents = runtime.subscribeEvents ?? vi.fn(async function* () {})
+  if (!runtime.readThread) return { ...runtime, subscribeEvents } as TestAgentRuntime
+  const readThread = runtime.readThread
+  const pendingPages = new Map<string, LegacyThreadDetailJson>()
+  const readKey = (input: { runtimeId?: AgentRuntimeId; threadId: string }): string => (
+    `${input.runtimeId ?? 'codex'}:${input.threadId}`
+  )
+  return {
+    ...runtime,
+    subscribeEvents,
+    readThreadStatus: async (input) => {
+      const detail = await readThread(input)
+      pendingPages.set(readKey(input), detail)
+      const latestTurn = detail.turns?.find((turn) => turn.id === detail.latestTurnId) ?? detail.turns?.at(-1)
+      return {
+        id: detail.id ?? input.threadId,
+        runtimeId: input.runtimeId ?? 'codex',
+        title: detail.thread?.id ?? detail.id ?? input.threadId,
+        updatedAt: new Date(0).toISOString(),
+        latestSeq: detail.latestSeq ?? 0,
+        status: detail.status,
+        latestTurnId: detail.latestTurnId ?? latestTurn?.id,
+        latestTurnStatus: latestTurn?.status
+      }
+    },
+    readThreadPage: async (input) => {
+      const key = readKey(input)
+      const detail = pendingPages.get(key) ?? await readThread(input)
+      pendingPages.delete(key)
+      return {
+        ...detail,
+        runtimeId: input.runtimeId ?? 'codex',
+        threadId: detail.id ?? input.threadId,
+        latestSeq: detail.latestSeq ?? 0,
+        turns: detail.turns ?? [],
+        nextCursor: null
+      } as never
+    }
+  } as TestAgentRuntime
 }
 
 describe('RemoteChannelRuntime', () => {
@@ -607,8 +665,11 @@ describe('RemoteChannelRuntime', () => {
     const agentRuntime = completedAgentRuntime({
       detail: completedThreadDetail('thr_1', 'turn_1', '', {
         thread: { id: 'thr_1', status: 'completed' },
-        turns: [{ id: 'turn_1', status: 'completed' }],
-        items: [{ kind: 'assistant_text', detail: 'hello from remote channel' }]
+        turns: [{
+          id: 'turn_1',
+          status: 'completed',
+          items: [{ kind: 'assistant_text', detail: 'hello from remote channel' }]
+        }]
       })
     })
     const store = {
@@ -909,7 +970,8 @@ describe('RemoteChannelRuntime', () => {
 
     expect(agentRuntime.readThread).toHaveBeenCalledWith({
       runtimeId: 'codex',
-      threadId: 'thread-default-runtime'
+      threadId: 'thread-default-runtime',
+      limit: 20
     })
   })
 
@@ -3913,13 +3975,8 @@ describe('RemoteChannelRuntime', () => {
           turnId: `turn-${turns}`
         }
       }),
-      readThread: vi.fn(async ({ threadId }: { threadId: string }) => ({
-        id: threadId,
-        runtimeId: 'codex' as const,
-        title: 'Phone thread',
-        updatedAt: '2026-06-02T00:00:00.000Z',
-        latestSeq: 2,
-        turns: [
+      readThread: vi.fn(async ({ threadId }: { threadId: string }) => {
+        const visibleTurns = [
           {
             id: 'turn-1',
             threadId,
@@ -3932,12 +3989,16 @@ describe('RemoteChannelRuntime', () => {
             status: 'completed' as const,
             items: [{ id: 'assistant-2', kind: 'assistant_message' as const, text: 'reply to Q2' }]
           }
-        ],
-        items: [
-          { id: 'assistant-1', kind: 'assistant_message' as const, text: 'reply to Q1' },
-          { id: 'assistant-2', kind: 'assistant_message' as const, text: 'reply to Q2' }
-        ]
-      }))
+        ].slice(0, turns)
+        return {
+          id: threadId,
+          runtimeId: 'codex' as const,
+          title: 'Phone thread',
+          updatedAt: '2026-06-02T00:00:00.000Z',
+          latestSeq: visibleTurns.length,
+          turns: visibleTurns
+        }
+      })
     }
     const runtime = createRemoteChannelRuntime({
       store: store as never,
@@ -4550,14 +4611,17 @@ describe('RemoteChannelRuntime', () => {
     const { store } = mutableSettingsStore(settings)
     let getCount = 0
     const forbiddenDirectCall = vi.fn()
+    const subscribeEvents = vi.fn(async function* () {})
     const agentRuntime = completedAgentRuntime({
       threadId: 'thr_weixin',
       turnId: 'turn_weixin',
+      subscribeEvents,
       readThread: async () => {
         getCount += 1
         return getCount === 1
           ? {
               id: 'thr_weixin',
+              latestSeq: 1,
               status: 'running',
               turns: [
                 {
@@ -4577,6 +4641,7 @@ describe('RemoteChannelRuntime', () => {
             }
           : {
               id: 'thr_weixin',
+              latestSeq: 2,
               status: 'idle',
               turns: [
                 {
@@ -4642,6 +4707,12 @@ describe('RemoteChannelRuntime', () => {
     })
     expect(JSON.parse(responseBody).reply).toContain('Remote channel commands:')
     expect(getCount).toBe(2)
+    expect(subscribeEvents).toHaveBeenCalledWith(expect.objectContaining({
+      runtimeId: 'codex',
+      threadId: 'thr_weixin',
+      sinceSeq: 1,
+      signal: expect.any(AbortSignal)
+    }))
     expect(forbiddenDirectCall).not.toHaveBeenCalled()
   })
 
@@ -4730,48 +4801,148 @@ describe('RemoteChannelRuntime', () => {
     expect(forbiddenDirectCall).not.toHaveBeenCalled()
   })
 
-  it('interrupts timed out agent runtime turns so phone duty does not stay running', async () => {
-    const settings = buildSettings()
-    const interruptTurn = vi.fn(async () => undefined)
-    const runtime = createRemoteChannelRuntime({
-      store: { load: vi.fn(async () => settings), patch: vi.fn(async () => settings) } as never,
-      agentRuntime: {
-        readThread: vi.fn(async () => ({
+  it('uses status-only polling while active and reads one page before interrupting a timeout', async () => {
+    vi.useFakeTimers()
+    try {
+      const settings = buildSettings()
+      const readThreadStatus = vi.fn(async () => ({
+        id: 'thread-1',
+        runtimeId: 'codex' as const,
+        title: 'Thread',
+        updatedAt: '2026-06-12T00:00:00.000Z',
+        latestSeq: 18,
+        latestTurnId: 'turn-1',
+        latestTurnStatus: 'running' as const
+      }))
+      const readThreadPage = vi.fn(async () => ({
+        runtimeId: 'codex' as const,
+        threadId: 'thread-1',
+        latestSeq: 18,
+        turns: [{ id: 'turn-1', threadId: 'thread-1', status: 'running' as const, items: [] }],
+        nextCursor: null
+      }))
+      const subscribeEvents = vi.fn(async function* () {})
+      const interruptTurn = vi.fn(async () => undefined)
+      const runtime = createRemoteChannelRuntime({
+        store: { load: vi.fn(async () => settings), patch: vi.fn(async () => settings) } as never,
+        agentRuntime: { readThreadStatus, readThreadPage, subscribeEvents, interruptTurn },
+        logError: () => undefined
+      })
+
+      const result = (runtime as unknown as {
+        waitForAgentRuntimeAssistantResult: (
+          threadId: string,
+          turnId: string,
+          timeoutMs: number,
+          workspaceRoot: string,
+          runtimeId: 'codex',
+          sinceSeq: number
+        ) => Promise<unknown>
+      }).waitForAgentRuntimeAssistantResult(
+        'thread-1',
+        'turn-1',
+        3_000,
+        '/tmp/workspace',
+        'codex',
+        17
+      )
+      const rejection = expect(result).rejects.toThrow('Timed out waiting for agent response.')
+
+      await vi.advanceTimersByTimeAsync(1_500)
+      expect(readThreadStatus).toHaveBeenCalledOnce()
+      expect(readThreadPage).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1_500)
+      await rejection
+
+      expect(readThreadStatus).toHaveBeenCalledTimes(2)
+      expect(readThreadPage).toHaveBeenCalledOnce()
+      expect(subscribeEvents).toHaveBeenCalledWith(expect.objectContaining({
+        runtimeId: 'codex',
+        threadId: 'thread-1',
+        sinceSeq: 17,
+        signal: expect.any(AbortSignal)
+      }))
+      expect(interruptTurn).toHaveBeenCalledWith({
+        runtimeId: 'codex',
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        discard: true
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reads exactly one page when a status-only wait reaches terminal completion', async () => {
+    vi.useFakeTimers()
+    try {
+      const settings = buildSettings()
+      const readThreadStatus = vi.fn()
+        .mockResolvedValueOnce({
           id: 'thread-1',
           runtimeId: 'codex' as const,
           title: 'Thread',
           updatedAt: '2026-06-12T00:00:00.000Z',
-          latestSeq: 1,
-          turns: [{ id: 'turn-1', threadId: 'thread-1', status: 'running' as const, items: [] }],
-          items: []
-        })),
-        interruptTurn
-      } as never,
-      logError: () => undefined
-    })
+          latestSeq: 18,
+          latestTurnId: 'turn-1',
+          latestTurnStatus: 'running' as const
+        })
+        .mockResolvedValueOnce({
+          id: 'thread-1',
+          runtimeId: 'codex' as const,
+          title: 'Thread',
+          updatedAt: '2026-06-12T00:00:01.000Z',
+          latestSeq: 19,
+          latestTurnId: 'turn-1',
+          latestTurnStatus: 'completed' as const
+        })
+      const readThreadPage = vi.fn(async () => ({
+        runtimeId: 'codex' as const,
+        threadId: 'thread-1',
+        latestSeq: 19,
+        turns: [{
+          id: 'turn-1',
+          threadId: 'thread-1',
+          status: 'completed' as const,
+          items: [{ id: 'assistant-1', kind: 'assistant_message' as const, text: 'terminal reply' }]
+        }],
+        nextCursor: null
+      }))
+      const subscribeEvents = vi.fn(async function* () {})
+      const runtime = createRemoteChannelRuntime({
+        store: { load: vi.fn(async () => settings), patch: vi.fn(async () => settings) } as never,
+        agentRuntime: { readThreadStatus, readThreadPage, subscribeEvents },
+        logError: () => undefined
+      })
 
-    await expect((runtime as unknown as {
-      waitForAgentRuntimeAssistantResult: (
-        threadId: string,
-        turnId: string,
-        timeoutMs: number,
-        workspaceRoot: string,
-        runtimeId: 'codex'
-      ) => Promise<unknown>
-    }).waitForAgentRuntimeAssistantResult(
-      'thread-1',
-      'turn-1',
-      0,
-      '/tmp/workspace',
-      'codex'
-    )).rejects.toThrow('Timed out waiting for agent response.')
+      const result = (runtime as unknown as {
+        waitForAgentRuntimeAssistantResult: (
+          threadId: string,
+          turnId: string,
+          timeoutMs: number,
+          workspaceRoot: string,
+          runtimeId: 'codex',
+          sinceSeq: number
+        ) => Promise<{ text: string }>
+      }).waitForAgentRuntimeAssistantResult(
+        'thread-1',
+        'turn-1',
+        30_000,
+        '/tmp/workspace',
+        'codex',
+        17
+      )
 
-    expect(interruptTurn).toHaveBeenCalledWith({
-      runtimeId: 'codex',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      discard: true
-    })
+      await vi.advanceTimersByTimeAsync(1_500)
+      expect(readThreadPage).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1_500)
+
+      await expect(result).resolves.toMatchObject({ text: 'terminal reply' })
+      expect(readThreadStatus).toHaveBeenCalledTimes(2)
+      expect(readThreadPage).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('returns waiting desktop approval when an agent runtime turn is blocked on approval', async () => {
@@ -4788,6 +4959,16 @@ describe('RemoteChannelRuntime', () => {
         threadId: 'thread-approval',
         turnId: 'turn-approval'
       })),
+      subscribeEvents: vi.fn(async function* () {
+        yield {
+          kind: 'approval_requested',
+          runtimeId: 'codex',
+          threadId: 'thread-approval',
+          turnId: 'turn-approval',
+          approvalId: 'approval-1',
+          summary: 'Command approval requested'
+        } satisfies AgentRuntimeEvent
+      }),
       readThread: vi.fn(async () => ({
         id: 'thread-approval',
         runtimeId: 'codex' as const,
@@ -4843,9 +5024,75 @@ describe('RemoteChannelRuntime', () => {
 
     expect(result).toMatchObject({
       ok: false,
-      message: 'Waiting for desktop approval before the remote channel can continue.',
+      message: 'Waiting for desktop approval or input before the remote channel can continue.',
       failureKind: 'waiting_desktop_approval'
     })
+  })
+
+  it('returns waiting desktop approval when the current turn requests user input', async () => {
+    vi.useFakeTimers()
+    try {
+      const settings = buildSettings()
+      const readThreadStatus = vi.fn(async () => ({
+        id: 'thread-input',
+        runtimeId: 'codex' as const,
+        title: 'Thread',
+        updatedAt: '2026-06-12T00:00:00.000Z',
+        latestSeq: 2,
+        latestTurnId: 'turn-input',
+        latestTurnStatus: 'running' as const
+      }))
+      const readThreadPage = vi.fn(async () => ({
+        runtimeId: 'codex' as const,
+        threadId: 'thread-input',
+        latestSeq: 2,
+        turns: [],
+        nextCursor: null
+      }))
+      const subscribeEvents = vi.fn(async function* () {
+        yield {
+          kind: 'user_input_requested',
+          runtimeId: 'codex',
+          threadId: 'thread-input',
+          turnId: 'turn-input',
+          requestId: 'input-1',
+          questions: [{ id: 'choice', header: 'Continue', question: 'Continue?', options: [] }]
+        } satisfies AgentRuntimeEvent
+      })
+      const runtime = createRemoteChannelRuntime({
+        store: { load: vi.fn(async () => settings), patch: vi.fn(async () => settings) } as never,
+        agentRuntime: { readThreadStatus, readThreadPage, subscribeEvents },
+        logError: () => undefined
+      })
+
+      const result = (runtime as unknown as {
+        waitForAgentRuntimeAssistantResult: (
+          threadId: string,
+          turnId: string,
+          timeoutMs: number,
+          workspaceRoot: string,
+          runtimeId: 'codex',
+          sinceSeq: number
+        ) => Promise<unknown>
+      }).waitForAgentRuntimeAssistantResult(
+        'thread-input',
+        'turn-input',
+        30_000,
+        '/tmp/workspace',
+        'codex',
+        1
+      )
+      const rejection = expect(result).rejects.toThrow(
+        'Waiting for desktop approval or input before the remote channel can continue.'
+      )
+      await vi.advanceTimersByTimeAsync(1_500)
+
+      await rejection
+      expect(readThreadStatus).not.toHaveBeenCalled()
+      expect(readThreadPage).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('does not return historical WeChat text when the current turn fails', async () => {

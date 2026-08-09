@@ -32,9 +32,18 @@ import {
   type CodexAppServerJsonRpcClientOptions,
   type CodexAppServerPendingRequest
 } from './app-server/index.js'
+import {
+  RuntimeEventStore,
+  type StoredRuntimeEvent,
+  type StoredThreadEventSummary
+} from './runtime-event-store.js'
+import {
+  boundRuntimeEventPayload,
+  boundRuntimeToolItem,
+  decodeRuntimeToolArtifactRef
+} from './runtime-payload-boundary.js'
 
 const REMOTE_CODEX_RUNTIME_VERSION = '1.0.0'
-const MAX_STORED_EVENTS_PER_THREAD = 10_000
 const MAX_PERSISTED_THREAD_BINDINGS = 10_000
 const THREAD_BINDING_STATE_SCHEMA_VERSION = 1
 const SCIFORGE_MODEL_PROVIDER_ID = 'sciforge-model-router'
@@ -104,16 +113,7 @@ export type CodexWorkspaceHostRuntimeOptions = Readonly<{
   now?: () => Date
 }>
 
-type RuntimeEvent = {
-  kind: string
-  runtimeId: 'codex'
-  threadId: string
-  turnId?: string
-  itemId?: string
-  seq: number
-  createdAt: string
-  [key: string]: WorkspaceHostPayload | undefined
-}
+type RuntimeEvent = StoredRuntimeEvent
 
 type RuntimeStream = {
   streamId: string
@@ -145,8 +145,8 @@ export class CodexWorkspaceHostRuntime {
   readonly #baseEnvironment: NodeJS.ProcessEnv
   readonly #stateFile: string
   readonly #codexHome: string
+  readonly #eventStore: RuntimeEventStore
   readonly #now: () => Date
-  readonly #events = new Map<string, RuntimeEvent[]>()
   readonly #streams = new Map<string, RuntimeStream>()
   readonly #threads = new Map<string, ThreadBinding>()
   readonly #codexToGuiThread = new Map<string, string>()
@@ -171,11 +171,13 @@ export class CodexWorkspaceHostRuntime {
   private constructor(
     options: CodexWorkspaceHostRuntimeOptions,
     workspaceRoot: string,
-    stateDirectory: string
+    stateDirectory: string,
+    eventStore: RuntimeEventStore
   ) {
     this.#workspaceRoot = workspaceRoot
     this.#stateFile = join(stateDirectory, 'thread-bindings.json')
     this.#codexHome = join(stateDirectory, 'codex-home')
+    this.#eventStore = eventStore
     this.#createClient = options.createClient ?? createCodexAppServerClient
     this.#clientOptions = {
       cwd: workspaceRoot,
@@ -245,10 +247,12 @@ export class CodexWorkspaceHostRuntime {
     }
     await mkdir(requestedStateDirectory, { recursive: true, mode: 0o700 })
     const stateDirectory = await realpath(requestedStateDirectory)
+    const eventStore = await RuntimeEventStore.create(stateDirectory)
     const runtime = new CodexWorkspaceHostRuntime(
       options,
       workspaceRoot,
-      stateDirectory
+      stateDirectory,
+      eventStore
     )
     await runtime.#loadThreadBindings()
     return runtime
@@ -265,6 +269,7 @@ export class CodexWorkspaceHostRuntime {
       throw new Error(`Remote runtime ${payload.runtimeId} is unavailable.`)
     }
     const result = await this.#invokeMethod(payload)
+    await this.#eventStore.flush()
     return asPayload({
       contractVersion: WORKSPACE_HOST_PROTOCOL_VERSION,
       runtimeId: 'codex',
@@ -283,9 +288,8 @@ export class CodexWorkspaceHostRuntime {
     if (payload.runtimeId !== 'codex') {
       throw new Error(`Remote runtime ${payload.runtimeId} is unavailable.`)
     }
-    const events = (this.#events.get(payload.threadId) ?? [])
-      .filter((event) => event.seq > payload.sinceSeq)
-      .map((event) => asPayload(event))
+    const events = (await this.#eventStore.readSince(payload.threadId, payload.sinceSeq))
+      .map((event) => boundRuntimeEventPayload(payload.threadId, asPayload(event)))
     return { events }
   }
 
@@ -303,6 +307,7 @@ export class CodexWorkspaceHostRuntime {
       await client.stop().catch(() => undefined)
     }
     await this.#eventPump?.catch(() => undefined)
+    await this.#eventStore.flush()
     await this.#stateWriteTail.catch(() => undefined)
   }
 
@@ -323,9 +328,12 @@ export class CodexWorkspaceHostRuntime {
         return this.#listThreads(input)
       case 'startThread':
         return this.#startThread(input)
-      case 'readThread':
-      case 'readThreadSidebarProbe':
-        return this.#readThread(input, payload.method)
+      case 'readThreadStatus':
+        return this.#readThreadStatus(input)
+      case 'readThreadPage':
+        return this.#readThreadPage(input)
+      case 'readToolArtifact':
+        return this.#readToolArtifact(input)
       case 'startTurn':
         return this.#startTurn(input)
       case 'interruptTurn':
@@ -420,13 +428,20 @@ export class CodexWorkspaceHostRuntime {
 
   async #listThreads(input: Record<string, unknown>): Promise<WorkspaceHostPayload> {
     const client = await this.#ensureConnected()
-    const response = await client.listThreads({
-      limit: numberValue(input.limit) ?? 100,
-      ...(stringValue(input.search) ? { search: stringValue(input.search) } : {}),
-      ...(input.includeArchived === true ? { includeArchived: true } : {}),
-      ...(input.archivedOnly === true ? { archivedOnly: true } : {})
+    const [response, summaries] = await Promise.all([
+      client.listThreads({
+        limit: numberValue(input.limit) ?? 100,
+        ...(stringValue(input.search) ? { search: stringValue(input.search) } : {}),
+        ...(input.includeArchived === true ? { includeArchived: true } : {}),
+        ...(input.archivedOnly === true ? { archivedOnly: true } : {})
+      }),
+      this.#eventStore.summaries()
+    ])
+    const byThreadId = new Map(summaries.map((summary) => [summary.threadId, summary]))
+    return threadList(response).map((thread) => {
+      const mapped = this.#mapThread(thread)
+      return withEventSummary(mapped, byThreadId.get(stringValue(record(mapped).id)))
     })
-    return threadList(response).map((thread) => this.#mapThread(thread))
   }
 
   async #startThread(input: Record<string, unknown>): Promise<WorkspaceHostPayload> {
@@ -465,33 +480,90 @@ export class CodexWorkspaceHostRuntime {
     return thread
   }
 
-  async #readThread(
-    input: Record<string, unknown>,
-    method: 'readThread' | 'readThreadSidebarProbe'
-  ): Promise<WorkspaceHostPayload> {
-    const guiThreadId = requiredString(input.threadId, `${method}.threadId`)
+  async #readThreadStatus(input: Record<string, unknown>): Promise<WorkspaceHostPayload> {
+    const guiThreadId = requiredString(input.threadId, 'readThreadStatus.threadId')
     const client = await this.#ensureConnected()
     const binding = this.#threads.get(guiThreadId)
     const response = await client.readThread({
       threadId: binding?.codexThreadId ?? guiThreadId,
-      includeTurns: true
+      includeTurns: false
     })
     const rawThread = threadFromResponse(response)
-    if (method === 'readThreadSidebarProbe') {
-      return {
-        runtimeId: 'codex',
-        threadId: guiThreadId,
-        text: firstUserText(rawThread)
-      }
-    }
     const thread = this.#mapThread(rawThread, binding)
-    const events = this.#events.get(guiThreadId) ?? []
+    const threadRecord = record(thread)
+    const summary = await this.#eventStore.summary(guiThreadId)
+    const latestTurnId = summary?.latestTurnId || stringValue(threadRecord.latestTurnId)
+    const latestTurnStatus = summary?.latestTurnStatus || stringValue(threadRecord.latestTurnStatus)
     return {
-      ...record(thread),
-      latestSeq: events.at(-1)?.seq ?? 0,
-      turns: mapTurns(rawThread),
-      items: events.flatMap(eventToItem)
+      id: stringValue(threadRecord.id) || guiThreadId,
+      runtimeId: 'codex',
+      latestSeq: summary?.latestSeq ?? 0,
+      ...(latestTurnId ? { latestTurnId } : {}),
+      ...(latestTurnStatus ? { latestTurnStatus, status: latestTurnStatus } : {})
     }
+  }
+
+  async #readThreadPage(input: Record<string, unknown>): Promise<WorkspaceHostPayload> {
+    const guiThreadId = requiredString(input.threadId, 'readThreadPage.threadId')
+    const limit = Math.min(100, Math.max(1, Math.floor(numberValue(input.limit) || 20)))
+    const page = await this.#eventStore.readPage(
+      guiThreadId,
+      stringValue(input.cursor),
+      limit
+    )
+    const events = page.events
+    const turnIds: string[] = []
+    const seenTurnIds = new Set<string>()
+    for (const event of events) {
+      const turnId = eventTurnId(event)
+      if (!turnId || seenTurnIds.has(turnId)) continue
+      seenTurnIds.add(turnId)
+      turnIds.push(turnId)
+    }
+    const selectedTurnIds = turnIds
+    const selected = new Set(selectedTurnIds)
+    const eventsByTurn = new Map(
+      selectedTurnIds.map((turnId) => [turnId, [] as RuntimeEvent[]])
+    )
+    for (const event of events) {
+      const turnId = eventTurnId(event)
+      if (!selected.has(turnId)) continue
+      eventsByTurn.get(turnId)?.push(event)
+    }
+    const turns = selectedTurnIds.map((turnId) => {
+      const turnEvents = eventsByTurn.get(turnId) ?? []
+      return {
+        id: turnId,
+        threadId: guiThreadId,
+        status: turnStatusFromEvents(turnEvents),
+        items: itemsFromTurnEvents(turnEvents).map((item) =>
+          boundRuntimeToolItem(guiThreadId, item)
+        )
+      }
+    })
+    const summary = await this.#eventStore.summary(guiThreadId)
+    return {
+      runtimeId: 'codex',
+      threadId: guiThreadId,
+      latestSeq: summary?.latestSeq ?? 0,
+      turns,
+      nextCursor: page.nextCursor
+    }
+  }
+
+  async #readToolArtifact(input: Record<string, unknown>): Promise<WorkspaceHostPayload> {
+    const guiThreadId = requiredString(input.threadId, 'readToolArtifact.threadId')
+    const ref = requiredString(input.ref, 'readToolArtifact.ref')
+    const itemId = decodeRuntimeToolArtifactRef(ref)
+    const content = await this.#eventStore.readLatestToolArtifact(guiThreadId, itemId)
+    if (content !== undefined) return {
+      runtimeId: 'codex',
+      threadId: guiThreadId,
+      ref,
+      size: Buffer.byteLength(content, 'utf8'),
+      content
+    }
+    throw new Error('Tool artifact was not found.')
   }
 
   async #startTurn(input: Record<string, unknown>): Promise<WorkspaceHostPayload> {
@@ -591,7 +663,7 @@ export class CodexWorkspaceHostRuntime {
     if (binding) this.#codexToGuiThread.delete(binding.codexThreadId)
     this.#threads.delete(guiThreadId)
     await this.#persistThreadBindings()
-    this.#events.delete(guiThreadId)
+    await this.#eventStore.delete(guiThreadId)
     for (const [streamId, stream] of this.#streams) {
       if (stream.threadId === guiThreadId) this.#streams.delete(streamId)
     }
@@ -778,19 +850,7 @@ export class CodexWorkspaceHostRuntime {
     threadId: string,
     input: Record<string, unknown>
   ): RuntimeEvent {
-    const existing = this.#events.get(threadId) ?? []
-    const event = asPayload({
-      ...input,
-      runtimeId: 'codex',
-      threadId,
-      seq: (existing.at(-1)?.seq ?? 0) + 1,
-      createdAt: stringValue(input.createdAt) || this.#now().toISOString()
-    }) as RuntimeEvent
-    existing.push(event)
-    if (existing.length > MAX_STORED_EVENTS_PER_THREAD) {
-      existing.splice(0, existing.length - MAX_STORED_EVENTS_PER_THREAD)
-    }
-    this.#events.set(threadId, existing)
+    const event = this.#eventStore.append(threadId, input, this.#now().toISOString())
     for (const stream of this.#streams.values()) {
       if (stream.threadId !== threadId) continue
       this.#publishEvent?.(WORKSPACE_HOST_EVENT_KINDS.runtimeEvent, {
@@ -798,7 +858,7 @@ export class CodexWorkspaceHostRuntime {
         runtimeId: 'codex',
         threadId,
         streamId: stream.streamId,
-        event: asPayload(event)
+        event: boundRuntimeEventPayload(threadId, asPayload(event))
       })
     }
     return event
@@ -1434,6 +1494,7 @@ function mapCodexNotification(
       }]
     }
     if (type === 'commandExecution' || type === 'fileChange') {
+      const detail = remoteToolDetail(item, type)
       return [{
         ...common,
         kind: 'item_snapshot',
@@ -1445,6 +1506,7 @@ function mapCodexNotification(
           status: method === 'item/completed' ? 'completed' : 'running',
           toolKind: type === 'fileChange' ? 'file_change' : 'command_execution',
           meta: { source: 'codex-app-server' },
+          ...(detail ? { detail } : {}),
           createdAt: now().toISOString()
         }
       }]
@@ -1504,17 +1566,23 @@ function latestTurnStatus(thread: Record<string, unknown>): string {
   return stringValue(turns.at(-1)?.status)
 }
 
-function mapTurns(thread: Record<string, unknown>): WorkspaceHostPayload[] {
-  return arrayValue(thread.turns).map((value) => {
-    const turn = record(value)
-    return {
-      id: stringValue(turn.id) || randomUUID(),
-      threadId: stringValue(thread.id),
-      status: stringValue(turn.status) || 'completed',
-      ...(dateValue(turn.startedAt) ? { startedAt: dateValue(turn.startedAt) } : {}),
-      ...(dateValue(turn.completedAt) ? { completedAt: dateValue(turn.completedAt) } : {})
-    }
-  })
+function withEventSummary(
+  thread: WorkspaceHostPayload | Record<string, unknown>,
+  summary: StoredThreadEventSummary | undefined
+): WorkspaceHostPayload {
+  const value = record(thread)
+  const latestTurnId = summary?.latestTurnId || stringValue(value.latestTurnId)
+  const latestTurnStatus = summary?.latestTurnStatus || stringValue(value.latestTurnStatus)
+  return {
+    ...value,
+    latestSeq: summary?.latestSeq ?? 0,
+    ...(latestTurnId ? { latestTurnId } : {}),
+    ...(latestTurnStatus
+      ? { latestTurnStatus, status: latestTurnStatus }
+      : {}),
+    ...(summary ? { hasUserMessage: summary.hasUserMessage } : {}),
+    ...(summary?.updatedAt ? { updatedAt: summary.updatedAt } : {})
+  }
 }
 
 function eventToItem(event: RuntimeEvent): WorkspaceHostPayload[] {
@@ -1533,17 +1601,47 @@ function eventToItem(event: RuntimeEvent): WorkspaceHostPayload[] {
   return []
 }
 
-function firstUserText(thread: Record<string, unknown>): string | null {
-  for (const turnValue of arrayValue(thread.turns)) {
-    const turn = record(turnValue)
-    for (const itemValue of arrayValue(turn.items)) {
-      const item = record(itemValue)
-      if (stringValue(item.type) !== 'userMessage') continue
-      const text = itemText(item)
-      if (text) return text
+function itemsFromTurnEvents(events: RuntimeEvent[]): WorkspaceHostPayload[] {
+  const items: WorkspaceHostPayload[] = []
+  const itemIndexes = new Map<string, number>()
+  for (const event of events) {
+    for (const item of eventToItem(event)) {
+      const itemId = stringValue(record(item).id)
+      const existingIndex = itemId ? itemIndexes.get(itemId) : undefined
+      if (existingIndex === undefined) {
+        if (itemId) itemIndexes.set(itemId, items.length)
+        items.push(item)
+        continue
+      }
+      items[existingIndex] = asPayload({
+        ...record(items[existingIndex]),
+        ...record(item)
+      })
     }
   }
-  return null
+  return items
+}
+
+function turnStatusFromEvents(events: RuntimeEvent[]): string {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!
+    if (event.kind !== 'turn_lifecycle') continue
+    const state = stringValue(event.state)
+    if (state === 'completed' || state === 'success') return 'completed'
+    if (state === 'failed' || state === 'error') return 'failed'
+    if (
+      state === 'aborted' ||
+      state === 'cancelled' ||
+      state === 'canceled' ||
+      state === 'interrupted'
+    ) return 'aborted'
+    if (state === 'started' || state === 'running' || state === 'in_progress') return 'running'
+  }
+  return events.length > 0 ? 'running' : 'queued'
+}
+
+function eventTurnId(event: RuntimeEvent): string {
+  return stringValue(event.turnId) || stringValue(record(event.item).turnId)
 }
 
 function itemText(item: Record<string, unknown>): string {
@@ -1554,6 +1652,26 @@ function itemText(item: Record<string, unknown>): string {
     .map((part) => stringValue(part.text))
     .filter(Boolean)
     .join('')
+}
+
+function remoteToolDetail(
+  item: Record<string, unknown>,
+  type: 'commandExecution' | 'fileChange'
+): string {
+  if (type === 'commandExecution') {
+    const output = stringValue(item.aggregatedOutput)
+    if (output) return output
+    const command = stringValue(item.command)
+    if (command) return command
+    return arrayValue(item.command)
+      .filter((part): part is string => typeof part === 'string')
+      .join(' ')
+  }
+  try {
+    return JSON.stringify(item.changes ?? [], null, 2)
+  } catch {
+    return ''
+  }
 }
 
 function deltaText(params: Record<string, unknown>): string {

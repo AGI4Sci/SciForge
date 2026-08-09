@@ -73,6 +73,7 @@ type CapabilityIpcSender = {
   id: number
   send: (channel: string, ...args: unknown[]) => void
   once: (event: 'destroyed', listener: () => void) => unknown
+  removeListener: (event: 'destroyed', listener: () => void) => unknown
   isDestroyed: () => boolean
 }
 type CapabilityIpcEvent = { sender: CapabilityIpcSender }
@@ -122,7 +123,7 @@ function parse<T>(schema: z.ZodType<T>, payload: unknown): T {
 export function registerCapabilityIpc(options: RegisterCapabilityIpcOptions): CapabilityIpcRegistration {
   const ipc = options.ipc ?? ipcMain
   const subscriptions = new Map<string, Subscription>()
-  const watchedCallerIds = new Set<number>()
+  const watchedCallers = new Map<number, { sender: CapabilityIpcSender; listener: () => void }>()
   const invokeHandlers = new Map<string, CapabilityIpcHandler>()
   const channels = Object.values(CAPABILITY_IPC_CHANNELS).filter((channel) => channel !== CAPABILITY_IPC_CHANNELS.event)
 
@@ -136,12 +137,18 @@ export function registerCapabilityIpc(options: RegisterCapabilityIpcOptions): Ca
   }
 
   const watchCaller = (sender: CapabilityIpcSender): void => {
-    if (watchedCallerIds.has(sender.id)) return
-    watchedCallerIds.add(sender.id)
-    sender.once('destroyed', () => {
-      watchedCallerIds.delete(sender.id)
+    if (watchedCallers.has(sender.id)) return
+    const listener = () => {
+      watchedCallers.delete(sender.id)
+      for (const [subscriptionId, subscription] of subscriptions) {
+        if (subscription.sender.id !== sender.id) continue
+        subscription.dispose()
+        subscriptions.delete(subscriptionId)
+      }
       options.onCallerDestroyed?.(`window:${sender.id}`)
-    })
+    }
+    watchedCallers.set(sender.id, { sender, listener })
+    sender.once('destroyed', listener)
   }
 
   handle(CAPABILITY_IPC_CHANNELS.discover, (event, payload) => {
@@ -224,12 +231,6 @@ export function registerCapabilityIpc(options: RegisterCapabilityIpcOptions): Ca
       })
     })
     subscriptions.set(subscriptionId, { sender, dispose })
-    sender.once('destroyed', () => {
-      const subscription = subscriptions.get(subscriptionId)
-      if (!subscription) return
-      subscription.dispose()
-      subscriptions.delete(subscriptionId)
-    })
     return { subscriptionId }
   })
   handle(CAPABILITY_IPC_CHANNELS.unsubscribe, (event, payload) => {
@@ -270,7 +271,10 @@ export function registerCapabilityIpc(options: RegisterCapabilityIpcOptions): Ca
       for (const channel of channels) ipc.removeHandler(channel)
       for (const subscription of subscriptions.values()) subscription.dispose()
       subscriptions.clear()
-      watchedCallerIds.clear()
+      for (const watched of watchedCallers.values()) {
+        watched.sender.removeListener('destroyed', watched.listener)
+      }
+      watchedCallers.clear()
       invokeHandlers.clear()
     }
   }

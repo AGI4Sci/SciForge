@@ -121,8 +121,7 @@ describe('createClaudeCodeAgentRuntimeAdapter', () => {
         agentCapabilities: {
           subagents: {
             enabled: false,
-            maxParallel: 2,
-            maxChildRuns: 4
+            maxParallel: 2
           }
         }
       }
@@ -132,8 +131,7 @@ describe('createClaudeCodeAgentRuntimeAdapter', () => {
       tools: {
         subagents: {
           available: false,
-          maxParallel: 2,
-          maxChildren: 4
+          maxParallel: 2
         }
       }
     })
@@ -143,9 +141,7 @@ describe('createClaudeCodeAgentRuntimeAdapter', () => {
       capabilities: {
         subagents: {
           available: false,
-          maxParallel: 2,
-          maxChildren: 4,
-          maxChildRuns: 4
+          maxParallel: 2
         }
       }
     })

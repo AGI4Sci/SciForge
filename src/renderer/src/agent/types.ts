@@ -30,6 +30,7 @@ import type {
   AgentRuntimeThreadGuiPlan,
   AgentRuntimeThreadRelation,
   AgentRuntimeThreadSidebarVisibility,
+  AgentRuntimeToolArtifactRef,
   AgentRuntimeTurnStatus,
   AgentRuntimeWorkspaceReference,
   AgentRuntimeWorkspaceReferencePreview,
@@ -168,6 +169,7 @@ export type NormalizedThread = {
   goal?: ThreadGoal | null
   todos?: ThreadTodoList | null
   guiPlan?: AgentRuntimeThreadGuiPlan | null
+  hasUserMessage?: boolean
 }
 
 export type ThreadGoalStatus =
@@ -246,6 +248,7 @@ export type ToolBlock = {
   toolKind?: ToolItemKind
   /** Full text content from runtime: stdout/stderr or unified patch text */
   detail?: string
+  detailArtifact?: AgentRuntimeToolArtifactRef
   /** Resolved file path for file_change items, when known */
   filePath?: string
   /** Optional structured metadata, e.g. { exit_code, duration_ms, command } */
@@ -365,6 +368,7 @@ export type ToolEventPayload = {
   status: 'running' | 'success' | 'error'
   toolKind?: ToolItemKind
   detail?: string
+  detailArtifact?: AgentRuntimeToolArtifactRef
   filePath?: string
   meta?: Record<string, unknown>
 }
@@ -563,21 +567,36 @@ export interface AgentProvider {
   connect(): Promise<void>
   listThreads(options?: ThreadListOptions): Promise<NormalizedThread[]>
   createThread(input: ThreadCreateInput): Promise<NormalizedThread>
-  getThreadDetail(threadId: string): Promise<{
+  getRecentThreadView(threadId: string): Promise<{
     runtimeId?: AgentRuntimeId
     workspaceLocator?: WorkspaceLocator
     blocks: ChatBlock[]
     latestSeq: number
     threadStatus?: string
     latestTurnId?: string
+    latestTurnStatus?: string
     latestUserMessageId?: string
     turnDurationByUserId?: Record<string, number>
     usage?: ThreadUsageSnapshot
     goal?: ThreadGoal | null
     todos?: ThreadTodoList | null
     guiPlan?: AgentRuntimeThreadGuiPlan | null
+    nextCursor?: string | null
   }>
-  getThreadSidebarProbe?(threadId: string): Promise<{ text: string | null }>
+  getThreadStatus(threadId: string): Promise<{
+    runtimeId?: AgentRuntimeId
+    latestSeq: number
+    threadStatus?: string
+    latestTurnId?: string
+    latestTurnStatus?: string
+    usage?: ThreadUsageSnapshot
+  }>
+  getThreadPage(threadId: string, cursor?: string): Promise<{
+    blocks: ChatBlock[]
+    latestSeq: number
+    nextCursor: string | null
+  }>
+  readToolArtifact(ref: AgentRuntimeToolArtifactRef): Promise<string>
   sendUserMessage(
     threadId: string,
     text: string,

@@ -9,7 +9,7 @@ test('runtime persists queued/running/completed records through an injected exec
   const events: MultiAgentChildEvent[] = []
   const usageRecords: unknown[] = []
   const runtime = new MultiAgentRuntime({
-    config: { maxParallel: 1, maxChildren: 2 },
+    config: { maxParallel: 1 },
     store,
     idGenerator: () => 'child-1',
     nowIso: clock(),
@@ -61,7 +61,7 @@ test('runtime persists queued/running/completed records through an injected exec
   assert.deepEqual(record.usage, { promptTokens: 2, completionTokens: 3, totalTokens: 5 })
   assert.deepEqual(record.transcript.map((entry) => entry.id), ['child-1-prompt', 'tool-1', 'assistant-1'])
   assert.equal(record.threadRef?.threadId, 'child-thread-1')
-  assert.deepEqual(events.map((event) => event.status), ['queued', 'running', 'running', 'completed'])
+  assert.deepEqual(events.map((event) => event.status), ['queued', 'running', 'completed'])
   assert.equal(usageRecords.length, 1)
 
   const diagnostics = await runtime.diagnostics('thread-1')
@@ -272,7 +272,7 @@ test('runtime enforces maxParallel while a child run is active', async () => {
   const release = deferred<MultiAgentExecutorResult>()
   const store = new InMemoryMultiAgentStore()
   const runtime = new MultiAgentRuntime({
-    config: { maxParallel: 1, maxChildren: 1 },
+    config: { maxParallel: 1 },
     store,
     idGenerator: sequenceIds('child'),
     executor: async () => {
@@ -306,78 +306,10 @@ test('runtime enforces maxParallel while a child run is active', async () => {
   await first
 })
 
-test('runtime reports the non-resetting turn budget before the temporary parallel budget', async () => {
-  const entered = deferred<void>()
-  const release = deferred<MultiAgentExecutorResult>()
-  const runtime = new MultiAgentRuntime({
-    config: { maxParallel: 1, maxChildren: 1 },
-    store: new InMemoryMultiAgentStore(),
-    idGenerator: sequenceIds('child'),
-    executor: async () => {
-      entered.resolve()
-      return release.promise
-    }
-  })
-
-  const first = runtime.runChild({
-    parentThreadId: 'thread-1',
-    parentTurnId: 'turn-1',
-    prompt: 'First'
-  })
-  await entered.promise
-
-  await assert.rejects(
-    runtime.runChild({
-      parentThreadId: 'thread-1',
-      parentTurnId: 'turn-1',
-      prompt: 'Second in the same turn'
-    }),
-    (error) => error instanceof MultiAgentRuntimeError &&
-      error.code === 'child_budget_exhausted' &&
-      error.message.includes('does not reset after a child finishes')
-  )
-
-  release.resolve({ summary: 'First done' })
-  await first
-})
-
-test('runtime reserves concurrent starts atomically before enforcing child budgets', async () => {
-  const release = deferred<MultiAgentExecutorResult>()
+test('runtime allows additional children in the same parent turn after completion', async () => {
   const store = new InMemoryMultiAgentStore()
   const runtime = new MultiAgentRuntime({
-    config: { maxParallel: 2, maxChildren: 1 },
-    store,
-    idGenerator: sequenceIds('child'),
-    executor: async () => release.promise
-  })
-
-  const first = runtime.runChild({
-    parentThreadId: 'thread-1',
-    parentTurnId: 'turn-1',
-    prompt: 'First'
-  })
-  const second = runtime.runChild({
-    parentThreadId: 'thread-1',
-    parentTurnId: 'turn-1',
-    prompt: 'Second'
-  })
-
-  await assert.rejects(
-    second,
-    (error) => error instanceof MultiAgentRuntimeError && error.code === 'child_budget_exhausted'
-  )
-  const diagnostics = await runtime.diagnostics('thread-1')
-  assert.equal(diagnostics.active, 1)
-  assert.equal(diagnostics.childRuns.length, 1)
-
-  release.resolve({ summary: 'First done' })
-  await first
-})
-
-test('runtime enforces maxChildren per parent turn without exhausting later turns', async () => {
-  const store = new InMemoryMultiAgentStore()
-  const runtime = new MultiAgentRuntime({
-    config: { maxParallel: 1, maxChildren: 1 },
+    config: { maxParallel: 1 },
     store,
     idGenerator: sequenceIds('child'),
     executor: async (input) => ({ summary: `${input.parentTurnId} done` })
@@ -390,30 +322,20 @@ test('runtime enforces maxChildren per parent turn without exhausting later turn
   })
   assert.equal(first.status, 'completed')
 
-  await assert.rejects(
-    runtime.runChild({
-      parentThreadId: 'thread-1',
-      parentTurnId: 'turn-1',
-      prompt: 'Second child in same turn'
-    }),
-    (error) => error instanceof MultiAgentRuntimeError &&
-      error.code === 'child_budget_exhausted' &&
-      error.message.includes('shared across all delegate_task calls in the parent turn')
-  )
-
-  const third = await runtime.runChild({
+  const second = await runtime.runChild({
     parentThreadId: 'thread-1',
-    parentTurnId: 'turn-3',
-    prompt: 'Third'
+    parentTurnId: 'turn-1',
+    prompt: 'Second child in same turn'
   })
-  assert.equal(third.status, 'completed')
+  assert.equal(second.status, 'completed')
+  assert.equal((await store.list({ parentThreadId: 'thread-1' })).length, 2)
 })
 
 test('runtime reuses a persisted request before budget checks or executor startup', async () => {
   const store = new InMemoryMultiAgentStore()
   const firstExecutor = async () => ({ summary: 'persisted result' })
   const firstRuntime = new MultiAgentRuntime({
-    config: { maxParallel: 1, maxChildren: 1 },
+    config: { maxParallel: 1 },
     store,
     idGenerator: () => 'child-persisted',
     executor: firstExecutor
@@ -427,7 +349,7 @@ test('runtime reuses a persisted request before budget checks or executor startu
 
   let replayExecutorCalls = 0
   const restartedRuntime = new MultiAgentRuntime({
-    config: { maxParallel: 0, maxChildren: 0 },
+    config: { maxParallel: 0 },
     store,
     executor: async () => {
       replayExecutorCalls += 1
@@ -452,7 +374,7 @@ test('runtime shares one in-flight execution for concurrent calls with the same 
   let executorCalls = 0
   const store = new InMemoryMultiAgentStore()
   const runtime = new MultiAgentRuntime({
-    config: { maxParallel: 2, maxChildren: 2 },
+    config: { maxParallel: 2 },
     store,
     idGenerator: sequenceIds('child'),
     executor: async () => {

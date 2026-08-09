@@ -8,6 +8,11 @@ receipts、主进程 lifecycle/capability、可选 workbench UI 与进程无关�
 compiler 的 HTTP 旁路。Project DAG 仅通过 Evidence DAG 的公开合同与正式
 Python 依赖消费 Evidence，不依赖宿主私有路径或相邻目录注入。
 
+桌面生命周期未显式配置 `SCIFORGE_PROJECT_DAG_SERVICE_URL` 时，会为自己拥有的
+sidecar 分配私有动态 loopback 端口，并合并并发 readiness 请求；子进程提前退出会
+立即失败，停止时只终止该生命周期创建的进程。显式外部 endpoint 保持原语义，包不
+探测或终止不属于自己的监听进程。
+
 可复跑节点、边、权限与比较语义见
 [`docs/reproducible-dag-v3.zh-CN.md`](../../../docs/reproducible-dag-v3.zh-CN.md)。
 

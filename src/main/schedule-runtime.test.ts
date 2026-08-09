@@ -108,15 +108,23 @@ function createStore(initial: AppSettingsV1) {
 function createAgentRuntime() {
   return {
     startThread: vi.fn(async () => ({ id: 'thread-1' })),
-    readThread: vi.fn(async () => ({
+    readThreadStatus: vi.fn(async () => ({
       id: 'thread-1',
-      thread: { id: 'thread-1', status: 'idle' },
+      runtimeId: 'codex',
+      status: 'idle',
+      latestSeq: 0
+    })),
+    readThreadPage: vi.fn(async () => ({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
       turns: [{
         id: 'turn-1',
         status: 'completed',
         items: [{ kind: 'assistant_text', turnId: 'turn-1', text: 'Task complete.' }]
-      }]
+      }],
+      nextCursor: null
     })),
+    subscribeEvents: vi.fn(async function* () {}),
     startTurn: vi.fn(async () => ({ threadId: 'thread-1', turnId: 'turn-1' })),
     interruptTurn: vi.fn(async () => undefined)
   } as unknown as ScheduleRuntimeDeps['agentRuntime']

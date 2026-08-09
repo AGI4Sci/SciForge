@@ -6,6 +6,7 @@ import {
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
+import { createServer } from 'node:net'
 import { delimiter, dirname, join } from 'node:path'
 import type {
   DomainMainRuntimeLifecycleContext,
@@ -67,15 +68,18 @@ export type ProjectDagSidecarOptions = Readonly<{
   ) => ChildProcess
   fetchImpl?: typeof fetch
   readyTimeoutMs?: number
+  allocatePort?: () => Promise<number>
 }>
 
 export class ProjectDagSidecar {
   readonly #spawnImpl: NonNullable<ProjectDagSidecarOptions['spawnImpl']>
   readonly #fetchImpl: typeof fetch
   readonly #readyTimeoutMs: number
+  readonly #allocatePort: () => Promise<number>
   #child: ChildProcess | null = null
   #ensurePromise: Promise<ProjectDagSidecarConfig> | null = null
   #config: ProjectDagSidecarConfig | null = null
+  #managedBaseUrl: string | null = null
   readonly #generatedRuntimeToken = randomBytes(32).toString('base64url')
 
   constructor(options: ProjectDagSidecarOptions = {}) {
@@ -83,6 +87,7 @@ export class ProjectDagSidecar {
       spawn(command, [...args], spawnOptions))
     this.#fetchImpl = options.fetchImpl ?? globalThis.fetch
     this.#readyTimeoutMs = options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS
+    this.#allocatePort = options.allocatePort ?? allocateProjectDagLoopbackPort
   }
 
   get config(): ProjectDagSidecarConfig | null {
@@ -140,10 +145,12 @@ export class ProjectDagSidecar {
       if (this.#childRunning()) await this.stop()
       throw error
     }
+    const managedBaseUrl = await this.#managedServiceUrl(context)
     const config = projectDagSidecarConfig(
       context,
       textReasoner,
-      this.#generatedRuntimeToken
+      this.#generatedRuntimeToken,
+      managedBaseUrl
     )
     if (this.#config && sameLaunch(this.#config, config) && this.#childRunning()) {
       await waitForProjectDagHealth(
@@ -222,6 +229,17 @@ export class ProjectDagSidecar {
       this.#child.signalCode === null
     )
   }
+
+  async #managedServiceUrl(context: DomainMainRuntimeLifecycleContext): Promise<string | undefined> {
+    if (projectDagServiceUrlFromEnv(context.environment)) return undefined
+    if (this.#managedBaseUrl) return this.#managedBaseUrl
+    const port = await this.#allocatePort()
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+      throw new Error('Project DAG sidecar received an invalid allocated loopback port.')
+    }
+    this.#managedBaseUrl = `http://127.0.0.1:${port}`
+    return this.#managedBaseUrl
+  }
 }
 
 export function projectDagSidecarConfig(
@@ -230,11 +248,12 @@ export function projectDagSidecarConfig(
     'appRoot' | 'environment' | 'userDataDir'
   >,
   textReasoner: DomainMainTextReasoner,
-  generatedRuntimeToken = randomBytes(32).toString('base64url')
+  generatedRuntimeToken = randomBytes(32).toString('base64url'),
+  managedBaseUrl?: string
 ): ProjectDagSidecarConfig {
   const environment = context.environment
   const configuredUrl = projectDagServiceUrlFromEnv(environment)
-  const baseUrl = configuredUrl || DEFAULT_PROJECT_DAG_SERVICE_URL
+  const baseUrl = configuredUrl || managedBaseUrl || DEFAULT_PROJECT_DAG_SERVICE_URL
   const port = localPortFromBaseUrl(baseUrl) ?? DEFAULT_PROJECT_PORT
   const runtimeToken = projectDagApiKeyFromEnv(environment) || generatedRuntimeToken
   const roots = projectDagPackageRoots(context.appRoot, environment)
@@ -274,6 +293,23 @@ export function projectDagSidecarConfig(
       EDAG_MODEL_ROUTER_API_KEY: textReasoner.apiKey,
       EDAG_MODEL_ROUTER_MODEL: textReasoner.model,
       PYTHONPATH: pythonPath
+    })
+  })
+}
+
+export async function allocateProjectDagLoopbackPort(): Promise<number> {
+  return await new Promise<number>((resolve, reject) => {
+    const server = createServer()
+    server.unref()
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        server.close(() => reject(new Error('Failed to allocate a Project DAG loopback port.')))
+        return
+      }
+      const port = address.port
+      server.close((error) => error ? reject(error) : resolve(port))
     })
   })
 }

@@ -12,7 +12,6 @@ test('runtime config and child run records apply contract defaults', () => {
   assert.deepEqual(MultiAgentRuntimeConfig.parse({}), {
     enabled: true,
     maxParallel: 2,
-    maxChildren: 16,
     maxTranscriptEntries: 1000
   })
 

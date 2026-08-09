@@ -37,7 +37,6 @@ export type AgentRuntimeSubagentBinding = {
   context: AgentRuntimeAdapterContext
   enabled: boolean
   maxParallel: number
-  maxChildren: number
 }
 
 export type AgentRuntimeSubagentToolBridgeOptions = {
@@ -61,7 +60,6 @@ type ActiveRequest = {
 type RuntimeEntry = {
   runtime: MultiAgentRuntime
   maxParallel: number
-  maxChildren: number
   ready: Promise<void>
 }
 
@@ -154,8 +152,7 @@ export class AgentRuntimeSubagentToolBridge {
       name: AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME,
       description: [
         'Start independent child agents and return stable child IDs immediately.',
-        'Plan the complete workload before calling: the configured child-run budget is shared by every delegate_task call in the same parent turn.',
-        'Partition all work into one balanced tasks array within that budget; splitting the same workload across later delegate_task calls does not reset it.',
+        'Each call may start up to the configured parallel capacity.',
         'After children start, use subagent_wait or subagent_status before deciding whether any remaining work needs a later parent turn.'
       ].join(' '),
       inputSchema: {
@@ -270,9 +267,8 @@ export class AgentRuntimeSubagentToolBridge {
     const maxParallel = entry.maxParallel
     if (input.tasks.length > maxParallel) {
       return failedMultiAgentResponse(
-        `delegate_task accepts at most ${maxParallel} concurrent tasks in one call, and this parent turn allows ${entry.maxChildren} child runs total. ` +
-        `Consolidate the complete workload into at most ${Math.min(maxParallel, entry.maxChildren)} balanced tasks; ` +
-        'splitting it into additional delegate_task calls does not reset the turn budget.'
+        `delegate_task accepts at most ${maxParallel} concurrent tasks in one call. ` +
+        'Wait for running children before starting the remaining work.'
       )
     }
     if (!request.turnId) return failedMultiAgentResponse('delegate_task requires turnId.')
@@ -402,12 +398,10 @@ export class AgentRuntimeSubagentToolBridge {
     const existing = this.runtimes.get(runtimeId)
     if (existing) return existing
     const maxParallel = Math.max(1, binding.maxParallel)
-    const maxChildren = Math.max(1, binding.maxChildren)
     const runtime = new MultiAgentRuntime({
       config: {
         enabled: true,
-        maxParallel,
-        maxChildren
+        maxParallel
       },
       store: this.options.storeFactory?.(runtimeId) ?? (this.options.storeRoot
         ? new FileMultiAgentStore(join(this.options.storeRoot, runtimeId))
@@ -417,7 +411,7 @@ export class AgentRuntimeSubagentToolBridge {
         onChildEvent: (event) => this.handleChildEvent(runtimeId, event)
       }
     })
-    const entry: RuntimeEntry = { runtime, maxParallel, maxChildren, ready: Promise.resolve() }
+    const entry: RuntimeEntry = { runtime, maxParallel, ready: Promise.resolve() }
     this.runtimes.set(runtimeId, entry)
     entry.ready = runtime.recoverStaleChildren().then(() => undefined)
     return entry

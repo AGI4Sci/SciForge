@@ -3,12 +3,15 @@ import type {
   AgentRuntimeCapabilities,
   AgentRuntimeEvent,
   AgentRuntimeId,
+  AgentRuntimeThreadPage,
+  AgentRuntimeThreadPageInput,
   AgentRuntimeThread,
-  AgentRuntimeThreadDetail,
   AgentRuntimeThreadListInput,
-  AgentRuntimeThreadReadInput,
-  AgentRuntimeThreadSidebarProbe,
+  AgentRuntimeThreadStatus,
+  AgentRuntimeThreadStatusInput,
   AgentRuntimeThreadStartInput,
+  AgentRuntimeToolArtifact,
+  AgentRuntimeToolArtifactReadInput,
   AgentRuntimeUsageQuery,
   AgentRuntimeUsageResponse,
   AgentRuntimeTurnHandle,
@@ -64,12 +67,16 @@ class AgentRuntimeClient {
     return this.invoke('startThread', (bridge) => bridge.startThread(input))
   }
 
-  readThread(input: AgentRuntimeThreadReadInput): Promise<AgentRuntimeThreadDetail> {
-    return this.invoke('readThread', (bridge) => bridge.readThread(input))
+  readThreadStatus(input: AgentRuntimeThreadStatusInput): Promise<AgentRuntimeThreadStatus> {
+    return this.invoke('readThreadStatus', (bridge) => bridge.readThreadStatus(input))
   }
 
-  readThreadSidebarProbe(input: AgentRuntimeThreadReadInput): Promise<AgentRuntimeThreadSidebarProbe> {
-    return this.invoke('readThreadSidebarProbe', (bridge) => bridge.readThreadSidebarProbe(input))
+  readThreadPage(input: AgentRuntimeThreadPageInput): Promise<AgentRuntimeThreadPage> {
+    return this.invoke('readThreadPage', (bridge) => bridge.readThreadPage(input))
+  }
+
+  readToolArtifact(input: AgentRuntimeToolArtifactReadInput): Promise<AgentRuntimeToolArtifact> {
+    return this.invoke('readToolArtifact', (bridge) => bridge.readToolArtifact(input))
   }
 
   startTurn(input: AgentRuntimeTurnStartInput): Promise<AgentRuntimeTurnHandle> {

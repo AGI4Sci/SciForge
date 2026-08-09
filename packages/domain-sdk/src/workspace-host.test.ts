@@ -28,6 +28,7 @@ import {
   workspaceHostProviderAttachInputSchema,
   workspaceHostRuntimeEventPayloadSchema,
   workspaceHostRuntimeInvokeInputSchema,
+  workspaceHostRuntimeReplayEventsInputSchema,
   workspaceHostSessionSchema,
   workspaceNetworkEgressSelectionSchema
 } from './workspace-host.js'
@@ -552,6 +553,33 @@ describe('Workspace Host contracts', () => {
       method: 'startTurn',
       input: { threadId: 'thread-1' }
     }).method, 'startTurn')
+    for (const method of [
+      'readThreadStatus',
+      'readThreadPage',
+      'readToolArtifact'
+    ] as const) {
+      assert.equal(workspaceHostRuntimeInvokeInputSchema.parse({
+        contractVersion: WORKSPACE_HOST_PROTOCOL_VERSION,
+        runtimeId: 'codex',
+        method,
+        input: { threadId: 'thread-1' }
+      }).method, method)
+    }
+    assert.throws(
+      () => workspaceHostRuntimeInvokeInputSchema.parse({
+        contractVersion: WORKSPACE_HOST_PROTOCOL_VERSION,
+        runtimeId: 'codex',
+        method: 'readThread',
+        input: { threadId: 'thread-1' }
+      }),
+      z.ZodError
+    )
+    assert.equal(workspaceHostRuntimeReplayEventsInputSchema.parse({
+      contractVersion: WORKSPACE_HOST_PROTOCOL_VERSION,
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      sinceSeq: 42
+    }).sinceSeq, 42)
     assert.throws(
       () => workspaceHostRuntimeInvokeInputSchema.parse({
         contractVersion: WORKSPACE_HOST_PROTOCOL_VERSION,

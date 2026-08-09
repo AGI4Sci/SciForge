@@ -144,6 +144,8 @@ export const useChatStore = create<ChatState>((set, get) => {
   liveReasoningMeta: null,
   liveAssistant: '',
   lastSeq: 0,
+  threadHistoryCursor: null,
+  threadHistoryLoading: false,
   usageRefreshKey: 0,
   childRefreshKey: 0,
   busy: false,

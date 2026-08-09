@@ -230,7 +230,6 @@ export type RuntimeGuardSettingsPatchV1 = {
 export type AgentSubagentSettingsV1 = {
   enabled: boolean
   maxParallel: number
-  maxChildRuns: number
 }
 
 export type AgentCapabilitySettingsV1 = {

@@ -2,6 +2,7 @@ import { constants, type Stats } from 'node:fs'
 import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { createInterface } from 'node:readline'
 
 export type AppDataStorePath = {
   rootPath: string
@@ -21,6 +22,12 @@ export type AppDataWriteOptions = {
 export type AppDataJsonlStoreOptions = {
   rootDir: string
   segments: readonly string[]
+}
+
+export type AppDataJsonlReverseReadOptions = {
+  /** Exclusive byte offset to start reading backwards from. Defaults to the file size. */
+  endOffset?: number
+  chunkSize?: number
 }
 
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0
@@ -88,6 +95,89 @@ export class AppDataJsonlStore {
 
   async readText(): Promise<string> {
     return this.enqueue(async () => readAppDataStoreText(this.rootDir, this.segments))
+  }
+
+  async readLines(visitor: (line: string) => void | Promise<void>): Promise<void> {
+    await this.enqueue(async () => {
+      const target = await appDataStorePath(this.rootDir, this.segments, {
+        createParentDirectories: false
+      })
+      const handle = await open(target.path, constants.O_RDONLY | NOFOLLOW)
+      try {
+        const stream = handle.createReadStream({ encoding: 'utf8', autoClose: false })
+        const lines = createInterface({ input: stream, crlfDelay: Infinity })
+        for await (const line of lines) await visitor(line)
+      } finally {
+        await handle.close()
+      }
+    })
+  }
+
+  async readLinesReverse(
+    visitor: (line: string, startOffset: number) => boolean | void | Promise<boolean | void>,
+    options: AppDataJsonlReverseReadOptions = {}
+  ): Promise<void> {
+    await this.enqueue(async () => {
+      const target = await appDataStorePath(this.rootDir, this.segments, {
+        createParentDirectories: false
+      })
+      const handle = await open(target.path, constants.O_RDONLY | NOFOLLOW)
+      try {
+        const fileSize = (await handle.stat()).size
+        const requestedEnd = options.endOffset ?? fileSize
+        if (!Number.isSafeInteger(requestedEnd) || requestedEnd < 0 || requestedEnd > fileSize) {
+          throw Object.assign(new Error('Invalid JSONL reverse-read offset.'), {
+            code: 'invalid_app_data_jsonl_offset'
+          })
+        }
+        const chunkSize = Math.min(
+          1024 * 1024,
+          Math.max(1024, Math.floor(options.chunkSize ?? 64 * 1024))
+        )
+        let position = requestedEnd
+        let carry = Buffer.alloc(0)
+
+        while (position > 0) {
+          const start = Math.max(0, position - chunkSize)
+          const chunk = Buffer.allocUnsafe(position - start)
+          const { bytesRead } = await handle.read(chunk, 0, chunk.length, start)
+          if (bytesRead !== chunk.length) {
+            throw Object.assign(new Error('Could not read the requested JSONL range.'), {
+              code: 'app_data_jsonl_short_read'
+            })
+          }
+          const data = carry.length > 0
+            ? Buffer.concat([chunk, carry], chunk.length + carry.length)
+            : chunk
+          let lineEnd = data.length
+
+          for (let index = data.length - 1; index >= 0; index -= 1) {
+            if (data[index] !== 0x0a) continue
+            const lineStart = index + 1
+            const rawLine = data.subarray(
+              lineStart,
+              lineEnd > lineStart && data[lineEnd - 1] === 0x0d ? lineEnd - 1 : lineEnd
+            )
+            lineEnd = index
+            if (rawLine.length === 0) continue
+            const keepReading = await visitor(rawLine.toString('utf8'), start + lineStart)
+            if (keepReading === false) return
+          }
+
+          carry = Buffer.from(data.subarray(0, lineEnd))
+          position = start
+        }
+
+        if (carry.length > 0) {
+          const rawLine = carry[carry.length - 1] === 0x0d
+            ? carry.subarray(0, carry.length - 1)
+            : carry
+          if (rawLine.length > 0) await visitor(rawLine.toString('utf8'), 0)
+        }
+      } finally {
+        await handle.close()
+      }
+    })
   }
 
   async path(): Promise<string> {

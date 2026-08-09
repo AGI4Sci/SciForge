@@ -5,7 +5,65 @@ import {
   EXECUTION_INTEGRITY_POLICY_VERSION
 } from '../agent-runtime/execution-integrity-guard'
 
+async function readAdapterThreadPage(
+  adapter: ReturnType<typeof createCodexAgentRuntimeAdapter>,
+  context: Parameters<ReturnType<typeof createCodexAgentRuntimeAdapter>['readThreadPage']>[0],
+  input: Parameters<ReturnType<typeof createCodexAgentRuntimeAdapter>['readThreadPage']>[1]
+) {
+  const page = await adapter.readThreadPage(context, input)
+  const latestTurn = page.turns.at(-1)
+  return {
+    ...page,
+    id: page.threadId,
+    latestTurnId: latestTurn?.id,
+    status: latestTurn?.status,
+    items: page.turns.flatMap((turn) => turn.items ?? [])
+  }
+}
+
+function withEventSubscription<T extends object>(service: T): T & {
+  subscribeEvents(threadId: string, sinceSeq?: number): AsyncIterable<unknown>
+} {
+  const readStoredEvents = (service as {
+    readStoredEvents?: (threadId: string, sinceSeq?: number) => Promise<unknown[]>
+  }).readStoredEvents
+  return Object.assign(service, {
+    async *subscribeEvents(threadId: string, sinceSeq = 0): AsyncIterable<unknown> {
+      for (const event of readStoredEvents ? await readStoredEvents(threadId, sinceSeq) : []) {
+        yield event
+      }
+    }
+  })
+}
+
 describe('createCodexAgentRuntimeAdapter', () => {
+  it('returns the bounded polling status without thread-list metadata', async () => {
+    const readThreadStatus = vi.fn(async () => ({
+      ok: true as const,
+      status: {
+        id: 'thread-status',
+        runtimeId: 'codex' as const,
+        status: 'running',
+        latestSeq: 42,
+        latestTurnId: 'turn-2',
+        latestTurnStatus: 'running'
+      }
+    }))
+    const adapter = createCodexAgentRuntimeAdapter({ readThreadStatus } as never)
+
+    await expect(adapter.readThreadStatus({ settings: {} as never }, {
+      runtimeId: 'codex',
+      threadId: 'thread-status'
+    })).resolves.toEqual({
+      id: 'thread-status',
+      runtimeId: 'codex',
+      status: 'running',
+      latestSeq: 42,
+      latestTurnId: 'turn-2',
+      latestTurnStatus: 'running'
+    })
+  })
+
   it('binds the Host tool allowlist when the Codex thread is created', async () => {
     const startThread = vi.fn(async () => ({
       ok: true as const,
@@ -104,7 +162,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
         rateLimitResetCredits: null
       }))
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
     const auxiliary = adapter.auxiliary!
     const context = { settings: {} as never }
 
@@ -276,8 +334,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
         agentCapabilities: {
           subagents: {
             enabled: false,
-            maxParallel: 2,
-            maxChildRuns: 4
+            maxParallel: 2
           }
         }
       } as never
@@ -285,8 +342,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
 
     expect(caps.tools.subagents).toMatchObject({
       available: false,
-      maxParallel: 2,
-      maxChildren: 4
+      maxParallel: 2
     })
 
     await expect(adapter.auxiliary!({
@@ -294,8 +350,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
         agentCapabilities: {
           subagents: {
             enabled: false,
-            maxParallel: 2,
-            maxChildRuns: 4
+            maxParallel: 2
           }
         }
       } as never
@@ -306,9 +361,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
       capabilities: {
         subagents: {
           available: false,
-          maxParallel: 2,
-          maxChildren: 4,
-          maxChildRuns: 4
+          maxParallel: 2
         }
       }
     })
@@ -334,7 +387,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
         userMessageItemId: 'user-1'
       }))
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
 
     await expect(adapter.listThreads({ settings: {} as never }, {
       runtimeId: 'codex',
@@ -378,7 +431,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
         }]
       }))
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
 
     await expect(adapter.listThreads({ settings: {} as never }, {
       runtimeId: 'codex',
@@ -401,7 +454,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
 
   it('keeps Codex thread blocks grouped by their source turn id', async () => {
     const service = {
-      readThread: vi.fn(async () => ({
+      readThreadPage: vi.fn(async () => ({
         ok: true as const,
         detail: {
           latestSeq: 4,
@@ -417,12 +470,11 @@ describe('createCodexAgentRuntimeAdapter', () => {
         }
       }))
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
 
-    const detail = await adapter.readThread({ settings: {} as never }, { runtimeId: 'codex', threadId: 'thread-1' })
+    const detail = await readAdapterThreadPage(adapter, { settings: {} as never }, { runtimeId: 'codex', threadId: 'thread-1' })
 
     expect(detail.latestTurnId).toBe('turn-2')
-    expect(detail.workspace).toBe('/workspace/molclaw')
     expect(detail.turns?.map((turn) => turn.id)).toEqual(['turn-1', 'turn-2'])
     expect(detail.turns?.find((turn) => turn.id === 'turn-1')?.items?.map((item) => item.text)).toEqual(['Q1', 'R1'])
     expect(detail.turns?.find((turn) => turn.id === 'turn-2')?.items?.map((item) => item.text)).toEqual(['Q2', 'R2'])
@@ -430,7 +482,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
 
   it('keeps numeric Codex approval request ids instead of falling back to item ids', async () => {
     const service = {
-      readThread: vi.fn(async () => ({
+      readThreadPage: vi.fn(async () => ({
         ok: true as const,
         detail: {
           latestSeq: 1,
@@ -471,9 +523,9 @@ describe('createCodexAgentRuntimeAdapter', () => {
         }
       ])
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
 
-    const detail = await adapter.readThread({ settings: {} as never }, { runtimeId: 'codex', threadId: 'thread-1' })
+    const detail = await readAdapterThreadPage(adapter, { settings: {} as never }, { runtimeId: 'codex', threadId: 'thread-1' })
     const approval = detail.turns?.[0]?.items?.[0]
     expect(approval).toMatchObject({
       id: 'call_approval',
@@ -505,7 +557,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
   it('keeps stale approval blocks on their original turn instead of attaching them to the latest turn', async () => {
     const service = {
       pendingServerRequests: vi.fn(() => []),
-      readThread: vi.fn(async () => ({
+      readThreadPage: vi.fn(async () => ({
         ok: true as const,
         detail: {
           latestSeq: 3,
@@ -530,9 +582,9 @@ describe('createCodexAgentRuntimeAdapter', () => {
         }
       }))
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
 
-    const detail = await adapter.readThread({ settings: {} as never }, { runtimeId: 'codex', threadId: 'thread-1' })
+    const detail = await readAdapterThreadPage(adapter, { settings: {} as never }, { runtimeId: 'codex', threadId: 'thread-1' })
 
     expect(detail.latestTurnId).toBe('turn-2')
     expect(detail.turns?.find((turn) => turn.id === 'turn-1')?.items).toEqual([
@@ -554,7 +606,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
 
   it('marks stale pending approvals from failed Codex threads as errors', async () => {
     const service = {
-      readThread: vi.fn(async () => ({
+      readThreadPage: vi.fn(async () => ({
         ok: true as const,
         detail: {
           latestSeq: 2,
@@ -578,9 +630,9 @@ describe('createCodexAgentRuntimeAdapter', () => {
         }
       }))
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
 
-    const detail = await adapter.readThread({ settings: {} as never }, { runtimeId: 'codex', threadId: 'thread-1' })
+    const detail = await readAdapterThreadPage(adapter, { settings: {} as never }, { runtimeId: 'codex', threadId: 'thread-1' })
 
     expect(detail.status).toBe('failed')
     expect(detail.turns?.[0]).toMatchObject({ id: 'turn-1', status: 'failed' })
@@ -600,7 +652,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
   it('marks pending approval blocks stale when the app-server registry no longer has the request', async () => {
     const service = {
       pendingServerRequests: vi.fn(() => []),
-      readThread: vi.fn(async () => ({
+      readThreadPage: vi.fn(async () => ({
         ok: true as const,
         detail: {
           latestSeq: 2,
@@ -624,9 +676,9 @@ describe('createCodexAgentRuntimeAdapter', () => {
         }
       }))
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
 
-    const detail = await adapter.readThread({ settings: {} as never }, { runtimeId: 'codex', threadId: 'thread-1' })
+    const detail = await readAdapterThreadPage(adapter, { settings: {} as never }, { runtimeId: 'codex', threadId: 'thread-1' })
 
     expect(detail.items).toEqual([
       expect.objectContaining({
@@ -640,7 +692,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
   it('keeps pending approval blocks live while the app-server registry still has the request', async () => {
     const service = {
       pendingServerRequests: vi.fn(() => [{ requestId: 4 }]),
-      readThread: vi.fn(async () => ({
+      readThreadPage: vi.fn(async () => ({
         ok: true as const,
         detail: {
           latestSeq: 2,
@@ -664,9 +716,9 @@ describe('createCodexAgentRuntimeAdapter', () => {
         }
       }))
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
 
-    const detail = await adapter.readThread({ settings: {} as never }, { runtimeId: 'codex', threadId: 'thread-1' })
+    const detail = await readAdapterThreadPage(adapter, { settings: {} as never }, { runtimeId: 'codex', threadId: 'thread-1' })
 
     expect(detail.items).toEqual([
       expect.objectContaining({
@@ -679,7 +731,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
 
   it('maps interrupted Codex thread status to an aborted turn instead of inferring running', async () => {
     const service = {
-      readThread: vi.fn(async () => ({
+      readThreadPage: vi.fn(async () => ({
         ok: true as const,
         detail: {
           latestSeq: 1,
@@ -691,9 +743,9 @@ describe('createCodexAgentRuntimeAdapter', () => {
         }
       }))
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
 
-    const detail = await adapter.readThread({ settings: {} as never }, { runtimeId: 'codex', threadId: 'thread-1' })
+    const detail = await readAdapterThreadPage(adapter, { settings: {} as never }, { runtimeId: 'codex', threadId: 'thread-1' })
 
     expect(detail.turns?.[0]).toMatchObject({
       id: 'turn-1',
@@ -703,7 +755,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
 
   it('keeps a Codex turn running while later tools are still active after a tool error', async () => {
     const service = {
-      readThread: vi.fn(async () => ({
+      readThreadPage: vi.fn(async () => ({
         ok: true as const,
         detail: {
           latestSeq: 4,
@@ -731,9 +783,9 @@ describe('createCodexAgentRuntimeAdapter', () => {
         }
       }))
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
 
-    const detail = await adapter.readThread({ settings: {} as never }, { runtimeId: 'codex', threadId: 'thread-1' })
+    const detail = await readAdapterThreadPage(adapter, { settings: {} as never }, { runtimeId: 'codex', threadId: 'thread-1' })
 
     expect(detail.turns?.[0]).toMatchObject({
       id: 'turn-1',
@@ -758,7 +810,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
         }
       ])
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
     const events = []
 
     for await (const event of adapter.subscribeEvents({ settings: {} as never }, {
@@ -780,7 +832,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
 
   it('preserves the hidden execution-integrity marker as typed thread metadata', async () => {
     const service = {
-      readThread: vi.fn(async () => ({
+      readThreadPage: vi.fn(async () => ({
         ok: true as const,
         detail: {
           latestSeq: 1,
@@ -796,9 +848,9 @@ describe('createCodexAgentRuntimeAdapter', () => {
         }
       }))
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
 
-    const detail = await adapter.readThread(
+    const detail = await readAdapterThreadPage(adapter,
       { settings: {} as never },
       { runtimeId: 'codex', threadId: 'thread-1' }
     )
@@ -835,7 +887,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
         }
       ])
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
     const events = []
 
     for await (const event of adapter.subscribeEvents({ settings: {} as never }, {
@@ -914,7 +966,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
         }
       }])
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
     const events = []
 
     for await (const event of adapter.subscribeEvents({ settings: {} as never }, {
@@ -1004,7 +1056,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
         }
       ])
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
     const events = []
 
     for await (const event of adapter.subscribeEvents({ settings: {} as never }, {
@@ -1083,7 +1135,11 @@ describe('createCodexAgentRuntimeAdapter', () => {
             }
           ]
         : []),
-      readThread: vi.fn(async () => ({
+      listStoredThreadChildren: vi.fn(async () => [childCompleted, {
+        ...childCompleted,
+        id: 'duplicate-call-id'
+      }]),
+      readThreadPage: vi.fn(async () => ({
         ok: true as const,
         detail: {
           latestSeq: 2,
@@ -1091,10 +1147,15 @@ describe('createCodexAgentRuntimeAdapter', () => {
             { kind: 'user' as const, id: 'child-user', text: 'Review the diff' },
             { kind: 'assistant' as const, id: 'child-assistant', text: 'Found one issue.' }
           ]
-        }
+        },
+        nextCursor: 'next-page'
+      })),
+      readThreadStatus: vi.fn(async () => ({
+        ok: true as const,
+        status: { id: 'child-thread', runtimeId: 'codex' as const, latestSeq: 2 }
       }))
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
 
     const events = []
     for await (const event of adapter.subscribeEvents({ settings: {} as never }, {
@@ -1133,10 +1194,10 @@ describe('createCodexAgentRuntimeAdapter', () => {
     const transcript = await adapter.auxiliary!({ settings: {} as never }, {
       runtimeId: 'codex',
       operation: 'readChildTranscript',
-      payload: { parentThreadId: 'parent-thread', childId: 'collab-1' }
+      payload: { parentThreadId: 'parent-thread', childId: 'collab-1', cursor: 'older-page', limit: 5 }
     })
 
-    expect(service.readThread).toHaveBeenCalledWith('child-thread')
+    expect(service.readThreadPage).toHaveBeenCalledWith('child-thread', { cursor: 'older-page', limit: 5 })
     expect(transcript).toMatchObject({
       transcript: {
         runtimeId: 'codex',
@@ -1146,8 +1207,9 @@ describe('createCodexAgentRuntimeAdapter', () => {
           { id: 'child-user', kind: 'user_message', text: 'Review the diff' },
           { id: 'child-assistant', kind: 'assistant_message', text: 'Found one issue.' }
         ],
+        nextCursor: 'next-page',
         metadata: {
-          source: 'openAsThreadRef',
+          source: 'readThreadPage',
           threadId: 'child-thread'
         }
       }
@@ -1155,8 +1217,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
   })
 
   it('normalizes raw Codex child event aliases before replaying and listing children', async () => {
-    const service = {
-      readStoredEvents: vi.fn(async () => [
+    const storedEvents = [
         {
           threadId: 'parent-thread',
           turnId: 'turn-1',
@@ -1178,9 +1239,12 @@ describe('createCodexAgentRuntimeAdapter', () => {
             }
           }
         }
-      ])
+      ]
+    const service = {
+      readStoredEvents: vi.fn(async () => storedEvents),
+      listStoredThreadChildren: vi.fn(async () => storedEvents.map((event) => event.child))
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
 
     const events = []
     for await (const event of adapter.subscribeEvents({ settings: {} as never }, {
@@ -1232,7 +1296,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
 
   it('lists native Codex subagent threads for the active parent thread', async () => {
     const service = {
-      readStoredEvents: vi.fn(async () => []),
+      listStoredThreadChildren: vi.fn(async () => []),
       listThreads: vi.fn(async () => ({
         ok: true as const,
         threads: [
@@ -1264,17 +1328,22 @@ describe('createCodexAgentRuntimeAdapter', () => {
           }
         ]
       })),
-      readThread: vi.fn(async () => ({
+      readThreadPage: vi.fn(async () => ({
         ok: true as const,
         detail: {
           latestSeq: 1,
           blocks: [
             { kind: 'assistant' as const, id: 'native-assistant', text: 'Native child transcript.' }
           ]
-        }
+        },
+        nextCursor: null
+      })),
+      readThreadStatus: vi.fn(async () => ({
+        ok: true as const,
+        status: { id: 'native-child', runtimeId: 'codex' as const, latestSeq: 1 }
       }))
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
 
     const listed = await adapter.auxiliary!({ settings: {} as never }, {
       runtimeId: 'codex',
@@ -1318,7 +1387,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
       payload: { parentThreadId: 'parent-thread', parentTurnId: 'turn-1', childId: 'native-child' }
     })
 
-    expect(service.readThread).toHaveBeenCalledWith('native-child')
+    expect(service.readThreadPage).toHaveBeenCalledWith('native-child', { limit: 20 })
     expect(transcript).toMatchObject({
       transcript: {
         runtimeId: 'codex',
@@ -1329,7 +1398,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
           { id: 'native-assistant', kind: 'assistant_message', text: 'Native child transcript.' }
         ],
         metadata: {
-          source: 'openAsThreadRef',
+          source: 'readThreadPage',
           threadId: 'native-child'
         }
       }
@@ -1338,11 +1407,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
 
   it('deduplicates a native child thread and collab event that reference the same thread', async () => {
     const service = {
-      readStoredEvents: vi.fn(async () => [{
-        threadId: 'parent-thread',
-        turnId: 'turn-1',
-        seq: 1,
-        child: {
+      listStoredThreadChildren: vi.fn(async () => [{
           id: 'collab-call-1',
           runtimeId: 'codex' as const,
           parentThreadId: 'parent-thread',
@@ -1364,7 +1429,6 @@ describe('createCodexAgentRuntimeAdapter', () => {
             source: 'codex-multi-agent'
           },
           updatedAt: '2026-06-21T00:00:02.000Z'
-        }
       }]),
       listThreads: vi.fn(async () => ({
         ok: true as const,
@@ -1387,7 +1451,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
         }]
       }))
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
 
     const listed = await adapter.auxiliary!({ settings: {} as never }, {
       runtimeId: 'codex',
@@ -1423,11 +1487,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
 
   it('returns a degraded child transcript when Codex exposes no real child thread', async () => {
     const service = {
-      readStoredEvents: vi.fn(async () => [{
-        threadId: 'parent-thread',
-        turnId: 'turn-1',
-        seq: 1,
-        child: {
+      listStoredThreadChildren: vi.fn(async () => [{
           id: 'summary-only',
           runtimeId: 'codex' as const,
           parentThreadId: 'parent-thread',
@@ -1436,11 +1496,10 @@ describe('createCodexAgentRuntimeAdapter', () => {
           status: 'completed' as const,
           prompt: 'Summarize the logs',
           summary: 'No transcript was exposed.'
-        }
       }]),
-      readThread: vi.fn()
+      readThreadPage: vi.fn()
     }
-    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
 
     const transcript = await adapter.auxiliary!({ settings: {} as never }, {
       runtimeId: 'codex',
@@ -1448,7 +1507,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
       payload: { parentThreadId: 'parent-thread', childId: 'summary-only' }
     })
 
-    expect(service.readThread).not.toHaveBeenCalled()
+    expect(service.readThreadPage).not.toHaveBeenCalled()
     expect(transcript).toMatchObject({
       transcript: {
         childId: 'summary-only',

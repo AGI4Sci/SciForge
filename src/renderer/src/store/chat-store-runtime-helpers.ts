@@ -8,17 +8,15 @@ import { normalizeUserMessageManagedBy } from '../agent/types'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
 import type { ChatState } from './chat-store-types'
 import { clearedAgentFocusState } from './chat-store-focus-actions'
+import { isAgentRuntimeActiveTurnState } from '@shared/agent-runtime-contract'
 
-type ThreadDetailProviderLike = {
-  getThreadDetail: (threadId: string) => Promise<{ blocks: ChatBlock[] }>
+type ThreadRuntimeRememberingProviderLike = {
   rememberThreadRuntime?: (
     threadId: string,
     runtimeId?: NormalizedThread['runtimeId'],
     workspaceLocator?: NormalizedThread['workspaceLocator']
   ) => void
 }
-
-type ThreadRuntimeRememberingProviderLike = Pick<ThreadDetailProviderLike, 'rememberThreadRuntime'>
 
 export function rememberProviderThreadRuntime(
   provider: ThreadRuntimeRememberingProviderLike,
@@ -248,12 +246,11 @@ export function clearedThreadSelection(): Pick<
   }
 }
 
-export async function findReusableEmptyThreadId(
+export function findReusableEmptyThreadId(
   state: ChatState,
-  provider: ThreadDetailProviderLike,
   workspaceRoot: string,
   isReusableThread: (thread: NormalizedThread) => boolean = () => true
-): Promise<string | null> {
+): string | null {
   const normalizedWorkspace = normalizeWorkspaceRoot(workspaceRoot)
   if (!normalizedWorkspace) return null
 
@@ -278,25 +275,11 @@ export async function findReusableEmptyThreadId(
     )
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
 
-  for (const thread of candidates) {
-    try {
-      rememberProviderThreadRuntime(provider, thread.id, state.threads)
-      const { blocks } = await provider.getThreadDetail(thread.id)
-      if (!threadHasUserMessage(blocks)) return thread.id
-    } catch {
-      /* ignore and keep checking other candidates */
-    }
-  }
-
-  return null
+  return candidates.find((thread) => thread.hasUserMessage === false)?.id ?? null
 }
 
 function runtimeStatusLooksRunning(status?: string): boolean {
-  const normalized = status?.trim().toLowerCase()
-  return normalized === 'running'
-    || normalized === 'in_progress'
-    || normalized === 'queued'
-    || normalized === 'started'
+  return isAgentRuntimeActiveTurnState(status)
 }
 
 function threadHasUserMessage(blocks: ChatBlock[]): boolean {

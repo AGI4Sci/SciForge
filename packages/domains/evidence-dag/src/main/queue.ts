@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { chmod, mkdir, open, readFile, rename, unlink } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import {
   evidenceDagCommittedSnapshotSchema,
@@ -51,6 +51,8 @@ type QueueJob = {
   reason: string
   priority: EvidenceDagQueuePriority
   trace: Record<string, unknown>[]
+  traceRef?: string
+  traceItemCount: number
   workspaceRoot: string
   rebuild?: boolean
   rebuildRationale?: string
@@ -67,8 +69,13 @@ type QueueJob = {
 }
 
 type QueueFile = {
-  version: 1
-  jobs: QueueJob[]
+  version: 2
+  jobs: StoredQueueJob[]
+}
+
+type StoredQueueJob = Omit<QueueJob, 'trace' | 'traceRef' | 'traceItemCount'> & {
+  traceRef: string
+  traceItemCount: number
 }
 
 const PRIORITY: Record<EvidenceDagQueuePriority, number> = {
@@ -130,13 +137,14 @@ export class EvidenceDagQueue {
   async enqueue(input: EvidenceDagQueueInput): Promise<EvidenceDagQueueEnqueueResult> {
     await this.load()
     if (!input.trace.length) throw new Error('Evidence DAG update requires at least one artifact.')
+    await this.hydrateCoalescingCandidate(input)
     const result = await this.mutateJobs((jobs) => {
       if (input.idempotencyKey) {
         const replay = jobs.find((job) => job.idempotencyKey === input.idempotencyKey)
         if (replay) {
           return {
             changed: false,
-            value: { jobId: replay.id, coalesced: true, itemCount: replay.trace.length }
+            value: { jobId: replay.id, coalesced: true, itemCount: replay.traceItemCount }
           }
         }
       }
@@ -177,6 +185,8 @@ export class EvidenceDagQueue {
           ? artifactLifecycleRetryWatermark(input.targetWatermark, existing.idempotencyKey!)
           : laterEvidenceDagWatermark(existing.targetWatermark, input.targetWatermark)
         existing.trace = mergedTrace
+        existing.traceRef = undefined
+        existing.traceItemCount = mergedTrace.length
         existing.reason = input.reason
         if (revivingFailed) {
           if (input.rebuild) existing.rebuild = true
@@ -205,7 +215,7 @@ export class EvidenceDagQueue {
         existing.updatedAt = this.nowIso()
         return {
           changed: true,
-          value: { jobId: existing.id, coalesced: true, itemCount: existing.trace.length }
+          value: { jobId: existing.id, coalesced: true, itemCount: existing.traceItemCount }
         }
       }
 
@@ -221,6 +231,7 @@ export class EvidenceDagQueue {
         reason: input.reason,
         priority: input.priority,
         trace: input.trace.map((item) => structuredClone(item) as Record<string, unknown>),
+        traceItemCount: input.trace.length,
         workspaceRoot: input.workspaceRoot,
         ...(input.rebuild ? { rebuild: true } : {}),
         ...(input.rebuildRationale ? { rebuildRationale: input.rebuildRationale } : {}),
@@ -233,7 +244,7 @@ export class EvidenceDagQueue {
       jobs.push(job)
       return {
         changed: true,
-        value: { jobId: job.id, coalesced: false, itemCount: job.trace.length }
+        value: { jobId: job.id, coalesced: false, itemCount: job.traceItemCount }
       }
     })
     this.schedulePump(0)
@@ -432,6 +443,7 @@ export class EvidenceDagQueue {
   }
 
   private async run(jobId: string): Promise<void> {
+    await this.hydrateJobTrace(jobId)
     const started = await this.mutateJobs((jobs) => {
       const job = requireQueueJob(jobs, jobId)
       if (
@@ -563,7 +575,8 @@ export class EvidenceDagQueue {
     const temporaryPath = `${this.options.storagePath}.${process.pid}.${randomUUID()}.tmp`
     let temporaryHandle: Awaited<ReturnType<typeof open>> | undefined
     try {
-      const file: QueueFile = { version: 1, jobs }
+      for (const job of jobs) await this.ensureTraceAsset(job)
+      const file: QueueFile = { version: 2, jobs: jobs.map(storedQueueJob) }
       const contents = `${JSON.stringify(file, null, 2)}\n`
       await this.ensureStorageDirectory()
       temporaryHandle = await open(temporaryPath, 'wx', 0o600)
@@ -587,6 +600,76 @@ export class EvidenceDagQueue {
       await temporaryHandle?.close().catch(() => undefined)
       await unlink(temporaryPath).catch(() => undefined)
     }
+  }
+
+  private async ensureTraceAsset(job: QueueJob): Promise<void> {
+    if (job.traceRef) return
+    const contents = `${JSON.stringify({ version: 1, trace: job.trace })}\n`
+    const traceRef = `sha256:${createHash('sha256').update(contents).digest('hex')}`
+    const traceDirectory = `${this.options.storagePath}.traces`
+    const tracePath = join(traceDirectory, `${traceRef.slice('sha256:'.length)}.json`)
+    await mkdir(traceDirectory, { recursive: true, mode: 0o700 })
+    await chmod(traceDirectory, 0o700)
+    try {
+      await chmod(tracePath, 0o600)
+    } catch (error) {
+      if (!hasErrorCode(error, 'ENOENT')) throw error
+      const temporaryPath = `${tracePath}.${process.pid}.${randomUUID()}.tmp`
+      let temporaryHandle: Awaited<ReturnType<typeof open>> | undefined
+      try {
+        temporaryHandle = await open(temporaryPath, 'wx', 0o600)
+        await temporaryHandle.writeFile(contents, 'utf8')
+        await temporaryHandle.sync()
+        await temporaryHandle.close()
+        temporaryHandle = undefined
+        await rename(temporaryPath, tracePath)
+      } finally {
+        await temporaryHandle?.close().catch(() => undefined)
+        await unlink(temporaryPath).catch(() => undefined)
+      }
+    }
+    job.traceRef = traceRef
+  }
+
+  private async hydrateCoalescingCandidate(input: EvidenceDagQueueInput): Promise<void> {
+    await this.writing
+    if (input.idempotencyKey) return
+    const matching = this.jobs
+      .filter((job) => job.engineThreadId === input.engineThreadId)
+      .sort(compareNewestJob)
+    const latest = input.priority === 'immediate'
+      ? matching.find((job) => job.status === 'failed' && isArtifactLifecycleJob(job))
+        ?? matching[0]
+      : matching[0]
+    if (!latest || latest.trace.length || !latest.traceRef) return
+    const eligible = latest.status === 'queued' || latest.status === 'retrying' ||
+      (latest.status === 'failed' && input.priority === 'immediate')
+    if (eligible) latest.trace = await this.readTraceAsset(latest.traceRef)
+  }
+
+  private async hydrateJobTrace(jobId: string): Promise<void> {
+    await this.writing
+    const job = this.jobs.find((candidate) => candidate.id === jobId)
+    if (!job || job.trace.length || !job.traceRef) return
+    job.trace = await this.readTraceAsset(job.traceRef)
+  }
+
+  private async readTraceAsset(traceRef: string): Promise<Record<string, unknown>[]> {
+    if (!isTraceRef(traceRef)) throw new Error('Evidence DAG queue trace reference is invalid.')
+    const tracePath = join(
+      `${this.options.storagePath}.traces`,
+      `${traceRef.slice('sha256:'.length)}.json`
+    )
+    const contents = await readFile(tracePath, 'utf8')
+    const digest = `sha256:${createHash('sha256').update(contents).digest('hex')}`
+    if (digest !== traceRef) throw new Error('Evidence DAG queue trace asset failed integrity validation.')
+    const asset = record(JSON.parse(contents))
+    const trace = asset?.version === 1 && Array.isArray(asset.trace) &&
+      asset.trace.every((item) => record(item) !== null)
+      ? asset.trace.map((item) => structuredClone(item) as Record<string, unknown>)
+      : null
+    if (!trace?.length) throw new Error('Evidence DAG queue trace asset is invalid.')
+    return trace
   }
 
   private now(): Date {
@@ -618,6 +701,8 @@ const QUEUE_JOB_KEYS = new Set([
   'reason',
   'priority',
   'trace',
+  'traceRef',
+  'traceItemCount',
   'workspaceRoot',
   'rebuild',
   'rebuildRationale',
@@ -650,7 +735,7 @@ function parseQueueFile(value: unknown): Readonly<{
 
   const jobs: QueueJob[] = []
   const jobIds = new Set<string>()
-  let recovered = file.version !== 1
+  let recovered = file.version !== 2
   for (const [index, value] of file.jobs.entries()) {
     const stored = record(value)
     if (!stored) throw invalidStoredJob(index)
@@ -669,7 +754,8 @@ function parseQueueFile(value: unknown): Readonly<{
     const job = canonicalJob(stored)
     if (!job || jobIds.has(job.id)) throw invalidStoredJob(index)
     jobIds.add(job.id)
-    if (!isDeepStrictEqual(job, stored)) recovered = true
+    if (file.version !== 2 || stored.trace !== undefined || stored.phase !== undefined ||
+        stored.attempts !== undefined || stored.lastError !== undefined) recovered = true
     jobs.push(job)
   }
   return { jobs, recovered }
@@ -688,8 +774,14 @@ function canonicalJob(job: Record<string, unknown>): QueueJob | null {
   const trace = Array.isArray(job.trace) && job.trace.every((item) => record(item) !== null)
     ? job.trace.map((item) => structuredClone(item) as Record<string, unknown>)
     : []
+  const traceRef = job.traceRef === undefined ? undefined : stringValue(job.traceRef)
+  const traceItemCount = job.traceItemCount === undefined
+    ? undefined
+    : positiveInteger(job.traceItemCount)
   if (!id || !runtimeId || !threadId || !engineThreadId || !targetWatermark || !workspaceRoot ||
-      !reason || !createdAt || !updatedAt || !trace.length) return null
+      !reason || !createdAt || !updatedAt ||
+      (!trace.length && (!traceRef || !isTraceRef(traceRef) || !traceItemCount)) ||
+      (trace.length && (traceRef !== undefined || traceItemCount !== undefined))) return null
   const status = canonicalQueueStatus(job.status)
   if (!status) return null
   const priority = canonicalQueuePriority(job.priority)
@@ -753,6 +845,8 @@ function canonicalJob(job: Record<string, unknown>): QueueJob | null {
     reason,
     priority,
     trace,
+    ...(traceRef ? { traceRef } : {}),
+    traceItemCount: trace.length || traceItemCount!,
     workspaceRoot,
     ...(job.rebuild === true ? { rebuild: true } : {}),
     ...(rebuildRationale ? { rebuildRationale } : {}),
@@ -767,6 +861,16 @@ function canonicalJob(job: Record<string, unknown>): QueueJob | null {
     ...(completedBatches !== undefined ? { completedBatches } : {}),
     ...(totalBatches !== undefined ? { totalBatches } : {})
   }
+}
+
+function storedQueueJob(job: QueueJob): StoredQueueJob {
+  if (!job.traceRef) throw new Error(`Evidence DAG queue job ${job.id} has no trace reference.`)
+  const { trace: _trace, traceRef, traceItemCount: _traceItemCount, ...stored } = job
+  return { ...stored, traceRef, traceItemCount: job.traceItemCount }
+}
+
+function isTraceRef(value: string): boolean {
+  return /^sha256:[a-f0-9]{64}$/u.test(value)
 }
 
 function storedNonnegativeInteger(primary: unknown, legacy: unknown): number | undefined {

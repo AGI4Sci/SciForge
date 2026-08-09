@@ -7,6 +7,7 @@ import {
   REMOTE_CHANNEL_FAILURE_THREAD_ID_MAX_LENGTH,
   REMOTE_CHANNEL_FAILURE_TITLE_MAX_LENGTH,
   REMOTE_CHANNEL_MODEL_IDS,
+  MAX_SUBAGENT_MAX_PARALLEL,
   SCHEDULE_MODEL_IDS,
   SCHEDULE_REASONING_EFFORT_IDS,
   SPEECH_TO_TEXT_PROTOCOLS
@@ -288,13 +289,21 @@ export const agentRuntimeStartThreadPayloadSchema = z.object({
   sidebarVisibility: agentRuntimeThreadSidebarVisibilitySchema.optional()
 }).strict()
 
-export const agentRuntimeReadThreadPayloadSchema = z.object({
+export const agentRuntimeReadThreadStatusPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
   threadId: trimmedString(MAX_ID_LENGTH),
   workspaceLocator: workspaceLocatorSchema.optional()
 }).strict()
 
-export const agentRuntimeReadThreadSidebarProbePayloadSchema = agentRuntimeReadThreadPayloadSchema
+export const agentRuntimeReadThreadPagePayloadSchema = agentRuntimeReadThreadStatusPayloadSchema.extend({
+  cursor: z.string().trim().max(2_048).optional(),
+  limit: z.number().int().min(1).max(100).optional()
+}).strict()
+
+export const agentRuntimeReadToolArtifactPayloadSchema = agentRuntimeReadThreadStatusPayloadSchema.extend({
+  ref: z.string().trim().min(1).max(2_048),
+  size: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
+}).strict()
 
 export const agentRuntimeStartTurnPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
@@ -652,8 +661,7 @@ const runtimeGuardPatchSchema = z.object({
 const agentCapabilityPatchSchema = z.object({
   subagents: z.object({
     enabled: z.boolean().optional(),
-    maxParallel: z.number().int().positive().max(16).optional(),
-    maxChildRuns: z.number().int().positive().max(4).optional()
+    maxParallel: z.number().int().positive().max(MAX_SUBAGENT_MAX_PARALLEL).optional()
   }).strict().optional()
 }).strict()
 

@@ -1,8 +1,4 @@
-export {
-  CodexRuntimeService,
-  type CodexRuntimeEventSink,
-  type CodexRuntimeServiceOptions
-} from './codex-service'
+export { CodexRuntimeService, type CodexRuntimeServiceOptions } from './codex-service'
 export {
   CODEX_MAIN_IPC_CHANNELS,
   createCodexAppServerClient,

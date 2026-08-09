@@ -36,7 +36,7 @@ import {
   resolveRuntimeModelRouterSettings
 } from '../shared/app-settings'
 import { APP_WEBHOOK_SECRET_HEADER } from '../shared/app-brand'
-import type { AgentRuntimeThread } from '../shared/agent-runtime-contract'
+import type { AgentRuntimeThread, AgentRuntimeTurnHandle } from '../shared/agent-runtime-contract'
 import { parseRemoteChannelCommand } from '../shared/remote-channel-commands'
 import { redactSecrets, redactSecretText } from '../shared/secret-redaction'
 import {
@@ -58,7 +58,6 @@ import {
   feishuSenderLabel,
   formatFeishuMirrorText,
   getRemoteChannelProviderCapabilities,
-  hasPendingDesktopApproval,
   isRunningStatus,
   latestThreadSummaryText,
   latestGeneratedFiles,
@@ -788,16 +787,23 @@ export class RemoteChannelRuntime {
     }
     const runtimePrompt = buildRemoteChannelRuntimePrompt(_settings, options.prompt, { channel: options.channel })
     const displayText = options.displayText?.trim() || parseRemoteChannelUserPromptForDisplay(options.prompt).text
-    const startTurn = () => agentRuntime.startTurn({
-      runtimeId,
-      threadId: thread.id,
-      text: runtimePrompt,
-      workspace,
-      mode: options.mode,
-      model,
-      governanceProfile: 'remote_guard',
-      ...(displayText && displayText !== runtimePrompt ? { displayText } : {})
-    })
+    let eventSinceSeq = 0
+    const startTurn = async (): Promise<AgentRuntimeTurnHandle> => {
+      eventSinceSeq = await agentRuntime.readThreadStatus({
+        runtimeId,
+        threadId: thread.id
+      }).then((status) => status.latestSeq).catch(() => 0)
+      return agentRuntime.startTurn({
+        runtimeId,
+        threadId: thread.id,
+        text: runtimePrompt,
+        workspace,
+        mode: options.mode,
+        model,
+        governanceProfile: 'remote_guard',
+        ...(displayText && displayText !== runtimePrompt ? { displayText } : {})
+      })
+    }
 
     let turn: { threadId: string; turnId: string }
     let replacementPreviousThreadId: string | undefined
@@ -848,7 +854,8 @@ export class RemoteChannelRuntime {
         turnId,
         options.responseTimeoutMs,
         workspace,
-        runtimeId
+        runtimeId,
+        eventSinceSeq
       )
     } catch (error) {
       return remoteChannelFailureFromError(error, 'Failed to wait for agent response.')
@@ -868,61 +875,83 @@ export class RemoteChannelRuntime {
     turnId: string,
     timeoutMs: number,
     workspaceRoot: string,
-    runtimeId: AgentRuntimeId
+    runtimeId: AgentRuntimeId,
+    sinceSeq: number
   ): Promise<{ text: string; files: RemoteChannelGeneratedFileV1[] }> {
     const agentRuntime = this.deps.agentRuntime
     const deadline = Date.now() + timeoutMs
-    let lastText = ''
-    let lastDetail: ThreadDetailJson | null = null
-    while (Date.now() < deadline) {
-      await sleep(1_500)
-      const detail = await agentRuntime.readThread({ runtimeId, threadId }) as ThreadDetailJson
-      lastDetail = detail
-      lastText = latestAssistantText(detail, { turnId }) || lastText
-      const targetTurn = Array.isArray(detail.turns)
-        ? detail.turns.find((turn) => turn.id === turnId)
-        : undefined
-      if (!targetTurn) continue
-      if (isRunningStatus(targetTurn.status)) {
-        if (hasPendingDesktopApproval(detail, { turnId })) {
+    const pendingApprovals = new Set<string>()
+    const pendingInputs = new Set<string>()
+    const subscriptionController = new AbortController()
+    const subscriptionTask = (async () => {
+      for await (const event of agentRuntime.subscribeEvents({
+        runtimeId,
+        threadId,
+        sinceSeq,
+        signal: subscriptionController.signal
+      })) {
+        if (event.turnId?.trim() && event.turnId.trim() !== turnId) continue
+        if (event.kind === 'approval_requested') pendingApprovals.add(event.approvalId)
+        if (event.kind === 'approval_resolved') pendingApprovals.delete(event.approvalId)
+        if (event.kind === 'user_input_requested') pendingInputs.add(event.requestId)
+        if (event.kind === 'user_input_resolved') pendingInputs.delete(event.requestId)
+      }
+    })().catch((error) => {
+      if (subscriptionController.signal.aborted) return
+      this.deps.logError('remote-channel-runtime', 'Agent event subscription failed while waiting for a response.', {
+        runtimeId,
+        threadId,
+        turnId,
+        message: errorMessage(error)
+      })
+    })
+    const readResult = async (): Promise<{ text: string; files: RemoteChannelGeneratedFileV1[] }> => {
+      const page = await agentRuntime.readThreadPage({ runtimeId, threadId, limit: 20 })
+      const detail = { turns: page.turns } as ThreadDetailJson
+      return {
+        text: latestAssistantText(detail, { turnId }),
+        files: latestGeneratedFiles(detail, { turnId, workspaceRoot })
+      }
+    }
+    try {
+      while (Date.now() < deadline) {
+        await sleep(1_500)
+        if (pendingApprovals.size > 0 || pendingInputs.size > 0) {
           throw remoteChannelFailureError(
             'waiting_desktop_approval',
-            'Waiting for desktop approval before the remote channel can continue.',
+            'Waiting for desktop approval or input before the remote channel can continue.',
             { threadId, turnId, runtimeId }
           )
         }
-        continue
-      }
-      if (isFailedStatus(targetTurn.status)) {
-        const error = targetTurn.error?.trim()
-        throw new Error(error || `Agent turn ${targetTurn.status}.`)
-      }
-      if (isCompletedStatus(targetTurn.status)) {
-        if (lastText) {
-          return {
-            text: lastText,
-            files: latestGeneratedFiles(detail, { turnId, workspaceRoot })
-          }
+        const status = await agentRuntime.readThreadStatus({ runtimeId, threadId })
+        if (status.latestTurnId !== turnId) continue
+        const turnStatus = status.latestTurnStatus ?? status.status
+        if (isRunningStatus(turnStatus)) continue
+        if (isFailedStatus(turnStatus)) {
+          throw new Error(`Agent turn ${turnStatus}.`)
         }
-        throw remoteChannelFailureError('empty_response', 'Agent completed without a reply.', {
-          threadId,
-          turnId,
-          runtimeId
-        })
+        if (isCompletedStatus(turnStatus)) {
+          const result = await readResult()
+          if (result.text) return result
+          throw remoteChannelFailureError('empty_response', 'Agent completed without a reply.', {
+            threadId,
+            turnId,
+            runtimeId
+          })
+        }
       }
+      const result = await readResult()
+      if (result.text) return result
+      await this.interruptTimedOutAgentRuntimeTurn(agentRuntime, runtimeId, threadId, turnId)
+      throw remoteChannelFailureError('timeout', 'Timed out waiting for agent response.', {
+        threadId,
+        turnId,
+        runtimeId
+      })
+    } finally {
+      subscriptionController.abort()
+      void subscriptionTask
     }
-    if (lastText && lastDetail) {
-      return {
-        text: lastText,
-        files: latestGeneratedFiles(lastDetail, { turnId, workspaceRoot })
-      }
-    }
-    await this.interruptTimedOutAgentRuntimeTurn(agentRuntime, runtimeId, threadId, turnId)
-    throw remoteChannelFailureError('timeout', 'Timed out waiting for agent response.', {
-      threadId,
-      turnId,
-      runtimeId
-    })
   }
 
   private async interruptTimedOutAgentRuntimeTurn(
@@ -1102,7 +1131,7 @@ export class RemoteChannelRuntime {
     threadId: string
   ): Promise<ThreadDetailJson> {
     const agentRuntime = this.deps.agentRuntime
-    return agentRuntime.readThread({ runtimeId, threadId }) as Promise<ThreadDetailJson>
+    return agentRuntime.readThreadPage({ runtimeId, threadId, limit: 20 }) as Promise<ThreadDetailJson>
   }
 
   private async incomingSummaryText(
@@ -2571,7 +2600,11 @@ export class RemoteChannelRuntime {
     if (!targetThreadId) return []
     try {
       const agentRuntime = this.deps.agentRuntime
-      const detail = await agentRuntime.readThread({ runtimeId, threadId: targetThreadId }) as ThreadDetailJson
+      const detail = await agentRuntime.readThreadPage({
+        runtimeId,
+        threadId: targetThreadId,
+        limit: 20
+      }) as ThreadDetailJson
       return latestGeneratedFiles(detail, {
         workspaceRoot,
         maxFiles: 3

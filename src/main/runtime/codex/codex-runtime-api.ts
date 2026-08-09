@@ -6,6 +6,7 @@ import type {
   AgentRuntimePhase,
   AgentRuntimeThreadRelation,
   AgentRuntimeThreadSidebarVisibility,
+  AgentRuntimeThreadStatus,
   AgentRuntimeThreadGoalStatus,
   AgentRuntimeUsage
 } from '../../../shared/agent-runtime-contract'
@@ -30,6 +31,7 @@ export type CodexNormalizedThread = {
   preview?: string
   latestTurnId?: string
   latestTurnStatus?: string
+  hasUserMessage?: boolean
   relation?: AgentRuntimeThreadRelation
   parentThreadId?: string
   parentTurnId?: string
@@ -219,8 +221,18 @@ export type CodexThreadStartResult =
   | CodexRuntimeOk<{ thread: CodexNormalizedThread }>
   | CodexRuntimeFailure
 
-export type CodexThreadReadResult =
-  | CodexRuntimeOk<{ detail: CodexThreadDetail }>
+export type CodexThreadStatusResult =
+  | CodexRuntimeOk<{
+      status: AgentRuntimeThreadStatus
+    }>
+  | CodexRuntimeFailure
+
+export type CodexThreadPageResult =
+  | CodexRuntimeOk<{ detail: CodexThreadDetail; nextCursor: string | null }>
+  | CodexRuntimeFailure
+
+export type CodexToolArtifactResult =
+  | CodexRuntimeOk<{ content: string }>
   | CodexRuntimeFailure
 
 export type CodexThreadMutationResult =

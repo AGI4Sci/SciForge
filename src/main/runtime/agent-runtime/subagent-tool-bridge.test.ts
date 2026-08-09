@@ -27,7 +27,6 @@ function bridgeWith(
   adapter: AgentRuntimeSubagentAdapter,
   options: {
     maxParallel?: number
-    maxChildren?: number
     onChildEvent?: AgentRuntimeSubagentToolBridgeOptions['onChildEvent']
   } = {}
 ) {
@@ -37,8 +36,7 @@ function bridgeWith(
       adapter,
       context: context(),
       enabled: true,
-      maxParallel: options.maxParallel ?? 2,
-      maxChildren: options.maxChildren ?? 8
+      maxParallel: options.maxParallel ?? 2
     }),
     onChildEvent: options.onChildEvent
   })
@@ -84,16 +82,13 @@ describe('AgentRuntime subagent tool bridge', () => {
       arguments: {}
     })).toBe(false)
     expect(bridge.dynamicTools()[0]?.description).toContain(
-      'the configured child-run budget is shared by every delegate_task call in the same parent turn'
-    )
-    expect(bridge.dynamicTools()[0]?.description).toContain(
-      'splitting the same workload across later delegate_task calls does not reset it'
+      'configured parallel capacity'
     )
   })
 
-  it('explains both concurrency and whole-turn budgets before an oversized batch can start', async () => {
+  it('explains concurrency capacity before an oversized batch can start', async () => {
     const adapter = completedAdapter('codex')
-    const bridge = bridgeWith(adapter, { maxParallel: 2, maxChildren: 4 })
+    const bridge = bridgeWith(adapter, { maxParallel: 2 })
 
     const response = await bridge.callTool({
       requestId: 'oversized-batch',
@@ -114,13 +109,43 @@ describe('AgentRuntime subagent tool bridge', () => {
     expect(response.contentItems).toEqual([{
       type: 'inputText',
       text: expect.stringContaining(
-        'at most 2 concurrent tasks in one call, and this parent turn allows 4 child runs total'
+        'at most 2 concurrent tasks in one call'
       )
     }])
     expect(response.contentItems[0]?.type === 'inputText' ? response.contentItems[0].text : '').toContain(
-      'splitting it into additional delegate_task calls does not reset the turn budget'
+      'Wait for running children before starting the remaining work'
     )
     expect(adapter.spawn).not.toHaveBeenCalled()
+  })
+
+  it('starts ten child agents in one call when configured capacity is ten', async () => {
+    const adapter = completedAdapter('codex')
+    const bridge = bridgeWith(adapter, { maxParallel: 10 })
+
+    const response = await bridge.callTool({
+      requestId: 'ten-child-batch',
+      runtimeId: 'codex',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn',
+      tool: AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME,
+      arguments: {
+        tasks: Array.from({ length: 10 }, (_, index) => ({
+          prompt: `task ${index + 1}`
+        }))
+      }
+    })
+
+    expect(response).toMatchObject({
+      success: true,
+      structuredContent: {
+        mode: 'parallel',
+        children: expect.arrayContaining([
+          expect.objectContaining({ index: 0, success: true }),
+          expect.objectContaining({ index: 9, success: true })
+        ])
+      }
+    })
+    expect(adapter.spawn).toHaveBeenCalledTimes(10)
   })
 
   it.each<AgentRuntimeId>(['codex', 'claude'])(
@@ -255,8 +280,7 @@ describe('AgentRuntime subagent tool bridge', () => {
         adapter,
         context: context(),
         enabled: true,
-        maxParallel: 2,
-        maxChildren: 8
+        maxParallel: 2
       }),
       onChildEvent: refresh
     })

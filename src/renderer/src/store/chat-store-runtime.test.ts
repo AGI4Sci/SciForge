@@ -91,11 +91,13 @@ describe('thread event sink binding', () => {
     const drainQueuedMessagesForThread = vi.fn(async () => true)
     const refreshThreads = vi.fn(async () => undefined)
     const provider = {
-      getThreadDetail: vi.fn(async () => ({
-        blocks: [{ kind: 'assistant', id: 'done-a', text: 'done' }],
+      getThreadStatus: vi.fn(async () => ({
         latestSeq: 4,
         threadStatus: 'idle'
       })),
+      getRecentThreadView: vi.fn(async () => {
+        throw new Error('completion polling must not read thread history')
+      }),
       rememberThreadRuntime: vi.fn()
     }
     registryMock.getProvider.mockReturnValue(provider)
@@ -114,11 +116,11 @@ describe('thread event sink binding', () => {
       expect(drainQueuedMessagesForThread).toHaveBeenCalledWith('thread-a')
     })
     expect(getState().activeThreadId).toBe('thread-b')
-    expect(getState().threadBlocksById['thread-a']).toEqual([
-      { kind: 'assistant', id: 'done-a', text: 'done' }
-    ])
+    expect(getState().threadBlocksById['thread-a']).toBeUndefined()
     expect(getState().watchTurnCompletion).toEqual({})
     expect(refreshThreads).toHaveBeenCalled()
+    expect(provider.getThreadStatus).toHaveBeenCalledWith('thread-a')
+    expect(provider.getRecentThreadView).not.toHaveBeenCalled()
   })
 
   it('requests an immediate thread refresh when a thread lifecycle event arrives', async () => {
@@ -888,7 +890,7 @@ describe('thread event sink binding', () => {
   it('settles busy state when terminal runtime status is the only completion signal', async () => {
     const provider = {
       rememberThreadRuntime: vi.fn(),
-      getThreadDetail: vi.fn(async () => ({
+      getRecentThreadView: vi.fn(async () => ({
         latestSeq: 12,
         threadStatus: 'completed',
         blocks: [
@@ -969,7 +971,7 @@ describe('thread event sink binding', () => {
     vi.stubGlobal('window', { sciforge: { showTurnCompleteNotification } })
     registryMock.getProvider.mockReturnValue({
       rememberThreadRuntime: vi.fn(),
-      getThreadDetail: vi.fn(async () => ({ blocks: [] }))
+      getRecentThreadView: vi.fn(async () => ({ blocks: [] }))
     })
     const { getState, set, get } = makeSinkHarness({
       activeThreadId: 'thread-current',
@@ -1038,7 +1040,7 @@ describe('thread event sink binding', () => {
   it('merges canonical assistant output after completion when live events omitted the answer', async () => {
     const provider = {
       rememberThreadRuntime: vi.fn(),
-      getThreadDetail: vi.fn(async () => ({
+      getRecentThreadView: vi.fn(async () => ({
         latestSeq: 12,
         threadStatus: 'completed',
         blocks: [
@@ -1139,7 +1141,7 @@ describe('thread event sink binding', () => {
     }
     const provider = {
       rememberThreadRuntime: vi.fn(),
-      getThreadDetail: vi.fn(async () => ({
+      getRecentThreadView: vi.fn(async () => ({
         latestSeq: 7,
         threadStatus: 'completed',
         blocks: [

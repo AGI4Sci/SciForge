@@ -69,6 +69,47 @@ function makeSink(): ThreadEventSink {
   }
 }
 
+type TestThreadSnapshot = {
+  id: string
+  runtimeId: string
+  latestSeq: number
+  latestTurnId?: string
+  status?: string
+  items?: Array<Record<string, unknown> & { id: string }>
+  turns?: Array<Record<string, unknown> & { id: string }>
+  [key: string]: unknown
+}
+
+function pagedThreadBridge(
+  readSnapshot: (input: { threadId: string }) => Promise<TestThreadSnapshot>
+) {
+  return {
+    readThreadStatus: async (input: { threadId: string }) => {
+      const snapshot = await readSnapshot(input)
+      return { ...snapshot, runtimeId: snapshot.runtimeId as AgentRuntimeId }
+    },
+    readThreadPage: async (input: { threadId: string }) => {
+      const snapshot = await readSnapshot(input)
+      return {
+        runtimeId: snapshot.runtimeId as AgentRuntimeId,
+        threadId: snapshot.id,
+        latestSeq: snapshot.latestSeq,
+        turns: snapshot.turns ?? [{
+          id: snapshot.latestTurnId ?? 'turn-1',
+          threadId: snapshot.id,
+          status: snapshot.status ?? 'completed',
+          items: snapshot.items ?? []
+        }],
+        nextCursor: null
+      }
+    },
+    readToolArtifact: async (input: { runtimeId: AgentRuntimeId; threadId: string; ref: string; size: number }) => ({
+      ...input,
+      content: ''
+    })
+  }
+}
+
 function capabilities(runtimeId: AgentRuntimeId): AgentRuntimeCapabilities {
   const transport = runtimeId === 'sciforge' ? 'http_sse' : runtimeId === 'claude' ? 'cli_process' : 'jsonrpc_stdio'
   return {
@@ -280,7 +321,7 @@ describe('AgentRuntimeProvider', () => {
           capabilities: vi.fn(async () => capabilities('codex')),
           listThreads,
           startThread,
-          readThread,
+          ...pagedThreadBridge(readThread),
           startTurn,
           interruptTurn,
           steerTurn,
@@ -332,26 +373,13 @@ describe('AgentRuntimeProvider', () => {
     })).resolves.toEqual(
       expect.objectContaining({ id: 'thread-2', title: 'Two', runtimeId: 'codex' })
     )
-    await expect(provider.getThreadDetail('thread-2')).resolves.toMatchObject({
+    await expect(provider.getRecentThreadView('thread-2')).resolves.toMatchObject({
       runtimeId: 'codex',
       latestSeq: 3,
       latestTurnId: 'turn-1',
       latestUserMessageId: 'user-1',
-      guiPlan: expect.objectContaining({
-        planId: '/tmp/workspace:.sciforge/plan/bridge.md',
-        relativePath: '.sciforge/plan/bridge.md'
-      }),
-      todos: {
-        items: [
-          expect.objectContaining({
-            id: 'todo-1',
-            source: expect.objectContaining({
-              kind: 'plan',
-              relativePath: '.sciforge/plan/bridge.md'
-            })
-          })
-        ]
-      },
+      guiPlan: null,
+      todos: null,
       blocks: [
         { kind: 'user', id: 'user-1', text: 'hello' },
         {
@@ -545,11 +573,6 @@ describe('AgentRuntimeProvider', () => {
         }
       ]
     }))
-    const readThreadSidebarProbe = vi.fn(async () => ({
-      runtimeId: 'codex' as const,
-      threadId: 'remote-thread',
-      text: 'Remote summary'
-    }))
     const startTurn = vi.fn(async () => ({
       threadId: 'remote-thread',
       turnId: 'turn-remote',
@@ -586,8 +609,7 @@ describe('AgentRuntimeProvider', () => {
         getSettings: vi.fn(async () => settings('codex')),
         setSettings: vi.fn(),
         agentRuntime: {
-          readThread,
-          readThreadSidebarProbe,
+          ...pagedThreadBridge(readThread),
           startTurn,
           steerTurn,
           interruptTurn,
@@ -611,8 +633,8 @@ describe('AgentRuntimeProvider', () => {
     const provider = new AgentRuntimeProvider()
     provider.rememberThreadRuntime('remote-thread', 'codex', workspaceLocator)
 
-    await provider.getThreadDetail('remote-thread')
-    await provider.getThreadSidebarProbe('remote-thread')
+    await provider.getRecentThreadView('remote-thread')
+    await provider.getThreadStatus('remote-thread')
     await provider.sendUserMessage('remote-thread', 'continue')
     await provider.steerUserMessage?.('remote-thread', 'turn-remote', 'more')
     await provider.interruptTurn('remote-thread', 'turn-remote')
@@ -640,7 +662,6 @@ describe('AgentRuntimeProvider', () => {
 
     for (const bridgeCall of [
       readThread,
-      readThreadSidebarProbe,
       startTurn,
       steerTurn,
       interruptTurn,
@@ -669,7 +690,7 @@ describe('AgentRuntimeProvider', () => {
         getSettings: vi.fn(async () => settings('codex')),
         setSettings: vi.fn(),
         agentRuntime: {
-          readThread: vi.fn(async () => ({
+          ...pagedThreadBridge(async () => ({
             id: 'thread-input',
             runtimeId: 'codex',
             title: 'Input thread',
@@ -706,7 +727,7 @@ describe('AgentRuntimeProvider', () => {
     const provider = new AgentRuntimeProvider()
     provider.rememberThreadRuntime('thread-input', 'codex')
 
-    await expect(provider.getThreadDetail('thread-input')).resolves.toMatchObject({
+    await expect(provider.getRecentThreadView('thread-input')).resolves.toMatchObject({
       blocks: [
         {
           kind: 'user_input',
@@ -733,7 +754,7 @@ describe('AgentRuntimeProvider', () => {
         getSettings: vi.fn(async () => settings('codex')),
         setSettings: vi.fn(),
         agentRuntime: {
-          readThread: vi.fn(async () => ({
+          ...pagedThreadBridge(async () => ({
             id: 'thread-approval',
             runtimeId: 'codex',
             title: 'Approval thread',
@@ -759,7 +780,7 @@ describe('AgentRuntimeProvider', () => {
     const provider = new AgentRuntimeProvider()
     provider.rememberThreadRuntime('thread-approval', 'codex')
 
-    const detail = await provider.getThreadDetail('thread-approval')
+    const detail = await provider.getRecentThreadView('thread-approval')
 
     expect(detail.blocks).toContainEqual(
       expect.objectContaining({
@@ -776,7 +797,7 @@ describe('AgentRuntimeProvider', () => {
         getSettings: vi.fn(async () => settings('codex')),
         setSettings: vi.fn(),
         agentRuntime: {
-          readThread: vi.fn(async () => ({
+          ...pagedThreadBridge(async () => ({
             id: 'thread-input-duplicate',
             runtimeId: 'codex',
             title: 'Input thread',
@@ -814,7 +835,7 @@ describe('AgentRuntimeProvider', () => {
     const provider = new AgentRuntimeProvider()
     provider.rememberThreadRuntime('thread-input-duplicate', 'codex')
 
-    const detail = await provider.getThreadDetail('thread-input-duplicate')
+    const detail = await provider.getRecentThreadView('thread-input-duplicate')
 
     expect(detail.blocks.filter((block) => block.kind === 'user_input')).toEqual([
       expect.objectContaining({ kind: 'user_input', id: 'input-new', requestId: 'request-1' })
@@ -827,7 +848,7 @@ describe('AgentRuntimeProvider', () => {
         getSettings: vi.fn(async () => settings('codex')),
         setSettings: vi.fn(),
         agentRuntime: {
-          readThread: vi.fn(async () => ({
+          ...pagedThreadBridge(async () => ({
             id: 'thread-completed-tool',
             runtimeId: 'codex',
             title: 'Completed tool thread',
@@ -880,7 +901,7 @@ describe('AgentRuntimeProvider', () => {
     const provider = new AgentRuntimeProvider()
     provider.rememberThreadRuntime('thread-completed-tool', 'codex')
 
-    const detail = await provider.getThreadDetail('thread-completed-tool')
+    const detail = await provider.getRecentThreadView('thread-completed-tool')
 
     expect(detail.blocks).toEqual([
       expect.objectContaining({ kind: 'user', id: 'user-1', turnStatus: 'completed' }),
@@ -896,7 +917,7 @@ describe('AgentRuntimeProvider', () => {
         getSettings: vi.fn(async () => settings('codex')),
         setSettings: vi.fn(),
         agentRuntime: {
-          readThread: vi.fn(async () => ({
+          ...pagedThreadBridge(async () => ({
             id: 'thread-idle',
             runtimeId: 'codex',
             title: 'Idle thread',
@@ -929,7 +950,7 @@ describe('AgentRuntimeProvider', () => {
     const provider = new AgentRuntimeProvider()
     provider.rememberThreadRuntime('thread-idle', 'codex')
 
-    const detail = await provider.getThreadDetail('thread-idle')
+    const detail = await provider.getRecentThreadView('thread-idle')
 
     expect(detail.blocks).toEqual([
       expect.objectContaining({ kind: 'tool', id: 'tool-running', status: 'error' }),
@@ -945,7 +966,7 @@ describe('AgentRuntimeProvider', () => {
         getSettings: vi.fn(async () => settings('codex')),
         setSettings: vi.fn(),
         agentRuntime: {
-          readThread: vi.fn(async () => ({
+          ...pagedThreadBridge(async () => ({
             id: 'thread-out-of-order',
             runtimeId: 'codex',
             title: 'Out of order thread',
@@ -996,7 +1017,7 @@ describe('AgentRuntimeProvider', () => {
     const provider = new AgentRuntimeProvider()
     provider.rememberThreadRuntime('thread-out-of-order', 'codex')
 
-    const detail = await provider.getThreadDetail('thread-out-of-order')
+    const detail = await provider.getRecentThreadView('thread-out-of-order')
 
     expect(detail.threadStatus).toBe('completed')
     expect(detail.blocks).toEqual(expect.arrayContaining([
@@ -1090,7 +1111,7 @@ describe('AgentRuntimeProvider', () => {
         getSettings: vi.fn(async () => settings(activeRuntime)),
         setSettings: vi.fn(),
         agentRuntime: {
-          readThread,
+          ...pagedThreadBridge(readThread),
           startTurn,
           interruptTurn,
           steerTurn,
@@ -1106,7 +1127,7 @@ describe('AgentRuntimeProvider', () => {
 
     const provider = new AgentRuntimeProvider()
     provider.rememberThreadRuntime('codex-thread', 'codex')
-    await provider.getThreadDetail('codex-thread')
+    await provider.getRecentThreadView('codex-thread')
 
     await provider.interruptTurn('codex-thread', 'turn-next')
     await provider.steerUserMessage?.('codex-thread', 'turn-next', 'more')
@@ -1636,7 +1657,7 @@ describe('AgentRuntimeProvider', () => {
         getSettings: vi.fn(async () => settings('codex')),
         setSettings: vi.fn(),
         agentRuntime: {
-          readThread: vi.fn(async () => ({
+          ...pagedThreadBridge(async () => ({
             id: 'thread-2',
             runtimeId: 'codex',
             title: 'Two',
@@ -1668,7 +1689,7 @@ describe('AgentRuntimeProvider', () => {
 
     const provider = new AgentRuntimeProvider()
     provider.rememberThreadRuntime('thread-2', 'codex')
-    await provider.getThreadDetail('thread-2')
+    await provider.getRecentThreadView('thread-2')
     await expect(provider.submitApprovalDecision?.('approval-1', 'allow')).resolves.toBeUndefined()
     await expect(provider.submitUserInputResponse?.('input-1', [
       { id: 'choice', label: 'Yes', value: 'yes' }
@@ -1695,7 +1716,7 @@ describe('AgentRuntimeProvider', () => {
         getSettings: vi.fn(async () => settings('codex')),
         setSettings: vi.fn(),
         agentRuntime: {
-          readThread: vi.fn(async () => ({
+          ...pagedThreadBridge(async () => ({
             id: 'thread-2',
             runtimeId: 'codex',
             title: 'Two',
@@ -1722,7 +1743,7 @@ describe('AgentRuntimeProvider', () => {
 
     const provider = new AgentRuntimeProvider()
     provider.rememberThreadRuntime('thread-2', 'codex')
-    await provider.getThreadDetail('thread-2')
+    await provider.getRecentThreadView('thread-2')
     await expect(provider.submitApprovalDecision?.('call_approval', 'allow')).resolves.toBeUndefined()
 
     expect(resolveApproval).toHaveBeenCalledWith({
@@ -1742,7 +1763,7 @@ describe('AgentRuntimeProvider', () => {
         getSettings: vi.fn(async () => settings(activeRuntime)),
         setSettings: vi.fn(),
         agentRuntime: {
-          readThread: vi.fn(async () => ({
+          ...pagedThreadBridge(async () => ({
             id: 'codex-thread',
             runtimeId: 'codex',
             title: 'Codex thread',
@@ -1774,7 +1795,7 @@ describe('AgentRuntimeProvider', () => {
 
     const provider = new AgentRuntimeProvider()
     provider.rememberThreadRuntime('codex-thread', 'codex')
-    await provider.getThreadDetail('codex-thread')
+    await provider.getRecentThreadView('codex-thread')
     activeRuntime = 'sciforge'
     rendererRuntimeClient.invalidateSettings()
     await expect(provider.submitApprovalDecision?.('approval-codex', 'deny')).resolves.toBeUndefined()
@@ -1826,6 +1847,35 @@ describe('AgentRuntimeProvider', () => {
       threadId: 'thread-2',
       sinceSeq: 7,
       streamId: expect.stringMatching(/^agent-runtime-/u)
+    })
+  })
+
+  it('loads externalized tool detail only through the artifact contract', async () => {
+    const readToolArtifact = vi.fn(async (input) => ({
+      ...input,
+      content: 'complete tool output'
+    }))
+    vi.stubGlobal('window', {
+      sciforge: {
+        getSettings: vi.fn(async () => settings('codex')),
+        setSettings: vi.fn(),
+        agentRuntime: { readToolArtifact }
+      }
+    })
+    const provider = new AgentRuntimeProvider()
+
+    await expect(provider.readToolArtifact({
+      runtimeId: 'codex',
+      threadId: 'thread-tool',
+      ref: 'tool-artifact-ref',
+      size: 42
+    })).resolves.toBe('complete tool output')
+
+    expect(readToolArtifact).toHaveBeenCalledWith({
+      runtimeId: 'codex',
+      threadId: 'thread-tool',
+      ref: 'tool-artifact-ref',
+      size: 42
     })
   })
 })

@@ -3,10 +3,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { SessionStoreEntry } from '@anthropic-ai/claude-agent-sdk'
+import { createExecutionReceipt } from '@sciforge/execution-governance'
 import {
   ClaudeCodeEventStore,
   ClaudeCodeThreadStore,
-  storedThreadDetail
+  storedThreadPage
 } from './claude-code-store'
 import { ClaudeCodeSessionStore } from './claude-code-session-store'
 import {
@@ -83,13 +84,15 @@ describe('ClaudeCodeEventStore', () => {
       displayText: 'short user prompt'
     })
 
-    await expect(storedThreadDetail(thread, eventStore)).resolves.toMatchObject({
-      items: [{
-        id: 'user-1',
-        text: 'short user prompt',
-        meta: {
-          [EXECUTION_INTEGRITY_POLICY_METADATA_KEY]: EXECUTION_INTEGRITY_POLICY_VERSION
-        }
+    await expect(storedThreadPage(thread, eventStore)).resolves.toMatchObject({
+      turns: [{
+        items: [{
+          id: 'user-1',
+          text: 'short user prompt',
+          meta: {
+            [EXECUTION_INTEGRITY_POLICY_METADATA_KEY]: EXECUTION_INTEGRITY_POLICY_VERSION
+          }
+        }]
       }]
     })
   })
@@ -118,6 +121,70 @@ describe('ClaudeCodeEventStore', () => {
     })
 
     expect((await store.read('thread-1', { includeAll: true })).map((event) => event.seq)).toEqual([1, 2])
+  })
+
+  it('pages complete Claude turns and externalizes large tool details on demand', async () => {
+    const rootDir = await tempRoot()
+    const eventStore = new ClaudeCodeEventStore({ rootDir })
+    const threadStore = new ClaudeCodeThreadStore({ rootDir })
+    const detail = '界'.repeat(20_000)
+    for (const event of [
+      {
+        kind: 'assistant_delta' as const,
+        runtimeId: 'claude' as const,
+        threadId: 'thread-page',
+        turnId: 'turn-1',
+        itemId: 'assistant-1',
+        text: 'first'
+      },
+      {
+        kind: 'turn_lifecycle' as const,
+        runtimeId: 'claude' as const,
+        threadId: 'thread-page',
+        turnId: 'turn-1',
+        state: 'completed' as const
+      },
+      {
+        kind: 'tool_event' as const,
+        runtimeId: 'claude' as const,
+        threadId: 'thread-page',
+        turnId: 'turn-2',
+        itemId: 'tool-2',
+        summary: 'Large output',
+        status: 'success' as const,
+        detail,
+        receipt: createExecutionReceipt({ status: 'success', detail })
+      },
+      {
+        kind: 'turn_lifecycle' as const,
+        runtimeId: 'claude' as const,
+        threadId: 'thread-page',
+        turnId: 'turn-2',
+        state: 'completed' as const
+      }
+    ]) await eventStore.append('thread-page', event)
+    const thread = await threadStore.upsert({
+      guiThreadId: 'thread-page',
+      latestSeq: 4,
+      latestTurnId: 'turn-2',
+      latestTurnStatus: 'completed'
+    })
+
+    const latest = await storedThreadPage(thread, eventStore, { limit: 1 })
+    expect(latest.latestSeq).toBe(4)
+    expect(latest.turns.map((turn) => turn.id)).toEqual(['turn-2'])
+    expect(latest.nextCursor).toEqual(expect.any(String))
+    const tool = latest.turns[0]?.items?.[0]
+    expect(Buffer.byteLength(tool?.detail ?? '', 'utf8')).toBeLessThanOrEqual(4_096)
+    expect(tool?.detailArtifact?.size).toBe(Buffer.byteLength(detail, 'utf8'))
+    await expect(eventStore.readToolArtifact('thread-page', tool!.detailArtifact!.ref)).resolves.toBe(detail)
+
+    const earlier = await storedThreadPage(thread, eventStore, {
+      cursor: latest.nextCursor!,
+      limit: 1
+    })
+    expect(earlier.turns.map((turn) => turn.id)).toEqual(['turn-1'])
+    expect(earlier.nextCursor).toBeNull()
   })
 
   it('serializes concurrent Claude event appends without corrupting JSONL rows', async () => {

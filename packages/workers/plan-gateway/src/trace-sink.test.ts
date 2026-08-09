@@ -121,14 +121,12 @@ test('records concurrent Codex requests with Agent-compatible correlation and no
     const responseBodies = eventsA
       .filter((event) => event.kind === 'model_response_chunk')
       .map((event) => String(recordValue(event.payload).body));
-    assert.equal(responseBodies.length, 2);
+    assert.equal(responseBodies.length, 1);
     assert.match(responseBodies.join(''), /\[REDACTED\]/);
-    assert.deepEqual(
-      eventsA
-        .filter((event) => event.kind === 'model_response_chunk')
-        .map((event) => recordValue(event.payload).index),
-      [0, 1],
-    );
+    const responseCapture = recordValue(recordValue(onlyEvent(eventsA, 'model_response_chunk').payload).capture);
+    assert.equal(responseCapture.mode, 'bounded');
+    assert.equal(responseCapture.chunkCount, 2);
+    assert.match(String(responseCapture.sha256), /^[a-f0-9]{64}$/);
 
     const rawTrace = await readTraceSegments(storageDirectory);
     for (const forbidden of [

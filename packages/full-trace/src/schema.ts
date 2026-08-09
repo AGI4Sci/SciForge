@@ -68,7 +68,19 @@ export type ModelResponseHeadersTracePayload = {
 
 export type ModelResponseChunkTracePayload = {
   index: number
+  /** Bounded response preview. Durable capture never promises the complete streamed body. */
   body: unknown
+  capture?: {
+    mode: 'bounded'
+    chunkCount: number
+    sourceByteLength: number
+    capturedBodyByteLength: number
+    previewByteLength: number
+    truncated: boolean
+    sha256: string
+    firstTimestamp?: string
+    lastTimestamp?: string
+  }
   [key: string]: unknown
 }
 

@@ -1,13 +1,14 @@
 import type {
   AgentRuntimeCapabilities,
-  AgentRuntimeThread,
-  AgentRuntimeThreadDetail
+  AgentRuntimeThread
 } from '../../../shared/agent-runtime-contract'
 import {
   createAgentRuntimeCapabilityMatrix,
-  createDefaultAgentRuntimeCapabilities
+  createDefaultAgentRuntimeCapabilities,
+  projectAgentRuntimeThreadSummary
 } from '../../../shared/agent-runtime-contract'
 import type { AgentRuntimeAdapter } from '../agent-runtime/adapter'
+import { boundAgentRuntimeEventForDelivery } from '../agent-runtime/jsonl-thread-page'
 import type {
   ClaudeCodeRuntimeFailure,
   ClaudeCodeRuntimeService
@@ -58,7 +59,7 @@ export function createClaudeCodeAgentRuntimeAdapter(
         archivedOnly: input.archivedOnly
       })
       if (!result.ok) throw claudeFailure(result)
-      return result.threads
+      return result.threads.map(projectAgentRuntimeThreadSummary)
     },
 
     async startThread(_context, input): Promise<AgentRuntimeThread> {
@@ -68,13 +69,25 @@ export function createClaudeCodeAgentRuntimeAdapter(
         title: input.title
       })
       if (!result.ok) throw claudeFailure(result)
-      return result.thread
+      return projectAgentRuntimeThreadSummary(result.thread)
     },
 
-    async readThread(_context, input): Promise<AgentRuntimeThreadDetail> {
-      const result = await service.readThread(input.threadId)
+    async readThreadStatus(_context, input) {
+      const result = await service.readThreadStatus(input.threadId)
       if (!result.ok) throw claudeFailure(result)
-      return result.detail
+      return result.status
+    },
+
+    async readThreadPage(_context, input) {
+      const result = await service.readThreadPage(input.threadId, input)
+      if (!result.ok) throw claudeFailure(result)
+      return result.page
+    },
+
+    async readToolArtifact(_context, input) {
+      const result = await service.readToolArtifact(input.threadId, input.ref, input.size)
+      if (!result.ok) throw claudeFailure(result)
+      return result.artifact
     },
 
     async startTurn(context, input) {
@@ -123,11 +136,13 @@ export function createClaudeCodeAgentRuntimeAdapter(
     },
 
     async *subscribeEvents(_context, input) {
-      yield* service.subscribeEvents(input.threadId, input.sinceSeq ?? 0, input.signal)
+      for await (const event of service.subscribeEvents(input.threadId, input.sinceSeq ?? 0, input.signal)) {
+        yield boundedClaudeEvent(event)
+      }
     },
 
     async publishSyntheticEvent(_context, event) {
-      return service.publishSyntheticEvent(event)
+      return boundedClaudeEvent(await service.publishSyntheticEvent(event))
     },
 
     async updateTurnGovernanceSnapshot(_context, input) {
@@ -218,6 +233,10 @@ export function createClaudeCodeAgentRuntimeAdapter(
   }
 }
 
+function boundedClaudeEvent(event: import('../../../shared/agent-runtime-contract').AgentRuntimeEvent) {
+  return boundAgentRuntimeEventForDelivery(event, { runtimeId: 'claude' })
+}
+
 function isClaudeComputerUseConfigured(
   service: ClaudeCodeRuntimeService,
   settings: AppSettingsV1
@@ -283,9 +302,7 @@ function claudeRuntimeInfo(
       },
       subagents: {
         ...coreCapability(caps.tools.subagents),
-        maxParallel: caps.tools.subagents.maxParallel ?? 0,
-        maxChildren: caps.tools.subagents.maxChildren ?? 0,
-        maxChildRuns: caps.tools.subagents.maxChildren ?? 0
+        maxParallel: caps.tools.subagents.maxParallel ?? 0
       },
       attachments: {
         ...coreCapability(caps.storage.attachments),
@@ -375,14 +392,12 @@ function claudeCapabilities(
       subagents: subagents.enabled
         ? {
             available: true,
-            maxParallel: subagents.maxParallel,
-            maxChildren: subagents.maxChildRuns
+            maxParallel: subagents.maxParallel
           }
         : {
             available: false,
             reason: 'Subagents are disabled by shared agentCapabilities settings.',
-            maxParallel: subagents.maxParallel,
-            maxChildren: subagents.maxChildRuns
+            maxParallel: subagents.maxParallel
           },
       diagnostics: { available: false, reason: 'Claude Code tool diagnostics are not exposed through this service yet.' }
     },

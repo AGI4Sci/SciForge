@@ -12,17 +12,19 @@ import type {
   AgentRuntimeListThreadChildrenResponse,
   AgentRuntimeReadChildTranscriptResponse,
   AgentRuntimeThread,
-  AgentRuntimeThreadDetail,
+  AgentRuntimeThreadPage,
   AgentRuntimeToolEvidenceStrength,
   AgentRuntimeToolExecutionPhase,
   AgentRuntimeToolFactSource,
   AgentRuntimeToolKind,
-  AgentRuntimeTurn
+  AgentRuntimeTurn,
+  AgentRuntimeUsage
 } from '../../../shared/agent-runtime-contract'
 import {
   createAgentRuntimeCapabilityMatrix,
   createDefaultAgentRuntimeCapabilities,
-  filterAgentRuntimeThreadChildren
+  filterAgentRuntimeThreadChildren,
+  projectAgentRuntimeThreadSummary
 } from '../../../shared/agent-runtime-contract'
 import {
   codexModelDeltaItemId,
@@ -31,6 +33,10 @@ import {
   type CodexThreadEventPayload
 } from './codex-runtime-api'
 import type { AgentRuntimeAdapter } from '../agent-runtime/adapter'
+import {
+  boundAgentRuntimeEventForDelivery,
+  externalizeToolDetails
+} from '../agent-runtime/jsonl-thread-page'
 import {
   EXECUTION_INTEGRITY_POLICY_METADATA_KEY,
   EXECUTION_INTEGRITY_POLICY_VERSION,
@@ -98,12 +104,30 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
       return mapCodexThread(result.thread)
     },
 
-    async readThread(_context, input) {
-      const result = await service.readThread(input.threadId)
+    async readThreadStatus(_context, input) {
+      const result = await service.readThreadStatus(input.threadId)
       if (!result.ok) throw codexFailure(result)
-      return mapCodexDetail(input.threadId, result.detail, {
+      return result.status
+    },
+
+    async readThreadPage(_context, input) {
+      const result = await service.readThreadPage(input.threadId, input)
+      if (!result.ok) throw codexFailure(result)
+      return mapCodexPage(input.threadId, result.detail, result.nextCursor ?? null, {
         activePendingRequestIds: activePendingRequestIds(service)
       })
+    },
+
+    async readToolArtifact(_context, input) {
+      const result = await service.readToolArtifact(input.threadId, input.ref)
+      if (!result.ok) throw codexFailure(result)
+      return {
+        runtimeId: 'codex',
+        threadId: input.threadId,
+        ref: input.ref,
+        size: Buffer.byteLength(result.content, 'utf8'),
+        content: result.content
+      }
     },
 
     async startTurn(context, input) {
@@ -153,10 +177,11 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
     },
 
     async *subscribeEvents(_context, input) {
-      const events = typeof service.subscribeEvents === 'function'
-        ? service.subscribeEvents(input.threadId, input.sinceSeq ?? 0, input.signal)
-        : await service.readStoredEvents(input.threadId, input.sinceSeq ?? 0)
-      for await (const event of events) {
+      for await (const event of service.subscribeEvents(
+        input.threadId,
+        input.sinceSeq ?? 0,
+        input.signal
+      )) {
         for (const mapped of mapCodexStoredEvent(event)) {
           if (input.signal?.aborted) return
           yield mapped
@@ -290,6 +315,7 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
             parentThreadId,
             parentTurnId,
             childId,
+            cursor: stringValue(payload.cursor),
             limit: numberValue(payload.limit)
           })
         }
@@ -423,14 +449,12 @@ function codexCapabilities(state: CodexMcpState = emptyCodexMcpState): AgentRunt
       subagents: state.subagents.enabled
         ? {
             available: true,
-            maxParallel: state.subagents.maxParallel,
-            maxChildren: state.subagents.maxChildRuns
+            maxParallel: state.subagents.maxParallel
           }
         : {
             available: false,
             reason: 'Subagents are disabled by shared agentCapabilities settings.',
-            maxParallel: state.subagents.maxParallel,
-            maxChildren: state.subagents.maxChildRuns
+            maxParallel: state.subagents.maxParallel
           },
       diagnostics: { available: true }
     },
@@ -521,9 +545,7 @@ function codexRuntimeInfo(state: CodexMcpState = emptyCodexMcpState): Record<str
       },
       subagents: {
         ...coreCapability(caps.tools.subagents),
-        maxParallel: caps.tools.subagents.maxParallel ?? 0,
-        maxChildren: caps.tools.subagents.maxChildren ?? 0,
-        maxChildRuns: caps.tools.subagents.maxChildren ?? 0
+        maxParallel: caps.tools.subagents.maxParallel ?? 0
       },
       attachments: {
         ...coreCapability(caps.storage.attachments),
@@ -620,7 +642,7 @@ function coreCapability(state: { available?: boolean; reason?: string; degraded?
 }
 
 function mapCodexThread(thread: CodexNormalizedThread): AgentRuntimeThread {
-  return {
+  return projectAgentRuntimeThreadSummary({
     id: thread.id,
     runtimeId: 'codex',
     title: thread.title || 'Codex thread',
@@ -633,6 +655,7 @@ function mapCodexThread(thread: CodexNormalizedThread): AgentRuntimeThread {
     preview: thread.preview,
     latestTurnId: thread.latestTurnId,
     latestTurnStatus: thread.latestTurnStatus,
+    hasUserMessage: thread.hasUserMessage,
     backendThreadId: thread.codexThreadId ?? thread.id,
     relation: thread.relation,
     parentThreadId: thread.parentThreadId,
@@ -642,28 +665,32 @@ function mapCodexThread(thread: CodexNormalizedThread): AgentRuntimeThread {
     titleSource: thread.titleSource,
     agentNickname: thread.agentNickname,
     agentRole: thread.agentRole
-  }
+  })
 }
 
-function mapCodexDetail(threadId: string, detail: {
+function mapCodexPage(threadId: string, detail: {
   blocks: CodexChatBlock[]
   latestSeq: number
   workspace?: string
   threadStatus?: string
   latestTurnId?: string
   latestUserMessageId?: string
-  usage?: AgentRuntimeThreadDetail['usage']
-}, options: {
+  usage?: AgentRuntimeUsage
+}, nextCursor: string | null, options: {
   activePendingRequestIds?: ReadonlySet<string>
-} = {}): AgentRuntimeThreadDetail {
+} = {}): AgentRuntimeThreadPage {
   const latestStatus = normalizeTurnStatus(detail.threadStatus)
   const stalePendingRequests = Boolean(latestStatus && latestStatus !== 'running')
-  const mappedItems = detail.blocks
+  const mappedItems = externalizeToolDetails({
+    runtimeId: 'codex',
+    threadId,
+    items: detail.blocks
     .map((block) => mapCodexBlock(block, {
       stalePendingRequests,
       activePendingRequestIds: options.activePendingRequestIds
     }))
     .filter(Boolean) as AgentRuntimeItem[]
+  })
   const fallbackTurnId = detail.latestTurnId || (mappedItems.length > 0 ? 'codex-turn' : '')
   const items = fallbackTurnId
     ? mappedItems.map((item) => item.turnId ? item : { ...item, turnId: fallbackTurnId })
@@ -680,18 +707,11 @@ function mapCodexDetail(threadId: string, detail: {
     }
   })
   return {
-    id: threadId,
     runtimeId: 'codex',
-    title: 'Codex thread',
-    updatedAt: new Date().toISOString(),
-    ...(turnId && detail.threadStatus ? { status: detail.threadStatus } : {}),
-    ...(turnId ? { latestTurnId: turnId } : {}),
+    threadId,
     latestSeq: detail.latestSeq,
-    workspace: detail.workspace,
     turns,
-    items,
-    usage: detail.usage,
-    backendThreadId: threadId
+    nextCursor
   }
 }
 
@@ -794,7 +814,13 @@ async function listCodexThreadChildren(
 
 async function readCodexChildTranscript(
   service: CodexRuntimeService,
-  input: { parentThreadId: string; parentTurnId?: string; childId: string; limit?: number }
+  input: {
+    parentThreadId: string
+    parentTurnId?: string
+    childId: string
+    cursor?: string
+    limit?: number
+  }
 ): Promise<AgentRuntimeReadChildTranscriptResponse> {
   const children = await listCodexThreadChildren(service, {
     threadId: input.parentThreadId,
@@ -814,13 +840,19 @@ async function readCodexChildTranscript(
     )
   }
 
-  const result = await service.readThread(childThreadId)
-  if (!result.ok) {
-    return degradedCodexChildTranscript(input, child, result.message)
+  const [pageResult, statusResult] = await Promise.all([
+    service.readThreadPage(childThreadId, {
+      ...(input.cursor ? { cursor: input.cursor } : {}),
+      limit: normalizedTranscriptPageLimit(input.limit)
+    }),
+    service.readThreadStatus(childThreadId)
+  ])
+  if (!pageResult.ok) {
+    return degradedCodexChildTranscript(input, child, pageResult.message)
   }
 
   const entries = limitTranscriptEntries(
-    result.detail.blocks.flatMap((block) => childTranscriptEntriesFromBlock(block)),
+    pageResult.detail.blocks.flatMap((block) => childTranscriptEntriesFromBlock(block)),
     input.limit
   )
   return {
@@ -833,9 +865,10 @@ async function readCodexChildTranscript(
       transcriptRef: child.transcriptRef,
       entries,
       summary: child.summary,
-      usage: child.usage ?? result.detail.usage,
+      usage: child.usage ?? (statusResult.ok ? statusResult.status.usage : undefined),
+      ...(pageResult.nextCursor ? { nextCursor: pageResult.nextCursor } : {}),
       metadata: {
-        source: 'openAsThreadRef',
+        source: 'readThreadPage',
         threadId: childThreadId
       }
     }
@@ -849,10 +882,8 @@ async function codexChildrenFromThreadEvents(
   const byId = new Map<string, AgentRuntimeChild>()
   const childIdByCanonicalIdentity = new Map<string, string>()
   const nativeChildIds = new Set<string>()
-  const [events, threadsResult] = await Promise.all([
-    typeof service.readStoredEvents === 'function'
-      ? service.readStoredEvents(threadId, 0)
-      : Promise.resolve([]),
+  const [storedChildren, threadsResult] = await Promise.all([
+    service.listStoredThreadChildren(threadId),
     typeof service.listThreads === 'function'
       ? service.listThreads({ includeArchived: true, includeSide: true })
       : Promise.resolve(null)
@@ -868,8 +899,8 @@ async function codexChildrenFromThreadEvents(
       nativeChildIds.add(child.id)
     }
   }
-  for (const event of events) {
-    const child = normalizeCodexChild(event.child, event)
+  for (const storedChild of storedChildren) {
+    const child = normalizeCodexChild(storedChild, { threadId })
     if (!child) continue
     const canonicalIdentity = canonicalCodexChildIdentity(child)
     const canonicalChildId = canonicalIdentity ? childIdByCanonicalIdentity.get(canonicalIdentity) : undefined
@@ -1282,6 +1313,10 @@ function limitTranscriptEntries(
   return entries.slice(0, Math.floor(limit))
 }
 
+function normalizedTranscriptPageLimit(limit?: number): number {
+  return Math.min(100, Math.max(1, Math.floor(limit ?? 20)))
+}
+
 function mapCodexStoredEvent(event: CodexThreadEventPayload): AgentRuntimeEvent[] {
   const common = {
     threadId: event.threadId,
@@ -1448,7 +1483,7 @@ function mapCodexStoredEvent(event: CodexThreadEventPayload): AgentRuntimeEvent[
       state: 'completed'
     })
   }
-  return mapped
+  return mapped.map((candidate) => boundAgentRuntimeEventForDelivery(candidate, { runtimeId: 'codex' }))
 }
 
 function codexExecutionReceipt<Status extends 'success' | 'error'>(

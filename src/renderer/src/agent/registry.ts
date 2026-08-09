@@ -32,14 +32,20 @@ class RegistryAgentProvider implements AgentProvider {
     return this.neutral.createThread(...args)
   }
 
-  getThreadDetail(...args: Parameters<AgentProvider['getThreadDetail']>): ReturnType<AgentProvider['getThreadDetail']> {
-    return this.neutral.getThreadDetail(...args)
+  getRecentThreadView(...args: Parameters<AgentProvider['getRecentThreadView']>): ReturnType<AgentProvider['getRecentThreadView']> {
+    return this.neutral.getRecentThreadView(...args)
   }
 
-  getThreadSidebarProbe(
-    ...args: Parameters<NonNullable<AgentProvider['getThreadSidebarProbe']>>
-  ): ReturnType<NonNullable<AgentProvider['getThreadSidebarProbe']>> {
-    return this.neutral.getThreadSidebarProbe(...args)
+  getThreadStatus(...args: Parameters<AgentProvider['getThreadStatus']>): ReturnType<AgentProvider['getThreadStatus']> {
+    return this.neutral.getThreadStatus(...args)
+  }
+
+  getThreadPage(...args: Parameters<AgentProvider['getThreadPage']>): ReturnType<AgentProvider['getThreadPage']> {
+    return this.neutral.getThreadPage(...args)
+  }
+
+  readToolArtifact(...args: Parameters<AgentProvider['readToolArtifact']>): ReturnType<AgentProvider['readToolArtifact']> {
+    return this.neutral.readToolArtifact(...args)
   }
 
   sendUserMessage(...args: Parameters<AgentProvider['sendUserMessage']>): ReturnType<AgentProvider['sendUserMessage']> {

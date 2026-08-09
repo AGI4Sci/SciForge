@@ -34,3 +34,12 @@ GUI-to-Codex thread bindings are atomically stored in a private
 `~/.sciforge/workspace-host-state/` directory keyed by the authorized workspace
 root. No state is written into the research project, and every loaded binding
 is validated against the canonical Workspace Host root.
+
+The same package owns an append-only `runtime-events/` JSONL log and atomic
+per-thread summaries below that private state directory. Status and thread-list
+reads use summaries, history uses opaque bounded reverse-page cursors, replay
+streams only records newer than `sinceSeq`, and full tool output is recovered
+from the newest matching persisted event only when its artifact reference is
+opened. Live, replay, and page payloads bound duplicated tool detail, metadata,
+arguments, receipts, and completion receipts before transport serialization;
+the canonical event log is never truncated at an in-memory event count.

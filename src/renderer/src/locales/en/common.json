@@ -1553,6 +1553,7 @@
   "timelineShowEarlierTurns": "Show {{count}} earlier turns",
   "timelineShowEarlierWork": "Show {{count}} earlier work items",
   "timelineCollapseEarlierTurns": "Show recent turns only",
+  "toolLoadFullDetail": "Load full output",
   "groupEditedFiles": "Edited {{count}} files",
   "groupEditedFile": "Edited 1 file",
   "turnChangeFilesOne": "Edited 1 file",

@@ -450,6 +450,66 @@ describe('syncTurnCompletionPoll', () => {
     await Promise.resolve()
   })
 
+  it('reconciles a locally busy active thread even when it is not in the background watch list', async () => {
+    const loadThreadState = vi.fn(async () => ({
+      blocks: [] as ChatBlock[],
+      latestTurnId: 'turn-1',
+      latestTurnStatus: 'completed'
+    }))
+    const onCompletedThreads = vi.fn(async () => undefined)
+    const h = makeHarness({
+      runtimeConnection: 'ready',
+      watchTurnCompletion: {},
+      activeThreadId: 't1',
+      busy: true,
+      currentTurnId: 'turn-1'
+    } as Partial<ChatState>)
+
+    syncTurnCompletionPoll(h.set, h.get, {
+      loadThreadState,
+      threadLooksRunning: (_blocks, status) => status === 'running',
+      onCompletedThreads,
+      intervalMs: 10
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(loadThreadState).toHaveBeenCalledWith(expect.anything(), 't1')
+    expect(onCompletedThreads).toHaveBeenCalledWith(
+      [{ threadId: 't1', expectedTurnId: 'turn-1' }],
+      expect.objectContaining({ activeThreadId: 't1', currentTurnId: 'turn-1' }),
+      h.set,
+      h.get
+    )
+  })
+
+  it('does not settle the active turn from a terminal snapshot for a different turn', async () => {
+    const onCompletedThreads = vi.fn(async () => undefined)
+    const h = makeHarness({
+      runtimeConnection: 'ready',
+      watchTurnCompletion: {},
+      activeThreadId: 't1',
+      busy: true,
+      currentTurnId: 'turn-current'
+    } as Partial<ChatState>)
+
+    syncTurnCompletionPoll(h.set, h.get, {
+      loadThreadState: async () => ({
+        latestTurnId: 'turn-old',
+        latestTurnStatus: 'completed'
+      }),
+      threadLooksRunning: (_blocks, status) => status === 'running',
+      onCompletedThreads,
+      intervalMs: 10
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(onCompletedThreads).not.toHaveBeenCalled()
+  })
+
   it('uses a slower cadence while the renderer is hidden', async () => {
     const loadThreadState = vi.fn(async () => ({ blocks: [], threadStatus: 'running' }))
     vi.stubGlobal('document', { visibilityState: 'hidden' })

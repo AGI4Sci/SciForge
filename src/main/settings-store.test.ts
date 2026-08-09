@@ -148,16 +148,14 @@ describe('JsonSettingsStore', () => {
     expect(getAgentCapabilitySettings(next)).toEqual({
       subagents: {
         enabled: false,
-        maxParallel: 3,
-        maxChildRuns: 4
+        maxParallel: 3
       }
     })
     const raw = JSON.parse(await readFile(join(userDataDir, 'sciforge-settings.json'), 'utf8'))
     expect(raw.agentCapabilities).toMatchObject({
       subagents: {
         enabled: false,
-        maxParallel: 3,
-        maxChildRuns: 4
+        maxParallel: 3
       }
     })
   })

@@ -213,7 +213,6 @@ export type LocalRuntimeCapabilityManifestJson = {
   }
   subagents: LocalRuntimeCapabilityStateJson & {
     maxParallel: number
-    maxChildRuns: number
   }
   attachments: LocalRuntimeCapabilityStateJson & {
     maxImageBytes: number

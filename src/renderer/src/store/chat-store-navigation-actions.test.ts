@@ -81,7 +81,6 @@ function buildHarness(options: {
   activeThread: NormalizedThread
   listedThreads: NormalizedThread[]
   blocks?: ChatState['blocks']
-  detailBlocks?: ChatState['blocks']
   showArchivedThreads?: boolean
   threadSearch?: string
   sideConversations?: ChatState['sideConversations']
@@ -90,14 +89,13 @@ function buildHarness(options: {
   state: ChatState
   provider: {
     listThreads: ReturnType<typeof vi.fn>
-    getThreadDetail: ReturnType<typeof vi.fn>
+    getRecentThreadView: ReturnType<typeof vi.fn>
   }
 } {
   let state: ChatState
-  const storedBlocks = options.detailBlocks ?? [{ kind: 'user' as const, id: 'stored-user', text: 'stored' }]
   const provider = {
     listThreads: vi.fn(async () => options.listedThreads),
-    getThreadDetail: vi.fn(async () => ({ blocks: storedBlocks }))
+    getRecentThreadView: vi.fn(async () => ({ blocks: [] }))
   }
   registryMock.getProvider.mockReturnValue(provider)
   runtimeClientMock.getSettings.mockResolvedValue({ activeAgentRuntime: options.activeRuntime })
@@ -243,37 +241,39 @@ describe('chat-store-navigation-actions refreshThreads', () => {
     expect(provider.listThreads).toHaveBeenCalledWith({ limit: 200, search: 'paper' })
   })
 
-  it('filters suspicious fallback threads before applying the sidebar list', async () => {
+  it('filters empty fallback threads from summary metadata without reading history', async () => {
     const activeThread = { ...thread('active-thread', 'codex'), title: 'Active thread' }
-    const fallbackThread = { ...thread('thr_279f3fef', 'codex'), title: 'thr_279f' }
+    const fallbackThread = {
+      ...thread('thr_279f3fef', 'codex'),
+      title: 'thr_279f',
+      hasUserMessage: false
+    }
     const { refreshThreads, state, provider } = buildHarness({
       activeRuntime: 'codex',
       activeThread,
       listedThreads: [fallbackThread]
     })
-    provider.getThreadDetail.mockResolvedValueOnce({ blocks: [] })
-
     await refreshThreads()
 
-    expect(provider.getThreadDetail).toHaveBeenCalledWith('thr_279f3fef')
+    expect(provider.getRecentThreadView).not.toHaveBeenCalled()
     expect(state.threads.map((item) => item.id)).toEqual(['active-thread'])
   })
 
-  it('derives real titles for fallback threads before applying the sidebar list', async () => {
+  it('uses the canonical title from the thread summary without reading history', async () => {
     const activeThread = { ...thread('active-thread', 'codex'), title: 'Active thread' }
-    const fallbackThread = { ...thread('thr_279f3fef', 'codex'), title: 'New Thread' }
+    const fallbackThread = {
+      ...thread('thr_279f3fef', 'codex'),
+      title: 'fix the sidebar placeholder titles',
+      hasUserMessage: true
+    }
     const { refreshThreads, state, provider } = buildHarness({
       activeRuntime: 'codex',
       activeThread,
       listedThreads: [fallbackThread]
     })
-    provider.getThreadDetail.mockResolvedValueOnce({
-      blocks: [{ kind: 'user', id: 'fallback-user', text: 'fix the sidebar placeholder titles' }]
-    })
-
     await refreshThreads()
 
-    expect(provider.getThreadDetail).toHaveBeenCalledWith('thr_279f3fef')
+    expect(provider.getRecentThreadView).not.toHaveBeenCalled()
     expect(state.threads.map((item) => [item.id, item.title])).toEqual([
       ['active-thread', 'Active thread'],
       ['thr_279f3fef', 'fix the sidebar placeholder titles']
@@ -311,7 +311,7 @@ describe('chat-store-navigation-actions refreshThreads', () => {
 
     await refreshThreads()
 
-    expect(provider.getThreadDetail).not.toHaveBeenCalled()
+    expect(provider.getRecentThreadView).not.toHaveBeenCalled()
     expect(state.threads.map((item) => item.id)).toEqual(['parent-thread', 'fork-thread'])
     expect(state.activeThreadId).toBe('parent-thread')
   })
@@ -474,36 +474,36 @@ describe('chat-store-navigation-actions refreshThreads', () => {
     expect(state.activeThreadId).toBe('sdd-codex-thread')
   })
 
-  it('keeps the active thread selected when sidebar filtering sees an empty detail during send', async () => {
+  it('keeps the active thread selected from summary metadata during send', async () => {
     const activeThread = {
       ...thread('12345678abcdef', 'codex'),
-      title: '12345678'
+      title: '12345678',
+      hasUserMessage: true
     }
     const { refreshThreads, state } = buildHarness({
       activeRuntime: 'codex',
       activeThread,
       listedThreads: [activeThread],
-      detailBlocks: [],
       blocks: [{ kind: 'user', id: 'optimistic-user', text: 'continue this thread' }]
     })
 
     await refreshThreads()
 
-    expect(state.threads).toEqual([{ ...activeThread, title: 'continue this thread' }])
+    expect(state.threads).toEqual([activeThread])
     expect(state.activeThreadId).toBe('12345678abcdef')
     expect(state.blocks).toEqual([{ kind: 'user', id: 'optimistic-user', text: 'continue this thread' }])
   })
 
-  it('still clears an empty active fallback-title thread that sidebar filtering hides', async () => {
+  it('clears an empty active fallback-title thread from summary metadata', async () => {
     const activeThread = {
       ...thread('87654321abcdef', 'codex'),
-      title: '87654321'
+      title: '87654321',
+      hasUserMessage: false
     }
     const { refreshThreads, state } = buildHarness({
       activeRuntime: 'codex',
       activeThread,
       listedThreads: [activeThread],
-      detailBlocks: [],
       blocks: []
     })
 

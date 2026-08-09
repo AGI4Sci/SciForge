@@ -16,9 +16,12 @@ import {
   resolveRuntimeModelRouterSettings
 } from '../shared/app-settings'
 import type {
+  AgentRuntimeEvent,
   AgentRuntimeThread,
-  AgentRuntimeThreadDetail,
-  AgentRuntimeThreadReadInput,
+  AgentRuntimeThreadPage,
+  AgentRuntimeThreadPageInput,
+  AgentRuntimeThreadStatus,
+  AgentRuntimeThreadStatusInput,
   AgentRuntimeThreadStartInput,
   AgentRuntimeTurnHandle,
   AgentRuntimeTurnStartInput
@@ -35,7 +38,14 @@ export type ScheduleRuntimeDeps = {
   store: JsonSettingsStore
   agentRuntime: {
     startThread: (input: AgentRuntimeThreadStartInput) => Promise<AgentRuntimeThread>
-    readThread: (input: AgentRuntimeThreadReadInput) => Promise<AgentRuntimeThreadDetail>
+    readThreadStatus: (input: AgentRuntimeThreadStatusInput) => Promise<AgentRuntimeThreadStatus>
+    readThreadPage: (input: AgentRuntimeThreadPageInput) => Promise<AgentRuntimeThreadPage>
+    subscribeEvents: (input: {
+      runtimeId: AgentRuntimeId
+      threadId: string
+      sinceSeq?: number
+      signal?: AbortSignal
+    }) => AsyncIterable<AgentRuntimeEvent>
     startTurn: (input: AgentRuntimeTurnStartInput) => Promise<AgentRuntimeTurnHandle>
     interruptTurn?: (input: { runtimeId: AgentRuntimeId; threadId: string; turnId: string; discard?: boolean }) => Promise<void>
   }
@@ -74,6 +84,9 @@ export type ThreadDetailJson = {
   status?: string
   turns?: TurnRecordJson[]
   items?: TurnItemJson[]
+  latestSeq?: number
+  latestTurnId?: string
+  latestTurnStatus?: string
 }
 
 export type RunPromptOptions = {
@@ -93,6 +106,11 @@ export type ScheduleModelConfig = {
   providerId: string
   model: string
   reasoningEffort: ScheduleReasoningEffort
+}
+
+export type SchedulePromptRunResult = ScheduleRunResult & {
+  /** Event watermark captured immediately before the scheduled turn starts. */
+  eventSinceSeq?: number
 }
 
 export const SCHEDULER_INTERVAL_MS = 30_000
@@ -171,7 +189,7 @@ export async function runPromptViaRuntime(
   deps: ScheduleRuntimeDeps,
   settings: AppSettingsV1,
   options: RunPromptOptions
-): Promise<ScheduleRunResult> {
+): Promise<SchedulePromptRunResult> {
   const workspace = options.workspaceRoot.trim() || settings.schedule.defaultWorkspaceRoot.trim() || settings.workspaceRoot
   const runtimeId = normalizeAgentRuntimeId(options.runtimeId ?? settings.activeAgentRuntime)
   if (workspace) {
@@ -194,6 +212,10 @@ export async function runPromptViaRuntime(
     return { ok: false, message: message || 'Failed to create thread.' }
   }
 
+  const eventSinceSeq = await agentRuntime.readThreadStatus({
+    runtimeId,
+    threadId: thread.id
+  }).then((status) => status.latestSeq).catch(() => 0)
   let turn: { threadId: string; turnId: string }
   try {
     turn = await agentRuntime.startTurn({
@@ -217,10 +239,17 @@ export async function runPromptViaRuntime(
     return { ok: false, message: 'Failed to start turn: missing turn id.' }
   }
   if (!options.waitForResult) {
-    return { ok: true, threadId, turnId, message: 'Started' }
+    return { ok: true, threadId, turnId, message: 'Started', eventSinceSeq }
   }
 
-  const text = await waitForAssistantTextViaRuntime(deps, runtimeId, threadId, turnId, options.responseTimeoutMs)
+  const text = await waitForAssistantTextViaRuntime(
+    deps,
+    runtimeId,
+    threadId,
+    turnId,
+    options.responseTimeoutMs,
+    eventSinceSeq
+  )
   return { ok: true, threadId, turnId, text, message: text || 'Completed' }
 }
 
@@ -229,31 +258,65 @@ export async function waitForAssistantTextViaRuntime(
   runtimeId: AgentRuntimeId,
   threadId: string,
   turnId: string,
-  timeoutMs: number
+  timeoutMs: number,
+  sinceSeq = 0
 ): Promise<string> {
   const agentRuntime = deps.agentRuntime
   const deadline = Date.now() + timeoutMs
-  let lastText = ''
-  while (Date.now() < deadline) {
-    await sleep(1_500)
-    const detail = await agentRuntime.readThread({ runtimeId, threadId }) as ThreadDetailJson
-    lastText = latestAssistantText(detail, { turnId }) || lastText
-    const targetTurn = Array.isArray(detail.turns)
-      ? detail.turns.find((turn) => turn.id === turnId)
-      : undefined
-    if (!targetTurn) continue
-    if (isRunningStatus(targetTurn.status)) continue
-    if (targetTurn.status === 'failed' || targetTurn.status === 'aborted') {
-      const error = targetTurn.error?.trim()
-      throw new Error(error || `Agent turn ${targetTurn.status}.`)
+  const pendingApprovals = new Set<string>()
+  const pendingInputs = new Set<string>()
+  const subscriptionController = new AbortController()
+  const subscriptionTask = (async () => {
+    for await (const event of agentRuntime.subscribeEvents({
+      runtimeId,
+      threadId,
+      sinceSeq,
+      signal: subscriptionController.signal
+    })) {
+      if (event.turnId?.trim() && event.turnId.trim() !== turnId) continue
+      if (event.kind === 'approval_requested') pendingApprovals.add(event.approvalId)
+      if (event.kind === 'approval_resolved') pendingApprovals.delete(event.approvalId)
+      if (event.kind === 'user_input_requested') pendingInputs.add(event.requestId)
+      if (event.kind === 'user_input_resolved') pendingInputs.delete(event.requestId)
     }
-    // A tool-driven agent turn may complete successfully without emitting a final
-    // assistant message. Completion is authoritative; an empty result is valid
-    // and callers surface it as "Completed" instead of waiting until timeout.
-    if (targetTurn.status === 'completed') return lastText
+  })().catch((error) => {
+    if (subscriptionController.signal.aborted) return
+    deps.logError('schedule-task', 'Agent event subscription failed while waiting for a response.', {
+      runtimeId,
+      threadId,
+      turnId,
+      message: error instanceof Error ? error.message : String(error)
+    })
+  })
+  try {
+    while (Date.now() < deadline) {
+      await sleep(1_500)
+      if (pendingApprovals.size > 0 || pendingInputs.size > 0) {
+        throw new Error('Agent turn is waiting for desktop approval or input.')
+      }
+      const status = await agentRuntime.readThreadStatus({ runtimeId, threadId })
+      if (status.latestTurnId !== turnId) continue
+      const turnStatus = status.latestTurnStatus ?? status.status
+      if (isRunningStatus(turnStatus)) continue
+      if (turnStatus === 'failed' || turnStatus === 'aborted') {
+        throw new Error(`Agent turn ${turnStatus}.`)
+      }
+      // A tool-driven agent turn may complete successfully without emitting a final
+      // assistant message. Completion is authoritative; an empty result is valid
+      // and callers surface it as "Completed" instead of waiting until timeout.
+      if (turnStatus === 'completed') {
+        const page = await agentRuntime.readThreadPage({ runtimeId, threadId, limit: 20 })
+        return latestAssistantText({ turns: page.turns }, { turnId })
+      }
+    }
+    const page = await agentRuntime.readThreadPage({ runtimeId, threadId, limit: 20 })
+    const lastText = latestAssistantText({ turns: page.turns }, { turnId })
+    if (lastText) return lastText
+    throw new Error('Timed out waiting for agent response.')
+  } finally {
+    subscriptionController.abort()
+    void subscriptionTask
   }
-  if (lastText) return lastText
-  throw new Error('Timed out waiting for agent response.')
 }
 
 export function summarizeTaskResult(text: string): string {

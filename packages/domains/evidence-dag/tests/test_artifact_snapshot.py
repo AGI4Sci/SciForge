@@ -72,6 +72,12 @@ class TestEvidenceSnapshots(unittest.TestCase):
             self.assertEqual(second["snapshot"]["version"], 2)
             with open(immutable, encoding="utf-8") as handle:
                 self.assertEqual(handle.read(), original)
+            restarted = Engine(storage_dir=storage)
+            self.assertEqual(
+                restarted.require("t").meta["snapshot"]["digest"],
+                second["snapshot"]["digest"],
+            )
+            self.assertEqual(restarted.list_threads(), ["t"])
 
     def test_failed_concurrent_update_never_exposes_partial_graph(self):
         class BlockingFailure:

@@ -415,10 +415,39 @@ export function queuedMessageMatchesThread(
 
 export function createThreadActions(
   { set, get, sseAbortRef }: StoreActionContext
-): Pick<ChatState, 'createThread' | 'refreshActiveThreadContextState' | 'recoverActiveTurn' | 'selectThread' | 'drainQueuedMessages' | 'drainQueuedMessagesForThread' | 'removeQueuedMessage' | 'updateQueuedMessage' | 'retryQueuedMessage' | 'steerQueuedMessage' | 'sendMessage' | 'reviewActiveThread'> {
+): Pick<ChatState, 'createThread' | 'refreshActiveThreadContextState' | 'recoverActiveTurn' | 'selectThread' | 'loadEarlierThreadHistory' | 'drainQueuedMessages' | 'drainQueuedMessagesForThread' | 'removeQueuedMessage' | 'updateQueuedMessage' | 'retryQueuedMessage' | 'steerQueuedMessage' | 'sendMessage' | 'reviewActiveThread'> {
   let selectThreadRequestSeq = 0
 
   return {
+  loadEarlierThreadHistory: async () => {
+    const state = get()
+    const threadId = state.activeThreadId
+    const cursor = state.threadHistoryCursor
+    if (!threadId || !cursor || state.threadHistoryLoading) return
+    set({ threadHistoryLoading: true })
+    try {
+      const provider = getProvider()
+      rememberProviderThreadRuntime(provider, threadId, state.threads)
+      const page = await provider.getThreadPage(threadId, cursor)
+      if (get().activeThreadId !== threadId) return
+      const olderBlocks = hydrateBlockModelLabels(threadId, page.blocks)
+      set((snapshot) => {
+        const currentIds = new Set(snapshot.blocks.map((block) => block.id))
+        return {
+          blocks: [
+            ...olderBlocks.filter((block) => !currentIds.has(block.id)),
+            ...snapshot.blocks
+          ],
+          threadHistoryCursor: page.nextCursor
+        }
+      })
+    } catch (error) {
+      set({ error: formatRuntimeError(error) })
+    } finally {
+      if (get().activeThreadId === threadId) set({ threadHistoryLoading: false })
+    }
+  },
+
   refreshActiveThreadContextState: async (threadId) => {
     const targetThreadId = threadId?.trim() || get().activeThreadId
     if (!targetThreadId) {
@@ -470,10 +499,8 @@ export function createThreadActions(
       set({ codeWorkspaceRoots })
       let reusableThreadId: string | null = null
       if (!options.forceNew && !workspaceLocator) {
-        const p = getProvider()
         reusableThreadId = await findReusableEmptyThreadId(
           get(),
-          p,
           workspaceRoot,
           (thread) => isCodeThread(thread, get().remoteChannels)
         )
@@ -535,8 +562,9 @@ export function createThreadActions(
         latestUserMessageId,
         turnDurationByUserId = {},
         goal,
-        todos
-      } = await p.getThreadDetail(activeThreadId)
+        todos,
+        nextCursor
+      } = await p.getRecentThreadView(activeThreadId)
       const contextState = await readProviderContextState(p, activeThreadId)
       if (get().activeThreadId !== activeThreadId) {
         if (get().error === runtimeStreamRecoveringMessage()) {
@@ -572,6 +600,8 @@ export function createThreadActions(
         activeThreadContextState: contextState,
         blocks,
         lastSeq: latestSeq,
+        threadHistoryCursor: nextCursor ?? null,
+        threadHistoryLoading: false,
         liveReasoning: '',
         liveAssistant: '',
         error: busy ? runtimeStreamRecoveringMessage() : null,
@@ -639,7 +669,9 @@ export function createThreadActions(
       unreadThreadIds: nextUnread,
       activeThreadId: id,
       remoteGuardChannelId: null,
-      error: null
+      error: null,
+      threadHistoryCursor: null,
+      threadHistoryLoading: false
     })
     if (selectionChanged) {
       set(resetAgentFocusState(get(), id))
@@ -656,8 +688,9 @@ export function createThreadActions(
         turnDurationByUserId = {},
         usage: threadUsage,
         goal,
-        todos
-      } = await p.getThreadDetail(id)
+        todos,
+        nextCursor
+      } = await p.getRecentThreadView(id)
       if (!isCurrentSelection()) return
       const contextState = await readProviderContextState(p, id)
       if (!isCurrentSelection()) return
@@ -678,6 +711,8 @@ export function createThreadActions(
         activeThreadContextState: contextState,
         blocks,
         lastSeq: latestSeq,
+        threadHistoryCursor: nextCursor ?? null,
+        threadHistoryLoading: false,
         liveReasoning: '',
         liveAssistant: '',
         error: null,
@@ -922,7 +957,7 @@ export function createThreadActions(
     const threadId = state.activeThreadId
     try {
       rememberProviderThreadRuntime(p, threadId, state.threads)
-      const detail = await p.getThreadDetail(threadId)
+      const detail = await p.getRecentThreadView(threadId)
       if (get().activeThreadId !== threadId) return false
       const blocks = hydrateBlockModelLabels(threadId, detail.blocks)
       const running = threadSnapshotHasTurnEvidence(
@@ -1302,7 +1337,6 @@ export function createThreadActions(
           ? null
           : await findReusableEmptyThreadId(
               get(),
-              p,
               workspaceRoot,
               (thread) => isCodeThread(thread, get().remoteChannels)
             )
@@ -1733,7 +1767,6 @@ export function createThreadActions(
           ? null
           : await findReusableEmptyThreadId(
               get(),
-              p,
               workspaceRoot,
               (thread) => isCodeThread(thread, get().remoteChannels)
             )

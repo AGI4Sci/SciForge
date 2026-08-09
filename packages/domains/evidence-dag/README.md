@@ -118,7 +118,7 @@ Every committed PROV document contains `edag:meta.snapshot`:
 }
 ```
 
-Latest files use the shared collision-resistant filename contract exported by `evidence_dag.snapshot.snapshot_filename(thread_id)`. Historical versions are stored under `snapshots/<snapshot_storage_key(thread_id)>/` and never rewritten.
+Latest files use the shared collision-resistant filename contract exported by `evidence_dag.snapshot.snapshot_filename(thread_id)`. Historical versions are stored under `snapshots/<snapshot_storage_key(thread_id)>/` and never rewritten. New snapshots are exact immutable manifests over content-defined, SHA-256-addressed chunks in `snapshot-blobs/v1/`; unchanged graph regions are reused across versions and `latest` is atomically linked to the committed manifest. Consumers must read snapshots through `evidence_dag.snapshot_storage` so both this format and existing full-PROV user data are integrity-verified without migration or deletion.
 
 ## RO-Crate exchange
 
@@ -350,3 +350,11 @@ contract before every queued submission, projects those values into the child
 process, and restarts its owned process when they change. Reads during
 extraction/review continue to return the prior committed graph; failed updates
 remain visible through `/updates/status` and never expose a partial snapshot.
+
+Unless `SCIFORGE_EVIDENCE_DAG_SERVICE_URL` explicitly selects an external
+service, the desktop lifecycle allocates a private loopback port for its owned
+sidecar. Concurrent readiness requests share one startup attempt, and an owned
+child that exits before readiness fails immediately. This keeps another app or
+an orphaned prior process on the standalone default port from causing repeated
+bind attempts or an unbounded startup backlog; the lifecycle never terminates a
+process it did not spawn.

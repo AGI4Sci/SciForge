@@ -144,6 +144,44 @@ describe('chat-store-thread-actions queued messages', () => {
     })
   })
 
+  it('prepends the previous server history page without rereading the full thread', async () => {
+    const { actions, state } = buildHarness()
+    const getThreadPage = vi.fn(async () => ({
+      blocks: [
+        { kind: 'user', id: 'user-old', text: 'older question' },
+        { kind: 'assistant', id: 'assistant-current', text: 'duplicate current answer' }
+      ] as ChatBlock[],
+      latestSeq: 12,
+      nextCursor: 'cursor-before-old'
+    }))
+    const provider = {
+      getThreadPage,
+      getRecentThreadView: vi.fn(async () => {
+        throw new Error('pagination must not read a full thread snapshot')
+      }),
+      rememberThreadRuntime: vi.fn()
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.activeThreadId = 'thr_existing'
+    state.threads = [{ ...thread('thr_existing'), runtimeId: 'codex' }]
+    state.blocks = [
+      { kind: 'assistant', id: 'assistant-current', text: 'current answer' }
+    ]
+    state.threadHistoryCursor = 'cursor-before-current'
+    state.threadHistoryLoading = false
+
+    await actions.loadEarlierThreadHistory()
+
+    expect(getThreadPage).toHaveBeenCalledWith('thr_existing', 'cursor-before-current')
+    expect(provider.getRecentThreadView).not.toHaveBeenCalled()
+    expect(state.blocks).toEqual([
+      { kind: 'user', id: 'user-old', text: 'older question' },
+      { kind: 'assistant', id: 'assistant-current', text: 'current answer' }
+    ])
+    expect(state.threadHistoryCursor).toBe('cursor-before-old')
+    expect(state.threadHistoryLoading).toBe(false)
+  })
+
   it('does not queue GUI plan messages while another turn is active', async () => {
     const { actions, state } = buildHarness()
     const guiPlan: GuiPlanMessageContext = {
@@ -772,7 +810,7 @@ describe('chat-store-thread-actions queued messages', () => {
   it('drains a completed background thread without mutating the active thread UI', async () => {
     const { actions, state } = buildHarness()
     const provider = {
-      getThreadDetail: vi.fn(async () => ({
+      getRecentThreadView: vi.fn(async () => ({
         blocks: [{ kind: 'assistant', id: 'a-running', text: 'still running' }],
         latestSeq: 2,
         threadStatus: 'running'
@@ -860,7 +898,7 @@ describe('chat-store-thread-actions queued messages', () => {
     const { actions, state } = buildHarness()
     const turn = deferred<{ turnId: string; threadId: string }>()
     const provider = {
-      getThreadDetail: vi.fn(async () => ({ blocks: [], latestSeq: 1, threadStatus: 'running' })),
+      getRecentThreadView: vi.fn(async () => ({ blocks: [], latestSeq: 1, threadStatus: 'running' })),
       rememberThreadRuntime: vi.fn(),
       sendUserMessage: vi.fn(() => turn.promise)
     }
@@ -912,7 +950,7 @@ describe('chat-store-thread-actions queued messages', () => {
       }
     }
     const provider = {
-      getThreadDetail: vi.fn(async () => ({
+      getRecentThreadView: vi.fn(async () => ({
         blocks: [],
         latestSeq: 2,
         threadStatus: 'idle'
@@ -937,10 +975,10 @@ describe('chat-store-thread-actions queued messages', () => {
       latestSeq: number
       threadStatus: string
     }) => void = () => {
-      throw new Error('getThreadDetail promise was not created')
+      throw new Error('getRecentThreadView promise was not created')
     }
     const provider = {
-      getThreadDetail: vi.fn(() => new Promise((resolve) => {
+      getRecentThreadView: vi.fn(() => new Promise((resolve) => {
         resolveDetail = resolve
       })),
       subscribeThreadEvents: vi.fn(async () => undefined)
@@ -994,7 +1032,7 @@ describe('chat-store-thread-actions queued messages', () => {
       threadStatus: string
     }) => void>()
     const provider = {
-      getThreadDetail: vi.fn((threadId: string) => new Promise((resolve) => {
+      getRecentThreadView: vi.fn((threadId: string) => new Promise((resolve) => {
         detailResolvers.set(threadId, resolve)
       })),
       subscribeThreadEvents: vi.fn(async () => undefined)
@@ -1037,7 +1075,7 @@ describe('chat-store-thread-actions queued messages', () => {
   it('does not activate owner plan state from thread metadata during thread selection', async () => {
     const { actions, state } = buildHarness()
     const provider = {
-      getThreadDetail: vi.fn(async () => ({
+      getRecentThreadView: vi.fn(async () => ({
         blocks: [],
         latestSeq: 2,
         threadStatus: 'idle',
@@ -1058,7 +1096,7 @@ describe('chat-store-thread-actions queued messages', () => {
 
     await actions.selectThread('thr_existing')
 
-    expect(provider.getThreadDetail).toHaveBeenCalledWith('thr_existing')
+    expect(provider.getRecentThreadView).toHaveBeenCalledWith('thr_existing')
     expect(guiPlanSession(useGuiPlanStore.getState(), 'thr_existing').activePlan).toBeNull()
   })
 
@@ -1069,10 +1107,10 @@ describe('chat-store-thread-actions queued messages', () => {
       latestSeq: number
       threadStatus: string
     }) => void = () => {
-      throw new Error('getThreadDetail promise was not created')
+      throw new Error('getRecentThreadView promise was not created')
     }
     const provider = {
-      getThreadDetail: vi.fn(() => new Promise((resolve) => {
+      getRecentThreadView: vi.fn(() => new Promise((resolve) => {
         resolveDetail = resolve
       })),
       subscribeThreadEvents: vi.fn(async () => undefined)
@@ -1100,7 +1138,7 @@ describe('chat-store-thread-actions queued messages', () => {
   it('does not keep an empty thread busy just because the runtime reports a running thread status', async () => {
     const { actions, state } = buildHarness()
     const provider = {
-      getThreadDetail: vi.fn(async () => ({
+      getRecentThreadView: vi.fn(async () => ({
         blocks: [],
         latestSeq: 1,
         threadStatus: 'running'
@@ -1130,7 +1168,7 @@ describe('chat-store-thread-actions queued messages', () => {
   it('keeps optimistic turn blocks when recovery reads a stale empty snapshot', async () => {
     const { actions, state } = buildHarness()
     const provider = {
-      getThreadDetail: vi.fn(async () => ({
+      getRecentThreadView: vi.fn(async () => ({
         blocks: [],
         latestSeq: 2,
         threadStatus: 'idle'
@@ -1162,7 +1200,7 @@ describe('chat-store-thread-actions queued messages', () => {
   it('settles stale pending blocks when recovery finds an idle runtime thread', async () => {
     const { actions, state } = buildHarness()
     const provider = {
-      getThreadDetail: vi.fn(async () => ({
+      getRecentThreadView: vi.fn(async () => ({
         blocks: [
           {
             kind: 'tool',
@@ -1320,7 +1358,7 @@ describe('chat-store-thread-actions queued messages', () => {
   it('retries the original text when the failed send was not persisted', async () => {
     const { actions, state } = buildHarness()
     const provider = {
-      getThreadDetail: vi.fn(async () => ({
+      getRecentThreadView: vi.fn(async () => ({
         blocks: [],
         latestSeq: 4,
         threadStatus: 'idle'
@@ -1356,7 +1394,7 @@ describe('chat-store-thread-actions queued messages', () => {
   it('continues an orphaned persisted user item instead of duplicating its text', async () => {
     const { actions, state } = buildHarness()
     const provider = {
-      getThreadDetail: vi.fn(async () => ({
+      getRecentThreadView: vi.fn(async () => ({
         blocks: [{
           kind: 'user' as const,
           id: 'runtime-orphan',
@@ -1408,7 +1446,7 @@ describe('chat-store-thread-actions queued messages', () => {
   it('reconciles a restored direct-send journal instead of duplicating an accepted user item', async () => {
     const { actions, state } = buildHarness()
     const provider = {
-      getThreadDetail: vi.fn(async () => ({
+      getRecentThreadView: vi.fn(async () => ({
         blocks: [{
           kind: 'user' as const,
           id: 'runtime-accepted-queue',
@@ -1491,7 +1529,7 @@ describe('chat-store-thread-actions queued messages', () => {
     second.state.error = null
     second.state.queuedMessages = restored
     const secondProvider = {
-      getThreadDetail: vi.fn(async () => ({ blocks: [], latestSeq: 0, threadStatus: 'idle' })),
+      getRecentThreadView: vi.fn(async () => ({ blocks: [], latestSeq: 0, threadStatus: 'idle' })),
       sendUserMessage: vi.fn(async () => ({
         threadId: 'thr_existing',
         turnId: 'turn-after-restart',
@@ -1518,7 +1556,7 @@ describe('chat-store-thread-actions queued messages', () => {
     const { actions, state } = buildHarness()
     const startedAt = 1_725_000_000_000
     const provider = {
-      getThreadDetail: vi.fn(async () => ({
+      getRecentThreadView: vi.fn(async () => ({
         blocks: [{
           kind: 'user' as const,
           id: 'runtime-accepted-complete',

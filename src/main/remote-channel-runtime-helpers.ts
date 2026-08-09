@@ -12,9 +12,12 @@ import type {
   ScheduleTaskFromTextResult
 } from '../shared/app-settings'
 import type {
+  AgentRuntimeEvent,
   AgentRuntimeThread,
-  AgentRuntimeThreadDetail,
-  AgentRuntimeThreadReadInput,
+  AgentRuntimeThreadPage,
+  AgentRuntimeThreadPageInput,
+  AgentRuntimeThreadStatus,
+  AgentRuntimeThreadStatusInput,
   AgentRuntimeThreadStartInput,
   AgentRuntimeTurnHandle,
   AgentRuntimeTurnStartInput
@@ -60,7 +63,14 @@ export type RemoteChannelRuntimeDeps = {
   agentRuntime: {
     listThreads?: (input?: { runtimeId?: AgentRuntimeId; limit?: number; includeArchived?: boolean }) => Promise<AgentRuntimeThread[]>
     startThread: (input: AgentRuntimeThreadStartInput) => Promise<AgentRuntimeThread>
-    readThread: (input: AgentRuntimeThreadReadInput) => Promise<AgentRuntimeThreadDetail>
+    readThreadStatus: (input: AgentRuntimeThreadStatusInput) => Promise<AgentRuntimeThreadStatus>
+    readThreadPage: (input: AgentRuntimeThreadPageInput) => Promise<AgentRuntimeThreadPage>
+    subscribeEvents: (input: {
+      runtimeId: AgentRuntimeId
+      threadId: string
+      sinceSeq?: number
+      signal?: AbortSignal
+    }) => AsyncIterable<AgentRuntimeEvent>
     startTurn: (input: AgentRuntimeTurnStartInput) => Promise<AgentRuntimeTurnHandle>
     interruptTurn?: (input: { runtimeId: AgentRuntimeId; threadId: string; turnId: string; discard?: boolean }) => Promise<void>
   }

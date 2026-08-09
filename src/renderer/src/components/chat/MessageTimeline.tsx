@@ -237,6 +237,11 @@ function MessageTimelineComponent({
   const liveReasoningMeta = useChatStore((s) =>
     activeThreadId && activeThreadId === s.activeThreadId ? s.liveReasoningMeta : null
   )
+  const serverHistoryCursor = useChatStore((s) =>
+    activeThreadId && activeThreadId === s.activeThreadId ? s.threadHistoryCursor : null
+  )
+  const serverHistoryLoading = useChatStore((s) => s.threadHistoryLoading)
+  const loadEarlierThreadHistory = useChatStore((s) => s.loadEarlierThreadHistory)
   const stableOnBuildPlan = onBuildPlan
   const stableOnOpenPlan = onOpenPlan
   const stableOnOpenImageArtifactInVisualReview = onOpenImageArtifactInVisualReview
@@ -358,6 +363,21 @@ function MessageTimelineComponent({
               className="ds-chip rounded-full px-4 py-2 text-[13px] font-medium text-ds-muted transition hover:text-ds-ink"
             >
               {t('timelineShowEarlierTurns', { count: Math.min(hiddenTurnCount, TURN_PAGE_SIZE) })}
+            </button>
+          </div>
+        ) : null}
+
+        {hiddenTurnCount === 0 && serverHistoryCursor ? (
+          <div className="flex items-center justify-center">
+            <button
+              type="button"
+              disabled={serverHistoryLoading}
+              onClick={() => void loadEarlierThreadHistory()}
+              className="ds-chip rounded-full px-4 py-2 text-[13px] font-medium text-ds-muted transition hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
+            >
+              {serverHistoryLoading
+                ? t('loading')
+                : t('timelineShowEarlierTurns', { count: TURN_PAGE_SIZE })}
             </button>
           </div>
         ) : null}

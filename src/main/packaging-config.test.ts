@@ -590,6 +590,7 @@ describe('electron-builder release packaging', () => {
     expect(modelRouter?.requiredPaths).toEqual(expect.arrayContaining([
       'packages/workers/model-router/package.json',
       'packages/workers/model-router/src/full-trace-recorder.ts',
+      'packages/workers/model-router/src/full-trace-worker-sink.ts',
       'packages/workers/model-router/src/cli.ts',
       'packages/workers/model-router/src/manifest.ts',
       'packages/workers/model-router/src/trace-correlation.ts',

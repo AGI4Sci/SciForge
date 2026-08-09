@@ -3,7 +3,9 @@ import type { AgentRuntimeChild } from '@shared/agent-runtime-contract'
 import type { ChatBlock } from '../../agent/types'
 import {
   buildChildAgentAttentionSummary,
-  loadChildAgentAttentionTree
+  createChildAgentAttentionEventSink,
+  loadChildAgentAttentionTree,
+  type ChildAgentAttentionSnapshot
 } from './child-agent-attention'
 
 function child(input: Partial<AgentRuntimeChild> & Pick<AgentRuntimeChild, 'id' | 'parentThreadId'>): AgentRuntimeChild {
@@ -15,8 +17,13 @@ function child(input: Partial<AgentRuntimeChild> & Pick<AgentRuntimeChild, 'id' 
   }
 }
 
-function snapshot(threadId: string, blocks: ChatBlock[], threadStatus?: string) {
-  return { threadId, blocks, threadStatus }
+function snapshot(
+  threadId: string,
+  blocks: ChatBlock[],
+  threadStatus?: string,
+  latestSeq = 0
+): ChildAgentAttentionSnapshot {
+  return { threadId, blocks, threadStatus, latestSeq }
 }
 
 describe('buildChildAgentAttentionSummary', () => {
@@ -166,22 +173,24 @@ describe('loadChildAgentAttentionTree', () => {
           ? [child({ id: 'b-call', parentThreadId: 'a', openAsThreadRef: { threadId: 'b' } })]
           : []
     }))
-    const getThreadDetail = vi.fn(async (threadId: string) => ({
+    const getRecentThreadView = vi.fn(async (threadId: string) => ({
       blocks: threadId === 'b'
         ? [{ kind: 'approval', id: 'approval', approvalId: 'approval', summary: 'Approve', status: 'pending' } as ChatBlock]
         : [],
+      latestSeq: threadId === 'b' ? 7 : 3,
       threadStatus: 'running'
     }))
     const rememberThreadRuntime = vi.fn()
 
     const loaded = await loadChildAgentAttentionTree({
       rootThreadId: 'root',
-      source: { listThreadChildren, getThreadDetail, rememberThreadRuntime }
+      source: { listThreadChildren, getRecentThreadView, rememberThreadRuntime }
     })
 
     expect(listThreadChildren.mock.calls.map(([threadId]) => threadId)).toEqual(['root', 'a', 'b'])
-    expect(getThreadDetail.mock.calls.map(([threadId]) => threadId)).toEqual(['a', 'b'])
+    expect(getRecentThreadView.mock.calls.map(([threadId]) => threadId)).toEqual(['a', 'b'])
     expect(loaded.snapshots.b.blocks).toHaveLength(1)
+    expect(loaded.snapshots.b.latestSeq).toBe(7)
     expect(loaded.degraded).toBe(false)
     expect(rememberThreadRuntime).toHaveBeenCalledTimes(2)
   })
@@ -193,12 +202,142 @@ describe('loadChildAgentAttentionTree', () => {
         listThreadChildren: async (threadId) => ({ children: threadId === 'root'
           ? [child({ id: 'a', parentThreadId: 'root', openAsThreadRef: { threadId: 'a' } })]
           : [] }),
-        getThreadDetail: async () => { throw new Error('not readable') }
+        getRecentThreadView: async () => { throw new Error('not readable') }
       }
     })
 
     expect(loaded.children).toHaveLength(1)
     expect(loaded.degraded).toBe(true)
     expect(loaded.errors).toEqual([{ threadId: 'a', operation: 'detail', message: 'not readable' }])
+  })
+
+  it('reads a bounded view once per child and uses status-only polling afterwards', async () => {
+    const activeChild = child({
+      id: 'worker-call',
+      parentThreadId: 'root',
+      status: 'running',
+      openAsThreadRef: { threadId: 'worker' }
+    })
+    const listThreadChildren = vi.fn(async (threadId: string) => ({
+      children: threadId === 'root' ? [activeChild] : []
+    }))
+    const getRecentThreadView = vi.fn(async () => ({
+      blocks: [{
+        kind: 'approval',
+        id: 'approval',
+        approvalId: 'approval',
+        summary: 'Approve',
+        status: 'pending'
+      } as ChatBlock],
+      latestSeq: 9,
+      threadStatus: 'running'
+    }))
+    const getThreadStatus = vi.fn(async () => ({
+      latestSeq: 12,
+      latestTurnStatus: 'completed'
+    }))
+    const detailAttemptedThreadIds = new Set<string>()
+
+    const first = await loadChildAgentAttentionTree({
+      rootThreadId: 'root',
+      source: { listThreadChildren, getRecentThreadView, getThreadStatus },
+      detailAttemptedThreadIds,
+      shouldReadDetail: () => true
+    })
+    const second = await loadChildAgentAttentionTree({
+      rootThreadId: 'root',
+      source: { listThreadChildren, getRecentThreadView, getThreadStatus },
+      cachedSnapshots: first.snapshots,
+      detailAttemptedThreadIds,
+      shouldReadDetail: () => true
+    })
+
+    expect(getRecentThreadView).toHaveBeenCalledTimes(1)
+    expect(getThreadStatus).toHaveBeenCalledTimes(1)
+    expect(second.snapshots.worker.latestSeq).toBe(9)
+    expect(second.snapshots.worker.threadStatus).toBe('completed')
+    expect(second.snapshots.worker.blocks).toEqual([
+      expect.objectContaining({ kind: 'approval', status: 'error' })
+    ])
+  })
+
+  it('settles cached pending interactions from terminal child-list status without rereading history', async () => {
+    const getRecentThreadView = vi.fn()
+    const loaded = await loadChildAgentAttentionTree({
+      rootThreadId: 'root',
+      source: {
+        listThreadChildren: async (threadId) => ({ children: threadId === 'root'
+          ? [child({
+              id: 'worker-call',
+              parentThreadId: 'root',
+              status: 'completed',
+              openAsThreadRef: { threadId: 'worker' }
+            })]
+          : [] }),
+        getRecentThreadView
+      },
+      cachedSnapshots: {
+        worker: snapshot('worker', [{
+          kind: 'approval',
+          id: 'approval',
+          approvalId: 'approval',
+          summary: 'Approve',
+          status: 'pending'
+        }], 'running', 9)
+      },
+      shouldReadDetail: () => false
+    })
+
+    expect(getRecentThreadView).not.toHaveBeenCalled()
+    expect(loaded.snapshots.worker).toMatchObject({ threadStatus: 'completed' })
+    expect(loaded.snapshots.worker.blocks).toEqual([
+      expect.objectContaining({ kind: 'approval', status: 'error' })
+    ])
+  })
+})
+
+describe('createChildAgentAttentionEventSink', () => {
+  it('updates only incremental interaction/status state and advances the replay cursor', () => {
+    let current = snapshot('worker', [], 'running', 4)
+    const attentionChanges: string[] = []
+    const sink = createChildAgentAttentionEventSink({
+      threadId: 'worker',
+      getSnapshot: () => current,
+      updateSnapshot: (next, attentionChanged) => {
+        current = next
+        if (attentionChanged) attentionChanges.push(next.threadStatus ?? '')
+      }
+    })
+
+    sink.onSeq(5)
+    sink.onApproval({ approvalId: 'approval-1', summary: 'Run command', status: 'pending' })
+    sink.onUserInput({
+      itemId: 'input-1',
+      requestId: 'request-1',
+      questions: [{ header: 'Mode', id: 'mode', question: 'Which mode?', options: [] }]
+    })
+
+    expect(current.latestSeq).toBe(5)
+    expect(buildChildAgentAttentionSummary({
+      rootThreadId: 'root',
+      children: [child({
+        id: 'worker-call',
+        parentThreadId: 'root',
+        status: 'running',
+        openAsThreadRef: { threadId: 'worker' }
+      })],
+      snapshots: { worker: current }
+    }).primaryTarget?.attention).toBe('waiting_user_input')
+
+    sink.onUserInputStatus({ itemId: 'request-1', status: 'submitted' })
+    sink.onApproval({ approvalId: 'approval-1', summary: 'Allowed', status: 'allowed' })
+    sink.onTurnLifecycle?.({ threadId: 'worker', state: 'completed' })
+
+    expect(current.blocks).toEqual([
+      expect.objectContaining({ kind: 'approval', status: 'allowed' }),
+      expect.objectContaining({ kind: 'user_input', status: 'submitted' })
+    ])
+    expect(current.threadStatus).toBe('completed')
+    expect(attentionChanges).toHaveLength(5)
   })
 })

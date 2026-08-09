@@ -9,6 +9,7 @@ import { isRemoteChannelManagedBy } from '../../agent/types'
 import { extractUnifiedDiffText } from '../../lib/diff-stats'
 import { openSafeExternalUrl } from '../../lib/open-external'
 import { useChatStore } from '../../store/chat-store'
+import { getProvider } from '../../agent/registry'
 import {
   CODE_MANAGED_INSTRUCTIONS_HEADING,
   CODE_CURRENT_USER_REQUEST_HEADING,
@@ -30,6 +31,24 @@ import { remoteChannelThreadBindingsFromChannels } from '../../store/chat-store-
 import { remoteToolMetadataChips } from './remote-tool-metadata'
 
 const COPY_FEEDBACK_RESET_MS = 1600
+
+export function toolArtifactRequestKey(ref: string | undefined, size: number | undefined): string | null {
+  return ref && size !== undefined ? JSON.stringify([ref, size]) : null
+}
+
+export function shouldRequestToolArtifact(input: {
+  artifactKey: string | null
+  requestedKey: string | null
+  inFlightKey: string | null
+  open: boolean
+}): boolean {
+  return Boolean(
+    input.open &&
+    input.artifactKey &&
+    input.requestedKey === input.artifactKey &&
+    input.inFlightKey !== input.artifactKey
+  )
+}
 
 /**
  * User message bubble with hover affordance to rewind/edit. Click the rewind
@@ -1102,6 +1121,16 @@ function ToolEntry({
 }): ReactElement {
   const { t } = useTranslation('common')
   const [open, setOpen] = useState(() => block.status === 'error' || block.status === 'running')
+  const [artifactDetail, setArtifactDetail] = useState<string | null>(null)
+  const [artifactLoading, setArtifactLoading] = useState(false)
+  const [artifactError, setArtifactError] = useState<string | null>(null)
+  const [artifactLoadKey, setArtifactLoadKey] = useState<string | null>(null)
+  const artifactRequestRef = useRef<string | null>(null)
+  const artifactRuntimeId = block.detailArtifact?.runtimeId
+  const artifactThreadId = block.detailArtifact?.threadId
+  const artifactRef = block.detailArtifact?.ref
+  const artifactSize = block.detailArtifact?.size
+  const artifactKey = toolArtifactRequestKey(artifactRef, artifactSize)
 
   useEffect(() => {
     if (block.status === 'running') {
@@ -1109,7 +1138,64 @@ function ToolEntry({
     }
   }, [block.status, block.id])
 
+  useEffect(() => {
+    artifactRequestRef.current = null
+    setArtifactLoadKey(null)
+    setArtifactDetail(null)
+    setArtifactError(null)
+    setArtifactLoading(false)
+  }, [block.id, artifactKey])
+
   const effectiveOpen = block.status === 'running' ? true : open
+
+  useEffect(() => {
+    if (
+      !artifactRuntimeId ||
+      !artifactThreadId ||
+      !artifactRef ||
+      artifactSize === undefined ||
+      !shouldRequestToolArtifact({
+        artifactKey,
+        requestedKey: artifactLoadKey,
+        inFlightKey: artifactRequestRef.current,
+        open: effectiveOpen
+      })
+    ) return
+    if (!artifactKey) return
+    artifactRequestRef.current = artifactKey
+    let cancelled = false
+    setArtifactLoading(true)
+    setArtifactError(null)
+    void getProvider().readToolArtifact({
+      runtimeId: artifactRuntimeId,
+      threadId: artifactThreadId,
+      ref: artifactRef,
+      size: artifactSize
+    })
+      .then((detail) => {
+        if (!cancelled) setArtifactDetail(detail)
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        artifactRequestRef.current = null
+        setArtifactLoadKey(null)
+        setArtifactError(error instanceof Error ? error.message : String(error))
+      })
+      .finally(() => {
+        if (!cancelled) setArtifactLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    artifactRef,
+    artifactKey,
+    artifactLoadKey,
+    artifactRuntimeId,
+    artifactSize,
+    artifactThreadId,
+    effectiveOpen
+  ])
 
   const tone =
     block.status === 'error'
@@ -1131,9 +1217,11 @@ function ToolEntry({
   const sessionId = metaString(block.meta, 'session_id')
   const sessionStatus = metaString(block.meta, 'status')
 
-  const hasDetail = !!(block.detail && block.detail.trim().length > 0)
-  const patchText = block.toolKind === 'file_change' ? extractUnifiedDiffText(block.detail) : undefined
-  const canExpand = hasDetail || block.status === 'running'
+  const displayedDetail = artifactDetail ?? block.detail
+  const hasDetail = !!(displayedDetail && displayedDetail.trim().length > 0)
+  const hasArtifact = Boolean(artifactRef)
+  const patchText = block.toolKind === 'file_change' ? extractUnifiedDiffText(displayedDetail) : undefined
+  const canExpand = hasDetail || hasArtifact || block.status === 'running'
 
   return (
     <div className={`rounded-[22px] border shadow-[0_12px_30px_rgba(86,103,136,0.04)] ${tone}`}>
@@ -1141,7 +1229,9 @@ function ToolEntry({
         type="button"
         onClick={() => {
           if (!canExpand || block.status === 'running') return
-          setOpen((v) => !v)
+          const nextOpen = !effectiveOpen
+          setOpen(nextOpen)
+          if (nextOpen && artifactKey) setArtifactLoadKey(artifactKey)
         }}
         className={`flex w-full items-start gap-2 px-4 py-3 text-left text-[13.5px] leading-6 ${
           canExpand && block.status !== 'running' ? 'cursor-pointer' : 'cursor-default'
@@ -1201,14 +1291,35 @@ function ToolEntry({
         variant="tool"
         onOpenVisualReview={onOpenImageArtifactInVisualReview}
       />
-      {effectiveOpen && hasDetail ? (
+      {effectiveOpen && (hasDetail || hasArtifact) ? (
         <div className="ds-panel-strip min-w-0 border-t border-ds-border-muted/60 px-4 py-3">
-          {patchText !== undefined ? (
-            <DiffView patch={patchText} filePath={block.filePath} />
+          {artifactLoading ? (
+            <div className="flex items-center gap-2 text-[12px] text-ds-muted">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              {t('loading')}
+            </div>
           ) : (
-            <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-6 text-ds-ink">
-              {block.detail}
-            </pre>
+            <>
+              {artifactError ? (
+                <p className="mb-2 text-[12px] text-ds-danger">{artifactError}</p>
+              ) : null}
+              {patchText !== undefined ? (
+                <DiffView patch={patchText} filePath={block.filePath} />
+              ) : hasDetail ? (
+                <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-6 text-ds-ink">
+                  {displayedDetail}
+                </pre>
+              ) : null}
+              {hasArtifact && artifactDetail === null && artifactKey ? (
+                <button
+                  type="button"
+                  onClick={() => setArtifactLoadKey(artifactKey)}
+                  className="mt-2 rounded-lg border border-ds-border px-2.5 py-1 text-[12px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                >
+                  {t('toolLoadFullDetail')}
+                </button>
+              ) : null}
+            </>
           )}
         </div>
       ) : null}

@@ -98,6 +98,41 @@ class TestEventStore(unittest.TestCase):
                 "EvidenceUpdateQueued", "EvidenceSnapshotCommitted",
             ])
 
+    def test_contiguous_tail_survives_storage_reset_and_keeps_monotonic_sequence(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, "events.json")
+            tail_event = {
+                "schemaVersion": "evidence-domain-events.v1",
+                "eventId": "evidence-event:tail",
+                "sequence": 7501,
+                "type": "EvidenceUpdateQueued",
+                "aggregateType": "EvidenceThread",
+                "aggregateId": "t",
+                "idempotencyKey": "job-tail",
+                "occurredAt": "2026-08-09T07:15:11Z",
+                "correlationId": None,
+                "causationId": None,
+                "persistent": True,
+                "payload": {"threadId": "t"},
+            }
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(tail_event) + "\n")
+
+            store = EventStore(path)
+            appended = store.append(
+                "EvidenceSnapshotCommitted",
+                aggregate_type="EvidenceThread",
+                aggregate_id="t",
+                idempotency_key="snapshot-tail",
+                payload={"threadId": "t"},
+            )
+
+            self.assertEqual(appended["sequence"], 7502)
+            self.assertEqual(
+                [event["sequence"] for event in EventStore(path).read()],
+                [7501, 7502],
+            )
+
     def test_update_and_snapshot_events_survive_restart_without_duplicates(self):
         with tempfile.TemporaryDirectory() as workspace:
             storage = os.path.join(workspace, ".edag")

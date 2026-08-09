@@ -248,6 +248,8 @@ export type ChatState = {
   liveReasoningMeta: RuntimeDisclosureMetadata | null
   liveAssistant: string
   lastSeq: number
+  threadHistoryCursor: string | null
+  threadHistoryLoading: boolean
   usageRefreshKey: number
   childRefreshKey: number
   busy: boolean
@@ -323,6 +325,7 @@ export type ChatState = {
   setShowArchivedThreads: (show: boolean) => void
   createThread: (options?: { workspaceRoot?: string; forceNew?: boolean }) => Promise<void>
   selectThread: (id: string) => Promise<void>
+  loadEarlierThreadHistory: () => Promise<void>
   focusAgentThread: (target: FocusAgentThreadInput) => boolean
   focusAgentBack: () => boolean
   focusAgentForward: () => boolean

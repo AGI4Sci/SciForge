@@ -149,7 +149,7 @@ class EventStore:
             created = {
                 "schemaVersion": SCHEMA_VERSION,
                 "eventId": event_id,
-                "sequence": len(self._events) + 1,
+                "sequence": int(self._events[-1]["sequence"]) + 1 if self._events else 1,
                 "type": event_type,
                 "aggregateType": str(aggregate_type),
                 "aggregateId": aggregate_id,
@@ -196,9 +196,19 @@ class EventStore:
 
     @staticmethod
     def _validate(events: list[Any]) -> None:
-        for index, event in enumerate(events, start=1):
-            if not isinstance(event, dict) or event.get("sequence") != index:
+        previous_sequence: Optional[int] = None
+        for event in events:
+            if not isinstance(event, dict):
                 raise ValueError("Evidence domain event stream sequence is corrupt")
+            sequence = event.get("sequence")
+            if (
+                isinstance(sequence, bool)
+                or not isinstance(sequence, int)
+                or sequence < 1
+                or (previous_sequence is not None and sequence != previous_sequence + 1)
+            ):
+                raise ValueError("Evidence domain event stream sequence is corrupt")
+            previous_sequence = sequence
             if event.get("type") not in EVENT_TYPES or not event.get("eventId"):
                 raise ValueError("Evidence domain event stream contains an invalid event")
 

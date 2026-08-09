@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  AGENT_RUNTIME_THREAD_SUMMARY_LIMITS,
   AGENT_RUNTIME_AUXILIARY_OPERATIONS,
   AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS,
   AGENT_RUNTIME_EVENT_KINDS,
@@ -10,6 +11,7 @@ import {
   filterAgentRuntimeThreadChildren,
   isAgentRuntimeChildActive,
   isAgentRuntimeDirectThreadChild,
+  projectAgentRuntimeThreadSummary,
   type AgentRuntimeAuxiliaryInput,
   type AgentRuntimeAuxiliaryOperation,
   type AgentRuntimeCapabilities,
@@ -18,6 +20,63 @@ import {
   type AgentRuntimeListThreadChildrenResponse,
   type AgentRuntimeReadChildTranscriptResponse
 } from './agent-runtime-contract'
+
+describe('projectAgentRuntimeThreadSummary', () => {
+  it('bounds UTF-8 summary fields and drops adapter-private payloads', () => {
+    const repeated = '🧪'.repeat(10_000)
+    const summary = projectAgentRuntimeThreadSummary({
+      id: 'thread-1',
+      runtimeId: 'codex',
+      title: repeated,
+      updatedAt: '2026-08-09T00:00:00.000Z',
+      preview: repeated,
+      goal: {
+        threadId: 'thread-1',
+        objective: repeated,
+        status: 'active',
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: '2026-08-09T00:00:00.000Z',
+        updatedAt: '2026-08-09T00:00:00.000Z'
+      },
+      todos: {
+        threadId: 'thread-1',
+        updatedAt: '2026-08-09T00:00:00.000Z',
+        items: Array.from({ length: 100 }, (_, index) => ({
+          id: `todo-${index}`,
+          content: repeated,
+          status: 'pending' as const,
+          createdAt: '2026-08-09T00:00:00.000Z',
+          updatedAt: '2026-08-09T00:00:00.000Z'
+        }))
+      },
+      guiPlan: {
+        operation: 'draft',
+        workspaceRoot: '/tmp/workspace',
+        relativePath: 'plan.md',
+        planId: 'plan-1',
+        sourceRequest: repeated
+      },
+      privateTranscript: repeated
+    } as never)
+
+    expect(new TextEncoder().encode(summary.preview ?? '').byteLength).toBeLessThanOrEqual(
+      AGENT_RUNTIME_THREAD_SUMMARY_LIMITS.previewBytes
+    )
+    expect(new TextEncoder().encode(summary.title).byteLength).toBeLessThanOrEqual(
+      AGENT_RUNTIME_THREAD_SUMMARY_LIMITS.titleBytes
+    )
+    expect(summary.todos?.items).toHaveLength(AGENT_RUNTIME_THREAD_SUMMARY_LIMITS.todoItems)
+    expect(new TextEncoder().encode(summary.goal?.objective ?? '').byteLength).toBeLessThanOrEqual(
+      AGENT_RUNTIME_THREAD_SUMMARY_LIMITS.objectiveBytes
+    )
+    expect(new TextEncoder().encode(summary.guiPlan?.sourceRequest ?? '').byteLength).toBeLessThanOrEqual(
+      AGENT_RUNTIME_THREAD_SUMMARY_LIMITS.planRequestBytes
+    )
+    expect(summary).not.toHaveProperty('privateTranscript')
+    expect(new TextEncoder().encode(JSON.stringify(summary)).byteLength).toBeLessThan(20_000)
+  })
+})
 
 function exhaustiveEventLabel(event: AgentRuntimeEvent): string {
   switch (event.kind) {

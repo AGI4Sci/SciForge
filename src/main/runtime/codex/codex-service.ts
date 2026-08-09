@@ -31,24 +31,34 @@ import {
   type CodexThreadListResult,
   type CodexThreadListOptions,
   type CodexThreadMutationResult,
-  type CodexThreadReadResult,
+  type CodexThreadPageResult,
+  type CodexThreadStatusResult,
   type CodexThreadStartPayload,
   type CodexThreadStartResult,
   type CodexTurnInterruptOptions,
   type CodexTurnMutationResult,
   type CodexTurnStartPayload,
   type CodexTurnStartResult,
-  type CodexTurnSteerPayload
+  type CodexTurnSteerPayload,
+  type CodexToolArtifactResult
 } from './codex-runtime-api'
 import type {
+  AgentRuntimeChild,
   AgentRuntimeEvent,
   AgentRuntimeThreadSidebarVisibility,
+  AgentRuntimeTurnStatus,
   AgentRuntimeUsage,
   AgentRuntimeUsageQuery,
   AgentRuntimeUsageResponse
 } from '../../../shared/agent-runtime-contract'
 import {
-  CODEX_MAIN_IPC_CHANNELS,
+  AGENT_RUNTIME_THREAD_SUMMARY_LIMITS,
+  isAgentRuntimeActiveTurnState,
+  isAgentRuntimeTerminalTurnState,
+  normalizeAgentRuntimeTurnState,
+  truncateAgentRuntimeSummaryText
+} from '../../../shared/agent-runtime-contract'
+import {
   createCodexAppServerClient,
   type CodexAppServerAccount,
   type CodexAppServerAccountLoginCompletedNotification,
@@ -69,10 +79,7 @@ import {
   type CodexAppServerResolveApprovalInput,
   type CodexAppServerResolveUserInputInput
 } from '@sciforge/codex-runtime/app-server'
-import {
-  codexAppServerThreadReasoningConfig,
-  codexAppServerTurnReasoningParams
-} from './app-server/reasoning-config'
+import { codexAppServerThreadReasoningConfig, codexAppServerTurnReasoningParams } from './app-server/reasoning-config'
 import { normalizeCodexEvent, type CodexEventNormalizeContext } from './app-server/event-normalizer'
 import { CodexEventStore, type CodexStoredEvent } from './codex-event-store'
 import { CodexThreadStore, type CodexStoredThread, type CodexThreadStoreUpsertInput } from './codex-thread-store'
@@ -99,10 +106,7 @@ import type {
   AgentRuntimeSubagentUsage,
   AgentRuntimeTurnGovernanceSnapshotInput
 } from '../agent-runtime/adapter'
-import {
-  GUI_COMPUTER_USE_MCP_SERVER_NAME,
-  isComputerUseMcpConfigured
-} from '../../computer-use-mcp-config'
+import { GUI_COMPUTER_USE_MCP_SERVER_NAME, isComputerUseMcpConfigured } from '../../computer-use-mcp-config'
 import {
   type RuntimeToolCallRequest,
   type RuntimeToolCallResponse,
@@ -114,23 +118,13 @@ import {
   CODEX_PRE_TOOL_USE_GOVERNANCE_STORAGE_ROOT_ENV,
   CodexPreToolUseGovernanceBridge
 } from './codex-pre-tool-use-governance'
-import {
-  probeCodexPreToolUseHook,
-  type CodexPreToolUseHookDefinition
-} from './codex-pre-tool-use-hook'
+import { probeCodexPreToolUseHook, type CodexPreToolUseHookDefinition } from './codex-pre-tool-use-hook'
 import type { ManagedGuiMcpLaunchConfig } from '../../managed-gui-mcp-config'
 
 class CodexCodingPlanLoginInProgressError extends Error {}
 
-export type CodexRuntimeEventSink = {
-  send(channel: typeof CODEX_MAIN_IPC_CHANNELS.event, payload: CodexEventPayload): void
-  send(channel: typeof CODEX_MAIN_IPC_CHANNELS.error, payload: { message: string; detail?: unknown }): void
-  send(channel: typeof CODEX_MAIN_IPC_CHANNELS.closed, payload: { reason?: string }): void
-}
-
 export type CodexRuntimeServiceOptions = {
   settings: () => Promise<AppSettingsV1>
-  sink: CodexRuntimeEventSink
   appVersion?: string
   storageRoot?: string
   managedCodexHome?: string
@@ -206,10 +200,7 @@ type CodexPendingTurnRecovery = {
   recoveryAttempted: boolean
 }
 
-type CodexCodingPlanLoginCompletion = Extract<
-  CodexCodingPlanLoginCompletionResult,
-  { ok: true }
->
+type CodexCodingPlanLoginCompletion = Extract<CodexCodingPlanLoginCompletionResult, { ok: true }>
 
 type CodexRuntimeStatusInput = {
   threadId: string
@@ -251,8 +242,10 @@ const EMPTY_CODEX_TURN_USAGE: AgentRuntimeUsage = {
 const FIRST_CODEX_ACTIVITY_TIMEOUT_MS = 75_000
 const INTERRUPT_TIMED_OUT_TURN_MS = 5_000
 const CODEX_PENDING_TOOL_COMPLETION_GRACE_MS = 5_000
-const CODEX_TURN_DISCONNECTED_MESSAGE = 'Codex runtime disconnected before this turn completed. The stuck turn was closed so you can retry.'
-const CODEX_TURN_STOPPED_MESSAGE = 'Codex runtime stopped before this turn completed. The stuck turn was closed so you can retry.'
+const CODEX_TURN_DISCONNECTED_MESSAGE =
+  'Codex runtime disconnected before this turn completed. The stuck turn was closed so you can retry.'
+const CODEX_TURN_STOPPED_MESSAGE =
+  'Codex runtime stopped before this turn completed. The stuck turn was closed so you can retry.'
 const CODEX_SUBAGENT_DEVELOPER_INSTRUCTIONS = [
   'SciForge provides `delegate_task` for child-agent work without a wall-clock execution deadline.',
   'Use it when parallel investigation or independent implementation subtasks materially help the user request.',
@@ -301,20 +294,17 @@ export class CodexRuntimeService {
   private readonly firstActivityTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly modelDeltaDedupeByTurn = new Map<string, CodexModelDeltaDedupeState>()
   private readonly eventSubscribers = new Set<CodexRuntimeEventSubscriber>()
+  private readonly childSummaryIndexes = new Map<string, Promise<Map<string, AgentRuntimeChild>>>()
   private readonly pendingToolItemsByTurn = new Map<string, Set<string>>()
   private readonly terminalToolItemsByTurn = new Map<string, Set<string>>()
   private readonly toolExecutionIdentityByCall = new Map<string, CodexToolExecutionIdentity>()
-  private readonly governanceBindingsByTurn =
-    new Map<string, CodexTurnGovernanceBinding>()
+  private readonly governanceBindingsByTurn = new Map<string, CodexTurnGovernanceBinding>()
   private readonly deferredTurnCompleteEvents = new Map<string, CodexThreadEventPayload>()
   private readonly pendingToolBarrierTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private codingPlanAccount: Extract<CodexCodingPlanAccountResult, { ok: true }> | null = null
   private codingPlanRateLimits: Extract<CodexCodingPlanRateLimitsResult, { ok: true }> | null = null
   private readonly codingPlanLoginCompletions = new Map<string, CodexCodingPlanLoginCompletion>()
-  private readonly codingPlanLoginWaiters = new Map<
-    string,
-    Set<(completion: CodexCodingPlanLoginCompletion) => void>
-  >()
+  private readonly codingPlanLoginWaiters = new Map<string, Set<(completion: CodexCodingPlanLoginCompletion) => void>>()
   private codingPlanLoginStartsInFlight = 0
   private readonly activeCodingPlanLoginIds = new Set<string>()
 
@@ -323,7 +313,9 @@ export class CodexRuntimeService {
     this.eventStore = options.storageRoot ? new CodexEventStore({ rootDir: options.storageRoot }) : null
     this.usageStore = options.storageRoot ? new CodexUsageStore({ rootDir: options.storageRoot }) : null
     this.preToolUseGovernanceBridge = options.storageRoot
-      ? new CodexPreToolUseGovernanceBridge({ storageRoot: options.storageRoot })
+      ? new CodexPreToolUseGovernanceBridge({
+          storageRoot: options.storageRoot
+        })
       : null
   }
 
@@ -349,12 +341,12 @@ export class CodexRuntimeService {
     }
   }
 
-  async getCodingPlanAccount(
-    options: { refreshToken?: boolean } = {}
-  ): Promise<CodexCodingPlanAccountResult> {
+  async getCodingPlanAccount(options: { refreshToken?: boolean } = {}): Promise<CodexCodingPlanAccountResult> {
     try {
       const { client } = await this.ensureCodingPlanAccountClient()
-      const response = await client.readAccount({ refreshToken: options.refreshToken === true })
+      const response = await client.readAccount({
+        refreshToken: options.refreshToken === true
+      })
       const result: Extract<CodexCodingPlanAccountResult, { ok: true }> = {
         ok: true,
         account: response.account,
@@ -368,9 +360,7 @@ export class CodexRuntimeService {
     }
   }
 
-  async startCodingPlanLogin(input: {
-    method: CodexCodingPlanLoginMethod
-  }): Promise<CodexCodingPlanLoginStartResult> {
+  async startCodingPlanLogin(input: { method: CodexCodingPlanLoginMethod }): Promise<CodexCodingPlanLoginStartResult> {
     this.codingPlanLoginStartsInFlight += 1
     try {
       const { client } = await this.ensureCodingPlanAccountClient()
@@ -454,9 +444,11 @@ export class CodexRuntimeService {
   }
 
   async listThreads(options: CodexThreadListOptions = {}): Promise<CodexThreadListResult> {
-    const stored = (await this.storedThreads({
-      includeArchived: options.includeArchived === true || options.archivedOnly === true
-    })).filter(isMaterializedStoredThread)
+    const stored = (
+      await this.storedThreads({
+        includeArchived: options.includeArchived === true || options.archivedOnly === true
+      })
+    ).filter(isMaterializedStoredThread)
     try {
       const { client } = await this.ensureConnectedClient()
       const response = await client.listThreads({
@@ -483,10 +475,7 @@ export class CodexRuntimeService {
       })
       return {
         ok: true,
-        threads: filterThreadList(
-          mergeThreads(mappedLiveThreads, stored.map(storedThreadToNormalizedThread)),
-          options
-        )
+        threads: filterThreadList(mergeThreads(mappedLiveThreads, stored.map(storedThreadToNormalizedThread)), options)
       }
     } catch (error) {
       if (this.activeTurns.size > 0) {
@@ -497,7 +486,10 @@ export class CodexRuntimeService {
       }
       await this.discardClientAfterFailure(error)
       if (stored.length > 0) {
-        return { ok: true, threads: filterThreadList(stored.map(storedThreadToNormalizedThread), options) }
+        return {
+          ok: true,
+          threads: filterThreadList(stored.map(storedThreadToNormalizedThread), options)
+        }
       }
       return failure(error)
     }
@@ -511,25 +503,34 @@ export class CodexRuntimeService {
       const startupStatusThreadId = `codex-thread-start-${startedAtMs}`
       const coldStart = !this.isClientWarm()
       if (coldStart) {
-        await this.emitRuntimeStatus({
-          threadId: startupStatusThreadId,
-          phase: 'process_start',
-          message: 'Starting Codex app-server'
-        }, { persist: false })
-        await this.emitRuntimeStatus({
-          threadId: startupStatusThreadId,
-          phase: 'initialize_start',
-          message: 'Initializing Codex app-server'
-        }, { persist: false })
+        await this.emitRuntimeStatus(
+          {
+            threadId: startupStatusThreadId,
+            phase: 'process_start',
+            message: 'Starting Codex app-server'
+          },
+          { persist: false }
+        )
+        await this.emitRuntimeStatus(
+          {
+            threadId: startupStatusThreadId,
+            phase: 'initialize_start',
+            message: 'Initializing Codex app-server'
+          },
+          { persist: false }
+        )
       }
       const { client } = await this.ensureModelUseClient(settings)
       if (coldStart) {
-        await this.emitRuntimeStatus({
-          threadId: startupStatusThreadId,
-          phase: 'initialize_done',
-          message: 'Codex app-server initialized',
-          latencyMs: elapsedMs(startedAtMs)
-        }, { persist: false })
+        await this.emitRuntimeStatus(
+          {
+            threadId: startupStatusThreadId,
+            phase: 'initialize_done',
+            message: 'Codex app-server initialized',
+            latencyMs: elapsedMs(startedAtMs)
+          },
+          { persist: false }
+        )
       }
       const dynamicTools = await this.codexDynamicTools(settings, payload.allowedTools)
       const response = await client.startThread({
@@ -545,7 +546,11 @@ export class CodexRuntimeService {
         ...(payload.parentTurnId ? { parentTurnId: payload.parentTurnId } : {}),
         ...(payload.threadSource ? { threadSource: payload.threadSource } : {}),
         ...(payload.sidebarVisibility ? { sidebarVisibility: payload.sidebarVisibility } : {}),
-        ...(payload.threadSource || payload.relation || payload.sidebarVisibility || payload.parentThreadId || payload.parentTurnId
+        ...(payload.threadSource ||
+        payload.relation ||
+        payload.sidebarVisibility ||
+        payload.parentThreadId ||
+        payload.parentTurnId
           ? {
               source: {
                 ...(payload.threadSource ? { type: payload.threadSource } : {}),
@@ -558,26 +563,24 @@ export class CodexRuntimeService {
           : {})
       })
       const thread = normalizeThread(readThread(response))
-      const storedThread = await this.persistThread({
-        ...thread,
-        workspace: thread.workspace || workspace,
-        title: payload.title || thread.title,
-        relation: thread.relation ?? payload.relation,
-        parentThreadId: thread.parentThreadId || payload.parentThreadId,
-        parentTurnId: thread.parentTurnId || payload.parentTurnId,
-        threadSource: thread.threadSource || payload.threadSource,
-        sidebarVisibility: thread.sidebarVisibility || payload.sidebarVisibility
-      }, {
-        ...(payload.threadId ? { guiThreadId: payload.threadId } : {})
-      })
+      const storedThread = await this.persistThread(
+        {
+          ...thread,
+          workspace: thread.workspace || workspace,
+          title: payload.title || thread.title,
+          relation: thread.relation ?? payload.relation,
+          parentThreadId: thread.parentThreadId || payload.parentThreadId,
+          parentTurnId: thread.parentTurnId || payload.parentTurnId,
+          threadSource: thread.threadSource || payload.threadSource,
+          sidebarVisibility: thread.sidebarVisibility || payload.sidebarVisibility
+        },
+        {
+          ...(payload.threadId ? { guiThreadId: payload.threadId } : {})
+        }
+      )
       if (payload.allowedTools !== undefined) {
         const allowed = new Set(payload.allowedTools)
-        for (const id of [
-          payload.threadId,
-          thread.id,
-          storedThread?.guiThreadId,
-          storedThread?.codexThreadId
-        ]) {
+        for (const id of [payload.threadId, thread.id, storedThread?.guiThreadId, storedThread?.codexThreadId]) {
           if (id?.trim()) this.allowedToolsByThread.set(id.trim(), allowed)
         }
       }
@@ -608,41 +611,100 @@ export class CodexRuntimeService {
     }
   }
 
-  async readThread(threadId: string): Promise<CodexThreadReadResult> {
-    const storedDetail = await this.readStoredDetail(threadId)
-    const storedThread = await this.findStoredThread(threadId)
-    const guiThreadId = storedThread?.guiThreadId ?? threadId
-    const codexThreadId = storedThread?.codexThreadId ?? threadId
+  async readThreadStatus(threadId: string): Promise<CodexThreadStatusResult> {
     try {
-      const { client } = await this.ensureConnectedClient()
-      const response = await client.readThread({ threadId: codexThreadId, includeTurns: true })
-      const thread = readThread(response)
-      const detail = threadDetail(thread)
-      const usage = await this.usageStore?.threadUsage(storedThread?.guiThreadId ?? threadId)
-      const detailWithUsage = usage ? { ...detail, usage } : detail
-      const storedDetailWithUsage = storedDetail && usage ? { ...storedDetail, usage } : storedDetail
-      const preferredDetail = preferThreadDetail(detailWithUsage, storedDetailWithUsage)
-      if (storedDetail && this.shouldRepairStaleTurnDetail(guiThreadId, preferredDetail, storedDetail)) {
-        const repairedDetail = await this.readStoredDetail(guiThreadId, { repairStale: true })
-        return { ok: true, detail: repairedDetail ?? preferredDetail }
+      const stored = await this.findStoredThread(threadId)
+      const guiThreadId = stored?.guiThreadId ?? threadId
+      const usage = await this.usageStore?.threadUsage(guiThreadId)
+      const activeTurnId = this.activeTurns.get(guiThreadId)
+      let latestSeq = stored?.latestSeq ?? 0
+      let latestTurnId = stored?.latestTurnId
+      let latestTurnStatus = stored?.latestTurnStatus
+      if (!activeTurnId && stored && isAgentRuntimeActiveTurnState(latestTurnStatus) && this.eventStore) {
+        const page = await this.eventStore.readPage(guiThreadId, { limit: 4 })
+        latestTurnId = latestPageTurnId(page.events) ?? latestTurnId
+        const durableStatus = latestPageTurnStatus(page.events, latestTurnId)
+        if (durableStatus && durableStatus !== 'running') {
+          latestTurnStatus = durableStatus
+          latestSeq = Math.max(latestSeq, page.events.at(-1)?.seq ?? 0)
+          await this.threadStore?.upsert({
+            guiThreadId: stored.guiThreadId,
+            codexThreadId: stored.codexThreadId,
+            workspace: stored.workspace,
+            title: stored.title,
+            latestSeq,
+            ...(latestTurnId ? { latestTurnId } : {}),
+            latestTurnStatus: durableStatus
+          })
+        }
       }
-      return { ok: true, detail: preferredDetail }
+      return {
+        ok: true,
+        status: {
+          id: guiThreadId,
+          runtimeId: 'codex',
+          status: activeTurnId ? 'running' : latestTurnStatus,
+          latestSeq,
+          latestTurnId: activeTurnId ?? latestTurnId,
+          latestTurnStatus: activeTurnId ? 'running' : latestTurnStatus,
+          ...(usage ? { usage } : {})
+        }
+      }
     } catch (error) {
-      if (isMissingOrUnmaterializedThreadError(error) && isEmptyStoredThread(storedThread, storedDetail)) {
-        return { ok: true, detail: emptyThreadDetail() }
+      return failure(error)
+    }
+  }
+
+  async readThreadPage(
+    threadId: string,
+    options: { cursor?: string; limit?: number } = {}
+  ): Promise<CodexThreadPageResult> {
+    try {
+      const stored = await this.findStoredThread(threadId)
+      const guiThreadId = stored?.guiThreadId ?? threadId
+      if (!this.eventStore) {
+        return {
+          ok: true,
+          detail: { blocks: [], latestSeq: 0 },
+          nextCursor: null
+        }
       }
-      if (isEmptyStoredThread(storedThread, storedDetail)) {
-        if (this.activeTurns.size === 0) await this.discardClientAfterFailure(error)
-        return { ok: true, detail: emptyThreadDetail() }
+      const page = await this.eventStore.readPage(guiThreadId, options)
+      const latestEvent = page.events.at(-1)
+      const latestTurnId = stored?.latestTurnId ?? latestPageTurnId(page.events)
+      const latestUserMessageId = stored?.latestUserMessageId ?? latestPageUserMessageId(page.events)
+      return {
+        ok: true,
+        detail: {
+          blocks: storedEventsToBlocks(page.events),
+          latestSeq: Math.max(stored?.latestSeq ?? 0, latestEvent?.seq ?? 0),
+          workspace: stored?.workspace,
+          latestTurnId,
+          latestUserMessageId,
+          threadStatus: mergeDurableThreadStatus(
+            stored?.latestTurnStatus,
+            latestPageTurnStatus(page.events, latestTurnId)
+          )
+        },
+        nextCursor: page.nextCursor
       }
-      if (this.activeTurns.size > 0) {
-        if (storedDetail) return { ok: true, detail: storedDetail }
-        return failure(error)
+    } catch (error) {
+      return failure(error)
+    }
+  }
+
+  async readToolArtifact(threadId: string, ref: string): Promise<CodexToolArtifactResult> {
+    try {
+      const stored = await this.findStoredThread(threadId)
+      const guiThreadId = stored?.guiThreadId ?? threadId
+      const content = (await this.eventStore?.readToolArtifact(guiThreadId, ref)) ?? null
+      if (content === null) {
+        throw Object.assign(new Error('Tool artifact was not found.'), {
+          code: 'not_found'
+        })
       }
-      await this.discardClientAfterFailure(error)
-      if (storedDetail) {
-        return { ok: true, detail: await this.readStoredDetail(guiThreadId, { repairStale: true }) ?? storedDetail }
-      }
+      return { ok: true, content }
+    } catch (error) {
       return failure(error)
     }
   }
@@ -651,6 +713,18 @@ export class CodexRuntimeService {
     if (!this.eventStore) return []
     const events = await this.eventStore.read(threadId, { sinceSeq })
     return events.map((event) => event.event)
+  }
+
+  async listStoredThreadChildren(threadId: string): Promise<AgentRuntimeChild[]> {
+    if (!this.eventStore) return []
+    const stored = await this.findStoredThread(threadId)
+    const guiThreadId = stored?.guiThreadId ?? threadId
+    let index = this.childSummaryIndexes.get(guiThreadId)
+    if (!index) {
+      index = this.loadChildSummaryIndex(guiThreadId)
+      this.childSummaryIndexes.set(guiThreadId, index)
+    }
+    return [...(await index).values()]
   }
 
   async publishSyntheticEvent(event: AgentRuntimeEvent): Promise<CodexThreadEventPayload> {
@@ -681,7 +755,6 @@ export class CodexRuntimeService {
       const published = stored?.event ?? runtimeEvent
       await this.noteRuntimeEvent(published)
       this.broadcastEvent(published)
-      this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.event, { event: published })
       return published
     }
     if (event.kind === 'child_event') {
@@ -706,11 +779,7 @@ export class CodexRuntimeService {
     })
   }
 
-  async *subscribeEvents(
-    threadId: string,
-    sinceSeq = 0,
-    signal?: AbortSignal
-  ): AsyncIterable<CodexThreadEventPayload> {
+  async *subscribeEvents(threadId: string, sinceSeq = 0, signal?: AbortSignal): AsyncIterable<CodexThreadEventPayload> {
     let latestSeq = sinceSeq
     const subscriber = this.addEventSubscriber(threadId)
     const onAbort = (): void => this.closeEventSubscriber(subscriber)
@@ -737,7 +806,10 @@ export class CodexRuntimeService {
     try {
       const stored = await this.findStoredThread(threadId)
       const { client } = await this.ensureConnectedClient()
-      await client.renameThread({ threadId: stored?.codexThreadId ?? threadId, title })
+      await client.renameThread({
+        threadId: stored?.codexThreadId ?? threadId,
+        title
+      })
       if (stored) {
         await this.threadStore?.upsert({
           guiThreadId: stored.guiThreadId,
@@ -764,7 +836,9 @@ export class CodexRuntimeService {
       if (archived) {
         try {
           const { client } = await this.ensureConnectedClient()
-          await client.request('thread/archive', { threadId: stored?.codexThreadId ?? threadId })
+          await client.request('thread/archive', {
+            threadId: stored?.codexThreadId ?? threadId
+          })
         } catch (error) {
           if (!isMissingOrUnmaterializedThreadError(error)) throw error
         }
@@ -804,11 +878,13 @@ export class CodexRuntimeService {
       const modelText = payload.text
       const modelDisplayText = payload.displayText
       let codexThreadId = storedThread?.codexThreadId ?? payload.threadId
-      storedThread = storedThread ?? await this.ensureGuiThreadRecord({
-        guiThreadId: payload.threadId,
-        codexThreadId,
-        workspace
-      })
+      storedThread =
+        storedThread ??
+        (await this.ensureGuiThreadRecord({
+          guiThreadId: payload.threadId,
+          codexThreadId,
+          workspace
+        }))
       codexThreadId = storedThread?.codexThreadId ?? codexThreadId
       const coldStart = !this.isClientWarm()
       if (coldStart) {
@@ -839,20 +915,21 @@ export class CodexRuntimeService {
           ? [...this.allowedToolsByThread.get(payload.threadId)!]
           : undefined,
         ownedVisualToolsAvailable: payload.ownedVisualToolsAvailable === true,
-        nativeVisualProofChainPending:
-          payload.nativeVisualProofChainPending === true
+        nativeVisualProofChainPending: payload.nativeVisualProofChainPending === true
       })
       try {
-        response = await client.startTurn(turnStartParams({
-          threadId: codexThreadId,
-          guiThreadId: payload.threadId,
-          text: modelText,
-          workspace,
-          model: runtimeModel,
-          reasoningEffort: payload.reasoningEffort,
-          fileReferences: payload.fileReferences,
-          runtime
-        }))
+        response = await client.startTurn(
+          turnStartParams({
+            threadId: codexThreadId,
+            guiThreadId: payload.threadId,
+            text: modelText,
+            workspace,
+            model: runtimeModel,
+            reasoningEffort: payload.reasoningEffort,
+            fileReferences: payload.fileReferences,
+            runtime
+          })
+        )
       } catch (error) {
         if (!isMissingOrUnmaterializedThreadError(error)) {
           throw error
@@ -872,28 +949,24 @@ export class CodexRuntimeService {
             ? [...this.allowedToolsByThread.get(payload.threadId)!]
             : undefined,
           ownedVisualToolsAvailable: payload.ownedVisualToolsAvailable === true,
-          nativeVisualProofChainPending:
-            payload.nativeVisualProofChainPending === true
+          nativeVisualProofChainPending: payload.nativeVisualProofChainPending === true
         })
-        response = await client.startTurn(turnStartParams({
-          threadId: codexThreadId,
-          guiThreadId: payload.threadId,
-          text: modelText,
-          workspace,
-          model: runtimeModel,
-          reasoningEffort: payload.reasoningEffort,
-          fileReferences: payload.fileReferences,
-          runtime
-        }))
+        response = await client.startTurn(
+          turnStartParams({
+            threadId: codexThreadId,
+            guiThreadId: payload.threadId,
+            text: modelText,
+            workspace,
+            model: runtimeModel,
+            reasoningEffort: payload.reasoningEffort,
+            fileReferences: payload.fileReferences,
+            runtime
+          })
+        )
       }
       const turn = asRecord(asRecord(response)?.turn) ?? {}
       const turnId = stringValue(turn.id) || ''
-      this.recordActiveTurn(
-        payload.threadId,
-        turnId,
-        startedAtMs,
-        getModelAccessSettings(settings)?.mode !== 'api'
-      )
+      this.recordActiveTurn(payload.threadId, turnId, startedAtMs, getModelAccessSettings(settings)?.mode !== 'api')
       await this.bindCodexTurnGovernance({
         threadId: payload.threadId,
         turnId,
@@ -908,10 +981,8 @@ export class CodexRuntimeService {
         model: runtimeModel,
         reasoningEffort: payload.reasoningEffort,
         fileReferences: payload.fileReferences,
-        ownedVisualToolsAvailable:
-          payload.ownedVisualToolsAvailable === true,
-        nativeVisualProofChainPending:
-          payload.nativeVisualProofChainPending === true,
+        ownedVisualToolsAvailable: payload.ownedVisualToolsAvailable === true,
+        nativeVisualProofChainPending: payload.nativeVisualProofChainPending === true,
         runtime,
         recoveryAttempted: false
       })
@@ -944,8 +1015,7 @@ export class CodexRuntimeService {
         userMessageItemId
       }
     } catch (error) {
-      await this.releasePreparedCodexTurnGovernance(preparedGovernance)
-        .catch(() => undefined)
+      await this.releasePreparedCodexTurnGovernance(preparedGovernance).catch(() => undefined)
       await this.discardClientAfterFailure(error)
       return failure(error)
     }
@@ -962,18 +1032,13 @@ export class CodexRuntimeService {
     if (!sessionId) throw new Error('Codex turn governance requires a session id.')
     if (!this.preToolUseGovernanceBridge) {
       if (input.nativeVisualProofChainPending || input.parent || input.allowedTools !== undefined) {
-        throw new Error(
-          'Codex native visual execution requires the SciForge pre-tool governance bridge.'
-        )
+        throw new Error('Codex native visual execution requires the SciForge pre-tool governance bridge.')
       }
       return { sessionId }
     }
     if (input.parent) {
       const parent = this.resolveParentCodexTurnGovernance(input.parent)
-      await this.preToolUseGovernanceBridge.seedSessionForGovernanceTurn(
-        sessionId,
-        parent.governanceTurnId
-      )
+      await this.preToolUseGovernanceBridge.seedSessionForGovernanceTurn(sessionId, parent.governanceTurnId)
       return {
         sessionId,
         parent: {
@@ -982,30 +1047,26 @@ export class CodexRuntimeService {
         }
       }
     }
-    await this.preToolUseGovernanceBridge.seedSession(sessionId, {
-      ownedVisualToolsAvailable: input.ownedVisualToolsAvailable === true,
-      nativeVisualProofChainPending:
-        input.nativeVisualProofChainPending === true
-    }, input.allowedTools)
+    await this.preToolUseGovernanceBridge.seedSession(
+      sessionId,
+      {
+        ownedVisualToolsAvailable: input.ownedVisualToolsAvailable === true,
+        nativeVisualProofChainPending: input.nativeVisualProofChainPending === true
+      },
+      input.allowedTools
+    )
     return { sessionId }
   }
 
-  private resolveParentCodexTurnGovernance(parent: {
-    threadId: string
-    turnId: string
-  }): CodexTurnGovernanceBinding {
-    const binding = this.governanceBindingsByTurn.get(
-      turnTimingKey(parent.threadId, parent.turnId)
-    )
+  private resolveParentCodexTurnGovernance(parent: { threadId: string; turnId: string }): CodexTurnGovernanceBinding {
+    const binding = this.governanceBindingsByTurn.get(turnTimingKey(parent.threadId, parent.turnId))
     if (
       this.activeTurns.get(parent.threadId) !== parent.turnId ||
       !binding ||
       binding.governanceThreadId !== parent.threadId ||
       binding.governanceTurnId !== parent.turnId
     ) {
-      throw new Error(
-        'Codex child governance requires the active parent Host turn governance key.'
-      )
+      throw new Error('Codex child governance requires the active parent Host turn governance key.')
     }
     return binding
   }
@@ -1022,24 +1083,17 @@ export class CodexRuntimeService {
         threadId: input.threadId,
         turnId,
         sessionId: input.prepared.sessionId,
-        ...(input.prepared.parent
-          ? { governanceTurnId: input.prepared.parent.turnId }
-          : {})
+        ...(input.prepared.parent ? { governanceTurnId: input.prepared.parent.turnId } : {})
       })
     }
-    this.governanceBindingsByTurn.set(
-      turnTimingKey(input.threadId, turnId),
-      {
-        sessionId: input.prepared.sessionId,
-        governanceThreadId: input.prepared.parent?.threadId ?? input.threadId,
-        governanceTurnId: input.prepared.parent?.turnId ?? turnId
-      }
-    )
+    this.governanceBindingsByTurn.set(turnTimingKey(input.threadId, turnId), {
+      sessionId: input.prepared.sessionId,
+      governanceThreadId: input.prepared.parent?.threadId ?? input.threadId,
+      governanceTurnId: input.prepared.parent?.turnId ?? turnId
+    })
   }
 
-  private async releasePreparedCodexTurnGovernance(
-    prepared: CodexPreparedTurnGovernance | null
-  ): Promise<void> {
+  private async releasePreparedCodexTurnGovernance(prepared: CodexPreparedTurnGovernance | null): Promise<void> {
     if (!prepared) return
     await this.preToolUseGovernanceBridge?.deleteSessionSeed(prepared.sessionId)
   }
@@ -1082,20 +1136,14 @@ export class CodexRuntimeService {
     }
   }
 
-  async updateTurnGovernanceSnapshot(
-    input: AgentRuntimeTurnGovernanceSnapshotInput
-  ): Promise<CodexTurnMutationResult> {
+  async updateTurnGovernanceSnapshot(input: AgentRuntimeTurnGovernanceSnapshotInput): Promise<CodexTurnMutationResult> {
     try {
       if (input.runtimeId !== 'codex') return { ok: true }
       if (this.activeTurns.get(input.threadId) !== input.turnId) return { ok: true }
       if (!this.preToolUseGovernanceBridge) {
-        return unsupportedFailure(
-          'Codex pre-tool governance requires a SciForge runtime storage root.'
-        )
+        return unsupportedFailure('Codex pre-tool governance requires a SciForge runtime storage root.')
       }
-      const binding = this.governanceBindingsByTurn.get(
-        turnTimingKey(input.threadId, input.turnId)
-      )
+      const binding = this.governanceBindingsByTurn.get(turnTimingKey(input.threadId, input.turnId))
       if (!binding) {
         throw new Error('Codex active turn governance binding is unavailable.')
       }
@@ -1157,13 +1205,13 @@ export class CodexRuntimeService {
       }
     }
     await this.backfillStoredUsageEvents()
-    return this.usageStore.summary(input, { threads: await this.storedThreads({ includeArchived: true }) })
+    return this.usageStore.summary(input, {
+      threads: await this.storedThreads({ includeArchived: true })
+    })
   }
 
   pendingServerRequests(): CodexAppServerPendingRequest[] {
-    return typeof this.client?.pendingServerRequests === 'function'
-      ? this.client.pendingServerRequests()
-      : []
+    return typeof this.client?.pendingServerRequests === 'function' ? this.client.pendingServerRequests() : []
   }
 
   async resolveApproval(input: CodexAppServerResolveApprovalInput): Promise<CodexTurnMutationResult> {
@@ -1219,23 +1267,15 @@ export class CodexRuntimeService {
     session.cancelled = true
     const current = this.clientSession === session
     const governanceTurnIds = [...this.activeTurns.values()]
-    const governanceSessionIds = [...this.governanceBindingsByTurn.values()]
-      .map((binding) => binding.sessionId)
+    const governanceSessionIds = [...this.governanceBindingsByTurn.values()].map((binding) => binding.sessionId)
     const cleanup = (async () => {
       if (current) {
         const releaseReason = input.failure ? 'runtime_disconnected' : input.reason
         for (const [threadId, turnId] of this.activeTurns) {
-          this.options.capabilityAgentTools?.abortTurn?.(
-            { runtimeId: 'codex', threadId, turnId },
-            releaseReason
-          )
+          this.options.capabilityAgentTools?.abortTurn?.({ runtimeId: 'codex', threadId, turnId }, releaseReason)
         }
         await this.finalizeActiveTurnsBeforeTeardown({
-          code: input.failure
-            ? 'runtime_disconnected'
-            : input.reason === 'user_stop'
-              ? 'aborted'
-              : 'runtime_stopped',
+          code: input.failure ? 'runtime_disconnected' : input.reason === 'user_stop' ? 'aborted' : 'runtime_stopped',
           message: input.failure
             ? CODEX_TURN_DISCONNECTED_MESSAGE
             : input.reason === 'user_stop'
@@ -1259,16 +1299,10 @@ export class CodexRuntimeService {
           )
           this.closeAllEventSubscribers()
         }
-        await Promise.all(
-          [
-            ...governanceTurnIds.map((turnId) =>
-              this.preToolUseGovernanceBridge?.deleteTurnState(turnId)
-            ),
-            ...governanceSessionIds.map((sessionId) =>
-              this.preToolUseGovernanceBridge?.deleteSessionSeed(sessionId)
-            )
-          ]
-        )
+        await Promise.all([
+          ...governanceTurnIds.map((turnId) => this.preToolUseGovernanceBridge?.deleteTurnState(turnId)),
+          ...governanceSessionIds.map((sessionId) => this.preToolUseGovernanceBridge?.deleteSessionSeed(sessionId))
+        ])
       }
       const client = session.client
       if (client) {
@@ -1304,11 +1338,8 @@ export class CodexRuntimeService {
           details: input.details,
           severity: 'error'
         })
-      } catch (error) {
-        this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.error, {
-          message: error instanceof Error ? error.message : String(error),
-          detail: error
-        })
+      } catch {
+        // Continue failing the remaining active turns even if one event cannot be published.
       }
     }
   }
@@ -1317,11 +1348,13 @@ export class CodexRuntimeService {
     settings?: AppSettingsV1,
     access: 'runtime' | 'account' = 'runtime'
   ): Promise<CodexConnectedClient> {
-    const current = settings ?? await this.options.settings()
+    const current = settings ?? (await this.options.settings())
     if (access === 'runtime' && !resolveModelAccessRuntimePolicy(current).codex) {
       const modelAccess = getModelAccessSettings(current)
       if (!modelAccess) {
-        throw new Error('Model access setup is required. Choose Model API or Coding Plan in Settings before connecting Codex.')
+        throw new Error(
+          'Model access setup is required. Choose Model API or Coding Plan in Settings before connecting Codex.'
+        )
       }
       if (modelAccess.mode === 'coding-plan' && !modelAccess.planAdapterId.trim()) {
         throw new Error('Select a Coding Plan in Settings before connecting Codex.')
@@ -1334,10 +1367,7 @@ export class CodexRuntimeService {
       if (existing.accessKey === nextAccessKey && !existing.cancelled) {
         return existing.readiness
       }
-      if (
-        (this.codingPlanLoginStartsInFlight > 0 || this.activeCodingPlanLoginIds.size > 0) &&
-        access === 'runtime'
-      ) {
+      if ((this.codingPlanLoginStartsInFlight > 0 || this.activeCodingPlanLoginIds.size > 0) && access === 'runtime') {
         throw new CodexCodingPlanLoginInProgressError(
           'Codex ChatGPT sign-in is still in progress. Complete or retry sign-in before starting the runtime.'
         )
@@ -1390,8 +1420,7 @@ export class CodexRuntimeService {
           ...launch.env,
           ...(this.options.storageRoot
             ? {
-                [CODEX_PRE_TOOL_USE_GOVERNANCE_STORAGE_ROOT_ENV]:
-                  this.options.storageRoot
+                [CODEX_PRE_TOOL_USE_GOVERNANCE_STORAGE_ROOT_ENV]: this.options.storageRoot
               }
             : {})
         },
@@ -1402,12 +1431,7 @@ export class CodexRuntimeService {
         },
         pendingServerRequests: {
           onPendingRequest: (request) => {
-            void this.publishPendingServerRequest(request).catch((error) => {
-              this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.error, {
-                message: error instanceof Error ? error.message : String(error),
-                detail: error
-              })
-            })
+            void this.publishPendingServerRequest(request).catch(() => undefined)
           },
           onToolCallRequest: (request) => this.handleDynamicToolCall(request)
         }
@@ -1466,9 +1490,7 @@ export class CodexRuntimeService {
     if (!this.options.preToolUseHookLaunch) return
     const storageRoot = this.options.storageRoot
     if (!this.preToolUseGovernanceBridge || !storageRoot) {
-      throw new Error(
-        'SciForge Codex PreToolUse governance requires a runtime storage root.'
-      )
+      throw new Error('SciForge Codex PreToolUse governance requires a runtime storage root.')
     }
     const expected = launch.preToolUseHook
     if (!expected) throw new Error('SciForge Codex PreToolUse hook was not prepared.')
@@ -1480,32 +1502,28 @@ export class CodexRuntimeService {
     })
     if (first.trustStatus === 'trusted') return
     if (first.trustStatus !== 'untrusted' && first.trustStatus !== 'modified') {
-      throw new Error(
-        `SciForge Codex PreToolUse hook has unexpected trust status ${first.trustStatus}.`
-      )
+      throw new Error(`SciForge Codex PreToolUse hook has unexpected trust status ${first.trustStatus}.`)
     }
     const write = await client.writeConfigBatch({
-      edits: [{
-        keyPath: 'hooks.state',
-        value: {
-          [first.key]: {
-            enabled: true,
-            trusted_hash: first.currentHash
-          }
-        },
-        mergeStrategy: 'upsert'
-      }],
+      edits: [
+        {
+          keyPath: 'hooks.state',
+          value: {
+            [first.key]: {
+              enabled: true,
+              trusted_hash: first.currentHash
+            }
+          },
+          mergeStrategy: 'upsert'
+        }
+      ],
       filePath: join(launch.codexHome, 'config.toml'),
       reloadUserConfig: true
     })
     if (write.status !== 'ok' && write.status !== 'okOverridden') {
       throw new Error(`Codex rejected SciForge hook trust update: ${write.status}.`)
     }
-    const verified = await this.readOwnedCodexPreToolUseHook(
-      client,
-      launch.cwd,
-      expected
-    )
+    const verified = await this.readOwnedCodexPreToolUseHook(client, launch.cwd, expected)
     if (
       verified.key !== first.key ||
       verified.currentHash !== first.currentHash ||
@@ -1520,20 +1538,13 @@ export class CodexRuntimeService {
     cwd: string,
     expected: CodexPreToolUseHookDefinition
   ): Promise<CodexAppServerHookMetadata> {
-    const [canonicalCwd, canonicalSourcePath] = await Promise.all([
-      realpath(cwd),
-      realpath(expected.sourcePath)
-    ])
+    const [canonicalCwd, canonicalSourcePath] = await Promise.all([realpath(cwd), realpath(expected.sourcePath)])
     const response = await client.listHooks([canonicalCwd])
     if (!Array.isArray(response.data) || response.data.length !== 1) {
       throw new Error('Codex hooks/list did not return exactly one workspace result.')
     }
     const result = response.data[0]
-    if (
-      result.cwd !== canonicalCwd ||
-      result.errors.length > 0 ||
-      result.warnings.length > 0
-    ) {
+    if (result.cwd !== canonicalCwd || result.errors.length > 0 || result.warnings.length > 0) {
       throw new Error('Codex hooks/list returned a workspace mismatch or hook diagnostics.')
     }
     const owned = result.hooks.filter((hook) => hook.sourcePath === canonicalSourcePath)
@@ -1541,9 +1552,7 @@ export class CodexRuntimeService {
       throw new Error('Codex did not discover exactly one SciForge-owned PreToolUse hook.')
     }
     const hook = owned[0]
-    const expectedCommand = process.platform === 'win32'
-      ? expected.commandWindows
-      : expected.command
+    const expectedCommand = process.platform === 'win32' ? expected.commandWindows : expected.command
     if (
       hook.source !== 'user' ||
       hook.isManaged ||
@@ -1566,20 +1575,18 @@ export class CodexRuntimeService {
     info: CodexAppServerInitializeResponse
   }> {
     const settings = await this.options.settings()
-    return this.ensureConnectedClient({
-      ...settings,
-      modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
-    }, 'account')
+    return this.ensureConnectedClient(
+      {
+        ...settings,
+        modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
+      },
+      'account'
+    )
   }
 
   isClientWarm(): boolean {
     const session = this.clientSession
-    return Boolean(
-      session?.ready &&
-      !session.cancelled &&
-      session.client &&
-      this.client === session.client
-    )
+    return Boolean(session?.ready && !session.cancelled && session.client && this.client === session.client)
   }
 
   isResearchMcpConfigured(): boolean {
@@ -1603,9 +1610,7 @@ export class CodexRuntimeService {
     allowedTools?: readonly string[]
   ): Promise<RuntimeToolDefinition[]> {
     const source = this.options.capabilityAgentTools
-    const capabilityTools = source
-      ? filterAgentRuntimeToolSurface(source, allowedTools).tools()
-      : []
+    const capabilityTools = source ? filterAgentRuntimeToolSurface(source, allowedTools).tools() : []
     return capabilityTools.map((tool) => ({
       type: tool.type,
       name: tool.name,
@@ -1614,9 +1619,7 @@ export class CodexRuntimeService {
     }))
   }
 
-  private async handleDynamicToolCall(
-    request: RuntimeToolCallRequest
-  ): Promise<RuntimeToolCallResponse> {
+  private async handleDynamicToolCall(request: RuntimeToolCallRequest): Promise<RuntimeToolCallResponse> {
     const settings = await this.options.settings()
     const contextualRequest = await this.requestWithGuiThreadContext(request)
     await this.publishDynamicToolExecutionFact(contextualRequest, 'dispatched')
@@ -1626,19 +1629,17 @@ export class CodexRuntimeService {
     } catch (error) {
       const name = request.namespace ? `${request.namespace}.${request.tool}` : request.tool
       response = {
-        contentItems: [{
-          type: 'inputText',
-          text: `Runtime tool ${name} failed: ${error instanceof Error ? error.message : String(error)}`
-        }],
+        contentItems: [
+          {
+            type: 'inputText',
+            text: `Runtime tool ${name} failed: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ],
         success: false,
         ...dynamicToolErrorMetadata(error)
       }
     }
-    await this.publishDynamicToolExecutionFact(
-      contextualRequest,
-      response.success ? 'succeeded' : 'failed',
-      response
-    )
+    await this.publishDynamicToolExecutionFact(contextualRequest, response.success ? 'succeeded' : 'failed', response)
     return response
   }
 
@@ -1653,9 +1654,12 @@ export class CodexRuntimeService {
   }
 
   private isSubagentDelegationConfigured(settings: AppSettingsV1): boolean {
-    return getAgentCapabilitySettings(settings).subagents.enabled &&
-      (this.options.capabilityAgentTools?.tools() ?? [])
-        .some((tool) => tool.name === AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME)
+    return (
+      getAgentCapabilitySettings(settings).subagents.enabled &&
+      (this.options.capabilityAgentTools?.tools() ?? []).some(
+        (tool) => tool.name === AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME
+      )
+    )
   }
 
   private canHandleCapabilityAgentTool(request: RuntimeToolCallRequest): boolean {
@@ -1697,15 +1701,15 @@ export class CodexRuntimeService {
       contentItems: [{ type: 'inputText', text: JSON.stringify(result.value, null, 2) }],
       structuredContent: result.value,
       ...(execution.effects.length ? { effects: execution.effects } : {}),
-      ...(execution.completionReceipts.length
-        ? { completionReceipts: execution.completionReceipts }
-        : {}),
+      ...(execution.completionReceipts.length ? { completionReceipts: execution.completionReceipts } : {}),
       evidenceDelta: true,
       ...(booleanValue(asRecord(result.value)?.changed) !== undefined
         ? { stateChanged: booleanValue(asRecord(result.value)?.changed) }
         : {}),
       ...(stringValue(asRecord(result.value)?.resourceRef).trim()
-        ? { resourceIdentity: stringValue(asRecord(result.value)?.resourceRef).trim() }
+        ? {
+            resourceIdentity: stringValue(asRecord(result.value)?.resourceRef).trim()
+          }
         : {})
     }
   }
@@ -1730,9 +1734,7 @@ export class CodexRuntimeService {
         status: phase === 'dispatched' ? 'running' : phase === 'succeeded' ? 'success' : 'error',
         toolKind: 'tool_call',
         ...(response?.effects?.length ? { effects: response.effects } : {}),
-        ...(response?.completionReceipts?.length
-          ? { completionReceipts: response.completionReceipts }
-          : {}),
+        ...(response?.completionReceipts?.length ? { completionReceipts: response.completionReceipts } : {}),
         ...(terminal && response ? { detail: dynamicToolResponseSummary(response) } : {}),
         meta: {
           callId,
@@ -1742,9 +1744,7 @@ export class CodexRuntimeService {
           evidenceStrength: terminal ? 'executor_receipt' : 'runtime_lifecycle',
           arguments: dynamicToolArgumentsRecord(request.arguments) ?? request.arguments,
           ...(terminal ? { success: response?.success === true } : {}),
-          ...(response?.structuredContent !== undefined
-            ? { structuredContent: response.structuredContent }
-            : {}),
+          ...(response?.structuredContent !== undefined ? { structuredContent: response.structuredContent } : {}),
           ...(response?.errorCode ? { errorCode: response.errorCode } : {}),
           ...(response?.failureClass ? { failureClass: response.failureClass } : {}),
           ...(response?.retryable !== undefined ? { retryable: response.retryable } : {}),
@@ -1762,17 +1762,12 @@ export class CodexRuntimeService {
       for (const runtimeEvent of this.eventsAfterPendingToolBarrier(correlated)) {
         await this.publishClientEvent(runtimeEvent)
       }
-    } catch (error) {
-      this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.error, {
-        message: `Failed to publish Codex dynamic tool execution fact: ${error instanceof Error ? error.message : String(error)}`,
-        detail: error
-      })
+    } catch {
+      // The tool response has already been returned; publishing its execution fact is best effort.
     }
   }
 
-  private async requestWithGuiThreadContext(
-    request: RuntimeToolCallRequest
-  ): Promise<RuntimeToolCallRequest> {
+  private async requestWithGuiThreadContext(request: RuntimeToolCallRequest): Promise<RuntimeToolCallRequest> {
     const threadId = stringValue(request.threadId).trim()
     if (!threadId) return request
     const storedThread = await this.findStoredThread(threadId)
@@ -1814,20 +1809,23 @@ export class CodexRuntimeService {
     const childThread = normalizeThread(readThread(threadResponse))
     if (!childThread.id) throw new Error('Codex child thread did not return a thread id.')
     const title = input.label || childThreadTitle(input.prompt)
-    const storedChild = await this.persistThread({
-      ...childThread,
-      workspace: childThread.workspace || workspace,
-      title,
-      relation: childThread.relation ?? 'side',
-      threadSource: childThread.threadSource || 'subagent',
-      parentThreadId: childThread.parentThreadId || input.parentThreadId,
-      parentTurnId: childThread.parentTurnId || input.parentTurnId,
-      agentNickname: childThread.agentNickname || input.label,
-      agentRole: childThread.agentRole || 'subagent'
-    }, {
-      workspace,
-      title
-    })
+    const storedChild = await this.persistThread(
+      {
+        ...childThread,
+        workspace: childThread.workspace || workspace,
+        title,
+        relation: childThread.relation ?? 'side',
+        threadSource: childThread.threadSource || 'subagent',
+        parentThreadId: childThread.parentThreadId || input.parentThreadId,
+        parentTurnId: childThread.parentTurnId || input.parentTurnId,
+        agentNickname: childThread.agentNickname || input.label,
+        agentRole: childThread.agentRole || 'subagent'
+      },
+      {
+        workspace,
+        title
+      }
+    )
     const childGuiThreadId = storedChild?.guiThreadId ?? childThread.id
     const childCodexThreadId = storedChild?.codexThreadId ?? childThread.id
     const subscriber = this.addEventSubscriber(childGuiThreadId)
@@ -1838,10 +1836,15 @@ export class CodexRuntimeService {
     const terminateChildTurn = (signal?: AbortSignal): Promise<void> => {
       if (!childTurnId) return Promise.resolve()
       if (terminationPromise) return terminationPromise
-      const pending = client.interruptTurn({
-        threadId: childCodexThreadId,
-        turnId: childTurnId
-      }, signal).then(() => undefined)
+      const pending = client
+        .interruptTurn(
+          {
+            threadId: childCodexThreadId,
+            turnId: childTurnId
+          },
+          signal
+        )
+        .then(() => undefined)
       terminationPromise = pending
       void pending.catch(() => {
         if (terminationPromise === pending) terminationPromise = null
@@ -1857,14 +1860,16 @@ export class CodexRuntimeService {
           turnId: input.parentTurnId
         }
       })
-      const turnResponse = await client.startTurn(turnStartParams({
-        threadId: childCodexThreadId,
-        guiThreadId: childGuiThreadId,
-        text: input.prompt,
-        workspace,
-        model: modelAccess.model,
-        runtime: getCodexRuntimeSettings(settings)
-      }))
+      const turnResponse = await client.startTurn(
+        turnStartParams({
+          threadId: childCodexThreadId,
+          guiThreadId: childGuiThreadId,
+          text: input.prompt,
+          workspace,
+          model: modelAccess.model,
+          runtime: getCodexRuntimeSettings(settings)
+        })
+      )
       const turn = asRecord(asRecord(turnResponse)?.turn) ?? {}
       childTurnId = stringValue(turn.id) || ''
       if (!childTurnId) throw new Error('Codex child turn did not return a turn id.')
@@ -1930,11 +1935,9 @@ export class CodexRuntimeService {
       }
     } finally {
       this.activeSubagents.delete(input.childId)
-      await this.releasePreparedCodexTurnGovernance(preparedGovernance)
-        .catch(() => undefined)
+      await this.releasePreparedCodexTurnGovernance(preparedGovernance).catch(() => undefined)
       if (childTurnId) {
-        await this.clearTurnTracking(childGuiThreadId, childTurnId)
-          .catch(() => undefined)
+        await this.clearTurnTracking(childGuiThreadId, childTurnId).catch(() => undefined)
       }
       this.closeEventSubscriber(subscriber)
     }
@@ -1943,9 +1946,8 @@ export class CodexRuntimeService {
   async inspectSubagent(input: AgentRuntimeSubagentInspectInput) {
     const active = this.activeSubagents.get(input.childId)
     return {
-      state: active && this.activeTurns.get(active.threadId) === active.turnId
-        ? 'active' as const
-        : 'missing' as const,
+      state:
+        active && this.activeTurns.get(active.threadId) === active.turnId ? ('active' as const) : ('missing' as const),
       observedAt: new Date().toISOString()
     }
   }
@@ -1955,11 +1957,14 @@ export class CodexRuntimeService {
     if (!active || this.activeTurns.get(active.threadId) !== active.turnId) {
       return { established: false }
     }
-    await active.client.steerTurn({
-      threadId: active.codexThreadId,
-      expectedTurnId: active.turnId,
-      input: [textInput(input.message)]
-    }, input.signal)
+    await active.client.steerTurn(
+      {
+        threadId: active.codexThreadId,
+        expectedTurnId: active.turnId,
+        input: [textInput(input.message)]
+      },
+      input.signal
+    )
     return { established: true }
   }
 
@@ -1981,7 +1986,7 @@ export class CodexRuntimeService {
     transcript: AgentRuntimeSubagentTranscriptEntry[]
   }> {
     const transcript: AgentRuntimeSubagentTranscriptEntry[] = []
-    let assistantText = ''
+    const assistantText: string[] = []
     let usage: AgentRuntimeSubagentUsage | undefined
     const onAbort = (): void => this.closeEventSubscriber(input.subscriber)
     input.signal.addEventListener('abort', onAbort, { once: true })
@@ -1993,7 +1998,7 @@ export class CodexRuntimeService {
         if (turnId && turnId !== input.turnId) continue
         for (const [index, delta] of (event.deltas ?? []).entries()) {
           if (!delta.text) continue
-          if (delta.kind === 'agent_message') assistantText += delta.text
+          if (delta.kind === 'agent_message') assistantText.push(delta.text)
           transcript.push({
             id: `codex-child-${input.turnId}-${event.seq ?? Date.now()}-${index}`,
             kind: delta.kind === 'agent_reasoning' ? 'reasoning' : 'assistant_message',
@@ -2023,10 +2028,11 @@ export class CodexRuntimeService {
         }
         if (event.turnComplete) break
       }
+      const assistantSummary = assistantText.join('').trim()
       if (input.signal.aborted) {
         await input.terminateChildTurn().catch(() => undefined)
         const error = Object.assign(new Error('Codex child turn was aborted.'), {
-          ...(assistantText.trim() ? { subagentSummary: assistantText.trim() } : {}),
+          ...(assistantSummary ? { subagentSummary: assistantSummary } : {}),
           subagentTranscript: transcript,
           ...(usage ? { subagentUsage: usage } : {})
         })
@@ -2034,7 +2040,7 @@ export class CodexRuntimeService {
         throw error
       }
       return {
-        summary: assistantText.trim(),
+        summary: assistantSummary,
         ...(usage ? { usage } : {}),
         transcript
       }
@@ -2057,9 +2063,7 @@ export class CodexRuntimeService {
     if (this.activeTurns.get(input.parentThreadId) !== input.parentTurnId) {
       throw new Error('Codex child receipt cannot target an inactive parent turn.')
     }
-    const parentBinding = this.governanceBindingsByTurn.get(
-      turnTimingKey(input.parentThreadId, input.parentTurnId)
-    )
+    const parentBinding = this.governanceBindingsByTurn.get(turnTimingKey(input.parentThreadId, input.parentTurnId))
     if (
       !parentBinding ||
       parentBinding.governanceThreadId !== input.parentThreadId ||
@@ -2091,10 +2095,7 @@ export class CodexRuntimeService {
     }
   }
 
-  private async handleCodingPlanNotification(
-    payload: unknown,
-    client: CodexAppServerJsonRpcClient
-  ): Promise<boolean> {
+  private async handleCodingPlanNotification(payload: unknown, client: CodexAppServerJsonRpcClient): Promise<boolean> {
     const notification = asRecord(payload)
     const method = stringValue(notification?.method)
     const params = asRecord(notification?.params)
@@ -2141,7 +2142,10 @@ export class CodexRuntimeService {
       } else if (this.codingPlanAccount?.account?.type === 'chatgpt' && updated.planType) {
         this.codingPlanAccount = {
           ...this.codingPlanAccount,
-          account: { ...this.codingPlanAccount.account, planType: updated.planType },
+          account: {
+            ...this.codingPlanAccount.account,
+            planType: updated.planType
+          },
           planType: updated.planType
         }
       }
@@ -2199,10 +2203,7 @@ export class CodexRuntimeService {
     this.codingPlanLoginWaiters.clear()
   }
 
-  private async forwardEvents(
-    client: CodexAppServerJsonRpcClient,
-    session: CodexClientSession
-  ): Promise<void> {
+  private async forwardEvents(client: CodexAppServerJsonRpcClient, session: CodexClientSession): Promise<void> {
     for await (const event of client.subscribe()) {
       if (this.clientSession !== session || session.cancelled) return
       if (event.type === 'event') {
@@ -2219,7 +2220,6 @@ export class CodexRuntimeService {
         continue
       }
       if (event.type === 'error') {
-        this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.error, event.error)
         continue
       }
       await this.failActiveTurns(
@@ -2228,21 +2228,12 @@ export class CodexRuntimeService {
         { reason: event.reason }
       )
       if (this.clientSession !== session || session.cancelled) return
-      this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.closed, { reason: event.reason })
       await this.discardClientAfterFailure(undefined, session)
       return
     }
-    if (
-      this.clientSession === session &&
-      !session.cancelled &&
-      this.activeTurns.size > 0
-    ) {
-      await this.failActiveTurns(
-        'Codex app-server event stream ended unexpectedly.',
-        'runtime_disconnected'
-      )
+    if (this.clientSession === session && !session.cancelled && this.activeTurns.size > 0) {
+      await this.failActiveTurns('Codex app-server event stream ended unexpectedly.', 'runtime_disconnected')
       if (this.clientSession !== session || session.cancelled) return
-      this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.closed, { reason: 'event_stream_ended' })
       await this.discardClientAfterFailure(undefined, session)
     }
   }
@@ -2308,18 +2299,19 @@ export class CodexRuntimeService {
     if (!event) return {}
     const params = asRecord(event.params)
     const sessionPayload = asRecord(event.payload)
-    const threadId = stringValue(params?.threadId) ||
+    const threadId =
+      stringValue(params?.threadId) ||
       stringValue(params?.thread_id) ||
       stringValue(sessionPayload?.threadId) ||
       stringValue(sessionPayload?.thread_id)
-    const turnId = stringValue(params?.turnId) ||
+    const turnId =
+      stringValue(params?.turnId) ||
       stringValue(params?.turn_id) ||
       stringValue(sessionPayload?.turnId) ||
       stringValue(sessionPayload?.turn_id)
     if (threadId && turnId) return { threadId, turnId }
     if (turnId) {
-      const activeThreadId = [...this.activeTurns.entries()]
-        .find(([, activeTurnId]) => activeTurnId === turnId)?.[0]
+      const activeThreadId = [...this.activeTurns.entries()].find(([, activeTurnId]) => activeTurnId === turnId)?.[0]
       if (activeThreadId) return { threadId: threadId || activeThreadId, turnId }
     }
     if (threadId) {
@@ -2351,7 +2343,9 @@ export class CodexRuntimeService {
     if (!this.eventStore) return
     const threads = await this.storedThreads({ includeArchived: true })
     for (const thread of threads) {
-      const events = await this.eventStore.read(thread.guiThreadId, { includeAll: true })
+      const events = await this.eventStore.read(thread.guiThreadId, {
+        includeAll: true
+      })
       for (const stored of events) {
         await this.recordUsageEvent(stored.event, stored.createdAt)
       }
@@ -2360,7 +2354,12 @@ export class CodexRuntimeService {
 
   private async persistThread(
     thread: CodexNormalizedThread,
-    options: { guiThreadId?: string; workspace?: string; title?: string; preserveArchived?: boolean } = {}
+    options: {
+      guiThreadId?: string
+      workspace?: string
+      title?: string
+      preserveArchived?: boolean
+    } = {}
   ): Promise<CodexStoredThread | null> {
     if (!this.threadStore || !thread.id) return null
     return this.threadStore.upsert({
@@ -2371,6 +2370,11 @@ export class CodexRuntimeService {
       archived: thread.archived,
       preserveArchived: options.preserveArchived,
       latestTurnId: thread.latestTurnId,
+      ...(normalizeAgentRuntimeTurnState(thread.latestTurnStatus)
+        ? {
+            latestTurnStatus: normalizeAgentRuntimeTurnState(thread.latestTurnStatus)!
+          }
+        : {}),
       updatedAt: thread.updatedAt,
       relation: thread.relation,
       parentThreadId: thread.parentThreadId,
@@ -2389,8 +2393,9 @@ export class CodexRuntimeService {
     workspace: string
   }): Promise<CodexStoredThread | null> {
     if (!this.threadStore) return null
-    const existing = await this.threadStore.get(input.guiThreadId) ??
-      await this.threadStore.getByCodexThreadId(input.codexThreadId)
+    const existing =
+      (await this.threadStore.get(input.guiThreadId)) ??
+      (await this.threadStore.getByCodexThreadId(input.codexThreadId))
     if (existing) return existing
     return this.threadStore.upsert({
       guiThreadId: input.guiThreadId,
@@ -2415,6 +2420,11 @@ export class CodexRuntimeService {
         archived: thread.archived,
         preserveArchived: options.preserveArchived,
         latestTurnId: thread.latestTurnId,
+        ...(normalizeAgentRuntimeTurnState(thread.latestTurnStatus)
+          ? {
+              latestTurnStatus: normalizeAgentRuntimeTurnState(thread.latestTurnStatus)!
+            }
+          : {}),
         updatedAt: thread.updatedAt,
         relation: thread.relation,
         parentThreadId: thread.parentThreadId,
@@ -2435,19 +2445,26 @@ export class CodexRuntimeService {
     return mapped
   }
 
-  private async persistEvent(
-    threadId: string,
-    event: CodexEventPayload['event']
-  ): Promise<CodexStoredEvent | null> {
+  private async persistEvent(threadId: string, event: CodexEventPayload['event']): Promise<CodexStoredEvent | null> {
     if (!this.eventStore) return null
-    const storedThread = await this.threadStore?.get(threadId) ?? await this.threadStore?.getByCodexThreadId(threadId)
+    const storedThread =
+      (await this.threadStore?.get(threadId)) ?? (await this.threadStore?.getByCodexThreadId(threadId))
     if (!storedThread) {
       if ((await this.eventStore.latestSeq(threadId)) <= 0) return null
-      return this.eventStore.append(threadId, { ...event, threadId })
+      const stored = await this.eventStore.append(threadId, {
+        ...event,
+        threadId
+      })
+      await this.updateChildSummaryIndex(threadId, stored.event)
+      return stored
     }
     const guiThreadId = storedThread?.guiThreadId ?? threadId
-    const stored = await this.eventStore.append(guiThreadId, { ...event, threadId: guiThreadId })
+    const stored = await this.eventStore.append(guiThreadId, {
+      ...event,
+      threadId: guiThreadId
+    })
     const turnId = isChildOnlyEvent(event) ? undefined : event.turnId || event.userMessage?.turnId
+    const turnStatus = turnId ? storedEventTurnStatus(event) : undefined
     await this.threadStore?.upsert({
       guiThreadId,
       codexThreadId: storedThread.codexThreadId,
@@ -2455,22 +2472,58 @@ export class CodexRuntimeService {
       title: storedThread.title,
       latestSeq: stored.seq,
       ...(turnId ? { latestTurnId: turnId } : {}),
+      ...(turnStatus ? { latestTurnStatus: turnStatus } : {}),
       ...(event.userMessage?.itemId ? { latestUserMessageId: event.userMessage.itemId } : {})
     })
+    await this.updateChildSummaryIndex(guiThreadId, stored.event)
     return stored
+  }
+
+  private async loadChildSummaryIndex(threadId: string): Promise<Map<string, AgentRuntimeChild>> {
+    const index = new Map<string, AgentRuntimeChild>()
+    for (const stored of (await this.eventStore?.read(threadId, {
+      includeAll: true
+    })) ?? []) {
+      const child = stored.event.child
+      if (!child) continue
+      index.set(child.id, mergeStoredCodexChild(index.get(child.id), child))
+    }
+    return index
+  }
+
+  private async updateChildSummaryIndex(threadId: string, event: CodexThreadEventPayload): Promise<void> {
+    const child = event.child
+    const pendingIndex = this.childSummaryIndexes.get(threadId)
+    if (!child || !pendingIndex) return
+    const index = await pendingIndex
+    index.set(child.id, mergeStoredCodexChild(index.get(child.id), child))
   }
 
   private async publishClientEvent(event: CodexThreadEventPayload): Promise<CodexThreadEventPayload> {
     if (await this.recoverModelRouterAliasFailure(event)) return event
-    const stored = await this.persistEvent(event.threadId, event)
-    const runtimeEvent = stored?.event ?? event
-    await this.recordUsageEvent(runtimeEvent, stored?.createdAt)
-    this.noteFirstActivity(runtimeEvent)
-    this.broadcastEvent(runtimeEvent)
-    this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.event, { event: runtimeEvent })
-    await this.emitFirstDeltaIfNeeded(runtimeEvent)
-    await this.emitTurnDoneIfNeeded(runtimeEvent)
-    await this.noteRuntimeEvent(runtimeEvent)
+    let runtimeEvent = event
+    const terminal = Boolean(event.turnComplete || isTerminalRuntimeError(event.runtimeError))
+    let persisted = false
+    let broadcasted = false
+    try {
+      const stored = await this.persistEvent(event.threadId, event)
+      persisted = true
+      runtimeEvent = stored?.event ?? event
+      await this.recordUsageEvent(runtimeEvent, stored?.createdAt)
+      this.noteFirstActivity(runtimeEvent)
+      this.broadcastEvent(runtimeEvent)
+      broadcasted = true
+      await this.emitFirstDeltaIfNeeded(runtimeEvent)
+      await this.emitTurnDoneIfNeeded(runtimeEvent)
+    } catch (error) {
+      if (terminal && !broadcasted) this.broadcastEvent(runtimeEvent)
+      if (terminal && !persisted) {
+        await this.persistTerminalMetadataFallback(runtimeEvent).catch(() => undefined)
+      }
+      throw error
+    } finally {
+      if (terminal) await this.noteRuntimeEvent(runtimeEvent)
+    }
     return runtimeEvent
   }
 
@@ -2484,7 +2537,10 @@ export class CodexRuntimeService {
     const settings = await this.options.settings()
     if (getModelAccessSettings(settings)?.mode !== 'api') return false
     const storedThread = await this.findStoredThread(event.threadId)
-    this.pendingTurnRecoveries.set(key, { ...recovery, recoveryAttempted: true })
+    this.pendingTurnRecoveries.set(key, {
+      ...recovery,
+      recoveryAttempted: true
+    })
     await this.clearTurnTracking(event.threadId, turnId)
 
     await this.emitRuntimeStatus({
@@ -2507,19 +2563,20 @@ export class CodexRuntimeService {
       preparedGovernance = await this.prepareCodexTurnGovernance({
         sessionId: replacement.codexThreadId,
         ownedVisualToolsAvailable: recovery.ownedVisualToolsAvailable,
-        nativeVisualProofChainPending:
-          recovery.nativeVisualProofChainPending
+        nativeVisualProofChainPending: recovery.nativeVisualProofChainPending
       })
-      const response = await client.startTurn(turnStartParams({
-        threadId: replacement.codexThreadId,
-        guiThreadId: event.threadId,
-        text: recovery.text,
-        workspace: recovery.workspace,
-        model: recovery.model,
-        reasoningEffort: recovery.reasoningEffort,
-        fileReferences: recovery.fileReferences,
-        runtime: recovery.runtime
-      }))
+      const response = await client.startTurn(
+        turnStartParams({
+          threadId: replacement.codexThreadId,
+          guiThreadId: event.threadId,
+          text: recovery.text,
+          workspace: recovery.workspace,
+          model: recovery.model,
+          reasoningEffort: recovery.reasoningEffort,
+          fileReferences: recovery.fileReferences,
+          runtime: recovery.runtime
+        })
+      )
       const turn = asRecord(asRecord(response)?.turn) ?? {}
       const retryTurnId = stringValue(turn.id) || ''
       this.recordActiveTurn(event.threadId, retryTurnId, Date.now(), false)
@@ -2543,15 +2600,17 @@ export class CodexRuntimeService {
       })
       return true
     } catch (error) {
-      await this.releasePreparedCodexTurnGovernance(preparedGovernance)
-        .catch(() => undefined)
-      await this.emitRuntimeError({
-        threadId: event.threadId,
-        turnId,
-        message: error instanceof Error ? error.message : String(error),
-        code: 'model_router_alias_recovery_failed',
-        severity: 'error'
-      }, { forceTurnDone: true })
+      await this.releasePreparedCodexTurnGovernance(preparedGovernance).catch(() => undefined)
+      await this.emitRuntimeError(
+        {
+          threadId: event.threadId,
+          turnId,
+          message: error instanceof Error ? error.message : String(error),
+          code: 'model_router_alias_recovery_failed',
+          severity: 'error'
+        },
+        { forceTurnDone: true }
+      )
       return true
     }
   }
@@ -2598,9 +2657,8 @@ export class CodexRuntimeService {
     const explicitToolName = stringValue(meta.toolName).trim()
     const toolName = explicitToolName || previous?.toolName || inferredCodexToolName(tool)
     const terminal = tool.status !== 'running'
-    const phase = stringValue(meta.phase).trim() || (
-      terminal ? (tool.status === 'success' ? 'succeeded' : 'failed') : 'dispatched'
-    )
+    const phase =
+      stringValue(meta.phase).trim() || (terminal ? (tool.status === 'success' ? 'succeeded' : 'failed') : 'dispatched')
     const nextTool: NonNullable<CodexThreadEventPayload['tool']> = {
       ...tool,
       summary: tool.summary === 'Tool output' && previous ? previous.summary : tool.summary,
@@ -2611,9 +2669,8 @@ export class CodexRuntimeService {
         toolName,
         phase,
         factSource: stringValue(meta.factSource).trim() || (terminal ? 'executor_result' : 'runtime_lifecycle'),
-        evidenceStrength: stringValue(meta.evidenceStrength).trim() || (
-          terminal ? 'executor_receipt' : 'runtime_lifecycle'
-        ),
+        evidenceStrength:
+          stringValue(meta.evidenceStrength).trim() || (terminal ? 'executor_receipt' : 'runtime_lifecycle'),
         ...(terminal && typeof meta.success !== 'boolean' ? { success: tool.status === 'success' } : {})
       }
     }
@@ -2690,12 +2747,7 @@ export class CodexRuntimeService {
     this.clearPendingToolBarrierTimer(key)
     const timer = setTimeout(() => {
       this.pendingToolBarrierTimers.delete(key)
-      void this.releaseDeferredTurnCompleteAfterGrace(key).catch((error) => {
-        this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.error, {
-          message: error instanceof Error ? error.message : String(error),
-          detail: error
-        })
-      })
+      void this.releaseDeferredTurnCompleteAfterGrace(key).catch(() => undefined)
     }, CODEX_PENDING_TOOL_COMPLETION_GRACE_MS)
     this.pendingToolBarrierTimers.set(key, timer)
   }
@@ -2715,17 +2767,20 @@ export class CodexRuntimeService {
     this.terminalToolItemsByTurn.delete(key)
     this.deferredTurnCompleteEvents.delete(key)
     this.clearToolExecutionIdentitiesForTurn(key)
-    await this.emitRuntimeError({
-      threadId: deferred.threadId,
-      turnId: deferred.turnId,
-      message: `Codex reported turn completion before ${pendingCallIds.length || 'one or more'} tool execution result${pendingCallIds.length === 1 ? '' : 's'} arrived. The turn is unresolved and was not marked completed.`,
-      code: 'tool_execution_unresolved',
-      details: {
-        pendingCallIds,
-        timeoutMs: CODEX_PENDING_TOOL_COMPLETION_GRACE_MS
+    await this.emitRuntimeError(
+      {
+        threadId: deferred.threadId,
+        turnId: deferred.turnId,
+        message: `Codex reported turn completion before ${pendingCallIds.length || 'one or more'} tool execution result${pendingCallIds.length === 1 ? '' : 's'} arrived. The turn is unresolved and was not marked completed.`,
+        code: 'tool_execution_unresolved',
+        details: {
+          pendingCallIds,
+          timeoutMs: CODEX_PENDING_TOOL_COMPLETION_GRACE_MS
+        },
+        severity: 'error'
       },
-      severity: 'error'
-    }, { forceTurnDone: true })
+      { forceTurnDone: true }
+    )
   }
 
   private addEventSubscriber(threadId: string): CodexRuntimeEventSubscriber {
@@ -2763,9 +2818,7 @@ export class CodexRuntimeService {
     }
   }
 
-  private async nextSubscriberEvent(
-    subscriber: CodexRuntimeEventSubscriber
-  ): Promise<CodexThreadEventPayload | null> {
+  private async nextSubscriberEvent(subscriber: CodexRuntimeEventSubscriber): Promise<CodexThreadEventPayload | null> {
     while (!subscriber.closed) {
       const event = subscriber.queue.shift()
       if (event) return event
@@ -2776,64 +2829,8 @@ export class CodexRuntimeService {
     return null
   }
 
-  private async readStoredDetail(
-    threadId: string,
-    options: { repairStale?: boolean } = {}
-  ): Promise<CodexThreadDetail | null> {
-    if (!this.eventStore) return null
-    let events = await this.eventStore.read(threadId, { includeAll: true })
-    if (events.length === 0) return null
-    let latest = events.at(-1)
-    let latestTurnId = latestStoredTurnId(events)
-    let terminalStatus = latestTurnId ? storedTerminalTurnStatus(events, latestTurnId) : undefined
-    const staleRunningTurn = latestTurnId &&
-      !this.activeTurns.has(threadId) &&
-      !terminalStatus &&
-      !storedTurnHasAssistantResponse(events, latestTurnId) &&
-      storedTurnAgeExceeds(events, latestTurnId, FIRST_CODEX_ACTIVITY_TIMEOUT_MS)
-    if (staleRunningTurn && latestTurnId && options.repairStale === true) {
-      await this.emitRuntimeError({
-        threadId,
-        turnId: latestTurnId,
-        message: CODEX_TURN_DISCONNECTED_MESSAGE,
-        code: 'runtime_disconnected',
-        details: { reason: 'stale_stored_turn' },
-        severity: 'error'
-      }, { forceTurnDone: true })
-      events = await this.eventStore.read(threadId, { includeAll: true })
-      latest = events.at(-1)
-      latestTurnId = latestStoredTurnId(events)
-      terminalStatus = latestTurnId ? storedTerminalTurnStatus(events, latestTurnId) : undefined
-    }
-    return {
-      blocks: storedEventsToBlocks(events),
-      latestSeq: latest?.seq ?? 0,
-      latestTurnId,
-      ...(terminalStatus ? { threadStatus: terminalStatus } : {})
-    }
-  }
-
-  private shouldRepairStaleTurnDetail(
-    threadId: string,
-    detail: CodexThreadDetail,
-    storedDetail?: CodexThreadDetail | null
-  ): boolean {
-    const turnId = detail.latestTurnId?.trim()
-    return Boolean(
-      turnId &&
-      !this.activeTurns.has(threadId) &&
-      !isTerminalThreadStatus(detail.threadStatus) &&
-      detailTurnAgeExceeds([detail, storedDetail ?? null], turnId, FIRST_CODEX_ACTIVITY_TIMEOUT_MS) &&
-      !detail.blocks.some((block) =>
-        block.kind === 'assistant' &&
-        block.turnId === turnId &&
-        block.text.trim()
-      )
-    )
-  }
-
   private async findStoredThread(threadId: string): Promise<CodexStoredThread | null> {
-    return await this.threadStore?.get(threadId) ?? await this.threadStore?.getByCodexThreadId(threadId) ?? null
+    return (await this.threadStore?.get(threadId)) ?? (await this.threadStore?.getByCodexThreadId(threadId)) ?? null
   }
 
   private async codexThreadIdFor(threadId: string): Promise<string> {
@@ -2849,10 +2846,7 @@ export class CodexRuntimeService {
     workspace: string
   }): Promise<CodexStoredThread> {
     const allowedTools = this.allowedToolsByThread.get(input.guiThreadId)
-    const dynamicTools = await this.codexDynamicTools(
-      input.settings,
-      allowedTools ? [...allowedTools] : undefined
-    )
+    const dynamicTools = await this.codexDynamicTools(input.settings, allowedTools ? [...allowedTools] : undefined)
     const response = await input.client.startThread({
       ...baseThreadParams(input.settings, input.workspace, {
         subagentsConfigured: this.isSubagentDelegationConfigured(input.settings),
@@ -2949,11 +2943,7 @@ export class CodexRuntimeService {
     this.clearPendingToolBarrierForTurn(key)
     await Promise.all([
       this.preToolUseGovernanceBridge?.deleteTurnState(turnId),
-      governanceBinding
-        ? this.preToolUseGovernanceBridge?.deleteSessionSeed(
-            governanceBinding.sessionId
-          )
-        : undefined
+      governanceBinding ? this.preToolUseGovernanceBridge?.deleteSessionSeed(governanceBinding.sessionId) : undefined
     ])
   }
 
@@ -2982,10 +2972,7 @@ export class CodexRuntimeService {
     })
   }
 
-  private async emitTurnDoneIfNeeded(
-    event: CodexThreadEventPayload,
-    options: { force?: boolean } = {}
-  ): Promise<void> {
+  private async emitTurnDoneIfNeeded(event: CodexThreadEventPayload, options: { force?: boolean } = {}): Promise<void> {
     const turnId = event.turnId || event.userMessage?.turnId || ''
     if (!turnId) return
     if (!options.force && this.activeTurns.get(event.threadId) !== turnId) return
@@ -3020,7 +3007,6 @@ export class CodexRuntimeService {
     const stored = shouldPersist ? await this.persistEvent(event.threadId, runtimeEvent) : null
     const published = stored?.event ?? runtimeEvent
     this.broadcastEvent(published)
-    this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.event, { event: published })
     return published
   }
 
@@ -3040,13 +3026,44 @@ export class CodexRuntimeService {
         severity: event.severity ?? 'error'
       }
     }
-    const stored = await this.persistEvent(event.threadId, runtimeEvent)
-    const published = stored?.event ?? runtimeEvent
-    await this.emitTurnDoneIfNeeded(published, { force: options.forceTurnDone === true })
-    await this.noteRuntimeEvent(published)
-    this.broadcastEvent(published)
-    this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.event, { event: published })
-    return published
+    let published = runtimeEvent
+    let persisted = false
+    let broadcasted = false
+    try {
+      const stored = await this.persistEvent(event.threadId, runtimeEvent)
+      persisted = true
+      published = stored?.event ?? runtimeEvent
+      this.broadcastEvent(published)
+      broadcasted = true
+      await this.emitTurnDoneIfNeeded(published, {
+        force: options.forceTurnDone === true
+      })
+      return published
+    } catch (error) {
+      if (!broadcasted) this.broadcastEvent(published)
+      if (!persisted) await this.persistTerminalMetadataFallback(published).catch(() => undefined)
+      throw error
+    } finally {
+      await this.noteRuntimeEvent(published)
+    }
+  }
+
+  private async persistTerminalMetadataFallback(event: CodexThreadEventPayload): Promise<void> {
+    if (!this.threadStore) return
+    const turnId = event.turnId || event.userMessage?.turnId
+    const latestTurnStatus = storedEventTurnStatus(event)
+    if (!turnId || !latestTurnStatus || latestTurnStatus === 'running') return
+    const stored = await this.findStoredThread(event.threadId)
+    if (!stored) return
+    await this.threadStore.upsert({
+      guiThreadId: stored.guiThreadId,
+      codexThreadId: stored.codexThreadId,
+      workspace: stored.workspace,
+      title: stored.title,
+      latestSeq: stored.latestSeq,
+      latestTurnId: turnId,
+      latestTurnStatus
+    })
   }
 
   private async failActiveTurns(message: string, code: string, details?: unknown): Promise<void> {
@@ -3068,12 +3085,7 @@ export class CodexRuntimeService {
     this.clearFirstActivityTimer(key)
     const timer = setTimeout(() => {
       this.firstActivityTimers.delete(key)
-      void this.failTurnWithoutFirstActivity(threadId, turnId).catch((error) => {
-        this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.error, {
-          message: error instanceof Error ? error.message : String(error),
-          detail: error
-        })
-      })
+      void this.failTurnWithoutFirstActivity(threadId, turnId).catch(() => undefined)
     }, FIRST_CODEX_ACTIVITY_TIMEOUT_MS)
     this.firstActivityTimers.set(key, timer)
   }
@@ -3151,9 +3163,6 @@ export class CodexRuntimeService {
   private async publishPendingServerRequest(request: CodexAppServerPendingRequest): Promise<void> {
     const event = pendingServerRequestEvent(request)
     if (!event) {
-      this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.error, {
-        message: 'Codex requested user interaction but did not include a thread context.'
-      })
       return
     }
     const runtimeEvent = await this.eventForGuiThread(event)
@@ -3182,10 +3191,23 @@ function mergeThreads(
       ...stored,
       ...thread,
       ...(stored ? { archived: stored.archived } : {}),
+      ...durableTerminalThreadStatus(stored, thread),
       ...storedTitle
     })
   }
   return [...byId.values()].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+}
+
+function durableTerminalThreadStatus(
+  stored: CodexNormalizedThread | undefined,
+  live: CodexNormalizedThread
+): Pick<CodexNormalizedThread, 'status' | 'latestTurnStatus'> | Record<string, never> {
+  if (!stored || !isAgentRuntimeTerminalTurnState(stored.latestTurnStatus)) return {}
+  if (live.latestTurnId && stored.latestTurnId && live.latestTurnId !== stored.latestTurnId) return {}
+  return {
+    status: stored.latestTurnStatus,
+    latestTurnStatus: stored.latestTurnStatus
+  }
 }
 
 function shouldPreferStoredThreadTitle(
@@ -3198,10 +3220,7 @@ function shouldPreferStoredThreadTitle(
   return live.titleSource === 'fallback' || !normalizeThreadTitleCandidate(live.title)
 }
 
-function isKnownStoredThread(
-  thread: CodexNormalizedThread,
-  storedThreads: readonly CodexStoredThread[]
-): boolean {
+function isKnownStoredThread(thread: CodexNormalizedThread, storedThreads: readonly CodexStoredThread[]): boolean {
   const ids = new Set<string>()
   for (const stored of storedThreads) {
     if (stored.guiThreadId.trim()) ids.add(stored.guiThreadId.trim())
@@ -3211,7 +3230,8 @@ function isKnownStoredThread(
 }
 
 function isMaterializedStoredThread(thread: CodexStoredThread): boolean {
-  return thread.latestSeq > 0 ||
+  return (
+    thread.latestSeq > 0 ||
     Boolean(thread.latestTurnId?.trim()) ||
     Boolean(thread.latestUserMessageId?.trim()) ||
     thread.guiThreadId !== thread.codexThreadId ||
@@ -3219,12 +3239,10 @@ function isMaterializedStoredThread(thread: CodexStoredThread): boolean {
     Boolean(thread.parentThreadId?.trim()) ||
     Boolean(thread.threadSource?.trim()) ||
     Boolean(thread.sidebarVisibility)
+  )
 }
 
-function filterThreadList(
-  threads: CodexNormalizedThread[],
-  options: CodexThreadListOptions
-): CodexNormalizedThread[] {
+function filterThreadList(threads: CodexNormalizedThread[], options: CodexThreadListOptions): CodexNormalizedThread[] {
   const includeArchived = options.includeArchived === true
   const archivedOnly = options.archivedOnly === true
   const includeSide = options.includeSide === true
@@ -3240,8 +3258,9 @@ function filterThreadList(
   }
   if (search) {
     output = output.filter((thread) =>
-      [thread.title, thread.preview, thread.workspace, thread.model]
-        .some((value) => value?.toLowerCase().includes(search))
+      [thread.title, thread.preview, thread.workspace, thread.model].some((value) =>
+        value?.toLowerCase().includes(search)
+      )
     )
   }
   if (typeof options.limit === 'number' && Number.isFinite(options.limit) && options.limit > 0) {
@@ -3253,17 +3272,14 @@ function filterThreadList(
 function isSideOrChildThread(thread: CodexNormalizedThread): boolean {
   if (thread.sidebarVisibility === 'main') return false
   if (thread.sidebarVisibility === 'side' || thread.sidebarVisibility === 'hidden') return true
-  return thread.relation === 'side' ||
+  return (
+    thread.relation === 'side' ||
     isCodexChildThreadSource(thread.threadSource) ||
     Boolean(thread.parentThreadId?.trim())
+  )
 }
 
-const EMPTY_PLACEHOLDER_THREAD_TITLES = new Set([
-  'Codex thread',
-  'New Thread',
-  'New chat',
-  '新会话'
-])
+const EMPTY_PLACEHOLDER_THREAD_TITLES = new Set(['Codex thread', 'New Thread', 'New chat', '新会话'])
 
 function isEmptyPlaceholderThread(thread: CodexNormalizedThread): boolean {
   const title = thread.title.trim()
@@ -3283,8 +3299,12 @@ function storedThreadToNormalizedThread(thread: CodexStoredThread): CodexNormali
     mode: 'agent',
     workspace: thread.workspace,
     archived: thread.archived,
+    status: thread.latestTurnStatus,
     latestTurnId: thread.latestTurnId,
-    relation: thread.relation ?? (isCodexChildThreadSource(thread.threadSource) || thread.parentThreadId ? 'side' : undefined),
+    latestTurnStatus: thread.latestTurnStatus,
+    hasUserMessage: Boolean(thread.latestUserMessageId),
+    relation:
+      thread.relation ?? (isCodexChildThreadSource(thread.threadSource) || thread.parentThreadId ? 'side' : undefined),
     parentThreadId: thread.parentThreadId,
     parentTurnId: thread.parentTurnId,
     threadSource: thread.threadSource,
@@ -3297,6 +3317,7 @@ function storedThreadToNormalizedThread(thread: CodexStoredThread): CodexNormali
 
 function storedEventsToBlocks(events: CodexStoredEvent[]): CodexChatBlock[] {
   const blocks: CodexChatBlock[] = []
+  const textChunksByBlock = new Map<number, string[]>()
   for (const item of events) {
     const event = item.event
     const turnId = event.turnId || event.userMessage?.turnId || ''
@@ -3312,7 +3333,7 @@ function storedEventsToBlocks(events: CodexStoredEvent[]): CodexChatBlock[] {
     }
     if (event.deltas) {
       for (const [index, delta] of event.deltas.entries()) {
-        appendStoredModelDelta(blocks, item, turnId, delta, index)
+        appendStoredModelDelta(blocks, textChunksByBlock, item, turnId, delta, index)
       }
     }
     if (event.tool) {
@@ -3340,17 +3361,21 @@ function storedEventsToBlocks(events: CodexStoredEvent[]): CodexChatBlock[] {
         ...(turnId ? { turnId } : {}),
         text: event.runtimeError.message,
         code: event.runtimeError.code,
-        severity: transientPhase
-          ? 'warning'
-          : event.runtimeError.severity
+        severity: transientPhase ? 'warning' : event.runtimeError.severity
       })
     }
   }
-  return dedupeThreadBlocks(blocks)
+  const materialized = blocks.map((block, index): CodexChatBlock => {
+    const chunks = textChunksByBlock.get(index)
+    if (!chunks || (block.kind !== 'assistant' && block.kind !== 'reasoning')) return block
+    return { ...block, text: chunks.join('') }
+  })
+  return dedupeThreadBlocks(materialized)
 }
 
 function appendStoredModelDelta(
   blocks: CodexChatBlock[],
+  textChunksByBlock: Map<number, string[]>,
   item: CodexStoredEvent,
   turnId: string,
   delta: NonNullable<CodexThreadEventPayload['deltas']>[number],
@@ -3362,40 +3387,57 @@ function appendStoredModelDelta(
 
   if (delta.kind === 'agent_reasoning') {
     if (previous?.kind === 'reasoning' && sameTurn) {
-      blocks[blocks.length - 1] = { ...previous, text: previous.text + delta.text }
+      const blockIndex = blocks.length - 1
+      const chunks = textChunksByBlock.get(blockIndex) ?? [previous.text]
+      chunks.push(delta.text)
+      textChunksByBlock.set(blockIndex, chunks)
       return
     }
+    const blockIndex = blocks.length
     blocks.push({
       kind: 'reasoning',
       id: codexModelDeltaItemId({ seq: item.seq, turnId }, delta, index),
       createdAt: item.createdAt,
       ...(turnId ? { turnId } : {}),
-      text: delta.text,
+      text: '',
       meta: { reasoning: { visibility: 'summary', source: 'runtime_summary' } }
     })
+    textChunksByBlock.set(blockIndex, [delta.text])
     return
   }
 
   if (previous?.kind === 'assistant' && sameTurn) {
     if (delta.snapshot) {
-      if (previous.snapshot && canonicalModelText(previous.text) === canonicalModelText(delta.text)) return
-      blocks[blocks.length - 1] = { ...previous, text: delta.text, snapshot: true }
+      const blockIndex = blocks.length - 1
+      const previousText = textChunksByBlock.get(blockIndex)?.join('') ?? previous.text
+      if (previous.snapshot && canonicalModelText(previousText) === canonicalModelText(delta.text)) return
+      blocks[blocks.length - 1] = {
+        ...previous,
+        text: delta.text,
+        snapshot: true
+      }
+      textChunksByBlock.delete(blockIndex)
       return
     }
     if (!previous.snapshot) {
-      blocks[blocks.length - 1] = { ...previous, text: previous.text + delta.text }
+      const blockIndex = blocks.length - 1
+      const chunks = textChunksByBlock.get(blockIndex) ?? [previous.text]
+      chunks.push(delta.text)
+      textChunksByBlock.set(blockIndex, chunks)
       return
     }
   }
 
+  const blockIndex = blocks.length
   blocks.push({
     kind: 'assistant',
     id: codexModelDeltaItemId({ seq: item.seq, turnId }, delta, index),
     createdAt: item.createdAt,
     ...(turnId ? { turnId } : {}),
-    text: delta.text,
+    text: delta.snapshot ? delta.text : '',
     ...(delta.snapshot ? { snapshot: true } : {})
   })
+  if (!delta.snapshot) textChunksByBlock.set(blockIndex, [delta.text])
 }
 
 function dedupeThreadBlocks(blocks: CodexChatBlock[]): CodexChatBlock[] {
@@ -3505,82 +3547,67 @@ function dedupeAssistantBlocks(blocks: CodexChatBlock[]): CodexChatBlock[] {
   return changed ? next : blocks
 }
 
-function preferThreadDetail(
-  liveDetail: CodexThreadDetail,
-  storedDetail: CodexThreadDetail | null
-): CodexThreadDetail {
-  if (!storedDetail) return liveDetail
-  if (liveDetail.blocks.length === 0) return storedDetail
-  if (
-    storedDetail.blocks.length > liveDetail.blocks.length &&
-    (!storedDetail.latestTurnId || !liveDetail.latestTurnId || storedDetail.latestTurnId === liveDetail.latestTurnId)
-  ) {
-    return {
-      ...storedDetail,
-      usage: liveDetail.usage ?? storedDetail.usage,
-      latestSeq: Math.max(liveDetail.latestSeq, storedDetail.latestSeq)
-    }
+function storedEventTurnStatus(
+  event: CodexThreadEventPayload
+): 'running' | 'completed' | 'failed' | 'aborted' | undefined {
+  if (event.runtimeError && isTerminalRuntimeError(event.runtimeError)) {
+    const code = event.runtimeError.code
+    return code === 'cancelled' || code === 'canceled' || code === 'aborted' ? 'aborted' : 'failed'
   }
-  if (
-    storedDetail.latestTurnId &&
-    storedDetail.latestTurnId === liveDetail.latestTurnId &&
-    isTerminalThreadStatus(storedDetail.threadStatus) &&
-    !isTerminalThreadStatus(liveDetail.threadStatus)
-  ) {
-    return storedDetail
-  }
-  return {
-    ...liveDetail,
-    latestSeq: Math.max(liveDetail.latestSeq, storedDetail.latestSeq)
-  }
+  if (event.turnComplete) return 'completed'
+  if (event.userMessage) return 'running'
+  return undefined
 }
 
-function latestStoredTurnId(events: CodexStoredEvent[]): string | undefined {
-  for (const item of [...events].reverse()) {
-    if (isChildOnlyEvent(item.event)) continue
-    const turnId = item.event.turnId || item.event.userMessage?.turnId
+function latestPageTurnId(events: readonly CodexStoredEvent[]): string | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]?.event
+    if (!event || isChildOnlyEvent(event)) continue
+    const turnId = event.turnId || event.userMessage?.turnId
     if (turnId) return turnId
   }
   return undefined
 }
 
-function storedTerminalTurnStatus(
-  events: CodexStoredEvent[],
-  turnId: string
-): 'completed' | 'failed' | 'aborted' | undefined {
-  for (const item of [...events].reverse()) {
-    const eventTurnId = item.event.turnId || item.event.userMessage?.turnId
-    if (eventTurnId !== turnId) continue
-    if (item.event.runtimeError && isTerminalRuntimeError(item.event.runtimeError)) {
-      const code = item.event.runtimeError.code
-      return code === 'cancelled' || code === 'canceled' || code === 'aborted'
-        ? 'aborted'
-        : 'failed'
-    }
-    if (item.event.turnComplete === true) return 'completed'
+function latestPageUserMessageId(events: readonly CodexStoredEvent[]): string | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const itemId = events[index]?.event.userMessage?.itemId
+    if (itemId) return itemId
   }
   return undefined
 }
 
-function storedTurnHasAssistantResponse(events: CodexStoredEvent[], turnId: string): boolean {
-  for (const item of events) {
-    const eventTurnId = item.event.turnId || item.event.userMessage?.turnId
+function latestPageTurnStatus(
+  events: readonly CodexStoredEvent[],
+  turnId: string | undefined
+): 'running' | 'completed' | 'failed' | 'aborted' | undefined {
+  if (!turnId) return undefined
+  let status: ReturnType<typeof storedEventTurnStatus> | undefined
+  for (const stored of events) {
+    if (isChildOnlyEvent(stored.event)) continue
+    const eventTurnId = stored.event.turnId || stored.event.userMessage?.turnId
     if (eventTurnId !== turnId) continue
-    if (item.event.deltas?.some((delta) => delta.kind === 'agent_message' && delta.text.trim())) {
-      return true
-    }
+    const nextStatus = storedEventTurnStatus(stored.event)
+    if (nextStatus) status = mergeTurnStatus(status, nextStatus)
   }
-  return false
+  return status
 }
 
-function storedTurnAgeExceeds(events: CodexStoredEvent[], turnId: string, minAgeMs: number): boolean {
-  const timestamps = events
-    .filter((item) => !isChildOnlyEvent(item.event))
-    .filter((item) => (item.event.turnId || item.event.userMessage?.turnId) === turnId)
-    .map((item) => Date.parse(item.createdAt))
-    .filter((value) => Number.isFinite(value))
-  if (timestamps.length === 0) return false
-  return Date.now() - Math.max(...timestamps) >= minAgeMs
+function mergeTurnStatus(
+  stored: ReturnType<typeof storedEventTurnStatus>,
+  observed: ReturnType<typeof storedEventTurnStatus>
+): ReturnType<typeof storedEventTurnStatus> {
+  if (isAgentRuntimeTerminalTurnState(stored)) return stored
+  return observed ?? stored
+}
+
+function mergeDurableThreadStatus(
+  stored: AgentRuntimeTurnStatus | undefined,
+  observed: ReturnType<typeof storedEventTurnStatus>
+): AgentRuntimeTurnStatus | undefined {
+  const normalizedStored = normalizeAgentRuntimeTurnState(stored) ?? undefined
+  if (isAgentRuntimeTerminalTurnState(normalizedStored)) return normalizedStored
+  return observed ?? normalizedStored
 }
 
 function isChildOnlyEvent(event: CodexThreadEventPayload): boolean {
@@ -3595,31 +3622,6 @@ function isChildOnlyEvent(event: CodexThreadEventPayload): boolean {
     !event.usage &&
     event.turnComplete !== true
   )
-}
-
-function detailTurnAgeExceeds(
-  details: Array<CodexThreadDetail | null>,
-  turnId: string,
-  minAgeMs: number
-): boolean {
-  const timestamps = details
-    .flatMap((detail) => detail?.blocks ?? [])
-    .filter((block) => block.turnId === turnId)
-    .map((block) => Date.parse(block.createdAt ?? ''))
-    .filter((value) => Number.isFinite(value))
-  if (timestamps.length === 0) return false
-  return Date.now() - Math.max(...timestamps) >= minAgeMs
-}
-
-function isTerminalThreadStatus(status: string | undefined): boolean {
-  return status === 'completed' ||
-    status === 'success' ||
-    status === 'failed' ||
-    status === 'error' ||
-    status === 'aborted' ||
-    status === 'cancelled' ||
-    status === 'canceled' ||
-    status === 'interrupted'
 }
 
 function baseThreadParams(
@@ -3645,28 +3647,26 @@ function baseThreadParams(
   }
 }
 
-function dynamicDeveloperInstructions(input: {
-  subagentsConfigured?: boolean
-}): string {
-  return [
-    input.subagentsConfigured ? CODEX_SUBAGENT_DEVELOPER_INSTRUCTIONS : ''
-  ].filter(Boolean).join('\n\n')
+function dynamicDeveloperInstructions(input: { subagentsConfigured?: boolean }): string {
+  return [input.subagentsConfigured ? CODEX_SUBAGENT_DEVELOPER_INSTRUCTIONS : ''].filter(Boolean).join('\n\n')
 }
 
 function failedDynamicToolCall(
   message: string,
-  metadata: Partial<Pick<
-    RuntimeToolCallResponse,
-    | 'structuredContent'
-    | 'errorCode'
-    | 'failureClass'
-    | 'retryable'
-    | 'recoveryGuidance'
-    | 'providerStage'
-    | 'resourceIdentity'
-    | 'evidenceDelta'
-    | 'stateChanged'
-  >> = {}
+  metadata: Partial<
+    Pick<
+      RuntimeToolCallResponse,
+      | 'structuredContent'
+      | 'errorCode'
+      | 'failureClass'
+      | 'retryable'
+      | 'recoveryGuidance'
+      | 'providerStage'
+      | 'resourceIdentity'
+      | 'evidenceDelta'
+      | 'stateChanged'
+    >
+  > = {}
 ): RuntimeToolCallResponse {
   return {
     success: false,
@@ -3675,9 +3675,10 @@ function failedDynamicToolCall(
   }
 }
 
-function codexModelAccessThreadParams(
-  settings: AppSettingsV1
-): { model?: string; modelProvider: string } {
+function codexModelAccessThreadParams(settings: AppSettingsV1): {
+  model?: string
+  modelProvider: string
+} {
   const access = getModelAccessSettings(settings)
   if (!access) throw new Error('Codex model access setup is required.')
   if (access.mode === 'coding-plan') {
@@ -3692,10 +3693,7 @@ function codexModelAccessThreadParams(
   }
 }
 
-function codexModelAccessKey(
-  settings: AppSettingsV1,
-  planGateway: CodexPlanGatewayLaunchConfig | undefined
-): string {
+function codexModelAccessKey(settings: AppSettingsV1, planGateway: CodexPlanGatewayLaunchConfig | undefined): string {
   const access = getModelAccessSettings(settings)
   if (!access) return 'setup-required'
   if (access.mode === 'coding-plan') {
@@ -3727,14 +3725,13 @@ function turnStartParams(input: {
     ...(input.model ? { model: input.model } : {}),
     approvalPolicy: mapApprovalPolicy(input.runtime.approvalPolicy, input.runtime.sandboxMode),
     sandboxPolicy: mapTurnSandboxMode(input.runtime.sandboxMode, input.workspace),
-    ...codexAppServerTurnReasoningParams({ reasoningEffort: input.reasoningEffort })
+    ...codexAppServerTurnReasoningParams({
+      reasoningEffort: input.reasoningEffort
+    })
   }
 }
 
-function mapApprovalPolicy(
-  policy: ApprovalPolicy,
-  sandboxMode: SandboxMode
-): 'never' | 'on-request' | 'untrusted' {
+function mapApprovalPolicy(policy: ApprovalPolicy, sandboxMode: SandboxMode): 'never' | 'on-request' | 'untrusted' {
   if (sandboxMode === 'danger-full-access') return 'never'
   if (policy === 'never' || policy === 'untrusted') return policy
   return 'on-request'
@@ -3800,15 +3797,21 @@ function pendingToolKind(
 }
 
 function safeQuestions(value: unknown): Array<Record<string, unknown>> {
-  return arrayValue(value).map(asRecord).filter(Boolean).map((question) => ({
-    id: stringValue(question?.id),
-    header: stringValue(question?.header),
-    question: stringValue(question?.question),
-    options: arrayValue(question?.options).map(asRecord).filter(Boolean).map((option) => ({
-      label: stringValue(option?.label),
-      description: stringValue(option?.description)
+  return arrayValue(value)
+    .map(asRecord)
+    .filter(Boolean)
+    .map((question) => ({
+      id: stringValue(question?.id),
+      header: stringValue(question?.header),
+      question: stringValue(question?.question),
+      options: arrayValue(question?.options)
+        .map(asRecord)
+        .filter(Boolean)
+        .map((option) => ({
+          label: stringValue(option?.label),
+          description: stringValue(option?.description)
+        }))
     }))
-  }))
 }
 
 function normalizeThreadTitle(name: string): string {
@@ -3865,7 +3868,8 @@ function normalizeThread(thread: Record<string, unknown>): CodexNormalizedThread
   const source = asRecord(thread.source) ?? asRecord(thread.threadSource)
   const threadSource = stringValue(thread.threadSource) || stringValue(source?.type) || stringValue(source?.kind)
   const relation = normalizeThreadRelation(thread.relation) || normalizeThreadRelation(source?.relation)
-  const sidebarVisibility = normalizeThreadSidebarVisibility(thread.sidebarVisibility) ||
+  const sidebarVisibility =
+    normalizeThreadSidebarVisibility(thread.sidebarVisibility) ||
     normalizeThreadSidebarVisibility(thread.sidebar_visibility) ||
     normalizeThreadSidebarVisibility(source?.sidebarVisibility) ||
     normalizeThreadSidebarVisibility(source?.sidebar_visibility)
@@ -3897,11 +3901,12 @@ function normalizeThread(thread: Record<string, unknown>): CodexNormalizedThread
     stringValue(source?.agentRole) ||
     stringValue(source?.agent_role)
   const updatedAtSeconds = numberValue(thread.updatedAt) ?? numberValue(thread.createdAt)
-  const updatedAt = updatedAtSeconds
-    ? new Date(updatedAtSeconds * 1000).toISOString()
-    : new Date().toISOString()
+  const updatedAt = updatedAtSeconds ? new Date(updatedAtSeconds * 1000).toISOString() : new Date().toISOString()
   const name = stringValue(thread.title) || stringValue(thread.name)
-  const preview = stringValue(thread.preview)
+  const preview = truncateAgentRuntimeSummaryText(
+    stringValue(thread.preview),
+    AGENT_RUNTIME_THREAD_SUMMARY_LIMITS.previewBytes
+  )
   const title = normalizeThreadTitle(name)
   const titleSource = normalizeThreadTitleSource(explicitTitleSource, title)
   const turns = arrayValue(thread.turns)
@@ -3922,7 +3927,9 @@ function normalizeThread(thread: Record<string, unknown>): CodexNormalizedThread
     ...(threadSource ? { threadSource } : {}),
     ...(sidebarVisibility ? { sidebarVisibility } : {}),
     ...(titleSource ? { titleSource } : {}),
-    ...(relation || isCodexChildThreadSource(threadSource) || parentThreadId ? { relation: relation ?? 'side' as const } : {}),
+    ...(relation || isCodexChildThreadSource(threadSource) || parentThreadId
+      ? { relation: relation ?? ('side' as const) }
+      : {}),
     ...(parentThreadId ? { parentThreadId } : {}),
     ...(parentTurnId ? { parentTurnId } : {}),
     ...(agentNickname ? { agentNickname } : {}),
@@ -3944,30 +3951,12 @@ function normalizeThreadSidebarVisibility(value: unknown): AgentRuntimeThreadSid
   const visibility = stringValue(value).trim().toLowerCase()
   if (visibility === 'main' || visibility === 'sidebar' || visibility === 'visible') return 'main'
   if (visibility === 'side' || visibility === 'auxiliary') return 'side'
-  if (visibility === 'hidden' || visibility === 'hide' || visibility === 'internal' || visibility === 'none') return 'hidden'
+  if (visibility === 'hidden' || visibility === 'hide' || visibility === 'internal' || visibility === 'none')
+    return 'hidden'
   return undefined
 }
 
-function threadDetail(thread: Record<string, unknown>): CodexThreadDetail {
-  const turns = arrayValue(thread.turns).map(asRecord).filter(Boolean) as Record<string, unknown>[]
-  const blocks = dedupeThreadBlocks(turns.flatMap((turn) => turnBlocks(turn)))
-  const latestTurn = latestTurnRecord(thread, turns)
-  const latestUserMessageId = [...blocks].reverse().find((block) => block.kind === 'user')?.id
-  const workspace = stringValue(thread.cwd)
-  return {
-    blocks,
-    latestSeq: blocks.length,
-    ...(workspace ? { workspace } : {}),
-    threadStatus: stringValue(thread.status) || stringValue(latestTurn?.status),
-    latestTurnId: stringValue(latestTurn?.id),
-    latestUserMessageId
-  }
-}
-
-function latestTurnRecord(
-  thread: Record<string, unknown>,
-  turns: unknown[]
-): Record<string, unknown> | undefined {
+function latestTurnRecord(thread: Record<string, unknown>, turns: unknown[]): Record<string, unknown> | undefined {
   const latestTurnId =
     stringValue(thread.latestTurnId) ||
     stringValue(thread.latest_turn_id) ||
@@ -3982,95 +3971,6 @@ function latestTurnRecord(
   return asRecord(turns.at(-1)) ?? undefined
 }
 
-function turnBlocks(turn: Record<string, unknown>): CodexChatBlock[] {
-  const createdAt = secondsToIso(numberValue(turn.startedAt))
-  return arrayValue(turn.items)
-    .map(asRecord)
-    .filter(Boolean)
-    .flatMap((item) => itemBlock(item as Record<string, unknown>, stringValue(turn.id), createdAt))
-}
-
-function itemBlock(item: Record<string, unknown>, turnId: string, createdAt?: string): CodexChatBlock[] {
-  const type = stringValue(item.type)
-  const id = stringValue(item.id) || `${turnId}-${type || 'item'}`
-  const turnMeta = turnId ? { turnId } : {}
-  if (type === 'userMessage') {
-    const meta = asRecord(item.meta)
-    const displayText =
-      stringValue(item.displayText) ||
-      stringValue(item.display_text) ||
-      stringValue(meta?.displayText)
-    return [{
-      kind: 'user',
-      id,
-      createdAt,
-      ...turnMeta,
-      text: userInputText(arrayValue(item.content)),
-      ...(displayText ? { displayText } : {})
-    }]
-  }
-  if (type === 'agentMessage') {
-    return [{ kind: 'assistant', id, createdAt, ...turnMeta, text: stringValue(item.text), snapshot: true }]
-  }
-  if (type === 'reasoning') {
-    const text = [...arrayValue(item.summary), ...arrayValue(item.content)]
-      .map((entry) => {
-        if (typeof entry === 'string') return entry
-        const record = asRecord(entry)
-        return stringValue(record?.text) ||
-          stringValue(record?.summary) ||
-          stringValue(record?.content)
-      })
-      .filter(Boolean)
-      .join('\n')
-    return text
-      ? [{ kind: 'reasoning', id, createdAt, ...turnMeta, text, meta: { reasoning: { visibility: 'summary', source: 'runtime_summary' } } }]
-      : []
-  }
-  if (type === 'plan') {
-    return [{
-      kind: 'reasoning',
-      id,
-      createdAt,
-      ...turnMeta,
-      text: stringValue(item.text),
-      meta: { reasoning: { visibility: 'summary', source: 'runtime_summary' } }
-    }]
-  }
-  if (type === 'commandExecution') {
-    const status = mapToolStatus(stringValue(item.status))
-    const command = stringValue(item.command)
-    return [{
-      kind: 'tool',
-      id,
-      createdAt,
-      ...turnMeta,
-      summary: command || 'Command',
-      status,
-      toolKind: 'command_execution',
-      detail: stringValue(item.aggregatedOutput),
-      meta: {
-        command,
-        cwd: stringValue(item.cwd),
-        exitCode: numberValue(item.exitCode)
-      }
-    }]
-  }
-  if (type === 'fileChange') {
-    return [{
-      kind: 'tool',
-      id,
-      createdAt,
-      ...turnMeta,
-      summary: 'File changes',
-      status: mapToolStatus(stringValue(item.status)),
-      toolKind: 'file_change',
-      detail: JSON.stringify(item.changes ?? [], null, 2)
-    }]
-  }
-  return []
-}
-
 function readThreadList(response: unknown): Record<string, unknown>[] {
   const record = asRecord(response)
   const data = arrayValue(record?.data)
@@ -4083,25 +3983,6 @@ function readThread(response: unknown): Record<string, unknown> {
   return asRecord(record?.thread) ?? record ?? {}
 }
 
-function userInputText(content: unknown[]): string {
-  return content
-    .map((entry) => {
-      const item = asRecord(entry)
-      if (!item) return ''
-      if (stringValue(item.type) === 'text') return stringValue(item.text)
-      if (stringValue(item.type) === 'input_text') return stringValue(item.text)
-      return ''
-    })
-    .filter(Boolean)
-    .join('\n')
-}
-
-function mapToolStatus(status: string): 'running' | 'success' | 'error' {
-  if (status === 'completed' || status === 'success') return 'success'
-  if (status === 'failed' || status === 'error') return 'error'
-  return 'running'
-}
-
 function unsupportedFailure(
   message: string,
   code = 'capability_unavailable'
@@ -4109,21 +3990,13 @@ function unsupportedFailure(
   return { ok: false, code, message, recoverable: true }
 }
 
-function controlTargetFailure(message: string): { ok: false; message: string; code: string; recoverable: true } {
+function controlTargetFailure(message: string): {
+  ok: false
+  message: string
+  code: string
+  recoverable: true
+} {
   return { ok: false, code: 'turn_not_running', message, recoverable: true }
-}
-
-function emptyThreadDetail(): CodexThreadDetail {
-  return { blocks: [], latestSeq: 0 }
-}
-
-function isEmptyStoredThread(
-  storedThread: CodexStoredThread | null,
-  detail: CodexThreadDetail | null = null
-): storedThread is CodexStoredThread {
-  if (!storedThread) return false
-  if (detail) return detail.blocks.length === 0
-  return storedThread.latestSeq <= 0
 }
 
 function eventHasNonDeltaPayload(event: CodexEventPayload['event']): boolean {
@@ -4144,12 +4017,15 @@ function eventWithoutTurnComplete(event: CodexThreadEventPayload): CodexThreadEv
 }
 
 function usageHasTokens(usage: AgentRuntimeUsage): boolean {
-  return safeUsageInteger(usage.inputTokens) +
-    safeUsageInteger(usage.outputTokens) +
-    safeUsageInteger(usage.reasoningTokens) +
-    safeUsageInteger(usage.totalTokens) +
-    safeUsageInteger(usage.cacheReadTokens) +
-    safeUsageInteger(usage.cacheWriteTokens) > 0
+  return (
+    safeUsageInteger(usage.inputTokens) +
+      safeUsageInteger(usage.outputTokens) +
+      safeUsageInteger(usage.reasoningTokens) +
+      safeUsageInteger(usage.totalTokens) +
+      safeUsageInteger(usage.cacheReadTokens) +
+      safeUsageInteger(usage.cacheWriteTokens) >
+    0
+  )
 }
 
 function subagentUsageFromCodexUsage(usage: AgentRuntimeUsage): AgentRuntimeSubagentUsage {
@@ -4160,6 +4036,26 @@ function subagentUsageFromCodexUsage(usage: AgentRuntimeUsage): AgentRuntimeSuba
     cachedTokens: usage.cacheReadTokens,
     cacheHitTokens: usage.cacheReadTokens,
     cacheMissTokens: usage.cacheWriteTokens
+  }
+}
+
+function mergeStoredCodexChild(previous: AgentRuntimeChild | undefined, next: AgentRuntimeChild): AgentRuntimeChild {
+  if (!previous) return next
+  return {
+    ...previous,
+    ...next,
+    ...(previous.transcriptRef || next.transcriptRef
+      ? { transcriptRef: { ...previous.transcriptRef, ...next.transcriptRef } }
+      : {}),
+    ...(previous.openAsThreadRef || next.openAsThreadRef
+      ? {
+          openAsThreadRef: {
+            ...previous.openAsThreadRef,
+            ...next.openAsThreadRef
+          }
+        }
+      : {}),
+    ...(previous.metadata || next.metadata ? { metadata: { ...previous.metadata, ...next.metadata } } : {})
   }
 }
 
@@ -4175,12 +4071,16 @@ function safeUsageInteger(value: unknown): number {
 
 function isMissingOrUnmaterializedThreadError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
-  return /thread\s+.*not found|thread not found|no rollout found|not materialized yet|includeTurns is unavailable/i.test(message)
+  return /thread\s+.*not found|thread not found|no rollout found|not materialized yet|includeTurns is unavailable/i.test(
+    message
+  )
 }
 
 function isCodexRuntimeDisconnectedError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
-  return /app-server client stopped|event stream (?:closed|ended)|runtime disconnected|socket hang up|ECONNRESET|EPIPE/i.test(message)
+  return /app-server client stopped|event stream (?:closed|ended)|runtime disconnected|socket hang up|ECONNRESET|EPIPE/i.test(
+    message
+  )
 }
 
 function isTerminalRuntimeError(
@@ -4207,23 +4107,29 @@ function codexChildTurnError(
 function isAbortRuntimeError(error: NonNullable<CodexThreadEventPayload['runtimeError']>): boolean {
   const code = stringValue(error.code).toLowerCase()
   const message = stringValue(error.message).toLowerCase()
-  return /\b(abort|aborted|cancel|cancelled|interrupted|user_stop)\b/.test(code) ||
+  return (
+    /\b(abort|aborted|cancel|cancelled|interrupted|user_stop)\b/.test(code) ||
     /\b(abort|aborted|cancelled|interrupted)\b/.test(message)
+  )
 }
 
 function isModelRouterAliasRuntimeError(error: CodexThreadEventPayload['runtimeError']): boolean {
   if (!error) return false
   const message = stringValue(error.message).toLowerCase()
-  return message.includes('model router requests must use the public router model alias') ||
+  return (
+    message.includes('model router requests must use the public router model alias') ||
     (message.includes('public router model alias') && message.includes('model router'))
+  )
 }
 
 function isTransientRuntimeError(error: NonNullable<CodexThreadEventPayload['runtimeError']>): boolean {
   const code = stringValue(error.code).toLowerCase()
-  return code === 'reconnecting' ||
+  return (
+    code === 'reconnecting' ||
     code === 'tool_waiting' ||
     code === 'stream_recovering' ||
     isReconnectRuntimeErrorMessage(error.message)
+  )
 }
 
 function transientRuntimeErrorPhase(
@@ -4243,12 +4149,7 @@ function isReconnectRuntimeErrorMessage(message: string | undefined): boolean {
 
 function eventHasModelActivity(event: CodexThreadEventPayload): boolean {
   return Boolean(
-    event.deltas?.length ||
-    event.tool ||
-    event.child ||
-    event.runtimeStatus ||
-    event.runtimeError ||
-    event.turnComplete
+    event.deltas?.length || event.tool || event.child || event.runtimeStatus || event.runtimeError || event.turnComplete
   )
 }
 
@@ -4283,17 +4184,21 @@ function elapsedMs(startedAtMs: number): number {
   return Math.max(0, Date.now() - startedAtMs)
 }
 
-function failure(error: unknown): { ok: false; message: string; recoverable: true } {
-  return { ok: false, message: error instanceof Error ? error.message : String(error), recoverable: true }
-}
-
-function secondsToIso(value: number | undefined): string | undefined {
-  return typeof value === 'number' ? new Date(value * 1000).toISOString() : undefined
+function failure(error: unknown): {
+  ok: false
+  message: string
+  recoverable: true
+} {
+  return {
+    ok: false,
+    message: error instanceof Error ? error.message : String(error),
+    recoverable: true
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : null
 }
 
@@ -4310,7 +4215,7 @@ function dynamicToolArgumentsRecord(value: unknown): Record<string, unknown> | n
 
 function dynamicToolResponseSummary(response: RuntimeToolCallResponse): string {
   const text = response.contentItems
-    .map((item) => item.type === 'inputText' ? item.text : '[image result]')
+    .map((item) => (item.type === 'inputText' ? item.text : '[image result]'))
     .filter(Boolean)
     .join('\n')
     .trim()
@@ -4318,7 +4223,9 @@ function dynamicToolResponseSummary(response: RuntimeToolCallResponse): string {
   return text.length <= 2_000 ? text : `${text.slice(0, 2_000)}…`
 }
 
-function dynamicToolErrorMetadata(error: unknown): Pick<
+function dynamicToolErrorMetadata(
+  error: unknown
+): Pick<
   RuntimeToolCallResponse,
   | 'errorCode'
   | 'failureClass'
@@ -4333,8 +4240,8 @@ function dynamicToolErrorMetadata(error: unknown): Pick<
   const code = stringValue(record?.code).trim()
   const failureClass = stringValue(record?.failureClass).trim()
   const retryable = booleanValue(record?.retryable)
-  const recoveryGuidance = stringValue(asRecord(record?.recovery)?.instruction).trim() ||
-    stringValue(record?.recoveryGuidance).trim()
+  const recoveryGuidance =
+    stringValue(asRecord(record?.recovery)?.instruction).trim() || stringValue(record?.recoveryGuidance).trim()
   const providerStage = stringValue(record?.providerStage).trim()
   const resourceIdentity = stringValue(record?.resourceIdentity).trim()
   const evidenceDelta = booleanValue(record?.evidenceDelta)

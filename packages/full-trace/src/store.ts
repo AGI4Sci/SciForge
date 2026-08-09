@@ -7,7 +7,9 @@ import {
   readdir,
   readFile,
   rename,
+  rmdir,
   chmod,
+  stat,
   unlink,
   type FileHandle
 } from 'node:fs/promises'
@@ -22,6 +24,7 @@ import {
   createEventId,
   isTraceEvent,
   type TraceClearResult,
+  type TraceCorrelation,
   type TraceEvent,
   type TraceEventInput,
   type TraceEventKind,
@@ -42,13 +45,23 @@ import {
   sanitizeTraceText,
   sanitizeTraceTextChunks,
   sanitizeTraceValue,
+  sensitiveTraceValuesFromHeaders,
   type TraceSanitizationOptions
 } from './redaction.js'
 
 const DEFAULT_RETENTION_DAYS = 30
+const DEFAULT_MAX_SEGMENT_BYTES = 64 * 1024 * 1024
+const DEFAULT_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
+const RESPONSE_PREVIEW_BYTES = 2 * 1024
 const TRACE_DIRECTORY_NAME = 'full-traces'
-const SEGMENT_PATTERN = /^(\d{4}-\d{2}-\d{2})\.ndjson$/
+const SEGMENT_PATTERN = /^(\d{4}-\d{2}-\d{2})(?:\.(\d{6}))?\.ndjson$/
 const RETENTION_MARKER_NAME = '.retention.json'
+const MUTATION_LOCK_NAME = '.writer.lock'
+const MUTATION_LOCK_OWNER_NAME = 'owner.json'
+const MUTATION_LOCK_WAIT_MS = 30_000
+const MUTATION_LOCK_RETRY_MS = 25
+const INCOMPLETE_LOCK_STALE_MS = 30_000
+const MUTATION_LOCK_HEARTBEAT_MS = 2_000
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1_000
 const DIRECTORY_MODE = 0o700
 const FILE_MODE = 0o600
@@ -64,6 +77,10 @@ export type LocalTraceStoreOptions = {
   /** Direct storage location for tests and non-Electron hosts. */
   storageDirectory?: string
   retentionDays?: number
+  /** Maximum size of each newly-written segment before rolling to an indexed segment. */
+  maxSegmentBytes?: number
+  /** Capacity for indexed segments written by the bounded store. Legacy daily files are preserved. */
+  maxTotalBytes?: number
   now?: () => Date
   /** Known credentials to remove even when an upstream echoes them without a label. */
   sensitiveValues?: readonly string[] | (() => readonly string[])
@@ -79,6 +96,12 @@ type TraceScanResult = {
 }
 
 type TraceScanVisitor = (event: TraceEvent) => void | Promise<void>
+
+type TraceSegmentSnapshot = {
+  file: string
+  handle: FileHandle
+  size: number
+}
 
 type TraceSpoolIndexEntry = {
   timestamp: string
@@ -146,6 +169,8 @@ type MutableRequestSummary = {
 export class LocalTraceStore {
   readonly directory: string
   readonly retentionDays: number
+  readonly maxSegmentBytes: number
+  readonly maxTotalBytes: number
 
   private readonly now: () => Date
   private readonly getSensitiveValues: () => readonly string[]
@@ -167,6 +192,19 @@ export class LocalTraceStore {
     if (!Number.isInteger(this.retentionDays) || this.retentionDays <= 0) {
       throw new Error('retentionDays must be a positive integer')
     }
+    this.maxSegmentBytes = positiveIntegerOption(
+      options.maxSegmentBytes,
+      DEFAULT_MAX_SEGMENT_BYTES,
+      'maxSegmentBytes'
+    )
+    this.maxTotalBytes = positiveIntegerOption(
+      options.maxTotalBytes,
+      DEFAULT_MAX_TOTAL_BYTES,
+      'maxTotalBytes'
+    )
+    if (this.maxTotalBytes < this.maxSegmentBytes) {
+      throw new Error('maxTotalBytes must be greater than or equal to maxSegmentBytes')
+    }
     this.now = options.now ?? (() => new Date())
     const sensitiveValues = options.sensitiveValues
     this.getSensitiveValues = typeof sensitiveValues === 'function'
@@ -187,22 +225,11 @@ export class LocalTraceStore {
   async append<Kind extends TraceEventKind>(input: TraceEventInput<Kind>): Promise<TraceEvent> {
     await this.initialize()
     return this.enqueue(async () => {
-      const event = this.normalizeEvent(input)
-      if (event.kind === 'execution_event' && input.eventId) {
-        const existing = (await this.readInternal({
-          eventIds: [event.eventId]
-        })).events.find(
-          (candidate) => candidate.eventId === event.eventId
-        )
-        if (existing) {
-          if (!sameLogicalTraceEvent(existing, event)) {
-            throw new Error(`Trace eventId collision: ${event.eventId}`)
-          }
-          return existing
-        }
-      }
-      await this.appendEvents([event])
-      return event
+      const event = compactResponseChunkEvent(this.normalizeEvent(
+        input,
+        this.sanitizationOptionsForInputs([input])
+      ))
+      return (await this.appendEvents([event]))[0] ?? event
     })
   }
 
@@ -210,9 +237,12 @@ export class LocalTraceStore {
     await this.initialize()
     if (inputs.length === 0) return []
     return this.enqueue(async () => {
-      const events = inputs.map((input) => this.normalizeEvent(input))
-      await this.appendEvents(events)
-      return events
+      const sanitization = this.sanitizationOptionsForInputs(inputs)
+      const events = compactResponseChunkRuns(
+        sanitizeTraceInputChunkRuns(inputs, sanitization)
+          .map((input) => ({ event: this.normalizeEvent(input, sanitization), aggregate: !input.eventId }))
+      )
+      return this.appendEvents(events)
     })
   }
 
@@ -224,31 +254,33 @@ export class LocalTraceStore {
   async read(query: TraceReadQuery = {}): Promise<TraceReadResult> {
     await this.initialize()
     validateReadQuery(query)
-    return this.enqueue(async () => this.readInternal(query))
+    return this.enqueue(async () => this.withReadSnapshot(
+      async (snapshot) => this.readInternal(query, snapshot)
+    ))
   }
 
   async summaries(query: TraceSummaryQuery = {}): Promise<TraceSummary[]> {
     await this.initialize()
     validateReadQuery(query)
-    return this.enqueue(async () => {
+    return this.enqueue(async () => this.withReadSnapshot(async (snapshot) => {
       const accumulator = new TraceSummaryAccumulator()
-      await this.scan(query, (event) => accumulator.add(event))
+      await this.scan(query, (event) => accumulator.add(event), snapshot)
       return orderAndLimitSummaries(accumulator.summaries(), query)
-    })
+    }))
   }
 
   /** Derives request-level cards from the same durable events as summaries(). */
   async requestSummaries(query: TraceRequestSummaryQuery = {}): Promise<TraceRequestSummary[]> {
     await this.initialize()
     validateReadQuery(query)
-    return this.enqueue(async () => {
+    return this.enqueue(async () => this.withReadSnapshot(async (snapshot) => {
       const accumulator = new TraceSummaryAccumulator()
-      await this.scan(query, (event) => accumulator.add(event))
+      await this.scan(query, (event) => accumulator.add(event), snapshot)
       return orderAndLimitSummaries(
         accumulator.requestSummaries(query.scope ?? 'all'),
         query
       )
-    })
+    }))
   }
 
   async export(options: TraceExportOptions): Promise<TraceExportResult> {
@@ -266,7 +298,7 @@ export class LocalTraceStore {
       to: options.to
     }
     validateReadQuery(query)
-    return this.enqueue(async () => {
+    return this.enqueue(async () => this.withReadSnapshot(async (snapshot) => {
       const exportedAt = this.now().toISOString()
       const traceIds = new Set<string>()
       let eventCount = 0
@@ -274,7 +306,7 @@ export class LocalTraceStore {
         const scanned = await this.scan(query, async (event) => {
           traceIds.add(event.traceId)
           await writeEvent(event)
-        })
+        }, snapshot)
         eventCount = scanned.total
         return {
           format: TRACE_EXPORT_FORMAT,
@@ -290,12 +322,12 @@ export class LocalTraceStore {
         eventCount,
         traceCount: traceIds.size
       }
-    })
+    }))
   }
 
   async clear(): Promise<TraceClearResult> {
     await this.initialize()
-    return this.enqueue(async () => {
+    return this.enqueue(async () => this.withMutationLock(async () => {
       const segmentFiles = await this.segmentFiles()
       let deletedEvents = 0
       for (const file of segmentFiles) {
@@ -303,12 +335,14 @@ export class LocalTraceStore {
         await unlink(file)
       }
       return { deletedFiles: segmentFiles.length, deletedEvents }
-    })
+    }))
   }
 
   async pruneExpired(options: TracePruneOptions = {}): Promise<TraceRetentionResult> {
     await this.initialize()
-    return this.enqueue(async () => this.pruneExpiredInternal(options.force ?? false))
+    return this.enqueue(async () => this.withMutationLock(
+      async () => this.pruneExpiredInternal(options.force ?? false)
+    ))
   }
 
   private async initializeOnce(): Promise<void> {
@@ -318,13 +352,15 @@ export class LocalTraceStore {
       throw new Error('Trace storage path must be a real directory, not a symbolic link')
     }
     await chmod(this.directory, DIRECTORY_MODE)
-    await this.pruneExpiredInternal(false)
+    await this.withMutationLock(async () => this.pruneExpiredInternal(false))
   }
 
-  private normalizeEvent<Kind extends TraceEventKind>(input: TraceEventInput<Kind>): TraceEvent {
+  private normalizeEvent<Kind extends TraceEventKind>(
+    input: TraceEventInput<Kind>,
+    sanitization: TraceSanitizationOptions = this.sanitizationOptions()
+  ): TraceEvent {
     assertTraceEventInput(input as TraceEventInput)
     const recordedAt = this.now().toISOString()
-    const sanitization = this.sanitizationOptions()
     return {
       schemaVersion: TRACE_SCHEMA_VERSION,
       eventId: sanitizeTraceIdentifier(input.eventId ?? createEventId(), sanitization),
@@ -342,50 +378,115 @@ export class LocalTraceStore {
     }
   }
 
-  private async appendEvents(events: readonly TraceEvent[]): Promise<void> {
-    const bySegment = new Map<string, TraceEvent[]>()
-    for (const event of events) {
-      const segment = segmentPath(this.directory, event.recordedAt)
-      const grouped = bySegment.get(segment) ?? []
-      grouped.push(event)
-      bySegment.set(segment, grouped)
-    }
-    for (const [segment, grouped] of bySegment) {
-      await assertSafeSegmentTarget(segment)
-      const handle = await open(
-        segment,
-        constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | noFollowFlag(),
-        FILE_MODE
-      )
-      try {
-        await handle.chmod(FILE_MODE)
-        await handle.writeFile(grouped.map((event) => `${JSON.stringify(event)}\n`).join(''), 'utf8')
-        await handle.sync()
-      } finally {
-        await handle.close()
+  private async appendEvents(events: readonly TraceEvent[]): Promise<TraceEvent[]> {
+    return this.withMutationLock(async () => {
+      const executionEventIds = [...new Set(events
+        .filter((event) => event.kind === 'execution_event')
+        .map((event) => event.eventId))]
+      const known = new Map<string, TraceEvent>()
+      if (executionEventIds.length > 0) {
+        for (const event of (await this.readInternal({ eventIds: executionEventIds })).events) {
+          known.set(event.eventId, event)
+        }
       }
-      await syncDirectory(path.dirname(segment))
+      const durable: TraceEvent[] = []
+      const resolved: TraceEvent[] = []
+      for (const event of events) {
+        if (event.kind !== 'execution_event') {
+          durable.push(event)
+          resolved.push(event)
+          continue
+        }
+        const existing = known.get(event.eventId)
+        if (existing) {
+          if (!sameLogicalTraceEvent(existing, event)) {
+            throw new Error(`Trace eventId collision: ${event.eventId}`)
+          }
+          resolved.push(existing)
+          continue
+        }
+        known.set(event.eventId, event)
+        durable.push(event)
+        resolved.push(event)
+      }
+      await this.appendEventsLocked(durable)
+      return resolved
+    })
+  }
+
+  private async appendEventsLocked(events: readonly TraceEvent[]): Promise<void> {
+    const byDate = new Map<string, TraceEvent[]>()
+    for (const event of events) {
+      const date = event.recordedAt.slice(0, 10)
+      const grouped = byDate.get(date) ?? []
+      grouped.push(event)
+      byDate.set(date, grouped)
+    }
+    const writes = [...byDate].flatMap(([date, grouped]) => (
+      serializeEventBatches(grouped, this.maxSegmentBytes).map((batch) => ({
+        date,
+        batch,
+        byteLength: Buffer.byteLength(batch)
+      }))
+    ))
+    await this.pruneCapacityForIncoming(
+      writes.reduce((total, write) => total + write.byteLength, 0)
+    )
+    for (const { date, batch, byteLength } of writes) {
+        const segment = await this.writableSegment(date, byteLength)
+        await assertSafeSegmentTarget(segment)
+        const handle = await open(
+          segment,
+          constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | noFollowFlag(),
+          FILE_MODE
+        )
+        try {
+          await handle.chmod(FILE_MODE)
+          await handle.writeFile(batch, 'utf8')
+          await handle.sync()
+        } finally {
+          await handle.close()
+        }
+        await syncDirectory(path.dirname(segment))
     }
   }
 
-  private async readInternal(query: TraceReadQuery): Promise<TraceReadResult> {
+  private async writableSegment(date: string, incomingBytes: number): Promise<string> {
+    const candidates = (await this.segmentFiles())
+      .filter((file) => indexedSegment(file) && path.basename(file).startsWith(`${date}.`))
+    const latest = candidates.at(-1)
+    if (latest && await canAppendToSegment(latest, incomingBytes, this.maxSegmentBytes)) return latest
+    const latestIndex = latest
+      ? Number(SEGMENT_PATTERN.exec(path.basename(latest))?.[2] ?? 0)
+      : 0
+    return path.join(this.directory, `${date}.${String(latestIndex + 1).padStart(6, '0')}.ndjson`)
+  }
+
+  private async readInternal(
+    query: TraceReadQuery,
+    snapshot?: readonly TraceSegmentSnapshot[]
+  ): Promise<TraceReadResult> {
     const events: TraceEvent[] = []
     const order = query.order ?? 'asc'
     const result = await this.scan(query, (event) => {
       retainOrderedEvent(events, event, order, query.limit)
-    })
+    }, snapshot)
     events.sort(order === 'desc' ? compareEventsDescending : compareEvents)
     return { events, total: result.total, corruptLines: result.corruptLines }
   }
 
-  private async scan(query: TraceReadQuery, visit: TraceScanVisitor): Promise<TraceScanResult> {
+  private async scan(
+    query: TraceReadQuery,
+    visit: TraceScanVisitor,
+    snapshot?: readonly TraceSegmentSnapshot[]
+  ): Promise<TraceScanResult> {
     const eventIds = query.eventIds ? new Set(query.eventIds) : undefined
     const matches = createTraceMatcher(query, eventIds)
     const eventIdMatches = query.eventIds ? new Map<string, number>() : undefined
     let total = 0
     let corruptLines = 0
-    for (const file of await this.segmentFiles()) {
-      corruptLines += await scanSegment(file, this.sanitizationOptions(), async (event) => {
+    for (const segment of snapshot ?? await this.segmentFiles()) {
+      corruptLines += await scanSegment(segment, this.sanitizationOptions(), async (event) => {
         if (eventIds?.has(event.eventId) && eventIdMatches) {
           const count = (eventIdMatches.get(event.eventId) ?? 0) + 1
           if (count > MAX_STORED_MATCHES_PER_EVENT_ID) {
@@ -421,7 +522,8 @@ export class LocalTraceStore {
     const cutoff = new Date(now.getTime() - this.retentionDays * MILLISECONDS_PER_DAY)
     const today = now.toISOString().slice(0, 10)
     if (!force && await retentionRanToday(this.directory, today)) {
-      return { ran: false, cutoff: cutoff.toISOString(), deletedFiles: 0, deletedEvents: 0 }
+      const capacity = await this.pruneCapacityInternal()
+      return { ran: capacity.deletedFiles > 0, cutoff: cutoff.toISOString(), ...capacity }
     }
 
     let deletedFiles = 0
@@ -448,12 +550,65 @@ export class LocalTraceStore {
         if (compacted.deletedFile) deletedFiles += 1
       }
     }
+    const capacity = await this.pruneCapacityInternal()
+    deletedFiles += capacity.deletedFiles
+    deletedEvents += capacity.deletedEvents
     await writeOwnerOnlyJson(path.join(this.directory, RETENTION_MARKER_NAME), { lastRunDate: today })
     return { ran: true, cutoff: cutoff.toISOString(), deletedFiles, deletedEvents }
   }
 
+  private async pruneCapacityInternal(): Promise<TraceClearResult> {
+    return this.pruneCapacityForIncoming(0)
+  }
+
+  private async pruneCapacityForIncoming(
+    incomingBytes: number
+  ): Promise<TraceClearResult> {
+    if (incomingBytes > this.maxTotalBytes) {
+      const error = new Error('Trace event exceeds the managed storage capacity') as NodeJS.ErrnoException
+      error.code = 'TRACE_CAPACITY_EXCEEDED'
+      throw error
+    }
+    const indexed = (await this.segmentFiles()).filter(indexedSegment)
+    const entries = await Promise.all(indexed.map(async (file) => ({
+      file,
+      bytes: (await stat(file)).size
+    })))
+    let total = entries.reduce((sum, entry) => sum + entry.bytes, 0)
+    let deletedFiles = 0
+    let deletedEvents = 0
+    // All mutation paths share one cross-process lease, so even the current-day
+    // segments are closed and safe to rotate while capacity maintenance runs.
+    for (const entry of entries) {
+      if (total + incomingBytes <= this.maxTotalBytes) break
+      deletedEvents += await countNonEmptyLines(entry.file)
+      await unlink(entry.file)
+      total -= entry.bytes
+      deletedFiles += 1
+    }
+    if (total + incomingBytes > this.maxTotalBytes) {
+      const error = new Error('Trace store cannot reserve managed storage capacity') as NodeJS.ErrnoException
+      error.code = 'TRACE_CAPACITY_EXCEEDED'
+      throw error
+    }
+    return { deletedFiles, deletedEvents }
+  }
+
   private sanitizationOptions(): TraceSanitizationOptions {
     return { sensitiveValues: this.getSensitiveValues() }
+  }
+
+  private sanitizationOptionsForInputs(inputs: readonly TraceEventInput[]): TraceSanitizationOptions {
+    const sensitiveValues = new Set(this.getSensitiveValues())
+    for (const input of inputs) {
+      if (input.kind !== 'model_request') continue
+      const headers = asRecord(input.payload)?.headers
+      if (!headers) continue
+      for (const value of sensitiveTraceValuesFromHeaders(headers as Record<string, unknown>)) {
+        sensitiveValues.add(value)
+      }
+    }
+    return { sensitiveValues: [...sensitiveValues] }
   }
 
   private enqueue<Result>(operation: () => Promise<Result>): Promise<Result> {
@@ -461,6 +616,275 @@ export class LocalTraceStore {
     this.operationQueue = result.then(() => undefined, () => undefined)
     return result
   }
+
+  private async withMutationLock<Result>(operation: () => Promise<Result>): Promise<Result> {
+    const release = await acquireTraceMutationLock(this.directory)
+    try {
+      return await operation()
+    } finally {
+      await release()
+    }
+  }
+
+  private async withReadSnapshot<Result>(
+    operation: (snapshot: readonly TraceSegmentSnapshot[]) => Promise<Result>
+  ): Promise<Result> {
+    const snapshot = await this.withMutationLock(async () => {
+      const opened: TraceSegmentSnapshot[] = []
+      try {
+        for (const file of await this.segmentFiles()) {
+          const handle = await open(file, constants.O_RDONLY | noFollowFlag())
+          try {
+            const info = await handle.stat()
+            if (!info.isFile()) throw new Error(`Unsafe trace segment: ${path.basename(file)}`)
+            opened.push({ file, handle, size: info.size })
+          } catch (error) {
+            await handle.close()
+            throw error
+          }
+        }
+        return opened
+      } catch (error) {
+        await Promise.all(opened.map(async ({ handle }) => handle.close().catch(() => undefined)))
+        throw error
+      }
+    })
+    try {
+      return await operation(snapshot)
+    } finally {
+      await Promise.all(snapshot.map(async ({ handle }) => handle.close()))
+    }
+  }
+}
+
+type TraceMutationLockOwner = {
+  pid: number
+  createdAt: string
+  heartbeatAt: string
+  token: string
+}
+
+type TraceFileIdentity = {
+  dev: number
+  ino: number
+}
+
+async function acquireTraceMutationLock(
+  directory: string
+): Promise<() => Promise<void>> {
+  const lockDirectory = path.join(directory, MUTATION_LOCK_NAME)
+  const ownerFile = path.join(lockDirectory, MUTATION_LOCK_OWNER_NAME)
+  const deadline = Date.now() + MUTATION_LOCK_WAIT_MS
+
+  while (true) {
+    let acquiredIdentity: TraceFileIdentity
+    try {
+      await mkdir(lockDirectory, { mode: DIRECTORY_MODE })
+      acquiredIdentity = fileIdentity(await lstat(lockDirectory))
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== 'EEXIST') throw error
+      if (await reclaimStaleTraceMutationLock(lockDirectory)) continue
+      if (Date.now() >= deadline) {
+        const timeout = new Error('Timed out waiting for the trace mutation lock') as NodeJS.ErrnoException
+        timeout.code = 'TRACE_LOCK_TIMEOUT'
+        throw timeout
+      }
+      await delay(MUTATION_LOCK_RETRY_MS)
+      continue
+    }
+
+    const token = randomUUID()
+    const createdAt = new Date().toISOString()
+    let ownerHandle: FileHandle | undefined
+    try {
+      if (!await pathHasIdentity(lockDirectory, acquiredIdentity)) continue
+      ownerHandle = await open(
+        ownerFile,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollowFlag(),
+        FILE_MODE
+      )
+      await writeTraceMutationLockOwner(ownerHandle, {
+        pid: process.pid,
+        createdAt,
+        heartbeatAt: createdAt,
+        token
+      })
+      if (!await pathHasIdentity(lockDirectory, acquiredIdentity)) {
+        await ownerHandle.close()
+        await unlinkOwnedTraceMutationLockOwner(ownerFile, token)
+        continue
+      }
+    } catch (error) {
+      await ownerHandle?.close().catch(() => undefined)
+      await removeTraceMutationLockIfOwned(lockDirectory, acquiredIdentity, token)
+      throw error
+    }
+
+    let heartbeatTask = Promise.resolve()
+    let heartbeatFailure: Error | undefined
+    const heartbeat = setInterval(() => {
+      heartbeatTask = heartbeatTask
+        .then(async () => {
+          if (heartbeatFailure) return
+          const now = new Date()
+          await ownerHandle!.utimes(now, now)
+        })
+        .catch((error: unknown) => {
+          heartbeatFailure = error instanceof Error ? error : new Error(String(error))
+        })
+    }, MUTATION_LOCK_HEARTBEAT_MS)
+    heartbeat.unref()
+    let released = false
+    return async () => {
+      if (released) return
+      released = true
+      clearInterval(heartbeat)
+      await heartbeatTask
+      await ownerHandle?.close()
+      await removeTraceMutationLockIfOwned(lockDirectory, acquiredIdentity, token)
+      if (heartbeatFailure) throw heartbeatFailure
+    }
+  }
+}
+
+async function reclaimStaleTraceMutationLock(lockDirectory: string): Promise<boolean> {
+  let info
+  try {
+    info = await lstat(lockDirectory)
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') return true
+    throw error
+  }
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw new Error('Trace mutation lock path must be a real directory')
+  }
+  const ownerFile = path.join(lockDirectory, MUTATION_LOCK_OWNER_NAME)
+  const owner = await readTraceMutationLockOwner(ownerFile)
+  const ownerInfo = owner ? await lstat(ownerFile).catch(() => undefined) : undefined
+  // Never reclaim a lease from a live process. A stale heartbeat can mean the
+  // owner is paused inside a filesystem operation; reclaiming it would permit
+  // the old owner to resume without fencing and create split-brain writers.
+  // Waiters time out explicitly instead. Dead-process and incomplete leases
+  // remain safely reclaimable.
+  if (owner && processExists(owner.pid)) return false
+  if (owner && ownerInfo && Date.now() - ownerInfo.mtimeMs < INCOMPLETE_LOCK_STALE_MS) return false
+  if (!owner && Date.now() - info.mtimeMs < INCOMPLETE_LOCK_STALE_MS) return false
+
+  const staleDirectory = `${lockDirectory}.stale.${randomUUID()}`
+  try {
+    await rename(lockDirectory, staleDirectory)
+  } catch (error) {
+    if (isNodeError(error) && (error.code === 'ENOENT' || error.code === 'EEXIST')) return true
+    throw error
+  }
+  await removeTraceMutationLock(staleDirectory)
+  return true
+}
+
+async function readTraceMutationLockOwner(
+  ownerFile: string
+): Promise<TraceMutationLockOwner | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(ownerFile, 'utf8')) as Partial<TraceMutationLockOwner>
+    if (
+      typeof parsed.pid === 'number' &&
+      Number.isInteger(parsed.pid) &&
+      parsed.pid > 0 &&
+      typeof parsed.createdAt === 'string' &&
+      Number.isFinite(Date.parse(parsed.createdAt)) &&
+      typeof parsed.heartbeatAt === 'string' &&
+      Number.isFinite(Date.parse(parsed.heartbeatAt)) &&
+      typeof parsed.token === 'string' &&
+      parsed.token.length > 0
+    ) {
+      return {
+        pid: parsed.pid,
+        createdAt: parsed.createdAt,
+        heartbeatAt: parsed.heartbeatAt,
+        token: parsed.token
+      }
+    }
+    return undefined
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') return undefined
+    if (error instanceof SyntaxError) return undefined
+    throw error
+  }
+}
+
+async function writeTraceMutationLockOwner(
+  handle: FileHandle,
+  owner: TraceMutationLockOwner
+): Promise<void> {
+  const serialized = Buffer.from(`${JSON.stringify(owner)}\n`, 'utf8')
+  const { bytesWritten } = await handle.write(serialized, 0, serialized.byteLength, 0)
+  if (bytesWritten !== serialized.byteLength) {
+    throw new Error('Trace mutation lock owner write was incomplete')
+  }
+  await handle.truncate(serialized.byteLength)
+  await handle.sync()
+}
+
+function fileIdentity(info: { dev: number; ino: number }): TraceFileIdentity {
+  return { dev: info.dev, ino: info.ino }
+}
+
+async function pathHasIdentity(file: string, expected: TraceFileIdentity): Promise<boolean> {
+  try {
+    const actual = await lstat(file)
+    return actual.dev === expected.dev && actual.ino === expected.ino
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') return false
+    throw error
+  }
+}
+
+async function unlinkOwnedTraceMutationLockOwner(ownerFile: string, token: string): Promise<void> {
+  const owner = await readTraceMutationLockOwner(ownerFile)
+  if (owner?.token !== token) return
+  try {
+    await unlink(ownerFile)
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== 'ENOENT') throw error
+  }
+}
+
+async function removeTraceMutationLockIfOwned(
+  lockDirectory: string,
+  expected: TraceFileIdentity,
+  token: string
+): Promise<void> {
+  if (!await pathHasIdentity(lockDirectory, expected)) return
+  const ownerFile = path.join(lockDirectory, MUTATION_LOCK_OWNER_NAME)
+  const owner = await readTraceMutationLockOwner(ownerFile)
+  if (owner && owner.token !== token) return
+  await removeTraceMutationLock(lockDirectory)
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return isNodeError(error) && error.code === 'EPERM'
+  }
+}
+
+async function removeTraceMutationLock(lockDirectory: string): Promise<void> {
+  try {
+    await unlink(path.join(lockDirectory, MUTATION_LOCK_OWNER_NAME))
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== 'ENOENT') throw error
+  }
+  try {
+    await rmdir(lockDirectory)
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== 'ENOENT') throw error
+  }
+}
+
+async function delay(milliseconds: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, milliseconds))
 }
 
 function sameLogicalTraceEvent(left: TraceEvent, right: TraceEvent): boolean {
@@ -819,13 +1243,177 @@ function sanitizeStoredEvent(
   }
 }
 
+type CompactableEvent = { event: TraceEvent; aggregate: boolean }
+
+function sanitizeTraceInputChunkRuns(
+  inputs: readonly TraceEventInput[],
+  sanitization: TraceSanitizationOptions
+): TraceEventInput[] {
+  const sanitized = [...inputs]
+  for (let index = 0; index < inputs.length;) {
+    const current = inputs[index]
+    if (!current || current.kind !== 'model_response_chunk') {
+      index += 1
+      continue
+    }
+    const run: TraceEventInput<'model_response_chunk'>[] = [
+      current as TraceEventInput<'model_response_chunk'>
+    ]
+    let cursor = index + 1
+    while (cursor < inputs.length) {
+      const candidate = inputs[cursor]
+      if (
+        !candidate ||
+        candidate.kind !== 'model_response_chunk' ||
+        responseStreamKey(candidate) !== responseStreamKey(current)
+      ) break
+      run.push(candidate as TraceEventInput<'model_response_chunk'>)
+      cursor += 1
+    }
+    const bodies = run.map((event) => event.payload.body)
+    if (bodies.every((body): body is string => typeof body === 'string')) {
+      const sanitizedBodies = sanitizeTraceTextChunks(bodies, sanitization)
+      run.forEach((event, offset) => {
+        sanitized[index + offset] = {
+          ...event,
+          payload: { ...event.payload, body: sanitizedBodies[offset] ?? '' }
+        }
+      })
+    } else if (bodies.every((body): body is Uint8Array => body instanceof Uint8Array)) {
+      const complete = Buffer.concat(bodies.map((body) => Buffer.from(body)))
+      const sanitizedComplete = sanitizeTraceValue(complete, sanitization)
+      if (isRedactedBinaryValue(sanitizedComplete)) {
+        run.forEach((event, offset) => {
+          sanitized[index + offset] = {
+            ...event,
+            payload: { ...event.payload, body: sanitizedComplete }
+          }
+        })
+      }
+    }
+    index = cursor
+  }
+  return sanitized
+}
+
+function compactResponseChunkRuns(entries: readonly CompactableEvent[]): TraceEvent[] {
+  const compacted: TraceEvent[] = []
+  for (let index = 0; index < entries.length;) {
+    const current = entries[index]
+    if (!current || current.event.kind !== 'model_response_chunk' || !current.aggregate) {
+      if (current) compacted.push(compactResponseChunkEvent(current.event))
+      index += 1
+      continue
+    }
+    const run: TraceEvent[] = [current.event]
+    let cursor = index + 1
+    while (cursor < entries.length) {
+      const candidate = entries[cursor]
+      if (
+        !candidate ||
+        !candidate.aggregate ||
+        candidate.event.kind !== 'model_response_chunk' ||
+        responseStreamKey(candidate.event) !== responseStreamKey(current.event)
+      ) break
+      run.push(candidate.event)
+      cursor += 1
+    }
+    compacted.push(compactResponseChunkEvent(run[0] as TraceEvent, run))
+    index = cursor
+  }
+  return compacted
+}
+
+function compactResponseChunkEvent(event: TraceEvent, run: readonly TraceEvent[] = [event]): TraceEvent {
+  if (event.kind !== 'model_response_chunk') return event
+  const digest = createHash('sha256')
+  const previewParts: Buffer[] = []
+  let previewBytes = 0
+  let bodyBytes = 0
+  let sourceBytes = 0
+  for (const chunk of run) {
+    const payload = asRecord(chunk.payload)
+    const serialized = traceChunkBody(payload?.body)
+    const bytes = Buffer.from(serialized, 'utf8')
+    digest.update(bytes)
+    bodyBytes += bytes.byteLength
+    const declaredBytes = numericValue(payload?.byteLength)
+    sourceBytes += declaredBytes !== undefined && declaredBytes >= 0 ? declaredBytes : bytes.byteLength
+    if (previewBytes < RESPONSE_PREVIEW_BYTES) {
+      const part = bytes.subarray(0, RESPONSE_PREVIEW_BYTES - previewBytes)
+      previewParts.push(part)
+      previewBytes += part.byteLength
+    }
+  }
+  const firstPayload = asRecord(event.payload) ?? {}
+  const { body: _body, byteLength: _byteLength, index: firstIndex, ...metadata } = firstPayload
+  const preview = Buffer.concat(previewParts).toString('utf8')
+  return {
+    ...event,
+    payload: {
+      ...metadata,
+      index: numericValue(firstIndex) ?? 0,
+      body: preview,
+      capture: {
+        mode: 'bounded',
+        chunkCount: run.length,
+        sourceByteLength: sourceBytes,
+        capturedBodyByteLength: bodyBytes,
+        previewByteLength: Buffer.byteLength(preview),
+        truncated: bodyBytes > RESPONSE_PREVIEW_BYTES,
+        sha256: digest.digest('hex'),
+        ...(run.length > 1 ? {
+          firstTimestamp: run[0]?.timestamp ?? event.timestamp,
+          lastTimestamp: run.at(-1)?.timestamp ?? event.timestamp
+        } : {})
+      }
+    }
+  }
+}
+
+function traceChunkBody(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value === undefined) return ''
+  return JSON.stringify(value)
+}
+
+function responseStreamKey(event: TraceCorrelation & { source: string }): string {
+  return JSON.stringify([
+    event.traceId,
+    event.source,
+    event.runtimeId,
+    event.threadId,
+    event.turnId,
+    event.requestId,
+    event.parentRequestId
+  ])
+}
+
+function isRedactedBinaryValue(value: unknown): boolean {
+  const record = asRecord(value)
+  return record?.encoding === 'base64' && record.data === '[REDACTED]'
+}
+
 async function scanSegment(
-  file: string,
+  segment: string | TraceSegmentSnapshot,
   sanitization: TraceSanitizationOptions,
   visit: TraceScanVisitor
 ): Promise<number> {
   let corruptLines = 0
-  const lines = createInterface({ input: createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity })
+  if (typeof segment !== 'string' && segment.size === 0) return 0
+  const file = typeof segment === 'string' ? segment : segment.file
+  const lines = createInterface({
+    input: createReadStream(file, {
+      encoding: 'utf8',
+      ...(typeof segment === 'string' ? {} : {
+        fd: segment.handle.fd,
+        autoClose: false,
+        start: 0,
+        end: segment.size - 1
+      })
+    }),
+    crlfDelay: Infinity
+  })
   for await (const line of lines) {
     if (!line.trim()) continue
     let event: TraceEvent
@@ -1031,8 +1619,55 @@ async function countNonEmptyLines(file: string): Promise<number> {
   return count
 }
 
-function segmentPath(directory: string, recordedAt: string): string {
-  return path.join(directory, `${recordedAt.slice(0, 10)}.ndjson`)
+async function canAppendToSegment(
+  file: string,
+  incomingBytes: number,
+  maxSegmentBytes: number
+): Promise<boolean> {
+  try {
+    const info = await lstat(file)
+    if (info.isSymbolicLink() || !info.isFile()) throw new Error('Unsafe trace segment target')
+    return info.size + incomingBytes <= maxSegmentBytes
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') return true
+    throw error
+  }
+}
+
+function indexedSegment(file: string): boolean {
+  return SEGMENT_PATTERN.exec(path.basename(file))?.[2] !== undefined
+}
+
+function positiveIntegerOption(value: number | undefined, fallback: number, name: string): number {
+  const resolved = value ?? fallback
+  if (!Number.isSafeInteger(resolved) || resolved <= 0) {
+    throw new Error(`${name} must be a positive safe integer`)
+  }
+  return resolved
+}
+
+function serializeEventBatches(events: readonly TraceEvent[], maxBytes: number): string[] {
+  const batches: string[] = []
+  let lines: string[] = []
+  let bytes = 0
+  for (const event of events) {
+    const line = `${JSON.stringify(event)}\n`
+    const lineBytes = Buffer.byteLength(line)
+    if (lineBytes > maxBytes) {
+      const error = new Error('Trace event exceeds the maximum segment size') as NodeJS.ErrnoException
+      error.code = 'TRACE_SEGMENT_EVENT_TOO_LARGE'
+      throw error
+    }
+    if (lines.length > 0 && bytes + lineBytes > maxBytes) {
+      batches.push(lines.join(''))
+      lines = []
+      bytes = 0
+    }
+    lines.push(line)
+    bytes += lineBytes
+  }
+  if (lines.length > 0) batches.push(lines.join(''))
+  return batches
 }
 
 function noFollowFlag(): number {

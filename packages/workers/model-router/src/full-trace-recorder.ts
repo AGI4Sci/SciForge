@@ -1,11 +1,6 @@
 import type { IncomingHttpHeaders, ServerResponse } from 'node:http'
 import {
   createRequestId,
-  sanitizeTraceHeaders,
-  sanitizeTraceText,
-  sanitizeTraceTextChunks,
-  sanitizeTraceValue,
-  sensitiveTraceValuesFromHeaders,
   type TraceEvent,
   type TraceCorrelation,
   type TraceEventInput
@@ -22,15 +17,30 @@ import type {
 } from './upstream-drivers.js'
 
 export type ModelRouterTraceSink = {
-  appendMany(inputs: readonly TraceEventInput[]): Promise<TraceEvent[]>
+  appendMany(inputs: readonly TraceEventInput[]): Promise<readonly TraceEvent[] | void>
+  status?(): {
+    state: 'starting' | 'ready' | 'closing' | 'failed' | 'closed'
+    failure?: string
+  }
+}
+
+export type ModelRouterTraceCaptureState = 'starting' | 'ready' | 'backlogged' | 'failed'
+
+export type ModelRouterTraceCaptureStatus = {
+  state: ModelRouterTraceCaptureState
+  ready: boolean
+  activeSessions: number
+  pendingBatches: number
+  maxOutstandingWork: number
+  failure?: string
 }
 
 export type ModelRouterFullTraceRecorderOptions = {
   sink: ModelRouterTraceSink
   correlationRegistry?: ModelRouterTraceCorrelationRegistry
-  sensitiveValues?: readonly string[] | (() => readonly string[])
   now?: () => Date
   log?: (message: string) => void
+  maxOutstandingWork?: number
 }
 
 export type ModelRouterTraceSessionStart = {
@@ -41,6 +51,7 @@ export type ModelRouterTraceSessionStart = {
 
 type CapturedChunk = {
   body: string
+  byteLength: number
   timestamp: string
 }
 
@@ -53,25 +64,59 @@ type CapturedError = {
 
 export class ModelRouterFullTraceRecorder {
   private readonly registry: ModelRouterTraceCorrelationRegistry
-  private readonly getSensitiveValues: () => readonly string[]
   private readonly now: () => Date
   private readonly pending = new Set<Promise<void>>()
+  private readonly maxOutstandingWork: number
+  private activeSessions = 0
+  private failure?: string
+  private failureCause?: Error
 
   constructor(private readonly options: ModelRouterFullTraceRecorderOptions) {
     this.registry = options.correlationRegistry ?? createModelRouterTraceCorrelationRegistry()
-    const sensitiveValues = options.sensitiveValues
-    this.getSensitiveValues = typeof sensitiveValues === 'function'
-      ? sensitiveValues
-      : () => sensitiveValues ?? []
     this.now = options.now ?? (() => new Date())
+    this.maxOutstandingWork = options.maxOutstandingWork ?? 32
+    if (!Number.isInteger(this.maxOutstandingWork) || this.maxOutstandingWork <= 0) {
+      throw new Error('maxOutstandingWork must be a positive integer')
+    }
   }
 
   start(input: ModelRouterTraceSessionStart): ModelRouterTraceSession {
+    const status = this.status()
+    if (!status.ready) {
+      throw new Error(status.failure ?? `Full Trace capture is ${status.state}.`)
+    }
+    this.activeSessions += 1
     return new ModelRouterTraceSession(this, input, this.now)
+  }
+
+  status(): ModelRouterTraceCaptureStatus {
+    const outstandingWork = this.activeSessions + this.pending.size
+    const sinkStatus = this.options.sink.status?.()
+    const failure = this.failure ?? (
+      sinkStatus?.state === 'failed' || sinkStatus?.state === 'closing' || sinkStatus?.state === 'closed'
+        ? sinkStatus.failure ?? `Full Trace writer is ${sinkStatus.state}.`
+        : undefined
+    )
+    const state: ModelRouterTraceCaptureState = failure
+      ? 'failed'
+      : sinkStatus?.state === 'starting'
+        ? 'starting'
+        : outstandingWork >= this.maxOutstandingWork
+          ? 'backlogged'
+          : 'ready'
+    return {
+      state,
+      ready: state === 'ready',
+      activeSessions: this.activeSessions,
+      pendingBatches: this.pending.size,
+      maxOutstandingWork: this.maxOutstandingWork,
+      ...(failure ? { failure } : {})
+    }
   }
 
   async flush(): Promise<void> {
     await Promise.all([...this.pending])
+    if (this.failureCause) throw this.failureCause
   }
 
   extractCorrelation(input: ModelRouterTraceSessionStart, body?: unknown) {
@@ -81,22 +126,32 @@ export class ModelRouterFullTraceRecorder {
     })
   }
 
-  sensitiveValuesFor(headers: IncomingHttpHeaders): readonly string[] {
-    return [
-      ...this.getSensitiveValues(),
-      ...sensitiveTraceValuesFromHeaders(headers as Record<string, unknown>)
-    ]
+  commit(events: readonly TraceEventInput[]): void {
+    if (this.activeSessions + this.pending.size >= this.maxOutstandingWork) {
+      throw new Error('Full Trace capture is backlogged.')
+    }
+    this.enqueueWrite(events)
   }
 
-  commit(events: readonly TraceEventInput[]): void {
+  private enqueueWrite(events: readonly TraceEventInput[]): void {
     let task: Promise<void>
-    task = this.options.sink.appendMany(events).then(
-      () => undefined,
-      (error: unknown) => {
-        this.options.log?.(`full trace write failed: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    ).finally(() => this.pending.delete(task))
+    task = Promise.resolve()
+      .then(async () => this.options.sink.appendMany(events))
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        this.failureCause = error instanceof Error ? error : new Error(String(error))
+        this.failure = this.failureCause.message
+        this.options.log?.(`full trace write failed: ${this.failure}`)
+        throw this.failureCause
+      })
+      .finally(() => this.pending.delete(task))
     this.pending.add(task)
+    void task.catch(() => undefined)
+  }
+
+  completeSession(events: readonly TraceEventInput[]): void {
+    this.activeSessions = Math.max(0, this.activeSessions - 1)
+    this.enqueueWrite(events)
   }
 }
 
@@ -108,6 +163,10 @@ export class ModelRouterTraceSession {
   private responseHeaders: Record<string, unknown> = {}
   private responseStatus = 500
   private readonly chunks: CapturedChunk[] = []
+  private readonly upstreamEvents: TraceEventInput[] = []
+  private openUpstreamAttempts = 0
+  private rootEvents?: TraceEventInput[]
+  private committed = false
   private capturedError?: CapturedError
   private finished = false
   private resolvedCorrelation?: TraceCorrelation
@@ -137,15 +196,16 @@ export class ModelRouterTraceSession {
   }
 
   startUpstreamAttempt(input: UpstreamTraceAttemptStart): UpstreamTraceAttemptObserver {
+    this.openUpstreamAttempts += 1
     return new ModelRouterUpstreamTraceAttempt(
-      this.owner,
+      (events) => {
+        this.upstreamEvents.push(...events)
+        this.openUpstreamAttempts = Math.max(0, this.openUpstreamAttempts - 1)
+        this.commitIfReady()
+      },
       this.correlation(),
       input,
-      this.now,
-      [
-        ...this.owner.sensitiveValuesFor(this.input.headers),
-        ...sensitiveTraceValuesFromHeaders(input.headers)
-      ]
+      this.now
     )
   }
 
@@ -187,50 +247,49 @@ export class ModelRouterTraceSession {
 
   private recordChunk(chunk: unknown, encoding?: BufferEncoding): void {
     this.responseHeadersAt ??= this.now().toISOString()
-    this.chunks.push({ body: chunkText(chunk, encoding), timestamp: this.now().toISOString() })
+    this.chunks.push({
+      body: chunkText(chunk, encoding),
+      byteLength: chunkByteLength(chunk, encoding),
+      timestamp: this.now().toISOString()
+    })
   }
 
   private finish(): void {
     if (this.finished) return
     this.finished = true
     const endedAt = this.now().toISOString()
-    const sensitiveValues = this.owner.sensitiveValuesFor(this.input.headers)
-    const sanitization = { sensitiveValues }
     const correlation = this.correlation()
     const base = {
       ...correlation,
       source: 'model-router'
     }
-    const sanitizedChunks = sanitizeTraceTextChunks(
-      this.chunks.map((chunk) => chunk.body),
-      sanitization
-    )
     const events: TraceEventInput[] = [{
       ...base,
       kind: 'model_request',
       timestamp: this.startedAt,
       payload: {
         method: this.input.method,
-        path: sanitizeTraceText(this.input.path, sanitization),
-        headers: sanitizeTraceHeaders(this.input.headers as Record<string, unknown>, sanitization),
-        body: sanitizeTraceValue(this.requestBody, sanitization),
+        path: this.input.path,
+        headers: this.input.headers,
+        body: this.requestBody,
         ...(modelFromBody(this.parsedRequestBody) ? { model: modelFromBody(this.parsedRequestBody) } : {})
       }
-    }, {
+    }]
+    events.push({
       ...base,
       kind: 'model_response_headers',
       timestamp: this.responseHeadersAt ?? endedAt,
       payload: {
         status: this.responseStatus,
-        headers: sanitizeTraceHeaders(this.responseHeaders, sanitization)
+        headers: this.responseHeaders
       }
-    }]
-    sanitizedChunks.forEach((body, index) => {
+    })
+    this.chunks.forEach((chunk, index) => {
       events.push({
         ...base,
         kind: 'model_response_chunk',
         timestamp: this.chunks[index]?.timestamp ?? endedAt,
-        payload: { index, body }
+        payload: { index, body: chunk.body, byteLength: chunk.byteLength }
       })
     })
     if (this.capturedError) {
@@ -240,7 +299,7 @@ export class ModelRouterTraceSession {
         timestamp: this.capturedError.timestamp,
         payload: {
           stage: 'model-router',
-          message: sanitizeTraceText(this.capturedError.message, sanitization),
+          message: this.capturedError.message,
           ...(this.capturedError.name ? { name: this.capturedError.name } : {}),
           ...(this.capturedError.code ? { code: this.capturedError.code } : {})
         }
@@ -258,7 +317,19 @@ export class ModelRouterTraceSession {
         ...(usage ? { usage } : {})
       }
     })
-    this.owner.commit(events)
+    this.rootEvents = events
+    this.commitIfReady()
+  }
+
+  private commitIfReady(): void {
+    if (this.committed || !this.rootEvents || this.openUpstreamAttempts > 0) return
+    this.committed = true
+    const [request, ...tail] = this.rootEvents
+    this.owner.completeSession([
+      ...(request ? [request] : []),
+      ...this.upstreamEvents,
+      ...tail
+    ])
   }
 }
 
@@ -273,11 +344,10 @@ class ModelRouterUpstreamTraceAttempt implements UpstreamTraceAttemptObserver {
   private finished = false
 
   constructor(
-    private readonly owner: ModelRouterFullTraceRecorder,
+    private readonly record: (events: readonly TraceEventInput[]) => void,
     private readonly parent: TraceCorrelation,
     private readonly input: UpstreamTraceAttemptStart,
-    private readonly now: () => Date,
-    private readonly sensitiveValues: readonly string[]
+    private readonly now: () => Date
   ) {
     this.startedAt = now().toISOString()
   }
@@ -311,7 +381,6 @@ class ModelRouterUpstreamTraceAttempt implements UpstreamTraceAttemptObserver {
     this.finished = true
     const endedAt = this.now().toISOString()
     this.responseStatus ??= result.status
-    const sanitization = { sensitiveValues: this.sensitiveValues }
     const base = {
       traceId: this.parent.traceId,
       ...(this.parent.runtimeId ? { runtimeId: this.parent.runtimeId } : {}),
@@ -329,9 +398,9 @@ class ModelRouterUpstreamTraceAttempt implements UpstreamTraceAttemptObserver {
         protocol: this.input.protocol,
         phase: this.input.phase,
         method: this.input.method,
-        path: sanitizeTraceText(this.input.url, sanitization),
-        headers: sanitizeTraceHeaders(this.input.headers, sanitization),
-        body: sanitizeTraceValue(this.input.body, sanitization),
+        path: this.input.url,
+        headers: this.input.headers,
+        body: this.input.body,
         ...(modelFromBody(this.input.body) ? { model: modelFromBody(this.input.body) } : {}),
         retry: this.input.retry ?? 0,
         upstream: true
@@ -344,15 +413,13 @@ class ModelRouterUpstreamTraceAttempt implements UpstreamTraceAttemptObserver {
         timestamp: this.responseHeadersAt ?? endedAt,
         payload: {
           status: this.responseStatus,
-          headers: sanitizeTraceHeaders(this.responseHeadersValue, sanitization),
+          headers: this.responseHeadersValue,
           protocol: this.input.protocol,
           upstream: true
         }
       })
     }
     const completeBody = Buffer.concat(this.chunks.map((chunk) => Buffer.from(chunk.body)))
-    const completeSanitized = sanitizeTraceValue(completeBody, sanitization)
-    const redactAllChunks = isRedactedBinaryValue(completeSanitized)
     for (const chunk of this.chunks) {
       events.push({
         ...base,
@@ -360,7 +427,8 @@ class ModelRouterUpstreamTraceAttempt implements UpstreamTraceAttemptObserver {
         timestamp: chunk.timestamp,
         payload: {
           index: chunk.index,
-          body: redactAllChunks ? completeSanitized : sanitizeTraceValue(chunk.body, sanitization),
+          body: chunk.body,
+          byteLength: chunk.body.byteLength,
           protocol: this.input.protocol,
           upstream: true
         }
@@ -375,7 +443,7 @@ class ModelRouterUpstreamTraceAttempt implements UpstreamTraceAttemptObserver {
           stage: 'model-router-upstream',
           protocol: this.input.protocol,
           upstream: true,
-          message: sanitizeTraceText(this.capturedError.message, sanitization),
+          message: this.capturedError.message,
           ...(this.capturedError.name ? { name: this.capturedError.name } : {}),
           ...(this.capturedError.code ? { code: this.capturedError.code } : {})
         }
@@ -395,7 +463,7 @@ class ModelRouterUpstreamTraceAttempt implements UpstreamTraceAttemptObserver {
         ...(usage ? { usage } : {})
       }
     })
-    this.owner.commit(events)
+    this.record(events)
   }
 }
 
@@ -459,16 +527,17 @@ function modelFromBody(body: unknown): string | undefined {
   return typeof model === 'string' && model.trim() ? model : undefined
 }
 
-function isRedactedBinaryValue(value: unknown): boolean {
-  const record = asRecord(value)
-  return record?.encoding === 'base64' && record.data === '[REDACTED]'
-}
-
 function chunkText(chunk: unknown, encoding?: BufferEncoding): string {
   if (typeof chunk === 'string') return chunk
   if (Buffer.isBuffer(chunk)) return chunk.toString(encoding ?? 'utf8')
   if (chunk instanceof Uint8Array) return Buffer.from(chunk).toString(encoding ?? 'utf8')
   return String(chunk)
+}
+
+function chunkByteLength(chunk: unknown, encoding?: BufferEncoding): number {
+  if (typeof chunk === 'string') return Buffer.byteLength(chunk, encoding ?? 'utf8')
+  if (Buffer.isBuffer(chunk) || chunk instanceof Uint8Array) return chunk.byteLength
+  return Buffer.byteLength(String(chunk))
 }
 
 function encodingFromArgs(args: readonly unknown[]): BufferEncoding | undefined {

@@ -24,7 +24,7 @@ class FakeProvider implements AgentProvider {
     approvals: true,
     attachFiles: false
   }
-  threadDetail: Awaited<ReturnType<AgentProvider['getThreadDetail']>> = {
+  threadDetail: Awaited<ReturnType<AgentProvider['getRecentThreadView']>> = {
     blocks: [],
     latestSeq: 0
   }
@@ -68,9 +68,18 @@ class FakeProvider implements AgentProvider {
       status: 'idle'
     }
   }
-  async getThreadDetail(threadId: string) {
+  async getRecentThreadView(threadId: string) {
     this.getDetailMock(threadId)
     return this.threadDetail
+  }
+  async getThreadStatus() {
+    return { latestSeq: this.threadDetail.latestSeq }
+  }
+  async getThreadPage() {
+    return { blocks: this.threadDetail.blocks, latestSeq: this.threadDetail.latestSeq, nextCursor: null }
+  }
+  async readToolArtifact() {
+    return ''
   }
   async sendUserMessage(
     threadId: string,

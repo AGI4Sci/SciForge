@@ -32,6 +32,31 @@ type QueryCall = {
   options?: ClaudeAgentSdkOptions
 }
 
+async function readCanonicalThreadView(service: ClaudeCodeRuntimeService, threadId: string) {
+  const [listed, status, page] = await Promise.all([
+    service.listThreads({ includeArchived: true, limit: 100 }),
+    service.readThreadStatus(threadId),
+    service.readThreadPage(threadId)
+  ])
+  if (!listed.ok) return listed
+  if (!status.ok) return status
+  if (!page.ok) return page
+  const summary = listed.threads.find((thread) => thread.id === threadId)
+  return {
+    ok: true as const,
+    detail: {
+      ...(summary ?? {
+        id: threadId,
+        runtimeId: 'claude' as const,
+        title: 'Claude Code thread',
+        updatedAt: ''
+      }),
+      ...status.status
+    },
+    page: page.page
+  }
+}
+
 function configuredModelRouterSettings() {
   const modelRouter = defaultModelRouterSettings()
   modelRouter.baseUrl = 'http://127.0.0.1:49876/v1'
@@ -291,6 +316,15 @@ async function storedEvents(
   return (await eventStore.read(threadId, { includeAll: true })).map((entry) => entry.event)
 }
 
+async function threadReachedState(
+  service: ClaudeCodeRuntimeService,
+  threadId: string,
+  state: 'completed' | 'failed'
+): Promise<boolean> {
+  const result = await service.readThreadStatus(threadId)
+  return result.ok && result.status.latestTurnStatus === state
+}
+
 async function waitUntil(assertion: () => Promise<boolean>, timeoutMs = 1_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -306,6 +340,55 @@ function randomTestId(prefix: string): string {
 
 afterEach(() => {
   vi.unstubAllEnvs()
+})
+
+describe('Claude child summary index', () => {
+  it('scans stored child events once and applies later child events incrementally', async () => {
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot()
+    })
+    const child = {
+      id: 'child-1',
+      runtimeId: 'claude' as const,
+      parentThreadId: 'parent-thread',
+      kind: 'agent' as const,
+      status: 'running' as const,
+      updatedAt: '2026-08-09T00:00:00.000Z'
+    }
+    await service.publishSyntheticEvent({
+      runtimeId: 'claude',
+      threadId: 'parent-thread',
+      kind: 'child_event',
+      child
+    })
+    const eventStore = (service as unknown as {
+      eventStore: { read(threadId: string, options: { includeAll: boolean }): Promise<unknown[]> }
+    }).eventStore
+    const readSpy = vi.spyOn(eventStore, 'read')
+
+    await expect(service.listThreadChildren({ threadId: 'parent-thread' })).resolves.toMatchObject({
+      children: [child]
+    })
+    await service.listThreadChildren({ threadId: 'parent-thread' })
+    expect(readSpy).toHaveBeenCalledTimes(1)
+
+    await service.publishSyntheticEvent({
+      runtimeId: 'claude',
+      threadId: 'parent-thread',
+      kind: 'child_event',
+      child: {
+        ...child,
+        status: 'completed',
+        summary: 'Done',
+        updatedAt: '2026-08-09T00:00:01.000Z'
+      }
+    })
+    await expect(service.listThreadChildren({ threadId: 'parent-thread' })).resolves.toMatchObject({
+      children: [expect.objectContaining({ id: 'child-1', status: 'completed', summary: 'Done' })]
+    })
+    expect(readSpy).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('ClaudeCodeRuntimeService', () => {
@@ -723,7 +806,7 @@ describe('ClaudeCodeRuntimeService', () => {
     })
     if (!firstTurn.ok) throw new Error(firstTurn.message)
     await waitUntil(async () => {
-      const detail = await service.readThread(thread.thread.id)
+      const detail = await readCanonicalThreadView(service, thread.thread.id)
       return detail.ok && detail.detail.backendThreadId === 'claude-session-1'
     })
     const secondTurn = await service.startTurn({
@@ -753,17 +836,17 @@ describe('ClaudeCodeRuntimeService', () => {
     expect(calls[1]?.options?.resume).toBe('claude-session-1')
 
     await waitUntil(async () => {
-      const detail = await service.readThread(thread.thread.id)
+      const detail = await readCanonicalThreadView(service, thread.thread.id)
       return detail.ok &&
         detail.detail.latestTurnStatus === 'completed' &&
-        (detail.detail.items?.filter((item) =>
+        (detail.page.turns.flatMap((turn) => turn.items ?? []).filter((item) =>
           item.kind === 'assistant_message' && item.text === 'Hello from Claude.'
         ).length ?? 0) === 2
     })
-    const detail = await service.readThread(thread.thread.id)
+    const detail = await readCanonicalThreadView(service, thread.thread.id)
     if (!detail.ok) throw new Error(detail.message)
     expect(detail.detail.backendThreadId).toBe('claude-session-1')
-    expect(detail.detail.items?.filter((item) =>
+    expect(detail.page.turns.flatMap((turn) => turn.items ?? []).filter((item) =>
       item.kind === 'assistant_message' && item.text === 'Hello from Claude.'
     )).toHaveLength(2)
   })
@@ -790,13 +873,12 @@ describe('ClaudeCodeRuntimeService', () => {
     if (!turn.ok) throw new Error(turn.message)
 
     await waitUntil(async () => {
-      const detail = await service.readThread(thread.thread.id)
-      return detail.ok && detail.detail.latestTurnStatus === 'completed'
+      return threadReachedState(service, thread.thread.id, 'completed')
     })
-    const detail = await service.readThread(thread.thread.id)
+    const detail = await readCanonicalThreadView(service, thread.thread.id)
     if (!detail.ok) throw new Error(detail.message)
 
-    expect(detail.detail.items).toEqual(expect.arrayContaining([
+    expect(detail.page.turns.flatMap((turn) => turn.items ?? [])).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'reasoning',
         text: 'Check the code path.'
@@ -806,7 +888,7 @@ describe('ClaudeCodeRuntimeService', () => {
         text: 'Done from Claude.'
       })
     ]))
-    expect(detail.detail.items?.some((item) =>
+    expect(detail.page.turns.flatMap((turn) => turn.items ?? []).some((item) =>
       item.kind === 'assistant_message' && item.text?.includes('Check the code path.')
     )).toBe(false)
   })
@@ -835,16 +917,15 @@ describe('ClaudeCodeRuntimeService', () => {
     if (!turn.ok) throw new Error(turn.message)
 
     await waitUntil(async () => {
-      const detail = await service.readThread(thread.thread.id)
-      return detail.ok && detail.detail.latestTurnStatus === 'completed'
+      return threadReachedState(service, thread.thread.id, 'completed')
     })
-    const detail = await service.readThread(thread.thread.id)
+    const detail = await readCanonicalThreadView(service, thread.thread.id)
     if (!detail.ok) throw new Error(detail.message)
 
     expect(calls[0]?.options?.thinking).toEqual({ type: 'adaptive', display: 'summarized' })
     expect(calls[0]?.options?.effort).toBe('max')
     expect(calls[0]?.options?.includePartialMessages).toBe(true)
-    expect(detail.detail.items).toEqual(expect.arrayContaining([
+    expect(detail.page.turns.flatMap((turn) => turn.items ?? [])).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'reasoning',
         text: 'Streaming thought.'
@@ -854,7 +935,7 @@ describe('ClaudeCodeRuntimeService', () => {
         text: 'Finished.'
       })
     ]))
-    expect(detail.detail.items?.some((item) =>
+    expect(detail.page.turns.flatMap((turn) => turn.items ?? []).some((item) =>
       item.kind === 'reasoning' && item.text?.includes('Final thought should not duplicate.')
     )).toBe(false)
   })
@@ -893,8 +974,7 @@ describe('ClaudeCodeRuntimeService', () => {
     })
     if (!turn.ok) throw new Error(turn.message)
     await waitUntil(async () => {
-      const detail = await service.readThread(thread.thread.id)
-      return detail.ok && detail.detail.latestTurnStatus === 'completed'
+      return threadReachedState(service, thread.thread.id, 'completed')
     })
 
     const toolEvents = (await storedEvents(service, thread.thread.id)).filter((event) =>
@@ -977,8 +1057,7 @@ describe('ClaudeCodeRuntimeService', () => {
     })
     if (!turn.ok) throw new Error(turn.message)
     await waitUntil(async () => {
-      const detail = await service.readThread(thread.thread.id)
-      return detail.ok && detail.detail.latestTurnStatus === 'completed'
+      return threadReachedState(service, thread.thread.id, 'completed')
     })
 
     const successful = (await storedEvents(service, thread.thread.id)).filter((event) =>
@@ -1026,8 +1105,7 @@ describe('ClaudeCodeRuntimeService', () => {
     })
     if (!turn.ok) throw new Error(turn.message)
     await waitUntil(async () => {
-      const detail = await service.readThread(thread.thread.id)
-      return detail.ok && detail.detail.latestTurnStatus === 'completed'
+      return threadReachedState(service, thread.thread.id, 'completed')
     })
 
     const toolEvents = (await storedEvents(service, thread.thread.id)).filter((event) =>
@@ -1081,8 +1159,7 @@ describe('ClaudeCodeRuntimeService', () => {
     })
     if (!turn.ok) throw new Error(turn.message)
     await waitUntil(async () => {
-      const detail = await service.readThread(thread.thread.id)
-      return detail.ok && detail.detail.latestTurnStatus === 'completed'
+      return threadReachedState(service, thread.thread.id, 'completed')
     })
 
     const toolEvents = (await storedEvents(service, thread.thread.id)).filter((event) =>
@@ -1151,8 +1228,7 @@ describe('ClaudeCodeRuntimeService', () => {
     })
     if (!turn.ok) throw new Error(turn.message)
     await waitUntil(async () => {
-      const detail = await service.readThread(thread.thread.id)
-      return detail.ok && detail.detail.latestTurnStatus === 'completed'
+      return threadReachedState(service, thread.thread.id, 'completed')
     })
 
     const toolEvents = (await storedEvents(service, thread.thread.id)).filter((event) =>
@@ -1195,8 +1271,7 @@ describe('ClaudeCodeRuntimeService', () => {
     })
     if (!turn.ok) throw new Error(turn.message)
     await waitUntil(async () => {
-      const detail = await service.readThread(thread.thread.id)
-      return detail.ok && detail.detail.latestTurnStatus === 'failed'
+      return threadReachedState(service, thread.thread.id, 'failed')
     })
     await waitUntil(async () => (await storedEvents(service, thread.thread.id)).some((event) =>
       event.kind === 'turn_lifecycle' && event.state === 'failed'

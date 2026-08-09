@@ -108,8 +108,6 @@ let remoteChannelActivityUnsubscribe: (() => void) | null = null
 let refreshThreadsRequestSeq = 0
 const DEFAULT_THREAD_LIST_LIMIT = 80
 const EXPANDED_THREAD_LIST_LIMIT = 200
-const DEFAULT_SIDEBAR_DETAIL_INSPECTION_LIMIT = 12
-const EXPANDED_SIDEBAR_DETAIL_INSPECTION_LIMIT = 40
 const RUNTIME_PROBE_TIMEOUT_MS = 8_000
 
 function withRuntimeProbeTimeout<T>(task: Promise<T>, label: string): Promise<T> {
@@ -828,10 +826,7 @@ export function createNavigationActions(
         }
       }
 
-      const filteredThreads = await filterThreadsForSidebar(threads, p, {
-        maxDetailInspections: expandedList
-          ? EXPANDED_SIDEBAR_DETAIL_INSPECTION_LIMIT
-          : DEFAULT_SIDEBAR_DETAIL_INSPECTION_LIMIT,
+      const filteredThreads = filterThreadsForSidebar(threads, {
         hiddenThreadIds: hiddenSideThreadIds
       })
       await applySidebarThreads(filteredThreads)

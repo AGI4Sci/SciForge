@@ -165,8 +165,7 @@ describe('local runtime defaults', () => {
     expect(defaultAgentCapabilitySettings()).toEqual({
       subagents: {
         enabled: true,
-        maxParallel: 2,
-        maxChildRuns: 4
+        maxParallel: 2
       }
     })
   })
@@ -177,8 +176,7 @@ describe('local runtime defaults', () => {
       agentCapabilities: {
         subagents: {
           enabled: false,
-          maxParallel: 99,
-          maxChildRuns: 0
+          maxParallel: 99
         }
       }
     })
@@ -186,36 +184,9 @@ describe('local runtime defaults', () => {
     expect(getAgentCapabilitySettings(normalized)).toEqual({
       subagents: {
         enabled: false,
-        maxParallel: 16,
-        maxChildRuns: 4
+        maxParallel: 64
       }
     })
-
-    const highChildBudget = normalizeAppSettings({
-      ...settings(),
-      agentCapabilities: {
-        subagents: {
-          enabled: true,
-          maxParallel: 2,
-          maxChildRuns: 3
-        }
-      }
-    })
-
-    expect(getAgentCapabilitySettings(highChildBudget).subagents.maxChildRuns).toBe(3)
-
-    const cappedChildBudget = normalizeAppSettings({
-      ...settings(),
-      agentCapabilities: {
-        subagents: {
-          enabled: true,
-          maxParallel: 2,
-          maxChildRuns: 9999
-        }
-      }
-    })
-
-    expect(getAgentCapabilitySettings(cappedChildBudget).subagents.maxChildRuns).toBe(4)
   })
 
   it('merges shared agent capability patches', () => {
@@ -224,8 +195,7 @@ describe('local runtime defaults', () => {
     })).toEqual({
       subagents: {
         enabled: true,
-        maxParallel: 3,
-        maxChildRuns: 4
+        maxParallel: 3
       }
     })
   })

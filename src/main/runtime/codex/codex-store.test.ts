@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
 import { CodexEventStore } from './codex-event-store'
 import { CodexThreadStore } from './codex-thread-store'
+import { externalizeToolDetails } from '../agent-runtime/jsonl-thread-page'
 
 async function tempRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'sciforge-codex-store-'))
@@ -96,6 +97,39 @@ describe('CodexThreadStore', () => {
     ])
     expect(await store.get('older-live-thread')).toMatchObject({
       updatedAt: '2026-06-01T00:00:00.000Z'
+    })
+  })
+
+  it('keeps a terminal status absorbing for the same turn while allowing a newer turn to run', async () => {
+    const rootDir = await tempRoot()
+    const store = new CodexThreadStore({ rootDir })
+    await store.upsert({
+      codexThreadId: 'codex-terminal-thread',
+      latestSeq: 10,
+      latestTurnId: 'turn-1',
+      latestTurnStatus: 'completed'
+    })
+
+    await store.upsert({
+      codexThreadId: 'codex-terminal-thread',
+      latestSeq: 11,
+      latestTurnId: 'turn-1',
+      latestTurnStatus: 'running'
+    })
+    await expect(store.get('codex-terminal-thread')).resolves.toMatchObject({
+      latestTurnId: 'turn-1',
+      latestTurnStatus: 'completed'
+    })
+
+    await store.upsert({
+      codexThreadId: 'codex-terminal-thread',
+      latestSeq: 12,
+      latestTurnId: 'turn-2',
+      latestTurnStatus: 'running'
+    })
+    await expect(store.get('codex-terminal-thread')).resolves.toMatchObject({
+      latestTurnId: 'turn-2',
+      latestTurnStatus: 'running'
     })
   })
 
@@ -205,6 +239,71 @@ describe('CodexEventStore', () => {
 
     expect(appended.seq).toBe(3)
     expect(await restartedStore.latestSeq('thread-1')).toBe(3)
+  })
+
+  it('pages complete turns newest-first and preserves the latest sequence', async () => {
+    const rootDir = await tempRoot()
+    const store = new CodexEventStore({ rootDir })
+    for (const event of [
+      { threadId: 'thread-1', turnId: 'turn-1', deltas: [{ kind: 'agent_message' as const, text: 'one' }] },
+      { threadId: 'thread-1', turnId: 'turn-1', turnComplete: true },
+      { threadId: 'thread-1', turnId: 'turn-2', deltas: [{ kind: 'agent_message' as const, text: 'two' }] },
+      { threadId: 'thread-1', turnId: 'turn-2', turnComplete: true },
+      { threadId: 'thread-1', turnId: 'turn-3', deltas: [{ kind: 'agent_message' as const, text: 'three' }] }
+    ]) await store.append('thread-1', event)
+
+    const latest = await store.readPage('thread-1', { limit: 2 })
+    expect(latest.events.map((event) => event.seq)).toEqual([3, 4, 5])
+    expect(latest.nextCursor).toEqual(expect.any(String))
+    expect(await store.latestSeq('thread-1')).toBe(5)
+
+    const earlier = await store.readPage('thread-1', { cursor: latest.nextCursor!, limit: 2 })
+    expect(earlier.events.map((event) => event.seq)).toEqual([1, 2])
+    expect(earlier.nextCursor).toBeNull()
+    expect(await store.latestSeq('thread-1')).toBe(5)
+  })
+
+  it('reads the latest full tool detail only through its artifact reference', async () => {
+    const rootDir = await tempRoot()
+    const store = new CodexEventStore({ rootDir })
+    const originalDetail = 'x'.repeat(20_000)
+    await store.append('thread-1', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: { itemId: 'tool-1', summary: 'Running', status: 'running', detail: 'initial' }
+    })
+    await store.append('thread-1', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: { itemId: 'tool-1', summary: 'Done', status: 'success', detail: originalDetail }
+    })
+    const [externalized] = externalizeToolDetails({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      items: [{ id: 'tool-1', kind: 'tool', detail: originalDetail }]
+    })
+
+    expect(externalized?.detail).toHaveLength(4_096)
+    expect(externalized?.detailArtifact?.size).toBe(20_000)
+    await expect(store.readToolArtifact('thread-1', externalized!.detailArtifact!.ref))
+      .resolves.toBe(originalDetail)
+    await expect(store.readToolArtifact('missing-thread', externalized!.detailArtifact!.ref))
+      .resolves.toBeNull()
+
+    const outputOnly = { rows: Array.from({ length: 2_000 }, () => 'full-output') }
+    await store.append('thread-1', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: { itemId: 'tool-output', summary: 'Done', status: 'success', meta: { output: outputOnly } }
+    })
+    const [outputProjection] = externalizeToolDetails({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      items: [{ id: 'tool-output', kind: 'tool', meta: { output: outputOnly } }]
+    })
+    expect(outputProjection?.detailArtifact).toBeDefined()
+    await expect(store.readToolArtifact('thread-1', outputProjection!.detailArtifact!.ref))
+      .resolves.toBe(JSON.stringify(outputOnly))
   })
 
   it('ignores malformed JSONL rows when replaying events', async () => {

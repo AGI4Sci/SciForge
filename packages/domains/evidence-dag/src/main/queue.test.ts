@@ -145,7 +145,7 @@ test('restart preserves terminal timestamps and directly discards old project-ph
     version: number
     jobs: Array<{ id: string; updatedAt: string }>
   }
-  assert.equal(migrated.version, 1)
+  assert.equal(migrated.version, 2)
   assert.deepEqual(migrated.jobs.map(({ id }) => id), ['evidence-job'])
   assert.equal(migrated.jobs[0]?.updatedAt, failedAt)
   await queue.close()
@@ -745,10 +745,13 @@ test('later ordinary success cannot hide a failed lifecycle receipt and immediat
       snapshot: { ...snapshot, version: 2, inputWatermark: '8' }
     }]
   }), 'utf8')
+  const initial = new EvidenceDagQueue({ storagePath, submit: async () => snapshot })
+  await initial.start(false)
+
+  assert.equal((await initial.pending('codex', 'thread-1'))?.state, 'failed')
+  await initial.close()
   const queue = new EvidenceDagQueue({ storagePath, submit: async () => snapshot })
   await queue.start(false)
-
-  assert.equal((await queue.pending('codex', 'thread-1'))?.state, 'failed')
   const retry = await queue.enqueue({
     ...queueInput('8', 'immediate'),
     reason: 'manual_immediate'
@@ -759,7 +762,8 @@ test('later ordinary success cannot hide a failed lifecycle receipt and immediat
       id: string
       idempotencyKey?: string
       targetWatermark: string
-      trace: unknown[]
+      traceRef: string
+      traceItemCount: number
     }>
   }
   const revived = stored.jobs.find((job) => job.id === 'lifecycle-failed')
@@ -769,7 +773,8 @@ test('later ordinary success cannot hide a failed lifecycle receipt and immediat
   assert.match(pending?.targetWatermark ?? '', /^8:artifact-lifecycle-retry:/u)
   assert.equal(revived?.idempotencyKey, 'artifact-lifecycle:receipt-failed:codex:thread-1')
   assert.match(revived?.targetWatermark ?? '', /^8:artifact-lifecycle-retry:/u)
-  assert.equal(revived?.trace.length, 2)
+  assert.match(revived?.traceRef ?? '', /^sha256:[a-f0-9]{64}$/u)
+  assert.equal(revived?.traceItemCount, 2)
   await queue.close()
 })
 
@@ -959,8 +964,81 @@ test('load and atomic replacement enforce private directory and file modes', {
   await queue.enqueue(queueInput('1'))
   assert.equal((await stat(directory)).mode & 0o777, 0o700)
   assert.equal((await stat(storagePath)).mode & 0o777, 0o600)
-  assert.deepEqual((await readdir(directory)).sort(), ['queue.json'])
+  assert.deepEqual((await readdir(directory)).sort(), ['queue.json', 'queue.json.traces'])
+  assert.equal((await stat(`${storagePath}.traces`)).mode & 0o777, 0o700)
+  const [traceAsset] = await readdir(`${storagePath}.traces`)
+  assert.ok(traceAsset)
+  assert.equal((await stat(join(`${storagePath}.traces`, traceAsset))).mode & 0o777, 0o600)
   await queue.close()
+})
+
+test('large terminal traces are stored once outside the bounded queue index and survive restart', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'evidence-domain-large-trace-'))
+  const storagePath = join(root, 'queue.json')
+  const largePayload = 'x'.repeat(4 * 1024 * 1024)
+  let submittedPayloadLength = 0
+  const queue = new EvidenceDagQueue({
+    storagePath,
+    submit: async (input) => {
+      submittedPayloadLength = String(input.trace[0]?.payload ?? '').length
+      return snapshot
+    }
+  })
+  await queue.start(true)
+  const enqueued = await queue.enqueue({
+    ...queueInput('large-terminal'),
+    trace: [{ id: 'large-artifact', payload: largePayload }]
+  })
+  assert.equal((await queue.waitForCommitted(enqueued.jobId)).digest, digest)
+  await queue.close()
+
+  assert.equal(submittedPayloadLength, largePayload.length)
+  assert.ok((await stat(storagePath)).size < 16 * 1024)
+  const stored = JSON.parse(await readFile(storagePath, 'utf8')) as {
+    version: number
+    jobs: Array<{ trace?: unknown; traceRef: string; traceItemCount: number }>
+  }
+  assert.equal(stored.version, 2)
+  assert.equal(stored.jobs[0]?.trace, undefined)
+  assert.equal(stored.jobs[0]?.traceItemCount, 1)
+  assert.match(stored.jobs[0]?.traceRef ?? '', /^sha256:[a-f0-9]{64}$/u)
+
+  const restarted = new EvidenceDagQueue({ storagePath, submit: async () => snapshot })
+  await restarted.start(false)
+  assert.equal((await restarted.committed('codex', 'thread-1'))?.digest, digest)
+  await restarted.close()
+})
+
+test('loading a legacy queue naturally compacts an embedded large terminal trace', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'evidence-domain-legacy-large-trace-'))
+  const storagePath = join(root, 'queue.json')
+  const legacy = {
+    ...storedQueueJob(1, 'succeeded'),
+    runtimeId: 'codex',
+    threadId: 'thread-1',
+    engineThreadId: 'codex:thread-1',
+    trace: [{ id: 'legacy-large', payload: 'y'.repeat(4 * 1024 * 1024) }],
+    snapshot
+  }
+  await writeFile(storagePath, JSON.stringify({ version: 1, jobs: [legacy] }), 'utf8')
+  assert.ok((await stat(storagePath)).size > 4 * 1024 * 1024)
+
+  const queue = new EvidenceDagQueue({ storagePath, submit: async () => snapshot })
+  await queue.start(false)
+  assert.equal((await queue.committed('codex', 'thread-1'))?.digest, digest)
+  await queue.close()
+
+  assert.ok((await stat(storagePath)).size < 16 * 1024)
+  const stored = JSON.parse(await readFile(storagePath, 'utf8')) as {
+    version: number
+    jobs: Array<{ trace?: unknown; traceRef: string; traceItemCount: number }>
+  }
+  assert.equal(stored.version, 2)
+  assert.equal(stored.jobs[0]?.trace, undefined)
+  assert.equal(stored.jobs[0]?.traceItemCount, 1)
+  const [asset] = await readdir(`${storagePath}.traces`)
+  assert.ok(asset)
+  assert.ok((await stat(join(`${storagePath}.traces`, asset))).size > 4 * 1024 * 1024)
 })
 
 test('a failed atomic write rolls back the complete in-memory mutation and cleans its temp', async () => {

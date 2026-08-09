@@ -249,13 +249,21 @@ describe('createWorkspaceHostAgentRuntimeAdapter', () => {
         title: 'Local',
         updatedAt: '2026-07-30T00:00:00.000Z'
       })),
-      readThread: vi.fn(async (_context, input) => ({
+      readThreadStatus: vi.fn(async (_context, input) => ({
         id: input.threadId,
         runtimeId: 'codex' as const,
         title: 'Local',
         updatedAt: '2026-07-30T00:00:00.000Z',
         latestSeq: 0
       })),
+      readThreadPage: vi.fn(async (_context, input) => ({
+        runtimeId: 'codex' as const,
+        threadId: input.threadId,
+        latestSeq: 0,
+        turns: [],
+        nextCursor: null
+      })),
+      readToolArtifact: vi.fn(async (_context, input) => ({ ...input, content: '' })),
       startTurn: localStartTurn,
       interruptTurn: vi.fn(async () => undefined),
       steerTurn: vi.fn(async () => undefined),

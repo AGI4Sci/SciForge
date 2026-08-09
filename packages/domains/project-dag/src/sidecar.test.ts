@@ -102,6 +102,7 @@ test('injects host-resolved text reasoning access and restarts its owned child o
     model: 'first-model'
   }
   const sidecar = new ProjectDagSidecar({
+    allocatePort: async () => 45_321,
     fetchImpl: async () => running
       ? projectServiceResponse()
       : new Response('{}', { status: 503 }),
@@ -126,6 +127,7 @@ test('injects host-resolved text reasoning access and restarts its owned child o
     await sidecar.ensure(context)
     await sidecar.ensure(context)
     assert.equal(environments.length, 1)
+    assert.equal(environments[0]?.PDAG_PORT, '45321')
     assert.equal(environments[0]?.EDAG_MODEL_ROUTER_BASE_URL, 'http://127.0.0.1:3892/v1')
     assert.equal(environments[0]?.EDAG_MODEL_ROUTER_API_KEY, 'first-key')
     assert.equal(environments[0]?.EDAG_MODEL_ROUTER_MODEL, 'first-model')
@@ -156,6 +158,60 @@ test('injects host-resolved text reasoning access and restarts its owned child o
     await sidecar.stop()
     await rm(userDataDir, { recursive: true })
   }
+})
+
+test('allocates one private loopback endpoint and coalesces concurrent readiness', async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'project-domain-sidecar-'))
+  let allocations = 0
+  let spawns = 0
+  let running = false
+  const sidecar = new ProjectDagSidecar({
+    allocatePort: async () => {
+      allocations += 1
+      return 45_322
+    },
+    fetchImpl: async () => running
+      ? projectServiceResponse()
+      : new Response('{}', { status: 503 }),
+    spawnImpl: () => {
+      spawns += 1
+      running = true
+      return fakeChild(() => {
+        running = false
+      })
+    }
+  })
+
+  try {
+    const [first, second] = await Promise.all([
+      sidecar.ensure(lifecycleContext({}, undefined, userDataDir)),
+      sidecar.ensure(lifecycleContext({}, undefined, userDataDir))
+    ])
+    assert.equal(first.baseUrl, 'http://127.0.0.1:45322')
+    assert.equal(second.baseUrl, first.baseUrl)
+    assert.equal(allocations, 1)
+    assert.equal(spawns, 1)
+  } finally {
+    await sidecar.stop()
+    await rm(userDataDir, { recursive: true })
+  }
+})
+
+test('preserves an explicitly configured external endpoint', async () => {
+  let allocations = 0
+  const sidecar = new ProjectDagSidecar({
+    allocatePort: async () => {
+      allocations += 1
+      return 45_323
+    },
+    fetchImpl: async () => projectServiceResponse()
+  })
+
+  const config = await sidecar.ensure(lifecycleContext({
+    SCIFORGE_PROJECT_DAG_SERVICE_URL: 'http://127.0.0.1:40123'
+  }))
+  assert.equal(config.baseUrl, 'http://127.0.0.1:40123')
+  assert.equal(allocations, 0)
 })
 
 test('fails closed without model-access contract and never falls back to Router env', async () => {

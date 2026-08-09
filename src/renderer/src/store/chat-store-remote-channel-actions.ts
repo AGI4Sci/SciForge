@@ -10,14 +10,14 @@ import {
 } from '@shared/app-settings'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
-import type { ChatBlock, NormalizedThread } from '../agent/types'
+import type { NormalizedThread } from '../agent/types'
 import { remoteChannelThreadTitleLooksManaged, remoteChannelThreadIdsFromChannels } from './chat-store-helpers'
 
 type RemoteChannelAgentProviderLike = {
   id?: AgentRuntimeId
   rememberThreadRuntime?: (threadId: string, runtimeId?: AgentRuntimeId) => void
   createThread: (input: { workspace: string; title: string; mode: 'agent' | 'plan' }) => Promise<NormalizedThread>
-  getThreadDetail: (threadId: string) => Promise<{ blocks: ChatBlock[] }>
+  getThreadStatus: (threadId: string) => Promise<unknown>
   deleteThread: (threadId: string) => Promise<void>
 }
 
@@ -175,20 +175,15 @@ export function resolveRemoteChannelThreadId(input: {
 
 async function threadExists(provider: RemoteChannelAgentProviderLike, threadId: string): Promise<boolean> {
   try {
-    await provider.getThreadDetail(threadId)
+    await provider.getThreadStatus(threadId)
     return true
   } catch {
     return false
   }
 }
 
-async function threadHasUserMessages(provider: RemoteChannelAgentProviderLike, threadId: string): Promise<boolean> {
-  try {
-    const detail = await provider.getThreadDetail(threadId)
-    return detail.blocks.some((block) => block.kind === 'user')
-  } catch {
-    return true
-  }
+function threadHasUserMessages(threads: NormalizedThread[], threadId: string): boolean {
+  return threads.find((thread) => thread.id === threadId)?.hasUserMessage !== false
 }
 
 function rememberRemoteChannelThreadRuntime(
@@ -428,7 +423,7 @@ export function createRemoteChannelActions(options: CreateRemoteChannelActionsOp
       rememberRemoteChannelThreadRuntime(provider, threadId, runtimeId)
       const configuredThreadExists = threadId ? await threadExists(provider, threadId) : false
       const configuredThreadHasUserMessages =
-        threadId && configuredThreadExists ? await threadHasUserMessages(provider, threadId) : false
+        threadId && configuredThreadExists ? threadHasUserMessages(get().threads, threadId) : false
       const configuredThreadId = threadId
       threadId = resolveRemoteChannelThreadId({
         configuredThreadId,

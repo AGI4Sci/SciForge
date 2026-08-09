@@ -221,7 +221,7 @@ type AgentRuntimeCapabilities = {
     mcp: CapabilityState & { search?: CapabilityState; toolCount?: number }
     web: CapabilityState & { fetch?: CapabilityState; search?: CapabilityState }
     skills: CapabilityState
-    subagents: CapabilityState & { maxParallel?: number; maxChildren?: number }
+    subagents: CapabilityState & { maxParallel?: number }
     diagnostics: CapabilityState
   }
   controls: {
@@ -252,7 +252,8 @@ type AgentRuntimeCapabilities = {
 
 `tools.subagents.available` 表示当前 runtime 可以在统一 children/transcript UI 中展示
 child/subagent 工作，并按 runtime 能力使用 multi-agent 链路。`maxParallel` 和
-`maxChildren` 来自共享 agent capability settings。`AgentRuntimeHost` 是
+共享 agent capability settings 共同决定同时运行容量。父 turn 没有额外的 child-run 总量预算；完成一批
+child 后可在同一 turn 继续委派。`AgentRuntimeHost` 是
 `delegate_task`、`subagent_status`、`subagent_wait`、`subagent_send` 和
 `subagent_cancel` 的唯一工具所有者，并使用 `packages/workers/multi-agent` 保存和调度
 child run。Codex、Claude Code 以及后续 runtime 适配器只实现统一的

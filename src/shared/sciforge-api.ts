@@ -115,13 +115,16 @@ import type {
   AgentRuntimeAuxiliaryInput,
   AgentRuntimeCapabilities,
   AgentRuntimeEvent,
+  AgentRuntimeThreadPage,
+  AgentRuntimeThreadPageInput,
   AgentRuntimeThreadRelation,
   AgentRuntimeThread,
-  AgentRuntimeThreadDetail,
   AgentRuntimeThreadListInput,
-  AgentRuntimeThreadReadInput,
-  AgentRuntimeThreadSidebarProbe,
+  AgentRuntimeThreadStatus,
+  AgentRuntimeThreadStatusInput,
   AgentRuntimeThreadStartInput,
+  AgentRuntimeToolArtifact,
+  AgentRuntimeToolArtifactReadInput,
   AgentRuntimeTurnHandle,
   AgentRuntimeTurnStartInput,
   AgentRuntimeTurnSteerInput,
@@ -992,8 +995,9 @@ export type SciForgeApi = {
     capabilities: (runtimeId?: AgentRuntimeThreadListInput['runtimeId']) => Promise<AgentRuntimeCapabilities>
     listThreads: (input?: AgentRuntimeThreadListInput) => Promise<AgentRuntimeThread[]>
     startThread: (input: AgentRuntimeThreadStartInput) => Promise<AgentRuntimeThread>
-    readThread: (input: AgentRuntimeThreadReadInput) => Promise<AgentRuntimeThreadDetail>
-    readThreadSidebarProbe: (input: AgentRuntimeThreadReadInput) => Promise<AgentRuntimeThreadSidebarProbe>
+    readThreadStatus: (input: AgentRuntimeThreadStatusInput) => Promise<AgentRuntimeThreadStatus>
+    readThreadPage: (input: AgentRuntimeThreadPageInput) => Promise<AgentRuntimeThreadPage>
+    readToolArtifact: (input: AgentRuntimeToolArtifactReadInput) => Promise<AgentRuntimeToolArtifact>
     startTurn: (input: AgentRuntimeTurnStartInput) => Promise<AgentRuntimeTurnHandle>
     interruptTurn: (input: AgentRuntimeTurnTargetInput) => Promise<void>
     steerTurn: (input: AgentRuntimeTurnSteerInput) => Promise<void>

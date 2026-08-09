@@ -21,7 +21,9 @@ import type {
   AgentRuntimeReadChildTranscriptResponse,
   AgentRuntimeEvent,
   AgentRuntimeThread,
-  AgentRuntimeThreadDetail,
+  AgentRuntimeThreadPage,
+  AgentRuntimeThreadStatus,
+  AgentRuntimeToolArtifact,
   AgentRuntimeTurn,
   AgentRuntimeUsage,
   AgentRuntimeUsageQuery,
@@ -63,7 +65,8 @@ import { ClaudeCodeSessionStore } from './claude-code-session-store'
 import {
   ClaudeCodeEventStore,
   ClaudeCodeThreadStore,
-  storedThreadDetail,
+  storedThreadPage,
+  storedThreadStatus,
   storedThreadToRuntimeThread,
   type ClaudeCodeStoredEvent
 } from './claude-code-store'
@@ -106,8 +109,16 @@ export type ClaudeCodeThreadStartResult =
   | ClaudeCodeRuntimeOk<{ thread: AgentRuntimeThread }>
   | ClaudeCodeRuntimeFailure
 
-export type ClaudeCodeThreadReadResult =
-  | ClaudeCodeRuntimeOk<{ detail: AgentRuntimeThreadDetail }>
+export type ClaudeCodeThreadStatusResult =
+  | ClaudeCodeRuntimeOk<{ status: AgentRuntimeThreadStatus }>
+  | ClaudeCodeRuntimeFailure
+
+export type ClaudeCodeThreadPageResult =
+  | ClaudeCodeRuntimeOk<{ page: AgentRuntimeThreadPage }>
+  | ClaudeCodeRuntimeFailure
+
+export type ClaudeCodeToolArtifactResult =
+  | ClaudeCodeRuntimeOk<{ artifact: AgentRuntimeToolArtifact }>
   | ClaudeCodeRuntimeFailure
 
 export type ClaudeCodeTurnStartResult =
@@ -244,6 +255,7 @@ export class ClaudeCodeRuntimeService {
   private readonly turnGovernanceSnapshots = new Map<string, AgentRuntimeTurnGovernanceSnapshot>()
   private readonly eventSubscribers = new Set<ClaudeRuntimeEventSubscriber>()
   private readonly childState = new Map<string, AgentRuntimeChild>()
+  private readonly childStateInitializers = new Map<string, Promise<void>>()
   private readonly activeSubagents = new Map<string, ActiveClaudeSubagent>()
 
   constructor(private readonly options: ClaudeCodeRuntimeServiceOptions) {
@@ -320,24 +332,61 @@ export class ClaudeCodeRuntimeService {
     }
   }
 
-  async readThread(threadId: string): Promise<ClaudeCodeThreadReadResult> {
+  async readThreadStatus(threadId: string): Promise<ClaudeCodeThreadStatusResult> {
     try {
       const thread = await this.threadStore.get(threadId)
       if (!thread) {
         return {
           ok: true,
-          detail: {
+          status: {
             id: threadId,
             runtimeId: 'claude',
-            title: 'Claude Code thread',
-            updatedAt: new Date().toISOString(),
-            latestSeq: 0,
-            turns: [],
-            items: []
+            latestSeq: 0
           }
         }
       }
-      return { ok: true, detail: await storedThreadDetail(thread, this.eventStore) }
+      return { ok: true, status: storedThreadStatus(thread) }
+    } catch (error) {
+      return failure(error)
+    }
+  }
+
+  async readThreadPage(
+    threadId: string,
+    options: { cursor?: string; limit?: number } = {}
+  ): Promise<ClaudeCodeThreadPageResult> {
+    try {
+      const thread = await this.threadStore.get(threadId)
+      if (!thread) {
+        return {
+          ok: true,
+          page: { runtimeId: 'claude', threadId, latestSeq: 0, turns: [], nextCursor: null }
+        }
+      }
+      return { ok: true, page: await storedThreadPage(thread, this.eventStore, options) }
+    } catch (error) {
+      return failure(error)
+    }
+  }
+
+  async readToolArtifact(
+    threadId: string,
+    ref: string,
+    _size: number
+  ): Promise<ClaudeCodeToolArtifactResult> {
+    try {
+      const content = await this.eventStore.readToolArtifact(threadId, ref)
+      if (content === null) throw Object.assign(new Error('Tool artifact was not found.'), { code: 'not_found' })
+      return {
+        ok: true,
+        artifact: {
+          runtimeId: 'claude',
+          threadId,
+          ref,
+          size: Buffer.byteLength(content, 'utf8'),
+          content
+        }
+      }
     } catch (error) {
       return failure(error)
     }
@@ -577,14 +626,14 @@ export class ClaudeCodeRuntimeService {
     })
 
     const transcript: AgentRuntimeSubagentTranscriptEntry[] = []
-    let summary = ''
+    const summary: string[] = []
     let usage: AgentRuntimeSubagentUsage | undefined
     try {
       for await (const event of this.subscribeEvents(active.threadId, 0, input.signal)) {
         if (event.turnId && event.turnId !== active.turnId) continue
         let entry: AgentRuntimeSubagentTranscriptEntry | null = null
         if (event.kind === 'assistant_delta') {
-          summary += event.text
+          summary.push(event.text)
           entry = {
             id: `${input.childId}-${event.seq ?? Date.now()}-assistant`,
             kind: 'assistant_message',
@@ -630,7 +679,7 @@ export class ClaudeCodeRuntimeService {
         throw error
       }
       return {
-        summary: summary.trim() || `Child agent ${active.threadId} completed.`,
+        summary: summary.join('').trim() || `Child agent ${active.threadId} completed.`,
         ...(usage ? { usage } : {}),
         transcript,
         threadRef: {
@@ -1894,18 +1943,33 @@ export class ClaudeCodeRuntimeService {
   }
 
   private async childrenForThread(threadId: string): Promise<AgentRuntimeChild[]> {
-    const storedEvents = await this.eventStore.read(threadId, { includeAll: true })
-    const children = new Map<string, AgentRuntimeChild>()
-    for (const stored of storedEvents) {
-      const event = stored.event
-      if (event.kind !== 'child_event') continue
-      const child = normalizeClaudeChild(event.child, threadId)
-      if (!child) continue
-      children.set(child.id, mergeChild(children.get(child.id), child))
-    }
-    return [...children.values()]
+    await this.ensureChildStateInitialized(threadId)
+    return [...this.childState.values()]
       .filter((child) => child.parentThreadId === threadId)
       .sort((a, b) => Date.parse(b.updatedAt ?? b.createdAt ?? '') - Date.parse(a.updatedAt ?? a.createdAt ?? ''))
+  }
+
+  private async ensureChildStateInitialized(threadId: string): Promise<void> {
+    let initializer = this.childStateInitializers.get(threadId)
+    if (!initializer) {
+      initializer = this.loadStoredChildState(threadId)
+      this.childStateInitializers.set(threadId, initializer)
+    }
+    await initializer
+  }
+
+  private async loadStoredChildState(threadId: string): Promise<void> {
+    for (const stored of await this.eventStore.read(threadId, { includeAll: true })) {
+      this.noteChildEvent(stored.event)
+    }
+  }
+
+  private noteChildEvent(event: AgentRuntimeEvent): void {
+    if (event.kind !== 'child_event') return
+    const child = normalizeClaudeChild(event.child, event.threadId)
+    if (!child) return
+    const key = childStateKey(child.parentThreadId, child.id)
+    this.childState.set(key, mergeChild(this.childState.get(key), child))
   }
 
   private async completeTurn(
@@ -1959,6 +2023,7 @@ export class ClaudeCodeRuntimeService {
 
   private async emit(event: AgentRuntimeEvent): Promise<ClaudeCodeStoredEvent> {
     const stored = await this.eventStore.append(event.threadId, event)
+    this.noteChildEvent(stored.event)
     const latestSeq = stored.seq
     const thread = await this.threadStore.get(stored.threadId)
     if (thread) {

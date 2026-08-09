@@ -5,16 +5,13 @@ import type {
 } from './app-settings-types'
 
 const DEFAULT_SUBAGENT_MAX_PARALLEL = 2
-const DEFAULT_SUBAGENT_MAX_CHILD_RUNS = 4
-const MAX_SUBAGENT_MAX_PARALLEL = 16
-const MAX_SUBAGENT_MAX_CHILD_RUNS = 4
+export const MAX_SUBAGENT_MAX_PARALLEL = 64
 
 export function defaultAgentCapabilitySettings(): AgentCapabilitySettingsV1 {
   return {
     subagents: {
       enabled: true,
-      maxParallel: DEFAULT_SUBAGENT_MAX_PARALLEL,
-      maxChildRuns: DEFAULT_SUBAGENT_MAX_CHILD_RUNS
+      maxParallel: DEFAULT_SUBAGENT_MAX_PARALLEL
     }
   }
 }
@@ -30,11 +27,6 @@ export function normalizeAgentCapabilitySettings(
         input?.subagents?.maxParallel,
         defaults.subagents.maxParallel,
         MAX_SUBAGENT_MAX_PARALLEL
-      ),
-      maxChildRuns: boundedPositiveInt(
-        input?.subagents?.maxChildRuns,
-        defaults.subagents.maxChildRuns,
-        MAX_SUBAGENT_MAX_CHILD_RUNS
       )
     }
   }

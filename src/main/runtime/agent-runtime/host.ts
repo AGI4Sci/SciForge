@@ -16,8 +16,13 @@ import {
   createAgentRuntimeCapabilityMatrix,
   isAgentRuntimeActiveTurnState,
   isAgentRuntimeTerminalTurnState,
-  normalizeAgentRuntimeTurnState
+  normalizeAgentRuntimeTurnState,
+  projectAgentRuntimeThreadSummary
 } from '../../../shared/agent-runtime-contract'
+import {
+  assertAgentRuntimeThreadPageDeliverySize,
+  boundAgentRuntimeEventForDelivery
+} from './jsonl-thread-page'
 import type {
   AgentRuntimeAuxiliaryInput,
   AgentRuntimeCapabilities,
@@ -38,11 +43,15 @@ import type {
   AgentRuntimeThread,
   AgentRuntimeThreadGoal,
   AgentRuntimeThreadGuiPlan,
-  AgentRuntimeThreadDetail,
+  AgentRuntimeThreadPage,
+  AgentRuntimeThreadPageInput,
   AgentRuntimeThreadListInput,
-  AgentRuntimeThreadReadInput,
-  AgentRuntimeThreadSidebarProbe,
+  AgentRuntimeThreadSnapshot,
+  AgentRuntimeThreadStatus,
+  AgentRuntimeThreadStatusInput,
   AgentRuntimeThreadStartInput,
+  AgentRuntimeToolArtifact,
+  AgentRuntimeToolArtifactReadInput,
   AgentRuntimeTurnHandle,
   AgentRuntimeTurnStartInput,
   AgentRuntimeTurnState,
@@ -200,7 +209,7 @@ const CAPABILITY_APPROVAL_PREVIEW_MAX_BYTES = 4 * 1_024
 export class AgentRuntimeHost {
   private readonly adapters: Map<AgentRuntimeId, AgentRuntimeAdapter>
   private readonly turnQueues = new Map<string, Promise<unknown>>()
-  private readonly threadReadsInFlight = new Map<string, Promise<AgentRuntimeThreadDetail>>()
+  private readonly threadStatusReadsInFlight = new Map<string, Promise<AgentRuntimeThreadStatus>>()
   private readonly auxiliaryReadsInFlight = new Map<string, Promise<unknown>>()
   private readonly auxiliaryReadCache = new Map<string, { expiresAt: number; value: unknown }>()
   private readonly activeThreadTurns = new Map<string, ActiveThreadTurn>()
@@ -208,6 +217,7 @@ export class AgentRuntimeHost {
   private readonly turnGovernanceProfiles = new Map<string, AgentRuntimeGovernanceProfile>()
   private readonly turnWorkspaces = new Map<string, string>()
   private readonly threadWorkspaceHosts = new Map<string, WorkspaceHostPlacement>()
+  private readonly threadSummaries = new Map<string, AgentRuntimeThread>()
   private readonly turnLifecycleSubscribers = new Set<
     (event: DomainMainTurnLifecycleEvent) => void | Promise<void>
   >()
@@ -235,8 +245,7 @@ export class AgentRuntimeHost {
               adapter: adapter.subagents,
               context,
               enabled: settings.enabled,
-              maxParallel: settings.maxParallel,
-              maxChildren: settings.maxChildRuns
+              maxParallel: settings.maxParallel
             }
           },
           onChildEvent: async (runtimeId, event, record) => {
@@ -293,6 +302,7 @@ export class AgentRuntimeHost {
       )
       for (const thread of placedThreads) {
         this.rememberThreadWorkspaceHost(adapter.id, thread.id, context.workspaceHost)
+        this.rememberThreadSummary(thread)
       }
       return this.withSharedGoalsOnThreads(adapter.id, placedThreads)
     }
@@ -309,6 +319,7 @@ export class AgentRuntimeHost {
       )
     )
     const threads = results.flatMap((result) => result.status === 'fulfilled' ? result.value : [])
+    for (const thread of threads) this.rememberThreadSummary(thread)
     if (threads.length === 0) {
       // An unavailable inactive runtime must not make a fresh installation look
       // offline merely because the selected runtime has no threads yet. Only
@@ -327,49 +338,133 @@ export class AgentRuntimeHost {
       input.threadId
     )
     const context = await this.withWorkspaceHostPlacement(baseContext, input.workspaceLocator)
-    const thread = withWorkspaceHostOnThread(
+    const thread = projectAgentRuntimeThreadSummary(withWorkspaceHostOnThread(
       await adapter.startThread(context, withWorkspaceLocatorPath(input)),
       context.workspaceHost
-    )
+    ))
     this.rememberThreadWorkspaceHost(adapter.id, thread.id || input.threadId, context.workspaceHost)
+    this.rememberThreadSummary(thread)
     return thread
   }
 
-  async readThread(input: AgentRuntimeThreadReadInput): Promise<AgentRuntimeThreadDetail> {
+  async readThreadStatus(input: AgentRuntimeThreadStatusInput): Promise<AgentRuntimeThreadStatus> {
     const { adapter, context } = await this.resolveRequiredRuntime(
       input.runtimeId,
       input.threadId,
       input.workspaceLocator
     )
-    const key = `${adapter.id}:${input.threadId}`
-    const existing = this.threadReadsInFlight.get(key)
+    const key = JSON.stringify([
+      adapter.id,
+      context.workspaceHost?.locator.hostSessionId ?? '',
+      context.workspaceHost?.locator.path ?? '',
+      input.threadId
+    ])
+    const existing = this.threadStatusReadsInFlight.get(key)
     if (existing) return existing
-    const pending = adapter.readThread(context, input)
-      .then((detail) => withWorkspaceHostOnThread(detail, context.workspaceHost))
-      .then((detail) => this.withSharedGoalOnThread(adapter.id, detail))
-      .then((detail) => this.withCapabilityApprovalsOnThread(adapter.id, detail))
+    const pending = adapter.readThreadStatus(context, input)
+      .then((status) => withWorkspaceHostOnStatus(status, context.workspaceHost))
       .finally(() => {
-        if (this.threadReadsInFlight.get(key) === pending) this.threadReadsInFlight.delete(key)
+        if (this.threadStatusReadsInFlight.get(key) === pending) this.threadStatusReadsInFlight.delete(key)
       })
-    this.threadReadsInFlight.set(key, pending)
+    this.threadStatusReadsInFlight.set(key, pending)
     return pending
   }
 
-  async readThreadSidebarProbe(input: AgentRuntimeThreadReadInput): Promise<AgentRuntimeThreadSidebarProbe> {
+  async readThreadPage(input: AgentRuntimeThreadPageInput): Promise<AgentRuntimeThreadPage> {
     const { adapter, context } = await this.resolveRequiredRuntime(
       input.runtimeId,
       input.threadId,
       input.workspaceLocator
     )
-    if (adapter.readThreadSidebarProbe) {
-      return adapter.readThreadSidebarProbe(context, input)
-    }
-    const detail = await adapter.readThread(context, input)
-    return {
+    return assertAgentRuntimeThreadPageDeliverySize(
+      await adapter.readThreadPage(context, input)
+    )
+  }
+
+  async readToolArtifact(input: AgentRuntimeToolArtifactReadInput): Promise<AgentRuntimeToolArtifact> {
+    const { adapter, context } = await this.resolveRequiredRuntime(
+      input.runtimeId,
+      input.threadId,
+      input.workspaceLocator
+    )
+    return adapter.readToolArtifact(context, input)
+  }
+
+  async readThreadSnapshot(input: AgentRuntimeThreadStatusInput): Promise<AgentRuntimeThreadSnapshot> {
+    const { adapter, context } = await this.resolveRequiredRuntime(
+      input.runtimeId,
+      input.threadId,
+      input.workspaceLocator
+    )
+    return this.readThreadSnapshotFromAdapter(adapter, context, input)
+  }
+
+  private async readThreadSnapshotFromAdapter(
+    adapter: AgentRuntimeAdapter,
+    context: AgentRuntimeAdapterContext,
+    input: AgentRuntimeThreadStatusInput
+  ): Promise<AgentRuntimeThreadSnapshot> {
+    const status = await adapter.readThreadStatus(context, input)
+    const summary = await this.readThreadSummaryFromAdapter(adapter, context, input.threadId)
+    const turns = [] as AgentRuntimeThreadSnapshot['turns']
+    const seenCursors = new Set<string>()
+    let cursor: string | undefined
+    do {
+      const page = await adapter.readThreadPage(context, {
+        ...input,
+        ...(cursor ? { cursor } : {}),
+        limit: 100
+      })
+      turns.unshift(...page.turns)
+      cursor = page.nextCursor ?? undefined
+      if (cursor && seenCursors.has(cursor)) {
+        throw new Error(`Runtime ${adapter.id} returned a repeated history cursor.`)
+      }
+      if (cursor) seenCursors.add(cursor)
+    } while (cursor)
+    const snapshot = await this.withSharedGoalOnThread(adapter.id, {
+      ...summary,
+      status: status.status,
+      latestTurnId: status.latestTurnId,
+      latestTurnStatus: status.latestTurnStatus,
+      latestSeq: status.latestSeq,
+      usage: status.usage,
+      ...(status.workspaceLocator ? { workspaceLocator: status.workspaceLocator } : {}),
+      turns
+    })
+    return this.withCapabilityApprovalsOnThread(adapter.id, snapshot)
+  }
+
+  private async readThreadSummaryFromAdapter(
+    adapter: AgentRuntimeAdapter,
+    context: AgentRuntimeAdapterContext,
+    threadId: string
+  ): Promise<AgentRuntimeThread> {
+    const cached = this.threadSummaries.get(threadTurnKey(adapter.id, threadId))
+    if (cached) return cached
+    const threads = await adapter.listThreads(context, {
       runtimeId: adapter.id,
-      threadId: detail.id || input.threadId,
-      text: firstSidebarUserText(detail)
+      includeArchived: true,
+      includeSide: true,
+      search: threadId,
+      limit: 10
+    })
+    const summary = threads.find((thread) => thread.id === threadId)
+    if (summary) {
+      const placed = projectAgentRuntimeThreadSummary(
+        withWorkspaceHostOnThread(summary, context.workspaceHost)
+      )
+      this.rememberThreadSummary(placed)
+      return placed
     }
+    const fallback = projectAgentRuntimeThreadSummary(withWorkspaceHostOnThread({
+      id: threadId,
+      runtimeId: adapter.id,
+      title: 'Agent thread',
+      updatedAt: new Date().toISOString()
+    }, context.workspaceHost))
+    this.rememberThreadSummary(fallback)
+    return fallback
   }
 
   async startTurn(input: AgentRuntimeTurnStartInput): Promise<AgentRuntimeTurnHandle> {
@@ -413,6 +508,15 @@ export class AgentRuntimeHost {
         : {}),
       occurredAt: new Date().toISOString()
     }))
+    const traceSinceSeq = this.options.services?.trace
+      ? await adapter.readThreadStatus(context, {
+          runtimeId: adapter.id,
+          threadId: integrityGuardedInput.threadId,
+          ...(integrityGuardedInput.workspaceLocator
+            ? { workspaceLocator: integrityGuardedInput.workspaceLocator }
+            : {})
+        }).then((status) => status.latestSeq).catch(() => 0)
+      : 0
     const handle = await this.enqueueThreadTurnStart(adapter, context, integrityGuardedInput)
     this.rememberThreadWorkspaceHost(
       adapter.id,
@@ -420,14 +524,15 @@ export class AgentRuntimeHost {
       context.workspaceHost
     )
     this.rememberTurnWorkspace(adapter.id, integrityGuardedInput, handle)
-    this.startTurnTraceCapture(adapter, context, handle)
+    this.startTurnTraceCapture(adapter, context, handle, traceSinceSeq)
     return handle
   }
 
   private startTurnTraceCapture(
     adapter: AgentRuntimeAdapter,
     context: AgentRuntimeAdapterContext,
-    handle: AgentRuntimeTurnHandle
+    handle: AgentRuntimeTurnHandle,
+    sinceSeq: number
   ): void {
     const trace = this.options.services?.trace
     if (!trace) return
@@ -438,7 +543,7 @@ export class AgentRuntimeHost {
       for await (const event of adapter.subscribeEvents(context, {
         runtimeId: adapter.id,
         threadId: handle.threadId,
-        sinceSeq: 0,
+        sinceSeq,
         signal: controller.signal
       })) {
         if (event.turnId !== handle.turnId) continue
@@ -586,6 +691,12 @@ export class AgentRuntimeHost {
       input.workspaceLocator
     )
     await adapter.renameThread(context, input)
+    const key = threadTurnKey(adapter.id, input.threadId)
+    const summary = this.threadSummaries.get(key)
+    if (summary) this.threadSummaries.set(
+      key,
+      projectAgentRuntimeThreadSummary({ ...summary, title: input.title })
+    )
   }
 
   async deleteThread(input: AgentRuntimeThreadDeleteInput): Promise<void> {
@@ -596,6 +707,7 @@ export class AgentRuntimeHost {
     )
     await adapter.deleteThread(context, input)
     this.threadWorkspaceHosts.delete(threadTurnKey(adapter.id, input.threadId))
+    this.threadSummaries.delete(threadTurnKey(adapter.id, input.threadId))
     await Promise.resolve(this.options.services?.visibleContext?.releaseSurface?.(capabilityAgentCallerId({
       runtimeId: adapter.id,
       threadId: input.threadId,
@@ -751,12 +863,12 @@ export class AgentRuntimeHost {
           for (const candidate of candidates) {
             const committedCandidate = committedAssistantEvent(candidate)
             await recordVisibleEvent(committedCandidate)
-            yield committedCandidate
+            yield boundAgentRuntimeEventForDelivery(committedCandidate, { runtimeId: adapter.id })
           }
         }
       }
       await recordVisibleEvent(event)
-      yield event
+      yield boundAgentRuntimeEventForDelivery(event, { runtimeId: adapter.id })
     }
   }
 
@@ -913,11 +1025,12 @@ export class AgentRuntimeHost {
       input.workspaceLocator
     )
     if (!adapter.forkThread) throw unsupported(adapter.id, 'fork')
-    const thread = withWorkspaceHostOnThread(
+    const thread = projectAgentRuntimeThreadSummary(withWorkspaceHostOnThread(
       await adapter.forkThread(context, input),
       context.workspaceHost
-    )
+    ))
     this.rememberThreadWorkspaceHost(adapter.id, thread.id, context.workspaceHost)
+    this.rememberThreadSummary(thread)
     return thread
   }
 
@@ -1398,10 +1511,18 @@ export class AgentRuntimeHost {
         title
       }).catch(() => undefined)
     }
-    targetThread = await targetAdapter.readThread(targetContext, {
+    const targetStatus = await targetAdapter.readThreadStatus(targetContext, {
       runtimeId: targetRuntimeId,
       threadId: targetThread.id
-    }).catch(() => targetThread)
+    }).catch(() => null)
+    if (targetStatus) {
+      targetThread = {
+        ...targetThread,
+        status: targetStatus.status,
+        latestTurnId: targetStatus.latestTurnId,
+        latestTurnStatus: targetStatus.latestTurnStatus
+      }
+    }
 
     const createdAt = new Date().toISOString()
     const event: AgentRuntimeEvent = {
@@ -1436,13 +1557,13 @@ export class AgentRuntimeHost {
   private async readRuntimeHandoffSourceDetail(
     sourceRuntimeId: AgentRuntimeId,
     sourceThreadId: string
-  ): Promise<AgentRuntimeThreadDetail | null> {
+  ): Promise<AgentRuntimeThreadSnapshot | null> {
     try {
       const { adapter, context } = await this.resolveRequiredRuntime(
         sourceRuntimeId,
         sourceThreadId
       )
-      return await adapter.readThread(context, {
+      return await this.readThreadSnapshotFromAdapter(adapter, context, {
         runtimeId: sourceRuntimeId,
         threadId: sourceThreadId
       })
@@ -1835,7 +1956,8 @@ export class AgentRuntimeHost {
     runtimeId: AgentRuntimeId,
     threads: AgentRuntimeThread[]
   ): Promise<AgentRuntimeThread[]> {
-    return Promise.all(threads.map((thread) => this.withSharedGoalOnThread(runtimeId, thread)))
+    return Promise.all(threads.map(async (thread) =>
+      projectAgentRuntimeThreadSummary(await this.withSharedGoalOnThread(runtimeId, thread))))
   }
 
   private async withSharedGoalOnThread<T extends AgentRuntimeThread>(
@@ -1854,10 +1976,9 @@ export class AgentRuntimeHost {
     runtimeId: AgentRuntimeId,
     thread: T
   ): T {
-    const detail = thread as unknown as Pick<AgentRuntimeThreadDetail, 'turns' | 'items'>
+    const detail = thread as unknown as Pick<AgentRuntimeThreadSnapshot, 'turns'>
     const rejectedTurnIds = new Set(this.executionIntegrity.rejectedTurnIds(runtimeId, thread.id))
     const items = [
-      ...(detail.items ?? []),
       ...(detail.turns ?? []).flatMap((turn) => (turn.items ?? []).map((item) => ({
         ...item,
         turnId: item.turnId ?? turn.id
@@ -1964,14 +2085,6 @@ export class AgentRuntimeHost {
     return {
       ...thread,
       ...(turns ? { turns } : {}),
-      ...(detail.items
-        ? {
-            items: detail.items.filter((item) => (
-              !isExecutionPublicationControlItem(item) &&
-              !isHiddenAssistant(item)
-            ))
-          }
-        : {}),
       ...(latestTurnId && rejectedTurnIds.has(latestTurnId)
         ? { latestTurnStatus: 'failed' }
         : {})
@@ -2052,6 +2165,15 @@ export class AgentRuntimeHost {
     this.threadWorkspaceHosts.set(
       threadTurnKey(runtimeId, normalizedThreadId),
       workspaceHost
+    )
+  }
+
+  private rememberThreadSummary(thread: AgentRuntimeThread): void {
+    const threadId = thread.id.trim()
+    if (!threadId) return
+    this.threadSummaries.set(
+      threadTurnKey(thread.runtimeId, threadId),
+      projectAgentRuntimeThreadSummary(thread)
     )
   }
 
@@ -2261,8 +2383,8 @@ export class AgentRuntimeHost {
 
   private withCapabilityApprovalsOnThread(
     runtimeId: AgentRuntimeId,
-    detail: AgentRuntimeThreadDetail
-  ): AgentRuntimeThreadDetail {
+    detail: AgentRuntimeThreadSnapshot
+  ): AgentRuntimeThreadSnapshot {
     const key = threadTurnKey(runtimeId, detail.id)
     const approvals = this.capabilityApprovalOrder
       .map((approvalId) => this.capabilityApprovals.get(approvalId))
@@ -2293,8 +2415,7 @@ export class AgentRuntimeHost {
     }
     return {
       ...detail,
-      items: merge(detail.items, approvals),
-      turns: detail.turns?.map((turn) => ({
+      turns: detail.turns.map((turn) => ({
         ...turn,
         items: merge(turn.items, approvals.filter((item) => item.turnId === turn.id))
       }))
@@ -2733,7 +2854,7 @@ export class AgentRuntimeHost {
   ): Promise<AgentRuntimeContextState | null> {
     const service = this.options.services?.contextState
     if (!service) throw unsupported(adapter.id, 'shared context compaction')
-    const detail = await adapter.readThread(context, {
+    const detail = await this.readThreadSnapshotFromAdapter(adapter, context, {
       runtimeId: adapter.id,
       threadId: input.threadId
     })
@@ -2964,19 +3085,39 @@ export class AgentRuntimeHost {
     const runtimeId = optionalRuntimeId(intent.runtimeId)
     if (!runtimeId) throw new Error(`Unsupported Agent runtime: ${intent.runtimeId}`)
     const { adapter, context } = await this.resolveRequiredRuntime(runtimeId, intent.threadId)
-    const detail = await adapter.readThread(context, {
+    const status = withWorkspaceHostOnStatus(await adapter.readThreadStatus(context, {
       runtimeId,
       threadId: intent.threadId
-    })
-    if (detail.id.trim() !== intent.threadId || detail.runtimeId !== runtimeId) {
+    }), context.workspaceHost)
+    const summary = await this.readThreadSummaryFromAdapter(adapter, context, intent.threadId)
+    if (status.id.trim() !== intent.threadId || status.runtimeId !== runtimeId) {
       throw new Error(
         `Completed Agent turn ${runtimeId}:${intent.threadId}:${intent.turnId} resolved to a different thread.`
       )
     }
-    const turn = detail.turns?.find((candidate) => candidate.id === intent.turnId)
-    const latestTurnMatches = detail.latestTurnId?.trim() === intent.turnId
+    let turn: AgentRuntimeThreadSnapshot['turns'][number] | undefined
+    let latestSeq = status.latestSeq
+    let cursor: string | undefined
+    const seenCursors = new Set<string>()
+    do {
+      const page = await adapter.readThreadPage(context, {
+        runtimeId,
+        threadId: intent.threadId,
+        ...(cursor ? { cursor } : {}),
+        limit: 20
+      })
+      latestSeq = Math.max(latestSeq, page.latestSeq)
+      turn = page.turns.find((candidate) => candidate.id === intent.turnId)
+      if (turn) break
+      cursor = page.nextCursor ?? undefined
+      if (cursor && seenCursors.has(cursor)) {
+        throw new Error(`Runtime ${adapter.id} returned a repeated history cursor.`)
+      }
+      if (cursor) seenCursors.add(cursor)
+    } while (cursor)
+    const latestTurnMatches = status.latestTurnId?.trim() === intent.turnId
     const turnState = normalizeAgentRuntimeTurnState(
-      turn?.status ?? (latestTurnMatches ? detail.latestTurnStatus : undefined)
+      turn?.status ?? (latestTurnMatches ? status.latestTurnStatus : undefined)
     )
     if (turnState !== 'completed') {
       throw new Error(
@@ -2985,21 +3126,19 @@ export class AgentRuntimeHost {
     }
     if (
       intent.sequence !== undefined &&
-      (!Number.isSafeInteger(detail.latestSeq) || detail.latestSeq < intent.sequence)
+      (!Number.isSafeInteger(latestSeq) || latestSeq < intent.sequence)
     ) {
       throw new Error(
         `Completed Agent turn ${runtimeId}:${intent.threadId}:${intent.turnId} has not reached sequence ${intent.sequence}.`
       )
     }
-    const artifacts = turn?.items?.length
-      ? turn.items
-      : (detail.items ?? []).filter((item) => item.turnId === intent.turnId)
+    const artifacts = turn?.items ?? []
     if (!artifacts.length) {
       throw new Error(
         `Completed Agent turn ${runtimeId}:${intent.threadId}:${intent.turnId} is not materialized yet.`
       )
     }
-    const workspaceRoot = detail.workspace?.trim()
+    const workspaceRoot = summary.workspace?.trim()
     if (!workspaceRoot) {
       throw new Error(
         `Completed Agent turn ${runtimeId}:${intent.threadId}:${intent.turnId} has no authoritative workspace.`
@@ -3097,7 +3236,7 @@ async function readThreadTurnActivity(
   runtimeId: AgentRuntimeId,
   threadId: string
 ): Promise<ThreadTurnActivity> {
-  const detail = await adapter.readThread(context, {
+  const detail = await adapter.readThreadStatus(context, {
     runtimeId,
     threadId
   })
@@ -3105,14 +3244,13 @@ async function readThreadTurnActivity(
 }
 
 function threadTurnActivityFromDetail(
-  detail: AgentRuntimeThreadDetail,
+  detail: AgentRuntimeThreadStatus,
   fallbackThreadId: string
 ): ThreadTurnActivity {
   const threadId = detail.id?.trim() || fallbackThreadId
-  const latestTurn = latestRuntimeTurn(detail)
-  const latestStatus = detail.latestTurnStatus ?? latestTurn?.status ?? detail.status
+  const latestStatus = detail.latestTurnStatus ?? detail.status
   const latestState = normalizeAgentRuntimeTurnState(latestStatus)
-  const latestTurnId = detail.latestTurnId?.trim() || latestTurn?.id
+  const latestTurnId = detail.latestTurnId?.trim()
   if (latestState && isAgentRuntimeActiveTurnState(latestState)) {
     return {
       active: true,
@@ -3129,30 +3267,7 @@ function threadTurnActivityFromDetail(
       state: latestState
     }
   }
-  const turns = Array.isArray(detail.turns) ? detail.turns : []
-  for (let index = turns.length - 1; index >= 0; index -= 1) {
-    const turn = turns[index]
-    const state = normalizeAgentRuntimeTurnState(turn.status)
-    if (state && isAgentRuntimeActiveTurnState(state)) {
-      return {
-        active: true,
-        threadId,
-        turnId: turn.id,
-        state
-      }
-    }
-  }
   return { active: false, threadId }
-}
-
-function latestRuntimeTurn(detail: AgentRuntimeThreadDetail): { id: string; status?: string } | undefined {
-  const turns = Array.isArray(detail.turns) ? detail.turns : []
-  if (detail.latestTurnId) {
-    const latestTurnId = detail.latestTurnId.trim()
-    const matched = turns.find((turn) => turn.id === latestTurnId)
-    if (matched) return matched
-  }
-  return turns[turns.length - 1]
 }
 
 function shouldClearTrackedActiveTurn(activity: ThreadTurnActivity, trackedTurnId: string): boolean {
@@ -3167,19 +3282,8 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function threadDetailItems(detail: AgentRuntimeThreadDetail): AgentRuntimeItem[] {
-  if (Array.isArray(detail.items) && detail.items.length > 0) return detail.items
-  return (detail.turns ?? []).flatMap((turn) => turn.items ?? [])
-}
-
-function firstSidebarUserText(detail: AgentRuntimeThreadDetail): string | null {
-  for (const item of threadDetailItems(detail)) {
-    if (item.kind !== 'user_message') continue
-    const displayText = typeof item.meta?.displayText === 'string' ? item.meta.displayText.trim() : ''
-    const text = displayText || item.text?.trim() || ''
-    if (text) return text
-  }
-  return null
+function threadDetailItems(detail: AgentRuntimeThreadSnapshot): AgentRuntimeItem[] {
+  return detail.turns.flatMap((turn) => turn.items ?? [])
 }
 
 function pinnedConstraintsFromItems(items: AgentRuntimeItem[]): string[] {
@@ -3249,14 +3353,14 @@ function renderModelCompactionInput(items: AgentRuntimeItem[], maxBytes: number)
 function truncateUtf8Text(text: string, maxBytes: number): string {
   if (maxBytes <= 0 || Buffer.byteLength(text, 'utf8') <= maxBytes) return text
   let bytes = 0
-  let output = ''
+  const output: string[] = []
   for (const char of text) {
     const size = Buffer.byteLength(char, 'utf8')
     if (bytes + size > maxBytes) break
-    output += char
+    output.push(char)
     bytes += size
   }
-  return output
+  return output.join('')
 }
 
 function extractResponsesOutputText(payload: Record<string, unknown>): string {
@@ -3858,7 +3962,7 @@ type RuntimeHandoffTranscriptEntry = {
   text: string
 }
 
-function renderRuntimeHandoffSourceTranscript(detail: AgentRuntimeThreadDetail | null): string {
+function renderRuntimeHandoffSourceTranscript(detail: AgentRuntimeThreadSnapshot | null): string {
   if (!detail) return ''
   const entries = boundedRuntimeHandoffTranscriptEntries(runtimeHandoffTranscriptEntries(detail))
   if (entries.length === 0) return ''
@@ -3877,7 +3981,7 @@ function renderRuntimeHandoffSourceTranscript(detail: AgentRuntimeThreadDetail |
   ].join('\n')
 }
 
-function runtimeHandoffTranscriptEntries(detail: AgentRuntimeThreadDetail): RuntimeHandoffTranscriptEntry[] {
+function runtimeHandoffTranscriptEntries(detail: AgentRuntimeThreadSnapshot): RuntimeHandoffTranscriptEntry[] {
   const items = threadDetailItems(detail)
   const includedToolIds = new Set(
     items
@@ -4210,6 +4314,24 @@ function withWorkspaceHostOnThread<Thread extends AgentRuntimeThread>(
     ...thread,
     workspace: workspaceHost.locator.path,
     workspaceLocator: workspaceHost.locator
+  }
+}
+
+function withWorkspaceHostOnStatus(
+  status: AgentRuntimeThreadStatus,
+  workspaceHost?: WorkspaceHostPlacement
+): AgentRuntimeThreadStatus {
+  return {
+    id: status.id,
+    runtimeId: status.runtimeId,
+    latestSeq: status.latestSeq,
+    ...(status.status === undefined ? {} : { status: status.status }),
+    ...(status.latestTurnId === undefined ? {} : { latestTurnId: status.latestTurnId }),
+    ...(status.latestTurnStatus === undefined ? {} : { latestTurnStatus: status.latestTurnStatus }),
+    ...(status.usage === undefined ? {} : { usage: status.usage }),
+    ...(workspaceHost
+      ? { workspaceLocator: workspaceHost.locator }
+      : status.workspaceLocator ? { workspaceLocator: status.workspaceLocator } : {})
   }
 }
 

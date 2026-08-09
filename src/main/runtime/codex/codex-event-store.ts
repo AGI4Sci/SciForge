@@ -1,5 +1,11 @@
 import type { CodexThreadEventPayload } from './codex-runtime-api'
 import { AppDataJsonlStore } from '../../services/app-data-store'
+import {
+  decodeToolArtifactRef,
+  readLatestJsonlThreadRecord,
+  readJsonlThreadPage,
+  readJsonlThreadRecordsSince
+} from '../agent-runtime/jsonl-thread-page'
 
 export type CodexStoredEvent = {
   seq: number
@@ -53,25 +59,56 @@ export class CodexEventStore {
   ): Promise<CodexStoredEvent[]> {
     const normalizedThreadId = threadId.trim()
     if (!normalizedThreadId) return []
-    let raw = ''
-    try {
-      raw = await this.jsonlForThread(normalizedThreadId).readText()
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-      throw error
-    }
-    const sinceSeq = options.includeAll ? 0 : Math.max(0, Math.floor(options.sinceSeq ?? 0))
-    const events = raw
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map(parseStoredEvent)
-      .filter((event): event is CodexStoredEvent => Boolean(event))
-      .filter((event) => event.threadId === normalizedThreadId)
-      .filter((event) => event.seq > sinceSeq)
-      .sort((a, b) => a.seq - b.seq)
+    const events = await readJsonlThreadRecordsSince({
+      store: this.jsonlForThread(normalizedThreadId),
+      threadId: normalizedThreadId,
+      sinceSeq: options.sinceSeq,
+      includeAll: options.includeAll,
+      parse: parseStoredEvent
+    })
     this.noteLatestSeq(normalizedThreadId, events)
     return events
+  }
+
+  async readPage(
+    threadId: string,
+    options: { cursor?: string; limit?: number } = {}
+  ): Promise<{ events: CodexStoredEvent[]; nextCursor: string | null }> {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return { events: [], nextCursor: null }
+    const page = await readJsonlThreadPage({
+      store: this.jsonlForThread(normalizedThreadId),
+      threadId: normalizedThreadId,
+      cursor: options.cursor,
+      limit: options.limit,
+      parse: parseStoredEvent,
+      turnId: ({ event }) => event.turnId || event.userMessage?.turnId
+    })
+    this.noteLatestSeq(normalizedThreadId, page.records)
+    return { events: page.records, nextCursor: page.nextCursor }
+  }
+
+  async readToolArtifact(threadId: string, ref: string): Promise<string | null> {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return null
+    const itemId = decodeToolArtifactRef(ref)
+    let content: string | null = null
+    try {
+      await this.jsonlForThread(normalizedThreadId).readLinesReverse((line) => {
+        const stored = parseStoredEvent(line.trim())
+        if (stored?.threadId !== normalizedThreadId) return
+        if (stored.event.tool?.itemId === itemId) {
+          const tool = stored.event.tool
+          const candidate = tool.detail ?? tool.meta?.structuredContent ?? tool.meta?.output ?? tool.meta?.result
+          if (candidate === undefined) return
+          content = typeof candidate === 'string' ? candidate : safeArtifactJson(candidate)
+          return false
+        }
+      })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    return content
   }
 
   async latestSeq(threadId: string): Promise<number> {
@@ -79,8 +116,11 @@ export class CodexEventStore {
     if (!normalizedThreadId) return 0
     const cached = this.latestSeqByThread.get(normalizedThreadId)
     if (cached !== undefined) return cached
-    const events = await this.read(normalizedThreadId, { includeAll: true })
-    const latest = Math.max(0, ...events.map((event) => event.seq))
+    const latest = (await readLatestJsonlThreadRecord({
+      store: this.jsonlForThread(normalizedThreadId),
+      threadId: normalizedThreadId,
+      parse: parseStoredEvent
+    }))?.seq ?? 0
     this.latestSeqByThread.set(normalizedThreadId, latest)
     return latest
   }
@@ -117,6 +157,14 @@ export class CodexEventStore {
       if (this.threadQueues.get(threadId) === next) this.threadQueues.delete(threadId)
     })
     return run
+  }
+}
+
+function safeArtifactJson(value: unknown): string {
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
   }
 }
 

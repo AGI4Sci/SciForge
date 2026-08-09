@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
+import { createServer } from 'node:net'
 import { join } from 'node:path'
 import type {
   DomainMainRuntimeLifecycleContext,
@@ -28,6 +29,8 @@ export class EvidenceDagSidecar implements EvidenceDagSidecarPort {
   private context: DomainMainRuntimeLifecycleContext | undefined
   private child: ChildProcess | undefined
   private activeReasoner: DomainMainTextReasoner | undefined
+  private managedBaseUrl: string | undefined
+  private ensureInFlight: Promise<void> | undefined
   private transition: Promise<void> = Promise.resolve()
   private readonly token = randomBytes(32).toString('base64url')
 
@@ -39,6 +42,7 @@ export class EvidenceDagSidecar implements EvidenceDagSidecarPort {
       options: SpawnOptions
     ) => ChildProcess
     readyTimeoutMs?: number
+    allocatePort?: () => Promise<number>
   }> = {}) {}
 
   configure(context: DomainMainRuntimeLifecycleContext): void {
@@ -47,18 +51,24 @@ export class EvidenceDagSidecar implements EvidenceDagSidecarPort {
 
   endpoint(): EvidenceDagServiceEndpoint {
     const environment = this.context?.environment ?? {}
+    const configuredBaseUrl = environment[EVIDENCE_DAG_SERVICE_URL_ENV]?.trim()
     return {
       baseUrl: normalizeBaseUrl(
-        environment[EVIDENCE_DAG_SERVICE_URL_ENV] ?? DEFAULT_EVIDENCE_DAG_SERVICE_URL
+        configuredBaseUrl || this.managedBaseUrl || DEFAULT_EVIDENCE_DAG_SERVICE_URL
       ),
       apiKey: environment[EVIDENCE_DAG_API_KEY_ENV]?.trim() || this.token
     }
   }
 
   ensureReady(): Promise<void> {
+    if (this.ensureInFlight) return this.ensureInFlight
     const transition = this.transition.then(() => this.ensureCurrent())
     this.transition = transition.catch(() => undefined)
-    return transition
+    const inFlight = transition.finally(() => {
+      if (this.ensureInFlight === inFlight) this.ensureInFlight = undefined
+    })
+    this.ensureInFlight = inFlight
+    return inFlight
   }
 
   stop(): Promise<void> {
@@ -99,12 +109,13 @@ export class EvidenceDagSidecar implements EvidenceDagSidecarPort {
     if (context.environment.SCIFORGE_EVIDENCE_DAG_AUTO_START === '0') {
       throw new Error('Evidence DAG auto-start is disabled and no service is reachable.')
     }
-    if (this.child && this.child.exitCode === null && this.child.signalCode === null) {
-      await this.waitUntilReady()
+    const activeChild = this.child
+    if (activeChild && activeChild.exitCode === null && activeChild.signalCode === null) {
+      await this.waitUntilReady(activeChild)
       return
     }
 
-    const endpoint = this.endpoint()
+    const endpoint = await this.prepareSpawnEndpoint(context)
     const url = new URL(endpoint.baseUrl)
     const python = context.environment.SCIFORGE_PYTHON_COMMAND?.trim() ||
       (process.platform === 'win32' ? 'python' : 'python3')
@@ -164,7 +175,7 @@ export class EvidenceDagSidecar implements EvidenceDagSidecarPort {
       }
     })
     try {
-      await this.waitUntilReady()
+      await this.waitUntilReady(child)
     } catch (error) {
       if (this.child === child) await this.stopChild()
       throw error
@@ -188,20 +199,55 @@ export class EvidenceDagSidecar implements EvidenceDagSidecarPort {
     }
   }
 
-  private async waitUntilReady(): Promise<void> {
+  private async waitUntilReady(child?: ChildProcess): Promise<void> {
     const startedAt = Date.now()
     const timeoutMs = this.options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS
     while (Date.now() - startedAt < timeoutMs) {
       if (await this.healthy()) return
+      if (child && (child.exitCode !== null || child.signalCode !== null || this.child !== child)) {
+        const outcome = child.signalCode
+          ? `signal ${child.signalCode}`
+          : `exit code ${child.exitCode ?? 'unknown'}`
+        throw new Error(`Evidence DAG sidecar exited before becoming ready (${outcome}).`)
+      }
       await new Promise((resolve) => setTimeout(resolve, 250))
     }
     throw new Error('Evidence DAG sidecar did not become ready before the startup deadline.')
+  }
+
+  private async prepareSpawnEndpoint(
+    context: DomainMainRuntimeLifecycleContext
+  ): Promise<EvidenceDagServiceEndpoint> {
+    if (context.environment[EVIDENCE_DAG_SERVICE_URL_ENV]?.trim()) return this.endpoint()
+    const port = await (this.options.allocatePort ?? allocateLoopbackPort)()
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+      throw new Error('Evidence DAG sidecar received an invalid allocated loopback port.')
+    }
+    this.managedBaseUrl = `http://127.0.0.1:${port}`
+    return this.endpoint()
   }
 
   private logChunk(level: 'debug' | 'warn', chunk: unknown): void {
     const message = String(chunk).replace(/\s+/gu, ' ').trim().slice(0, 1_000)
     if (message) this.context?.log({ level, message: `Evidence DAG sidecar: ${message}` })
   }
+}
+
+export async function allocateLoopbackPort(): Promise<number> {
+  return await new Promise<number>((resolve, reject) => {
+    const server = createServer()
+    server.unref()
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        server.close(() => reject(new Error('Failed to allocate an Evidence DAG loopback port.')))
+        return
+      }
+      const port = address.port
+      server.close((error) => error ? reject(error) : resolve(port))
+    })
+  })
 }
 
 async function resolveTextReasoner(

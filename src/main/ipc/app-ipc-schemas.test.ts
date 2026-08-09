@@ -9,8 +9,9 @@ import {
   agentRuntimeApprovalResolvePayloadSchema,
   agentRuntimeAuxiliaryPayloadSchema,
   agentRuntimeListThreadsPayloadSchema,
-  agentRuntimeReadThreadPayloadSchema,
-  agentRuntimeReadThreadSidebarProbePayloadSchema,
+  agentRuntimeReadThreadPagePayloadSchema,
+  agentRuntimeReadThreadStatusPayloadSchema,
+  agentRuntimeReadToolArtifactPayloadSchema,
   agentRuntimeSessionResumePayloadSchema,
   agentRuntimeStartThreadPayloadSchema,
   agentRuntimeThreadCompactPayloadSchema,
@@ -428,8 +429,9 @@ describe('app-ipc-schemas', () => {
   it('requires explicit runtime ids for thread, turn, session, and interaction runtime payloads', () => {
     const cases = [
       ['startThread', agentRuntimeStartThreadPayloadSchema, { title: 'New thread' }],
-      ['readThread', agentRuntimeReadThreadPayloadSchema, { threadId: 'thread-1' }],
-      ['readThreadSidebarProbe', agentRuntimeReadThreadSidebarProbePayloadSchema, { threadId: 'thread-1' }],
+      ['readThreadStatus', agentRuntimeReadThreadStatusPayloadSchema, { threadId: 'thread-1' }],
+      ['readThreadPage', agentRuntimeReadThreadPagePayloadSchema, { threadId: 'thread-1', limit: 20 }],
+      ['readToolArtifact', agentRuntimeReadToolArtifactPayloadSchema, { threadId: 'thread-1', ref: 'ref-1', size: 12 }],
       ['startTurn', agentRuntimeStartTurnPayloadSchema, { threadId: 'thread-1', text: 'hello' }],
       ['interruptTurn', agentRuntimeTurnTargetPayloadSchema, { threadId: 'thread-1', turnId: 'turn-1' }],
       ['steerTurn', agentRuntimeTurnSteerPayloadSchema, { threadId: 'thread-1', turnId: 'turn-1', text: 'continue' }],
@@ -697,8 +699,7 @@ describe('app-ipc-schemas', () => {
       agentCapabilities: {
         subagents: {
           enabled: true,
-          maxParallel: 3,
-          maxChildRuns: 4
+          maxParallel: 10
         }
       },
       modelAccess: {
@@ -762,8 +763,7 @@ describe('app-ipc-schemas', () => {
     expect(payload.agents?.sciforge?.tokenEconomy?.enabled).toBe(true)
     expect(payload.agents?.sciforge?.tokenEconomy?.historyHygiene?.maxToolResultTokens).toBe(4000)
     expect(payload.activeAgentRuntime).toBe('claude')
-    expect(payload.agentCapabilities?.subagents?.maxParallel).toBe(3)
-    expect(payload.agentCapabilities?.subagents?.maxChildRuns).toBe(4)
+    expect(payload.agentCapabilities?.subagents?.maxParallel).toBe(10)
     expect(payload.modelAccess).toEqual({ mode: 'api', planAdapterId: '' })
     expect(payload.agents?.codex?.codexHome).toBe('/tmp/codex-home')
     expect(payload.agents?.claude?.configDir).toBe('/tmp/claude-code')

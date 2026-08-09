@@ -8,8 +8,14 @@ import {
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
+  type AgentRuntimeId,
   type AppSettingsV1
 } from '../shared/app-settings'
+import type {
+  AgentRuntimeEvent,
+  AgentRuntimeThreadPage,
+  AgentRuntimeThreadStatus
+} from '../shared/agent-runtime-contract'
 import {
   resolveScheduleModelConfig,
   waitForAssistantTextViaRuntime,
@@ -64,19 +70,120 @@ describe('waitForAssistantTextViaRuntime', () => {
     vi.useRealTimers()
   })
 
-  it('accepts a completed tool-driven turn with no assistant text', async () => {
+  const status = (
+    state: AgentRuntimeThreadStatus['latestTurnStatus'],
+    latestSeq = 1
+  ): AgentRuntimeThreadStatus => ({
+    id: 'thread-1',
+    runtimeId: 'sciforge',
+    latestSeq,
+    latestTurnId: 'turn-1',
+    latestTurnStatus: state
+  })
+
+  const page = (text = ''): AgentRuntimeThreadPage => ({
+    runtimeId: 'sciforge',
+    threadId: 'thread-1',
+    latestSeq: 1,
+    turns: [{
+      id: 'turn-1',
+      threadId: 'thread-1',
+      status: 'completed',
+      items: text ? [{ id: 'assistant-1', kind: 'assistant_message', text }] : []
+    }],
+    nextCursor: null
+  })
+
+  const subscribe = (events: AgentRuntimeEvent[] = []) => vi.fn(async function* (
+    _input: { runtimeId: AgentRuntimeId; threadId: string; sinceSeq?: number; signal?: AbortSignal }
+  ) {
+    for (const event of events) yield event
+  })
+
+  it('uses status-only polling while active and reads one page after terminal completion', async () => {
     vi.useFakeTimers()
-    const readThread = vi.fn(async () => ({
-      turns: [{ id: 'turn-1', status: 'completed', items: [] }]
-    }))
+    const readThreadStatus = vi.fn()
+      .mockResolvedValueOnce(status('running', 1))
+      .mockResolvedValueOnce(status('completed', 2))
+    const readThreadPage = vi.fn(async () => page())
+    const subscribeEvents = subscribe()
     const deps = {
-      agentRuntime: { readThread }
+      agentRuntime: { readThreadStatus, readThreadPage, subscribeEvents }
     } as unknown as ScheduleRuntimeDeps
 
     const result = waitForAssistantTextViaRuntime(deps, 'sciforge', 'thread-1', 'turn-1', 30_000)
     await vi.advanceTimersByTimeAsync(1_500)
+    expect(readThreadStatus).toHaveBeenCalledOnce()
+    expect(readThreadPage).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1_500)
 
     await expect(result).resolves.toBe('')
-    expect(readThread).toHaveBeenCalledOnce()
+    expect(readThreadStatus).toHaveBeenCalledTimes(2)
+    expect(readThreadPage).toHaveBeenCalledOnce()
+    expect(subscribeEvents).toHaveBeenCalledWith(expect.objectContaining({
+      runtimeId: 'sciforge',
+      threadId: 'thread-1',
+      sinceSeq: 0,
+      signal: expect.any(AbortSignal)
+    }))
+  })
+
+  it('reads at most one page when an active turn reaches the timeout', async () => {
+    vi.useFakeTimers()
+    const readThreadStatus = vi.fn(async () => status('running'))
+    const readThreadPage = vi.fn(async () => page())
+    const deps = {
+      agentRuntime: { readThreadStatus, readThreadPage, subscribeEvents: subscribe() }
+    } as unknown as ScheduleRuntimeDeps
+
+    const result = waitForAssistantTextViaRuntime(deps, 'sciforge', 'thread-1', 'turn-1', 3_000)
+    const rejection = expect(result).rejects.toThrow('Timed out waiting for agent response.')
+    await vi.advanceTimersByTimeAsync(1_500)
+    expect(readThreadPage).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1_500)
+
+    await rejection
+    expect(readThreadStatus).toHaveBeenCalledTimes(2)
+    expect(readThreadPage).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    {
+      label: 'approval',
+      event: {
+        kind: 'approval_requested',
+        runtimeId: 'sciforge',
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        approvalId: 'approval-1',
+        summary: 'Approve command'
+      } satisfies AgentRuntimeEvent
+    },
+    {
+      label: 'input',
+      event: {
+        kind: 'user_input_requested',
+        runtimeId: 'sciforge',
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        requestId: 'input-1',
+        questions: [{ id: 'choice', header: 'Continue', question: 'Continue?', options: [] }]
+      } satisfies AgentRuntimeEvent
+    }
+  ])('fails immediately when the event stream reports pending desktop $label', async ({ event }) => {
+    vi.useFakeTimers()
+    const readThreadStatus = vi.fn(async () => status('running'))
+    const readThreadPage = vi.fn(async () => page())
+    const deps = {
+      agentRuntime: { readThreadStatus, readThreadPage, subscribeEvents: subscribe([event as AgentRuntimeEvent]) }
+    } as unknown as ScheduleRuntimeDeps
+
+    const result = waitForAssistantTextViaRuntime(deps, 'sciforge', 'thread-1', 'turn-1', 30_000)
+    const rejection = expect(result).rejects.toThrow('waiting for desktop approval or input')
+    await vi.advanceTimersByTimeAsync(1_500)
+
+    await rejection
+    expect(readThreadStatus).not.toHaveBeenCalled()
+    expect(readThreadPage).not.toHaveBeenCalled()
   })
 })

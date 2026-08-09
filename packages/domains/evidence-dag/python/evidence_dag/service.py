@@ -66,6 +66,11 @@ from .snapshot import (
     snapshot_filename,
     snapshot_storage_key,
 )
+from .snapshot_storage import (
+    atomic_publish_latest,
+    read_snapshot_text,
+    write_snapshot,
+)
 from .verifier import verify as _verify
 
 
@@ -1109,8 +1114,7 @@ class Engine:
         path = self._path(thread_id)
         if not path or not os.path.exists(path):
             return None
-        with open(path, encoding="utf-8") as fh:
-            graph = provjson.loads(fh.read())
+        graph = provjson.loads(read_snapshot_text(path, storage_dir=self.storage_dir))
         snapshot = self._verified_snapshot(graph, thread_id=thread_id)
         self._apply_review_decisions(graph, snapshot.digest)
         self._graphs[thread_id] = graph
@@ -1316,8 +1320,9 @@ class Engine:
                     if cached is not None and cached[0] == mtime:
                         found[cached[1]] = mtime
                         continue
-                    with open(path, encoding="utf-8") as fh:
-                        doc = json.load(fh)
+                    doc = json.loads(
+                        read_snapshot_text(path, storage_dir=self.storage_dir),
+                    )
                     snapshot = EvidenceSnapshot.from_dict((doc.get("edag:meta") or {}).get("snapshot") or {})
                     self._thread_id_cache[path] = (mtime, snapshot.thread_id)
                     found[snapshot.thread_id] = mtime
@@ -1499,8 +1504,9 @@ class Engine:
                     mtime = os.path.getmtime(path)
                     cached = self._history_cache.get(path)
                     if cached is None or cached[0] != mtime:
-                        with open(path, encoding="utf-8") as fh:
-                            graph = provjson.loads(fh.read())
+                        graph = provjson.loads(
+                            read_snapshot_text(path, storage_dir=self.storage_dir),
+                        )
                         snapshot = self._verified_snapshot(graph, thread_id=thread_id)
                         cached = (mtime, snapshot.to_dict())
                         self._history_cache[path] = cached
@@ -1539,8 +1545,9 @@ class Engine:
         matches = glob.glob(os.path.join(directory, f"*-{target_digest.removeprefix('sha256:')}.prov.json"))
         if len(matches) != 1:
             raise KeyError(target_digest)
-        with open(matches[0], encoding="utf-8") as fh:
-            graph = provjson.loads(fh.read())
+        graph = provjson.loads(
+            read_snapshot_text(matches[0], storage_dir=self.storage_dir),
+        )
         snapshot = self._verified_snapshot(
             graph, thread_id=thread_id, target_digest=target_digest,
         )
@@ -1738,12 +1745,11 @@ class Engine:
             snapshot_dir, f"{snapshot.version:08d}-{snapshot.digest[7:]}.prov.json",
         )
         if os.path.exists(immutable_path):
-            with open(immutable_path, encoding="utf-8") as fh:
-                if fh.read() != content:
-                    raise RuntimeError("immutable Evidence Snapshot collision")
+            if read_snapshot_text(immutable_path, storage_dir=self.storage_dir) != content:
+                raise RuntimeError("immutable Evidence Snapshot collision")
         else:
-            self._atomic_write(immutable_path, content)
-        self._atomic_write(latest_path, content)
+            write_snapshot(immutable_path, content, storage_dir=self.storage_dir)
+        atomic_publish_latest(immutable_path, latest_path)
 
     @staticmethod
     def _atomic_write(path: str, content: str) -> None:

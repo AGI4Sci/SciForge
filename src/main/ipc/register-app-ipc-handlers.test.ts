@@ -1482,6 +1482,29 @@ describe('registerAppIpcHandlers', () => {
     expect(signals[0].aborted).toBe(true)
   })
 
+  it('shares one sender-destroyed listener across many agent runtime event streams', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const agentRuntime = {
+      subscribeEvents: vi.fn((input: { signal: AbortSignal }) => waitForAbortStream(input.signal))
+    }
+    const sender = createSender(33)
+
+    registerAppIpcHandlers(registerOptions({ agentRuntime: agentRuntime as never }))
+    for (let index = 0; index < 12; index += 1) {
+      await expect(
+        handlers.get('agentRuntime:subscribeEvents')?.({ sender }, {
+          runtimeId: 'codex',
+          threadId: `thread-${index}`,
+          streamId: `stream-${index}`
+        })
+      ).resolves.toEqual({ streamId: `stream-${index}` })
+    }
+
+    expect(sender.once).toHaveBeenCalledTimes(1)
+    sender.destroy()
+    await vi.waitFor(() => expect(sender.removeListener).toHaveBeenCalledTimes(1))
+  })
+
   it('rejects another sender subscribing over an active agent runtime stream id', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
     const signals: AbortSignal[] = []

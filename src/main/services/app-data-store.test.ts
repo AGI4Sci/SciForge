@@ -97,6 +97,82 @@ describe('app-data-store', () => {
     expect(rows.map((row) => row.seq)).toEqual([1, 2])
   })
 
+  it('streams JSONL rows in order without exposing a trailing empty row', async () => {
+    const root = await tempRoot()
+    const store = new AppDataJsonlStore({ rootDir: root, segments: ['events', 'stream.jsonl'] })
+    await store.appendJson([
+      { seq: 1, text: 'first' },
+      { seq: 2, text: 'second' },
+      { seq: 3, text: 'third' }
+    ])
+    const visited: number[] = []
+
+    await store.readLines(async (line) => {
+      await Promise.resolve()
+      visited.push((JSON.parse(line) as { seq: number }).seq)
+    })
+
+    expect(visited).toEqual([1, 2, 3])
+  })
+
+  it('releases the JSONL queue when a streaming visitor fails', async () => {
+    const root = await tempRoot()
+    const store = new AppDataJsonlStore({ rootDir: root, segments: ['events', 'recover.jsonl'] })
+    await store.appendJson([{ seq: 1 }])
+
+    await expect(store.readLines(() => {
+      throw new Error('visitor failed')
+    })).rejects.toThrow('visitor failed')
+    await expect(store.appendJson([{ seq: 2 }])).resolves.toBeUndefined()
+
+    const visited: number[] = []
+    await store.readLines((line) => {
+      visited.push((JSON.parse(line) as { seq: number }).seq)
+    })
+    expect(visited).toEqual([1, 2])
+  })
+
+  it('reads JSONL backwards across chunks with Unicode offsets and supports early stop', async () => {
+    const root = await tempRoot()
+    const store = new AppDataJsonlStore({ rootDir: root, segments: ['events', 'reverse.jsonl'] })
+    const rows = [
+      { seq: 1, text: '甲'.repeat(600) },
+      { seq: 2, text: 'β'.repeat(700) },
+      { seq: 3, text: 'tail' }
+    ]
+    const serialized = rows.map((row) => JSON.stringify(row))
+    await store.appendLines(serialized)
+    const expectedOffsets = [
+      0,
+      Buffer.byteLength(`${serialized[0]}\n`, 'utf8'),
+      Buffer.byteLength(`${serialized[0]}\n${serialized[1]}\n`, 'utf8')
+    ]
+    const visited: Array<{ seq: number; offset: number }> = []
+
+    await store.readLinesReverse((line, offset) => {
+      visited.push({ seq: (JSON.parse(line) as { seq: number }).seq, offset })
+    }, { chunkSize: 1_024 })
+
+    expect(visited).toEqual([
+      { seq: 3, offset: expectedOffsets[2] },
+      { seq: 2, offset: expectedOffsets[1] },
+      { seq: 1, offset: expectedOffsets[0] }
+    ])
+
+    const beforeTail: number[] = []
+    await store.readLinesReverse((line) => {
+      beforeTail.push((JSON.parse(line) as { seq: number }).seq)
+    }, { endOffset: expectedOffsets[2], chunkSize: 1_024 })
+    expect(beforeTail).toEqual([2, 1])
+
+    const stopped: number[] = []
+    await store.readLinesReverse((line) => {
+      stopped.push((JSON.parse(line) as { seq: number }).seq)
+      return false
+    }, { chunkSize: 1_024 })
+    expect(stopped).toEqual([3])
+  })
+
   it('serializes concurrent JSONL appends on one store instance', async () => {
     const root = await tempRoot()
     const store = new AppDataJsonlStore({ rootDir: root, segments: ['usage', 'records.jsonl'] })

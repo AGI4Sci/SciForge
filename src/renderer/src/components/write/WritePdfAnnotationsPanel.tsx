@@ -1018,7 +1018,7 @@ export function WritePdfAnnotationsPanel({
                     </div>
                   </div>
                   <div className="min-w-0 border-t border-ds-border-muted/70 px-3 py-2">
-                    {selected ? (
+                    {selected && isQuestion ? (
                       <div className="mb-2 flex min-w-0 items-center justify-end">
                         <button
                           type="button"

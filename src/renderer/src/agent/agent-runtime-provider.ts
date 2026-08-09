@@ -11,7 +11,7 @@ import type {
   AgentRuntimeReadChildTranscriptResponse,
   AgentRuntimeThreadRelation,
   AgentRuntimeThread,
-  AgentRuntimeThreadDetail,
+  AgentRuntimeThreadPage,
   AgentRuntimeUsage
 } from '@shared/agent-runtime-contract'
 import {
@@ -146,7 +146,8 @@ function normalizeThread(thread: AgentRuntimeThread): NormalizedThread {
     agentRole: threadMetadata.agentRole,
     goal: thread.goal ?? null,
     todos: thread.todos ?? null,
-    guiPlan: thread.guiPlan ?? null
+    guiPlan: thread.guiPlan ?? null,
+    hasUserMessage: thread.hasUserMessage
   }
   return {
     ...normalized,
@@ -263,6 +264,7 @@ function toolBlock(item: AgentRuntimeItem): ToolBlock {
     status: visibleStatus(item.status),
     toolKind: item.toolKind,
     detail: item.detail,
+    detailArtifact: item.detailArtifact,
     meta: item.meta
   }
 }
@@ -404,21 +406,37 @@ function blockFromItem(item: AgentRuntimeItem, turnStatus?: string): ChatBlock |
   }
 }
 
-function detailItems(detail: AgentRuntimeThreadDetail): AgentRuntimeItem[] {
-  if (detail.items?.length) return detail.items
-  return detail.turns?.flatMap((turn) => turn.items ?? []) ?? []
+function pageItems(page: AgentRuntimeThreadPage): AgentRuntimeItem[] {
+  return page.turns.flatMap((turn) => turn.items ?? [])
 }
 
-type DetailTurn = NonNullable<AgentRuntimeThreadDetail['turns']>[number]
+type DetailTurn = AgentRuntimeThreadPage['turns'][number]
 
-function latestTurnFromDetail(detail: AgentRuntimeThreadDetail): DetailTurn | undefined {
-  if (!detail.turns?.length) return undefined
-  const latestTurnId = detail.latestTurnId?.trim()
-  if (latestTurnId) {
-    const exactTurn = detail.turns.find((turn) => turn.id === latestTurnId)
-    if (exactTurn) return exactTurn
-  }
-  return detail.turns.at(-1)
+function latestTurnFromPage(page: AgentRuntimeThreadPage, latestTurnId?: string): DetailTurn | undefined {
+  if (!page.turns.length) return undefined
+  const normalizedId = latestTurnId?.trim()
+  return (normalizedId ? page.turns.find((turn) => turn.id === normalizedId) : undefined) ?? page.turns.at(-1)
+}
+
+function blocksFromPage(page: AgentRuntimeThreadPage, latestTurnId?: string): {
+  blocks: ChatBlock[]
+  items: AgentRuntimeItem[]
+  latestTurn?: DetailTurn
+} {
+  const items = pageItems(page)
+  const latestTurn = latestTurnFromPage(page, latestTurnId)
+  const latestUserMessageId = [...items].reverse().find((item) => item.kind === 'user_message')?.id
+  const turnStatusById = new Map(page.turns.map((turn) => [turn.id, turn.status]))
+  const blocks = mergeRepeatedUserInputBlocks(mergeRepeatedToolBlocks(items.flatMap((item) => {
+    const turnStatus = item.turnId
+      ? turnStatusById.get(item.turnId)
+      : item.id === latestUserMessageId
+        ? latestTurn?.status
+        : undefined
+    const block = blockFromItem(item, turnStatus)
+    return block ? [block] : []
+  })))
+  return { blocks, items, latestTurn }
 }
 
 type TerminalSnapshotOutcome = 'success' | 'error'
@@ -678,6 +696,7 @@ export class AgentRuntimeProvider implements AgentProvider {
   private capabilitiesCache: AgentRuntimeCapabilities = defaultCapabilities()
   private readonly threadRuntimes = new Map<string, AgentRuntimeId>()
   private readonly threadWorkspaceLocators = new Map<string, WorkspaceLocator>()
+  private readonly threadSummaries = new Map<string, NormalizedThread>()
   private readonly approvalThreads = new Map<string, InteractionRequestRef>()
   private readonly userInputThreads = new Map<string, InteractionRequestRef>()
 
@@ -715,69 +734,88 @@ export class AgentRuntimeProvider implements AgentProvider {
     const runtimeId = await this.activeRuntimeId()
     const thread = await agentRuntimeClient.startThread({ runtimeId, ...input })
     const workspaceLocator = thread.workspaceLocator ?? input.workspaceLocator
-    this.rememberThreadRuntime(thread.id, thread.runtimeId, workspaceLocator)
-    return {
-      ...normalizeThread(thread),
-      ...(workspaceLocator ? { workspaceLocator } : {})
-    }
+    return this.normalizeRememberedThread({ ...thread, ...(workspaceLocator ? { workspaceLocator } : {}) })
   }
 
-  async getThreadDetail(threadId: string): ReturnType<AgentProvider['getThreadDetail']> {
+  async getRecentThreadView(threadId: string): ReturnType<AgentProvider['getRecentThreadView']> {
     const runtimeId = await this.runtimeIdForThread(threadId)
     const workspaceLocator = this.workspaceLocatorForThread(threadId)
-    const detail = await agentRuntimeClient.readThread({
-      runtimeId,
-      threadId,
-      ...(workspaceLocator ? { workspaceLocator } : {})
-    })
-    const items = detailItems(detail)
-    const resolvedWorkspaceLocator = detail.workspaceLocator ?? workspaceLocator
+    const request = { runtimeId, threadId, ...(workspaceLocator ? { workspaceLocator } : {}) }
+    const [status, page] = await Promise.all([
+      agentRuntimeClient.readThreadStatus(request),
+      agentRuntimeClient.readThreadPage({ ...request, limit: 20 })
+    ])
+    const { blocks, items, latestTurn } = blocksFromPage(page, status.latestTurnId)
+    const summary = this.threadSummaries.get(threadId)
+    const resolvedWorkspaceLocator = summary?.workspaceLocator ?? workspaceLocator
     this.rememberThreadRuntime(
-      detail.id,
-      detail.runtimeId,
+      status.id,
+      status.runtimeId,
       resolvedWorkspaceLocator
     )
-    this.rememberInteractionRequests(detail.id, detail.runtimeId, items)
-    const latestTurn = latestTurnFromDetail(detail)
+    this.rememberInteractionRequests(status.id, status.runtimeId, items)
     const latestUserMessageId = [...items].reverse().find((item) => item.kind === 'user_message')?.id
-    const turnStatusById = new Map((detail.turns ?? []).map((turn) => [turn.id, turn.status]))
-    const rawBlocks = mergeRepeatedUserInputBlocks(mergeRepeatedToolBlocks(items.flatMap((item) => {
-      const turnStatus = item.turnId
-        ? turnStatusById.get(item.turnId)
-        : item.id === latestUserMessageId
-          ? latestTurn?.status ?? detail.status
-          : undefined
-      const block = blockFromItem(item, turnStatus)
-      return block ? [block] : []
-    })))
     return {
-      runtimeId: detail.runtimeId,
+      runtimeId: status.runtimeId,
       ...(resolvedWorkspaceLocator ? { workspaceLocator: resolvedWorkspaceLocator } : {}),
       blocks: settleTerminalSnapshotBlocks(
-        rawBlocks,
-        terminalSnapshotOutcome(detail.status, latestTurn?.status)
+        blocks,
+        terminalSnapshotOutcome(status.status, latestTurn?.status)
       ),
-      latestSeq: detail.latestSeq,
-      threadStatus: detail.status ?? latestTurn?.status,
-      latestTurnId: detail.latestTurnId ?? latestTurn?.id,
+      latestSeq: status.latestSeq,
+      threadStatus: status.status ?? latestTurn?.status,
+      latestTurnId: status.latestTurnId ?? latestTurn?.id,
       latestUserMessageId,
-      usage: usageFromRuntime(detail.usage),
-      goal: detail.goal ?? null,
-      todos: detail.todos ?? null,
-      guiPlan: detail.guiPlan ?? null
+      usage: usageFromRuntime(status.usage),
+      goal: summary?.goal ?? null,
+      todos: summary?.todos ?? null,
+      guiPlan: summary?.guiPlan ?? null,
+      nextCursor: page.nextCursor
     }
   }
 
-  async getThreadSidebarProbe(threadId: string): Promise<{ text: string | null }> {
+  async getThreadStatus(threadId: string): ReturnType<AgentProvider['getThreadStatus']> {
     const runtimeId = await this.runtimeIdForThread(threadId)
     const workspaceLocator = this.workspaceLocatorForThread(threadId)
-    const probe = await agentRuntimeClient.readThreadSidebarProbe({
+    const status = await agentRuntimeClient.readThreadStatus({
       runtimeId,
       threadId,
       ...(workspaceLocator ? { workspaceLocator } : {})
     })
-    this.rememberThreadRuntime(probe.threadId, probe.runtimeId, workspaceLocator)
-    return { text: probe.text }
+    this.rememberThreadRuntime(status.id, status.runtimeId, workspaceLocator)
+    return {
+      runtimeId: status.runtimeId,
+      latestSeq: status.latestSeq,
+      threadStatus: status.status,
+      latestTurnId: status.latestTurnId,
+      latestTurnStatus: status.latestTurnStatus,
+      usage: usageFromRuntime(status.usage)
+    }
+  }
+
+  async getThreadPage(threadId: string, cursor?: string): ReturnType<AgentProvider['getThreadPage']> {
+    const runtimeId = await this.runtimeIdForThread(threadId)
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
+    const page = await agentRuntimeClient.readThreadPage({
+      runtimeId,
+      threadId,
+      ...(cursor ? { cursor } : {}),
+      limit: 20,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    })
+    const { blocks, items } = blocksFromPage(page)
+    this.rememberInteractionRequests(threadId, runtimeId, items)
+    return { blocks, latestSeq: page.latestSeq, nextCursor: page.nextCursor }
+  }
+
+  async readToolArtifact(ref: Parameters<AgentProvider['readToolArtifact']>[0]): Promise<string> {
+    const artifact = await agentRuntimeClient.readToolArtifact({
+      ...ref,
+      ...(this.workspaceLocatorForThread(ref.threadId)
+        ? { workspaceLocator: this.workspaceLocatorForThread(ref.threadId) }
+        : {})
+    })
+    return artifact.content
   }
 
   async sendUserMessage(
@@ -884,6 +922,7 @@ export class AgentRuntimeProvider implements AgentProvider {
     })
     this.threadRuntimes.delete(threadId)
     this.threadWorkspaceLocators.delete(threadId)
+    this.threadSummaries.delete(threadId)
   }
 
   getRuntimeInfo(): ReturnType<NonNullable<AgentProvider['getRuntimeInfo']>> {
@@ -1182,7 +1221,9 @@ export class AgentRuntimeProvider implements AgentProvider {
 
   private normalizeRememberedThread(thread: AgentRuntimeThread): NormalizedThread {
     this.rememberThreadRuntime(thread.id, thread.runtimeId, thread.workspaceLocator)
-    return normalizeThread(thread)
+    const normalized = normalizeThread(thread)
+    this.threadSummaries.set(thread.id, normalized)
+    return normalized
   }
 
   private workspaceLocatorForThread(threadId: string): WorkspaceLocator | undefined {

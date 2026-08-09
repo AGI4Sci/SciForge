@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRuntimeId, RemoteChannelV1, RemoteChannelConversationV1 } from '@shared/app-settings'
 import { REMOTE_CHANNEL_MANAGED_INSTRUCTIONS_HEADING } from '@shared/app-settings'
-import type { ChatBlock, NormalizedThread } from '../agent/types'
+import type { NormalizedThread } from '../agent/types'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import {
   channelWithRemoteThreadMapping,
@@ -103,7 +103,7 @@ type TestRemoteChannelProvider = {
   id: AgentRuntimeId
   rememberThreadRuntime: ReturnType<typeof vi.fn<(threadId: string, runtimeId?: AgentRuntimeId) => void>>
   createThread: ReturnType<typeof vi.fn<(input: { workspace: string; title: string; mode: 'agent' | 'plan' }) => Promise<NormalizedThread>>>
-  getThreadDetail: ReturnType<typeof vi.fn<(threadId: string) => Promise<{ blocks: ChatBlock[] }>>>
+  getThreadStatus: ReturnType<typeof vi.fn<(threadId: string) => Promise<unknown>>>
   deleteThread: ReturnType<typeof vi.fn<(threadId: string) => Promise<void>>>
 }
 
@@ -155,7 +155,7 @@ function createRemoteChannelActionHarness(options: {
     createThread: vi.fn<(input: { workspace: string; title: string; mode: 'agent' | 'plan' }) => Promise<NormalizedThread>>(
       async () => thread('created-thread', '[Remote channel:Feishu Agent01]')
     ),
-    getThreadDetail: vi.fn<(threadId: string) => Promise<{ blocks: ChatBlock[] }>>(async () => ({ blocks: [] })),
+    getThreadStatus: vi.fn<(threadId: string) => Promise<unknown>>(async () => ({})),
     deleteThread: vi.fn<(threadId: string) => Promise<void>>(async () => undefined),
     ...(options.provider ?? {})
   }
@@ -395,7 +395,7 @@ describe('chat-store remote channel actions helpers', () => {
     await actions.selectRemoteChannel('channel-1')
 
     expect(provider.rememberThreadRuntime).toHaveBeenCalledWith('codex-conversation-thread', 'codex')
-    expect(provider.getThreadDetail).toHaveBeenCalledWith('codex-conversation-thread')
+    expect(provider.getThreadStatus).toHaveBeenCalledWith('codex-conversation-thread')
     expect(getState().activeThreadId).toBe('codex-conversation-thread')
     expect((getState().threads as NormalizedThread[])[0]?.runtimeId).toBe('codex')
   })
@@ -471,7 +471,7 @@ describe('chat-store remote channel actions helpers', () => {
 
     expect(selectRemoteChannel).not.toHaveBeenCalled()
     expect(provider.rememberThreadRuntime).toHaveBeenCalledWith('codex-conversation-thread', 'codex')
-    expect(provider.getThreadDetail).toHaveBeenCalledWith('codex-conversation-thread')
+    expect(provider.getThreadStatus).toHaveBeenCalledWith('codex-conversation-thread')
     expect(getState().activeThreadId).toBe('codex-conversation-thread')
     expect((getState().threads as NormalizedThread[])[0]?.runtimeId).toBe('codex')
   })
@@ -604,7 +604,7 @@ describe('chat-store remote channel actions helpers', () => {
 
     const provider = {
       createThread: vi.fn(),
-      getThreadDetail: vi.fn(async () => {
+      getThreadStatus: vi.fn(async () => {
         throw new Error('thread not found: thr_missing')
       }),
       deleteThread: vi.fn()

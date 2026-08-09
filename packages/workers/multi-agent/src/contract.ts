@@ -20,7 +20,6 @@ export const MultiAgentErrorCode = z.enum([
   'executor_missing',
   'prompt_required',
   'parallel_budget_exhausted',
-  'child_budget_exhausted',
   'child_not_found',
   'child_failed',
   'child_aborted',
@@ -115,7 +114,6 @@ export const MultiAgentRuntimeConfig = z
   .object({
     enabled: z.boolean().default(true),
     maxParallel: z.number().int().nonnegative().default(2),
-    maxChildren: z.number().int().nonnegative().default(16),
     maxTranscriptEntries: z.number().int().positive().default(1000)
   })
   .strict()

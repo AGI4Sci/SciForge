@@ -14,8 +14,9 @@ import {
   type AgentRuntimeEvent,
   type AgentRuntimeId,
   type AgentRuntimeThread,
-  type AgentRuntimeThreadDetail,
-  type AgentRuntimeThreadSidebarProbe,
+  type AgentRuntimeThreadPage,
+  type AgentRuntimeThreadStatus,
+  type AgentRuntimeToolArtifact,
   type AgentRuntimeTransport,
   type AgentRuntimeTurnHandle,
   type AgentRuntimeUsageResponse
@@ -34,8 +35,9 @@ export const WORKSPACE_HOST_AGENT_RUNTIME_METHODS = Object.freeze({
   capabilities: 'capabilities',
   listThreads: 'listThreads',
   startThread: 'startThread',
-  readThread: 'readThread',
-  readThreadSidebarProbe: 'readThreadSidebarProbe',
+  readThreadStatus: 'readThreadStatus',
+  readThreadPage: 'readThreadPage',
+  readToolArtifact: 'readToolArtifact',
   startTurn: 'startTurn',
   interruptTurn: 'interruptTurn',
   steerTurn: 'steerTurn',
@@ -231,24 +233,34 @@ export function createWorkspaceHostAgentRuntimeAdapter(
       return thread
     },
 
-    async readThread(context, input) {
-      const detail = await invoke<AgentRuntimeThreadDetail>(
+    async readThreadStatus(context, input) {
+      const status = await invoke<AgentRuntimeThreadStatus>(
         context,
-        WORKSPACE_HOST_AGENT_RUNTIME_METHODS.readThread,
+        WORKSPACE_HOST_AGENT_RUNTIME_METHODS.readThreadStatus,
         input
       )
-      assertThread(detail, options.runtimeId)
-      return detail
+      assertThreadStatus(status, options.runtimeId)
+      return status
     },
 
-    async readThreadSidebarProbe(context, input) {
-      const probe = await invoke<AgentRuntimeThreadSidebarProbe>(
+    async readThreadPage(context, input) {
+      const page = await invoke<AgentRuntimeThreadPage>(
         context,
-        WORKSPACE_HOST_AGENT_RUNTIME_METHODS.readThreadSidebarProbe,
+        WORKSPACE_HOST_AGENT_RUNTIME_METHODS.readThreadPage,
         input
       )
-      assertRuntimeIdentity(probe.runtimeId, options.runtimeId, 'sidebar probe')
-      return probe
+      assertRuntimeIdentity(page.runtimeId, options.runtimeId, 'thread page')
+      return page
+    },
+
+    async readToolArtifact(context, input) {
+      const artifact = await invoke<AgentRuntimeToolArtifact>(
+        context,
+        WORKSPACE_HOST_AGENT_RUNTIME_METHODS.readToolArtifact,
+        input
+      )
+      assertRuntimeIdentity(artifact.runtimeId, options.runtimeId, 'tool artifact')
+      return artifact
     },
 
     async startTurn(context, input) {
@@ -460,7 +472,9 @@ export function createPlacementAwareAgentRuntimeAdapter(
     capabilities: (context) => selected(context).capabilities(context),
     listThreads: (context, input) => selected(context).listThreads(context, input),
     startThread: (context, input) => selected(context).startThread(context, input),
-    readThread: (context, input) => selected(context).readThread(context, input),
+    readThreadStatus: (context, input) => selected(context).readThreadStatus(context, input),
+    readThreadPage: (context, input) => selected(context).readThreadPage(context, input),
+    readToolArtifact: (context, input) => selected(context).readToolArtifact(context, input),
     startTurn: (context, input) => selected(context).startTurn(context, input),
     interruptTurn: (context, input) => selected(context).interruptTurn(context, input),
     steerTurn: (context, input) => selected(context).steerTurn(context, input),
@@ -468,12 +482,6 @@ export function createPlacementAwareAgentRuntimeAdapter(
     deleteThread: (context, input) => selected(context).deleteThread(context, input),
     subscribeEvents: (context, input) => selected(context).subscribeEvents(context, input),
     usage: (context, input) => selected(context).usage(context, input),
-    ...(local.readThreadSidebarProbe && workspaceHost.readThreadSidebarProbe
-      ? {
-          readThreadSidebarProbe: (context, input) =>
-            selected(context).readThreadSidebarProbe!(context, input)
-        }
-      : {}),
     ...(local.publishSyntheticEvent && workspaceHost.publishSyntheticEvent
       ? {
           publishSyntheticEvent: (context, event) =>
@@ -858,6 +866,13 @@ function assertThread(thread: AgentRuntimeThread, runtimeId: AgentRuntimeId): vo
     throw invalidRemoteResult('thread', 'thread must have an id')
   }
   assertRuntimeIdentity(thread.runtimeId, runtimeId, `thread ${thread.id}`)
+}
+
+function assertThreadStatus(status: AgentRuntimeThreadStatus, runtimeId: AgentRuntimeId): void {
+  if (!isRecord(status) || typeof status.id !== 'string' || !Number.isSafeInteger(status.latestSeq)) {
+    throw invalidRemoteResult('thread status', 'thread status must have an id and latestSeq')
+  }
+  assertRuntimeIdentity(status.runtimeId, runtimeId, `thread status ${status.id}`)
 }
 
 function assertRuntimeIdentity(

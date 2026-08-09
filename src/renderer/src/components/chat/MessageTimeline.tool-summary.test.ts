@@ -5,7 +5,11 @@ import type { RemoteChannelV1 } from '@shared/app-settings'
 import type { ChatBlock, NormalizedThread, ToolBlock } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import { MessageTimeline, summarizeToolBlock } from './MessageTimeline'
-import { MessageBubble } from './message-timeline-bubbles'
+import {
+  MessageBubble,
+  shouldRequestToolArtifact,
+  toolArtifactRequestKey
+} from './message-timeline-bubbles'
 import {
   resolveMarkdownImageReference,
   timelineVisualReviewArtifactsFromToolBlock,
@@ -204,7 +208,9 @@ describe('MessageTimeline local runtime metadata smoke', () => {
       turnReasoningFirstAtByUserId: {},
       turnReasoningLastAtByUserId: {},
       remoteChannels: [],
-      activeRemoteChannelId: ''
+      activeRemoteChannelId: '',
+      threadHistoryCursor: null,
+      threadHistoryLoading: false
     })
   })
 
@@ -230,6 +236,48 @@ describe('MessageTimeline local runtime metadata smoke', () => {
     expect(html).toContain('src="data:image/png;base64,abc"')
     expect(html).toContain('为什么图片完全没有识别啊')
     expect(html).not.toContain('Attachments 1')
+  })
+
+  it('keeps auto-expanded tool errors on the bounded preview until the user loads full output', () => {
+    const block = toolBlock({
+      status: 'error',
+      detail: 'bounded tool output preview',
+      detailArtifact: {
+        runtimeId: 'codex',
+        threadId: 'thr_1',
+        ref: 'artifact-ref',
+        size: 20_000
+      }
+    })
+
+    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
+
+    expect(html).toContain('bounded tool output preview')
+    expect(html).toContain('Load full output')
+  })
+
+  it('includes artifact size in the request dedupe key', () => {
+    const key = toolArtifactRequestKey('artifact-ref', 20_000)
+    expect(key).not.toBe(toolArtifactRequestKey('artifact-ref', 30_000))
+    expect(toolArtifactRequestKey(undefined, 20_000)).toBeNull()
+    expect(shouldRequestToolArtifact({
+      artifactKey: key,
+      requestedKey: null,
+      inFlightKey: null,
+      open: true
+    })).toBe(false)
+    expect(shouldRequestToolArtifact({
+      artifactKey: key,
+      requestedKey: key,
+      inFlightKey: null,
+      open: true
+    })).toBe(true)
+    expect(shouldRequestToolArtifact({
+      artifactKey: key,
+      requestedKey: key,
+      inFlightKey: key,
+      open: true
+    })).toBe(false)
   })
 
   it('keeps id-only image attachments in the timeline until their content loads', () => {

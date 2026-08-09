@@ -82,7 +82,6 @@ export class MultiAgentRuntime {
   private readonly config: MultiAgentRuntimeConfigType
   private active = 0
   private readonly activeChildIds = new Set<string>()
-  private readonly pendingChildReservations = new Map<string, number>()
   private readonly activeRequestsByKey = new Map<string, Promise<MultiAgentChildRunRecord>>()
   private readonly startedRequestsByKey = new Map<string, Promise<MultiAgentChildRunRecord>>()
   private readonly executionsByChildId = new Map<string, Promise<MultiAgentChildRunRecord>>()
@@ -165,11 +164,10 @@ export class MultiAgentRuntime {
         )
         if (replayed) return { replayed } as const
       }
-      await this.assertCanStart(normalized.parentThreadId, normalized.parentTurnId)
+      this.assertCanStart()
       const id = this.options.idGenerator?.() ?? randomChildId()
       this.active += 1
       this.activeChildIds.add(id)
-      this.incrementPendingChildReservation(normalized.parentThreadId, normalized.parentTurnId)
       return { id } as const
     })
     if ('replayed' in reservation) {
@@ -206,12 +204,10 @@ export class MultiAgentRuntime {
     try {
       await this.persistAndEmit(record)
     } catch (error) {
-      this.releasePendingChildReservation(normalized.parentThreadId, normalized.parentTurnId)
       this.active -= 1
       this.activeChildIds.delete(id)
       throw error
     }
-    this.releasePendingChildReservation(normalized.parentThreadId, normalized.parentTurnId)
 
     const boundary = createExecutionBoundary(input.signal)
     this.boundariesByChildId.set(id, boundary)
@@ -486,23 +482,12 @@ export class MultiAgentRuntime {
     })
   }
 
-  private async assertCanStart(parentThreadId: string, parentTurnId: string): Promise<void> {
+  private assertCanStart(): void {
     if (!this.config.enabled) {
       throw new MultiAgentRuntimeError(createMultiAgentError('config_disabled', 'multi-agent runtime is disabled'))
     }
     if (!this.options.executor) {
       throw new MultiAgentRuntimeError(createMultiAgentError('executor_missing', 'multi-agent executor is not configured'))
-    }
-    const existing = (await this.options.store.list({ parentThreadId }))
-      .filter((record) => record.parentTurnId === parentTurnId)
-    const reserved = this.pendingChildReservations.get(childReservationKey(parentThreadId, parentTurnId)) ?? 0
-    if (existing.length + reserved >= this.config.maxChildren) {
-      throw new MultiAgentRuntimeError(createMultiAgentError(
-        'child_budget_exhausted',
-        `multi-agent child budget exhausted for parent turn ${parentTurnId}: ${existing.length + reserved}/${this.config.maxChildren}. ` +
-        'This budget is shared across all delegate_task calls in the parent turn and does not reset after a child finishes; ' +
-        'consolidate the workload into the allowed children or continue in a later parent turn.'
-      ))
     }
     if (this.active >= this.config.maxParallel) {
       throw new MultiAgentRuntimeError(createMultiAgentError(
@@ -528,18 +513,6 @@ export class MultiAgentRuntime {
     }
   }
 
-  private incrementPendingChildReservation(parentThreadId: string, parentTurnId: string): void {
-    const key = childReservationKey(parentThreadId, parentTurnId)
-    this.pendingChildReservations.set(key, (this.pendingChildReservations.get(key) ?? 0) + 1)
-  }
-
-  private releasePendingChildReservation(parentThreadId: string, parentTurnId: string): void {
-    const key = childReservationKey(parentThreadId, parentTurnId)
-    const next = (this.pendingChildReservations.get(key) ?? 1) - 1
-    if (next > 0) this.pendingChildReservations.set(key, next)
-    else this.pendingChildReservations.delete(key)
-  }
-
   private async appendTranscript(
     record: MultiAgentChildRunRecord,
     entry: MultiAgentTranscriptEntryType
@@ -551,7 +524,10 @@ export class MultiAgentRuntime {
       transcript: trimTranscript(mergeTranscript(record.transcript, [parsed]), this.config.maxTranscriptEntries),
       updatedAt
     })
-    await this.persistAndEmit(next)
+    // Transcript entries are consumed through the child's own event stream.
+    // Persist them for inspection without publishing a parent child_event for
+    // every token/tool update; parent notifications are lifecycle/identity only.
+    await this.options.store.upsert(next)
     return next
   }
 
@@ -876,9 +852,6 @@ function trimOptional(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined
 }
 
-function childReservationKey(parentThreadId: string, parentTurnId: string): string {
-  return `${parentThreadId}\u0000${parentTurnId}`
-}
 
 function childRequestKey(parentThreadId: string, parentTurnId: string, requestId: string): string {
   return `${parentThreadId}\u0000${parentTurnId}\u0000${requestId}`

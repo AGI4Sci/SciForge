@@ -48,7 +48,8 @@ describe('capability IPC adapter', () => {
       id: 7,
       send: vi.fn(),
       isDestroyed: () => false,
-      once: senderEvents.once.bind(senderEvents)
+      once: senderEvents.once.bind(senderEvents),
+      removeListener: senderEvents.removeListener.bind(senderEvents)
     }
     const event = { sender } as never
     const caller = { audience: 'ui' as const, callerId: 'window:7', workspaceId: '/workspace' }
@@ -115,6 +116,11 @@ describe('capability IPC adapter', () => {
     const subscription = await ipcHandlers.get(CAPABILITY_IPC_CHANNELS.subscribe)?.(event, {
       workspaceId: '/workspace'
     }) as { subscriptionId: string }
+    const secondSubscription = await ipcHandlers.get(CAPABILITY_IPC_CHANNELS.subscribe)?.(event, {
+      workspaceId: '/workspace'
+    }) as { subscriptionId: string }
+    expect(secondSubscription.subscriptionId).not.toBe(subscription.subscriptionId)
+    expect(senderEvents.listenerCount('destroyed')).toBe(1)
     const result = await ipcHandlers.get(CAPABILITY_IPC_CHANNELS.invoke)?.(event, {
       workspaceId: '/workspace',
       request: {

@@ -55,7 +55,7 @@ const AWS_ACCESS_KEY_PATTERN = /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g
 const SERVICE_TOKEN_PATTERN = /\b(?:npm_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{12,})\b/g
 const SECRET_HEADER_LINE_PATTERN = /^(\s*(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key)\s*:\s*)[^\r\n]*/gim
 const INLINE_ASSIGNMENT_PATTERN = /(["']?)(authorization|proxy[-_ ]?authorization|cookie|set[-_ ]?cookie|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|auth[-_ ]?token|client[-_ ]?secret|password|passwd|credential|private[-_ ]?key|secret)\1(\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,}&]+)/gi
-const URL_PASSWORD_PATTERN = /([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)([^\s/@]+)(@)/gi
+const URL_PASSWORD_AT_SCHEME_PATTERN = /([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)([^\s/@]+)(@)/iy
 
 export function isSecretFieldName(name: string): boolean {
   const normalized = normalizeFieldName(name)
@@ -77,11 +77,58 @@ export function sanitizeTraceText(value: string, options: TraceSanitizationOptio
     .replace(INLINE_ASSIGNMENT_PATTERN, (_match, quote: string, key: string, separator: string) => (
       `${quote}${key}${quote}${separator}${TRACE_REDACTION_MARKER}`
     ))
-    .replace(URL_PASSWORD_PATTERN, `$1${TRACE_REDACTION_MARKER}$3`)
+  sanitized = sanitizeUrlPasswords(sanitized)
   for (const sensitiveValue of exactSensitiveValues(options.sensitiveValues ?? [])) {
     sanitized = sanitized.replaceAll(sensitiveValue, TRACE_REDACTION_MARKER)
   }
   return sanitized
+}
+
+function sanitizeUrlPasswords(value: string): string {
+  let cursor = 0
+  let delimiter = value.indexOf('://')
+  if (delimiter < 0) return value
+  const parts: string[] = []
+  while (delimiter >= 0) {
+    let schemeStart = delimiter
+    while (schemeStart > cursor && isUrlSchemeCharacter(value.charCodeAt(schemeStart - 1))) {
+      schemeStart -= 1
+    }
+    while (schemeStart < delimiter && !isAsciiLetter(value.charCodeAt(schemeStart))) {
+      schemeStart += 1
+    }
+    URL_PASSWORD_AT_SCHEME_PATTERN.lastIndex = schemeStart
+    const match = URL_PASSWORD_AT_SCHEME_PATTERN.exec(value)
+    if (match && match.index === schemeStart) {
+      parts.push(
+        value.slice(cursor, schemeStart),
+        match[1] ?? '',
+        TRACE_REDACTION_MARKER,
+        match[3] ?? ''
+      )
+      cursor = schemeStart + match[0].length
+    } else {
+      const nextCursor = delimiter + 3
+      parts.push(value.slice(cursor, nextCursor))
+      cursor = nextCursor
+    }
+    delimiter = value.indexOf('://', cursor)
+  }
+  parts.push(value.slice(cursor))
+  return parts.join('')
+}
+
+function isUrlSchemeCharacter(code: number): boolean {
+  return (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    code === 43 ||
+    code === 45 ||
+    code === 46
+}
+
+function isAsciiLetter(code: number): boolean {
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122)
 }
 
 /**

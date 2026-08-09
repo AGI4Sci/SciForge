@@ -207,6 +207,7 @@ function toolEventFromRuntime(
     status: event.status,
     toolKind: toolKind(event.toolKind),
     detail: event.detail,
+    detailArtifact: event.detailArtifact,
     filePath: event.filePath,
     meta: event.meta
   }
@@ -403,6 +404,7 @@ function toolEventFromItem(item: AgentRuntimeItem): ToolEventPayload {
         : 'success',
     toolKind: toolKind(item.toolKind),
     detail: item.detail,
+    detailArtifact: item.detailArtifact,
     meta: item.meta
   }
 }

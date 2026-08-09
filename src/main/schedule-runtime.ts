@@ -50,6 +50,7 @@ type RunningScheduleTask = {
   runtimeId: AgentRuntimeId
   threadId: string
   turnId: string
+  eventSinceSeq: number
 }
 
 export class ScheduleRuntime {
@@ -127,7 +128,13 @@ export class ScheduleRuntime {
     const turnId = result.turnId?.trim() ?? ''
     if (!threadId || !turnId) return { ok: false, message: 'Failed to start scheduled task.' }
 
-    this.runningTasks.set(task.id, { runtimeId, threadId, turnId })
+    const running = {
+      runtimeId,
+      threadId,
+      turnId,
+      eventSinceSeq: result.eventSinceSeq ?? 0
+    }
+    this.runningTasks.set(task.id, running)
     await this.updateTaskRunState(task.id, (current) => ({
       ...current,
       lastRunAt: new Date().toISOString(),
@@ -141,7 +148,7 @@ export class ScheduleRuntime {
       }
     }))
     this.syncPowerSaveBlocker(await this.deps.store.load())
-    void this.finishTask(task.id, { runtimeId, threadId, turnId })
+    void this.finishTask(task.id, running)
     return { ok: true, threadId, turnId, message: result.message || 'Started' }
   }
 
@@ -154,7 +161,8 @@ export class ScheduleRuntime {
         running.runtimeId,
         running.threadId,
         running.turnId,
-        TASK_RESPONSE_TIMEOUT_MS
+        TASK_RESPONSE_TIMEOUT_MS,
+        running.eventSinceSeq
       )
       message = summarizeTaskResult(text)
     } catch (error) {

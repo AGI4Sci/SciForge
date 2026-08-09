@@ -1,10 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { LocalTraceStore } from '@sciforge/full-trace';
 
 import { startModelRouterServer, type ModelRouterConfig } from './router';
 import { resolveModelRouterCliOptions } from './cli-options';
 import { ModelRouterFullTraceRecorder } from './full-trace-recorder';
+import { ModelRouterFullTraceWorkerSink } from './full-trace-worker-sink';
 
 const options = resolveModelRouterCliOptions(process.argv.slice(2), process.env);
 const config = loadModelRouterConfig(options.configPath);
@@ -12,14 +12,17 @@ if (!options.userDataDir) {
   throw new Error('Model Router requires --user-data-dir or SCIFORGE_MODEL_ROUTER_USER_DATA_DIR for durable tracing.');
 }
 const sensitiveValues = configuredSensitiveValues(config, process.env);
-const traceStore = new LocalTraceStore({
+const traceWriter = new ModelRouterFullTraceWorkerSink({
   userDataDirectory: resolve(options.userDataDir),
-  sensitiveValues: () => sensitiveValues,
+  sensitiveValues,
 });
-await traceStore.initialize();
+void traceWriter.initialize().catch((error: unknown) => {
+  if (!options.quiet) {
+    console.error(`[sciforge-model-router] Full Trace writer initialization failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+});
 const fullTraceRecorder = new ModelRouterFullTraceRecorder({
-  sink: traceStore,
-  sensitiveValues: () => sensitiveValues,
+  sink: traceWriter,
   log: options.quiet ? undefined : (message) => console.error(`[sciforge-model-router] ${message}`),
 });
 
@@ -29,7 +32,11 @@ const server = await startModelRouterServer({
   config,
   workspaceRoot: options.workspaceRoot,
   fullTraceRecorder,
+  fullTraceRequired: true,
   log: options.quiet ? undefined : (message) => console.error(`[sciforge-model-router] ${message}`),
+}).catch(async (error: unknown) => {
+  await traceWriter.close();
+  throw error;
 });
 
 if (!options.quiet) {
@@ -38,11 +45,30 @@ if (!options.quiet) {
   console.log(`Public model alias: ${config.publicModelAlias ?? 'sciforge-model-router'}`);
 }
 
+let shutdownTask: Promise<void> | undefined;
+const shutdown = (): Promise<void> => {
+  if (shutdownTask) return shutdownTask;
+  shutdownTask = (async () => {
+    let failed = false;
+    try {
+      await server.close();
+    } catch (error) {
+      failed = true;
+      if (!options.quiet) console.error(`[sciforge-model-router] Server shutdown failed: ${String(error)}`);
+    }
+    try {
+      await traceWriter.close();
+    } catch (error) {
+      failed = true;
+      if (!options.quiet) console.error(`[sciforge-model-router] Full Trace writer shutdown failed: ${String(error)}`);
+    }
+    process.exit(failed ? 1 : 0);
+  })();
+  return shutdownTask;
+};
+
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.once(signal, async () => {
-    await server.close();
-    process.exit(0);
-  });
+  process.once(signal, () => void shutdown());
 }
 
 function loadModelRouterConfig(configPath: string | undefined): ModelRouterConfig {

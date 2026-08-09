@@ -153,6 +153,64 @@ test('injects host-resolved reasoning access and restarts when it changes', asyn
   await sidecar.stop()
 })
 
+test('uses a package-owned dynamic loopback port when no endpoint is configured', async () => {
+  let running = false
+  let spawnedEnvironment: NodeJS.ProcessEnv | undefined
+  const sidecar = new EvidenceDagSidecar({
+    allocatePort: async () => 48_123,
+    fetchImpl: async () => running
+      ? evidenceServiceResponse()
+      : new Response('{}', { status: 503 }),
+    spawnImpl: (_command, _args, options) => {
+      spawnedEnvironment = { ...options.env }
+      running = true
+      return fakeChild(() => { running = false })
+    }
+  })
+  sidecar.configure(lifecycleContext({}))
+
+  await sidecar.ensureReady()
+
+  assert.equal(sidecar.endpoint().baseUrl, 'http://127.0.0.1:48123')
+  assert.equal(spawnedEnvironment?.EDAG_PORT, '48123')
+  assert.equal(
+    spawnedEnvironment?.SCIFORGE_EVIDENCE_DAG_SERVICE_URL,
+    'http://127.0.0.1:48123'
+  )
+  await sidecar.stop()
+})
+
+test('coalesces concurrent startup failures and detects an early child exit', async () => {
+  let allocations = 0
+  let spawns = 0
+  const sidecar = new EvidenceDagSidecar({
+    allocatePort: async () => {
+      allocations += 1
+      return 48_124
+    },
+    fetchImpl: async () => new Response('{}', { status: 503 }),
+    readyTimeoutMs: 30_000,
+    spawnImpl: () => {
+      spawns += 1
+      return exitingChild(1)
+    }
+  })
+  sidecar.configure(lifecycleContext({}))
+
+  const results = await Promise.allSettled([
+    sidecar.ensureReady(),
+    sidecar.ensureReady(),
+    sidecar.ensureReady()
+  ])
+
+  assert.equal(allocations, 1)
+  assert.equal(spawns, 1)
+  for (const result of results) {
+    assert.equal(result.status, 'rejected')
+    assert.match(String((result as PromiseRejectedResult).reason), /exited before becoming ready/)
+  }
+})
+
 test('does not fall back to Router environment variables when model access is unavailable', async () => {
   let fetched = false
   let spawned = false
@@ -261,6 +319,18 @@ function fakeChild(onKill: () => void): ChildProcess {
     return true
   }
   return child as unknown as ChildProcess
+}
+
+function exitingChild(exitCode: number): ChildProcess {
+  const child = fakeChild(() => undefined) as ChildProcess & {
+    exitCode: number | null
+    signalCode: NodeJS.Signals | null
+  }
+  setTimeout(() => {
+    child.exitCode = exitCode
+    child.emit('exit', exitCode, null)
+  }, 0)
+  return child
 }
 
 async function assertSelfContainedPythonImport(pythonPath: string): Promise<void> {

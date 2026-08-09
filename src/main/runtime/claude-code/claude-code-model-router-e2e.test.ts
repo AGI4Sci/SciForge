@@ -34,6 +34,31 @@ type QueryCall = {
   options?: ClaudeAgentSdkOptions
 }
 
+async function readCanonicalThreadView(service: ClaudeCodeRuntimeService, threadId: string) {
+  const [listed, status, page] = await Promise.all([
+    service.listThreads({ includeArchived: true, limit: 100 }),
+    service.readThreadStatus(threadId),
+    service.readThreadPage(threadId)
+  ])
+  if (!listed.ok) return listed
+  if (!status.ok) return status
+  if (!page.ok) return page
+  const summary = listed.threads.find((thread) => thread.id === threadId)
+  return {
+    ok: true as const,
+    detail: {
+      ...(summary ?? {
+        id: threadId,
+        runtimeId: 'claude' as const,
+        title: 'Claude Code thread',
+        updatedAt: ''
+      }),
+      ...status.status
+    },
+    page: page.page
+  }
+}
+
 type CapturedProviderCall = {
   url: string
   body: Record<string, unknown>
@@ -353,18 +378,18 @@ describe('Claude Code runtime + Model Router e2e', () => {
       if (!turn.ok) throw new Error(turn.message)
 
       await waitUntil(async () => {
-        const detail = await service.readThread(thread.thread.id)
+        const detail = await readCanonicalThreadView(service, thread.thread.id)
         return detail.ok &&
           detail.detail.latestTurnStatus === 'completed' &&
-          detail.detail.items?.some((item) =>
+          detail.page.turns.flatMap((turn) => turn.items ?? []).some((item) =>
             item.kind === 'assistant_message' && item.text === 'Routed Claude request.'
           ) === true
       })
 
-      const detail = await service.readThread(thread.thread.id)
+      const detail = await readCanonicalThreadView(service, thread.thread.id)
       if (!detail.ok) throw new Error(detail.message)
       expect(detail.detail.backendThreadId).toBe('claude-e2e-session')
-      expect(detail.detail.items).toEqual(expect.arrayContaining([
+      expect(detail.page.turns.flatMap((turn) => turn.items ?? [])).toEqual(expect.arrayContaining([
         expect.objectContaining({
           kind: 'assistant_message',
           text: 'Routed Claude request.'

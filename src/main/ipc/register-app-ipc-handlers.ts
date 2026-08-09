@@ -54,8 +54,9 @@ import {
   zulipTestSendPayloadSchema,
   agentRuntimeEventSubscribePayloadSchema,
   agentRuntimeListThreadsPayloadSchema,
-  agentRuntimeReadThreadPayloadSchema,
-  agentRuntimeReadThreadSidebarProbePayloadSchema,
+  agentRuntimeReadThreadPagePayloadSchema,
+  agentRuntimeReadThreadStatusPayloadSchema,
+  agentRuntimeReadToolArtifactPayloadSchema,
   agentRuntimeSessionResumePayloadSchema,
   agentRuntimeStartThreadPayloadSchema,
   agentRuntimeStartTurnPayloadSchema,
@@ -167,12 +168,15 @@ import type {
   AgentRuntimeAuxiliaryInput,
   AgentRuntimeCapabilities,
   AgentRuntimeId,
+  AgentRuntimeThreadPage,
+  AgentRuntimeThreadPageInput,
   AgentRuntimeThread,
-  AgentRuntimeThreadDetail,
   AgentRuntimeThreadListInput,
-  AgentRuntimeThreadReadInput,
-  AgentRuntimeThreadSidebarProbe,
+  AgentRuntimeThreadStatus,
+  AgentRuntimeThreadStatusInput,
   AgentRuntimeThreadStartInput,
+  AgentRuntimeToolArtifact,
+  AgentRuntimeToolArtifactReadInput,
   AgentRuntimeTurnHandle,
   AgentRuntimeTurnStartInput,
   AgentRuntimeTurnSteerInput,
@@ -236,7 +240,6 @@ type WorkspaceFileWatchRecord = {
 type AgentRuntimeEventStreamRecord = {
   controller: AbortController
   sender: AppBridgeSender
-  onSenderDestroyed: () => void
 }
 
 export type AppBridgeSender = {
@@ -296,8 +299,9 @@ export type RegisterAppIpcHandlersOptions = {
     capabilities: (runtimeId?: AgentRuntimeId) => Promise<AgentRuntimeCapabilities>
     listThreads: (input?: AgentRuntimeThreadListInput) => Promise<AgentRuntimeThread[]>
     startThread: (input: AgentRuntimeThreadStartInput) => Promise<AgentRuntimeThread>
-    readThread: (input: AgentRuntimeThreadReadInput) => Promise<AgentRuntimeThreadDetail>
-    readThreadSidebarProbe: (input: AgentRuntimeThreadReadInput) => Promise<AgentRuntimeThreadSidebarProbe>
+    readThreadStatus: (input: AgentRuntimeThreadStatusInput) => Promise<AgentRuntimeThreadStatus>
+    readThreadPage: (input: AgentRuntimeThreadPageInput) => Promise<AgentRuntimeThreadPage>
+    readToolArtifact: (input: AgentRuntimeToolArtifactReadInput) => Promise<AgentRuntimeToolArtifact>
     startTurn: (input: AgentRuntimeTurnStartInput) => Promise<AgentRuntimeTurnHandle>
     interruptTurn: (input: AgentRuntimeTurnTargetInput) => Promise<void>
     steerTurn: (input: AgentRuntimeTurnSteerInput) => Promise<void>
@@ -489,6 +493,10 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   } = options
   const workspaceFileWatchers = new Map<string, WorkspaceFileWatchRecord>()
   const agentRuntimeEventStreams = new Map<string, AgentRuntimeEventStreamRecord>()
+  const agentRuntimeEventStreamSenderListeners = new Map<
+    number,
+    { sender: AppBridgeSender; listener: () => void }
+  >()
   const invokeHandlers = new Map<string, AppBridgeInvokeHandler>()
   const requireTraceStore = (): NonNullable<RegisterAppIpcHandlersOptions['traces']> => {
     if (!traces) throw new Error('Full trace storage is not initialized.')
@@ -673,8 +681,12 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
 
   const cleanupAgentRuntimeEventStreamRecord = (streamId: string, record: AgentRuntimeEventStreamRecord): void => {
     if (agentRuntimeEventStreams.get(streamId) !== record) return
-    record.sender.removeListener('destroyed', record.onSenderDestroyed)
     agentRuntimeEventStreams.delete(streamId)
+    if ([...agentRuntimeEventStreams.values()].some((active) => active.sender.id === record.sender.id)) return
+    const watched = agentRuntimeEventStreamSenderListeners.get(record.sender.id)
+    if (!watched) return
+    watched.sender.removeListener('destroyed', watched.listener)
+    agentRuntimeEventStreamSenderListeners.delete(record.sender.id)
   }
 
   const disposeAgentRuntimeEventStream = (streamId: string, sender?: AppBridgeSender): boolean => {
@@ -692,6 +704,13 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         disposeAgentRuntimeEventStream(streamId, sender)
       }
     }
+  }
+
+  const watchAgentRuntimeEventStreamSender = (sender: AppBridgeSender): void => {
+    if (agentRuntimeEventStreamSenderListeners.has(sender.id)) return
+    const listener = () => disposeAgentRuntimeEventStreamsForSender(sender)
+    agentRuntimeEventStreamSenderListeners.set(sender.id, { sender, listener })
+    sender.once('destroyed', listener)
   }
 
   const disposeWorkspaceFileWatchesForSender = (sender: AppBridgeSender): void => {
@@ -884,18 +903,19 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('agentRuntime:startThread', agentRuntimeStartThreadPayloadSchema, payload)
     )
   )
-  handleInvoke('agentRuntime:readThread', async (_, payload: unknown) =>
-    requireAgentRuntime().readThread(
-      parseIpcPayload('agentRuntime:readThread', agentRuntimeReadThreadPayloadSchema, payload)
+  handleInvoke('agentRuntime:readThreadStatus', async (_, payload: unknown) =>
+    requireAgentRuntime().readThreadStatus(
+      parseIpcPayload('agentRuntime:readThreadStatus', agentRuntimeReadThreadStatusPayloadSchema, payload)
     )
   )
-  handleInvoke('agentRuntime:readThreadSidebarProbe', async (_, payload: unknown) =>
-    requireAgentRuntime().readThreadSidebarProbe(
-      parseIpcPayload(
-        'agentRuntime:readThreadSidebarProbe',
-        agentRuntimeReadThreadSidebarProbePayloadSchema,
-        payload
-      )
+  handleInvoke('agentRuntime:readThreadPage', async (_, payload: unknown) =>
+    requireAgentRuntime().readThreadPage(
+      parseIpcPayload('agentRuntime:readThreadPage', agentRuntimeReadThreadPagePayloadSchema, payload)
+    )
+  )
+  handleInvoke('agentRuntime:readToolArtifact', async (_, payload: unknown) =>
+    requireAgentRuntime().readToolArtifact(
+      parseIpcPayload('agentRuntime:readToolArtifact', agentRuntimeReadToolArtifactPayloadSchema, payload)
     )
   )
   handleInvoke('agentRuntime:startTurn', async (event, payload: unknown) => {
@@ -1007,10 +1027,9 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     disposeAgentRuntimeEventStream(streamId, sender)
 
     const controller = new AbortController()
-    const onSenderDestroyed = () => disposeAgentRuntimeEventStreamsForSender(sender)
-    const record = { controller, sender, onSenderDestroyed }
+    const record = { controller, sender }
     agentRuntimeEventStreams.set(streamId, record)
-    sender.once('destroyed', onSenderDestroyed)
+    watchAgentRuntimeEventStreamSender(sender)
 
     void (async () => {
       try {

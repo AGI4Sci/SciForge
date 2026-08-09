@@ -2,7 +2,11 @@ import {
   atomicWriteAppDataJson,
   readAppDataStoreText
 } from '../../services/app-data-store'
-import type { AgentRuntimeThreadSidebarVisibility } from '../../../shared/agent-runtime-contract'
+import {
+  isAgentRuntimeTerminalTurnState,
+  type AgentRuntimeThreadSidebarVisibility,
+  type AgentRuntimeTurnStatus
+} from '../../../shared/agent-runtime-contract'
 
 export type CodexStoredThread = {
   guiThreadId: string
@@ -15,6 +19,7 @@ export type CodexStoredThread = {
   archived: boolean
   latestSeq: number
   latestTurnId?: string
+  latestTurnStatus?: AgentRuntimeTurnStatus
   latestUserMessageId?: string
   relation?: CodexStoredThreadRelation
   parentThreadId?: string
@@ -47,6 +52,7 @@ export type CodexThreadStoreUpsertInput = {
   preserveArchived?: boolean
   latestSeq?: number
   latestTurnId?: string
+  latestTurnStatus?: AgentRuntimeTurnStatus
   latestUserMessageId?: string
   updatedAt?: string
   relation?: CodexStoredThreadRelation
@@ -86,6 +92,7 @@ function applyThreadUpsert(
     archived,
     latestSeq: input.latestSeq,
     latestTurnId: input.latestTurnId,
+    latestTurnStatus: input.latestTurnStatus,
     latestUserMessageId: input.latestUserMessageId,
     relation: input.relation,
     parentThreadId: input.parentThreadId,
@@ -115,6 +122,7 @@ function sameStoredThread(a: CodexStoredThread, b: CodexStoredThread): boolean {
     a.archived === b.archived &&
     a.latestSeq === b.latestSeq &&
     a.latestTurnId === b.latestTurnId &&
+    a.latestTurnStatus === b.latestTurnStatus &&
     a.latestUserMessageId === b.latestUserMessageId &&
     a.relation === b.relation &&
     a.parentThreadId === b.parentThreadId &&
@@ -311,6 +319,7 @@ function normalizeThread(raw: unknown): CodexStoredThread | null {
     archived: record.archived === true,
     latestSeq: numberValue(record.latestSeq),
     ...(stringValue(record.latestTurnId) ? { latestTurnId: stringValue(record.latestTurnId) } : {}),
+    ...(isTurnStatus(record.latestTurnStatus) ? { latestTurnStatus: record.latestTurnStatus } : {}),
     ...(stringValue(record.latestUserMessageId) ? { latestUserMessageId: stringValue(record.latestUserMessageId) } : {}),
     ...(normalizeThreadRelation(record.relation) ? { relation: normalizeThreadRelation(record.relation) } : {}),
     ...(stringValue(record.parentThreadId) ? { parentThreadId: stringValue(record.parentThreadId) } : {}),
@@ -358,6 +367,7 @@ function mergeThreadRecords(
     archived?: boolean
     latestSeq?: number
     latestTurnId?: string
+    latestTurnStatus?: AgentRuntimeTurnStatus
     latestUserMessageId?: string
     updatedAt?: string
     now?: string
@@ -376,6 +386,13 @@ function mergeThreadRecords(
   const now = validIso(overrides.now) ?? new Date(0).toISOString()
   const guiThreadId = nonEmpty(overrides.guiThreadId, preferred?.guiThreadId ?? overrides.codexThreadId ?? '')
   const codexThreadId = nonEmpty(overrides.codexThreadId, preferred?.codexThreadId ?? guiThreadId)
+  const latestTurnIdField = optionalString('latestTurnId', overrides.latestTurnId, preferredRecords)
+  const durableTerminalStatus = preferredRecords.find((thread) => (
+    thread.latestTurnId === latestTurnIdField.latestTurnId && isAgentRuntimeTerminalTurnState(thread.latestTurnStatus)
+  ))?.latestTurnStatus
+  const latestTurnStatusOverride = durableTerminalStatus && !isAgentRuntimeTerminalTurnState(overrides.latestTurnStatus)
+    ? durableTerminalStatus
+    : overrides.latestTurnStatus
   return {
     guiThreadId,
     codexThreadId,
@@ -389,7 +406,8 @@ function mergeThreadRecords(
       numberValue(overrides.latestSeq),
       ...preferredRecords.map((thread) => thread.latestSeq)
     ),
-    ...optionalString('latestTurnId', overrides.latestTurnId, preferredRecords),
+    ...latestTurnIdField,
+    ...optionalTurnStatus('latestTurnStatus', latestTurnStatusOverride, preferredRecords),
     ...optionalString('latestUserMessageId', overrides.latestUserMessageId, preferredRecords),
     ...optionalRelation('relation', overrides.relation, preferredRecords),
     ...optionalString('parentThreadId', overrides.parentThreadId, preferredRecords),
@@ -444,6 +462,24 @@ function optionalSidebarVisibility(
     .map((thread) => normalizeSidebarVisibility(thread[key]))
     .find(Boolean)
   return value ? { [key]: value } : {}
+}
+
+function optionalTurnStatus(
+  key: 'latestTurnStatus',
+  override: AgentRuntimeTurnStatus | undefined,
+  records: CodexStoredThread[]
+): Partial<Pick<CodexStoredThread, 'latestTurnStatus'>> {
+  if (override !== undefined) return { [key]: override }
+  const value = records.map((thread) => thread.latestTurnStatus).find(isTurnStatus)
+  return value ? { [key]: value } : {}
+}
+
+function isTurnStatus(value: unknown): value is AgentRuntimeTurnStatus {
+  return typeof value === 'string' && [
+    'idle', 'starting', 'running', 'reconnecting', 'tool_waiting', 'stream_recovering',
+    'completing', 'completed', 'failed', 'cancelled', 'aborted', 'queued', 'pending',
+    'started', 'in_progress', 'steered', 'success', 'error', 'canceled', 'interrupted'
+  ].includes(value)
 }
 
 function optionalRelation(

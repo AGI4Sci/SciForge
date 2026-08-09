@@ -1,13 +1,28 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentRuntimeId } from '@shared/app-settings'
-import type { ChatBlock } from '../agent/types'
+import type { ChatBlock, NormalizedThread } from '../agent/types'
+import type { ChatState } from './chat-store-types'
 import {
+  findReusableEmptyThreadId,
   hasPendingRuntimeWork,
   rememberProviderThreadRuntime,
   settlePendingRuntimeWorkAfterCompletion,
   settlePendingRuntimeWorkAfterInterrupt,
   threadSnapshotLooksRunning
 } from './chat-store-runtime-helpers'
+
+function thread(id: string, hasUserMessage?: boolean): NormalizedThread {
+  return {
+    id,
+    runtimeId: 'codex',
+    title: id,
+    updatedAt: '2026-06-11T00:00:00.000Z',
+    model: 'gpt-5',
+    mode: 'agent',
+    workspace: '/workspace/sciforge',
+    ...(hasUserMessage === undefined ? {} : { hasUserMessage })
+  }
+}
 
 describe('rememberProviderThreadRuntime', () => {
   function provider() {
@@ -38,6 +53,22 @@ describe('rememberProviderThreadRuntime', () => {
     rememberProviderThreadRuntime(p, 'missing-thread', [{ id: 'known-thread', runtimeId: 'sciforge' }])
 
     expect(p.rememberThreadRuntime).not.toHaveBeenCalled()
+  })
+})
+
+describe('findReusableEmptyThreadId', () => {
+  it('uses list summary metadata and does not treat unknown history as empty', () => {
+    const state = {
+      activeThreadId: null,
+      blocks: [],
+      threads: [
+        thread('used-thread', true),
+        thread('legacy-unknown'),
+        thread('empty-thread', false)
+      ]
+    } as unknown as ChatState
+
+    expect(findReusableEmptyThreadId(state, '/workspace/sciforge')).toBe('empty-thread')
   })
 })
 
@@ -75,6 +106,24 @@ describe('chat-store-runtime-helpers compaction state', () => {
     expect(threadSnapshotLooksRunning([staleTool], 'aborted')).toBe(false)
     expect(threadSnapshotLooksRunning([staleTool], 'running')).toBe(true)
     expect(threadSnapshotLooksRunning([staleTool])).toBe(true)
+  })
+
+  it('recognizes every shared active runtime state as still running', () => {
+    for (const status of [
+      'starting',
+      'running',
+      'in_progress',
+      'queued',
+      'started',
+      'reconnecting',
+      'tool_waiting',
+      'stream_recovering',
+      'completing',
+      'pending',
+      'steered'
+    ]) {
+      expect(threadSnapshotLooksRunning([], status), status).toBe(true)
+    }
   })
 
   it('settles local pending work after a successful interrupt', () => {

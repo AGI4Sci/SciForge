@@ -1553,6 +1553,7 @@
   "timelineShowEarlierTurns": "显示更早的 {{count}} 轮对话",
   "timelineShowEarlierWork": "显示更早的 {{count}} 项工作记录",
   "timelineCollapseEarlierTurns": "仅显示最近对话",
+  "toolLoadFullDetail": "加载完整输出",
   "groupEditedFiles": "修改了 {{count}} 个文件",
   "groupEditedFile": "修改了 1 个文件",
   "turnChangeFilesOne": "已编辑 1 个文件",

@@ -9,10 +9,14 @@ import {
   readFile,
   readdir,
   rm,
-  symlink
+  stat,
+  symlink,
+  utimes,
+  writeFile
 } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import {
   LocalTraceStore,
   TRACE_REDACTION_MARKER,
@@ -75,6 +79,11 @@ describe('secret filtering', () => {
     assert.equal(sanitizeTraceText('Cookie: session=secret; csrf=also-secret').includes('also-secret'), false)
     assert.equal(sanitizeTraceText('https://example.test/v1?api_key=query-secret&safe=1').includes('query-secret'), false)
     assert.equal(sanitizeTraceText('Set-Cookie: session=cookie-secret; Secure').includes('cookie-secret'), false)
+    assert.equal(
+      sanitizeTraceText('connect https://user:opaque-password@example.test/path'),
+      `connect https://user:${TRACE_REDACTION_MARKER}@example.test/path`
+    )
+    assert.equal(sanitizeTraceText('x'.repeat(256 * 1024)), 'x'.repeat(256 * 1024))
     assert.deepEqual(sensitiveTraceValuesFromHeaders({
       Authorization: 'Bearer opaque-bearer',
       Cookie: 'session=cookie-value; csrf=csrf-value',
@@ -155,6 +164,35 @@ describe('LocalTraceStore', () => {
     )
   })
 
+  test('sanitizes model response runs across chunk boundaries before persistence', async () => {
+    const temporary = await createTemporaryDirectory()
+    const secret = 'opaque-cross-chunk-secret'
+    const store = new LocalTraceStore({
+      storageDirectory: path.join(temporary, 'traces'),
+      sensitiveValues: [secret]
+    })
+
+    await store.appendMany([{
+      traceId: 'trace-cross-chunk',
+      requestId: 'request-cross-chunk',
+      source: 'model-router',
+      kind: 'model_response_chunk',
+      payload: { index: 0, body: 'opaque-cross-' }
+    }, {
+      traceId: 'trace-cross-chunk',
+      requestId: 'request-cross-chunk',
+      source: 'model-router',
+      kind: 'model_response_chunk',
+      payload: { index: 1, body: 'chunk-secret' }
+    }])
+
+    const stored = await store.read({ traceIds: ['trace-cross-chunk'] })
+    assert.equal(stored.events.length, 1)
+    const serialized = JSON.stringify(stored.events)
+    assert.equal(serialized.includes(secret), false)
+    assert.equal(serialized.includes(TRACE_REDACTION_MARKER), true)
+  })
+
   test('appends complete sanitized events to owner-only files and filters export again', async () => {
     const temporary = await createTemporaryDirectory()
     const userDataDirectory = path.join(temporary, 'user-data')
@@ -185,7 +223,11 @@ describe('LocalTraceStore', () => {
         body: { prompt: `Use ${secret}; echoed opaque-upstream-key`, apiKey: secret }
       }
     })
-    const segment = path.join(store.directory, '2026-07-19.ndjson')
+    const segmentName = (await readdir(store.directory)).find((name) => (
+      /^2026-07-19\.\d{6}\.ndjson$/u.test(name)
+    ))
+    assert.ok(segmentName)
+    const segment = path.join(store.directory, segmentName)
     const firstSnapshot = await readFile(segment, 'utf8')
     assert.equal(firstSnapshot.includes(secret), false)
     assert.equal(firstSnapshot.includes('opaque-upstream-key'), false)
@@ -229,6 +271,97 @@ describe('LocalTraceStore', () => {
       eventCount: 3,
       traceCount: 1
     })
+  })
+
+  test('stores response streams as one bounded, digest-verifiable event', async () => {
+    const temporary = await createTemporaryDirectory()
+    const destination = path.join(temporary, 'exports', 'bounded.jsonl')
+    const store = new LocalTraceStore({
+      storageDirectory: path.join(temporary, 'traces'),
+      now: () => new Date('2026-07-19T10:00:00.000Z')
+    })
+    const response = Array.from({ length: 100 }, (_, index) => `${index}:`.padEnd(1_024, 'x'))
+    const persisted = await store.appendMany(response.map((body, index) => ({
+      traceId: 'trace-bounded-stream',
+      requestId: 'request-bounded-stream',
+      source: 'model-router',
+      kind: 'model_response_chunk' as const,
+      timestamp: `2026-07-19T10:00:00.${String(index).padStart(3, '0')}Z`,
+      payload: { index, body, byteLength: Buffer.byteLength(body) }
+    })))
+
+    assert.equal(persisted.length, 1)
+    const [event] = (await store.read({ traceIds: ['trace-bounded-stream'] })).events
+    assert.equal(event?.kind, 'model_response_chunk')
+    const payload = event?.payload as Record<string, unknown>
+    const capture = payload.capture as Record<string, unknown>
+    assert.equal(capture.mode, 'bounded')
+    assert.equal(capture.chunkCount, 100)
+    assert.equal(capture.sourceByteLength, 102_400)
+    assert.equal(capture.truncated, true)
+    assert.equal(capture.sha256, createHash('sha256').update(response.join('')).digest('hex'))
+    assert.ok(Buffer.byteLength(String(payload.body)) <= 2_048 + 3)
+
+    await store.export({ destination, traceIds: ['trace-bounded-stream'] })
+    const exported = (await readFile(destination, 'utf8')).trim().split('\n')
+    assert.equal(exported.length, 2)
+    const exportedEvent = JSON.parse(exported[1] as string) as TraceEvent
+    assert.equal((exportedEvent.payload as Record<string, unknown>).body, payload.body)
+  })
+
+  test('rolls future writes by size and caps indexed segments without deleting the legacy daily file', async () => {
+    const temporary = await createTemporaryDirectory()
+    let now = new Date('2026-07-19T10:00:00.000Z')
+    const store = new LocalTraceStore({
+      storageDirectory: path.join(temporary, 'traces'),
+      now: () => now,
+      maxSegmentBytes: 700,
+      maxTotalBytes: 1_400
+    })
+    await store.initialize()
+    await writeFile(
+      path.join(store.directory, '2026-07-19.ndjson'),
+      '{"legacy":"trace-legacy"}\n',
+      { mode: 0o600 }
+    )
+    for (const input of Array.from({ length: 8 }, (_, index) => ({
+      traceId: `trace-roll-${index}`,
+      source: 'agent-runtime',
+      kind: 'lifecycle' as const,
+      payload: { phase: 'progress', detail: 'x'.repeat(180), index }
+    }))) {
+      await store.append(input)
+    }
+    now = new Date('2026-07-20T10:00:00.000Z')
+    await store.pruneExpired({ force: true })
+
+    const files = (await readdir(store.directory)).filter((name) => name.endsWith('.ndjson')).sort()
+    assert.ok(files.includes('2026-07-19.ndjson'))
+    assert.ok(files.some((name) => /^2026-07-19\.\d{6}\.ndjson$/u.test(name)))
+    const indexedBytes = (await Promise.all(files
+      .filter((name) => /^2026-07-19\.\d{6}\.ndjson$/u.test(name))
+      .map(async (name) => (await lstat(path.join(store.directory, name))).size)))
+      .reduce((sum, size) => sum + size, 0)
+    assert.ok(indexedBytes <= store.maxTotalBytes)
+    assert.ok((await readFile(path.join(store.directory, '2026-07-19.ndjson'), 'utf8')).includes('trace-legacy'))
+  })
+
+  test('rejects an over-capacity append batch atomically before writing any of it', async () => {
+    const temporary = await createTemporaryDirectory()
+    const store = new LocalTraceStore({
+      storageDirectory: path.join(temporary, 'traces'),
+      maxSegmentBytes: 1_500,
+      maxTotalBytes: 3_000
+    })
+    const inputs = Array.from({ length: 10 }, (_, index) => ({
+      traceId: `trace-over-capacity-${index}`,
+      source: 'agent-runtime',
+      kind: 'lifecycle' as const,
+      payload: { phase: 'progress', detail: 'x'.repeat(600), index }
+    }))
+
+    await assert.rejects(store.appendMany(inputs), /exceeds the managed storage capacity/u)
+    assert.deepEqual((await store.read()).events, [])
   })
 
   test('normalizes forged identifiers, source, and payload consistently on read and export', async () => {
@@ -727,7 +860,11 @@ describe('LocalTraceStore', () => {
     assert.equal(pruned.deletedFiles, 0)
     assert.equal(pruned.deletedEvents, 1)
     assert.deepEqual((await store.read()).events.map((event) => event.traceId), ['trace-boundary'])
-    assert.equal((await lstat(path.join(store.directory, '2026-06-19.ndjson'))).mode & 0o777, 0o600)
+    const retainedSegment = (await readdir(store.directory)).find((name) => (
+      /^2026-06-19\.\d{6}\.ndjson$/u.test(name)
+    ))
+    assert.ok(retainedSegment)
+    assert.equal((await lstat(path.join(store.directory, retainedSegment))).mode & 0o777, 0o600)
     assert.equal((await readdir(store.directory)).some((entry) => entry.endsWith('.tmp')), false)
   })
 
@@ -735,8 +872,8 @@ describe('LocalTraceStore', () => {
     const temporary = await createTemporaryDirectory()
     const storageDirectory = path.join(temporary, 'traces')
     const now = new Date('2026-07-19T10:00:00.000Z')
-    const first = new LocalTraceStore({ storageDirectory, now: () => now })
-    const second = new LocalTraceStore({ storageDirectory, now: () => now })
+    const first = new LocalTraceStore({ storageDirectory, now: () => now, maxSegmentBytes: 1_500 })
+    const second = new LocalTraceStore({ storageDirectory, now: () => now, maxSegmentBytes: 1_500 })
     await Promise.all([first.initialize(), second.initialize()])
 
     await Promise.all(Array.from({ length: 100 }, (_, index) => {
@@ -745,7 +882,7 @@ describe('LocalTraceStore', () => {
         traceId: `trace-${index}`,
         source: 'agent-runtime',
         kind: 'lifecycle',
-        payload: { phase: 'started', index }
+        payload: { phase: 'started', detail: 'x'.repeat(180), index }
       })
     }))
 
@@ -753,6 +890,76 @@ describe('LocalTraceStore', () => {
     assert.equal(result.corruptLines, 0)
     assert.equal(result.events.length, 100)
     assert.equal(new Set(result.events.map((event) => event.traceId)).size, 100)
+    const segments = (await readdir(storageDirectory)).filter((entry) => entry.endsWith('.ndjson'))
+    assert.ok(segments.length > 1)
+    for (const segment of segments) {
+      assert.ok((await stat(path.join(storageDirectory, segment))).size <= first.maxSegmentBytes)
+    }
+  })
+
+  test('serializes concurrent retention maintenance across store instances', async () => {
+    const temporary = await createTemporaryDirectory()
+    const storageDirectory = path.join(temporary, 'traces')
+    let now = new Date('2026-06-01T10:00:00.000Z')
+    const first = new LocalTraceStore({ storageDirectory, now: () => now, retentionDays: 30 })
+    const second = new LocalTraceStore({ storageDirectory, now: () => now, retentionDays: 30 })
+    await Promise.all([first.initialize(), second.initialize()])
+    await first.append({
+      traceId: 'trace-expired-concurrently',
+      source: 'agent-runtime',
+      kind: 'lifecycle',
+      payload: { phase: 'completed' }
+    })
+
+    now = new Date('2026-08-01T10:00:00.000Z')
+    const results = await Promise.all([
+      first.pruneExpired({ force: true }),
+      second.pruneExpired({ force: true })
+    ])
+
+    assert.equal(results.reduce((sum, result) => sum + result.deletedFiles, 0), 1)
+    assert.deepEqual((await first.read()).events, [])
+  })
+
+  test('reclaims a stale mutation lease left by a terminated writer process', async () => {
+    const temporary = await createTemporaryDirectory()
+    const storageDirectory = path.join(temporary, 'traces')
+    const lockDirectory = path.join(storageDirectory, '.writer.lock')
+    await mkdir(lockDirectory, { recursive: true, mode: 0o700 })
+    const ownerFile = path.join(lockDirectory, 'owner.json')
+    await writeFile(ownerFile, `${JSON.stringify({
+      pid: 2_147_483_647,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      heartbeatAt: '2026-01-01T00:00:00.000Z',
+      token: 'terminated-writer-process'
+    })}\n`, { mode: 0o600 })
+    await utimes(ownerFile, new Date('2026-01-01T00:00:00.000Z'), new Date('2026-01-01T00:00:00.000Z'))
+
+    const store = new LocalTraceStore({ storageDirectory })
+    await store.initialize()
+
+    assert.equal((await readdir(storageDirectory)).includes('.writer.lock'), false)
+  })
+
+  test('rejects an indivisible event larger than the segment limit before writing', async () => {
+    const temporary = await createTemporaryDirectory()
+    const storageDirectory = path.join(temporary, 'traces')
+    const store = new LocalTraceStore({
+      storageDirectory,
+      maxSegmentBytes: 1_024,
+      maxTotalBytes: 8_192
+    })
+
+    await assert.rejects(store.append({
+      traceId: 'trace-oversized-line',
+      source: 'agent-runtime',
+      kind: 'lifecycle',
+      payload: { phase: 'completed', detail: 'x'.repeat(2_048) }
+    }), (error: unknown) => (
+      error instanceof Error &&
+      (error as NodeJS.ErrnoException).code === 'TRACE_SEGMENT_EVENT_TOO_LARGE'
+    ))
+    assert.deepEqual((await store.read()).events, [])
   })
 
   test('rejects a symbolic-link storage directory', async () => {
@@ -839,6 +1046,37 @@ test('execution event replay is idempotent by stable eventId and rejects collisi
     }),
     /eventId collision/u
   )
+})
+
+test('serializes execution event collision checks across store instances', async () => {
+  const directory = await createTemporaryDirectory()
+  const first = new LocalTraceStore({ storageDirectory: directory })
+  const second = new LocalTraceStore({ storageDirectory: directory })
+  const base = {
+    eventId: 'execution-event-concurrent',
+    traceId: 'trace-execution-concurrent',
+    source: 'domain-execution:domain.create-loop',
+    kind: 'execution_event' as const,
+    timestamp: '2026-08-05T00:00:00.000Z'
+  }
+  const payload = (phase: 'run_completed' | 'run_failed') => ({
+    schemaVersion: 'sciforge.execution-event.v1' as const,
+    phase,
+    producer: { moduleId: 'domain.create-loop', moduleVersion: '1.0.0' },
+    executionId: 'execution-concurrent',
+    runId: 'run-concurrent',
+    event: { artifacts: [] }
+  })
+
+  const results = await Promise.allSettled([
+    first.append({ ...base, payload: payload('run_completed') }),
+    second.append({ ...base, payload: payload('run_failed') })
+  ])
+
+  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1)
+  assert.equal(results.filter((result) => result.status === 'rejected').length, 1)
+  assert.match(String((results.find((result) => result.status === 'rejected') as PromiseRejectedResult).reason), /eventId collision/u)
+  assert.equal((await first.read({ eventIds: [base.eventId] })).total, 1)
 })
 
 test('exact event id reads are bounded and retain only matching trace records', async () => {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
@@ -21,6 +21,11 @@ import {
   createCodexWorkspaceHostRuntime,
   type CodexWorkspaceHostRuntime
 } from './workspace-host-runtime.js'
+import { RuntimeEventStore } from './runtime-event-store.js'
+import {
+  boundRuntimeEventPayload,
+  decodeRuntimeToolArtifactRef
+} from './runtime-payload-boundary.js'
 
 const temporaryDirectories: string[] = []
 const runtimes: CodexWorkspaceHostRuntime[] = []
@@ -113,6 +118,63 @@ describe('CodexWorkspaceHostRuntime', () => {
       record(record(payload).event).kind === 'assistant_delta'
     ))
 
+    const commandOutput = 'x'.repeat(20_000)
+    fake.events.push({
+      type: 'event',
+      channel: 'codex:event',
+      payload: {
+        method: 'item/started',
+        params: {
+          threadId: 'codex-thread-1',
+          turnId: 'turn-1',
+          itemId: 'command-1',
+          item: {
+            id: 'command-1',
+            type: 'commandExecution',
+            command: 'npm test'
+          }
+        }
+      }
+    })
+    fake.events.push({
+      type: 'event',
+      channel: 'codex:event',
+      payload: {
+        method: 'item/completed',
+        params: {
+          threadId: 'codex-thread-1',
+          turnId: 'turn-1',
+          itemId: 'command-1',
+          item: {
+            id: 'command-1',
+            type: 'commandExecution',
+            command: 'npm test',
+            aggregatedOutput: commandOutput
+          }
+        }
+      }
+    })
+    await waitFor(() => published.some(({ payload }) => {
+      const event = record(record(payload).event)
+      return event.kind === 'item_snapshot' && record(event.item).id === 'command-1'
+    }))
+    const page = record(await invoke(runtime, context, 'readThreadPage', {
+      runtimeId: 'codex',
+      threadId: 'gui-thread-1',
+      limit: 1
+    }))
+    const command = array(record(array(page.turns)[0]).items)
+      .map(record)
+      .find((item) => item.id === 'command-1')
+    assert.equal(
+      array(record(array(page.turns)[0]).items)
+        .map(record)
+        .filter((item) => item.id === 'command-1').length,
+      1
+    )
+    assert.equal(String(command?.detail).length, 4_096)
+    assert.equal(record(command?.detailArtifact).size, commandOutput.length)
+
     const replay = record(await runtime.replayEvents({
       contractVersion: 1,
       runtimeId: 'codex',
@@ -128,6 +190,122 @@ describe('CodexWorkspaceHostRuntime', () => {
     assert.ok(replayedEvents.some((event) => event.kind === 'user_message'))
     assert.ok(replayedEvents.some((event) => event.kind === 'assistant_delta'))
     assert.ok(published.every(({ kind }) => kind === WORKSPACE_HOST_EVENT_KINDS.runtimeEvent))
+  })
+
+  it('reads bounded status, cursor pages, tool artifacts, and replay deltas', async () => {
+    const root = await temporaryWorkspace()
+    const fake = fakeCodexClient()
+    const runtime = await createCodexWorkspaceHostRuntime({
+      workspaceRoot: root,
+      stateDirectory: await temporaryDirectory('sciforge-remote-codex-state-'),
+      createClient: () => fake.client
+    })
+    runtimes.push(runtime)
+    const context = runtimeContext(root)
+    await invoke(runtime, context, 'startThread', {
+      runtimeId: 'codex',
+      threadId: 'gui-thread-paged',
+      workspace: root
+    })
+
+    const largeDetail = '详'.repeat(20_000)
+    for (let index = 1; index <= 3; index += 1) {
+      const turnId = `turn-${index}`
+      await invoke(runtime, context, 'publishSyntheticEvent', {
+        threadId: 'gui-thread-paged',
+        turnId,
+        itemId: `user-${index}`,
+        kind: 'user_message',
+        text: `question ${index}`
+      })
+      await invoke(runtime, context, 'publishSyntheticEvent', {
+        threadId: 'gui-thread-paged',
+        turnId,
+        kind: 'turn_lifecycle',
+        state: 'started'
+      })
+      await invoke(runtime, context, 'publishSyntheticEvent', {
+        threadId: 'gui-thread-paged',
+        turnId,
+        itemId: `tool-${index}`,
+        kind: 'item_snapshot',
+        item: {
+          id: `tool-${index}`,
+          turnId,
+          kind: 'tool',
+          summary: `tool ${index}`,
+          status: 'completed',
+          detail: index === 1 ? largeDetail : `detail ${index}`
+        }
+      })
+      await invoke(runtime, context, 'publishSyntheticEvent', {
+        threadId: 'gui-thread-paged',
+        turnId,
+        kind: 'turn_lifecycle',
+        state: 'completed'
+      })
+    }
+
+    const status = record(await invoke(runtime, context, 'readThreadStatus', {
+      runtimeId: 'codex',
+      threadId: 'gui-thread-paged'
+    }))
+    assert.equal(fake.reads.at(-1)?.includeTurns, false)
+    assert.equal(status.latestTurnId, 'turn-3')
+    assert.equal(status.latestTurnStatus, 'completed')
+    assert.equal('hasUserMessage' in status, false)
+    assert.equal(Object.hasOwn(status, 'turns'), false)
+    assert.equal(Object.hasOwn(status, 'items'), false)
+
+    const recentPage = record(await invoke(runtime, context, 'readThreadPage', {
+      runtimeId: 'codex',
+      threadId: 'gui-thread-paged',
+      limit: 2
+    }))
+    assert.deepEqual(array(recentPage.turns).map((turn) => record(turn).id), [
+      'turn-2',
+      'turn-3'
+    ])
+    assert.equal(typeof recentPage.nextCursor, 'string')
+    assert.equal(recentPage.latestSeq, status.latestSeq)
+
+    const olderPage = record(await invoke(runtime, context, 'readThreadPage', {
+      runtimeId: 'codex',
+      threadId: 'gui-thread-paged',
+      cursor: recentPage.nextCursor,
+      limit: 2
+    }))
+    assert.deepEqual(array(olderPage.turns).map((turn) => record(turn).id), ['turn-1'])
+    assert.equal(olderPage.nextCursor, null)
+    const tool = array(record(array(olderPage.turns)[0]).items)
+      .map(record)
+      .find((item) => item.id === 'tool-1')
+    assert.ok(Buffer.byteLength(String(tool?.detail), 'utf8') <= 4_096)
+    const artifactRef = record(tool?.detailArtifact)
+    assert.equal(artifactRef.size, Buffer.byteLength(largeDetail, 'utf8'))
+
+    const artifact = record(await invoke(runtime, context, 'readToolArtifact', {
+      runtimeId: 'codex',
+      threadId: 'gui-thread-paged',
+      ref: artifactRef.ref
+    }))
+    assert.equal(artifact.content, largeDetail)
+    assert.equal(artifact.size, Buffer.byteLength(largeDetail, 'utf8'))
+
+    const latestSeq = Number(status.latestSeq)
+    await invoke(runtime, context, 'publishSyntheticEvent', {
+      threadId: 'gui-thread-paged',
+      turnId: 'turn-3',
+      kind: 'runtime_status',
+      phase: 'idle'
+    })
+    const replay = record(await runtime.replayEvents({
+      contractVersion: WORKSPACE_HOST_PROTOCOL_VERSION,
+      runtimeId: 'codex',
+      threadId: 'gui-thread-paged',
+      sinceSeq: latestSeq
+    }, context))
+    assert.deepEqual(array(replay.events).map((event) => record(event).seq), [latestSeq + 1])
   })
 
   it('publishes fail-closed approval and user-input requests and resolves them', async () => {
@@ -380,7 +558,7 @@ describe('CodexWorkspaceHostRuntime', () => {
       createClient: () => second.client
     })
     runtimes.push(runtime2)
-    const thread = record(await invoke(runtime2, context, 'readThread', {
+    const thread = record(await invoke(runtime2, context, 'readThreadStatus', {
       runtimeId: 'codex',
       threadId: 'gui-thread-persisted'
     }))
@@ -395,13 +573,157 @@ describe('CodexWorkspaceHostRuntime', () => {
   })
 })
 
+describe('RuntimeEventStore', () => {
+  it('keeps canonical history, replay deltas, pages, and artifacts beyond 10k events', async () => {
+    const stateDirectory = await temporaryDirectory('sciforge-remote-codex-events-')
+    const threadId = 'thread-long-lived'
+    const detail = 'persisted-output-'.repeat(2_000)
+    const first = await RuntimeEventStore.create(stateDirectory)
+    for (let index = 1; index <= 10_020; index += 1) {
+      first.append(threadId, {
+        kind: 'item_snapshot',
+        turnId: `turn-${index}`,
+        itemId: `tool-${index}`,
+        item: {
+          id: `tool-${index}`,
+          turnId: `turn-${index}`,
+          kind: 'tool',
+          status: 'completed',
+          detail: index === 1 ? detail : `result ${index}`
+        }
+      }, '2026-08-09T00:00:00.000Z')
+    }
+    await first.flush()
+
+    const reloaded = await RuntimeEventStore.create(stateDirectory)
+    const summary = await reloaded.summary(threadId)
+    assert.equal(summary?.latestSeq, 10_020)
+    assert.equal(summary?.latestTurnId, 'turn-10020')
+
+    const replay = await reloaded.readSince(threadId, 10_000)
+    assert.deepEqual(replay.map((event) => event.seq), [
+      10_001, 10_002, 10_003, 10_004, 10_005,
+      10_006, 10_007, 10_008, 10_009, 10_010,
+      10_011, 10_012, 10_013, 10_014, 10_015,
+      10_016, 10_017, 10_018, 10_019, 10_020
+    ])
+
+    let cursor = ''
+    let oldestTurnId = ''
+    let pageCount = 0
+    do {
+      const page = await reloaded.readPage(threadId, cursor, 100)
+      oldestTurnId = String(page.events[0]?.turnId ?? oldestTurnId)
+      cursor = page.nextCursor ?? ''
+      pageCount += 1
+    } while (cursor)
+    assert.equal(pageCount, 101)
+    assert.equal(oldestTurnId, 'turn-1')
+    assert.equal(await reloaded.readLatestToolArtifact(threadId, 'tool-1'), detail)
+
+    const eventDirectory = join(stateDirectory, 'runtime-events')
+    const eventFile = (await readdir(eventDirectory))
+      .find((name) => name.endsWith('.events.jsonl'))
+    assert.ok(eventFile)
+    const eventPath = join(eventDirectory, eventFile)
+    const persistedLog = await readFile(eventPath, 'utf8')
+    const firstLineEnd = persistedLog.indexOf('\n')
+    await writeFile(eventPath, `{malformed-old-record}\n${persistedLog.slice(firstLineEnd + 1)}`)
+    assert.equal((await reloaded.readSince(threadId, 10_000)).length, 20)
+    await assert.rejects(reloaded.readSince(threadId, 0), /invalid JSON/)
+  })
+
+  it('bounds pages within a single long turn by records and raw bytes', async () => {
+    const stateDirectory = await temporaryDirectory('sciforge-remote-codex-long-turn-')
+    const store = await RuntimeEventStore.create(stateDirectory)
+    const threadId = 'thread-one-long-turn'
+    for (let index = 1; index <= 600; index += 1) {
+      store.append(threadId, {
+        kind: 'assistant_delta',
+        turnId: 'turn-long',
+        itemId: 'assistant-1',
+        text: `chunk-${index}`
+      }, '2026-08-09T00:00:00.000Z')
+    }
+    await store.flush()
+
+    const seen = new Set<number>()
+    let cursor = ''
+    do {
+      const page = await store.readPage(threadId, cursor, 20)
+      assert.ok(page.events.length <= 256)
+      for (const event of page.events) seen.add(event.seq)
+      cursor = page.nextCursor ?? ''
+    } while (cursor)
+    assert.equal(seen.size, 600)
+
+    const byteBounded = await RuntimeEventStore.create(
+      await temporaryDirectory('sciforge-remote-codex-byte-page-')
+    )
+    for (let index = 1; index <= 20; index += 1) {
+      byteBounded.append(threadId, {
+        kind: 'assistant_delta',
+        turnId: 'turn-large',
+        itemId: 'assistant-1',
+        text: '界'.repeat(16_000)
+      }, '2026-08-09T00:00:00.000Z')
+    }
+    await byteBounded.flush()
+    const page = await byteBounded.readPage(threadId, '', 20)
+    assert.ok(page.events.length < 10)
+    assert.ok(page.nextCursor)
+  })
+
+  it('bounds every duplicated tool expansion field before serialization', () => {
+    const large = '界'.repeat(20_000)
+    const bounded = record(boundRuntimeEventPayload('thread-1', {
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      itemId: 'tool-1',
+      kind: 'item_snapshot',
+      item: {
+        id: 'tool-1',
+        kind: 'tool',
+        detail: large,
+        arguments: { prompt: large },
+        meta: { toolName: 'exec', output: large, arguments: { prompt: large } },
+        receipt: { status: 'success', detail: large, output: { nested: large } },
+        completionReceipts: [{
+          receiptId: 'receipt-1',
+          issuer: large,
+          callId: 'tool-1',
+          subjectRef: 'artifact-1',
+          attestation: large
+        }]
+      }
+    }))
+    const item = record(bounded.item)
+    assert.ok(Buffer.byteLength(String(item.detail), 'utf8') <= 4_096)
+    assert.deepEqual(item.meta, { toolName: 'exec' })
+    assert.equal(item.arguments, undefined)
+    assert.equal(record(item.receipt).output, undefined)
+    assert.ok(Buffer.byteLength(String(record(item.receipt).detail), 'utf8') <= 4_096)
+    assert.ok(
+      Buffer.byteLength(
+        String(record(array(item.completionReceipts)[0]).attestation),
+        'utf8'
+      ) <= 128
+    )
+    const artifact = record(item.detailArtifact)
+    assert.equal(decodeRuntimeToolArtifactRef(String(artifact.ref)), 'tool-1')
+    assert.ok(Number(artifact.size) > Buffer.byteLength(large, 'utf8'))
+    assert.ok(Buffer.byteLength(JSON.stringify(bounded), 'utf8') < 16_384)
+  })
+})
+
 function fakeCodexClient(): {
   client: CodexAppServerJsonRpcClient
   events: AsyncQueue<CodexAppServerClientEvent>
   approvals: unknown[]
   userInputs: unknown[]
   interruptions: unknown[]
-  reads: Array<{ threadId: string }>
+  reads: Array<{ threadId: string; includeTurns?: boolean }>
   startTurns: Array<{
     sandboxPolicy: { networkAccess: boolean }
   }>
@@ -414,7 +736,7 @@ function fakeCodexClient(): {
   const approvals: unknown[] = []
   const userInputs: unknown[] = []
   const interruptions: unknown[] = []
-  const reads: Array<{ threadId: string }> = []
+  const reads: Array<{ threadId: string; includeTurns?: boolean }> = []
   const startTurns: Array<{
     sandboxPolicy: { networkAccess: boolean }
   }> = []
@@ -451,7 +773,7 @@ function fakeCodexClient(): {
           cwd: '/unused'
         }
       }),
-      readThread: async (input: { threadId: string }) => {
+      readThread: async (input: { threadId: string; includeTurns?: boolean }) => {
         reads.push(input)
         return {
           thread: { id: input.threadId, name: 'Remote work', turns: [] }

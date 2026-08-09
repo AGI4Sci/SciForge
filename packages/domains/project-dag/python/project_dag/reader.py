@@ -8,7 +8,6 @@ Snapshot.
 """
 from __future__ import annotations
 
-import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -23,6 +22,7 @@ from evidence_dag.snapshot import (
     snapshot_filename,
     snapshot_storage_key,
 )
+from evidence_dag.snapshot_storage import read_snapshot_json
 from .human_review import normalize_upstream_review
 
 # statuses that qualify a session claim for promotion. `conflicting` is
@@ -34,10 +34,9 @@ _UPSTREAM_RELS = {EdgeRel.SUPPORTS, EdgeRel.REFINES, EdgeRel.PREREQUISITE}
 
 CREDIBILITY_SCORE = {"high": 0.9, "medium": 0.6, "low": 0.3}
 DEFAULT_QUALITY = 0.5
-def _read_snapshot_header(path: str) -> Optional[dict]:
+def _read_snapshot_header(path: str, storage_dir: str) -> Optional[dict]:
     try:
-        with open(path, encoding="utf-8") as fh:
-            doc = json.load(fh)
+        doc = read_snapshot_json(path, storage_dir=storage_dir)
         meta = doc.get("edag:meta") or {}
         snapshot = meta.get("snapshot")
         if not isinstance(snapshot, dict) or snapshot.get("status") != "committed":
@@ -131,7 +130,7 @@ class SessionReader:
         for fn in sorted(os.listdir(self.session_dir)):
             if fn.endswith(".prov.json"):
                 path = os.path.join(self.session_dir, fn)
-                header = _read_snapshot_header(path)
+                header = _read_snapshot_header(path, self.session_dir)
                 if header is not None:
                     snapshot = EvidenceSnapshot.from_dict(header)
                     out.append(snapshot.thread_id)
@@ -163,16 +162,14 @@ class SessionReader:
             -> tuple[ThreadGraph, EvidenceSnapshot, dict]:
         """Parse exactly one committed Evidence Snapshot."""
         path = self._path(session_id)
-        with open(path, encoding="utf-8") as fh:
-            doc = json.load(fh)
+        doc = read_snapshot_json(path, storage_dir=self.session_dir)
         header = (doc.get("edag:meta") or {}).get("snapshot")
         if not isinstance(header, dict):
             raise ValueError(f"{session_id}: missing committed Evidence Snapshot envelope")
         snapshot = EvidenceSnapshot.from_dict(header)
         if expected_digest is not None and snapshot.digest != expected_digest:
             path = self._historical_path(session_id, expected_digest)
-            with open(path, encoding="utf-8") as fh:
-                doc = json.load(fh)
+            doc = read_snapshot_json(path, storage_dir=self.session_dir)
             header = (doc.get("edag:meta") or {}).get("snapshot")
             if not isinstance(header, dict):
                 raise ValueError(f"{session_id}: historical Evidence Snapshot envelope missing")

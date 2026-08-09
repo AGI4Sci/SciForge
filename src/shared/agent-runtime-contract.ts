@@ -448,13 +448,37 @@ export type AgentRuntimeThread = {
   goal?: AgentRuntimeThreadGoal | null
   todos?: AgentRuntimeTodoList | null
   guiPlan?: AgentRuntimeThreadGuiPlan | null
+  /** Whether the thread has persisted user-authored content. Used by summary-only sidebar filtering. */
+  hasUserMessage?: boolean
 }
 
-export type AgentRuntimeThreadDetail = AgentRuntimeThread & {
+/** Small, bounded polling payload. Thread summary metadata belongs to listThreads. */
+export type AgentRuntimeThreadStatus = {
+  id: string
+  runtimeId: AgentRuntimeId
+  status?: string
   latestSeq: number
-  turns?: AgentRuntimeTurn[]
-  items?: AgentRuntimeItem[]
+  latestTurnId?: string
+  latestTurnStatus?: string
   usage?: AgentRuntimeUsage
+  /** Retained only when the runtime is placed on a non-local Workspace Host. */
+  workspaceLocator?: WorkspaceLocator
+}
+
+export type AgentRuntimeThreadPage = {
+  runtimeId: AgentRuntimeId
+  threadId: string
+  latestSeq: number
+  turns: AgentRuntimeTurn[]
+  /** Opaque cursor for the next, older page. Null means history is exhausted. */
+  nextCursor: string | null
+}
+
+/** Internal aggregate for explicit transcript consumers; never exposed through renderer IPC. */
+export type AgentRuntimeThreadSnapshot = AgentRuntimeThread & {
+  latestSeq: number
+  usage?: AgentRuntimeUsage
+  turns: AgentRuntimeTurn[]
 }
 
 export type AgentRuntimeTurn = {
@@ -481,7 +505,6 @@ export type AgentRuntimeThreadListInput = {
   includeArchived?: boolean
   archivedOnly?: boolean
   includeSide?: boolean
-  summary?: boolean
 }
 
 export type AgentRuntimeThreadStartInput = {
@@ -501,16 +524,30 @@ export type AgentRuntimeThreadStartInput = {
   allowedTools?: string[]
 }
 
-export type AgentRuntimeThreadReadInput = {
+export type AgentRuntimeThreadStatusInput = {
   runtimeId: AgentRuntimeId
   threadId: string
   workspaceLocator?: WorkspaceLocator
 }
 
-export type AgentRuntimeThreadSidebarProbe = {
+export type AgentRuntimeThreadPageInput = AgentRuntimeThreadStatusInput & {
+  cursor?: string
+  limit?: number
+}
+
+export type AgentRuntimeToolArtifactRef = {
   runtimeId: AgentRuntimeId
   threadId: string
-  text: string | null
+  ref: string
+  size: number
+}
+
+export type AgentRuntimeToolArtifactReadInput = AgentRuntimeToolArtifactRef & {
+  workspaceLocator?: WorkspaceLocator
+}
+
+export type AgentRuntimeToolArtifact = AgentRuntimeToolArtifactRef & {
+  content: string
 }
 
 export type AgentRuntimeExecutionEffectClass =
@@ -985,6 +1022,7 @@ export type AgentRuntimeItem = {
   effects?: AgentRuntimeExecutionEffectClass[]
   completionReceipts?: AgentRuntimeCompletionReceipt[]
   detail?: string
+  detailArtifact?: AgentRuntimeToolArtifactRef
   meta?: Record<string, unknown>
   createdAt?: string
 }
@@ -1026,6 +1064,142 @@ export type AgentRuntimeTodoList = {
   items: AgentRuntimeTodoItem[]
 }
 
+/** Transport limits for the summary-only thread list contract. */
+export const AGENT_RUNTIME_THREAD_SUMMARY_LIMITS = {
+  previewBytes: 4_096,
+  titleBytes: 512,
+  scalarBytes: 1_024,
+  pathBytes: 2_048,
+  objectiveBytes: 2_048,
+  planRequestBytes: 2_048,
+  todoItems: 12,
+  todoContentBytes: 512
+} as const
+
+/**
+ * Projects an adapter-owned thread into the bounded, summary-only public contract.
+ * Besides bounding known fields, the explicit projection prevents accidental rich
+ * adapter payloads from crossing listThreads or being retained in Host caches.
+ */
+export function projectAgentRuntimeThreadSummary(thread: AgentRuntimeThread): AgentRuntimeThread {
+  const limits = AGENT_RUNTIME_THREAD_SUMMARY_LIMITS
+  return {
+    id: truncateAgentRuntimeSummaryText(thread.id, limits.scalarBytes),
+    runtimeId: thread.runtimeId,
+    title: truncateAgentRuntimeSummaryText(thread.title, limits.titleBytes),
+    updatedAt: truncateAgentRuntimeSummaryText(thread.updatedAt, limits.scalarBytes),
+    ...(thread.createdAt ? { createdAt: truncateAgentRuntimeSummaryText(thread.createdAt, limits.scalarBytes) } : {}),
+    ...(thread.model ? { model: truncateAgentRuntimeSummaryText(thread.model, limits.scalarBytes) } : {}),
+    ...(thread.mode ? { mode: truncateAgentRuntimeSummaryText(thread.mode, limits.scalarBytes) } : {}),
+    ...(thread.workspace ? { workspace: truncateAgentRuntimeSummaryText(thread.workspace, limits.pathBytes) } : {}),
+    ...(thread.workspaceLocator ? { workspaceLocator: {
+      contractVersion: thread.workspaceLocator.contractVersion,
+      hostSessionId: truncateAgentRuntimeSummaryText(thread.workspaceLocator.hostSessionId, limits.scalarBytes),
+      path: truncateAgentRuntimeSummaryText(thread.workspaceLocator.path, limits.pathBytes)
+    } } : {}),
+    ...(thread.status ? { status: truncateAgentRuntimeSummaryText(thread.status, limits.scalarBytes) } : {}),
+    ...(thread.archived !== undefined ? { archived: thread.archived } : {}),
+    ...(thread.preview ? { preview: truncateAgentRuntimeSummaryText(thread.preview, limits.previewBytes) } : {}),
+    ...(thread.latestTurnId ? { latestTurnId: truncateAgentRuntimeSummaryText(thread.latestTurnId, limits.scalarBytes) } : {}),
+    ...(thread.latestTurnStatus ? { latestTurnStatus: truncateAgentRuntimeSummaryText(thread.latestTurnStatus, limits.scalarBytes) } : {}),
+    ...(thread.backendThreadId ? { backendThreadId: truncateAgentRuntimeSummaryText(thread.backendThreadId, limits.scalarBytes) } : {}),
+    ...(thread.relation ? { relation: thread.relation } : {}),
+    ...(thread.parentThreadId ? { parentThreadId: truncateAgentRuntimeSummaryText(thread.parentThreadId, limits.scalarBytes) } : {}),
+    ...(thread.parentTurnId ? { parentTurnId: truncateAgentRuntimeSummaryText(thread.parentTurnId, limits.scalarBytes) } : {}),
+    ...(thread.threadSource ? { threadSource: truncateAgentRuntimeSummaryText(thread.threadSource, limits.scalarBytes) } : {}),
+    ...(thread.sidebarVisibility ? { sidebarVisibility: thread.sidebarVisibility } : {}),
+    ...(thread.titleSource ? { titleSource: truncateAgentRuntimeSummaryText(thread.titleSource, limits.scalarBytes) } : {}),
+    ...(thread.agentNickname ? { agentNickname: truncateAgentRuntimeSummaryText(thread.agentNickname, limits.scalarBytes) } : {}),
+    ...(thread.agentRole ? { agentRole: truncateAgentRuntimeSummaryText(thread.agentRole, limits.scalarBytes) } : {}),
+    ...(thread.forkedFromThreadId ? { forkedFromThreadId: truncateAgentRuntimeSummaryText(thread.forkedFromThreadId, limits.scalarBytes) } : {}),
+    ...(thread.forkedFromTitle ? { forkedFromTitle: truncateAgentRuntimeSummaryText(thread.forkedFromTitle, limits.titleBytes) } : {}),
+    ...(thread.forkedAt ? { forkedAt: truncateAgentRuntimeSummaryText(thread.forkedAt, limits.scalarBytes) } : {}),
+    ...(thread.forkedFromMessageCount !== undefined ? { forkedFromMessageCount: thread.forkedFromMessageCount } : {}),
+    ...(thread.forkedFromTurnCount !== undefined ? { forkedFromTurnCount: thread.forkedFromTurnCount } : {}),
+    ...(thread.goal !== undefined ? { goal: thread.goal ? boundedThreadGoal(thread.goal) : null } : {}),
+    ...(thread.todos !== undefined ? { todos: thread.todos ? boundedThreadTodos(thread.todos) : null } : {}),
+    ...(thread.guiPlan !== undefined ? { guiPlan: thread.guiPlan ? boundedThreadGuiPlan(thread.guiPlan) : null } : {}),
+    ...(thread.hasUserMessage !== undefined ? { hasUserMessage: thread.hasUserMessage } : {})
+  }
+}
+
+export function truncateAgentRuntimeSummaryText(value: string, maxBytes: number): string {
+  if (maxBytes <= 0) return ''
+  let bytes = 0
+  let truncated = false
+  const output: string[] = []
+  for (const character of value) {
+    const size = utf8ByteLength(character)
+    if (bytes + size > maxBytes) {
+      truncated = true
+      break
+    }
+    output.push(character)
+    bytes += size
+  }
+  return truncated ? output.join('') : value
+}
+
+function boundedThreadGoal(goal: AgentRuntimeThreadGoal): AgentRuntimeThreadGoal {
+  const limits = AGENT_RUNTIME_THREAD_SUMMARY_LIMITS
+  return {
+    ...(goal.runtimeId ? { runtimeId: goal.runtimeId } : {}),
+    threadId: truncateAgentRuntimeSummaryText(goal.threadId, limits.scalarBytes),
+    objective: truncateAgentRuntimeSummaryText(goal.objective, limits.objectiveBytes),
+    status: goal.status,
+    ...(goal.tokenBudget !== undefined ? { tokenBudget: goal.tokenBudget } : {}),
+    tokensUsed: goal.tokensUsed,
+    timeUsedSeconds: goal.timeUsedSeconds,
+    createdAt: truncateAgentRuntimeSummaryText(goal.createdAt, limits.scalarBytes),
+    updatedAt: truncateAgentRuntimeSummaryText(goal.updatedAt, limits.scalarBytes)
+  }
+}
+
+function boundedThreadTodos(todos: AgentRuntimeTodoList): AgentRuntimeTodoList {
+  const limits = AGENT_RUNTIME_THREAD_SUMMARY_LIMITS
+  return {
+    threadId: truncateAgentRuntimeSummaryText(todos.threadId, limits.scalarBytes),
+    updatedAt: truncateAgentRuntimeSummaryText(todos.updatedAt, limits.scalarBytes),
+    items: todos.items.slice(0, limits.todoItems).map((item) => ({
+      id: truncateAgentRuntimeSummaryText(item.id, limits.scalarBytes),
+      content: truncateAgentRuntimeSummaryText(item.content, limits.todoContentBytes),
+      status: item.status,
+      ...(item.source ? { source: {
+        kind: item.source.kind,
+        planId: truncateAgentRuntimeSummaryText(item.source.planId, limits.scalarBytes),
+        relativePath: truncateAgentRuntimeSummaryText(item.source.relativePath, limits.pathBytes),
+        ordinal: item.source.ordinal,
+        contentHash: truncateAgentRuntimeSummaryText(item.source.contentHash, limits.scalarBytes)
+      } } : {}),
+      createdAt: truncateAgentRuntimeSummaryText(item.createdAt, limits.scalarBytes),
+      updatedAt: truncateAgentRuntimeSummaryText(item.updatedAt, limits.scalarBytes)
+    }))
+  }
+}
+
+function boundedThreadGuiPlan(guiPlan: AgentRuntimeThreadGuiPlan): AgentRuntimeThreadGuiPlan {
+  const limits = AGENT_RUNTIME_THREAD_SUMMARY_LIMITS
+  return {
+    operation: guiPlan.operation,
+    workspaceRoot: truncateAgentRuntimeSummaryText(guiPlan.workspaceRoot, limits.pathBytes),
+    relativePath: truncateAgentRuntimeSummaryText(guiPlan.relativePath, limits.pathBytes),
+    planId: truncateAgentRuntimeSummaryText(guiPlan.planId, limits.scalarBytes),
+    ...(guiPlan.sourceRequest ? {
+      sourceRequest: truncateAgentRuntimeSummaryText(guiPlan.sourceRequest, limits.planRequestBytes)
+    } : {}),
+    ...(guiPlan.title ? { title: truncateAgentRuntimeSummaryText(guiPlan.title, limits.titleBytes) } : {})
+  }
+}
+
+function utf8ByteLength(value: string): number {
+  let bytes = 0
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0
+    bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4
+  }
+  return bytes
+}
+
 export type AgentRuntimeBaseEvent = {
   threadId: string
   runtimeId?: AgentRuntimeId
@@ -1053,6 +1227,7 @@ type AgentRuntimeToolEventBase = AgentRuntimeBaseEvent & {
   errorCode?: string
   summary?: string
   detail?: string
+  detailArtifact?: AgentRuntimeToolArtifactRef
   filePath?: string
   meta?: Record<string, unknown>
 }
@@ -1285,7 +1460,7 @@ export type AgentRuntimeCapabilities = {
       readonly?: boolean
     }
     skills: CapabilityState
-    subagents: CapabilityState & { maxParallel?: number; maxChildren?: number }
+    subagents: CapabilityState & { maxParallel?: number }
     diagnostics: CapabilityState
   }
   observability?: {

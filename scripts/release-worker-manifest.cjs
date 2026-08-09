@@ -427,6 +427,7 @@ const RUNTIME_ENTRIES = [
         'src/cli-options.ts',
         'src/cli.ts',
         'src/full-trace-recorder.ts',
+        'src/full-trace-worker-sink.ts',
         'src/http-body.ts',
         'src/index.ts',
         'src/router.ts',

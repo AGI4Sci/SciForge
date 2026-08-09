@@ -1,8 +1,9 @@
 import type {
   AgentRuntimeEvent,
   AgentRuntimeItem,
+  AgentRuntimeThreadPage,
+  AgentRuntimeThreadStatus,
   AgentRuntimeThread,
-  AgentRuntimeThreadDetail,
   AgentRuntimeTurn
 } from '../../../shared/agent-runtime-contract'
 import {
@@ -15,6 +16,13 @@ import {
   EXECUTION_INTEGRITY_POLICY_VERSION,
   requiresExecutionIntegrityValidation
 } from '../agent-runtime/execution-integrity-guard'
+import {
+  decodeToolArtifactRef,
+  externalizeToolDetails,
+  readLatestJsonlThreadRecord,
+  readJsonlThreadPage,
+  readJsonlThreadRecordsSince
+} from '../agent-runtime/jsonl-thread-page'
 
 export type ClaudeCodeStoredThread = {
   guiThreadId: string
@@ -172,6 +180,7 @@ export class ClaudeCodeEventStore {
   private readonly now: () => Date
   private readonly threadQueues = new Map<string, Promise<void>>()
   private readonly jsonlStores = new Map<string, AppDataJsonlStore>()
+  private readonly latestSeqByThread = new Map<string, number>()
 
   constructor(options: { rootDir: string; now?: () => Date }) {
     this.rootDir = options.rootDir
@@ -189,33 +198,83 @@ export class ClaudeCodeEventStore {
   ): Promise<ClaudeCodeStoredEvent[]> {
     const normalizedThreadId = threadId.trim()
     if (!normalizedThreadId) return []
-    let raw = ''
-    try {
-      raw = await this.jsonlForThread(normalizedThreadId).readText()
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-      throw error
+    const events = await readJsonlThreadRecordsSince({
+      store: this.jsonlForThread(normalizedThreadId),
+      threadId: normalizedThreadId,
+      sinceSeq: options.sinceSeq,
+      includeAll: options.includeAll,
+      parse: parseStoredEvent
+    })
+    if (events.length > 0) {
+      const latest = events.at(-1)!.seq
+      if (latest > (this.latestSeqByThread.get(normalizedThreadId) ?? 0)) {
+        this.latestSeqByThread.set(normalizedThreadId, latest)
+      }
     }
-    const sinceSeq = options.includeAll ? 0 : Math.max(0, Math.floor(options.sinceSeq ?? 0))
-    return raw
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map(parseStoredEvent)
-      .filter((event): event is ClaudeCodeStoredEvent => Boolean(event))
-      .filter((event) => event.threadId === normalizedThreadId)
-      .filter((event) => event.seq > sinceSeq)
-      .sort((a, b) => a.seq - b.seq)
+    return events
+  }
+
+  async readPage(
+    threadId: string,
+    options: { cursor?: string; limit?: number } = {}
+  ): Promise<{ events: ClaudeCodeStoredEvent[]; nextCursor: string | null }> {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return { events: [], nextCursor: null }
+    const page = await readJsonlThreadPage({
+      store: this.jsonlForThread(normalizedThreadId),
+      threadId: normalizedThreadId,
+      cursor: options.cursor,
+      limit: options.limit,
+      parse: parseStoredEvent,
+      turnId: ({ event }) => event.turnId
+    })
+    return { events: page.records, nextCursor: page.nextCursor }
+  }
+
+  async readToolArtifact(threadId: string, ref: string): Promise<string | null> {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return null
+    const itemId = decodeToolArtifactRef(ref)
+    let content: string | null = null
+    try {
+      await this.jsonlForThread(normalizedThreadId).readLinesReverse((line) => {
+        const stored = parseStoredEvent(line.trim())
+        if (stored?.threadId !== normalizedThreadId) return
+        const event = stored.event
+        if (event.kind === 'tool_event' && event.itemId === itemId) {
+          const candidate = event.detail ?? event.receipt?.output ?? event.meta?.structuredContent ?? event.meta?.output ?? event.meta?.result
+          if (candidate === undefined) return
+          content = typeof candidate === 'string' ? candidate : safeArtifactJson(candidate)
+          return false
+        } else if (event.kind === 'item_snapshot' && event.item.id === itemId) {
+          const candidate = event.item.detail ?? event.item.meta?.structuredContent ?? event.item.meta?.output ?? event.item.meta?.result
+          if (candidate === undefined) return
+          content = typeof candidate === 'string' ? candidate : safeArtifactJson(candidate)
+          return false
+        }
+      })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    return content
   }
 
   async latestSeq(threadId: string): Promise<number> {
-    const events = await this.read(threadId, { includeAll: true })
-    return Math.max(0, ...events.map((event) => event.seq))
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return 0
+    const cached = this.latestSeqByThread.get(normalizedThreadId)
+    if (cached !== undefined) return cached
+    const latest = (await readLatestJsonlThreadRecord({
+      store: this.jsonlForThread(normalizedThreadId),
+      threadId: normalizedThreadId,
+      parse: parseStoredEvent
+    }))?.seq ?? 0
+    this.latestSeqByThread.set(normalizedThreadId, latest)
+    return latest
   }
 
   private async appendNow(threadId: string, event: AgentRuntimeEvent): Promise<ClaudeCodeStoredEvent> {
-    const existing = await this.read(threadId, { includeAll: true })
-    const seq = Math.max(0, ...existing.map((item) => item.seq)) + 1
+    const seq = (await this.latestSeq(threadId)) + 1
     const createdAt = event.createdAt || this.now().toISOString()
     const stored: ClaudeCodeStoredEvent = {
       seq,
@@ -230,6 +289,7 @@ export class ClaudeCodeEventStore {
       }
     }
     await this.jsonlForThread(threadId).appendJson([stored])
+    this.latestSeqByThread.set(threadId, seq)
     return stored
   }
 
@@ -257,6 +317,14 @@ export class ClaudeCodeEventStore {
   }
 }
 
+function safeArtifactJson(value: unknown): string {
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
 export function storedThreadToRuntimeThread(thread: ClaudeCodeStoredThread): AgentRuntimeThread {
   return {
     id: thread.guiThreadId,
@@ -269,29 +337,48 @@ export function storedThreadToRuntimeThread(thread: ClaudeCodeStoredThread): Age
     archived: thread.archived,
     latestTurnId: thread.latestTurnId,
     latestTurnStatus: thread.latestTurnStatus,
-    backendThreadId: thread.claudeSessionId || undefined
+    backendThreadId: thread.claudeSessionId || undefined,
+    hasUserMessage: Boolean(thread.latestUserMessageId)
   }
 }
 
-export async function storedThreadDetail(
+export function storedThreadStatus(thread: ClaudeCodeStoredThread): AgentRuntimeThreadStatus {
+  return {
+    id: thread.guiThreadId,
+    runtimeId: 'claude',
+    status: thread.latestTurnStatus,
+    latestSeq: thread.latestSeq,
+    latestTurnId: thread.latestTurnId,
+    latestTurnStatus: thread.latestTurnStatus
+  }
+}
+
+export async function storedThreadPage(
   thread: ClaudeCodeStoredThread,
-  eventStore: ClaudeCodeEventStore
-): Promise<AgentRuntimeThreadDetail> {
-  const storedEvents = await eventStore.read(thread.guiThreadId, { includeAll: true })
+  eventStore: ClaudeCodeEventStore,
+  options: { cursor?: string; limit?: number } = {}
+): Promise<AgentRuntimeThreadPage> {
+  const page = await eventStore.readPage(thread.guiThreadId, options)
+  const storedEvents = page.events
   const events = storedEvents.map((item) => item.event)
-  const items = itemsFromEvents(events)
+  const items = externalizeToolDetails({
+    runtimeId: 'claude',
+    threadId: thread.guiThreadId,
+    items: itemsFromEvents(events)
+  })
   const turns = turnsFromEvents(thread.guiThreadId, events, items)
   return {
-    ...storedThreadToRuntimeThread(thread),
-    status: thread.latestTurnStatus,
-    latestSeq: Math.max(thread.latestSeq, ...storedEvents.map((event) => event.seq), 0),
+    runtimeId: 'claude',
+    threadId: thread.guiThreadId,
+    latestSeq: thread.latestSeq,
     turns,
-    items
+    nextCursor: page.nextCursor
   }
 }
 
 function itemsFromEvents(events: AgentRuntimeEvent[]): AgentRuntimeItem[] {
   const items = new Map<string, AgentRuntimeItem>()
+  const textChunks = new Map<string, string[]>()
   for (const event of events) {
     if (event.kind === 'user_message') {
       items.set(event.itemId, {
@@ -313,27 +400,34 @@ function itemsFromEvents(events: AgentRuntimeEvent[]): AgentRuntimeItem[] {
     }
     if (event.kind === 'assistant_delta') {
       const current = items.get(event.itemId)
+      const chunks = textChunks.get(event.itemId) ?? []
+      chunks.push(event.text)
+      textChunks.set(event.itemId, chunks)
       items.set(event.itemId, {
         id: event.itemId,
         turnId: event.turnId,
         kind: 'assistant_message',
-        text: `${current?.text ?? ''}${event.text}`,
+        text: '',
         createdAt: current?.createdAt ?? event.createdAt
       })
       continue
     }
     if (event.kind === 'reasoning_delta') {
       const current = items.get(event.itemId)
+      const chunks = textChunks.get(event.itemId) ?? []
+      chunks.push(event.text)
+      textChunks.set(event.itemId, chunks)
       items.set(event.itemId, {
         id: event.itemId,
         turnId: event.turnId,
         kind: 'reasoning',
-        text: `${current?.text ?? ''}${event.text}`,
+        text: '',
         createdAt: current?.createdAt ?? event.createdAt
       })
       continue
     }
     if (event.kind === 'item_snapshot') {
+      textChunks.delete(event.item.id)
       items.set(event.item.id, {
         ...event.item,
         turnId: event.item.turnId ?? event.turnId,
@@ -368,7 +462,10 @@ function itemsFromEvents(events: AgentRuntimeEvent[]): AgentRuntimeItem[] {
       })
     }
   }
-  return [...items.values()]
+  return [...items.values()].map((item) => {
+    const chunks = textChunks.get(item.id)
+    return chunks ? { ...item, text: chunks.join('') } : item
+  })
 }
 
 function turnsFromEvents(

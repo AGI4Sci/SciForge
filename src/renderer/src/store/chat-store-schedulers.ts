@@ -45,10 +45,10 @@ type TurnCompletionPollOptions = {
   loadThreadState: (
     state: ChatState,
     threadId: string
-  ) => Promise<{ blocks: ChatBlock[]; threadStatus?: string }>
+  ) => Promise<{ threadStatus?: string; latestTurnId?: string; latestTurnStatus?: string }>
   threadLooksRunning: (blocks: ChatBlock[], threadStatus?: string) => boolean
   onCompletedThreads: (
-    doneIds: string[],
+    completed: Array<{ threadId: string; expectedTurnId?: string }>,
     state: ChatState,
     set: ChatStoreSet,
     get: ChatStoreGet
@@ -302,7 +302,7 @@ export function syncTurnCompletionPoll(
   get: ChatStoreGet,
   options: TurnCompletionPollOptions
 ): void {
-  const ids = Object.keys(get().watchTurnCompletion).filter((id) => get().watchTurnCompletion[id])
+  const ids = completionPollThreadIds(get())
   if (ids.length === 0) {
     stopTurnCompletionPoll()
     return
@@ -327,11 +327,15 @@ async function runTurnCompletionPoll(
     turnCompletionPollInFlight = false
   }
 
-  if (generation !== turnCompletionPollGeneration) return
+  if (generation !== turnCompletionPollGeneration) {
+    const state = get()
+    if (state.runtimeConnection === 'ready' && completionPollThreadIds(state).length > 0) {
+      syncTurnCompletionPoll(set, get, options)
+    }
+    return
+  }
   const state = get()
-  const hasWatchedThreads = Object.keys(state.watchTurnCompletion)
-    .some((id) => state.watchTurnCompletion[id])
-  if (state.runtimeConnection !== 'ready' || !hasWatchedThreads) {
+  if (state.runtimeConnection !== 'ready' || completionPollThreadIds(state).length === 0) {
     stopTurnCompletionPoll()
     return
   }
@@ -356,29 +360,53 @@ async function pollTurnCompletionWatch(
     return
   }
 
-  const ids = Object.keys(state.watchTurnCompletion).filter((id) => state.watchTurnCompletion[id])
+  const ids = completionPollThreadIds(state)
   if (ids.length === 0) {
     stopTurnCompletionPoll()
     return
   }
 
-  const doneIds: string[] = []
+  const completed: Array<{ threadId: string; expectedTurnId?: string }> = []
   for (const threadId of ids) {
     try {
-      const { blocks, threadStatus } = await options.loadThreadState(state, threadId)
-      if (!options.threadLooksRunning(blocks, threadStatus)) {
-        doneIds.push(threadId)
+      const activeWork = threadId === state.activeThreadId && Boolean(state.busy || state.currentTurnId)
+      const expectedTurnId = (
+        activeWork
+          ? state.currentTurnId ?? state.threads.find((thread) => thread.id === threadId)?.latestTurnId
+          : state.threads.find((thread) => thread.id === threadId)?.latestTurnId
+      )?.trim()
+      const { threadStatus, latestTurnId, latestTurnStatus } = await options.loadThreadState(state, threadId)
+      if (!options.threadLooksRunning([], latestTurnStatus ?? threadStatus)) {
+        if (activeWork && (
+          !expectedTurnId ||
+          !latestTurnId?.trim() ||
+          latestTurnId.trim() !== expectedTurnId
+        )) continue
+        completed.push({ threadId, ...(expectedTurnId ? { expectedTurnId } : {}) })
       }
     } catch {
       /* ignore */
     }
   }
 
-  if (doneIds.length > 0) {
-    await options.onCompletedThreads(doneIds, state, set, get)
+  const current = get()
+  const done = completed.filter(({ threadId, expectedTurnId }) => {
+    if (threadId !== current.activeThreadId || !(current.busy || current.currentTurnId)) return true
+    return Boolean(expectedTurnId && current.currentTurnId?.trim() === expectedTurnId)
+  })
+  if (done.length > 0) {
+    await options.onCompletedThreads(done, current, set, get)
   }
 
-  if (Object.keys(get().watchTurnCompletion).filter((id) => get().watchTurnCompletion[id]).length === 0) {
+  if (completionPollThreadIds(get()).length === 0) {
     stopTurnCompletionPoll()
   }
+}
+
+function completionPollThreadIds(state: ChatState): string[] {
+  const ids = new Set(
+    Object.keys(state.watchTurnCompletion ?? {}).filter((id) => state.watchTurnCompletion?.[id])
+  )
+  if ((state.busy || state.currentTurnId) && state.activeThreadId) ids.add(state.activeThreadId)
+  return [...ids]
 }

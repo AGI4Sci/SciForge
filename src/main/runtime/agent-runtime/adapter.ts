@@ -4,13 +4,16 @@ import type {
   AgentRuntimeCapabilities,
   AgentRuntimeEvent,
   AgentRuntimeId,
+  AgentRuntimeThreadPage,
+  AgentRuntimeThreadPageInput,
   AgentRuntimeThreadRelation,
   AgentRuntimeThread,
-  AgentRuntimeThreadDetail,
   AgentRuntimeThreadListInput,
-  AgentRuntimeThreadReadInput,
-  AgentRuntimeThreadSidebarProbe,
+  AgentRuntimeThreadStatus,
+  AgentRuntimeThreadStatusInput,
   AgentRuntimeThreadStartInput,
+  AgentRuntimeToolArtifact,
+  AgentRuntimeToolArtifactReadInput,
   AgentRuntimeTransport,
   AgentRuntimeTurnHandle,
   AgentRuntimeTurnStartInput,
@@ -231,14 +234,18 @@ export type AgentRuntimeAdapter = {
     context: AgentRuntimeAdapterContext,
     input: AgentRuntimeThreadStartInput
   ): Promise<AgentRuntimeThread>
-  readThread(
+  readThreadStatus(
     context: AgentRuntimeAdapterContext,
-    input: AgentRuntimeThreadReadInput
-  ): Promise<AgentRuntimeThreadDetail>
-  readThreadSidebarProbe?(
+    input: AgentRuntimeThreadStatusInput
+  ): Promise<AgentRuntimeThreadStatus>
+  readThreadPage(
     context: AgentRuntimeAdapterContext,
-    input: AgentRuntimeThreadReadInput
-  ): Promise<AgentRuntimeThreadSidebarProbe>
+    input: AgentRuntimeThreadPageInput
+  ): Promise<AgentRuntimeThreadPage>
+  readToolArtifact(
+    context: AgentRuntimeAdapterContext,
+    input: AgentRuntimeToolArtifactReadInput
+  ): Promise<AgentRuntimeToolArtifact>
   startTurn(
     context: AgentRuntimeAdapterContext,
     input: AgentRuntimeTurnStartInput

@@ -672,6 +672,7 @@ export function armBusyWatchdog(
     flushLiveBlocks,
     busyTimeoutMessage: () => i18n.t('common:busyTimeout', { minutes: timeoutMinutes })
   })
+  syncTurnCompletionPoll(set, get)
 }
 
 export function syncTurnCompletionPoll(
@@ -682,15 +683,11 @@ export function syncTurnCompletionPoll(
     loadThreadState: async (state, threadId) => {
       const provider = getProvider()
       rememberProviderThreadRuntime(provider, threadId, state.threads)
-      const detail = await provider.getThreadDetail(threadId)
-      const blocks = hydrateBlockModelLabels(threadId, detail.blocks)
-      set((snapshot) => ({
-        threadBlocksById: cacheThreadBlocks(snapshot.threadBlocksById, threadId, blocks)
-      }))
-      return { ...detail, blocks }
+      return provider.getThreadStatus(threadId)
     },
     threadLooksRunning: threadSnapshotLooksRunning,
-    onCompletedThreads: async (doneIds, state, setState, getState) => {
+    onCompletedThreads: async (completed, state, setState, getState) => {
+      const doneIds = completed.map(({ threadId }) => threadId)
       for (const id of doneIds) {
         notifyTurnComplete(
           id,
@@ -711,6 +708,16 @@ export function syncTurnCompletionPoll(
       for (const id of doneIds) {
         await getState().drainQueuedMessagesForThread(id)
       }
+      const current = getState()
+      const currentCompletion = completed.find(({ threadId }) => threadId === current.activeThreadId)
+      if (
+        current.activeThreadId &&
+        currentCompletion &&
+        currentCompletion.expectedTurnId === current.currentTurnId?.trim() &&
+        (current.busy || current.currentTurnId)
+      ) {
+        await current.recoverActiveTurn()
+      }
       void getState().refreshThreads()
     }
   })
@@ -728,7 +735,7 @@ function refreshCompletedThreadSnapshot(
     try {
       const provider = getProvider()
       rememberProviderThreadRuntime(provider, targetThreadId, get().threads)
-      const detail = await provider.getThreadDetail(targetThreadId)
+      const detail = await provider.getRecentThreadView(targetThreadId)
       const canonicalBlocks = hydrateBlockModelLabels(targetThreadId, detail.blocks)
       set((state) => {
         if (state.activeThreadId !== targetThreadId) return {}
@@ -862,6 +869,11 @@ export function buildThreadEventSink(
     if (!isCurrentStream()) return
     if (!isAgentRuntimeTerminalTurnState(ev.state)) return
     const beforeState = get()
+    if (
+      beforeState.currentTurnId &&
+      ev.turnId?.trim() &&
+      beforeState.currentTurnId !== ev.turnId.trim()
+    ) return
     const terminalKey = terminalTurnKey(ev, beforeState)
     if (terminalKey && settledTerminalTurnKeys.has(terminalKey)) return
     if (!hasTerminalWorkToSettle(beforeState)) return
@@ -1121,6 +1133,7 @@ export function buildThreadEventSink(
             status: ev.status,
             toolKind: ev.toolKind ?? cur.toolKind,
             detail: ev.detail ?? cur.detail,
+            detailArtifact: ev.detailArtifact ?? cur.detailArtifact,
             filePath: ev.filePath ?? cur.filePath,
             meta: ev.meta ?? cur.meta
           }
@@ -1145,6 +1158,7 @@ export function buildThreadEventSink(
           status: ev.status,
           toolKind: ev.toolKind,
           detail: ev.detail,
+          detailArtifact: ev.detailArtifact,
           filePath: ev.filePath,
           meta: ev.meta
         }

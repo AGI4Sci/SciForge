@@ -2218,6 +2218,137 @@ test('interactive responses preempt in-flight Evidence DAG provider work', async
   }
 });
 
+test('keeps health responsive and rejects new model work while Full Trace is backlogged', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-trace-backlog-'));
+  let releaseWrite: (() => void) | undefined;
+  const writeReleased = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  const recorder = new ModelRouterFullTraceRecorder({
+    sink: {
+      async appendMany() {
+        await writeReleased;
+      },
+    },
+    maxOutstandingWork: 1,
+  });
+  recorder.commit([{
+    traceId: 'trace-backlog',
+    source: 'model-router',
+    kind: 'lifecycle',
+    payload: { phase: 'queued' },
+  }]);
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: async () => {
+      throw new Error('Backlogged requests must not reach an upstream provider.');
+    },
+    fullTraceRecorder: recorder,
+  });
+
+  try {
+    const health = await fetch(`${server.url}/healthz?check=upstream`);
+    assert.equal(health.status, 503);
+    const healthBody = await health.json() as Record<string, unknown>;
+    assert.equal(healthBody.traceCapture, 'backlogged');
+    assert.equal((healthBody.traceCaptureDiagnostics as Record<string, unknown>).pendingBatches, 1);
+
+    const rejected = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ model: 'sciforge-router', input: 'do not route this' }),
+    });
+    assert.equal(rejected.status, 503);
+    const rejectedBody = await rejected.json() as { error?: { code?: string } };
+    assert.equal(rejectedBody.error?.code, 'full_trace_backlogged');
+
+    releaseWrite?.();
+    await recorder.flush();
+    const recovered = await fetch(`${server.url}/healthz?check=upstream`);
+    assert.equal(recovered.status, 200);
+    assert.equal((await recovered.json() as Record<string, unknown>).traceCapture, 'ready');
+  } finally {
+    releaseWrite?.();
+    await server.close();
+  }
+});
+
+test('authenticates model routes before exposing Full Trace admission state', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-trace-auth-order-'));
+  const recorder = new ModelRouterFullTraceRecorder({
+    sink: {
+      status: () => ({ state: 'failed', failure: '/Users/private/full-traces: EACCES' }),
+      async appendMany() {},
+    },
+  });
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: async () => {
+      throw new Error('Rejected trace requests must not reach an upstream provider.');
+    },
+    fullTraceRecorder: recorder,
+  });
+
+  try {
+    const unauthorized = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'sciforge-router', input: 'unauthorized' }),
+    });
+    assert.equal(unauthorized.status, 401);
+    assert.doesNotMatch(await unauthorized.text(), /trace|EACCES|Users\/private/i);
+
+    const authorized = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ model: 'sciforge-router', input: 'authorized' }),
+    });
+    assert.equal(authorized.status, 503);
+    const publicFailure = await authorized.text();
+    assert.match(publicFailure, /full_trace_failed/);
+    assert.doesNotMatch(publicFailure, /EACCES|Users\/private/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('fails readiness and authorized model admission when required Full Trace is disabled', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-trace-required-'));
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: async () => {
+      throw new Error('Untraced model work must not reach an upstream provider.');
+    },
+    fullTraceRequired: true,
+  });
+
+  try {
+    const health = await fetch(`${server.url}/healthz`);
+    assert.equal(health.status, 503);
+    assert.equal((await health.json() as Record<string, unknown>).traceCapture, 'disabled');
+
+    const rejected = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ model: 'sciforge-router', input: 'must be traced' }),
+    });
+    assert.equal(rejected.status, 503);
+    const body = await rejected.json() as { error?: { code?: string } };
+    assert.equal(body.error?.code, 'full_trace_disabled');
+  } finally {
+    await server.close();
+  }
+});
+
 test('client disconnect aborts the text upstream and records error plus partial terminal trace events', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-client-abort-trace-'));
   const capturedEvents: TraceEventInput[] = [];

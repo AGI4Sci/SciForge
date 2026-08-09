@@ -27,6 +27,7 @@ import {
 import { readIncomingMessageBody, readIncomingMessageBodyBytes } from './http-body';
 import {
   type ModelRouterFullTraceRecorder,
+  type ModelRouterTraceCaptureStatus,
   type ModelRouterTraceSession,
 } from './full-trace-recorder';
 import { redactTraceText, redactUserVisibleText } from './trace-redaction';
@@ -108,6 +109,7 @@ export interface ModelRouterServerOptions {
   fetchImpl?: typeof fetch;
   log?: (message: string) => void;
   fullTraceRecorder?: ModelRouterFullTraceRecorder;
+  fullTraceRequired?: boolean;
 }
 
 export interface StartedModelRouterServer {
@@ -374,15 +376,40 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
       if (!response.writableFinished) abortClientRequest();
     });
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? '127.0.0.1'}`);
-    const fullTraceSession = isModelTraceRoute(request.method, url.pathname)
-      ? options.fullTraceRecorder?.start({
+    const traceRoute = isModelTraceRoute(request.method, url.pathname);
+    let fullTraceSession: ModelRouterTraceSession | undefined;
+    try {
+      if (traceRoute) {
+        assertRuntimeAuthorized(request, options.config, env);
+        const traceCaptureStatus = options.fullTraceRecorder?.status();
+        if (!traceCaptureStatus && options.fullTraceRequired) {
+          return sendJson(response, 503, {
+            error: {
+              code: 'full_trace_disabled',
+              message: 'Full Trace capture is required but unavailable.',
+            },
+          });
+        }
+        if (traceCaptureStatus && !traceCaptureStatus.ready) {
+          return sendJson(response, 503, {
+            error: {
+              code: `full_trace_${traceCaptureStatus.state}`,
+              message: traceCaptureStatus.state === 'starting'
+                ? 'Full Trace capture is initializing. Retry shortly.'
+                : traceCaptureStatus.state === 'backlogged'
+                  ? 'Full Trace capture is backlogged. Retry after the writer catches up.'
+                  : 'Full Trace capture failed. Check Model Router logs.',
+            },
+            traceCapture: publicTraceCaptureDiagnostics(traceCaptureStatus),
+          });
+        }
+        fullTraceSession = options.fullTraceRecorder?.start({
           method: request.method ?? 'POST',
           path: `${url.pathname}${url.search}`,
           headers: request.headers,
-        })
-      : undefined;
-    fullTraceSession?.attach(response);
-    try {
+        });
+        fullTraceSession?.attach(response);
+      }
       if (request.method === 'OPTIONS') return sendCors(response);
       if (request.method === 'GET' && url.pathname === '/health') {
         return sendJson(response, 200, compactObject({
@@ -390,6 +417,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
           service: 'sciforge.model-router',
           instanceId: stringField(env.SCIFORGE_MODEL_ROUTER_INSTANCE_ID),
           checkedAt: new Date().toISOString(),
+          traceCapture: options.fullTraceRecorder?.status().state ?? 'disabled',
         }));
       }
       if (request.method === 'GET' && url.pathname === '/healthz') {
@@ -409,8 +437,11 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
           upstream,
           recentProviderDiagnostic ? upstream.category : undefined,
         );
-        return sendJson(response, upstream.ok ? 200 : 503, {
-          ok: upstream.ok,
+        const traceCapture = options.fullTraceRecorder?.status();
+        const traceReady = traceCapture?.ready ?? !options.fullTraceRequired;
+        const ready = upstream.ok && traceReady;
+        return sendJson(response, ready ? 200 : 503, compactObject({
+          ok: ready,
           service: 'sciforge.model-router',
           checkedAt: new Date().toISOString(),
           version: diagnostics.version,
@@ -419,9 +450,12 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
           recentError: diagnostics.recentError,
           capabilities: diagnostics.capabilities,
           protocol,
-          traceCapture: options.fullTraceRecorder ? 'ready' : 'disabled',
+          traceCapture: traceCapture?.state ?? 'disabled',
+          traceCaptureDiagnostics: traceCapture
+            ? publicTraceCaptureDiagnostics(traceCapture)
+            : undefined,
           upstream,
-        });
+        }));
       }
       if (request.method === 'GET' && url.pathname === '/manifest') {
         return sendJson(response, 200, modelRouterManifest as unknown as JsonObject);
@@ -4354,6 +4388,16 @@ function isModelTraceRoute(method: string | undefined, pathname: string): boolea
     || pathname === '/api/cc/v1/messages'
     || pathname === '/v1/messages/count_tokens'
     || pathname === '/api/cc/v1/messages/count_tokens';
+}
+
+function publicTraceCaptureDiagnostics(status: ModelRouterTraceCaptureStatus): JsonObject {
+  return {
+    state: status.state,
+    ready: status.ready,
+    activeSessions: status.activeSessions,
+    pendingBatches: status.pendingBatches,
+    maxOutstandingWork: status.maxOutstandingWork,
+  };
 }
 
 function sendCors(response: ServerResponse) {

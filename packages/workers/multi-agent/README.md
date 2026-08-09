@@ -9,13 +9,10 @@ credentials remain inside that adapter.
 
 Hosts that expose delegation to a model should provide one batch-capable
 delegation contract. Independent child tasks submitted in the same request start
-concurrently up to `maxParallel`; the runtime reserves parallel and per-turn
-child capacity atomically so concurrent starts cannot exceed either budget.
-`maxChildren` is the total budget for the whole parent turn, not a per-call or
-simultaneous-work limit: completing a child or issuing another delegation call
-does not reset it. Tool descriptions and admission errors must tell callers to
-partition the complete workload across one balanced batch instead of attempting
-serial batches that can never exceed the same turn budget.
+concurrently up to `maxParallel`; the runtime admits starts atomically so active
+children cannot exceed that configured capacity. A parent turn has no separate
+lifetime child-run quota: after children finish, the parent may delegate more
+work in the same turn.
 
 The Host registers one `MultiAgentLifecycleControl` before provider spawn and
 the adapter reports `missing` until its child channel is active. Once the

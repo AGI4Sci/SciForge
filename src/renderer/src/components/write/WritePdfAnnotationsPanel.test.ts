@@ -195,6 +195,20 @@ describe('WritePdfAnnotationsPanel', () => {
     expect(html).toContain('aria-label="Resize editor"')
   })
 
+  it('renders only one labeled delete action for a selected comment thread', () => {
+    const html = renderToStaticMarkup(createElement(WritePdfAnnotationsPanel, {
+      sidecar: panelSidecar(),
+      selectedThreadId: 'thread-a',
+      initialKind: 'comment',
+      onLocateThread: vi.fn(),
+      onDeleteThread: vi.fn(),
+      onEditAnnotation: vi.fn()
+    }))
+
+    expect(html).not.toContain('data-testid="annotation-thread-delete-thread-a"')
+    expect(html.match(/Delete thread<\/button>/g)).toHaveLength(1)
+  })
+
   it('renders document annotation copy without PDF-only package and page controls', () => {
     const html = renderToStaticMarkup(createElement(WritePdfAnnotationsPanel, {
       documentKind: 'docx',
