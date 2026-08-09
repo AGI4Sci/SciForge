@@ -1,7 +1,7 @@
 """Deterministic capability-driven backend selection."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable
 
 from cua.capabilities import BackendCapabilities, BackendId
@@ -15,7 +15,12 @@ from cua.isolation import (
 from cua.session_registry import LeaseScope, RegistryError, SessionRegistry, TargetLease
 from cua.target import TargetDescriptor, TargetKind
 
-from .backend import BackendOpenContext, BackendOperationError, InputBackend
+from .backend import (
+    BackendOpenContext,
+    BackendOperationError,
+    InputBackend,
+    PreparingBackend,
+)
 
 
 class RoutingError(RuntimeError):
@@ -135,18 +140,39 @@ class BackendRouter:
 
         last_open_error: Exception | None = None
         for _, backend, capability, decision in sorted(candidates, key=lambda item: item[0]):
+            candidate_context = open_context
+            canonical_scope_key = self._scope_key(target, capability.lease_scope)
+            if isinstance(backend, PreparingBackend):
+                try:
+                    preparation = backend.prepare(target, open_context)
+                except BackendOperationError as error:
+                    if error.safe_to_retry:
+                        last_open_error = error
+                        continue
+                    raise RoutingError(
+                        error.code or "BACKEND_UNAVAILABLE",
+                        str(error),
+                        details={"targetId": target.target_id, "backend": capability.backend.value},
+                    ) from error
+                if preparation.target_id != target.target_id:
+                    raise RoutingError(
+                        "BACKEND_UNAVAILABLE",
+                        "backend preparation returned a mismatched target identity",
+                    )
+                canonical_scope_key = preparation.canonical_lease_key
+                candidate_context = replace(open_context, preparation=preparation)
             try:
                 lease = registry.acquire_lease(
                     request_id,
                     backend=capability.backend.value,
                     scope=capability.lease_scope,
-                    scope_key=self._scope_key(target, capability.lease_scope),
+                    scope_key=canonical_scope_key,
                     ttl_seconds=lease_ttl_seconds,
                 )
             except RegistryError as error:
                 raise RoutingError(error.code, str(error), details=error.details) from error
             try:
-                handle = backend.open(target, open_context)
+                handle = backend.open(target, candidate_context)
             except Exception as error:
                 # An exception does not prove that a remote/native open had no
                 # side effect. Only an explicit backend classification permits
@@ -168,7 +194,7 @@ class BackendRouter:
                         "retainLease": True,
                     },
                     pending_open=PendingOpenSelection(
-                        backend, capability, target, open_context, lease,
+                        backend, capability, target, candidate_context, lease,
                     ),
                 ) from error
             # Once open() returns, the handle and lease must have one cleanup

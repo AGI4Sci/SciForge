@@ -22,6 +22,7 @@ from driver.backend import (
     ActionReceipt,
     BackendOpenContext,
     BackendOperationError,
+    BackendPreparation,
     Observation,
     VerificationEvidence,
 )
@@ -72,6 +73,8 @@ class WindowsUIAHandle:
     identity: str
     closed: bool = False
     results: dict[str, UIAActionResult] = field(default_factory=dict)
+    element_tokens: dict[str, tuple[str, str]] = field(default_factory=dict)
+    token_secret: str = field(default_factory=lambda: uuid.uuid4().hex, repr=False)
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
 
@@ -106,26 +109,42 @@ class WindowsUIABackend:
     def discover_targets(self, filters: Mapping[str, Any] | None = None) -> list[TargetDescriptor]:
         return self.provider.discover()
 
+    def prepare(
+        self,
+        target: TargetDescriptor,
+        context: BackendOpenContext,
+    ) -> BackendPreparation:
+        """Resolve the native identity before leasing its canonical resource."""
+        if target.kind is not TargetKind.WINDOWS_UIA:
+            raise BackendOperationError(
+                "Windows UIA backend only accepts windows-uia targets",
+                safe_to_retry=True,
+            )
+        identity = self._resolve_identity(target)
+        return BackendPreparation(
+            target_id=target.target_id,
+            canonical_lease_key=f"windows-uia:{identity}",
+            metadata={"identity": identity},
+        )
+
     def open(self, target: TargetDescriptor, context: BackendOpenContext) -> WindowsUIAHandle:
         if target.kind is not TargetKind.WINDOWS_UIA:
             raise BackendOperationError(
                 "Windows UIA backend only accepts windows-uia targets",
                 safe_to_retry=True,
             )
-        try:
-            identity = self.provider.open(target)
-        except UIATargetLost as error:
+        prepared = context.preparation
+        identity = str(prepared.metadata.get("identity")) if prepared is not None else ""
+        if not identity:
+            identity = self._resolve_identity(target)
+        # Re-resolve after lease acquisition. A reused HWND/runtime identity
+        # must fail closed rather than opening a different physical control.
+        if self._resolve_identity(target) != identity:
             raise BackendOperationError(
-                str(error), code="TARGET_LOST", safe_to_retry=True,
-            ) from error
-        except Exception as error:
-            # UIA open only resolves and fingerprints an attached target. It
-            # creates no native/remote handle that could survive this call.
-            raise BackendOperationError(
-                "Windows UIA target could not be opened",
-                code="BACKEND_UNAVAILABLE",
+                "Windows UIA target identity changed during lease acquisition",
+                code="TARGET_LOST",
                 safe_to_retry=True,
-            ) from error
+            )
         return WindowsUIAHandle(target, context, identity)
 
     def observe(self, handle: object) -> Observation:
@@ -139,12 +158,13 @@ class WindowsUIABackend:
             # UIA is a semantic provider, not a target-bound pixel capture API.
             # Keep image provenance honest; the semantic tree is in metadata.
             image = Image.new("RGB", (32, 24), (32, 32, 32))
+            nodes = self._issue_element_tokens(h, snapshot)
             return Observation(
                 target_id=h.target.target_id,
                 revision=snapshot.revision,
                 image=image,
                 backend=BackendId.WINDOWS_UIA.value,
-                metadata={"semanticTree": list(snapshot.nodes), "imageAvailable": False},
+                metadata={"semanticTree": nodes, "imageAvailable": False},
             )
 
     def perform(
@@ -157,9 +177,10 @@ class WindowsUIABackend:
         name = str(action.get("action") or "").lower()
         if name not in _ACTIONS:
             raise BackendOperationError(f"unsupported UIA action: {name}")
-        if "coordinate" in action and not (action.get("automationId") or action.get("elementId")):
+        element_token = str(action.get("elementToken") or "")
+        if not element_token:
             raise BackendOperationError(
-                "UIA cannot bind a coordinate-only action without a semantic element id",
+                "UIA actions require an elementToken issued by the latest observation",
                 may_have_taken_effect=False,
                 code="ACTION_UNSUPPORTED",
             )
@@ -176,7 +197,18 @@ class WindowsUIABackend:
                         may_have_taken_effect=False,
                         code="STALE_OBSERVATION",
                     )
-                result = self.provider.perform(h.target, h.identity, action)
+                token_binding = h.element_tokens.get(element_token)
+                if token_binding is None or token_binding[0] != expected_revision:
+                    raise BackendOperationError(
+                        "UIA element token is unknown, ambiguous, or stale",
+                        may_have_taken_effect=False,
+                        code="STALE_OBSERVATION",
+                    )
+                provider_action = dict(action)
+                provider_action.pop("elementToken", None)
+                provider_action.pop("automationId", None)
+                provider_action["elementId"] = token_binding[1]
+                result = self.provider.perform(h.target, h.identity, provider_action)
         except BackendOperationError:
             raise
         except UIAActionUnsupported as error:
@@ -222,7 +254,48 @@ class WindowsUIABackend:
         h = self._handle(handle)
         with h.lock:
             h.results.clear()
+            h.element_tokens.clear()
             h.closed = True
+
+    def _resolve_identity(self, target: TargetDescriptor) -> str:
+        try:
+            return self.provider.open(target)
+        except UIATargetLost as error:
+            raise BackendOperationError(
+                str(error), code="TARGET_LOST", safe_to_retry=True,
+            ) from error
+        except Exception as error:
+            # UIA resolution creates no native/remote handle that survives the
+            # call, so the router may safely release or try another candidate.
+            raise BackendOperationError(
+                "Windows UIA target could not be resolved",
+                code="BACKEND_UNAVAILABLE",
+                safe_to_retry=True,
+            ) from error
+
+    @staticmethod
+    def _issue_element_tokens(
+        handle: WindowsUIAHandle,
+        snapshot: UIASnapshot,
+    ) -> list[dict[str, Any]]:
+        element_ids = [str(node.get("elementId") or "") for node in snapshot.nodes]
+        counts = {value: element_ids.count(value) for value in set(element_ids) if value}
+        issued: dict[str, tuple[str, str]] = {}
+        nodes: list[dict[str, Any]] = []
+        for node in snapshot.nodes:
+            public = dict(node)
+            element_id = str(public.get("elementId") or "")
+            if element_id and counts.get(element_id) == 1:
+                digest = hashlib.sha256(
+                    f"{handle.token_secret}\0{handle.target.target_id}\0"
+                    f"{snapshot.revision}\0{element_id}".encode("utf-8")
+                ).hexdigest()
+                token = f"uia-token:{digest}"
+                public["elementToken"] = token
+                issued[token] = (snapshot.revision, element_id)
+            nodes.append(public)
+        handle.element_tokens = issued
+        return nodes
 
     @staticmethod
     def _handle(handle: object) -> WindowsUIAHandle:

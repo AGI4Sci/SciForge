@@ -1,19 +1,23 @@
 """Opt-in UIA tests against three test-owned standard Win32 windows."""
 from __future__ import annotations
 
+import os
+import sys
+
+import pytest
+
+if sys.platform != "win32":
+    pytest.skip("Windows-only UIA smoke", allow_module_level=True)
+
 import ctypes
 import json
-import os
 import queue
 import subprocess
-import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-import pytest
 
 from cua import result as R
 from cua.service import ComputerUseService
@@ -152,6 +156,18 @@ def _element_id(observation, *, name: str | None = None, control_type: int | Non
     raise AssertionError(f"UIA element was not found: name={name!r}, controlType={control_type!r}")
 
 
+def _element_token(observation, *, name: str | None = None, control_type: int | None = None) -> str:
+    for node in observation.metadata["semanticTree"]:
+        if name is not None and str(node.get("name") or "") != name:
+            continue
+        if control_type is not None and int(node.get("controlType") or 0) != control_type:
+            continue
+        value = str(node.get("elementToken") or "")
+        if value:
+            return value
+    raise AssertionError(f"UIA element token was not found: name={name!r}, controlType={control_type!r}")
+
+
 def _node_name(observation, element_id: str) -> str:
     for node in observation.metadata["semanticTree"]:
         if str(node.get("elementId") or "") == element_id:
@@ -169,13 +185,13 @@ def test_single_window_real_patterns_without_activation(uia_hosts) -> None:
     handle = backend.open(host.target(), context)
     observation = backend.observe(handle)
     assert observation.metadata["imageAvailable"] is False
-    edit_id = _element_id(observation, control_type=50004)
+    edit_token = _element_token(observation, control_type=50004)
     _element_id(observation, name="Commit A")
     _element_id(observation, name="Check A")
     _element_id(observation, control_type=50020)
     receipt = backend.perform(handle, {
         "action": "write",
-        "elementId": edit_id,
+        "elementToken": edit_token,
         "text": "single-uia-A",
     }, observation.revision)
     evidence = backend.verify(handle, {"action": "write"}, receipt, observation)
@@ -200,26 +216,24 @@ def test_three_sessions_write_invoke_toggle_without_cross_line(uia_hosts) -> Non
 
     def execute(label: str, _request, channel):
         before = channel.observe()
-        edit_id = _element_id(before, control_type=50004)
-        button_id = _element_id(before, name=f"Commit {label}")
-        check_id = _element_id(before, name=f"Check {label}")
+        edit_token = _element_token(before, control_type=50004)
         status_id = _element_id(before, control_type=50020)
         barrier.wait(timeout=10)
         written = channel.perform({
             "action": "write",
-            "elementId": edit_id,
+            "elementToken": edit_token,
             "text": VALUES[label],
         }, expected_revision=before.revision)
         assert written.verification.value == "verified"
         after_write = channel.observe()
         invoked = channel.perform({
             "action": "invoke",
-            "elementId": button_id,
+            "elementToken": _element_token(after_write, name=f"Commit {label}"),
         }, expected_revision=after_write.revision)
         after_invoke = channel.observe()
         toggled = channel.perform({
             "action": "toggle",
-            "elementId": check_id,
+            "elementToken": _element_token(after_invoke, name=f"Check {label}"),
         }, expected_revision=after_invoke.revision)
         final = channel.observe()
         status = _node_name(final, status_id)
@@ -269,14 +283,14 @@ def test_stale_coordinate_and_cancel_are_side_effect_free(uia_hosts) -> None:
     context = BackendOpenContext("uia-stale", True, 0, False, threading.Event())
     handle = backend.open(host.target(), context)
     before = backend.observe(handle)
-    edit_id = _element_id(before, control_type=50004)
+    edit_token = _element_token(before, control_type=50004)
     assert user32.SendMessageW(
         int(host.handshake["editHwnd"]), WM_SETTEXT, 0, ctypes.c_wchar_p("external-C"),
     )
     with pytest.raises(BackendOperationError) as stale:
         backend.perform(handle, {
             "action": "write",
-            "elementId": edit_id,
+            "elementToken": edit_token,
             "text": "must-not-replace",
         }, before.revision)
     assert stale.value.code == "STALE_OBSERVATION"
@@ -291,12 +305,12 @@ def test_stale_coordinate_and_cancel_are_side_effect_free(uia_hosts) -> None:
 
     def execute(_request, channel):
         observed = channel.observe()
-        edit_id = _element_id(observed, control_type=50004)
+        edit_token = _element_token(observed, control_type=50004)
         service.cancel({"requestId": "uia-cancelled", "reason": "integration-test"})
         try:
             channel.perform({
                 "action": "write",
-                "elementId": edit_id,
+                "elementToken": edit_token,
                 "text": "must-not-appear",
             }, expected_revision=observed.revision)
         except ChannelError as error:

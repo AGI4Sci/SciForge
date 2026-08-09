@@ -21,11 +21,11 @@ _OS_NAME = {"Windows": "windows", "Darwin": "macos", "Linux": "linux"}.get(
 _TERMINAL = {"terminate", "answer", "stop", "done", "interact", "call_user"}
 _UIA_BACKEND_GUIDANCE = (
     "The active backend is Windows UI Automation, not a physical mouse/keyboard. "
-    "Use the supplied semantic tree and include automationId for the exact control. "
+    "Use the supplied semantic tree and include its opaque elementToken for the exact control. "
     "Allowed semantic actions are: type/write with text, left_click/invoke, toggle, "
     "select, range with value, scroll, wait, terminate, answer, and interact. "
     "Do not use coordinates, key/hotkey, open_app, drag, mouse_move, right_click, "
-    "middle_click, double_click, or triple_click. If no suitable automationId/pattern "
+    "middle_click, double_click, or triple_click. If no suitable elementToken/pattern "
     "is exposed, use interact or terminate with failure instead of guessing."
 )
 

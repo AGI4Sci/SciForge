@@ -6,8 +6,8 @@ from cua.runner import _UIA_BACKEND_GUIDANCE, _semantic_context
 
 def test_uia_semantic_tree_enters_current_model_turn_with_backend_constraints():
     tree = [
-        {"automationId": "EditorA", "name": "Document", "controlType": 50004},
-        {"automationId": "SaveButton", "name": "Save", "controlType": 50000},
+        {"automationId": "EditorA", "elementToken": "token-editor", "name": "Document", "controlType": 50004},
+        {"automationId": "SaveButton", "elementToken": "token-save", "name": "Save", "controlType": 50000},
     ]
     semantic = _semantic_context({"semanticTree": tree, "imageAvailable": False})
     messages = owl_agent.build_messages(
@@ -19,11 +19,12 @@ def test_uia_semantic_tree_enters_current_model_turn_with_backend_constraints():
     )
 
     assert "Windows UI Automation" in messages[0]["content"]
-    assert "include automationId" in messages[0]["content"]
+    assert "opaque elementToken" in messages[0]["content"]
     current_parts = messages[-1]["content"]
     semantic_part = next(part for part in current_parts if part["type"] == "text" and "semantic tree" in part["text"])
     assert "EditorA" in semantic_part["text"]
     assert "SaveButton" in semantic_part["text"]
+    assert "token-editor" in semantic_part["text"]
     assert "untrusted UI data" in semantic_part["text"]
 
 

@@ -33,6 +33,23 @@ def target(index: int):
     }
 
 
+def physical_target(target_id: str, process_id: int, automation_id: str):
+    return {
+        "targetId": target_id,
+        "kind": "windows-uia",
+        "locator": {"processId": process_id, "automationId": automation_id},
+    }
+
+
+def window_target(target_id: str, process_id: int, hwnd: int):
+    return {
+        "targetId": target_id,
+        "kind": "windows-uia",
+        "locator": {"processId": process_id, "nativeWindowHandle": str(hwnd)},
+        "generation": f"generation-{process_id}-{hwnd}",
+    }
+
+
 class FakeUIAProvider(UIAProvider):
     def __init__(self):
         self._lock = threading.Lock()
@@ -60,7 +77,11 @@ class FakeUIAProvider(UIAProvider):
             text = self._values[value.target_id]
         return UIASnapshot(
             revision=f"uia:{revision}",
-            nodes=({"automationId": value.locator.get("automationId", ""), "name": text},),
+            nodes=({
+                "elementId": f"element:{value.target_id}",
+                "automationId": value.locator.get("automationId", ""),
+                "name": text,
+            },),
         )
 
     def perform(self, value, identity, action):
@@ -96,12 +117,49 @@ class FakeUIAProvider(UIAProvider):
             raise UIATargetLost("runtime identity changed")
 
 
+class CanonicalUIAProvider(UIAProvider):
+    def __init__(self):
+        self.identities: dict[str, str] = {}
+        self.open_overrides: dict[str, list[str]] = {}
+        self.perform_calls = 0
+
+    def available(self):
+        return True, None
+
+    def discover(self):
+        return []
+
+    def open(self, value):
+        overrides = self.open_overrides.get(value.target_id)
+        if overrides:
+            return overrides.pop(0)
+        locator_identity = (
+            value.locator.get("nativeWindowHandle")
+            or value.locator.get("automationId", "")
+        )
+        return f"pid:{value.locator['processId']}:locator:{locator_identity}"
+
+    def snapshot(self, value, identity):
+        return UIASnapshot(
+            revision="uia:0",
+            nodes=({"elementId": f"element:{identity}", "name": value.target_id},),
+        )
+
+    def perform(self, value, identity, action):
+        self.perform_calls += 1
+        return UIAActionResult(Verification.VERIFIED, "uia:1")
+
+
 def backend_handle(index=0):
     provider = FakeUIAProvider()
     backend = WindowsUIABackend(provider)
     descriptor = parse_target_descriptor(target(index))
     context = BackendOpenContext(f"request-{index}", True, 0, False, threading.Event())
     return provider, backend, backend.open(descriptor, context)
+
+
+def element_token(observation):
+    return observation.metadata["semanticTree"][0]["elementToken"]
 
 
 def test_capability_is_semantic_target_scoped_and_never_host_input():
@@ -232,7 +290,7 @@ def test_value_pattern_style_action_is_read_back_and_verified():
     before = backend.observe(handle)
     receipt = backend.perform(
         handle,
-        {"action": "write", "automationId": "Editor-0", "text": "alpha"},
+        {"action": "write", "elementToken": element_token(before), "text": "alpha"},
         before.revision,
     )
     evidence = backend.verify(handle, {"action": "write"}, receipt, before)
@@ -248,7 +306,11 @@ def test_semantic_revision_change_rejects_action_before_commit():
     before = backend.observe(handle)
     provider.perform(handle.target, handle.identity, {"action": "write", "text": "external"})
     with pytest.raises(BackendOperationError) as caught:
-        backend.perform(handle, {"action": "write", "text": "bad"}, before.revision)
+        backend.perform(
+            handle,
+            {"action": "write", "elementToken": element_token(before), "text": "bad"},
+            before.revision,
+        )
     assert getattr(caught.value, "code", None) == "STALE_OBSERVATION"
     assert getattr(caught.value, "may_have_taken_effect", None) is False
     assert provider.read("uia-target-0") == "external"
@@ -288,6 +350,148 @@ def test_open_failure_is_safe_to_release_because_uia_open_owns_no_external_handl
     assert caught.value.safe_to_retry is True
 
 
+def test_canonical_uia_identity_serializes_alias_target_ids():
+    provider = CanonicalUIAProvider()
+    service = ComputerUseService(router=BackendRouter([WindowsUIABackend(provider)]))
+    entered = threading.Event()
+    release = threading.Event()
+    shared_locator = (4401, "Editor")
+
+    def hold(_request, _channel):
+        entered.set()
+        assert release.wait(timeout=2)
+        return R.ok({"status": "held"})
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        first = pool.submit(service.run, {
+            "instruction": "hold",
+            "target": physical_target("uia-alias-a", *shared_locator),
+            "requestId": "uia-alias-request-a",
+        }, hold)
+        assert entered.wait(timeout=2)
+        contender = service.run({
+            "instruction": "contend",
+            "target": physical_target("uia-alias-b", *shared_locator),
+            "requestId": "uia-alias-request-b",
+        }, lambda _request, _channel: R.ok({"status": "incorrect"}))
+        release.set()
+        assert first.result(timeout=2)["ok"] is True
+
+    assert contender["error"]["code"] == "TARGET_BUSY"
+    assert service.registry.snapshot_counts()["activeLeases"] == 0
+
+
+def test_generated_target_ids_cannot_change_the_canonical_uia_lease_key():
+    provider = CanonicalUIAProvider()
+    backend = WindowsUIABackend(provider)
+    raw = {
+        "kind": "windows-uia",
+        "locator": {"processId": 4402, "nativeWindowHandle": "8802"},
+        "generation": "generation-4402-8802",
+    }
+    first = parse_target_descriptor(raw)
+    second = parse_target_descriptor(raw)
+    context = BackendOpenContext("canonical-prepare", True, 0, False, threading.Event())
+
+    first_prepared = backend.prepare(first, context)
+    second_prepared = backend.prepare(second, context)
+
+    assert first.target_id != second.target_id
+    assert first_prepared.canonical_lease_key == second_prepared.canonical_lease_key
+    assert provider.perform_calls == 0
+
+
+def test_distinct_canonical_uia_identities_can_open_in_parallel():
+    provider = CanonicalUIAProvider()
+    service = ComputerUseService(router=BackendRouter([WindowsUIABackend(provider)]))
+    barrier = Barrier(2)
+
+    def run(index):
+        return service.run({
+            "instruction": "parallel",
+            "target": window_target(f"uia-distinct-{index}", 5500, 9900 + index),
+            "requestId": f"uia-distinct-request-{index}",
+        }, lambda _request, _channel: (
+            barrier.wait(timeout=2), R.ok({"status": "done"})
+        )[1])
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(run, range(2)))
+
+    assert all(result["ok"] is True for result in results)
+
+
+def test_uia_identity_change_between_prepare_and_open_fails_closed():
+    provider = CanonicalUIAProvider()
+    provider.open_overrides["uia-reused"] = ["identity:old", "identity:new"]
+    service = ComputerUseService(router=BackendRouter([WindowsUIABackend(provider)]))
+
+    result = service.run({
+        "instruction": "open reused handle",
+        "target": physical_target("uia-reused", 6601, "Editor"),
+        "requestId": "uia-reused-request",
+    }, lambda _request, _channel: R.ok({"status": "incorrect"}))
+
+    assert result["error"]["code"] == "TARGET_LOST"
+    assert service.registry.snapshot_counts()["activeLeases"] == 0
+
+
+def test_automation_id_without_observation_token_is_rejected():
+    provider, backend, handle = backend_handle()
+    before = backend.observe(handle)
+
+    with pytest.raises(BackendOperationError) as caught:
+        backend.perform(
+            handle,
+            {"action": "write", "automationId": "Editor-0", "text": "unsafe"},
+            before.revision,
+        )
+
+    assert caught.value.code == "ACTION_UNSUPPORTED"
+    assert caught.value.may_have_taken_effect is False
+
+
+def test_element_token_cannot_cross_targets():
+    provider = FakeUIAProvider()
+    backend = WindowsUIABackend(provider)
+    first = backend.open(
+        parse_target_descriptor(target(0)),
+        BackendOpenContext("token-request-a", True, 0, False, threading.Event()),
+    )
+    second = backend.open(
+        parse_target_descriptor(target(1)),
+        BackendOpenContext("token-request-b", True, 0, False, threading.Event()),
+    )
+    first_observation = backend.observe(first)
+    second_observation = backend.observe(second)
+
+    with pytest.raises(BackendOperationError) as caught:
+        backend.perform(
+            second,
+            {
+                "action": "write",
+                "elementToken": element_token(first_observation),
+                "text": "unsafe",
+            },
+            second_observation.revision,
+        )
+
+    assert caught.value.code == "STALE_OBSERVATION"
+    assert provider.read("uia-target-1") == ""
+
+
+def test_duplicate_element_ids_are_not_issued_action_tokens():
+    provider, backend, handle = backend_handle()
+    provider.snapshot = lambda value, identity: UIASnapshot(
+        revision="uia:0",
+        nodes=({"elementId": "duplicate"}, {"elementId": "duplicate"}),
+    )
+
+    observation = backend.observe(handle)
+
+    assert all("elementToken" not in node for node in observation.metadata["semanticTree"])
+
+
 def test_three_uia_sessions_interleave_without_semantic_cross_line():
     provider = FakeUIAProvider()
     backend = WindowsUIABackend(provider)
@@ -305,7 +509,11 @@ def test_three_uia_sessions_interleave_without_semantic_cross_line():
         observation = channel.observe()
         observed.wait(timeout=2)
         outcome = channel.perform(
-            {"action": "write", "automationId": f"Editor-{index}", "text": f"value-{index}"},
+            {
+                "action": "write",
+                "elementToken": element_token(observation),
+                "text": f"value-{index}",
+            },
             expected_revision=observation.revision,
         )
         return R.ok({"status": "done", "targetId": outcome.target_id})
@@ -362,7 +570,11 @@ def test_one_uia_provider_failure_does_not_cross_other_sessions():
         barrier.wait(timeout=2)
         try:
             outcome = channel.perform(
-                {"action": "write", "automationId": f"Editor-{index}", "text": f"safe-{index}"},
+                {
+                    "action": "write",
+                    "elementToken": element_token(observation),
+                    "text": f"safe-{index}",
+                },
                 expected_revision=observation.revision,
             )
             return R.ok({"status": "done", "targetId": outcome.target_id})

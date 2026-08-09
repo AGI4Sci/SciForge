@@ -1,19 +1,23 @@
 """Opt-in UIA smoke against a test-owned blank Excel workbook."""
 from __future__ import annotations
 
+import os
+import sys
+
+import pytest
+
+if sys.platform != "win32":
+    pytest.skip("Windows-only Office UIA smoke", allow_module_level=True)
+
 import ctypes
 import json
-import os
 import queue
 import shutil
 import subprocess
-import sys
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-
-import pytest
 
 from driver.backend import BackendOpenContext
 from driver.backends.windows_uia import WindowsUIABackend
@@ -236,9 +240,15 @@ def test_excel_name_box_value_round_trip_with_declared_activation_risk() -> None
             }
             original = _read_value(backend, handle, action)
             fresh = backend.observe(handle)
+            fresh_node = _unique_node(fresh, automation_id="1001")
+            perform_action = {
+                "action": "write",
+                "elementToken": fresh_node["elementToken"],
+                "text": PROBE_VALUE,
+            }
             action_desktop_before = _desktop_state()
-            receipt = backend.perform(handle, action, fresh.revision)
-            evidence = backend.verify(handle, action, receipt, fresh)
+            receipt = backend.perform(handle, perform_action, fresh.revision)
+            evidence = backend.verify(handle, perform_action, receipt, fresh)
             assert evidence.status.value == "verified"
             assert evidence.details == {
                 "pattern": "Value", "expected": PROBE_VALUE, "actual": PROBE_VALUE,
@@ -247,7 +257,12 @@ def test_excel_name_box_value_round_trip_with_declared_activation_risk() -> None
             assert action_desktop_after[1] == action_desktop_before[1]
 
             after_probe = backend.observe(handle)
-            restore = dict(action, text=original)
+            restore_node = _unique_node(after_probe, automation_id="1001")
+            restore = {
+                "action": "write",
+                "elementToken": restore_node["elementToken"],
+                "text": original,
+            }
             restore_desktop_before = _desktop_state()
             restore_receipt = backend.perform(handle, restore, after_probe.revision)
             restore_evidence = backend.verify(handle, restore, restore_receipt, after_probe)

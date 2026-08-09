@@ -25,6 +25,16 @@ class BackendOpenContext:
     show_overlay: bool
     cancellation: threading.Event
     screenshot_provider: Any | None = field(default=None, repr=False)
+    preparation: "BackendPreparation | None" = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class BackendPreparation:
+    """Side-effect-free target resolution performed before lease acquisition."""
+
+    target_id: str
+    canonical_lease_key: str
+    metadata: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
 
 @dataclass(frozen=True)
@@ -110,3 +120,14 @@ class RecoverableOpenBackend(Protocol):
     """Backend whose idempotent request identity can recover an uncertain Open."""
 
     def recover_open(self, target: TargetDescriptor, context: BackendOpenContext) -> object: ...
+
+
+@runtime_checkable
+class PreparingBackend(Protocol):
+    """Backend that canonicalizes a physical resource before it is leased."""
+
+    def prepare(
+        self,
+        target: TargetDescriptor,
+        context: BackendOpenContext,
+    ) -> BackendPreparation: ...

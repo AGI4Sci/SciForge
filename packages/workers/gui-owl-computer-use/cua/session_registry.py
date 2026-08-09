@@ -602,7 +602,7 @@ class SessionRegistry:
         scope_key: str | None,
     ) -> str:
         if scope is LeaseScope.TARGET:
-            return f"target:{request.target_id}"
+            return f"target:{scope_key or request.target_id}"
         if scope_key:
             return f"{scope.value}:{scope_key}"
         if scope is LeaseScope.PROCESS_GLOBAL:
