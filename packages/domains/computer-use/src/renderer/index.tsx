@@ -8,6 +8,7 @@ import {
   COMPUTER_USE_STATUS_CONTRACT
 } from '../contract.js'
 import {
+  COMPUTER_USE_RENDERER_SETTINGS_CONTRACT,
   COMPUTER_USE_RENDERER_SETTINGS_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition.js'
@@ -26,6 +27,7 @@ export function createDomainRendererEntry(
     definition: domainPackageDefinition,
     contributions: [{
       ...COMPUTER_USE_RENDERER_SETTINGS_CONTRIBUTION,
+      contract: COMPUTER_USE_RENDERER_SETTINGS_CONTRACT,
       value: {
         section: 'agents.permissions',
         order: 180,
@@ -55,7 +57,10 @@ function ComputerUseSettingsCard({
     : () => undefined
   const form = isRecord(settingsHost.form) ? settingsHost.form : {}
   const settings = normalizeSettings(form.computerUse)
-  const [status, setStatus] = useState<Status | null>(null)
+  const initialStatus = isRecord(settingsHost.computerUseStatus)
+    ? settingsHost.computerUseStatus as Status
+    : null
+  const [status, setStatus] = useState<Status | null>(initialStatus)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -118,6 +123,8 @@ function ComputerUseSettingsCard({
           </StatusBadge>
           <span>{t('computerUseLifecycle')}: {runtime?.lifecycleState ?? 'unknown'}</span>
           <span>{t('computerUseApprovalProof')}: {runtime?.approvalProof ?? 'unavailable'}</span>
+          <span>{t('computerUseSidecarInstance')}: {runtime?.serverInstanceId ?? 'unknown'}</span>
+          <span>{t('computerUseSidecarGeneration')}: {runtime?.generation ?? 'unknown'}</span>
           <button
             type="button"
             disabled={busy}
@@ -139,33 +146,45 @@ function ComputerUseSettingsCard({
           </div>
         ) : null}
         {permissions?.needsPermission ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <span>Accessibility: {permissions.accessibility}</span>
-            <span>Screen recording: {permissions.screenRecording}</span>
-            {(['accessibility', 'screenRecording'] as const).map((kind) => (
-              <button
-                key={kind}
-                type="button"
-                disabled={busy}
-                className="rounded-lg border border-ds-border px-2 py-1"
-                onClick={() => void capabilityHost.capabilityInvoker.invoke(
-                  COMPUTER_USE_REQUEST_PERMISSION_CONTRACT,
-                  { kind },
-                  { approval: { mode: 'confirmation' } }
-                ).then(() => refresh()).catch((cause) => {
-                  setError(cause instanceof Error ? cause.message : String(cause))
-                })}
-              >
-                {kind}
-              </button>
-            ))}
+          <div className="grid gap-2">
+            <div className="font-semibold text-ds-ink">{t('computerUsePermissions')}</div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span>Accessibility: {permissions.accessibility}</span>
+              <span>Screen recording: {permissions.screenRecording}</span>
+              {(['accessibility', 'screenRecording'] as const).map((kind) => (
+                <button
+                  key={kind}
+                  type="button"
+                  disabled={busy}
+                  className="rounded-lg border border-ds-border px-2 py-1"
+                  onClick={() => void capabilityHost.capabilityInvoker.invoke(
+                    COMPUTER_USE_REQUEST_PERMISSION_CONTRACT,
+                    { kind },
+                    { approval: { mode: 'confirmation' } }
+                  ).then(() => refresh()).catch((cause) => {
+                    setError(cause instanceof Error ? cause.message : String(cause))
+                  })}
+                >
+                  {kind}
+                </button>
+              ))}
+            </div>
           </div>
         ) : null}
-        <StatusList title={t('computerUseBackend')} items={(runtime?.backends ?? []).map((backend) =>
-          `${backend.backend}: ${backend.available ? 'available' : 'unavailable'}${backend.reason ? ` — ${backend.reason}` : ''}`
-        )} />
+        <StatusList title={t('computerUseBackend')} items={(runtime?.backends ?? []).map((backend) => [
+          `${backend.backend}: ${backend.available ? 'available' : 'unavailable'}`,
+          backend.reason,
+          backend.instanceId ? `${t('computerUseBackendInstance')}: ${backend.instanceId}` : null,
+          backend.generation ? `${t('computerUseSidecarGeneration')}: ${backend.generation}` : null,
+          backend.mayActivateTarget ? t('computerUseSafetyTargetActivationPossible') : null
+        ].filter((item): item is string => Boolean(item)).join(' — '))} />
+        {(runtime?.active ?? []).some((lease) => lease.verification === 'unverified') ? (
+          <div className="rounded-xl border border-amber-300/50 bg-amber-500/10 px-3 py-2 text-amber-800 dark:text-amber-200">
+            {t('computerUseUnverifiedHint')}
+          </div>
+        ) : null}
         <StatusList title={t('computerUseActiveLeases')} items={(runtime?.active ?? []).map((lease) =>
-          `${lease.targetId} · ${lease.backend ?? 'routing'} · ${lease.verification}`
+          `${lease.targetId} · ${lease.backend ?? 'routing'} · ${lease.verification}${lease.degradedReason ? ` · ${lease.degradedReason}` : ''}`
         )} empty={t('computerUseNoActiveLeases')} />
         <StatusList title={t('computerUseCleanupPending')} items={(runtime?.cleanupPending ?? []).map((item) =>
           `${item.backend} / ${item.requestId}: ${item.errors.join('; ')}`

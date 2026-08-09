@@ -87,16 +87,20 @@ function sourceFiles(root: string): string[] {
   if (!existsSync(absoluteRoot)) return []
   return readdirSync(absoluteRoot, { withFileTypes: true }).flatMap((entry) => {
     const path = join(absoluteRoot, entry.name)
-    if (entry.isDirectory()) return sourceFiles(relative(projectRoot, path))
+    if (entry.isDirectory()) return sourceFiles(projectRelative(path))
     return ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(extname(entry.name))
       ? [path]
       : []
   })
 }
 
+function projectRelative(path: string): string {
+  return relative(projectRoot, path).replaceAll('\\', '/')
+}
+
 function isTestSource(path: string): boolean {
   return /(?:^|\/)(?:__tests__|fixtures)(?:\/|$)|\.(?:test|spec)\.[cm]?[jt]sx?$/u
-    .test(relative(projectRoot, path))
+    .test(projectRelative(path))
 }
 
 function productionSourceFiles(...roots: string[]): string[] {
@@ -142,15 +146,15 @@ function migratedModuleSourceFiles(): string[] {
   )
   return [...new Set([
     ...knownModuleRoots.flatMap(sourceFiles),
-    ...discoveredOwnerRoots.flatMap((root) => sourceFiles(relative(projectRoot, root))),
-    ...installedDomainRoots.flatMap((root) => sourceFiles(relative(projectRoot, root))),
+    ...discoveredOwnerRoots.flatMap((root) => sourceFiles(projectRelative(root))),
+    ...installedDomainRoots.flatMap((root) => sourceFiles(projectRelative(root))),
     ...workerServices
   ])].sort()
 }
 
 describe('domain module boundaries', () => {
   it('discovers owner roots, worker service adapters, and installed domain packages', () => {
-    const relativeFiles = migratedModuleSourceFiles().map((path) => relative(projectRoot, path))
+    const relativeFiles = migratedModuleSourceFiles().map(projectRelative)
 
     expect(relativeFiles).toEqual(expect.arrayContaining([
       'src/main/capabilities/app-contributions/composition.ts',
@@ -176,7 +180,7 @@ describe('domain module boundaries', () => {
     const privateImports = migratedModuleSourceFiles().flatMap((path) =>
       readFileSync(path, 'utf8').split(/\r?\n/).flatMap((line, index) =>
         privateWorkerSourceImportPattern.test(line)
-          ? [`${relative(projectRoot, path)}:${index + 1}`]
+          ? [`${projectRelative(path)}:${index + 1}`]
           : []
       )
     )
@@ -190,12 +194,12 @@ describe('domain module boundaries', () => {
     const violations = productionSourceFiles('scripts').flatMap((path) =>
       importSpecifiers(readFileSync(path, 'utf8')).flatMap((specifier) => {
         if (/^@sciforge\/domain-[^/]+\/src(?:\/|$)/u.test(specifier)) {
-          return [`${relative(projectRoot, path)} -> ${specifier}`]
+          return [`${projectRelative(path)} -> ${specifier}`]
         }
         if (!specifier.startsWith('.') && !specifier.startsWith('/')) return []
         const importedPath = resolve(dirname(path), specifier)
         return domainSourceRoots.some((root) => isWithin(importedPath, root))
-          ? [`${relative(projectRoot, path)} -> ${specifier}`]
+          ? [`${projectRelative(path)} -> ${specifier}`]
           : []
       })
     )
@@ -205,13 +209,13 @@ describe('domain module boundaries', () => {
 
   it('keeps renderer domain modules off main-process and domain-specific bridge paths', () => {
     const rendererFiles = migratedModuleSourceFiles().filter((path) =>
-      relative(projectRoot, path).startsWith('src/renderer/') &&
+      projectRelative(path).startsWith('src/renderer/') &&
       !path.includes('.test.')
     )
     const violations = rendererFiles.flatMap((path) =>
       readFileSync(path, 'utf8').split(/\r?\n/).flatMap((line, index) =>
         /(?:from\s+['"][^'"]*\/main\/|window\.sciforge(?:\?\.)?\.paperRadar)/.test(line)
-          ? [`${relative(projectRoot, path)}:${index + 1}`]
+          ? [`${projectRelative(path)}:${index + 1}`]
           : []
       )
     )
@@ -388,7 +392,7 @@ describe('domain module boundaries', () => {
         )
       ]
       const hardCodedHostRegistrations = hostProductionFiles.flatMap((path) => {
-        const relativePath = relative(projectRoot, path)
+        const relativePath = projectRelative(path)
         if (generatedDomainCompositionPaths.has(relativePath)) return []
         const source = readFileSync(path, 'utf8')
         return reservedRegistrationIds.some((id) => source.includes(id))
@@ -407,30 +411,30 @@ describe('domain module boundaries', () => {
     ]
 
     for (const packageRoot of filesNamed(packagesRoot, 'sciforge.domain.json').map(dirname)) {
-      const packageFiles = productionSourceFiles(relative(projectRoot, join(packageRoot, 'src')))
+      const packageFiles = productionSourceFiles(projectRelative(join(packageRoot, 'src')))
       const violations = packageFiles.flatMap((path) => {
         const source = readFileSync(path, 'utf8')
         return importSpecifiers(source).flatMap((specifier) => {
           if (/^(?:@shared|@renderer|@main)(?:\/|$)/u.test(specifier)) {
-            return [`${relative(projectRoot, path)} -> ${specifier}`]
+            return [`${projectRelative(path)} -> ${specifier}`]
           }
           if (/^(?:src\/(?:main|renderer|shared))(?:\/|$)/u.test(specifier) ||
             /@sciforge\/sciforge\/src\/(?:main|renderer|shared)(?:\/|$)/u.test(specifier)) {
-            return [`${relative(projectRoot, path)} -> ${specifier}`]
+            return [`${projectRelative(path)} -> ${specifier}`]
           }
           if (!specifier.startsWith('.') && !specifier.startsWith('/')) return []
           const importedPath = resolve(dirname(path), specifier)
           if (hostPrivateRoots.some((root) => isWithin(importedPath, root))) {
-            return [`${relative(projectRoot, path)} -> ${specifier}`]
+            return [`${projectRelative(path)} -> ${specifier}`]
           }
           const relativePackagePath = relative(packageRoot, path)
           if (relativePackagePath.startsWith('src/main') &&
             isWithin(importedPath, resolve(packageRoot, 'src/renderer'))) {
-            return [`${relative(projectRoot, path)} -> ${specifier}`]
+            return [`${projectRelative(path)} -> ${specifier}`]
           }
           if (relativePackagePath.startsWith('src/renderer') &&
             isWithin(importedPath, resolve(packageRoot, 'src/main'))) {
-            return [`${relative(projectRoot, path)} -> ${specifier}`]
+            return [`${projectRelative(path)} -> ${specifier}`]
           }
           return []
         })
@@ -453,7 +457,7 @@ describe('domain module boundaries', () => {
     ))
     const violations = installerFiles.flatMap((path) => {
       const source = readFileSync(path, 'utf8')
-      const relativePath = relative(projectRoot, path)
+      const relativePath = projectRelative(path)
       const importViolations = importSpecifiers(source).flatMap((specifier) => {
         if (
           specifier === sdkPackageName ||
@@ -485,7 +489,7 @@ describe('domain module boundaries', () => {
   it('declares legacy DAG transport prefixes as broker-migrated with no exceptions', () => {
     for (const domain of dagDomainPackages) {
       const packageRoot = resolve(packagesRoot, 'domains', domain.directory)
-      const source = productionSourceFiles(relative(projectRoot, join(packageRoot, 'src')))
+      const source = productionSourceFiles(projectRelative(join(packageRoot, 'src')))
         .map((path) => readFileSync(path, 'utf8'))
         .join('\n')
 
@@ -524,7 +528,7 @@ describe('domain module boundaries', () => {
           /packages\/workers\/(?:evidence-dag|project-dag)\/desktop(?:\/|['"])/u.test(line)
         const retiredApi = forbiddenDagHostApiSymbols.some((symbol) => line.includes(symbol))
         return directTransport || directWorkerDesktopImport || retiredApi
-          ? [`${relative(projectRoot, path)}:${index + 1}`]
+          ? [`${projectRelative(path)}:${index + 1}`]
           : []
       })
     })
@@ -631,7 +635,7 @@ describe('domain module boundaries', () => {
     expect(workerPackage.scripts).not.toHaveProperty('start')
     expect(workerPackage.sciforge?.mcpServer).toBe(false)
 
-    const workerSources = sourceFiles(relative(projectRoot, join(workerRoot, 'src')))
+    const workerSources = sourceFiles(projectRelative(join(workerRoot, 'src')))
       .map((path) => readFileSync(path, 'utf8'))
       .join('\n')
     const retiredToolPrefix = ['gui', 'paper'].join('_')

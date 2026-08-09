@@ -25,6 +25,10 @@ export const COMPUTER_USE_TRUSTED_METADATA_CONTRIBUTION = contributionFor(
 export const COMPUTER_USE_RENDERER_SETTINGS_CONTRIBUTION = contributionFor(
   'renderer', 'renderer.settings-section'
 )
+export const COMPUTER_USE_RENDERER_SETTINGS_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    COMPUTER_USE_RENDERER_SETTINGS_CONTRIBUTION.id
+  ]!
 
 function contributionFor(process: 'main' | 'renderer', kind: string) {
   const contribution = domainPackageDefinition.entrypoints

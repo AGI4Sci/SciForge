@@ -309,7 +309,10 @@ def cdp_stack() -> CdpStack:
         adapter = processes.add(subprocess.Popen(
             [
                 node, "--import", "tsx",
-                str(REPO_DIR / "src" / "main" / "computer-use-cdp-adapter-node-entry.ts"),
+                    str(
+                        REPO_DIR / "packages" / "domains" / "computer-use" /
+                        "src" / "main" / "cdp-adapter-node-entry.ts"
+                    ),
             ],
             cwd=REPO_DIR,
             env=env,
@@ -446,7 +449,10 @@ def test_adapter_restart_changes_generation_and_rejects_stale_targets(cdp_stack:
     process = owned.add(subprocess.Popen(
         [
             node, "--import", "tsx",
-            str(REPO_DIR / "src" / "main" / "computer-use-cdp-adapter-node-entry.ts"),
+            str(
+                REPO_DIR / "packages" / "domains" / "computer-use" /
+                "src" / "main" / "cdp-adapter-node-entry.ts"
+            ),
         ],
         cwd=REPO_DIR,
         env=env,
@@ -665,7 +671,8 @@ def test_attached_driver_shutdown_disconnects_without_closing_browser(cdp_stack:
     node = shutil.which("node")
     assert node is not None
     module_url = (
-        REPO_DIR / "src" / "main" / "services" / "computer-use-cdp-adapter.ts"
+        REPO_DIR / "packages" / "domains" / "computer-use" / "src" /
+        "main" / "services" / "computer-use-cdp-adapter.ts"
     ).as_uri()
     script = (
         f"import {{ createPlaywrightCdpDriver }} from {json.dumps(module_url)};"
