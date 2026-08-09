@@ -1,0 +1,64 @@
+name: Computer Use cross-platform
+
+on:
+  pull_request:
+    paths:
+      - "packages/workers/gui-owl-computer-use/**"
+      - ".github/workflows/computer-use-cross-platform.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: packages/workers/gui-owl-computer-use
+    env:
+      CUA_UIA_SMOKE: "0"
+      CUA_UIA_OFFICE_SMOKE: "0"
+      CUA_LEGACY_REAL_INPUT: "0"
+      CUA_CDP_INTEGRATION: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: packages/workers/gui-owl-computer-use/requirements.txt
+
+      - name: Install Linux display harness
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+        working-directory: .
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt pytest ruff
+
+      - name: Collect tests
+        if: runner.os != 'Linux'
+        run: python -m pytest --collect-only -q
+
+      - name: Collect tests under Xvfb
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python -m pytest --collect-only -q
+
+      - name: Run tests
+        if: runner.os != 'Linux'
+        run: python -m pytest -q
+
+      - name: Run tests under Xvfb
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python -m pytest -q
+
+      - name: Check fatal Python diagnostics
+        run: python -m ruff check --select F,E9 cua driver tests

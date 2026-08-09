@@ -1,11 +1,17 @@
 """Opt-in physical input smoke against one test-owned Win32 window."""
 from __future__ import annotations
 
+import os
+import sys
+
+import pytest
+
+if sys.platform != "win32":
+    pytest.skip("Windows-only physical input smoke", allow_module_level=True)
+
 import ctypes
 import json
-import os
 import subprocess
-import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -14,8 +20,6 @@ from pathlib import Path
 
 import mss
 import pyperclip
-import pytest
-
 from cua import result as R
 from cua.service import ComputerUseService
 from driver.backends.legacy_pyautogui import LegacyPyAutoGUIBackend

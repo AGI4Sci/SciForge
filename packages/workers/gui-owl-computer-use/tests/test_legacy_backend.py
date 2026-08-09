@@ -6,7 +6,7 @@ from PIL import Image
 from cua.capabilities import Verification
 from cua.target import host_desktop_target
 from driver.backend import BackendOpenContext
-from driver.backends.legacy_pyautogui import LegacyPyAutoGUIBackend
+from driver.backends.legacy_pyautogui import LegacyPyAutoGUIBackend, paste_modifier_for
 
 
 def context(provider):
@@ -20,8 +20,15 @@ def context(provider):
     )
 
 
-def test_legacy_observe_uses_injected_source_and_write_is_explicitly_unverified(monkeypatch):
-    backend = LegacyPyAutoGUIBackend()
+@pytest.mark.parametrize(
+    ("platform_name", "modifier"),
+    [("Darwin", "command"), ("Windows", "ctrl"), ("Linux", "ctrl")],
+)
+def test_legacy_observe_uses_platform_paste_modifier_and_write_is_unverified(
+    monkeypatch, platform_name, modifier,
+):
+    assert paste_modifier_for(platform_name) == modifier
+    backend = LegacyPyAutoGUIBackend(platform_name=platform_name)
     handle = backend.open(host_desktop_target(), context(lambda: Image.new("RGB", (20, 10))))
     observation = backend.observe(handle)
     clipboard = ["original"]
@@ -39,8 +46,8 @@ def test_legacy_observe_uses_injected_source_and_write_is_explicitly_unverified(
     )
     evidence = backend.verify(handle, {"action": "type"}, receipt, observation)
     assert copies == ["hello", "original"]
-    assert downs == ["ctrl", "v"]
-    assert ups == ["v", "ctrl"]
+    assert downs == [modifier, "v"]
+    assert ups == ["v", modifier]
     assert evidence.status is Verification.UNVERIFIED
     backend.close(handle, "done")
 

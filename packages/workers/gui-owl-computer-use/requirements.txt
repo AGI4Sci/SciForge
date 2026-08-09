@@ -9,4 +9,4 @@ Pillow>=10.0.0
 # Windows UI Automation COM binding (P3b); exact for generated-interface stability.
 comtypes==1.4.16; sys_platform == "win32"
 # MCP stdio transport (only needed for `--stdio`; HTTP sidecar works without it).
-mcp>=1.8.0
+mcp==1.8.0

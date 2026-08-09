@@ -225,9 +225,7 @@ def test_cancel_crosses_transport_while_action_response_is_blocked(tmp_path):
     worker.start()
     assert transport.action_entered.wait(timeout=2)
     provider.cancel(handle, "test-cancel")
-    assert any(path == "/v1/handles/cancel" for _, path, _ in transport.requests), (
-        lifecycle.is_alive(), lifecycle_results, transport.requests
-    )
+    assert any(path == "/v1/handles/cancel" for _, path, _ in transport.requests)
     assert worker.is_alive()
     transport.release_action.set()
     worker.join(timeout=5)

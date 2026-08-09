@@ -77,7 +77,7 @@ def test_build_messages_official_multiturn_optional():
     """Official GUI-Owl multi-turn: alternating roles, sliding 2-image window,
     task text retained in turn 0, older screenshots dropped. Skips if PIL absent."""
     try:
-        import io, tempfile, os as _os
+        import tempfile, os as _os
         from PIL import Image
         from cua import owl_agent
     except Exception:  # noqa: BLE001

@@ -35,6 +35,10 @@ _ACTIONS = (
 )
 
 
+def paste_modifier_for(platform_name: str) -> str:
+    return "command" if platform_name == "Darwin" else "ctrl"
+
+
 @dataclass
 class LegacyHandle:
     target: TargetDescriptor
@@ -53,6 +57,17 @@ class LegacyHandle:
 
 class LegacyPyAutoGUIBackend:
     """The only production module allowed to call PyAutoGUI directly."""
+
+    def __init__(
+        self,
+        *,
+        paste_modifier: str | None = None,
+        platform_name: str | None = None,
+    ) -> None:
+        resolved = paste_modifier or paste_modifier_for(platform_name or platform.system())
+        if resolved not in {"command", "ctrl"}:
+            raise ValueError("paste_modifier must be 'command' or 'ctrl'")
+        self._paste_modifier = resolved
 
     def probe(self) -> BackendCapabilities:
         return BackendCapabilities(
@@ -290,8 +305,7 @@ class LegacyPyAutoGUIBackend:
             monitor = sct.monitors[h.monitor]
         return int(monitor["left"] + x), int(monitor["top"] + y)
 
-    @staticmethod
-    def _type_text(h: LegacyHandle, text: str) -> None:
+    def _type_text(self, h: LegacyHandle, text: str) -> None:
         try:
             previous = pyperclip.paste()
         except Exception as error:
@@ -303,8 +317,7 @@ class LegacyPyAutoGUIBackend:
         h.clipboard_restore_pending = True
         try:
             pyperclip.copy(text)
-            modifier = "command" if platform.system() == "Darwin" else "ctrl"
-            LegacyPyAutoGUIBackend._press_keys(h, [modifier, "v"])
+            self._press_keys(h, [self._paste_modifier, "v"])
             time.sleep(max(0.25, h.context.settle_s))
         finally:
             try:
