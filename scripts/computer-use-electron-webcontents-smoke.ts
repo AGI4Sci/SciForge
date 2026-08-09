@@ -1,6 +1,8 @@
 import { app, BrowserWindow, webContents } from 'electron'
-import { startComputerUseCdpAdapter } from '../src/main/services/computer-use-cdp-adapter'
-import { createElectronWebContentsCdpDriver } from '../src/main/services/computer-use-electron-webcontents-driver'
+import {
+  createElectronWebContentsCdpDriver,
+  startComputerUseCdpAdapter
+} from '@sciforge/domain-computer-use/main'
 
 app.commandLine.appendSwitch('disable-gpu')
 

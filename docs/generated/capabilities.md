@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **173**
+Registered actions: **175**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -47,6 +47,8 @@ Registered actions: **173**
 | `browser-preview.reload` | 1.0.0 | ui, agent | external-write | confirmation | resource |
 | `browser-preview.select` | 1.0.0 | ui, agent | external-write | confirmation | resource |
 | `change-inspector.open-session` | 1.0.0 | ui | read | none | workspace |
+| `computer-use.request-permission` | 1.0.0 | ui | external-write | confirmation | global |
+| `computer-use.status` | 1.0.0 | ui | read | none | global |
 | `controlled-process.create` | 1.0.0 | ui | external-write | none | workspace |
 | `controlled-process.dispose` | 1.0.0 | ui | external-write | none | resource |
 | `controlled-process.read` | 1.0.0 | ui | read | none | resource |
@@ -12561,6 +12563,838 @@ Issues a read-only resource for one session change snapshot.
     "audit"
   ],
   "title": "Observe session changes"
+}
+```
+
+## `computer-use.request-permission`
+
+Opens the operating system permission enrollment flow.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "kind": {
+        "enum": [
+          "accessibility",
+          "screenRecording"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "kind"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "accessibility": {
+        "enum": [
+          "granted",
+          "denied",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "accessibilityNeedsRestart": {
+        "type": "boolean"
+      },
+      "needsPermission": {
+        "type": "boolean"
+      },
+      "platform": {
+        "type": "string"
+      },
+      "screenRecording": {
+        "enum": [
+          "granted",
+          "denied",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "supported": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "platform",
+      "supported",
+      "needsPermission",
+      "accessibility",
+      "screenRecording",
+      "accessibilityNeedsRestart"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "computer-use"
+  ],
+  "title": "Request Computer Use permission"
+}
+```
+
+## `computer-use.status`
+
+Reads permissions and the conservative runtime status view.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "settings": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "runtimeEnabled": {
+            "additionalProperties": false,
+            "properties": {
+              "claude": {
+                "type": "boolean"
+              },
+              "codex": {
+                "type": "boolean"
+              },
+              "sciforge": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "sciforge",
+              "codex",
+              "claude"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "enabled",
+          "runtimeEnabled"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "settings"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "permissions": {
+        "additionalProperties": false,
+        "properties": {
+          "accessibility": {
+            "enum": [
+              "granted",
+              "denied",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "accessibilityNeedsRestart": {
+            "type": "boolean"
+          },
+          "needsPermission": {
+            "type": "boolean"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "screenRecording": {
+            "enum": [
+              "granted",
+              "denied",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "supported": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "platform",
+          "supported",
+          "needsPermission",
+          "accessibility",
+          "screenRecording",
+          "accessibilityNeedsRestart"
+        ],
+        "type": "object"
+      },
+      "runtime": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "backend": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "browser-cdp",
+                        "windows-uia",
+                        "isolated-desktop",
+                        "legacy-pyautogui",
+                        "static-image"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "degraded": {
+                  "type": "boolean"
+                },
+                "degradedReason": {
+                  "anyOf": [
+                    {
+                      "maxLength": 512,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "effectiveIsolation": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "agent-isolated",
+                        "host-app-scoped",
+                        "host-global",
+                        "host-approved"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "leaseId": {
+                  "anyOf": [
+                    {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "leaseScope": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "target",
+                        "environment",
+                        "process-global"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "requestId": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                  "type": "string"
+                },
+                "requestedIsolation": {
+                  "enum": [
+                    "auto",
+                    "agent-isolated",
+                    "host-app-scoped",
+                    "host-global",
+                    "host-approved"
+                  ],
+                  "type": "string"
+                },
+                "runtimeId": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "sessionId": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                  "type": "string"
+                },
+                "state": {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "targetId": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                  "type": "string"
+                },
+                "threadId": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "turnId": {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "verification": {
+                  "enum": [
+                    "verified",
+                    "unverified",
+                    "failed",
+                    "not-applicable"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "sessionId",
+                "requestId",
+                "targetId",
+                "leaseId",
+                "runtimeId",
+                "threadId",
+                "turnId",
+                "backend",
+                "leaseScope",
+                "requestedIsolation",
+                "effectiveIsolation",
+                "degraded",
+                "degradedReason",
+                "verification",
+                "state",
+                "updatedAt"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "approvalProof": {
+            "enum": [
+              "legacy-trust-boundary",
+              "invocation-proof-v1",
+              "unavailable"
+            ],
+            "type": "string"
+          },
+          "backends": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "actions": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "affectsUserInput": {
+                  "type": "boolean"
+                },
+                "available": {
+                  "type": "boolean"
+                },
+                "backend": {
+                  "enum": [
+                    "browser-cdp",
+                    "windows-uia",
+                    "isolated-desktop",
+                    "legacy-pyautogui",
+                    "static-image"
+                  ],
+                  "type": "string"
+                },
+                "backgroundInput": {
+                  "enum": [
+                    "semantic",
+                    "targeted",
+                    "none"
+                  ],
+                  "type": "string"
+                },
+                "effectiveIsolation": {
+                  "enum": [
+                    "agent-isolated",
+                    "host-app-scoped",
+                    "host-global",
+                    "host-approved"
+                  ],
+                  "type": "string"
+                },
+                "generation": {
+                  "anyOf": [
+                    {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "instanceId": {
+                  "anyOf": [
+                    {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "leaseScope": {
+                  "enum": [
+                    "target",
+                    "environment",
+                    "process-global"
+                  ],
+                  "type": "string"
+                },
+                "maxConcurrency": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "mayActivateTarget": {
+                  "type": "boolean"
+                },
+                "reason": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "requiresHostFocus": {
+                  "type": "boolean"
+                },
+                "supportsReadback": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "targetKinds": {
+                  "items": {
+                    "enum": [
+                      "browser-page",
+                      "electron-webcontents",
+                      "windows-uia",
+                      "isolated-desktop",
+                      "host-desktop",
+                      "static-image"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "usesHostClipboard": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "backend",
+                "available",
+                "targetKinds",
+                "actions",
+                "effectiveIsolation",
+                "backgroundInput",
+                "requiresHostFocus",
+                "affectsUserInput",
+                "usesHostClipboard",
+                "supportsReadback",
+                "leaseScope",
+                "maxConcurrency",
+                "reason"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "cleanupPending": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "backend": {
+                  "enum": [
+                    "browser-cdp",
+                    "windows-uia",
+                    "isolated-desktop",
+                    "legacy-pyautogui",
+                    "static-image"
+                  ],
+                  "type": "string"
+                },
+                "closed": {
+                  "type": "boolean"
+                },
+                "errors": {
+                  "items": {
+                    "maxLength": 512,
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "leaseId": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                  "type": "string"
+                },
+                "leaseReleased": {
+                  "type": "boolean"
+                },
+                "requestId": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                  "type": "string"
+                },
+                "sessionId": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                  "type": "string"
+                },
+                "targetId": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "requestId",
+                "sessionId",
+                "targetId",
+                "leaseId",
+                "backend",
+                "closed",
+                "leaseReleased",
+                "errors"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "connection": {
+            "enum": [
+              "online",
+              "offline",
+              "stale"
+            ],
+            "type": "string"
+          },
+          "counts": {
+            "additionalProperties": false,
+            "properties": {
+              "activeLeases": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "releasedLeaseTombstones": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "requests": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "sessions": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "tombstones": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "sessions",
+              "requests",
+              "activeLeases",
+              "tombstones",
+              "releasedLeaseTombstones"
+            ],
+            "type": "object"
+          },
+          "generation": {
+            "anyOf": [
+              {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastStatusError": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastSuccessAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lifecycleState": {
+            "enum": [
+              "running",
+              "stopping",
+              "stopped",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "protocolVersion": {
+            "anyOf": [
+              {
+                "const": 2,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reaper": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "intervalSeconds": {
+                    "anyOf": [
+                      {
+                        "exclusiveMinimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastError": {
+                    "anyOf": [
+                      {
+                        "maxLength": 512,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "leaseTtlSeconds": {
+                    "anyOf": [
+                      {
+                        "exclusiveMinimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "running": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "running",
+                  "intervalSeconds",
+                  "leaseTtlSeconds",
+                  "lastError"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recentRejections": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "message": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "requestId": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "requestId",
+                "code",
+                "message",
+                "updatedAt"
+              ],
+              "type": "object"
+            },
+            "maxItems": 20,
+            "type": "array"
+          },
+          "serverInstanceId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "connection",
+          "stale",
+          "lastSuccessAt",
+          "lastStatusError",
+          "serverInstanceId",
+          "generation",
+          "updatedAt",
+          "protocolVersion",
+          "approvalProof",
+          "lifecycleState",
+          "backends",
+          "counts",
+          "active",
+          "cleanupPending",
+          "recentRejections",
+          "reaper"
+        ],
+        "type": "object"
+      },
+      "settings": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "runtimeEnabled": {
+            "additionalProperties": false,
+            "properties": {
+              "claude": {
+                "type": "boolean"
+              },
+              "codex": {
+                "type": "boolean"
+              },
+              "sciforge": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "sciforge",
+              "codex",
+              "claude"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "enabled",
+          "runtimeEnabled"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "settings",
+      "permissions",
+      "runtime"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "computer-use"
+  ],
+  "title": "Read Computer Use status"
 }
 ```
 
@@ -71340,6 +72174,7 @@ Releases an open Workspace Preview session.
 | Biology Room | biologyRoom: |  |
 | Browser Preview | browserPreview: |  |
 | Change Inspector |  |  |
+| Computer Use |  |  |
 | Controlled Process |  |  |
 | Create Loop |  |  |
 | Dataset API |  |  |

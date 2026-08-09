@@ -118,12 +118,13 @@ describe('ComputerUseRuntimeClient', () => {
     expect(view.backends).toEqual([backend])
     expect(view.active[0]).toMatchObject({ degraded: true, verification: 'unverified' })
     expect(fetchImpl).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-      headers: { Authorization: 'Bearer token' }
+      headers: { Authorization: 'Bearer token' },
+      redirect: 'error'
     }))
     expect(writes).toHaveLength(1)
   })
 
-  it('rejects a generation regression and never exposes stale active resources', async () => {
+  it('marks a generation regression stale while preserving last-known resource evidence', async () => {
     let generation = 5
     const fetchImpl = vi.fn(async (url: string) => response(
       url.endsWith('/computer-use/status') ? status('instance-1', generation) : capabilities()
@@ -139,8 +140,9 @@ describe('ComputerUseRuntimeClient', () => {
 
     expect(regressed.connection).toBe('stale')
     expect(regressed.lastStatusError).toContain('generation regressed')
-    expect(regressed.active).toEqual([])
-    expect(regressed.cleanupPending).toEqual([])
+    expect(regressed.active).toHaveLength(1)
+    expect(regressed.active[0]?.requestId).toBe('request-1')
+    expect(regressed.counts).toMatchObject({ sessions: 1, requests: 1, activeLeases: 1 })
     expect(regressed.backends[0]?.available).toBe(false)
   })
 
@@ -178,5 +180,7 @@ describe('ComputerUseRuntimeClient', () => {
   it('rejects non-loopback and non-http status endpoints', () => {
     expect(() => new ComputerUseRuntimeClient({ baseUrl: 'https://example.com' })).toThrow(/loopback/)
     expect(() => new ComputerUseRuntimeClient({ baseUrl: 'https://127.0.0.1:3900' })).toThrow(/loopback/)
+    expect(() => new ComputerUseRuntimeClient({ baseUrl: 'http://user:secret@127.0.0.1:3900' }))
+      .toThrow(/credential-free/)
   })
 })

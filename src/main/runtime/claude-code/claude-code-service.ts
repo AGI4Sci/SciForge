@@ -41,7 +41,7 @@ import {
 } from './claude-code-config'
 import {
   isComputerUseMcpConfigured,
-} from '../../computer-use-mcp-config'
+} from '@sciforge/domain-computer-use/main/mcp-config'
 import {
   filterAgentRuntimeToolSurface,
   nativeAgentToolExecutionMetadata,

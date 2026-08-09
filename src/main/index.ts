@@ -134,22 +134,12 @@ import {
   type ImageGenerationMcpLaunchConfig
 } from './image-generation-mcp-config'
 import type { PptMasterMcpLaunchConfig } from './ppt-master-mcp-config'
-import {
-  GUI_COMPUTER_USE_MCP_SERVER_NAME,
-  isComputerUseMcpConfigured,
-  type ComputerUseMcpLaunchConfig
-} from './computer-use-mcp-config'
 import { buildManagedGuiMcpServers } from './gui-mcp-registry'
 import { migrateLegacyKunGlobalConfig } from './legacy-kun-global-config-migration'
 import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
 import { ControlledProcessService } from './processes/controlled-process-service'
 import { VersionControlWorkspaceService } from './services/version-control-workspace-service'
 import { VersionControlPlacementFacade } from './services/version-control-placement-facade'
-import { ComputerUseRuntimeClient } from './services/computer-use-runtime-client'
-import {
-  startElectronComputerUseAdapterRuntime,
-  type ElectronComputerUseAdapterRuntime
-} from './services/computer-use-electron-adapter-runtime'
 import { WorkspacePlacementRouter } from './services/workspace-placement-router'
 import {
   WorkspacePreviewHost,
@@ -174,6 +164,8 @@ import {
   createMainActionGuardEvaluator,
   createMainSystemCapabilityInvoker,
   listMainArtifactConsumers,
+  listMainMcpTrustedInvocationMetadataContributions,
+  listMainRuntimeMcpServerContributions,
   listMainVisualSourceContributions,
   listMainWorkspacePreviewPluginContributions,
   type ActivatedMainRuntimeContributions
@@ -363,16 +355,8 @@ function getPptMasterMcpLaunchConfig(): PptMasterMcpLaunchConfig {
   }
 }
 
-function getComputerUseMcpLaunchConfig(): ComputerUseMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
-}
-
 function managedGuiMcpServers(settings: AppSettingsV1) {
-  return buildManagedGuiMcpServers({
+  const builtIn = buildManagedGuiMcpServers({
     settings,
     scheduleMcp: { settings, launch: getScheduleMcpLaunchConfig() },
     researchMcp: { launch: getResearchSearchMcpLaunchConfig() },
@@ -383,18 +367,29 @@ function managedGuiMcpServers(settings: AppSettingsV1) {
     scientificPlottingMcp: { settings, launch: getScientificPlottingMcpLaunchConfig() },
     bgcDiscoveryMcp: { settings, launch: getBgcDiscoveryMcpLaunchConfig() },
     imageGenerationMcp: { settings, launch: getImageGenerationMcpLaunchConfig() },
-    pptMasterMcp: { settings, launch: getPptMasterMcpLaunchConfig() },
-    computerUseMcp: { settings, launch: getComputerUseMcpLaunchConfig() }
+    pptMasterMcp: { settings, launch: getPptMasterMcpLaunchConfig() }
   })
+  const domainOwned = domainRuntimeMcpServerContributions.flatMap((contribution) => {
+    const config = contribution.createConfig(settings)
+    return config ? [{
+      ...config,
+      args: config.args ? [...config.args] : undefined,
+      env: config.env ? { ...config.env } : undefined,
+      enabledTools: config.enabledTools ? [...config.enabledTools] : undefined
+    }] : []
+  })
+  return [...builtIn, ...domainOwned]
 }
 
 async function runtimeMayUseManagedTool(
   runtimeId: string,
   tool: RuntimeToolDefinition
 ): Promise<boolean> {
-  if (tool.providerId !== GUI_COMPUTER_USE_MCP_SERVER_NAME) return true
-  if (runtimeId !== 'codex' && runtimeId !== 'claude') return false
-  return isComputerUseMcpConfigured(await store.load(), runtimeId)
+  const contribution = domainRuntimeMcpServerContributions.find(
+    ({ serverId }) => serverId === tool.providerId
+  )
+  if (!contribution) return true
+  return contribution.isRuntimeEnabled?.(await store.load(), runtimeId) ?? true
 }
 
 traceStartup('main module evaluated')
@@ -426,13 +421,18 @@ let agentRuntimeHostForShutdown: AgentRuntimeHost | null = null
 let domainExecutionEventsForShutdown: DomainExecutionEventService | null = null
 let turnArtifactHandoffForShutdown: TurnArtifactHandoffService | null = null
 let runtimeMcpToolGateway: RuntimeMcpToolGateway | null = null
+let domainRuntimeMcpServerContributions: ReturnType<
+  typeof listMainRuntimeMcpServerContributions
+> = Object.freeze([])
+let domainMcpTrustedInvocationMetadata: ReturnType<
+  typeof listMainMcpTrustedInvocationMetadataContributions
+> = Object.freeze([])
 let claudeCodeRuntime: ClaudeCodeRuntimeService | null = null
 let codeNavigationService: LspCodeNavigationService | null = null
 let domainModuleCatalog: DomainModuleCatalog | null = null
 let mainRuntimeContributions: ActivatedMainRuntimeContributions | null = null
 let workspaceHostSessionManagerForShutdown: WorkspaceHostSessionManager | null = null
 let workspaceEgressServiceForShutdown: WorkspaceEgressService | null = null
-let computerUseElectronAdapterForShutdown: ElectronComputerUseAdapterRuntime | null = null
 let managedRuntimesStoppedForQuit = false
 let managedRuntimesStopPromise: Promise<void> | null = null
 let appBehavior: AppBehaviorConfigV1 = normalizeAppBehaviorSettings()
@@ -804,11 +804,6 @@ async function stopManagedRuntimes(): Promise<void> {
       stopWeixinBridgeRuntime()
       await runtimeMcpToolGateway?.close('service_shutdown')
       runtimeMcpToolGateway = null
-      const computerUseAdapter = computerUseElectronAdapterForShutdown
-      computerUseElectronAdapterForShutdown = null
-      await computerUseAdapter?.close().catch(() => {
-        logWarn('computer-use', 'Failed to close the Electron webContents adapter cleanly.')
-      })
       // Drain model clients before terminating the shared access sidecar so an
       // active request can finish and its tail trace can be persisted.
       await stopModelAccessGatewaySidecar({
@@ -1107,34 +1102,6 @@ app.whenReady().then(async () => {
     retentionDays: initial.log.retentionDays
   })
   traceStartup('logger configured')
-  const computerUseServiceUrl = (process.env.SCIFORGE_CUA_SERVICE_URL ?? '').trim()
-  const computerUseServiceToken = (
-    (process.env.SCIFORGE_CUA_SERVICE_TOKEN ?? '').trim() ||
-    (process.env.CUA_SERVICE_TOKEN ?? '').trim()
-  )
-  const explicitCdpAdapter = Boolean(
-    (process.env.SCIFORGE_CUA_CDP_ADAPTER_URL ?? '').trim() ||
-    (process.env.SCIFORGE_CUA_CDP_ADAPTER_TOKEN ?? '').trim()
-  )
-  if (computerUseServiceUrl && computerUseServiceToken && !explicitCdpAdapter) {
-    try {
-      const browserEndpoints = (process.env.SCIFORGE_CUA_CDP_ENDPOINTS ?? '')
-        .split(',')
-        .map((value) => value.trim())
-        .filter(Boolean)
-      computerUseElectronAdapterForShutdown = await startElectronComputerUseAdapterRuntime({
-        serviceUrl: computerUseServiceUrl,
-        serviceToken: computerUseServiceToken,
-        browserEndpoints,
-        listWebContents: () => webContents.getAllWebContents().filter((contents) => (
-          !contents.isDestroyed() && contents.getType() === 'window'
-        ))
-      })
-      logInfo('computer-use', 'Electron webContents adapter started on loopback.')
-    } catch {
-      logWarn('computer-use', 'Electron webContents adapter startup failed; target remains unavailable.')
-    }
-  }
   const traceSensitiveSettings = new CurrentTraceSensitiveSettings(initial)
   const fullTraceStore = new LocalTraceStore({
     userDataDirectory: app.getPath('userData'),
@@ -1191,6 +1158,9 @@ app.whenReady().then(async () => {
   })
   const catalog = createApplicationDomainCatalog({
     getUserDataDir: () => app.getPath('userData'),
+    getAppRoot: () => app.getAppPath(),
+    getExecutablePath: () => process.execPath,
+    isPackaged: () => app.isPackaged,
     openPath: async (targetPath) => {
       const error = await shell.openPath(targetPath)
       if (error) throw new Error(error)
@@ -1379,8 +1349,12 @@ app.whenReady().then(async () => {
     ...listMainVisualSourceContributions(catalog)
   ])
   domainModuleCatalog = catalog
+  domainRuntimeMcpServerContributions = listMainRuntimeMcpServerContributions(catalog)
+  domainMcpTrustedInvocationMetadata =
+    listMainMcpTrustedInvocationMetadataContributions(catalog)
   runtimeMcpToolGateway = createRuntimeMcpToolGateway({
-    servers: managedGuiMcpServers(initial)
+    servers: managedGuiMcpServers(initial),
+    trustedInvocationMetadata: domainMcpTrustedInvocationMetadata
   })
   const runtimeCapabilityBroker = createRuntimeCapabilityBroker({
     broker: capabilityBroker,
@@ -1920,12 +1894,6 @@ app.whenReady().then(async () => {
       )
   })
 
-  const computerUseRuntimeClient = new ComputerUseRuntimeClient({
-    baseUrl: process.env.SCIFORGE_CUA_SERVICE_URL || 'http://127.0.0.1:3900',
-    token: process.env.SCIFORGE_CUA_SERVICE_TOKEN || process.env.CUA_SERVICE_TOKEN,
-    cachePath: join(app.getPath('userData'), 'computer-use', 'runtime-status.json')
-  })
-
   const appBridgeDispatcher = registerAppIpcHandlers({
     store,
     actionGuardEvaluator,
@@ -1943,7 +1911,6 @@ app.whenReady().then(async () => {
     },
     applySettingsPatch,
     getModelAccessStatus: readModelAccessStatus,
-    getComputerUseRuntimeStatus: () => computerUseRuntimeClient.refresh(),
     traces: fullTraceStore,
     agentRuntime: agentRuntimeHost,
     remoteWorkspace: remoteWorkspaceController,

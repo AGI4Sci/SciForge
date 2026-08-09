@@ -47,7 +47,7 @@ import {
   configuredComputerUseCapability,
   GUI_COMPUTER_USE_MCP_SERVER_NAME,
   unavailableComputerUseCapability
-} from '../../computer-use-mcp-config'
+} from '@sciforge/domain-computer-use/main/mcp-config'
 
 export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): AgentRuntimeAdapter {
   return {

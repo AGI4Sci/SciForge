@@ -2,8 +2,9 @@ import {
   computerUseCapabilitiesEnvelopeSchema,
   computerUseStatusEnvelopeSchema,
   type ComputerUseSidecarRuntimeStatus
-} from '../../shared/computer-use-contract'
-import { atomicWriteAppDataJsonAtPath } from './app-data-store'
+} from '../../contract'
+import { atomicWriteJson } from './atomic-json'
+import { trustedLoopbackEndpoint, trustedLoopbackOrigin } from '../trusted-loopback-url'
 
 export type ComputerUseRuntimeConnection = 'online' | 'offline' | 'stale'
 
@@ -57,14 +58,13 @@ export class ComputerUseRuntimeClient {
   private lastAccepted: ComputerUseRuntimeView | null = null
 
   constructor(options: ComputerUseRuntimeClientOptions) {
-    this.baseUrl = trustedLoopbackUrl(options.baseUrl)
+    this.baseUrl = trustedLoopbackOrigin(options.baseUrl)
     this.token = options.token?.trim() ?? ''
     this.timeoutMs = boundedTimeout(options.timeoutMs)
     this.cachePath = options.cachePath
     this.fetchImpl = options.fetchImpl ?? fetch
     this.now = options.now ?? (() => new Date())
-    this.writeCache = options.writeCache ?? ((path, value) =>
-      atomicWriteAppDataJsonAtPath(path, value, { trailingNewline: true }))
+    this.writeCache = options.writeCache ?? atomicWriteJson
   }
 
   async refresh(): Promise<ComputerUseRuntimeView> {
@@ -133,11 +133,11 @@ export class ComputerUseRuntimeClient {
         available: false,
         reason: 'Sidecar status is stale or offline.'
       })),
-      counts: { ...EMPTY_COUNTS },
-      active: [],
-      cleanupPending: [],
+      counts: last?.counts ?? { ...EMPTY_COUNTS },
+      active: last?.active ?? [],
+      cleanupPending: last?.cleanupPending ?? [],
       recentRejections: last?.recentRejections ?? [],
-      reaper: null
+      reaper: last?.reaper ?? null
     }
   }
 
@@ -145,10 +145,11 @@ export class ComputerUseRuntimeClient {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), this.timeoutMs)
     try {
-      const response = await this.fetchImpl(new URL(path, this.baseUrl).toString(), {
+      const response = await this.fetchImpl(trustedLoopbackEndpoint(this.baseUrl, path), {
         method: 'GET',
         headers: this.token ? { Authorization: `Bearer ${this.token}` } : undefined,
-        signal: controller.signal
+        signal: controller.signal,
+        redirect: 'error'
       })
       if (!response.ok) throw new Error(`Computer Use sidecar returned HTTP ${response.status}.`)
       return schema.parse(await response.json())
@@ -156,18 +157,6 @@ export class ComputerUseRuntimeClient {
       clearTimeout(timer)
     }
   }
-}
-
-function trustedLoopbackUrl(value: string): URL {
-  const url = new URL(value)
-  const host = url.hostname.toLowerCase()
-  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(host)) {
-    throw new Error('Computer Use runtime status URL must use trusted loopback HTTP.')
-  }
-  url.pathname = '/'
-  url.search = ''
-  url.hash = ''
-  return url
 }
 
 function boundedTimeout(value: number | undefined): number {

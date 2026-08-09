@@ -70,7 +70,6 @@ import {
   agentRuntimeUserInputResolvePayloadSchema,
   connectPhoneInstallPollPayloadSchema,
   connectPhoneInstallQrPayloadSchema,
-  computerUsePermissionKindSchema,
   remoteChannelActiveThreadContextPayloadSchema,
   remoteChannelMirrorPayloadSchema,
   remoteChannelTaskFromTextPayloadSchema,
@@ -220,12 +219,6 @@ import {
 } from '../services/write-inline-completion-service'
 import { retrieveWriteContext } from '../services/write-retrieval-service'
 import { requestSpeechTranscription } from '../services/speech-to-text-service'
-import {
-  getComputerUsePermissions,
-  requestComputerUsePermission
-} from '../services/computer-use-permissions'
-import { readComputerUseRuntimeStatus } from '../services/computer-use-status'
-import type { ComputerUseRuntimeView } from '../services/computer-use-runtime-client'
 import { exportWriteDocument } from '../services/write-export-service'
 import { listGuiSkills } from '../services/skill-service'
 type GuiUpdaterModule = typeof import('../gui-updater')
@@ -285,7 +278,6 @@ export type RegisterAppIpcHandlersOptions = {
   isTrustedIpcSender: (event: IpcMainInvokeEvent) => boolean
   applySettingsPatch: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   getModelAccessStatus: (settings: AppSettingsV1) => Promise<ModelAccessStatus>
-  getComputerUseRuntimeStatus?: () => Promise<ComputerUseRuntimeView>
   traces?: {
     read: (query?: TraceReadQuery) => Promise<TraceReadResult>
     summaries: (query?: TraceSummaryQuery) => Promise<TraceSummary[]>
@@ -460,7 +452,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     getMainWindow,
     applySettingsPatch,
     getModelAccessStatus,
-    getComputerUseRuntimeStatus,
     traces,
     extensions,
     agentRuntime,
@@ -712,29 +703,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('settings:set', settingsPatchSchema, partial) as AppSettingsPatch
     )
   )
-  handleInvoke('computer-use:permissions', async () => getComputerUsePermissions())
-  handleInvoke('computer-use:request-permission', async (_, kind: unknown) =>
-    requestComputerUsePermission(
-      parseIpcPayload(
-        'computer-use:request-permission',
-        computerUsePermissionKindSchema,
-        kind
-      )
-    )
-  )
-  handleInvoke('computer-use:status', async () => {
-    const settings = await store.load()
-    const runtime = getComputerUseRuntimeStatus
-      ? await getComputerUseRuntimeStatus()
-      : await readComputerUseRuntimeStatus(
-        join(app.getPath('userData'), 'computer-use', 'status.json')
-      )
-    return {
-      settings: settings.computerUse,
-      permissions: await getComputerUsePermissions(),
-      runtime
-    }
-  })
   handleInvoke('performance:snapshot', async () => {
     const mainSnapshot = getMainPerformanceSnapshot?.() ?? null
     const win = getMainWindow()

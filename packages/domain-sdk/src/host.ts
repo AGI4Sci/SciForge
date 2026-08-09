@@ -33,6 +33,10 @@ export const MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND = 'main.runtime-lifecycle'
 export const MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND =
   'main.artifact-consumer' as const
 export const MAIN_ACTION_GUARD_CONTRIBUTION_KIND = 'main.action-guard' as const
+export const MAIN_RUNTIME_MCP_SERVER_CONTRIBUTION_KIND =
+  'main.runtime-mcp-server' as const
+export const MAIN_MCP_TRUSTED_INVOCATION_METADATA_CONTRIBUTION_KIND =
+  'main.mcp-trusted-invocation-metadata' as const
 
 export type DomainRuntimeContributionOwner = Readonly<{
   moduleId: string
@@ -43,6 +47,34 @@ export type DomainMainRuntimeLogEntry = Readonly<{
   level: 'debug' | 'info' | 'warn' | 'error'
   message: string
   detail?: unknown
+}>
+
+export type DomainRuntimeMcpServerConfig = Readonly<{
+  id: string
+  command: string
+  args?: readonly string[]
+  env?: Readonly<Record<string, string>>
+  timeoutMs?: number
+  enabledTools?: readonly string[]
+  disabled?: boolean
+}>
+
+/** Generic package-owned MCP worker binding consumed by the runtime host. */
+export type DomainMainRuntimeMcpServerContribution = Readonly<{
+  serverId: string
+  createConfig: (settings: unknown) => DomainRuntimeMcpServerConfig | null
+  isRuntimeEnabled?: (settings: unknown, runtimeId: string) => boolean
+}>
+
+/**
+ * Declares how host-owned trusted invocation metadata is forwarded to one MCP
+ * server/tool set. The domain chooses the key; the host remains domain-agnostic.
+ */
+export type DomainMcpTrustedInvocationMetadataContribution = Readonly<{
+  serverId: string
+  tools: readonly string[]
+  metadataKey: string
+  source: 'trusted-invocation'
 }>
 
 export type DomainAgentThreadListInput = Readonly<{
@@ -344,6 +376,26 @@ export function isDomainMainActionGuard(
     new Set(actions).size === actions.length
 }
 
+export function isDomainMainRuntimeMcpServerContribution(
+  value: unknown
+): value is DomainMainRuntimeMcpServerContribution {
+  if (!isRecord(value)) return false
+  return typeof value.serverId === 'string' && Boolean(value.serverId.trim()) &&
+    typeof value.createConfig === 'function' &&
+    (value.isRuntimeEnabled === undefined || typeof value.isRuntimeEnabled === 'function')
+}
+
+export function isDomainMcpTrustedInvocationMetadataContribution(
+  value: unknown
+): value is DomainMcpTrustedInvocationMetadataContribution {
+  if (!isRecord(value) || value.source !== 'trusted-invocation') return false
+  if (typeof value.serverId !== 'string' || !value.serverId.trim()) return false
+  if (typeof value.metadataKey !== 'string' || !value.metadataKey.trim()) return false
+  return Array.isArray(value.tools) && value.tools.length > 0 &&
+    value.tools.every((tool) => typeof tool === 'string' && Boolean(tool.trim())) &&
+    new Set(value.tools).size === value.tools.length
+}
+
 export type DomainWorkbenchRightPanelSession = Readonly<{
   id: string
   runtimeId?: string
@@ -433,6 +485,9 @@ export type DomainRendererWorkbenchHost = Readonly<{
  */
 export type DomainMainHost = Readonly<{
   getUserDataDir: () => string
+  getAppRoot?: () => string
+  getExecutablePath?: () => string
+  isPackaged?: () => boolean
   defineCapability: (options: unknown) => unknown
   /** Opens one absolute local path with the operating system's configured application. */
   openPath?: (path: string) => Promise<void>

@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import type {
+  DomainMcpTrustedInvocationMetadataContribution
+} from '@sciforge/domain-sdk/host'
 import { mainPerformanceMonitor } from '../../performance-monitor'
 import type {
   RuntimeToolCallRequest,
@@ -49,6 +52,7 @@ export type RuntimeMcpClient = {
 
 export type RuntimeMcpToolGatewayOptions = {
   servers: readonly RuntimeMcpServerConfig[]
+  trustedInvocationMetadata?: readonly DomainMcpTrustedInvocationMetadataContribution[]
   clientFactory?: (server: RuntimeMcpServerConfig) => Promise<RuntimeMcpClient>
 }
 
@@ -139,11 +143,15 @@ export class RuntimeMcpToolGateway {
   private states: ServerState[] = []
   private readonly statesByNamespace = new Map<string, ServerState>()
   private readonly clientFactory: (server: RuntimeMcpServerConfig) => Promise<RuntimeMcpClient>
+  private readonly trustedInvocationMetadata: readonly DomainMcpTrustedInvocationMetadataContribution[]
   private closedReason: RuntimeToolReleaseReason | null = null
   private serverConfigSignature = ''
 
   constructor(options: RuntimeMcpToolGatewayOptions) {
     this.clientFactory = options.clientFactory ?? createRuntimeMcpClient
+    this.trustedInvocationMetadata = Object.freeze([
+      ...(options.trustedInvocationMetadata ?? [])
+    ])
     this.installServerStates(options.servers)
   }
 
@@ -369,9 +377,12 @@ export class RuntimeMcpToolGateway {
         {
           name: tool.originalName,
           arguments: callArguments,
-          ...(request.trustedInvocation && state.config.id === 'gui_owl_computer_use'
-            ? { _meta: { 'io.sciforge/computer-use-invocation': request.trustedInvocation } }
-            : {})
+          ...mcpTrustedInvocationMetadata(
+            this.trustedInvocationMetadata,
+            state.config.id,
+            tool.originalName,
+            request.trustedInvocation
+          )
         },
         { signal, timeout: state.config.timeoutMs }
       )
@@ -596,6 +607,30 @@ export class RuntimeMcpToolGateway {
       diagnosticCode: diagnostic.diagnosticCode
     })
   }
+}
+
+function mcpTrustedInvocationMetadata(
+  contributions: readonly DomainMcpTrustedInvocationMetadataContribution[],
+  serverId: string,
+  toolName: string,
+  trustedInvocation: RuntimeToolCallRequest['trustedInvocation']
+): { _meta?: Record<string, unknown> } {
+  if (!trustedInvocation) return {}
+  const metadata: Record<string, unknown> = {}
+  for (const contribution of contributions) {
+    if (
+      contribution.serverId !== serverId ||
+      !contribution.tools.includes(toolName) ||
+      contribution.source !== 'trusted-invocation'
+    ) continue
+    if (Object.hasOwn(metadata, contribution.metadataKey)) {
+      throw new Error(
+        `Duplicate trusted invocation metadata key ${contribution.metadataKey} for ${serverId}/${toolName}.`
+      )
+    }
+    metadata[contribution.metadataKey] = trustedInvocation
+  }
+  return Object.keys(metadata).length > 0 ? { _meta: metadata } : {}
 }
 
 function safeDiagnosticIdentifier(value: string, maxLength: number, fallback: string): string {

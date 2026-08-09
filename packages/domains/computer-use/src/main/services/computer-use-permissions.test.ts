@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { shell } from 'electron'
-import { MACOS_SCREEN_RECORDING_SETTINGS_URL } from '../../shared/external-url-policy'
-import { openSystemSettingsPane } from './computer-use-permissions'
+import {
+  MACOS_SCREEN_RECORDING_SETTINGS_URL,
+  openSystemSettingsPane
+} from './computer-use-permissions'
 
 vi.mock('electron', () => ({
   desktopCapturer: {

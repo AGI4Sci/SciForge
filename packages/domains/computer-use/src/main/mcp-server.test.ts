@@ -5,10 +5,15 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   COMPUTER_USE_MCP_TOOL_NAME,
+  COMPUTER_USE_GET_CAPABILITIES_TOOL_NAME,
   GUI_COMPUTER_USE_MCP_SERVER_NAME,
   computerUseMcpEnabledTools
-} from './computer-use-mcp-config'
-import { createComputerUseMcpServer, runComputerUseMcpServerFromArgv } from './computer-use-mcp-server'
+} from './mcp-config'
+import {
+  createComputerUseMcpServer,
+  resolveComputerUseServiceConfig,
+  runComputerUseMcpServerFromArgv
+} from './mcp-server'
 import { COMPUTER_USE_INVOCATION_META_KEY } from './services/computer-use-invocation-proof'
 
 const openServers: Array<{ close: () => Promise<void> }> = []
@@ -194,6 +199,51 @@ describe('computer-use MCP server', () => {
       await client.close()
       await mcpServer.close()
     }
+  })
+
+  it('rejects sidecar redirects instead of forwarding local authorization', async () => {
+    let redirectedHits = 0
+    const destination = await startFakeSidecar(async (_request, response) => {
+      redirectedHits += 1
+      response.writeHead(200, { 'Content-Type': 'application/json' })
+      response.end(JSON.stringify({ ok: true, data: {} }))
+    })
+    const redirector = await startFakeSidecar(async (_request, response) => {
+      response.writeHead(302, { Location: `${destination.url}/captured` })
+      response.end()
+    })
+    const mcpServer = createComputerUseMcpServer({
+      serviceUrl: redirector.url,
+      serviceToken: 'must-not-forward',
+      timeoutMs: 5_000
+    })
+    const client = new Client({ name: 'computer-use-redirect-test', version: '0.1.0' })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    try {
+      await Promise.all([mcpServer.connect(serverTransport), client.connect(clientTransport)])
+      const result = await client.callTool({
+        name: COMPUTER_USE_GET_CAPABILITIES_TOOL_NAME,
+        arguments: {}
+      })
+      expect(result.isError).toBe(true)
+      expect(result.structuredContent).toMatchObject({ error: { code: 'UNAVAILABLE' } })
+      expect(redirectedHits).toBe(0)
+    } finally {
+      await client.close()
+      await mcpServer.close()
+    }
+  })
+
+  it('accepts only credential-free loopback HTTP service origins', () => {
+    expect(resolveComputerUseServiceConfig({
+      SCIFORGE_CUA_SERVICE_URL: 'http://[::1]:3900'
+    })?.serviceUrl).toBe('http://[::1]:3900')
+    expect(() => resolveComputerUseServiceConfig({
+      SCIFORGE_CUA_SERVICE_URL: 'http://user:secret@127.0.0.1:3900'
+    })).toThrow(/credential-free/)
+    expect(() => resolveComputerUseServiceConfig({
+      SCIFORGE_CUA_SERVICE_URL: 'http://127.0.0.1:3900/prefix'
+    })).toThrow(/loopback HTTP origin/)
   })
 })
 

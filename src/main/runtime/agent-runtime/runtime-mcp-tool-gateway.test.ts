@@ -594,19 +594,25 @@ describe('runtime MCP tool gateway', () => {
     })
   })
 
-  it('passes runtime computer-use arguments through runtime MCP calls', async () => {
+  it('passes trusted invocation metadata through generic domain contributions', async () => {
     const callTool = vi.fn(async () => ({
       content: [{ type: 'text', text: 'bound' }],
       structuredContent: { ok: true }
     }))
     const bridge = createRuntimeMcpToolGateway({
       servers: [{
-        id: 'gui_owl_computer_use',
-        command: '/bin/computer-use-mcp',
-        enabledTools: ['computer_use']
+        id: 'domain-worker',
+        command: '/bin/domain-worker',
+        enabledTools: ['domain_tool']
+      }],
+      trustedInvocationMetadata: [{
+        serverId: 'domain-worker',
+        tools: ['domain_tool'],
+        metadataKey: 'io.example/trusted-invocation',
+        source: 'trusted-invocation'
       }],
       clientFactory: async () => fakeMcpClient({
-        tools: [{ name: 'computer_use', description: 'Shared host UI control.' }],
+        tools: [{ name: 'domain_tool', description: 'Domain-owned tool.' }],
         callTool
       })
     })
@@ -616,7 +622,7 @@ describe('runtime MCP tool gateway', () => {
       requestId: 'request-1',
       threadId: 'codex-thread-1',
       turnId: 'codex-turn-1',
-      tool: 'computer_use',
+      tool: 'domain_tool',
       arguments: {
         instruction: 'open the settings window'
       },
@@ -634,12 +640,12 @@ describe('runtime MCP tool gateway', () => {
     })
     expect(callTool).toHaveBeenCalledWith(
       {
-        name: 'computer_use',
+        name: 'domain_tool',
         arguments: {
           instruction: 'open the settings window'
         },
         _meta: {
-          'io.sciforge/computer-use-invocation': {
+          'io.example/trusted-invocation': {
             requestId: 'request-1',
             runtimeId: 'codex',
             threadId: 'codex-thread-1',

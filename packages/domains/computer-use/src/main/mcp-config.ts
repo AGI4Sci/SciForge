@@ -1,18 +1,32 @@
-import type { AgentRuntimeCapabilities } from '../shared/agent-runtime-contract'
-import { isComputerUseEnabledForRuntime, type AgentRuntimeId, type AppSettingsV1 } from '../shared/app-settings'
-import {
-  buildManagedGuiLocalRuntimeMcpServerConfig,
-  buildExternalLocalRuntimeMcpJson,
-  ELECTRON_RUN_AS_NODE_ENV,
-  managedGuiMcpNames,
-  resolveManagedGuiMcpCommand,
-  resolveManagedGuiMcpNodeEntryPath,
-  resolveLocalRuntimeMcpJsonPath,
-  syncExternalLocalRuntimeMcpJson,
-  type JsonRecord,
-  type ManagedGuiMcpDescriptor,
-  type ManagedGuiMcpLaunchConfig
-} from './managed-gui-mcp-config'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { dirname, join, posix } from 'node:path'
+import { resolveElectronRunAsNodeExecutable } from '@sciforge/domain-sdk/node/electron-node-executable'
+
+export type AgentRuntimeId = 'sciforge' | 'codex' | 'claude'
+export type ComputerUseSettingsLike = Readonly<{
+  enabled?: boolean
+  runtimeEnabled?: Readonly<Partial<Record<AgentRuntimeId, boolean>>>
+}>
+export type AppSettingsLike = Readonly<{ computerUse?: ComputerUseSettingsLike }>
+export type ComputerUseMcpLaunchConfig = Readonly<{
+  appPath: string
+  execPath: string
+  isPackaged: boolean
+}>
+export type JsonRecord = Record<string, unknown>
+export type ComputerUseCapability =
+  | Readonly<{
+    available: true
+    server: 'mcp'
+    toolName: 'computer_use'
+    backend: 'legacy-pyautogui'
+    inputIsolation: 'host-approved'
+    affectsUserInput: true
+    requiresHostFocus: true
+    usesHostClipboard: true
+  }>
+  | Readonly<{ available: false; reason: string }>
 
 export const GUI_COMPUTER_USE_MCP_SERVER_NAME = 'gui_owl_computer_use'
 export const RETIRED_GUI_COMPUTER_USE_MCP_SERVER_NAMES = ['gui_computer_use', 'computer-use'] as const
@@ -25,13 +39,11 @@ const GUI_COMPUTER_USE_MCP_NODE_ENTRY = 'out/main/computer-use-mcp-node-entry.js
 export const COMPUTER_USE_MCP_LAUNCH_FLAG = '--gui-owl-computer-use-mcp-server'
 export const COMPUTER_USE_MCP_TIMEOUT_MS = 600_000
 
-export type ComputerUseMcpLaunchConfig = ManagedGuiMcpLaunchConfig
-
 type ComputerUseMcpConfigPaths = {
   mcpJsonPath?: string
 }
 
-export const GUI_COMPUTER_USE_MCP_DESCRIPTOR: ManagedGuiMcpDescriptor = {
+export const GUI_COMPUTER_USE_MCP_DESCRIPTOR = {
   serverName: GUI_COMPUTER_USE_MCP_SERVER_NAME,
   legacyServerNames: RETIRED_GUI_COMPUTER_USE_MCP_SERVER_NAMES,
   nodeEntry: GUI_COMPUTER_USE_MCP_NODE_ENTRY,
@@ -40,7 +52,7 @@ export const GUI_COMPUTER_USE_MCP_DESCRIPTOR: ManagedGuiMcpDescriptor = {
   enabledTools: computerUseMcpEnabledTools
 }
 
-export function configuredComputerUseCapability(): AgentRuntimeCapabilities['tools']['computerUse'] {
+export function configuredComputerUseCapability(): ComputerUseCapability {
   return {
     available: true,
     server: 'mcp',
@@ -55,7 +67,7 @@ export function configuredComputerUseCapability(): AgentRuntimeCapabilities['too
 
 export function unavailableComputerUseCapability(
   reason: string
-): AgentRuntimeCapabilities['tools']['computerUse'] {
+): ComputerUseCapability {
   return { available: false, reason }
 }
 
@@ -70,7 +82,7 @@ export function computerUseMcpEnabledTools(): string[] {
 }
 
 export function isComputerUseMcpConfigured(
-  settings: AppSettingsV1 | undefined,
+  settings: AppSettingsLike | undefined,
   runtimeId: AgentRuntimeId,
   env: NodeJS.ProcessEnv = process.env
 ): boolean {
@@ -89,21 +101,23 @@ export function buildComputerUseMcpArgs(launch: ComputerUseMcpLaunchConfig): str
 }
 
 export function resolveComputerUseMcpNodeEntryPath(launch: ComputerUseMcpLaunchConfig): string {
-  return resolveManagedGuiMcpNodeEntryPath(launch, GUI_COMPUTER_USE_MCP_NODE_ENTRY)
+  return launch.appPath.includes('/') && !launch.appPath.includes('\\')
+    ? posix.join(launch.appPath, GUI_COMPUTER_USE_MCP_NODE_ENTRY)
+    : join(launch.appPath, GUI_COMPUTER_USE_MCP_NODE_ENTRY)
 }
 
 export function resolveComputerUseMcpCommand(
   launch: ComputerUseMcpLaunchConfig,
   platform: NodeJS.Platform = process.platform
 ): string {
-  return resolveManagedGuiMcpCommand(launch, platform)
+  return resolveElectronRunAsNodeExecutable(launch.execPath, platform)
 }
 
 export function computerUseMcpEnv(
   baseEnv: NodeJS.ProcessEnv = process.env
 ): Record<string, string> {
   return {
-    ...ELECTRON_RUN_AS_NODE_ENV,
+    ELECTRON_RUN_AS_NODE: '1',
     ...copyEnv(baseEnv, [
       'SCIFORGE_CUA_SERVICE_URL',
       'SCIFORGE_CUA_SERVICE_TOKEN',
@@ -117,29 +131,71 @@ export function computerUseMcpEnv(
 }
 
 export function buildComputerUseLocalRuntimeMcpServerConfig(
-  settings: AppSettingsV1,
+  settings: AppSettingsLike,
   launch: ComputerUseMcpLaunchConfig,
   existing: unknown = {}
 ): JsonRecord {
-  return buildManagedGuiLocalRuntimeMcpServerConfig({
-    descriptor: GUI_COMPUTER_USE_MCP_DESCRIPTOR,
-    launch,
+  const record = isJsonRecord(existing) ? existing : {}
+  return {
+    ...record,
+    enabled: isComputerUseMcpConfigured(settings, 'sciforge'),
+    transport: 'stdio',
+    command: resolveComputerUseMcpCommand(launch),
     args: buildComputerUseMcpArgs(launch),
     env: computerUseMcpEnv(),
-    existing,
-    enabled: isComputerUseMcpConfigured(settings, 'sciforge')
-  })
+    trustScope: 'user',
+    timeoutMs: COMPUTER_USE_MCP_TIMEOUT_MS
+  }
 }
 
 export function buildSyncedComputerUseMcpJson(existing: unknown): JsonRecord {
-  return buildExternalLocalRuntimeMcpJson(existing, managedGuiMcpNames(GUI_COMPUTER_USE_MCP_DESCRIPTOR))
+  const base = isJsonRecord(existing) ? existing : {}
+  const servers = isJsonRecord(base.servers) ? base.servers : {}
+  const retired = new Set([
+    GUI_COMPUTER_USE_MCP_SERVER_NAME,
+    ...RETIRED_GUI_COMPUTER_USE_MCP_SERVER_NAMES
+  ])
+  return {
+    ...base,
+    servers: Object.fromEntries(
+      Object.entries(servers).filter(([name]) => !retired.has(name))
+    )
+  }
 }
 
 export async function syncComputerUseMcpConfig(
   paths: ComputerUseMcpConfigPaths = {}
 ): Promise<void> {
-  const mcpJsonPath = paths.mcpJsonPath ?? resolveLocalRuntimeMcpJsonPath()
-  await syncExternalLocalRuntimeMcpJson(mcpJsonPath, managedGuiMcpNames(GUI_COMPUTER_USE_MCP_DESCRIPTOR))
+  const mcpJsonPath = paths.mcpJsonPath ?? join(homedir(), '.sciforge', 'mcp.json')
+  let raw: string
+  try {
+    raw = await readFile(mcpJsonPath, 'utf8')
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') return
+    throw error
+  }
+  const current = JSON.parse(raw) as unknown
+  const next = buildSyncedComputerUseMcpJson(current)
+  const nextText = `${JSON.stringify(next, null, 2)}\n`
+  if (nextText === `${JSON.stringify(current, null, 2)}\n`) return
+  await mkdir(dirname(mcpJsonPath), { recursive: true })
+  await writeFile(mcpJsonPath, nextText, 'utf8')
+}
+
+function isComputerUseEnabledForRuntime(
+  settings: AppSettingsLike,
+  runtimeId: AgentRuntimeId
+): boolean {
+  return settings.computerUse?.enabled !== false &&
+    settings.computerUse?.runtimeEnabled?.[runtimeId] !== false
+}
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === 'object' && error !== null
 }
 
 function computerUseServiceUrl(env: NodeJS.ProcessEnv): string {

@@ -102,7 +102,7 @@ import type {
 import {
   GUI_COMPUTER_USE_MCP_SERVER_NAME,
   isComputerUseMcpConfigured
-} from '../../computer-use-mcp-config'
+} from '@sciforge/domain-computer-use/main/mcp-config'
 import {
   type RuntimeToolCallRequest,
   type RuntimeToolCallResponse,

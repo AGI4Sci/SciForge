@@ -10,7 +10,7 @@ import {
   GUI_COMPUTER_USE_MCP_SERVER_NAME,
   RETIRED_GUI_COMPUTER_USE_MCP_SERVER_NAMES,
   syncComputerUseMcpConfig
-} from './computer-use-mcp-config'
+} from './mcp-config'
 
 describe('computer use MCP config', () => {
   it('passes invocation-proof configuration only through the managed process environment', () => {

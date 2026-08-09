@@ -1,8 +1,13 @@
-import { desktopCapturer, shell, systemPreferences } from 'electron'
-import {
-  MACOS_SCREEN_RECORDING_SETTINGS_URL,
-  normalizeSafeSystemSettingsUrl
-} from '../../shared/external-url-policy'
+type ElectronPermissionsApi = Pick<
+  typeof import('electron'),
+  'desktopCapturer' | 'shell' | 'systemPreferences'
+>
+
+async function loadElectronPermissionsApi(): Promise<ElectronPermissionsApi> {
+  return await import('electron')
+}
+export const MACOS_SCREEN_RECORDING_SETTINGS_URL =
+  'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
 
 export type ComputerUsePermissionState = 'granted' | 'denied' | 'unknown'
 
@@ -59,6 +64,7 @@ export async function getComputerUsePermissions(): Promise<ComputerUsePermission
 
   let liveTrust = false
   try {
+    const { systemPreferences } = await loadElectronPermissionsApi()
     liveTrust = systemPreferences.isTrustedAccessibilityClient(false)
   } catch {
     liveTrust = false
@@ -74,6 +80,7 @@ export async function getComputerUsePermissions(): Promise<ComputerUsePermission
 
   let screenRecording: ComputerUsePermissionState = 'unknown'
   try {
+    const { systemPreferences } = await loadElectronPermissionsApi()
     screenRecording = normalizeState(systemPreferences.getMediaAccessStatus('screen'))
   } catch {
     screenRecording = 'unknown'
@@ -95,6 +102,7 @@ export async function requestComputerUsePermission(
   if (process.platform !== 'darwin') return getComputerUsePermissions()
   const native = await loadMacPermissions()
   try {
+    const { desktopCapturer, systemPreferences } = await loadElectronPermissionsApi()
     if (kind === 'accessibility') {
       if (native?.askForAccessibilityAccess) {
         native.askForAccessibilityAccess()
@@ -123,7 +131,9 @@ export async function requestComputerUsePermission(
 }
 
 export async function openSystemSettingsPane(url: string): Promise<void> {
-  const validatedUrl = normalizeSafeSystemSettingsUrl(url)
-  if (!validatedUrl) throw new Error('Unsupported system settings URL.')
-  await shell.openExternal(validatedUrl)
+  if (url !== MACOS_SCREEN_RECORDING_SETTINGS_URL) {
+    throw new Error('Unsupported system settings URL.')
+  }
+  const { shell } = await loadElectronPermissionsApi()
+  await shell.openExternal(url)
 }

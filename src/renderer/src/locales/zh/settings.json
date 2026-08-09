@@ -30,6 +30,8 @@
   "computerUseConnection_online": "Sidecar 在线",
   "computerUseConnection_offline": "Sidecar 离线",
   "computerUseConnection_stale": "状态已陈旧",
+  "computerUseStaleLastKnown": "最后已知值",
+  "computerUseCurrentStateUnknown": "当前状态未知",
   "computerUseApprovalProof": "调用证明",
   "computerUseLifecycle": "生命周期",
   "computerUseSidecarInstance": "Sidecar 实例",

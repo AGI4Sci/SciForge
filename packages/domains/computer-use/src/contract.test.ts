@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import fixturePayload from '../../packages/workers/gui-owl-computer-use/tests/fixtures/computer_use_contract_v2.json'
+import fixturePayload from '../../../workers/gui-owl-computer-use/tests/fixtures/computer_use_contract_v2.json'
 import {
   COMPUTER_USE_ERROR_CODES,
   computerUseRunInputSchema,
   isComputerUseV2Input,
   normalizeComputerUseRunInput,
   redactComputerUseTarget
-} from './computer-use-contract'
+} from './contract'
 
 type FixtureCase = {
   name: string

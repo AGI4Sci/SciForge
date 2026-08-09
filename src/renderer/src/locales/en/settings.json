@@ -30,6 +30,8 @@
   "computerUseConnection_online": "Sidecar online",
   "computerUseConnection_offline": "Sidecar offline",
   "computerUseConnection_stale": "status stale",
+  "computerUseStaleLastKnown": "Last-known values",
+  "computerUseCurrentStateUnknown": "current state unknown",
   "computerUseApprovalProof": "Invocation proof",
   "computerUseLifecycle": "Lifecycle",
   "computerUseSidecarInstance": "Sidecar instance",

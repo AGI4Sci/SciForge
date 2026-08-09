@@ -3,7 +3,9 @@ import { describe, it } from 'node:test'
 import {
   domainArtifactEventScope,
   isDomainArtifactConsumer,
+  isDomainMcpTrustedInvocationMetadataContribution,
   isDomainMainActionGuard,
+  isDomainMainRuntimeMcpServerContribution,
   isDomainMainRuntimeLifecycleContribution,
   type DomainMainTurnLifecycleEvent,
   type DomainMainModelAccessHost,
@@ -59,6 +61,29 @@ describe('domain host contracts', () => {
     assert.equal(isDomainMainActionGuard({
       actions: ['write.export'],
       evaluate: 'not-a-function'
+    }), false)
+  })
+
+  it('validates generic runtime MCP and trusted metadata contributions', () => {
+    assert.equal(isDomainMainRuntimeMcpServerContribution({
+      serverId: 'domain-worker',
+      createConfig: () => null
+    }), true)
+    assert.equal(isDomainMainRuntimeMcpServerContribution({
+      serverId: '',
+      createConfig: () => null
+    }), false)
+    assert.equal(isDomainMcpTrustedInvocationMetadataContribution({
+      serverId: 'domain-worker',
+      tools: ['domain_tool'],
+      metadataKey: 'io.example/trusted',
+      source: 'trusted-invocation'
+    }), true)
+    assert.equal(isDomainMcpTrustedInvocationMetadataContribution({
+      serverId: 'domain-worker',
+      tools: ['domain_tool', 'domain_tool'],
+      metadataKey: 'io.example/trusted',
+      source: 'trusted-invocation'
     }), false)
   })
 

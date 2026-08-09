@@ -347,10 +347,6 @@ const api = {
   getPerformanceSnapshot: () =>
     ipcRenderer.invoke('performance:snapshot'),
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
-  getComputerUsePermissions: () => ipcRenderer.invoke('computer-use:permissions'),
-  requestComputerUsePermission: (kind) =>
-    ipcRenderer.invoke('computer-use:request-permission', kind),
-  getComputerUseStatus: () => ipcRenderer.invoke('computer-use:status'),
   showTurnCompleteNotification: (payload) => ipcRenderer.invoke('notification:turn-complete', payload),
   getAppVersion: () => ipcRenderer.invoke('app:version'),
   getGuiUpdateState: () => ipcRenderer.invoke('gui:update-state'),

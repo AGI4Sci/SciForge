@@ -19,6 +19,8 @@ export const RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND =
   'renderer.composer-context-provider' as const
 export const RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND =
   'renderer.chat-result-panel' as const
+export const RENDERER_SETTINGS_SECTION_CONTRIBUTION_KIND =
+  'renderer.settings-section' as const
 
 export const WORKBENCH_TOPBAR_LOCATION = 'workbench.topbar' as const
 export const WORKBENCH_RIGHT_PANEL_LOCATION = 'workbench.right-panel' as const
@@ -132,6 +134,26 @@ export type DomainRendererChatResultPanelValue<View = unknown> = Readonly<{
   id: string
   render: (context: DomainRendererChatResultPanelRenderContext) => View | null
 }>
+
+export type DomainRendererSettingsSectionContext = Readonly<{
+  section: string
+  host: Readonly<Record<string, unknown>>
+}>
+
+export type DomainRendererSettingsSectionValue<View = unknown> = Readonly<{
+  section: string
+  order?: number
+  render: (context: DomainRendererSettingsSectionContext) => View | null
+}>
+
+export function isDomainRendererSettingsSectionValue(
+  value: unknown
+): value is DomainRendererSettingsSectionValue {
+  return hasOnlyKeys(value, ['section', 'order', 'render']) &&
+    typeof value.section === 'string' && Boolean(value.section.trim()) &&
+    (value.order === undefined || Number.isFinite(value.order)) &&
+    typeof value.render === 'function'
+}
 
 export function isDomainRendererChatResultPanelValue(
   value: unknown

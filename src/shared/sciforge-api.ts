@@ -3,12 +3,10 @@ import type {
   AppSettingsV1,
   AgentRuntimeId,
   RemoteChannelAgentProfileV1,
-  ComputerUseSettingsV1,
   ScheduleRunResult,
   ScheduleRuntimeStatus,
   ScheduleTaskFromTextResult
 } from './app-settings'
-import type { ComputerUseSidecarRuntimeStatus } from './computer-use-contract'
 import type {
   TraceClearResult,
   TraceExportResult,
@@ -405,39 +403,6 @@ export type ModelAccessStatus = {
   protocolState: ModelAccessProtocolState
   traceCaptureReady: boolean
   action: string
-}
-export type ComputerUsePermissionKind = 'accessibility' | 'screenRecording'
-export type ComputerUsePermissionState = 'granted' | 'denied' | 'unknown'
-export type ComputerUsePermissions = {
-  platform: string
-  supported: boolean
-  needsPermission: boolean
-  accessibility: ComputerUsePermissionState
-  screenRecording: ComputerUsePermissionState
-  accessibilityNeedsRestart: boolean
-}
-export type ComputerUseRuntimeStatusView = {
-  connection: 'online' | 'offline' | 'stale'
-  stale: boolean
-  lastSuccessAt: string | null
-  lastStatusError: string | null
-  serverInstanceId: string | null
-  generation: number | null
-  updatedAt: string
-  protocolVersion: 2 | null
-  approvalProof: 'legacy-trust-boundary' | 'invocation-proof-v1' | 'unavailable'
-  lifecycleState: 'running' | 'stopping' | 'stopped' | 'unknown'
-  backends: ComputerUseSidecarRuntimeStatus['backends']
-  counts: ComputerUseSidecarRuntimeStatus['registry']['counts']
-  active: ComputerUseSidecarRuntimeStatus['active']
-  cleanupPending: ComputerUseSidecarRuntimeStatus['cleanupPending']
-  recentRejections: ComputerUseSidecarRuntimeStatus['recentRejections']
-  reaper: ComputerUseSidecarRuntimeStatus['reaper'] | null
-}
-export type ComputerUseStatusView = {
-  settings?: ComputerUseSettingsV1
-  permissions: ComputerUsePermissions
-  runtime: ComputerUseRuntimeStatusView
 }
 export type ConnectPhoneInstallQrResult =
   | { ok: true; url: string; deviceCode: string; userCode: string; interval: number; expireIn: number }
@@ -1017,11 +982,6 @@ export type SciForgeApi = {
   runDesktopCommand: (command: DesktopCommand) => Promise<void>
   getPerformanceSnapshot: () => Promise<PerformanceSnapshotResult>
   openExternal: (url: string) => Promise<void>
-  getComputerUsePermissions: () => Promise<ComputerUsePermissions>
-  requestComputerUsePermission: (
-    kind: ComputerUsePermissionKind
-  ) => Promise<ComputerUsePermissions>
-  getComputerUseStatus: () => Promise<ComputerUseStatusView>
   showTurnCompleteNotification: (
     payload: TurnCompleteNotificationPayload
   ) => Promise<SystemNotificationResult>

@@ -3,6 +3,7 @@ import {
   RENDERER_COMMAND_CONTRIBUTION_KIND,
   RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND,
   RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND,
+  RENDERER_SETTINGS_SECTION_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_BOTTOM_PANEL_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
@@ -13,11 +14,13 @@ import {
   domainRendererWorkbenchToolbarActionContractSchema,
   isDomainRendererCommandHandler,
   isDomainRendererChatResultPanelValue,
+  isDomainRendererSettingsSectionValue,
   isDomainRendererComposerContextProvider,
   isDomainRendererWorkbenchSurfaceValue,
   isDomainRendererWorkbenchToolbarActionValue,
   type DomainRendererCommandHandler,
   type DomainRendererComposerContextProvider,
+  type DomainRendererSettingsSectionValue,
   type DomainRendererComposerContextProviderContract,
   type DomainRendererWorkbenchBottomPanelContract,
   type DomainRendererWorkbenchBottomPanelValue,
@@ -97,6 +100,12 @@ export type InstalledRendererContributions = Readonly<{
   commands: WorkbenchCommandRegistry
   rightPanels: WorkbenchRightPanelContributionRegistry
   chatResultPanels: ChatResultPanelContributionRegistry
+  settingsSections: readonly Readonly<{
+    id: string
+    ownerId: string
+    order: number
+    value: DomainRendererSettingsSectionValue<ReactElement>
+  }>[]
   bottomPanels: WorkbenchBottomPanelContributionRegistry
   globalOverlays: WorkbenchGlobalOverlayContributionRegistry
   composerContexts: ComposerContextProviderRegistry
@@ -172,6 +181,13 @@ export function createInstalledRendererContributions(
     ownerId: string
     order: number
     contribution: ChatResultPanelContribution
+    onDispose?: () => void
+  }> = []
+  const settingsSections: Array<{
+    id: string
+    ownerId: string
+    order: number
+    value: DomainRendererSettingsSectionValue<ReactElement>
     onDispose?: () => void
   }> = []
   const workspacePreviewPlugins: RendererWorkspacePreviewPluginRegistrationInput[] = []
@@ -320,6 +336,19 @@ export function createInstalledRendererContributions(
       })
       continue
     }
+    if (installed.declaration.kind === RENDERER_SETTINGS_SECTION_CONTRIBUTION_KIND) {
+      if (!isDomainRendererSettingsSectionValue(installed.value)) {
+        throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
+      }
+      settingsSections.push({
+        id: installed.declaration.id,
+        ownerId: installed.owner.moduleId,
+        order: installed.value.order ?? installed.declaration.priority,
+        value: installed.value as DomainRendererSettingsSectionValue<ReactElement>,
+        ...(installed.onDispose ? { onDispose: installed.onDispose } : {})
+      })
+      continue
+    }
     if (installed.declaration.kind === RENDERER_WORKSPACE_PREVIEW_PLUGIN_CONTRIBUTION_KIND) {
       if (!isRendererWorkspacePreviewPluginContribution(installed.value, installed)) {
         throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
@@ -427,6 +456,9 @@ export function createInstalledRendererContributions(
         chatResultPanelRegistry.register(panel).dispose
       )
     }
+    for (const section of settingsSections) {
+      if (section.onDispose) registrationDisposers.push(section.onDispose)
+    }
     for (const lifecycle of lifecycles) {
       const dispose = lifecycle.contribution.activate()
       if (dispose !== undefined && typeof dispose !== 'function') {
@@ -452,6 +484,9 @@ export function createInstalledRendererContributions(
     commands: workbenchCommands,
     rightPanels,
     chatResultPanels: chatResultPanelRegistry,
+    settingsSections: Object.freeze(settingsSections
+      .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id))
+      .map(({ onDispose: _onDispose, ...section }) => Object.freeze(section))),
     bottomPanels: workbenchBottomPanels,
     globalOverlays: workbenchGlobalOverlays,
     composerContexts: workbenchComposerContexts,

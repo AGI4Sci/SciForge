@@ -284,6 +284,74 @@ export const computerUseCleanupPendingEnvelopeSchema = z.object({
 export type ComputerUseSidecarRuntimeStatus = z.infer<typeof computerUseRuntimeStatusSchema>
 export type ComputerUseSidecarCapabilities = z.infer<typeof computerUseCapabilitiesStatusSchema>
 
+export const computerUseSettingsSchema = z.object({
+  enabled: z.boolean(),
+  runtimeEnabled: z.object({
+    sciforge: z.boolean(),
+    codex: z.boolean(),
+    claude: z.boolean()
+  }).strict()
+}).strict()
+
+export const computerUsePermissionsSchema = z.object({
+  platform: z.string(),
+  supported: z.boolean(),
+  needsPermission: z.boolean(),
+  accessibility: z.enum(['granted', 'denied', 'unknown']),
+  screenRecording: z.enum(['granted', 'denied', 'unknown']),
+  accessibilityNeedsRestart: z.boolean()
+}).strict()
+
+export const computerUseRuntimeViewSchema = z.object({
+  connection: z.enum(['online', 'offline', 'stale']),
+  stale: z.boolean(),
+  lastSuccessAt: z.string().nullable(),
+  lastStatusError: z.string().nullable(),
+  serverInstanceId: z.string().nullable(),
+  generation: z.number().int().nullable(),
+  updatedAt: z.string(),
+  protocolVersion: z.literal(2).nullable(),
+  approvalProof: z.enum(['legacy-trust-boundary', 'invocation-proof-v1', 'unavailable']),
+  lifecycleState: z.enum(['running', 'stopping', 'stopped', 'unknown']),
+  backends: z.array(computerUseBackendCapabilitiesSchema),
+  counts: computerUseRuntimeStatusSchema.shape.registry.shape.counts,
+  active: computerUseRuntimeStatusSchema.shape.active,
+  cleanupPending: computerUseRuntimeStatusSchema.shape.cleanupPending,
+  recentRejections: computerUseRuntimeStatusSchema.shape.recentRejections,
+  reaper: computerUseRuntimeStatusSchema.shape.reaper.nullable()
+}).strict()
+
+export const computerUseSettingsStatusInputSchema = z.object({
+  settings: computerUseSettingsSchema
+}).strict()
+export const computerUseSettingsStatusOutputSchema = z.object({
+  settings: computerUseSettingsSchema,
+  permissions: computerUsePermissionsSchema,
+  runtime: computerUseRuntimeViewSchema
+}).strict()
+export const computerUsePermissionRequestInputSchema = z.object({
+  kind: z.enum(['accessibility', 'screenRecording'])
+}).strict()
+
+export const COMPUTER_USE_CAPABILITY_IDS = Object.freeze({
+  status: 'computer-use.status',
+  requestPermission: 'computer-use.request-permission'
+})
+
+export const COMPUTER_USE_STATUS_CONTRACT = Object.freeze({
+  actionId: COMPUTER_USE_CAPABILITY_IDS.status,
+  effect: 'read' as const,
+  inputSchema: computerUseSettingsStatusInputSchema,
+  outputSchema: computerUseSettingsStatusOutputSchema
+})
+
+export const COMPUTER_USE_REQUEST_PERMISSION_CONTRACT = Object.freeze({
+  actionId: COMPUTER_USE_CAPABILITY_IDS.requestPermission,
+  effect: 'external-write' as const,
+  inputSchema: computerUsePermissionRequestInputSchema,
+  outputSchema: computerUsePermissionsSchema
+})
+
 export function redactComputerUseTarget(
   target: z.infer<typeof computerUseTargetSchema>
 ): Record<string, unknown> {

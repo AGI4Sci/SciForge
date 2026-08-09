@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
 import { fileURLToPath } from 'node:url'
-import { startElectronComputerUseAdapterRuntime } from '../src/main/services/computer-use-electron-adapter-runtime'
+import { startElectronComputerUseAdapterRuntime } from '@sciforge/domain-computer-use/main'
 
 const workerDirectory = fileURLToPath(new URL(
   '../packages/workers/gui-owl-computer-use/', import.meta.url

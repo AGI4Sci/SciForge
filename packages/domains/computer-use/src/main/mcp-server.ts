@@ -16,7 +16,7 @@ import {
   computerUseReleaseSessionInputSchema,
   computerUseRunInputSchema,
   type ComputerUseRunInput
-} from '../shared/computer-use-contract'
+} from '../contract'
 import {
   COMPUTER_USE_BIND_TARGET_TOOL_NAME,
   COMPUTER_USE_GET_CAPABILITIES_TOOL_NAME,
@@ -25,7 +25,8 @@ import {
   COMPUTER_USE_RELEASE_SESSION_TOOL_NAME,
   GUI_COMPUTER_USE_MCP_SERVER_NAME,
   COMPUTER_USE_MCP_TOOL_NAME
-} from './computer-use-mcp-config'
+} from './mcp-config'
+import { trustedLoopbackEndpoint, trustedLoopbackOrigin } from './trusted-loopback-url'
 
 type ComputerUseToolResult = CallToolResult & {
   content: Array<{ type: 'text'; text: string }>
@@ -154,7 +155,7 @@ export function createComputerUseMcpServer(
 export function resolveComputerUseServiceConfig(
   env: NodeJS.ProcessEnv = process.env
 ): ComputerUseServiceConfig | null {
-  const serviceUrl = (env.SCIFORGE_CUA_SERVICE_URL ?? '').trim().replace(/\/+$/, '')
+  const serviceUrl = (env.SCIFORGE_CUA_SERVICE_URL ?? '').trim()
   if (!serviceUrl) return null
   const serviceToken = (
     env.SCIFORGE_CUA_SERVICE_TOKEN ??
@@ -163,7 +164,7 @@ export function resolveComputerUseServiceConfig(
   ).trim()
   const timeout = Number(env.SCIFORGE_CUA_SERVICE_TIMEOUT_MS)
   return {
-    serviceUrl,
+    serviceUrl: trustedLoopbackOrigin(serviceUrl).origin,
     serviceToken,
     timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : DEFAULT_TIMEOUT_MS,
     invocationSecret: (env.SCIFORGE_CUA_INVOCATION_SECRET ?? '').trim(),
@@ -184,11 +185,12 @@ async function callComputerUseServiceEndpoint(
   const unlink = linkAbortSignal(signal, controller)
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs)
   try {
-    const response = await fetch(`${config.serviceUrl}${path}`, {
+    const response = await fetch(trustedLoopbackEndpoint(config.serviceUrl, path), {
       method,
       headers: jsonHeaders(config.serviceToken, invocationProof),
       ...(body ? { body: JSON.stringify(body) } : {}),
-      signal: controller.signal
+      signal: controller.signal,
+      redirect: 'error'
     })
     const payload = await response.json().catch(() => null)
     if (!payload || typeof payload !== 'object') {
@@ -262,10 +264,11 @@ async function callComputerUseService(
         { requestId },
         meta
       )
-      void fetch(`${config.serviceUrl}/computer-use/cancel`, {
+      void fetch(trustedLoopbackEndpoint(config.serviceUrl, '/computer-use/cancel'), {
         method: 'POST',
         headers: jsonHeaders(config.serviceToken, cancelAuthorization.proof),
-        body: JSON.stringify(cancelAuthorization.body)
+        body: JSON.stringify(cancelAuthorization.body),
+        redirect: 'error'
       }).catch(() => undefined)
     } catch {
       // The original call still aborts. Status will expose cleanup pending if
@@ -275,11 +278,12 @@ async function callComputerUseService(
   controller.signal.addEventListener('abort', cancel, { once: true })
 
   try {
-    const response = await fetch(`${config.serviceUrl}/computer-use/run`, {
+    const response = await fetch(trustedLoopbackEndpoint(config.serviceUrl, '/computer-use/run'), {
       method: 'POST',
       headers: jsonHeaders(config.serviceToken, authorization.proof),
       body: JSON.stringify(authorization.body),
-      signal: controller.signal
+      signal: controller.signal,
+      redirect: 'error'
     })
     const payload = await response.json().catch(() => null)
     if (!payload || typeof payload !== 'object') {

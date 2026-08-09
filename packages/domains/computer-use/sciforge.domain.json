@@ -1,0 +1,44 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-computer-use",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
+  "module": {
+    "id": "sciforge.computer-use",
+    "displayName": "Computer Use",
+    "version": "1.0.0",
+    "hostApi": {
+      "minimum": "1.0.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 180
+  },
+  "contributionContracts": {
+    "computer-use.settings-section": {
+      "location": "settings.agents.permissions",
+      "title": "computerUseTitle"
+    }
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        { "kind": "main.capability-factory", "id": "computer-use.capabilities" },
+        { "kind": "main.runtime-lifecycle", "id": "computer-use.runtime-lifecycle" },
+        { "kind": "main.runtime-mcp-server", "id": "computer-use.runtime-mcp-server" },
+        { "kind": "main.mcp-trusted-invocation-metadata", "id": "computer-use.trusted-invocation-metadata" }
+      ]
+    },
+    {
+      "process": "renderer",
+      "export": "./renderer",
+      "contributions": [
+        { "kind": "renderer.settings-section", "id": "computer-use.settings-section" }
+      ]
+    }
+  ]
+}
