@@ -3,6 +3,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { createRequire } from 'node:module'
 import type { AddressInfo } from 'node:net'
 import type { Browser, CDPSession, Page } from 'playwright-core'
+import {
+  CDP_RENDERER_SETTLE_EXPRESSION,
+  CDP_SEMANTIC_TREE_EXPRESSION,
+  cdpClickReadbackExpression,
+  normalizeCdpClickReadback,
+  normalizeCdpSemanticTree,
+  verifyCdpClick
+} from './computer-use-cdp-semantics'
 
 const require = createRequire(import.meta.url)
 const { chromium } = require('playwright-core') as typeof import('playwright-core')
@@ -16,7 +24,7 @@ export type BrowserPageCdpAdapterTarget = Readonly<{
   ownership: 'attached'
   generation: string
   locator: { cdpEndpoint: string; cdpTargetId: string }
-  metadata: { title: string; url: string }
+  metadata: { title: string; url: string; publicLabel?: string }
 }>
 
 export type ElectronWebContentsCdpAdapterTarget = Readonly<{
@@ -110,6 +118,9 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
             }
             const cdpTargetId = result.targetInfo?.targetId
             if (!cdpTargetId) continue
+            const publicLabel = (await page.evaluate(() => (
+              document.querySelector('meta[name="sciforge-target-label"]')?.getAttribute('content') ?? ''
+            )).catch(() => '')).trim().slice(0, 256)
             output.push({
               page,
               target: {
@@ -120,7 +131,8 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
                 locator: { cdpEndpoint: endpoint, cdpTargetId },
                 metadata: {
                   title: (await page.title().catch(() => '')).slice(0, 2048),
-                  url: page.url().slice(0, 2048)
+                  url: page.url().slice(0, 2048),
+                  ...(publicLabel ? { publicLabel } : {})
                 }
               }
             })
@@ -206,7 +218,10 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
       // Page.screenshot() can contend on Playwright's browser-level capture
       // path when several attached pages are observed at once. A fresh CDP
       // session binds capture to this exact target and can run independently.
-      const imageBase64 = await serializeObservation(() => captureTargetScreenshot(value.page))
+      const [imageBase64, semanticTree] = await Promise.all([
+        serializeObservation(() => captureTargetScreenshot(value.page)),
+        pageSemanticTree(value.page)
+      ])
       value.revision += 1
       return {
         targetId: value.targetId,
@@ -216,7 +231,8 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
         metadata: {
           url: value.page.url().slice(0, 2048),
           title: (await value.page.title().catch(() => '')).slice(0, 2048),
-          viewport: value.page.viewportSize()
+          viewport: value.page.viewportSize(),
+          semanticTree
         }
       }
     },
@@ -234,10 +250,21 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
       }
       if (name === 'click' || name === 'left_click' || name === 'right_click' || name === 'double_click') {
         const [x, y] = coordinate(action.coordinate)
+        const beforeReadback = await pageClickReadback(value.page, x, y)
+        const beforeSemanticTree = await pageSemanticTree(value.page)
         await value.page.mouse.click(x, y, {
           button: name === 'right_click' ? 'right' : 'left',
           clickCount: name === 'double_click' ? 2 : 1
         })
+        await value.page.evaluate(CDP_RENDERER_SETTLE_EXPRESSION)
+        const afterReadback = await pageClickReadback(value.page, x, y)
+        const afterSemanticTree = await pageSemanticTree(value.page)
+        verification = verifyCdpClick(
+          beforeReadback,
+          afterReadback,
+          beforeSemanticTree,
+          afterSemanticTree
+        )
       } else if (name === 'type') {
         const text = String(action.text ?? '')
         const beforeReadback = await activeElementReadback(value.page)
@@ -336,6 +363,14 @@ export async function captureTargetScreenshot(page: Page): Promise<string> {
       ])
     }
   }
+}
+
+async function pageSemanticTree(page: Page) {
+  return normalizeCdpSemanticTree(await page.evaluate(CDP_SEMANTIC_TREE_EXPRESSION))
+}
+
+async function pageClickReadback(page: Page, x: number, y: number) {
+  return normalizeCdpClickReadback(await page.evaluate(cdpClickReadbackExpression(x, y)))
 }
 
 export async function startComputerUseCdpAdapter(options: Readonly<{

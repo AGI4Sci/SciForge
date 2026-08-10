@@ -287,13 +287,22 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200 if res.get("ok") else 409, res)
 
         def execute_channel(request: dict, channel) -> dict:
+            executor_options = {
+                "execute": request["execute"], "approve": request["approve"],
+            }
+            if request.get("semanticAction") is not None:
+                executor_options["semantic_action"] = request["semanticAction"]
             return self.executor(
                 self.config, request["instruction"], channel,
-                execute=request["execute"], approve=request["approve"],
+                **executor_options,
             )
 
         try:
-            res = self.service.run(
+            run_method = (
+                self.service.run_batch if body.get("parallel") is not None
+                else self.service.run
+            )
+            res = run_method(
                 body,
                 execute_channel,
                 channel_options={

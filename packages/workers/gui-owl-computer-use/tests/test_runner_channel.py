@@ -3,13 +3,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 
-from cua.capabilities import Verification
+from cua.capabilities import BackendId, Verification
 
 from cua.config import Config
 from cua.runner import run_task
 from cua.service import ComputerUseService
 from cua.session_registry import RequestState
 from driver.router import BackendRouter
+from driver.backend import Observation
+from cua.target import TargetKind
 from tests.fakes.fake_backend import FakeBackend
 
 
@@ -33,6 +35,78 @@ def config(tmp_path):
     cfg.show_overlay = False
     cfg.reflect = False
     return cfg
+
+
+class SemanticCdpFakeBackend(FakeBackend):
+    def __init__(self):
+        super().__init__(
+            backend_id=BackendId.BROWSER_CDP,
+            target_kinds=(TargetKind.BROWSER_PAGE,),
+            actions=("observe", "click"),
+        )
+
+    def observe(self, handle):
+        observation = super().observe(handle)
+        committed = bool(self.read(observation.target_id))
+        return Observation(
+            target_id=observation.target_id,
+            revision=observation.revision,
+            image=observation.image,
+            backend=observation.backend,
+            metadata={"semanticTree": [
+                {
+                    "tag": "button", "role": "", "name": "Commit Alpha",
+                    "center": [500, 500], "disabled": False,
+                },
+                {
+                    "tag": "output", "role": "status",
+                    "name": "State Alpha: ALPHA_COMMITTED" if committed else "State Alpha: READY",
+                    "center": [500, 700], "disabled": False,
+                },
+            ]},
+        )
+
+
+def test_semantic_action_observes_clicks_verifies_and_records_timeline(tmp_path):
+    backend = SemanticCdpFakeBackend()
+    service = ComputerUseService(router=BackendRouter([backend]))
+    service.bind_session({
+        "sessionId": "semantic-session",
+        "owner": {"runtimeId": "runtime", "threadId": "thread"},
+        "target": {
+            "targetId": "semantic-target", "kind": "browser-page",
+            "locator": {"cdpEndpoint": "http://127.0.0.1:9222", "cdpTargetId": "page"},
+        },
+    })
+    cfg = config(tmp_path)
+    action = {
+        "kind": "click", "role": "button", "name": "Commit Alpha",
+        "expect": {"kind": "text-present", "text": "ALPHA_COMMITTED", "stableForMs": 1},
+    }
+    result = service.run(
+        {
+            "instruction": "Commit Alpha.", "semanticAction": action,
+            "sessionId": "semantic-session", "requestId": "semantic-request",
+            "execute": True, "approve": True,
+        },
+        lambda request, channel: run_task(
+            cfg, request["instruction"], channel,
+            execute=request["execute"], approve=request["approve"],
+            semantic_action=request["semanticAction"],
+        ),
+        channel_options={"allow_execute": True},
+    )
+    assert result["ok"] is True
+    assert result["data"]["verification"]["matched"] is True
+    assert result["data"]["verification"]["expectation"]["stableForMs"] == 1
+    assert result["data"]["action"]["name"] == "Commit Alpha"
+    assert result["data"]["initialObservation"]["semanticTree"][1]["name"] == "State Alpha: READY"
+    assert result["data"]["finalObservation"]["semanticTree"][1]["name"] == "State Alpha: ALPHA_COMMITTED"
+    assert set(result["data"]["timeline"]) == {
+        "startedAt", "observedAt", "actionStartedAt", "actionCompletedAt", "finalObservedAt",
+    }
+    assert backend.open_handle_count == 0
+    assert service.registry.snapshot_counts()["activeLeases"] == 0
 
 
 def test_runner_uses_channel_for_observe_action_verify_and_manifest(monkeypatch, tmp_path):

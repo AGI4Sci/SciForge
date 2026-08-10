@@ -40,11 +40,16 @@ def test_sensitive_locator_and_metadata_are_redacted_from_views_and_repr():
             "cdpEndpoint": "http://token-secret@127.0.0.1:9222?key=secret",
             "cdpTargetId": "page-1",
         },
-        "metadata": {"title": "secret title", "url": "https://secret.example"},
+        "metadata": {
+            "title": "secret title",
+            "url": "https://secret.example",
+            "publicLabel": "Test-owned Alpha",
+        },
     })
     public = target.to_dict(include_sensitive=False)
     assert public["locator"]["cdpEndpoint"] == "<redacted>"
     assert public["metadata"]["title"] == "<redacted>"
+    assert public["metadata"]["publicLabel"] == "Test-owned Alpha"
     assert "token-secret" not in repr(target)
 
 

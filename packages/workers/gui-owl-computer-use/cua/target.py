@@ -228,7 +228,7 @@ def _parse_metadata(value: object) -> dict[str, str]:
         return {}
     if not isinstance(value, Mapping):
         raise ValueError("target.metadata must be an object")
-    allowed = {"title", "url", "processName"}
+    allowed = {"title", "url", "processName", "publicLabel"}
     unknown = set(value) - allowed
     if unknown:
         raise ValueError(f"target.metadata contains unsupported fields: {', '.join(sorted(unknown))}")

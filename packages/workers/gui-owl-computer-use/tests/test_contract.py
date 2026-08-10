@@ -14,6 +14,69 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from cua import contract, result as R  # noqa: E402
 
 
+def test_semantic_action_is_bounded_and_marks_protocol_v2():
+    normalized = contract.normalize_run_input({
+        "instruction": "Commit the exact accessible control.",
+        "semanticAction": {
+            "kind": "click", "role": "button", "name": "Commit Alpha",
+            "expect": {"kind": "text-present", "text": "ALPHA_COMMITTED", "stableForMs": 8000},
+        },
+    })
+    assert normalized["protocolVersion"] == 2
+    assert normalized["semanticAction"]["expect"]["text"] == "ALPHA_COMMITTED"
+    assert normalized["semanticAction"]["expect"]["stableForMs"] == 8000
+
+
+def test_semantic_action_rejects_missing_expectation():
+    try:
+        contract.normalize_run_input({
+            "instruction": "click",
+            "semanticAction": {"kind": "click", "role": "button", "name": "x"},
+        })
+    except ValueError as error:
+        assert "semanticAction" in str(error)
+    else:  # pragma: no cover
+        raise AssertionError("incomplete semantic action should fail")
+
+
+def test_parallel_run_normalizes_distinct_bound_sessions():
+    normalized = contract.normalize_parallel_run_input({
+        "instruction": "Run independently.",
+        "execute": True,
+        "parallel": [
+            {"instruction": "Commit Alpha", "sessionId": "session-alpha"},
+            {"instruction": "Commit Beta", "sessionId": "session-beta", "allowDegraded": False},
+        ],
+    })
+    assert normalized["protocolVersion"] == 2
+    assert [item["sessionId"] for item in normalized["parallel"]] == [
+        "session-alpha", "session-beta",
+    ]
+    assert all(item["execute"] is True for item in normalized["parallel"])
+
+
+def test_parallel_run_rejects_duplicate_or_conflicting_sessions():
+    for value in ({
+        "instruction": "batch",
+        "parallel": [
+            {"instruction": "one", "sessionId": "same"},
+            {"instruction": "two", "sessionId": "same"},
+        ],
+    }, {
+        "instruction": "batch", "sessionId": "top-level",
+        "parallel": [
+            {"instruction": "one", "sessionId": "one"},
+            {"instruction": "two", "sessionId": "two"},
+        ],
+    }):
+        try:
+            contract.normalize_parallel_run_input(value)
+        except ValueError:
+            pass
+        else:  # pragma: no cover
+            raise AssertionError("unsafe parallel input should fail")
+
+
 def test_ok_envelope():
     res = R.ok({"status": "dry_run_planned", "stepCount": 1}, summary="done")
     assert res["ok"] is True

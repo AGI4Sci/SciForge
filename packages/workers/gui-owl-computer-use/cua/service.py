@@ -5,6 +5,7 @@ import time
 import threading
 import uuid
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -18,7 +19,7 @@ from . import result as R
 from .isolation import RequestedIsolation
 from .invocation_proof import InvocationIdentity
 from .session_registry import RegistryError, RequestState, SessionOwner, SessionRegistry
-from .target import host_desktop_target, parse_target_descriptor, validate_safe_id
+from .target import TargetDescriptor, host_desktop_target, parse_target_descriptor, validate_safe_id
 
 
 ChannelExecutor = Callable[[dict[str, Any], SessionInputChannel], dict[str, Any]]
@@ -80,6 +81,8 @@ class ComputerUseService:
         self._approval_proof = "legacy-trust-boundary"
         self._server_instance_id = server_instance_id or f"cua-{uuid.uuid4()}"
         self._request_contexts: dict[str, dict[str, Any]] = {}
+        self._batch_requests: dict[str, tuple[str, ...]] = {}
+        self._cancelled_batches: set[str] = set()
         self._open_cleanup_pending: dict[str, _PendingOpenCleanup] = {}
         self._recent_rejections: deque[dict[str, Any]] = deque(maxlen=20)
 
@@ -184,10 +187,13 @@ class ComputerUseService:
                 cancellation=cancellation,
                 screenshot_provider=options.get("screenshot_provider"),
             )
-            # The natural-language request has no trusted action plan yet.  Route
-            # on observation capability, then enforce each planned action at the
-            # channel boundary before it reaches the backend.
-            required_actions = ("observe",)
+            # Natural-language requests have no trusted action plan yet. An
+            # explicit semanticAction is already bounded to one exact control,
+            # so routing can require click support before opening the channel.
+            required_actions = (
+                ("observe", "click") if request.get("semanticAction")
+                else ("observe",)
+            )
             selection = self.router.route(
                 registry=self.registry,
                 request_id=request_id,
@@ -290,6 +296,120 @@ class ComputerUseService:
             self._remember_rejection(result, request_id=request_id)
         return result
 
+    def run_batch(
+        self,
+        value: object,
+        executor: ChannelExecutor,
+        *,
+        channel_options: dict[str, Any] | None = None,
+        invocation: InvocationIdentity | None = None,
+    ) -> dict[str, Any]:
+        """Run independent bound sessions concurrently under one approval proof."""
+        with self._lifecycle_lock:
+            if self._lifecycle_state != "running":
+                return R.err(
+                    "UNAVAILABLE",
+                    "computer use service is shutting down and no longer accepts requests",
+                    details={"reason": "service-shutting-down"},
+                )
+        try:
+            request = contract.normalize_parallel_run_input(value)
+            sessions = []
+            for child in request["parallel"]:
+                session, ephemeral = self._resolve_session(child, invocation)
+                if ephemeral:
+                    raise ValueError("parallel entries must use pre-bound sessions")
+                sessions.append(session)
+            target_ids = [session.target.target_id for session in sessions]
+            if len(set(target_ids)) != len(target_ids):
+                raise ValueError("parallel sessions must bind different targets")
+        except RegistryError as error:
+            return R.err(error.code, str(error), details=error.details)
+        except ValueError as error:
+            return R.err("INVALID_ARGUMENT", str(error))
+
+        started_at = time.time()
+        parent_request_id = (
+            invocation.request_id if invocation is not None
+            else str(value.get("requestId") or f"batch-{uuid.uuid4()}")
+        )
+        child_invocations: list[InvocationIdentity | None] = []
+        child_request_ids: list[str] = []
+        for index, child in enumerate(request["parallel"]):
+            child.pop("protocolVersion", None)
+            child_request_id = f"batch-{uuid.uuid4()}"
+            child_request_ids.append(child_request_id)
+            child["requestId"] = child_request_id
+            child_invocations.append(
+                InvocationIdentity(
+                    proof_id=f"{invocation.proof_id}:{index}",
+                    request_id=child_request_id,
+                    runtime_id=invocation.runtime_id,
+                    thread_id=invocation.thread_id,
+                    turn_id=invocation.turn_id,
+                    call_id=invocation.call_id,
+                    invocation_id=invocation.invocation_id,
+                    tool=invocation.tool,
+                ) if invocation is not None else None
+            )
+
+        with self._channels_lock:
+            self._batch_requests[parent_request_id] = tuple(child_request_ids)
+
+        def run_child(index: int, child: dict[str, Any]) -> dict[str, Any]:
+            with self._channels_lock:
+                cancelled = parent_request_id in self._cancelled_batches
+            if cancelled:
+                return R.err(
+                    "CANCEL_PENDING",
+                    "batch was cancelled before this child request started",
+                    details={"requestId": child_request_ids[index]},
+                )
+            return self.run(
+                child,
+                executor,
+                channel_options=channel_options,
+                invocation=child_invocations[index],
+            )
+
+        try:
+            with ThreadPoolExecutor(
+                max_workers=len(request["parallel"]),
+                thread_name_prefix="cua-batch",
+            ) as pool:
+                futures = [
+                    pool.submit(run_child, index, child)
+                    for index, child in enumerate(request["parallel"])
+                ]
+                child_results = [future.result() for future in futures]
+        finally:
+            with self._channels_lock:
+                self._batch_requests.pop(parent_request_id, None)
+                self._cancelled_batches.discard(parent_request_id)
+
+        results = [
+            {
+                "sessionId": session.session_id,
+                "targetId": session.target.target_id,
+                "requestId": child_request_ids[index],
+                "result": child_results[index],
+            }
+            for index, session in enumerate(sessions)
+        ]
+        success_count = sum(1 for item in child_results if item.get("ok"))
+        return R.ok(
+            {
+                "status": "batch_completed",
+                "requestedCount": len(results),
+                "successCount": success_count,
+                "failureCount": len(results) - success_count,
+                "results": results,
+            },
+            prov=R.provenance(
+                "computer_use_run_batch", parent_request_id, started_at,
+            ),
+        )
+
     def _resolve_session(
         self, request: dict[str, Any], invocation: InvocationIdentity | None = None,
     ):
@@ -353,7 +473,7 @@ class ComputerUseService:
                     runtime_id=validate_safe_id(owner_value["runtimeId"], "owner.runtimeId"),
                     thread_id=validate_safe_id(owner_value["threadId"], "owner.threadId"),
                 )
-            target = parse_target_descriptor(value.get("target"))
+            target = self._resolve_public_target(parse_target_descriptor(value.get("target")))
             session = self.registry.bind_session(owner, target, session_id=value.get("sessionId"))
             return R.ok({
                 "protocolVersion": contract.PROTOCOL_V2,
@@ -365,6 +485,26 @@ class ComputerUseService:
             return R.err(error.code, str(error), details=error.details)
         except ValueError as error:
             return R.err("INVALID_ARGUMENT", str(error))
+
+    def _resolve_public_target(self, target: TargetDescriptor) -> TargetDescriptor:
+        public = target.to_dict(include_sensitive=True)
+        if not self._contains_redacted_value(public):
+            return target
+        for candidate in self.router.discover_targets():
+            if candidate.target_id != target.target_id:
+                continue
+            if candidate.to_dict(include_sensitive=False) == public:
+                return candidate
+            raise ValueError("target public identity changed after discovery")
+        raise ValueError("target is no longer available after discovery")
+
+    @staticmethod
+    def _contains_redacted_value(value: object) -> bool:
+        if isinstance(value, dict):
+            return any(ComputerUseService._contains_redacted_value(item) for item in value.values())
+        if isinstance(value, (list, tuple)):
+            return any(ComputerUseService._contains_redacted_value(item) for item in value)
+        return value == "<redacted>"
 
     def release_session(
         self, value: object, invocation: InvocationIdentity | None = None,
@@ -434,12 +574,53 @@ class ComputerUseService:
             if unknown:
                 raise ValueError(f"unsupported fields: {', '.join(sorted(unknown))}")
             request_id = validate_safe_id(value.get("requestId"), "requestId")
+            reason = str(value.get("reason", "user_stop"))
+            with self._channels_lock:
+                child_request_ids = self._batch_requests.get(request_id)
+                if child_request_ids is not None:
+                    self._cancelled_batches.add(request_id)
+            if child_request_ids is not None:
+                child_statuses = []
+                for child_request_id in child_request_ids:
+                    try:
+                        active = self.registry.get_request(child_request_id)
+                    except RegistryError as error:
+                        if error.code == "REQUEST_NOT_FOUND":
+                            child_statuses.append({
+                                "requestId": child_request_id,
+                                "status": "pending-start",
+                            })
+                            continue
+                        raise
+                    session = self.registry.get_session(active.session_id)
+                    if invocation is not None:
+                        self._assert_session_owner(session.owner, invocation)
+                    request = self.registry.request_cancel(child_request_id, reason)
+                    terminal = request.state in {
+                        RequestState.COMPLETED, RequestState.FAILED, RequestState.CANCELLED,
+                        RequestState.TIMED_OUT, RequestState.TARGET_LOST,
+                    }
+                    status = "already-terminal" if terminal else "accepted"
+                    if not terminal:
+                        with self._channels_lock:
+                            channel = self._channels.get(child_request_id)
+                        if channel is not None:
+                            channel.request_cancel(reason)
+                    child_statuses.append({
+                        "requestId": child_request_id,
+                        "status": status,
+                        "state": request.state.value,
+                    })
+                return R.ok({
+                    "requestId": request_id,
+                    "status": "accepted",
+                    "children": child_statuses,
+                })
             if invocation is not None:
                 active = self.registry.get_request(request_id)
                 session = self.registry.get_session(active.session_id)
                 self._assert_session_owner(session.owner, invocation)
             request = self.registry.request_cancel(request_id, str(value.get("reason", "user_stop")))
-            reason = str(value.get("reason", "user_stop"))
             terminal = request.state in {
                 RequestState.COMPLETED, RequestState.FAILED, RequestState.CANCELLED,
                 RequestState.TIMED_OUT, RequestState.TARGET_LOST,
@@ -566,7 +747,6 @@ class ComputerUseService:
             "protocolVersion": contract.PROTOCOL_V2,
             "targets": [target.to_dict(include_sensitive=False) for target in self.router.discover_targets()],
         }
-
     def cleanup_pending(self) -> list[dict[str, Any]]:
         with self._channels_lock:
             channels = list(self._channels.values())

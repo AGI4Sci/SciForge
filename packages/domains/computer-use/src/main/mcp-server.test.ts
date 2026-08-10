@@ -93,6 +93,13 @@ describe('computer-use MCP server', () => {
         })
       }
       const runTool = tools.tools.find((tool) => tool.name === COMPUTER_USE_MCP_TOOL_NAME)
+      const parallel = (runTool?.inputSchema as {
+        properties?: { parallel?: { type?: string; items?: unknown; minItems?: number; maxItems?: number } }
+      }).properties?.parallel
+      expect(parallel).toMatchObject({
+        type: 'array', minItems: 2, maxItems: 8,
+        items: expect.objectContaining({ type: 'object' })
+      })
       expect(runTool?.annotations).toMatchObject({
         title: 'Computer use',
         readOnlyHint: false,

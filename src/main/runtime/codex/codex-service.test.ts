@@ -1553,6 +1553,56 @@ describe('CodexRuntimeService storage fallback', () => {
     expect(client.readThread).toHaveBeenCalledWith({ threadId: 'codex-thread-1', includeTurns: true })
   })
 
+  it('keeps the shared app-server alive when a historical thread read uses stored fallback', async () => {
+    const storageRoot = await tempRoot()
+    const threadStore = new CodexThreadStore({ rootDir: storageRoot })
+    await threadStore.upsert({
+      guiThreadId: 'historical-gui-thread',
+      codexThreadId: 'historical-codex-thread',
+      workspace: '/tmp/workspace',
+      title: 'Historical Codex thread'
+    })
+    const eventStore = new CodexEventStore({ rootDir: storageRoot })
+    await eventStore.append('historical-gui-thread', {
+      threadId: 'historical-gui-thread',
+      turnId: 'historical-turn',
+      userMessage: {
+        itemId: 'historical-user',
+        turnId: 'historical-turn',
+        text: 'persisted historical input'
+      }
+    })
+    const client = controllableClient()
+    vi.mocked(client.readThread).mockRejectedValue(
+      new Error('thread historical-codex-thread not found')
+    )
+    const createClient = vi.fn(() => client)
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      storageRoot,
+      createClient
+    })
+
+    await expect(service.readThread('historical-gui-thread')).resolves.toEqual({
+      ok: true,
+      detail: expect.objectContaining({
+        blocks: [expect.objectContaining({
+          kind: 'user',
+          id: 'historical-user',
+          text: 'persisted historical input'
+        })]
+      })
+    })
+    expect(client.stop).not.toHaveBeenCalled()
+
+    await expect(service.startThread({ title: 'New unaffected thread' })).resolves.toMatchObject({
+      ok: true,
+      thread: expect.objectContaining({ id: 'thread-1' })
+    })
+    expect(createClient).toHaveBeenCalledTimes(1)
+  })
+
   it('returns empty detail for empty stored threads when the app-server client is stopped', async () => {
     const storageRoot = await tempRoot()
     const threadStore = new CodexThreadStore({ rootDir: storageRoot })

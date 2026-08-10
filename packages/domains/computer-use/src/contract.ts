@@ -71,7 +71,8 @@ export const computerUseTargetSchema = z.object({
   metadata: z.object({
     title: z.string().max(2_048).optional(),
     url: z.string().max(2_048).optional(),
-    processName: z.string().max(2_048).optional()
+    processName: z.string().max(2_048).optional(),
+    publicLabel: z.string().max(256).optional()
   }).strict().optional()
 }).strict().superRefine((target, context) => {
   const allowed = targetLocatorFields[target.kind] as readonly string[]
@@ -118,15 +119,53 @@ export const computerUseTargetSchema = z.object({
   }
 })
 
+const computerUseSemanticActionSchema = z.object({
+    kind: z.literal('click'),
+    role: z.string().trim().min(1).max(64),
+    name: z.string().trim().min(1).max(512),
+    expect: z.object({
+      kind: z.literal('text-present'),
+      text: z.string().trim().min(1).max(512),
+      stableForMs: z.number().int().min(0).max(10_000).optional()
+    }).strict()
+  }).strict()
+
+const computerUseParallelRunEntrySchema = z.object({
+  instruction: z.string().trim().min(1).max(16_384),
+  semanticAction: computerUseSemanticActionSchema.optional(),
+  sessionId: safeId,
+  requestedIsolation: computerUseIsolationSchema.optional(),
+  allowDegraded: z.boolean().optional(),
+  queueIfBusy: z.boolean().optional(),
+  deadlineMs: z.number().int().min(1).max(600_000).optional()
+}).strict()
+
 export const computerUseRunInputSchema = z.object({
   instruction: z.string().trim().min(1).max(16_384),
+  semanticAction: computerUseSemanticActionSchema.optional(),
+  parallel: z.array(computerUseParallelRunEntrySchema).min(2).max(8).superRefine((entries, context) => {
+    const sessionIds = new Set<string>()
+    entries.forEach((entry, index) => {
+      if (sessionIds.has(entry.sessionId)) {
+        context.addIssue({ code: 'custom', path: [index, 'sessionId'], message: 'parallel sessionId values must be unique' })
+      }
+      sessionIds.add(entry.sessionId)
+    })
+  }).optional(),
   sessionId: safeId.optional(),
   target: computerUseTargetSchema.optional(),
   requestedIsolation: computerUseIsolationSchema.optional(),
   allowDegraded: z.boolean().optional(),
   queueIfBusy: z.boolean().optional(),
   deadlineMs: z.number().int().min(1).max(600_000).optional()
-}).strict()
+}).strict().superRefine((input, context) => {
+  if (!input.parallel) return
+  for (const field of ['semanticAction', 'sessionId', 'target', 'requestedIsolation', 'allowDegraded', 'queueIfBusy', 'deadlineMs'] as const) {
+    if (input[field] !== undefined) {
+      context.addIssue({ code: 'custom', path: [field], message: `${field} must be supplied per parallel entry` })
+    }
+  }
+})
 
 export type ComputerUseRunInput = z.infer<typeof computerUseRunInputSchema>
 
@@ -149,6 +188,8 @@ export const computerUseReleaseSessionInputSchema = z.object({
 }).strict()
 
 export const COMPUTER_USE_V2_FIELDS = [
+  'semanticAction',
+  'parallel',
   'sessionId',
   'target',
   'requestedIsolation',

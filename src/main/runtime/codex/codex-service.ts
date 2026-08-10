@@ -644,14 +644,18 @@ export class CodexRuntimeService {
         return { ok: true, detail: emptyThreadDetail() }
       }
       if (isEmptyStoredThread(storedThread, storedDetail)) {
-        if (this.activeTurns.size === 0) await this.discardClientAfterFailure(error)
+        if (this.activeTurns.size === 0 && isCodexRuntimeDisconnectedError(error)) {
+          await this.discardClientAfterFailure(error)
+        }
         return { ok: true, detail: emptyThreadDetail() }
       }
       if (this.activeTurns.size > 0) {
         if (storedDetail) return { ok: true, detail: storedDetail }
         return failure(error)
       }
-      await this.discardClientAfterFailure(error)
+      if (isCodexRuntimeDisconnectedError(error)) {
+        await this.discardClientAfterFailure(error)
+      }
       if (storedDetail) {
         return { ok: true, detail: await this.readStoredDetail(guiThreadId, { repairStale: true }) ?? storedDetail }
       }

@@ -5,6 +5,7 @@ import json
 import platform as _platform
 import re
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from driver.channel import ChannelError, SessionInputChannel
@@ -79,6 +80,7 @@ def run_task(
     *,
     execute: bool = False,
     approve: bool = False,
+    semantic_action: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Run one task; every exit closes the supplied channel exactly once."""
     started = time.time()
@@ -102,7 +104,12 @@ def run_task(
             target_id=channel.target.target_id,
             backend=channel.capabilities.backend.value,
         )
-        result, terminal = _run_loop(cfg, instruction, channel, execute, artifact_run, started)
+        if semantic_action is not None:
+            result, terminal = _run_semantic_action(
+                instruction, semantic_action, channel, execute, artifact_run, started,
+            )
+        else:
+            result, terminal = _run_loop(cfg, instruction, channel, execute, artifact_run, started)
         return result
     except ChannelError as error:
         terminal = "cancelled" if error.code == "CANCEL_PENDING" else "timed-out" if error.code == "TIMEOUT" else "failed"
@@ -123,6 +130,149 @@ def run_task(
                 )
             except Exception as error:  # artifact cleanup must not hide channel cleanup
                 cleanup.errors.append(f"artifact manifest: {error}")
+
+
+def _run_semantic_action(
+    instruction: str,
+    semantic_action: Dict[str, Any],
+    channel: SessionInputChannel,
+    really_execute: bool,
+    artifact_run: ArtifactRun,
+    started: float,
+) -> tuple[Dict[str, Any], str]:
+    """Execute one explicit accessible-control action without an LLM planner."""
+    if channel.capabilities.backend.value != "browser-cdp":
+        raise ChannelError(
+            "ACTION_UNSUPPORTED",
+            "semanticAction currently requires the target-scoped browser-cdp backend",
+        )
+    if semantic_action.get("kind") != "click":
+        raise ChannelError("ACTION_UNSUPPORTED", "unsupported semantic action")
+    if not really_execute:
+        raise ChannelError("ACTION_UNSUPPORTED", "semanticAction requires execute=true")
+
+    initial = channel.observe()
+    initial_at = time.time()
+    initial_tree = _result_semantic_tree(initial.metadata)
+    role = str(semantic_action["role"]).strip().lower()
+    name = str(semantic_action["name"]).strip()
+    matches = [
+        node for node in initial_tree
+        if isinstance(node, dict)
+        and _semantic_role(node) == role
+        and str(node.get("name") or "").strip() == name
+        and node.get("disabled") is not True
+        and _semantic_center(node) is not None
+    ]
+    if len(matches) != 1:
+        raise ChannelError(
+            "ACTION_UNSUPPORTED",
+            "semanticAction requires exactly one enabled control with the requested role and name",
+            details={"role": role, "name": name, "matchCount": len(matches)},
+        )
+    center = _semantic_center(matches[0])
+    assert center is not None
+    width, height = initial.image.size
+    prepared = _prepare_action({"action": "click", "coordinate": center}, width, height)
+    action_started = time.time()
+    outcome = channel.perform(prepared, expected_revision=initial.revision)
+    action_completed = time.time()
+    final = channel.observe()
+    final_tree = _result_semantic_tree(final.metadata)
+    expected_text = str(semantic_action["expect"]["text"]).strip()
+    text_present_after_action = any(
+        isinstance(node, dict) and expected_text in str(node.get("name") or "")
+        for node in final_tree
+    )
+    stable_for_ms = int(semantic_action["expect"].get("stableForMs", 0))
+    if text_present_after_action and stable_for_ms:
+        channel.wait(stable_for_ms / 1000.0)
+        final = channel.observe()
+        final_tree = _result_semantic_tree(final.metadata)
+    final_at = time.time()
+    text_present = text_present_after_action and any(
+        isinstance(node, dict) and expected_text in str(node.get("name") or "")
+        for node in final_tree
+    )
+    verification = {
+        "status": "verified" if text_present else "failed",
+        "expectation": {
+            "kind": "text-present", "text": expected_text,
+            "stableForMs": stable_for_ms,
+        },
+        "matched": text_present,
+        "backend": outcome.verification.value,
+        "evidence": dict(outcome.evidence),
+    }
+    data = {
+        "status": "verified" if text_present else "verification_failed",
+        "executed": True,
+        "instruction": instruction,
+        "stepCount": 1,
+        "targetId": channel.target.target_id,
+        "backend": channel.capabilities.backend.value,
+        "requestedIsolation": channel.isolation.requested.value,
+        "effectiveIsolation": channel.isolation.effective.value,
+        "degraded": channel.isolation.degraded,
+        "degradedReason": channel.isolation.degraded_reason,
+        "initialObservation": {
+            "revision": initial.revision,
+            "semanticTree": initial_tree,
+        },
+        "action": {
+            "kind": "click", "role": role, "name": name,
+            "coordinate": list(center), "outcome": outcome.to_dict(),
+        },
+        "verification": verification,
+        "finalObservation": {
+            "revision": final.revision,
+            "semanticTree": final_tree,
+        },
+        "timeline": {
+            "startedAt": _iso_time(started),
+            "observedAt": _iso_time(initial_at),
+            "actionStartedAt": _iso_time(action_started),
+            "actionCompletedAt": _iso_time(action_completed),
+            "finalObservedAt": _iso_time(final_at),
+        },
+    }
+    artifact_run.save_screenshot(initial.image, 0)
+    artifact_run.save_screenshot(final.image, 1)
+    if not text_present:
+        return R.err(
+            "ACTION_UNVERIFIED",
+            "semanticAction text readback did not match",
+            details=data,
+            prov=_provenance(channel, started),
+        ), "failed"
+    return R.ok(
+        data,
+        summary=f"semantic click verified on {channel.target.target_id}",
+        prov=_provenance(channel, started),
+    ), "completed"
+
+
+def _semantic_role(node: Dict[str, Any]) -> str:
+    explicit = str(node.get("role") or "").strip().lower()
+    if explicit:
+        return explicit
+    return {
+        "a": "link", "button": "button", "input": "textbox",
+        "select": "combobox", "textarea": "textbox", "output": "status",
+    }.get(str(node.get("tag") or "").strip().lower(), "")
+
+
+def _semantic_center(node: Dict[str, Any]) -> List[int] | None:
+    value = node.get("center")
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    if any(isinstance(part, bool) or not isinstance(part, (int, float)) for part in value):
+        return None
+    return [max(0, min(1000, round(float(part)))) for part in value]
+
+
+def _iso_time(value: float) -> str:
+    return datetime.fromtimestamp(value, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _run_loop(

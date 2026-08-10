@@ -37,8 +37,31 @@ PROTOCOL_V1 = 1
 PROTOCOL_V2 = 2
 V2_RUN_FIELDS = frozenset({
     "sessionId", "target", "requestedIsolation", "allowDegraded",
-    "queueIfBusy", "deadlineMs",
+    "queueIfBusy", "deadlineMs", "semanticAction", "parallel",
 })
+
+SEMANTIC_ACTION_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "description": "Optional deterministic action against one exact accessible control.",
+    "properties": {
+        "kind": {"type": "string", "enum": ["click"]},
+        "role": {"type": "string"},
+        "name": {"type": "string"},
+        "expect": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": ["text-present"]},
+                "text": {"type": "string"},
+                "stableForMs": {"type": "integer", "minimum": 0, "maximum": 10000},
+            },
+            "required": ["kind", "text"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["kind", "role", "name", "expect"],
+    "additionalProperties": False,
+}
+
 
 RUN_INPUT_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -47,6 +70,33 @@ RUN_INPUT_SCHEMA: Dict[str, Any] = {
             "type": "string",
             "description": "The desktop task in natural language, e.g. "
             '"open Notepad and type the meeting agenda".',
+        },
+        "semanticAction": SEMANTIC_ACTION_SCHEMA,
+        "parallel": {
+            "type": "array",
+            "description": (
+                "Two to eight independent bound-session runs executed concurrently "
+                "under this single approved invocation."
+            ),
+            "minItems": 2,
+            "maxItems": 8,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "instruction": {"type": "string"},
+                    "semanticAction": SEMANTIC_ACTION_SCHEMA,
+                    "sessionId": {"type": "string"},
+                    "requestedIsolation": {
+                        "type": "string",
+                        "enum": ["auto", "agent-isolated", "host-app-scoped", "host-global", "host-approved"],
+                    },
+                    "allowDegraded": {"type": "boolean"},
+                    "queueIfBusy": {"type": "boolean"},
+                    "deadlineMs": {"type": "integer", "minimum": 1, "maximum": 600000},
+                },
+                "required": ["instruction", "sessionId"],
+                "additionalProperties": False,
+            },
         },
         "execute": {
             "type": "boolean",
@@ -120,6 +170,8 @@ def normalize_run_input(value: object) -> Dict[str, Any]:
     unknown = set(value) - allowed
     if unknown:
         raise ValueError(f"unsupported fields: {', '.join(sorted(unknown))}")
+    if "parallel" in value:
+        raise ValueError("parallel input requires the bounded batch executor")
 
     instruction = value.get("instruction")
     if not isinstance(instruction, str) or not instruction.strip():
@@ -128,6 +180,41 @@ def normalize_run_input(value: object) -> Dict[str, Any]:
         raise ValueError("instruction must be at most 16384 characters")
 
     normalized: Dict[str, Any] = {"instruction": instruction.strip()}
+    semantic_action = value.get("semanticAction")
+    if semantic_action is not None:
+        if not isinstance(semantic_action, dict):
+            raise ValueError("semanticAction must be an object")
+        if set(semantic_action) != {"kind", "role", "name", "expect"}:
+            raise ValueError("semanticAction must contain only kind, role, name, and expect")
+        if semantic_action.get("kind") != "click":
+            raise ValueError("semanticAction.kind must be click")
+        role = semantic_action.get("role")
+        name = semantic_action.get("name")
+        expect = semantic_action.get("expect")
+        if not isinstance(role, str) or not role.strip() or len(role) > 64:
+            raise ValueError("semanticAction.role must be 1-64 characters")
+        if not isinstance(name, str) or not name.strip() or len(name) > 512:
+            raise ValueError("semanticAction.name must be 1-512 characters")
+        if not isinstance(expect, dict) or not {"kind", "text"}.issubset(expect) or set(expect) - {"kind", "text", "stableForMs"}:
+            raise ValueError("semanticAction.expect must contain kind/text and optional stableForMs")
+        text = expect.get("text")
+        if expect.get("kind") != "text-present":
+            raise ValueError("semanticAction.expect.kind must be text-present")
+        if not isinstance(text, str) or not text.strip() or len(text) > 512:
+            raise ValueError("semanticAction.expect.text must be 1-512 characters")
+        stable_for_ms = expect.get("stableForMs", 0)
+        if (
+            isinstance(stable_for_ms, bool) or not isinstance(stable_for_ms, int)
+            or not 0 <= stable_for_ms <= 10_000
+        ):
+            raise ValueError("semanticAction.expect.stableForMs must be an integer between 0 and 10000")
+        normalized["semanticAction"] = {
+            "kind": "click", "role": role.strip(), "name": name.strip(),
+            "expect": {
+                "kind": "text-present", "text": text.strip(),
+                **({"stableForMs": stable_for_ms} if "stableForMs" in expect else {}),
+            },
+        }
     for field in ("execute", "approve", "allowDegraded", "queueIfBusy"):
         raw = value.get(field, False)
         if not isinstance(raw, bool):
@@ -163,6 +250,66 @@ def normalize_run_input(value: object) -> Dict[str, Any]:
         PROTOCOL_V2 if V2_RUN_FIELDS.intersection(value) else PROTOCOL_V1
     )
     return normalized
+
+
+def normalize_parallel_run_input(value: object) -> Dict[str, Any]:
+    """Validate one approved, bounded batch without resolving its sessions."""
+    if not isinstance(value, dict):
+        raise ValueError("run input must be an object")
+    allowed = set(RUN_INPUT_SCHEMA["properties"])
+    unknown = set(value) - allowed
+    if unknown:
+        raise ValueError(f"unsupported fields: {', '.join(sorted(unknown))}")
+    instruction = value.get("instruction")
+    if not isinstance(instruction, str) or not instruction.strip():
+        raise ValueError("instruction is required")
+    if len(instruction) > 16_384:
+        raise ValueError("instruction must be at most 16384 characters")
+    conflicting = {
+        "semanticAction", "sessionId", "target", "requestedIsolation",
+        "allowDegraded", "queueIfBusy", "deadlineMs", "imagePath", "imageBase64",
+    }.intersection(value)
+    if conflicting:
+        raise ValueError(
+            "parallel fields must be supplied per entry: "
+            + ", ".join(sorted(conflicting))
+        )
+    entries = value.get("parallel")
+    if not isinstance(entries, list) or not 2 <= len(entries) <= 8:
+        raise ValueError("parallel must contain between 2 and 8 entries")
+    execute = value.get("execute", False)
+    approve = value.get("approve", False)
+    if not isinstance(execute, bool) or not isinstance(approve, bool):
+        raise ValueError("execute and approve must be booleans")
+    normalized_entries = []
+    session_ids: set[str] = set()
+    allowed_entry = {
+        "instruction", "semanticAction", "sessionId", "requestedIsolation",
+        "allowDegraded", "queueIfBusy", "deadlineMs",
+    }
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise ValueError(f"parallel[{index}] must be an object")
+        unsupported = set(entry) - allowed_entry
+        if unsupported:
+            raise ValueError(
+                f"parallel[{index}] unsupported fields: {', '.join(sorted(unsupported))}"
+            )
+        child = normalize_run_input({**entry, "execute": execute, "approve": approve})
+        session_id = child.get("sessionId")
+        if session_id is None:
+            raise ValueError(f"parallel[{index}].sessionId is required")
+        if session_id in session_ids:
+            raise ValueError("parallel sessionId values must be unique")
+        session_ids.add(session_id)
+        normalized_entries.append(child)
+    return {
+        "instruction": instruction.strip(),
+        "execute": execute,
+        "approve": approve,
+        "parallel": normalized_entries,
+        "protocolVersion": PROTOCOL_V2,
+    }
 
 
 def v2_backend_unavailable(request: Dict[str, Any] | None = None) -> Dict[str, Any]:

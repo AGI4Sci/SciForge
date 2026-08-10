@@ -23,6 +23,66 @@ describe('computer-use shared v2 contract', () => {
     expect(COMPUTER_USE_ERROR_CODES).toContain('APPROVAL_PROOF_CAPACITY')
   })
 
+  it('accepts a bounded deterministic semantic click as protocol v2', () => {
+    const normalized = normalizeComputerUseRunInput({
+      instruction: 'Commit the exact accessible control.',
+      semanticAction: {
+        kind: 'click',
+        role: 'button',
+        name: 'Commit Alpha',
+        expect: { kind: 'text-present', text: 'ALPHA_COMMITTED', stableForMs: 8000 }
+      }
+    })
+    expect(normalized.protocolVersion).toBe(2)
+    expect(normalized.semanticAction).toEqual({
+      kind: 'click', role: 'button', name: 'Commit Alpha',
+      expect: { kind: 'text-present', text: 'ALPHA_COMMITTED', stableForMs: 8000 }
+    })
+  })
+
+  it('rejects unbounded or ambiguous semantic actions', () => {
+    expect(computerUseRunInputSchema.safeParse({
+      instruction: 'click',
+      semanticAction: { kind: 'click', role: 'button', name: 'x' }
+    }).success).toBe(false)
+    expect(computerUseRunInputSchema.safeParse({
+      instruction: 'click',
+      semanticAction: {
+        kind: 'type', role: 'textbox', name: 'x',
+        expect: { kind: 'text-present', text: 'done' }
+      }
+    }).success).toBe(false)
+  })
+
+  it('accepts one approved parallel batch with distinct bounded sessions', () => {
+    const normalized = normalizeComputerUseRunInput({
+      instruction: 'Run the test-owned targets concurrently.',
+      parallel: ['Alpha', 'Beta', 'Gamma'].map((label) => ({
+        instruction: `Commit ${label}.`,
+        sessionId: `session-${label.toLowerCase()}`,
+        requestedIsolation: 'host-app-scoped',
+        allowDegraded: false,
+        semanticAction: {
+          kind: 'click', role: 'button', name: `Commit ${label}`,
+          expect: { kind: 'text-present', text: `${label.toUpperCase()}_COMMITTED` }
+        }
+      }))
+    })
+    expect(normalized.protocolVersion).toBe(2)
+    expect(normalized.parallel).toHaveLength(3)
+  })
+
+  it('rejects duplicate sessions and conflicting single-run fields in a parallel batch', () => {
+    const entry = { instruction: 'observe', sessionId: 'session-alpha' }
+    expect(computerUseRunInputSchema.safeParse({
+      instruction: 'batch', parallel: [entry, entry]
+    }).success).toBe(false)
+    expect(computerUseRunInputSchema.safeParse({
+      instruction: 'batch', sessionId: 'top-level',
+      parallel: [entry, { instruction: 'observe', sessionId: 'session-beta' }]
+    }).success).toBe(false)
+  })
+
   for (const fixture of fixtures.valid) {
     it(`accepts ${fixture.name}`, () => {
       const parsed = computerUseRunInputSchema.parse(fixture.input)
@@ -46,7 +106,7 @@ describe('computer-use shared v2 contract', () => {
       target: {
         kind: 'browser-page',
         locator: { cdpEndpoint: 'http://token@127.0.0.1:9222', cdpTargetId: 'page-1' },
-        metadata: { title: 'secret', url: 'https://secret.example' }
+        metadata: { title: 'secret', url: 'https://secret.example', publicLabel: 'Test-owned Alpha' }
       }
     }).target!
     const redacted = redactComputerUseTarget(target)
@@ -55,7 +115,7 @@ describe('computer-use shared v2 contract', () => {
     }))
     expect(redacted).toMatchObject({
       locator: { cdpEndpoint: '<redacted>' },
-      metadata: { title: '<redacted>', url: '<redacted>' }
+      metadata: { title: '<redacted>', url: '<redacted>', publicLabel: 'Test-owned Alpha' }
     })
   })
 })
