@@ -19,12 +19,21 @@ export const RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND =
   'renderer.composer-context-provider' as const
 export const RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND =
   'renderer.chat-result-panel' as const
+export const RENDERER_EXTENSION_CONTRIBUTION_KIND = 'renderer.extension' as const
 
 export const WORKBENCH_TOPBAR_LOCATION = 'workbench.topbar' as const
 export const WORKBENCH_RIGHT_PANEL_LOCATION = 'workbench.right-panel' as const
 export const WORKBENCH_BOTTOM_PANEL_LOCATION = 'workbench.bottom-panel' as const
 export const WORKBENCH_GLOBAL_OVERLAY_LOCATION = 'workbench.global-overlay' as const
 export const COMPOSER_CONTEXT_LOCATION = 'composer.context' as const
+
+export const domainRendererExtensionContractSchema = z.object({
+  location: z.string().trim().min(1).max(192)
+}).passthrough()
+
+export type DomainRendererExtensionContract = z.infer<
+  typeof domainRendererExtensionContractSchema
+>
 
 export const domainCapabilityResourceHandleSchema = z.object({
   token: z.string().min(1).max(4_096),

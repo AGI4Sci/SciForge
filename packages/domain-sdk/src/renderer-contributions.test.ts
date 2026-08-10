@@ -6,6 +6,7 @@ import {
   COMPOSER_CONTEXT_LOCATION,
   RENDERER_COMMAND_CONTRIBUTION_KIND,
   RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND,
+  RENDERER_EXTENSION_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_BOTTOM_PANEL_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
@@ -50,6 +51,7 @@ describe('renderer extension contribution contracts', () => {
       RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND,
       'renderer.composer-context-provider'
     )
+    assert.equal(RENDERER_EXTENSION_CONTRIBUTION_KIND, 'renderer.extension')
   })
 
   it('accepts bounded generic command activation and rejects unknown or non-JSON payloads', () => {

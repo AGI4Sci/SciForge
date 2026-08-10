@@ -194,6 +194,20 @@ export function createWorkflowNode(
         type: 'http-request',
         config: { method: 'GET', url: '', headers: [], body: '', timeoutMs: 30_000, parseJson: false }
       }
+    case 'resource':
+      return {
+        ...base,
+        type: 'resource',
+        config: {
+          providerId: '',
+          resourceId: '',
+          resourceName: '',
+          operationId: '',
+          actionId: '',
+          effect: 'read',
+          inputTemplate: '{}'
+        }
+      }
     case 'delay':
       return { ...base, type: 'delay', config: { delayMs: 1_000 } }
     case 'template':

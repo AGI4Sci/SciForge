@@ -13,7 +13,7 @@ import {
   type EdgeChange,
   type NodeChange
 } from '@xyflow/react'
-import { ArrowLeft, History, Play, Plus, Save, Square } from 'lucide-react'
+import { ArrowLeft, Database, History, Loader2, Play, Plus, RefreshCw, Save, Square } from 'lucide-react'
 import type {
   WorkflowConnectionV1,
   WorkflowEnvVarV1,
@@ -27,6 +27,10 @@ import {
   useCreateLoopRuntime,
   type CreateLoopRendererSettings
 } from '../runtime-bridge.js'
+import type {
+  CreateLoopResourceDescriptor,
+  CreateLoopResourceProvider
+} from '../../resource-provider.js'
 import {
   NODE_ICONS,
   WorkflowNodeActionsContext,
@@ -58,6 +62,7 @@ type PersistPatch = {
 type Props = {
   workflow: WorkflowV1
   settings: CreateLoopRendererSettings
+  resourceProviders: readonly CreateLoopResourceProvider[]
   runStatus: Record<string, WorkflowNodeRunStatus>
   lastResults: Record<string, WorkflowNodeRunResultV1>
   liveResults: Record<string, WorkflowNodeRunResultV1>
@@ -116,6 +121,7 @@ function reachableInputs(
 function WorkflowEditorInner({
   workflow,
   settings,
+  resourceProviders,
   runStatus,
   lastResults,
   liveResults,
@@ -137,6 +143,13 @@ function WorkflowEditorInner({
   const [historyOpen, setHistoryOpen] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [resourceActionError, setResourceActionError] = useState('')
+  const [resourceCatalog, setResourceCatalog] = useState<ReadonlyArray<Readonly<{
+    provider: CreateLoopResourceProvider
+    resources: readonly CreateLoopResourceDescriptor[]
+    loading: boolean
+    error: string
+  }>>>(() => resourceProviders.map((provider) => ({ provider, resources: [], loading: true, error: '' })))
 
   const results = useMemo(() => resultSource(liveResults, lastResults), [lastResults, liveResults])
   const selectedNode = useMemo(
@@ -163,6 +176,27 @@ function WorkflowEditorInner({
 
   const markDirty = useCallback(() => setDirty(true), [])
 
+  const loadResources = useCallback(async () => {
+    setResourceCatalog(resourceProviders.map((provider) => ({ provider, resources: [], loading: true, error: '' })))
+    const loaded = await Promise.all(resourceProviders.map(async (provider) => {
+      try {
+        return { provider, resources: await provider.loadResources(settings.workspaceRoot), loading: false, error: '' }
+      } catch (error) {
+        return {
+          provider,
+          resources: [],
+          loading: false,
+          error: error instanceof Error ? error.message : String(error)
+        }
+      }
+    }))
+    setResourceCatalog(loaded)
+  }, [resourceProviders, settings.workspaceRoot])
+
+  useEffect(() => {
+    void loadResources()
+  }, [loadResources])
+
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     setNodes((current) => applyNodeChanges(changes, current) as WorkflowFlowNode[])
     if (changes.some((change) => change.type !== 'select' && change.type !== 'dimensions')) markDirty()
@@ -185,6 +219,25 @@ function WorkflowEditorInner({
     setMode('config')
     markDirty()
   }, [markDirty, nodes.length])
+
+  const addResourceNode = useCallback((
+    provider: CreateLoopResourceProvider,
+    resource: CreateLoopResourceDescriptor
+  ): void => {
+    setResourceActionError('')
+    try {
+      const createdNode = provider.createNode(resource, nextNodePosition(nodes.length))
+      const node = resource.nameKey
+        ? { ...createdNode, name: t(resource.nameKey) }
+        : createdNode
+      setNodes((current) => [...current, { id: node.id, type: node.type, position: node.position, data: { node } }])
+      setSelectedNodeId(node.id)
+      setMode('config')
+      markDirty()
+    } catch (error) {
+      setResourceActionError(error instanceof Error ? error.message : String(error))
+    }
+  }, [markDirty, nodes.length, t])
 
   const updateNode = useCallback((updated: WorkflowNodeV1) => {
     setNodes((current) =>
@@ -351,6 +404,74 @@ function WorkflowEditorInner({
               })}
             </section>
           ))}
+          {resourceProviders.length > 0 ? (
+            <section className="flex flex-col gap-1 border-t border-ds-border pt-3">
+              <div className="flex items-center justify-between gap-2 px-1">
+                <h2 className="text-[10.5px] font-semibold uppercase text-ds-faint">
+                  {t('workflowGroup_resources')}
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => void loadResources()}
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-md text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+                  title={t('workflowResourcesRefresh')}
+                  aria-label={t('workflowResourcesRefresh')}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" strokeWidth={1.8} />
+                </button>
+              </div>
+              {resourceActionError ? (
+                <span className="px-2 py-1 text-[11px] leading-4 text-red-600">{resourceActionError}</span>
+              ) : null}
+              {resourceCatalog.map(({ provider, resources, loading, error }) => (
+                <div key={provider.id} className="flex flex-col gap-1">
+                  {resourceProviders.length > 1 ? (
+                    <span className="px-2 pt-1 text-[10px] font-medium text-ds-faint">{provider.title}</span>
+                  ) : null}
+                  {loading ? (
+                    <span className="flex h-9 items-center gap-2 px-2 text-[11.5px] text-ds-faint">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      {t('workflowResourcesLoading')}
+                    </span>
+                  ) : error ? (
+                    <span className="px-2 py-1 text-[11px] leading-4 text-red-600">{error}</span>
+                  ) : resources.every((resource) => resource.paletteVisibility === 'hidden') ? (
+                    <span className="px-2 py-1 text-[11px] leading-4 text-ds-faint">
+                      {t('workflowResourcesEmpty')}
+                    </span>
+                  ) : (
+                    <div className="flex flex-col gap-1">
+                      {resources.filter((resource) => resource.paletteVisibility !== 'hidden').map((resource) => {
+                        const resourceKey = `${provider.id}:${resource.id}`
+                        return (
+                          <button
+                            type="button"
+                            key={resourceKey}
+                            onClick={() => addResourceNode(provider, resource)}
+                            title={resource.description || resource.name}
+                            className="flex min-h-10 items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-left text-ds-ink transition hover:border-ds-border hover:bg-ds-hover"
+                          >
+                            <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-600">
+                              <Database className="h-3.5 w-3.5" strokeWidth={1.8} />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-[12px] font-medium">
+                                {resource.nameKey ? t(resource.nameKey) : resource.name}
+                              </span>
+                              {resource.detail ? (
+                                <span className="block truncate text-[10.5px] text-ds-faint">{resource.detail}</span>
+                              ) : null}
+                            </span>
+                            <Plus className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.8} />
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </section>
+          ) : null}
         </aside>
 
         <main className="relative min-w-0 flex-1">
@@ -407,6 +528,7 @@ function WorkflowEditorInner({
               <NodeConfigPanel
                 node={selectedNode}
                 settings={settings}
+                resourceProviders={resourceProviders}
                 lastResult={selectedNodeId ? results[selectedNodeId] ?? null : null}
                 onChange={updateNode}
                 onDelete={deleteNode}

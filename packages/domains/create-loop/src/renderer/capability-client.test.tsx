@@ -11,6 +11,23 @@ import {
   rerunSpecFileName,
   rerunWorkflowRun
 } from './workflow/WorkflowRunHistory.js'
+import { loadWorkflowViewState } from './workflow/WorkflowView.js'
+import { defaultWorkflowSettings } from '../workflow-settings.js'
+
+test('Create Loop still loads workflows when the live runtime status is temporarily invalid', async () => {
+  const settings = {
+    workspaceRoot: '/workspace',
+    workflow: defaultWorkflowSettings()
+  }
+
+  const loaded = await loadWorkflowViewState({
+    getSettings: async () => settings,
+    getWorkflowStatus: async () => { throw new Error('invalid legacy runtime status') }
+  })
+
+  assert.equal(loaded.settings, settings)
+  assert.equal(loaded.status, null)
+})
 
 test('run history export uses the canonical exportRerun capability and a stable JSON filename', async () => {
   const calls: Array<{ actionId: string; input: unknown; workspaceId?: string }> = []
@@ -61,7 +78,8 @@ test('renderer bridge forwards a canonical spec through client.rerun with fresh 
   } as DomainRendererCapabilityInvoker
   const bridge = createCreateLoopRuntimeBridge(
     createCreateLoopCapabilityClient(invoker),
-    '/workspace'
+    '/workspace',
+    []
   )
   const spec = { schemaVersion: 'sciforge.rerun.v1', specId: 'spec-1' } as SciForgeReproSpecV1
 

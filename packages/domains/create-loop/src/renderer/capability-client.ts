@@ -30,6 +30,10 @@ import {
   createLoopTestNodeInputSchema,
   createLoopWorkflowInputSchema,
   createLoopWorkflowSchema,
+  createDatasetLoopInputSchema,
+  createDatasetLoopOutputSchema,
+  type CreateDatasetLoopInput,
+  type CreateDatasetLoopOutput,
   type CreateLoopSnapshot,
   type WorkflowApprovalDecision,
   type WorkflowCodeCheckResult,
@@ -45,6 +49,12 @@ import {
 export const createLoopCapabilityContracts = Object.freeze({
   read: contract(CREATE_LOOP_CAPABILITY_IDS.read, 'read', createLoopReadInputSchema, createLoopSnapshotSchema),
   save: contract(CREATE_LOOP_CAPABILITY_IDS.save, 'workspace-write', createLoopSaveInputSchema, createLoopSnapshotSchema),
+  buildDataset: contract(
+    CREATE_LOOP_CAPABILITY_IDS.buildDataset,
+    'external-write',
+    createDatasetLoopInputSchema,
+    createDatasetLoopOutputSchema
+  ),
   run: contract(CREATE_LOOP_CAPABILITY_IDS.run, 'external-write', createLoopWorkflowInputSchema, createLoopRunResultSchema),
   stop: contract(CREATE_LOOP_CAPABILITY_IDS.stop, 'external-write', createLoopStopInputSchema, createLoopRunResultSchema),
   status: contract(CREATE_LOOP_CAPABILITY_IDS.status, 'read', createLoopReadInputSchema, createLoopRuntimeStatusSchema),
@@ -108,6 +118,10 @@ export type CreateLoopCapabilityClient = Readonly<{
     settings: WorkflowSettingsV1,
     expectedRevision?: number
   ) => Promise<CreateLoopSnapshot>
+  buildDataset: (
+    workspaceRoot: string,
+    input: CreateDatasetLoopInput
+  ) => Promise<CreateDatasetLoopOutput>
   run: (
     workspaceRoot: string,
     workflowId: string,
@@ -169,6 +183,12 @@ export function createCreateLoopCapabilityClient(
         createLoopCapabilityContracts.save,
         { settings, ...(expectedRevision === undefined ? {} : { expectedRevision }) },
         options(workspaceRoot)
+      ),
+    buildDataset: (workspaceRoot, input) =>
+      invoker.invoke(
+        createLoopCapabilityContracts.buildDataset,
+        input,
+        confirmedOptions(workspaceRoot)
       ),
     run: (workspaceRoot, workflowId, input) =>
       invoker.invoke(

@@ -73,6 +73,9 @@ test('builds editable coordinator and iteration workflows from a dataset require
     'grounding-failed'
   )
   assert.equal(built.workflow.nodes.find((node) => node.id === 'review')?.type, 'human-approval')
+  const reviewToPublish = built.workflow.connections.find((edge) => edge.target === 'publication-context')
+  assert.equal(reviewToPublish?.source, 'review')
+  assert.equal(reviewToPublish?.sourceHandle, 'approved')
   assert.equal(built.iterationWorkflow.nodes.find((node) => node.id === 'challenger')?.type, 'llm')
   assert.equal(built.iterationWorkflow.nodes.find((node) => node.id === 'challenger-context')?.type, 'code')
   assert.equal(built.iterationWorkflow.nodes.find((node) => node.id === 'judge-context')?.type, 'code')
@@ -128,6 +131,7 @@ test('builds editable coordinator and iteration workflows from a dataset require
   assert.equal(publicationGate?.type, 'code')
   if (publicationGate?.type === 'code') {
     assert.match(publicationGate.config.code, /Dataset publication receipt is not successful/)
+    assert.match(publicationGate.config.code, /publication\.artifact/)
     assert.match(publicationGate.config.code, /publicationComplete: true/)
   }
 
@@ -285,6 +289,141 @@ test('builds editable coordinator and iteration workflows from a dataset require
     assert.match(publisher.config.prompt, /After it returns, never discover or invoke another capability/)
     assert.doesNotMatch(publisher.config.prompt, /sciforge-tool-policy/)
   }
+})
+
+test('uses package-contributed resource bindings for deterministic source acquisition', () => {
+  const built = buildDatasetGenerationLoop({
+    ...request,
+    sourceIds: ['uniprot'],
+    sourceBindings: [{
+      sourceId: 'uniprot',
+      providerId: 'dataset-api',
+      resourceId: 'uniprot',
+      resourceName: 'UniProt REST',
+      operationId: 'metadata',
+      actionId: 'dataset-api.metadata',
+      effect: 'workspace-write',
+      inputTemplate: JSON.stringify({
+        sourceId: 'uniprot',
+        pathParameters: { identifier: 'P04637' },
+        responseMode: 'summary',
+        outputFileName: 'uniprot-metadata.json'
+      })
+    }]
+  }, { now: '2026-08-10T00:00:00.000Z' })
+
+  const acquisition = built.workflow.nodes.find((node) => node.id === 'grounding-resource-1')
+  assert.equal(acquisition?.type, 'resource')
+  if (acquisition?.type === 'resource') {
+    assert.equal(acquisition.config.actionId, 'dataset-api.metadata')
+    assert.equal(acquisition.config.preserveInput, true)
+    assert.equal(acquisition.config.resultKey, 'datasetResource1')
+  }
+  assert.equal(built.workflow.nodes.some((node) => node.id === 'grounding-1'), false)
+  assert.equal(built.workflow.nodes.some((node) => node.id === 'parse-acquisition-1'), false)
+  const normalize = built.workflow.nodes.find((node) => node.id === 'normalize-acquisition')
+  assert.equal(normalize?.type, 'code')
+  if (normalize?.type === 'code') {
+    assert.match(normalize.config.code, /datasetResource1/)
+    assert.match(normalize.config.code, /Dataset resource query failed for source/)
+    const artifactPath = '/workspace/.sciforge/datasets/raw/uniprot/uniprot-metadata.json'
+    const execute = new Function('$json', normalize.config.code) as (
+      input: unknown
+    ) => Record<string, unknown>
+    const normalized = execute({
+      datasetResource1: {
+        datasetApi: {
+          success: true,
+          actionId: 'dataset-api.metadata',
+          result: {
+            artifact: { path: artifactPath },
+            response: {
+              data: {
+                entry: {
+                  proteinDescription: {
+                    recommendedName: {
+                      fullName: {
+                        value: 'Cellular tumor antigen p53',
+                        arbitraryDetails: { hidden: true }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    })
+    assert.deepEqual(
+      (((((normalized.grounding as Record<string, unknown>).uniprot as Record<string, unknown>)
+        .result as Record<string, unknown>).response as Record<string, unknown>)
+        .data as Record<string, unknown>).entry,
+      {
+        proteinDescription: {
+          recommendedName: {
+            fullName: { value: 'Cellular tumor antigen p53' }
+          }
+        }
+      }
+    )
+    assert.deepEqual(normalized.parentArtifacts, [artifactPath])
+
+    const contextNode = built.iterationWorkflow.nodes.find((node) => node.id === 'challenger-context')
+    assert.equal(contextNode?.type, 'code')
+    if (contextNode?.type === 'code') {
+      const createContext = new Function('$json', contextNode.config.code) as (
+        input: unknown
+      ) => Record<string, unknown>
+      const context = JSON.parse(String(createContext(normalized).challengerContext)) as {
+        grounding: { uniprot: { result: { response: { data: { entry: unknown } } } } }
+      }
+      assert.deepEqual(context.grounding.uniprot.result.response.data.entry, {
+        proteinDescription: {
+          recommendedName: {
+            fullName: { value: 'Cellular tumor antigen p53' }
+          }
+        }
+      })
+    }
+  }
+})
+
+test('drops transient generated-loop model contexts after each model stage', () => {
+  const built = buildDatasetGenerationLoop(request)
+  const strategist = built.iterationWorkflow.nodes.find((node) => node.id === 'strategy-learner')
+  assert.equal(strategist?.type, 'llm')
+  if (!strategist) return
+  const provider = createDatasetWorkflowExecutionReceiptProvider()
+  const normalizedText = provider.normalizeModelOutput?.({
+    workflow: built.iterationWorkflow,
+    node: strategist,
+    incoming: {
+      json: {
+        state: {
+          objective: 'Create grounded records.',
+          challengerContext: 'old challenger context'.repeat(2_000)
+        },
+        candidate: { question: 'A grounded question?' },
+        strategyContext: 'current strategy context'.repeat(2_000),
+        verifierContext: 'old verifier context'.repeat(2_000)
+      },
+      text: ''
+    },
+    responseText: JSON.stringify({
+      strategyUpdate: {
+        shouldRevise: false,
+        systemicFailurePatterns: [],
+        revisedRecipe: 'Keep the current recipe.',
+        challengerPromptPatch: '',
+        reason: 'The candidate is acceptable.'
+      }
+    })
+  })
+  const normalized = JSON.parse(normalizedText ?? '{}') as Record<string, unknown>
+  assert.doesNotMatch(JSON.stringify(normalized), /(?:challenger|strategy|verifier)Context/)
+  assert.equal((normalized.state as Record<string, unknown>).objective, 'Create grounded records.')
+  assert.equal((normalized.strategyUpdate as Record<string, unknown>).shouldRevise, false)
 })
 
 test('requires every designed plan-gated preparation step to succeed before generation', () => {
@@ -648,9 +787,10 @@ test('runs the generated loop through grounding, generation, evaluation, and pub
             text: `Publication completed.\n${JSON.stringify({
               loopId: 'generated-loop',
               planId: 'plan-fixture',
-              materializedArtifact: { path: 'synthetic.jsonl' },
-              validation: { valid: true },
-              publication: { path: 'published/synthetic' }
+              materializedArtifact: { status: 'succeeded', artifact: { path: 'synthetic.jsonl', sha256: 'materialized-sha' } },
+              validation: { status: 'succeeded', valid: true, artifact: { path: 'synthetic.validation.json', sha256: 'validation-sha' } },
+              publication: { status: 'succeeded', artifact: { path: 'published/synthetic/manifest.json', sha256: 'publication-sha' } },
+              execution: { completedSteps: 3, failedSteps: 0, totalSteps: 3 }
             })}`,
             threadId: 'publication-thread'
           }
@@ -705,11 +845,12 @@ test('runs the generated loop through grounding, generation, evaluation, and pub
   const output = completedRun?.nodeResults.find((result) => result.nodeId === 'output')
   assert.match(
     output?.outputJson ?? '',
-    /published\/synthetic/,
+    /published\/synthetic\/manifest\.json/,
     JSON.stringify(completedRun, null, 2)
   )
   assert.equal(agentPrompts.length, 4)
   assert.equal(agentRequests.every((request) => request.runtimeId === undefined), true)
+  assert.equal(agentRequests.every((request) => request.interaction === 'reviewable'), true)
   assert.equal(generationRound, 3)
   assert.equal(judgeRound, 3)
   assert.equal(strongCalls, 4, 'Malformed solver output must retry without losing the incoming state.')

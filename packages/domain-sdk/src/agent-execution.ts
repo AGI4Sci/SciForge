@@ -11,6 +11,7 @@ export const domainMainAgentExecutionRequestSchema = z.object({
   ).max(128).refine((tools) => new Set(tools).size === tools.length, {
     message: 'Allowed tool names must be unique.'
   }).optional(),
+  interaction: z.enum(['background', 'reviewable']).default('background'),
   mode: z.enum(['agent', 'plan']).default('agent'),
   signal: z.instanceof(AbortSignal).optional()
 }).strict()

@@ -28,6 +28,12 @@ import {
   createLoopI18nResourceContribution,
   type CreateLoopI18nResourceContribution
 } from './messages.js'
+import {
+  CREATE_LOOP_RESOURCE_PROVIDER_KIND,
+  CREATE_LOOP_RESOURCE_PALETTE_LOCATION,
+  isCreateLoopResourceProvider,
+  type CreateLoopResourceProvider
+} from '../resource-provider.js'
 
 const WorkflowView = lazy(() =>
   import('./workflow/WorkflowView.js').then((module) => ({
@@ -54,17 +60,38 @@ export function createCreateLoopRightPanelContribution(
 ): CreateLoopRightPanelContribution {
   const client = createCreateLoopCapabilityClient(host.capabilityInvoker)
   return Object.freeze({
-    render: ({ active, className, onCollapse, session }) => (
-      <div className={className} data-active={active ? 'true' : 'false'}>
-        <CreateLoopRuntimeProvider
-          client={client}
-          workspaceRoot={session.workspaceRoot ?? ''}
-        >
-          <WorkflowView onCollapse={onCollapse} />
-        </CreateLoopRuntimeProvider>
-      </div>
-    )
+    render: ({ active, className, onCollapse, session }) => {
+      const resourceProviders = collectCreateLoopResourceProviders(host)
+      return (
+        <div className={className} data-active={active ? 'true' : 'false'}>
+          <CreateLoopRuntimeProvider
+            client={client}
+            resourceProviders={resourceProviders}
+            workspaceRoot={session.workspaceRoot ?? ''}
+          >
+            <WorkflowView onCollapse={onCollapse} />
+          </CreateLoopRuntimeProvider>
+        </div>
+      )
+    }
   })
+}
+
+export function collectCreateLoopResourceProviders(
+  host: DomainRendererHost
+): readonly CreateLoopResourceProvider[] {
+  return Object.freeze(
+    (host.contributions?.list(CREATE_LOOP_RESOURCE_PROVIDER_KIND) ?? [])
+      .filter((contribution) => {
+        const contract = contribution.contract
+        return Boolean(
+          contract && typeof contract === 'object' && !Array.isArray(contract) &&
+          contract.location === CREATE_LOOP_RESOURCE_PALETTE_LOCATION
+        )
+      })
+      .map((contribution) => contribution.value)
+      .filter(isCreateLoopResourceProvider)
+  )
 }
 
 export function createCreateLoopCommandContribution(

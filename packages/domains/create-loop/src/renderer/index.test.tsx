@@ -7,9 +7,12 @@ import {
   WORKFLOW_AUTOMATION_RENDERER_TOOLBAR_ACTION_CONTRIBUTION
 } from '../definition.js'
 import {
+  collectCreateLoopResourceProviders,
   createCreateLoopCommandContribution,
   createDomainRendererEntry
 } from './index.js'
+import { CREATE_LOOP_RESOURCE_PROVIDER_KIND } from '../resource-provider.js'
+import { createElement } from 'react'
 
 test('command opens the package-owned panel through the public Workbench host', () => {
   const opened: unknown[] = []
@@ -54,6 +57,33 @@ test('renderer entry keeps command, toolbar, and panel separately owned', () => 
     id === WORKFLOW_AUTOMATION_RENDERER_RIGHT_PANEL_CONTRIBUTION.id
   )
   assert.deepEqual(Object.keys(panel?.value as object), ['render'])
+})
+
+test('collects installed resource providers through the renderer extension host', () => {
+  const provider = {
+    id: 'fixture-provider',
+    title: 'Fixture provider',
+    loadResources: async () => [],
+    createNode: () => { throw new Error('not used') },
+    renderNodeConfig: () => createElement('div')
+  }
+  const host: DomainRendererHost = {
+    ...rendererHost([]),
+    contributions: {
+      list: (kind) => kind === CREATE_LOOP_RESOURCE_PROVIDER_KIND
+        ? [{
+            id: 'fixture.resources',
+            kind,
+            packageName: '@fixture/domain',
+            owner: { moduleId: 'fixture', moduleVersion: '1.0.0' },
+            contract: { location: 'create-loop.resource-palette' },
+            value: provider
+          }]
+        : []
+    }
+  }
+
+  assert.deepEqual(collectCreateLoopResourceProviders(host), [provider])
 })
 
 function rendererHost(opened: unknown[]): DomainRendererHost {

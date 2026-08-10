@@ -1489,7 +1489,7 @@ app
             ...(request.model ? { model: request.model } : {}),
             relation: 'side',
             threadSource: 'domain-runtime',
-            sidebarVisibility: 'hidden',
+            sidebarVisibility: request.interaction === 'reviewable' ? 'main' : 'hidden',
             ...(request.allowedTools ? { allowedTools: request.allowedTools } : {})
           })
           let turnId = ''

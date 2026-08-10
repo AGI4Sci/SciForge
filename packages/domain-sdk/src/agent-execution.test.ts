@@ -25,6 +25,7 @@ describe('agent execution host contract', () => {
       model: 'frontier',
       reasoningEffort: 'high',
       allowedTools: ['sciforge_discover', 'sciforge_invoke'],
+      interaction: 'reviewable',
       mode: 'agent',
       signal: controller.signal
     })
@@ -42,6 +43,7 @@ describe('agent execution host contract', () => {
     }), {
       prompt: 'Continue.',
       workspaceRoot: '/workspace',
+      interaction: 'background',
       mode: 'agent'
     })
 

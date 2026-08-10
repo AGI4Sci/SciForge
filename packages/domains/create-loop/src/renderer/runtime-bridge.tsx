@@ -7,6 +7,7 @@ import {
 } from 'react'
 import type { SciForgeReproSpecV1 } from '@sciforge/domain-sdk/reproducibility'
 import type {
+  CreateDatasetLoopInput,
   WorkflowApprovalDecision,
   WorkflowCodeLanguage,
   WorkflowRunComparatorV1,
@@ -14,6 +15,7 @@ import type {
 } from '../contract.js'
 import { mergeWorkflowSettings } from '../workflow-settings.js'
 import type { CreateLoopCapabilityClient } from './capability-client.js'
+import type { CreateLoopResourceProvider } from '../resource-provider.js'
 
 export type CreateLoopRendererSettings = Readonly<{
   workspaceRoot: string
@@ -21,9 +23,12 @@ export type CreateLoopRendererSettings = Readonly<{
 }>
 
 export type CreateLoopRuntimeBridge = Readonly<{
+  resourceProviders: readonly CreateLoopResourceProvider[]
   getSettings: () => Promise<CreateLoopRendererSettings>
   setSettings: (patch: Readonly<{ workflow?: WorkflowSettingsPatchV1 }>) =>
     Promise<CreateLoopRendererSettings>
+  buildDataset: (input: CreateDatasetLoopInput) =>
+    ReturnType<CreateLoopCapabilityClient['buildDataset']>
   getWorkflowStatus: () => ReturnType<CreateLoopCapabilityClient['status']>
   runWorkflow: (workflowId: string, input?: unknown) =>
     ReturnType<CreateLoopCapabilityClient['run']>
@@ -52,24 +57,28 @@ const RuntimeContext = createContext<CreateLoopRuntimeBridge | null>(null)
 export function CreateLoopRuntimeProvider({
   children,
   client,
+  resourceProviders,
   workspaceRoot
 }: PropsWithChildren<{
   client: CreateLoopCapabilityClient
+  resourceProviders: readonly CreateLoopResourceProvider[]
   workspaceRoot: string
 }>): ReactElement {
   const bridge = useMemo(
-    () => createCreateLoopRuntimeBridge(client, workspaceRoot),
-    [client, workspaceRoot]
+    () => createCreateLoopRuntimeBridge(client, workspaceRoot, resourceProviders),
+    [client, resourceProviders, workspaceRoot]
   )
   return <RuntimeContext.Provider value={bridge}>{children}</RuntimeContext.Provider>
 }
 
 export function createCreateLoopRuntimeBridge(
   client: CreateLoopCapabilityClient,
-  workspaceRoot: string
+  workspaceRoot: string,
+  resourceProviders: readonly CreateLoopResourceProvider[]
 ): CreateLoopRuntimeBridge {
   let revision: number | undefined
   return Object.freeze({
+    resourceProviders,
     getSettings: async () => {
       const snapshot = await client.read(workspaceRoot)
       revision = snapshot.revision
@@ -82,6 +91,7 @@ export function createCreateLoopRuntimeBridge(
       revision = snapshot.revision
       return { workspaceRoot, workflow: snapshot.settings }
     },
+    buildDataset: (input) => client.buildDataset(workspaceRoot, input),
     getWorkflowStatus: () => client.status(workspaceRoot),
     runWorkflow: (workflowId, input) => client.run(workspaceRoot, workflowId, input),
     stopWorkflow: (workflowId) => client.stop(workspaceRoot, workflowId),

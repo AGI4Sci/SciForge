@@ -33,6 +33,7 @@ export function buildDatasetGenerationLoop(
   const normalized = {
     objective: input.objective,
     sourceIds: [...new Set(input.sourceIds)],
+    sourceBindings: input.sourceBindings ?? [],
     outputSchema: input.outputSchema,
     quality: input.quality,
     models: input.models ?? {},
@@ -107,8 +108,30 @@ function buildCoordinatorWorkflow(input: {
     output: input.input.output
   }
   const acquisitionNodeIds: string[] = []
-  const acquisitionNodes: WorkflowNodeV1[] = input.input.sourceIds.flatMap((sourceId, index) => {
+  const sourceBindings = new Map(
+    (input.input.sourceBindings ?? []).map((binding) => [binding.sourceId, binding])
+  )
+  const resourceAcquisitions: Array<{ sourceId: string; resultKey: string }> = []
+  const acquisitionNodes = input.input.sourceIds.flatMap<WorkflowNodeV1>((sourceId, index) => {
     const suffix = index + 1
+    const binding = sourceBindings.get(sourceId)
+    if (binding) {
+      const resourceId = `grounding-resource-${suffix}`
+      const resultKey = `datasetResource${suffix}`
+      acquisitionNodeIds.push(resourceId)
+      resourceAcquisitions.push({ sourceId, resultKey })
+      return [node(resourceId, `Query ${binding.resourceName}`, 'resource', 660 + index * 120, {
+        providerId: binding.providerId,
+        resourceId: binding.resourceId,
+        resourceName: binding.resourceName,
+        operationId: binding.operationId,
+        actionId: binding.actionId,
+        effect: binding.effect,
+        inputTemplate: binding.inputTemplate,
+        preserveInput: true,
+        resultKey
+      }, { retries: 1, retryDelayMs: 1000 })]
+    }
     const agentId = `grounding-${suffix}`
     const parseId = `parse-acquisition-${suffix}`
     acquisitionNodeIds.push(agentId, parseId)
@@ -165,7 +188,7 @@ function buildCoordinatorWorkflow(input: {
     ...acquisitionNodes,
     node('normalize-acquisition', 'Normalize acquisition state', 'code', 840, {
       language: 'javascript',
-      code: normalizeAcquisitionCode(spec)
+      code: normalizeAcquisitionCode(spec, resourceAcquisitions)
     }),
     node('preparation', 'Execute Dataset API processing recipe', 'ai-agent', 900, {
       prompt: preparationPrompt(spec),
@@ -271,7 +294,7 @@ function buildCoordinatorWorkflow(input: {
     })
   )
   connections.push(
-    edge('publish-source', publishSource, publishSource === 'ready' ? 'true' : '', 'publication-context'),
+    edge('publish-source', publishSource, publishSource === 'ready' ? 'true' : 'approved', 'publication-context'),
     edge('publish-context', 'publication-context', '', 'publish'),
     edge('publish-parse', 'publish', '', 'parse-publication'),
     edge('publication-validate', 'parse-publication', '', 'validate-publication'),
@@ -537,14 +560,7 @@ Incoming state:
 function modelContextCode(kind: 'challenger' | 'judge' | 'verifier' | 'strategy'): string {
   return `const envelope = $json && typeof $json === 'object' ? $json : {};
 const state = envelope.state && typeof envelope.state === 'object' ? envelope.state : envelope;
-const bounded = (value, depth = 0) => {
-  if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean') return value;
-  if (typeof value === 'string') return value.length > 2000 ? value.slice(0, 2000) : value;
-  if (depth >= 6) return Array.isArray(value) ? [] : {};
-  if (Array.isArray(value)) return value.slice(0, 8).map((entry) => bounded(entry, depth + 1));
-  if (typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, bounded(entry, depth + 1)]));
-  return String(value);
-};
+${boundedContextFunctionCode(2000, 8)}
 const baseState = {
   outputSchema: state.outputSchema,
   rubric: state.rubric,
@@ -572,14 +588,7 @@ return { ...envelope, ${kind}Context: JSON.stringify(context) };`
 function publicationContextCode(): string {
   return `const state = $json && typeof $json === 'object' ? $json : {};
 if (state.readyToPublish !== true) throw new Error('Publication context requires readyToPublish=true.');
-const bounded = (value, depth = 0) => {
-  if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean') return value;
-  if (typeof value === 'string') return value.length > 2000 ? value.slice(0, 2000) : value;
-  if (depth >= 6) return Array.isArray(value) ? [] : {};
-  if (Array.isArray(value)) return value.slice(0, 8).map((entry) => bounded(entry, depth + 1));
-  if (typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, bounded(entry, depth + 1)]));
-  return String(value);
-};
+${boundedContextFunctionCode(2000, 8)}
 return {
   objective: state.objective,
   outputSchema: state.outputSchema,
@@ -607,14 +616,7 @@ return {
 function strongSolverContextCode(): string {
   return `const envelope = $json && typeof $json === 'object' ? $json : {};
 const state = envelope.state && typeof envelope.state === 'object' ? envelope.state : envelope;
-const bounded = (value, depth = 0) => {
-  if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean') return value;
-  if (typeof value === 'string') return value.length > 2000 ? value.slice(0, 2000) : value;
-  if (depth >= 6) return Array.isArray(value) ? [] : {};
-  if (Array.isArray(value)) return value.slice(0, 8).map((entry) => bounded(entry, depth + 1));
-  if (typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, bounded(entry, depth + 1)]));
-  return String(value);
-};
+${boundedContextFunctionCode(2000, 8)}
 const context = {
   question: envelope.candidate && typeof envelope.candidate === 'object' ? envelope.candidate.question : '',
   taskRubric: bounded(state.rubric),
@@ -841,7 +843,7 @@ Perform these steps in order:
 3. Invoke the already-discovered dataset-api.confirm-plan operationRef exactly once with only the returned planId. Continue only after the Host records real user approval.
 4. Invoke the already-discovered dataset-api.execute-plan operationRef exactly once with only the same planId. The deterministic plan executor performs materialize, validates the logical output binding, publishes both artifacts, and checkpoints every step. Do not invoke materialize, validate, or publish directly and do not retry a failed execution.
 5. Treat the execute-plan receipt as complete and authoritative. After it returns, never discover or invoke another capability, even if a UI preview says the result was truncated; use the execution summary, step counts, primary step artifacts, and report artifact already present in that receipt.
-Return JSON only with loopId, planId, materializedArtifact, validation, and publication receipts. Preserve failed or pending statuses exactly; never describe a failed execution as successful and never fabricate a receipt.
+Return JSON only with loopId, planId, materializedArtifact, validation, publication, and execution receipts. Preserve each execution step as { step, status, artifact: { path, sha256 } }; validation must additionally preserve valid, records, errorCount, and warningCount. Preserve failed or pending statuses exactly; never describe a failed execution as successful and never fabricate a receipt.
 
 Exact confirmed-plan blueprint:
 ${JSON.stringify(planBlueprint, null, 2)}
@@ -859,15 +861,15 @@ function publicationValidationCode(): string {
 const materialized = receipt.materializedArtifact && typeof receipt.materializedArtifact === 'object' ? receipt.materializedArtifact : {};
 const validation = receipt.validation && typeof receipt.validation === 'object' ? receipt.validation : {};
 const publication = receipt.publication && typeof receipt.publication === 'object' ? receipt.publication : {};
-const artifactPath = typeof materialized.path === 'string' && materialized.path.trim()
-  ? materialized.path
-  : Array.isArray(materialized.artifacts) && materialized.artifacts.some((artifact) => artifact && typeof artifact.path === 'string' && artifact.path.trim());
-const materializedSucceeded = Boolean(artifactPath) && (materialized.status == null || materialized.status === 'succeeded');
-const validationSucceeded = validation.valid === true || validation.status === 'succeeded';
-const publicationPath = typeof publication.path === 'string' && publication.path.trim()
-  ? publication.path
-  : Array.isArray(publication.artifacts) && publication.artifacts.some((artifact) => artifact && typeof artifact.path === 'string' && artifact.path.trim());
-const publicationSucceeded = Boolean(publicationPath) && (publication.status == null || publication.status === 'succeeded');
+const materializedArtifact = materialized.artifact && typeof materialized.artifact === 'object' ? materialized.artifact : {};
+const validationArtifact = validation.artifact && typeof validation.artifact === 'object' ? validation.artifact : {};
+const publicationArtifact = publication.artifact && typeof publication.artifact === 'object' ? publication.artifact : {};
+const artifactPath = typeof materializedArtifact.path === 'string' && materializedArtifact.path.trim();
+const validationPath = typeof validationArtifact.path === 'string' && validationArtifact.path.trim();
+const publicationPath = typeof publicationArtifact.path === 'string' && publicationArtifact.path.trim();
+const materializedSucceeded = Boolean(artifactPath) && materialized.status === 'succeeded';
+const validationSucceeded = Boolean(validationPath) && validation.status === 'succeeded' && validation.valid === true;
+const publicationSucceeded = Boolean(publicationPath) && publication.status === 'succeeded';
 if (!materializedSucceeded || !validationSucceeded || !publicationSucceeded) {
   throw new Error('Dataset publication receipt is not successful: materialized=' + String(materialized.status ?? Boolean(artifactPath)) + ', validation=' + String(validation.status ?? validation.valid) + ', publication=' + String(publication.status ?? Boolean(publicationPath)) + '.');
 }
@@ -893,18 +895,79 @@ return {
 };`
 }
 
-function normalizeAcquisitionCode(spec: unknown): string {
+function boundedContextFunctionCode(maximumStringLength: number, maximumArrayItems: number): string {
+  return `const identityKeys = new Set(['id', 'name', 'label', 'accession', 'value']);
+const identityProjection = (value, remainingDepth = 4) => {
+  if (!value || typeof value !== 'object' || remainingDepth < 0) return undefined;
+  if (Array.isArray(value)) {
+    const projected = value.map((entry) => identityProjection(entry, remainingDepth - 1)).filter((entry) => entry !== undefined);
+    return projected.length ? projected : undefined;
+  }
+  const projected = Object.entries(value).flatMap(([key, entry]) => {
+    if (identityKeys.has(key) && (entry === null || ['string', 'number', 'boolean'].includes(typeof entry))) {
+      return [[key, typeof entry === 'string' && entry.length > ${maximumStringLength} ? entry.slice(0, ${maximumStringLength}) : entry]];
+    }
+    const child = identityProjection(entry, remainingDepth - 1);
+    return child === undefined ? [] : [[key, child]];
+  });
+  return projected.length ? Object.fromEntries(projected) : undefined;
+};
+const bounded = (value, depth = 0) => {
+  if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (typeof value === 'string') return value.length > ${maximumStringLength} ? value.slice(0, ${maximumStringLength}) : value;
+  if (depth >= 6) {
+    if (Array.isArray(value)) return [];
+    if (typeof value !== 'object') return String(value);
+    return identityProjection(value) ?? {};
+  }
+  if (Array.isArray(value)) return value.slice(0, ${maximumArrayItems}).map((entry) => bounded(entry, depth + 1));
+  if (typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, bounded(entry, depth + 1)]));
+  return String(value);
+};`
+}
+
+function normalizeAcquisitionCode(
+  spec: unknown,
+  resourceAcquisitions: readonly { sourceId: string; resultKey: string }[] = []
+): string {
   return `const receipt = $json && typeof $json === 'object' ? $json : {};
-if (receipt.acquisitionComplete !== true) throw new Error('Dataset API acquisition receipt is incomplete.');
 const confirmedSourceIds = ${JSON.stringify((spec as { sourceIds?: string[] })?.sourceIds ?? [])};
+const directResources = ${JSON.stringify(resourceAcquisitions)};
+${boundedContextFunctionCode(4000, 20)}
+const artifactPaths = (value, depth = 0) => {
+  if (!value || typeof value !== 'object' || depth >= 8) return [];
+  if (Array.isArray(value)) return value.flatMap((entry) => artifactPaths(entry, depth + 1));
+  return Object.entries(value).flatMap(([key, entry]) => {
+    const own = key === 'path' && typeof entry === 'string' && entry.startsWith('/') ? [entry] : [];
+    return [...own, ...artifactPaths(entry, depth + 1)];
+  });
+};
+const directGrounding = {};
+const directArtifactPaths = [];
+const directSourceIds = [];
+for (const binding of directResources) {
+  const output = receipt[binding.resultKey];
+  const datasetApi = output && typeof output === 'object' ? output.datasetApi : null;
+  if (!datasetApi || datasetApi.success !== true || !datasetApi.result) {
+    throw new Error('Dataset resource query failed for source: ' + binding.sourceId + '.');
+  }
+  directGrounding[binding.sourceId] = {
+    actionId: datasetApi.actionId,
+    result: bounded(datasetApi.result)
+  };
+  directArtifactPaths.push(...artifactPaths(datasetApi.result));
+  directSourceIds.push(binding.sourceId);
+}
 const acquiredSourceIds = Array.isArray(receipt.acquiredSourceIds)
   ? [...new Set(receipt.acquiredSourceIds.filter((sourceId) => typeof sourceId === 'string' && sourceId.trim()))]
   : [];
+for (const sourceId of directSourceIds) if (!acquiredSourceIds.includes(sourceId)) acquiredSourceIds.push(sourceId);
 const missingSourceIds = confirmedSourceIds.filter((sourceId) => !acquiredSourceIds.includes(sourceId));
 if (missingSourceIds.length) throw new Error('Dataset API acquisition omitted confirmed sources: ' + missingSourceIds.join(', ') + '.');
 const parentArtifacts = Array.isArray(receipt.parentArtifacts)
   ? [...new Set(receipt.parentArtifacts.filter((path) => typeof path === 'string' && path.trim()))]
   : [];
+for (const path of directArtifactPaths) if (!parentArtifacts.includes(path)) parentArtifacts.push(path);
 if (parentArtifacts.length === 0) throw new Error('Dataset API acquisition did not produce any artifact paths.');
 const groundingReceipt = receipt.grounding && typeof receipt.grounding === 'object' && !Array.isArray(receipt.grounding)
   ? receipt.grounding
@@ -914,7 +977,10 @@ const generationOnlyKeys = new Set([
   'verdict', 'verifier', 'strategyUpdate', 'verdicts', 'feedback', 'round', 'done', 'lastCandidate',
   'lastVerdict', 'batchQuality', 'readyToPublish'
 ]);
-const grounding = Object.fromEntries(Object.entries(groundingReceipt).filter(([key]) => !generationOnlyKeys.has(key)));
+const grounding = {
+  ...Object.fromEntries(Object.entries(groundingReceipt).filter(([key]) => !generationOnlyKeys.has(key))),
+  ...directGrounding
+};
 return {
   ...${JSON.stringify(spec)},
   ...receipt,

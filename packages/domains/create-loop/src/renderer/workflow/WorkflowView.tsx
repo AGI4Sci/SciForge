@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import {
   Bot,
   Check,
+  Database,
   Download,
   Pencil,
   Play,
@@ -18,6 +19,7 @@ import {
   Zap
 } from 'lucide-react'
 import {
+  type CreateDatasetLoopInput,
   type WorkflowHookTriggerV1,
   type WorkflowInputFieldV1,
   type WorkflowNodeRunResultV1,
@@ -31,9 +33,11 @@ import { mergeWorkflowSettings, normalizeWorkflowSettings } from '../../workflow
 import { parseWorkflowDsl, serializeWorkflowDsl } from '../../workflow-dsl.js'
 import {
   useCreateLoopRuntime,
+  type CreateLoopRuntimeBridge,
   type CreateLoopRendererSettings
 } from '../runtime-bridge.js'
 import { WorkflowEditorView } from './WorkflowEditorView'
+import { DatasetLoopDialog, type DatasetSourceOption } from './DatasetLoopDialog'
 import { WorkflowHookTriggers } from './WorkflowHookTriggers'
 import { createWorkflow } from './workflow-types'
 
@@ -42,6 +46,23 @@ type Props = {
 }
 
 const EMPTY_WORKFLOWS: WorkflowV1[] = []
+
+export async function loadWorkflowViewState(
+  runtime: Pick<CreateLoopRuntimeBridge, 'getSettings' | 'getWorkflowStatus'>
+): Promise<Readonly<{
+  settings: CreateLoopRendererSettings
+  status: WorkflowRuntimeStatus | null
+}>> {
+  const [settingsResult, statusResult] = await Promise.allSettled([
+    runtime.getSettings(),
+    runtime.getWorkflowStatus()
+  ])
+  if (settingsResult.status === 'rejected') throw settingsResult.reason
+  return {
+    settings: settingsResult.value,
+    status: statusResult.status === 'fulfilled' ? statusResult.value : null
+  }
+}
 
 function statusTone(status: WorkflowV1['lastStatus']): string {
   if (status === 'running') return 'bg-amber-500/15 text-amber-900 dark:text-amber-100'
@@ -65,6 +86,9 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
   const [error, setError] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [runInputTarget, setRunInputTarget] = useState<WorkflowV1 | null>(null)
+  const [datasetBuilderOpen, setDatasetBuilderOpen] = useState(false)
+  const [datasetBuilderLoading, setDatasetBuilderLoading] = useState(false)
+  const [datasetBuilderSources, setDatasetBuilderSources] = useState<readonly DatasetSourceOption[]>([])
 
   const refreshStatus = useCallback(async (): Promise<void> => {
     try {
@@ -76,12 +100,9 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
 
   const load = useCallback(async (): Promise<void> => {
     try {
-      const [nextSettings, nextStatus] = await Promise.all([
-        runtime.getSettings(),
-        runtime.getWorkflowStatus()
-      ])
-      setSettings(nextSettings)
-      setStatus(nextStatus)
+      const next = await loadWorkflowViewState(runtime)
+      setSettings(next.settings)
+      if (next.status) setStatus(next.status)
       setError(null)
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : String(loadError))
@@ -110,6 +131,17 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
       window.clearTimeout(timer)
     }
   }, [load, refreshStatus])
+
+  useEffect(() => {
+    if (!settings?.workspaceRoot.trim()) return
+    let cancelled = false
+    void Promise.all(
+      runtime.resourceProviders.map((provider) => provider.loadResources(settings.workspaceRoot))
+    ).catch((resourceError) => {
+      if (!cancelled) setError(resourceError instanceof Error ? resourceError.message : String(resourceError))
+    })
+    return () => { cancelled = true }
+  }, [runtime.resourceProviders, settings?.workspaceRoot])
 
   const workflowSettings = settings ? normalizeWorkflowSettings(settings.workflow) : null
   const workflows = workflowSettings?.workflows ?? EMPTY_WORKFLOWS
@@ -161,6 +193,43 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
     await persist([...workflows, created])
     setEditingId(created.id)
   }, [persist, t, workflows])
+
+  const openDatasetBuilder = useCallback(async (): Promise<void> => {
+    if (!settings || datasetBuilderLoading) return
+    setDatasetBuilderLoading(true)
+    setError(null)
+    try {
+      const catalogs = await Promise.all(
+        runtime.resourceProviders.map((provider) => provider.loadResources(settings.workspaceRoot))
+      )
+      const byId = new Map<string, DatasetSourceOption>()
+      for (const [providerIndex, resources] of catalogs.entries()) {
+        const provider = runtime.resourceProviders[providerIndex]
+        if (!provider) continue
+        for (const resource of resources) {
+          if (resource.role !== 'data-source') continue
+          const resourceNode = provider.createNode(resource, { x: 0, y: 0 })
+          const binding: NonNullable<CreateDatasetLoopInput['sourceBindings']>[number] = {
+            sourceId: resource.id,
+            providerId: resourceNode.config.providerId,
+            resourceId: resourceNode.config.resourceId,
+            resourceName: resourceNode.config.resourceName,
+            operationId: resourceNode.config.operationId,
+            actionId: resourceNode.config.actionId,
+            effect: resourceNode.config.effect,
+            inputTemplate: resourceNode.config.inputTemplate
+          }
+          byId.set(resource.id, { id: resource.id, name: resource.name, binding })
+        }
+      }
+      setDatasetBuilderSources([...byId.values()])
+      setDatasetBuilderOpen(true)
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : String(loadError))
+    } finally {
+      setDatasetBuilderLoading(false)
+    }
+  }, [datasetBuilderLoading, runtime, settings])
 
   const importInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -328,6 +397,7 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
           key={editingWorkflow.id}
           workflow={editingWorkflow}
           settings={settings}
+          resourceProviders={runtime.resourceProviders}
           runStatus={status?.nodeStatus?.[editingWorkflow.id] ?? {}}
           lastResults={lastResults}
           liveResults={status?.nodeResults?.[editingWorkflow.id] ?? {}}
@@ -390,6 +460,15 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
                   if (file) void handleImportFile(file)
                 }}
               />
+              <button
+                type="button"
+                disabled={!settings || datasetBuilderLoading}
+                onClick={() => void openDatasetBuilder()}
+                className="inline-flex items-center gap-2 rounded-lg border border-ds-border bg-ds-card px-3.5 py-2 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-45"
+              >
+                <Database className="h-4 w-4" strokeWidth={1.8} />
+                {datasetBuilderLoading ? t('workflowDatasetLoading') : t('workflowBuildDataset')}
+              </button>
               <button
                 type="button"
                 onClick={() => setShowHooks(true)}
@@ -601,6 +680,19 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
           workflows={workflows}
           onChange={(next) => void persistHookTriggers(next)}
           onClose={() => setShowHooks(false)}
+        />
+      ) : null}
+
+      {datasetBuilderOpen ? (
+        <DatasetLoopDialog
+          sources={datasetBuilderSources}
+          onClose={() => setDatasetBuilderOpen(false)}
+          onSubmit={async (input) => {
+            const result = await runtime.buildDataset(input)
+            setDatasetBuilderOpen(false)
+            await load()
+            setEditingId(result.workflowId)
+          }}
         />
       ) : null}
     </div>
