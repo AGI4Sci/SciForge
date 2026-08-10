@@ -69,3 +69,18 @@ spool and retain only a lightweight byte-range sort index before writing the
 manifest and timestamp-ordered events. Full payload history is never
 accumulated in the main-process heap, and manifest counts match the exported
 event stream.
+
+## Scientific semantics
+
+`ScientificTraceCollector` adds a domain-neutral scientific envelope on top of
+the same durable store. It records one rooted causal graph with input,
+Artifact, Evidence, Human Review, and exactly one completed, failed, or
+cancelled terminal event. Domain packages may add lowercase namespaced event
+types such as `scientific-compute.job-started`; the trace core does not own a
+central domain-event list.
+
+`validateScientificTraceClosure` rejects mixed trace IDs, duplicate event IDs,
+multiple roots or terminals, cross-trace parents, cycles, orphan nodes, and a
+terminal event that cannot reach the required scientific evidence chain.
+Scientific Trace sanitization reuses the store credential filter and also
+redacts common PII and Luhn-valid payment-card values before persistence.

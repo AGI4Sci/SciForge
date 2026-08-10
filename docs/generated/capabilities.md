@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **173**
+Registered actions: **175**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -139,6 +139,8 @@ Registered actions: **173**
 | `remote-ssh.targets.list` | 1.0.0 | ui, agent, system | read | none | workspace |
 | `remote-ssh.virtualbox-machines.list` | 1.0.0 | ui | read | none | global |
 | `remote-ssh.workspace-host-session.open` | 1.0.0 | ui | external-write | confirmation | resource |
+| `scientific-compute.run-baseline` | 1.0.0 | ui, agent, system | compute | none | global |
+| `scientific-compute.status` | 1.0.0 | ui, agent, system | read | none | global |
 | `scientific-plotting.compare` | 1.0.0 | ui, agent, system | read | none | workspace |
 | `scientific-plotting.map-data` | 1.0.0 | ui, agent, system | compute | none | workspace |
 | `scientific-plotting.render` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
@@ -33746,6 +33748,269 @@ Authorizes a private Remote Workspace host session on this target.
     "session"
   ],
   "title": "Open Remote Workspace session"
+}
+```
+
+## `scientific-compute.run-baseline`
+
+Builds a deterministic local job-loop trace without submitting external work.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `compute`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "jobId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        "type": "string"
+      },
+      "reviewerId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        "type": "string"
+      },
+      "scenario": {
+        "enum": [
+          "success",
+          "blocked",
+          "rerun",
+          "human-interaction"
+        ],
+        "type": "string"
+      },
+      "traceId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "scenario"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "artifacts": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "artifactId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            },
+            "path": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            "sha256": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "artifactId",
+            "path",
+            "sha256"
+          ],
+          "type": "object"
+        },
+        "maxItems": 16,
+        "type": "array"
+      },
+      "eventCount": {
+        "exclusiveMinimum": 0,
+        "maximum": 9007199254740991,
+        "type": "integer"
+      },
+      "jobId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        "type": "string"
+      },
+      "jsonl": {
+        "maxLength": 2000000,
+        "type": "string"
+      },
+      "resourceUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "apiTokens": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "estimatedUsd": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "gpuHours": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "humanMinutes": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "storageGb": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "humanMinutes",
+          "gpuHours",
+          "apiTokens",
+          "storageGb",
+          "estimatedUsd"
+        ],
+        "type": "object"
+      },
+      "scenario": {
+        "enum": [
+          "success",
+          "blocked",
+          "rerun",
+          "human-interaction"
+        ],
+        "type": "string"
+      },
+      "state": {
+        "enum": [
+          "submitted",
+          "running",
+          "finished",
+          "failed",
+          "blocked",
+          "cancelled",
+          "resumed"
+        ],
+        "type": "string"
+      },
+      "traceId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        "type": "string"
+      },
+      "validationOk": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "scenario",
+      "traceId",
+      "jobId",
+      "state",
+      "resourceUsage",
+      "artifacts",
+      "eventCount",
+      "validationOk",
+      "jsonl"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "scientific-compute",
+    "local-fixture",
+    "trace",
+    "reproducibility"
+  ],
+  "title": "Run Scientific Compute baseline"
+}
+```
+
+## `scientific-compute.status`
+
+Reports the deterministic local fixture provider; no real scheduler is configured.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "provider": {
+        "const": "local-fixture",
+        "type": "string"
+      },
+      "realScheduler": {
+        "const": false,
+        "type": "boolean"
+      },
+      "scenarios": {
+        "items": {
+          "enum": [
+            "success",
+            "blocked",
+            "rerun",
+            "human-interaction"
+          ],
+          "type": "string"
+        },
+        "maxItems": 4,
+        "minItems": 4,
+        "type": "array"
+      }
+    },
+    "required": [
+      "provider",
+      "realScheduler",
+      "scenarios"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "scientific-compute",
+    "local-fixture",
+    "trace",
+    "reproducibility"
+  ],
+  "title": "Read Scientific Compute status"
 }
 ```
 
@@ -71348,6 +71613,7 @@ Releases an open Workspace Preview session.
 | Paper Radar | paperRadar: |  |
 | Project DAG | projectDag: |  |
 | Remote SSH |  |  |
+| Scientific Compute | scientific-compute: |  |
 | Scientific Plotting | mcp:scientific-plotting-, scientific-plotting: |  |
 | Surface Context |  |  |
 | Version Control |  |  |

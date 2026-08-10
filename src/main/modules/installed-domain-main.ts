@@ -14,8 +14,9 @@ import { createDomainMainEntry as createDomainMainEntry9 } from '@sciforge/domai
 import { createDomainMainEntry as createDomainMainEntry10 } from '@sciforge/domain-paper-radar/main'
 import { createDomainMainEntry as createDomainMainEntry11 } from '@sciforge/domain-project-dag/main'
 import { createDomainMainEntry as createDomainMainEntry12 } from '@sciforge/domain-remote-ssh/main'
-import { createDomainMainEntry as createDomainMainEntry13 } from '@sciforge/domain-scientific-plotting/main'
-import { createDomainMainEntry as createDomainMainEntry14 } from '@sciforge/domain-visual-review/main'
+import { createDomainMainEntry as createDomainMainEntry13 } from '@sciforge/domain-scientific-compute/main'
+import { createDomainMainEntry as createDomainMainEntry14 } from '@sciforge/domain-scientific-plotting/main'
+import { createDomainMainEntry as createDomainMainEntry15 } from '@sciforge/domain-visual-review/main'
 import type { z } from 'zod'
 import { installedDomainPackages } from '../../shared/installed-domain-packages'
 import { defineCapability, type DefineCapabilityOptions } from '../capabilities/registry'
@@ -46,7 +47,8 @@ export function createInstalledMainDomainEntries(host: InstalledMainDomainHost) 
       createDomainMainEntry11(domainHost),
       createDomainMainEntry12(domainHost),
       createDomainMainEntry13(domainHost),
-      createDomainMainEntry14(domainHost)
+      createDomainMainEntry14(domainHost),
+      createDomainMainEntry15(domainHost)
     ]
   ).entries
 }
