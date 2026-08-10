@@ -470,6 +470,19 @@ export type DomainRendererCapabilityChange = Readonly<{
 
 export type DomainRendererCapabilityChangeDisposer = () => void
 
+export type DomainRendererContribution = Readonly<{
+  id: string
+  kind: string
+  packageName: string
+  owner: DomainRuntimeContributionOwner
+  contract?: DomainPackageJsonValue
+  value: unknown
+}>
+
+export type DomainRendererContributionHost = Readonly<{
+  list: (kind: string) => readonly DomainRendererContribution[]
+}>
+
 export type DomainVisibleContextResource = Readonly<{
   kind: string
   role?: string
@@ -582,6 +595,8 @@ export type DomainRendererCapabilityInvoker = Readonly<{
 /** Renderer-safe services available to every trusted domain package. */
 export type DomainRendererHost = Readonly<{
   capabilityInvoker: DomainRendererCapabilityInvoker
+  /** Lazily exposes installed renderer extension points to other trusted packages. */
+  contributions?: DomainRendererContributionHost
   openExternal: (url: string) => void | Promise<void>
   workspace?: DomainRendererWorkspaceHost
   workspacePreview?: DomainRendererWorkspacePreviewHost

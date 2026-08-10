@@ -3,10 +3,12 @@ import {
   RENDERER_COMMAND_CONTRIBUTION_KIND,
   RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND,
   RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND,
+  RENDERER_EXTENSION_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_BOTTOM_PANEL_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
   domainRendererComposerContextProviderContractSchema,
+  domainRendererExtensionContractSchema,
   domainRendererWorkbenchBottomPanelContractSchema,
   domainRendererWorkbenchGlobalOverlayContractSchema,
   domainRendererWorkbenchRightPanelContractSchema,
@@ -179,6 +181,7 @@ export function createInstalledRendererContributions(
     contribution: RendererLifecycleContribution
     onDispose?: () => void
   }> = []
+  const extensions: Array<{ onDispose?: () => void }> = []
 
   for (const installed of entrySet.contributions) {
     if (installed.declaration.kind === RENDERER_COMMAND_CONTRIBUTION_KIND) {
@@ -340,6 +343,15 @@ export function createInstalledRendererContributions(
       })
       continue
     }
+    if (installed.declaration.kind === RENDERER_EXTENSION_CONTRIBUTION_KIND) {
+      if (!domainRendererExtensionContractSchema.safeParse(installed.contract).success) {
+        throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
+      }
+      extensions.push({
+        ...(installed.onDispose ? { onDispose: installed.onDispose } : {})
+      })
+      continue
+    }
     throw new Error(
       `Renderer contribution kind ${installed.declaration.kind} from ${installed.owner.moduleId} has no host consumer.`
     )
@@ -434,6 +446,9 @@ export function createInstalledRendererContributions(
       }
       if (lifecycle.onDispose) registrationDisposers.push(lifecycle.onDispose)
       if (dispose) registrationDisposers.push(dispose)
+    }
+    for (const extension of extensions) {
+      if (extension.onDispose) registrationDisposers.push(extension.onDispose)
     }
   } catch (error) {
     try {

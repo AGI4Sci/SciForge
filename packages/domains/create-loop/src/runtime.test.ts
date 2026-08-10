@@ -4,7 +4,10 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import type { DomainMainRuntimeLifecycleContext } from '@sciforge/domain-sdk/host'
+import type {
+  DomainMainRuntimeLifecycleContext,
+  DomainMainSystemCapabilityInvoker
+} from '@sciforge/domain-sdk/host'
 import {
   canonicalizeReproSpecForDigest,
   sciforgeReproSpecSchema,
@@ -72,6 +75,164 @@ test('persists the canonical Workflow V1 graph and run history', async (context)
   const deactivateReloaded = await reloaded.activate(runtimeContext())
   assert.equal((await reloaded.read()).settings.workflows[0]?.runs.length, 1)
   await deactivateReloaded()
+})
+
+test('runs resource nodes through the governed capability invoker', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-create-loop-resource-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  const calls: Array<{ actionId: string; input: unknown; workspaceId?: string }> = []
+  const rawSequence = 'M'.repeat(15_000)
+  const invoke = (async (
+    contract: { actionId: string },
+    input: unknown,
+    options?: { workspaceId?: string }
+  ) => {
+    calls.push({
+      actionId: contract.actionId,
+      input,
+      workspaceId: options?.workspaceId
+    })
+    return { source: { id: 'uniprot' }, response: { status: 200, rawSequence } }
+  }) as DomainMainSystemCapabilityInvoker['invoke']
+  const runtime = new CreateLoopRuntime({
+    statePath: createLoopStatePath(root),
+    setInterval: () => ({ timer: true }),
+    clearInterval: () => undefined
+  })
+  const deactivate = await runtime.activate(runtimeContext({
+    capabilities: { invoke }
+  }))
+  const workflow = fixtureWorkflow()
+  workflow.nodes[1] = {
+    id: 'dataset',
+    name: 'UniProt REST',
+    type: 'resource',
+    position: { x: 200, y: 0 },
+    disabled: false,
+    config: {
+      providerId: 'dataset-api',
+      resourceId: 'uniprot',
+      resourceName: 'UniProt REST',
+      operationId: 'metadata',
+      actionId: 'dataset-api.metadata',
+      effect: 'workspace-write',
+      inputTemplate: '{"sourceId":"uniprot","pathParameters":{"identifier":"{{json.accession}}"}}',
+      preserveInput: true,
+      resultKey: 'uniprotResult'
+    }
+  }
+  workflow.connections = [
+    { id: 'edge-1', source: 'trigger', sourceHandle: '', target: 'dataset', targetHandle: '' },
+    { id: 'edge-2', source: 'dataset', sourceHandle: '', target: 'output', targetHandle: '' }
+  ]
+  await runtime.save(
+    { ...defaultWorkflowSettings(), enabled: true, workflows: [workflow] },
+    0
+  )
+
+  await runtime.runWorkflow(workflow.id, { accession: 'P04637' }, root)
+  await waitForRun(runtime, workflow.id)
+
+  assert.deepEqual(calls, [{
+    actionId: 'dataset-api.metadata',
+    input: { sourceId: 'uniprot', pathParameters: { identifier: 'P04637' } },
+    workspaceId: root
+  }])
+  const completed = await runtime.read()
+  assert.equal(completed.settings.workflows[0]?.lastStatus, 'success')
+  const persistedOutput = completed.settings.workflows[0]?.runs[0]?.nodeResults[1]?.outputJson ?? ''
+  assert.match(persistedOutput, /uniprot/)
+  assert.match(persistedOutput, /P04637/)
+  assert.match(persistedOutput, /uniprotResult/)
+  assert.ok(persistedOutput.length > 10_000)
+  const liveOutput = runtime.status().nodeResults[workflow.id]?.dataset?.outputJson ?? ''
+  assert.equal(liveOutput.length, 10_000)
+  assert.match(liveOutput, /\[truncated in live status\]$/)
+  await deactivate()
+})
+
+test('keeps full model output while bounding execution receipt details', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-create-loop-model-output-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  const modelOutput = JSON.stringify({ answer: 'x'.repeat(50_000) })
+  const published: Parameters<DomainMainRuntimeLifecycleContext['executionEvents']['publish']>[0][] = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(JSON.stringify({ output_text: modelOutput }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' }
+  })
+  context.after(() => { globalThis.fetch = originalFetch })
+
+  const runtime = new CreateLoopRuntime({
+    statePath: createLoopStatePath(root),
+    setInterval: () => ({ timer: true }),
+    clearInterval: () => undefined
+  })
+  const deactivate = await runtime.activate(runtimeContext({
+    modelAccess: {
+      textReasoner: async () => ({
+        baseUrl: 'http://model-router.test/v1',
+        apiKey: '',
+        model: 'fixture-model'
+      })
+    },
+    executionEvents: {
+      publish: async (event) => {
+        published.push(structuredClone(event))
+        return publishedEvent(event, published.length)
+      }
+    }
+  }))
+  const workflow = fixtureWorkflow()
+  workflow.nodes[1] = {
+    id: 'model',
+    name: 'Large model response',
+    type: 'llm',
+    position: { x: 200, y: 0 },
+    disabled: false,
+    config: { prompt: 'Return a large result.', model: '', maxTokens: 0 }
+  }
+  workflow.nodes.splice(2, 0, {
+    id: 'reduce',
+    name: 'Reduce output',
+    type: 'set-fields',
+    position: { x: 400, y: 0 },
+    disabled: false,
+    config: { fields: [{ key: 'done', value: 'true' }], keepIncoming: false }
+  })
+  workflow.nodes[3]!.position = { x: 600, y: 0 }
+  workflow.connections = [
+    { id: 'edge-1', source: 'trigger', sourceHandle: '', target: 'model', targetHandle: '' },
+    { id: 'edge-2', source: 'model', sourceHandle: '', target: 'reduce', targetHandle: '' },
+    { id: 'edge-3', source: 'reduce', sourceHandle: '', target: 'output', targetHandle: '' }
+  ]
+  await runtime.save(
+    { ...defaultWorkflowSettings(), enabled: true, workflows: [workflow] },
+    0
+  )
+
+  await runtime.runWorkflow(workflow.id, undefined, root)
+  await waitForRun(runtime, workflow.id)
+
+  const completed = await runtime.read()
+  const modelResult = completed.settings.workflows[0]?.runs[0]?.nodeResults.find(
+    (result) => result.nodeId === 'model'
+  )
+  assert.equal(
+    completed.settings.workflows[0]?.lastStatus,
+    'success',
+    completed.settings.workflows[0]?.lastMessage
+  )
+  assert.equal(JSON.parse(modelResult?.outputJson ?? '{}').text, modelOutput)
+  assert.equal(modelResult?.attempts[0]?.receipt.detail?.length, 10_000)
+  assert.match(modelResult?.attempts[0]?.receipt.detail ?? '', /\[truncated in execution receipt\]$/)
+  const completedEvent = published.find((event) =>
+    event.phase === 'activity_completed' && event.activityId === 'model'
+  )
+  const eventReceipt = (completedEvent?.payload as { receipt?: { detail?: string } })?.receipt
+  assert.equal(eventReceipt?.detail?.length, 10_000)
+  assert.match(eventReceipt?.detail ?? '', /\[truncated in execution receipt\]$/)
+  await deactivate()
 })
 
 test('rejects stale saves and cancels active delay nodes', async (context) => {

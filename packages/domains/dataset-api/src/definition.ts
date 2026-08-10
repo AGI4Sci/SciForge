@@ -26,6 +26,20 @@ export const DATASET_API_TIMELINE_RESULTS_CONTRIBUTION = contributionFor(
   'renderer.chat-result-panel'
 )
 
+export const DATASET_API_CREATE_LOOP_RESOURCES_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.extension'
+)
+export const DATASET_API_CREATE_LOOP_RESOURCES_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    DATASET_API_CREATE_LOOP_RESOURCES_CONTRIBUTION.id
+  ]!
+
+export const DATASET_API_RENDERER_I18N_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.i18n-resource'
+)
+
 function contributionFor(process: 'main' | 'renderer', kind: string) {
   const contribution = domainPackageDefinition.entrypoints
     .find((entrypoint) => entrypoint.process === process)

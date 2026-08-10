@@ -29,6 +29,8 @@ import {
 } from '../../contract.js'
 import type { CreateLoopRendererSettings } from '../runtime-bridge.js'
 import { useCreateLoopRuntime } from '../runtime-bridge.js'
+import type { CreateLoopResourceProvider } from '../../resource-provider.js'
+import { latestNodeResult } from './node-result.js'
 
 const WEBHOOK_METHODS: WorkflowWebhookMethod[] = ['ANY', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE']
 
@@ -99,6 +101,7 @@ const CONDITION_OPERATORS: WorkflowConditionOperator[] = [
 type Props = {
   node: WorkflowNodeV1 | null
   settings: CreateLoopRendererSettings
+  resourceProviders: readonly CreateLoopResourceProvider[]
   lastResult?: WorkflowNodeRunResultV1 | null
   onChange: (node: WorkflowNodeV1) => void
   onDelete: (nodeId: string) => void
@@ -735,6 +738,7 @@ function VariablePicker({
 export function NodeConfigPanel({
   node,
   settings,
+  resourceProviders,
   lastResult,
   onChange,
   onDelete,
@@ -751,6 +755,7 @@ export function NodeConfigPanel({
   const [presetSaved, setPresetSaved] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [testOpen, setTestOpen] = useState(false)
+  const [testedResult, setTestedResult] = useState<WorkflowNodeRunResultV1 | null>(null)
   // Tracks the most recently focused text field so the variable picker can splice a token at its caret.
   const lastFocused = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
@@ -825,6 +830,10 @@ export function NodeConfigPanel({
     models: listModelRouterModelIds(settings)
   }]
   const danglingRefs = collectDanglingRefs(node, upstreamNodes)
+  const resourceProvider = node.type === 'resource'
+    ? resourceProviders.find((provider) => provider.id === node.config.providerId)
+    : undefined
+  const effectiveLastResult = latestNodeResult(node.id, lastResult ?? null, testedResult)
 
   return (
     <div ref={panelRef} className="flex h-full min-h-0 flex-col">
@@ -1427,6 +1436,17 @@ export function NodeConfigPanel({
               {t('workflowHttpParseJson')}
             </label>
           </>
+        ) : null}
+
+        {node.type === 'resource' ? (
+          resourceProvider
+            ? resourceProvider.renderNodeConfig({
+                node,
+                workspaceRoot: settings.workspaceRoot,
+                lastResult: effectiveLastResult,
+                onChange
+              })
+            : <p className="text-[12px] leading-5 text-red-600">{t('workflowResourceProviderMissing')}</p>
         ) : null}
 
         {node.type === 'switch' ? (
@@ -2440,11 +2460,13 @@ export function NodeConfigPanel({
           </div>
         ) : null}
 
-        {lastResult && (lastResult.message || lastResult.error || lastResult.outputJson) ? (
+        {effectiveLastResult && (
+          effectiveLastResult.message || effectiveLastResult.error || effectiveLastResult.outputJson
+        ) ? (
           <div className="flex flex-col gap-1.5 border-t border-ds-border pt-3">
             <span className="text-[12px] font-medium text-ds-muted">{t('workflowLastOutput')}</span>
             <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-ds-subtle px-3 py-2 text-[11.5px] leading-5 text-ds-muted">
-              {lastResult.error || lastResult.message || lastResult.outputJson}
+              {effectiveLastResult.error || effectiveLastResult.message || effectiveLastResult.outputJson}
             </pre>
           </div>
         ) : null}
@@ -2454,8 +2476,9 @@ export function NodeConfigPanel({
         <TestNodeDialog
           workflowId={workflowId}
           node={node}
-          initialMock={lastResult?.inputJson || '{}'}
+          initialMock={effectiveLastResult?.inputJson || '{}'}
           onBeforeTest={onBeforeTest}
+          onResult={setTestedResult}
           onClose={() => setTestOpen(false)}
         />
       ) : null}
@@ -2469,12 +2492,14 @@ function TestNodeDialog({
   node,
   initialMock,
   onBeforeTest,
+  onResult,
   onClose
 }: {
   workflowId: string
   node: WorkflowNodeV1
   initialMock: string
   onBeforeTest?: () => Promise<void>
+  onResult: (result: WorkflowNodeRunResultV1) => void
   onClose: () => void
 }): ReactElement {
   const { t } = useTranslation('common')
@@ -2491,7 +2516,10 @@ function TestNodeDialog({
     try {
       await onBeforeTest?.()
       const response = await runtime.testWorkflowNode(workflowId, node.id, mock)
-      if (response.ok) setResult(response.result)
+      if (response.ok) {
+        setResult(response.result)
+        onResult(response.result)
+      }
       else setError(response.message)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))

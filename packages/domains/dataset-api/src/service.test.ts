@@ -40,6 +40,29 @@ test('lists exact executable examples for registered provider presets', async (c
   })
 })
 
+test('ensures every executable preset without replacing existing source settings', async (context) => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-defaults-'))
+  context.after(() => rm(workspaceRoot, { recursive: true, force: true }))
+  const service = createDatasetApiService({ workspaceRoot })
+  await service.register({
+    id: 'ensembl',
+    name: 'Workspace Ensembl mirror',
+    baseUrl: 'https://example.org/ensembl/',
+    metadataEndpoint: 'lookup/{identifier}',
+    rawDataEndpoint: 'sequence/{identifier}'
+  })
+
+  const first = await service.ensureProviders({})
+  assert.deepEqual(first.sources.map((source) => source.id), [...EXECUTABLE_DATASET_PROVIDER_IDS].sort())
+  assert.equal(first.addedSourceIds.length, EXECUTABLE_DATASET_PROVIDER_IDS.length - 1)
+  assert.deepEqual(first.preservedSourceIds, ['ensembl'])
+  assert.equal(first.sources.find((source) => source.id === 'ensembl')?.baseUrl, 'https://example.org/ensembl/')
+
+  const second = await service.ensureProviders({})
+  assert.deepEqual(second.addedSourceIds, [])
+  assert.equal(second.preservedSourceIds.length, EXECUTABLE_DATASET_PROVIDER_IDS.length)
+})
+
 test('registers a database and reads its metadata endpoint', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-api-'))
   const server = createServer((request, response) => {
@@ -130,6 +153,7 @@ test('keeps shallow identifier and label fields visible in summarized result rec
     workspaceRoot,
     fetchImpl: async () => new Response(JSON.stringify({
       results: [{ id: 'GO:1902749', name: 'regulation of cell cycle G2/M phase transition', definition: { text: 'x'.repeat(2_000) } }],
+      genes: [{ geneName: { value: 'TP53' }, details: { text: 'x'.repeat(2_000) } }],
       pageInfo: { total: 1 }
     }), { headers: { 'content-type': 'application/json' } })
   })
@@ -149,6 +173,10 @@ test('keeps shallow identifier and label fields visible in summarized result rec
       id: 'GO:1902749',
       name: 'regulation of cell cycle G2/M phase transition',
       definition: { fieldCount: 1 }
+    })
+    assert.deepEqual((result.metadata as { genes: unknown[] }).genes[0], {
+      geneName: { value: 'TP53' },
+      details: { fieldCount: 1 }
     })
     assert.ok(JSON.stringify(result.metadata).length < 8_000)
   } finally {

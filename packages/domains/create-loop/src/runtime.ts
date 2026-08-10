@@ -4,6 +4,7 @@ import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import path from 'node:path'
 import { runInNewContext } from 'node:vm'
+import { z } from 'zod'
 import type {
   DomainMainRuntimeDisposer,
   DomainMainRuntimeLifecycleContext
@@ -71,6 +72,10 @@ const DEFAULT_MAX_RUN_DURATION_MS = 30 * 60_000
 const CODE_TIMEOUT_MS = 30_000
 const MAX_PENDING_EXECUTION_EVENTS = 10_000
 const MAX_TRUSTED_RERUN_EXPORTS = 10_000
+const MAX_RUNTIME_STATUS_STRING_LENGTH = 10_000
+const RUNTIME_STATUS_TRUNCATION_MARKER = '\n...[truncated in live status]'
+const MAX_WORKFLOW_RECEIPT_DETAIL_LENGTH = 10_000
+const WORKFLOW_RECEIPT_TRUNCATION_MARKER = '\n...[truncated in execution receipt]'
 
 type PendingExecutionEvent = Omit<
   DomainExecutionEventV1,
@@ -250,13 +255,13 @@ export class CreateLoopRuntime {
 
   status(): WorkflowRuntimeStatus {
     this.#requireActive()
-    return {
+    return boundRuntimeStatusStrings({
       runningWorkflowIds: [...this.#activeRuns.keys()],
       nodeStatus: clone(this.#nodeStatus),
       nodeResults: clone(this.#nodeResults),
       powerSaveBlockerActive: false,
       pendingApprovals: [...this.#approvals.values()].map(({ approval }) => ({ ...approval }))
-    }
+    })
   }
 
   async runWorkflow(
@@ -990,7 +995,11 @@ export class CreateLoopRuntime {
           status: 'success' as const,
           outcome: 'progress' as const,
           outputFingerprint,
-          detail: output.message
+          detail: truncateString(
+            output.message,
+            MAX_WORKFLOW_RECEIPT_DETAIL_LENGTH,
+            WORKFLOW_RECEIPT_TRUNCATION_MARKER
+          )
         }
         const recordedAttempt = {
           attempt,
@@ -1045,7 +1054,11 @@ export class CreateLoopRuntime {
           status: 'error' as const,
           outcome: terminal ? 'fatal_error' as const : 'retryable_error' as const,
           errorCode: signal.aborted ? 'aborted' : 'node_execution_failed',
-          detail: errorDetail
+          detail: truncateString(
+            errorDetail,
+            MAX_WORKFLOW_RECEIPT_DETAIL_LENGTH,
+            WORKFLOW_RECEIPT_TRUNCATION_MARKER
+          )
         }
         const recordedAttempt = {
           attempt,
@@ -1211,6 +1224,9 @@ export class CreateLoopRuntime {
           ...(node.config.allowedTools
             ? { allowedTools: node.config.allowedTools }
             : {}),
+          ...(node.config.allowedTools?.includes('sciforge_invoke')
+            ? { interaction: 'reviewable' as const }
+            : {}),
           mode: node.config.mode,
           signal
         })
@@ -1311,6 +1327,43 @@ export class CreateLoopRuntime {
         if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 500)}`)
         const json = node.config.parseJson ? parseJson(text) : { status: response.status, body: text }
         return { payload: { json, text }, message: `HTTP ${response.status}` }
+      }
+      case 'resource': {
+        const context = this.#requireContext()
+        const state = await this.#load()
+        const trigger = workflow.nodes.find((candidate) => candidate.type.endsWith('-trigger'))
+        const triggerWorkspace = trigger && 'workspaceRoot' in trigger.config
+          ? interpolate(trigger.config.workspaceRoot ?? '', payload).trim()
+          : ''
+        const workspaceRoot = triggerWorkspace ||
+          state.settings.defaultWorkspaceRoot.trim() ||
+          callerWorkspaceRoot.trim()
+        if (!workspaceRoot) throw new Error('Resource nodes require an active or configured workspace.')
+        if (!node.config.actionId.trim()) throw new Error('Resource node capability is not configured.')
+        const inputText = interpolate(node.config.inputTemplate || '{}', payload)
+        const input = JSON.parse(inputText) as unknown
+        const result = await context.capabilities.invoke(
+          {
+            actionId: node.config.actionId,
+            effect: node.config.effect,
+            inputSchema: z.unknown(),
+            outputSchema: z.unknown()
+          },
+          input,
+          {
+            workspaceId: workspaceRoot,
+            idempotencyKey: `create-loop:${runId}:${node.id}`
+          }
+        )
+        const resultKey = node.config.resultKey?.trim()
+        const json = node.config.preserveInput && resultKey && isRecord(payload.json)
+          ? { ...payload.json, [resultKey]: result }
+          : result
+        const text = JSON.stringify(json)
+        return {
+          payload: { json, text },
+          message: `${node.config.resourceName || node.config.resourceId} · ${node.config.operationId}`
+        }
       }
       case 'delay':
         await abortableDelay(Math.max(0, node.config.delayMs), signal)
@@ -2084,6 +2137,25 @@ function clone<T>(value: T): T {
   return structuredClone(value)
 }
 
+function boundRuntimeStatusStrings<T>(value: T): T {
+  if (typeof value === 'string') {
+    if (value.length <= MAX_RUNTIME_STATUS_STRING_LENGTH) return value
+    return `${value.slice(
+      0,
+      MAX_RUNTIME_STATUS_STRING_LENGTH - RUNTIME_STATUS_TRUNCATION_MARKER.length
+    )}${RUNTIME_STATUS_TRUNCATION_MARKER}` as T
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => boundRuntimeStatusStrings(item)) as T
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, boundRuntimeStatusStrings(item)])
+    ) as T
+  }
+  return value
+}
+
 function isApprovalRecord(value: unknown): value is WorkflowApprovalRecordV2 {
   if (!isRecord(value)) return false
   return typeof value.requestId === 'string' && typeof value.workflowId === 'string' &&
@@ -2185,6 +2257,11 @@ function payloadFromInput(input: unknown): Payload {
   if (typeof input === 'string') return { json: { text: input }, text: input }
   const json = input ?? {}
   return { json, text: isRecord(json) && typeof json.text === 'string' ? json.text : JSON.stringify(json) }
+}
+
+function truncateString(value: string, maximumLength: number, marker: string): string {
+  if (value.length <= maximumLength) return value
+  return `${value.slice(0, Math.max(0, maximumLength - marker.length))}${marker}`
 }
 
 function payloadFromResult(result: WorkflowNodeRunResultV1): Payload {

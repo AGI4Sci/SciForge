@@ -558,6 +558,22 @@ export function normalizeWorkflowNode(value: unknown, index: number): WorkflowNo
           parseJson: normalizeBoolean(config.parseJson, false)
         }
       }
+    case 'resource':
+      return {
+        ...base,
+        type: 'resource',
+        config: {
+          providerId: asTrimmed(config.providerId),
+          resourceId: asTrimmed(config.resourceId),
+          resourceName: asTrimmed(config.resourceName),
+          operationId: asTrimmed(config.operationId),
+          actionId: asTrimmed(config.actionId),
+          effect: normalizeCapabilityEffect(config.effect),
+          inputTemplate: asText(config.inputTemplate) || '{}',
+          ...(normalizeBoolean(config.preserveInput, false) ? { preserveInput: true } : {}),
+          ...(asTrimmed(config.resultKey) ? { resultKey: asTrimmed(config.resultKey) } : {})
+        }
+      }
     case 'delay':
       return {
         ...base,
@@ -648,6 +664,16 @@ function normalizeStringRecord(value: unknown): Record<string, string> {
     count += 1
   }
   return out
+}
+
+function normalizeCapabilityEffect(value: unknown): Extract<
+  WorkflowNodeV1,
+  { type: 'resource' }
+>['config']['effect'] {
+  return value === 'compute' || value === 'workspace-write' ||
+    value === 'external-write' || value === 'destructive'
+    ? value
+    : 'read'
 }
 
 function normalizeModuleField(value: unknown): WorkflowModuleFieldV1 | null {

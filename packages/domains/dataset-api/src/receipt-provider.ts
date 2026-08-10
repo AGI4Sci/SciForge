@@ -11,6 +11,13 @@ const MAX_DATASET_GENERATION_RUN_DURATION_MS = 3 * 60 * 60_000
 const DATASET_AGENT_NODE_TIMEOUT_MS = 12 * 60_000
 const DATASET_PREPARATION_NODE_TIMEOUT_MS = 6 * 60_000
 const DATASET_LLM_NODE_TIMEOUT_MS = 8 * 60_000
+const TRANSIENT_MODEL_CONTEXT_KEYS = new Set([
+  'challengerContext',
+  'strongSolverContext',
+  'judgeContext',
+  'verifierContext',
+  'strategyContext'
+])
 
 type WorkflowRecord = Record<string, unknown> & {
   id: string
@@ -353,14 +360,18 @@ function normalizeGeneratedDatasetLlmOutput(
   const parsed = parseJson(responseText)
   const incoming = requiredRecord(incomingValue, 'workflow input')
   const incomingJson = requiredRecord(incoming.json, 'workflow input envelope')
+  const stableIncomingJson = requiredRecord(
+    stripTransientModelContexts(incomingJson),
+    'stable workflow input envelope'
+  )
   if (!isRecord(parsed)) throw new Error(`Generated dataset ${String(node.id)} must return a JSON object envelope.`)
   if (node.id === 'challenger') {
     if (!isRecord(parsed.candidate) || !isRecord(parsed.generation)) {
       throw new Error('Generated dataset challenger must return candidate and generation objects.')
     }
-    return JSON.stringify({ state: incomingJson, candidate: parsed.candidate, generation: parsed.generation })
+    return JSON.stringify({ state: stableIncomingJson, candidate: parsed.candidate, generation: parsed.generation })
   }
-  if (!isRecord(incomingJson.state) || !isRecord(incomingJson.candidate)) {
+  if (!isRecord(stableIncomingJson.state) || !isRecord(stableIncomingJson.candidate)) {
     throw new Error(`Generated dataset ${String(node.id)} input is missing state or candidate.`)
   }
   const fieldByNode: Record<string, string> = {
@@ -372,7 +383,17 @@ function normalizeGeneratedDatasetLlmOutput(
   }
   const field = fieldByNode[String(node.id)]!
   if (!isRecord(parsed[field])) throw new Error(`Generated dataset ${String(node.id)} must return ${field}.`)
-  return JSON.stringify({ ...incomingJson, [field]: parsed[field] })
+  return JSON.stringify({ ...stableIncomingJson, [field]: parsed[field] })
+}
+
+function stripTransientModelContexts(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripTransientModelContexts)
+  if (!isRecord(value)) return value
+  return Object.fromEntries(Object.entries(value).flatMap(([key, entry]) =>
+    TRANSIENT_MODEL_CONTEXT_KEYS.has(key)
+      ? []
+      : [[key, stripTransientModelContexts(entry)]]
+  ))
 }
 
 function workflowRunDurationMs(workflow: unknown): number {

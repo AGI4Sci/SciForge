@@ -40,6 +40,7 @@ export type WorkflowNodeKind =
   | 'research-search'
   | 'paper-download'
   | 'http-request'
+  | 'resource'
   | 'merge'
   | 'subworkflow'
   | 'loop'
@@ -70,6 +71,7 @@ export const WORKFLOW_NODE_KINDS: readonly WorkflowNodeKind[] = [
   'research-search',
   'paper-download',
   'http-request',
+  'resource',
   'merge',
   'subworkflow',
   'loop',
@@ -481,6 +483,21 @@ export type WorkflowHttpRequestConfigV1 = {
   parseJson: boolean
 }
 
+export type WorkflowResourceConfigV1 = {
+  /** Renderer contribution that owns discovery and configuration for this resource. */
+  providerId: string
+  resourceId: string
+  resourceName: string
+  operationId: string
+  actionId: string
+  effect: 'read' | 'compute' | 'workspace-write' | 'external-write' | 'destructive'
+  /** JSON request body. Supports the same {{json.x}} / {{text}} interpolation as other nodes. */
+  inputTemplate: string
+  /** Keep the incoming object and attach the capability output under resultKey. */
+  preserveInput?: boolean
+  resultKey?: string
+}
+
 export type WorkflowResearchSearchConfigV1 = {
   /** Templated with {{json.x}} / {{text}} from the incoming payload. */
   query: string
@@ -534,6 +551,7 @@ export type WorkflowNodeConfigByKind = {
   'research-search': WorkflowResearchSearchConfigV1
   'paper-download': WorkflowPaperDownloadConfigV1
   'http-request': WorkflowHttpRequestConfigV1
+  resource: WorkflowResourceConfigV1
   merge: WorkflowMergeConfigV1
   subworkflow: WorkflowSubWorkflowConfigV1
   loop: WorkflowLoopConfigV1
@@ -962,10 +980,22 @@ const generatedDatasetFieldSchema = z.object({
   required: z.boolean().optional()
 }).strict()
 
+const generatedDatasetSourceBindingSchema = z.object({
+  sourceId: z.string().trim().min(1).max(160),
+  providerId: z.string().trim().min(1).max(160),
+  resourceId: z.string().trim().min(1).max(160),
+  resourceName: z.string().trim().min(1).max(500),
+  operationId: z.string().trim().min(1).max(160),
+  actionId: z.string().trim().min(1).max(256),
+  effect: z.enum(['read', 'compute', 'workspace-write', 'external-write', 'destructive']),
+  inputTemplate: z.string().trim().min(2).max(1_000_000)
+}).strict()
+
 export const createDatasetLoopInputSchema = z.object({
   name: z.string().trim().min(1).max(160),
   objective: z.string().trim().min(1).max(8000),
   sourceIds: z.array(z.string().trim().min(1).max(160)).min(1).max(50),
+  sourceBindings: z.array(generatedDatasetSourceBindingSchema).max(50).optional(),
   outputSchema: z.record(
     z.string().trim().min(1).max(512),
     generatedDatasetFieldSchema
@@ -1006,7 +1036,27 @@ export const createDatasetLoopInputSchema = z.object({
   }).strict(),
   humanReview: z.boolean().default(true),
   run: z.boolean().default(true)
-}).strict()
+}).strict().superRefine((input, context) => {
+  const sourceIds = new Set(input.sourceIds)
+  const boundSourceIds = new Set<string>()
+  for (const [index, binding] of (input.sourceBindings ?? []).entries()) {
+    if (!sourceIds.has(binding.sourceId)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['sourceBindings', index, 'sourceId'],
+        message: 'A source binding must reference a selected sourceId.'
+      })
+    }
+    if (boundSourceIds.has(binding.sourceId)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['sourceBindings', index, 'sourceId'],
+        message: 'A selected source can have only one generated-loop binding.'
+      })
+    }
+    boundSourceIds.add(binding.sourceId)
+  }
+})
 
 export type CreateDatasetLoopInput = z.infer<typeof createDatasetLoopInputSchema>
 const createLoopNodeRunResultSchema = z.object({
@@ -1120,6 +1170,7 @@ export const createDatasetLoopOutputSchema = z.object({
   revision: z.number().int().nonnegative(),
   run: createLoopRunResultSchema.nullable()
 }).strict()
+export type CreateDatasetLoopOutput = z.infer<typeof createDatasetLoopOutputSchema>
 export const createLoopRuntimeStatusSchema = z.object({
   runningWorkflowIds: z.array(z.string().max(256)).max(10_000),
   nodeStatus: z.record(

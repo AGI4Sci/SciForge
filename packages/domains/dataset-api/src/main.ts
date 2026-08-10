@@ -6,6 +6,7 @@ import {
   DATASET_API_CAPABILITY_IDS,
   datasetApiCapabilityOutputSchema,
   datasetApiCatalogInputSchema,
+  datasetApiEnsureProvidersInputSchema,
   datasetApiListInputSchema,
   datasetApiMetadataInputSchema,
   datasetApiRawDataInputSchema,
@@ -251,6 +252,13 @@ export function createDatasetApiCapabilityFactory<CapabilityDefinition>(options:
         'Lists built-in public biology data providers, transports, metadata access, raw-data access, and adapter requirements.',
         datasetApiCatalogInputSchema,
         async (input) => services().api.catalog(input)
+      ),
+      defineWrite(
+        DATASET_API_CAPABILITY_IDS.ensureProviders,
+        'Ensure built-in dataset providers',
+        'Registers every missing executable public dataset preset in the caller workspace without replacing existing source configurations.',
+        datasetApiEnsureProvidersInputSchema.omit({ workspaceRoot: true }),
+        async (input, workspaceRoot) => services().api.ensureProviders(withWorkspace(workspaceRoot, input))
       ),
       defineWrite(
         DATASET_API_CAPABILITY_IDS.registerProvider,

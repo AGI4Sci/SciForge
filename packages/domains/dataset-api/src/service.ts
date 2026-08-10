@@ -8,12 +8,14 @@ import { basename, dirname, extname, join, resolve } from 'node:path'
 import { Agent, fetch as undiciFetch } from 'undici'
 import {
   datasetApiListInputSchema,
+  datasetApiEnsureProvidersInputSchema,
   datasetApiCatalogInputSchema,
   datasetApiRegisterProviderInputSchema,
   datasetApiMetadataInputSchema,
   datasetApiRawDataInputSchema,
   datasetApiRegisterInputSchema,
   type DatasetApiListInput,
+  type DatasetApiEnsureProvidersInput,
   type DatasetApiCatalogInput,
   type DatasetApiRegisterProviderInput,
   type DatasetApiMetadataInput,
@@ -63,6 +65,34 @@ export function createDatasetApiService(options: {
   const env = options.env ?? process.env
 
   return {
+    async ensureProviders(raw: DatasetApiEnsureProvidersInput) {
+      const input = datasetApiEnsureProvidersInputSchema.parse(raw)
+      const registryPath = resolveRegistryPath(input.workspaceRoot, defaultWorkspaceRoot)
+      const before = await readRegistry(registryPath)
+      const existingIds = new Set(before.sources.map((source) => source.id))
+      const addedSourceIds: string[] = []
+      const preservedSourceIds: string[] = []
+      for (const preset of Object.values(EXECUTABLE_DATASET_PROVIDER_PRESETS)) {
+        if (existingIds.has(preset.source.id)) {
+          preservedSourceIds.push(preset.source.id)
+          continue
+        }
+        const registered = await registerSource({
+          ...preset.source,
+          workspaceRoot: input.workspaceRoot
+        }, defaultWorkspaceRoot)
+        if (registered.reused) preservedSourceIds.push(preset.source.id)
+        else addedSourceIds.push(preset.source.id)
+      }
+      const registry = await readRegistry(registryPath)
+      return {
+        registryPath,
+        sources: registry.sources,
+        addedSourceIds,
+        preservedSourceIds
+      }
+    },
+
     async catalog(raw: DatasetApiCatalogInput) {
       const input = datasetApiCatalogInputSchema.parse(raw)
       const query = input.query?.toLocaleLowerCase()
@@ -829,7 +859,20 @@ function summarizeMetadata(value: unknown, depth = 0): unknown {
   }
   if (depth >= 3) {
     if (Array.isArray(value)) return { itemCount: value.length }
-    if (typeof value === 'object') return { fieldCount: Object.keys(value).length }
+    if (typeof value === 'object') {
+      const record = value as Record<string, unknown>
+      const identityEntries = Object.entries(record).filter(([key, item]) => (
+        ['id', 'name', 'label', 'accession', 'value'].includes(key.toLowerCase()) &&
+        (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean')
+      ))
+      if (identityEntries.length > 0) {
+        return Object.fromEntries(identityEntries.map(([key, item]) => [
+          key,
+          summarizeMetadata(item, depth + 1)
+        ]))
+      }
+      return { fieldCount: Object.keys(value).length }
+    }
     return String(value)
   }
   if (Array.isArray(value)) {

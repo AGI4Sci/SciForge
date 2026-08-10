@@ -9,6 +9,7 @@ import {
   Brain,
   CalendarClock,
   Code2,
+  Database,
   Download,
   FileJson,
   Filter,
@@ -72,6 +73,7 @@ export const NODE_ICONS: Record<WorkflowNodeKind, LucideIcon> = {
   'research-search': Search,
   'paper-download': Download,
   'http-request': Globe,
+  resource: Database,
   merge: GitMerge,
   subworkflow: Workflow,
   loop: Repeat,
@@ -140,6 +142,10 @@ function nodeSummary(node: WorkflowNodeV1): string {
       return `${node.config.outputDir || 'papers'} · ${node.config.maxFiles}`
     case 'http-request':
       return `${node.config.method} ${node.config.url}`.trim()
+    case 'resource':
+      return [node.config.resourceName || node.config.resourceId, node.config.operationId]
+        .filter(Boolean)
+        .join(' · ')
     case 'merge':
       return node.config.mode
     case 'loop':

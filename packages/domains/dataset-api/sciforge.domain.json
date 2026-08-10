@@ -12,6 +12,12 @@
     },
     "priority": 100
   },
+  "contributionContracts": {
+    "dataset-api.create-loop-resources": {
+      "location": "create-loop.resource-palette",
+      "resourceKind": "dataset-api-source"
+    }
+  },
   "entrypoints": [
     {
       "process": "main",
@@ -28,7 +34,9 @@
       "process": "renderer",
       "export": "./renderer",
       "contributions": [
-        { "kind": "renderer.chat-result-panel", "id": "dataset-api.timeline-results" }
+        { "kind": "renderer.chat-result-panel", "id": "dataset-api.timeline-results" },
+        { "kind": "renderer.extension", "id": "dataset-api.create-loop-resources" },
+        { "kind": "renderer.i18n-resource", "id": "dataset-api.translations" }
       ]
     }
   ]
