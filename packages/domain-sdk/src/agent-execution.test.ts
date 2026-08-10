@@ -24,6 +24,7 @@ describe('agent execution host contract', () => {
       workspaceRoot: '/workspace/project',
       model: 'frontier',
       reasoningEffort: 'high',
+      imageUrls: ['data:image/png;base64,AAAA'],
       allowedTools: ['sciforge_discover', 'sciforge_invoke'],
       mode: 'agent',
       signal: controller.signal
@@ -77,6 +78,19 @@ describe('agent execution host contract', () => {
       prompt: 'Work.',
       workspaceRoot: '/workspace',
       allowedTools: ['sciforge_invoke', 'sciforge_invoke']
+    }), z.ZodError)
+  })
+
+  it('bounds process-neutral image inputs to supported data URLs', () => {
+    assert.deepEqual(domainMainAgentExecutionRequestSchema.parse({
+      prompt: 'Inspect the attached screenshot.',
+      workspaceRoot: '/workspace',
+      imageUrls: ['data:image/webp;base64,AAAA']
+    }).imageUrls, ['data:image/webp;base64,AAAA'])
+    assert.throws(() => domainMainAgentExecutionRequestSchema.parse({
+      prompt: 'Inspect it.',
+      workspaceRoot: '/workspace',
+      imageUrls: ['https://example.test/screenshot.png']
     }), z.ZodError)
   })
 })

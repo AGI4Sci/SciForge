@@ -190,7 +190,8 @@ describe('Plan Gateway sidecar', () => {
       fetchImpl: async () => {
         throw new Error('unavailable')
       },
-      readyTimeoutMs: 25
+      readyTimeoutMs: 25,
+      platform: 'linux'
     })).rejects.toThrow(/did not become ready/)
 
     expect(child.kill).toHaveBeenCalledWith('SIGTERM')
@@ -214,7 +215,8 @@ describe('Plan Gateway sidecar', () => {
         adapterId: 'previous-adapter',
         instanceId: 'old-instance'
       }),
-      killProcessImpl: killProcessImpl as never
+      killProcessImpl: killProcessImpl as never,
+      platform: 'linux'
     })
 
     expect(killProcessImpl).toHaveBeenCalledWith(4243, 'SIGTERM')

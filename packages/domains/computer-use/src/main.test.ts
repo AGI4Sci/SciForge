@@ -38,4 +38,51 @@ describe('Computer Use main domain entry', () => {
       source: 'trusted-invocation'
     })
   })
+
+  it('attaches and owner-clears the authenticated Host Agent planning bridge', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 })
+    )
+    const entry = createDomainMainEntry({
+      defineCapability: (definition: unknown) => definition,
+      getUserDataDir: () => 'C:/test/user-data',
+      getAppRoot: () => 'C:/test/app'
+    } as never)
+    const lifecycle = entry.contributions[1]?.value as {
+      activate(context: unknown): Promise<undefined | (() => Promise<void>)>
+    }
+    const dispose = await lifecycle.activate({
+      appRoot: 'C:/test/app',
+      userDataDir: 'C:/test/user-data',
+      environment: {
+        SCIFORGE_CUA_SERVICE_URL: 'http://127.0.0.1:3900',
+        SCIFORGE_CUA_SERVICE_TOKEN: 'sidecar-token',
+        SCIFORGE_CUA_CDP_ADAPTER_URL: 'http://127.0.0.1:4900'
+      },
+      agentExecution: { run: vi.fn() },
+      signal: new AbortController().signal,
+      log: vi.fn()
+    })
+
+    expect(dispose).toEqual(expect.any(Function))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'http://127.0.0.1:3900/computer-use/model-access/configure'
+    )
+    const attached = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))
+    expect(attached).toMatchObject({ model: 'sciforge-computer-use-agent' })
+    expect(attached.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/)
+    expect(attached.apiKey.length).toBeGreaterThanOrEqual(32)
+
+    await dispose?.()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const cleared = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))
+    expect(cleared).toEqual({
+      baseUrl: '',
+      apiKey: '',
+      model: '',
+      expectedBaseUrl: attached.baseUrl
+    })
+    fetchMock.mockRestore()
+  })
 })

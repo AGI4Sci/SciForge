@@ -3376,7 +3376,7 @@ process.stdout.write(JSON.stringify({
     })
   })
 
-  it('encodes structured workspace references with Codex-supported input variants', async () => {
+  it('encodes in-memory images and structured workspace references with Codex-supported inputs', async () => {
     const client = controllableClient()
     const service = new CodexRuntimeService({
       settings: async () => settings(),
@@ -3388,6 +3388,7 @@ process.stdout.write(JSON.stringify({
       threadId: 'thread-1',
       text: 'Analyze the references',
       workspace: '/tmp/workspace',
+      imageUrls: ['data:image/png;base64,AAAA'],
       fileReferences: [
         {
           path: 'papers/large.pdf',
@@ -3414,6 +3415,10 @@ process.stdout.write(JSON.stringify({
           type: 'text',
           text: 'Analyze the references',
           text_elements: []
+        },
+        {
+          type: 'image',
+          url: 'data:image/png;base64,AAAA'
         },
         {
           type: 'mention',

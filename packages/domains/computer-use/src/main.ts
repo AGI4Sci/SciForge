@@ -38,6 +38,10 @@ import {
   type ComputerUseMcpLaunchConfig
 } from './main/mcp-config.js'
 import {
+  startComputerUseAgentModelBridge,
+  type ComputerUseAgentModelBridge
+} from './main/services/computer-use-agent-model-bridge.js'
+import {
   startElectronComputerUseAdapterRuntime,
   type ElectronComputerUseAdapterRuntime
 } from './main/services/computer-use-electron-adapter-runtime.js'
@@ -46,6 +50,7 @@ import {
   requestComputerUsePermission
 } from './main/services/computer-use-permissions.js'
 import { ComputerUseRuntimeClient } from './main/services/computer-use-runtime-client.js'
+import { trustedLoopbackEndpoint } from './main/trusted-loopback-url.js'
 
 export {
   createPlaywrightCdpDriver,
@@ -103,6 +108,7 @@ export function createDomainMainEntry(
     return runtimeClient
   }
   let adapter: ElectronComputerUseAdapterRuntime | null = null
+  let modelBridge: ComputerUseAgentModelBridge | null = null
 
   const runtimeMcpServer: DomainMainRuntimeMcpServerContribution = Object.freeze({
     serverId: GUI_COMPUTER_USE_MCP_SERVER_NAME,
@@ -146,6 +152,47 @@ export function createDomainMainEntry(
         (context.environment.SCIFORGE_CUA_CDP_ADAPTER_URL ?? '').trim() ||
         (context.environment.SCIFORGE_CUA_CDP_ADAPTER_TOKEN ?? '').trim()
       )
+      if (serviceUrl && serviceToken && context.agentExecution) {
+        try {
+          modelBridge = await startComputerUseAgentModelBridge({
+            agentExecution: context.agentExecution,
+            workspaceRoot: context.appRoot
+          })
+          const response = await fetch(
+            trustedLoopbackEndpoint(serviceUrl, '/computer-use/model-access/configure'),
+            {
+              method: 'POST',
+              headers: {
+                authorization: `Bearer ${serviceToken}`,
+                'content-type': 'application/json'
+              },
+              body: JSON.stringify({
+                baseUrl: modelBridge.baseUrl,
+                apiKey: modelBridge.token,
+                model: 'sciforge-computer-use-agent'
+              }),
+              signal: context.signal
+            }
+          )
+          if (!response.ok) {
+            throw new Error(`sidecar model bridge configuration failed (HTTP ${response.status})`)
+          }
+          context.log({
+            level: 'info',
+            message: 'Computer Use planner attached to the Host Agent model-access boundary.'
+          })
+        } catch (error) {
+          const currentBridge = modelBridge
+          modelBridge = null
+          await currentBridge?.close().catch(() => undefined)
+          context.log({
+            level: 'warn',
+            message: 'Computer Use planner bridge startup failed; targets remain unavailable.',
+            detail: error instanceof Error ? error.message : String(error)
+          })
+          return
+        }
+      }
       if (serviceUrl && serviceToken && !explicitAdapter) {
         try {
           const { webContents } = await import('electron')
@@ -171,6 +218,27 @@ export function createDomainMainEntry(
         const current = adapter
         adapter = null
         await current?.close()
+        const currentBridge = modelBridge
+        modelBridge = null
+        if (currentBridge) {
+          await fetch(
+            trustedLoopbackEndpoint(serviceUrl, '/computer-use/model-access/configure'),
+            {
+              method: 'POST',
+              headers: {
+                authorization: `Bearer ${serviceToken}`,
+                'content-type': 'application/json'
+              },
+              body: JSON.stringify({
+                baseUrl: '',
+                apiKey: '',
+                model: '',
+                expectedBaseUrl: currentBridge.baseUrl
+              })
+            }
+          ).catch(() => undefined)
+          await currentBridge.close().catch(() => undefined)
+        }
       }
     }
   })

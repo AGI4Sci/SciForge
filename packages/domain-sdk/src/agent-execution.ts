@@ -6,6 +6,15 @@ export const domainMainAgentExecutionRequestSchema = z.object({
   workspaceRoot: z.string().min(1).max(4_096),
   model: z.string().trim().min(1).max(256).optional(),
   reasoningEffort: z.string().trim().min(1).max(64).optional(),
+  imageUrls: z.array(
+    z.string().max(12_000_000).refine(
+      (value) => /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value),
+      { message: 'Agent execution images must be base64 PNG, JPEG, or WebP data URLs.' }
+    )
+  ).max(4).refine(
+    (images) => images.reduce((total, image) => total + image.length, 0) <= 24_000_000,
+    { message: 'Agent execution images exceed the 24 MB aggregate limit.' }
+  ).optional(),
   allowedTools: z.array(
     z.string().trim().min(1).max(192).regex(/^[A-Za-z0-9_.-]+$/)
   ).max(128).refine((tools) => new Set(tools).size === tools.length, {

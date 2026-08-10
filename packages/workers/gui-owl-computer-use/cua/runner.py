@@ -317,17 +317,37 @@ def _run_loop(
         "effectiveIsolation": channel.isolation.effective.value,
         "degraded": channel.isolation.degraded,
         "degradedReason": channel.isolation.degraded_reason,
+        "finalObservation": {
+            "revision": latest_revision,
+            "semanticTree": _result_semantic_tree(observation_metadata),
+        },
     }
     terminal = "cancelled" if status == "cancelled" else "completed" if status != "error" else "failed"
     return R.ok(data, summary=summary, artifacts=artifacts, prov=_provenance(channel, started)), terminal
 
 
 def _semantic_context(metadata: Any) -> str:
+    tree = _bounded_semantic_tree(metadata)
+    return json.dumps(tree, ensure_ascii=False, separators=(",", ":")) if tree else ""
+
+
+def _bounded_semantic_tree(metadata: Any) -> List[Any]:
     if not isinstance(metadata, dict) or "semanticTree" not in metadata:
-        return ""
+        return []
     tree = metadata.get("semanticTree")
     if not isinstance(tree, (list, tuple)):
-        return ""
+        return []
     # Backend providers already redact password nodes. Keep the model input
     # bounded and deterministic; semantic UI content remains untrusted data.
-    return json.dumps(tree[:256], ensure_ascii=False, separators=(",", ":"))[:30_000]
+    bounded: List[Any] = []
+    for item in tree[:256]:
+        candidate = [*bounded, item]
+        if len(json.dumps(candidate, ensure_ascii=False, separators=(",", ":"))) > 30_000:
+            break
+        bounded = candidate
+    return bounded
+
+
+def _result_semantic_tree(metadata: Any) -> List[Any]:
+    """Return the same bounded, provider-redacted semantic evidence shown to the planner."""
+    return _bounded_semantic_tree(metadata)

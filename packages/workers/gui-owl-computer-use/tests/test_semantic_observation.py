@@ -1,7 +1,7 @@
 from PIL import Image
 
 from cua import owl_agent
-from cua.runner import _UIA_BACKEND_GUIDANCE, _semantic_context
+from cua.runner import _UIA_BACKEND_GUIDANCE, _result_semantic_tree, _semantic_context
 
 
 def test_uia_semantic_tree_enters_current_model_turn_with_backend_constraints():
@@ -49,3 +49,9 @@ def test_semantic_context_is_bounded_and_rejects_non_tree_metadata():
     assert len(semantic) <= 30_000
     assert "node-0" in semantic
     assert "node-399" not in semantic
+
+
+def test_result_semantic_tree_matches_the_bounded_planner_evidence():
+    tree = [{"name": "Settings", "center": [500, 100]}]
+    assert _result_semantic_tree({"semanticTree": tree}) == tree
+    assert _result_semantic_tree({"semanticTree": "invalid"}) == []

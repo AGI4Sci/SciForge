@@ -1606,6 +1606,7 @@ app.whenReady().then(async () => {
             ...(request.reasoningEffort
               ? { reasoningEffort: request.reasoningEffort }
               : {}),
+            ...(request.imageUrls?.length ? { imageUrls: request.imageUrls } : {}),
             ...(request.allowedTools ? { allowedTools: request.allowedTools } : {})
           })
           turnId = handle.turnId

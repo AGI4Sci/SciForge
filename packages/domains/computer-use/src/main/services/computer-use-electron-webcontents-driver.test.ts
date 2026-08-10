@@ -135,6 +135,44 @@ describe('Electron webContents CDP driver', () => {
     await driver.close(opened.handleId, 'done')
   })
 
+  it('waits for an SPA renderer turn and verifies a semantic navigation change', async () => {
+    const contents = new FakeWebContents()
+    contents.semanticTree = [{
+      tag: 'button', role: 'navigation', name: 'Settings', center: [45, 970], disabled: false
+    }]
+    contents.clickReadbacks = [
+      { url: 'app://sciforge.test/', activeName: '', targetName: 'Settings', targetState: '' },
+      { url: 'app://sciforge.test/', activeName: '', targetName: '', targetState: '' }
+    ]
+    const originalSend = contents.debugger.sendCommand
+    contents.debugger.sendCommand = async (method, params) => {
+      const result = await originalSend(method, params)
+      if (method === 'Input.dispatchMouseEvent' && params?.type === 'mouseReleased') {
+        contents.semanticTree = [{
+          tag: 'h1', role: '', name: 'Settings', center: [500, 100], disabled: false
+        }]
+      }
+      return result
+    }
+    const driver = createElectronWebContentsCdpDriver(() => [contents])
+    const [target] = await driver.targets()
+    const opened = await driver.open(target!, 'request-spa-navigation')
+    const observation = await driver.observe(opened.handleId)
+
+    await expect(driver.action(opened.handleId, {
+      expectedRevision: observation.revision,
+      action: { action: 'left_click', coordinate: [29, 466] }
+    })).resolves.toMatchObject({
+      verification: { status: 'verified', details: { reason: 'semantic-tree-changed' } }
+    })
+    expect(contents.commands).toContainEqual(expect.objectContaining({
+      method: 'Runtime.evaluate',
+      params: expect.objectContaining({ awaitPromise: true })
+    }))
+
+    await driver.close(opened.handleId, 'done')
+  })
+
   it('maps observation pixels to CDP CSS pixels under display scaling', async () => {
     const contents = new FakeWebContents()
     contents.imageSize = { width: 800, height: 600 }

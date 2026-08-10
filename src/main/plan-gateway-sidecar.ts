@@ -101,6 +101,7 @@ export async function ensurePlanGatewaySidecar(
     spawnImpl?: typeof spawn
     fetchImpl?: typeof fetch
     readyTimeoutMs?: number
+    platform?: NodeJS.Platform
     resolveProxy?: (url: string) => Promise<string>
     log?: (message: string) => void
   }
@@ -151,6 +152,8 @@ export async function stopPlanGatewaySidecar(options: {
   userDataDir?: string
   fetchImpl?: typeof fetch
   killProcessImpl?: typeof process.kill
+  killProcessTreeImpl?: (pid: number) => Promise<void>
+  platform?: NodeJS.Platform
   log?: (message: string) => void
 } = {}): Promise<void> {
   await stopModelAccessGatewaySidecar({

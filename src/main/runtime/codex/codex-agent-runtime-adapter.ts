@@ -114,6 +114,7 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
         workspace: input.workspace,
         model: input.model,
         reasoningEffort: input.reasoningEffort,
+        imageUrls: input.imageUrls,
         fileReferences: input.fileReferences,
         ownedVisualToolsAvailable:
           context.turnGovernanceSnapshot?.ownedVisualToolsAvailable === true,

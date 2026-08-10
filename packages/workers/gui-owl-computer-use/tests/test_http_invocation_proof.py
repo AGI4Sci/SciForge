@@ -195,6 +195,68 @@ def test_cdp_adapter_registration_requires_bearer_and_clears_only_matching_owner
         thread.join(timeout=5)
 
 
+def test_model_access_bridge_registration_requires_bearer_and_clears_only_owner():
+    service = ComputerUseService(router=BackendRouter([]))
+    config = Config(service_token="sidecar-token", allow_execute=False)
+    original = (
+        config.model_router_base_url,
+        config.model_router_api_key,
+        config.model_router_model,
+    )
+    verifier = InvocationProofVerifier(SECRET, mode="required")
+    httpd = server_module.create_http_server(
+        service, config, verifier, address=("127.0.0.1", 0),
+    )
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    bridge_url = "http://127.0.0.1:41235/v1"
+    try:
+        status, payload = _post(
+            httpd.server_port, "/computer-use/model-access/configure",
+            {"baseUrl": bridge_url, "apiKey": "a" * 32, "model": "planner"},
+        )
+        assert status == 401
+        assert payload["error"]["code"] == "UNAUTHENTICATED"
+
+        status, payload = _post(
+            httpd.server_port, "/computer-use/model-access/configure",
+            {"baseUrl": bridge_url, "apiKey": "a" * 32, "model": "planner"},
+            token="sidecar-token",
+        )
+        assert status == 200
+        assert payload["data"]["configured"] is True
+        assert config.model_router_base_url == bridge_url
+        assert config.model_router_api_key == "a" * 32
+        assert config.model_router_model == "planner"
+
+        _post(
+            httpd.server_port, "/computer-use/model-access/configure",
+            {"baseUrl": "", "apiKey": "", "model": "", "expectedBaseUrl": "http://127.0.0.1:49999/v1"},
+            token="sidecar-token",
+        )
+        assert config.model_router_base_url == bridge_url
+
+        status, payload = _post(
+            httpd.server_port, "/computer-use/model-access/configure",
+            {"baseUrl": "", "apiKey": "", "model": "", "expectedBaseUrl": bridge_url},
+            token="sidecar-token",
+        )
+        assert status == 200
+        assert payload["data"]["cleared"] is True
+        assert config.model_router_base_url == ""
+        assert config.model_router_api_key == ""
+        assert config.model_router_model == ""
+    finally:
+        (
+            config.model_router_base_url,
+            config.model_router_api_key,
+            config.model_router_model,
+        ) = original
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
 def test_http_proof_capacity_fails_closed_with_stable_error_code():
     service = ComputerUseService(router=BackendRouter([]))
     service.configure_approval_proof("required")

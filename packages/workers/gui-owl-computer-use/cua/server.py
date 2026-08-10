@@ -141,6 +141,7 @@ class Handler(BaseHTTPRequestHandler):
             "/computer-use/run", "/computer-use/cancel",
             "/computer-use/sessions/bind", "/computer-use/sessions/release",
             "/computer-use/backends/cdp/configure",
+            "/computer-use/model-access/configure",
         ):
             return self._send(404, R.err("NOT_FOUND", f"no route {self.path}"))
         auth_error = _check_auth(self.headers.get("Authorization"), self.config)
@@ -192,6 +193,67 @@ class Handler(BaseHTTPRequestHandler):
                 adapter_url, adapter_token, expected_adapter_url=expected_adapter_url,
             )
             return self._send(200 if res.get("ok") else 409, res)
+        if self.path == "/computer-use/model-access/configure":
+            if not self.config.service_token:
+                return self._send(403, R.err(
+                    "UNAUTHENTICATED",
+                    "model access configuration requires an authenticated sidecar",
+                ))
+            base_url = str(body.get("baseUrl") or "").strip().rstrip("/")
+            api_key = str(body.get("apiKey") or "").strip()
+            model = str(body.get("model") or "").strip()
+            expected_base_url = str(body.get("expectedBaseUrl") or "").strip().rstrip("/")
+            if bool(base_url) != bool(api_key) or bool(base_url) != bool(model):
+                return self._send(400, R.err(
+                    "INVALID_ARGUMENT",
+                    "baseUrl, apiKey, and model must be set or cleared together",
+                ))
+            for label, candidate in (
+                ("baseUrl", base_url), ("expectedBaseUrl", expected_base_url),
+            ):
+                if not candidate:
+                    continue
+                parsed = urlsplit(candidate)
+                if parsed.scheme != "http" or parsed.hostname not in {
+                    "127.0.0.1", "localhost", "::1",
+                } or parsed.username or parsed.password or parsed.query or parsed.fragment:
+                    return self._send(400, R.err(
+                        "INVALID_ARGUMENT",
+                        f"{label} must be credential-free loopback HTTP",
+                    ))
+                if parsed.path.rstrip("/") not in {"", "/v1"}:
+                    return self._send(400, R.err(
+                        "INVALID_ARGUMENT", f"{label} path must be empty or /v1",
+                    ))
+            if api_key and not 32 <= len(api_key) <= 4096:
+                return self._send(400, R.err(
+                    "INVALID_ARGUMENT", "model access token length is invalid",
+                ))
+            if model and len(model) > 256:
+                return self._send(400, R.err(
+                    "INVALID_ARGUMENT", "model name length is invalid",
+                ))
+            runtime = self.service.capabilities()["runtime"]
+            counts = runtime["counts"]
+            if (
+                runtime["activeChannels"] or runtime["activeRequests"]
+                or counts["sessions"] or counts["activeLeases"]
+                or runtime["cleanupPending"] or runtime["waiters"]
+                or runtime["backendHandles"]
+            ):
+                return self._send(409, R.err(
+                    "RUNTIME_BUSY",
+                    "model access cannot change while Computer Use resources are active",
+                ))
+            current = self.config.model_router_base_url.rstrip("/")
+            if not base_url and expected_base_url and current != expected_base_url:
+                return self._send(200, R.ok({"configured": bool(current), "cleared": False}))
+            self.config.model_router_base_url = base_url
+            self.config.model_router_api_key = api_key
+            self.config.model_router_model = model
+            return self._send(200, R.ok({
+                "configured": bool(base_url), "cleared": not bool(base_url),
+            }))
         invocation = None
         try:
             proof_arguments = dict(body)

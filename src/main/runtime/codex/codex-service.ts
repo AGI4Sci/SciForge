@@ -865,6 +865,7 @@ export class CodexRuntimeService {
           workspace,
           model: runtimeModel,
           reasoningEffort: payload.reasoningEffort,
+          imageUrls: payload.imageUrls,
           fileReferences: payload.fileReferences,
           runtime
         }))
@@ -897,6 +898,7 @@ export class CodexRuntimeService {
           workspace,
           model: runtimeModel,
           reasoningEffort: payload.reasoningEffort,
+          imageUrls: payload.imageUrls,
           fileReferences: payload.fileReferences,
           runtime
         }))
@@ -3741,6 +3743,7 @@ function turnStartParams(input: {
   workspace: string
   model?: string
   reasoningEffort?: string
+  imageUrls?: CodexTurnStartPayload['imageUrls']
   fileReferences?: CodexTurnStartPayload['fileReferences']
   runtime: ReturnType<typeof getCodexRuntimeSettings>
 }): Parameters<CodexAppServerJsonRpcClient['startTurn']>[0] {
@@ -3750,7 +3753,11 @@ function turnStartParams(input: {
       runtime_id: 'codex',
       gui_thread_id: input.guiThreadId
     },
-    input: [textInput(input.text), ...fileReferenceInputs(input.fileReferences)],
+    input: [
+      textInput(input.text),
+      ...imageUrlInputs(input.imageUrls),
+      ...fileReferenceInputs(input.fileReferences)
+    ],
     cwd: input.workspace,
     ...(input.model ? { model: input.model } : {}),
     approvalPolicy: mapApprovalPolicy(input.runtime.approvalPolicy, input.runtime.sandboxMode),
@@ -4209,6 +4216,23 @@ function isMissingOrUnmaterializedThreadError(error: unknown): boolean {
 function isCodexRuntimeDisconnectedError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
   return /app-server client stopped|event stream (?:closed|ended)|runtime disconnected|socket hang up|ECONNRESET|EPIPE/i.test(message)
+}
+
+function imageUrlInputs(imageUrls: CodexTurnStartPayload['imageUrls']): CodexAppServerInputItem[] {
+  const values = imageUrls ?? []
+  if (values.length > 4) throw new Error('Codex turn accepts at most four in-memory images.')
+  if (values.some((value) => value.length > 12_000_000)) {
+    throw new Error('Codex turn in-memory images must not exceed 12 MB each.')
+  }
+  if (values.reduce((total, value) => total + value.length, 0) > 24_000_000) {
+    throw new Error('Codex turn in-memory images exceed the 24 MB aggregate limit.')
+  }
+  return values.map((url) => {
+    if (!/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(url)) {
+      throw new Error('Codex turn in-memory images must be base64 PNG, JPEG, or WebP data URLs.')
+    }
+    return { type: 'image', url }
+  })
 }
 
 function isClientStoppedBeforeRequest(error: unknown): boolean {

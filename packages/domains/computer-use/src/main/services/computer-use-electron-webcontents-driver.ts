@@ -286,9 +286,17 @@ export function createElectronWebContentsCdpDriver(
         const button = name === 'right_click' ? 'right' : 'left'
         const clickCount = name === 'double_click' ? 2 : 1
         const beforeReadback = await clickReadback(handle.contents, x, y)
+        const beforeSemanticTree = await electronSemanticTree(handle.contents)
         await dispatchMouseClick(handle, button, x, y, clickCount)
+        await waitForRendererTurn(handle.contents)
         const afterReadback = await clickReadback(handle.contents, x, y)
-        verification = clickVerification(beforeReadback, afterReadback)
+        const afterSemanticTree = await electronSemanticTree(handle.contents)
+        verification = clickVerification(
+          beforeReadback,
+          afterReadback,
+          beforeSemanticTree,
+          afterSemanticTree
+        )
       } else if (name === 'type') {
         const text = String(action.text ?? '')
         const beforeReadback = await activeElementReadback(handle.contents)
@@ -484,6 +492,27 @@ type ClickReadback = {
   targetState: string
 }
 
+async function waitForRendererTurn(contents: ElectronWebContentsLike): Promise<void> {
+  await contents.debugger.sendCommand('Runtime.evaluate', {
+    expression: `new Promise((resolve) => { /* sciforge-computer-use-renderer-settle-v1 */
+      let settled = false
+      const finish = () => {
+        if (settled) return
+        settled = true
+        setTimeout(resolve, 50)
+      }
+      setTimeout(finish, 250)
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => requestAnimationFrame(finish))
+      } else {
+        finish()
+      }
+    })`,
+    awaitPromise: true,
+    returnByValue: true
+  })
+}
+
 async function electronSemanticTree(contents: ElectronWebContentsLike): Promise<Record<string, unknown>[]> {
   const response = record(await contents.debugger.sendCommand('Runtime.evaluate', {
     expression: `(() => { /* sciforge-computer-use-semantic-tree-v1 */
@@ -599,7 +628,12 @@ async function clickReadback(
   }
 }
 
-function clickVerification(before: ClickReadback, after: ClickReadback): Record<string, unknown> {
+function clickVerification(
+  before: ClickReadback,
+  after: ClickReadback,
+  beforeSemanticTree: readonly Record<string, unknown>[],
+  afterSemanticTree: readonly Record<string, unknown>[]
+): Record<string, unknown> {
   if (before.url !== after.url) {
     return { status: 'verified', details: { reason: 'url-changed' } }
   }
@@ -611,6 +645,9 @@ function clickVerification(before: ClickReadback, after: ClickReadback): Record<
     after.activeName === before.targetName && after.activeName !== before.activeName
   ) {
     return { status: 'verified', details: { reason: 'clicked-element-focused' } }
+  }
+  if (JSON.stringify(beforeSemanticTree) !== JSON.stringify(afterSemanticTree)) {
+    return { status: 'verified', details: { reason: 'semantic-tree-changed' } }
   }
   return { status: 'unverified', details: { reason: 'click-has-no-semantic-readback' } }
 }

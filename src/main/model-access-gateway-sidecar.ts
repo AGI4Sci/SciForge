@@ -31,8 +31,10 @@ export type ModelAccessGatewaySidecarOptions = {
   spawnImpl?: typeof spawn
   fetchImpl?: typeof fetch
   killProcessImpl?: typeof process.kill
+  killProcessTreeImpl?: (pid: number) => Promise<void>
   isProcessAliveImpl?: (pid: number) => boolean
   recordedStopTimeoutMs?: number
+  platform?: NodeJS.Platform
   log?: (message: string) => void
 }
 
@@ -118,7 +120,7 @@ async function stopInternal(
   restartAttempts = 0
   const current = managedChild
   managedChild = null
-  if (current && isChildRunning(current.child)) await terminateChild(current.child)
+  if (current && isChildRunning(current.child)) await terminateChild(current.child, options)
   if (current) await rm(current.statePath, { force: true })
   await stopRecordedSidecar(options)
 }
@@ -146,7 +148,7 @@ async function startManagedChild(
     await writeManagedState(statePath, child, spec)
   } catch (error) {
     managedChild = null
-    if (isChildRunning(child)) await terminateChild(child)
+    if (isChildRunning(child)) await terminateChild(child, options)
     throw error
   }
   attachChildLogging(child, spec.logLabel, options.log)
@@ -277,7 +279,7 @@ async function stopRecordedSidecar(
       )
       if (healthy) {
         try {
-          (options.killProcessImpl ?? process.kill)(pid, 'SIGTERM')
+          await signalRecordedProcess(pid, 'SIGTERM', options)
           options.log?.(`Stopped a stale app-managed ${inferredMode} sidecar before launching the current runtime.`)
           const stopped = await waitForRecordedExit(
             pid,
@@ -290,7 +292,7 @@ async function stopRecordedSidecar(
           )
           if (!stopped) {
             try {
-              (options.killProcessImpl ?? process.kill)(pid, 'SIGKILL')
+              await signalRecordedProcess(pid, 'SIGKILL', options)
               options.log?.(`Force-stopped a stale app-managed ${inferredMode} sidecar after graceful shutdown timed out.`)
             } catch {
               // The recorded process already exited.
@@ -407,7 +409,14 @@ function isChildRunning(child: ChildProcess): boolean {
   return child.exitCode === null && child.signalCode === null
 }
 
-async function terminateChild(child: ChildProcess): Promise<void> {
+async function terminateChild(
+  child: ChildProcess,
+  options: ModelAccessGatewaySidecarOptions
+): Promise<void> {
+  if ((options.platform ?? process.platform) === 'win32' && child.pid) {
+    await terminateWindowsProcessTree(child.pid, options)
+    return
+  }
   await new Promise<void>((resolve) => {
     const timer = setTimeout(() => {
       child.kill('SIGKILL')
@@ -418,6 +427,36 @@ async function terminateChild(child: ChildProcess): Promise<void> {
       resolve()
     })
     child.kill('SIGTERM')
+  })
+}
+
+async function signalRecordedProcess(
+  pid: number,
+  signal: NodeJS.Signals,
+  options: ModelAccessGatewaySidecarOptions
+): Promise<void> {
+  if ((options.platform ?? process.platform) === 'win32') {
+    await terminateWindowsProcessTree(pid, options)
+    return
+  }
+  (options.killProcessImpl ?? process.kill)(pid, signal)
+}
+
+async function terminateWindowsProcessTree(
+  pid: number,
+  options: ModelAccessGatewaySidecarOptions
+): Promise<void> {
+  if (options.killProcessTreeImpl) {
+    await options.killProcessTreeImpl(pid)
+    return
+  }
+  await new Promise<void>((resolve) => {
+    const killer = spawn('taskkill.exe', ['/pid', String(pid), '/t', '/f'], {
+      stdio: 'ignore',
+      windowsHide: true
+    })
+    killer.once('error', () => resolve())
+    killer.once('exit', () => resolve())
   })
 }
 

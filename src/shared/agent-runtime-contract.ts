@@ -580,6 +580,8 @@ export type AgentRuntimeTurnStartInput = {
   mode?: string
   model?: string
   reasoningEffort?: string
+  /** @internal Host-validated in-memory images; public renderer IPC rejects this field. */
+  imageUrls?: string[]
   /** Host-enforced runtime tool allowlist. An empty list disables all runtime tools. */
   allowedTools?: string[]
   governanceProfile?: AgentRuntimeGovernanceProfile

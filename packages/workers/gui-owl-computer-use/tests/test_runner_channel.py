@@ -64,6 +64,9 @@ def test_runner_uses_channel_for_observe_action_verify_and_manifest(monkeypatch,
     )
     assert result["ok"] is True
     assert result["data"]["backend"] == "windows-uia"
+    assert result["data"]["finalObservation"] == {
+        "revision": "fake:1", "semanticTree": [],
+    }
     assert result["data"]["steps"][0]["outcome"]["verification"] == "verified"
     assert backend.read("target-1") == ("hello",)
     manifest = tmp_path / "request-1" / "manifest.json"

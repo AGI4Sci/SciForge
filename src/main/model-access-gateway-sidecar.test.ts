@@ -63,7 +63,7 @@ describe('Model Access gateway sidecar controller', () => {
 
   afterEach(async () => {
     vi.useRealTimers()
-    await stopModelAccessGatewaySidecar({ userDataDir: roots[roots.length - 1] })
+    await stopModelAccessGatewaySidecar({ userDataDir: roots[roots.length - 1], platform: 'linux' })
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
   })
 
@@ -78,11 +78,13 @@ describe('Model Access gateway sidecar controller', () => {
 
     await synchronizeModelAccessGatewaySidecar(spec('model-router', 'one'), {
       userDataDir: root,
-      spawnImpl: spawnImpl as never
+      spawnImpl: spawnImpl as never,
+      platform: 'linux'
     })
     await synchronizeModelAccessGatewaySidecar(spec('plan-gateway', 'two'), {
       userDataDir: root,
-      spawnImpl: spawnImpl as never
+      spawnImpl: spawnImpl as never,
+      platform: 'linux'
     })
 
     expect(spawnImpl).toHaveBeenCalledTimes(2)
@@ -107,11 +109,13 @@ describe('Model Access gateway sidecar controller', () => {
 
     const firstRun = synchronizeModelAccessGatewaySidecar(spec('model-router', 'one', () => firstPrepare), {
       userDataDir: root,
-      spawnImpl: spawnImpl as never
+      spawnImpl: spawnImpl as never,
+      platform: 'linux'
     })
     const secondRun = synchronizeModelAccessGatewaySidecar(spec('plan-gateway', 'two'), {
       userDataDir: root,
-      spawnImpl: spawnImpl as never
+      spawnImpl: spawnImpl as never,
+      platform: 'linux'
     })
     await Promise.resolve()
     expect(spawnImpl).not.toHaveBeenCalled()
@@ -148,7 +152,8 @@ describe('Model Access gateway sidecar controller', () => {
       fetchImpl,
       killProcessImpl: killProcessImpl as never,
       isProcessAliveImpl: () => true,
-      recordedStopTimeoutMs: 20
+      recordedStopTimeoutMs: 20,
+      platform: 'linux'
     })
 
     expect(killProcessImpl).toHaveBeenNthCalledWith(1, 4301, 'SIGTERM')
@@ -179,7 +184,8 @@ describe('Model Access gateway sidecar controller', () => {
       spawnImpl: spawnImpl as never,
       fetchImpl,
       killProcessImpl: killProcessImpl as never,
-      isProcessAliveImpl: () => false
+      isProcessAliveImpl: () => false,
+      platform: 'linux'
     })
 
     expect(killProcessImpl).toHaveBeenCalledWith(4351, 'SIGTERM')
@@ -201,7 +207,8 @@ describe('Model Access gateway sidecar controller', () => {
     await synchronizeModelAccessGatewaySidecar(spec('model-router', 'one'), {
       userDataDir: root,
       spawnImpl: spawnImpl as never,
-      log
+      log,
+      platform: 'linux'
     })
     Object.defineProperty(failed, 'exitCode', { value: 1, configurable: true })
     failed.emit('exit', 1, null)
@@ -245,12 +252,48 @@ describe('Model Access gateway sidecar controller', () => {
       spawnImpl: vi.fn(() => child) as never,
       fetchImpl,
       killProcessImpl: killProcessImpl as never,
-      isProcessAliveImpl: () => false
+      isProcessAliveImpl: () => false,
+      platform: 'linux'
     })
 
     expect(killProcessImpl).toHaveBeenNthCalledWith(1, 4501, 'SIGTERM')
     expect(killProcessImpl).toHaveBeenNthCalledWith(2, 4502, 'SIGTERM')
     await expect(readFile(join(root, 'model-router', 'sidecar-state.json'), 'utf8')).rejects.toThrow()
     await expect(readFile(join(root, 'plan-gateway', 'sidecar-state.json'), 'utf8')).rejects.toThrow()
+  })
+
+  it('terminates the full managed process tree on Windows mode switches', async () => {
+    const root = await tempRoot()
+    roots.push(root)
+    const first = fakeChild(4601)
+    const second = fakeChild(4602)
+    const spawnImpl = vi.fn()
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second)
+    const killProcessTreeImpl = vi.fn(async (pid: number) => {
+      if (pid === first.pid) {
+        Object.defineProperty(first, 'exitCode', { value: 137, configurable: true })
+        Object.defineProperty(first, 'signalCode', { value: 'SIGKILL', configurable: true })
+        first.emit('exit', 137, 'SIGKILL')
+      }
+    })
+
+    await synchronizeModelAccessGatewaySidecar(spec('model-router', 'one'), {
+      userDataDir: root,
+      spawnImpl: spawnImpl as never,
+      killProcessTreeImpl,
+      platform: 'win32'
+    })
+    await synchronizeModelAccessGatewaySidecar(spec('plan-gateway', 'two'), {
+      userDataDir: root,
+      spawnImpl: spawnImpl as never,
+      killProcessTreeImpl,
+      platform: 'win32'
+    })
+
+    expect(killProcessTreeImpl).toHaveBeenCalledOnce()
+    expect(killProcessTreeImpl).toHaveBeenCalledWith(4601)
+    expect(first.kill).not.toHaveBeenCalled()
+    expect(spawnImpl).toHaveBeenCalledTimes(2)
   })
 })
