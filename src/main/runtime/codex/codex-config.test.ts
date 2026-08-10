@@ -554,6 +554,30 @@ describe('codex config launch helpers', () => {
       .rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('keeps coding-plan provider assignments outside the features table', async () => {
+    const managedCodexHome = await mkdtemp(join(tmpdir(), 'managed-codex-home-'))
+    await prepareCodexAppServerLaunch({
+      settings: {
+        ...settings(managedCodexHome),
+        modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
+      },
+      managedCodexHome,
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1/' },
+      preToolUseHookLaunch: {
+        appPath: join(managedCodexHome, 'SciForge App'),
+        execPath: process.execPath,
+        isPackaged: false
+      }
+    })
+
+    const config = await readFile(join(managedCodexHome, 'config.toml'), 'utf8')
+    expect(config.indexOf(`model_provider = "${CODEX_PLAN_GATEWAY_PROVIDER_ID}"`))
+      .toBeLessThan(config.indexOf('[features]'))
+    expect(config.indexOf(`[model_providers.${CODEX_PLAN_GATEWAY_PROVIDER_ID}]`))
+      .toBeLessThan(config.indexOf('[features]'))
+    expect(config).toContain('[features]\nhooks = true')
+  })
+
   it('imports explicitly trusted standard Codex auth without overwriting runtime config', async () => {
     const externalCodexHome = await mkdtemp(join(tmpdir(), 'external-codex-home-'))
     const managedCodexHome = await mkdtemp(join(tmpdir(), 'managed-codex-home-'))

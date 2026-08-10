@@ -618,8 +618,8 @@ function codexConfigToml(
       'model_reasoning_summary = "detailed"',
       'model_supports_reasoning_summaries = true',
       '',
-      ...hookConfig,
-      createCodexPlanRuntimeConfig(modelAccess.baseUrl)
+      createCodexPlanRuntimeConfig(modelAccess.baseUrl),
+      ...hookConfig
     ].join('\n')
   }
   return [
