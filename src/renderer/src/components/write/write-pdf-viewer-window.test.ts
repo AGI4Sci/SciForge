@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 
 vi.mock('pdfjs-dist/build/pdf.mjs', () => ({
   GlobalWorkerOptions: { workerSrc: '' },
@@ -14,6 +16,10 @@ import {
   pdfPageRenderWindow,
   type WritePdfSelection
 } from './WritePdfViewer'
+import {
+  WritePdfPageFrame,
+  pdfPageDisplaySize
+} from './WritePdfPageFrame'
 
 describe('PDF page render window', () => {
   it('allows PDF zoom up to 500 percent through every scale path', () => {
@@ -39,6 +45,34 @@ describe('PDF page render window', () => {
     expect(pdfPageRenderWindow(99, 4)).toEqual([2, 3, 4])
     expect(pdfPageRenderWindow(2, 4, -5)).toEqual([2])
     expect(pdfPageRenderWindow(2, 4, 1)).toEqual([1, 2, 3])
+  })
+
+  it('keeps the page shell dimensions stable while virtualized content mounts', () => {
+    const pageBaseSizes = new Map([
+      [1, { width: 612, height: 792 }],
+      [8, { width: 612, height: 792 }]
+    ])
+
+    const placeholderSize = pdfPageDisplaySize(pageBaseSizes, 8, 1.15)
+    const renderedSize = pdfPageDisplaySize(pageBaseSizes, 8, 1.15)
+    const placeholderHtml = renderToStaticMarkup(createElement(WritePdfPageFrame, {
+      pageNumber: 8,
+      rendered: false,
+      pageSize: placeholderSize
+    }))
+    const renderedHtml = renderToStaticMarkup(createElement(WritePdfPageFrame, {
+      pageNumber: 8,
+      rendered: true,
+      pageSize: renderedSize
+    }, createElement('canvas')))
+
+    expect(placeholderSize).toEqual({ width: 703.8, height: 910.8 })
+    expect(renderedSize).toEqual(placeholderSize)
+    expect(placeholderHtml).toContain('data-write-pdf-page-placeholder="8"')
+    expect(renderedHtml).toContain('data-write-pdf-page="8"')
+    expect(placeholderHtml).toContain('width:703.8px;height:910.8px')
+    expect(renderedHtml).toContain('width:703.8px;height:910.8px')
+    expect(renderedHtml).toContain('<canvas></canvas>')
   })
 
   it('publishes only the bounded text for the current PDF page', () => {
