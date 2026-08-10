@@ -10,6 +10,7 @@ import {
   type ModelRouterMemberSettingsV1,
   type ModelRouterProtocolPreference
 } from '../shared/app-settings'
+import { resolveRuntimeModelRouterSettings } from './runtime-model-router-settings'
 import {
   DIRECT_PROVIDER_WORKER_ENV_PREFIXES,
   MODEL_ROUTER_PRIVATE_ENV_PREFIXES,
@@ -134,7 +135,7 @@ export function buildModelRouterSidecarLaunch(
   const scientific = router.profiles.default.translators.scientific
   const env: NodeJS.ProcessEnv = modelRouterSidecarEnv(baseEnv)
   env[MODEL_ROUTER_USER_DATA_DIR_ENV] = options.userDataDir
-  env[ROUTER_RUNTIME_KEY_ENV] = router.runtimeApiKey
+  env[ROUTER_RUNTIME_KEY_ENV] = resolveRuntimeModelRouterSettings(settings, baseEnv).apiKey
   env[TEXT_REASONER_KEY_ENV] = textReasoner.apiKey.trim()
   if (isModelRouterMemberConfigured(vision)) {
     env[VISION_TRANSLATOR_KEY_ENV] = vision.apiKey.trim()

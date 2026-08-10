@@ -114,3 +114,27 @@ def test_status_rejections_are_bounded_and_cleanup_context_does_not_leak():
     assert len(status["recentRejections"]) == 20
     assert status["active"] == []
     assert service._request_contexts == {}
+
+
+def test_capabilities_exposes_sanitized_zero_resource_counts():
+    service = ComputerUseService(
+        router=BackendRouter([]),
+        server_instance_id="instance-capabilities-runtime",
+    )
+
+    runtime = service.capabilities()["runtime"]
+
+    assert runtime == {
+        "counts": {
+            "sessions": 0,
+            "requests": 0,
+            "activeLeases": 0,
+            "tombstones": 0,
+            "releasedLeaseTombstones": 0,
+        },
+        "activeChannels": 0,
+        "activeRequests": 0,
+        "cleanupPending": 0,
+        "waiters": 0,
+        "backendHandles": 0,
+    }

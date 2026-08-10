@@ -529,10 +529,24 @@ class ComputerUseService:
 
     def capabilities(self) -> dict[str, Any]:
         capabilities = self.router.capabilities()
+        with self._channels_lock:
+            active_channels = len(self._channels)
+            pending_opens = len(self._open_cleanup_pending)
+        counts = self.registry.snapshot_counts()
         return {
             "protocolVersion": contract.PROTOCOL_V2,
             "backends": [item.to_dict() for item in capabilities],
             "approvalProof": self._approval_proof,
+            "runtime": {
+                "counts": counts,
+                "activeChannels": active_channels,
+                "activeRequests": counts["requests"],
+                "cleanupPending": len(self.cleanup_pending()),
+                # Lease acquisition is fail-fast; this runtime has no queued waiters.
+                "waiters": 0,
+                # Every live channel or uncertain Open retains one cleanup authority.
+                "backendHandles": active_channels + pending_opens,
+            },
         }
 
     @staticmethod

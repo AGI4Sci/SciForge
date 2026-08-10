@@ -29,7 +29,11 @@ describe('Computer Use main domain entry', () => {
     const metadata = entry.contributions[3]?.value
     expect(metadata).toMatchObject({
       serverId: 'gui_owl_computer_use',
-      tools: ['computer_use'],
+      tools: [
+        'computer_use_bind_target',
+        'computer_use',
+        'computer_use_release_session'
+      ],
       metadataKey: 'io.sciforge/computer-use-invocation',
       source: 'trusted-invocation'
     })

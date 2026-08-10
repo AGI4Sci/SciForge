@@ -8,11 +8,11 @@ import {
   getCodexRuntimeSettings,
   getModelAccessSettings,
   resolveModelAccessRuntimePolicy,
-  resolveRuntimeModelRouterSettings,
   type AppSettingsV1,
   type ApprovalPolicy,
   type SandboxMode
 } from '../../../shared/app-settings'
+import { resolveRuntimeModelRouterSettings } from '../../runtime-model-router-settings'
 import {
   codexModelDeltaItemId,
   type CodexChatBlock,
@@ -503,7 +503,10 @@ export class CodexRuntimeService {
     }
   }
 
-  async startThread(payload: CodexThreadStartPayload): Promise<CodexThreadStartResult> {
+  async startThread(
+    payload: CodexThreadStartPayload,
+    retryStoppedClient = true
+  ): Promise<CodexThreadStartResult> {
     try {
       const startedAtMs = Date.now()
       const settings = await this.options.settings()
@@ -604,6 +607,9 @@ export class CodexRuntimeService {
       }
     } catch (error) {
       await this.discardClientAfterFailure(error)
+      if (retryStoppedClient && isClientStoppedBeforeRequest(error)) {
+        return this.startThread(payload, false)
+      }
       return failure(error)
     }
   }
@@ -621,10 +627,16 @@ export class CodexRuntimeService {
       const usage = await this.usageStore?.threadUsage(storedThread?.guiThreadId ?? threadId)
       const detailWithUsage = usage ? { ...detail, usage } : detail
       const storedDetailWithUsage = storedDetail && usage ? { ...storedDetail, usage } : storedDetail
-      const preferredDetail = preferThreadDetail(detailWithUsage, storedDetailWithUsage)
+      const preferredDetail = withStoredThreadWorkspace(
+        preferThreadDetail(detailWithUsage, storedDetailWithUsage),
+        storedThread
+      )
       if (storedDetail && this.shouldRepairStaleTurnDetail(guiThreadId, preferredDetail, storedDetail)) {
         const repairedDetail = await this.readStoredDetail(guiThreadId, { repairStale: true })
-        return { ok: true, detail: repairedDetail ?? preferredDetail }
+        return {
+          ok: true,
+          detail: withStoredThreadWorkspace(repairedDetail ?? preferredDetail, storedThread)
+        }
       }
       return { ok: true, detail: preferredDetail }
     } catch (error) {
@@ -791,7 +803,10 @@ export class CodexRuntimeService {
     }
   }
 
-  async startTurn(payload: CodexTurnStartPayload): Promise<CodexTurnStartResult> {
+  async startTurn(
+    payload: CodexTurnStartPayload,
+    retryStoppedClient = true
+  ): Promise<CodexTurnStartResult> {
     let preparedGovernance: CodexPreparedTurnGovernance | null = null
     try {
       const startedAtMs = Date.now()
@@ -947,6 +962,9 @@ export class CodexRuntimeService {
       await this.releasePreparedCodexTurnGovernance(preparedGovernance)
         .catch(() => undefined)
       await this.discardClientAfterFailure(error)
+      if (retryStoppedClient && isClientStoppedBeforeRequest(error)) {
+        return this.startTurn(payload, false)
+      }
       return failure(error)
     }
   }
@@ -3535,6 +3553,16 @@ function preferThreadDetail(
   }
 }
 
+function withStoredThreadWorkspace(
+  detail: CodexThreadDetail,
+  storedThread: CodexStoredThread | null
+): CodexThreadDetail {
+  const workspace = detail.workspace?.trim() || storedThread?.workspace.trim()
+  return workspace && workspace !== detail.workspace
+    ? { ...detail, workspace }
+    : detail
+}
+
 function latestStoredTurnId(events: CodexStoredEvent[]): string | undefined {
   for (const item of [...events].reverse()) {
     if (isChildOnlyEvent(item.event)) continue
@@ -4181,6 +4209,10 @@ function isMissingOrUnmaterializedThreadError(error: unknown): boolean {
 function isCodexRuntimeDisconnectedError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
   return /app-server client stopped|event stream (?:closed|ended)|runtime disconnected|socket hang up|ECONNRESET|EPIPE/i.test(message)
+}
+
+function isClientStoppedBeforeRequest(error: unknown): boolean {
+  return error instanceof Error && error.message.trim() === 'Codex app-server client stopped.'
 }
 
 function isTerminalRuntimeError(

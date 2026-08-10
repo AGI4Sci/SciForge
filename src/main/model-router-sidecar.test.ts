@@ -118,6 +118,21 @@ describe('buildModelRouterSidecarLaunch', () => {
     })
   })
 
+  it('uses the process-scoped runtime key without changing settings', () => {
+    const configured = settings()
+    const result = buildModelRouterSidecarLaunch(configured, {
+      userDataDir: '/tmp/sciforge-user-data',
+      appRoot: '/repo/sciforge',
+      env: { SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY: 'ephemeral-runtime-key' },
+      npmCommand: 'npm'
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.launch.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY).toBe('ephemeral-runtime-key')
+    expect(configured.modelRouter?.runtimeApiKey).toBe('local-runtime-key')
+  })
+
   it('builds a dev workspace launch without writing provider secrets into config', () => {
     const result = buildModelRouterSidecarLaunch(settings(), {
       userDataDir: '/tmp/sciforge-user-data',

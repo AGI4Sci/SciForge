@@ -10,9 +10,9 @@ import {
   getModelAccessSettings,
   getModelRouterSettings,
   isModelRouterTextReasonerConfigured,
-  resolveRuntimeModelRouterSettings,
   type AppSettingsV1
 } from '../../../shared/app-settings'
+import { resolveRuntimeModelRouterSettings } from '../../runtime-model-router-settings'
 import {
   CODEX_PLAN_PROVIDER_ID,
   createCodexPlanRuntimeConfig
@@ -199,7 +199,10 @@ async function findExecutableCommand(
 ): Promise<string | null> {
   for (const directory of new Set(directories)) {
     const names = platform === 'win32'
-      ? [command, `${command}.exe`, `${command}.cmd`, `${command}.bat`]
+      // Package managers commonly place a POSIX shell shim named `codex`
+      // beside the Windows-native codex.cmd. Node cannot execute that bare
+      // shell shim on Windows, so resolve native launchers first.
+      ? [`${command}.exe`, `${command}.cmd`, `${command}.bat`, command]
       : [command]
     for (const name of names) {
       const candidate = join(directory, name)

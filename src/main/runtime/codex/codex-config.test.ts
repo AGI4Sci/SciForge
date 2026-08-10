@@ -168,6 +168,21 @@ describe('codex config launch helpers', () => {
     })).resolves.toBe(command)
   })
 
+  it('prefers the Windows cmd shim over a sibling POSIX shell shim', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-windows-shims-'))
+    const npmBin = join(home, 'AppData', 'Roaming', 'npm')
+    const command = join(npmBin, 'codex.cmd')
+    await mkdir(npmBin, { recursive: true })
+    await writeFile(join(npmBin, 'codex'), '#!/bin/sh\n', 'utf8')
+    await writeFile(command, '@echo off\r\n', 'utf8')
+
+    await expect(resolveCodexCommand('codex', {
+      env: { Path: npmBin },
+      homeDir: home,
+      platform: 'win32'
+    })).resolves.toBe(command)
+  })
+
   it('materializes the runtime bundled with the Windows Codex app', async () => {
     const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-msix-'))
     const programFiles = join(home, 'Program Files')

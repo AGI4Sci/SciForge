@@ -369,7 +369,7 @@ class CdpAdapterBackend:
             revision_before=expected_revision,
             committed=payload.get("committed") is True,
             may_have_taken_effect=payload.get("mayHaveTakenEffect") is True,
-            backend_evidence={"adapter": "playwright-core"},
+            backend_evidence={"adapter": "cdp-adapter"},
         )
 
     def verify(

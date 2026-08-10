@@ -12,6 +12,10 @@ class FakeWebContents extends EventEmitter implements ElectronWebContentsLike {
   attached = false
   text = ''
   scrollY = 0
+  semanticTree: Array<Record<string, unknown>> = []
+  clickReadbacks: Array<Record<string, unknown>> = []
+  imageSize = { width: 640, height: 480 }
+  cssViewport = { width: 640, height: 480 }
   readonly commands: Array<{ method: string; params?: Record<string, unknown> }> = []
   private readonly debuggerEvents = new EventEmitter()
   readonly debugger = {
@@ -29,6 +33,15 @@ class FakeWebContents extends EventEmitter implements ElectronWebContentsLike {
       if (method === 'Input.insertText') this.text += String(params?.text ?? '')
       if (method === 'Runtime.evaluate') {
         const expression = String(params?.expression ?? '')
+        if (expression.includes('sciforge-computer-use-semantic-tree-v1')) {
+          return { result: { value: this.semanticTree } }
+        }
+        if (expression.includes('sciforge-computer-use-css-viewport-v1')) {
+          return { result: { value: this.cssViewport } }
+        }
+        if (expression.includes('sciforge-computer-use-click-readback-v1')) {
+          return { result: { value: this.clickReadbacks.shift() ?? {} } }
+        }
         if (expression.includes('window.scrollBy')) {
           const amount = Number(/scrollBy\(0,\s*(-?[\d.]+)/u.exec(expression)?.[1] ?? 0)
           this.scrollY += amount
@@ -51,7 +64,7 @@ class FakeWebContents extends EventEmitter implements ElectronWebContentsLike {
   async capturePage() {
     return {
       toPNG: () => Buffer.from('test-png'),
-      getSize: () => ({ width: 640, height: 480 })
+      getSize: () => this.imageSize
     }
   }
   destroy(): void {
@@ -93,6 +106,62 @@ describe('Electron webContents CDP driver', () => {
     expect(contents.attached).toBe(false)
     expect(contents.destroyed).toBe(false)
     await expect(driver.targets()).resolves.toHaveLength(1)
+  })
+
+  it('exposes bounded normalized semantics and verifies a focused click target', async () => {
+    const contents = new FakeWebContents()
+    contents.semanticTree = [{
+      tag: 'button', role: 'navigation', name: 'Settings', center: [45, 970], disabled: false
+    }]
+    contents.clickReadbacks = [
+      { url: 'app://sciforge.test/', activeName: '', targetName: 'Settings', targetState: '' },
+      { url: 'app://sciforge.test/', activeName: 'Settings', targetName: 'Settings', targetState: '' }
+    ]
+    const driver = createElectronWebContentsCdpDriver(() => [contents])
+    const [target] = await driver.targets()
+    const opened = await driver.open(target!, 'request-semantic-click')
+
+    const observation = await driver.observe(opened.handleId)
+    expect(observation.metadata).toMatchObject({
+      semanticTree: [{ name: 'Settings', center: [45, 970], disabled: false }]
+    })
+    await expect(driver.action(opened.handleId, {
+      expectedRevision: observation.revision,
+      action: { action: 'left_click', coordinate: [86, 466] }
+    })).resolves.toMatchObject({
+      verification: { status: 'verified', details: { reason: 'clicked-element-focused' } }
+    })
+
+    await driver.close(opened.handleId, 'done')
+  })
+
+  it('maps observation pixels to CDP CSS pixels under display scaling', async () => {
+    const contents = new FakeWebContents()
+    contents.imageSize = { width: 800, height: 600 }
+    contents.cssViewport = { width: 640, height: 480 }
+    contents.clickReadbacks = [
+      { url: 'app://sciforge.test/', activeName: '', targetName: 'Settings', targetState: '' },
+      { url: 'app://sciforge.test/settings', activeName: '', targetName: '', targetState: '' }
+    ]
+    const driver = createElectronWebContentsCdpDriver(() => [contents])
+    const [target] = await driver.targets()
+    const opened = await driver.open(target!, 'request-scaled-click')
+    const observation = await driver.observe(opened.handleId)
+
+    await driver.action(opened.handleId, {
+      expectedRevision: observation.revision,
+      action: { action: 'left_click', coordinate: [400, 300] }
+    })
+
+    const mousePressed = contents.commands.find((command) =>
+      command.method === 'Input.dispatchMouseEvent' && command.params?.type === 'mousePressed'
+    )
+    expect(mousePressed?.params).toMatchObject({ x: 320, y: 240 })
+    expect(observation.metadata).toMatchObject({
+      viewport: { width: 800, height: 600 },
+      cssViewport: { width: 640, height: 480 }
+    })
+    await driver.close(opened.handleId, 'done')
   })
 
   it('does not steal or detach a debugger owned by another caller', async () => {

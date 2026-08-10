@@ -45,6 +45,8 @@ type ElectronHandle = {
   debuggerOwnershipUnknown: boolean
   pressedKeys: Set<string>
   pressedMouseButtons: Map<string, { x: number; y: number; clickCount: number }>
+  observationViewport: { width: number; height: number } | null
+  cssViewport: { width: number; height: number } | null
   onDestroyed: () => void
   onDebuggerDetach: () => void
 }
@@ -196,6 +198,8 @@ export function createElectronWebContentsCdpDriver(
         debuggerOwnershipUnknown: false,
         pressedKeys: new Set(),
         pressedMouseButtons: new Map(),
+        observationViewport: null,
+        cssViewport: null,
         onDestroyed: () => undefined,
         onDebuggerDetach: () => undefined
       }
@@ -240,11 +244,17 @@ export function createElectronWebContentsCdpDriver(
     async observe(handleId) {
       const handle = requireHandle(handleId)
       if (handle.cancelled) throw new Error('Electron webContents handle was cancelled.')
-      const image = await handle.contents.capturePage()
+      const [image, semanticTree, cssViewport] = await Promise.all([
+        handle.contents.capturePage(),
+        electronSemanticTree(handle.contents),
+        electronCssViewport(handle.contents)
+      ])
       if (handle.contents.isDestroyed()) {
         throw new Error('TARGET_LOST: Electron webContents closed during observe.')
       }
       handle.revision += 1
+      handle.observationViewport = image.getSize()
+      handle.cssViewport = cssViewport
       return {
         targetId: handle.targetId,
         generation: handle.generation,
@@ -253,7 +263,9 @@ export function createElectronWebContentsCdpDriver(
         metadata: {
           url: handle.contents.getURL().slice(0, 2048),
           title: handle.contents.getTitle().slice(0, 2048),
-          viewport: image.getSize()
+          viewport: handle.observationViewport,
+          cssViewport,
+          semanticTree
         }
       }
     },
@@ -269,10 +281,14 @@ export function createElectronWebContentsCdpDriver(
         status: 'unverified', details: { reason: 'action-has-no-semantic-readback' }
       }
       if (name === 'click' || name === 'left_click' || name === 'right_click' || name === 'double_click') {
-        const [x, y] = coordinate(action.coordinate)
+        const [observationX, observationY] = coordinate(action.coordinate)
+        const [x, y] = electronInputCoordinate(handle, observationX, observationY)
         const button = name === 'right_click' ? 'right' : 'left'
         const clickCount = name === 'double_click' ? 2 : 1
+        const beforeReadback = await clickReadback(handle.contents, x, y)
         await dispatchMouseClick(handle, button, x, y, clickCount)
+        const afterReadback = await clickReadback(handle.contents, x, y)
+        verification = clickVerification(beforeReadback, afterReadback)
       } else if (name === 'type') {
         const text = String(action.text ?? '')
         const beforeReadback = await activeElementReadback(handle.contents)
@@ -459,6 +475,148 @@ async function activeElementReadback(contents: ElectronWebContentsLike): Promise
     returnByValue: true
   }))
   return String(record(response.result).value ?? '')
+}
+
+type ClickReadback = {
+  url: string
+  activeName: string
+  targetName: string
+  targetState: string
+}
+
+async function electronSemanticTree(contents: ElectronWebContentsLike): Promise<Record<string, unknown>[]> {
+  const response = record(await contents.debugger.sendCommand('Runtime.evaluate', {
+    expression: `(() => { /* sciforge-computer-use-semantic-tree-v1 */
+      const text = (value) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, 512)
+      const name = (element) => text(
+        element.getAttribute('aria-label') || element.getAttribute('title') ||
+        element.getAttribute('alt') || element.getAttribute('placeholder') ||
+        element.innerText || element.textContent
+      )
+      const selectors = [
+        'button', 'a', 'input:not([type="hidden"])', 'select', 'textarea',
+        '[role]', '[aria-label]', 'h1', 'h2', 'h3'
+      ].join(',')
+      return [...document.querySelectorAll(selectors)].flatMap((element) => {
+        if (!(element instanceof HTMLElement)) return []
+        const rect = element.getBoundingClientRect()
+        const style = getComputedStyle(element)
+        if (rect.width <= 0 || rect.height <= 0 || style.visibility === 'hidden' || style.display === 'none') return []
+        const center = [
+          Math.round(Math.max(0, Math.min(1000, ((rect.left + rect.width / 2) / Math.max(1, innerWidth)) * 1000))),
+          Math.round(Math.max(0, Math.min(1000, ((rect.top + rect.height / 2) / Math.max(1, innerHeight)) * 1000)))
+        ]
+        return [{
+          tag: element.tagName.toLowerCase(),
+          role: text(element.getAttribute('role')),
+          name: name(element),
+          center,
+          disabled: Boolean(element.disabled || element.getAttribute('aria-disabled') === 'true'),
+          current: text(element.getAttribute('aria-current')),
+          selected: text(element.getAttribute('aria-selected')),
+          expanded: text(element.getAttribute('aria-expanded')),
+          pressed: text(element.getAttribute('aria-pressed'))
+        }]
+      }).filter((item) => item.name || item.role).slice(0, 256)
+    })()`,
+    returnByValue: true
+  }))
+  const value = record(response.result).value
+  if (!Array.isArray(value)) return []
+  return value.slice(0, 256).flatMap((item) => {
+    const candidate = record(item)
+    const center = Array.isArray(candidate.center) ? candidate.center : []
+    if (center.length !== 2 || !center.every((part) => Number.isFinite(part))) return []
+    return [{
+      tag: boundedText(candidate.tag),
+      role: boundedText(candidate.role),
+      name: boundedText(candidate.name),
+      center: center.map((part) => Math.max(0, Math.min(1000, Math.round(Number(part))))),
+      disabled: candidate.disabled === true,
+      current: boundedText(candidate.current),
+      selected: boundedText(candidate.selected),
+      expanded: boundedText(candidate.expanded),
+      pressed: boundedText(candidate.pressed)
+    }]
+  })
+}
+
+async function electronCssViewport(
+  contents: ElectronWebContentsLike
+): Promise<{ width: number; height: number }> {
+  const response = record(await contents.debugger.sendCommand('Runtime.evaluate', {
+    expression: `(() => { /* sciforge-computer-use-css-viewport-v1 */
+      return { width: Math.max(1, innerWidth), height: Math.max(1, innerHeight) }
+    })()`,
+    returnByValue: true
+  }))
+  const value = record(record(response.result).value)
+  return {
+    width: Math.max(1, finiteNumber(value.width, 1)),
+    height: Math.max(1, finiteNumber(value.height, 1))
+  }
+}
+
+function electronInputCoordinate(handle: ElectronHandle, x: number, y: number): [number, number] {
+  const observation = handle.observationViewport
+  const css = handle.cssViewport
+  if (!observation || !css) {
+    throw new Error('STALE_OBSERVATION: Electron action has no captured viewport mapping.')
+  }
+  return [
+    x * css.width / Math.max(1, observation.width),
+    y * css.height / Math.max(1, observation.height)
+  ]
+}
+
+async function clickReadback(
+  contents: ElectronWebContentsLike,
+  x: number,
+  y: number
+): Promise<ClickReadback> {
+  const response = record(await contents.debugger.sendCommand('Runtime.evaluate', {
+    expression: `(() => { /* sciforge-computer-use-click-readback-v1 */
+      const text = (value) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, 512)
+      const describe = (element) => element instanceof HTMLElement ? {
+        name: text(element.getAttribute('aria-label') || element.getAttribute('title') || element.innerText || element.textContent),
+        state: [
+          element.getAttribute('aria-current'), element.getAttribute('aria-selected'),
+          element.getAttribute('aria-expanded'), element.getAttribute('aria-pressed')
+        ].map(text).join('|')
+      } : { name: '', state: '' }
+      const active = describe(document.activeElement)
+      const target = describe(document.elementFromPoint(${JSON.stringify(x)}, ${JSON.stringify(y)}))
+      return { url: String(location.href).slice(0, 2048), activeName: active.name, targetName: target.name, targetState: target.state }
+    })()`,
+    returnByValue: true
+  }))
+  const value = record(record(response.result).value)
+  return {
+    url: boundedText(value.url, 2048),
+    activeName: boundedText(value.activeName),
+    targetName: boundedText(value.targetName),
+    targetState: boundedText(value.targetState)
+  }
+}
+
+function clickVerification(before: ClickReadback, after: ClickReadback): Record<string, unknown> {
+  if (before.url !== after.url) {
+    return { status: 'verified', details: { reason: 'url-changed' } }
+  }
+  if (before.targetState !== after.targetState && after.targetState) {
+    return { status: 'verified', details: { reason: 'target-state-changed' } }
+  }
+  if (
+    before.targetName && after.activeName &&
+    after.activeName === before.targetName && after.activeName !== before.activeName
+  ) {
+    return { status: 'verified', details: { reason: 'clicked-element-focused' } }
+  }
+  return { status: 'unverified', details: { reason: 'click-has-no-semantic-readback' } }
+}
+
+function boundedText(value: unknown, max = 512): string {
+  return String(value ?? '').replace(/\s+/gu, ' ').trim().slice(0, max)
 }
 
 async function scrollPosition(contents: ElectronWebContentsLike): Promise<{ x: number; y: number }> {

@@ -28,6 +28,12 @@ _UIA_BACKEND_GUIDANCE = (
     "middle_click, double_click, or triple_click. If no suitable elementToken/pattern "
     "is exposed, use interact or terminate with failure instead of guessing."
 )
+_CDP_BACKEND_GUIDANCE = (
+    "The active backend is browser-cdp. When the supplied semantic tree contains a control, "
+    "use that control's normalized 0-1000 center as the action coordinate; do not guess from "
+    "an unavailable screenshot. After acting, use the next semantic tree to confirm the requested "
+    "UI state before terminating with success."
+)
 
 
 def _norm_action(action: str) -> str:
@@ -159,6 +165,8 @@ def _run_loop(
             backend_guidance=(
                 _UIA_BACKEND_GUIDANCE
                 if channel.capabilities.backend.value == "windows-uia"
+                else _CDP_BACKEND_GUIDANCE
+                if channel.capabilities.backend.value == "browser-cdp"
                 else ""
             ),
             semantic_context=_semantic_context(observation_metadata),

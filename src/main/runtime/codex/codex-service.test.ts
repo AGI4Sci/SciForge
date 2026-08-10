@@ -1489,6 +1489,43 @@ describe('CodexRuntimeService storage fallback', () => {
     })
   })
 
+  it('restores the persisted workspace when live thread detail omits cwd', async () => {
+    const storageRoot = await tempRoot()
+    const threadStore = new CodexThreadStore({ rootDir: storageRoot })
+    await threadStore.upsert({
+      guiThreadId: 'gui-thread-1',
+      codexThreadId: 'codex-thread-1',
+      workspace: '/tmp/workspace',
+      title: 'Persisted workspace thread'
+    })
+    const client = controllableClient()
+    vi.mocked(client.readThread).mockResolvedValue({
+      thread: {
+        id: 'codex-thread-1',
+        turns: [{
+          id: 'turn-1',
+          status: 'completed',
+          items: [{
+            id: 'assistant-1',
+            type: 'agentMessage',
+            text: 'done'
+          }]
+        }]
+      }
+    })
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      storageRoot,
+      createClient: () => client
+    })
+
+    await expect(service.readThread('gui-thread-1')).resolves.toEqual({
+      ok: true,
+      detail: expect.objectContaining({ workspace: '/tmp/workspace' })
+    })
+  })
+
   it('returns an empty stored detail for an unmaterialized Codex thread', async () => {
     const storageRoot = await tempRoot()
     const threadStore = new CodexThreadStore({ rootDir: storageRoot })
@@ -5702,6 +5739,50 @@ process.stdout.write(JSON.stringify({
     expect(first.stop).toHaveBeenCalledTimes(1)
     expect(service.isClientWarm()).toBe(false)
     await expect(service.connect()).resolves.toMatchObject({ ok: true })
+    expect(createClient).toHaveBeenCalledTimes(2)
+  })
+
+  it('reconnects once when startThread finds a client stopped before dispatch', async () => {
+    const first = controllableClient()
+    vi.mocked(first.startThread).mockRejectedValueOnce(new Error('Codex app-server client stopped.'))
+    const second = controllableClient()
+    const createClient = vi.fn()
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second)
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      createClient
+    })
+
+    await expect(service.startThread({ title: 'Recovered thread' })).resolves.toMatchObject({
+      ok: true,
+      thread: expect.objectContaining({ id: 'thread-1' })
+    })
+    expect(first.startThread).toHaveBeenCalledTimes(1)
+    expect(second.startThread).toHaveBeenCalledTimes(1)
+    expect(createClient).toHaveBeenCalledTimes(2)
+  })
+
+  it('reconnects once when startTurn finds a client stopped before dispatch', async () => {
+    const first = controllableClient()
+    vi.mocked(first.startTurn).mockRejectedValueOnce(new Error('Codex app-server client stopped.'))
+    const second = controllableClient()
+    const createClient = vi.fn()
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second)
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      createClient
+    })
+
+    await expect(service.startTurn({ threadId: 'thread-1', text: 'hello' })).resolves.toMatchObject({
+      ok: true,
+      turnId: 'turn-1'
+    })
+    expect(first.startTurn).toHaveBeenCalledTimes(1)
+    expect(second.startTurn).toHaveBeenCalledTimes(1)
     expect(createClient).toHaveBeenCalledTimes(2)
   })
 })

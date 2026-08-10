@@ -64,7 +64,7 @@ export const computerUseTargetSchema = z.object({
   display: z.object({
     monitorId: z.string().min(1).max(256).optional(),
     scaleFactor: z.number().positive().optional(),
-    viewport: z.tuple([z.number().int().positive(), z.number().int().positive()]).optional()
+    viewport: z.array(z.number().int().positive()).length(2).optional()
   }).strict().optional(),
   backendHint: z.string().trim().min(1).max(256).optional(),
   generation: z.string().trim().min(1).max(256).optional(),
@@ -259,7 +259,15 @@ export const computerUseRuntimeStatusSchema = z.object({
 export const computerUseCapabilitiesStatusSchema = z.object({
   protocolVersion: z.literal(2),
   backends: z.array(computerUseBackendCapabilitiesSchema),
-  approvalProof: z.enum(['legacy-trust-boundary', 'invocation-proof-v1'])
+  approvalProof: z.enum(['legacy-trust-boundary', 'invocation-proof-v1']),
+  runtime: z.object({
+    counts: computerUseRuntimeStatusSchema.shape.registry.shape.counts,
+    activeChannels: z.number().int().nonnegative(),
+    activeRequests: z.number().int().nonnegative(),
+    cleanupPending: z.number().int().nonnegative(),
+    waiters: z.number().int().nonnegative(),
+    backendHandles: z.number().int().nonnegative()
+  }).strict().optional()
 }).strict()
 
 export const computerUseCleanupPendingStatusSchema = z.object({

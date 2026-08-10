@@ -24,8 +24,10 @@ import {
   domainPackageDefinition
 } from './definition.js'
 import {
+  COMPUTER_USE_BIND_TARGET_TOOL_NAME,
   COMPUTER_USE_MCP_TIMEOUT_MS,
   COMPUTER_USE_MCP_TOOL_NAME,
+  COMPUTER_USE_RELEASE_SESSION_TOOL_NAME,
   GUI_COMPUTER_USE_MCP_SERVER_NAME,
   buildComputerUseMcpArgs,
   computerUseMcpEnabledTools,
@@ -125,7 +127,11 @@ export function createDomainMainEntry(
   })
   const trustedMetadata: DomainMcpTrustedInvocationMetadataContribution = Object.freeze({
     serverId: GUI_COMPUTER_USE_MCP_SERVER_NAME,
-    tools: Object.freeze([COMPUTER_USE_MCP_TOOL_NAME]),
+    tools: Object.freeze([
+      COMPUTER_USE_BIND_TARGET_TOOL_NAME,
+      COMPUTER_USE_MCP_TOOL_NAME,
+      COMPUTER_USE_RELEASE_SESSION_TOOL_NAME
+    ]),
     metadataKey: 'io.sciforge/computer-use-invocation',
     source: 'trusted-invocation'
   })

@@ -153,6 +153,7 @@ def test_model_router_responses_call_optional():
     assert calls[0]["headers"]["Authorization"] == "Bearer router-token"
     assert calls[0]["json"]["model"] == "sciforge-router"
     assert calls[0]["json"]["instructions"] == "system prompt"
+    assert "temperature" not in calls[0]["json"]
     serialized = str(calls[0]["json"])
     assert "input_image" in serialized and "data:image/png;base64,AAAA" in serialized
 

@@ -234,7 +234,6 @@ def call_owl(base_url: str, model: str, api_key: str,
         "model": model,
         "input": input_items,
         "max_output_tokens": max_tokens,
-        "temperature": 0.0,
         "stream": False,
     }
     if instructions:

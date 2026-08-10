@@ -152,6 +152,7 @@ def test_observe_action_verify_and_idempotent_close():
     assert before.target_id == "page-1"
     assert before.image.size == (8, 6)
     receipt = backend.perform(handle, {"action": "type", "text": "abc"}, before.revision)
+    assert receipt.backend_evidence == {"adapter": "cdp-adapter"}
     evidence = backend.verify(handle, {"action": "type"}, receipt, before)
     assert evidence.status is Verification.VERIFIED
     assert evidence.details["value"] == "abc"

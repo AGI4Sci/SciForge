@@ -80,6 +80,18 @@ describe('computer-use MCP server', () => {
 
       const tools = await client.listTools()
       expect(tools.tools.map((tool) => tool.name)).toEqual(computerUseMcpEnabledTools())
+      for (const toolName of ['computer_use_bind_target', COMPUTER_USE_MCP_TOOL_NAME]) {
+        const tool = tools.tools.find((candidate) => candidate.name === toolName)
+        const target = (tool?.inputSchema as {
+          properties?: { target?: { properties?: { display?: { properties?: { viewport?: unknown } } } } }
+        }).properties?.target
+        expect(target?.properties?.display?.properties?.viewport).toMatchObject({
+          type: 'array',
+          items: { type: 'integer' },
+          minItems: 2,
+          maxItems: 2
+        })
+      }
       const runTool = tools.tools.find((tool) => tool.name === COMPUTER_USE_MCP_TOOL_NAME)
       expect(runTool?.annotations).toMatchObject({
         title: 'Computer use',
