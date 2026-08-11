@@ -82,7 +82,7 @@ class ComputerUseService:
         self._server_instance_id = server_instance_id or f"cua-{uuid.uuid4()}"
         self._request_contexts: dict[str, dict[str, Any]] = {}
         self._batch_requests: dict[str, tuple[str, ...]] = {}
-        self._cancelled_batches: set[str] = set()
+        self._batch_cancellations: dict[str, threading.Event] = {}
         self._open_cleanup_pending: dict[str, _PendingOpenCleanup] = {}
         self._recent_rejections: deque[dict[str, Any]] = deque(maxlen=20)
 
@@ -179,6 +179,12 @@ class ComputerUseService:
                     "requestedIsolation": request["requestedIsolation"],
                 }
             cancellation = self.registry.cancellation_event(request_id)
+            external_cancellation = options.get("external_cancellation")
+            if (
+                isinstance(external_cancellation, threading.Event)
+                and external_cancellation.is_set()
+            ):
+                self.registry.request_cancel(request_id, "parent_batch_cancelled")
             open_context = BackendOpenContext(
                 request_id=request_id,
                 execute=request["execute"],
@@ -313,66 +319,79 @@ class ComputerUseService:
                     details={"reason": "service-shutting-down"},
                 )
         try:
-            request = contract.normalize_parallel_run_input(value)
-            sessions = []
-            for child in request["parallel"]:
-                session, ephemeral = self._resolve_session(child, invocation)
-                if ephemeral:
-                    raise ValueError("parallel entries must use pre-bound sessions")
-                sessions.append(session)
-            target_ids = [session.target.target_id for session in sessions]
-            if len(set(target_ids)) != len(target_ids):
-                raise ValueError("parallel sessions must bind different targets")
-        except RegistryError as error:
-            return R.err(error.code, str(error), details=error.details)
+            raw_parent_request_id = (
+                invocation.request_id if invocation is not None
+                else value.get("requestId") if isinstance(value, dict) else None
+            )
+            parent_request_id = validate_safe_id(
+                raw_parent_request_id or f"batch-{uuid.uuid4()}",
+                "requestId",
+            )
         except ValueError as error:
             return R.err("INVALID_ARGUMENT", str(error))
 
         started_at = time.time()
-        parent_request_id = (
-            invocation.request_id if invocation is not None
-            else str(value.get("requestId") or f"batch-{uuid.uuid4()}")
-        )
-        child_invocations: list[InvocationIdentity | None] = []
-        child_request_ids: list[str] = []
-        for index, child in enumerate(request["parallel"]):
-            child.pop("protocolVersion", None)
-            child_request_id = f"batch-{uuid.uuid4()}"
-            child_request_ids.append(child_request_id)
-            child["requestId"] = child_request_id
-            child_invocations.append(
-                InvocationIdentity(
-                    proof_id=f"{invocation.proof_id}:{index}",
-                    request_id=child_request_id,
-                    runtime_id=invocation.runtime_id,
-                    thread_id=invocation.thread_id,
-                    turn_id=invocation.turn_id,
-                    call_id=invocation.call_id,
-                    invocation_id=invocation.invocation_id,
-                    tool=invocation.tool,
-                ) if invocation is not None else None
-            )
-
+        batch_cancellation = threading.Event()
         with self._channels_lock:
-            self._batch_requests[parent_request_id] = tuple(child_request_ids)
-
-        def run_child(index: int, child: dict[str, Any]) -> dict[str, Any]:
-            with self._channels_lock:
-                cancelled = parent_request_id in self._cancelled_batches
-            if cancelled:
+            if parent_request_id in self._batch_requests:
                 return R.err(
-                    "CANCEL_PENDING",
-                    "batch was cancelled before this child request started",
-                    details={"requestId": child_request_ids[index]},
+                    "REQUEST_ID_CONFLICT",
+                    "parallel batch requestId is already active",
+                    details={"requestId": parent_request_id},
                 )
-            return self.run(
-                child,
-                executor,
-                channel_options=channel_options,
-                invocation=child_invocations[index],
-            )
-
+            # Register before validation/session resolution so an immediate Host
+            # stop is latched even while no child request exists yet.
+            self._batch_requests[parent_request_id] = ()
+            self._batch_cancellations[parent_request_id] = batch_cancellation
         try:
+            try:
+                request = contract.normalize_parallel_run_input(value)
+                sessions = []
+                for child in request["parallel"]:
+                    session, ephemeral = self._resolve_session(child, invocation)
+                    if ephemeral:
+                        raise ValueError("parallel entries must use pre-bound sessions")
+                    sessions.append(session)
+                target_ids = [session.target.target_id for session in sessions]
+                if len(set(target_ids)) != len(target_ids):
+                    raise ValueError("parallel sessions must bind different targets")
+            except RegistryError as error:
+                return R.err(error.code, str(error), details=error.details)
+            except ValueError as error:
+                return R.err("INVALID_ARGUMENT", str(error))
+
+            child_invocations: list[InvocationIdentity | None] = []
+            child_request_ids: list[str] = []
+            for index, child in enumerate(request["parallel"]):
+                child.pop("protocolVersion", None)
+                child_request_id = f"batch-{uuid.uuid4()}"
+                child_request_ids.append(child_request_id)
+                child["requestId"] = child_request_id
+                child_invocations.append(
+                    InvocationIdentity(
+                        proof_id=f"{invocation.proof_id}:{index}",
+                        request_id=child_request_id,
+                        runtime_id=invocation.runtime_id,
+                        thread_id=invocation.thread_id,
+                        turn_id=invocation.turn_id,
+                        call_id=invocation.call_id,
+                        invocation_id=invocation.invocation_id,
+                        tool=invocation.tool,
+                    ) if invocation is not None else None
+                )
+            with self._channels_lock:
+                self._batch_requests[parent_request_id] = tuple(child_request_ids)
+
+            def run_child(index: int, child: dict[str, Any]) -> dict[str, Any]:
+                child_options = dict(channel_options or {})
+                child_options["external_cancellation"] = batch_cancellation
+                return self.run(
+                    child,
+                    executor,
+                    channel_options=child_options,
+                    invocation=child_invocations[index],
+                )
+
             with ThreadPoolExecutor(
                 max_workers=len(request["parallel"]),
                 thread_name_prefix="cua-batch",
@@ -382,33 +401,33 @@ class ComputerUseService:
                     for index, child in enumerate(request["parallel"])
                 ]
                 child_results = [future.result() for future in futures]
+
+            results = [
+                {
+                    "sessionId": session.session_id,
+                    "targetId": session.target.target_id,
+                    "requestId": child_request_ids[index],
+                    "result": child_results[index],
+                }
+                for index, session in enumerate(sessions)
+            ]
+            success_count = sum(1 for item in child_results if item.get("ok"))
+            return R.ok(
+                {
+                    "status": "batch_completed",
+                    "requestedCount": len(results),
+                    "successCount": success_count,
+                    "failureCount": len(results) - success_count,
+                    "results": results,
+                },
+                prov=R.provenance(
+                    "computer_use_run_batch", parent_request_id, started_at,
+                ),
+            )
         finally:
             with self._channels_lock:
                 self._batch_requests.pop(parent_request_id, None)
-                self._cancelled_batches.discard(parent_request_id)
-
-        results = [
-            {
-                "sessionId": session.session_id,
-                "targetId": session.target.target_id,
-                "requestId": child_request_ids[index],
-                "result": child_results[index],
-            }
-            for index, session in enumerate(sessions)
-        ]
-        success_count = sum(1 for item in child_results if item.get("ok"))
-        return R.ok(
-            {
-                "status": "batch_completed",
-                "requestedCount": len(results),
-                "successCount": success_count,
-                "failureCount": len(results) - success_count,
-                "results": results,
-            },
-            prov=R.provenance(
-                "computer_use_run_batch", parent_request_id, started_at,
-            ),
-        )
+                self._batch_cancellations.pop(parent_request_id, None)
 
     def _resolve_session(
         self, request: dict[str, Any], invocation: InvocationIdentity | None = None,
@@ -577,10 +596,12 @@ class ComputerUseService:
             reason = str(value.get("reason", "user_stop"))
             with self._channels_lock:
                 child_request_ids = self._batch_requests.get(request_id)
-                if child_request_ids is not None:
-                    self._cancelled_batches.add(request_id)
+                batch_cancellation = self._batch_cancellations.get(request_id)
+                if batch_cancellation is not None:
+                    batch_cancellation.set()
             if child_request_ids is not None:
                 child_statuses = []
+                delivery_errors = []
                 for child_request_id in child_request_ids:
                     try:
                         active = self.registry.get_request(child_request_id)
@@ -605,12 +626,30 @@ class ComputerUseService:
                         with self._channels_lock:
                             channel = self._channels.get(child_request_id)
                         if channel is not None:
-                            channel.request_cancel(reason)
+                            try:
+                                channel.request_cancel(reason)
+                            except Exception as error:  # cancellation remains latched in Registry
+                                status = "delivery-failed"
+                                delivery_errors.append({
+                                    "requestId": child_request_id,
+                                    "errorType": type(error).__name__[:128],
+                                })
                     child_statuses.append({
                         "requestId": child_request_id,
                         "status": status,
                         "state": request.state.value,
                     })
+                if delivery_errors:
+                    return R.err(
+                        "CANCEL_DELIVERY_FAILED",
+                        "batch cancellation was recorded but one or more backend deliveries failed",
+                        retryable=True,
+                        details={
+                            "requestId": request_id,
+                            "children": child_statuses,
+                            "deliveryErrors": delivery_errors,
+                        },
+                    )
                 return R.ok({
                     "requestId": request_id,
                     "status": "accepted",

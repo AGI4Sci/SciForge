@@ -84,6 +84,13 @@ def test_ok_envelope():
     assert res["summary"] == "done"
 
 
+def test_cancel_delivery_failure_is_canonical_retryable_cleanup_error():
+    res = R.err("CANCEL_DELIVERY_FAILED", "backend cancel delivery failed")
+    assert res["error"]["code"] == "CANCEL_DELIVERY_FAILED"
+    assert res["error"]["retryable"] is True
+    assert res["error"]["failureClass"] == "cleanup"
+
+
 def test_err_envelope_and_bad_code():
     res = R.err("NEEDS_APPROVAL", "needs approval", blocked_reason="x")
     assert res["ok"] is False

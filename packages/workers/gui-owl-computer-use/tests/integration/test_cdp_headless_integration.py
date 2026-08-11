@@ -833,25 +833,103 @@ def test_cancelled_channel_does_not_commit_to_its_page(cdp_stack: CdpStack) -> N
     assert service.cleanup_pending() == []
 
 
-def test_target_loss_is_structured_and_does_not_break_other_page(cdp_stack: CdpStack) -> None:
+def test_parallel_batch_parent_cancel_reaches_all_real_cdp_channels(
+    cdp_stack: CdpStack,
+) -> None:
     stack = cdp_stack
     backend = stack.backend()
     targets = _targets_by_name(stack)
     service = ComputerUseService(router=BackendRouter([backend]))
-    observed = threading.Barrier(2)
+    all_observed = threading.Barrier(4)
+    batch_result: dict[str, Any] = {}
+
+    for name in PAGE_NAMES:
+        assert service.bind_session({
+            "sessionId": f"batch-cancel-session-{name}",
+            "owner": {"runtimeId": "integration", "threadId": "batch-cancel"},
+            "target": targets[name].to_dict(),
+        })["ok"] is True
+
+    def execute(_request, channel):
+        channel.observe()
+        all_observed.wait(timeout=10)
+        try:
+            channel.wait(30)
+        except ChannelError as error:
+            return R.err(error.code, str(error))
+        return R.ok({"status": "incorrect"})
+
+    worker = threading.Thread(target=lambda: batch_result.update(service.run_batch({
+        "instruction": "cancel all real target-scoped children",
+        "requestId": "real-cdp-parent-cancel",
+        "parallel": [
+            {"instruction": f"wait on {name}", "sessionId": f"batch-cancel-session-{name}"}
+            for name in PAGE_NAMES
+        ],
+    }, execute)))
+    before = stack.state.snapshot()
+    worker.start()
+    all_observed.wait(timeout=10)
+    cancelled = service.cancel({
+        "requestId": "real-cdp-parent-cancel",
+        "reason": "real-integration-cancel",
+    })
+    worker.join(timeout=15)
+
+    assert not worker.is_alive()
+    assert cancelled["ok"] is True
+    assert len(cancelled["data"]["children"]) == 3
+    assert batch_result["data"]["successCount"] == 0
+    assert batch_result["data"]["failureCount"] == 3
+    assert {
+        item["result"]["error"]["code"] for item in batch_result["data"]["results"]
+    } == {"CANCEL_PENDING"}
+    assert stack.state.snapshot() == before
+    counts = service.registry.snapshot_counts()
+    assert counts["requests"] == counts["activeLeases"] == 0
+    assert service.status()["activeChannels"] == 0
+    assert service.cleanup_pending() == []
+    for name in PAGE_NAMES:
+        assert service.release_session({
+            "sessionId": f"batch-cancel-session-{name}",
+        })["ok"] is True
+    assert service.registry.snapshot_counts()["sessions"] == 0
+
+
+def test_parallel_batch_target_loss_does_not_break_other_real_pages(
+    cdp_stack: CdpStack,
+) -> None:
+    stack = cdp_stack
+    backend = stack.backend()
+    targets = _targets_by_name(stack)
+    service = ComputerUseService(router=BackendRouter([backend]))
+    observed = threading.Barrier(3)
     page_closed = threading.Event()
 
-    for name in ("A", "B"):
+    for name in PAGE_NAMES:
         bound = service.bind_session({
             "sessionId": f"loss-session-{name}",
-            "owner": {"runtimeId": "integration", "threadId": f"loss-thread-{name}"},
+            "owner": {"runtimeId": "integration", "threadId": "loss-thread"},
             "target": targets[name].to_dict(),
         })
         assert bound["ok"] is True
 
-    def execute_a(_request, channel):
+    def execute(request, channel):
+        name = request["instruction"].rsplit(" ", 1)[-1]
         before = channel.observe()
         observed.wait(timeout=10)
+        if name == "B":
+            response = requests.get(
+                f"{stack.cdp_url}/json/close/{stack.pages['B']['id']}",
+                timeout=5,
+            )
+            response.raise_for_status()
+            page_closed.set()
+            try:
+                channel.observe()
+            except ChannelError as error:
+                return R.err(error.code, str(error))
+            return R.ok({"status": "incorrect"})
         assert page_closed.wait(timeout=10)
         channel.perform(
             {"action": "click", "coordinate": [260, 145]},
@@ -864,45 +942,34 @@ def test_target_loss_is_structured_and_does_not_break_other_page(cdp_stack: CdpS
         )
         selected = channel.observe()
         outcome = channel.perform(
-            {"action": "type", "text": "survivor-A"},
+            {"action": "type", "text": f"survivor-{name}"},
             expected_revision=selected.revision,
         )
         return R.ok({"targetId": outcome.target_id})
 
-    def execute_b(_request, channel):
-        channel.observe()
-        observed.wait(timeout=10)
-        response = requests.get(
-            f"{stack.cdp_url}/json/close/{stack.pages['B']['id']}",
-            timeout=5,
-        )
-        response.raise_for_status()
-        page_closed.set()
-        try:
-            channel.observe()
-        except ChannelError as error:
-            return R.err(error.code, str(error))
-        return R.ok({"status": "incorrect"})
+    result = service.run_batch({
+        "instruction": "one real CDP target is lost while peers continue",
+        "requestId": "real-cdp-target-loss-batch",
+        "parallel": [
+            {"instruction": f"target-loss {name}", "sessionId": f"loss-session-{name}"}
+            for name in PAGE_NAMES
+        ],
+    }, execute)
 
-    def run(name: str):
-        return service.run(
-            {
-                "instruction": f"target-loss {name}",
-                "sessionId": f"loss-session-{name}",
-                "requestId": f"loss-request-{name}",
-            },
-            execute_a if name == "A" else execute_b,
-        )
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        result_a, result_b = list(pool.map(run, ("A", "B")))
-
-    assert result_b["error"]["code"] in {"TARGET_LOST", "BACKEND_UNAVAILABLE"}, result_b
-    assert result_a["ok"] is True, result_a
+    assert result["ok"] is True, result
+    assert result["data"]["successCount"] == 2
+    assert result["data"]["failureCount"] == 1
+    children = {item["sessionId"]: item["result"] for item in result["data"]["results"]}
+    assert children["loss-session-B"]["error"]["code"] in {
+        "TARGET_LOST", "BACKEND_UNAVAILABLE",
+    }
+    assert children["loss-session-A"]["ok"] is True
+    assert children["loss-session-C"]["ok"] is True
     assert stack.state.snapshot()["A"]["text"] == "survivor-A"
+    assert stack.state.snapshot()["C"]["text"] == "survivor-C"
     counts = service.registry.snapshot_counts()
     assert counts["requests"] == counts["activeLeases"] == 0
-    for name in ("A", "B"):
+    for name in PAGE_NAMES:
         assert service.release_session({"sessionId": f"loss-session-{name}"})["ok"] is True
     assert service.registry.snapshot_counts()["sessions"] == 0
     assert service.status()["activeChannels"] == 0

@@ -277,6 +277,211 @@ def test_parallel_batch_parent_cancel_fans_out_and_cleans_children():
     assert backend.open_handle_count == 0
 
 
+def test_parallel_batch_cancel_is_latched_before_child_request_registration(monkeypatch):
+    backend = FakeBackend()
+    service = ComputerUseService(router=BackendRouter([backend]))
+    for label in ("alpha", "beta"):
+        service.bind_session({
+            "sessionId": f"session-{label}",
+            "owner": {"runtimeId": "runtime-1", "threadId": "thread-1"},
+            "target": uia_target(f"target-{label}"),
+        })
+    original_begin_request = service.registry.begin_request
+    before_registration = threading.Barrier(3)
+    permit_registration = threading.Event()
+    batch_result = {}
+
+    def delayed_begin_request(*args, **kwargs):
+        before_registration.wait(timeout=1)
+        assert permit_registration.wait(timeout=1)
+        return original_begin_request(*args, **kwargs)
+
+    monkeypatch.setattr(service.registry, "begin_request", delayed_begin_request)
+    worker = threading.Thread(
+        target=lambda: batch_result.update(service.run_batch({
+            "instruction": "cancel during child registration",
+            "requestId": "batch-registration-race",
+            "parallel": [
+                {"instruction": "alpha", "sessionId": "session-alpha"},
+                {"instruction": "beta", "sessionId": "session-beta"},
+            ],
+        }, lambda _request, _channel: {"ok": True})),
+    )
+    worker.start()
+    before_registration.wait(timeout=1)
+    cancelled = service.cancel({"requestId": "batch-registration-race"})
+    permit_registration.set()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert cancelled["ok"] is True
+    assert {item["status"] for item in cancelled["data"]["children"]} == {"pending-start"}
+    assert batch_result["data"]["successCount"] == 0
+    assert batch_result["data"]["failureCount"] == 2
+    assert {
+        item["result"]["error"]["code"] for item in batch_result["data"]["results"]
+    } == {"CANCEL_PENDING"}
+    counts = service.registry.snapshot_counts()
+    assert counts["requests"] == counts["activeLeases"] == 0
+    assert backend.open_handle_count == 0
+
+
+def test_parallel_batch_cancel_is_latched_during_session_resolution(monkeypatch):
+    backend = FakeBackend()
+    service = ComputerUseService(router=BackendRouter([backend]))
+    for label in ("alpha", "beta"):
+        service.bind_session({
+            "sessionId": f"session-{label}",
+            "owner": {"runtimeId": "runtime-1", "threadId": "thread-1"},
+            "target": uia_target(f"target-{label}"),
+        })
+    original_resolve_session = service._resolve_session
+    resolving = threading.Event()
+    permit_resolution = threading.Event()
+    batch_result = {}
+    first_resolution = True
+
+    def delayed_resolve_session(*args, **kwargs):
+        nonlocal first_resolution
+        if first_resolution:
+            first_resolution = False
+            resolving.set()
+            assert permit_resolution.wait(timeout=1)
+        return original_resolve_session(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_resolve_session", delayed_resolve_session)
+    worker = threading.Thread(
+        target=lambda: batch_result.update(service.run_batch({
+            "instruction": "cancel while sessions resolve",
+            "requestId": "batch-session-resolution-race",
+            "parallel": [
+                {"instruction": "alpha", "sessionId": "session-alpha"},
+                {"instruction": "beta", "sessionId": "session-beta"},
+            ],
+        }, lambda _request, _channel: {"ok": True})),
+    )
+    worker.start()
+    assert resolving.wait(timeout=1)
+    cancelled = service.cancel({"requestId": "batch-session-resolution-race"})
+    permit_resolution.set()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert cancelled["ok"] is True
+    assert cancelled["data"]["children"] == []
+    assert batch_result["data"]["successCount"] == 0
+    assert batch_result["data"]["failureCount"] == 2
+    assert {
+        item["result"]["error"]["code"] for item in batch_result["data"]["results"]
+    } == {"CANCEL_PENDING"}
+    counts = service.registry.snapshot_counts()
+    assert counts["requests"] == counts["activeLeases"] == 0
+    assert backend.open_handle_count == 0
+
+
+def test_parallel_batch_rejects_duplicate_active_parent_request_id():
+    backend = FakeBackend()
+    service = ComputerUseService(router=BackendRouter([backend]))
+    for label in ("alpha", "beta"):
+        service.bind_session({
+            "sessionId": f"session-{label}",
+            "owner": {"runtimeId": "runtime-1", "threadId": "thread-1"},
+            "target": uia_target(f"target-{label}"),
+        })
+    both_started = threading.Barrier(3)
+    permit_finish = threading.Event()
+    first_result = {}
+    batch = {
+        "instruction": "one active parent identity",
+        "requestId": "batch-parent-conflict",
+        "parallel": [
+            {"instruction": "alpha", "sessionId": "session-alpha"},
+            {"instruction": "beta", "sessionId": "session-beta"},
+        ],
+    }
+
+    def execute(_request, _channel):
+        both_started.wait(timeout=1)
+        assert permit_finish.wait(timeout=1)
+        return {"ok": True}
+
+    worker = threading.Thread(
+        target=lambda: first_result.update(service.run_batch(batch, execute)),
+    )
+    worker.start()
+    both_started.wait(timeout=1)
+    duplicate = service.run_batch(batch, lambda _request, _channel: {"ok": True})
+    permit_finish.set()
+    worker.join(timeout=2)
+
+    assert duplicate["error"]["code"] == "REQUEST_ID_CONFLICT"
+    assert first_result["data"]["successCount"] == 2
+    counts = service.registry.snapshot_counts()
+    assert counts["requests"] == counts["activeLeases"] == 0
+    assert backend.open_handle_count == 0
+
+
+def test_parallel_batch_cancel_continues_after_one_backend_delivery_failure(monkeypatch):
+    backend = FakeBackend()
+    service = ComputerUseService(router=BackendRouter([backend]))
+    for label in ("alpha", "beta"):
+        service.bind_session({
+            "sessionId": f"session-{label}",
+            "owner": {"runtimeId": "runtime-1", "threadId": "thread-1"},
+            "target": uia_target(f"target-{label}"),
+        })
+    original_cancel = backend.cancel
+    delivery_count = 0
+    delivered_targets = []
+    both_started = threading.Barrier(3)
+    batch_result = {}
+
+    def fail_first_cancel(handle, reason):
+        nonlocal delivery_count
+        delivery_count += 1
+        delivered_targets.append(handle.target.target_id)
+        if delivery_count == 1:
+            raise RuntimeError("injected cancel delivery failure")
+        original_cancel(handle, reason)
+
+    monkeypatch.setattr(backend, "cancel", fail_first_cancel)
+
+    def execute(_request, channel):
+        channel.observe()
+        both_started.wait(timeout=1)
+        while not channel.cancellation.is_set():
+            time.sleep(0.001)
+        return {"ok": False, "error": {"code": "CANCELLED", "message": "cancelled"}}
+
+    worker = threading.Thread(
+        target=lambda: batch_result.update(service.run_batch({
+            "instruction": "continue cancel fanout after one delivery failure",
+            "requestId": "batch-cancel-delivery-failure",
+            "parallel": [
+                {"instruction": "alpha", "sessionId": "session-alpha"},
+                {"instruction": "beta", "sessionId": "session-beta"},
+            ],
+        }, execute)),
+    )
+    worker.start()
+    both_started.wait(timeout=1)
+    cancelled = service.cancel({"requestId": "batch-cancel-delivery-failure"})
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert cancelled["error"]["code"] == "CANCEL_DELIVERY_FAILED"
+    statuses = {
+        item["status"] for item in cancelled["error"]["details"]["children"]
+    }
+    assert statuses == {"accepted", "delivery-failed"}
+    assert delivery_count >= 2
+    assert set(delivered_targets) == {"target-alpha", "target-beta"}
+    assert batch_result["data"]["failureCount"] == 2
+    counts = service.registry.snapshot_counts()
+    assert counts["requests"] == counts["activeLeases"] == 0
+    assert backend.open_handle_count == 0
+
+
 def test_unknown_backend_open_outcome_stays_visible_and_keeps_lease_quarantined():
     backend = FakeBackend()
 

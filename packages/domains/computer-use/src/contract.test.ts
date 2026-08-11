@@ -21,6 +21,7 @@ describe('computer-use shared v2 contract', () => {
   it('exposes the structured isolated desktop unavailable code', () => {
     expect(COMPUTER_USE_ERROR_CODES).toContain('ISOLATED_DESKTOP_UNAVAILABLE')
     expect(COMPUTER_USE_ERROR_CODES).toContain('APPROVAL_PROOF_CAPACITY')
+    expect(COMPUTER_USE_ERROR_CODES).toContain('CANCEL_DELIVERY_FAILED')
   })
 
   it('accepts a bounded deterministic semantic click as protocol v2', () => {
