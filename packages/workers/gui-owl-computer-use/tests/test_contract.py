@@ -6,6 +6,7 @@ No network and no display required. Runnable two ways:
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -37,6 +38,49 @@ def test_semantic_action_rejects_missing_expectation():
         assert "semanticAction" in str(error)
     else:  # pragma: no cover
         raise AssertionError("incomplete semantic action should fail")
+
+
+def test_semantic_sequence_is_bounded_and_normalized():
+    normalized = contract.normalize_run_input({
+        "instruction": "Commit Alpha.",
+        "semanticAction": {
+            "kind": "sequence",
+            "steps": [
+                {"kind": "write", "role": "textbox", "automationId": "1101", "text": "alpha"},
+                {"kind": "invoke", "role": "button", "name": "Commit Alpha"},
+                {"kind": "toggle", "role": "checkbox", "automationId": "1103"},
+            ],
+            "expect": {"kind": "text-present", "text": "text=alpha;clicks=1;checked=1"},
+        },
+    })
+    assert normalized["semanticAction"]["steps"][0]["text"] == "alpha"
+    assert normalized["semanticAction"]["steps"][1] == {
+        "kind": "invoke", "role": "button", "name": "Commit Alpha",
+    }
+
+
+def test_semantic_sequence_rejects_ambiguous_malformed_or_unbounded_steps():
+    base = {
+        "instruction": "sequence",
+        "semanticAction": {
+            "kind": "sequence",
+            "steps": [{"kind": "write", "role": "textbox", "automationId": "1101", "text": "x"}],
+            "expect": {"kind": "text-present", "text": "done"},
+        },
+    }
+    invalid_steps = [
+        [{"kind": "write", "role": "textbox", "text": "x"}],
+        [{"kind": "invoke", "role": "button", "name": "Save", "text": "x"}],
+        base["semanticAction"]["steps"] * 17,
+    ]
+    for steps in invalid_steps:
+        candidate = {**base, "semanticAction": {**base["semanticAction"], "steps": steps}}
+        try:
+            contract.normalize_run_input(candidate)
+        except ValueError:
+            pass
+        else:  # pragma: no cover
+            raise AssertionError("unsafe semantic sequence should fail")
 
 
 def test_parallel_run_normalizes_distinct_bound_sessions():
@@ -75,6 +119,47 @@ def test_parallel_run_rejects_duplicate_or_conflicting_sessions():
             pass
         else:  # pragma: no cover
             raise AssertionError("unsafe parallel input should fail")
+
+
+def test_parallel_run_accepts_matching_redundant_policy_assertions_only():
+    entries = [
+        {
+            "instruction": "one", "sessionId": "one",
+            "requestedIsolation": "host-app-scoped", "allowDegraded": False,
+        },
+        {
+            "instruction": "two", "sessionId": "two",
+            "requestedIsolation": "host-app-scoped", "allowDegraded": False,
+        },
+    ]
+    normalized = contract.normalize_parallel_run_input({
+        "instruction": "batch",
+        "requestedIsolation": "host-app-scoped",
+        "allowDegraded": False,
+        "queueIfBusy": True,
+        "deadlineMs": 300_000,
+        "parallel": entries,
+    })
+    assert normalized["parallel"][0]["requestedIsolation"] == "host-app-scoped"
+    assert normalized["parallel"][0]["queueIfBusy"] is True
+    assert normalized["parallel"][0]["deadlineMs"] == 300_000
+    assert "requestedIsolation" not in normalized
+
+    for entries_with_drift in (
+        [entries[0], {**entries[1], "requestedIsolation": "agent-isolated"}],
+        [entries[0], {"instruction": "two", "sessionId": "two"}],
+    ):
+        try:
+            contract.normalize_parallel_run_input({
+                "instruction": "batch",
+                "requestedIsolation": "host-app-scoped",
+                "allowDegraded": False,
+                "parallel": entries_with_drift,
+            })
+        except ValueError:
+            pass
+        else:  # pragma: no cover
+            raise AssertionError("drifting batch policy assertion should fail")
 
 
 def test_ok_envelope():
@@ -224,8 +309,165 @@ def test_model_router_responses_call_optional():
     assert calls[0]["json"]["model"] == "sciforge-router"
     assert calls[0]["json"]["instructions"] == "system prompt"
     assert "temperature" not in calls[0]["json"]
+    assert calls[0]["json"]["tools"] == [owl_agent.RESPONSES_COMPUTER_USE_TOOL]
+    assert calls[0]["json"]["tool_choice"] == {
+        "type": "function", "name": "computer_use",
+    }
+    assert calls[0]["json"]["parallel_tool_calls"] is False
+    assert "metadata" not in calls[0]["json"]
     serialized = str(calls[0]["json"])
     assert "input_image" in serialized and "data:image/png;base64,AAAA" in serialized
+
+
+def test_model_router_marks_trusted_semantic_observation_optional():
+    try:
+        from cua import owl_agent
+    except Exception:  # noqa: BLE001
+        return
+
+    calls = []
+    original_post = owl_agent.requests.post
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "output": [{
+                    "type": "function_call",
+                    "name": "computer_use",
+                    "arguments": '{"action":"write","elementToken":"token","text":"alpha"}',
+                }],
+            }
+
+    def fake_post(url, headers=None, json=None, timeout=None):  # noqa: A002
+        calls.append({"json": json})
+        return FakeResponse()
+
+    try:
+        owl_agent.requests.post = fake_post
+        owl_agent.call_owl(
+            "http://127.0.0.1:3892/v1",
+            "sciforge-router",
+            "router-token",
+            [{"role": "user", "content": [{"type": "text", "text": "semantic tree"}]}],
+            semantic_observation={
+                "targetId": "uia:42:100:abc",
+                "revision": "7",
+                "semanticTree": [{"elementToken": "token", "name": "Editor"}],
+            },
+        )
+    finally:
+        owl_agent.requests.post = original_post
+
+    assert calls[0]["json"]["metadata"] == {
+        "sciforge_observation_mode": "semantic",
+        "sciforge_semantic_observation": {
+            "targetId": "uia:42:100:abc",
+            "revision": "7",
+            "semanticTree": [{"elementToken": "token", "name": "Editor"}],
+        },
+    }
+
+
+def test_model_router_exposes_sanitized_retryable_bridge_error_optional():
+    try:
+        from cua import owl_agent
+    except Exception:  # noqa: BLE001
+        return
+
+    original_post = owl_agent.requests.post
+
+    class FakeResponse:
+        status_code = 502
+
+        def raise_for_status(self):
+            raise owl_agent.requests.HTTPError("raw URL must not escape")
+
+        def json(self):
+            return {
+                "error": {
+                    "code": "computer_use_planner_unavailable",
+                    "message": "Host Agent returned an invalid forced function result.",
+                },
+            }
+
+    try:
+        owl_agent.requests.post = lambda *_args, **_kwargs: FakeResponse()
+        try:
+            owl_agent.call_owl(
+                "http://127.0.0.1:3892/v1",
+                "sciforge-router",
+                "router-token",
+                [{"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                ]}],
+            )
+            raise AssertionError("expected ModelCallError")
+        except owl_agent.ModelCallError as error:
+            assert error.retryable is True
+            assert "HTTP 502" in str(error)
+            assert "invalid forced function result" in str(error)
+            assert "raw URL" not in str(error)
+    finally:
+        owl_agent.requests.post = original_post
+
+
+def test_system_prompt_requires_native_tool_call_optional():
+    try:
+        from cua import owl_agent
+    except Exception:  # noqa: BLE001
+        return
+
+    assert "Call the provided native `computer_use` function exactly once" in owl_agent.SYSTEM_PROMPT
+    assert "do not emit JSON or XML as text" in owl_agent.SYSTEM_PROMPT
+    assert "Output exactly in the order: Action, <tool_call>" not in owl_agent.SYSTEM_PROMPT
+
+
+def test_model_router_native_function_call_becomes_runner_action_optional():
+    """Responses function calls are normalized to the runner's canonical format."""
+    try:
+        from cua import owl_agent
+    except Exception:  # noqa: BLE001
+        return
+
+    output = owl_agent._responses_output_text({
+        "output_text": "",
+        "output": [{
+            "type": "function_call",
+            "call_id": "call_uia_write",
+            "name": "computer_use",
+            "arguments": json.dumps({
+                "action": "write",
+                "elementToken": "uia-token:opaque",
+                "text": "uia-agent-A",
+            }),
+        }],
+    })
+
+    assert output.startswith("Action: write\n<tool_call>")
+    assert owl_agent.extract_action(output) == {
+        "action": "write",
+        "elementToken": "uia-token:opaque",
+        "text": "uia-agent-A",
+    }
+
+
+def test_model_router_native_function_call_ignores_malformed_arguments_optional():
+    try:
+        from cua import owl_agent
+    except Exception:  # noqa: BLE001
+        return
+
+    assert owl_agent._responses_output_text({
+        "output_text": "model fallback",
+        "output": [{
+            "type": "function_call",
+            "name": "computer_use",
+            "arguments": "{not-json",
+        }],
+    }) == "model fallback"
 
 
 def test_model_router_responses_url_normalizes_base_optional():

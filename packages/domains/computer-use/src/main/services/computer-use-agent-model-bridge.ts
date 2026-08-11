@@ -1,7 +1,10 @@
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 
-import type { DomainMainAgentExecutionHost } from '@sciforge/domain-sdk'
+import type {
+  DomainMainAgentCanonicalObservation,
+  DomainMainAgentExecutionHost
+} from '@sciforge/domain-sdk'
 
 const MAX_REQUEST_BYTES = 32 * 1024 * 1024
 
@@ -82,6 +85,9 @@ async function handleRequest(
       runtimeId: 'codex',
       prompt: prepared.prompt,
       imageUrls: prepared.imageUrls,
+      ...(prepared.canonicalObservation
+        ? { canonicalObservation: prepared.canonicalObservation }
+        : {}),
       workspaceRoot: options.workspaceRoot,
       allowedTools: [],
       mode: 'plan',
@@ -89,6 +95,20 @@ async function handleRequest(
     })
     const text = result.text.trim()
     if (!text) throw new Error('Host Agent returned an empty Computer Use planning response.')
+    if (prepared.forcedFunction) {
+      const argumentsValue = parseForcedFunctionResult(text, prepared.forcedFunction.name)
+      sendJson(response, 200, {
+        output_text: '',
+        output: [{
+          type: 'function_call',
+          id: `fc_${randomUUID()}`,
+          call_id: `call_${randomUUID()}`,
+          name: prepared.forcedFunction.name,
+          arguments: JSON.stringify(argumentsValue)
+        }]
+      })
+      return
+    }
     sendJson(response, 200, {
       output_text: text,
       output: [{
@@ -106,6 +126,8 @@ async function handleRequest(
 function prepareAgentExecution(body: Record<string, unknown>): {
   prompt: string
   imageUrls: string[]
+  forcedFunction: { name: string; parameters: unknown } | null
+  canonicalObservation: DomainMainAgentCanonicalObservation | null
 } {
   const prompt: string[] = []
   const instructions = typeof body.instructions === 'string' ? body.instructions.trim() : ''
@@ -135,15 +157,100 @@ function prepareAgentExecution(body: Record<string, unknown>): {
     }
     prompt.push(`## ${role}`, parts.join('\n'))
   }
-  if (imageUrls.length === 0) throw new Error('Computer Use planning request requires a screenshot.')
+  const metadata = objectRecord(body.metadata)
+  const semanticObservation = metadata?.sciforge_observation_mode === 'semantic'
+  if (imageUrls.length === 0 && !semanticObservation) {
+    throw new Error('Computer Use planning request requires a screenshot or trusted semantic observation.')
+  }
   if (imageUrls.length > 4) throw new Error('Computer Use planning request exceeds the four-image limit.')
-  prompt.push(
-    '# Output constraint',
-    'Return exactly the response format requested in the instructions. Do not call tools.'
-  )
+  if (semanticObservation) {
+    prompt.push(
+      '# Observation mode',
+      'The current semantic tree in the conversation is the canonical target-bound observation. No screenshot is expected for this UI Automation request.'
+    )
+  }
+  const canonicalObservation = semanticObservation
+    ? canonicalObservationFromMetadata(metadata)
+    : null
+  const forcedFunction = forcedFunctionFromRequest(body)
+  prompt.push('# Output constraint')
+  if (forcedFunction) {
+    prompt.push(
+      `Return exactly one JSON object with this shape: {"name":${JSON.stringify(forcedFunction.name)},"arguments":{...}}.`,
+      'The arguments must satisfy this JSON Schema:',
+      JSON.stringify(forcedFunction.parameters),
+      'Do not use Markdown, prose, XML, or an actual tool call.'
+    )
+  } else {
+    prompt.push('Return exactly the response format requested in the instructions. Do not call tools.')
+  }
   const text = prompt.join('\n\n')
   if (text.length > 1_000_000) throw new Error('Computer Use planning prompt exceeds the 1 MB text limit.')
-  return { prompt: text, imageUrls }
+  return { prompt: text, imageUrls, forcedFunction, canonicalObservation }
+}
+
+function canonicalObservationFromMetadata(
+  metadata: Record<string, unknown> | null
+): DomainMainAgentCanonicalObservation {
+  const value = objectRecord(metadata?.sciforge_semantic_observation)
+  const targetId = typeof value?.targetId === 'string' ? value.targetId.trim() : ''
+  const revisionValue = value?.revision
+  const revision = typeof revisionValue === 'string' || typeof revisionValue === 'number'
+    ? String(revisionValue).trim()
+    : ''
+  const rawTree = Array.isArray(value?.semanticTree) ? value.semanticTree : null
+  const semanticTree = rawTree?.every((node) => objectRecord(node) !== null)
+    ? rawTree as Array<Record<string, unknown>>
+    : null
+  if (!targetId || targetId.length > 1_024 || !revision || revision.length > 256 || !semanticTree) {
+    throw new Error('Trusted semantic observation metadata is missing or invalid.')
+  }
+  if (semanticTree.length > 256 || JSON.stringify(semanticTree).length > 64_000) {
+    throw new Error('Trusted semantic observation metadata exceeds its bounded limits.')
+  }
+  return {
+    kind: 'target-semantic-tree',
+    targetId,
+    revision,
+    semanticTree
+  }
+}
+
+function forcedFunctionFromRequest(body: Record<string, unknown>): {
+  name: string
+  parameters: unknown
+} | null {
+  const choice = objectRecord(body.tool_choice)
+  if (choice?.type !== 'function' || typeof choice.name !== 'string' || !choice.name) return null
+  const tools = Array.isArray(body.tools) ? body.tools : []
+  for (const candidate of tools) {
+    const tool = objectRecord(candidate)
+    if (tool?.type === 'function' && tool.name === choice.name) {
+      return { name: choice.name, parameters: tool.parameters ?? {} }
+    }
+  }
+  throw new Error(`Forced Computer Use function ${choice.name} is not declared.`)
+}
+
+function parseForcedFunctionResult(text: string, expectedName: string): Record<string, unknown> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    throw new Error('Host Agent did not return the required JSON function result.')
+  }
+  const result = objectRecord(parsed)
+  const argumentsValue = objectRecord(result?.arguments)
+  if (result?.name !== expectedName || !argumentsValue) {
+    throw new Error('Host Agent returned an invalid forced function result.')
+  }
+  return argumentsValue
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
 }
 
 function assertDataImageUrl(value: string): void {

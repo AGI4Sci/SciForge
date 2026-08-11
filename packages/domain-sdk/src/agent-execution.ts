@@ -1,5 +1,20 @@
 import { z } from 'zod'
 
+export const domainMainAgentCanonicalObservationSchema = z.object({
+  kind: z.literal('target-semantic-tree'),
+  targetId: z.string().trim().min(1).max(1_024),
+  revision: z.string().trim().min(1).max(256),
+  semanticTree: z.array(z.record(z.string(), z.unknown())).max(256)
+}).strict().superRefine((observation, context) => {
+  if (JSON.stringify(observation.semanticTree).length > 64_000) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['semanticTree'],
+      message: 'Canonical semantic observations must not exceed 64 KB.'
+    })
+  }
+})
+
 export const domainMainAgentExecutionRequestSchema = z.object({
   runtimeId: z.string().trim().min(1).max(128).optional(),
   prompt: z.string().min(1).max(1_000_000),
@@ -20,6 +35,11 @@ export const domainMainAgentExecutionRequestSchema = z.object({
   ).max(128).refine((tools) => new Set(tools).size === tools.length, {
     message: 'Allowed tool names must be unique.'
   }).optional(),
+  /**
+   * Host-trusted, target-bound state captured by a main-process domain before
+   * starting this hidden execution. Renderer IPC cannot supply this field.
+   */
+  canonicalObservation: domainMainAgentCanonicalObservationSchema.optional(),
   mode: z.enum(['agent', 'plan']).default('agent'),
   signal: z.instanceof(AbortSignal).optional()
 }).strict()
@@ -31,6 +51,9 @@ export const domainMainAgentExecutionResultSchema = z.object({
 
 export type DomainMainAgentExecutionRequest = z.input<
   typeof domainMainAgentExecutionRequestSchema
+>
+export type DomainMainAgentCanonicalObservation = z.infer<
+  typeof domainMainAgentCanonicalObservationSchema
 >
 export type DomainMainAgentExecutionResult = z.infer<
   typeof domainMainAgentExecutionResultSchema

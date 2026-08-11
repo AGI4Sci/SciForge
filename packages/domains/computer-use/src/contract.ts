@@ -119,16 +119,47 @@ export const computerUseTargetSchema = z.object({
   }
 })
 
-const computerUseSemanticActionSchema = z.object({
-    kind: z.literal('click'),
-    role: z.string().trim().min(1).max(64),
-    name: z.string().trim().min(1).max(512),
-    expect: z.object({
-      kind: z.literal('text-present'),
-      text: z.string().trim().min(1).max(512),
-      stableForMs: z.number().int().min(0).max(10_000).optional()
-    }).strict()
-  }).strict()
+const computerUseSemanticExpectationSchema = z.object({
+  kind: z.literal('text-present'),
+  text: z.string().trim().min(1).max(512),
+  stableForMs: z.number().int().min(0).max(10_000).optional()
+}).strict()
+
+const computerUseSemanticClickSchema = z.object({
+  kind: z.literal('click'),
+  role: z.string().trim().min(1).max(64),
+  name: z.string().trim().min(1).max(512),
+  expect: computerUseSemanticExpectationSchema
+}).strict()
+
+const computerUseSemanticSequenceStepSchema = z.object({
+  kind: z.enum(['write', 'invoke', 'toggle']),
+  role: z.string().trim().min(1).max(64),
+  name: z.string().trim().min(1).max(512).optional(),
+  automationId: z.string().trim().min(1).max(256).optional(),
+  text: z.string().max(4_096).optional()
+}).strict().superRefine((step, context) => {
+  if (!step.name && !step.automationId) {
+    context.addIssue({ code: 'custom', message: 'semantic sequence step requires name or automationId' })
+  }
+  if (step.kind === 'write' && step.text === undefined) {
+    context.addIssue({ code: 'custom', path: ['text'], message: 'write step requires text' })
+  }
+  if (step.kind !== 'write' && step.text !== undefined) {
+    context.addIssue({ code: 'custom', path: ['text'], message: 'only write steps accept text' })
+  }
+})
+
+const computerUseSemanticSequenceSchema = z.object({
+  kind: z.literal('sequence'),
+  steps: z.array(computerUseSemanticSequenceStepSchema).min(1).max(16),
+  expect: computerUseSemanticExpectationSchema
+}).strict()
+
+const computerUseSemanticActionSchema = z.union([
+  computerUseSemanticClickSchema,
+  computerUseSemanticSequenceSchema
+])
 
 const computerUseParallelRunEntrySchema = z.object({
   instruction: z.string().trim().min(1).max(16_384),
@@ -160,10 +191,22 @@ export const computerUseRunInputSchema = z.object({
   deadlineMs: z.number().int().min(1).max(600_000).optional()
 }).strict().superRefine((input, context) => {
   if (!input.parallel) return
-  for (const field of ['semanticAction', 'sessionId', 'target', 'requestedIsolation', 'allowDegraded', 'queueIfBusy', 'deadlineMs'] as const) {
+  for (const field of ['semanticAction', 'sessionId', 'target'] as const) {
     if (input[field] !== undefined) {
       context.addIssue({ code: 'custom', path: [field], message: `${field} must be supplied per parallel entry` })
     }
+  }
+  for (const field of ['requestedIsolation', 'allowDegraded'] as const) {
+    if (input[field] === undefined) continue
+    input.parallel.forEach((entry, index) => {
+      if (entry[field] !== input[field]) {
+        context.addIssue({
+          code: 'custom',
+          path: ['parallel', index, field],
+          message: `${field} must be explicit and match the redundant batch assertion`
+        })
+      }
+    })
   }
 })
 

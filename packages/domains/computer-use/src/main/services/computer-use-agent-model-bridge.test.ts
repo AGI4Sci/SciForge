@@ -77,4 +77,99 @@ describe('Computer Use agent model bridge', () => {
     expect(missingImage.status).toBe(502)
     expect(run).not.toHaveBeenCalled()
   })
+
+  it('plans a trusted semantic observation as a forced Responses function call', async () => {
+    const run = vi.fn(async () => ({
+      text: JSON.stringify({
+        name: 'computer_use',
+        arguments: { action: 'write', elementToken: 'uia-token:editor', text: 'alpha' }
+      }),
+      threadId: 'hidden-semantic-1'
+    }))
+    bridge = await startComputerUseAgentModelBridge({
+      agentExecution: { run },
+      workspaceRoot: 'C:\\workspace'
+    })
+    const response = await fetch(`${bridge.baseUrl}/responses`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${bridge.token}`,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        stream: false,
+        metadata: {
+          sciforge_observation_mode: 'semantic',
+          sciforge_semantic_observation: {
+            targetId: 'uia:42:100:abc',
+            revision: 7,
+            semanticTree: [{ elementToken: 'uia-token:editor', name: 'Editor' }]
+          }
+        },
+        input: [{
+          role: 'user',
+          content: [{
+            type: 'input_text',
+            text: 'Semantic tree: [{"elementToken":"uia-token:editor"}]'
+          }]
+        }],
+        tools: [{
+          type: 'function',
+          name: 'computer_use',
+          parameters: {
+            type: 'object',
+            properties: { action: { type: 'string' } },
+            required: ['action']
+          }
+        }],
+        tool_choice: { type: 'function', name: 'computer_use' }
+      })
+    })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      output: [{
+        type: 'function_call',
+        name: 'computer_use',
+        arguments: JSON.stringify({
+          action: 'write',
+          elementToken: 'uia-token:editor',
+          text: 'alpha'
+        })
+      }]
+    })
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({
+      allowedTools: [],
+      imageUrls: [],
+      canonicalObservation: {
+        kind: 'target-semantic-tree',
+        targetId: 'uia:42:100:abc',
+        revision: '7',
+        semanticTree: [{ elementToken: 'uia-token:editor', name: 'Editor' }]
+      },
+      prompt: expect.stringContaining('canonical target-bound observation')
+    }))
+  })
+
+  it('rejects a semantic marker without a bounded target observation', async () => {
+    const run = vi.fn(async () => ({ text: 'unused' }))
+    bridge = await startComputerUseAgentModelBridge({
+      agentExecution: { run },
+      workspaceRoot: 'C:\\workspace'
+    })
+    const response = await fetch(`${bridge.baseUrl}/responses`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${bridge.token}`,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        metadata: { sciforge_observation_mode: 'semantic' },
+        input: [{ role: 'user', content: [{ type: 'input_text', text: 'unbound tree' }] }]
+      })
+    })
+
+    expect(response.status).toBe(502)
+    expect(run).not.toHaveBeenCalled()
+  })
 })

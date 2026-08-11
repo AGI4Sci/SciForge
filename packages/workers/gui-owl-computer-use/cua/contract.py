@@ -40,26 +40,56 @@ V2_RUN_FIELDS = frozenset({
     "queueIfBusy", "deadlineMs", "semanticAction", "parallel",
 })
 
-SEMANTIC_ACTION_SCHEMA: Dict[str, Any] = {
+SEMANTIC_EXPECTATION_SCHEMA: Dict[str, Any] = {
     "type": "object",
-    "description": "Optional deterministic action against one exact accessible control.",
     "properties": {
-        "kind": {"type": "string", "enum": ["click"]},
-        "role": {"type": "string"},
-        "name": {"type": "string"},
-        "expect": {
+        "kind": {"type": "string", "enum": ["text-present"]},
+        "text": {"type": "string"},
+        "stableForMs": {"type": "integer", "minimum": 0, "maximum": 10000},
+    },
+    "required": ["kind", "text"],
+    "additionalProperties": False,
+}
+
+SEMANTIC_ACTION_SCHEMA: Dict[str, Any] = {
+    "description": "Optional bounded deterministic action or UIA Pattern sequence.",
+    "oneOf": [
+        {
             "type": "object",
             "properties": {
-                "kind": {"type": "string", "enum": ["text-present"]},
-                "text": {"type": "string"},
-                "stableForMs": {"type": "integer", "minimum": 0, "maximum": 10000},
+                "kind": {"type": "string", "enum": ["click"]},
+                "role": {"type": "string"},
+                "name": {"type": "string"},
+                "expect": SEMANTIC_EXPECTATION_SCHEMA,
             },
-            "required": ["kind", "text"],
+            "required": ["kind", "role", "name", "expect"],
             "additionalProperties": False,
         },
-    },
-    "required": ["kind", "role", "name", "expect"],
-    "additionalProperties": False,
+        {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": ["sequence"]},
+                "steps": {
+                    "type": "array", "minItems": 1, "maxItems": 16,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {"type": "string", "enum": ["write", "invoke", "toggle"]},
+                            "role": {"type": "string"},
+                            "name": {"type": "string"},
+                            "automationId": {"type": "string"},
+                            "text": {"type": "string"},
+                        },
+                        "required": ["kind", "role"],
+                        "additionalProperties": False,
+                    },
+                },
+                "expect": SEMANTIC_EXPECTATION_SCHEMA,
+            },
+            "required": ["kind", "steps", "expect"],
+            "additionalProperties": False,
+        },
+    ],
 }
 
 
@@ -182,39 +212,7 @@ def normalize_run_input(value: object) -> Dict[str, Any]:
     normalized: Dict[str, Any] = {"instruction": instruction.strip()}
     semantic_action = value.get("semanticAction")
     if semantic_action is not None:
-        if not isinstance(semantic_action, dict):
-            raise ValueError("semanticAction must be an object")
-        if set(semantic_action) != {"kind", "role", "name", "expect"}:
-            raise ValueError("semanticAction must contain only kind, role, name, and expect")
-        if semantic_action.get("kind") != "click":
-            raise ValueError("semanticAction.kind must be click")
-        role = semantic_action.get("role")
-        name = semantic_action.get("name")
-        expect = semantic_action.get("expect")
-        if not isinstance(role, str) or not role.strip() or len(role) > 64:
-            raise ValueError("semanticAction.role must be 1-64 characters")
-        if not isinstance(name, str) or not name.strip() or len(name) > 512:
-            raise ValueError("semanticAction.name must be 1-512 characters")
-        if not isinstance(expect, dict) or not {"kind", "text"}.issubset(expect) or set(expect) - {"kind", "text", "stableForMs"}:
-            raise ValueError("semanticAction.expect must contain kind/text and optional stableForMs")
-        text = expect.get("text")
-        if expect.get("kind") != "text-present":
-            raise ValueError("semanticAction.expect.kind must be text-present")
-        if not isinstance(text, str) or not text.strip() or len(text) > 512:
-            raise ValueError("semanticAction.expect.text must be 1-512 characters")
-        stable_for_ms = expect.get("stableForMs", 0)
-        if (
-            isinstance(stable_for_ms, bool) or not isinstance(stable_for_ms, int)
-            or not 0 <= stable_for_ms <= 10_000
-        ):
-            raise ValueError("semanticAction.expect.stableForMs must be an integer between 0 and 10000")
-        normalized["semanticAction"] = {
-            "kind": "click", "role": role.strip(), "name": name.strip(),
-            "expect": {
-                "kind": "text-present", "text": text.strip(),
-                **({"stableForMs": stable_for_ms} if "stableForMs" in expect else {}),
-            },
-        }
+        normalized["semanticAction"] = _normalize_semantic_action(semantic_action)
     for field in ("execute", "approve", "allowDegraded", "queueIfBusy"):
         raw = value.get(field, False)
         if not isinstance(raw, bool):
@@ -252,6 +250,87 @@ def normalize_run_input(value: object) -> Dict[str, Any]:
     return normalized
 
 
+def _normalize_semantic_action(value: object) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("semanticAction must be an object")
+    kind = value.get("kind")
+    if kind == "click":
+        if set(value) != {"kind", "role", "name", "expect"}:
+            raise ValueError("click semanticAction must contain only kind, role, name, and expect")
+        role = _bounded_string(value.get("role"), "semanticAction.role", 64)
+        name = _bounded_string(value.get("name"), "semanticAction.name", 512)
+        return {
+            "kind": "click", "role": role, "name": name,
+            "expect": _normalize_semantic_expectation(value.get("expect")),
+        }
+    if kind != "sequence":
+        raise ValueError("semanticAction.kind must be click or sequence")
+    if set(value) != {"kind", "steps", "expect"}:
+        raise ValueError("sequence semanticAction must contain only kind, steps, and expect")
+    steps = value.get("steps")
+    if not isinstance(steps, list) or not 1 <= len(steps) <= 16:
+        raise ValueError("semanticAction.steps must contain between 1 and 16 entries")
+    normalized_steps = []
+    for index, step in enumerate(steps):
+        if not isinstance(step, dict):
+            raise ValueError(f"semanticAction.steps[{index}] must be an object")
+        if set(step) - {"kind", "role", "name", "automationId", "text"}:
+            raise ValueError(f"semanticAction.steps[{index}] contains unsupported fields")
+        step_kind = step.get("kind")
+        if step_kind not in {"write", "invoke", "toggle"}:
+            raise ValueError(f"semanticAction.steps[{index}].kind is unsupported")
+        role = _bounded_string(step.get("role"), f"semanticAction.steps[{index}].role", 64)
+        name = step.get("name")
+        automation_id = step.get("automationId")
+        if name is None and automation_id is None:
+            raise ValueError(f"semanticAction.steps[{index}] requires name or automationId")
+        normalized_step: Dict[str, Any] = {"kind": step_kind, "role": role}
+        if name is not None:
+            normalized_step["name"] = _bounded_string(
+                name, f"semanticAction.steps[{index}].name", 512,
+            )
+        if automation_id is not None:
+            normalized_step["automationId"] = _bounded_string(
+                automation_id, f"semanticAction.steps[{index}].automationId", 256,
+            )
+        text = step.get("text")
+        if step_kind == "write":
+            if not isinstance(text, str) or len(text) > 4_096:
+                raise ValueError(f"semanticAction.steps[{index}].text must be at most 4096 characters")
+            normalized_step["text"] = text
+        elif text is not None:
+            raise ValueError(f"semanticAction.steps[{index}].text is valid only for write")
+        normalized_steps.append(normalized_step)
+    return {
+        "kind": "sequence", "steps": normalized_steps,
+        "expect": _normalize_semantic_expectation(value.get("expect")),
+    }
+
+
+def _normalize_semantic_expectation(value: object) -> Dict[str, Any]:
+    if not isinstance(value, dict) or not {"kind", "text"}.issubset(value) or set(value) - {"kind", "text", "stableForMs"}:
+        raise ValueError("semanticAction.expect must contain kind/text and optional stableForMs")
+    if value.get("kind") != "text-present":
+        raise ValueError("semanticAction.expect.kind must be text-present")
+    text = _bounded_string(value.get("text"), "semanticAction.expect.text", 512)
+    stable_for_ms = value.get("stableForMs", 0)
+    if (
+        isinstance(stable_for_ms, bool) or not isinstance(stable_for_ms, int)
+        or not 0 <= stable_for_ms <= 10_000
+    ):
+        raise ValueError("semanticAction.expect.stableForMs must be an integer between 0 and 10000")
+    return {
+        "kind": "text-present", "text": text,
+        **({"stableForMs": stable_for_ms} if "stableForMs" in value else {}),
+    }
+
+
+def _bounded_string(value: object, field: str, maximum: int) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value) > maximum:
+        raise ValueError(f"{field} must be 1-{maximum} characters")
+    return value.strip()
+
+
 def normalize_parallel_run_input(value: object) -> Dict[str, Any]:
     """Validate one approved, bounded batch without resolving its sessions."""
     if not isinstance(value, dict):
@@ -266,8 +345,7 @@ def normalize_parallel_run_input(value: object) -> Dict[str, Any]:
     if len(instruction) > 16_384:
         raise ValueError("instruction must be at most 16384 characters")
     conflicting = {
-        "semanticAction", "sessionId", "target", "requestedIsolation",
-        "allowDegraded", "queueIfBusy", "deadlineMs", "imagePath", "imageBase64",
+        "semanticAction", "sessionId", "target", "imagePath", "imageBase64",
     }.intersection(value)
     if conflicting:
         raise ValueError(
@@ -287,6 +365,16 @@ def normalize_parallel_run_input(value: object) -> Dict[str, Any]:
         "instruction", "semanticAction", "sessionId", "requestedIsolation",
         "allowDegraded", "queueIfBusy", "deadlineMs",
     }
+    batch_assertions = {
+        field: value[field]
+        for field in ("requestedIsolation", "allowDegraded")
+        if field in value
+    }
+    batch_defaults = {
+        field: value[field]
+        for field in ("queueIfBusy", "deadlineMs")
+        if field in value
+    }
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
             raise ValueError(f"parallel[{index}] must be an object")
@@ -295,7 +383,15 @@ def normalize_parallel_run_input(value: object) -> Dict[str, Any]:
             raise ValueError(
                 f"parallel[{index}] unsupported fields: {', '.join(sorted(unsupported))}"
             )
-        child = normalize_run_input({**entry, "execute": execute, "approve": approve})
+        for field, expected in batch_assertions.items():
+            if field not in entry or entry[field] != expected:
+                raise ValueError(
+                    f"parallel[{index}].{field} must be explicit and match "
+                    "the redundant batch assertion"
+                )
+        child = normalize_run_input({
+            **batch_defaults, **entry, "execute": execute, "approve": approve,
+        })
         session_id = child.get("sessionId")
         if session_id is None:
             raise ValueError(f"parallel[{index}].sessionId is required")

@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from cua import result as R
+from cua.config import Config
+from cua.runner import run_task
 from cua.service import ComputerUseService
 from cua.target import TargetDescriptor, parse_target_descriptor
 from driver.backend import BackendOpenContext, BackendOperationError
@@ -326,6 +328,92 @@ def test_stale_coordinate_and_cancel_are_side_effect_free(uia_hosts) -> None:
     assert service.registry.snapshot_counts()["sessions"] == 0
     assert service.status()["activeChannels"] == 0
     assert service.cleanup_pending() == []
+
+
+def test_runner_deterministic_sequences_on_three_fresh_windows(tmp_path) -> None:
+    processes = OwnedProcesses()
+    desktop_before = _host_state()
+    hosts: dict[str, NativeHost] = {}
+    service = ComputerUseService(router=BackendRouter([WindowsUIABackend()]))
+    try:
+        for index, label in enumerate(LABELS):
+            host = _start_host(label, processes)
+            hosts[label] = host
+            assert service.bind_session({
+                "sessionId": f"uia-sequence-session-{label}",
+                "owner": {"runtimeId": "integration", "threadId": f"sequence-{index}"},
+                "target": host.target().to_dict(),
+            })["ok"] is True
+
+        cfg = Config()
+        cfg.artifact_dir = str(tmp_path)
+        cfg.allow_execute = True
+        cfg.show_overlay = False
+        cfg.reflect = False
+
+        def run(label: str):
+            action = {
+                "kind": "sequence",
+                "steps": [
+                    {
+                        "kind": "write", "role": "textbox",
+                        "automationId": hosts[label].handshake["editAutomationId"],
+                        "text": VALUES[label],
+                    },
+                    {"kind": "invoke", "role": "button", "name": f"Commit {label}"},
+                    {"kind": "toggle", "role": "checkbox", "name": f"Check {label}"},
+                ],
+                "expect": {
+                    "kind": "text-present",
+                    "text": f"text={VALUES[label]};clicks=1;checked=1",
+                },
+            }
+            return service.run(
+                {
+                    "instruction": f"deterministic sequence {label}",
+                    "semanticAction": action,
+                    "sessionId": f"uia-sequence-session-{label}",
+                    "requestId": f"uia-sequence-request-{label}",
+                    "execute": True,
+                    "approve": True,
+                },
+                lambda request, channel: run_task(
+                    cfg, request["instruction"], channel,
+                    execute=True, approve=True,
+                    semantic_action=request["semanticAction"],
+                ),
+                channel_options={"allow_execute": True},
+            )
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            results = list(pool.map(run, LABELS))
+
+        for label, result in zip(LABELS, results, strict=True):
+            assert result["ok"] is True, result
+            assert result["data"]["verification"]["matched"] is True
+            assert result["data"]["stepCount"] == 3
+            assert all(
+                item["outcome"]["verification"] == "verified"
+                for item in result["data"]["actions"]
+            )
+            assert any(
+                node.get("name") == f"text={VALUES[label]};clicks=1;checked=1"
+                for node in result["data"]["finalObservation"]["semanticTree"]
+            )
+        assert service.registry.snapshot_counts()["requests"] == 0
+        assert service.registry.snapshot_counts()["activeLeases"] == 0
+        assert service.status()["activeChannels"] == 0
+    finally:
+        for label in reversed(LABELS):
+            service.release_session({"sessionId": f"uia-sequence-session-{label}"})
+            host = hosts.get(label)
+            if host is not None:
+                host.shutdown()
+        processes.close()
+        processes.assert_stopped()
+    assert service.registry.snapshot_counts()["sessions"] == 0
+    assert service.cleanup_pending() == []
+    assert _host_state() == desktop_before
 
 
 def test_destroyed_target_does_not_break_surviving_windows(uia_hosts) -> None:

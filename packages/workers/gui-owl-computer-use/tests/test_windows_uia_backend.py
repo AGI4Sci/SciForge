@@ -172,6 +172,7 @@ def test_capability_is_semantic_target_scoped_and_never_host_input():
     assert capability.uses_host_clipboard is False
     assert capability.may_activate_target is True
     assert "key" not in capability.actions
+    assert {"write", "invoke", "toggle"}.issubset(capability.supports_readback)
 
 
 class _DiscoveryElement:
@@ -258,7 +259,7 @@ def _stub_discovery_automation(provider, automation, state):
 
 
 def test_discovery_skips_one_stale_window_and_keeps_later_targets():
-    provider = ComtypesUIAProvider()
+    provider = ComtypesUIAProvider(trusted_title_pattern="")
     state = {"entered": 0, "exited": 0}
     automation = _DiscoveryAutomation([
         _DiscoveryElement(1001, 2001, "A"),
@@ -274,8 +275,35 @@ def test_discovery_skips_one_stale_window_and_keeps_later_targets():
     assert state == {"entered": 1, "exited": 1}
 
 
+def test_discovery_allowlist_exposes_only_explicitly_trusted_public_labels():
+    provider = ComtypesUIAProvider(
+        trusted_title_pattern=r"SciForge Controlled UIA [A-D]",
+    )
+    state = {"entered": 0, "exited": 0}
+    automation = _DiscoveryAutomation([
+        _DiscoveryElement(1001, 2001, "Private document - Editor"),
+        _DiscoveryElement(1002, 2002, "SciForge Controlled UIA A"),
+        _DiscoveryElement(1003, 2003, "SciForge Controlled UIA D"),
+    ])
+    _stub_discovery_automation(provider, automation, state)
+
+    targets = provider.discover()
+
+    assert [item.locator["processId"] for item in targets] == [1002, 1003]
+    assert [item.metadata["publicLabel"] for item in targets] == [
+        "SciForge Controlled UIA A",
+        "SciForge Controlled UIA D",
+    ]
+    assert state == {"entered": 1, "exited": 1}
+
+
+def test_invalid_discovery_allowlist_fails_closed():
+    with pytest.raises(ValueError, match="CUA_UIA_TRUSTED_TITLE_PATTERN"):
+        ComtypesUIAProvider(trusted_title_pattern="[")
+
+
 def test_discovery_does_not_hide_desktop_enumeration_failure():
-    provider = ComtypesUIAProvider()
+    provider = ComtypesUIAProvider(trusted_title_pattern="")
     state = {"entered": 0, "exited": 0}
     _stub_discovery_automation(provider, _DiscoveryAutomation([], fail_find_all=True), state)
 

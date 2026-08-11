@@ -187,6 +187,7 @@ import {
 } from './workspace-preview-asset-protocol'
 import {
   startDevBrowserBridgeServer,
+  resolveDevBrowserBridgePort,
   type DevBrowserBridgeServer
 } from './dev-browser-bridge'
 import {
@@ -1607,7 +1608,10 @@ app.whenReady().then(async () => {
               ? { reasoningEffort: request.reasoningEffort }
               : {}),
             ...(request.imageUrls?.length ? { imageUrls: request.imageUrls } : {}),
-            ...(request.allowedTools ? { allowedTools: request.allowedTools } : {})
+            ...(request.allowedTools ? { allowedTools: request.allowedTools } : {}),
+            ...(request.canonicalObservation
+              ? { canonicalObservation: request.canonicalObservation }
+              : {})
           })
           turnId = handle.turnId
           for (const event of pendingTerminalEvents) acceptTerminalEvent(event)
@@ -1950,6 +1954,7 @@ app.whenReady().then(async () => {
 
   if (!app.isPackaged && process.env.SCIFORGE_DEV_BROWSER_BRIDGE !== '0') {
     void startDevBrowserBridgeServer({
+      port: resolveDevBrowserBridgePort(),
       dispatcher: {
         invoke: (channel, payload, sender) => (
           capabilityIpcRegistration.handles(channel)

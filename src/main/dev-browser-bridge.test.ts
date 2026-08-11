@@ -9,6 +9,7 @@ import { registerCapabilityIpc } from './capabilities/ipc'
 import { CapabilityRegistry, defineCapability } from './capabilities/registry'
 import {
   DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS,
+  resolveDevBrowserBridgePort,
   startDevBrowserBridgeServer,
   type DevBrowserBridgeDispatcher
 } from './dev-browser-bridge'
@@ -126,6 +127,13 @@ function openSse(path: string): Promise<{ close: () => void; chunks: string[] }>
 describe('dev browser bridge server', () => {
   afterEach(async () => {
     await closeServer()
+  })
+
+  it('accepts only bounded explicit loopback port overrides', () => {
+    expect(resolveDevBrowserBridgePort('5501')).toBe(5501)
+    expect(resolveDevBrowserBridgePort('1023')).toBe(5174)
+    expect(resolveDevBrowserBridgePort('65536')).toBe(5174)
+    expect(resolveDevBrowserBridgePort('not-a-port')).toBe(5174)
   })
 
   it('keeps the default browser bridge allowlist in parity with the preload API', () => {

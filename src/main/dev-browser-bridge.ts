@@ -26,6 +26,15 @@ const DEV_BROWSER_BRIDGE_ALLOWED_HEADERS = [
   'X-SciForge-Dev-Instance'
 ].join(',')
 
+export function resolveDevBrowserBridgePort(
+  value = process.env.SCIFORGE_DEV_BROWSER_BRIDGE_PORT
+): number {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed >= 1_024 && parsed <= 65_535
+    ? parsed
+    : DEFAULT_DEV_BROWSER_BRIDGE_PORT
+}
+
 // The bridge is gated to localhost renderer origins and is only started for
 // development builds. The browser dev surface is intentionally expected to
 // match the Electron preload API so product work can be debugged in a normal

@@ -572,6 +572,13 @@ export type AgentRuntimeTurnStartInput = {
   visibleContextBindingId?: string
   /** @internal Prevents a failed submission-time capture from rebinding newer UI state. */
   visibleContextBindingAttempted?: boolean
+  /** @internal Host-trusted target observation supplied only by main-process domain execution. */
+  canonicalObservation?: {
+    kind: 'target-semantic-tree'
+    targetId: string
+    revision: string
+    semanticTree: Array<Record<string, unknown>>
+  }
   clientDirectiveId?: string
   executionIntent?: AgentRuntimeExecutionIntent
   metadata?: Record<string, unknown>

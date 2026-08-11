@@ -194,12 +194,17 @@ class ComputerUseService:
                 screenshot_provider=options.get("screenshot_provider"),
             )
             # Natural-language requests have no trusted action plan yet. An
-            # explicit semanticAction is already bounded to one exact control,
-            # so routing can require click support before opening the channel.
-            required_actions = (
-                ("observe", "click") if request.get("semanticAction")
-                else ("observe",)
-            )
+            # explicit semanticAction is already bounded, so routing can
+            # require every deterministic operation before opening a handle.
+            semantic_action = request.get("semanticAction")
+            if semantic_action and semantic_action.get("kind") == "sequence":
+                required_actions = tuple(dict.fromkeys(
+                    ["observe", *(step["kind"] for step in semantic_action["steps"])]
+                ))
+            elif semantic_action:
+                required_actions = ("observe", "click")
+            else:
+                required_actions = ("observe",)
             selection = self.router.route(
                 registry=self.registry,
                 request_id=request_id,

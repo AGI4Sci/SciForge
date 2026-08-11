@@ -55,6 +55,44 @@ describe('computer-use shared v2 contract', () => {
     }).success).toBe(false)
   })
 
+  it('accepts a bounded deterministic UIA Pattern sequence', () => {
+    const semanticAction = {
+      kind: 'sequence' as const,
+      steps: [
+        { kind: 'write' as const, role: 'textbox', automationId: '1101', text: 'alpha' },
+        { kind: 'invoke' as const, role: 'button', name: 'Commit Alpha' },
+        { kind: 'toggle' as const, role: 'checkbox', automationId: '1103' }
+      ],
+      expect: { kind: 'text-present' as const, text: 'text=alpha;clicks=1;checked=1' }
+    }
+    const normalized = normalizeComputerUseRunInput({ instruction: 'Commit Alpha.', semanticAction })
+    expect(normalized.semanticAction).toEqual(semanticAction)
+  })
+
+  it('rejects ambiguous, malformed, or unbounded UIA Pattern sequences', () => {
+    const base = {
+      instruction: 'sequence',
+      semanticAction: {
+        kind: 'sequence',
+        steps: [{ kind: 'write', role: 'textbox', automationId: '1101', text: 'alpha' }],
+        expect: { kind: 'text-present', text: 'done' }
+      }
+    }
+    expect(computerUseRunInputSchema.safeParse(base).success).toBe(true)
+    expect(computerUseRunInputSchema.safeParse({
+      ...base,
+      semanticAction: { ...base.semanticAction, steps: [{ kind: 'write', role: 'textbox', text: 'x' }] }
+    }).success).toBe(false)
+    expect(computerUseRunInputSchema.safeParse({
+      ...base,
+      semanticAction: { ...base.semanticAction, steps: [{ kind: 'invoke', role: 'button', name: 'Save', text: 'x' }] }
+    }).success).toBe(false)
+    expect(computerUseRunInputSchema.safeParse({
+      ...base,
+      semanticAction: { ...base.semanticAction, steps: Array.from({ length: 17 }, () => base.semanticAction.steps[0]) }
+    }).success).toBe(false)
+  })
+
   it('accepts one approved parallel batch with distinct bounded sessions', () => {
     const normalized = normalizeComputerUseRunInput({
       instruction: 'Run the test-owned targets concurrently.',
@@ -81,6 +119,33 @@ describe('computer-use shared v2 contract', () => {
     expect(computerUseRunInputSchema.safeParse({
       instruction: 'batch', sessionId: 'top-level',
       parallel: [entry, { instruction: 'observe', sessionId: 'session-beta' }]
+    }).success).toBe(false)
+  })
+
+  it('accepts matching redundant batch policy assertions but rejects drift or omission', () => {
+    const entries = ['alpha', 'beta'].map((label) => ({
+      instruction: `observe ${label}`,
+      sessionId: `session-${label}`,
+      requestedIsolation: 'host-app-scoped' as const,
+      allowDegraded: false
+    }))
+    expect(computerUseRunInputSchema.safeParse({
+      instruction: 'batch',
+      requestedIsolation: 'host-app-scoped',
+      allowDegraded: false,
+      queueIfBusy: true,
+      deadlineMs: 300_000,
+      parallel: entries
+    }).success).toBe(true)
+    expect(computerUseRunInputSchema.safeParse({
+      instruction: 'batch',
+      requestedIsolation: 'host-app-scoped',
+      parallel: [entries[0], { ...entries[1], requestedIsolation: 'agent-isolated' }]
+    }).success).toBe(false)
+    expect(computerUseRunInputSchema.safeParse({
+      instruction: 'batch',
+      allowDegraded: false,
+      parallel: [entries[0], { instruction: 'observe beta', sessionId: 'session-beta' }]
     }).success).toBe(false)
   })
 

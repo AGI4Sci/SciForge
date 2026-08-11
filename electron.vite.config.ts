@@ -2,6 +2,19 @@ import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 
+export function resolveDevLoopbackPort(value: string | undefined, fallback: number): number {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed >= 1_024 && parsed <= 65_535
+    ? parsed
+    : fallback
+}
+
+const rendererPort = resolveDevLoopbackPort(process.env.SCIFORGE_DEV_RENDERER_PORT, 5173)
+const browserBridgePort = resolveDevLoopbackPort(
+  process.env.SCIFORGE_DEV_BROWSER_BRIDGE_PORT,
+  5174
+)
+
 export default defineConfig({
   main: {
     // These public runtime packages are source-owned workspaces. Bundle them
@@ -66,7 +79,7 @@ export default defineConfig({
       // Never drift to 5174+ when a stale dev renderer is already alive. The
       // bridge endpoint intentionally owns 5174, so an incremented renderer
       // would otherwise present a page backed by a different Electron main.
-      port: 5173,
+      port: rendererPort,
       strictPort: true,
       fs: {
         strict: true,
@@ -78,7 +91,7 @@ export default defineConfig({
       hmr: false,
       proxy: {
         '/__sciforge-dev-bridge': {
-          target: 'http://127.0.0.1:5174',
+          target: `http://127.0.0.1:${browserBridgePort}`,
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/__sciforge-dev-bridge/, '')
         }

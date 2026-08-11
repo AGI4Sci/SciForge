@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import config from '../../electron.vite.config'
+import config, { resolveDevLoopbackPort } from '../../electron.vite.config'
 
 describe('electron renderer dev server config', () => {
+  it('accepts only bounded explicit loopback development port overrides', () => {
+    expect(resolveDevLoopbackPort('5500', 5173)).toBe(5500)
+    expect(resolveDevLoopbackPort('1023', 5173)).toBe(5173)
+    expect(resolveDevLoopbackPort('65536', 5173)).toBe(5173)
+    expect(resolveDevLoopbackPort('not-a-port', 5173)).toBe(5173)
+  })
+
   it('keeps the privileged browser debug surface on a strict loopback file boundary', () => {
     const renderer = (config as {
       renderer?: {

@@ -4,7 +4,9 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import json
+import os
 import platform
+import re
 import threading
 import time
 import uuid
@@ -34,7 +36,10 @@ _ACTIONS = (
 )
 
 _UIA_TYPES_LOCK = threading.Lock()
+_UIA_CREATE_LOCK = threading.Lock()
 _UIA_TYPES: Any | None = None
+
+_TRUSTED_TITLE_PATTERN_ENV = "CUA_UIA_TRUSTED_TITLE_PATTERN"
 
 
 class UIATargetLost(RuntimeError):
@@ -96,7 +101,10 @@ class WindowsUIABackend:
             requires_host_focus=False,
             affects_user_input=False,
             uses_host_clipboard=False,
-            supports_readback=("type", "write", "toggle", "select", "range", "scroll"),
+            supports_readback=(
+                "click", "left_click", "invoke", "type", "write",
+                "toggle", "select", "range", "scroll",
+            ),
             lease_scope=LeaseScope.TARGET,
             max_concurrency=64 if available else 0,
             reason=reason,
@@ -268,7 +276,7 @@ class WindowsUIABackend:
             # UIA resolution creates no native/remote handle that survives the
             # call, so the router may safely release or try another candidate.
             raise BackendOperationError(
-                "Windows UIA target could not be resolved",
+                f"Windows UIA target could not be resolved ({type(error).__name__})",
                 code="BACKEND_UNAVAILABLE",
                 safe_to_retry=True,
             ) from error
@@ -312,6 +320,21 @@ class WindowsUIABackend:
 class ComtypesUIAProvider:
     """Resolve fresh COM elements per call so pointers never cross threads."""
 
+    def __init__(self, trusted_title_pattern: str | None = None) -> None:
+        raw_pattern = (
+            os.getenv(_TRUSTED_TITLE_PATTERN_ENV, "")
+            if trusted_title_pattern is None
+            else trusted_title_pattern
+        ).strip()
+        try:
+            self._trusted_title_pattern = (
+                re.compile(raw_pattern) if raw_pattern else None
+            )
+        except re.error as error:
+            raise ValueError(
+                f"{_TRUSTED_TITLE_PATTERN_ENV} must be a valid regular expression"
+            ) from error
+
     def available(self) -> tuple[bool, str | None]:
         if platform.system() != "Windows":
             return False, "Windows UI Automation is available only on Windows"
@@ -335,17 +358,29 @@ class ComtypesUIAProvider:
                     hwnd = int(element.CurrentNativeWindowHandle)
                     pid = int(element.CurrentProcessId)
                     if hwnd > 0 and pid > 0:
+                        title = str(element.CurrentName or "")[:2048]
+                        if (
+                            self._trusted_title_pattern is not None
+                            and self._trusted_title_pattern.fullmatch(title) is None
+                        ):
+                            continue
                         identity = self._identity(element)
+                        metadata = {
+                            "title": title,
+                            "processName": "",
+                        }
+                        if self._trusted_title_pattern is not None:
+                            # The operator explicitly opted matching titles into
+                            # discovery, so the redacted public descriptor may
+                            # safely expose this bounded label to the Agent.
+                            metadata["publicLabel"] = title[:256]
                         targets.append(parse_target_descriptor({
                             "targetId": f"uia:{pid}:{hwnd}:{identity[:16]}",
                             "kind": "windows-uia",
                             "ownership": "attached",
                             "locator": {"processId": pid, "nativeWindowHandle": str(hwnd)},
                             "generation": identity,
-                            "metadata": {
-                                "title": str(element.CurrentName or "")[:2048],
-                                "processName": "",
-                            },
+                            "metadata": metadata,
                         }))
                 except Exception:
                     pass
@@ -388,12 +423,25 @@ class ComtypesUIAProvider:
                 status = Verification.VERIFIED if readback == value else Verification.FAILED
                 details = {"pattern": "Value", "expected": value, "actual": readback}
             elif name in {"click", "left_click", "invoke"}:
-                before = self._element_state(element)
+                before_snapshot = self._snapshot_nodes(automation, root, target, limit=256)
+                before_revision = self._snapshot_revision(before_snapshot)
                 pattern = self._pattern(element, uia.UIA_InvokePatternId, uia.IUIAutomationInvokePattern)
                 pattern.Invoke()
-                after = self._element_state(element)
-                status = Verification.VERIFIED if before != after else Verification.UNVERIFIED
-                details = {"pattern": "Invoke", "before": before, "after": after}
+                after_snapshot = self._bounded_readback(
+                    lambda: self._snapshot_nodes(automation, root, target, limit=256),
+                    lambda current: self._snapshot_revision(current) != before_revision,
+                )
+                after_revision = self._snapshot_revision(after_snapshot)
+                status = (
+                    Verification.VERIFIED
+                    if before_revision != after_revision
+                    else Verification.UNVERIFIED
+                )
+                details = {
+                    "pattern": "Invoke",
+                    "beforeRevision": before_revision,
+                    "afterRevision": after_revision,
+                }
             elif name == "toggle":
                 pattern = self._pattern(element, uia.UIA_TogglePatternId, uia.IUIAutomationTogglePattern)
                 before = int(pattern.CurrentToggleState)
@@ -438,10 +486,14 @@ class ComtypesUIAProvider:
             else:
                 raise UIAActionUnsupported(f"UIA action requires focus or is unsupported: {name}")
             snapshot = self._snapshot_nodes(automation, root, target, limit=256)
-            revision = "uia:" + hashlib.sha256(
-                json.dumps(snapshot, sort_keys=True, ensure_ascii=True).encode("utf-8")
-            ).hexdigest()[:24]
+            revision = self._snapshot_revision(snapshot)
             return UIAActionResult(status, revision, details)
+
+    @staticmethod
+    def _snapshot_revision(nodes: object) -> str:
+        return "uia:" + hashlib.sha256(
+            json.dumps(nodes, sort_keys=True, ensure_ascii=True).encode("utf-8")
+        ).hexdigest()[:24]
 
     @staticmethod
     def _load_types():
@@ -476,7 +528,26 @@ class ComtypesUIAProvider:
         uia = self._load_types()
         comtypes.CoInitialize()
         try:
-            automation = CreateObject(uia.CUIAutomation8, interface=uia.IUIAutomation)
+            # comtypes' generated UIAutomation activation is not reliable when
+            # multiple apartments create CUIAutomation8 at the exact same
+            # instant. Serialize only this short client creation boundary;
+            # target resolution, tree reads, and Pattern actions remain fully
+            # independent and concurrent after activation.
+            with _UIA_CREATE_LOCK:
+                last_error: Exception | None = None
+                for attempt in range(3):
+                    try:
+                        automation = CreateObject(
+                            uia.CUIAutomation8, interface=uia.IUIAutomation,
+                        )
+                        break
+                    except Exception as error:  # noqa: BLE001
+                        last_error = error
+                        if attempt < 2:
+                            time.sleep(0.01 * (attempt + 1))
+                else:  # pragma: no cover - exercised only by broken COM hosts
+                    assert last_error is not None
+                    raise last_error
             yield automation, uia
         finally:
             comtypes.CoUninitialize()

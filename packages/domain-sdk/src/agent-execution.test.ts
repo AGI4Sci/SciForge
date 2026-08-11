@@ -93,4 +93,26 @@ describe('agent execution host contract', () => {
       imageUrls: ['https://example.test/screenshot.png']
     }), z.ZodError)
   })
+
+  it('accepts a bounded target semantic observation and rejects oversized state', () => {
+    const canonicalObservation = {
+      kind: 'target-semantic-tree' as const,
+      targetId: 'uia:42:100:abc',
+      revision: '7',
+      semanticTree: [{ elementToken: 'token-editor', name: 'Editor' }]
+    }
+    assert.deepEqual(domainMainAgentExecutionRequestSchema.parse({
+      prompt: 'Plan the next semantic action.',
+      workspaceRoot: '/workspace',
+      canonicalObservation
+    }).canonicalObservation, canonicalObservation)
+    assert.throws(() => domainMainAgentExecutionRequestSchema.parse({
+      prompt: 'Plan the next semantic action.',
+      workspaceRoot: '/workspace',
+      canonicalObservation: {
+        ...canonicalObservation,
+        semanticTree: [{ name: 'x'.repeat(65_000) }]
+      }
+    }), z.ZodError)
+  })
 })

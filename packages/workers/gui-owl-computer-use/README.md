@@ -209,7 +209,18 @@ On Windows, the worker loads the pinned `comtypes==1.4.16` binding and resolves
 each target from its PID/HWND/AutomationId on the request thread. It supports
 only control patterns exposed by the target provider: Value, Invoke, Toggle,
 SelectionItem, RangeValue and Scroll. Value-like writes are read back before a
-`verified` result is returned.
+`verified` result is returned. Invoke is verified against a bounded, fresh
+target-level semantic snapshot rather than assuming that the invoked button's
+own properties must change.
+
+The managed `computer_use` tool also accepts a bounded deterministic
+`semanticAction.kind=sequence` for Windows UIA. A sequence contains 1-16
+`write`, `invoke`, or `toggle` steps. Each step selects exactly one enabled
+control by `role` and `name` and/or `automationId`; the runner observes again
+after every step so it never reuses an old opaque element token. Completion is
+reported only after a fresh final semantic tree contains the requested text.
+The sequence path does not call the model planner and never falls back to
+coordinates, focus-dependent keyboard input, PyAutoGUI, or host-global input.
 
 Before a target lease is acquired, the backend resolves a provider-owned
 canonical PID/HWND-or-root/runtime identity. Caller-supplied or generated
@@ -217,6 +228,14 @@ canonical PID/HWND-or-root/runtime identity. Caller-supplied or generated
 Every actionable semantic-tree node also carries an opaque `elementToken`
 bound to that target and observation revision. Actions must use that token;
 `automationId` is display/discovery metadata and is not action authority.
+
+Window titles remain redacted from target descriptors by default. For a
+deployment with an operator-approved set of UIA windows, set
+`CUA_UIA_TRUSTED_TITLE_PATTERN` to a regular expression that fully matches the
+allowed titles. Discovery then excludes every non-matching top-level window and
+publishes each matching title as the bounded `metadata.publicLabel` used by the
+Agent to select a target before binding. An invalid expression fails sidecar
+startup; this is an explicit trust boundary, not a fallback to broad discovery.
 
 This backend never calls `SetFocus`, PyAutoGUI, PostMessage or the host
 clipboard. A third-party UIA provider may nevertheless activate its own window
