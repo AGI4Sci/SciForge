@@ -119,7 +119,9 @@ export function createComputerUseMcpServer(
       'input. UIA sequence steps are write/invoke/toggle and require role plus name or automationId. Use parallel with 2-8 different pre-bound',
       'sessions when tasks must overlap under one approval; each child keeps its own request, channel, lease, and result.',
       'Each parallel child is authoritative for requestedIsolation and allowDegraded; matching top-level copies are accepted',
-      'as redundant assertions. Top-level queueIfBusy and deadlineMs are batch defaults that children may override.',
+      'as redundant assertions. A top-level instruction string is still required as the parallel batch summary.',
+      'queueIfBusy is reserved and must be omitted or false at both batch and child levels; true returns',
+      'QUEUE_NOT_SUPPORTED before any action. Top-level deadlineMs is a batch default that children may override.',
       'Returns a ServiceResult trace and optional answer.'
     ].join(' '),
     inputSchema: computerUseRunInputSchema,

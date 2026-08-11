@@ -17,7 +17,7 @@ export type CdpClickReadback = Readonly<{
   targetState: string
 }>
 
-export const CDP_SEMANTIC_TREE_EXPRESSION = `(() => { /* sciforge-computer-use-semantic-tree-v1 */
+export const CDP_SEMANTIC_TREE_EXPRESSION = `(() => { /* sciforge-computer-use-semantic-tree-v2 */
   const text = (value) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, 512)
   const name = (element) => text(
     element.getAttribute('aria-label') || element.getAttribute('title') ||
@@ -28,27 +28,52 @@ export const CDP_SEMANTIC_TREE_EXPRESSION = `(() => { /* sciforge-computer-use-s
     'button', 'a', 'input:not([type="hidden"])', 'select', 'textarea',
     '[role]', '[aria-label]', 'h1', 'h2', 'h3', 'output'
   ].join(',')
-  return [...document.querySelectorAll(selectors)].flatMap((element) => {
+  const describeRect = (rect) => ({
+    center: [
+      Math.round(Math.max(0, Math.min(1000, ((rect.left + rect.width / 2) / Math.max(1, innerWidth)) * 1000))),
+      Math.round(Math.max(0, Math.min(1000, ((rect.top + rect.height / 2) / Math.max(1, innerHeight)) * 1000)))
+    ]
+  })
+  const semanticElements = [...document.querySelectorAll(selectors)]
+  const semanticNodes = semanticElements.flatMap((element) => {
     if (!(element instanceof HTMLElement)) return []
     const rect = element.getBoundingClientRect()
     const style = getComputedStyle(element)
     if (rect.width <= 0 || rect.height <= 0 || style.visibility === 'hidden' || style.display === 'none') return []
-    const center = [
-      Math.round(Math.max(0, Math.min(1000, ((rect.left + rect.width / 2) / Math.max(1, innerWidth)) * 1000))),
-      Math.round(Math.max(0, Math.min(1000, ((rect.top + rect.height / 2) / Math.max(1, innerHeight)) * 1000)))
-    ]
     return [{
       tag: element.tagName.toLowerCase(),
       role: text(element.getAttribute('role')),
       name: name(element),
-      center,
+      center: describeRect(rect).center,
       disabled: Boolean(element.disabled || element.getAttribute('aria-disabled') === 'true'),
       current: text(element.getAttribute('aria-current')),
       selected: text(element.getAttribute('aria-selected')),
       expanded: text(element.getAttribute('aria-expanded')),
       pressed: text(element.getAttribute('aria-pressed'))
     }]
-  }).filter((item) => item.name || item.role).slice(0, 256)
+  }).filter((item) => item.name || item.role)
+  const staticTextNodes = []
+  const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT)
+  while (walker.nextNode() && semanticNodes.length + staticTextNodes.length < 256) {
+    const node = walker.currentNode
+    const value = text(node.nodeValue)
+    const parent = node.parentElement
+    if (!value || !parent || parent.closest('script,style,noscript,template')) continue
+    const style = getComputedStyle(parent)
+    if (style.visibility === 'hidden' || style.display === 'none') continue
+    const semanticOwner = parent.closest(selectors)
+    if (semanticOwner && name(semanticOwner).includes(value)) continue
+    const range = document.createRange()
+    range.selectNodeContents(node)
+    const rect = range.getBoundingClientRect()
+    range.detach()
+    if (rect.width <= 0 || rect.height <= 0) continue
+    staticTextNodes.push({
+      tag: '#text', role: 'text', name: value, center: describeRect(rect).center,
+      disabled: false, current: '', selected: '', expanded: '', pressed: ''
+    })
+  }
+  return semanticNodes.concat(staticTextNodes).slice(0, 256)
 })()`
 
 export const CDP_RENDERER_SETTLE_EXPRESSION = `new Promise((resolve) => { /* sciforge-computer-use-renderer-settle-v1 */

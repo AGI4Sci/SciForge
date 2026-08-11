@@ -16,7 +16,10 @@ describe('shared CDP semantic readback', () => {
       current: '', selected: '', expanded: '', pressed: ''
     }])
     expect(normalizeCdpSemanticTree([{ name: 'invalid', center: [1] }])).toEqual([])
-    expect(CDP_SEMANTIC_TREE_EXPRESSION).toContain('sciforge-computer-use-semantic-tree-v1')
+    expect(CDP_SEMANTIC_TREE_EXPRESSION).toContain('sciforge-computer-use-semantic-tree-v2')
+    expect(CDP_SEMANTIC_TREE_EXPRESSION).toContain('NodeFilter.SHOW_TEXT')
+    expect(CDP_SEMANTIC_TREE_EXPRESSION).toContain("tag: '#text', role: 'text'")
+    expect(CDP_SEMANTIC_TREE_EXPRESSION).toContain('name(semanticOwner).includes(value)')
   })
 
   it('verifies a click only from target-scoped semantic readback', () => {

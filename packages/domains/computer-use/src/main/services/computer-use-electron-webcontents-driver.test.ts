@@ -33,7 +33,7 @@ class FakeWebContents extends EventEmitter implements ElectronWebContentsLike {
       if (method === 'Input.insertText') this.text += String(params?.text ?? '')
       if (method === 'Runtime.evaluate') {
         const expression = String(params?.expression ?? '')
-        if (expression.includes('sciforge-computer-use-semantic-tree-v1')) {
+        if (expression.includes('sciforge-computer-use-semantic-tree-v2')) {
           return { result: { value: this.semanticTree } }
         }
         if (expression.includes('sciforge-computer-use-css-viewport-v1')) {

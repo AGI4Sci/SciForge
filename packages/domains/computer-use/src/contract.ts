@@ -167,18 +167,26 @@ const computerUseSemanticActionSchema = z.union([
   computerUseSemanticSequenceSchema
 ])
 
+const computerUseQueueIfBusySchema = z.boolean().optional().describe(
+  'Reserved for a future bounded queue. Omit or set false; true returns QUEUE_NOT_SUPPORTED before any action.'
+)
+
 const computerUseParallelRunEntrySchema = z.object({
-  instruction: z.string().trim().min(1).max(16_384),
+  instruction: z.string().trim().min(1).max(16_384).describe(
+    'Natural-language task for this bound session.'
+  ),
   semanticAction: computerUseSemanticActionSchema.optional(),
   sessionId: safeId,
   requestedIsolation: computerUseIsolationSchema.optional(),
   allowDegraded: z.boolean().optional(),
-  queueIfBusy: z.boolean().optional(),
+  queueIfBusy: computerUseQueueIfBusySchema,
   deadlineMs: z.number().int().min(1).max(600_000).optional()
 }).strict()
 
 export const computerUseRunInputSchema = z.object({
-  instruction: z.string().trim().min(1).max(16_384),
+  instruction: z.string().trim().min(1).max(16_384).describe(
+    'Required task instruction, or a required batch summary when parallel is present.'
+  ),
   semanticAction: computerUseSemanticActionSchema.optional(),
   parallel: z.array(computerUseParallelRunEntrySchema).min(2).max(8).superRefine((entries, context) => {
     const sessionIds = new Set<string>()
@@ -193,7 +201,7 @@ export const computerUseRunInputSchema = z.object({
   target: computerUseTargetSchema.optional(),
   requestedIsolation: computerUseIsolationSchema.optional(),
   allowDegraded: z.boolean().optional(),
-  queueIfBusy: z.boolean().optional(),
+  queueIfBusy: computerUseQueueIfBusySchema,
   deadlineMs: z.number().int().min(1).max(600_000).optional()
 }).strict().superRefine((input, context) => {
   if (!input.parallel) return

@@ -100,6 +100,16 @@ describe('computer-use MCP server', () => {
         type: 'array', minItems: 2, maxItems: 8,
         items: expect.objectContaining({ type: 'object' })
       })
+      expect(runTool?.description).toContain('top-level instruction string is still required')
+      expect(runTool?.description).toContain('queueIfBusy is reserved and must be omitted or false')
+      const runProperties = (runTool?.inputSchema as {
+        properties?: {
+          instruction?: { description?: string }
+          queueIfBusy?: { description?: string }
+        }
+      }).properties
+      expect(runProperties?.instruction?.description).toContain('required batch summary')
+      expect(runProperties?.queueIfBusy?.description).toContain('QUEUE_NOT_SUPPORTED')
       expect(runTool?.annotations).toMatchObject({
         title: 'Computer use',
         readOnlyHint: false,
