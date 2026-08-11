@@ -102,6 +102,58 @@ python -m cua.cli --http
 
 bind、run、release 可能分别出现人工审批。确认工具和参数属于本次验收后可以点 `Allow`。
 
+### 4.1 多 Session BrowserContext 验收
+
+当 SciForge 自有 Electron webContents 不足三个时，使用仓库提供的测试拥有环境；不得伪造多个 target。它创建四个独立 Chromium BrowserContext，每个 context 各含一个 page、cookie、localStorage、状态控件和独立生命周期：
+
+```powershell
+npm run computer-use:multisession:harness -- `
+  --ready-file .tmp-cua-multisession/ready.json `
+  --runtime-dir .tmp-cua-multisession/chromium
+```
+
+将 `ready.json` 中的随机 CDP endpoint 注入独立 SciForge 实例的 `SCIFORGE_CUA_CDP_ENDPOINTS`。仍由 SciForge 内 Agent 完成 list targets、四个 UUID 的 bind、一次有界 `parallel` run、逐项 verification/final semanticTree、finally release 和最终 capabilities。外层不得直接调用 adapter 或 sidecar 代替内 Agent。
+
+并行 run 必须满足：
+
+- 2–8 个预绑定 Session，Session ID 和完整 target ID 分别唯一；
+- `requestedIsolation=host-app-scoped`、`allowDegraded=false`；
+- 每个 child 拥有独立 request/channel/lease/backend handle；
+- 成功 child 的 action 时间区间存在正数公共交集；
+- 失败、超时或 target-loss child 不影响其他 target；
+- 父 batch cancel 必须锁存到尚未注册的 child，并扇出到已启动 channel；
+- 所有 Session finally release，活动资源全零。
+
+这证明的是多个独立 BrowserContext/page 的 target-scoped 输入与存储隔离；不要把多个 page 描述成多个独立 Windows input desktop，也不要把同一 BrowserContext 内的多个 page 描述成 cookie/storage 隔离。
+
+### 4.2 脱敏证据导出
+
+要求 SciForge 内 Agent 将本轮原始工具结果写入一个临时 capture JSON，顶层字段为：
+
+```text
+runId
+batch              # computer_use parallel 的完整 ServiceResult
+releases           # 每个 Session 的 release ServiceResult 数组
+finalCapabilities  # release 后 capabilities 的完整 ServiceResult
+harnessState       # 可选，测试拥有状态端点的最终读回
+```
+
+然后在仓库根目录运行：
+
+```powershell
+npm run computer-use:multisession:evidence -- `
+  --input .tmp-cua-multisession/capture.json `
+  --output output/computer-use-multisession-evidence.json
+```
+
+导出器会拒绝重复 Session/target、串行伪并发、缺失 release、未验证的成功动作和任何非零活动资源；URL、CDP endpoint、Authorization、token、secret、API key、截图与本地路径自动脱敏。输出只保留 target/session/request 身份、隔离、动作 outcome、verification、final semanticTree、时间线、release 和资源计数。完成导出后删除原始 capture 和 runtime 临时目录，只保留脱敏 evidence。
+
+验收支持脚本的快速回归入口：
+
+```powershell
+npm run computer-use:multisession:test
+```
+
 ## 5. 结果判读
 
 成功证据至少包含：
@@ -169,6 +221,17 @@ npm --workspace @sciforge/domain-sdk run typecheck
 ```powershell
 python -m pytest tests -q
 python -m ruff check cua driver tests --select F,E9
+```
+
+真实 CDP 故障矩阵必须显式 opt-in，并使用测试拥有的 headless Chromium：
+
+```powershell
+$env:CUA_CDP_INTEGRATION='1'
+python -m pytest `
+  tests/integration/test_cdp_headless_integration.py::test_post_dispatch_transport_loss_is_unknown_and_not_replayed `
+  tests/integration/test_cdp_headless_integration.py::test_parallel_batch_parent_cancel_reaches_all_real_cdp_channels `
+  tests/integration/test_cdp_headless_integration.py::test_parallel_batch_target_loss_does_not_break_other_real_pages `
+  -q
 ```
 
 最后执行仓库已有的 domain/capability checks，并审查：
