@@ -161,14 +161,14 @@ disabling the target-bound channel and backend routing introduced earlier.
 - [Backend capability matrix](docs/computer-use-backend-capability-matrix.md)
 - [Operations, diagnostics and rollback](docs/computer-use-operations.md)
 - [Approval trust boundary ADR](docs/adr-001-approval-trust-boundary.md)
+- [Real SciForge Agent E2E and verified web-task evidence](../../../docs/computer-use-real-e2e.zh-CN.md)
 
-Current local controlled evidence is `217 passed, 16 opt-in skipped` for the
-default Python suite, `9 passed` for the test-owned headless CDP suite, `4
-passed` for project-owned Win32 UIA windows and `2 passed` for a test-owned
-blank Excel name-box Value round trip plus exact-identity crash cleanup. The
-Excel smoke does not write or prove cell content. These results do not prove ordinary Chrome, Word document
-content, Windows Settings, VS Code, a real isolated desktop provider or three
-physical Windows input desktops.
+The current verification matrix and its known Windows-only baselines are kept
+in the real E2E guide linked above. That guide also records the exact outcomes
+of test-owned Playwright TodoMVC tasks and public Wikipedia search/readback
+tasks. Those results do not prove ordinary Chrome, arbitrary production sites,
+Word document content, a real isolated desktop provider, or multiple physical
+Windows input desktops.
 
 ### Isolated desktop provider SPI
 

@@ -157,6 +157,36 @@ npm run computer-use:multisession:evidence -- `
 npm run computer-use:multisession:test
 ```
 
+### 4.3 已验证的真实网页小任务
+
+下表记录 2026-08-11 在 Windows 11 上完成的产品级验收。每轮均启动全新的
+SciForge、Computer Use sidecar、CDP adapter 和测试拥有的 Chromium；网页动作由
+**SciForge 内 Agent** 经 managed MCP 生产链发起。外层自动化只负责新建聊天、选择
+`Med`、发送任务和处理 Host 审批。
+
+| 页面与范围 | SciForge 内 Agent 执行的任务 | 准确结果 |
+|---|---|---|
+| Playwright 官方 TodoMVC，单 BrowserContext | 观察页面，点击待办输入框，输入 `Review SciForge web evidence`，按 Enter 提交，并从最终 semantic tree 读回待办 | 1/1 成功；目标文本只出现一次；release 后活动资源全零 |
+| Playwright 官方 TodoMVC，五个独立 BrowserContext | 单次 `parallel[5]` 分别创建 Alpha/Beta/Gamma/Delta/Epsilon 待办，再逐页读回 | 任务层 4/5：Alpha、Beta、Delta、Epsilon 成功且互不串写；Gamma 在任何动作前由规划模型明确失败。五个 child 的完整执行区间公共重叠 33 秒；所有 Session 均 release，活动资源全零 |
+| 英文 Wikipedia，单 BrowserContext | 在站内搜索框输入 `CRISPR`，按 Enter 导航到条目，读回标题与简介语义节点 | 成功；Enter 为 `verified/url-changed`，最终状态为 `agent_reported_done`，h1 为 `CRISPR` |
+| 英文 Wikipedia，四个独立 BrowserContext | 单次 `parallel[4]` 同时搜索 `CRISPR`、`Cas9`、`Genome editing`、`Bacteriophage`，并读回各条目 h1 | 4/4 成功；四路均为 `browser-cdp`、`host-app-scoped`、无降级、`agent_reported_done`；四个 Enter 均为 `verified/url-changed`。公共执行重叠 `191010.297 ms`，跨 Session 的 committed+verified action 最大重叠 `49.598 ms`；release 后八类活动资源全零 |
+
+这里的“五个工具”是 capability catalog 暴露的五个 managed MCP Computer Use 工具，
+不是五次 Wikipedia 搜索。最终 Wikipedia 并发验收包含四个搜索任务。
+
+这些结果证明当前受控 CDP 路径可以完成一组小型、可回读的网页任务：
+
+- 观察目标页面并基于 semantic tree 选择控件；
+- 点击并聚焦输入控件；
+- 输入文本、发送 Enter 等按键并验证提交或导航；
+- 在导航销毁旧 execution context 后只重试只读 readback，不重放 click/key；
+- 从最终 revision 的 semantic tree 读回待办文本、页面标题和可见正文线索；
+- 在不同 BrowserContext/target 上并发执行，并在 finally 中释放 Session、Request、Lease、Channel 和 backend handle。
+
+验收不等于“任意网站自动化”。它没有证明登录、验证码、支付、上传、下载或第三方
+生产账号流程，也没有证明普通未开放调试端点的 Chrome。多个 BrowserContext 提供
+target-scoped 页面与存储隔离，但不等同于多个独立 Windows input desktop。
+
 ## 5. 结果判读
 
 成功证据至少包含：
