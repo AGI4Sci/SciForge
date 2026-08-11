@@ -11,14 +11,27 @@ import type { Browser, BrowserContext } from 'playwright-core'
 const require = createRequire(import.meta.url)
 const { chromium } = require('playwright-core') as typeof import('playwright-core')
 
-export const MANAGED_SURFACES = Object.freeze([
+const MANAGED_SURFACE_TEMPLATES = Object.freeze([
   { id: 'alpha', label: 'Alpha', color: '#e8f2ff' },
   { id: 'beta', label: 'Beta', color: '#ecf8ee' },
   { id: 'gamma', label: 'Gamma', color: '#fff4df' },
-  { id: 'delta', label: 'Delta', color: '#f5eaff' }
+  { id: 'delta', label: 'Delta', color: '#f5eaff' },
+  { id: 'epsilon', label: 'Epsilon', color: '#e6fbf8' },
+  { id: 'zeta', label: 'Zeta', color: '#fff0f0' },
+  { id: 'eta', label: 'Eta', color: '#eef0ff' },
+  { id: 'theta', label: 'Theta', color: '#f4f7df' }
 ] as const)
 
-type SurfaceId = typeof MANAGED_SURFACES[number]['id']
+export const MANAGED_SURFACES = Object.freeze(MANAGED_SURFACE_TEMPLATES.slice(0, 4))
+
+export function createManagedSurfaces(count = 4): readonly ManagedSurface[] {
+  if (!Number.isInteger(count) || count < 2 || count > MANAGED_SURFACE_TEMPLATES.length) {
+    throw new Error(`--contexts must be an integer between 2 and ${MANAGED_SURFACE_TEMPLATES.length}.`)
+  }
+  return MANAGED_SURFACE_TEMPLATES.slice(0, count)
+}
+
+type ManagedSurface = typeof MANAGED_SURFACE_TEMPLATES[number]
 type SurfaceState = {
   commits: number
   state: string
@@ -31,9 +44,10 @@ type HarnessOptions = Readonly<{
   readyFile: string
   runtimeDir: string
   browserExecutable?: string
+  contextCount?: number
 }>
 
-export function managedSurfaceHtml(surface: typeof MANAGED_SURFACES[number]): string {
+export function managedSurfaceHtml(surface: ManagedSurface): string {
   const marker = `${surface.id.toUpperCase()}_CONTEXT`
   const committed = `${surface.id.toUpperCase()}_COMMITTED`
   return `<!doctype html>
@@ -49,6 +63,7 @@ export function managedSurfaceHtml(surface: typeof MANAGED_SURFACES[number]): st
   <p>Storage marker ${surface.label}: ${marker}</p>
   <button id="commit" aria-label="Commit ${surface.label}">Commit ${surface.label}</button>
   <output id="state">State ${surface.label}: READY</output>
+  <output id="commits">Commits ${surface.label}: 0</output>
 </main><script>
   const surface = ${JSON.stringify(surface.id)}
   const marker = ${JSON.stringify(marker)}
@@ -68,20 +83,21 @@ export function managedSurfaceHtml(surface: typeof MANAGED_SURFACES[number]): st
     state.commits += 1
     state.state = committed
     document.querySelector('#state').textContent = 'State ${surface.label}: ' + committed
+    document.querySelector('#commits').textContent = 'Commits ${surface.label}: ' + state.commits
     await publish()
   })
   publish()
 </script></body></html>`
 }
 
-export function emptyHarnessState(): Record<SurfaceId, SurfaceState> {
-  return Object.fromEntries(MANAGED_SURFACES.map((surface) => [surface.id, {
+export function emptyHarnessState(surfaces: readonly ManagedSurface[] = MANAGED_SURFACES): Record<string, SurfaceState> {
+  return Object.fromEntries(surfaces.map((surface) => [surface.id, {
     commits: 0,
     state: 'READY',
     cookie: '',
     storage: '',
     updatedAt: null
-  }])) as Record<SurfaceId, SurfaceState>
+  }]))
 }
 
 export function browserExecutableCandidates(explicit?: string): string[] {
@@ -107,8 +123,9 @@ export async function startManagedMultisessionHarness(options: HarnessOptions): 
   const executablePath = browserExecutableCandidates(options.browserExecutable).find(existsSync)
   if (!executablePath) throw new Error('No supported Chromium executable was found for the managed harness.')
 
-  const state = emptyHarnessState()
-  const stateServer = createServer((request, response) => handleStateRequest(state, request, response))
+  const surfaces = createManagedSurfaces(options.contextCount)
+  const state = emptyHarnessState(surfaces)
+  const stateServer = createServer((request, response) => handleStateRequest(surfaces, state, request, response))
   const statePort = await listenLoopback(stateServer)
   const cdpPort = await reserveLoopbackPort()
   const stateEndpoint = `http://127.0.0.1:${statePort}`
@@ -128,20 +145,20 @@ export async function startManagedMultisessionHarness(options: HarnessOptions): 
       ]
     })
     await waitForCdp(cdpEndpoint)
-    for (const surface of MANAGED_SURFACES) {
+    for (const surface of surfaces) {
       const context = await browser.newContext({ viewport: { width: 900, height: 640 } })
       contexts.push(context)
       const page = await context.newPage()
       await page.goto(`${stateEndpoint}/surface/${surface.id}`, { waitUntil: 'networkidle' })
     }
-    await waitForSurfaceRegistration(state)
+    await waitForSurfaceRegistration(surfaces, state)
     await writeFile(readyFile, JSON.stringify({
       version: 1,
       runId: randomUUID(),
       cdpEndpoint,
       stateEndpoint,
       contextCount: contexts.length,
-      surfaces: MANAGED_SURFACES.map(({ id, label }) => ({ id, label }))
+      surfaces: surfaces.map(({ id, label }) => ({ id, label }))
     }, null, 2), 'utf8')
   } catch (error) {
     await Promise.allSettled(contexts.map((context) => context.close()))
@@ -165,12 +182,13 @@ export async function startManagedMultisessionHarness(options: HarnessOptions): 
 }
 
 function handleStateRequest(
-  state: Record<SurfaceId, SurfaceState>,
+  surfaces: readonly ManagedSurface[],
+  state: Record<string, SurfaceState>,
   request: IncomingMessage,
   response: ServerResponse
 ): void {
   const url = new URL(request.url ?? '/', 'http://127.0.0.1')
-  const surface = MANAGED_SURFACES.find((candidate) => url.pathname === `/surface/${candidate.id}`)
+  const surface = surfaces.find((candidate) => url.pathname === `/surface/${candidate.id}`)
   if (request.method === 'GET' && surface) {
     send(response, 200, managedSurfaceHtml(surface), 'text/html; charset=utf-8')
     return
@@ -179,9 +197,10 @@ function handleStateRequest(
     send(response, 200, JSON.stringify(state), 'application/json; charset=utf-8')
     return
   }
-  const stateMatch = /^\/state\/(alpha|beta|gamma|delta)$/u.exec(url.pathname)
-  if (request.method === 'POST' && stateMatch) {
-    const id = stateMatch[1] as SurfaceId
+  const stateMatch = /^\/state\/([a-z]+)$/u.exec(url.pathname)
+  const stateSurface = stateMatch ? surfaces.find(({ id }) => id === stateMatch[1]) : undefined
+  if (request.method === 'POST' && stateSurface) {
+    const id = stateSurface.id
     readJson(request).then((payload) => {
       state[id] = {
         commits: finiteNonnegativeInteger(payload.commits),
@@ -262,10 +281,13 @@ async function waitForCdp(endpoint: string): Promise<void> {
   throw new Error(`Chromium CDP endpoint did not become ready: ${String(lastError)}`)
 }
 
-async function waitForSurfaceRegistration(state: Record<SurfaceId, SurfaceState>): Promise<void> {
+async function waitForSurfaceRegistration(
+  surfaces: readonly ManagedSurface[],
+  state: Record<string, SurfaceState>
+): Promise<void> {
   const deadline = Date.now() + 10_000
   while (Date.now() < deadline) {
-    if (MANAGED_SURFACES.every((surface) => {
+    if (surfaces.every((surface) => {
       const marker = `${surface.id.toUpperCase()}_CONTEXT`
       return state[surface.id].cookie.includes(marker) && state[surface.id].storage === marker
     })) return
@@ -285,16 +307,25 @@ function boundedText(value: unknown): string {
 
 function parseOptions(argv: readonly string[]): HarnessOptions {
   const values = new Map<string, string>()
+  const allowed = new Set(['--ready-file', '--runtime-dir', '--browser', '--contexts'])
   for (let index = 0; index < argv.length; index += 2) {
     const key = argv[index]
     const value = argv[index + 1]
     if (!key?.startsWith('--') || !value) throw new Error('Expected --ready-file and --runtime-dir arguments.')
+    if (!allowed.has(key)) throw new Error(`Unknown argument: ${key}`)
     values.set(key, value)
   }
   const readyFile = values.get('--ready-file')
   const runtimeDir = values.get('--runtime-dir')
   if (!readyFile || !runtimeDir) throw new Error('--ready-file and --runtime-dir are required.')
-  return { readyFile, runtimeDir, ...(values.get('--browser') ? { browserExecutable: values.get('--browser') } : {}) }
+  const contextCount = values.has('--contexts') ? Number(values.get('--contexts')) : undefined
+  if (contextCount !== undefined) createManagedSurfaces(contextCount)
+  return {
+    readyFile,
+    runtimeDir,
+    ...(values.get('--browser') ? { browserExecutable: values.get('--browser') } : {}),
+    ...(contextCount !== undefined ? { contextCount } : {})
+  }
 }
 
 async function main(): Promise<void> {

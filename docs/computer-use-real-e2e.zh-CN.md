@@ -108,11 +108,14 @@ bind、run、release 可能分别出现人工审批。确认工具和参数属�
 
 ```powershell
 npm run computer-use:multisession:harness -- `
+  --contexts 5 `
   --ready-file .tmp-cua-multisession/ready.json `
   --runtime-dir .tmp-cua-multisession/chromium
 ```
 
-将 `ready.json` 中的随机 CDP endpoint 注入独立 SciForge 实例的 `SCIFORGE_CUA_CDP_ENDPOINTS`。仍由 SciForge 内 Agent 完成 list targets、四个 UUID 的 bind、一次有界 `parallel` run、逐项 verification/final semanticTree、finally release 和最终 capabilities。外层不得直接调用 adapter 或 sidecar 代替内 Agent。
+`--contexts` 支持 2–8，默认 4；超出范围或未知参数会明确拒绝。每个 context 对应一个独立 target/page 和独立 cookie/localStorage 状态。
+
+将 `ready.json` 中的随机 CDP endpoint 注入独立 SciForge 实例的 `SCIFORGE_CUA_CDP_ENDPOINTS`。仍由 SciForge 内 Agent 按 `surfaces` 数量完成不同 UUID 的 bind、一次有界 `parallel` run、逐项 verification/final semanticTree、finally release 和最终 capabilities。外层不得直接调用 adapter 或 sidecar 代替内 Agent。
 
 并行 run 必须满足：
 
