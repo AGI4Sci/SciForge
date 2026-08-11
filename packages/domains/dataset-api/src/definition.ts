@@ -21,6 +21,15 @@ export const DATASET_API_WORKFLOW_EXECUTION_RECEIPT_CONTRIBUTION = contributionF
   'main.workflow-execution-receipt-provider'
 )
 
+export const DATASET_API_CREATE_LOOP_RESOURCE_EXECUTOR_CONTRIBUTION = contributionFor(
+  'main',
+  'main.extension'
+)
+export const DATASET_API_CREATE_LOOP_RESOURCE_EXECUTOR_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    DATASET_API_CREATE_LOOP_RESOURCE_EXECUTOR_CONTRIBUTION.id
+  ]!
+
 export const DATASET_API_TIMELINE_RESULTS_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.chat-result-panel'

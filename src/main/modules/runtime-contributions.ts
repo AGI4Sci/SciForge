@@ -6,13 +6,16 @@ import {
 import {
   MAIN_ACTION_GUARD_CONTRIBUTION_KIND,
   MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
+  MAIN_EXTENSION_CONTRIBUTION_KIND,
   MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
+  domainMainExtensionContractSchema,
   isDomainArtifactConsumer,
   isDomainMainActionGuard,
   isDomainMainRuntimeLifecycleContribution,
   type DomainArtifactConsumer,
   type DomainMainActionGuard,
   type DomainMainActionGuardInput,
+  type DomainMainContribution,
   type DomainMainRuntimeDisposer,
   type DomainMainRuntimeLifecycleContribution,
   type DomainMainRuntimeLifecycleHost,
@@ -66,6 +69,23 @@ export function listMainWorkflowExecutionReceiptProviders(
     (value): value is DomainWorkflowExecutionReceiptProvider =>
       isDomainWorkflowExecutionReceiptProvider(value)
   ).map((contribution) => contribution.value))
+}
+
+export function listMainExtensionContributions(
+  catalog: DomainModuleCatalog
+): readonly DomainMainContribution[] {
+  return Object.freeze(catalog.listContributions(
+    MAIN_EXTENSION_CONTRIBUTION_KIND,
+    (value, metadata): value is unknown =>
+      domainMainExtensionContractSchema.safeParse(metadata.contract).success
+  ).map((contribution) => Object.freeze({
+    id: contribution.declaration.id,
+    kind: MAIN_EXTENSION_CONTRIBUTION_KIND,
+    packageName: contribution.packageName,
+    owner: contribution.owner,
+    contract: contribution.contract!,
+    value: contribution.value
+  })))
 }
 
 export function createMainActionGuardEvaluator(
@@ -206,6 +226,11 @@ export async function activateMainRuntimeContributions(
   )
   const artifactConsumers = listMainArtifactConsumers(catalog)
   const workflowExecutionReceipts = listMainWorkflowExecutionReceiptProviders(catalog)
+  const mainExtensions = listMainExtensionContributions(catalog)
+  const contributionHost = Object.freeze({
+    list: (kind: typeof MAIN_EXTENSION_CONTRIBUTION_KIND) =>
+      kind === MAIN_EXTENSION_CONTRIBUTION_KIND ? mainExtensions : Object.freeze([])
+  })
 
   const activated: ActivatedLifecycle[] = []
   try {
@@ -224,6 +249,7 @@ export async function activateMainRuntimeContributions(
           publish: (event: DomainExecutionEventInput) => executionEvents.publish(owner, event)
         }),
         workflowExecutionReceipts,
+        contributions: contributionHost,
         enablement: Object.freeze({
           isEnabled: () => enablement.isEnabled(owner.moduleId),
           subscribe: (listener: (enabled: boolean) => void) =>

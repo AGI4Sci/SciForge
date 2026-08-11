@@ -12,7 +12,6 @@ import {
   DATASET_API_CAPABILITY_IDS,
   datasetApiCapabilityOutputSchema,
   datasetConfirmPlanInputSchema,
-  datasetApiEnsureProvidersInputSchema,
   datasetApiListInputSchema
 } from '../contract.js'
 
@@ -64,12 +63,6 @@ const listContract = Object.freeze({
   actionId: DATASET_API_CAPABILITY_IDS.list,
   effect: 'read' as const,
   inputSchema: datasetApiListInputSchema.omit({ workspaceRoot: true }),
-  outputSchema: datasetApiCapabilityOutputSchema
-})
-const ensureProvidersContract = Object.freeze({
-  actionId: DATASET_API_CAPABILITY_IDS.ensureProviders,
-  effect: 'workspace-write' as const,
-  inputSchema: datasetApiEnsureProvidersInputSchema.omit({ workspaceRoot: true }),
   outputSchema: datasetApiCapabilityOutputSchema
 })
 const confirmPlanContract = Object.freeze({
@@ -132,11 +125,11 @@ function sourceData(resource: CreateLoopResourceDescriptor): DatasetSourceResour
 }
 
 function planTemplate(operation: DatasetPlanOperation): Record<string, JsonValue> {
-  if (operation === 'execute-plan') return { planId: '{{json.datasetApi.result.planId}}' }
+  if (operation === 'execute-plan') return { planId: '{{json.createLoopResource.result.planId}}' }
   if (operation === 'resume-plan') {
     return {
-      planId: '{{json.datasetApi.result.execution.planId}}',
-      runId: '{{json.datasetApi.result.execution.runId}}'
+      planId: '{{json.createLoopResource.result.execution.planId}}',
+      runId: '{{json.createLoopResource.result.execution.runId}}'
     }
   }
   return {
@@ -148,12 +141,6 @@ function planTemplate(operation: DatasetPlanOperation): Record<string, JsonValue
     }],
     outputs: [{ name: 'profile.json', format: 'json' }]
   }
-}
-
-function planAction(operation: DatasetPlanOperation): string {
-  if (operation === 'execute-plan') return DATASET_API_CAPABILITY_IDS.executePlan
-  if (operation === 'resume-plan') return DATASET_API_CAPABILITY_IDS.resumePlan
-  return DATASET_API_CAPABILITY_IDS.preparePlan
 }
 
 export async function confirmDatasetPlan(
@@ -176,10 +163,25 @@ export function createDatasetApiCreateLoopResourceProvider(
   invoker: DomainRendererCapabilityInvoker
 ): CreateLoopResourceProvider {
   const cache = new Map<string, readonly CreateLoopResourceDescriptor[]>()
+  const pendingLoads = new Map<string, Promise<readonly CreateLoopResourceDescriptor[]>>()
 
   const loadResources = async (workspaceRoot: string): Promise<readonly CreateLoopResourceDescriptor[]> => {
     if (!workspaceRoot.trim()) return []
-    await invoker.invoke(ensureProvidersContract, {}, { workspaceId: workspaceRoot })
+    const key = workspaceRoot.trim()
+    const pending = pendingLoads.get(key)
+    if (pending) return pending
+    const loading = loadWorkspaceResources(key)
+    pendingLoads.set(key, loading)
+    try {
+      return await loading
+    } finally {
+      if (pendingLoads.get(key) === loading) pendingLoads.delete(key)
+    }
+  }
+
+  const loadWorkspaceResources = async (
+    workspaceRoot: string
+  ): Promise<readonly CreateLoopResourceDescriptor[]> => {
     const listOutput = await invoker.invoke(listContract, {}, { workspaceId: workspaceRoot })
     const listResult = listResultSchema.parse(listOutput.datasetApi.result)
     const registered = Object.freeze(listResult.sources.map((source): CreateLoopResourceDescriptor => {
@@ -209,7 +211,7 @@ export function createDatasetApiCreateLoopResourceProvider(
           id: DATASET_QUERY_RESOURCE_ID,
           name: DATASET_QUERY_NODE_NAME,
           nameKey: 'datasetResourceQuery',
-          description: 'Query metadata or raw data from any registered Dataset API source.',
+          description: 'Query metadata or raw data from any available Dataset API source.',
           detail: 'metadata · raw data',
           role: 'operation',
           data: {
@@ -259,8 +261,6 @@ export function createDatasetApiCreateLoopResourceProvider(
           resourceId: selectedResourceId,
           resourceName: selectedResourceName,
           operationId: plan ? operation : 'metadata',
-          actionId: plan ? planAction(operation) : DATASET_API_CAPABILITY_IDS.metadata,
-          effect: 'workspace-write',
           inputTemplate: prettyJson(
             plan
               ? planTemplate(operation)
@@ -338,8 +338,6 @@ function DatasetResourceNodeConfig({
       config: {
         ...node.config,
         operationId: nextRawData ? 'raw-data' : 'metadata',
-        actionId: nextRawData ? DATASET_API_CAPABILITY_IDS.rawData : DATASET_API_CAPABILITY_IDS.metadata,
-        effect: 'workspace-write',
         inputTemplate: prettyJson(
           nextRawData
             ? data?.rawDataInput ?? rawDataInput(node.config.resourceId)
@@ -478,8 +476,6 @@ function DatasetPlanNodeConfig({
       config: {
         ...node.config,
         operationId: next,
-        actionId: planAction(next),
-        effect: 'workspace-write',
         inputTemplate: prettyJson(input)
       }
     })
@@ -609,8 +605,7 @@ export function readDatasetPlanDraft(outputJson?: string): {
   if (!outputJson?.trim()) return null
   try {
     const output = JSON.parse(outputJson) as Record<string, unknown>
-    const datasetApi = output.datasetApi as Record<string, unknown> | undefined
-    const result = datasetApi?.result as Record<string, unknown> | undefined
+    const result = createLoopResourceResult(output)
     if (typeof result?.planId !== 'string' || result.status !== 'draft') return null
     return { planId: result.planId, status: 'draft' }
   } catch {
@@ -628,8 +623,7 @@ export function readDatasetExecutionReceipt(outputJson?: string): {
   if (!outputJson?.trim()) return null
   try {
     const output = JSON.parse(outputJson) as Record<string, unknown>
-    const datasetApi = output.datasetApi as Record<string, unknown> | undefined
-    const result = datasetApi?.result as Record<string, unknown> | undefined
+    const result = createLoopResourceResult(output)
     const execution = (result?.execution ?? result) as Record<string, unknown> | undefined
     if (!execution || typeof execution.planId !== 'string' || typeof execution.runId !== 'string') return null
     const steps = Array.isArray(execution.steps) ? execution.steps : []
@@ -652,6 +646,13 @@ export function readDatasetExecutionReceipt(outputJson?: string): {
   } catch {
     return null
   }
+}
+
+function createLoopResourceResult(
+  output: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  const resource = output.createLoopResource as Record<string, unknown> | undefined
+  return resource?.result as Record<string, unknown> | undefined
 }
 
 function displayEndpoint(baseUrl: string, endpoint: string): string {

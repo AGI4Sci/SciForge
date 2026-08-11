@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { DomainMainRuntimeLifecycleContext } from '@sciforge/domain-sdk/host'
+import {
+  MAIN_EXTENSION_CONTRIBUTION_KIND,
+  type DomainMainRuntimeLifecycleContext
+} from '@sciforge/domain-sdk/host'
 import { CREATE_LOOP_CAPABILITY_IDS, type WorkflowSettingsV1 } from './contract.js'
 import {
   createCreateLoopCapabilityFactory,
@@ -61,6 +64,10 @@ test('publishes the complete node-workflow operation set through one governed fa
 
 test('main entry owns one lifecycle and persists below the package data root', async () => {
   const calls: string[] = []
+  const resourceExecutor = Object.freeze({
+    id: 'fixture-data-provider',
+    execute: async () => ({ result: { ok: true } })
+  })
   const runtime = {
     activate: async () => {
       calls.push('activate')
@@ -71,8 +78,9 @@ test('main entry owns one lifecycle and persists below the package data root', a
   const entry = createDomainMainEntry({
     getUserDataDir: () => '/unused',
     defineCapability: (definition) => definition,
-    createCreateLoopRuntime: ({ statePath }) => {
+    createCreateLoopRuntime: ({ statePath, resourceExecutors }) => {
       calls.push(`create:${statePath}`)
+      calls.push(`resources:${resourceExecutors?.map((executor) => executor.id).join(',')}`)
       return runtime
     }
   })
@@ -80,16 +88,31 @@ test('main entry owns one lifecycle and persists below the package data root', a
     activate(context: DomainMainRuntimeLifecycleContext): Promise<unknown>
   }
   const deactivate = await lifecycle.activate({
-    userDataDir: '/user-data'
-  } as DomainMainRuntimeLifecycleContext) as () => Promise<void>
+    userDataDir: '/user-data',
+    contributions: {
+      list: () => [{
+        id: 'fixture-data-provider.executor',
+        kind: MAIN_EXTENSION_CONTRIBUTION_KIND,
+        packageName: '@fixture/data-provider',
+        owner: { moduleId: 'fixture.data-provider', moduleVersion: '1.0.0' },
+        contract: {
+          location: 'create-loop.resource-executor',
+          providerId: 'fixture-data-provider'
+        },
+        value: resourceExecutor
+      }]
+    }
+  } as unknown as DomainMainRuntimeLifecycleContext) as () => Promise<void>
   assert.deepEqual(calls, [
     'create:/user-data/domains/create-loop/state.json',
+    'resources:fixture-data-provider',
     'activate'
   ])
   await deactivate()
   await entry.contributions[1]!.onDispose?.()
   assert.deepEqual(calls, [
     'create:/user-data/domains/create-loop/state.json',
+    'resources:fixture-data-provider',
     'activate',
     'deactivate'
   ])

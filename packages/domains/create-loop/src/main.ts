@@ -38,6 +38,7 @@ import {
   type WorkflowSettingsV1
 } from './contract.js'
 import { buildDatasetGenerationLoop } from './dataset-loop-builder.js'
+import { collectCreateLoopResourceExecutors } from './resource-executor.js'
 import {
   WORKFLOW_AUTOMATION_CAPABILITY_FACTORY_CONTRIBUTION,
   WORKFLOW_AUTOMATION_DOMAIN_MODULE_ID,
@@ -130,7 +131,8 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
       const pending = (async (): Promise<OwnedRuntime> => {
         const runtime = createRuntime({
           statePath: createLoopStatePath(context.userDataDir),
-          executionReceiptProviders: context.workflowExecutionReceipts
+          executionReceiptProviders: context.workflowExecutionReceipts,
+          resourceExecutors: collectCreateLoopResourceExecutors(context.contributions)
         })
         try {
           const deactivate = await runtime.activate(context)

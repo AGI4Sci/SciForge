@@ -221,6 +221,8 @@ export type WorkflowAiAgentConfigV1 = {
   model: string
   reasoningEffort: ScheduleReasoningEffort
   mode: ScheduleRunMode
+  /** Whether the Host should expose the run in its review surface. */
+  interaction: 'background' | 'reviewable'
   /** Host-enforced runtime tool allowlist. Empty disables all runtime tools. */
   allowedTools?: string[]
 }
@@ -484,13 +486,11 @@ export type WorkflowHttpRequestConfigV1 = {
 }
 
 export type WorkflowResourceConfigV1 = {
-  /** Renderer contribution that owns discovery and configuration for this resource. */
+  /** Package contribution that owns discovery, configuration, and main-process execution. */
   providerId: string
   resourceId: string
   resourceName: string
   operationId: string
-  actionId: string
-  effect: 'read' | 'compute' | 'workspace-write' | 'external-write' | 'destructive'
   /** JSON request body. Supports the same {{json.x}} / {{text}} interpolation as other nodes. */
   inputTemplate: string
   /** Keep the incoming object and attach the capability output under resultKey. */
@@ -986,8 +986,6 @@ const generatedDatasetSourceBindingSchema = z.object({
   resourceId: z.string().trim().min(1).max(160),
   resourceName: z.string().trim().min(1).max(500),
   operationId: z.string().trim().min(1).max(160),
-  actionId: z.string().trim().min(1).max(256),
-  effect: z.enum(['read', 'compute', 'workspace-write', 'external-write', 'destructive']),
   inputTemplate: z.string().trim().min(2).max(1_000_000)
 }).strict()
 

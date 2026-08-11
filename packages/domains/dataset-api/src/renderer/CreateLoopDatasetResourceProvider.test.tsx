@@ -11,15 +11,6 @@ import {
 describe('Create Loop Dataset API resource provider', () => {
   it('discovers workspace sources and creates an executable resource node', async () => {
     const invokeMock = vi.fn(async (contract: { actionId: string }) => {
-      if (contract.actionId === 'dataset-api.ensure-providers') {
-        return {
-          datasetApi: {
-            actionId: 'dataset-api.ensure-providers' as const,
-            success: true as const,
-            result: { sources: [], addedSourceIds: [], preservedSourceIds: [] }
-          }
-        }
-      }
       return {
         datasetApi: {
           actionId: 'dataset-api.list' as const,
@@ -55,18 +46,17 @@ describe('Create Loop Dataset API resource provider', () => {
     }
     const provider = createDatasetApiCreateLoopResourceProvider(invoker)
 
-    const resources = await provider.loadResources('/workspace/project')
-    expect(invokeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ actionId: 'dataset-api.ensure-providers', effect: 'workspace-write' }),
-      {},
-      { workspaceId: '/workspace/project' }
-    )
+    const [resources, concurrentResources] = await Promise.all([
+      provider.loadResources('/workspace/project'),
+      provider.loadResources('/workspace/project')
+    ])
+    expect(concurrentResources).toBe(resources)
     expect(invokeMock).toHaveBeenCalledWith(
       expect.objectContaining({ actionId: 'dataset-api.list', effect: 'read' }),
       {},
       { workspaceId: '/workspace/project' }
     )
-    expect(invokeMock).toHaveBeenCalledTimes(2)
+    expect(invokeMock).toHaveBeenCalledTimes(1)
     expect(resources).toHaveLength(3)
     expect(resources[0]).toMatchObject({
       id: 'uniprot',
@@ -92,9 +82,7 @@ describe('Create Loop Dataset API resource provider', () => {
       config: {
         providerId: 'dataset-api',
         resourceId: 'uniprot',
-        operationId: 'metadata',
-        actionId: 'dataset-api.metadata',
-        effect: 'workspace-write'
+        operationId: 'metadata'
       }
     })
     expect(JSON.parse(node.config.inputTemplate)).toEqual({
@@ -109,8 +97,7 @@ describe('Create Loop Dataset API resource provider', () => {
       name: 'Query dataset',
       config: {
         resourceId: 'uniprot',
-        resourceName: 'UniProt REST',
-        actionId: 'dataset-api.metadata'
+        resourceName: 'UniProt REST'
       }
     })
     expect(JSON.parse(queryNode.config.inputTemplate)).toMatchObject({
@@ -119,25 +106,14 @@ describe('Create Loop Dataset API resource provider', () => {
     })
   })
 
-  it('automatically registers presets and exposes query and plan operations', async () => {
-    let registered = false
-    const invokeMock = vi.fn(async (contract: { actionId: string }) => {
-      if (contract.actionId === 'dataset-api.ensure-providers') {
-        registered = true
-        return {
-          datasetApi: {
-            actionId: 'dataset-api.ensure-providers' as const,
-            success: true as const,
-            result: { sources: [], addedSourceIds: ['string'], preservedSourceIds: [] }
-          }
-        }
-      }
+  it('exposes virtual presets as query and plan operations', async () => {
+    const invokeMock = vi.fn(async () => {
       return {
         datasetApi: {
           actionId: 'dataset-api.list' as const,
           success: true as const,
           result: {
-            sources: registered ? [{
+            sources: [{
               id: 'string',
               name: 'STRING API',
               baseUrl: 'https://string-db.org/api/',
@@ -152,7 +128,7 @@ describe('Create Loop Dataset API resource provider', () => {
                   expectedFormat: 'text'
                 }
               }
-            }] : []
+            }]
           }
         }
       }
@@ -188,8 +164,7 @@ describe('Create Loop Dataset API resource provider', () => {
     const planNode = provider.createNode(resources[2]!, { x: 300, y: 200 })
     expect(planNode.config).toMatchObject({
       resourceId: 'dataset-processing-plan',
-      operationId: 'prepare-plan',
-      actionId: 'dataset-api.prepare-plan'
+      operationId: 'prepare-plan'
     })
     const planInput = JSON.parse(planNode.config.inputTemplate)
     expect(planInput).toMatchObject({ operations: [{ tool: 'dataset_profile' }] })
@@ -229,11 +204,11 @@ describe('Create Loop Dataset API resource provider', () => {
 
   it('parses draft and canonical execution receipts', () => {
     expect(readDatasetPlanDraft(JSON.stringify({
-      datasetApi: { result: { planId: 'plan-123', status: 'draft' } }
+      createLoopResource: { result: { planId: 'plan-123', status: 'draft' } }
     }))).toEqual({ planId: 'plan-123', status: 'draft' })
 
     expect(readDatasetExecutionReceipt(JSON.stringify({
-      datasetApi: {
+      createLoopResource: {
         result: {
           execution: {
             planId: 'plan-123',

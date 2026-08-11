@@ -1,4 +1,4 @@
-import type { z } from 'zod'
+import { z } from 'zod'
 
 import type { DomainMainAgentExecutionHost } from './agent-execution.js'
 import type { DomainPackageJsonValue } from './contract.js'
@@ -33,10 +33,33 @@ export const MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND = 'main.runtime-lifecycle'
 export const MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND =
   'main.artifact-consumer' as const
 export const MAIN_ACTION_GUARD_CONTRIBUTION_KIND = 'main.action-guard' as const
+export const MAIN_EXTENSION_CONTRIBUTION_KIND = 'main.extension' as const
+
+export const domainMainExtensionContractSchema = z.object({
+  location: z.string().trim().min(1).max(192)
+}).passthrough()
+
+export type DomainMainExtensionContract = z.infer<
+  typeof domainMainExtensionContractSchema
+>
 
 export type DomainRuntimeContributionOwner = Readonly<{
   moduleId: string
   moduleVersion: string
+}>
+
+export type DomainMainContribution = Readonly<{
+  id: string
+  kind: typeof MAIN_EXTENSION_CONTRIBUTION_KIND
+  packageName: string
+  owner: DomainRuntimeContributionOwner
+  contract: DomainPackageJsonValue
+  value: unknown
+}>
+
+export type DomainMainContributionHost = Readonly<{
+  list: (kind: typeof MAIN_EXTENSION_CONTRIBUTION_KIND) =>
+    readonly DomainMainContribution[]
 }>
 
 export type DomainMainRuntimeLogEntry = Readonly<{
@@ -193,6 +216,8 @@ export type DomainMainRuntimeLifecycleContext =
     enablement: DomainMainModuleEnablement
     executionEvents: DomainMainExecutionEventsHost
     workflowExecutionReceipts: readonly DomainWorkflowExecutionReceiptProvider[]
+    /** Installed package extension values, projected only after every main entry is registered. */
+    contributions?: DomainMainContributionHost
   }>
 
 export type DomainMainRuntimeDisposer = () => void | Promise<void>

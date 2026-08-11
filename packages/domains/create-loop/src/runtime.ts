@@ -4,7 +4,7 @@ import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import path from 'node:path'
 import { runInNewContext } from 'node:vm'
-import { z } from 'zod'
+import { domainPackageJsonValueSchema } from '@sciforge/domain-sdk/contract'
 import type {
   DomainMainRuntimeDisposer,
   DomainMainRuntimeLifecycleContext
@@ -64,6 +64,10 @@ import {
   defaultWorkflowSettings,
   normalizeWorkflowSettings
 } from './workflow-settings.js'
+import {
+  createLoopResourceExecutionResultSchema,
+  type CreateLoopResourceExecutor
+} from './resource-executor.js'
 
 const SCHEMA_VERSION = 3
 const SCHEDULER_POLL_MS = 30_000
@@ -126,6 +130,7 @@ type RunExecutionMetadata = {
 export type CreateLoopRuntimeOptions = Readonly<{
   statePath: string
   executionReceiptProviders?: readonly DomainWorkflowExecutionReceiptProvider[]
+  resourceExecutors?: readonly CreateLoopResourceExecutor[]
   now?: () => Date
   createId?: () => string
   maxPendingExecutionEvents?: number
@@ -141,6 +146,7 @@ export class CreateLoopRuntime {
   readonly #setInterval: (handler: () => void, delay: number) => unknown
   readonly #clearInterval: (handle: unknown) => void
   readonly #executionReceiptProviders: readonly DomainWorkflowExecutionReceiptProvider[]
+  readonly #resourceExecutors: ReadonlyMap<string, CreateLoopResourceExecutor>
   #context: DomainMainRuntimeLifecycleContext | null = null
   #state: PersistedState | null = null
   #stateOperation: Promise<unknown> = Promise.resolve()
@@ -158,6 +164,11 @@ export class CreateLoopRuntime {
   constructor(options: CreateLoopRuntimeOptions) {
     this.#statePath = path.resolve(options.statePath)
     this.#executionReceiptProviders = Object.freeze([...(options.executionReceiptProviders ?? [])])
+    const resourceExecutors = options.resourceExecutors ?? []
+    this.#resourceExecutors = new Map(resourceExecutors.map((executor) => [executor.id, executor]))
+    if (this.#resourceExecutors.size !== resourceExecutors.length) {
+      throw new TypeError('Create Loop resource executor ids must be unique.')
+    }
     this.#now = options.now ?? (() => new Date())
     this.#createId = options.createId ?? randomUUID
     const requestedPendingLimit = options.maxPendingExecutionEvents ?? MAX_PENDING_EXECUTION_EVENTS
@@ -1224,9 +1235,7 @@ export class CreateLoopRuntime {
           ...(node.config.allowedTools
             ? { allowedTools: node.config.allowedTools }
             : {}),
-          ...(node.config.allowedTools?.includes('sciforge_invoke')
-            ? { interaction: 'reviewable' as const }
-            : {}),
+          interaction: node.config.interaction,
           mode: node.config.mode,
           signal
         })
@@ -1329,7 +1338,6 @@ export class CreateLoopRuntime {
         return { payload: { json, text }, message: `HTTP ${response.status}` }
       }
       case 'resource': {
-        const context = this.#requireContext()
         const state = await this.#load()
         const trigger = workflow.nodes.find((candidate) => candidate.type.endsWith('-trigger'))
         const triggerWorkspace = trigger && 'workspaceRoot' in trigger.config
@@ -1339,22 +1347,33 @@ export class CreateLoopRuntime {
           state.settings.defaultWorkspaceRoot.trim() ||
           callerWorkspaceRoot.trim()
         if (!workspaceRoot) throw new Error('Resource nodes require an active or configured workspace.')
-        if (!node.config.actionId.trim()) throw new Error('Resource node capability is not configured.')
+        const providerId = node.config.providerId.trim()
+        const executor = this.#resourceExecutors.get(providerId)
+        if (!executor) {
+          throw new Error(`Resource provider '${providerId}' is not installed.`)
+        }
         const inputText = interpolate(node.config.inputTemplate || '{}', payload)
-        const input = JSON.parse(inputText) as unknown
-        const result = await context.capabilities.invoke(
-          {
-            actionId: node.config.actionId,
-            effect: node.config.effect,
-            inputSchema: z.unknown(),
-            outputSchema: z.unknown()
-          },
-          input,
-          {
-            workspaceId: workspaceRoot,
+        const input = domainPackageJsonValueSchema.parse(JSON.parse(inputText))
+        const execution = createLoopResourceExecutionResultSchema.parse(
+          await executor.execute({
+            providerId,
+            resourceId: node.config.resourceId,
+            operationId: node.config.operationId,
+            input,
+            workspaceRoot,
             idempotencyKey: `create-loop:${runId}:${node.id}`
-          }
+          })
         )
+        const result = {
+          createLoopResource: {
+            providerId,
+            resourceId: node.config.resourceId,
+            operationId: node.config.operationId,
+            success: true,
+            result: execution.result,
+            artifactPaths: execution.artifactPaths ?? []
+          }
+        }
         const resultKey = node.config.resultKey?.trim()
         const json = node.config.preserveInput && resultKey && isRecord(payload.json)
           ? { ...payload.json, [resultKey]: result }
@@ -1362,7 +1381,8 @@ export class CreateLoopRuntime {
         const text = JSON.stringify(json)
         return {
           payload: { json, text },
-          message: `${node.config.resourceName || node.config.resourceId} · ${node.config.operationId}`
+          message: execution.message ??
+            `${node.config.resourceName || node.config.resourceId} · ${node.config.operationId}`
         }
       }
       case 'delay':

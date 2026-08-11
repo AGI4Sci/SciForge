@@ -9,6 +9,7 @@
     "./contract": "./src/contract.ts",
     "./definition": "./src/definition.ts",
     "./main": "./src/main.ts",
+    "./resource-executor": "./src/resource-executor.ts",
     "./resource-provider": "./src/resource-provider.ts",
     "./renderer": "./src/renderer/index.tsx"
   },

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { LookupAddress } from 'node:dns'
 import { lookup as systemLookup } from 'node:dns/promises'
 import { createReadStream } from 'node:fs'
@@ -8,14 +8,12 @@ import { basename, dirname, extname, join, resolve } from 'node:path'
 import { Agent, fetch as undiciFetch } from 'undici'
 import {
   datasetApiListInputSchema,
-  datasetApiEnsureProvidersInputSchema,
   datasetApiCatalogInputSchema,
   datasetApiRegisterProviderInputSchema,
   datasetApiMetadataInputSchema,
   datasetApiRawDataInputSchema,
   datasetApiRegisterInputSchema,
   type DatasetApiListInput,
-  type DatasetApiEnsureProvidersInput,
   type DatasetApiCatalogInput,
   type DatasetApiRegisterProviderInput,
   type DatasetApiMetadataInput,
@@ -36,6 +34,8 @@ export type DatasetApiService = ReturnType<typeof createDatasetApiService>
 const resilientDatasetFetch = createResilientDatasetFetch()
 const RAW_ARTIFACT_PREVIEW_BYTES = 2 * 1024
 const DEFAULT_DATASET_MAX_RETRIES = 3
+const BUILTIN_SOURCE_TIMESTAMP = '1970-01-01T00:00:00.000Z'
+const registryMutations = new Map<string, Promise<void>>()
 
 export class DatasetApiRequestError extends Error {
   readonly code = 'DATASET_API_NETWORK_ERROR'
@@ -65,34 +65,6 @@ export function createDatasetApiService(options: {
   const env = options.env ?? process.env
 
   return {
-    async ensureProviders(raw: DatasetApiEnsureProvidersInput) {
-      const input = datasetApiEnsureProvidersInputSchema.parse(raw)
-      const registryPath = resolveRegistryPath(input.workspaceRoot, defaultWorkspaceRoot)
-      const before = await readRegistry(registryPath)
-      const existingIds = new Set(before.sources.map((source) => source.id))
-      const addedSourceIds: string[] = []
-      const preservedSourceIds: string[] = []
-      for (const preset of Object.values(EXECUTABLE_DATASET_PROVIDER_PRESETS)) {
-        if (existingIds.has(preset.source.id)) {
-          preservedSourceIds.push(preset.source.id)
-          continue
-        }
-        const registered = await registerSource({
-          ...preset.source,
-          workspaceRoot: input.workspaceRoot
-        }, defaultWorkspaceRoot)
-        if (registered.reused) preservedSourceIds.push(preset.source.id)
-        else addedSourceIds.push(preset.source.id)
-      }
-      const registry = await readRegistry(registryPath)
-      return {
-        registryPath,
-        sources: registry.sources,
-        addedSourceIds,
-        preservedSourceIds
-      }
-    },
-
     async catalog(raw: DatasetApiCatalogInput) {
       const input = datasetApiCatalogInputSchema.parse(raw)
       const query = input.query?.toLocaleLowerCase()
@@ -115,7 +87,13 @@ export function createDatasetApiService(options: {
       const registryPath = resolveRegistryPath(input.workspaceRoot, defaultWorkspaceRoot)
       const registry = await readRegistry(registryPath)
       const requestedSourceIds = input.sourceIds ? new Set(input.sourceIds) : null
-      const sources = registry.sources
+      const sourcesById = new Map<string, DatasetApiSource>(
+        Object.values(EXECUTABLE_DATASET_PROVIDER_PRESETS)
+          .map((preset) => [preset.source.id, builtinSource(preset.source)] as const)
+      )
+      for (const source of registry.sources) sourcesById.set(source.id, source)
+      const sources = [...sourcesById.values()]
+        .sort((left, right) => left.id.localeCompare(right.id))
         .filter((source) => !requestedSourceIds || requestedSourceIds.has(source.id))
         .map((source) => ({
           usageExamples: providerUsageExamples(source),
@@ -429,33 +407,35 @@ async function registerSource(
   validateEndpoint(input.metadataEndpoint, 'metadataEndpoint')
   validateEndpoint(input.rawDataEndpoint, 'rawDataEndpoint')
   validateHeaders(input.defaultHeaders)
-  const registry = await readRegistry(registryPath)
-  const existingIndex = registry.sources.findIndex((source) => source.id === input.id)
-  const now = new Date().toISOString()
-  const previous = existingIndex >= 0 ? registry.sources[existingIndex] : undefined
-  const source: DatasetApiSource = {
-    id: input.id,
-    name: input.name ?? input.id,
-    ...(input.description ? { description: input.description } : {}),
-    baseUrl: input.baseUrl,
-    metadataEndpoint: input.metadataEndpoint,
-    rawDataEndpoint: input.rawDataEndpoint,
-    ...(input.defaultHeaders ? { defaultHeaders: input.defaultHeaders } : {}),
-    ...(input.auth ? { auth: input.auth } : {}),
-    createdAt: previous?.createdAt ?? now,
-    updatedAt: now
-  }
-  if (previous && !input.overwrite) {
-    if (sameSourceConfiguration(previous, source)) {
-      return { registryPath, source: previous, reused: true }
+  return withRegistryMutation(registryPath, async () => {
+    const registry = await readRegistry(registryPath)
+    const existingIndex = registry.sources.findIndex((source) => source.id === input.id)
+    const now = new Date().toISOString()
+    const previous = existingIndex >= 0 ? registry.sources[existingIndex] : undefined
+    const source: DatasetApiSource = {
+      id: input.id,
+      name: input.name ?? input.id,
+      ...(input.description ? { description: input.description } : {}),
+      baseUrl: input.baseUrl,
+      metadataEndpoint: input.metadataEndpoint,
+      rawDataEndpoint: input.rawDataEndpoint,
+      ...(input.defaultHeaders ? { defaultHeaders: input.defaultHeaders } : {}),
+      ...(input.auth ? { auth: input.auth } : {}),
+      createdAt: previous?.createdAt ?? now,
+      updatedAt: now
     }
-    throw new Error(`Dataset source '${input.id}' already exists with different settings. Set overwrite=true to replace it.`)
-  }
-  if (existingIndex >= 0) registry.sources[existingIndex] = source
-  else registry.sources.push(source)
-  registry.sources.sort((left, right) => left.id.localeCompare(right.id))
-  await writeRegistry(registryPath, registry)
-  return { registryPath, source, reused: false }
+    if (previous && !input.overwrite) {
+      if (sameSourceConfiguration(previous, source)) {
+        return { registryPath, source: previous, reused: true }
+      }
+      throw new Error(`Dataset source '${input.id}' already exists with different settings. Set overwrite=true to replace it.`)
+    }
+    if (existingIndex >= 0) registry.sources[existingIndex] = source
+    else registry.sources.push(source)
+    registry.sources.sort((left, right) => left.id.localeCompare(right.id))
+    await writeRegistry(registryPath, registry)
+    return { registryPath, source, reused: false }
+  })
 }
 
 function sameSourceConfiguration(left: DatasetApiSource, right: DatasetApiSource): boolean {
@@ -483,7 +463,8 @@ async function registeredSource(
 ): Promise<{ source: DatasetApiSource; workspaceRoot: string }> {
   const workspaceRoot = resolveWorkspaceRoot(requestedRoot, defaultRoot)
   const registry = await readRegistry(registryPathFor(workspaceRoot))
-  const source = registry.sources.find((candidate) => candidate.id === sourceId)
+  const source = registry.sources.find((candidate) => candidate.id === sourceId) ??
+    builtinSourceById(sourceId)
   if (!source) throw new Error(`Dataset source '${sourceId}' is not registered.`)
   return { source, workspaceRoot }
 }
@@ -514,9 +495,45 @@ async function readRegistry(path: string): Promise<DatasetApiRegistry> {
 
 async function writeRegistry(path: string, registry: DatasetApiRegistry): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
-  const temporaryPath = `${path}.${process.pid}.tmp`
-  await writeFile(temporaryPath, `${JSON.stringify(registry, null, 2)}\n`, 'utf8')
-  await rename(temporaryPath, path)
+  const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify(registry, null, 2)}\n`, 'utf8')
+    await rename(temporaryPath, path)
+  } finally {
+    await rm(temporaryPath, { force: true })
+  }
+}
+
+function builtinSourceById(sourceId: string): DatasetApiSource | undefined {
+  const preset = EXECUTABLE_DATASET_PROVIDER_PRESETS[
+    sourceId as keyof typeof EXECUTABLE_DATASET_PROVIDER_PRESETS
+  ]
+  return preset ? builtinSource(preset.source) : undefined
+}
+
+function builtinSource(
+  source: Omit<DatasetApiRegisterInput, 'workspaceRoot' | 'overwrite'>
+): DatasetApiSource {
+  return {
+    ...source,
+    name: source.name ?? source.id,
+    createdAt: BUILTIN_SOURCE_TIMESTAMP,
+    updatedAt: BUILTIN_SOURCE_TIMESTAMP
+  }
+}
+
+async function withRegistryMutation<T>(path: string, mutate: () => Promise<T>): Promise<T> {
+  const previous = registryMutations.get(path) ?? Promise.resolve()
+  let release!: () => void
+  const current = new Promise<void>((resolve) => { release = resolve })
+  registryMutations.set(path, current)
+  await previous
+  try {
+    return await mutate()
+  } finally {
+    release()
+    if (registryMutations.get(path) === current) registryMutations.delete(path)
+  }
 }
 
 function validateBaseUrl(value: string): void {

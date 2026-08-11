@@ -5,8 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import type {
-  DomainMainRuntimeLifecycleContext,
-  DomainMainSystemCapabilityInvoker
+  DomainMainRuntimeLifecycleContext
 } from '@sciforge/domain-sdk/host'
 import {
   canonicalizeReproSpecForDigest,
@@ -77,31 +76,36 @@ test('persists the canonical Workflow V1 graph and run history', async (context)
   await deactivateReloaded()
 })
 
-test('runs resource nodes through the governed capability invoker', async (context) => {
+test('runs resource nodes through the installed provider executor', async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-create-loop-resource-'))
   context.after(() => rm(root, { recursive: true, force: true }))
-  const calls: Array<{ actionId: string; input: unknown; workspaceId?: string }> = []
+  const calls: Array<{
+    providerId: string
+    resourceId: string
+    operationId: string
+    input: unknown
+    workspaceRoot: string
+    idempotencyKey: string
+  }> = []
   const rawSequence = 'M'.repeat(15_000)
-  const invoke = (async (
-    contract: { actionId: string },
-    input: unknown,
-    options?: { workspaceId?: string }
-  ) => {
-    calls.push({
-      actionId: contract.actionId,
-      input,
-      workspaceId: options?.workspaceId
-    })
-    return { source: { id: 'uniprot' }, response: { status: 200, rawSequence } }
-  }) as DomainMainSystemCapabilityInvoker['invoke']
   const runtime = new CreateLoopRuntime({
     statePath: createLoopStatePath(root),
     setInterval: () => ({ timer: true }),
-    clearInterval: () => undefined
+    clearInterval: () => undefined,
+    resourceExecutors: [{
+      id: 'dataset-api',
+      execute: async (request) => {
+        calls.push(request)
+        return {
+          result: {
+            source: { id: 'uniprot' },
+            response: { status: 200, rawSequence }
+          }
+        }
+      }
+    }]
   })
-  const deactivate = await runtime.activate(runtimeContext({
-    capabilities: { invoke }
-  }))
+  const deactivate = await runtime.activate(runtimeContext())
   const workflow = fixtureWorkflow()
   workflow.nodes[1] = {
     id: 'dataset',
@@ -114,8 +118,6 @@ test('runs resource nodes through the governed capability invoker', async (conte
       resourceId: 'uniprot',
       resourceName: 'UniProt REST',
       operationId: 'metadata',
-      actionId: 'dataset-api.metadata',
-      effect: 'workspace-write',
       inputTemplate: '{"sourceId":"uniprot","pathParameters":{"identifier":"{{json.accession}}"}}',
       preserveInput: true,
       resultKey: 'uniprotResult'
@@ -133,11 +135,22 @@ test('runs resource nodes through the governed capability invoker', async (conte
   await runtime.runWorkflow(workflow.id, { accession: 'P04637' }, root)
   await waitForRun(runtime, workflow.id)
 
-  assert.deepEqual(calls, [{
-    actionId: 'dataset-api.metadata',
+  assert.equal(calls.length, 1)
+  const resourceCall = calls[0]!
+  assert.deepEqual({
+    providerId: resourceCall.providerId,
+    resourceId: resourceCall.resourceId,
+    operationId: resourceCall.operationId,
+    input: resourceCall.input,
+    workspaceRoot: resourceCall.workspaceRoot
+  }, {
+    providerId: 'dataset-api',
+    resourceId: 'uniprot',
+    operationId: 'metadata',
     input: { sourceId: 'uniprot', pathParameters: { identifier: 'P04637' } },
-    workspaceId: root
-  }])
+    workspaceRoot: root
+  })
+  assert.match(resourceCall.idempotencyKey, /^create-loop:.+:dataset$/)
   const completed = await runtime.read()
   assert.equal(completed.settings.workflows[0]?.lastStatus, 'success')
   const persistedOutput = completed.settings.workflows[0]?.runs[0]?.nodeResults[1]?.outputJson ?? ''
@@ -328,7 +341,8 @@ test('routes AI Agent nodes through the Host agent execution port and records th
       providerId: '',
       model: 'gpt-test',
       reasoningEffort: 'high',
-      mode: 'agent'
+      mode: 'agent',
+      interaction: 'background'
     }
   }
   workflow.connections = [
@@ -352,6 +366,7 @@ test('routes AI Agent nodes through the Host agent execution port and records th
   assert.equal(requests[0]?.workspaceRoot, '/node-workspace')
   assert.equal(requests[0]?.runtimeId, 'codex')
   assert.equal(requests[0]?.prompt, 'Investigate biology')
+  assert.equal(requests[0]?.interaction, 'background')
   const completed = await runtime.read()
   assert.equal(
     completed.settings.workflows[0]?.runs[0]?.nodeResults[1]?.threadId,
@@ -1291,7 +1306,8 @@ test('hydrates dataset preparation from the immutable execution report instead o
       providerId: '',
       model: '',
       reasoningEffort: 'medium',
-      mode: 'agent'
+      mode: 'agent',
+      interaction: 'background'
     }
   }
   workflow.connections = [
@@ -1367,7 +1383,7 @@ test('recovers dataset preparation from a matching verified run after Agent fail
     position: { x: 200, y: 0 },
     disabled: false,
     config: {
-      prompt: 'Execute preparation.', workspaceRoot: '', providerId: '', model: '', reasoningEffort: 'medium', mode: 'agent'
+      prompt: 'Execute preparation.', workspaceRoot: '', providerId: '', model: '', reasoningEffort: 'medium', mode: 'agent', interaction: 'background'
     }
   }
   workflow.connections = [
@@ -1462,7 +1478,7 @@ test('replaces an Agent-reported failed preparation plan with a matching success
     position: { x: 200, y: 0 },
     disabled: false,
     config: {
-      prompt: 'Execute preparation.', workspaceRoot: '', providerId: '', model: '', reasoningEffort: 'medium', mode: 'agent'
+      prompt: 'Execute preparation.', workspaceRoot: '', providerId: '', model: '', reasoningEffort: 'medium', mode: 'agent', interaction: 'background'
     }
   }
   workflow.connections = [
@@ -1708,7 +1724,8 @@ function agentNode(
       providerId: '',
       model: 'fixture-model',
       reasoningEffort: 'low',
-      mode: 'agent'
+      mode: 'agent',
+      interaction: 'background'
     }
   }
 }

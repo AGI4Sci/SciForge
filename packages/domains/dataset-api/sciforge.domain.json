@@ -13,6 +13,10 @@
     "priority": 100
   },
   "contributionContracts": {
+    "dataset-api.create-loop-resource-executor": {
+      "location": "create-loop.resource-executor",
+      "providerId": "dataset-api"
+    },
     "dataset-api.create-loop-resources": {
       "location": "create-loop.resource-palette",
       "resourceKind": "dataset-api-source"
@@ -27,7 +31,8 @@
         {
           "kind": "main.workflow-execution-receipt-provider",
           "id": "dataset-api.synthetic-generation-receipts"
-        }
+        },
+        { "kind": "main.extension", "id": "dataset-api.create-loop-resource-executor" }
       ]
     },
     {

@@ -2,7 +2,6 @@ import { z } from 'zod'
 
 export const DATASET_API_CAPABILITY_IDS = Object.freeze({
   catalog: 'dataset-api.catalog',
-  ensureProviders: 'dataset-api.ensure-providers',
   registerProvider: 'dataset-api.register-provider',
   list: 'dataset-api.list',
   register: 'dataset-api.register',
@@ -439,10 +438,6 @@ export const datasetApiListInputSchema = z.object({
   sourceIds: z.array(datasetIdSchema).min(1).max(50).optional()
 }).strict()
 
-export const datasetApiEnsureProvidersInputSchema = z.object({
-  workspaceRoot: optionalWorkspaceRootSchema
-}).strict()
-
 export const datasetApiRegisterProviderInputSchema = z.object({
   workspaceRoot: optionalWorkspaceRootSchema,
   providerId: executableDatasetProviderIdSchema,
@@ -563,7 +558,6 @@ export const datasetObjectRawDataInputSchema = z.object({
 
 export type DatasetApiListInput = z.infer<typeof datasetApiListInputSchema>
 export type DatasetApiCatalogInput = z.infer<typeof datasetApiCatalogInputSchema>
-export type DatasetApiEnsureProvidersInput = z.infer<typeof datasetApiEnsureProvidersInputSchema>
 export type DatasetApiRegisterProviderInput = z.infer<typeof datasetApiRegisterProviderInputSchema>
 export type DatasetApiRegisterInput = z.infer<typeof datasetApiRegisterInputSchema>
 export type DatasetApiMetadataInput = z.infer<typeof datasetApiMetadataInputSchema>

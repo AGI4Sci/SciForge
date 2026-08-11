@@ -11,7 +11,7 @@ test('publishes the complete Dataset API surface through governed capabilities',
     definitions.map((definition) => definition.id),
     Object.values(DATASET_API_CAPABILITY_IDS)
   )
-  assert.equal(definitions.length, 30)
+  assert.equal(definitions.length, 29)
   assert.ok(definitions
     .filter((definition) => ![
       DATASET_API_CAPABILITY_IDS.register,
@@ -20,7 +20,6 @@ test('publishes the complete Dataset API surface through governed capabilities',
     .every((definition) => definition.audiences.includes('agent')))
   assert.ok(definitions.every((definition) => definition.scope === 'workspace'))
   assert.equal(findDefinition(definitions, DATASET_API_CAPABILITY_IDS.catalog).effect, 'read')
-  assert.equal(findDefinition(definitions, DATASET_API_CAPABILITY_IDS.ensureProviders).effect, 'workspace-write')
   assert.equal(findDefinition(definitions, DATASET_API_CAPABILITY_IDS.rawData).effect, 'workspace-write')
   assert.equal(findDefinition(definitions, DATASET_API_CAPABILITY_IDS.listObjects).effect, 'read')
   assert.equal(findDefinition(definitions, DATASET_API_CAPABILITY_IDS.objectRawData).effect, 'workspace-write')

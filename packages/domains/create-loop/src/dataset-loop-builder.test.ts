@@ -297,12 +297,10 @@ test('uses package-contributed resource bindings for deterministic source acquis
     sourceIds: ['uniprot'],
     sourceBindings: [{
       sourceId: 'uniprot',
-      providerId: 'dataset-api',
+      providerId: 'fixture-data-provider',
       resourceId: 'uniprot',
       resourceName: 'UniProt REST',
-      operationId: 'metadata',
-      actionId: 'dataset-api.metadata',
-      effect: 'workspace-write',
+      operationId: 'lookup',
       inputTemplate: JSON.stringify({
         sourceId: 'uniprot',
         pathParameters: { identifier: 'P04637' },
@@ -315,7 +313,8 @@ test('uses package-contributed resource bindings for deterministic source acquis
   const acquisition = built.workflow.nodes.find((node) => node.id === 'grounding-resource-1')
   assert.equal(acquisition?.type, 'resource')
   if (acquisition?.type === 'resource') {
-    assert.equal(acquisition.config.actionId, 'dataset-api.metadata')
+    assert.equal(acquisition.config.providerId, 'fixture-data-provider')
+    assert.equal(acquisition.config.operationId, 'lookup')
     assert.equal(acquisition.config.preserveInput, true)
     assert.equal(acquisition.config.resultKey, 'datasetResource1')
   }
@@ -332,9 +331,12 @@ test('uses package-contributed resource bindings for deterministic source acquis
     ) => Record<string, unknown>
     const normalized = execute({
       datasetResource1: {
-        datasetApi: {
+        createLoopResource: {
+          providerId: 'fixture-data-provider',
+          resourceId: 'uniprot',
+          operationId: 'lookup',
           success: true,
-          actionId: 'dataset-api.metadata',
+          artifactPaths: [artifactPath],
           result: {
             artifact: { path: artifactPath },
             response: {

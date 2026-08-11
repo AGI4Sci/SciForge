@@ -22,7 +22,7 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --import tsx --test src/main.test.ts src/object-store.test.ts src/plan-executor.test.ts src/processing.test.ts src/service.test.ts && vitest run src/renderer/DatasetTimelinePanel.test.ts src/renderer/CreateLoopDatasetResourceProvider.test.tsx"
+    "test": "node --import tsx --test src/create-loop-resource-executor.test.ts src/main.test.ts src/object-store.test.ts src/plan-executor.test.ts src/processing.test.ts src/service.test.ts && vitest run src/renderer/DatasetTimelinePanel.test.ts src/renderer/CreateLoopDatasetResourceProvider.test.tsx"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1049.0",

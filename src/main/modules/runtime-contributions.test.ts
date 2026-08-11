@@ -1,10 +1,12 @@
 import {
   DOMAIN_PACKAGE_CONTRACT_VERSION,
+  type DomainPackageJsonValue,
   type TrustedDomainProcessEntryInput
 } from '@sciforge/domain-sdk'
 import {
   MAIN_ACTION_GUARD_CONTRIBUTION_KIND,
   MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
+  MAIN_EXTENSION_CONTRIBUTION_KIND,
   MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
   type DomainArtifactConsumer,
   type DomainMainRuntimeLifecycleContext
@@ -22,7 +24,8 @@ import {
   activateMainRuntimeContributions,
   createMainActionGuardEvaluator,
   createMainSystemCapabilityInvoker,
-  listMainArtifactConsumers
+  listMainArtifactConsumers,
+  listMainExtensionContributions
 } from './runtime-contributions'
 
 describe('main runtime contributions', () => {
@@ -126,6 +129,45 @@ describe('main runtime contributions', () => {
     const activated = await activateMainRuntimeContributions(catalog, runtimeHost())
     expect(contexts[0]?.workflowExecutionReceipts).toEqual([provider])
     expect(Object.isFrozen(contexts[0]?.workflowExecutionReceipts)).toBe(true)
+    await activated.dispose()
+  })
+
+  it('projects declared main extensions through the generic lifecycle host', async () => {
+    const contexts: DomainMainRuntimeLifecycleContext[] = []
+    const executor = Object.freeze({ id: 'fixture-provider', execute: vi.fn() })
+    const contract = Object.freeze({
+      location: 'fixture.resource-executor',
+      providerId: 'fixture-provider'
+    })
+    const catalog = new DomainModuleCatalog()
+    catalog.registerModule(fixtureEntry('fixture.extensions', '@fixture/extensions', 100, [
+      {
+        id: 'fixture.extensions.executor',
+        kind: MAIN_EXTENSION_CONTRIBUTION_KIND,
+        contract,
+        value: executor
+      },
+      {
+        id: 'fixture.extensions.runtime',
+        kind: MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
+        value: {
+          activate: (context: DomainMainRuntimeLifecycleContext) => {
+            contexts.push(context)
+          }
+        }
+      }
+    ]))
+
+    expect(listMainExtensionContributions(catalog)).toMatchObject([{
+      id: 'fixture.extensions.executor',
+      kind: MAIN_EXTENSION_CONTRIBUTION_KIND,
+      packageName: '@fixture/extensions',
+      contract,
+      value: executor
+    }])
+    const activated = await activateMainRuntimeContributions(catalog, runtimeHost())
+    expect(contexts[0]?.contributions?.list(MAIN_EXTENSION_CONTRIBUTION_KIND))
+      .toEqual(listMainExtensionContributions(catalog))
     await activated.dispose()
   })
 
@@ -476,6 +518,7 @@ function fixtureEntry(
     id: string
     kind: string
     priority?: number
+    contract?: DomainPackageJsonValue
     value: unknown
   }>
 ): TrustedDomainProcessEntryInput<unknown> {
@@ -491,6 +534,9 @@ function fixtureEntry(
         hostApi: { minimum: '1.0.0', maximumExclusive: '2.0.0' },
         priority
       },
+      contributionContracts: Object.fromEntries(
+        contributions.flatMap(({ id, contract }) => contract ? [[id, contract]] : [])
+      ),
       entrypoints: [{
         process: 'main',
         export: './main',

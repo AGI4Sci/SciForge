@@ -215,8 +215,6 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
             resourceId: resourceNode.config.resourceId,
             resourceName: resourceNode.config.resourceName,
             operationId: resourceNode.config.operationId,
-            actionId: resourceNode.config.actionId,
-            effect: resourceNode.config.effect,
             inputTemplate: resourceNode.config.inputTemplate
           }
           byId.set(resource.id, { id: resource.id, name: resource.name, binding })

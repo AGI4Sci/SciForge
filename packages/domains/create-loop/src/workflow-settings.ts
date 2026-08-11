@@ -396,6 +396,7 @@ export function normalizeWorkflowNode(value: unknown, index: number): WorkflowNo
           model: asTrimmed(config.model),
           reasoningEffort: normalizeScheduleReasoningEffort(config.reasoningEffort),
           mode: normalizeRunMode(config.mode),
+          interaction: config.interaction === 'reviewable' ? 'reviewable' : 'background',
           ...(Array.isArray(config.allowedTools)
             ? { allowedTools: normalizeAllowedTools(config.allowedTools) }
             : {})
@@ -567,8 +568,6 @@ export function normalizeWorkflowNode(value: unknown, index: number): WorkflowNo
           resourceId: asTrimmed(config.resourceId),
           resourceName: asTrimmed(config.resourceName),
           operationId: asTrimmed(config.operationId),
-          actionId: asTrimmed(config.actionId),
-          effect: normalizeCapabilityEffect(config.effect),
           inputTemplate: asText(config.inputTemplate) || '{}',
           ...(normalizeBoolean(config.preserveInput, false) ? { preserveInput: true } : {}),
           ...(asTrimmed(config.resultKey) ? { resultKey: asTrimmed(config.resultKey) } : {})
@@ -664,16 +663,6 @@ function normalizeStringRecord(value: unknown): Record<string, string> {
     count += 1
   }
   return out
-}
-
-function normalizeCapabilityEffect(value: unknown): Extract<
-  WorkflowNodeV1,
-  { type: 'resource' }
->['config']['effect'] {
-  return value === 'compute' || value === 'workspace-write' ||
-    value === 'external-write' || value === 'destructive'
-    ? value
-    : 'read'
 }
 
 function normalizeModuleField(value: unknown): WorkflowModuleFieldV1 | null {

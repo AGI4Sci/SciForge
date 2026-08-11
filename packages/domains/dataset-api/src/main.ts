@@ -1,12 +1,12 @@
 import type { DomainMainHost } from '@sciforge/domain-sdk/host'
 import type { DomainWorkflowExecutionReceiptProvider } from '@sciforge/domain-sdk/workflow-template'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
+import type { CreateLoopResourceExecutor } from '@sciforge/domain-create-loop/resource-executor'
 import { z } from 'zod'
 import {
   DATASET_API_CAPABILITY_IDS,
   datasetApiCapabilityOutputSchema,
   datasetApiCatalogInputSchema,
-  datasetApiEnsureProvidersInputSchema,
   datasetApiListInputSchema,
   datasetApiMetadataInputSchema,
   datasetApiRawDataInputSchema,
@@ -37,11 +37,14 @@ import {
   datasetValidateInputSchema
 } from './contract.js'
 import {
+  DATASET_API_CREATE_LOOP_RESOURCE_EXECUTOR_CONTRACT,
+  DATASET_API_CREATE_LOOP_RESOURCE_EXECUTOR_CONTRIBUTION,
   DATASET_API_CAPABILITY_FACTORY_CONTRIBUTION,
   DATASET_API_DOMAIN_MODULE_ID,
   DATASET_API_WORKFLOW_EXECUTION_RECEIPT_CONTRIBUTION,
   domainPackageDefinition
 } from './definition.js'
+import { createDatasetApiCreateLoopResourceExecutor } from './create-loop-resource-executor.js'
 import { createDatasetWorkflowExecutionReceiptProvider } from './receipt-provider.js'
 import { createDatasetPlanExecutor } from './plan-executor.js'
 import {
@@ -119,7 +122,9 @@ export type DatasetApiCapabilityFactory<CapabilityDefinition = unknown> = Readon
 
 export function createDomainMainEntry(
   host: DatasetMainHost
-): TrustedDomainProcessEntryInput<DatasetApiCapabilityFactory | DomainWorkflowExecutionReceiptProvider> {
+): TrustedDomainProcessEntryInput<
+  DatasetApiCapabilityFactory | DomainWorkflowExecutionReceiptProvider | CreateLoopResourceExecutor
+> {
   let services: DatasetApiServices | undefined
   const getServices = (): DatasetApiServices => {
     if (!services) {
@@ -158,6 +163,11 @@ export function createDomainMainEntry(
       {
         ...DATASET_API_WORKFLOW_EXECUTION_RECEIPT_CONTRIBUTION,
         value: createDatasetWorkflowExecutionReceiptProvider()
+      },
+      {
+        ...DATASET_API_CREATE_LOOP_RESOURCE_EXECUTOR_CONTRIBUTION,
+        contract: DATASET_API_CREATE_LOOP_RESOURCE_EXECUTOR_CONTRACT,
+        value: createDatasetApiCreateLoopResourceExecutor(host.capabilities)
       }
     ]
   }
@@ -252,13 +262,6 @@ export function createDatasetApiCapabilityFactory<CapabilityDefinition>(options:
         'Lists built-in public biology data providers, transports, metadata access, raw-data access, and adapter requirements.',
         datasetApiCatalogInputSchema,
         async (input) => services().api.catalog(input)
-      ),
-      defineWrite(
-        DATASET_API_CAPABILITY_IDS.ensureProviders,
-        'Ensure built-in dataset providers',
-        'Registers every missing executable public dataset preset in the caller workspace without replacing existing source configurations.',
-        datasetApiEnsureProvidersInputSchema.omit({ workspaceRoot: true }),
-        async (input, workspaceRoot) => services().api.ensureProviders(withWorkspace(workspaceRoot, input))
       ),
       defineWrite(
         DATASET_API_CAPABILITY_IDS.registerProvider,

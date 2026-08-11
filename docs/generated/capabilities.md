@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **176**
+Registered actions: **175**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -68,7 +68,6 @@ Registered actions: **176**
 | `dataset-api.catalog` | 1.0.0 | ui, agent, system | read | none | workspace |
 | `dataset-api.confirm-plan` | 1.0.0 | ui, agent, system | external-write | confirmation | workspace |
 | `dataset-api.deduplicate` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
-| `dataset-api.ensure-providers` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `dataset-api.execute-plan` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `dataset-api.filter` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `dataset-api.graph-organize` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
@@ -13229,21 +13228,6 @@ Compiles confirmed conversational data requirements into editable Create Loop wo
         "items": {
           "additionalProperties": false,
           "properties": {
-            "actionId": {
-              "maxLength": 256,
-              "minLength": 1,
-              "type": "string"
-            },
-            "effect": {
-              "enum": [
-                "read",
-                "compute",
-                "workspace-write",
-                "external-write",
-                "destructive"
-              ],
-              "type": "string"
-            },
             "inputTemplate": {
               "maxLength": 1000000,
               "minLength": 2,
@@ -13281,8 +13265,6 @@ Compiles confirmed conversational data requirements into editable Create Loop wo
             "resourceId",
             "resourceName",
             "operationId",
-            "actionId",
-            "effect",
             "inputTemplate"
           ],
           "type": "object"
@@ -17193,7 +17175,6 @@ Lists built-in public biology data providers, transports, metadata access, raw-d
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -17334,7 +17315,6 @@ Records broker-approved user confirmation of an exact immutable draft plan.
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -17527,7 +17507,6 @@ Deduplicates records by explicit structured keys and preserves removed duplicate
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -17587,137 +17566,6 @@ Deduplicates records by explicit structured keys and preserves removed duplicate
     "data-preparation"
   ],
   "title": "Deduplicate a dataset"
-}
-```
-
-## `dataset-api.ensure-providers`
-
-Registers every missing executable public dataset preset in the caller workspace without replacing existing source configurations.
-
-- Version: `1.0.0`
-- Audiences: ui, agent, system
-- Effect: `workspace-write`
-- Approval: none
-- Scope: workspace
-
-### Contract
-
-```json
-{
-  "concurrency": {
-    "idempotency": "required",
-    "revision": "none"
-  },
-  "contractVersion": 1,
-  "inputSchema": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
-    "properties": {},
-    "type": "object"
-  },
-  "outputSchema": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
-    "definitions": {
-      "__schema0": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "number"
-          },
-          {
-            "type": "boolean"
-          },
-          {
-            "type": "null"
-          },
-          {
-            "items": {
-              "$ref": "#/definitions/__schema0"
-            },
-            "type": "array"
-          },
-          {
-            "additionalProperties": {
-              "$ref": "#/definitions/__schema0"
-            },
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
-          }
-        ]
-      }
-    },
-    "properties": {
-      "datasetApi": {
-        "additionalProperties": false,
-        "properties": {
-          "actionId": {
-            "enum": [
-              "dataset-api.catalog",
-              "dataset-api.ensure-providers",
-              "dataset-api.register-provider",
-              "dataset-api.list",
-              "dataset-api.register",
-              "dataset-api.metadata",
-              "dataset-api.raw-data",
-              "dataset-api.register-object-store",
-              "dataset-api.list-object-stores",
-              "dataset-api.list-objects",
-              "dataset-api.object-metadata",
-              "dataset-api.object-raw-data",
-              "dataset-api.prepare-plan",
-              "dataset-api.confirm-plan",
-              "dataset-api.execute-plan",
-              "dataset-api.resume-plan",
-              "dataset-api.profile",
-              "dataset-api.filter",
-              "dataset-api.select-columns",
-              "dataset-api.transform",
-              "dataset-api.deduplicate",
-              "dataset-api.id-map",
-              "dataset-api.id-map-provider",
-              "dataset-api.join",
-              "dataset-api.structure-profile",
-              "dataset-api.structure-validate",
-              "dataset-api.graph-organize",
-              "dataset-api.materialize",
-              "dataset-api.validate",
-              "dataset-api.publish"
-            ],
-            "type": "string"
-          },
-          "result": {
-            "$ref": "#/definitions/__schema0"
-          },
-          "success": {
-            "const": true,
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "actionId",
-          "success",
-          "result"
-        ],
-        "type": "object"
-      }
-    },
-    "required": [
-      "datasetApi"
-    ],
-    "type": "object"
-  },
-  "resourceKinds": [],
-  "tags": [
-    "dataset",
-    "biology",
-    "data-preparation"
-  ],
-  "title": "Ensure built-in dataset providers"
 }
 ```
 
@@ -17799,7 +17647,6 @@ Executes every operation in a confirmed plan with durable step checkpoints.
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -18023,7 +17870,6 @@ Applies structured filter conditions and writes deterministic included and exclu
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -18254,7 +18100,6 @@ Converts explicit edge records into deterministic node, edge, graph-summary, and
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -18510,7 +18355,6 @@ Maps identifiers using a workspace mapping artifact with explicit cardinality an
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -18782,7 +18626,6 @@ Runs a bounded UniProt mapping job, persists provenance, and applies the mapping
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -19032,7 +18875,6 @@ Joins two structured artifacts with explicit key mappings and deterministic unma
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -19175,7 +19017,6 @@ Lists API-backed dataset databases registered in the caller workspace.
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -19306,7 +19147,6 @@ Lists workspace-scoped S3-compatible object stores and credential readiness with
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -19466,7 +19306,6 @@ Lists a bounded page of objects and common prefixes within a registered object-s
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -19731,7 +19570,6 @@ Writes bounded generated records as a checksummed Dataset artifact with generati
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -19961,7 +19799,6 @@ Reads structured metadata from a registered dataset database and can persist the
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -20109,7 +19946,6 @@ Reads S3-compatible object metadata without downloading the object body.
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -20299,7 +20135,6 @@ Streams a complete or ranged S3-compatible object into a checksummed workspace a
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -20581,7 +20416,6 @@ Creates an immutable draft data-preparation plan for review.
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -20753,7 +20587,6 @@ Profiles JSON, JSONL, CSV, TSV, or FASTA data and persists a bounded report.
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -20928,7 +20761,6 @@ Publishes confirmed-plan artifacts with manifest, schema, quality report, checks
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -21181,7 +21013,6 @@ Downloads validated raw data from a registered database into a checksummed works
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -21404,7 +21235,6 @@ Registers an API-backed database with separate metadata and raw-data endpoint te
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -21614,7 +21444,6 @@ Registers an S3-compatible object store using credential environment-variable re
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -21775,7 +21604,6 @@ Registers an executable built-in biology provider preset in the caller workspace
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -21920,7 +21748,6 @@ Resumes a failed or interrupted confirmed plan from its checksum-verified checkp
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -22133,7 +21960,6 @@ Selects, renames, defaults, and requires structured fields without arbitrary cod
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -22297,7 +22123,6 @@ Profiles SDF or mmCIF structure data with format-aware parsers.
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -22472,7 +22297,6 @@ Validates SDF or mmCIF records and persists a quality report.
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -23035,7 +22859,6 @@ Applies allow-listed deterministic normalization and scalar transformations.
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",
@@ -23282,7 +23105,6 @@ Validates schema, record, range, uniqueness, missingness, and FASTA integrity co
           "actionId": {
             "enum": [
               "dataset-api.catalog",
-              "dataset-api.ensure-providers",
               "dataset-api.register-provider",
               "dataset-api.list",
               "dataset-api.register",

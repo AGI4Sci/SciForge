@@ -16,11 +16,10 @@ test('keeps executable provider schemas and presets in sync', () => {
   }
 })
 
-test('lists exact executable examples for registered provider presets', async (context) => {
+test('lists exact executable examples for virtual provider presets without writing the workspace', async (context) => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-examples-'))
   context.after(() => rm(workspaceRoot, { recursive: true, force: true }))
   const service = createDatasetApiService({ workspaceRoot })
-  await service.registerProvider({ providerId: 'string' })
   const listed = await service.list({ sourceIds: ['string'] })
   const source = listed.sources.find((candidate) => candidate.id === 'string')
   assert.equal(Object.keys(listed)[0], 'usageExamplesBySource')
@@ -38,9 +37,13 @@ test('lists exact executable examples for registered provider presets', async (c
       expectedFormat: 'text'
     }
   })
+  await assert.rejects(
+    readFile(listed.registryPath, 'utf8'),
+    (error: NodeJS.ErrnoException) => error.code === 'ENOENT'
+  )
 })
 
-test('ensures every executable preset without replacing existing source settings', async (context) => {
+test('lists every virtual preset while preserving workspace source overrides', async (context) => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-defaults-'))
   context.after(() => rm(workspaceRoot, { recursive: true, force: true }))
   const service = createDatasetApiService({ workspaceRoot })
@@ -52,15 +55,48 @@ test('ensures every executable preset without replacing existing source settings
     rawDataEndpoint: 'sequence/{identifier}'
   })
 
-  const first = await service.ensureProviders({})
-  assert.deepEqual(first.sources.map((source) => source.id), [...EXECUTABLE_DATASET_PROVIDER_IDS].sort())
-  assert.equal(first.addedSourceIds.length, EXECUTABLE_DATASET_PROVIDER_IDS.length - 1)
-  assert.deepEqual(first.preservedSourceIds, ['ensembl'])
-  assert.equal(first.sources.find((source) => source.id === 'ensembl')?.baseUrl, 'https://example.org/ensembl/')
+  const listed = await service.list({})
+  assert.deepEqual(listed.sources.map((source) => source.id), [...EXECUTABLE_DATASET_PROVIDER_IDS].sort())
+  assert.equal(listed.sources.find((source) => source.id === 'ensembl')?.baseUrl, 'https://example.org/ensembl/')
+})
 
-  const second = await service.ensureProviders({})
-  assert.deepEqual(second.addedSourceIds, [])
-  assert.equal(second.preservedSourceIds.length, EXECUTABLE_DATASET_PROVIDER_IDS.length)
+test('executes a virtual provider without first registering it', async (context) => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-virtual-access-'))
+  context.after(() => rm(workspaceRoot, { recursive: true, force: true }))
+  const service = createDatasetApiService({
+    workspaceRoot,
+    fetchImpl: async () => new Response(JSON.stringify({ primaryAccession: 'P04637' }), {
+      headers: { 'content-type': 'application/json' }
+    })
+  })
+
+  const metadata = await service.metadata({
+    sourceId: 'uniprot',
+    pathParameters: { identifier: 'P04637' }
+  })
+  assert.deepEqual(metadata.metadata, { primaryAccession: 'P04637' })
+  await assert.rejects(
+    readFile(join(workspaceRoot, '.sciforge', 'datasets', 'api-sources.json'), 'utf8'),
+    (error: NodeJS.ErrnoException) => error.code === 'ENOENT'
+  )
+})
+
+test('serializes concurrent registry updates without losing a source', async (context) => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-registry-race-'))
+  context.after(() => rm(workspaceRoot, { recursive: true, force: true }))
+  const service = createDatasetApiService({ workspaceRoot })
+
+  await Promise.all(['first', 'second'].map((id) => service.register({
+    id,
+    baseUrl: `https://${id}.example.com/`,
+    metadataEndpoint: 'metadata',
+    rawDataEndpoint: 'raw'
+  })))
+  const persisted = JSON.parse(await readFile(
+    join(workspaceRoot, '.sciforge', 'datasets', 'api-sources.json'),
+    'utf8'
+  )) as { sources: Array<{ id: string }> }
+  assert.deepEqual(persisted.sources.map((source) => source.id), ['first', 'second'])
 })
 
 test('registers a database and reads its metadata endpoint', async () => {
@@ -98,8 +134,9 @@ test('registers a database and reads its metadata endpoint', async () => {
     assert.equal(metadataManifest.operation, 'dataset_api_metadata')
     assert.equal(metadataManifest.origins[0].source.id, 'example')
     const listed = await service.list({})
-    assert.equal(listed.sources[0]?.metadataEndpoint, 'datasets/{datasetId}/metadata')
-    assert.equal(listed.sources[0]?.auth?.configured, true)
+    const listedExample = listed.sources.find((source) => source.id === 'example')
+    assert.equal(listedExample?.metadataEndpoint, 'datasets/{datasetId}/metadata')
+    assert.equal(listedExample?.auth?.configured, true)
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
     await rm(workspaceRoot, { recursive: true, force: true })

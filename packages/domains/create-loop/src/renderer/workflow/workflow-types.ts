@@ -106,7 +106,8 @@ export function createWorkflowNode(
           providerId: '',
           model: '',
           reasoningEffort: 'medium',
-          mode: 'agent'
+          mode: 'agent',
+          interaction: 'background'
         }
       }
     case 'generate-image':
@@ -203,8 +204,6 @@ export function createWorkflowNode(
           resourceId: '',
           resourceName: '',
           operationId: '',
-          actionId: '',
-          effect: 'read',
           inputTemplate: '{}'
         }
       }

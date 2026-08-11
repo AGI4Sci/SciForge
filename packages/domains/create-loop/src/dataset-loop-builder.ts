@@ -125,8 +125,6 @@ function buildCoordinatorWorkflow(input: {
         resourceId: binding.resourceId,
         resourceName: binding.resourceName,
         operationId: binding.operationId,
-        actionId: binding.actionId,
-        effect: binding.effect,
         inputTemplate: binding.inputTemplate,
         preserveInput: true,
         resultKey
@@ -143,6 +141,7 @@ function buildCoordinatorWorkflow(input: {
         model: input.models.challenger,
         reasoningEffort: 'medium',
         mode: 'agent',
+        interaction: 'reviewable',
         allowedTools: ['sciforge_discover', 'sciforge_invoke']
       }, { retries: 1, retryDelayMs: 1000 }),
       node(parseId, `Validate ${sourceId} acquisition receipt`, 'json', 720 + index * 120, {
@@ -197,6 +196,7 @@ function buildCoordinatorWorkflow(input: {
       model: input.models.challenger,
       reasoningEffort: 'medium',
       mode: 'agent',
+      interaction: 'reviewable',
       allowedTools: ['sciforge_discover', 'sciforge_invoke']
     }, { retries: 2, retryDelayMs: 1000 }),
     node('parse-grounding', 'Validate prepared grounding receipt', 'json', 960, {
@@ -277,6 +277,7 @@ function buildCoordinatorWorkflow(input: {
       model: input.models.judge,
       reasoningEffort: 'high',
       mode: 'agent',
+      interaction: 'reviewable',
       allowedTools: ['sciforge_discover', 'sciforge_invoke']
     }, { retries: 1, retryDelayMs: 1000 }),
     node('parse-publication', 'Validate publication receipt', 'json', 2160, {
@@ -947,15 +948,16 @@ const directArtifactPaths = [];
 const directSourceIds = [];
 for (const binding of directResources) {
   const output = receipt[binding.resultKey];
-  const datasetApi = output && typeof output === 'object' ? output.datasetApi : null;
-  if (!datasetApi || datasetApi.success !== true || !datasetApi.result) {
+  const resource = output && typeof output === 'object' ? output.createLoopResource : null;
+  if (!resource || resource.success !== true || !resource.result) {
     throw new Error('Dataset resource query failed for source: ' + binding.sourceId + '.');
   }
   directGrounding[binding.sourceId] = {
-    actionId: datasetApi.actionId,
-    result: bounded(datasetApi.result)
+    providerId: resource.providerId,
+    operationId: resource.operationId,
+    result: bounded(resource.result)
   };
-  directArtifactPaths.push(...artifactPaths(datasetApi.result));
+  if (Array.isArray(resource.artifactPaths)) directArtifactPaths.push(...resource.artifactPaths);
   directSourceIds.push(binding.sourceId);
 }
 const acquiredSourceIds = Array.isArray(receipt.acquiredSourceIds)
