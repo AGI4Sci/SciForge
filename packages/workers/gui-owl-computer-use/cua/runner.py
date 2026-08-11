@@ -145,6 +145,10 @@ def _run_semantic_action(
     started: float,
 ) -> tuple[Dict[str, Any], str]:
     """Execute one explicit accessible-control action without an LLM planner."""
+    if semantic_action.get("kind") == "observe":
+        return _run_semantic_observe(
+            instruction, semantic_action, channel, artifact_run, started,
+        )
     if semantic_action.get("kind") == "sequence":
         return _run_semantic_sequence(
             instruction, semantic_action, channel, really_execute, artifact_run, started,
@@ -256,6 +260,80 @@ def _run_semantic_action(
     return R.ok(
         data,
         summary=f"semantic click verified on {channel.target.target_id}",
+        prov=_provenance(channel, started),
+    ), "completed"
+
+
+def _run_semantic_observe(
+    instruction: str,
+    semantic_action: Dict[str, Any],
+    channel: SessionInputChannel,
+    artifact_run: ArtifactRun,
+    started: float,
+) -> tuple[Dict[str, Any], str]:
+    """Perform deterministic target-scoped observation and text readback only."""
+    initial = channel.observe()
+    observed_at = time.time()
+    initial_tree = _result_semantic_tree(initial.metadata)
+    expected_text = str(semantic_action["expect"]["text"]).strip()
+    stable_for_ms = int(semantic_action["expect"].get("stableForMs", 0))
+    matched = _semantic_text_present(initial_tree, expected_text)
+    final = initial
+    final_tree = initial_tree
+    if matched and stable_for_ms:
+        channel.wait(stable_for_ms / 1000.0)
+        final = channel.observe()
+        final_tree = _result_semantic_tree(final.metadata)
+        matched = _semantic_text_present(final_tree, expected_text)
+    final_at = time.time()
+    artifact_run.save_screenshot(initial.image, 0)
+    if final is not initial:
+        artifact_run.save_screenshot(final.image, 1)
+    data = {
+        "status": "verified" if matched else "verification_failed",
+        "executed": False,
+        "instruction": instruction,
+        "stepCount": 0,
+        "targetId": channel.target.target_id,
+        "backend": channel.capabilities.backend.value,
+        "requestedIsolation": channel.isolation.requested.value,
+        "effectiveIsolation": channel.isolation.effective.value,
+        "degraded": channel.isolation.degraded,
+        "degradedReason": channel.isolation.degraded_reason,
+        "initialObservation": {
+            "revision": initial.revision,
+            "semanticTree": initial_tree,
+        },
+        "verification": {
+            "status": "verified" if matched else "failed",
+            "expectation": {
+                "kind": "text-present", "text": expected_text,
+                "stableForMs": stable_for_ms,
+            },
+            "matched": matched,
+            "backend": "observation",
+        },
+        "finalObservation": {
+            "revision": final.revision,
+            "semanticTree": final_tree,
+        },
+        "timeline": {
+            "startedAt": _iso_time(started),
+            "observedAt": _iso_time(observed_at),
+            "finalObservedAt": _iso_time(final_at),
+        },
+        "semanticAction": semantic_action,
+    }
+    if not matched:
+        return R.err(
+            "ACTION_UNVERIFIED",
+            "semanticAction observation text readback did not match",
+            details=data,
+            prov=_provenance(channel, started),
+        ), "failed"
+    return R.ok(
+        data,
+        summary=f"semantic observation verified on {channel.target.target_id}",
         prov=_provenance(channel, started),
     ), "completed"
 

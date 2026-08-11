@@ -208,6 +208,57 @@ def test_semantic_uia_sequence_uses_fresh_tokens_and_final_readback(tmp_path):
     assert service.registry.snapshot_counts()["activeLeases"] == 0
 
 
+def test_semantic_observe_verifies_readback_without_action_or_planner(tmp_path):
+    backend = SemanticUIAFakeBackend()
+    service = ComputerUseService(router=BackendRouter([backend]))
+    bound = service.bind_session({
+        "sessionId": "semantic-observe-session",
+        "owner": {"runtimeId": "runtime", "threadId": "thread"},
+        "target": {
+            "targetId": "semantic-observe-target", "kind": "windows-uia",
+            "locator": {"processId": 44, "nativeWindowHandle": "1003"},
+            "generation": "semantic-observe-generation",
+        },
+    })
+    assert bound["ok"] is True, bound
+    semantic_action = {
+        "kind": "observe",
+        "expect": {
+            "kind": "text-present", "text": "text=;clicks=0;checked=0",
+            "stableForMs": 1,
+        },
+    }
+    cfg = config(tmp_path)
+    result = service.run(
+        {
+            "instruction": "Read state only.", "semanticAction": semantic_action,
+            "sessionId": "semantic-observe-session", "requestId": "semantic-observe-request",
+            "execute": True, "approve": True,
+        },
+        lambda request, channel: run_task(
+            cfg, request["instruction"], channel,
+            execute=True, approve=True, semantic_action=request["semanticAction"],
+        ),
+        channel_options={"allow_execute": True},
+    )
+
+    assert result["ok"] is True, result
+    assert result["data"]["executed"] is False
+    assert result["data"]["stepCount"] == 0
+    assert result["data"]["verification"]["matched"] is True
+    assert result["data"]["verification"]["backend"] == "observation"
+    assert result["data"]["finalObservation"]["semanticTree"][3]["name"] == (
+        "text=;clicks=0;checked=0"
+    )
+    assert set(result["data"]["timeline"]) == {
+        "startedAt", "observedAt", "finalObservedAt",
+    }
+    assert backend.tokens == []
+    assert backend.read("semantic-observe-target") == ()
+    assert backend.open_handle_count == 0
+    assert service.registry.snapshot_counts()["activeLeases"] == 0
+
+
 def test_semantic_uia_sequence_deadline_before_first_action_has_no_side_effect(tmp_path):
     backend = SemanticUIAFakeBackend(observe_delay=0.02)
     service = ComputerUseService(router=BackendRouter([backend]))

@@ -40,6 +40,27 @@ def test_semantic_action_rejects_missing_expectation():
         raise AssertionError("incomplete semantic action should fail")
 
 
+def test_semantic_observe_is_bounded_and_marks_protocol_v2():
+    normalized = contract.normalize_run_input({
+        "instruction": "Read state only.",
+        "semanticAction": {
+            "kind": "observe",
+            "expect": {
+                "kind": "text-present", "text": "text=;clicks=0;checked=0",
+                "stableForMs": 500,
+            },
+        },
+    })
+    assert normalized["protocolVersion"] == 2
+    assert normalized["semanticAction"] == {
+        "kind": "observe",
+        "expect": {
+            "kind": "text-present", "text": "text=;clicks=0;checked=0",
+            "stableForMs": 500,
+        },
+    }
+
+
 def test_semantic_sequence_is_bounded_and_normalized():
     normalized = contract.normalize_run_input({
         "instruction": "Commit Alpha.",

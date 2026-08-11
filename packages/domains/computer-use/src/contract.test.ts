@@ -41,6 +41,21 @@ describe('computer-use shared v2 contract', () => {
     })
   })
 
+  it('accepts deterministic target-scoped observation readback as protocol v2', () => {
+    const normalized = normalizeComputerUseRunInput({
+      instruction: 'Read the exact current state without acting.',
+      semanticAction: {
+        kind: 'observe',
+        expect: { kind: 'text-present', text: 'text=;clicks=0;checked=0', stableForMs: 500 }
+      }
+    })
+    expect(normalized.protocolVersion).toBe(2)
+    expect(normalized.semanticAction).toEqual({
+      kind: 'observe',
+      expect: { kind: 'text-present', text: 'text=;clicks=0;checked=0', stableForMs: 500 }
+    })
+  })
+
   it('rejects unbounded or ambiguous semantic actions', () => {
     expect(computerUseRunInputSchema.safeParse({
       instruction: 'click',
@@ -52,6 +67,9 @@ describe('computer-use shared v2 contract', () => {
         kind: 'type', role: 'textbox', name: 'x',
         expect: { kind: 'text-present', text: 'done' }
       }
+    }).success).toBe(false)
+    expect(computerUseRunInputSchema.safeParse({
+      instruction: 'observe', semanticAction: { kind: 'observe' }
     }).success).toBe(false)
   })
 

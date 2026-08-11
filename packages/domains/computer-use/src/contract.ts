@@ -132,6 +132,11 @@ const computerUseSemanticClickSchema = z.object({
   expect: computerUseSemanticExpectationSchema
 }).strict()
 
+const computerUseSemanticObserveSchema = z.object({
+  kind: z.literal('observe'),
+  expect: computerUseSemanticExpectationSchema
+}).strict()
+
 const computerUseSemanticSequenceStepSchema = z.object({
   kind: z.enum(['write', 'invoke', 'toggle']),
   role: z.string().trim().min(1).max(64),
@@ -157,6 +162,7 @@ const computerUseSemanticSequenceSchema = z.object({
 }).strict()
 
 const computerUseSemanticActionSchema = z.union([
+  computerUseSemanticObserveSchema,
   computerUseSemanticClickSchema,
   computerUseSemanticSequenceSchema
 ])

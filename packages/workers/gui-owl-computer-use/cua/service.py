@@ -197,7 +197,9 @@ class ComputerUseService:
             # explicit semanticAction is already bounded, so routing can
             # require every deterministic operation before opening a handle.
             semantic_action = request.get("semanticAction")
-            if semantic_action and semantic_action.get("kind") == "sequence":
+            if semantic_action and semantic_action.get("kind") == "observe":
+                required_actions = ("observe",)
+            elif semantic_action and semantic_action.get("kind") == "sequence":
                 required_actions = tuple(dict.fromkeys(
                     ["observe", *(step["kind"] for step in semantic_action["steps"])]
                 ))

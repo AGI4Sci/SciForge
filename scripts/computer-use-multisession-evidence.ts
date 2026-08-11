@@ -24,6 +24,7 @@ export type MultisessionEvidence = Readonly<{
 const SECRET_KEY = /(?:authorization|api.?key|token|secret|password|cookie|localStorage|sessionStorage|cdpEndpoint|imageBase64|imagePath)/iu
 const SENSITIVE_VALUE = /(?:\b(?:https?|wss?):\/\/|\bBearer\s+\S+|\bsk-[A-Za-z0-9_-]+|(?:^|\s)[A-Za-z]:\\|(?:^|\s)\/(?:Users|home|tmp)\/)/iu
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
+const CONTROLLED_TARGET_SCOPED_BACKENDS = new Set(['browser-cdp', 'windows-uia'])
 
 export function buildMultisessionEvidence(input: unknown): MultisessionEvidence {
   const capture = record(input, 'capture')
@@ -154,7 +155,10 @@ export function buildMultisessionEvidence(input: unknown): MultisessionEvidence 
 
 function validateSuccessfulChild(data: JsonRecord, index: number): void {
   const prefix = `batch.results[${index}].result.data`
-  if (data.backend !== 'browser-cdp') throw new Error(`${prefix}.backend must be browser-cdp`)
+  const backend = requiredString(data.backend, `${prefix}.backend`)
+  if (!CONTROLLED_TARGET_SCOPED_BACKENDS.has(backend)) {
+    throw new Error(`${prefix}.backend must be a controlled target-scoped backend`)
+  }
   if (data.degraded !== false) throw new Error(`${prefix}.degraded must be false`)
   const requestedIsolation = requiredString(data.requestedIsolation, `${prefix}.requestedIsolation`)
   const effectiveIsolation = requiredString(data.effectiveIsolation, `${prefix}.effectiveIsolation`)

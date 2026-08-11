@@ -52,8 +52,17 @@ SEMANTIC_EXPECTATION_SCHEMA: Dict[str, Any] = {
 }
 
 SEMANTIC_ACTION_SCHEMA: Dict[str, Any] = {
-    "description": "Optional bounded deterministic action or UIA Pattern sequence.",
+    "description": "Optional bounded deterministic observation, action, or UIA Pattern sequence.",
     "oneOf": [
+        {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": ["observe"]},
+                "expect": SEMANTIC_EXPECTATION_SCHEMA,
+            },
+            "required": ["kind", "expect"],
+            "additionalProperties": False,
+        },
         {
             "type": "object",
             "properties": {
@@ -254,6 +263,13 @@ def _normalize_semantic_action(value: object) -> Dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("semanticAction must be an object")
     kind = value.get("kind")
+    if kind == "observe":
+        if set(value) != {"kind", "expect"}:
+            raise ValueError("observe semanticAction must contain only kind and expect")
+        return {
+            "kind": "observe",
+            "expect": _normalize_semantic_expectation(value.get("expect")),
+        }
     if kind == "click":
         if set(value) != {"kind", "role", "name", "expect"}:
             raise ValueError("click semanticAction must contain only kind, role, name, and expect")
@@ -264,7 +280,7 @@ def _normalize_semantic_action(value: object) -> Dict[str, Any]:
             "expect": _normalize_semantic_expectation(value.get("expect")),
         }
     if kind != "sequence":
-        raise ValueError("semanticAction.kind must be click or sequence")
+        raise ValueError("semanticAction.kind must be observe, click, or sequence")
     if set(value) != {"kind", "steps", "expect"}:
         raise ValueError("sequence semanticAction must contain only kind, steps, and expect")
     steps = value.get("steps")

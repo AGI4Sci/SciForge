@@ -115,7 +115,7 @@ export function createComputerUseMcpServer(
       'Control the user\'s real desktop to complete one GUI task through the SciForge GUI-Owl computer-use sidecar.',
       'Provide one clear natural-language instruction. The sidecar observes the screen, plans, grounds coordinates,',
       'and executes only after host approval. For exact accessible controls, semanticAction provides a deterministic',
-      'target-scoped browser click or bounded Windows UIA Pattern sequence plus final text readback, without host-global',
+      'target-scoped observation/readback, browser click, or bounded Windows UIA Pattern sequence, without host-global',
       'input. UIA sequence steps are write/invoke/toggle and require role plus name or automationId. Use parallel with 2-8 different pre-bound',
       'sessions when tasks must overlap under one approval; each child keeps its own request, channel, lease, and result.',
       'Each parallel child is authoritative for requestedIsolation and allowDegraded; matching top-level copies are accepted',

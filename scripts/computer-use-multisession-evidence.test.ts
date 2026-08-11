@@ -2,15 +2,20 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { buildMultisessionEvidence } from './computer-use-multisession-evidence'
 
-function successfulChild(label: string, start: string, end: string) {
+function successfulChild(
+  label: string,
+  start: string,
+  end: string,
+  backend: 'browser-cdp' | 'windows-uia' = 'browser-cdp',
+) {
   return {
     sessionId: `session-${label}`,
-    targetId: `cdp:managed:${label}`,
+    targetId: `${backend === 'browser-cdp' ? 'cdp:managed' : 'uia:managed'}:${label}`,
     requestId: `request-${label}`,
     result: {
       ok: true,
       data: {
-        backend: 'browser-cdp',
+        backend,
         requestedIsolation: 'host-app-scoped',
         effectiveIsolation: 'host-app-scoped',
         degraded: false,
@@ -105,6 +110,24 @@ describe('Computer Use multisession evidence exporter', () => {
     assert.equal(evidence.finalResources.tombstones, 3)
   })
 
+  it('accepts overlapping CDP and Windows UIA children while preserving each backend', () => {
+    const mixed = capture()
+    mixed.batch.data.results[1] = successfulChild(
+      'beta',
+      '2026-08-11T00:00:00.200Z',
+      '2026-08-11T00:00:00.500Z',
+      'windows-uia',
+    )
+    mixed.releases[1].data.targetId = mixed.batch.data.results[1].targetId
+
+    const evidence = buildMultisessionEvidence(mixed)
+    assert.deepEqual(
+      evidence.sessions.map((session) => session.backend),
+      ['browser-cdp', 'windows-uia', undefined],
+    )
+    assert.equal(evidence.batch.actionOverlapMs, 200)
+  })
+
   it('rejects duplicate targets or an incomplete release set', () => {
     const duplicate = capture()
     duplicate.batch.data.results[1].targetId = duplicate.batch.data.results[0].targetId
@@ -143,5 +166,9 @@ describe('Computer Use multisession evidence exporter', () => {
     const unsafeIdentity = capture()
     unsafeIdentity.runId = 'http://private.example/run'
     assert.throws(() => buildMultisessionEvidence(unsafeIdentity), /safe identifier/u)
+
+    const legacy = capture()
+    legacy.batch.data.results[0].result.data.backend = 'legacy-pyautogui'
+    assert.throws(() => buildMultisessionEvidence(legacy), /controlled target-scoped backend/u)
   })
 })

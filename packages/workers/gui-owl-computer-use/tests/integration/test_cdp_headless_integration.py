@@ -275,7 +275,7 @@ def cdp_stack() -> CdpStack:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW,
-        ))
+        ), tree=True)
         cdp_url = f"http://127.0.0.1:{cdp_port}"
         _wait_until(
             lambda: requests.get(f"{cdp_url}/json/version", timeout=1).status_code == 200,
@@ -320,7 +320,7 @@ def cdp_stack() -> CdpStack:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW,
-        ))
+        ), tree=True)
         headers = {"Authorization": f"Bearer {token}"}
         _wait_until(
             lambda: requests.get(f"{adapter_url}/v1/capabilities", headers=headers, timeout=1).status_code == 200,
@@ -377,6 +377,18 @@ def _targets_by_name(stack: CdpStack):
     assert set(mapped) == set(PAGE_NAMES)
     assert len({target.target_id for target in mapped.values()}) == 3
     return mapped
+
+
+def _assert_browser_available(stack: CdpStack) -> None:
+    """Assert the browser, not its potentially short-lived launcher, is alive."""
+
+    version = requests.get(f"{stack.cdp_url}/json/version", timeout=2)
+    assert version.status_code == 200
+    live_target_ids = {
+        item.get("id") for item in _json_request("GET", f"{stack.cdp_url}/json/list")
+    }
+    expected_target_ids = {page["id"] for page in stack.pages.values()}
+    assert expected_target_ids.issubset(live_target_ids)
 
 
 def test_single_target_real_transport_and_authentication(cdp_stack: CdpStack) -> None:
@@ -494,7 +506,7 @@ def test_adapter_restart_changes_generation_and_rejects_stale_targets(cdp_stack:
         assert_loopback_ports_released([port])
     assert process.poll() is not None
     assert CdpAdapterBackend(adapter_url=url, token=token, timeout_s=0.25).probe().available is False
-    assert stack.browser.poll() is None
+    _assert_browser_available(stack)
     live_ids = {
         item.get("id") for item in _json_request("GET", f"{stack.cdp_url}/json/list")
         if item.get("type") == "page"
@@ -659,7 +671,7 @@ def test_same_real_cdp_page_returns_target_busy_without_opening_second_handle(
 
 def test_attached_close_does_not_close_pages_or_browser(cdp_stack: CdpStack) -> None:
     stack = cdp_stack
-    assert stack.browser.poll() is None
+    _assert_browser_available(stack)
     live = _json_request("GET", f"{stack.cdp_url}/json/list")
     live_ids = {item.get("id") for item in live if item.get("type") == "page"}
     assert {page["id"] for page in stack.pages.values()} <= live_ids
@@ -693,7 +705,7 @@ def test_attached_driver_shutdown_disconnects_without_closing_browser(cdp_stack:
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
-    assert stack.browser.poll() is None
+    _assert_browser_available(stack)
     live_ids = {
         item.get("id") for item in _json_request("GET", f"{stack.cdp_url}/json/list")
         if item.get("type") == "page"
