@@ -89,7 +89,7 @@ export function FloatingComposerModelPicker({
   runtimeLocked = false,
   canChangeModel,
   stretch = false,
-  composerReasoningEffort = 'max',
+  composerReasoningEffort = 'medium',
   onComposerModelChange,
   onActiveAgentRuntimeChange,
   onComposerReasoningEffortChange
@@ -520,7 +520,7 @@ export function normalizeComposerReasoningEffort(value: string | undefined): Com
     case 'max':
       return value.trim().toLowerCase() as ComposerReasoningEffort
     default:
-      return 'max'
+      return 'medium'
   }
 }
 

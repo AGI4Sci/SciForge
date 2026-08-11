@@ -26,6 +26,7 @@ import {
   calculateFloatingMenuPlacement,
   calculateFloatingSubmenuPlacement,
   composerReasoningEffortRequestValue,
+  normalizeComposerReasoningEffort,
   normalizeComposerRuntimeId,
 } from './FloatingComposerModelPicker'
 import { getGoalPanelDraftObjective } from './floating-composer-commands'
@@ -360,6 +361,11 @@ describe('FloatingComposer file references', () => {
 })
 
 describe('FloatingComposer model controls', () => {
+  it('defaults missing or invalid reasoning effort to medium', () => {
+    expect(normalizeComposerReasoningEffort(undefined)).toBe('medium')
+    expect(normalizeComposerReasoningEffort('unsupported')).toBe('medium')
+  })
+
   it('maps the low reasoning chip to disabled thinking for faster turns', () => {
     expect(composerReasoningEffortRequestValue('low')).toBe('off')
     expect(composerReasoningEffortRequestValue('max')).toBe('max')
@@ -1257,6 +1263,23 @@ describe('FloatingComposer capability controls', () => {
     expect(html).not.toContain('>Auto<')
     expect(html).not.toContain('<option value=""></option>')
     expect(html).not.toContain('Default (thread)')
+  })
+
+  it('renders medium reasoning when no effort is provided', () => {
+    const html = renderToStaticMarkup(
+      createElement(FloatingComposerModelPicker, {
+        compact: false,
+        mode: 'select',
+        composerModel: 'deepseek-v4-pro',
+        composerPickList: ['auto', 'deepseek-v4-pro'],
+        canChangeModel: true,
+        onComposerReasoningEffortChange: () => undefined,
+        onComposerModelChange: () => undefined
+      })
+    )
+
+    expect(html).toContain('Med')
+    expect(html).not.toContain('Ultra')
   })
 
   it('renders compact combobox controls as a picker button with model and reasoning labels', () => {

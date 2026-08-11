@@ -780,7 +780,7 @@ export function Workbench(): ReactElement {
   const [input, setInput] = useState('')
   const [mode, setMode] = useState<'plan' | 'agent'>('agent')
   const [composerReasoningEffort, setComposerReasoningEffort] =
-    useState<ComposerReasoningEffort>('max')
+    useState<ComposerReasoningEffort>('medium')
   const [runtimeInfo, setRuntimeInfo] = useState<LocalRuntimeInfoJson | null>(null)
   const [runtimeSkills, setRuntimeSkills] = useState<LocalRuntimeSkillJson[]>([])
   const [composerAttachments, setComposerAttachments] = useState<AttachmentReference[]>([])
