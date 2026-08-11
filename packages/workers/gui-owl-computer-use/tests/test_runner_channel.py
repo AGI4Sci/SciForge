@@ -333,6 +333,10 @@ def test_runner_uses_channel_for_observe_action_verify_and_manifest(monkeypatch,
         "revision": "fake:1", "semanticTree": [],
     }
     assert result["data"]["steps"][0]["outcome"]["verification"] == "verified"
+    action_timeline = result["data"]["steps"][0]["timeline"]
+    assert action_timeline["actionStartedAt"].endswith("Z")
+    assert action_timeline["actionCompletedAt"].endswith("Z")
+    assert action_timeline["actionStartedAt"] <= action_timeline["actionCompletedAt"]
     assert backend.read("target-1") == ("hello",)
     manifest = tmp_path / "request-1" / "manifest.json"
     payload = json.loads(manifest.read_text(encoding="utf-8"))
@@ -364,7 +368,9 @@ def test_model_failure_still_closes_channel_and_writes_terminal_manifest(monkeyp
     assert backend.open_handle_count == 0
 
 
-def test_retryable_planning_failure_retries_once_before_any_backend_action(monkeypatch, tmp_path):
+def test_retryable_planning_failure_backs_off_and_retries_before_any_backend_action(
+    monkeypatch, tmp_path,
+):
     from cua.owl_agent import ModelCallError
 
     backend = FakeBackend()
@@ -375,11 +381,14 @@ def test_retryable_planning_failure_retries_once_before_any_backend_action(monke
     def flaky_planner(*_args, **_kwargs):
         nonlocal calls
         calls += 1
-        if calls == 1:
+        if calls < 4:
             raise ModelCallError("temporary bridge failure", retryable=True)
         return '<tool_call>{"arguments":{"action":"answer","text":"done"}}</tool_call>'
 
     monkeypatch.setattr("cua.runner.owl_agent.call_owl", flaky_planner)
+    waits = []
+    monkeypatch.setattr("cua.runner._MODEL_RETRY_BACKOFF_SECONDS", (0.01, 0.02, 0.03))
+    monkeypatch.setattr("cua.runner.SessionInputChannel.wait", lambda _self, seconds: waits.append(seconds))
     cfg = config(tmp_path)
     result = service.run(
         {"instruction": "inspect", "sessionId": "session-1", "requestId": "request-retry"},
@@ -387,7 +396,37 @@ def test_retryable_planning_failure_retries_once_before_any_backend_action(monke
     )
 
     assert result["ok"] is True
-    assert calls == 2
+    assert calls == 4
+    assert waits == [0.01, 0.02, 0.03]
+    assert backend.read("target-1") == ()
+    assert service.registry.snapshot_counts()["activeLeases"] == 0
+    assert backend.open_handle_count == 0
+
+
+def test_retryable_planning_failure_stops_after_bounded_attempts(monkeypatch, tmp_path):
+    from cua.owl_agent import ModelCallError
+
+    backend = FakeBackend()
+    service = ComputerUseService(router=BackendRouter([backend]))
+    bind(service)
+    calls = 0
+
+    def unavailable_planner(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise ModelCallError("persistent bridge failure", retryable=True)
+
+    monkeypatch.setattr("cua.runner.owl_agent.call_owl", unavailable_planner)
+    monkeypatch.setattr("cua.runner._MODEL_RETRY_BACKOFF_SECONDS", (0.0, 0.0, 0.0))
+    cfg = config(tmp_path)
+    result = service.run(
+        {"instruction": "inspect", "sessionId": "session-1", "requestId": "request-retry-limit"},
+        lambda request, channel: run_task(cfg, request["instruction"], channel),
+    )
+
+    assert result["error"]["code"] == "UNAVAILABLE"
+    assert result["error"]["details"] == {"step": 0, "planningAttempts": 4}
+    assert calls == 4
     assert backend.read("target-1") == ()
     assert service.registry.snapshot_counts()["activeLeases"] == 0
     assert backend.open_handle_count == 0

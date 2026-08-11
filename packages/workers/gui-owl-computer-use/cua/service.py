@@ -43,6 +43,105 @@ def _utc_iso(epoch_seconds: float | None = None) -> str:
     return datetime.fromtimestamp(value, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _batch_child_evidence(
+    *,
+    session_id: str,
+    target_id: str,
+    request_id: str,
+    result: dict[str, Any],
+    started_at: float,
+    completed_at: float,
+) -> dict[str, Any]:
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    final_observation = (
+        data.get("finalObservation")
+        if isinstance(data.get("finalObservation"), dict)
+        else {}
+    )
+    action_spans = []
+    steps = data.get("steps") if isinstance(data.get("steps"), list) else []
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        timeline = step.get("timeline")
+        if not isinstance(timeline, dict):
+            continue
+        action_started = timeline.get("actionStartedAt")
+        action_completed = timeline.get("actionCompletedAt")
+        if not isinstance(action_started, str) or not isinstance(action_completed, str):
+            continue
+        outcome = step.get("outcome") if isinstance(step.get("outcome"), dict) else {}
+        evidence = outcome.get("evidence") if isinstance(outcome.get("evidence"), dict) else {}
+        action_spans.append({
+            "step": step.get("step"),
+            "startedAt": action_started,
+            "completedAt": action_completed,
+            "committed": outcome.get("committed"),
+            "mayHaveTakenEffect": outcome.get("mayHaveTakenEffect"),
+            "verification": outcome.get("verification"),
+            "verificationReason": evidence.get("reason"),
+        })
+    error = result.get("error") if isinstance(result.get("error"), dict) else {}
+    return {
+        "sessionId": session_id,
+        "targetId": target_id,
+        "requestId": request_id,
+        "ok": result.get("ok") is True,
+        "errorCode": error.get("code"),
+        "startedAt": _utc_iso(started_at),
+        "completedAt": _utc_iso(completed_at),
+        "durationMs": round((completed_at - started_at) * 1000, 3),
+        "backend": data.get("backend"),
+        "requestedIsolation": data.get("requestedIsolation"),
+        "effectiveIsolation": data.get("effectiveIsolation"),
+        "degraded": data.get("degraded"),
+        "executed": data.get("executed"),
+        "executorStatus": data.get("status"),
+        "finalRevision": final_observation.get("revision"),
+        "actionSpans": action_spans,
+    }
+
+
+def _batch_overlap_evidence(
+    children: list[dict[str, Any]],
+    timings: list[tuple[float, float]],
+) -> dict[str, Any]:
+    common_execution_overlap = max(
+        0.0,
+        min(completed for _, completed in timings)
+        - max(started for started, _ in timings),
+    )
+    parsed_action_spans: list[tuple[str, int, float, float]] = []
+    for child in children:
+        for span in child["actionSpans"]:
+            if span.get("committed") is not True or span.get("verification") != "verified":
+                continue
+            try:
+                started = datetime.fromisoformat(span["startedAt"].replace("Z", "+00:00")).timestamp()
+                completed = datetime.fromisoformat(span["completedAt"].replace("Z", "+00:00")).timestamp()
+            except (AttributeError, TypeError, ValueError):
+                continue
+            parsed_action_spans.append((child["sessionId"], span["step"], started, completed))
+    best_overlap = 0.0
+    best_pair: list[dict[str, Any]] = []
+    for index, left in enumerate(parsed_action_spans):
+        for right in parsed_action_spans[index + 1:]:
+            if left[0] == right[0]:
+                continue
+            overlap = max(0.0, min(left[3], right[3]) - max(left[2], right[2]))
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_pair = [
+                    {"sessionId": left[0], "step": left[1]},
+                    {"sessionId": right[0], "step": right[1]},
+                ]
+    return {
+        "commonExecutionOverlapMs": round(common_execution_overlap * 1000, 3),
+        "maxCrossSessionActionOverlapMs": round(best_overlap * 1000, 3),
+        "maxCrossSessionActionOverlapPair": best_pair,
+    }
+
+
 def _default_router() -> BackendRouter:
     from driver.backends.cdp_adapter import CdpAdapterBackend
     from driver.backends.isolated_desktop import IsolatedDesktopBackend
@@ -389,15 +488,18 @@ class ComputerUseService:
             with self._channels_lock:
                 self._batch_requests[parent_request_id] = tuple(child_request_ids)
 
-            def run_child(index: int, child: dict[str, Any]) -> dict[str, Any]:
+            def run_child(index: int, child: dict[str, Any]) -> tuple[dict[str, Any], float, float]:
                 child_options = dict(channel_options or {})
                 child_options["external_cancellation"] = batch_cancellation
-                return self.run(
+                child_started_at = time.time()
+                result = self.run(
                     child,
                     executor,
                     channel_options=child_options,
                     invocation=child_invocations[index],
                 )
+                child_completed_at = time.time()
+                return result, child_started_at, child_completed_at
 
             with ThreadPoolExecutor(
                 max_workers=len(request["parallel"]),
@@ -407,7 +509,13 @@ class ComputerUseService:
                     pool.submit(run_child, index, child)
                     for index, child in enumerate(request["parallel"])
                 ]
-                child_results = [future.result() for future in futures]
+                completed_children = [future.result() for future in futures]
+
+            child_results = [result for result, _, _ in completed_children]
+            child_timings = [
+                (child_started_at, child_completed_at)
+                for _, child_started_at, child_completed_at in completed_children
+            ]
 
             results = [
                 {
@@ -418,6 +526,17 @@ class ComputerUseService:
                 }
                 for index, session in enumerate(sessions)
             ]
+            trace_summary = [
+                _batch_child_evidence(
+                    session_id=session.session_id,
+                    target_id=session.target.target_id,
+                    request_id=child_request_ids[index],
+                    result=child_results[index],
+                    started_at=child_timings[index][0],
+                    completed_at=child_timings[index][1],
+                )
+                for index, session in enumerate(sessions)
+            ]
             success_count = sum(1 for item in child_results if item.get("ok"))
             return R.ok(
                 {
@@ -425,6 +544,10 @@ class ComputerUseService:
                     "requestedCount": len(results),
                     "successCount": success_count,
                     "failureCount": len(results) - success_count,
+                    "concurrencyEvidence": {
+                        **_batch_overlap_evidence(trace_summary, child_timings),
+                        "children": trace_summary,
+                    },
                     "results": results,
                 },
                 prov=R.provenance(

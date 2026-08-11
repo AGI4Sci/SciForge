@@ -162,6 +162,26 @@ def test_observe_action_verify_and_idempotent_close():
     assert len(close_calls) == 1
 
 
+def test_action_uses_navigation_safe_response_timeout_without_changing_observe_timeout():
+    session = AdapterSession()
+    backend = CdpAdapterBackend(
+        adapter_url="http://127.0.0.1:3909",
+        token="secret",
+        timeout_s=4,
+        action_timeout_s=37,
+        session=session,
+    )
+    context = BackendOpenContext("request-timeouts", True, 0, False, threading.Event())
+    handle = backend.open(parse_target_descriptor(target_value()), context)
+    before = backend.observe(handle)
+    backend.perform(handle, {"action": "key", "keys": ["ENTER"]}, before.revision)
+
+    observe_call = next(call for call in session.calls if call[1].endswith("/observe"))
+    action_call = next(call for call in session.calls if call[1].endswith("/action"))
+    assert observe_call[2]["timeout"] == 4
+    assert action_call[2]["timeout"] == 37
+
+
 def test_existing_handle_keeps_original_adapter_routing_after_reconfiguration():
     backend, handle, session = backend_and_handle()
     backend.configure("http://127.0.0.1:4999", "replacement-secret")

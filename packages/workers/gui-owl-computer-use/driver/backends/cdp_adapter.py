@@ -29,6 +29,7 @@ _ACTIONS = (
     "observe", "click", "left_click", "right_click", "double_click",
     "type", "key", "hotkey", "scroll", "wait",
 )
+_DEFAULT_ACTION_TIMEOUT_S = 30.0
 
 
 class CdpAdapterResponseError(RuntimeError):
@@ -61,6 +62,7 @@ class CdpAdapterBackend:
         adapter_url: str | None = None,
         token: str | None = None,
         timeout_s: float = 10.0,
+        action_timeout_s: float | None = None,
         session: requests.Session | None = None,
     ) -> None:
         self.adapter_url = (adapter_url if adapter_url is not None else os.getenv(
@@ -70,6 +72,11 @@ class CdpAdapterBackend:
             "SCIFORGE_CUA_CDP_ADAPTER_TOKEN", ""
         )).strip()
         self.timeout_s = timeout_s
+        self.action_timeout_s = (
+            _DEFAULT_ACTION_TIMEOUT_S if action_timeout_s is None else action_timeout_s
+        )
+        if self.timeout_s <= 0 or self.action_timeout_s <= 0:
+            raise ValueError("CDP adapter timeouts must be positive")
         self._config_lock = threading.RLock()
         self._pending_lock = threading.RLock()
         self._pending_opens: dict[
@@ -331,12 +338,19 @@ class CdpAdapterBackend:
         try:
             with h.lock:
                 self._ensure_open(h)
-                payload = self._request_at(h.adapter_url, h.token, "POST", "/v1/action", {
-                    "handleId": h.adapter_handle_id,
-                    "actionId": action_id,
-                    "expectedRevision": expected_revision,
-                    "action": dict(action),
-                })
+                payload = self._request_at(
+                    h.adapter_url,
+                    h.token,
+                    "POST",
+                    "/v1/action",
+                    {
+                        "handleId": h.adapter_handle_id,
+                        "actionId": action_id,
+                        "expectedRevision": expected_revision,
+                        "action": dict(action),
+                    },
+                    timeout_s=self.action_timeout_s,
+                )
         except BackendOperationError:
             raise
         except CdpAdapterResponseError as error:
@@ -429,6 +443,8 @@ class CdpAdapterBackend:
         method: str,
         path: str,
         body: Mapping[str, Any] | None = None,
+        *,
+        timeout_s: float | None = None,
     ) -> dict[str, Any]:
         if not adapter_url or not token:
             raise RuntimeError("CDP adapter is not configured")
@@ -439,7 +455,7 @@ class CdpAdapterBackend:
                 f"{adapter_url}{path}",
                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
                 json=dict(body) if body is not None else None,
-                timeout=self.timeout_s,
+                timeout=self.timeout_s if timeout_s is None else timeout_s,
             )
         except Exception as error:
             raise RuntimeError("CDP adapter transport is unavailable") from error

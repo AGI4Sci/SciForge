@@ -39,6 +39,7 @@ _CDP_BACKEND_GUIDANCE = (
     "an unavailable screenshot. After acting, use the next semantic tree to confirm the requested "
     "UI state before terminating with success."
 )
+_MODEL_RETRY_BACKOFF_SECONDS = (0.25, 0.75, 1.5)
 
 
 def _norm_action(action: str) -> str:
@@ -629,13 +630,23 @@ def _run_loop(
                 if remaining is not None and remaining <= 0:
                     raise ChannelError("TIMEOUT", "request deadline expired during model call") from error
                 if (
-                    model_attempt == 0
+                    model_attempt < len(_MODEL_RETRY_BACKOFF_SECONDS)
                     and not channel.cancelled
                     and owl_agent.is_retryable_model_error(error)
                 ):
-                    # Planning failed before any backend action was selected or
-                    # executed, so one retry cannot replay an unknown outcome.
+                    # Planning failed before an action was selected or dispatched
+                    # for this step. A bounded, cancellation-aware retry therefore
+                    # cannot replay an unknown backend outcome. Backoff prevents a
+                    # concurrent batch from immediately re-hitting the same brief
+                    # Host/provider overload window.
+                    backoff = _MODEL_RETRY_BACKOFF_SECONDS[model_attempt]
                     model_attempt += 1
+                    remaining = channel.remaining_seconds
+                    if remaining is not None and remaining <= backoff:
+                        raise ChannelError(
+                            "TIMEOUT", "request deadline expired before model retry",
+                        ) from error
+                    channel.wait(backoff)
                     continue
                 return R.err(
                     "UNAVAILABLE",
@@ -710,9 +721,15 @@ def _run_loop(
 
         before_image = image
         prepared = _prepare_action(args, width, height)
+        action_started = time.time()
         outcome = channel.perform(prepared, expected_revision=latest_revision)
+        action_completed = time.time()
         step_rec["executed"] = outcome.committed
         step_rec["outcome"] = outcome.to_dict()
+        step_rec["timeline"] = {
+            "actionStartedAt": _iso_time(action_started),
+            "actionCompletedAt": _iso_time(action_completed),
+        }
         observation = channel.observe()
         after_image, latest_revision = observation.image, observation.revision
         observation_metadata = observation.metadata

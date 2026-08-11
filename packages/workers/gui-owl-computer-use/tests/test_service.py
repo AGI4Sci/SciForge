@@ -1,11 +1,16 @@
 import threading
 import time
+from datetime import datetime, timezone
 
 from cua.capabilities import BackendId
 from cua.service import ComputerUseService
 from cua.target import TargetKind, parse_target_descriptor
 from driver.router import BackendRouter
 from tests.fakes.fake_backend import FakeBackend
+
+
+def _iso(value):
+    return datetime.fromtimestamp(value, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def uia_target(target_id="target-uia-1"):
@@ -176,12 +181,26 @@ def test_parallel_batch_overlaps_distinct_targets_and_isolates_one_timeout():
             channel.observe()
             raise AssertionError("expired child must not observe")
         observed = channel.observe()
+        action_started = time.time()
         successful_overlap.wait(timeout=1)
+        time.sleep(0.01)
         outcome = channel.perform(
             {"action": "write", "value": request["instruction"]},
             expected_revision=observed.revision,
         )
-        return {"ok": True, "data": {"status": "done", "verified": outcome.verification.value}}
+        action_completed = time.time()
+        return {"ok": True, "data": {
+            "status": "done",
+            "steps": [{
+                "step": 0,
+                "timeline": {
+                    "actionStartedAt": _iso(action_started),
+                    "actionCompletedAt": _iso(action_completed),
+                },
+                "outcome": outcome.to_dict(),
+            }],
+            "finalObservation": {"revision": "fake:1"},
+        }}
 
     result = service.run_batch({
         "instruction": "bounded parallel verification",
@@ -195,6 +214,18 @@ def test_parallel_batch_overlaps_distinct_targets_and_isolates_one_timeout():
     assert result["ok"] is True
     assert result["data"]["successCount"] == 2
     assert result["data"]["failureCount"] == 1
+    concurrency = result["data"]["concurrencyEvidence"]
+    assert concurrency["commonExecutionOverlapMs"] >= 0
+    assert concurrency["maxCrossSessionActionOverlapMs"] > 0
+    assert len(concurrency["maxCrossSessionActionOverlapPair"]) == 2
+    assert [child["sessionId"] for child in concurrency["children"]] == [
+        "session-alpha", "session-beta", "session-delta",
+    ]
+    alpha_action = concurrency["children"][0]["actionSpans"][0]
+    assert alpha_action["committed"] is True
+    assert alpha_action["verification"] == "verified"
+    assert alpha_action["startedAt"] <= alpha_action["completedAt"]
+    assert concurrency["children"][2]["errorCode"] == "TIMEOUT"
     children = result["data"]["results"]
     assert [item["targetId"] for item in children] == [
         "target-alpha", "target-beta", "target-delta",
