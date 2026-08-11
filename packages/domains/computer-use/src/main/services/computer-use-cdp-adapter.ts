@@ -17,6 +17,8 @@ const { chromium } = require('playwright-core') as typeof import('playwright-cor
 const MAX_BODY_BYTES = 1_000_000
 const ACTION_TIMEOUT_MS = 10_000
 const OBSERVATION_TIMEOUT_MS = 3_000
+const NAVIGATION_READ_RETRY_ATTEMPTS = 3
+const NAVIGATION_SETTLE_TIMEOUT_MS = 1_500
 
 export type BrowserPageCdpAdapterTarget = Readonly<{
   targetId: string
@@ -252,11 +254,12 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
         const [x, y] = coordinate(action.coordinate)
         const beforeReadback = await pageClickReadback(value.page, x, y)
         const beforeSemanticTree = await pageSemanticTree(value.page)
+        const beforeUrl = value.page.url()
         await value.page.mouse.click(x, y, {
           button: name === 'right_click' ? 'right' : 'left',
           clickCount: name === 'double_click' ? 2 : 1
         })
-        await value.page.evaluate(CDP_RENDERER_SETTLE_EXPRESSION)
+        await settleAfterPotentialNavigation(value.page, beforeUrl)
         const afterReadback = await pageClickReadback(value.page, x, y)
         const afterSemanticTree = await pageSemanticTree(value.page)
         verification = verifyCdpClick(
@@ -275,8 +278,18 @@ export function createPlaywrightCdpDriver(endpoints: readonly string[]): CdpAdap
         const keys = Array.isArray(action.keys) ? action.keys.map(String) : [String(action.keys ?? '')]
         const chord = keys.filter(Boolean).map(playwrightKey).join('+')
         if (!chord) throw new Error('CDP key action requires keys.')
+        const beforeUrl = value.page.url()
+        const beforeSemanticTree = await pageSemanticTree(value.page)
         await value.page.keyboard.press(chord)
-        verification = { status: 'unverified', details: { chord } }
+        await settleAfterPotentialNavigation(value.page, beforeUrl)
+        const afterUrl = value.page.url()
+        const afterSemanticTree = await pageSemanticTree(value.page)
+        verification = keyActionVerification(
+          chord,
+          beforeUrl !== afterUrl,
+          beforeSemanticTree,
+          afterSemanticTree
+        )
       } else if (name === 'scroll') {
         const pixels = finiteNumber(action.pixels, 1)
         const before = await scrollPosition(value.page)
@@ -366,11 +379,44 @@ export async function captureTargetScreenshot(page: Page): Promise<string> {
 }
 
 async function pageSemanticTree(page: Page) {
-  return normalizeCdpSemanticTree(await page.evaluate(CDP_SEMANTIC_TREE_EXPRESSION))
+  return normalizeCdpSemanticTree(await evaluateCdpReadback(page, CDP_SEMANTIC_TREE_EXPRESSION))
 }
 
 async function pageClickReadback(page: Page, x: number, y: number) {
-  return normalizeCdpClickReadback(await page.evaluate(cdpClickReadbackExpression(x, y)))
+  return normalizeCdpClickReadback(await evaluateCdpReadback(page, cdpClickReadbackExpression(x, y)))
+}
+
+export async function evaluateCdpReadback(page: Page, expression: string): Promise<unknown> {
+  for (let attempt = 1; attempt <= NAVIGATION_READ_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await page.evaluate(expression)
+    } catch (error) {
+      if (!isNavigationContextError(error) || page.isClosed() || attempt === NAVIGATION_READ_RETRY_ATTEMPTS) {
+        throw error
+      }
+      await page.waitForLoadState('domcontentloaded', {
+        timeout: NAVIGATION_SETTLE_TIMEOUT_MS
+      }).catch(() => undefined)
+      await page.waitForTimeout(50)
+    }
+  }
+  throw new Error('CDP readback retry exhausted.')
+}
+
+async function settleAfterPotentialNavigation(page: Page, beforeUrl: string): Promise<void> {
+  await page.waitForTimeout(50)
+  if (page.url() !== beforeUrl) {
+    await page.waitForLoadState('domcontentloaded', {
+      timeout: NAVIGATION_SETTLE_TIMEOUT_MS
+    }).catch(() => undefined)
+  }
+  await evaluateCdpReadback(page, CDP_RENDERER_SETTLE_EXPRESSION)
+}
+
+function isNavigationContextError(error: unknown): boolean {
+  const message = safeError(error).toLowerCase()
+  return message.includes('execution context was destroyed')
+    || message.includes('cannot find context with specified id')
 }
 
 export async function startComputerUseCdpAdapter(options: Readonly<{
@@ -528,6 +574,21 @@ export function insertedTextVerification(
           afterReadback
         }
       }
+}
+
+export function keyActionVerification(
+  chord: string,
+  urlChanged: boolean,
+  beforeSemanticTree: readonly unknown[],
+  afterSemanticTree: readonly unknown[]
+): Record<string, unknown> {
+  if (urlChanged) {
+    return { status: 'verified', details: { chord, reason: 'url-changed' } }
+  }
+  if (JSON.stringify(beforeSemanticTree) !== JSON.stringify(afterSemanticTree)) {
+    return { status: 'verified', details: { chord, reason: 'semantic-tree-changed' } }
+  }
+  return { status: 'unverified', details: { chord, reason: 'key-has-no-semantic-readback' } }
 }
 
 async function scrollPosition(page: Page): Promise<{ x: number; y: number }> {

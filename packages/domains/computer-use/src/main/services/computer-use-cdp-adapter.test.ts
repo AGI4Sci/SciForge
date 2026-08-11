@@ -3,7 +3,9 @@ import {
   CdpAdapterDriverError,
   captureTargetScreenshot,
   createPlaywrightCdpDriver,
+  evaluateCdpReadback,
   insertedTextVerification,
+  keyActionVerification,
   stableTargetId,
   startComputerUseCdpAdapter,
   type CdpAdapterDriver,
@@ -111,6 +113,42 @@ async function call(
 }
 
 describe('computer-use CDP adapter', () => {
+  it('retries read-only evaluation after a navigation destroys the old execution context', async () => {
+    const evaluate = vi.fn()
+      .mockRejectedValueOnce(new Error('Execution context was destroyed, most likely because of a navigation'))
+      .mockResolvedValueOnce([{ name: 'CRISPR', center: [500, 100] }])
+    const waitForLoadState = vi.fn(async () => undefined)
+    const waitForTimeout = vi.fn(async () => undefined)
+    const page = {
+      evaluate,
+      isClosed: vi.fn(() => false),
+      waitForLoadState,
+      waitForTimeout
+    }
+
+    await expect(evaluateCdpReadback(page as never, 'semantic-tree')).resolves.toEqual([
+      { name: 'CRISPR', center: [500, 100] }
+    ])
+    expect(evaluate).toHaveBeenCalledTimes(2)
+    expect(waitForLoadState).toHaveBeenCalledWith('domcontentloaded', { timeout: 1_500 })
+    expect(waitForTimeout).toHaveBeenCalledWith(50)
+  })
+
+  it('verifies key actions only when target-scoped readback changes', () => {
+    expect(keyActionVerification('Enter', true, [], [])).toEqual({
+      status: 'verified',
+      details: { chord: 'Enter', reason: 'url-changed' }
+    })
+    expect(keyActionVerification('Tab', false, [{ name: 'before' }], [{ name: 'after' }])).toEqual({
+      status: 'verified',
+      details: { chord: 'Tab', reason: 'semantic-tree-changed' }
+    })
+    expect(keyActionVerification('Escape', false, [{ name: 'same' }], [{ name: 'same' }])).toEqual({
+      status: 'unverified',
+      details: { chord: 'Escape', reason: 'key-has-no-semantic-readback' }
+    })
+  })
+
   it('verifies type only when non-empty text changes the active element readback', () => {
     expect(insertedTextVerification('', 'alpha', 'alpha')).toMatchObject({ status: 'verified' })
     expect(insertedTextVerification('alpha', 'alpha', 'alpha')).toMatchObject({
