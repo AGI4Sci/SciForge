@@ -1,9 +1,27 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { AgentRuntimeAdapterContext } from '../agent-runtime/adapter'
 import type { ClaudeCodeRuntimeService } from './claude-code-service'
 import { createClaudeCodeAgentRuntimeAdapter } from './claude-code-agent-runtime-adapter'
 
 describe('createClaudeCodeAgentRuntimeAdapter', () => {
+  it('forwards one-shot thread ownership to the Claude service', async () => {
+    const startThread = vi.fn(async () => ({
+      ok: true as const,
+      thread: { id: 'thread-ephemeral', runtimeId: 'claude' as const, title: 'One shot', updatedAt: '' }
+    }))
+    const adapter = createClaudeCodeAgentRuntimeAdapter({
+      startThread
+    } as unknown as ClaudeCodeRuntimeService)
+
+    await adapter.startThread({ settings: {} as never }, {
+      runtimeId: 'claude',
+      workspace: '/tmp/workspace',
+      ephemeral: true
+    })
+
+    expect(startThread).toHaveBeenCalledWith(expect.objectContaining({ ephemeral: true }))
+  })
+
   it('seeds Claude pre-dispatch governance from Host-owned typed turn metadata', async () => {
     const received: unknown[] = []
     const adapter = createClaudeCodeAgentRuntimeAdapter({

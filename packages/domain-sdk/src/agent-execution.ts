@@ -34,7 +34,12 @@ export type DomainMainAgentExecutionResult = z.infer<
  * selects the user's active runtime through the Host.
  */
 export type DomainMainAgentExecutionHost = Readonly<{
+  /** Runs a persistent Agent thread that remains available after completion. */
   run: (
+    request: DomainMainAgentExecutionRequest
+  ) => Promise<DomainMainAgentExecutionResult>
+  /** Runs one Agent turn and deterministically removes its thread-scoped state. */
+  runEphemeral: (
     request: DomainMainAgentExecutionRequest
   ) => Promise<DomainMainAgentExecutionResult>
 }>

@@ -140,6 +140,9 @@ function failingClient(): CodexAppServerJsonRpcClient {
     startTurn: vi.fn(async () => {
       throw new Error('app-server offline')
     }),
+    deleteThread: vi.fn(async () => {
+      throw new Error('app-server offline')
+    }),
     renameThread: vi.fn(async () => {
       throw new Error('app-server offline')
     }),
@@ -168,6 +171,7 @@ function controllableClient(): CodexAppServerJsonRpcClient {
     readThread: vi.fn(async () => ({ thread: { id: 'thread-1', turns: [] } })),
     startThread: vi.fn(async () => ({ thread: { id: 'thread-1' } })),
     startTurn: vi.fn(async () => ({ turn: { id: 'turn-1' } })),
+    deleteThread: vi.fn(async () => ({})),
     renameThread: vi.fn(async () => ({})),
     interruptTurn: vi.fn(async () => ({})),
     steerTurn: vi.fn(async () => ({})),
@@ -383,6 +387,43 @@ describe('Codex child summary index', () => {
 })
 
 describe('CodexRuntimeService storage fallback', () => {
+  it('creates ephemeral app-server threads and truly deletes all local thread state', async () => {
+    const storageRoot = await tempRoot()
+    const client = controllableClient()
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot,
+      createClient: () => client
+    })
+
+    const started = await service.startThread({
+      ephemeral: true,
+      workspace: '/tmp/workspace',
+      allowedTools: ['sciforge_discover']
+    })
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    const storedEvents = await service.readStoredEvents(started.thread.id)
+    expect(storedEvents).not.toEqual([])
+    const iterator = service.subscribeEvents(
+      started.thread.id,
+      storedEvents.at(-1)?.seq ?? 0
+    )[Symbol.asyncIterator]()
+    const pending = iterator.next()
+    await vi.waitFor(() => {
+      expect((service as unknown as { eventSubscribers: Set<unknown> }).eventSubscribers.size).toBe(1)
+    })
+
+    await expect(service.deleteThread(started.thread.id)).resolves.toEqual({ ok: true })
+    await expect(pending).resolves.toEqual({ done: true, value: undefined })
+    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({ ephemeral: true }))
+    expect(client.deleteThread).toHaveBeenCalledWith({ threadId: 'thread-1' })
+    await expect(new CodexThreadStore({ rootDir: storageRoot }).get(started.thread.id)).resolves.toBeNull()
+    await expect(service.readStoredEvents(started.thread.id)).resolves.toEqual([])
+    expect((service as unknown as { allowedToolsByThread: Map<string, unknown> }).allowedToolsByThread.size).toBe(0)
+    expect((service as unknown as { eventSubscribers: Set<unknown> }).eventSubscribers.size).toBe(0)
+  })
+
   it('lists stored Codex threads when app-server list is unavailable', async () => {
     const storageRoot = await tempRoot()
     const threadStore = new CodexThreadStore({ rootDir: storageRoot })

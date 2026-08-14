@@ -324,7 +324,8 @@ test('routes AI Agent nodes through the Host agent execution port and records th
       run: async (request) => {
         requests.push(request)
         return { text: 'agent result', threadId: 'thread-agent-1' }
-      }
+      },
+      runEphemeral: async () => { throw new Error('not used') }
     }
   }))
   const workflow = fixtureWorkflow()
@@ -1288,7 +1289,8 @@ test('hydrates dataset preparation from the immutable execution report instead o
           groundingComplete: true
         }),
         threadId: 'preparation-thread'
-      })
+      }),
+      runEphemeral: async () => { throw new Error('not used') }
     }
   }))
   const workflow = fixtureWorkflow()
@@ -1371,7 +1373,10 @@ test('recovers dataset preparation from a matching verified run after Agent fail
     clearInterval: () => undefined
   })
   const deactivate = await runtime.activate(runtimeContext({
-    agentExecution: { run: async () => { throw new Error('Agent stopped after tool execution.') } }
+    agentExecution: {
+      run: async () => { throw new Error('Agent stopped after tool execution.') },
+      runEphemeral: async () => { throw new Error('not used') }
+    }
   }))
   const workflow = fixtureWorkflow()
   workflow.id = 'dataset-receipt-recovery'
@@ -1465,7 +1470,8 @@ test('replaces an Agent-reported failed preparation plan with a matching success
           processingComplete: false,
           groundingComplete: false
         })
-      })
+      }),
+      runEphemeral: async () => { throw new Error('not used') }
     }
   }))
   const workflow = fixtureWorkflow()

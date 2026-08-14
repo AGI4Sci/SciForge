@@ -80,6 +80,22 @@ describe('createCodexAgentRuntimeAdapter', () => {
     }))
   })
 
+  it('forwards one-shot thread ownership to the Codex service', async () => {
+    const startThread = vi.fn(async () => ({
+      ok: true as const,
+      thread: { id: 'thread-ephemeral', title: 'One shot', workspace: '/tmp/workspace' }
+    }))
+    const adapter = createCodexAgentRuntimeAdapter({ startThread } as never)
+
+    await adapter.startThread({ settings: {} as never }, {
+      runtimeId: 'codex',
+      workspace: '/tmp/workspace',
+      ephemeral: true
+    })
+
+    expect(startThread).toHaveBeenCalledWith(expect.objectContaining({ ephemeral: true }))
+  })
+
   it('forwards turn governance snapshots to the Codex pre-tool bridge', async () => {
     const updateTurnGovernanceSnapshot = vi.fn(async () => ({ ok: true as const }))
     const adapter = createCodexAgentRuntimeAdapter({

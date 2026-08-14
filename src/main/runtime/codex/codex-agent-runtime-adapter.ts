@@ -89,6 +89,7 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
 
     async startThread(_context, input) {
       const result = await service.startThread({
+        ephemeral: input.ephemeral,
         threadId: input.threadId,
         workspace: input.workspace,
         title: input.title,

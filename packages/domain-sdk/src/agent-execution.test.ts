@@ -15,6 +15,10 @@ describe('agent execution host contract', () => {
       run: async (request) => ({
         text: `${request.runtimeId}:${request.mode ?? 'agent'}`,
         threadId: 'thread-1'
+      }),
+      runEphemeral: async (request) => ({
+        text: `${request.runtimeId}:${request.mode ?? 'agent'}`,
+        threadId: 'thread-1'
       })
     }
 
@@ -31,6 +35,10 @@ describe('agent execution host contract', () => {
     })
 
     assert.deepEqual(await host.run(request), {
+      text: 'codex:agent',
+      threadId: 'thread-1'
+    })
+    assert.deepEqual(await host.runEphemeral(request), {
       text: 'codex:agent',
       threadId: 'thread-1'
     })

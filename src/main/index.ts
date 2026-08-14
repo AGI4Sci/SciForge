@@ -1489,9 +1489,9 @@ app
         readDurableTurnBoundarySnapshot: () =>
           agentRuntimeHost.readDurableTurnBoundarySnapshot()
       },
-      agentExecution: {
-        run: async (request) => {
-          const requestedRuntimeId = request.runtimeId?.trim()
+      agentExecution: createDomainAgentExecutionHost({
+        agentRuntimeHost,
+        resolveRuntimeId: async (requestedRuntimeId) => {
           if (
             requestedRuntimeId !== undefined &&
             requestedRuntimeId !== 'codex' &&
@@ -1500,130 +1500,9 @@ app
           ) {
             throw new Error(`Unsupported agent runtime: ${requestedRuntimeId}`)
           }
-          if (request.signal?.aborted) throw request.signal.reason
-          const runtimeId = requestedRuntimeId ?? getActiveAgentRuntime(await store.load())
-          const thread = await agentRuntimeHost.startThread({
-            runtimeId,
-            workspace: request.workspaceRoot,
-            mode: request.mode,
-            ...(request.model ? { model: request.model } : {}),
-            relation: 'side',
-            threadSource: 'domain-runtime',
-            sidebarVisibility: request.interaction === 'reviewable' ? 'main' : 'hidden',
-            ...(request.allowedTools ? { allowedTools: request.allowedTools } : {})
-          })
-          let turnId = ''
-          let terminalState: 'completed' | 'failed' | 'cancelled' | null = null
-          let consecutivePolledTerminalFailures = 0
-          let resolveTerminal!: () => void
-          let rejectTerminal!: (reason?: unknown) => void
-          const terminal = new Promise<void>((resolve, reject) => {
-            resolveTerminal = resolve
-            rejectTerminal = reject
-          })
-          const pendingTerminalEvents: Array<
-            Readonly<{
-              turnId: string
-              state: 'completed' | 'failed' | 'cancelled'
-            }>
-          > = []
-          const acceptTerminalEvent = (
-            event: Readonly<{
-              turnId: string
-              state: 'completed' | 'failed' | 'cancelled'
-            }>
-          ): void => {
-            if (!turnId) {
-              pendingTerminalEvents.push(event)
-              return
-            }
-            if (event.turnId !== turnId || terminalState) return
-            terminalState = event.state
-            resolveTerminal()
-          }
-          const unsubscribe = agentRuntimeHost.subscribeTurnLifecycle((event) => {
-            if (
-              event.kind !== 'after-turn' ||
-              event.state === 'rejected' ||
-              event.runtimeId !== runtimeId ||
-              event.threadId !== thread.id
-            ) return
-            acceptTerminalEvent({ turnId: event.turnId, state: event.state })
-          })
-          const abort = (): void => {
-            if (turnId) {
-              void agentRuntimeHost
-                .interruptTurn({
-                  runtimeId,
-                  threadId: thread.id,
-                  turnId,
-                  discard: false
-                })
-                .catch(() => undefined)
-            }
-            rejectTerminal(request.signal?.reason ?? new Error('Agent execution aborted.'))
-          }
-          request.signal?.addEventListener('abort', abort, { once: true })
-          try {
-            const handle = await agentRuntimeHost.startTurn({
-              runtimeId,
-              threadId: thread.id,
-              text: request.prompt,
-              workspace: request.workspaceRoot,
-              mode: request.mode,
-              ...(request.model ? { model: request.model } : {}),
-              ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
-              ...(request.allowedTools ? { allowedTools: request.allowedTools } : {})
-            })
-            turnId = handle.turnId
-            for (const event of pendingTerminalEvents) acceptTerminalEvent(event)
-            if (request.signal?.aborted) abort()
-            while (!terminalState) {
-              await Promise.race([terminal, new Promise<void>((resolve) => setTimeout(resolve, 1_000))])
-              if (terminalState) break
-              const detail = await agentRuntimeHost.readThreadStatus({
-                runtimeId,
-                threadId: thread.id
-              })
-              const polledStatus =
-                detail.latestTurnId === turnId ? (detail.latestTurnStatus ?? detail.status) : detail.status
-              // A recoverable tool failure can temporarily surface as failed
-              // while Codex is still deciding whether to retry. Require three
-              // consecutive failed polls before polling terminalizes a missed
-              // failure lifecycle event.
-              if (polledStatus === 'completed') {
-                terminalState = 'completed'
-                consecutivePolledTerminalFailures = 0
-              } else if (polledStatus === 'failed' || polledStatus === 'cancelled') {
-                consecutivePolledTerminalFailures += 1
-                if (consecutivePolledTerminalFailures >= 3) terminalState = polledStatus
-              } else {
-                consecutivePolledTerminalFailures = 0
-              }
-            }
-            if (terminalState !== 'completed') {
-              throw new Error(`Agent execution ${terminalState ?? 'failed'}.`)
-            }
-            const page = await agentRuntimeHost.readThreadPage({
-              runtimeId,
-              threadId: thread.id,
-              limit: 20
-            })
-            const items = page.turns.find((turn) => turn.id === turnId)?.items ?? []
-            return {
-              threadId: thread.id,
-              text: items
-                .filter((item) => item.kind === 'assistant_message')
-                .map((item) => item.text?.trim() || item.summary?.trim() || '')
-                .filter(Boolean)
-                .join('\n\n')
-            }
-          } finally {
-            request.signal?.removeEventListener('abort', abort)
-            unsubscribe()
-          }
+          return requestedRuntimeId ?? getActiveAgentRuntime(await store.load())
         }
-      },
+      }),
       power: {
         acquire: async () => {
           const blockerId = powerSaveBlocker.start('prevent-app-suspension')

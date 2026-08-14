@@ -207,6 +207,16 @@ export class CodexThreadStore {
     })
   }
 
+  async delete(guiThreadId: string): Promise<void> {
+    const id = guiThreadId.trim()
+    if (!id) return
+    await this.enqueue(async () => {
+      const snapshot = await this.load()
+      const threads = snapshot.threads.filter((thread) => thread.guiThreadId !== id)
+      if (threads.length !== snapshot.threads.length) await this.save({ version: 1, threads })
+    })
+  }
+
   async updateLatestSeq(guiThreadId: string, latestSeq: number): Promise<CodexStoredThread | null> {
     const existing = await this.get(guiThreadId)
     if (!existing) return null

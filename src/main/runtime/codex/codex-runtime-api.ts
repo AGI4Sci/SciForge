@@ -206,6 +206,7 @@ export type CodexThreadListOptions = {
 }
 
 export type CodexThreadStartPayload = {
+  ephemeral?: boolean
   threadId?: string
   workspace?: string
   title?: string

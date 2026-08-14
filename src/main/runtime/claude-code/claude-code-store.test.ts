@@ -47,6 +47,16 @@ describe('ClaudeCodeThreadStore', () => {
     })
   })
 
+  it('truly deletes a persisted Claude thread mapping', async () => {
+    const rootDir = await tempRoot()
+    const store = new ClaudeCodeThreadStore({ rootDir })
+    await store.upsert({ guiThreadId: 'thread-delete', title: 'Delete me' })
+
+    await store.delete('thread-delete')
+
+    await expect(store.get('thread-delete')).resolves.toBeNull()
+  })
+
   it('does not follow a symlinked app-data thread snapshot target', async () => {
     const rootDir = await tempRoot()
     const outsideDir = await tempRoot()
@@ -63,6 +73,24 @@ describe('ClaudeCodeThreadStore', () => {
 })
 
 describe('ClaudeCodeEventStore', () => {
+  it('deletes an event log and resets its cached sequence', async () => {
+    const rootDir = await tempRoot()
+    const store = new ClaudeCodeEventStore({ rootDir })
+    await store.append('thread-delete', {
+      kind: 'assistant_delta',
+      runtimeId: 'claude',
+      threadId: 'thread-delete',
+      turnId: 'turn-1',
+      itemId: 'assistant-1',
+      text: 'temporary'
+    })
+
+    await store.delete('thread-delete')
+
+    await expect(store.read('thread-delete')).resolves.toEqual([])
+    await expect(store.latestSeq('thread-delete')).resolves.toBe(0)
+  })
+
   it('preserves the hidden execution-integrity marker as typed thread metadata', async () => {
     const rootDir = await tempRoot()
     const eventStore = new ClaudeCodeEventStore({ rootDir })

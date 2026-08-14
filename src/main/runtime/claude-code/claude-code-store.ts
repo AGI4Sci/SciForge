@@ -273,6 +273,21 @@ export class ClaudeCodeEventStore {
     return latest
   }
 
+  async delete(threadId: string): Promise<void> {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return
+    await this.enqueueForThread(normalizedThreadId, async () => {
+      const storeKey = safeSegment(normalizedThreadId)
+      const store = this.jsonlStores.get(storeKey) ?? new AppDataJsonlStore({
+        rootDir: this.rootDir,
+        segments: ['events', `${storeKey}.jsonl`]
+      })
+      await store.delete()
+      this.jsonlStores.delete(storeKey)
+      this.latestSeqByThread.delete(normalizedThreadId)
+    })
+  }
+
   private async appendNow(threadId: string, event: AgentRuntimeEvent): Promise<ClaudeCodeStoredEvent> {
     const seq = (await this.latestSeq(threadId)) + 1
     const createdAt = event.createdAt || this.now().toISOString()

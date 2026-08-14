@@ -540,7 +540,7 @@ export class CodexRuntimeService {
         }),
         ...codexModelAccessThreadParams(settings),
         serviceName: 'SciForge',
-        ephemeral: false,
+        ephemeral: payload.ephemeral === true,
         ...(payload.relation ? { relation: payload.relation } : {}),
         ...(payload.parentThreadId ? { parentThreadId: payload.parentThreadId } : {}),
         ...(payload.parentTurnId ? { parentTurnId: payload.parentTurnId } : {}),
@@ -827,7 +827,37 @@ export class CodexRuntimeService {
   }
 
   async deleteThread(threadId: string): Promise<CodexThreadMutationResult> {
-    return this.archiveThread(threadId, true)
+    const errors: unknown[] = []
+    const stored = await this.findStoredThread(threadId).catch((error) => {
+      errors.push(error)
+      return null
+    })
+    const guiThreadId = stored?.guiThreadId ?? threadId
+    const codexThreadId = stored?.codexThreadId ?? threadId
+    try {
+      const { client } = await this.ensureConnectedClient()
+      await client.deleteThread({ threadId: codexThreadId })
+    } catch (error) {
+      if (!isMissingOrUnmaterializedThreadError(error)) errors.push(error)
+    }
+    try {
+      await this.threadStore?.delete(guiThreadId)
+    } catch (error) {
+      errors.push(error)
+    }
+    try {
+      await this.eventStore?.delete(guiThreadId)
+    } catch (error) {
+      errors.push(error)
+    }
+    try {
+      await this.clearThreadRuntimeState([guiThreadId, codexThreadId])
+    } catch (error) {
+      errors.push(error)
+    }
+    return errors.length > 0
+      ? failure(new AggregateError(errors, `Could not completely delete Codex thread ${threadId}.`))
+      : { ok: true }
   }
 
   async archiveThread(threadId: string, archived: boolean): Promise<CodexThreadMutationResult> {
@@ -2807,6 +2837,81 @@ export class CodexRuntimeService {
     for (const subscriber of [...this.eventSubscribers]) {
       this.closeEventSubscriber(subscriber)
     }
+  }
+
+  private async clearThreadRuntimeState(threadIds: readonly string[]): Promise<void> {
+    const ids = new Set(threadIds.map((id) => id.trim()).filter(Boolean))
+    const errors: unknown[] = []
+    for (const [childId, active] of [...this.activeSubagents]) {
+      if (!ids.has(active.parentThreadId) && !ids.has(active.threadId) && !ids.has(active.codexThreadId)) continue
+      try {
+        await active.terminate()
+      } catch (error) {
+        errors.push(error)
+      } finally {
+        this.activeSubagents.delete(childId)
+      }
+    }
+    for (const id of ids) {
+      const activeTurnId = this.activeTurns.get(id)
+      if (activeTurnId) {
+        try {
+          await this.clearTurnTracking(id, activeTurnId)
+        } catch (error) {
+          errors.push(error)
+        }
+      }
+      this.allowedToolsByThread.delete(id)
+      this.childSummaryIndexes.delete(id)
+      const prefix = `${id}\u0000`
+      const turnKeys = new Set<string>()
+      for (const keys of [
+        this.turnTimings.keys(),
+        this.turnModelHints.keys(),
+        this.pendingTurnRecoveries.keys(),
+        this.governanceBindingsByTurn.keys(),
+        this.modelDeltaDedupeByTurn.keys(),
+        this.firstActivityTimers.keys(),
+        this.pendingToolItemsByTurn.keys(),
+        this.terminalToolItemsByTurn.keys(),
+        this.deferredTurnCompleteEvents.keys(),
+        this.pendingToolBarrierTimers.keys(),
+        this.turnsWithRecordedUsage.values()
+      ]) {
+        for (const key of keys) if (key.startsWith(prefix)) turnKeys.add(key)
+      }
+      for (const callKey of this.toolExecutionIdentityByCall.keys()) {
+        if (!callKey.startsWith(prefix)) continue
+        const callSeparator = callKey.indexOf('\u0000', prefix.length)
+        turnKeys.add(callSeparator < 0 ? callKey : callKey.slice(0, callSeparator))
+      }
+      for (const key of turnKeys) {
+        const turnId = key.slice(prefix.length)
+        const governanceBinding = this.governanceBindingsByTurn.get(key)
+        this.turnTimings.delete(key)
+        this.turnModelHints.delete(key)
+        this.pendingTurnRecoveries.delete(key)
+        this.governanceBindingsByTurn.delete(key)
+        this.modelDeltaDedupeByTurn.delete(key)
+        this.turnsWithRecordedUsage.delete(key)
+        this.clearFirstActivityTimer(key)
+        this.clearPendingToolBarrierForTurn(key)
+        try {
+          await Promise.all([
+            this.preToolUseGovernanceBridge?.deleteTurnState(turnId),
+            governanceBinding
+              ? this.preToolUseGovernanceBridge?.deleteSessionSeed(governanceBinding.sessionId)
+              : undefined
+          ])
+        } catch (error) {
+          errors.push(error)
+        }
+      }
+      for (const subscriber of [...this.eventSubscribers]) {
+        if (ids.has(subscriber.threadId)) this.closeEventSubscriber(subscriber)
+      }
+    }
+    if (errors.length > 0) throw new AggregateError(errors, 'Codex thread runtime cleanup failed.')
   }
 
   private broadcastEvent(event: CodexThreadEventPayload): void {

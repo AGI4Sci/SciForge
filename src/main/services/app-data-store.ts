@@ -185,6 +185,19 @@ export class AppDataJsonlStore {
     return target.path
   }
 
+  async delete(): Promise<void> {
+    await this.enqueue(async () => {
+      try {
+        const target = await appDataStorePath(this.rootDir, this.segments, {
+          createParentDirectories: false
+        })
+        await rm(target.path, { force: true })
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+    })
+  }
+
   private enqueue<T>(task: () => Promise<T>): Promise<T> {
     const run = this.queue.then(task, task)
     this.queue = run.then(() => undefined, () => undefined)

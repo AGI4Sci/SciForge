@@ -52,6 +52,17 @@ describe('CodexThreadStore', () => {
     })
   })
 
+  it('truly deletes a persisted thread mapping', async () => {
+    const rootDir = await tempRoot()
+    const store = new CodexThreadStore({ rootDir })
+    await store.upsert({ guiThreadId: 'gui-delete', codexThreadId: 'codex-delete' })
+
+    await store.delete('gui-delete')
+
+    await expect(store.get('gui-delete')).resolves.toBeNull()
+    await expect(store.getByCodexThreadId('codex-delete')).resolves.toBeNull()
+  })
+
   it('normalizes malformed persisted thread records and filters archived lists', async () => {
     const rootDir = await tempRoot()
     await writeFile(join(rootDir, 'threads.json'), JSON.stringify({
@@ -178,6 +189,20 @@ describe('CodexThreadStore', () => {
 })
 
 describe('CodexEventStore', () => {
+  it('deletes an event log and resets its cached sequence', async () => {
+    const rootDir = await tempRoot()
+    const store = new CodexEventStore({ rootDir })
+    await store.append('thread-delete', {
+      threadId: 'thread-delete',
+      deltas: [{ kind: 'agent_message', text: 'temporary' }]
+    })
+
+    await store.delete('thread-delete')
+
+    await expect(store.read('thread-delete')).resolves.toEqual([])
+    await expect(store.latestSeq('thread-delete')).resolves.toBe(0)
+  })
+
   it('appends normalized events with GUI-owned seq values', async () => {
     const rootDir = await tempRoot()
     const store = new CodexEventStore({

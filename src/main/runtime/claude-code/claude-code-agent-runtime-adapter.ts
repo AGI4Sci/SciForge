@@ -101,6 +101,7 @@ export function createClaudeCodeAgentRuntimeAdapter(
 
     async startThread(_context, input): Promise<AgentRuntimeThread> {
       const result = await service.startThread({
+        ephemeral: input.ephemeral,
         threadId: input.threadId,
         workspace: input.workspace,
         title: input.title

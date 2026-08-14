@@ -798,7 +798,8 @@ test('runs the generated loop through grounding, generation, evaluation, and pub
           }
         }
         throw new Error('Unexpected agent prompt.')
-      }
+      },
+      runEphemeral: async () => { throw new Error('not used') }
     },
     modelAccess: {
       textReasoner: async () => ({

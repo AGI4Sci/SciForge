@@ -728,6 +728,40 @@ describe('ClaudeCodeRuntimeService', () => {
     }
   })
 
+  it('deletes one-shot thread records, events, and live subscribers', async () => {
+    const { sdk } = fakeSdk(() => [])
+    const storageRoot = await serviceRoot()
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot,
+      claudeAgentSdk: sdk
+    })
+    const started = await service.startThread({
+      ephemeral: true,
+      workspace: '/tmp/workspace',
+      title: 'One shot'
+    })
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    const threadId = started.thread.id
+    const iterator = service.subscribeEvents(threadId, 1)[Symbol.asyncIterator]()
+    const pending = iterator.next()
+    await vi.waitFor(() => {
+      expect((service as unknown as { eventSubscribers: Set<unknown> }).eventSubscribers.size).toBe(1)
+    })
+
+    await expect(service.deleteThread(threadId)).resolves.toEqual({ ok: true })
+    await expect(pending).resolves.toEqual({ done: true, value: undefined })
+    await expect((service as unknown as {
+      threadStore: { get: (id: string) => Promise<unknown> }
+    }).threadStore.get(threadId)).resolves.toBeNull()
+    await expect((service as unknown as {
+      eventStore: { read: (id: string) => Promise<unknown[]> }
+    }).eventStore.read(threadId)).resolves.toEqual([])
+    expect((service as unknown as { eventSubscribers: Set<unknown> }).eventSubscribers.size).toBe(0)
+  })
+
+
   it('subscribes before replaying stored events and de-duplicates queued live echoes', async () => {
     const { sdk } = fakeSdk(() => [])
     const service = new ClaudeCodeRuntimeService({

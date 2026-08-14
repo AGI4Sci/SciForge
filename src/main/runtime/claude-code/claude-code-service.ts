@@ -304,6 +304,7 @@ export class ClaudeCodeRuntimeService {
   }
 
   async startThread(payload: {
+    ephemeral?: boolean
     threadId?: string
     workspace?: string
     title?: string
@@ -751,20 +752,52 @@ export class ClaudeCodeRuntimeService {
   }
 
   async deleteThread(threadId: string): Promise<ClaudeCodeTurnMutationResult> {
-    try {
-      const active = this.activeTurns.get(threadId)
-      if (active) {
+    const errors: unknown[] = []
+    const active = this.activeTurns.get(threadId)
+    if (active) {
+      try {
         active.inputStream?.close()
         active.abortController.abort()
         active.query.close?.()
+      } catch (error) {
+        errors.push(error)
       }
-      this.activeTurns.delete(threadId)
-      this.deleteThreadGovernanceSnapshots(threadId)
-      await this.threadStore.delete(threadId)
-      return { ok: true }
-    } catch (error) {
-      return failure(error)
     }
+    this.activeTurns.delete(threadId)
+    this.deleteThreadGovernanceSnapshots(threadId)
+    for (const [childId, child] of [...this.activeSubagents]) {
+      if (child.parentThreadId !== threadId && child.threadId !== threadId) continue
+      try {
+        await this.interruptTurn(child.threadId, child.turnId)
+      } catch (error) {
+        errors.push(error)
+      } finally {
+        this.activeSubagents.delete(childId)
+        this.childState.delete(childId)
+        this.childStateInitializers.delete(childId)
+      }
+    }
+    for (const subscriber of [...this.eventSubscribers]) {
+      if (subscriber.threadId !== threadId) continue
+      subscriber.closed = true
+      subscriber.queue.length = 0
+      subscriber.wake?.()
+      subscriber.wake = null
+      this.eventSubscribers.delete(subscriber)
+    }
+    try {
+      await this.threadStore.delete(threadId)
+    } catch (error) {
+      errors.push(error)
+    }
+    try {
+      await this.eventStore.delete(threadId)
+    } catch (error) {
+      errors.push(error)
+    }
+    return errors.length > 0
+      ? failure(new AggregateError(errors, `Could not completely delete Claude thread ${threadId}.`))
+      : { ok: true }
   }
 
   async archiveThread(threadId: string, archived: boolean): Promise<ClaudeCodeTurnMutationResult> {

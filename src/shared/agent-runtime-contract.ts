@@ -510,6 +510,8 @@ export type AgentRuntimeThreadListInput = {
 
 export type AgentRuntimeThreadStartInput = {
   runtimeId: AgentRuntimeId
+  /** Runtime-owned one-shot storage may be discarded after the caller reads the result. */
+  ephemeral?: boolean
   threadId?: string
   workspace?: string
   workspaceLocator?: WorkspaceLocator
