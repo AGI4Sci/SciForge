@@ -5,6 +5,7 @@ import {
   findFileReferences,
   isFileReferenceHref,
   LEGACY_FILE_REFERENCE_SCHEME,
+  parseExactFileReference,
   parseFileReferenceHref
 } from './file-references'
 
@@ -88,5 +89,39 @@ describe('file reference detection', () => {
 
   it('does not turn URL paths into local file references', () => {
     expect(findFileReferences('打开 https://example.test/src/App.tsx 查看')).toEqual([])
+  })
+
+  it('parses exact inline-code paths whose first segment or filename contains spaces', () => {
+    expect(parseExactFileReference(
+      'AI Scientist/Frontis-MA1 - Training an AI4AI Model/Frontis-MA1_读书报告.md'
+    )).toEqual({
+      path: 'AI Scientist/Frontis-MA1 - Training an AI4AI Model/Frontis-MA1_读书报告.md',
+      kind: 'file'
+    })
+
+    expect(parseExactFileReference('results/My report.md')).toEqual({
+      path: 'results/My report.md',
+      kind: 'file'
+    })
+  })
+
+  it('parses exact nested directory references with or without a trailing separator', () => {
+    expect(parseExactFileReference('assets/')).toEqual({
+      path: 'assets',
+      kind: 'directory'
+    })
+    expect(parseExactFileReference('AI Scientist/Frontis MA1/')).toEqual({
+      path: 'AI Scientist/Frontis MA1',
+      kind: 'directory'
+    })
+    expect(parseExactFileReference('AI Scientist/Frontis MA1')).toEqual({
+      path: 'AI Scientist/Frontis MA1'
+    })
+  })
+
+  it('keeps commands, URLs, and ordinary inline code out of exact path references', () => {
+    expect(parseExactFileReference('npm run test')).toBeNull()
+    expect(parseExactFileReference('https://example.test/report.md')).toBeNull()
+    expect(parseExactFileReference('const value = 1')).toBeNull()
   })
 })

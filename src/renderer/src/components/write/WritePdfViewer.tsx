@@ -58,6 +58,7 @@ import {
   pdfPageDisplaySize,
   type PdfPageDisplaySize
 } from './WritePdfPageFrame'
+import { pdfJsRendererOptions } from './pdfjs-cmap-assets'
 import { normalizedBoundsForPageRects } from './write-pdf-visible-context'
 import {
   boundWorkspacePreviewPresentationState,
@@ -640,22 +641,19 @@ function documentSourceFromProps({
   if (data) {
     return {
       data: pdfDataFromSource(data),
-      isEvalSupported: false,
-      useSystemFonts: true
+      ...pdfJsRendererOptions()
     }
   }
   if (dataBase64?.trim()) {
     return {
       data: bytesFromBase64(dataBase64),
-      isEvalSupported: false,
-      useSystemFonts: true
+      ...pdfJsRendererOptions()
     }
   }
   if (sourceUrl?.trim()) {
     return {
       url: sourceUrl.trim(),
-      isEvalSupported: false,
-      useSystemFonts: true
+      ...pdfJsRendererOptions()
     }
   }
   throw new Error('No PDF data source was provided.')

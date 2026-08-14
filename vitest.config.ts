@@ -5,6 +5,7 @@ import { defineConfig } from 'vitest/config'
 const repositoryRoot = fileURLToPath(new URL('.', import.meta.url))
 
 export default defineConfig({
+  assetsInclude: ['**/*.bcmap'],
   resolve: {
     alias: {
       '@renderer': resolve('src/renderer/src'),

@@ -51,6 +51,9 @@ export default defineConfig({
     }
   },
   renderer: {
+    // PDF.js Adobe CMaps are binary assets. Mark them explicitly so the
+    // renderer can lazy-import packed maps for CID fonts in dev and builds.
+    assetsInclude: ['**/*.bcmap'],
     define: {
       __SCIFORGE_DEV_INSTANCE_ID__: JSON.stringify(process.env.SCIFORGE_DEV_INSTANCE_ID ?? '')
     },

@@ -94,6 +94,8 @@ const EXTENSIONS = [
 const PATH_CHARS = String.raw`[\p{L}\p{N}_@.()+=[\]{} $,;!%#~\/\\-]`
 const FILE_NAME_CHARS = String.raw`[\p{L}\p{N}_@()+=[\]{}!%#~-]`
 const PATH_END = String.raw`(?=$|[\s(),.;:!?\]\u3001\u3002\uff0c\uff1b\uff1a\uff08\uff09]|#L)`
+const EXACT_PATH_CHARS = new RegExp(String.raw`^${PATH_CHARS}+$`, 'u')
+const FILE_EXTENSION_AT_END = new RegExp(String.raw`\.(?:${EXTENSIONS})$`, 'iu')
 const PATH_WITH_SEPARATOR = new RegExp(
   String.raw`${PATH_PREFIX_BOUNDARY}(?:~|\/|\.{1,2}\/|[A-Za-z]:[\\/]|[\w@.-]+[\\/])${PATH_CHARS}*?\.(?:${EXTENSIONS})${PATH_END}`,
   'giu'
@@ -107,7 +109,9 @@ const DIRECTORY_WITH_SEPARATOR = new RegExp(
   'giu'
 )
 const LINE_SUFFIX = /(?::(\d+)(?::(\d+))?|#L(\d+)(?:-L\d+)?|\s*[（(](?:line|lines)\s+(\d+)[）)]|\s*[（(]第\s*(\d+)\s*行[）)]|\s+line\s+(\d+)|\s+第\s*(\d+)\s*行)/iy
+const EXACT_LINE_SUFFIX = /(?::(\d+)(?::(\d+))?|#L(\d+)(?:-L\d+)?|\s*[（(](?:line|lines)\s+(\d+)[）)]|\s*[（(]第\s*(\d+)\s*行[）)]|\s+line\s+(\d+)|\s+第\s*(\d+)\s*行)$/iu
 const TRAILING_PUNCTUATION = /[.,;!?，。；：、]+$/
+const URL_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//
 const BLOCKED_PARENTS = new Set(['a', 'code', 'pre', 'script', 'style', 'textarea'])
 
 function lineFromSuffix(match: RegExpExecArray): { line?: number; column?: number } {
@@ -203,6 +207,50 @@ export function findFileReferences(text: string): FileReferenceMatch[] {
     ...collectMatches(text, BASENAME_FILE, false, 'file'),
     ...collectMatches(text, DIRECTORY_WITH_SEPARATOR, false, 'directory')
   ])
+}
+
+/**
+ * Parses a complete inline-code value as a workspace path.
+ *
+ * Prose linkification stays deliberately conservative because spaces can also
+ * separate ordinary words. Inline code already provides an exact boundary, so
+ * it can safely support filenames and leading directory segments with spaces,
+ * as well as extensionless nested paths. Existence is still checked by the
+ * workspace resolver before the reference becomes interactive.
+ */
+export function parseExactFileReference(text: string): FileReferenceTarget | null {
+  const trimmed = text.trim()
+  if (!trimmed || trimmed.includes('\n') || URL_SCHEME.test(trimmed)) return null
+
+  const detected = findFileReferences(trimmed)
+  if (detected.length === 1 && detected[0].start === 0 && detected[0].end === trimmed.length) {
+    return detected[0].target
+  }
+
+  const suffix = EXACT_LINE_SUFFIX.exec(trimmed)
+  const rawPath = suffix ? trimmed.slice(0, suffix.index) : trimmed
+  const hasTrailingSeparator = /[\\/]$/.test(rawPath)
+  const path = hasTrailingSeparator ? rawPath.replace(/[\\/]+$/g, '') : rawPath
+  const hasPathSeparator = /[\\/]/.test(path)
+  const hasKnownFileExtension = FILE_EXTENSION_AT_END.test(path)
+
+  if (
+    !path ||
+    !EXACT_PATH_CHARS.test(path) ||
+    (!hasTrailingSeparator && !hasPathSeparator && !hasKnownFileExtension)
+  ) {
+    return null
+  }
+
+  return {
+    path,
+    ...(suffix ? lineFromSuffix(suffix) : {}),
+    ...(hasTrailingSeparator
+      ? { kind: 'directory' as const }
+      : hasKnownFileExtension
+        ? { kind: 'file' as const }
+        : {})
+  }
 }
 
 export function createFileReferenceHref(target: FileReferenceTarget): string {

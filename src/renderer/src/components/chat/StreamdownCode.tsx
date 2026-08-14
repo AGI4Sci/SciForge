@@ -21,7 +21,7 @@ import {
 } from 'react'
 import { StreamdownContext } from 'streamdown'
 import {
-  findFileReferences,
+  parseExactFileReference,
   type FileReferenceTarget
 } from '../../lib/file-references'
 import { useValidatedFileReference } from '../../lib/file-reference-validation'
@@ -110,10 +110,8 @@ function PlainTextBlock({ code }: { code: string }): ReactNode {
 function inlineFileReference(text: string): { text: string; target: FileReferenceTarget } | null {
   const trimmed = text.trim()
   if (!trimmed) return null
-  const matches = findFileReferences(trimmed)
-  const match = matches.length === 1 ? matches[0] : null
-  if (!match || match.start !== 0 || match.end !== trimmed.length) return null
-  return { text: trimmed, target: match.target }
+  const target = parseExactFileReference(trimmed)
+  return target ? { text: trimmed, target } : null
 }
 
 function InlineFileReferenceCode({

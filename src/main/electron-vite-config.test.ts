@@ -32,6 +32,12 @@ describe('electron renderer dev server config', () => {
     expect(renderer?.define?.__SCIFORGE_DEV_INSTANCE_ID__).toBe(JSON.stringify(process.env.SCIFORGE_DEV_INSTANCE_ID ?? ''))
   })
 
+  it('treats packed PDF.js CMaps as renderer assets', () => {
+    const renderer = (config as { renderer?: { assetsInclude?: string[] } }).renderer
+
+    expect(renderer?.assetsInclude).toContain('**/*.bcmap')
+  })
+
   it('disables renderer HMR so strict CSP does not block React refresh preamble', () => {
     const renderer = (config as { renderer?: { server?: { hmr?: unknown } } }).renderer
 
