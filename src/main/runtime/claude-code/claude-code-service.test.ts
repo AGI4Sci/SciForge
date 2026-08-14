@@ -755,11 +755,146 @@ describe('ClaudeCodeRuntimeService', () => {
     })
     const child = await completion
     if (!child.threadRef) throw new Error('Claude child did not return a thread reference.')
+    const ownership = (service as unknown as {
+      ephemeralOwnership: EphemeralThreadOwnershipRegistry
+    }).ephemeralOwnership
+    expect(ownership.owns(child.threadRef.threadId)).toBe(true)
+    expect(ownership.isProvisional(child.threadRef.threadId)).toBe(false)
 
     await expect(service.reclaimEphemeralThread(parent.thread.id)).resolves.toEqual({ ok: true })
     await expect((service as unknown as {
       threadStore: { get: (threadId: string) => Promise<unknown> }
     }).threadStore.get(child.threadRef.threadId)).resolves.toBeNull()
+  })
+
+  it('reclaims a provisionally owned Claude child when startTurn fails after thread creation', async () => {
+    const sdk: ClaudeAgentSdk = {
+      query: vi.fn(() => {
+        throw new Error('child startTurn failed')
+      })
+    }
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const parent = await service.startThread({ ephemeral: true, workspace: '/tmp/workspace' })
+    if (!parent.ok) throw new Error(parent.message)
+
+    await expect(service.spawnSubagent({
+      childId: 'failed-child',
+      parentThreadId: parent.thread.id,
+      parentTurnId: 'parent-turn',
+      prompt: 'fail during turn startup',
+      signal: new AbortController().signal,
+      appendTranscript: vi.fn(async () => undefined),
+      onSpawned: vi.fn(async () => undefined)
+    })).rejects.toThrow('child startTurn failed')
+
+    const internals = service as unknown as {
+      threadStore: { list: (options?: { includeArchived?: boolean }) => Promise<Array<{ guiThreadId: string }>> }
+      ephemeralOwnership: EphemeralThreadOwnershipRegistry
+      activeTurns: Map<string, unknown>
+      activeSubagents: Map<string, unknown>
+    }
+    const child = (await internals.threadStore.list({ includeArchived: true }))
+      .find((thread) => thread.guiThreadId !== parent.thread.id)
+    if (!child) throw new Error('Provisionally owned Claude child was not persisted.')
+    expect(internals.ephemeralOwnership.isProvisional(child.guiThreadId)).toBe(true)
+    expect(internals.activeTurns.size).toBe(0)
+    expect(internals.activeSubagents.size).toBe(0)
+
+    await expect(service.reclaimEphemeralThread(parent.thread.id)).resolves.toEqual({ ok: true })
+    await expect(internals.threadStore.list({ includeArchived: true })).resolves.toEqual([])
+    expect(internals.ephemeralOwnership.snapshot()).toEqual({
+      roots: 0,
+      threads: 0,
+      pendingCreations: 0,
+      backgroundTasks: 0
+    })
+  })
+
+  it('does not register or reclaim persistent Claude root and child threads as ephemeral', async () => {
+    const { sdk } = fakeSdk(() => [
+      assistantText('persistent child complete', 'persistent-child-session'),
+      result('persistent child complete', 'persistent-child-session')
+    ])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const parent = await service.startThread({ workspace: '/tmp/workspace' })
+    if (!parent.ok) throw new Error(parent.message)
+    const child = await service.spawnSubagent({
+      childId: 'persistent-child',
+      parentThreadId: parent.thread.id,
+      parentTurnId: 'parent-turn',
+      prompt: 'finish persistently',
+      signal: new AbortController().signal,
+      appendTranscript: vi.fn(async () => undefined),
+      onSpawned: vi.fn(async () => undefined)
+    })
+    if (!child.threadRef) throw new Error('Persistent Claude child did not return a thread reference.')
+    const internals = service as unknown as {
+      threadStore: { get: (threadId: string) => Promise<unknown> }
+      ephemeralOwnership: EphemeralThreadOwnershipRegistry
+    }
+
+    expect(internals.ephemeralOwnership.snapshot().roots).toBe(0)
+    await expect(service.reclaimEphemeralThread(parent.thread.id)).resolves.toMatchObject({ ok: false })
+    await expect(internals.threadStore.get(parent.thread.id)).resolves.not.toBeNull()
+    await expect(internals.threadStore.get(child.threadRef.threadId)).resolves.not.toBeNull()
+  })
+
+  it('returns Claude service resources to baseline across repeated child initialization failures', async () => {
+    const sdk: ClaudeAgentSdk = {
+      query: vi.fn(() => {
+        throw new Error('repeated child startTurn failure')
+      })
+    }
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const internals = service as unknown as {
+      threadStore: { list: (options?: { includeArchived?: boolean }) => Promise<unknown[]> }
+      eventSubscribers: Set<unknown>
+      activeTurns: Map<string, unknown>
+      activeSubagents: Map<string, unknown>
+      ephemeralOwnership: EphemeralThreadOwnershipRegistry
+      turnGovernanceSnapshots: Map<string, unknown>
+    }
+
+    for (let index = 0; index < 10; index += 1) {
+      const parent = await service.startThread({ ephemeral: true, workspace: '/tmp/workspace' })
+      if (!parent.ok) throw new Error(parent.message)
+      await expect(service.spawnSubagent({
+        childId: `failed-child-${index}`,
+        parentThreadId: parent.thread.id,
+        parentTurnId: `parent-turn-${index}`,
+        prompt: 'fail during turn startup',
+        signal: new AbortController().signal,
+        appendTranscript: vi.fn(async () => undefined),
+        onSpawned: vi.fn(async () => undefined)
+      })).rejects.toThrow('repeated child startTurn failure')
+      await expect(service.reclaimEphemeralThread(parent.thread.id)).resolves.toEqual({ ok: true })
+      await expect(internals.threadStore.list({ includeArchived: true })).resolves.toEqual([])
+      expect({
+        subscribers: internals.eventSubscribers.size,
+        activeTurns: internals.activeTurns.size,
+        activeSubagents: internals.activeSubagents.size,
+        governance: internals.turnGovernanceSnapshots.size,
+        ownership: internals.ephemeralOwnership.snapshot()
+      }).toEqual({
+        subscribers: 0,
+        activeTurns: 0,
+        activeSubagents: 0,
+        governance: 0,
+        ownership: { roots: 0, threads: 0, pendingCreations: 0, backgroundTasks: 0 }
+      })
+    }
   })
 
   it('settles a running Claude child before deleting its ephemeral tree', async () => {

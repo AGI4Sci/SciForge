@@ -309,6 +309,7 @@ export class ClaudeCodeRuntimeService {
   async startThread(payload: {
     ephemeral?: boolean
     ephemeralParentThreadId?: string
+    onCreated?: (threadId: string) => void
     threadId?: string
     workspace?: string
     title?: string
@@ -325,6 +326,7 @@ export class ClaudeCodeRuntimeService {
         model,
         latestTurnStatus: 'queued'
       })
+      payload.onCreated?.(thread.guiThreadId)
       await this.emit({
         threadId: thread.guiThreadId,
         kind: 'thread_lifecycle',
@@ -613,10 +615,16 @@ export class ClaudeCodeRuntimeService {
     const threadResult = await this.startThread({
       ephemeral: childCreation !== null,
       ...(childCreation ? { ephemeralParentThreadId: input.parentThreadId } : {}),
+      ...(childCreation ? { onCreated: childCreation.register } : {}),
       workspace: input.workspace,
       title: input.label || firstLineTitle(input.prompt)
     })
     if (!threadResult.ok) throw new Error(threadResult.message)
+    if (input.signal.aborted) {
+      const error = new Error('Claude child turn was aborted during thread startup.')
+      error.name = 'AbortError'
+      throw error
+    }
     const turnResult = await this.startTurn({
       threadId: threadResult.thread.id,
       text: input.prompt,
@@ -625,10 +633,8 @@ export class ClaudeCodeRuntimeService {
       streamingInput: true
     })
     if (!turnResult.ok) throw new Error(turnResult.message)
-    childCreation?.register(threadResult.thread.id)
     const childTurn = this.activeTurns.get(threadResult.thread.id)
     if (childCreation && childTurn) childCreation.trackBackgroundTask(childTurn.settled)
-    childCreation?.settle()
     if (childCreation) {
       let resolveOwnedChild!: () => void
       const ownedChild = new Promise<void>((resolve) => { resolveOwnedChild = resolve })
@@ -643,6 +649,8 @@ export class ClaudeCodeRuntimeService {
       turnId: turnResult.turnId
     }
     this.activeSubagents.set(input.childId, active)
+    childCreation?.activate()
+    childCreation?.settle()
     await input.onSpawned({
       runtime: 'claude',
       threadId: active.threadId,

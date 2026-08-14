@@ -8,6 +8,7 @@ export type EphemeralThreadOwnershipSnapshot = Readonly<{
 type Ownership = {
   state: 'active' | 'closing'
   parentByThread: Map<string, string | null>
+  provisionalThreads: Set<string>
   pendingCreations: Set<Promise<void>>
   backgroundTasks: Set<Promise<void>>
 }
@@ -22,6 +23,7 @@ export class EphemeralThreadOwnershipRegistry {
     this.ownershipByRoot.set(id, {
       state: 'active',
       parentByThread: new Map([[id, null]]),
+      provisionalThreads: new Set(),
       pendingCreations: new Set(),
       backgroundTasks: new Set()
     })
@@ -30,6 +32,12 @@ export class EphemeralThreadOwnershipRegistry {
 
   owns(threadId: string): boolean {
     return this.rootByThread.has(threadId.trim())
+  }
+
+  isProvisional(threadId: string): boolean {
+    const id = requiredId(threadId)
+    const rootId = this.rootByThread.get(id)
+    return rootId ? this.requireOwnership(rootId).provisionalThreads.has(id) : false
   }
 
   assertAcceptingWork(threadId: string): void {
@@ -42,6 +50,7 @@ export class EphemeralThreadOwnershipRegistry {
 
   beginChildCreation(parentThreadId: string): Readonly<{
     register: (threadId: string) => void
+    activate: () => void
     trackBackgroundTask: (task: Promise<unknown>) => void
     settle: () => void
   }> | null {
@@ -56,12 +65,20 @@ export class EphemeralThreadOwnershipRegistry {
     const pending = new Promise<void>((resolve) => { resolvePending = resolve })
     ownership.pendingCreations.add(pending)
     let settled = false
+    let registeredThreadId: string | null = null
     return Object.freeze({
       register: (threadId: string): void => {
         const id = requiredId(threadId)
+        if (registeredThreadId) throw new Error(`Ephemeral child creation already owns ${registeredThreadId}.`)
         if (this.rootByThread.has(id)) throw new Error(`Ephemeral thread ${id} is already owned.`)
         ownership.parentByThread.set(id, parentId)
+        ownership.provisionalThreads.add(id)
         this.rootByThread.set(id, rootId)
+        registeredThreadId = id
+      },
+      activate: (): void => {
+        if (!registeredThreadId) throw new Error('Ephemeral child must be registered before activation.')
+        ownership.provisionalThreads.delete(registeredThreadId)
       },
       trackBackgroundTask: (task: Promise<unknown>): void => {
         this.rememberBackgroundTask(ownership, task)

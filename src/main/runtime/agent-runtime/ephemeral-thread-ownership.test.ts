@@ -7,6 +7,9 @@ describe('EphemeralThreadOwnershipRegistry', () => {
     registry.registerRoot('root')
     const first = registry.beginChildCreation('root')
     first?.register('child')
+    expect(registry.isProvisional('child')).toBe(true)
+    first?.activate()
+    expect(registry.isProvisional('child')).toBe(false)
     first?.settle()
     const nested = registry.beginChildCreation('child')
     nested?.register('grandchild')
@@ -56,5 +59,20 @@ describe('EphemeralThreadOwnershipRegistry', () => {
     await expect(registry.beginReclaim('persistent')).rejects.toThrow(
       'not a runtime-owned ephemeral root'
     )
+  })
+
+  it('retains a provisional child for reclamation when initialization fails', async () => {
+    const registry = new EphemeralThreadOwnershipRegistry()
+    registry.registerRoot('root')
+    const creation = registry.beginChildCreation('root')
+    creation?.register('child')
+    creation?.settle()
+
+    expect(registry.isProvisional('child')).toBe(true)
+    await expect(registry.beginReclaim('root')).resolves.toMatchObject({
+      childThreadIds: ['child']
+    })
+    registry.completeReclaim('root')
+    expect(registry.owns('child')).toBe(false)
   })
 })

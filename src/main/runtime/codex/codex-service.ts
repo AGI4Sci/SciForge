@@ -615,12 +615,27 @@ export class CodexRuntimeService {
             }
       }
     } catch (error) {
+      let reportedError = error
       if (registeredEphemeralRoot) {
-        await this.destroyThread(registeredEphemeralRoot).catch(() => undefined)
-        this.ephemeralOwnership.completeReclaim(registeredEphemeralRoot)
+        let cleanupResult: CodexThreadMutationResult
+        try {
+          cleanupResult = await this.destroyThread(registeredEphemeralRoot)
+        } catch (cleanupError) {
+          cleanupResult = failure(cleanupError)
+        }
+        if (cleanupResult.ok) {
+          this.ephemeralOwnership.completeReclaim(registeredEphemeralRoot)
+        } else {
+          const cleanupError = new Error(cleanupResult.message)
+          reportedError = new AggregateError(
+            [error, cleanupError],
+            `Codex ephemeral thread startup failed and cleanup failed: ${cleanupResult.message}`,
+            { cause: error }
+          )
+        }
       }
-      await this.discardClientAfterFailure(error)
-      return failure(error)
+      await this.discardClientAfterFailure(reportedError)
+      return failure(reportedError)
     }
   }
 
@@ -879,16 +894,22 @@ export class CodexRuntimeService {
     })
     const guiThreadId = stored?.guiThreadId ?? threadId
     const codexThreadId = stored?.codexThreadId ?? threadId
+    let remoteDestroyed = true
     try {
       const { client } = await this.ensureConnectedClient()
       await client.deleteThread({ threadId: codexThreadId })
     } catch (error) {
-      if (!isMissingOrUnmaterializedThreadError(error)) errors.push(error)
+      if (!isMissingOrUnmaterializedThreadError(error)) {
+        remoteDestroyed = false
+        errors.push(error)
+      }
     }
-    try {
-      await this.threadStore?.delete(guiThreadId)
-    } catch (error) {
-      errors.push(error)
+    if (remoteDestroyed) {
+      try {
+        await this.threadStore?.delete(guiThreadId)
+      } catch (error) {
+        errors.push(error)
+      }
     }
     try {
       await this.eventStore?.delete(guiThreadId)
@@ -901,7 +922,10 @@ export class CodexRuntimeService {
       errors.push(error)
     }
     return errors.length > 0
-      ? failure(new AggregateError(errors, `Could not completely delete Codex thread ${threadId}.`))
+      ? failure(new AggregateError(
+          errors,
+          `Could not completely delete Codex thread ${threadId}: ${errors.map(errorMessage).join('; ')}`
+        ))
       : { ok: true }
   }
 
@@ -1884,9 +1908,10 @@ export class CodexRuntimeService {
         agentRole: 'subagent'
       }
     })
-    if (input.signal.aborted) throw new Error('Codex child turn was aborted during thread startup.')
     const childThread = normalizeThread(readThread(threadResponse))
     if (!childThread.id) throw new Error('Codex child thread did not return a thread id.')
+    childCreation?.register(childThread.id)
+    if (input.signal.aborted) throw new Error('Codex child turn was aborted during thread startup.')
     const title = input.label || childThreadTitle(input.prompt)
     const storedChild = await this.persistThread(
       {
@@ -1907,8 +1932,6 @@ export class CodexRuntimeService {
     )
     const childGuiThreadId = storedChild?.guiThreadId ?? childThread.id
     const childCodexThreadId = storedChild?.codexThreadId ?? childThread.id
-    childCreation?.register(childGuiThreadId)
-    childCreation?.settle()
     if (childCreation) {
       let resolveOwnedChild!: () => void
       const ownedChild = new Promise<void>((resolve) => { resolveOwnedChild = resolve })
@@ -1989,6 +2012,8 @@ export class CodexRuntimeService {
         close: () => this.closeEventSubscriber(subscriber)
       }
       this.activeSubagents.set(input.childId, activeSubagent)
+      childCreation?.activate()
+      childCreation?.settle()
       await input.onSpawned({
         runtime: 'codex',
         threadId: childGuiThreadId,
@@ -4231,6 +4256,10 @@ function childThreadTitle(prompt: string): string {
   const normalized = prompt.trim().replace(/\s+/g, ' ')
   if (!normalized) return 'Child agent'
   return `Child agent: ${normalized.slice(0, 72)}${normalized.length > 72 ? '...' : ''}`
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function safeUsageInteger(value: unknown): number {

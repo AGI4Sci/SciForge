@@ -543,6 +543,83 @@ describe('CodexRuntimeService storage fallback', () => {
     expect((service as unknown as { eventSubscribers: Set<unknown> }).eventSubscribers.size).toBe(0)
   })
 
+  it('retains Codex startup ownership and primary error when root cleanup fails, then reclaims it', async () => {
+    const storageRoot = await tempRoot()
+    const client = controllableClient()
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot,
+      createClient: () => client
+    })
+    await service.connect()
+    const startupError = new Error('runtime status persistence failed')
+    const internals = service as unknown as {
+      emitRuntimeStatus: (...args: unknown[]) => Promise<void>
+      discardClientAfterFailure: (error: unknown) => Promise<void>
+      ephemeralOwnership: EphemeralThreadOwnershipRegistry
+    }
+    vi.spyOn(internals, 'emitRuntimeStatus').mockRejectedValueOnce(startupError)
+    const discard = vi.spyOn(internals, 'discardClientAfterFailure')
+    vi.mocked(client.deleteThread).mockRejectedValueOnce(new Error('remote destroy failed'))
+
+    const started = await service.startThread({
+      ephemeral: true,
+      threadId: 'startup-cleanup-root',
+      workspace: '/tmp/workspace'
+    })
+
+    expect(started).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('remote destroy failed')
+    })
+    const reported = discard.mock.calls[0]?.[0]
+    expect(reported).toBeInstanceOf(AggregateError)
+    expect((reported as AggregateError).cause).toBe(startupError)
+    expect((reported as AggregateError).errors[0]).toBe(startupError)
+    expect((reported as AggregateError).errors[1]).toEqual(
+      expect.objectContaining({ message: expect.stringContaining('remote destroy failed') })
+    )
+    expect(internals.ephemeralOwnership.snapshot().roots).toBe(1)
+    await expect(new CodexThreadStore({ rootDir: storageRoot }).get('startup-cleanup-root'))
+      .resolves.toMatchObject({ codexThreadId: 'thread-1' })
+
+    vi.mocked(client.deleteThread).mockResolvedValueOnce({})
+    await expect(service.reclaimEphemeralThread('startup-cleanup-root')).resolves.toEqual({ ok: true })
+    expect(internals.ephemeralOwnership.snapshot()).toEqual({
+      roots: 0,
+      threads: 0,
+      pendingCreations: 0,
+      backgroundTasks: 0
+    })
+    await expect(new CodexThreadStore({ rootDir: storageRoot }).get('startup-cleanup-root')).resolves.toBeNull()
+  })
+
+  it('clears Codex startup ownership while preserving the original error when root cleanup succeeds', async () => {
+    const storageRoot = await tempRoot()
+    const client = controllableClient()
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot,
+      createClient: () => client
+    })
+    await service.connect()
+    const startupError = new Error('runtime status persistence failed')
+    const internals = service as unknown as {
+      emitRuntimeStatus: (...args: unknown[]) => Promise<void>
+      ephemeralOwnership: EphemeralThreadOwnershipRegistry
+    }
+    vi.spyOn(internals, 'emitRuntimeStatus').mockRejectedValueOnce(startupError)
+
+    await expect(service.startThread({
+      ephemeral: true,
+      threadId: 'startup-clean-root',
+      workspace: '/tmp/workspace'
+    })).resolves.toEqual({ ok: false, message: startupError.message, recoverable: true })
+
+    expect(internals.ephemeralOwnership.snapshot().roots).toBe(0)
+    await expect(new CodexThreadStore({ rootDir: storageRoot }).get('startup-clean-root')).resolves.toBeNull()
+  })
+
   it('keeps public persistent delete compatible with archive semantics', async () => {
     const storageRoot = await tempRoot()
     const client = controllableClient()
@@ -3049,6 +3126,212 @@ describe('CodexRuntimeService compatibility operations', () => {
       .toEqual(['owned-child-backend', 'owned-parent-backend'])
   })
 
+  it('reclaims a provisionally owned Codex child when persistence fails after app-server creation', async () => {
+    const queued = clientWithQueuedEvents()
+    vi.mocked(queued.client.startThread)
+      .mockResolvedValueOnce({ thread: { id: 'persist-parent-backend' } })
+      .mockResolvedValueOnce({ thread: { id: 'persist-child-backend' } })
+    vi.mocked(queued.client.startTurn).mockResolvedValueOnce({ turn: { id: 'persist-parent-turn' } })
+    const storageRoot = await tempRoot()
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot,
+      createClient: () => queued.client
+    })
+    const parent = await service.startThread({
+      ephemeral: true,
+      threadId: 'persist-parent',
+      workspace: '/tmp/workspace'
+    })
+    if (!parent.ok) throw new Error(parent.message)
+    await service.startTurn({ threadId: parent.thread.id, text: 'delegate' })
+    const internals = service as unknown as {
+      persistThread: (...args: unknown[]) => Promise<unknown>
+      ephemeralOwnership: EphemeralThreadOwnershipRegistry
+    }
+    vi.spyOn(internals, 'persistThread').mockRejectedValueOnce(new Error('child persist failed'))
+
+    await expect(service.spawnSubagent({
+      childId: 'persist-child',
+      parentThreadId: parent.thread.id,
+      parentTurnId: 'persist-parent-turn',
+      prompt: 'fail while persisting',
+      signal: new AbortController().signal,
+      appendTranscript: vi.fn(async () => undefined),
+      onSpawned: vi.fn(async () => undefined)
+    })).rejects.toThrow('child persist failed')
+
+    expect(internals.ephemeralOwnership.owns('persist-child-backend')).toBe(true)
+    expect(internals.ephemeralOwnership.isProvisional('persist-child-backend')).toBe(true)
+    await expect(service.reclaimEphemeralThread(parent.thread.id)).resolves.toEqual({ ok: true })
+    expect(vi.mocked(queued.client.deleteThread).mock.calls.map(([input]) => input.threadId))
+      .toEqual(['persist-child-backend', 'persist-parent-backend'])
+    expect(internals.ephemeralOwnership.snapshot()).toEqual({
+      roots: 0,
+      threads: 0,
+      pendingCreations: 0,
+      backgroundTasks: 0
+    })
+    await expect(new CodexThreadStore({ rootDir: storageRoot }).get(parent.thread.id)).resolves.toBeNull()
+  })
+
+  it('reclaims a Codex child aborted after app-server creation but before initialization', async () => {
+    const queued = clientWithQueuedEvents()
+    let releaseChild!: () => void
+    const childStarted = new Promise<void>((resolve) => { releaseChild = resolve })
+    vi.mocked(queued.client.startThread)
+      .mockResolvedValueOnce({ thread: { id: 'abort-parent-backend' } })
+      .mockImplementationOnce(async () => {
+        await childStarted
+        return { thread: { id: 'abort-child-backend' } }
+      })
+    vi.mocked(queued.client.startTurn).mockResolvedValueOnce({ turn: { id: 'abort-parent-turn' } })
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await tempRoot(),
+      createClient: () => queued.client
+    })
+    const parent = await service.startThread({ ephemeral: true, workspace: '/tmp/workspace' })
+    if (!parent.ok) throw new Error(parent.message)
+    await service.startTurn({ threadId: parent.thread.id, text: 'delegate' })
+    const controller = new AbortController()
+    const completion = service.spawnSubagent({
+      childId: 'abort-child',
+      parentThreadId: parent.thread.id,
+      parentTurnId: 'abort-parent-turn',
+      prompt: 'abort during startup',
+      signal: controller.signal,
+      appendTranscript: vi.fn(async () => undefined),
+      onSpawned: vi.fn(async () => undefined)
+    })
+    await vi.waitFor(() => expect(queued.client.startThread).toHaveBeenCalledTimes(2))
+    controller.abort()
+    releaseChild()
+
+    await expect(completion).rejects.toThrow('aborted during thread startup')
+    const ownership = (service as unknown as {
+      ephemeralOwnership: EphemeralThreadOwnershipRegistry
+    }).ephemeralOwnership
+    expect(ownership.isProvisional('abort-child-backend')).toBe(true)
+    await expect(service.reclaimEphemeralThread(parent.thread.id)).resolves.toEqual({ ok: true })
+    expect(vi.mocked(queued.client.startTurn)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(queued.client.deleteThread).mock.calls.map(([input]) => input.threadId))
+      .toEqual(['abort-child-backend', 'abort-parent-backend'])
+  })
+
+  it('does not register or reclaim persistent Codex root and child threads as ephemeral', async () => {
+    const queued = clientWithQueuedEvents()
+    vi.mocked(queued.client.startThread)
+      .mockResolvedValueOnce({ thread: { id: 'persistent-parent-backend' } })
+      .mockResolvedValueOnce({ thread: { id: 'persistent-child-backend' } })
+    vi.mocked(queued.client.startTurn)
+      .mockResolvedValueOnce({ turn: { id: 'persistent-parent-turn' } })
+      .mockResolvedValueOnce({ turn: { id: 'persistent-child-turn' } })
+    const storageRoot = await tempRoot()
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot,
+      createClient: () => queued.client
+    })
+    const parent = await service.startThread({ threadId: 'persistent-parent', workspace: '/tmp/workspace' })
+    if (!parent.ok) throw new Error(parent.message)
+    await service.startTurn({ threadId: parent.thread.id, text: 'delegate' })
+    const spawned = vi.fn(async () => undefined)
+    const completion = service.spawnSubagent({
+      childId: 'persistent-child',
+      parentThreadId: parent.thread.id,
+      parentTurnId: 'persistent-parent-turn',
+      prompt: 'finish persistently',
+      signal: new AbortController().signal,
+      appendTranscript: vi.fn(async () => undefined),
+      onSpawned: spawned
+    })
+    await vi.waitFor(() => expect(spawned).toHaveBeenCalled())
+    queued.push({
+      type: 'event',
+      channel: CODEX_MAIN_IPC_CHANNELS.event,
+      payload: {
+        method: 'turn/completed',
+        params: { threadId: 'persistent-child-backend', turnId: 'persistent-child-turn' }
+      }
+    })
+    const child = await completion
+    if (!child.threadRef) throw new Error('Persistent Codex child did not return a thread reference.')
+    const ownership = (service as unknown as {
+      ephemeralOwnership: EphemeralThreadOwnershipRegistry
+    }).ephemeralOwnership
+
+    expect(ownership.snapshot().roots).toBe(0)
+    await expect(service.reclaimEphemeralThread(parent.thread.id)).resolves.toMatchObject({ ok: false })
+    expect(queued.client.deleteThread).not.toHaveBeenCalled()
+    await expect(new CodexThreadStore({ rootDir: storageRoot }).get(parent.thread.id)).resolves.not.toBeNull()
+    await expect(new CodexThreadStore({ rootDir: storageRoot }).get(child.threadRef.threadId)).resolves.not.toBeNull()
+  })
+
+  it('returns Codex service resources to baseline across repeated child persistence failures', async () => {
+    const queued = clientWithQueuedEvents()
+    let threadSequence = 0
+    let turnSequence = 0
+    vi.mocked(queued.client.startThread).mockImplementation(async () => ({
+      thread: { id: `repeated-backend-${++threadSequence}` }
+    }))
+    vi.mocked(queued.client.startTurn).mockImplementation(async () => ({
+      turn: { id: `repeated-turn-${++turnSequence}` }
+    }))
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await tempRoot(),
+      createClient: () => queued.client
+    })
+    const internals = service as unknown as {
+      persistThread: (...args: unknown[]) => Promise<unknown>
+      threadStore: { list: (options?: { includeArchived?: boolean }) => Promise<unknown[]> }
+      eventSubscribers: Set<unknown>
+      activeTurns: Map<string, unknown>
+      activeSubagents: Map<string, unknown>
+      allowedToolsByThread: Map<string, unknown>
+      ephemeralOwnership: EphemeralThreadOwnershipRegistry
+    }
+    const persist = vi.spyOn(internals, 'persistThread')
+
+    for (let index = 0; index < 10; index += 1) {
+      const parent = await service.startThread({
+        ephemeral: true,
+        threadId: `repeated-parent-${index}`,
+        workspace: '/tmp/workspace',
+        allowedTools: ['sciforge_discover']
+      })
+      if (!parent.ok) throw new Error(parent.message)
+      const parentTurn = await service.startTurn({ threadId: parent.thread.id, text: 'delegate' })
+      if (!parentTurn.ok) throw new Error(parentTurn.message)
+      persist.mockRejectedValueOnce(new Error(`child persist failed ${index}`))
+      await expect(service.spawnSubagent({
+        childId: `repeated-child-${index}`,
+        parentThreadId: parent.thread.id,
+        parentTurnId: parentTurn.turnId,
+        prompt: 'fail while persisting',
+        signal: new AbortController().signal,
+        appendTranscript: vi.fn(async () => undefined),
+        onSpawned: vi.fn(async () => undefined)
+      })).rejects.toThrow(`child persist failed ${index}`)
+      await expect(service.reclaimEphemeralThread(parent.thread.id)).resolves.toEqual({ ok: true })
+      await expect(internals.threadStore.list({ includeArchived: true })).resolves.toEqual([])
+      expect({
+        subscribers: internals.eventSubscribers.size,
+        activeTurns: internals.activeTurns.size,
+        activeSubagents: internals.activeSubagents.size,
+        allowedTools: internals.allowedToolsByThread.size,
+        ownership: internals.ephemeralOwnership.snapshot()
+      }).toEqual({
+        subscribers: 0,
+        activeTurns: 0,
+        activeSubagents: 0,
+        allowedTools: 0,
+        ownership: { roots: 0, threads: 0, pendingCreations: 0, backgroundTasks: 0 }
+      })
+    }
+  })
+
   it('retains a completed Codex child until its ephemeral root is reclaimed', async () => {
     const queued = clientWithQueuedEvents()
     vi.mocked(queued.client.startThread)
@@ -3080,6 +3363,11 @@ describe('CodexRuntimeService compatibility operations', () => {
       onSpawned: spawned
     })
     await vi.waitFor(() => expect(spawned).toHaveBeenCalled())
+    const ownership = (service as unknown as {
+      ephemeralOwnership: EphemeralThreadOwnershipRegistry
+    }).ephemeralOwnership
+    expect(ownership.owns('completed-child-backend')).toBe(true)
+    expect(ownership.isProvisional('completed-child-backend')).toBe(false)
     queued.push({
       type: 'event',
       channel: CODEX_MAIN_IPC_CHANNELS.event,
