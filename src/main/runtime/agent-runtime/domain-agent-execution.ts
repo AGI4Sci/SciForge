@@ -15,7 +15,7 @@ type ExecutionRuntimeHost = Pick<
   | 'startThread'
   | 'startTurn'
   | 'interruptTurn'
-  | 'deleteThread'
+  | 'reclaimEphemeralThread'
   | 'readThreadStatus'
   | 'readThreadPage'
   | 'subscribeTurnLifecycle'
@@ -162,13 +162,13 @@ async function executeDomainAgentRequest(
   }
 
   const cleanupErrors: unknown[] = []
-  if (ephemeral && state.turnId && !state.terminalState) {
+  if (primaryError !== undefined && state.turnId && !state.terminalState) {
     try {
       await options.agentRuntimeHost.interruptTurn({
         runtimeId,
         threadId: state.threadId,
         turnId: state.turnId,
-        discard: true
+        discard: ephemeral
       })
     } catch (error) {
       cleanupErrors.push(error)
@@ -184,7 +184,7 @@ async function executeDomainAgentRequest(
   request.signal?.removeEventListener('abort', abort)
   if (ephemeral) {
     try {
-      await options.agentRuntimeHost.deleteThread({ runtimeId, threadId: state.threadId })
+      await options.agentRuntimeHost.reclaimEphemeralThread({ runtimeId, threadId: state.threadId })
     } catch (error) {
       cleanupErrors.push(error)
     }

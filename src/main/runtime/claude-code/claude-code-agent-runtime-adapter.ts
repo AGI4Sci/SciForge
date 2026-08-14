@@ -165,6 +165,11 @@ export function createClaudeCodeAgentRuntimeAdapter(
       if (!result.ok) throw claudeFailure(result)
     },
 
+    async reclaimEphemeralThread(_context, input) {
+      const result = await service.reclaimEphemeralThread(input.threadId)
+      if (!result.ok) throw claudeFailure(result)
+    },
+
     async *subscribeEvents(_context, input) {
       for await (const event of service.subscribeEvents(input.threadId, input.sinceSeq ?? 0, input.signal)) {
         yield boundedClaudeEvent(event)

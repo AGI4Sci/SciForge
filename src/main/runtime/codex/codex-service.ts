@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { realpath } from 'node:fs/promises'
 import { join } from 'node:path'
+import { EphemeralThreadOwnershipRegistry } from '../agent-runtime/ephemeral-thread-ownership'
 import {
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
   DEFAULT_MODEL_ROUTER_PROVIDER_ID,
@@ -168,6 +169,7 @@ type ActiveCodexSubagent = {
   turnId: string
   client: CodexAppServerJsonRpcClient
   terminate(signal?: AbortSignal): Promise<void>
+  close(): void
 }
 
 type CodexConnectedClient = {
@@ -284,6 +286,7 @@ export class CodexRuntimeService {
   private readonly usageStore: CodexUsageStore | null
   private readonly preToolUseGovernanceBridge: CodexPreToolUseGovernanceBridge | null
   private readonly activeSubagents = new Map<string, ActiveCodexSubagent>()
+  private readonly ephemeralOwnership = new EphemeralThreadOwnershipRegistry()
   private readonly allowedToolsByThread = new Map<string, ReadonlySet<string>>()
   private usageBackfillPromise: Promise<void> | null = null
   private readonly activeTurns = new Map<string, string>()
@@ -496,6 +499,7 @@ export class CodexRuntimeService {
   }
 
   async startThread(payload: CodexThreadStartPayload): Promise<CodexThreadStartResult> {
+    let registeredEphemeralRoot: string | null = null
     try {
       const startedAtMs = Date.now()
       const settings = await this.options.settings()
@@ -584,8 +588,13 @@ export class CodexRuntimeService {
           if (id?.trim()) this.allowedToolsByThread.set(id.trim(), allowed)
         }
       }
+      const returnedThreadId = storedThread?.guiThreadId ?? thread.id
+      if (payload.ephemeral === true) {
+        this.ephemeralOwnership.registerRoot(returnedThreadId)
+        registeredEphemeralRoot = returnedThreadId
+      }
       await this.emitRuntimeStatus({
-        threadId: storedThread?.guiThreadId ?? thread.id,
+        threadId: returnedThreadId,
         phase: 'thread_start_done',
         message: 'Codex thread ready',
         latencyMs: elapsedMs(startedAtMs)
@@ -606,6 +615,10 @@ export class CodexRuntimeService {
             }
       }
     } catch (error) {
+      if (registeredEphemeralRoot) {
+        await this.destroyThread(registeredEphemeralRoot).catch(() => undefined)
+        this.ephemeralOwnership.completeReclaim(registeredEphemeralRoot)
+      }
       await this.discardClientAfterFailure(error)
       return failure(error)
     }
@@ -827,6 +840,38 @@ export class CodexRuntimeService {
   }
 
   async deleteThread(threadId: string): Promise<CodexThreadMutationResult> {
+    return this.archiveThread(threadId, true)
+  }
+
+  async reclaimEphemeralThread(threadId: string): Promise<CodexThreadMutationResult> {
+    try {
+      const ownership = await this.ephemeralOwnership.beginReclaim(threadId)
+      const errors: unknown[] = []
+      for (const ownedThreadId of [...ownership.childThreadIds, ownership.rootThreadId]) {
+        const activeTurnId = this.activeTurns.get(ownedThreadId)
+        if (!activeTurnId) continue
+        const interrupted = await this.interruptTurn(ownedThreadId, activeTurnId, { discard: false })
+        if (!interrupted.ok && interrupted.code !== 'turn_not_running') {
+          errors.push(new Error(interrupted.message))
+        }
+      }
+      await this.clearThreadRuntimeState([ownership.rootThreadId, ...ownership.childThreadIds])
+      await Promise.all(ownership.backgroundTasks)
+      for (const ownedThreadId of [...ownership.childThreadIds, ownership.rootThreadId]) {
+        const result = await this.destroyThread(ownedThreadId)
+        if (!result.ok) errors.push(new Error(result.message))
+      }
+      if (errors.length > 0) {
+        return failure(new AggregateError(errors, `Could not reclaim ephemeral Codex thread ${threadId}.`))
+      }
+      this.ephemeralOwnership.completeReclaim(threadId)
+      return { ok: true }
+    } catch (error) {
+      return failure(error)
+    }
+  }
+
+  private async destroyThread(threadId: string): Promise<CodexThreadMutationResult> {
     const errors: unknown[] = []
     const stored = await this.findStoredThread(threadId).catch((error) => {
       errors.push(error)
@@ -1807,6 +1852,9 @@ export class CodexRuntimeService {
   }
 
   async spawnSubagent(input: AgentRuntimeSubagentSpawnInput): Promise<AgentRuntimeSubagentResult> {
+    const childCreation = this.ephemeralOwnership.beginChildCreation(input.parentThreadId)
+    let finishOwnedChild: (() => void) | null = null
+    try {
     const settings = await this.options.settings()
     const { client } = await this.ensureModelUseClient(settings)
     if (input.signal.aborted) throw new Error('Codex child turn was aborted before startup.')
@@ -1823,7 +1871,7 @@ export class CodexRuntimeService {
       }),
       ...codexModelAccessThreadParams(settings),
       serviceName: 'SciForge',
-      ephemeral: false,
+      ephemeral: childCreation !== null,
       threadSource: 'subagent',
       relation: 'side',
       parentThreadId: input.parentThreadId,
@@ -1859,6 +1907,14 @@ export class CodexRuntimeService {
     )
     const childGuiThreadId = storedChild?.guiThreadId ?? childThread.id
     const childCodexThreadId = storedChild?.codexThreadId ?? childThread.id
+    childCreation?.register(childGuiThreadId)
+    childCreation?.settle()
+    if (childCreation) {
+      let resolveOwnedChild!: () => void
+      const ownedChild = new Promise<void>((resolve) => { resolveOwnedChild = resolve })
+      finishOwnedChild = resolveOwnedChild
+      childCreation.trackBackgroundTask(ownedChild)
+    }
     const subscriber = this.addEventSubscriber(childGuiThreadId)
     const startedAtMs = Date.now()
     let childTurnId = ''
@@ -1929,7 +1985,8 @@ export class CodexRuntimeService {
         codexThreadId: childCodexThreadId,
         turnId: childTurnId,
         client,
-        terminate: terminateChildTurn
+        terminate: terminateChildTurn,
+        close: () => this.closeEventSubscriber(subscriber)
       }
       this.activeSubagents.set(input.childId, activeSubagent)
       await input.onSpawned({
@@ -1965,12 +2022,16 @@ export class CodexRuntimeService {
         }
       }
     } finally {
+      finishOwnedChild?.()
       this.activeSubagents.delete(input.childId)
       await this.releasePreparedCodexTurnGovernance(preparedGovernance).catch(() => undefined)
       if (childTurnId) {
         await this.clearTurnTracking(childGuiThreadId, childTurnId).catch(() => undefined)
       }
       this.closeEventSubscriber(subscriber)
+    }
+    } finally {
+      childCreation?.settle()
     }
   }
 
@@ -2849,6 +2910,7 @@ export class CodexRuntimeService {
       } catch (error) {
         errors.push(error)
       } finally {
+        active.close()
         this.activeSubagents.delete(childId)
       }
     }

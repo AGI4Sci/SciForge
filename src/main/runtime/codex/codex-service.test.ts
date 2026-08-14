@@ -36,6 +36,10 @@ import { CAPABILITY_AGENT_TOOL_NAMES, createCapabilityAgentToolSurface } from '.
 import { CapabilityBroker } from '../../capabilities/broker'
 import { CapabilityRegistry } from '../../capabilities/registry'
 import type { AgentRuntimeToolSurface } from '../agent-runtime/agent-tool-surface'
+import { createAgentRuntimeHost } from '../agent-runtime/host'
+import { createDomainAgentExecutionHost } from '../agent-runtime/domain-agent-execution'
+import { createCodexAgentRuntimeAdapter } from './codex-agent-runtime-adapter'
+import type { EphemeralThreadOwnershipRegistry } from '../agent-runtime/ephemeral-thread-ownership'
 
 function configuredModelRouterSettings() {
   const modelRouter = defaultModelRouterSettings()
@@ -387,6 +391,122 @@ describe('Codex child summary index', () => {
 })
 
 describe('CodexRuntimeService storage fallback', () => {
+  it('returns all service and Host resources to baseline across 20 full one-shot runs', async () => {
+    const storageRoot = await tempRoot()
+    const queued = clientWithQueuedEvents()
+    let threadSequence = 0
+    let turnSequence = 0
+    vi.mocked(queued.client.startThread).mockImplementation(async () => ({
+      thread: { id: `one-shot-thread-${++threadSequence}` }
+    }))
+    vi.mocked(queued.client.startTurn).mockImplementation(async () => ({
+      turn: { id: `one-shot-turn-${++turnSequence}` }
+    }))
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot,
+      createClient: () => queued.client
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings(),
+      adapters: [createCodexAgentRuntimeAdapter(service)]
+    })
+    const execution = createDomainAgentExecutionHost({
+      agentRuntimeHost: host,
+      resolveRuntimeId: async () => 'codex' as const,
+      pollIntervalMs: 2
+    })
+    const serviceState = service as unknown as {
+      threadStore: CodexThreadStore
+      eventSubscribers: Set<unknown>
+      allowedToolsByThread: Map<string, unknown>
+      activeTurns: Map<string, unknown>
+      activeSubagents: Map<string, unknown>
+      firstActivityTimers: Map<string, unknown>
+      pendingToolBarrierTimers: Map<string, unknown>
+      governanceBindingsByTurn: Map<string, unknown>
+      turnTimings: Map<string, unknown>
+      turnModelHints: Map<string, unknown>
+      pendingTurnRecoveries: Map<string, unknown>
+      modelDeltaDedupeByTurn: Map<string, unknown>
+      ephemeralOwnership: EphemeralThreadOwnershipRegistry
+    }
+    const hostState = host as unknown as {
+      activeThreadTurns: Map<string, unknown>
+      terminalWaiters: Map<string, unknown>
+      turnGovernanceProfiles: Map<string, unknown>
+      turnWorkspaces: Map<string, unknown>
+      turnLifecycleSubscribers: Set<unknown>
+      traceCaptureTasks: Map<string, unknown>
+    }
+    const baseline = {
+      subscribers: serviceState.eventSubscribers.size,
+      allowedTools: serviceState.allowedToolsByThread.size,
+      activeTurns: serviceState.activeTurns.size,
+      activeSubagents: serviceState.activeSubagents.size,
+      timers: serviceState.firstActivityTimers.size + serviceState.pendingToolBarrierTimers.size,
+      governance: serviceState.governanceBindingsByTurn.size,
+      turnScoped: serviceState.turnTimings.size + serviceState.turnModelHints.size +
+        serviceState.pendingTurnRecoveries.size + serviceState.modelDeltaDedupeByTurn.size,
+      hostTurns: hostState.activeThreadTurns.size,
+      waiters: hostState.terminalWaiters.size,
+      hostGovernance: hostState.turnGovernanceProfiles.size,
+      hostTurnScoped: hostState.turnWorkspaces.size + hostState.traceCaptureTasks.size,
+      lifecycleSubscribers: hostState.turnLifecycleSubscribers.size
+    }
+
+    for (let index = 0; index < 20; index += 1) {
+      const pending = execution.runEphemeral({
+        prompt: `one shot ${index}`,
+        workspaceRoot: '/tmp/workspace',
+        interaction: 'background',
+        mode: 'agent',
+        allowedTools: ['sciforge_discover']
+      })
+      await vi.waitFor(() => expect(queued.client.startTurn).toHaveBeenCalledTimes(index + 1))
+      const threadId = `one-shot-thread-${index + 1}`
+      const turnId = `one-shot-turn-${index + 1}`
+      queued.push({
+        type: 'event',
+        channel: CODEX_MAIN_IPC_CHANNELS.event,
+        payload: {
+          method: 'item/agentMessage/delta',
+          params: { threadId, turnId, delta: `done ${index}` }
+        }
+      })
+      queued.push({
+        type: 'event',
+        channel: CODEX_MAIN_IPC_CHANNELS.event,
+        payload: { method: 'turn/completed', params: { threadId, turnId } }
+      })
+      await expect(pending).resolves.toMatchObject({ text: `done ${index}` })
+    }
+
+    await expect(serviceState.threadStore.list({ includeArchived: true })).resolves.toEqual([])
+    expect(serviceState.ephemeralOwnership.snapshot()).toEqual({
+      roots: 0,
+      threads: 0,
+      pendingCreations: 0,
+      backgroundTasks: 0
+    })
+    expect({
+      subscribers: serviceState.eventSubscribers.size,
+      allowedTools: serviceState.allowedToolsByThread.size,
+      activeTurns: serviceState.activeTurns.size,
+      activeSubagents: serviceState.activeSubagents.size,
+      timers: serviceState.firstActivityTimers.size + serviceState.pendingToolBarrierTimers.size,
+      governance: serviceState.governanceBindingsByTurn.size,
+      turnScoped: serviceState.turnTimings.size + serviceState.turnModelHints.size +
+        serviceState.pendingTurnRecoveries.size + serviceState.modelDeltaDedupeByTurn.size,
+      hostTurns: hostState.activeThreadTurns.size,
+      waiters: hostState.terminalWaiters.size,
+      hostGovernance: hostState.turnGovernanceProfiles.size,
+      hostTurnScoped: hostState.turnWorkspaces.size + hostState.traceCaptureTasks.size,
+      lifecycleSubscribers: hostState.turnLifecycleSubscribers.size
+    }).toEqual(baseline)
+    host.dispose()
+  }, 20_000)
+
   it('creates ephemeral app-server threads and truly deletes all local thread state', async () => {
     const storageRoot = await tempRoot()
     const client = controllableClient()
@@ -401,8 +521,7 @@ describe('CodexRuntimeService storage fallback', () => {
       workspace: '/tmp/workspace',
       allowedTools: ['sciforge_discover']
     })
-    expect(started.ok).toBe(true)
-    if (!started.ok) return
+    if (!started.ok) throw new Error(started.message)
     const storedEvents = await service.readStoredEvents(started.thread.id)
     expect(storedEvents).not.toEqual([])
     const iterator = service.subscribeEvents(
@@ -414,7 +533,7 @@ describe('CodexRuntimeService storage fallback', () => {
       expect((service as unknown as { eventSubscribers: Set<unknown> }).eventSubscribers.size).toBe(1)
     })
 
-    await expect(service.deleteThread(started.thread.id)).resolves.toEqual({ ok: true })
+    await expect(service.reclaimEphemeralThread(started.thread.id)).resolves.toEqual({ ok: true })
     await expect(pending).resolves.toEqual({ done: true, value: undefined })
     expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({ ephemeral: true }))
     expect(client.deleteThread).toHaveBeenCalledWith({ threadId: 'thread-1' })
@@ -422,6 +541,69 @@ describe('CodexRuntimeService storage fallback', () => {
     await expect(service.readStoredEvents(started.thread.id)).resolves.toEqual([])
     expect((service as unknown as { allowedToolsByThread: Map<string, unknown> }).allowedToolsByThread.size).toBe(0)
     expect((service as unknown as { eventSubscribers: Set<unknown> }).eventSubscribers.size).toBe(0)
+  })
+
+  it('keeps public persistent delete compatible with archive semantics', async () => {
+    const storageRoot = await tempRoot()
+    const client = controllableClient()
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot,
+      createClient: () => client
+    })
+    const started = await service.startThread({ workspace: '/tmp/workspace' })
+    if (!started.ok) throw new Error(started.message)
+
+    await expect(service.deleteThread(started.thread.id)).resolves.toEqual({ ok: true })
+
+    expect(client.deleteThread).not.toHaveBeenCalled()
+    await expect(new CodexThreadStore({ rootDir: storageRoot }).get(started.thread.id))
+      .resolves.toMatchObject({ archived: true })
+  })
+
+  it('fails closed when persistent state calls ephemeral reclamation', async () => {
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await tempRoot(),
+      createClient: () => controllableClient()
+    })
+    const started = await service.startThread({ workspace: '/tmp/workspace' })
+    if (!started.ok) throw new Error(started.message)
+
+    const result = await service.reclaimEphemeralThread(started.thread.id)
+
+    expect(result).toMatchObject({ ok: false })
+    if (result.ok) return
+    expect(result.message).toContain('not a runtime-owned ephemeral root')
+  })
+
+  it('exposes child cleanup failure without skipping root reclamation', async () => {
+    const client = controllableClient()
+    vi.mocked(client.deleteThread)
+      .mockRejectedValueOnce(new Error('child delete failed'))
+      .mockResolvedValueOnce({})
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await tempRoot(),
+      createClient: () => client
+    })
+    const started = await service.startThread({ ephemeral: true, workspace: '/tmp/workspace' })
+    if (!started.ok) throw new Error(started.message)
+    const ownership = (service as unknown as {
+      ephemeralOwnership: EphemeralThreadOwnershipRegistry
+    }).ephemeralOwnership
+    const child = ownership.beginChildCreation(started.thread.id)
+    child?.register('owned-child-with-cleanup-failure')
+    child?.settle()
+
+    const reclaimed = await service.reclaimEphemeralThread(started.thread.id)
+
+    expect(reclaimed).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('Could not reclaim ephemeral Codex thread')
+    })
+    expect(client.deleteThread).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(client.deleteThread).mock.calls[1]?.[0]).toEqual({ threadId: 'thread-1' })
   })
 
   it('lists stored Codex threads when app-server list is unavailable', async () => {
@@ -2822,6 +3004,95 @@ describe('CodexRuntimeService compatibility operations', () => {
       })
     ).resolves.toMatchObject({ state: 'missing' })
     queued.close()
+  })
+
+  it('reclaims a running Codex child before its ephemeral root', async () => {
+    const queued = clientWithQueuedEvents()
+    vi.mocked(queued.client.startThread)
+      .mockResolvedValueOnce({ thread: { id: 'owned-parent-backend' } })
+      .mockResolvedValueOnce({ thread: { id: 'owned-child-backend' } })
+    vi.mocked(queued.client.startTurn)
+      .mockResolvedValueOnce({ turn: { id: 'owned-parent-turn' } })
+      .mockResolvedValueOnce({ turn: { id: 'owned-child-turn' } })
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await tempRoot(),
+      createClient: () => queued.client
+    })
+    const parent = await service.startThread({
+      ephemeral: true,
+      threadId: 'owned-parent',
+      workspace: '/tmp/workspace'
+    })
+    if (!parent.ok) throw new Error(parent.message)
+    await service.startTurn({ threadId: parent.thread.id, text: 'delegate' })
+    const spawned = vi.fn(async () => undefined)
+    const completion = service.spawnSubagent({
+      childId: 'owned-child',
+      parentThreadId: parent.thread.id,
+      parentTurnId: 'owned-parent-turn',
+      prompt: 'continue until cancelled',
+      signal: new AbortController().signal,
+      appendTranscript: vi.fn(async () => undefined),
+      onSpawned: spawned
+    })
+    await vi.waitFor(() => expect(spawned).toHaveBeenCalled())
+
+    await expect(service.reclaimEphemeralThread(parent.thread.id)).resolves.toEqual({ ok: true })
+    await expect(completion).resolves.toMatchObject({ threadRef: { threadId: expect.any(String) } })
+
+    expect(queued.client.interruptTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: 'owned-child-backend', turnId: 'owned-child-turn' }),
+      undefined
+    )
+    expect(vi.mocked(queued.client.deleteThread).mock.calls.map(([input]) => input.threadId))
+      .toEqual(['owned-child-backend', 'owned-parent-backend'])
+  })
+
+  it('retains a completed Codex child until its ephemeral root is reclaimed', async () => {
+    const queued = clientWithQueuedEvents()
+    vi.mocked(queued.client.startThread)
+      .mockResolvedValueOnce({ thread: { id: 'completed-parent-backend' } })
+      .mockResolvedValueOnce({ thread: { id: 'completed-child-backend' } })
+    vi.mocked(queued.client.startTurn)
+      .mockResolvedValueOnce({ turn: { id: 'completed-parent-turn' } })
+      .mockResolvedValueOnce({ turn: { id: 'completed-child-turn' } })
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await tempRoot(),
+      createClient: () => queued.client
+    })
+    const parent = await service.startThread({
+      ephemeral: true,
+      threadId: 'completed-parent',
+      workspace: '/tmp/workspace'
+    })
+    if (!parent.ok) throw new Error(parent.message)
+    await service.startTurn({ threadId: parent.thread.id, text: 'delegate' })
+    const spawned = vi.fn(async () => undefined)
+    const completion = service.spawnSubagent({
+      childId: 'completed-child',
+      parentThreadId: parent.thread.id,
+      parentTurnId: 'completed-parent-turn',
+      prompt: 'finish',
+      signal: new AbortController().signal,
+      appendTranscript: vi.fn(async () => undefined),
+      onSpawned: spawned
+    })
+    await vi.waitFor(() => expect(spawned).toHaveBeenCalled())
+    queued.push({
+      type: 'event',
+      channel: CODEX_MAIN_IPC_CHANNELS.event,
+      payload: {
+        method: 'turn/completed',
+        params: { threadId: 'completed-child-backend', turnId: 'completed-child-turn' }
+      }
+    })
+    await completion
+
+    await expect(service.reclaimEphemeralThread(parent.thread.id)).resolves.toEqual({ ok: true })
+    expect(vi.mocked(queued.client.deleteThread).mock.calls.map(([input]) => input.threadId))
+      .toEqual(['completed-child-backend', 'completed-parent-backend'])
   })
 
   it('forces Codex thread starts through the managed Model Router provider', async () => {

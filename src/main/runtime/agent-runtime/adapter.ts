@@ -278,6 +278,10 @@ export type AgentRuntimeAdapter = {
     context: AgentRuntimeAdapterContext,
     input: AgentRuntimeThreadDeleteInput
   ): Promise<void>
+  reclaimEphemeralThread?(
+    context: AgentRuntimeAdapterContext,
+    input: AgentRuntimeThreadDeleteInput
+  ): Promise<void>
   subscribeEvents(
     context: AgentRuntimeAdapterContext,
     input: AgentRuntimeEventSubscribeInput

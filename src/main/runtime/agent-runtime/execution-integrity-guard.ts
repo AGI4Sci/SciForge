@@ -93,6 +93,12 @@ export class RuntimeExecutionIntegrityGuard {
   private readonly states = new Map<string, ExecutionIntegrityState>()
   private readonly violated = new Map<string, ExecutionIntegrityViolation>()
 
+  deleteThread(runtimeId: AgentRuntimeId, threadId: string): void {
+    const prefix = `${runtimeId}:${threadId.trim()}:`
+    for (const key of this.states.keys()) if (key.startsWith(prefix)) this.states.delete(key)
+    for (const key of this.violated.keys()) if (key.startsWith(prefix)) this.violated.delete(key)
+  }
+
   rememberTurn(runtimeId: AgentRuntimeId, input: AgentRuntimeTurnStartInput, threadId: string, turnId: string): void {
     const key = executionKey(runtimeId, threadId, turnId)
     if (!key) return

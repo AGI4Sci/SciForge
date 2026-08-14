@@ -42,6 +42,11 @@ const MAX_HYGIENE_REPLAY_RECOVERY_ATTEMPTS = 2
 export class RuntimeGovernanceSupervisor {
   private readonly states = new Map<string, GovernanceState>()
 
+  deleteThread(runtimeId: string, threadId: string): void {
+    const prefix = `${runtimeId}:${threadId.trim()}:`
+    for (const key of this.states.keys()) if (key.startsWith(prefix)) this.states.delete(key)
+  }
+
   observe(
     event: AgentRuntimeEvent,
     capabilities: AgentRuntimeCapabilities,

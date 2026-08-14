@@ -179,6 +179,11 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
       if (!result.ok) throw codexFailure(result)
     },
 
+    async reclaimEphemeralThread(_context, input) {
+      const result = await service.reclaimEphemeralThread(input.threadId)
+      if (!result.ok) throw codexFailure(result)
+    },
+
     async *subscribeEvents(_context, input) {
       for await (const event of service.subscribeEvents(
         input.threadId,

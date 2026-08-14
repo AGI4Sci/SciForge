@@ -1349,6 +1349,45 @@ export class AgentRuntimeHost {
     }))).catch(() => undefined)
   }
 
+  async reclaimEphemeralThread(input: AgentRuntimeThreadDeleteInput): Promise<void> {
+    const { adapter, context } = await this.resolveRequiredRuntime(
+      input.runtimeId,
+      input.threadId,
+      input.workspaceLocator
+    )
+    if (!adapter.reclaimEphemeralThread) {
+      throw new Error(`AgentRuntimeAdapter ${adapter.id} does not support ephemeral reclamation.`)
+    }
+    await adapter.reclaimEphemeralThread(context, input)
+    await this.clearEphemeralHostState(adapter.id, input.threadId)
+    this.threadWorkspaceHosts.delete(threadTurnKey(adapter.id, input.threadId))
+    this.threadSummaries.delete(threadTurnKey(adapter.id, input.threadId))
+    await Promise.resolve(this.options.services?.visibleContext?.releaseSurface?.(capabilityAgentCallerId({
+      runtimeId: adapter.id,
+      threadId: input.threadId,
+      requestId: input.threadId
+    }))).catch(() => undefined)
+  }
+
+  private async clearEphemeralHostState(runtimeId: AgentRuntimeId, threadId: string): Promise<void> {
+    const threadKey = threadTurnKey(runtimeId, threadId)
+    this.clearActiveThreadTurn(threadKey)
+    const turnPrefix = `${runtimeId}:${threadId.trim()}:`
+    const traceTasks: Promise<void>[] = []
+    for (const [key, task] of this.traceCaptureTasks) {
+      if (key.startsWith(turnPrefix)) traceTasks.push(task)
+    }
+    await Promise.all(traceTasks)
+    for (const key of this.turnGovernanceProfiles.keys()) {
+      if (key.startsWith(turnPrefix)) this.turnGovernanceProfiles.delete(key)
+    }
+    for (const key of this.turnWorkspaces.keys()) {
+      if (key.startsWith(turnPrefix)) this.turnWorkspaces.delete(key)
+    }
+    this.governance.deleteThread(runtimeId, threadId)
+    this.executionIntegrity.deleteThread(runtimeId, threadId)
+  }
+
   async *subscribeEvents(input: AgentRuntimeEventSubscribeInput): AsyncIterable<AgentRuntimeEvent> {
     const { adapter, context } = await this.resolveRequiredRuntime(
       input.runtimeId,

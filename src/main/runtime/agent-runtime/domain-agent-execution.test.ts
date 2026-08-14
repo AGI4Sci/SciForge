@@ -9,7 +9,7 @@ type ExecutionRuntimeHost = Pick<
   | 'startThread'
   | 'startTurn'
   | 'interruptTurn'
-  | 'deleteThread'
+  | 'reclaimEphemeralThread'
   | 'readThreadStatus'
   | 'readThreadPage'
   | 'subscribeTurnLifecycle'
@@ -18,6 +18,7 @@ type ExecutionRuntimeHost = Pick<
 function createHarness(options: Readonly<{
   terminalState?: 'completed' | 'failed' | 'cancelled' | null
   deleteError?: Error
+  interruptError?: Error
   unsubscribeError?: Error
 }> = {}) {
   const listeners = new Set<(event: DomainMainTurnLifecycleEvent) => void | Promise<void>>()
@@ -52,9 +53,10 @@ function createHarness(options: Readonly<{
     return { threadId: input.threadId, turnId }
   })
   const interruptTurn = vi.fn(async (input) => {
+    if (options.interruptError) throw options.interruptError
     activeTurns.delete(input.turnId)
   })
-  const deleteThread = vi.fn(async (input) => {
+  const reclaimEphemeralThread = vi.fn(async (input) => {
     if (options.deleteError) throw options.deleteError
     activeThreads.delete(input.threadId)
   })
@@ -62,7 +64,7 @@ function createHarness(options: Readonly<{
     startThread,
     startTurn,
     interruptTurn,
-    deleteThread,
+    reclaimEphemeralThread,
     readThreadStatus: vi.fn(async (input) => ({
       id: input.threadId,
       runtimeId: input.runtimeId,
@@ -103,7 +105,7 @@ function createHarness(options: Readonly<{
     listeners,
     startThread,
     interruptTurn,
-    deleteThread
+    reclaimEphemeralThread
   }
 }
 
@@ -123,7 +125,7 @@ describe('createDomainAgentExecutionHost', () => {
       text: 'done'
     })
     expect(harness.startThread).toHaveBeenCalledWith(expect.objectContaining({ ephemeral: false }))
-    expect(harness.deleteThread).not.toHaveBeenCalled()
+    expect(harness.reclaimEphemeralThread).not.toHaveBeenCalled()
     expect(harness.listeners.size).toBe(0)
   })
 
@@ -136,7 +138,7 @@ describe('createDomainAgentExecutionHost', () => {
     })
     expect(harness.startThread).toHaveBeenCalledWith(expect.objectContaining({ ephemeral: true }))
     expect(harness.interruptTurn).not.toHaveBeenCalled()
-    expect(harness.deleteThread).toHaveBeenCalledWith({ runtimeId: 'codex', threadId: 'thread-1' })
+    expect(harness.reclaimEphemeralThread).toHaveBeenCalledWith({ runtimeId: 'codex', threadId: 'thread-1' })
     expect(harness.activeThreads.size).toBe(0)
     expect(harness.activeTurns.size).toBe(0)
     expect(harness.listeners.size).toBe(0)
@@ -146,7 +148,7 @@ describe('createDomainAgentExecutionHost', () => {
     const harness = createHarness({ terminalState: 'failed' })
 
     await expect(harness.execution.runEphemeral(request)).rejects.toThrow('Agent execution failed.')
-    expect(harness.deleteThread).toHaveBeenCalledTimes(1)
+    expect(harness.reclaimEphemeralThread).toHaveBeenCalledTimes(1)
     expect(harness.activeThreads.size).toBe(0)
     expect(harness.listeners.size).toBe(0)
   })
@@ -162,7 +164,7 @@ describe('createDomainAgentExecutionHost', () => {
     await expect(execution).rejects.toThrow('stop requested')
     expect(harness.interruptTurn).toHaveBeenCalledWith(expect.objectContaining({ discard: true }))
     expect(harness.interruptTurn.mock.invocationCallOrder[0]).toBeLessThan(
-      harness.deleteThread.mock.invocationCallOrder[0]
+      harness.reclaimEphemeralThread.mock.invocationCallOrder[0]
     )
     expect(harness.activeThreads.size).toBe(0)
     expect(harness.activeTurns.size).toBe(0)
@@ -177,7 +179,7 @@ describe('createDomainAgentExecutionHost', () => {
 
     expect(error).toMatchObject({ name: 'TimeoutError' })
     expect(harness.interruptTurn).toHaveBeenCalledTimes(1)
-    expect(harness.deleteThread).toHaveBeenCalledTimes(1)
+    expect(harness.reclaimEphemeralThread).toHaveBeenCalledTimes(1)
     expect(harness.activeThreads.size).toBe(0)
     expect(harness.activeTurns.size).toBe(0)
     expect(harness.listeners.size).toBe(0)
@@ -218,6 +220,51 @@ describe('createDomainAgentExecutionHost', () => {
       expect(harness.activeTurns.size).toBe(0)
       expect(harness.listeners.size).toBe(0)
     }
-    expect(harness.deleteThread).toHaveBeenCalledTimes(20)
+    expect(harness.reclaimEphemeralThread).toHaveBeenCalledTimes(20)
+  })
+
+  it('awaits persistent abort interruption without reclaiming the thread', async () => {
+    const harness = createHarness({ terminalState: null })
+    const controller = new AbortController()
+    const execution = harness.execution.run({ ...request, signal: controller.signal })
+    await vi.waitFor(() => expect(harness.activeTurns.size).toBe(1))
+
+    controller.abort(new Error('persistent stop'))
+
+    await expect(execution).rejects.toThrow('persistent stop')
+    expect(harness.interruptTurn).toHaveBeenCalledWith(expect.objectContaining({ discard: false }))
+    expect(harness.reclaimEphemeralThread).not.toHaveBeenCalled()
+    expect(harness.activeThreads).toEqual(new Set(['thread-1']))
+  })
+
+  it('awaits persistent timeout interruption without reclaiming the thread', async () => {
+    const harness = createHarness({ terminalState: null })
+
+    const error = await harness.execution.run({ ...request, signal: AbortSignal.timeout(10) })
+      .catch((caught) => caught)
+
+    expect(error).toMatchObject({ name: 'TimeoutError' })
+    expect(harness.interruptTurn).toHaveBeenCalledWith(expect.objectContaining({ discard: false }))
+    expect(harness.reclaimEphemeralThread).not.toHaveBeenCalled()
+    expect(harness.activeThreads).toEqual(new Set(['thread-1']))
+  })
+
+  it('keeps the persistent business error first when awaited interrupt also fails', async () => {
+    const harness = createHarness({
+      terminalState: null,
+      interruptError: new Error('interrupt failed')
+    })
+    const controller = new AbortController()
+    const execution = harness.execution.run({ ...request, signal: controller.signal })
+    await vi.waitFor(() => expect(harness.activeTurns.size).toBe(1))
+    controller.abort(new Error('persistent stop'))
+
+    const error = await execution.catch((caught) => caught)
+    expect(error).toBeInstanceOf(AggregateError)
+    expect(error.cause).toMatchObject({ message: 'persistent stop' })
+    expect(error.errors).toEqual([
+      expect.objectContaining({ message: 'persistent stop' }),
+      expect.objectContaining({ message: 'interrupt failed' })
+    ])
   })
 })

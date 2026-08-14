@@ -288,6 +288,7 @@ export function createWorkspaceHostAgentRuntimeAdapter(
       await invoke(context, WORKSPACE_HOST_AGENT_RUNTIME_METHODS.deleteThread, input)
     },
 
+
     async *subscribeEvents(context, input) {
       const client = await resolvePort(context)
       ensureRuntimeCapability(client)
@@ -471,7 +472,12 @@ export function createPlacementAwareAgentRuntimeAdapter(
     connect: (context) => selected(context).connect(context),
     capabilities: (context) => selected(context).capabilities(context),
     listThreads: (context, input) => selected(context).listThreads(context, input),
-    startThread: (context, input) => selected(context).startThread(context, input),
+    startThread: async (context, input) => {
+      if (context.workspaceHost && input.ephemeral === true) {
+        throw new Error('Remote Workspace Host ephemeral ownership is not available in contract v1.')
+      }
+      return selected(context).startThread(context, input)
+    },
     readThreadStatus: (context, input) => selected(context).readThreadStatus(context, input),
     readThreadPage: (context, input) => selected(context).readThreadPage(context, input),
     readToolArtifact: (context, input) => selected(context).readToolArtifact(context, input),
@@ -480,6 +486,16 @@ export function createPlacementAwareAgentRuntimeAdapter(
     steerTurn: (context, input) => selected(context).steerTurn(context, input),
     renameThread: (context, input) => selected(context).renameThread(context, input),
     deleteThread: (context, input) => selected(context).deleteThread(context, input),
+    ...(local.reclaimEphemeralThread
+      ? {
+          reclaimEphemeralThread: (context, input) => {
+            if (context.workspaceHost) {
+              throw new Error('Remote Workspace Host ephemeral reclamation is not available in contract v1.')
+            }
+            return local.reclaimEphemeralThread!(context, input)
+          }
+        }
+      : {}),
     subscribeEvents: (context, input) => selected(context).subscribeEvents(context, input),
     usage: (context, input) => selected(context).usage(context, input),
     ...(local.publishSyntheticEvent && workspaceHost.publishSyntheticEvent

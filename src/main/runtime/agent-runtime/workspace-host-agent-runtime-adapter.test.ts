@@ -308,6 +308,16 @@ describe('createWorkspaceHostAgentRuntimeAdapter', () => {
     }, input)).resolves.toMatchObject({
       turnId: 'remote-turn'
     })
+    await expect(placed.startThread({
+      settings: {} as never,
+      workspaceHost: {
+        locator: session().locator,
+        session: session()
+      }
+    }, {
+      runtimeId: 'codex',
+      ephemeral: true
+    })).rejects.toThrow('not available in contract v1')
 
     expect(placed.id).toBe('codex')
     expect(localStartTurn).toHaveBeenCalledTimes(1)
@@ -317,6 +327,11 @@ describe('createWorkspaceHostAgentRuntimeAdapter', () => {
         runtimeId: 'codex',
         method: WORKSPACE_HOST_AGENT_RUNTIME_METHODS.startTurn
       }),
+      expect.any(Object)
+    )
+    expect(remote.request).not.toHaveBeenCalledWith(
+      WORKSPACE_HOST_OPERATIONS.runtimeInvoke,
+      expect.objectContaining({ method: WORKSPACE_HOST_AGENT_RUNTIME_METHODS.startThread }),
       expect.any(Object)
     )
   })

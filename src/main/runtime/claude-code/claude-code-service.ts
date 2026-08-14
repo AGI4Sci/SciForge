@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { EphemeralThreadOwnershipRegistry } from '../agent-runtime/ephemeral-thread-ownership'
 import {
   ExecutionGovernorCore,
   createExecutionReceipt
@@ -135,6 +136,7 @@ type ActiveClaudeTurn = {
   abortController: AbortController
   query: ClaudeAgentSdkQuery
   assistantItemId: string
+  settled: Promise<void>
   inputStream?: ClaudeStreamingInput
 }
 
@@ -257,6 +259,7 @@ export class ClaudeCodeRuntimeService {
   private readonly childState = new Map<string, AgentRuntimeChild>()
   private readonly childStateInitializers = new Map<string, Promise<void>>()
   private readonly activeSubagents = new Map<string, ActiveClaudeSubagent>()
+  private readonly ephemeralOwnership = new EphemeralThreadOwnershipRegistry()
 
   constructor(private readonly options: ClaudeCodeRuntimeServiceOptions) {
     this.sdk = options.claudeAgentSdk ?? { query: claudeAgentSdkQuery }
@@ -305,6 +308,7 @@ export class ClaudeCodeRuntimeService {
 
   async startThread(payload: {
     ephemeral?: boolean
+    ephemeralParentThreadId?: string
     threadId?: string
     workspace?: string
     title?: string
@@ -327,6 +331,9 @@ export class ClaudeCodeRuntimeService {
         state: 'created',
         thread: storedThreadToRuntimeThread(thread)
       })
+      if (payload.ephemeral === true && !payload.ephemeralParentThreadId) {
+        this.ephemeralOwnership.registerRoot(thread.guiThreadId)
+      }
       return { ok: true, thread: storedThreadToRuntimeThread(thread) }
     } catch (error) {
       return failure(error)
@@ -412,6 +419,7 @@ export class ClaudeCodeRuntimeService {
     requestedUserMessageItemId?: string
   }): Promise<ClaudeCodeTurnStartResult> {
     try {
+      this.ephemeralOwnership.assertAcceptingWork(payload.threadId)
       const settings = await this.options.settings()
       requireClaudeRuntimeSelected(settings)
       const existingThread = await this.threadStore.get(payload.threadId)
@@ -526,15 +534,18 @@ export class ClaudeCodeRuntimeService {
         this.turnGovernanceSnapshots.delete(governanceKey)
         throw error
       }
+      let resolveSettled!: () => void
+      const settled = new Promise<void>((resolve) => { resolveSettled = resolve })
       this.activeTurns.set(payload.threadId, {
         threadId: payload.threadId,
         turnId,
         abortController,
         query,
         assistantItemId,
+        settled,
         ...(inputStream ? { inputStream } : {})
       })
-      void this.runClaudeTurn({
+      const backgroundTask = this.runClaudeTurn({
         query,
         threadId: payload.threadId,
         turnId,
@@ -542,6 +553,8 @@ export class ClaudeCodeRuntimeService {
         startedAtMs: Date.now(),
         fallbackThread: storedThread.guiThreadId
       })
+      void backgroundTask.then(resolveSettled, resolveSettled)
+      this.ephemeralOwnership.trackBackgroundTask(payload.threadId, settled)
       return { ok: true, threadId: payload.threadId, turnId, userMessageItemId }
     } catch (error) {
       return failure(error)
@@ -562,6 +575,7 @@ export class ClaudeCodeRuntimeService {
       await this.completeTurn(threadId, turnId, 'aborted', 'Claude Code turn interrupted.')
       this.activeTurns.delete(threadId)
       this.turnGovernanceSnapshots.delete(turnGovernanceKey(threadId, turnId))
+      await active.settled
       return { ok: true }
     } catch (error) {
       return failure(error)
@@ -593,7 +607,12 @@ export class ClaudeCodeRuntimeService {
   }
 
   async spawnSubagent(input: AgentRuntimeSubagentSpawnInput): Promise<AgentRuntimeSubagentResult> {
+    const childCreation = this.ephemeralOwnership.beginChildCreation(input.parentThreadId)
+    let finishOwnedChild: (() => void) | null = null
+    try {
     const threadResult = await this.startThread({
+      ephemeral: childCreation !== null,
+      ...(childCreation ? { ephemeralParentThreadId: input.parentThreadId } : {}),
       workspace: input.workspace,
       title: input.label || firstLineTitle(input.prompt)
     })
@@ -606,6 +625,16 @@ export class ClaudeCodeRuntimeService {
       streamingInput: true
     })
     if (!turnResult.ok) throw new Error(turnResult.message)
+    childCreation?.register(threadResult.thread.id)
+    const childTurn = this.activeTurns.get(threadResult.thread.id)
+    if (childCreation && childTurn) childCreation.trackBackgroundTask(childTurn.settled)
+    childCreation?.settle()
+    if (childCreation) {
+      let resolveOwnedChild!: () => void
+      const ownedChild = new Promise<void>((resolve) => { resolveOwnedChild = resolve })
+      finishOwnedChild = resolveOwnedChild
+      childCreation.trackBackgroundTask(ownedChild)
+    }
     const active: ActiveClaudeSubagent = {
       childId: input.childId,
       parentThreadId: input.parentThreadId,
@@ -692,7 +721,11 @@ export class ClaudeCodeRuntimeService {
         }
       }
     } finally {
+      finishOwnedChild?.()
       this.activeSubagents.delete(input.childId)
+    }
+    } finally {
+      childCreation?.settle()
     }
   }
 
@@ -752,6 +785,35 @@ export class ClaudeCodeRuntimeService {
   }
 
   async deleteThread(threadId: string): Promise<ClaudeCodeTurnMutationResult> {
+    return this.destroyThread(threadId)
+  }
+
+  async reclaimEphemeralThread(threadId: string): Promise<ClaudeCodeTurnMutationResult> {
+    try {
+      const ownership = await this.ephemeralOwnership.beginReclaim(threadId)
+      const errors: unknown[] = []
+      for (const ownedThreadId of [...ownership.childThreadIds, ownership.rootThreadId]) {
+        const active = this.activeTurns.get(ownedThreadId)
+        if (!active) continue
+        const interrupted = await this.interruptTurn(ownedThreadId, active.turnId)
+        if (!interrupted.ok) errors.push(new Error(interrupted.message))
+      }
+      await Promise.all(ownership.backgroundTasks)
+      for (const ownedThreadId of [...ownership.childThreadIds, ownership.rootThreadId]) {
+        const result = await this.destroyThread(ownedThreadId)
+        if (!result.ok) errors.push(new Error(result.message))
+      }
+      if (errors.length > 0) {
+        return failure(new AggregateError(errors, `Could not reclaim ephemeral Claude thread ${threadId}.`))
+      }
+      this.ephemeralOwnership.completeReclaim(threadId)
+      return { ok: true }
+    } catch (error) {
+      return failure(error)
+    }
+  }
+
+  private async destroyThread(threadId: string): Promise<ClaudeCodeTurnMutationResult> {
     const errors: unknown[] = []
     const active = this.activeTurns.get(threadId)
     if (active) {

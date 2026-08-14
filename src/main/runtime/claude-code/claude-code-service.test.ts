@@ -26,6 +26,10 @@ import {
   ClaudeCodeRuntimeService,
   type ClaudeAgentSdk
 } from './claude-code-service'
+import { createClaudeCodeAgentRuntimeAdapter } from './claude-code-agent-runtime-adapter'
+import { createAgentRuntimeHost } from '../agent-runtime/host'
+import { createDomainAgentExecutionHost } from '../agent-runtime/domain-agent-execution'
+import type { EphemeralThreadOwnershipRegistry } from '../agent-runtime/ephemeral-thread-ownership'
 
 type QueryCall = {
   prompt: string | AsyncIterable<unknown>
@@ -728,6 +732,122 @@ describe('ClaudeCodeRuntimeService', () => {
     }
   })
 
+  it('retains a completed Claude child until its ephemeral root is reclaimed', async () => {
+    const { sdk } = fakeSdk(() => [
+      assistantText('child complete', 'owned-child-session'),
+      result('child complete', 'owned-child-session')
+    ])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const parent = await service.startThread({ ephemeral: true, workspace: '/tmp/workspace' })
+    if (!parent.ok) throw new Error(parent.message)
+    const completion = service.spawnSubagent({
+      childId: 'owned-child',
+      parentThreadId: parent.thread.id,
+      parentTurnId: 'parent-turn',
+      prompt: 'finish',
+      signal: new AbortController().signal,
+      appendTranscript: vi.fn(async () => undefined),
+      onSpawned: vi.fn(async () => undefined)
+    })
+    const child = await completion
+    if (!child.threadRef) throw new Error('Claude child did not return a thread reference.')
+
+    await expect(service.reclaimEphemeralThread(parent.thread.id)).resolves.toEqual({ ok: true })
+    await expect((service as unknown as {
+      threadStore: { get: (threadId: string) => Promise<unknown> }
+    }).threadStore.get(child.threadRef.threadId)).resolves.toBeNull()
+  })
+
+  it('settles a running Claude child before deleting its ephemeral tree', async () => {
+    let closeQuery!: () => void
+    const sdk: ClaudeAgentSdk = {
+      query: vi.fn(() => {
+        let closed = false
+        let wake!: () => void
+        const closedPromise = new Promise<void>((resolve) => { wake = resolve })
+        closeQuery = () => {
+          closed = true
+          wake()
+        }
+        return {
+          close: closeQuery,
+          async *[Symbol.asyncIterator]() {
+            await closedPromise
+            if (!closed) yield result('late result', 'late-session')
+          }
+        } as unknown as ClaudeAgentSdkQuery
+      })
+    }
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const parent = await service.startThread({ ephemeral: true, workspace: '/tmp/workspace' })
+    if (!parent.ok) throw new Error(parent.message)
+    const spawned = vi.fn(async () => undefined)
+    const completion = service.spawnSubagent({
+      childId: 'running-child',
+      parentThreadId: parent.thread.id,
+      parentTurnId: 'parent-turn',
+      prompt: 'wait',
+      signal: new AbortController().signal,
+      appendTranscript: vi.fn(async () => undefined),
+      onSpawned: spawned
+    })
+    const completionResult = completion.catch((error) => error)
+    await vi.waitFor(() => expect(spawned).toHaveBeenCalled())
+
+    await expect(service.reclaimEphemeralThread(parent.thread.id)).resolves.toEqual({ ok: true })
+    await expect(completionResult).resolves.toMatchObject({
+      name: 'AbortError',
+      message: 'Claude Code turn interrupted.'
+    })
+    expect(closeQuery).toEqual(expect.any(Function))
+    expect((service as unknown as { activeTurns: Map<string, unknown> }).activeTurns.size).toBe(0)
+    expect((service as unknown as { activeSubagents: Map<string, unknown> }).activeSubagents.size).toBe(0)
+  })
+
+  it('waits a late Claude background write before deleting ephemeral stores', async () => {
+    let release!: () => void
+    const messages = new Promise<SDKMessage[]>((resolve) => {
+      release = () => resolve([
+        assistantText('late write', 'late-root-session'),
+        result('late write', 'late-root-session')
+      ])
+    })
+    const { sdk } = fakeSdk(() => messages)
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const started = await service.startThread({ ephemeral: true, workspace: '/tmp/workspace' })
+    if (!started.ok) throw new Error(started.message)
+    const turn = await service.startTurn({ threadId: started.thread.id, text: 'wait' })
+    if (!turn.ok) throw new Error(turn.message)
+    let reclaimed = false
+    const reclaiming = service.reclaimEphemeralThread(started.thread.id).then((value) => {
+      reclaimed = true
+      return value
+    })
+    await Promise.resolve()
+    expect(reclaimed).toBe(false)
+
+    release()
+    await expect(reclaiming).resolves.toEqual({ ok: true })
+    await expect((service as unknown as {
+      threadStore: { get: (threadId: string) => Promise<unknown> }
+    }).threadStore.get(started.thread.id)).resolves.toBeNull()
+    await expect((service as unknown as {
+      eventStore: { read: (threadId: string) => Promise<unknown[]> }
+    }).eventStore.read(started.thread.id)).resolves.toEqual([])
+  })
+
   it('deletes one-shot thread records, events, and live subscribers', async () => {
     const { sdk } = fakeSdk(() => [])
     const storageRoot = await serviceRoot()
@@ -750,7 +870,7 @@ describe('ClaudeCodeRuntimeService', () => {
       expect((service as unknown as { eventSubscribers: Set<unknown> }).eventSubscribers.size).toBe(1)
     })
 
-    await expect(service.deleteThread(threadId)).resolves.toEqual({ ok: true })
+    await expect(service.reclaimEphemeralThread(threadId)).resolves.toEqual({ ok: true })
     await expect(pending).resolves.toEqual({ done: true, value: undefined })
     await expect((service as unknown as {
       threadStore: { get: (id: string) => Promise<unknown> }
@@ -760,6 +880,107 @@ describe('ClaudeCodeRuntimeService', () => {
     }).eventStore.read(threadId)).resolves.toEqual([])
     expect((service as unknown as { eventSubscribers: Set<unknown> }).eventSubscribers.size).toBe(0)
   })
+
+  it('fails closed when a persistent Claude thread calls ephemeral reclamation', async () => {
+    const { sdk } = fakeSdk(() => [])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const started = await service.startThread({ workspace: '/tmp/workspace' })
+    if (!started.ok) throw new Error(started.message)
+
+    const reclaimed = await service.reclaimEphemeralThread(started.thread.id)
+
+    expect(reclaimed).toMatchObject({ ok: false })
+    if (reclaimed.ok) return
+    expect(reclaimed.message).toContain('not a runtime-owned ephemeral root')
+  })
+
+  it('returns all Claude service and Host resources to baseline across 20 full one-shot runs', async () => {
+    let sequence = 0
+    const { sdk } = fakeSdk(() => {
+      const current = ++sequence
+      return [assistantText(`done ${current}`, `session-${current}`), result(`done ${current}`, `session-${current}`)]
+    })
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings(),
+      adapters: [createClaudeCodeAgentRuntimeAdapter(service)]
+    })
+    const execution = createDomainAgentExecutionHost({
+      agentRuntimeHost: host,
+      resolveRuntimeId: async () => 'claude' as const,
+      pollIntervalMs: 2
+    })
+    const serviceState = service as unknown as {
+      threadStore: { list: (options: { includeArchived: boolean }) => Promise<unknown[]> }
+      eventSubscribers: Set<unknown>
+      activeTurns: Map<string, unknown>
+      activeSubagents: Map<string, unknown>
+      childState: Map<string, unknown>
+      childStateInitializers: Map<string, unknown>
+      turnGovernanceSnapshots: Map<string, unknown>
+      ephemeralOwnership: EphemeralThreadOwnershipRegistry
+    }
+    const hostState = host as unknown as {
+      activeThreadTurns: Map<string, unknown>
+      terminalWaiters: Map<string, unknown>
+      turnGovernanceProfiles: Map<string, unknown>
+      turnWorkspaces: Map<string, unknown>
+      turnLifecycleSubscribers: Set<unknown>
+      traceCaptureTasks: Map<string, unknown>
+    }
+    const baseline = {
+      subscribers: serviceState.eventSubscribers.size,
+      activeTurns: serviceState.activeTurns.size,
+      activeSubagents: serviceState.activeSubagents.size,
+      childState: serviceState.childState.size,
+      childInitializers: serviceState.childStateInitializers.size,
+      governance: serviceState.turnGovernanceSnapshots.size,
+      hostTurns: hostState.activeThreadTurns.size,
+      waiters: hostState.terminalWaiters.size,
+      hostGovernance: hostState.turnGovernanceProfiles.size,
+      hostTurnScoped: hostState.turnWorkspaces.size + hostState.traceCaptureTasks.size,
+      lifecycleSubscribers: hostState.turnLifecycleSubscribers.size
+    }
+
+    for (let index = 0; index < 20; index += 1) {
+      await expect(execution.runEphemeral({
+        prompt: `one shot ${index}`,
+        workspaceRoot: '/tmp/workspace',
+        interaction: 'background',
+        mode: 'agent'
+      })).resolves.toMatchObject({ text: `done ${index + 1}` })
+    }
+
+    await expect(serviceState.threadStore.list({ includeArchived: true })).resolves.toEqual([])
+    expect(serviceState.ephemeralOwnership.snapshot()).toEqual({
+      roots: 0,
+      threads: 0,
+      pendingCreations: 0,
+      backgroundTasks: 0
+    })
+    expect({
+      subscribers: serviceState.eventSubscribers.size,
+      activeTurns: serviceState.activeTurns.size,
+      activeSubagents: serviceState.activeSubagents.size,
+      childState: serviceState.childState.size,
+      childInitializers: serviceState.childStateInitializers.size,
+      governance: serviceState.turnGovernanceSnapshots.size,
+      hostTurns: hostState.activeThreadTurns.size,
+      waiters: hostState.terminalWaiters.size,
+      hostGovernance: hostState.turnGovernanceProfiles.size,
+      hostTurnScoped: hostState.turnWorkspaces.size + hostState.traceCaptureTasks.size,
+      lifecycleSubscribers: hostState.turnLifecycleSubscribers.size
+    }).toEqual(baseline)
+    host.dispose()
+  }, 20_000)
 
 
   it('subscribes before replaying stored events and de-duplicates queued live echoes', async () => {
