@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Background,
@@ -13,7 +13,19 @@ import {
   type EdgeChange,
   type NodeChange
 } from '@xyflow/react'
-import { ArrowLeft, Database, History, Loader2, Play, Plus, RefreshCw, Save, Square } from 'lucide-react'
+import {
+  ArrowLeft,
+  Database,
+  History,
+  Loader2,
+  Maximize2,
+  Minimize2,
+  Play,
+  Plus,
+  RefreshCw,
+  Save,
+  Square
+} from 'lucide-react'
 import type {
   WorkflowConnectionV1,
   WorkflowEnvVarV1,
@@ -39,8 +51,13 @@ import {
   type WorkflowNodeActions
 } from './WorkflowNodes'
 import { NodeConfigPanel } from './NodeConfigPanel'
+import { WorkflowNodeRunDetailsPanel } from './WorkflowNodeRunDetailsPanel.js'
 import { WorkflowRunHistory } from './WorkflowRunHistory'
 import { WorkflowRunLogPanel } from './WorkflowRunLogPanel'
+import {
+  fitWorkflowDetailsPanelWidth,
+  WORKFLOW_DETAILS_PANEL_DEFAULT_WIDTH
+} from './workflow-details-panel-size.js'
 import {
   WORKFLOW_PALETTE_GROUPS,
   createWorkflowNode,
@@ -74,13 +91,13 @@ type Props = {
   onBack: () => void
 }
 
-type PanelMode = 'config' | 'run'
+type PanelMode = 'config' | 'node' | 'run'
 type UpstreamNode = { id: string; name: string; type: WorkflowNodeV1['type']; node: WorkflowNodeV1 }
 
 function nextNodePosition(count: number): { x: number; y: number } {
   const column = count % 3
   const row = Math.floor(count / 3)
-  return { x: 120 + column * 260, y: 120 + row * 160 }
+  return { x: 120 + column * 320, y: 120 + row * 160 }
 }
 
 function resultSource(
@@ -141,6 +158,9 @@ function WorkflowEditorInner({
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(workflow.nodes[0]?.id ?? null)
   const [mode, setMode] = useState<PanelMode>('config')
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [inspectorExpanded, setInspectorExpanded] = useState(false)
+  const [inspectorWidth, setInspectorWidth] = useState(WORKFLOW_DETAILS_PANEL_DEFAULT_WIDTH)
+  const inspectorResizeRef = useRef(false)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [resourceActionError, setResourceActionError] = useState('')
@@ -166,13 +186,41 @@ function WorkflowEditorInner({
   )
 
   useEffect(() => {
-    if (running) setMode('run')
+    if (running) setMode('node')
   }, [running])
+
+  useEffect(() => {
+    const completed = Object.values(liveResults)
+      .filter((result) => result.finishedAt)
+      .sort((left, right) => Date.parse(right.finishedAt) - Date.parse(left.finishedAt))[0]
+    if (!completed) return
+    setSelectedNodeId(completed.nodeId)
+    setMode('node')
+  }, [liveResults])
 
   useEffect(() => {
     if (!selectedNodeId || nodes.some((node) => node.id === selectedNodeId)) return
     setSelectedNodeId(nodes[0]?.id ?? null)
   }, [nodes, selectedNodeId])
+
+  useEffect(() => {
+    const onPointerMove = (event: PointerEvent): void => {
+      if (!inspectorResizeRef.current) return
+      setInspectorWidth(fitWorkflowDetailsPanelWidth(
+        window.innerWidth - event.clientX,
+        window.innerWidth
+      ))
+    }
+    const stopResize = (): void => {
+      inspectorResizeRef.current = false
+    }
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', stopResize)
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', stopResize)
+    }
+  }, [])
 
   const markDirty = useCallback(() => setDirty(true), [])
 
@@ -380,7 +428,7 @@ function WorkflowEditorInner({
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="flex w-[196px] shrink-0 flex-col gap-3 overflow-y-auto border-r border-ds-border bg-ds-card/40 p-3">
+        <aside className={`${inspectorExpanded ? 'hidden' : 'flex'} w-[196px] shrink-0 flex-col gap-3 overflow-y-auto border-r border-ds-border bg-ds-card/40 p-3`}>
           <span className="text-[11px] font-semibold uppercase text-ds-faint">{t('workflowPalette')}</span>
           {WORKFLOW_PALETTE_GROUPS.map((group) => (
             <section key={group.id} className="flex flex-col gap-1">
@@ -474,7 +522,7 @@ function WorkflowEditorInner({
           ) : null}
         </aside>
 
-        <main className="relative min-w-0 flex-1">
+        <main className={`${inspectorExpanded ? 'hidden' : 'relative'} min-w-0 flex-1`}>
           <WorkflowRunStatusContext.Provider value={runStatus}>
             <WorkflowNodeActionsContext.Provider value={nodeActions}>
               <ReactFlow
@@ -487,7 +535,7 @@ function WorkflowEditorInner({
                 onConnect={onConnect}
                 onNodeClick={(_, node) => {
                   setSelectedNodeId(node.id)
-                  setMode('config')
+                  setMode('node')
                 }}
                 onPaneClick={() => setSelectedNodeId(null)}
                 fitView
@@ -507,9 +555,27 @@ function WorkflowEditorInner({
           ) : null}
         </main>
 
-        <aside className="flex w-[340px] shrink-0 flex-col overflow-hidden border-l border-ds-border bg-ds-card/40">
+        {!inspectorExpanded ? (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize node inspector"
+            title="Drag to resize node inspector"
+            onPointerDown={(event) => {
+              event.preventDefault()
+              inspectorResizeRef.current = true
+            }}
+            className="group relative z-10 w-1 shrink-0 cursor-col-resize bg-transparent hover:bg-accent/40"
+          >
+            <span className="pointer-events-none absolute inset-y-0 left-0 w-px bg-ds-border transition group-hover:w-1 group-hover:bg-accent" />
+          </div>
+        ) : null}
+        <aside
+          style={inspectorExpanded ? undefined : { width: inspectorWidth }}
+          className={`flex shrink-0 flex-col overflow-hidden border-l border-ds-border bg-ds-card/40 ${inspectorExpanded ? 'w-full border-l-0' : 'min-w-[360px]'}`}
+        >
           <div className="flex h-11 shrink-0 items-end gap-1 border-b border-ds-border px-2">
-            {(['config', 'run'] as const).map((tab) => (
+            {(['config', 'node', 'run'] as const).map((tab) => (
               <button
                 type="button"
                 key={tab}
@@ -518,10 +584,21 @@ function WorkflowEditorInner({
                   mode === tab ? 'text-ds-ink' : 'text-ds-faint hover:text-ds-muted'
                 }`}
               >
-                {tab === 'config' ? t('workflowTabConfig') : t('workflowTabRunLog')}
+                {tab === 'config' ? t('workflowTabConfig') : tab === 'node' ? 'Node' : t('workflowTabRunLog')}
                 {mode === tab ? <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-accent" /> : null}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => setInspectorExpanded((value) => !value)}
+              title={inspectorExpanded ? 'Restore workflow canvas' : 'Expand node inspector'}
+              aria-label={inspectorExpanded ? 'Restore workflow canvas' : 'Expand node inspector'}
+              className="mb-1 ml-auto inline-flex h-8 w-8 items-center justify-center rounded-md text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+            >
+              {inspectorExpanded
+                ? <Minimize2 className="h-4 w-4" strokeWidth={1.8} />
+                : <Maximize2 className="h-4 w-4" strokeWidth={1.8} />}
+            </button>
           </div>
           <div className="min-h-0 flex-1">
             {mode === 'config' ? (
@@ -536,6 +613,15 @@ function WorkflowEditorInner({
                 upstreamNodes={upstreamNodes}
                 workflowId={workflow.id}
                 onBeforeTest={save}
+              />
+            ) : mode === 'node' ? (
+              <WorkflowNodeRunDetailsPanel
+                node={selectedNode}
+                status={selectedNodeId ? runStatus[selectedNodeId] : undefined}
+                result={selectedNodeId ? results[selectedNodeId] ?? null : null}
+                running={running}
+                upstreamNodes={upstreamNodes}
+                onRunNode={(nodeId) => void runNode(nodeId)}
               />
             ) : (
               <WorkflowRunLogPanel nodes={flowToWorkflowGraph(nodes, edges).nodes} results={results} running={running} />
