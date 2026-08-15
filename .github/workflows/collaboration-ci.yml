@@ -14,8 +14,7 @@ on:
       - "package-lock.json"
   push:
     branches:
-      - master
-      - develop
+      - gui
     paths:
       - ".github/workflows/collaboration-ci.yml"
       - "packages/collaboration-*/**"

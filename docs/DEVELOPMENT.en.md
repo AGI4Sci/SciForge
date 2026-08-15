@@ -6,35 +6,35 @@ This document defines how developers should work in this repository, especially 
 
 ## Development Baseline
 
-- `develop` is the active collaboration and daily integration branch
-- `master` is the stable release branch, updated by maintainers from `develop`
-- Routine feature and fix work should start from the latest `develop`
-- Short-lived feature branches are encouraged for non-trivial changes
+- `gui` is the only long-lived branch and the shared source of truth for desktop, cloud, and phone collaboration
+- Start routine feature and fix work from the latest `gui` on a short-lived branch
+- Separate deployment targets by directory and package, not by permanent desktop/cloud/mobile source branches
+- Build, test, tag, and release each target independently from the same exact commit
 
 ## Recommended Workflow
 
 1. Update your local repository.
-2. Switch to `develop`.
-3. Pull the latest changes from `develop`.
-4. Create an optional feature branch from `develop` for your work.
+2. Switch to `gui`.
+3. Pull the latest changes from `gui`.
+4. Create a short-lived feature branch from `gui` for your work.
 5. Implement and validate your changes locally.
-6. Open a PR back into `develop`.
+6. Open a PR back into `gui`.
 7. Merge after review and passing checks.
 
 ## Example Commands
 
-### Sync `develop`
+### Sync `gui`
 
 ```bash
-git checkout develop
-git pull origin develop
+git checkout gui
+git pull --ff-only origin gui
 ```
 
-### Create a feature branch from `develop`
+### Create a feature branch from `gui`
 
 ```bash
-git checkout develop
-git pull origin develop
+git checkout gui
+git pull --ff-only origin gui
 git checkout -b feat/short-description
 ```
 
@@ -48,13 +48,13 @@ git push origin feat/short-description
 
 Default target branch:
 
-- `develop`
+- `gui`
 
 Typical PR path:
 
-1. Develop on a short-lived feature branch created from `develop`
+1. Develop on a short-lived feature branch created from `gui`
 2. Push the branch to the remote
-3. Open a PR into `develop`
+3. Open a PR into `gui`
 4. Address review feedback
 5. Merge after approval and passing checks
 
@@ -127,15 +127,27 @@ Update documentation when changes affect:
 - release behavior
 - contributor workflow
 
+## Multi-target source and release boundaries
+
+Every target integrates at one `gui` commit: `src/` and `packages/domains/collaboration/` are desktop code;
+`packages/collaboration-server/` and `packages/collaboration-provider-zulip/` are cloud deployment code;
+`packages/collaboration-contracts/` is shared protocol. Phones currently use the official Zulip app. A future native
+app should live in its own directory while continuing to integrate through `gui`, not a permanent mobile branch.
+
+Keep artifacts isolated: Electron releases never contain cloud secrets; ECS installs only version-matched contracts,
+provider, and server tarballs; mobile clients use public APIs. Record the target version, Git commit, and contract
+version for every release. Shared-contract changes require `npm run collaboration:test` plus desktop and packed-server
+validation.
+
 ## Merge Guidance
 
-Merge contribution changes into `develop` only after:
+Merge contribution changes into `gui` only after:
 
 - review feedback is addressed
 - checks pass
-- the change is considered stable enough for the daily integration branch
+- the change is considered stable enough for the only integration branch
 
-`master` is reserved for stable releases. After maintainers decide the current `develop` state is ready to publish, they merge `develop` into `master`.
+Do not represent release state with permanent desktop/cloud/mobile branches. Use target-specific tags, GitHub Releases, and immutable artifacts.
 
 ## Suggested Branch Naming
 

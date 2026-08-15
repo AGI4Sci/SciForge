@@ -169,40 +169,76 @@ Host sciforge-hk
 
 ## 5. 发布产物与原子目录
 
-要求 Node.js 22、npm 和 PostgreSQL 客户端。不要在 ECS 上从工作树直接运行 TypeScript。可信构建机
-从干净源码构建三个 package，并把 tarball 作为同一 release 传输：
+### 5.1 唯一源码线与跨端版本记录
+
+仓库采用唯一长期主分支 `gui`。云端协作服务不是专用源码分支；短期功能分支必须先经评审合入
+`gui`，生产不得从功能分支、服务器本地分支、未固定的 branch HEAD、cherry-pick 工作树或任何漂移
+分支部署。
+
+桌面应用与云端服务各自维护版本号、tag 和 release，可以独立发布；但每个 release 都必须记录完整的
+`contractCommit`。兼容的桌面/云端组合中该值必须相同。云端还要记录三个 tarball 的版本与 SHA-256；
+tag 名或版本号相同不能代替 commit 校验。两个端可以用各自的 tag 指向同一获批 commit，不需要创建
+第二条长期分支。
+
+生产构建先批准一个确实位于 `origin/gui` 历史中的完整 commit，切到 detached HEAD 并确认 worktree
+干净。后续三个 package 必须全部从这个精确 commit 的同一 worktree 构建：
+
+```sh
+git fetch --tags origin refs/heads/gui:refs/remotes/origin/gui
+release_commit="$(git rev-parse --verify '<获批的完整 gui commit>^{commit}')"
+git merge-base --is-ancestor "$release_commit" origin/gui
+git switch --detach "$release_commit"
+test "$(git rev-parse HEAD)" = "$release_commit"
+test -z "$(git status --porcelain)"
+```
+
+桌面 release 记录的 `contractCommit` 也必须等于这里的 `release_commit`。若两端记录不同，先停止发布并
+重新选择兼容构建，不能通过修改版本字符串、临时 cherry-pick 或云端专用分支规避。
+
+### 5.2 三包 bundle 与 ECS 安装
+
+要求 Node.js `>=22.12.0`、npm 和 PostgreSQL 客户端。不要在 ECS 上从工作树直接运行 TypeScript。
+可信构建机从上一步锁定的 commit 构建 contracts、Zulip provider 和 server 三个 package，并把三个
+tarball 作为同一 release 传输：
 
 ```sh
 npm --workspace @sciforge/collaboration-contracts run build
 npm --workspace @sciforge/collaboration-provider-zulip run build
 npm --workspace @sciforge/collaboration-server run build
+node scripts/collaboration-providers.mjs --check
 
 artifact_dir="$(mktemp -d)"
 npm pack --workspace @sciforge/collaboration-contracts --pack-destination "$artifact_dir"
 npm pack --workspace @sciforge/collaboration-provider-zulip --pack-destination "$artifact_dir"
 npm pack --workspace @sciforge/collaboration-server --pack-destination "$artifact_dir"
+printf '%s\n' "$release_commit" > "$artifact_dir/CONTRACT_COMMIT"
 
 cd "$artifact_dir"
 npm init --yes
 npm install --package-lock-only --save-exact --ignore-scripts --no-audit --no-fund ./*.tgz
-shasum -a 256 *.tgz package.json package-lock.json > SHA256SUMS
+shasum -a 256 *.tgz package.json package-lock.json CONTRACT_COMMIT > SHA256SUMS
 ```
 
 先核对 `npm pack --dry-run`/tarball 清单包含 server `dist/`、`migrations/`、`deploy/`，且不包含 `.env`、
 日志、测试真实数据或任何 secret。`package-lock.json` 把本次审核过的传递依赖和三个 tarball integrity 固定
-下来；不要在 ECS 上临时解析一个新的依赖集合。把 tarball、`package.json` 和 `package-lock.json` 作为
-同一 bundle 传到服务器权限受限的暂存目录；`SHA256SUMS` 必须一起传输。以下步骤在服务器执行，先
-校验 bundle，再创建不可变 release：
+下来；不要在 ECS 上临时解析一个新的依赖集合。把三个 tarball、`package.json`、`package-lock.json`、
+`CONTRACT_COMMIT` 和 `SHA256SUMS` 作为同一 bundle 传到服务器权限受限的暂存目录。ECS 不 clone
+SciForge 仓库，不复制或部署 Electron、renderer、桌面 domain 源码和整个 workspace；服务器上的应用
+代码只能来自这三个 tarball。以下步骤在服务器执行，先校验 bundle 和获批 commit，再创建不可变
+release：
 
 ```sh
 cd <bundle-dir>
 sha256sum --check SHA256SUMS
+grep --quiet --extended-regexp '^[0-9a-f]{40}$' CONTRACT_COMMIT
+test "$(cat CONTRACT_COMMIT)" = '<桌面与云端 release 共同记录的完整 contractCommit>'
 
-release_id="<UTC 时间戳或 Git commit>"
+release_id="<云端独立 release ID>"
 release_dir="/opt/sciforge-collaboration/releases/${release_id}"
 install -d -o root -g root -m 0755 "$release_dir"
 install -o root -g root -m 0644 <bundle-dir>/*.tgz "$release_dir"/
 install -o root -g root -m 0644 <bundle-dir>/package.json <bundle-dir>/package-lock.json "$release_dir"/
+install -o root -g root -m 0644 <bundle-dir>/CONTRACT_COMMIT "$release_dir"/
 install -o root -g root -m 0644 <bundle-dir>/SHA256SUMS "$release_dir"/
 npm --prefix "$release_dir" ci --omit=dev --ignore-scripts --no-audit --no-fund
 chown -R root:root "$release_dir"
@@ -214,7 +250,11 @@ find "$release_dir" -type d -exec chmod go-w {} +
 ```sh
 node --check "$release_dir/node_modules/@sciforge/collaboration-server/dist/cli.js"
 npm --prefix "$release_dir" ls --omit=dev --all
+cat "$release_dir/CONTRACT_COMMIT"
 ```
+
+最后一行只输出非敏感 commit ID，用于和桌面 release 证明比对。发布记录应同时保存桌面 tag/release、
+云端 tag/release、共同的 `contractCommit`、三包版本和 SHA-256；不要把任何凭据写入记录。
 
 维护窗口中再按第 8 节停止旧服务、创建发布前备份、原子切换 `current`、运行新 migration 并启动。
 `current` 只指向完整、只读 release。不要在运行目录内执行升级或修改 `node_modules`。至少保留当前和
@@ -499,15 +539,16 @@ Zulip 继续使用其官方 backup/restore 工具，备份包按 secret 级别�
 
 ## 13. 升级与回滚
 
-升级顺序固定为：构建并校验新 bundle → 安装完整新 release → 执行并验证发布前备份 → 停止服务 →
-原子切换 `current` → 运行 migration → 启动并检查 loopback → 检查公网路径与未认证 401 → 做单用户
-真实冒烟。Nginx snippet 未变化时不应重复覆盖；变化时必须先 `nginx -t` 再 reload。任何一步失败都
-停止推进，不在已运行 release 内原地修改。
+升级顺序固定为：批准 `gui` 精确 commit 并核对桌面/云端相同 `contractCommit` → 构建并校验三包
+bundle → 安装完整新 release → 执行并验证发布前备份 → 停止服务 → 原子切换 `current` → 运行
+migration → 启动并检查 loopback → 检查公网路径与未认证 401 → 做单用户真实冒烟。Nginx snippet 未
+变化时不应重复覆盖；变化时必须先 `nginx -t` 再 reload。任何一步失败都停止推进，不在已运行 release
+内原地修改，也不从漂移分支补包。
 
 应用发布回滚：
 
 1. 停止 `sciforge-collaboration.service`；
-2. 确认上一个 release 支持当前 schema；
+2. 确认上一个 release 支持当前 schema，并核对其 `CONTRACT_COMMIT` 与要继续使用的桌面 release；
 3. 原子把 `current` 指回上一个 release；
 4. 启动服务并验证内外网 `readyz` 与真实消息；
 5. 保留失败 release、时间线和安全错误码用于分析。

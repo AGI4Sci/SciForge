@@ -135,7 +135,7 @@ Download a macOS, Windows, or Linux installer from [GitHub Releases](https://git
 
 ### Run from Source
 
-Requirements: Node.js 20+ and a locally installed, authenticated Codex (default) or Claude Code CLI.
+Requirements: Node.js 22.12+ and a locally installed, authenticated Codex (default) or Claude Code CLI.
 
 ```bash
 git clone https://github.com/AGI4Sci/SciForge.git
@@ -157,6 +157,8 @@ For complete instructions on installation, first-time setup, runtime selection, 
 ### Mobile and cloud collaboration
 
 The collaboration backend is part of this open-source repository rather than a hidden desktop service. The cloud server and PostgreSQL migrations live in [`packages/collaboration-server`](./packages/collaboration-server/), the Zulip provider in [`packages/collaboration-provider-zulip`](./packages/collaboration-provider-zulip/), the shared protocol in [`packages/collaboration-contracts`](./packages/collaboration-contracts/), and the desktop domain in [`packages/domains/collaboration`](./packages/domains/collaboration/).
+
+The repository has one long-lived branch, `gui`. Desktop, cloud, and the current Zulip phone entrypoint are built and tested from the same exact commit instead of drifting per-client source branches. They still release independently: Electron installers contain the desktop application; ECS installs only the contracts, Zulip provider, and collaboration-server tarballs; phones currently use the official Zulip app rather than a second native application in this repository. Shared-contract changes run both desktop and cloud validation.
 
 See the [server README](./packages/collaboration-server/README.md) for source builds, migrations, configuration, probes, and tests. Production systemd, Nginx, backup, upgrade, and rollback procedures are documented in the [Chinese operations guide](./docs/operations/zulip-aliyun-deployment.zh-CN.md). Passwords, API keys, private keys, and tokens must always be injected from deployment-managed secret files or a secret manager outside Git.
 

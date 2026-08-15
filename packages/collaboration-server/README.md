@@ -33,6 +33,30 @@
 - npm workspace 安装的仓库依赖。生产发布还必须包含版本完全匹配的 contracts、provider adapter 与 server 包。
 - 反向代理必须支持 HTTP/1.1 WebSocket Upgrade；应用默认只监听 loopback。
 
+## 发布来源与桌面/云端版本对齐
+
+仓库只维护一个长期主分支：`gui`。协作云服务不是另一条长期源码分支；功能分支只能短期开发并通过
+评审合入 `gui`，不得把功能分支、服务器本地分支、未记录的 `gui` 漂移 HEAD 或 cherry-pick 工作树
+直接部署到生产。
+
+每次生产构建先批准一个位于 `gui` 历史中的完整 Git commit，并在该 commit 的同一干净 worktree 中
+同时构建、打包以下三个版本匹配的包：
+
+- `@sciforge/collaboration-contracts`
+- `@sciforge/collaboration-provider-zulip`
+- `@sciforge/collaboration-server`
+
+ECS 的应用代码只允许来自这三个 tarball。服务器不 clone SciForge 仓库，不部署 Electron、renderer、
+桌面 domain 源码或整个 workspace，也不在服务器上重新解析另一份源码状态。
+
+桌面应用与协作云服务使用独立的版本号、tag 和 release，可以按各自节奏发布；两端的发布记录都必须
+包含完整的 `contractCommit`，兼容配对时该值必须相同。云端 bundle 的 `contractCommit` 就是上述获批的
+`gui` commit；桌面 release 也记录同一 commit。两个端的 tag 可以独立指向这个 commit，但 tag 名称或
+版本号相同不能代替 commit 校验。
+
+发布记录至少保存：桌面 tag/release、云端 tag/release、完整 `contractCommit`、三个 tarball 的版本和
+SHA-256。commit 和 checksum 不是 secret，可以进入发布证明；任何 credential 都不能进入其中。
+
 ## 从源码开发
 
 在仓库根目录安装依赖并先构建共享 contract 与 provider composition：
@@ -154,7 +178,12 @@ node scripts/collaboration-providers.mjs --check
 npm pack --workspace @sciforge/collaboration-server --dry-run
 ```
 
-正式 release 应分别打包版本匹配的 contracts、provider adapter 与 server tarball，生成校验和，并在空目录通过 clean `npm install`/`npm ci`、`npm ls`、CLI help、migration loader 和探针 smoke。`npm pack --dry-run` 清单必须包含 `dist/`、`migrations/`、`deploy/`、`.env.example` 与本 README；不要从源码路径启动发布包。
+正式 release 应从前述同一精确 `gui` commit 分别打包版本匹配的 contracts、provider adapter 与 server
+tarball，生成含完整 `contractCommit` 的 manifest 和校验和，并在空目录通过 clean `npm install`/`npm
+ci`、`npm ls`、CLI help、migration loader 和探针 smoke。`npm pack --dry-run` 清单必须包含 `dist/`、
+`migrations/`、`deploy/`、`.env.example` 与本 README；不要从源码路径启动发布包，也不要在 ECS 上
+构建或补齐缺失产物。具体 bundle 与香港 ECS 安装步骤见
+[中文运维手册](../../docs/operations/zulip-aliyun-deployment.zh-CN.md)。
 
 ## `deploy/` 文件索引
 
@@ -181,7 +210,7 @@ npm pack --workspace @sciforge/collaboration-server --dry-run
 
 升级建议使用不可变 release 目录：
 
-1. 记录三个 tarball 的精确版本和校验和，完成数据库备份并验证 sidecar。
+1. 核对桌面与云端 release 记录同一 `contractCommit`，并记录三个 tarball 的精确版本和校验和；完成数据库备份并验证 sidecar。
 2. 在新 release 空目录 clean 安装，运行测试过的 Node 版本和 CLI smoke。
 3. 停止写流量或进入维护窗口，只运行一次显式 migration。
 4. 原子切换当前 release，重启服务，等待 `/readyz` 成功后恢复流量。
@@ -198,5 +227,6 @@ npm pack --workspace @sciforge/collaboration-server --dry-run
 - 不得记录 provider 异常的 message、cause、stack、header 或 body。诊断只保留有界安全错误码和白名单名称。
 - 不得在 Project Record 或消息中上传本地绝对路径、工作区文件内容或 secret；只同步 contract 明确允许的协作数据。
 - 不得从不可信备份直接恢复；校验完整性、限制读取权限，并在隔离环境验证后再进入恢复窗口。
+- 不得从 `gui` 以外的长期分支、未合入功能分支、未固定 branch HEAD 或服务器工作树发布；生产输入只能是获批 `gui` commit 构建的三个 tarball。
 
 本包采用 MIT 许可证；部署者仍需自行满足数据库、消息 provider、数据保留和用户隐私方面的合规要求。

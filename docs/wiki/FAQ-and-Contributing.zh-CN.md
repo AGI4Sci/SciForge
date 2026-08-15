@@ -37,7 +37,7 @@ Model Router 的 GUI Base URL 默认要求本机 loopback。把远程 provider �
 
 推荐流程：
 
-1. 从最新 `develop` 创建短期分支，保持一个 PR 一个主题。
+1. 从唯一长期分支 `gui` 创建短期分支，保持一个 PR 一个主题，并将 PR 提回 `gui`。
 2. 文档、UI、runtime 和 worker 的改动尽量保持边界清晰；不要提交密钥、私有路径或大体积产物。
 3. 行为改变补测试，使用方式改变同步 Wiki / README / DEVELOPMENT 文档。
 4. PR 描述写清 Summary、Why、Validation、Tests 和必要的截图或 GIF。

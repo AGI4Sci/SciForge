@@ -155,6 +155,11 @@ endpoint、唯一 active Project binding、目标用户、assurance、revision �
 - `@sciforge/domain-collaboration`：一个版本化领域包，分别提供 main/renderer 入口；
 - `@sciforge/collaboration-provider-zulip`：通过 manifest/generated composition 安装的 provider adapter。
 
+仓库只维护一个长期 `gui` 分支。桌面端、云端服务、共享合同和当前手机 Zulip 入口必须从同一个精确
+commit 构建与测试；各端通过目录、package、版本和发布产物隔离，不建立永久的 desktop/cloud/mobile
+源码分支。桌面端发布 Electron 安装包，香港 ECS 只部署版本匹配的 contracts/provider/server tarball，
+当前手机端直接使用官方 Zulip App。未来增加原生手机应用时，应放入独立目录并继续合入 `gui`。
+
 Host 只依赖通用 Domain SDK。协作领域和 provider 不导入 Host-private main/renderer/shared 路径，也不
 增加 provider 专属 IPC、MCP、Runtime 或重复镜像路径。
 

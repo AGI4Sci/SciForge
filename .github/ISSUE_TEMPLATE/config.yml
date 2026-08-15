@@ -4,5 +4,5 @@ contact_links:
     url: mailto:security@sciforge.ai
     about: Please report security issues privately instead of opening a public issue.
   - name: Contribution guide
-    url: https://github.com/XingYu-Zhong/SciForge/blob/master/docs/CONTRIBUTING.md
+    url: https://github.com/AGI4Sci/SciForge/blob/gui/docs/CONTRIBUTING.md
     about: Read the contribution workflow and validation expectations before opening a PR.
