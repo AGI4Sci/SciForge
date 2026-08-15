@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-paper-radar",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -22,7 +22,7 @@
     "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "@sciforge/domain-sdk": "^0.1.0",
+    "@sciforge/domain-sdk": "^0.2.0",
     "@sciforge/paper-radar": "^0.1.0",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",
