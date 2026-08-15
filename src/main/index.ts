@@ -60,6 +60,7 @@ import { stopModelAccessGatewaySidecar } from './model-access-gateway-sidecar'
 import { PLAN_GATEWAY_BASE_URL } from './plan-gateway-config'
 import { stopDisallowedAgentRuntimes } from './model-access-runtime-lifecycle'
 import { createAgentRuntimeHost, type AgentRuntimeHost } from './runtime/agent-runtime/host'
+import { createDomainAgentExecutionHost } from './runtime/agent-runtime/domain-agent-execution'
 import {
   composeAgentRuntimeToolSurfaces,
   createDeferredAgentRuntimeToolSurface,

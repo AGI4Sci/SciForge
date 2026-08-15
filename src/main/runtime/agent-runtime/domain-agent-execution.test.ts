@@ -42,6 +42,11 @@ function createHarness(options: Readonly<{
       const event: DomainMainTurnLifecycleEvent = {
         kind: 'after-turn',
         state: options.terminalState,
+        issuerEpoch: 'issuer-domain-execution-test',
+        deliveryAttemptOrdinal: threadSequence,
+        deliveryAttemptId: `delivery-attempt-domain-${threadSequence}`,
+        boundaryLeaseId: `turn-boundary-domain-${threadSequence}`,
+        clientDirectiveId: `directive-domain-${threadSequence}`,
         runtimeId: input.runtimeId,
         threadId: input.threadId,
         turnId,

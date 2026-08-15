@@ -101,6 +101,7 @@ async function executeDomainAgentRequest(
     unsubscribe = options.agentRuntimeHost.subscribeTurnLifecycle((event) => {
       if (
         event.kind !== 'after-turn' ||
+        event.state === 'rejected' ||
         event.runtimeId !== runtimeId ||
         event.threadId !== state.threadId
       ) return
