@@ -4271,7 +4271,7 @@ function safeUsageInteger(value: unknown): number {
 
 function isMissingOrUnmaterializedThreadError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
-  return /thread\s+.*not found|thread not found|no rollout found|not materialized yet|includeTurns is unavailable/i.test(
+  return /thread\s+.*not found|thread not found|no rollout found|not materialized yet|thread is not persisted and cannot be deleted|includeTurns is unavailable/i.test(
     message
   )
 }

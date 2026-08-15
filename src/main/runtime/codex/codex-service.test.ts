@@ -543,6 +543,35 @@ describe('CodexRuntimeService storage fallback', () => {
     expect((service as unknown as { eventSubscribers: Set<unknown> }).eventSubscribers.size).toBe(0)
   })
 
+  it('completes ephemeral reclamation when app-server reports an unpersisted thread', async () => {
+    const storageRoot = await tempRoot()
+    const client = controllableClient()
+    vi.mocked(client.deleteThread).mockRejectedValueOnce(
+      new Error('thread is not persisted and cannot be deleted: thread-1')
+    )
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot,
+      createClient: () => client
+    })
+    const started = await service.startThread({ ephemeral: true, workspace: '/tmp/workspace' })
+    if (!started.ok) throw new Error(started.message)
+    const ownership = (service as unknown as {
+      ephemeralOwnership: EphemeralThreadOwnershipRegistry
+    }).ephemeralOwnership
+
+    await expect(service.reclaimEphemeralThread(started.thread.id)).resolves.toEqual({ ok: true })
+    expect(client.deleteThread).toHaveBeenCalledWith({ threadId: 'thread-1' })
+    expect(ownership.snapshot()).toEqual({
+      roots: 0,
+      threads: 0,
+      pendingCreations: 0,
+      backgroundTasks: 0
+    })
+    await expect(new CodexThreadStore({ rootDir: storageRoot }).get(started.thread.id)).resolves.toBeNull()
+    await expect(service.readStoredEvents(started.thread.id)).resolves.toEqual([])
+  })
+
   it('retains Codex startup ownership and primary error when root cleanup fails, then reclaims it', async () => {
     const storageRoot = await tempRoot()
     const client = controllableClient()
