@@ -84,6 +84,19 @@ describe('DomainModuleCatalog', () => {
       .toBe('incompatible_host_api')
   })
 
+  it('accepts Host API 1.1 packages by default and rejects them on an older Host', () => {
+    const requiresHostApi11 = moduleDefinition('sciforge.host-api-11', [], {
+      hostApi: { minimum: '1.1.0', maximumExclusive: '2.0.0' }
+    })
+    const currentHost = new DomainModuleCatalog()
+    currentHost.registerModule(requiresHostApi11)
+    expect(currentHost.hasModule('sciforge.host-api-11')).toBe(true)
+
+    const oldHost = new DomainModuleCatalog({ hostApiVersion: '1.0.0' })
+    expect(errorCode(() => oldHost.registerModule(requiresHostApi11)))
+      .toBe('incompatible_host_api')
+  })
+
   it('rejects duplicate package, module, and contribution identities', () => {
     const catalog = new DomainModuleCatalog()
     catalog.registerModule(moduleDefinition('sciforge.one', [

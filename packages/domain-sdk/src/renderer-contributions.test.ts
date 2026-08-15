@@ -7,6 +7,7 @@ import {
   RENDERER_COMMAND_CONTRIBUTION_KIND,
   RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND,
   RENDERER_EXTENSION_CONTRIBUTION_KIND,
+  RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_BOTTOM_PANEL_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
@@ -17,11 +18,14 @@ import {
   defineDomainRendererWorkbenchToolbarActionContract,
   domainRendererCommandInvocationSchema,
   domainRendererComposerContextResultSchema,
+  domainRendererResourceNavigationContractSchema,
   domainRendererWorkspacePickResultSchema,
+  domainWorkbenchOpenResourceInputSchema,
   isDomainRendererCommandActive,
   isDomainRendererCommandAvailable,
   isDomainRendererCommandHandler,
   isDomainRendererComposerContextProvider,
+  isDomainRendererResourceNavigationValue,
   isDomainRendererWorkbenchSurfaceValue,
   isDomainRendererWorkbenchToolbarActionValue,
   type DomainRendererCommandHandler,
@@ -50,6 +54,10 @@ describe('renderer extension contribution contracts', () => {
     assert.equal(
       RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND,
       'renderer.composer-context-provider'
+    )
+    assert.equal(
+      RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION_KIND,
+      'renderer.resource-navigation'
     )
     assert.equal(RENDERER_EXTENSION_CONTRIBUTION_KIND, 'renderer.extension')
   })
@@ -180,6 +188,65 @@ describe('renderer extension contribution contracts', () => {
       id: 'duplicated-manifest-id',
       render: () => ({})
     }), false)
+  })
+
+  it('keeps exact-resource navigation generic and rejects ambiguous contracts', () => {
+    assert.deepEqual(domainRendererResourceNavigationContractSchema.parse({
+      resourceKinds: ['artifact-version', 'compute-run'],
+      target: {
+        surface: 'right-panel',
+        contributionId: 'fixture.dossier-panel'
+      }
+    }), {
+      resourceKinds: ['artifact-version', 'compute-run'],
+      target: {
+        surface: 'right-panel',
+        contributionId: 'fixture.dossier-panel'
+      }
+    })
+    assert.equal(isDomainRendererResourceNavigationValue({
+      resolve: () => null
+    }), true)
+    assert.equal(isDomainRendererResourceNavigationValue({
+      resolve: () => null,
+      contributionId: 'host-private-target'
+    }), false)
+    assert.throws(() => domainRendererResourceNavigationContractSchema.parse({
+      resourceKinds: ['artifact-version', 'artifact-version'],
+      target: {
+        surface: 'right-panel',
+        contributionId: 'fixture.dossier-panel'
+      }
+    }), z.ZodError)
+    assert.deepEqual(domainWorkbenchOpenResourceInputSchema.parse({
+      sessionId: ' session-1 ',
+      resource: {
+        resourceKind: ' artifact-version ',
+        resourceId: ' artifact-version:figure:2 ',
+        integrity: {
+          algorithm: 'sha256',
+          expectedDigest: `SHA256:${'A'.repeat(64)}`
+        }
+      }
+    }), {
+      sessionId: 'session-1',
+      resource: {
+        resourceKind: 'artifact-version',
+        resourceId: 'artifact-version:figure:2',
+        integrity: {
+          algorithm: 'sha256',
+          expectedDigest: `sha256:${'a'.repeat(64)}`
+        }
+      }
+    })
+    assert.throws(() => domainWorkbenchOpenResourceInputSchema.parse({
+      sessionId: 'session-1',
+      resource: {
+        resourceKind: 'artifact-version',
+        resourceId: 'artifact-version:figure:2',
+        integrity: { algorithm: 'md5', expectedDigest: 'md5:unsafe' }
+      }
+    }), z.ZodError)
   })
 
   it('bounds composer context and workspace picker results', () => {

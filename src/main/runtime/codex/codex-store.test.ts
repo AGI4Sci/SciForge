@@ -196,9 +196,38 @@ describe('CodexEventStore', () => {
 
     expect(first.seq).toBe(1)
     expect(first.event.seq).toBe(1)
+    expect(first.event.createdAt).toBe('2026-06-10T11:00:00.000Z')
     expect(second.seq).toBe(2)
+    expect(second.event.createdAt).toBe(second.createdAt)
     expect(await store.latestSeq('codex/thread:1')).toBe(2)
-    expect((await store.read('codex/thread:1', { sinceSeq: 1 })).map((event) => event.seq)).toEqual([2])
+    const replayed = await store.read('codex/thread:1', { sinceSeq: 1 })
+    expect(replayed.map((event) => event.seq)).toEqual([2])
+    expect(replayed[0]?.event.createdAt).toBe(replayed[0]?.createdAt)
+  })
+
+  it('projects legacy outer-envelope time into replayed lifecycle events', async () => {
+    const rootDir = await tempRoot()
+    const store = new CodexEventStore({ rootDir })
+    const first = await store.append('thread-legacy', {
+      threadId: 'thread-legacy',
+      turnId: 'turn-legacy',
+      turnComplete: true
+    })
+    const path = join(
+      rootDir,
+      'events',
+      `${Buffer.from('thread-legacy').toString('base64url')}.jsonl`
+    )
+    const raw = JSON.parse((await readFile(path, 'utf8')).trim()) as {
+      event: { createdAt?: string }
+    }
+    delete raw.event.createdAt
+    await writeFile(path, `${JSON.stringify(raw)}\n`, 'utf8')
+
+    const replayed = await new CodexEventStore({ rootDir }).read('thread-legacy', { includeAll: true })
+    expect(replayed).toHaveLength(1)
+    expect(replayed[0]?.createdAt).toBe(first.createdAt)
+    expect(replayed[0]?.event.createdAt).toBe(first.createdAt)
   })
 
   it('serializes concurrent appends for one thread into unique monotonic seq values', async () => {

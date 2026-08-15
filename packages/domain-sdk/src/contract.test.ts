@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import { z } from 'zod'
 import {
   DOMAIN_PACKAGE_CONTRACT_VERSION,
+  DOMAIN_PACKAGE_HOST_API_VERSION,
   defineDomainPackage,
   defineTrustedDomainPackage,
   isDomainPackageHostApiCompatible,
@@ -76,6 +77,18 @@ const sandboxedDefinitionFixture: SandboxedDomainPackageDefinitionInput = {
 }
 
 describe('domain package packaging contract', () => {
+  it('publishes Host API 1.1 for lifecycle authority and navigation contracts', () => {
+    assert.equal(DOMAIN_PACKAGE_HOST_API_VERSION, '1.1.0')
+    assert.equal(isDomainPackageHostApiCompatible({
+      minimum: '1.1.0',
+      maximumExclusive: '2.0.0'
+    }, '1.1.0'), true)
+    assert.equal(isDomainPackageHostApiCompatible({
+      minimum: '1.1.0',
+      maximumExclusive: '2.0.0'
+    }, '1.0.0'), false)
+  })
+
   it('allows only trusted packages to declare a conventional workspace-server entrypoint', () => {
     const trusted = defineTrustedDomainPackage({
       ...definitionFixture,

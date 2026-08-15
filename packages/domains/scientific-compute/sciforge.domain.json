@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.scientific-compute",
     "displayName": "Scientific Compute",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "hostApi": {
       "minimum": "1.0.0",
       "maximumExclusive": "2.0.0"

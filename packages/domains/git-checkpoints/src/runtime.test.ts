@@ -53,6 +53,11 @@ test('runtime captures enabled before/terminal-after turn events once through li
   const before = {
     kind: 'before-turn',
     state: 'starting',
+    issuerEpoch: 'issuer-epoch-1',
+    deliveryAttemptId: 'attempt-1',
+    deliveryAttemptOrdinal: 1,
+    boundaryLeaseId: 'turn-boundary:attempt-1',
+    clientDirectiveId: 'directive-1',
     runtimeId: 'codex',
     threadId: 'thread-1',
     workspaceRoot: '/workspace',

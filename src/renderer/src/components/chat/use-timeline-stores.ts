@@ -6,7 +6,16 @@ import type { NormalizedThread } from '../../agent/types'
 
 type TimelineActiveThread = Pick<
   NormalizedThread,
-  'id' | 'title' | 'forkedFromThreadId' | 'forkedFromTitle' | 'forkedFromTurnCount'
+  | 'id'
+  | 'title'
+  | 'runtimeId'
+  | 'workspace'
+  | 'updatedAt'
+  | 'latestTurnId'
+  | 'latestTurnStatus'
+  | 'forkedFromThreadId'
+  | 'forkedFromTitle'
+  | 'forkedFromTurnCount'
 >
 
 /**
@@ -48,6 +57,11 @@ export function useTimelineStores(activeThreadId: string | null): TimelineStores
     return {
       id: thread.id,
       title: thread.title,
+      runtimeId: thread.runtimeId,
+      workspace: thread.workspace,
+      updatedAt: thread.updatedAt,
+      latestTurnId: thread.latestTurnId,
+      latestTurnStatus: thread.latestTurnStatus,
       forkedFromThreadId: thread.forkedFromThreadId,
       forkedFromTitle: thread.forkedFromTitle,
       forkedFromTurnCount: thread.forkedFromTurnCount

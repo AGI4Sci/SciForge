@@ -78,7 +78,7 @@ import {
 } from './runtime/agent-runtime/workspace-host-agent-runtime-adapter'
 import { ClaudeCodeRuntimeService, createClaudeCodeAgentRuntimeAdapter } from './runtime/claude-code'
 import { LspCodeNavigationService } from './services/lsp-code-navigation-service'
-import { LocalTraceStore } from '@sciforge/full-trace'
+import { LocalTraceStore, sanitizeTraceTextChunks } from '@sciforge/full-trace'
 import { WorkspaceEgressService } from '@sciforge/workspace-egress'
 import {
   VISUAL_SOURCE_CONTRACT_VERSION,
@@ -156,7 +156,7 @@ import {
   createApplicationCapabilityRegistry,
   createApplicationDomainCatalog,
   createMainActionGuardEvaluator,
-  createMainSystemCapabilityInvoker,
+  createMainSystemCapabilityInvokerFactory,
   listMainArtifactConsumers,
   listMainVisualSourceContributions,
   listMainWorkspacePreviewPluginContributions,
@@ -1077,7 +1077,9 @@ app
     const runtimeGoalService = new RuntimeGoalService(app.getPath('userData'))
     const researchCardService = new ResearchCardService(app.getPath('userData'))
     const workspaceReferenceService = new WorkspaceReferenceService()
-    let domainSystemCapabilityInvoker: ReturnType<typeof createMainSystemCapabilityInvoker> | null = null
+    let domainSystemCapabilityInvokers: ReturnType<
+      typeof createMainSystemCapabilityInvokerFactory
+    > | null = null
     let capabilityBrokerForVisibleContext: CapabilityBroker | null = null
     const visibleContextService = new VisibleContextService(app.getPath('userData'), {
       surfaceCaptureProvider: visibleContextSurfaceCaptureProvider,
@@ -1115,6 +1117,11 @@ app
     })
     const catalog = createApplicationDomainCatalog({
       getUserDataDir: () => app.getPath('userData'),
+      textSanitizer: {
+        sanitizeText: (value) => sanitizeTraceTextChunks([value], {
+          sensitiveValues: traceSensitiveSettings.values()
+        })[0] ?? ''
+      },
       openPath: async (targetPath) => {
         const error = await shell.openPath(targetPath)
         if (error) throw new Error(error)
@@ -1127,13 +1134,21 @@ app
             resourcesPath: process.resourcesPath
           })
         }),
-      capabilities: {
-        invoke: (contract, input, options) => {
-          if (!domainSystemCapabilityInvoker) {
-            throw new Error('The Host capability broker is not ready.')
+      capabilityInvokerFor: (owner) => {
+        let scopedInvoker: ReturnType<
+          ReturnType<typeof createMainSystemCapabilityInvokerFactory>['forDomain']
+        > | null = null
+        return Object.freeze({
+          invoke: (contract, input, options) => {
+            if (!scopedInvoker) {
+              if (!domainSystemCapabilityInvokers) {
+                throw new Error('The Host capability broker is not ready.')
+              }
+              scopedInvoker = domainSystemCapabilityInvokers.forDomain(owner)
+            }
+            return scopedInvoker.invoke(contract, input, options)
           }
-          return domainSystemCapabilityInvoker.invoke(contract, input, options)
-        }
+        })
       },
       visualCapture: registeredTargetVisualCapture
     })
@@ -1239,7 +1254,7 @@ app
       createApplicationCapabilityRegistry(catalog, appCapabilityDependencies)
     )
     capabilityBrokerForVisibleContext = capabilityBroker
-    domainSystemCapabilityInvoker = createMainSystemCapabilityInvoker(capabilityBroker)
+    domainSystemCapabilityInvokers = createMainSystemCapabilityInvokerFactory(capabilityBroker)
     const visualSourceRegistry = new VisualSourceRegistry([
       {
         ownerId: 'sciforge.agent-runtime',
@@ -1333,7 +1348,8 @@ app
       resolveCaller: (context) => ({
         audience: 'agent',
         callerId: capabilityAgentCallerId(context),
-        ...(context.workspaceId ? { workspaceId: context.workspaceId } : {})
+        ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
+        ...(context.workspaceLocator ? { workspaceLocator: context.workspaceLocator } : {})
       }),
       requestApproval: (request, options) =>
         agentRuntimeHostRef.current?.requestCapabilityApproval(request, options) ?? 'cancelled',
@@ -1467,7 +1483,11 @@ app
         hasActiveTurns: () => agentRuntimeHost.hasActiveTurns()
       },
       turnEvents: {
-        subscribe: (listener) => agentRuntimeHost.subscribeTurnLifecycle(listener)
+        subscribe: (listener) => agentRuntimeHost.subscribeTurnLifecycle(listener),
+        subscribeRequiredBeforeTurn: (listener) =>
+          agentRuntimeHost.subscribeRequiredBeforeTurn(listener),
+        readDurableTurnBoundarySnapshot: () =>
+          agentRuntimeHost.readDurableTurnBoundarySnapshot()
       },
       agentExecution: {
         run: async (request) => {
@@ -1522,7 +1542,12 @@ app
             resolveTerminal()
           }
           const unsubscribe = agentRuntimeHost.subscribeTurnLifecycle((event) => {
-            if (event.kind !== 'after-turn' || event.runtimeId !== runtimeId || event.threadId !== thread.id) return
+            if (
+              event.kind !== 'after-turn' ||
+              event.state === 'rejected' ||
+              event.runtimeId !== runtimeId ||
+              event.threadId !== thread.id
+            ) return
             acceptTerminalEvent({ turnId: event.turnId, state: event.state })
           })
           const abort = (): void => {
@@ -1614,7 +1639,7 @@ app
           }
         }
       },
-      capabilities: domainSystemCapabilityInvoker,
+      capabilityInvokers: domainSystemCapabilityInvokers,
       modelAccess: {
         textReasoner: async () => {
           const settings = await store.load()
@@ -1647,6 +1672,9 @@ app
     })
     void domainExecutionEvents.replayPending().catch((error) => {
       logError('domain-execution-events', 'Durable execution event replay failed.', error)
+    })
+    void agentRuntimeHost.recoverCompletedTurnArtifacts().catch((error) => {
+      logError('turn-artifact-handoff', 'Accepted turn artifact watcher recovery failed.', error)
     })
     void turnArtifactHandoff.replayPending().catch((error) => {
       logError('turn-artifact-handoff', 'Durable completed turn replay failed.', error)

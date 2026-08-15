@@ -4,6 +4,7 @@ import type {
   DomainRendererWorkbenchSendMessageResult,
   DomainRendererWorkspacePreviewHost,
   DomainWorkbenchOpenRightPanelInput,
+  DomainWorkbenchOpenResourceInput,
   DomainWorkbenchOpenSurfaceInput,
   DomainWorkbenchToggleGlobalOverlayInput,
   DomainWorkspacePreviewTarget
@@ -25,6 +26,23 @@ type DomainWorkbenchMessageSender = (
 ) => Promise<DomainRendererWorkbenchSendMessageResult>
 
 let messageSender: DomainWorkbenchMessageSender | null = null
+
+type DomainWorkbenchResourceNavigationProvider = Readonly<{
+  canOpen: (resourceKind: string) => boolean
+  resolve: (input: DomainWorkbenchOpenResourceInput) => DomainWorkbenchOpenRightPanelInput | null
+}>
+
+let resourceNavigationProvider: DomainWorkbenchResourceNavigationProvider | null = null
+
+export function setDomainWorkbenchResourceNavigationProvider(
+  provider: DomainWorkbenchResourceNavigationProvider
+): () => void {
+  const previous = resourceNavigationProvider
+  resourceNavigationProvider = provider
+  return () => {
+    if (resourceNavigationProvider === provider) resourceNavigationProvider = previous
+  }
+}
 
 export function setDomainWorkbenchMessageSender(
   sender: DomainWorkbenchMessageSender
@@ -53,6 +71,17 @@ export const domainRendererNavigationHost: Readonly<{
     }
   }),
   workbench: Object.freeze({
+    canOpenResource: (resourceKind: string) =>
+      resourceNavigationProvider?.canOpen(resourceKind) ?? false,
+    openResource: (input: DomainWorkbenchOpenResourceInput) => {
+      const rightPanel = resourceNavigationProvider?.resolve(input) ?? null
+      if (!rightPanel) return false
+      window.dispatchEvent(new CustomEvent<DomainWorkbenchOpenRightPanelInput>(
+        DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT,
+        { detail: rightPanel }
+      ))
+      return true
+    },
     openRightPanel: (input: DomainWorkbenchOpenRightPanelInput) => {
       window.dispatchEvent(new CustomEvent<DomainWorkbenchOpenRightPanelInput>(
         DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT,

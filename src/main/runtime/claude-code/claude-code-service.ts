@@ -407,14 +407,16 @@ export class ClaudeCodeRuntimeService {
     ownedVisualToolsAvailable?: boolean
     nativeVisualProofChainPending?: boolean
     streamingInput?: boolean
+    requestedTurnId?: string
+    requestedUserMessageItemId?: string
   }): Promise<ClaudeCodeTurnStartResult> {
     try {
       const settings = await this.options.settings()
       requireClaudeRuntimeSelected(settings)
       const existingThread = await this.threadStore.get(payload.threadId)
       const workspace = resolveClaudeWorkspace(settings, payload.workspace || existingThread?.workspace)
-      const turnId = `claude-turn-${randomUUID()}`
-      const userMessageItemId = `claude-user-${randomUUID()}`
+      const turnId = payload.requestedTurnId?.trim() || `claude-turn-${randomUUID()}`
+      const userMessageItemId = payload.requestedUserMessageItemId?.trim() || `claude-user-${randomUUID()}`
       const assistantItemId = `claude-assistant-${randomUUID()}`
       const launch = await prepareClaudeCodeSdkLaunch({
         settings,

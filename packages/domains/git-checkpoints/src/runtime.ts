@@ -56,10 +56,13 @@ export class GitCheckpointRuntime {
       const key = eventKey(event)
       if (this.#seen.has(key)) return
       this.#remember(key)
+      const turnId = event.kind === 'after-turn' && event.state !== 'rejected'
+        ? event.turnId
+        : undefined
       const result = await service.create({
         runtimeId: event.runtimeId,
         threadId: event.threadId,
-        ...(event.turnId ? { turnId: event.turnId } : {}),
+        ...(turnId ? { turnId } : {}),
         workspaceRoot: event.workspaceRoot!,
         phase: event.kind
       })
@@ -72,7 +75,7 @@ export class GitCheckpointRuntime {
             message: result.message,
             runtimeId: event.runtimeId,
             threadId: event.threadId,
-            turnId: event.turnId
+            turnId
           }
         })
       }
@@ -117,11 +120,14 @@ function shouldCaptureEvent(event: DomainMainTurnLifecycleEvent): boolean {
 }
 
 function eventKey(event: DomainMainTurnLifecycleEvent): string {
+  const turnId = event.kind === 'after-turn' && event.state !== 'rejected'
+    ? event.turnId
+    : ''
   return [
     event.kind,
     event.runtimeId,
     event.threadId,
-    event.turnId ?? '',
+    turnId,
     event.occurredAt
   ].join('\u0000')
 }

@@ -271,7 +271,12 @@ async function loadApplicationCapabilityModel() {
     catalog = await module.createApplicationDomainCatalog({
       getUserDataDir: () => {
         throw new GovernanceError('Governance must not instantiate a domain service.')
-      }
+      },
+      capabilityInvokerFor: () => Object.freeze({
+        invoke: async () => {
+          throw new GovernanceError('Governance must not invoke a package system capability.')
+        }
+      })
     })
     registry = await module.createApplicationCapabilityRegistry(
       catalog,

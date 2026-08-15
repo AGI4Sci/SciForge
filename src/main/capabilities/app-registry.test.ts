@@ -25,7 +25,12 @@ import {
 } from '../modules'
 
 function createRegistry(dependencies: AppCapabilityDependencies) {
-  const catalog = createApplicationDomainCatalog({ getUserDataDir: () => '/tmp/sciforge-test' })
+  const catalog = createApplicationDomainCatalog({
+    getUserDataDir: () => '/tmp/sciforge-test',
+    capabilityInvokerFor: () => ({
+      invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') }
+    })
+  })
   return createApplicationCapabilityRegistry(catalog, dependencies)
 }
 
@@ -155,7 +160,12 @@ describe('app capability registry', () => {
         currentSurface: vi.fn()
       }
     } as unknown as AppCapabilityDependencies
-    const catalog = createApplicationDomainCatalog({ getUserDataDir: () => '/tmp/sciforge-test' })
+    const catalog = createApplicationDomainCatalog({
+      getUserDataDir: () => '/tmp/sciforge-test',
+      capabilityInvokerFor: () => ({
+        invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') }
+      })
+    })
     const contributions = catalog.listContributions(
       MAIN_CAPABILITY_FACTORY_CONTRIBUTION_KIND,
       isAppCapabilityContributionFactory

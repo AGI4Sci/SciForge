@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.paper-radar",
     "displayName": "Paper Radar",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "hostApi": {
       "minimum": "1.0.0",
       "maximumExclusive": "2.0.0"

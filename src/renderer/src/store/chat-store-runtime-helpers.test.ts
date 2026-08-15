@@ -8,7 +8,8 @@ import {
   rememberProviderThreadRuntime,
   settlePendingRuntimeWorkAfterCompletion,
   settlePendingRuntimeWorkAfterInterrupt,
-  threadSnapshotLooksRunning
+  threadSnapshotLooksRunning,
+  upsertUserBlock
 } from './chat-store-runtime-helpers'
 
 function thread(id: string, hasUserMessage?: boolean): NormalizedThread {
@@ -53,6 +54,20 @@ describe('rememberProviderThreadRuntime', () => {
     rememberProviderThreadRuntime(p, 'missing-thread', [{ id: 'known-thread', runtimeId: 'sciforge' }])
 
     expect(p.rememberThreadRuntime).not.toHaveBeenCalled()
+  })
+})
+
+describe('upsertUserBlock', () => {
+  it('preserves the runtime turn identity on the canonical user block', () => {
+    const blocks = upsertUserBlock([], {
+      itemId: 'user-1',
+      turnId: 'turn-1',
+      text: 'hello'
+    })
+
+    expect(blocks).toEqual([
+      expect.objectContaining({ kind: 'user', id: 'user-1', turnId: 'turn-1' })
+    ])
   })
 })
 

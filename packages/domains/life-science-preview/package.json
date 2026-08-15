@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-life-science-preview",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -24,7 +24,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@sciforge/domain-sdk": "^0.1.0",
+    "@sciforge/domain-sdk": "^0.2.0",
     "@sciforge/workspace-bioimaging": "^0.1.0",
     "@sciforge/workspace-molecular": "^0.1.0",
     "@sciforge/workspace-omics": "^0.1.0",

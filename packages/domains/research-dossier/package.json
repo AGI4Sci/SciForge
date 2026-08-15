@@ -1,0 +1,42 @@
+{
+  "name": "@sciforge/domain-research-dossier",
+  "version": "1.0.0",
+  "license": "MIT",
+  "type": "module",
+  "private": false,
+  "description": "Presentation-only exact scientific artifact and compute run dossier for SciForge.",
+  "exports": {
+    "./contract": "./src/contract.ts",
+    "./definition": "./src/definition.ts",
+    "./renderer": "./src/renderer/index.tsx"
+  },
+  "files": [
+    "src",
+    "sciforge.domain.json",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\""
+  },
+  "dependencies": {
+    "@sciforge/domain-artifact-versions": "^1.1.0",
+    "@sciforge/domain-research-checkpoints": "^1.0.0",
+    "@sciforge/domain-sdk": "^0.2.0",
+    "@sciforge/domain-visual-review": "^1.0.1",
+    "lucide-react": "^0.544.0",
+    "react": "^19.0.0",
+    "react-i18next": "^15.7.4",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.0",
+    "happy-dom": "^20.11.2",
+    "react-dom": "^19.0.0",
+    "tsx": "^4.22.4",
+    "typescript": "^5.8.2"
+  }
+}

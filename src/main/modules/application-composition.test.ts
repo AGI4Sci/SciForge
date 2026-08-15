@@ -13,8 +13,15 @@ import {
 
 describe('application domain composition', () => {
   it('composes explicit host-core and installed package capabilities through one catalog', () => {
+    const packageInvokerOwners: Array<{ moduleId: string; moduleVersion: string }> = []
     const catalog = createApplicationDomainCatalog({
-      getUserDataDir: () => '/tmp/sciforge-domain-composition-test'
+      getUserDataDir: () => '/tmp/sciforge-domain-composition-test',
+      capabilityInvokerFor: (owner) => {
+        packageInvokerOwners.push(owner)
+        return Object.freeze({
+          invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') }
+        })
+      }
     })
     const packages = catalog.listPackages()
 
@@ -27,6 +34,18 @@ describe('application domain composition', () => {
         .filter((definition) => definition.entrypoints.some(({ process }) => process === 'main'))
         .map((definition) => definition.packageName)
     ])
+    expect([...packageInvokerOwners].sort((left, right) => left.moduleId.localeCompare(right.moduleId))).toEqual(
+      installedDomainPackages.definitions
+        .filter((definition) => definition.entrypoints.some(({ process }) => process === 'main'))
+        .map((definition) => ({
+          moduleId: definition.module.id,
+          moduleVersion: definition.module.version
+        }))
+        .sort((left, right) => left.moduleId.localeCompare(right.moduleId))
+    )
+    expect(packageInvokerOwners.every((owner) => Object.isFrozen(owner))).toBe(true)
+    expect(new Set(packageInvokerOwners.map(({ moduleId }) => moduleId)).size)
+      .toBe(packageInvokerOwners.length)
     const factories = catalog.listContributions(
       MAIN_CAPABILITY_FACTORY_CONTRIBUTION_KIND,
       isAppCapabilityContributionFactory

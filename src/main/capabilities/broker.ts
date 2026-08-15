@@ -8,6 +8,7 @@ import {
   capabilityEventQuerySchema,
   capabilityInvocationRequestSchema,
   capabilityInvocationResultSchema,
+  capabilityIdSchema,
   capabilityJsonValueSchema,
   capabilityObservationSchema,
   capabilityObserveRequestSchema,
@@ -127,6 +128,13 @@ export type ActiveCapabilityInvocation = Readonly<{
   approved: boolean
 }>
 
+type HostSystemCapabilityCaller = Readonly<{
+  callerId: string
+  workspaceId?: string
+  capabilityGrants?: readonly string[]
+  approvals?: CapabilityCallerContextInput['approvals']
+}>
+
 function opaqueId(prefix: 'cap' | 'res' | 'audit' | 'event'): string {
   return `${prefix}_${randomBytes(24).toString('base64url')}`
 }
@@ -198,6 +206,13 @@ export class CapabilityBroker {
     rawRegistration: CapabilityResourceRegistration
   ): CapabilityResourceHandle {
     const caller = this.#parseCaller(rawCaller)
+    return this.#issueResourceHandleAs(caller, rawRegistration)
+  }
+
+  #issueResourceHandleAs(
+    caller: CapabilityCallerContext,
+    rawRegistration: CapabilityResourceRegistration
+  ): CapabilityResourceHandle {
     const registration = this.#parseResourceRegistration(rawRegistration)
     const workspaceId = registration.workspaceId ?? caller.workspaceId
     if (registration.workspaceId && registration.workspaceId !== caller.workspaceId) {
@@ -268,7 +283,7 @@ export class CapabilityBroker {
   ): CapabilityResourceHandle {
     const caller = this.#parseCaller(rawCaller)
     const state = this.#authorizedResourceRef(caller, resourceRef)
-    return this.issueResourceHandle(caller, {
+    return this.#issueResourceHandleAs(caller, {
       resourceId: state.resourceId,
       resourceKind: state.resourceKind,
       workspaceId: state.workspaceId,
@@ -352,7 +367,7 @@ export class CapabilityBroker {
 
     state.semanticRevision = observed.data.semanticRevision
     state.layoutRevision = observed.data.layoutRevision
-    const refreshedHandle = this.issueResourceHandle(caller, {
+    const refreshedHandle = this.#issueResourceHandleAs(caller, {
       resourceId: state.resourceId,
       resourceKind: state.resourceKind,
       workspaceId: state.workspaceId,
@@ -395,7 +410,51 @@ export class CapabilityBroker {
     rawRequest: CapabilityInvocationRequest,
     options: { signal?: AbortSignal } = {}
   ): Promise<CapabilityInvocationResult> {
+    if (
+      typeof rawCaller === 'object' &&
+      rawCaller !== null &&
+      Object.hasOwn(rawCaller, 'capabilityGrants')
+    ) {
+      throw new CapabilityBrokerError(
+        'invalid_caller',
+        'Capability grants can only be projected by the Host system invoker.'
+      )
+    }
     const caller = this.#parseCaller(rawCaller)
+    return this.#invokeAs(caller, rawRequest, options)
+  }
+
+  /** Host-private authority path used only by package-scoped system invokers. */
+  async invokeHostSystem(
+    rawCaller: HostSystemCapabilityCaller,
+    rawRequest: CapabilityInvocationRequest,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<CapabilityInvocationResult> {
+    const baseCaller = this.#parseCaller({
+      audience: 'system',
+      callerId: rawCaller.callerId,
+      ...(rawCaller.workspaceId ? { workspaceId: rawCaller.workspaceId } : {}),
+      ...(rawCaller.approvals?.length ? { approvals: [...rawCaller.approvals] } : {})
+    })
+    const capabilityGrants = z.array(capabilityIdSchema).max(128).superRefine(
+      (grants, context) => {
+        if (new Set(grants).size !== grants.length) {
+          context.addIssue({ code: 'custom', message: 'Capability grants must be unique.' })
+        }
+      }
+    ).parse(rawCaller.capabilityGrants ?? [])
+    const caller: CapabilityCallerContext = Object.freeze({
+      ...baseCaller,
+      ...(capabilityGrants.length > 0 ? { capabilityGrants: Object.freeze(capabilityGrants) } : {})
+    })
+    return this.#invokeAs(caller, rawRequest, options)
+  }
+
+  async #invokeAs(
+    caller: CapabilityCallerContext,
+    rawRequest: CapabilityInvocationRequest,
+    options: { signal?: AbortSignal }
+  ): Promise<CapabilityInvocationResult> {
     const requestResult = capabilityInvocationRequestSchema.safeParse(rawRequest)
     if (!requestResult.success) {
       throw new CapabilityBrokerError('invalid_invocation', 'Capability invocation is invalid.', {
@@ -434,6 +493,7 @@ export class CapabilityBroker {
       const beforeRevision = resource?.semanticRevision
       const fingerprint = stableJson({
         actionId: request.actionId,
+        capabilityGrants: [...(caller.capabilityGrants ?? [])].sort(),
         resourceRef: resource?.resourceRef ?? null,
         expectedRevision: request.expectedRevision ?? null,
         input: request.input
@@ -695,7 +755,7 @@ export class CapabilityBroker {
       }), () => definition.handler(options.parsedInput, {
         caller,
         resource: resource && this.#resolvedResource(resource),
-        issueResource: (registration) => this.issueResourceHandle(caller, registration),
+        issueResource: (registration) => this.#issueResourceHandleAs(caller, registration),
         signal
       }))
     } catch (error) {
@@ -774,7 +834,7 @@ export class CapabilityBroker {
       resource.semanticRevision = semanticRevision
       resource.layoutRevision = rawResult.layoutRevision ?? resource.layoutRevision
       afterRevision = semanticRevision
-      refreshedHandle = this.issueResourceHandle(caller, {
+      refreshedHandle = this.#issueResourceHandleAs(caller, {
         resourceId: resource.resourceId,
         resourceKind: resource.resourceKind,
         workspaceId: resource.workspaceId,

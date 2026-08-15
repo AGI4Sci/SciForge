@@ -38,14 +38,20 @@ export class CodexEventStore {
 
   private async appendNow(threadId: string, event: CodexThreadEventPayload): Promise<CodexStoredEvent> {
     const seq = await this.nextSeq(threadId)
+    const createdAt = this.now().toISOString()
     const stored: CodexStoredEvent = {
       seq,
       threadId,
-      createdAt: this.now().toISOString(),
+      createdAt,
       event: {
         ...event,
         threadId,
-        seq
+        seq,
+        // The Host-owned event-store timestamp is the authoritative durable
+        // occurrence time for lifecycle replay. Keep it inside the replayed
+        // payload as well as the outer journal envelope so subscribers cannot
+        // accidentally discard it when reading only `event`.
+        createdAt
       }
     }
     await this.jsonlForThread(threadId).appendJson([stored])
@@ -181,14 +187,19 @@ function parseStoredEvent(line: string): CodexStoredEvent | null {
   const threadId = stringValue(record.threadId) || event?.threadId || ''
   const seq = numberValue(record.seq)
   if (!event || !threadId || seq <= 0) return null
+  const createdAt = stringValue(record.createdAt) || new Date(0).toISOString()
   return {
     seq,
     threadId,
-    createdAt: stringValue(record.createdAt) || new Date(0).toISOString(),
+    createdAt,
     event: {
       ...event,
       threadId,
-      seq
+      seq,
+      // Migrate older JSONL records whose Host timestamp lived only on the
+      // outer envelope. Event replay must preserve that durable occurrence
+      // time without inventing a new clock value.
+      createdAt
     }
   }
 }

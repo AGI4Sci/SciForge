@@ -132,6 +132,7 @@ UI. It defines these generic contribution kinds:
 - `renderer.workbench-bottom-panel`
 - `renderer.workbench-global-overlay`
 - `renderer.composer-context-provider`
+- `renderer.resource-navigation`
 
 A command declaration ID is its stable command ID. Its runtime value has the exact shape
 `{ execute, isAvailable?, isActive? }`. Every invocation carries only bounded process-neutral data:
@@ -145,6 +146,14 @@ The three slots use contribution IDs rather than host-private modes. Composer co
 return bounded text items and metadata through a strict result schema. These pure contracts also
 describe future sandboxed renderer contributions; a sandbox host supplies the view transport
 without changing the manifest data model.
+
+Exact-resource navigation is contribution-neutral at the caller. A package asks the Workbench to
+open a bounded `{ resourceKind, resourceId, integrity? }` identity; exactly one installed
+`renderer.resource-navigation` owner may claim each resource kind and translate it to its own
+surface activation. Its manifest-declared target panel must exist and share the navigator's package
+owner. Duplicate resource owners, missing panels, and cross-owner targets fail registration.
+`canOpenResource` and the boolean `openResource` result let callers omit unavailable navigation;
+callers never name another package's contribution ID or activation schema.
 
 `DomainRendererHost` exposes only generic workbench navigation, bounded message sending,
 workspace file picking, registered visual-target inspection, and capability invocation. Visual
@@ -190,6 +199,17 @@ Main runtime lifecycle contributions can subscribe to generic before-turn and te
 events. System capability invocation cannot manufacture user approval. A nested destructive
 operation may request `inherit-current-action`, which the host must reject unless execution is
 already inside a matching approved outer action.
+
+Trusted capability providers may register bounded `main.system-capability-grant` contributions.
+A lifecycle contribution can request those public grant IDs only through its canonical manifest
+contract. Before activating any runtime, the Host resolves requests against the installed provider
+registrations; it then issues a package-scoped invoker whose caller identity and grants cannot be
+chosen by the package runtime. An unknown or undeclared grant fails closed.
+`eligibility: 'trusted-domain-runtime'` means every bundled trusted compile-time package is eligible
+to request the provider-owned grant through its installed manifest; it is not a provider-maintained
+consumer allowlist. Sandboxed or transport callers cannot request or carry these Host-issued grants.
+Packages that require lifecycle grants or resource navigation declare Host API `1.1.0` as their
+minimum; older Hosts reject those packages during catalog registration.
 
 ## Execution provenance and reproducibility
 

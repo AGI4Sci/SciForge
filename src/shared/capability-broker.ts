@@ -172,7 +172,10 @@ export const capabilityCallerContextSchema = z.object({
   workspaceLocator: workspaceLocatorSchema.optional(),
   approvals: z.array(capabilityApprovalGrantSchema).max(64).default([])
 }).strict()
-export type CapabilityCallerContext = z.infer<typeof capabilityCallerContextSchema>
+export type CapabilityCallerContext = z.infer<typeof capabilityCallerContextSchema> & Readonly<{
+  /** Host-issued package authority; this is intentionally absent from the public raw schema. */
+  capabilityGrants?: readonly string[]
+}>
 export type CapabilityCallerContextInput = z.input<typeof capabilityCallerContextSchema>
 
 export const capabilityResourceHandleSchema = z.object({

@@ -29,7 +29,15 @@ export type AgentRuntimeAdapterContext = {
   settings: AppSettingsV1
   workspaceHost?: WorkspaceHostPlacement
   turnGovernanceSnapshot?: AgentRuntimeTurnGovernanceSnapshot
+  /** @internal Host durability acknowledgement required before startTurn resolves. */
+  onTurnAccepted?: (handle: AgentRuntimeTurnHandle) => Promise<void>
 }
+
+/** Adapter-owned exact identity persisted before provider launch. */
+export type AgentRuntimePreparedTurn = Readonly<{
+  handle: AgentRuntimeTurnHandle
+  dispatch: () => Promise<AgentRuntimeTurnHandle>
+}>
 
 export type AgentRuntimeThreadRenameInput = {
   runtimeId: AgentRuntimeId
@@ -250,6 +258,10 @@ export type AgentRuntimeAdapter = {
     context: AgentRuntimeAdapterContext,
     input: AgentRuntimeTurnStartInput
   ): Promise<AgentRuntimeTurnHandle>
+  prepareTurnCapture?(
+    context: AgentRuntimeAdapterContext,
+    input: AgentRuntimeTurnStartInput
+  ): Promise<AgentRuntimePreparedTurn>
   interruptTurn(
     context: AgentRuntimeAdapterContext,
     input: AgentRuntimeTurnTargetInput

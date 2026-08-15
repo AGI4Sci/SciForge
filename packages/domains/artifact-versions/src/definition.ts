@@ -19,6 +19,10 @@ export const ARTIFACT_VERSIONS_RUNTIME_LIFECYCLE_CONTRIBUTION = contributionFor(
   'main',
   'main.runtime-lifecycle'
 )
+export const ARTIFACT_VERSIONS_IDENTITY_GRANT_CONTRIBUTION = contributionFor(
+  'main',
+  'main.system-capability-grant'
+)
 export const ARTIFACT_VERSIONS_RENDERER_RIGHT_PANEL_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.workbench-right-panel'

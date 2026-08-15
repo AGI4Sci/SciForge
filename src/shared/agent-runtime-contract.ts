@@ -193,6 +193,7 @@ export type AgentRuntimeCapabilityId =
   | 'workspace.references'
   | 'ui.visibleContext'
   | 'thread.goals'
+  | 'turnBoundary.pendingStartGovernance'
 
 export type AgentRuntimeCapabilityChannel = 'runtime_contract' | 'host_service' | 'auxiliary'
 
@@ -936,6 +937,9 @@ export const AGENT_RUNTIME_AUXILIARY_OPERATIONS = [
   'getThreadTodos',
   'setThreadTodos',
   'clearThreadTodos',
+  'listPendingTurnStarts',
+  'resolvePendingTurnStart',
+  'releasePendingTurnStart',
   'cancelUserInput'
 ] as const
 
@@ -965,6 +969,8 @@ export const AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS = [
   'getThreadTodos',
   'setThreadTodos',
   'clearThreadTodos',
+  'resolvePendingTurnStart',
+  'releasePendingTurnStart',
   'cancelUserInput'
 ] as const satisfies readonly AgentRuntimeAuxiliaryOperation[]
 
@@ -1001,6 +1007,52 @@ export type AgentRuntimeAuxiliaryInput =
   | AgentRuntimeAuxiliaryThreadBoundInput
   | AgentRuntimeAuxiliaryActiveScopedInput
   | AgentRuntimeAuxiliaryRuntimeScopedInput
+
+/** Generic Host-owned governance contract for an ambiguous provider delivery. */
+export type AgentRuntimePendingTurnStart = Readonly<{
+  issuerEpoch: string
+  deliveryAttemptOrdinal: number
+  boundaryLeaseId: string
+  deliveryAttemptId: string
+  runtimeId: AgentRuntimeId
+  threadId: string
+  clientDirectiveId: string
+  workspaceRoot?: string
+  workspaceLocator?: WorkspaceLocator
+  phase: 'pending-start'
+  occurredAt: string
+}>
+
+export type AgentRuntimePendingTurnStartListInput = Readonly<{
+  runtimeId?: AgentRuntimeId
+  threadId?: string
+  workspaceRoot?: string
+  workspaceLocator?: WorkspaceLocator
+}>
+
+export type AgentRuntimePendingTurnStartResolutionInput = Readonly<{
+  boundaryLeaseId: string
+  runtimeId: AgentRuntimeId
+  threadId: string
+  turnId: string
+  workspaceRoot?: string
+  workspaceLocator?: WorkspaceLocator
+  userMessageItemId: string
+}>
+
+export type AgentRuntimePendingTurnStartReleaseInput = Readonly<{
+  boundaryLeaseId: string
+  runtimeId: AgentRuntimeId
+  threadId: string
+  workspaceRoot?: string
+  workspaceLocator?: WorkspaceLocator
+}>
+
+export type AgentRuntimePendingTurnStartGovernanceReceipt = Readonly<{
+  action: 'resolve' | 'release-as-rejected'
+  boundaryLeaseId: string
+  applied: boolean
+}>
 
 export type AgentRuntimeItem = {
   id: string

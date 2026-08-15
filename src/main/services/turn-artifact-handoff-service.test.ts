@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, it } from 'vitest'
 
 import type {
   DomainArtifactConsumer,
+  DomainMainAfterTurnEvent,
   DomainTurnArtifactEvent
 } from '@sciforge/domain-sdk/host'
 
@@ -13,7 +14,11 @@ import { TurnArtifactHandoffService } from './turn-artifact-handoff-service'
 import {
   TurnArtifactOutbox,
   turnArtifactIntentKey,
-  type TurnArtifactIntent
+  type TurnArtifactIntent,
+  type TurnArtifactReplayIntent,
+  type TurnArtifactStart,
+  type TurnArtifactStartDraft,
+  type TurnArtifactWatch
 } from './turn-artifact-outbox'
 
 const roots: string[] = []
@@ -39,22 +44,24 @@ describe('TurnArtifactHandoffService', () => {
       consumers: [{ consume: async (value) => { delivered.push(value as DomainTurnArtifactEvent) } }]
     })
 
-    await service.publish(intent())
-    await service.publish(intent())
+    const accepted = await acceptTurn(service)
+    const value = accepted.intent
+    await service.publish(value)
+    await service.publish(value)
 
     assert.equal(outbox.all().length, 1)
     await service.replayPending()
     assert.equal(materializations, 1)
     assert.equal(delivered.length, 1)
     assert.equal(outbox.all().length, 0)
-    assert.equal(outbox.wasDelivered(turnArtifactIntentKey(intent())), true)
+    assert.equal(outbox.wasDelivered(turnArtifactIntentKey(value)), true)
 
-    await service.publish(intent())
+    await service.publish(value)
     await service.replayPending()
     assert.equal(materializations, 1)
     assert.equal(delivered.length, 1)
     await assert.rejects(
-      service.publish(intent({ occurredAt: '2026-08-05T00:00:01.000Z' })),
+      service.publish({ ...value, occurredAt: '2026-08-05T00:00:01.000Z' }),
       /intent key collision/
     )
     assert.equal((await stat(dirname(outbox.path))).mode & 0o777, 0o700)
@@ -70,7 +77,7 @@ describe('TurnArtifactHandoffService', () => {
       },
       consumers: [{ consume: async (value) => { delivered.push(value as DomainTurnArtifactEvent) } }]
     })
-    await recovered.publish(intent())
+    await recovered.publish(value)
     await recovered.replayPending()
     assert.equal(materializations, 1)
     assert.equal(delivered.length, 1)
@@ -80,14 +87,13 @@ describe('TurnArtifactHandoffService', () => {
   it('rejects a repeated identity when any immutable intent field differs', async () => {
     const root = await temporaryRoot()
     const outbox = new TurnArtifactOutbox(root)
-    const original = intent()
-
+    const { intent: original } = await acceptTurn(outbox)
     await outbox.enqueueIntent(original)
 
     for (const changed of [
-      intent({ sequence: 8 }),
-      intent({ workspaceRoot: '/another-workspace' }),
-      intent({ occurredAt: '2026-08-05T00:00:01.000Z' })
+      { ...original, sequence: 8 },
+      { ...original, workspaceRoot: '/another-workspace' },
+      { ...original, occurredAt: '2026-08-05T00:00:01.000Z' }
     ]) {
       await assert.rejects(
         outbox.enqueueIntent(changed),
@@ -101,7 +107,7 @@ describe('TurnArtifactHandoffService', () => {
   it('requires a materialized envelope to equal its intent and clears retry metadata', async () => {
     const root = await temporaryRoot()
     const outbox = new TurnArtifactOutbox(root)
-    const value = intent({ turnId: 'turn-envelope' })
+    const { intent: value } = await acceptTurn(outbox, { turnId: 'turn-envelope' })
     const key = turnArtifactIntentKey(value)
     await outbox.enqueueIntent(value)
     await outbox.markFailed(key, new Error('thread not ready'), 60_000)
@@ -128,7 +134,10 @@ describe('TurnArtifactHandoffService', () => {
   it('atomically binds a previously unbound intent to the authoritative materialized workspace', async () => {
     const root = await temporaryRoot()
     const firstOutbox = new TurnArtifactOutbox(root)
-    const unbound = intent({ turnId: 'turn-authoritative-bind', workspaceRoot: undefined })
+    const { intent: unbound } = await acceptTurn(firstOutbox, {
+      turnId: 'turn-authoritative-bind',
+      workspaceRoot: undefined
+    })
     const authoritative = { ...unbound, workspaceRoot: '/workspace/from-thread-detail' }
     const key = turnArtifactIntentKey(unbound)
     let materializations = 0
@@ -184,7 +193,10 @@ describe('TurnArtifactHandoffService', () => {
   it('does not persist an authoritative workspace candidate when another envelope field is invalid', async () => {
     const root = await temporaryRoot()
     const outbox = new TurnArtifactOutbox(root)
-    const unbound = intent({ turnId: 'turn-invalid-authoritative-bind', workspaceRoot: undefined })
+    const { intent: unbound } = await acceptTurn(outbox, {
+      turnId: 'turn-invalid-authoritative-bind',
+      workspaceRoot: undefined
+    })
     const key = turnArtifactIntentKey(unbound)
     await outbox.enqueueIntent(unbound)
 
@@ -211,7 +223,7 @@ describe('TurnArtifactHandoffService', () => {
       },
       consumers: [{ consume: async () => { deliveries += 1 } }]
     })
-    const value = intent({ turnId: 'turn-transient' })
+    const { intent: value } = await acceptTurn(service, { turnId: 'turn-transient' })
 
     await service.publish(value)
     await assert.rejects(service.replayPending(), AggregateError)
@@ -239,7 +251,7 @@ describe('TurnArtifactHandoffService', () => {
       },
       consumers: [{ consume: async () => { throw new Error('consumer offline') } }]
     })
-    const value = intent({ turnId: 'turn-restart' })
+    const { intent: value } = await acceptTurn(first, { turnId: 'turn-restart' })
 
     await first.publish(value)
     await assert.rejects(first.replayPending(), AggregateError)
@@ -299,7 +311,7 @@ describe('TurnArtifactHandoffService', () => {
       materialize: async (value) => event(value, 'stable-replay'),
       consumers: [firstConsumer, secondConsumer]
     })
-    const value = intent({ turnId: 'turn-partial' })
+    const { intent: value } = await acceptTurn(service, { turnId: 'turn-partial' })
 
     await service.publish(value)
     await assert.rejects(service.replayPending(), AggregateError)
@@ -313,41 +325,522 @@ describe('TurnArtifactHandoffService', () => {
     assert.equal(outbox.all().length, 0)
     await service.close()
   })
+
+  it('persists a rejected lifecycle subscriber and replays it after restart', async () => {
+    const root = await temporaryRoot()
+    const first = handoff({
+      outbox: new TurnArtifactOutbox(root),
+      materialize: async (value) => event(value, 'unused'),
+      consumers: [],
+      lifecycleConsumer: async () => { throw new Error('checkpoint store offline') }
+    })
+    const accepted = await acceptTurn(first)
+    const terminal = lifecycleFor(accepted.start, accepted.watch.turnId, undefined, 'failed')
+    await first.publishLifecycleSettlement(terminal)
+    const pending = (await first.readDurableTurnBoundarySnapshot()).owners
+    assert.equal(pending[0]?.boundaryLeaseId, terminal.boundaryLeaseId)
+    assert.equal(pending[0]?.phase, 'terminal-settlement')
+    assert.equal(pending[0]?.terminalState, 'failed')
+    await first.close()
+
+    const delivered: DomainMainAfterTurnEvent[] = []
+    const recovered = handoff({
+      outbox: new TurnArtifactOutbox(root),
+      materialize: async (value) => event(value, 'unused'),
+      consumers: [],
+      lifecycleConsumer: async (value) => { delivered.push(value) }
+    })
+    await recovered.flushThread('codex', 'thread-1')
+    assert.deepEqual(delivered, [terminal])
+    assert.equal((await recovered.readDurableTurnBoundarySnapshot()).owners[0]?.phase, 'terminal-settlement')
+    await recovered.close()
+  })
+
+  it('blocks completed artifact fan-out until its durable lifecycle settlement is acknowledged', async () => {
+    const root = await temporaryRoot()
+    const artifacts: DomainTurnArtifactEvent[] = []
+    const first = handoff({
+      outbox: new TurnArtifactOutbox(root),
+      materialize: async (value) => event(value, 'completed-after-settlement'),
+      consumers: [{ consume: async (value) => { artifacts.push(value as DomainTurnArtifactEvent) } }],
+      lifecycleConsumer: async () => { throw new Error('lifecycle consumer offline') }
+    })
+    const accepted = await acceptTurn(first)
+    await first.publish(accepted.intent)
+    await first.publishLifecycleSettlement(accepted.lifecycle)
+    assert.equal(artifacts.length, 0)
+    await first.close()
+
+    const ordering: string[] = []
+    const recovered = handoff({
+      outbox: new TurnArtifactOutbox(root),
+      materialize: async (value) => event(value, 'completed-after-settlement'),
+      consumers: [{ consume: async () => { ordering.push('artifact') } }],
+      lifecycleConsumer: async () => { ordering.push('settlement') }
+    })
+    await recovered.flushThread('codex', 'thread-1')
+    assert.deepEqual(ordering, ['settlement', 'artifact'])
+    await recovered.close()
+  })
+
+  it('replays an accepted open watch to completion after a process restart', async () => {
+    const root = await temporaryRoot()
+    const first = handoff({
+      outbox: new TurnArtifactOutbox(root),
+      materialize: async (value) => event(value, 'unused-before-crash'),
+      consumers: []
+    })
+    const accepted = await acceptTurn(first)
+    await first.close()
+
+    const artifacts: DomainTurnArtifactEvent[] = []
+    const recovered = handoff({
+      outbox: new TurnArtifactOutbox(root),
+      materialize: async (value) => event(value, 'replayed-after-crash'),
+      consumers: [{ consume: async (value) => { artifacts.push(value as DomainTurnArtifactEvent) } }]
+    })
+    assert.equal((await recovered.pending()).length, 1)
+    await recovered.publish(accepted.intent)
+    await recovered.flushThread('codex', 'thread-1')
+    assert.equal(artifacts.length, 1)
+    assert.deepEqual(artifacts[0]?.artifacts, [{ marker: 'replayed-after-crash' }])
+    assert.equal((await recovered.readDurableTurnBoundarySnapshot()).owners[0]?.terminalState, 'completed')
+    await recovered.close()
+  })
+
+  it('coalesces authoritative phases and fails closed on unresolved predecessors', async () => {
+    const root = await temporaryRoot()
+    const service = handoff({
+      outbox: new TurnArtifactOutbox(root),
+      materialize: async (value) => event(value, 'coalesced'),
+      consumers: []
+    })
+    const draft = startDraft()
+    const acceptedStart = await service.registerStart(draft)
+    await assert.rejects(
+      service.registerStart({ ...draft, workspaceRoot: '/different-workspace' }),
+      /start key collision/
+    )
+    assert.equal((await service.readDurableTurnBoundarySnapshot()).owners[0]?.phase, 'pending-start')
+    await assert.rejects(
+      service.flushThread('codex', 'thread-1'),
+      (error: unknown) => error instanceof AggregateError && error.errors.some(
+        (cause) => String(cause).includes('unresolved accepted/prepared predecessor')
+      )
+    )
+    const acceptedWatch: TurnArtifactWatch = {
+      ...acceptedStart,
+      turnId: 'turn-1',
+      bindingSource: 'provider-accepted'
+    }
+    await service.bindStart(acceptedStart, acceptedWatch)
+    assert.equal((await service.readDurableTurnBoundarySnapshot()).owners[0]?.phase, 'watching')
+    const acceptedIntent = intentFor(acceptedStart, acceptedWatch.turnId)
+    await service.publish(acceptedIntent)
+    assert.equal((await service.readDurableTurnBoundarySnapshot()).owners[0]?.phase, 'terminal-settlement')
+    await service.publishLifecycleSettlement(lifecycleFor(acceptedStart, acceptedWatch.turnId))
+    const boundaries = (await service.readDurableTurnBoundarySnapshot()).owners
+    assert.equal(boundaries.length, 1)
+    assert.equal(boundaries[0]?.phase, 'terminal-settlement')
+    assert.equal(boundaries[0]?.terminalState, 'completed')
+    await service.close()
+  })
+
+  it('rejects a settlement that changes the durable workspace binding', async () => {
+    const root = await temporaryRoot()
+    const outbox = new TurnArtifactOutbox(root)
+    const acceptedStart = await outbox.registerStart(startDraft())
+    await assert.rejects(
+      outbox.enqueueLifecycleSettlement({
+        ...lifecycleFor(acceptedStart, undefined, undefined, 'rejected'),
+        state: 'rejected',
+        turnId: undefined,
+        workspaceRoot: '/different-workspace'
+      }),
+      /does not match its durable boundary owner/
+    )
+  })
+
+  it('persists the explicit pending-start release source for audit and replay', async () => {
+    const root = await temporaryRoot()
+    const outbox = new TurnArtifactOutbox(root)
+    const acceptedStart = await outbox.registerStart(startDraft())
+    await outbox.enqueueLifecycleSettlement({
+      ...lifecycleFor(acceptedStart, undefined, undefined, 'rejected'),
+      settlementSource: 'explicit-pending-start-release'
+    })
+
+    const recovered = new TurnArtifactOutbox(root)
+    await recovered.load()
+    assert.equal(recovered.pendingStarts().length, 0)
+    assert.equal(
+      recovered.readyLifecycleSettlements()[0]?.event.settlementSource,
+      'explicit-pending-start-release'
+    )
+    const boundary = recovered.durableTurnBoundarySnapshot().owners[0]
+    assert.equal(boundary?.boundaryLeaseId, acceptedStart.boundaryLeaseId)
+    assert.equal(boundary?.phase, 'terminal-settlement')
+    assert.equal(boundary?.terminalState, 'rejected')
+  })
+
+  it('atomically resolves or releases each pending start exactly once', async () => {
+    const root = await temporaryRoot()
+    const outbox = new TurnArtifactOutbox(root)
+
+    const raced = await outbox.registerStart(startDraft({
+      threadId: 'thread-raced',
+      clientDirectiveId: 'directive-raced'
+    }))
+    const racedWatch: TurnArtifactWatch = {
+      ...raced,
+      turnId: 'turn-raced',
+      bindingSource: 'explicit-resolution'
+    }
+    const racedRelease = {
+      ...lifecycleFor(raced, undefined, undefined, 'rejected'),
+      settlementSource: 'explicit-pending-start-release' as const
+    }
+    const raceResults = await Promise.all([
+      outbox.bindStart(raced, racedWatch),
+      outbox.rejectStart(raced, racedRelease)
+    ])
+    assert.equal(raceResults.filter(Boolean).length, 1)
+    assert.equal(outbox.pendingStarts().length, 0)
+    assert.equal(
+      outbox.pendingWatches().length + outbox.readyLifecycleSettlements().length,
+      1
+    )
+
+    const releaseFirst = await outbox.registerStart(startDraft({
+      threadId: 'thread-release-first',
+      clientDirectiveId: 'directive-release-first'
+    }))
+    const releaseFirstWatch: TurnArtifactWatch = {
+      ...releaseFirst,
+      turnId: 'turn-release-first',
+      bindingSource: 'explicit-resolution'
+    }
+    const releaseFirstEvent = {
+      ...lifecycleFor(releaseFirst, undefined, undefined, 'rejected'),
+      settlementSource: 'explicit-pending-start-release' as const
+    }
+    assert.deepEqual(await Promise.all([
+      outbox.rejectStart(releaseFirst, releaseFirstEvent),
+      outbox.bindStart(releaseFirst, releaseFirstWatch)
+    ]), [true, false])
+    assert.equal(outbox.pendingWatches().some(
+      (watch) => watch.boundaryLeaseId === releaseFirst.boundaryLeaseId
+    ), false)
+    assert.equal(outbox.readyLifecycleSettlements().some(
+      (record) => record.event.boundaryLeaseId === releaseFirst.boundaryLeaseId
+    ), true)
+
+    const doubleResolve = await outbox.registerStart(startDraft({
+      threadId: 'thread-double-resolve',
+      clientDirectiveId: 'directive-double-resolve'
+    }))
+    const differentHandles = await Promise.allSettled([
+      outbox.bindStart(doubleResolve, {
+        ...doubleResolve,
+        turnId: 'turn-resolution-a',
+        bindingSource: 'explicit-resolution'
+      }),
+      outbox.bindStart(doubleResolve, {
+        ...doubleResolve,
+        turnId: 'turn-resolution-b',
+        bindingSource: 'explicit-resolution'
+      })
+    ])
+    assert.equal(differentHandles.filter(
+      (result) => result.status === 'fulfilled' && result.value
+    ).length, 1)
+    const collision = differentHandles.find((result) => result.status === 'rejected')
+    assert.match(String(collision && collision.status === 'rejected' ? collision.reason : ''), /collision/)
+
+    const doubleRelease = await outbox.registerStart(startDraft({
+      threadId: 'thread-double-release',
+      clientDirectiveId: 'directive-double-release'
+    }))
+    const doubleReleaseEvent = {
+      ...lifecycleFor(doubleRelease, undefined, undefined, 'rejected'),
+      settlementSource: 'explicit-pending-start-release' as const
+    }
+    const releaseResults = await Promise.all([
+      outbox.rejectStart(doubleRelease, doubleReleaseEvent),
+      outbox.rejectStart(doubleRelease, doubleReleaseEvent)
+    ])
+    assert.deepEqual([...releaseResults].sort(), [false, true])
+
+    const restarted = new TurnArtifactOutbox(root)
+    await restarted.load()
+    assert.equal(await restarted.rejectStart(doubleRelease, doubleReleaseEvent), false)
+    assert.equal(restarted.pendingStarts().length, 0)
+    assert.equal(restarted.pendingWatches().some(
+      (watch) => watch.boundaryLeaseId === doubleRelease.boundaryLeaseId
+    ), false)
+
+    const resolvedBeforeRestart = await outbox.registerStart(startDraft({
+      threadId: 'thread-resolved-before-restart',
+      clientDirectiveId: 'directive-resolved-before-restart'
+    }))
+    const resolvedWatch: TurnArtifactWatch = {
+      ...resolvedBeforeRestart,
+      turnId: 'turn-resolved-before-restart',
+      bindingSource: 'explicit-resolution'
+    }
+    assert.equal(await outbox.bindStart(resolvedBeforeRestart, resolvedWatch), true)
+    const afterResolveRestart = new TurnArtifactOutbox(root)
+    await afterResolveRestart.load()
+    assert.equal(await afterResolveRestart.rejectStart(resolvedBeforeRestart, {
+      ...lifecycleFor(resolvedBeforeRestart, undefined, undefined, 'rejected'),
+      settlementSource: 'explicit-pending-start-release'
+    }), false)
+    assert.equal(afterResolveRestart.pendingWatches().some(
+      (watch) => watch.boundaryLeaseId === resolvedBeforeRestart.boundaryLeaseId
+    ), true)
+
+    assert.equal(await restarted.bindStart(doubleRelease, {
+      ...doubleRelease,
+      turnId: 'turn-stale-after-release',
+      bindingSource: 'explicit-resolution'
+    }), false)
+    assert.equal(restarted.pendingWatches().some(
+      (watch) => watch.boundaryLeaseId === doubleRelease.boundaryLeaseId
+    ), false)
+  })
+
+  it('fails closed when an issued ordinal is neither live nor exactly retired', async () => {
+    const root = await temporaryRoot()
+    const outbox = new TurnArtifactOutbox(root)
+    await outbox.registerStart(startDraft({
+      threadId: 'thread-first',
+      clientDirectiveId: 'directive-first'
+    }))
+    await outbox.registerStart(startDraft({
+      threadId: 'thread-second',
+      clientDirectiveId: 'directive-second'
+    }))
+    const persisted = JSON.parse(await readFile(outbox.path, 'utf8')) as {
+      starts: unknown[]
+    }
+    persisted.starts.shift()
+    await writeFile(outbox.path, `${JSON.stringify(persisted, null, 2)}\n`, 'utf8')
+
+    await assert.rejects(
+      new TurnArtifactOutbox(root).load(),
+      /ledger is missing ordinal 1/
+    )
+  })
+
+  it('bounds mixed terminal receipts with an exact sparse retirement ledger across restart', async () => {
+    const root = await temporaryRoot()
+    const outbox = new TurnArtifactOutbox(root, {
+      maxArtifactReceipts: 1,
+      maxLifecycleReceipts: 1
+    })
+    const service = handoff({
+      outbox,
+      materialize: async (value) => event(value, value.turnId),
+      consumers: [{ consume: async () => undefined }]
+    })
+
+    const hole = await service.registerStart(startDraft({
+      threadId: 'thread-hole',
+      clientDirectiveId: 'directive-hole'
+    }))
+    const retiredCandidates: TurnArtifactIntent[] = []
+    for (let index = 0; index < 16; index += 1) {
+      const identity = String(index).padStart(2, '0')
+      const threadId = `thread-${identity}`
+      const clientDirectiveId = `directive-${identity}`
+      const state = (['completed', 'failed', 'cancelled', 'rejected'] as const)[index % 4]!
+      if (state === 'rejected') {
+        const start = await service.registerStart(startDraft({ threadId, clientDirectiveId }))
+        await service.publishLifecycleSettlement(lifecycleFor(start, undefined, undefined, state))
+        continue
+      }
+      const accepted = await acceptTurn(service, {
+        threadId,
+        turnId: `turn-${identity}`,
+        clientDirectiveId
+      })
+      if (state === 'completed') {
+        retiredCandidates.push(accepted.intent)
+        await service.publish(accepted.intent)
+        await service.flushThread('codex', threadId)
+      } else {
+        await service.publishLifecycleSettlement(lifecycleFor(
+          accepted.start,
+          accepted.watch.turnId,
+          undefined,
+          state
+        ))
+      }
+    }
+
+    const snapshot = await service.readDurableTurnBoundarySnapshot()
+    assert.equal(snapshot.owners.some((owner) => owner.boundaryLeaseId === hole.boundaryLeaseId), true)
+    assert.equal(snapshot.owners.some((owner) => owner.deliveryAttemptOrdinal === 2), false)
+    assert.equal(snapshot.retiredThroughOrdinal, 0)
+    assert.equal(snapshot.retiredOrdinalRanges.some((range) => range.first === 2), true)
+
+    const persisted = JSON.parse(await readFile(outbox.path, 'utf8')) as {
+      records: unknown[]
+      receipts: unknown[]
+      lifecycleReceipts: unknown[]
+      attemptIssuer: { retiredOrdinalRanges: Array<{ first: number; last: number }> }
+    }
+    assert.equal(persisted.records.length, 0)
+    assert.ok(persisted.receipts.length <= 1)
+    assert.ok(persisted.lifecycleReceipts.length <= 1)
+    assert.ok(persisted.attemptIssuer.retiredOrdinalRanges.length <= 2)
+
+    await service.close()
+    const recovered = handoff({
+      outbox: new TurnArtifactOutbox(root, {
+        maxArtifactReceipts: 1,
+        maxLifecycleReceipts: 1
+      }),
+      materialize: async (value) => event(value, value.turnId),
+      consumers: [{ consume: async () => undefined }]
+    })
+    const retired = retiredCandidates[0]!
+    await assert.rejects(
+      recovered.publish(retired),
+      /permanently retired/
+    )
+    await assert.rejects(
+      recovered.publish({ ...retired, occurredAt: '2026-08-05T00:00:01.000Z' }),
+      /permanently retired/
+    )
+    const next = await recovered.registerStart(startDraft({
+      threadId: 'thread-after-restart',
+      clientDirectiveId: 'directive-after-restart'
+    }))
+    assert.equal(next.deliveryAttemptOrdinal, snapshot.nextDeliveryAttemptOrdinal)
+    await recovered.close()
+  })
 })
 
 function handoff(input: {
   outbox: TurnArtifactOutbox
-  materialize: (intent: TurnArtifactIntent) => Promise<DomainTurnArtifactEvent>
+  materialize: (intent: TurnArtifactReplayIntent) => Promise<DomainTurnArtifactEvent>
   consumers: readonly DomainArtifactConsumer[]
+  lifecycleConsumer?: (event: DomainMainAfterTurnEvent) => Promise<void>
 }): TurnArtifactHandoffService {
-  return new TurnArtifactHandoffService({
+  const service = new TurnArtifactHandoffService({
     ...input,
     retryBaseMs: 60_000,
     retryMaxMs: 60_000,
     setTimeout: inertSetTimeout,
     clearTimeout: inertClearTimeout
   })
+  service.attachLifecycleSettlementConsumer(input.lifecycleConsumer ?? (async () => undefined))
+  return service
 }
 
-function intent(overrides: Partial<TurnArtifactIntent> = {}): TurnArtifactIntent {
+async function acceptTurn(
+  owner: Pick<TurnArtifactHandoffService, 'registerStart' | 'bindStart'> | TurnArtifactOutbox,
+  overrides: Readonly<{
+    runtimeId?: string
+    threadId?: string
+    turnId?: string
+    clientDirectiveId?: string
+    inputDigest?: string
+    workspaceRoot?: string
+  }> = {}
+): Promise<Readonly<{
+  start: TurnArtifactStart
+  watch: TurnArtifactWatch
+  intent: TurnArtifactIntent
+  lifecycle: DomainMainAfterTurnEvent
+}>> {
+  const draft = startDraft(overrides)
+  const start = await owner.registerStart(draft)
+  const watchValue: TurnArtifactWatch = {
+    ...start,
+    turnId: overrides.turnId ?? 'turn-1',
+    bindingSource: 'provider-accepted'
+  }
+  await owner.bindStart(start, watchValue)
+  const intentValue = intentFor(start, watchValue.turnId)
+  return Object.freeze({
+    start,
+    watch: watchValue,
+    intent: intentValue,
+    lifecycle: lifecycleFor(start, watchValue.turnId, intentValue.occurredAt)
+  })
+}
+
+function startDraft(overrides: Readonly<{
+  runtimeId?: string
+  threadId?: string
+  clientDirectiveId?: string
+  inputDigest?: string
+  workspaceRoot?: string
+}> = {}): TurnArtifactStartDraft {
   return {
-    runtimeId: 'codex',
-    threadId: 'thread-1',
-    turnId: 'turn-1',
-    sequence: 7,
-    workspaceRoot: '/workspace',
-    occurredAt: '2026-08-05T00:00:00.000Z',
-    ...overrides
+    runtimeId: overrides.runtimeId ?? 'codex',
+    threadId: overrides.threadId ?? 'thread-1',
+    clientDirectiveId: overrides.clientDirectiveId ?? 'directive-1',
+    inputDigest: overrides.inputDigest ?? 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    ...(Object.prototype.hasOwnProperty.call(overrides, 'workspaceRoot')
+      ? (overrides.workspaceRoot ? { workspaceRoot: overrides.workspaceRoot } : {})
+      : { workspaceRoot: '/workspace' })
   }
 }
 
-function event(value: TurnArtifactIntent, marker: string): DomainTurnArtifactEvent {
+function intentFor(start: TurnArtifactStart, turnId: string): TurnArtifactIntent {
+  const { key: _key, registeredAt: _registeredAt, ...binding } = start as TurnArtifactStart & {
+    key?: string
+    registeredAt?: string
+  }
+  return {
+    ...binding,
+    turnId,
+    bindingSource: 'provider-accepted',
+    sequence: 7,
+    occurredAt: '2026-08-05T00:00:00.000Z'
+  }
+}
+
+function lifecycleFor(
+  start: TurnArtifactStart,
+  turnId: string | undefined,
+  occurredAt = '2026-08-05T00:00:00.000Z',
+  state: DomainMainAfterTurnEvent['state'] = 'completed'
+): DomainMainAfterTurnEvent {
+  return {
+    kind: 'after-turn',
+    state,
+    issuerEpoch: start.issuerEpoch,
+    deliveryAttemptOrdinal: start.deliveryAttemptOrdinal,
+    deliveryAttemptId: start.deliveryAttemptId,
+    boundaryLeaseId: start.boundaryLeaseId,
+    runtimeId: start.runtimeId,
+    threadId: start.threadId,
+    ...(turnId ? { turnId } : {}),
+    clientDirectiveId: start.clientDirectiveId,
+    ...(start.workspaceRoot ? { workspaceRoot: start.workspaceRoot } : {}),
+    settlementSource: 'runtime',
+    occurredAt
+  } as DomainMainAfterTurnEvent
+}
+
+function event(value: TurnArtifactReplayIntent, marker: string): DomainTurnArtifactEvent {
   return {
     contractVersion: 1,
     kind: 'turn-completed',
     runtimeId: value.runtimeId,
     threadId: value.threadId,
     turnId: value.turnId,
+    ...(value.issuerEpoch ? { issuerEpoch: value.issuerEpoch } : {}),
+    ...(value.deliveryAttemptOrdinal === undefined
+      ? {}
+      : { deliveryAttemptOrdinal: value.deliveryAttemptOrdinal }),
+    deliveryAttemptId: value.deliveryAttemptId,
+    boundaryLeaseId: value.boundaryLeaseId,
+    ...(value.clientDirectiveId ? { clientDirectiveId: value.clientDirectiveId } : {}),
     targetWatermark: String(value.sequence ?? value.turnId),
     ...(value.sequence === undefined ? {} : { sequence: value.sequence }),
     ...(value.workspaceRoot ? { workspaceRoot: value.workspaceRoot } : {}),

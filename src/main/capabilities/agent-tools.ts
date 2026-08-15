@@ -1,4 +1,5 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 import { z } from 'zod'
 import {
   CAPABILITY_BROKER_CONTRACT_VERSION,
@@ -62,6 +63,8 @@ export type CapabilityAgentToolRequestContext = Readonly<{
   turnId?: string
   callId?: string
   workspaceId?: string
+  /** Host workspace placement; never included in model-visible schemas. */
+  workspaceLocator?: WorkspaceLocator
 }>
 
 export type CapabilityAgentToolCall = Readonly<{
@@ -154,6 +157,8 @@ export type AgentCapabilityObservation = Readonly<{
 }>
 
 export type AgentCapabilityInvocation = Readonly<{
+  /** Exact Host-resolved action identity for durable executor receipts. */
+  capabilityId: string
   operationRef: string
   output: CapabilityJsonValue
   resourceRef?: string
@@ -490,8 +495,10 @@ export class CapabilityAgentToolSurface {
     const active = this.#beginActiveCall(context, signal)
     try {
       const descriptor = this.#operation(cache, parsed.operationRef)
+      const invocationId = descriptor.effect === 'read'
+        ? undefined
+        : stableAgentInvocationId(descriptor, context)
       let handle = parsed.resourceRef ? this.#resource(cache, parsed.resourceRef) : undefined
-      const invocationId = descriptor.effect === 'read' ? undefined : opaqueId('agent_inv')
       const invokeCaller = await this.#callerForInvocation(
         caller,
         descriptor,
@@ -527,6 +534,12 @@ export class CapabilityAgentToolSurface {
         cache.resources.set(parsed.resourceRef, renewed)
         result = await invoke(renewed)
       }
+      if (result.actionId !== descriptor.id) {
+        throw new CapabilityAgentToolError(
+          'capability_identity_mismatch',
+          'The capability broker returned an action identity that did not match the Host-resolved operation.'
+        )
+      }
       const sanitizedOutput = await this.#sanitizeOutput(caller, cache, result.output)
       let resourceRef = parsed.resourceRef
       if (result.resource) {
@@ -537,6 +550,7 @@ export class CapabilityAgentToolSurface {
       return {
         tool: CAPABILITY_AGENT_TOOL_NAMES.invoke,
         value: {
+          capabilityId: descriptor.id,
           operationRef: parsed.operationRef,
           output: sanitizedOutput,
           ...(resourceRef ? { resourceRef } : {}),
@@ -782,7 +796,9 @@ export class CapabilityAgentToolError extends Error {
     | 'unknown_resource_ref'
     | 'resource_ref_retired'
     | 'capability_discovery_empty'
+    | 'capability_identity_mismatch'
     | 'stale_resource_ref'
+    | 'missing_invocation_context'
     | 'approval_denied'
     | 'approval_cancelled'
     | 'visual_runtime_unavailable'
@@ -999,6 +1015,30 @@ function isCapabilityJsonValue(value: unknown): value is CapabilityJsonValue {
 
 function opaqueId(prefix: string): string {
   return `${prefix}_${randomBytes(18).toString('base64url')}`
+}
+
+function stableAgentInvocationId(
+  descriptor: Pick<CapabilityDescriptor, 'id'>,
+  context: Pick<CapabilityAgentToolRequestContext, 'runtimeId' | 'threadId' | 'turnId' | 'callId'>
+): string {
+  const runtimeId = context.runtimeId.trim()
+  const threadId = context.threadId?.trim()
+  const turnId = context.turnId?.trim()
+  const callId = context.callId?.trim()
+  if (!runtimeId || !threadId || !turnId || !callId) {
+    throw new CapabilityAgentToolError(
+      'missing_invocation_context',
+      `Non-read capability ${descriptor.id} requires exact runtime, thread, turn, and call context.`
+    )
+  }
+  const digest = createHash('sha256').update(JSON.stringify({
+    runtimeId,
+    threadId,
+    turnId,
+    callId,
+    actionId: descriptor.id
+  })).digest('hex')
+  return `agent_inv_${digest}`
 }
 
 function activeTurnKey(

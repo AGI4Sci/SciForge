@@ -1,37 +1,60 @@
 import type { z } from 'zod'
-import type {
-  DomainMainHost,
-  DomainMainRuntimeLifecycleContribution
+import {
+  defineDomainMainSystemCapabilityGrant,
+  type DomainMainHost,
+  type DomainMainRuntimeLifecycleContribution,
+  type DomainMainSystemCapabilityGrant
 } from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
 import {
   ARTIFACT_VERSIONS_CAPABILITY_IDS,
+  ARTIFACT_VERSIONS_SYSTEM_CAPABILITY_GRANTS,
   artifactVersionBundleExportInputV1Schema,
+  artifactVersionBundleExportInputV2Schema,
   artifactVersionBundleExportResultV1Schema,
+  artifactVersionBundleExportResultV2Schema,
   artifactVersionBundleImportInputV1Schema,
   artifactVersionBundleImportResultV1Schema,
   artifactVersionBundleVerifyInputV1Schema,
   artifactVersionBundleVerifyResultV1Schema,
+  artifactVersionBundleVerifyResultV2Schema,
   artifactVersionCommitInputV1Schema,
   artifactVersionCommitResultV1Schema,
+  artifactVersionCommitInputV2Schema,
+  artifactVersionCommitResultV2Schema,
   artifactVersionCompareInputV1Schema,
   artifactVersionCompareResultV1Schema,
+  artifactVersionDescribeInputV2Schema,
+  artifactVersionDescribeResultV2Schema,
   artifactVersionEventListInputV1Schema,
   artifactVersionEventListResultV1Schema,
   artifactVersionListInputV1Schema,
+  artifactVersionListInputV2Schema,
   artifactVersionListResultV1Schema,
+  artifactVersionListResultV2Schema,
   artifactVersionMaterializeInputV1Schema,
   artifactVersionMaterializeResultV1Schema,
   artifactVersionObserveInputV1Schema,
   artifactVersionReadInputV1Schema,
+  artifactVersionReadRangeInputV2Schema,
+  artifactVersionReadRangeResultV2Schema,
   artifactVersionReadResultV1Schema,
   artifactVersionRefreshInputV1Schema,
   artifactVersionRefreshResultV1Schema,
-  artifactVersionRestoreAsNewInputV1Schema
+  artifactVersionRestoreAsNewInputV1Schema,
+  artifactVersionStageAbortInputV2Schema,
+  artifactVersionStageAbortResultV2Schema,
+  artifactVersionStageAppendInputV2Schema,
+  artifactVersionStageAppendResultV2Schema,
+  artifactVersionStageBeginInputV2Schema,
+  artifactVersionStageBeginResultV2Schema,
+  artifactVersionStageSealInputV2Schema,
+  artifactVersionStageSealResultV2Schema
 } from './contract.js'
 import {
   ARTIFACT_VERSIONS_CAPABILITY_FACTORY_CONTRIBUTION,
   ARTIFACT_VERSIONS_DOMAIN_MODULE_ID,
+  ARTIFACT_VERSIONS_IDENTITY_GRANT_CONTRIBUTION,
   ARTIFACT_VERSIONS_RUNTIME_LIFECYCLE_CONTRIBUTION,
   domainPackageDefinition
 } from './definition.js'
@@ -45,6 +68,7 @@ type ArtifactVersionsCapabilityHandlerContext = Readonly<{
     audience: CapabilityAudience
     callerId: string
     workspaceId?: string
+    capabilityGrants?: readonly string[]
   }>
 }>
 
@@ -84,6 +108,7 @@ export type ArtifactVersionsCapabilityFactory<CapabilityDefinition = unknown> = 
 export type ArtifactVersionsMainContribution<CapabilityDefinition = unknown> =
   | ArtifactVersionsCapabilityFactory<CapabilityDefinition>
   | DomainMainRuntimeLifecycleContribution
+  | DomainMainSystemCapabilityGrant
 
 export function createDomainMainEntry<CapabilityDefinition = unknown>(
   host: DomainMainHost
@@ -128,6 +153,14 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
         onDispose: () => {
           void deactivate?.().catch(() => undefined)
         }
+      },
+      {
+        ...ARTIFACT_VERSIONS_IDENTITY_GRANT_CONTRIBUTION,
+        value: defineDomainMainSystemCapabilityGrant({
+          id: ARTIFACT_VERSIONS_SYSTEM_CAPABILITY_GRANTS.selectIdentities,
+          eligibility: 'trusted-domain-runtime',
+          description: 'Select immutable Artifact and Version identities during an atomic commit.'
+        })
       }
     ]
   }
@@ -159,7 +192,10 @@ export function createArtifactVersionsCapabilityFactory<CapabilityDefinition>(
     if (!callerId) throw new Error('Artifact Versions capability requires caller identity.')
     return {
       audience: context.caller.audience,
-      callerId
+      callerId,
+      ...(context.caller.capabilityGrants?.length
+        ? { capabilityGrants: Object.freeze([...context.caller.capabilityGrants]) }
+        : {})
     } as const
   }
   return Object.freeze({
@@ -181,10 +217,107 @@ export function createArtifactVersionsCapabilityFactory<CapabilityDefinition>(
         concurrency: { revision: 'none', idempotency: 'required' },
         inputSchema: artifactVersionCommitInputV1Schema,
         outputSchema: artifactVersionCommitResultV1Schema,
-        handler: async (raw, context) => mutationResponse(
-          await options.getService().commit(
+        handler: async (raw, context) => {
+          const input = artifactVersionCommitInputV1Schema.parse(raw)
+          return mutationResponse(await options.getService().commit(
             workspace(context),
-            artifactVersionCommitInputV1Schema.parse(raw),
+            input,
+            access(context)
+          ))
+        }
+      }),
+      define({
+        id: ARTIFACT_VERSIONS_CAPABILITY_IDS.commitV2,
+        title: 'Commit artifact versions V2',
+        description: 'Commits versions with staged content and system-owned deterministic identities.',
+        audiences: ['system'],
+        effect: 'workspace-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: artifactVersionCommitInputV2Schema,
+        outputSchema: artifactVersionCommitResultV2Schema,
+        handler: async (raw, context) => {
+          const input = artifactVersionCommitInputV2Schema.parse(raw)
+          if (input.candidates.some((candidate) => (
+            candidate.requestedArtifactId || candidate.requestedVersionId
+          )) && !context.caller.capabilityGrants?.includes(
+            ARTIFACT_VERSIONS_SYSTEM_CAPABILITY_GRANTS.selectIdentities
+          )) {
+            throw new Error('Caller-selected identities require the Artifact Versions identity-selection grant.')
+          }
+          return mutationResponse(await options.getService().commitV2(
+            workspace(context), input, access(context)
+          ))
+        }
+      }),
+      define({
+        id: ARTIFACT_VERSIONS_CAPABILITY_IDS.stageBeginV2,
+        title: 'Begin staged artifact object',
+        description: 'Creates a caller-bound bounded streaming object upload.',
+        audiences: ['system'],
+        effect: 'workspace-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: artifactVersionStageBeginInputV2Schema,
+        outputSchema: artifactVersionStageBeginResultV2Schema,
+        handler: async (raw, context) => mutationResponse(
+          await options.getService().stageBegin(
+            workspace(context),
+            artifactVersionStageBeginInputV2Schema.parse(raw),
+            access(context)
+          )
+        )
+      }),
+      define({
+        id: ARTIFACT_VERSIONS_CAPABILITY_IDS.stageAppendV2,
+        title: 'Append staged artifact object chunk',
+        description: 'Appends one integrity-checked sequential chunk to a staged object.',
+        audiences: ['system'],
+        effect: 'workspace-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: artifactVersionStageAppendInputV2Schema,
+        outputSchema: artifactVersionStageAppendResultV2Schema,
+        handler: async (raw, context) => mutationResponse(
+          await options.getService().stageAppend(
+            workspace(context),
+            artifactVersionStageAppendInputV2Schema.parse(raw),
+            access(context)
+          )
+        )
+      }),
+      define({
+        id: ARTIFACT_VERSIONS_CAPABILITY_IDS.stageSealV2,
+        title: 'Seal staged artifact object',
+        description: 'Verifies and seals a staged object for single-use commit.',
+        audiences: ['system'],
+        effect: 'workspace-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: artifactVersionStageSealInputV2Schema,
+        outputSchema: artifactVersionStageSealResultV2Schema,
+        handler: async (raw, context) => mutationResponse(
+          await options.getService().stageSeal(
+            workspace(context),
+            artifactVersionStageSealInputV2Schema.parse(raw),
+            access(context)
+          )
+        )
+      }),
+      define({
+        id: ARTIFACT_VERSIONS_CAPABILITY_IDS.stageAbortV2,
+        title: 'Abort staged artifact object',
+        description: 'Discards an uncommitted staged object owned by the system caller.',
+        audiences: ['system'],
+        effect: 'workspace-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: artifactVersionStageAbortInputV2Schema,
+        outputSchema: artifactVersionStageAbortResultV2Schema,
+        handler: async (raw, context) => mutationResponse(
+          await options.getService().stageAbort(
+            workspace(context),
+            artifactVersionStageAbortInputV2Schema.parse(raw),
             access(context)
           )
         )
@@ -226,6 +359,42 @@ export function createArtifactVersionsCapabilityFactory<CapabilityDefinition>(
         })
       }),
       define({
+        id: ARTIFACT_VERSIONS_CAPABILITY_IDS.readRangeV2,
+        title: 'Read exact artifact content range',
+        description: 'Reads one bounded integrity-checked range from a snapshot version.',
+        audiences: ['ui', 'agent', 'system'],
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        inputSchema: artifactVersionReadRangeInputV2Schema,
+        outputSchema: artifactVersionReadRangeResultV2Schema,
+        handler: async (raw, context) => ({
+          output: await options.getService().readRange(
+            workspace(context),
+            artifactVersionReadRangeInputV2Schema.parse(raw),
+            access(context)
+          )
+        })
+      }),
+      define({
+        id: ARTIFACT_VERSIONS_CAPABILITY_IDS.describeV2,
+        title: 'Describe exact artifact version',
+        description: 'Returns one exact version, stable reference, current state, and local ordinal.',
+        audiences: ['ui', 'agent', 'system'],
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        inputSchema: artifactVersionDescribeInputV2Schema,
+        outputSchema: artifactVersionDescribeResultV2Schema,
+        handler: async (raw, context) => ({
+          output: await options.getService().describe(
+            workspace(context),
+            artifactVersionDescribeInputV2Schema.parse(raw),
+            access(context)
+          )
+        })
+      }),
+      define({
         id: ARTIFACT_VERSIONS_CAPABILITY_IDS.list,
         title: 'List artifact version history',
         description: 'Lists immutable versions in the caller workspace.',
@@ -236,9 +405,27 @@ export function createArtifactVersionsCapabilityFactory<CapabilityDefinition>(
         inputSchema: artifactVersionListInputV1Schema,
         outputSchema: artifactVersionListResultV1Schema,
         handler: async (raw, context) => ({
-          output: await options.getService().list(
+          output: await options.getService().listV1(
             workspace(context),
             artifactVersionListInputV1Schema.parse(raw),
+            access(context)
+          )
+        })
+      }),
+      define({
+        id: ARTIFACT_VERSIONS_CAPABILITY_IDS.listV2,
+        title: 'List enriched artifact version history',
+        description: 'Lists immutable versions with research filters, ordinals, and current state.',
+        audiences: ['ui', 'agent', 'system'],
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        inputSchema: artifactVersionListInputV2Schema,
+        outputSchema: artifactVersionListResultV2Schema,
+        handler: async (raw, context) => ({
+          output: await options.getService().list(
+            workspace(context),
+            artifactVersionListInputV2Schema.parse(raw),
             access(context)
           )
         })
@@ -316,6 +503,24 @@ export function createArtifactVersionsCapabilityFactory<CapabilityDefinition>(
         )
       }),
       define({
+        id: ARTIFACT_VERSIONS_CAPABILITY_IDS.exportBundleV2,
+        title: 'Export artifact version directory bundle',
+        description: 'Exports selected version histories as a V2 directory bundle.',
+        audiences: ['ui', 'agent'],
+        effect: 'workspace-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: artifactVersionBundleExportInputV2Schema,
+        outputSchema: artifactVersionBundleExportResultV2Schema,
+        handler: async (raw, context) => mutationResponse(
+          await options.getService().exportBundle(
+            workspace(context),
+            artifactVersionBundleExportInputV2Schema.parse(raw),
+            access(context)
+          )
+        )
+      }),
+      define({
         id: ARTIFACT_VERSIONS_CAPABILITY_IDS.importBundle,
         title: 'Import artifact version bundle',
         description: 'Verifies and atomically imports a portable artifact version bundle.',
@@ -343,6 +548,23 @@ export function createArtifactVersionsCapabilityFactory<CapabilityDefinition>(
         concurrency: { revision: 'none', idempotency: 'none' },
         inputSchema: artifactVersionBundleVerifyInputV1Schema,
         outputSchema: artifactVersionBundleVerifyResultV1Schema,
+        handler: async (raw, context) => ({
+          output: await options.getService().verifyBundleV1(
+            workspace(context),
+            artifactVersionBundleVerifyInputV1Schema.parse(raw)
+          )
+        })
+      }),
+      define({
+        id: ARTIFACT_VERSIONS_CAPABILITY_IDS.verifyBundleV2,
+        title: 'Verify artifact version bundle V2',
+        description: 'Verifies either portable bundle format and reports the detected format.',
+        audiences: ['ui', 'agent', 'system'],
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        inputSchema: artifactVersionBundleVerifyInputV1Schema,
+        outputSchema: artifactVersionBundleVerifyResultV2Schema,
         handler: async (raw, context) => ({
           output: await options.getService().verifyBundle(
             workspace(context),
