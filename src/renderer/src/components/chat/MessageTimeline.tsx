@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next'
 import type { ChatBlock, RuntimeConnectionStatus, RuntimeDisclosureMetadata } from '../../agent/types'
 import type { VisibleContextComponentSnapshot } from '@shared/visible-context'
 import { useChatStore } from '../../store/chat-store'
-import { isRemoteChannelThread } from '../../store/chat-store-helpers'
 import { useTimelineStores } from './use-timeline-stores'
 import { useTimelineScroll } from './use-timeline-scroll'
 import { deriveTurnSections } from './derive-turn-sections'
@@ -82,7 +81,6 @@ export function buildMessageTimelineVisibleContextComponent(input: {
   live: boolean
   reasoning: boolean
   runtimeConnection: RuntimeConnectionStatus
-  remoteChannelMode: boolean
   updatedAt?: string
 }): VisibleContextComponentSnapshot {
   const active = Boolean(input.activeThreadId)
@@ -108,7 +106,6 @@ export function buildMessageTimelineVisibleContextComponent(input: {
       live: input.live,
       reasoning: input.reasoning,
       runtimeConnection: input.runtimeConnection,
-      remoteChannelMode: input.remoteChannelMode,
       hasContent: input.blockCount > 0 || input.live || input.reasoning
     }
   }
@@ -254,8 +251,6 @@ function MessageTimelineComponent({
   const {
     workspaceRoot,
     chooseWorkspace,
-    remoteChannels,
-    activeRemoteChannel,
     activeAgentRuntime,
     busy,
     currentTurnUserId,
@@ -286,7 +281,6 @@ function MessageTimelineComponent({
   const stableOnOpenImageArtifactInVisualReview = onOpenImageArtifactInVisualReview
   const stableOnContinueScientificObject = useStableOptionalCallback(onSelectSuggestion)
 
-  const remoteChannelMode = Boolean(activeThread && isRemoteChannelThread(activeThread, remoteChannels))
   const timelineRuntimeId = activeThread?.runtimeId ?? activeAgentRuntime
   const timelineWorkspaceRoot = activeThread?.workspace?.trim() || workspaceRoot
   const hasContent = blocks.length > 0 || live || liveReasoning
@@ -342,8 +336,7 @@ function MessageTimelineComponent({
     busy: effectiveBusy,
     live: Boolean(live.trim()),
     reasoning: Boolean(liveReasoning.trim()),
-    runtimeConnection,
-    remoteChannelMode
+    runtimeConnection
   })), [
     activeThreadId,
     blocks.length,
@@ -352,7 +345,6 @@ function MessageTimelineComponent({
     live,
     liveReasoning,
     pendingRuntimeTurnCount,
-    remoteChannelMode,
     runtimeConnection,
     turns.length,
     visibleTurnCount
@@ -379,12 +371,10 @@ function MessageTimelineComponent({
       <div className="ds-message-timeline-content ds-chat-column-inset mx-auto flex w-full min-w-0 max-w-4xl flex-col gap-8 pb-10 pt-8">
         {!hasContent || !activeThreadId ? (
           <MessageTimelineEmptyHero
-            remoteChannelMode={remoteChannelMode}
             ready={runtimeConnection === 'ready'}
             hasWorkspace={!!workspaceRoot}
             runtimeError={runtimeError}
             runtimeId={activeAgentRuntime}
-            activeRemoteChannel={activeRemoteChannel}
             onPickWorkspace={() => void chooseWorkspace()}
             onRetry={onRetryConnection}
             onOpenSettings={onOpenSettings}

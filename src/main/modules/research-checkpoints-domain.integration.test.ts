@@ -17,12 +17,11 @@ import { createExecutionReceipt } from '@sciforge/execution-governance'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   defaultCodexRuntimeSettings,
-  defaultConnectPhoneSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
-  defaultRemoteChannelSettings,
   defaultScheduleSettings,
+  defaultSkillsSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
   type AppSettingsV1
@@ -55,6 +54,7 @@ import {
   createMainSystemCapabilityInvokerFactory,
   listMainArtifactConsumers
 } from './runtime-contributions'
+import { createNonSecretPackageStorageForTest } from './domain-package-storage.test-helper'
 
 const temporaryDirectories: string[] = []
 
@@ -104,6 +104,7 @@ describe('installed Research Checkpoints and Artifact Versions domains', () => {
           turns: [...turns],
           artifacts: []
         }),
+        subscribeMessages: async function* () {},
         hasActiveTurns: () => false
       },
       turnEvents: {
@@ -156,6 +157,7 @@ describe('installed Research Checkpoints and Artifact Versions domains', () => {
         id: event.turnId,
         status: 'completed',
         completedAt: event.occurredAt,
+        messages: [],
         artifacts: event.artifacts
       })
       await Promise.all(activated.artifactConsumers.map((consumer) => consumer.consume(event)))
@@ -452,6 +454,7 @@ async function createProductionCrashComposition(
   const catalog = createApplicationDomainCatalog({
     getUserDataDir: () => userDataDir,
     textSanitizer: { sanitizeText: (value) => value },
+    packageStorageFor: createNonSecretPackageStorageForTest(),
     capabilityInvokerFor: (owner) => Object.freeze({
       invoke: (contract, input, options) => {
         if (!capabilityInvokers) throw new Error('Test capability broker is not ready.')
@@ -481,6 +484,11 @@ async function createProductionCrashComposition(
     userDataDir,
     appRoot: '/app',
     environment: Object.freeze({ NODE_ENV: 'test' }),
+    agentExecution: {
+      run: async () => {
+        throw new Error('Agent execution is unavailable in this checkpoint-only test.')
+      }
+    },
     agentThreads: {
       list: async () => [],
       read: async ({ runtimeId, threadId }) => ({
@@ -493,11 +501,13 @@ async function createProductionCrashComposition(
               id: CRASH_REPLAY_TURN_ID,
               status: 'completed',
               completedAt: CRASH_REPLAY_OCCURRED_AT,
+              messages: [],
               artifacts: crashReplayArtifacts()
             }]
           : [],
         artifacts: []
       }),
+      subscribeMessages: async function* () {},
       hasActiveTurns: () => !runtimeState.completed
     },
     turnEvents: {
@@ -687,8 +697,7 @@ function crashReplaySettings(workspaceRoot: string): AppSettingsV1 {
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),
     write: defaultWriteSettings(),
-    remoteChannel: defaultRemoteChannelSettings(),
-    connectPhone: defaultConnectPhoneSettings(),
+    skills: defaultSkillsSettings(),
     schedule: defaultScheduleSettings(),
     workflow: defaultWorkflowSettings(),
     guiUpdate: { channel: 'stable' },
@@ -740,6 +749,7 @@ async function activateResearchComposition(input: Readonly<{
         turns: [],
         artifacts: []
       }),
+      subscribeMessages: async function* () {},
       hasActiveTurns: () => false
     },
     turnEvents: {

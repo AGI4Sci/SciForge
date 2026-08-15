@@ -2,13 +2,12 @@ import type { ReactElement, SetStateAction } from 'react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
-import { ArrowLeft, ArrowRight, Bot, CircleAlert, Eye } from 'lucide-react'
+import { ArrowLeft, ArrowRight, CircleAlert, Eye } from 'lucide-react'
 import type {
   DomainWorkbenchOpenRightPanelInput,
   DomainWorkbenchOpenSurfaceInput,
   DomainWorkbenchToggleGlobalOverlayInput
 } from '@sciforge/domain-sdk/host'
-import { parseRemoteChannelCommand } from '@shared/remote-channel-commands'
 import { buildGuiPlanId, buildPlanRelativePath } from '@shared/gui-plan'
 import { sddDraftTraceRelativePath } from '@shared/sdd'
 import { buildSddTraceSnapshot } from '@shared/sdd-trace'
@@ -20,7 +19,7 @@ import {
   type KeyboardShortcutCommandId
 } from '@shared/keyboard-shortcuts'
 import type { DesktopCommand, SkillListItem } from '@shared/sciforge-api'
-import type { AgentRuntimeId, RemoteChannelV1 } from '@shared/app-settings'
+import type { AgentRuntimeId } from '@shared/app-settings'
 import type { ClipboardImageReadResult } from '@shared/workspace-file'
 import type { VisibleContextComponentSnapshot } from '@shared/visible-context'
 import type { AgentRuntimeChild, AgentRuntimeWorkspaceReference } from '@shared/agent-runtime-contract'
@@ -35,15 +34,9 @@ import { getProvider } from '../agent/registry'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import { useChatStore } from '../store/chat-store'
 import { selectFocusedAgentSurface } from '../store/chat-store-focus-actions'
-import {
-  remoteChannelThreadBindingsFromChannels,
-  deriveRemoteChannelThreadStatusKind,
-  isRemoteChannelThread
-} from '../store/chat-store-helpers'
 import { hasPendingRuntimeWork } from '../store/chat-store-runtime-helpers'
 import { Sidebar } from './chat/Sidebar'
 import { WorkbenchTopBar, type RightPanelMode } from './chat/WorkbenchTopBar'
-import { ActiveRemoteBindingDetails } from './chat/RemoteBindingDetailsPill'
 import { MessageTimeline } from './chat/MessageTimeline'
 import {
   FloatingComposer,
@@ -65,11 +58,6 @@ import { AgentFocusNavigation } from './chat/AgentFocusNavigation'
 import { FocusedAgentWorkbench } from './chat/FocusedAgentWorkbench'
 import { useChildAgentAttention } from './chat/use-child-agent-attention'
 import type { FileTreeInitialDirectory } from './chat/ChatFileTreePanel'
-import {
-  RemoteGuardDetailView,
-  remoteGuardChannelTitle,
-  remoteGuardProviderLabel
-} from './chat/RemoteGuardDetailView'
 import { RemoteWorkspaceSelector } from './chat/RemoteWorkspaceSelector'
 import { SessionHeader } from './SessionHeader'
 import {
@@ -123,12 +111,6 @@ import {
   WORKSPACE_FILE_PREVIEW_EVENT,
   type WorkspaceFilePreviewDetail
 } from '../lib/workspace-file-preview'
-import {
-  createRemoteChannelTaskFromTextApi,
-  mirrorRemoteChannelMessageApi,
-  updateRemoteChannelActiveThreadContextApi
-} from '../lib/remote-channel-api'
-import { isUnsupportedLocalRemoteChannelCommand } from '../lib/remote-channel-local-commands'
 import {
   buildComposerFileContextPrompt,
   composerFileReferenceKey,
@@ -548,28 +530,6 @@ function mergeSkillCommands(
   return [...merged.values()]
 }
 
-function RemoteGuardSessionHeader({
-  channel
-}: {
-  channel: RemoteChannelV1
-}): ReactElement {
-  return (
-    <div className="flex min-w-0 flex-1 items-center gap-2.5">
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] border border-accent/20 bg-accent/10 text-accent">
-        <Bot className="h-4 w-4" strokeWidth={1.85} />
-      </div>
-      <div className="min-w-0">
-        <div className="truncate text-[14.5px] font-semibold leading-5 text-ds-ink">
-          {remoteGuardChannelTitle(channel)}
-        </div>
-        <div className="mt-0.5 truncate text-[11.5px] leading-4 text-ds-faint">
-          {remoteGuardProviderLabel(channel.provider)}
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function sddAssistantContextFromBlocks(blocks: ChatBlock[], maxMessages = 10): string {
   const messages: string[] = []
   for (const block of blocks) {
@@ -640,7 +600,6 @@ export function Workbench(): ReactElement {
     busy,
     route,
     pluginHostRoute,
-    connectPhonePanelOpen,
     workspaceRoot,
     runtimeConnection,
     activeAgentRuntime,
@@ -648,25 +607,15 @@ export function Workbench(): ReactElement {
     setRoute,
     openSettings,
     openPlugins,
-    openConnectPhone,
-    setConnectPhonePanelOpen,
     openSchedule,
     chooseWorkspace,
-    remoteChannels,
-    activeRemoteChannelId,
-    remoteGuardChannelId,
     workspaceLocator,
-    selectRemoteChannel,
-    resetRemoteChannelSession,
-    setRemoteChannelModel,
-    appendLocalRemoteChannelTurn,
     setError,
     sendMessage,
     reviewActiveThread,
     queuedMessages,
     chatSessionPersistenceDegraded,
     activeThreadTodos,
-    watchTurnCompletion,
     unreadThreadIds,
     removeQueuedMessage,
     updateQueuedMessage,
@@ -720,7 +669,6 @@ export function Workbench(): ReactElement {
       busy: s.busy,
       route: s.route,
       pluginHostRoute: s.pluginHostRoute,
-      connectPhonePanelOpen: s.connectPhonePanelOpen,
       workspaceRoot: s.workspaceRoot,
       runtimeConnection: s.runtimeConnection,
       activeAgentRuntime: s.activeAgentRuntime,
@@ -728,25 +676,15 @@ export function Workbench(): ReactElement {
       setRoute: s.setRoute,
       openSettings: s.openSettings,
       openPlugins: s.openPlugins,
-      openConnectPhone: s.openConnectPhone,
-      setConnectPhonePanelOpen: s.setConnectPhonePanelOpen,
       openSchedule: s.openSchedule,
       chooseWorkspace: s.chooseWorkspace,
-      remoteChannels: s.remoteChannels,
-      activeRemoteChannelId: s.activeRemoteChannelId,
-      remoteGuardChannelId: s.remoteGuardChannelId,
       workspaceLocator: s.workspaceLocator,
-      selectRemoteChannel: s.selectRemoteChannel,
-      resetRemoteChannelSession: s.resetRemoteChannelSession,
-      setRemoteChannelModel: s.setRemoteChannelModel,
-      appendLocalRemoteChannelTurn: s.appendLocalRemoteChannelTurn,
       setError: s.setError,
       sendMessage: s.sendMessage,
       reviewActiveThread: s.reviewActiveThread,
       queuedMessages: s.queuedMessages,
       chatSessionPersistenceDegraded: s.chatSessionPersistenceDegraded,
       activeThreadTodos: s.activeThreadTodos,
-      watchTurnCompletion: s.watchTurnCompletion,
       unreadThreadIds: s.unreadThreadIds,
       removeQueuedMessage: s.removeQueuedMessage,
       updateQueuedMessage: s.updateQueuedMessage,
@@ -853,16 +791,6 @@ export function Workbench(): ReactElement {
   const timelineBlocks = blocks
   const timelineLiveReasoning = liveReasoning
   const timelineLiveAssistant = liveAssistant
-  const activeRemoteChannel = useMemo(
-    () => remoteChannels.find((channel) => channel.id === activeRemoteChannelId) ?? null,
-    [activeRemoteChannelId, remoteChannels]
-  )
-  const remoteGuardChannel = useMemo(
-    () => remoteGuardChannelId
-      ? remoteChannels.find((channel) => channel.id === remoteGuardChannelId) ?? null
-      : null,
-    [remoteGuardChannelId, remoteChannels]
-  )
   const activeThread = useMemo(
     () => threads.find((thread) => thread.id === activeThreadId) ?? null,
     [activeThreadId, threads]
@@ -897,17 +825,6 @@ export function Workbench(): ReactElement {
     childRefreshKey,
     unreadThreadIds
   })
-  const remoteThreadBindings = useMemo(
-    () => remoteChannelThreadBindingsFromChannels(remoteChannels),
-    [remoteChannels]
-  )
-  const queuedThreadIds = useMemo(
-    () => new Set(queuedMessages
-      .filter((message) => !message.deliveryAttempt?.journalOnly || message.deliveryAttempt.restored || message.sendFailure)
-      .map((message) => message.threadId?.trim() ?? '')
-      .filter(Boolean)),
-    [queuedMessages]
-  )
   const activeQueuedMessages = useMemo(
     () => activeThreadId
       ? queuedMessages.filter(
@@ -919,30 +836,8 @@ export function Workbench(): ReactElement {
       : [],
     [activeThread?.runtimeId, activeThreadId, queuedMessages]
   )
-  const activeRemoteBinding = activeThreadId
-    ? remoteThreadBindings.get(activeThreadId) ?? null
-    : null
-  const activeThreadIsRemoteChannel = Boolean(
-    activeRemoteBinding ||
-    (activeThread && isRemoteChannelThread(activeThread, remoteChannels))
-  )
   const selectedWorkspaceLocator =
-    route === 'chat' && !activeThreadIsRemoteChannel ? workspaceLocator ?? undefined : undefined
-  const activeRemoteComposerChannel = activeRemoteBinding
-    ? remoteChannels.find((channel) => channel.id === activeRemoteBinding.channelId) ?? activeRemoteChannel
-    : activeRemoteChannel
-  const activeRemoteComposerChannelId = activeRemoteComposerChannel?.id ?? activeRemoteChannelId
-  const activeRemoteStatusKind = activeThreadId
-    ? deriveRemoteChannelThreadStatusKind({
-        binding: activeRemoteBinding,
-        running: busy || watchTurnCompletion[activeThreadId] === true,
-        queued: queuedThreadIds.has(activeThreadId),
-        status: activeThread?.status,
-        latestTurnStatus: activeThread?.latestTurnStatus
-      })
-    : null
-  const activeRemoteUnread =
-    activeThreadId ? unreadThreadIds[activeThreadId] === true : false
+    route === 'chat' ? workspaceLocator ?? undefined : undefined
   const activeSkillWorkspace = useMemo(
     () => activeThread?.workspace || workspaceRoot || '',
     [activeThread, workspaceRoot]
@@ -961,21 +856,6 @@ export function Workbench(): ReactElement {
     }),
     [activeThread?.workspace, codeWorkspaceRoots, workspaceRoot]
   )
-  useEffect(() => {
-    const updateRemoteChannelActiveThreadContext = typeof window !== 'undefined'
-      ? updateRemoteChannelActiveThreadContextApi(window.sciforge)
-      : undefined
-    if (typeof updateRemoteChannelActiveThreadContext !== 'function') return
-    if (!activeThreadId || (activeThread && isRemoteChannelThread(activeThread, remoteChannels))) {
-      void updateRemoteChannelActiveThreadContext(null).catch(() => undefined)
-      return
-    }
-    void updateRemoteChannelActiveThreadContext({
-      threadId: activeThreadId,
-      runtimeId: activeThread?.runtimeId,
-      workspaceRoot: activeThread?.workspace || workspaceRoot || undefined
-    }).catch(() => undefined)
-  }, [activeThread, activeThreadId, remoteChannels, route, workspaceRoot])
   const composerChangeSummary = useMemo(
     () => collectComposerChangeSummary(timelineBlocks, activeSkillWorkspace),
     [activeSkillWorkspace, timelineBlocks]
@@ -1371,38 +1251,11 @@ export function Workbench(): ReactElement {
 
   const codeThreads = useMemo(
     () => threads.filter((thread) =>
-      !isRemoteChannelThread(thread, remoteChannels) &&
       !isSddAssistantThread(thread) &&
       !isEmptySddAssistantThreadCandidate(thread)
     ),
-    [remoteChannels, threads]
+    [threads]
   )
-
-  const mirrorRemoteChannelCommand = async (userText: string, replyText: string): Promise<void> => {
-    const mirrorRemoteChannelMessage = mirrorRemoteChannelMessageApi(window.sciforge)
-    if (!activeThreadId || typeof mirrorRemoteChannelMessage !== 'function') return
-    const userResult = await mirrorRemoteChannelMessage(
-      activeThreadId,
-      userText,
-      'user'
-    )
-    if (!userResult.ok) return
-    await mirrorRemoteChannelMessage(
-      activeThreadId,
-      replyText,
-      'assistant'
-    )
-  }
-
-  const remoteChannelHelpText = (): string =>
-    [
-      t('remoteChannelHelpTitle'),
-      '',
-      `- \`/help\`: ${t('remoteChannelHelpCommandHelp')}`,
-      `- \`/new\`: ${t('remoteChannelHelpCommandNew')}`,
-      `- \`/model\`: ${t('remoteChannelHelpCommandModelShow')}`,
-      `- \`/mode\`: ${t('remoteChannelHelpCommandModeShow')}`
-    ].join('\n')
 
   useEffect(() => {
     inputRef.current = input
@@ -2403,8 +2256,7 @@ export function Workbench(): ReactElement {
       mode === 'plan' &&
       route === 'chat' &&
       !isImageGenerationIntent &&
-      !activeSddDraft &&
-      !activeThreadIsRemoteChannel
+      !activeSddDraft
     const prepareChatMessage = async (): Promise<{ text: string; displayText?: string } | null> => {
       const userVisibleText = v || emptyDisplayText
       const runtimeMessageText = isImageGenerationIntent
@@ -2488,113 +2340,6 @@ export function Workbench(): ReactElement {
       void handleGuiPlanCommand(planCommand.kind === 'create' ? planCommand.request : undefined)
       return
     }
-    if (activeThreadIsRemoteChannel) {
-      const command = parseRemoteChannelCommand(v)
-      if (command?.kind === 'clear') {
-        if (!activeRemoteComposerChannelId) {
-          setError(t('remoteChannelNoActiveIm'))
-          return
-        }
-        setInput('')
-        void (async () => {
-          await resetRemoteChannelSession(activeRemoteComposerChannelId)
-          const replyText = t('remoteChannelNewSessionStarted')
-          appendLocalRemoteChannelTurn(v, replyText)
-          await mirrorRemoteChannelCommand(v, replyText)
-        })()
-        return
-      }
-      if (command?.kind === 'help') {
-        setInput('')
-        const replyText = remoteChannelHelpText()
-        appendLocalRemoteChannelTurn(v, replyText)
-        void mirrorRemoteChannelCommand(v, replyText)
-        return
-      }
-      if (command?.kind === 'model') {
-        setInput('')
-        const replyText = t('remoteChannelModelChangeUnsupported')
-        appendLocalRemoteChannelTurn(v, replyText)
-        void mirrorRemoteChannelCommand(v, replyText)
-        return
-      }
-      if (command?.kind === 'showModel') {
-        if (!activeRemoteComposerChannelId) {
-          setError(t('remoteChannelNoActiveIm'))
-          return
-        }
-        setInput('')
-        const replyText = t('remoteChannelModelCurrent', {
-          model: activeRemoteComposerChannel?.model ?? 'auto'
-        })
-        appendLocalRemoteChannelTurn(v, replyText)
-        void mirrorRemoteChannelCommand(v, replyText)
-        return
-      }
-      if (command?.kind === 'invalidModel') {
-        setInput('')
-        const replyText = t('remoteChannelModelChangeUnsupported')
-        appendLocalRemoteChannelTurn(v, replyText)
-        void mirrorRemoteChannelCommand(v, replyText)
-        return
-      }
-      if (command?.kind === 'showMode') {
-        setInput('')
-        const replyText = t('remoteChannelModeCurrent', { mode })
-        appendLocalRemoteChannelTurn(v, replyText)
-        void mirrorRemoteChannelCommand(v, replyText)
-        return
-      }
-      if (command?.kind === 'mode' || command?.kind === 'invalidMode') {
-        setInput('')
-        const replyText = t('remoteChannelModeChangeUnsupported')
-        appendLocalRemoteChannelTurn(v, replyText)
-        void mirrorRemoteChannelCommand(v, replyText)
-        return
-      }
-      if (isUnsupportedLocalRemoteChannelCommand(command)) {
-        setInput('')
-        const replyText = t('remoteChannelCommandUnsupported')
-        appendLocalRemoteChannelTurn(v, replyText)
-        void mirrorRemoteChannelCommand(v, replyText)
-        return
-      }
-      if (!activeRemoteComposerChannelId) {
-        setError(t('remoteChannelNoActiveIm'))
-        return
-      }
-      setInput('')
-      void (async () => {
-        const createRemoteChannelTaskFromText = createRemoteChannelTaskFromTextApi(window.sciforge)
-        const taskResult = typeof createRemoteChannelTaskFromText === 'function'
-          ? await createRemoteChannelTaskFromText(v, {
-              channelId: activeRemoteComposerChannelId,
-              modelHint: activeRemoteComposerChannel?.model,
-              mode
-            })
-          : { kind: 'noop' as const }
-        if (taskResult.kind === 'created') {
-          appendLocalRemoteChannelTurn(v, taskResult.confirmationText)
-          await mirrorRemoteChannelCommand(v, taskResult.confirmationText)
-          return
-        }
-        if (taskResult.kind === 'error') {
-          appendLocalRemoteChannelTurn(v, `Failed to create scheduled task: ${taskResult.message}`)
-          return
-        }
-        if (!activeThreadId) {
-          await selectRemoteChannel(activeRemoteComposerChannelId)
-          await useChatStore.getState().sendMessage(v, mode === 'plan' ? 'plan' : 'agent', {
-            ...(reasoningEffort ? { reasoningEffort } : {})
-          })
-          return
-        }
-        await sendMessage(v, mode === 'plan' ? 'plan' : 'agent', {
-          ...(reasoningEffort ? { reasoningEffort } : {})
-        })
-      })()
-      return
-    }
     if (!isImageGenerationIntent && route === 'chat' && mode === 'plan') {
       const prepared = await prepareChatMessage()
       if (!prepared) return
@@ -2628,10 +2373,8 @@ export function Workbench(): ReactElement {
     void (async () => {
       const thread = threads.find((item) => item.id === id) ?? null
       if (await openSddRequirementDraftFromSidebarThread(id, thread)) {
-        setConnectPhonePanelOpen(false)
         return
       }
-      setConnectPhonePanelOpen(false)
       setRoute('chat')
       getProvider().rememberThreadRuntime?.(id, runtimeId)
       await selectThread(id)
@@ -2639,33 +2382,21 @@ export function Workbench(): ReactElement {
   }
 
   const startNewChat = (): void => {
-    setConnectPhonePanelOpen(false)
     setRoute('chat')
     void createThread({ forceNew: true })
   }
 
   const startNewChatInWorkspace = (workspaceRoot: string): void => {
-    setConnectPhonePanelOpen(false)
     setRoute('chat')
     void createThread({ workspaceRoot, forceNew: true })
   }
 
   const openPluginsView = (): void => {
-    setConnectPhonePanelOpen(false)
     openPlugins('chat')
   }
 
   const openScheduleView = (): void => {
-    setConnectPhonePanelOpen(false)
     openSchedule()
-  }
-
-  const toggleConnectPhone = (): void => {
-    if (connectPhonePanelOpen) {
-      setConnectPhonePanelOpen(false)
-    } else {
-      openConnectPhone()
-    }
   }
 
   const sidebarView: 'chat' | 'schedule' = route === 'schedule' ? 'schedule' : 'chat'
@@ -3046,7 +2777,6 @@ export function Workbench(): ReactElement {
               threads={codeThreads}
               activeThreadId={activeThreadId}
               activeView={sidebarView}
-              connectPhoneSidebarOpen={connectPhonePanelOpen}
               pluginsActive={route === 'plugins'}
               runtimeReady={runtimeConnection === 'ready'}
               threadSearch={threadSearch}
@@ -3062,7 +2792,6 @@ export function Workbench(): ReactElement {
               onNewChatInWorkspace={startNewChatInWorkspace}
               onOpenSettings={(section) => openSettings(section)}
               onOpenPlugins={openPluginsView}
-              onToggleConnectPhone={toggleConnectPhone}
               onScheduleOpen={openScheduleView}
               onToggleSidebar={toggleLeftSidebar}
             />
@@ -3137,22 +2866,10 @@ export function Workbench(): ReactElement {
                       ariaLabel={t('sidebarExpand')}
                     />
                   ) : null}
-                  {remoteGuardChannel ? (
-                    <RemoteGuardSessionHeader channel={remoteGuardChannel} />
-                  ) : (
-                    <SessionHeader compact className="min-w-0 flex-1" />
-                  )}
-                  {!remoteGuardChannel && activeRemoteBinding && activeRemoteStatusKind ? (
-                    <ActiveRemoteBindingDetails
-                      binding={activeRemoteBinding}
-                      statusKind={activeRemoteStatusKind}
-                      unread={activeRemoteUnread}
-                      t={t}
-                    />
-                  ) : null}
+                  <SessionHeader compact className="min-w-0 flex-1" />
                 </div>
                 <div className="chat-topbar-actions flex min-w-0 flex-wrap items-center justify-end gap-2 self-start">
-                  {!remoteGuardChannel ? <RemoteWorkspaceSelector /> : null}
+                  <RemoteWorkspaceSelector />
                   {(focusedAgentSurface?.busy ?? busy) ? (
                     <span className="inline-flex shrink-0 rounded-full bg-amber-500/16 px-2.5 py-1 text-[11.5px] font-semibold text-amber-950 dark:text-amber-100">
                       {t('running')}
@@ -3193,7 +2910,7 @@ export function Workbench(): ReactElement {
                 </div>
               </div>
             </header>
-            {!remoteGuardChannel && (focusNavigationLineage.length > 1 || agentFocusHistory.length > 1) ? (
+            {focusNavigationLineage.length > 1 || agentFocusHistory.length > 1 ? (
               <AgentFocusNavigation
                 lineage={focusNavigationLineage}
                 canGoBack={agentFocusHistoryIndex > 0}
@@ -3216,7 +2933,7 @@ export function Workbench(): ReactElement {
                 }}
               />
             ) : null}
-            {!remoteGuardChannel && (
+            {(
               childAgentAttention.summary.counts.waitingUserInput +
               childAgentAttention.summary.counts.waitingApproval
             ) > 0 ? (
@@ -3238,15 +2955,7 @@ export function Workbench(): ReactElement {
                 </span>
               </button>
             ) : null}
-            {remoteGuardChannel ? (
-              <RemoteGuardDetailView
-                channel={remoteGuardChannel}
-                onOpenThread={openThread}
-                onOpenSettings={openConnectPhone}
-                t={t}
-              />
-            ) : (
-              <>
+            <>
                 <FocusedAgentWorkbench
                   child={focusedChild}
                   side={focusedSide}
@@ -3283,11 +2992,7 @@ export function Workbench(): ReactElement {
                     busy={busy}
                     runtimeReady={runtimeConnection === 'ready'}
                     hasActiveThread={Boolean(activeThreadId)}
-                    composerModel={
-                      activeThreadIsRemoteChannel
-                        ? activeRemoteComposerChannel?.model ?? 'auto'
-                        : composerModel
-                    }
+                    composerModel={composerModel}
                     composerPickList={composerPickList}
                     composerModelGroups={composerModelGroups}
                     activeAgentRuntime={activeAgentRuntime}
@@ -3295,13 +3000,7 @@ export function Workbench(): ReactElement {
                     composerReasoningEffort={
                       route === 'chat' ? composerReasoningEffort : undefined
                     }
-                    onComposerModelChange={(modelId) => {
-                      if (activeThreadIsRemoteChannel && activeRemoteComposerChannelId) {
-                        void setRemoteChannelModel(activeRemoteComposerChannelId, modelId)
-                        return
-                      }
-                      setComposerModel(modelId)
-                    }}
+                    onComposerModelChange={setComposerModel}
                     onActiveAgentRuntimeChange={(runtimeId) => {
                       void setActiveAgentRuntime(runtimeId)
                     }}
@@ -3313,7 +3012,7 @@ export function Workbench(): ReactElement {
                     attachmentUploadEnabled={attachmentUploadEnabled}
                     attachmentUploadBusy={attachmentUploadBusy}
                     attachmentUploadError={attachmentUploadError}
-                    fileReferenceEnabled={route === 'chat' && !activeSddDraft && !activeThreadIsRemoteChannel}
+                    fileReferenceEnabled={route === 'chat' && !activeSddDraft}
                     fileReferences={composerFileReferences}
                     webAccessAvailable={webAccessAvailable}
                     changedFiles={composerChangeSummary?.files}
@@ -3378,7 +3077,6 @@ export function Workbench(): ReactElement {
                   </div>
                 ) : null}
               </>
-            )}
           </section>
           )}
           </div>

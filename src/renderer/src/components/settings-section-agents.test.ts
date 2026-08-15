@@ -149,7 +149,7 @@ function baseCtx(): Record<string, unknown> {
       agents: { codex, claude },
       computerUse: defaultComputerUseSettings(),
       codePromptPrefix: 'Prefer pnpm.',
-      remoteChannel: { skills: { extraDirs: ['/tmp/project/.agents/skills'] } }
+      skills: { extraDirs: ['/tmp/project/.agents/skills'] }
     },
     codex,
     claude,

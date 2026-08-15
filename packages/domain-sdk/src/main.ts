@@ -13,6 +13,7 @@ import {
 export type { TrustedDomainProcessEntryInput } from './process-entry.js'
 export * from './agent-execution.js'
 export * from './controlled-process.js'
+export * from './package-storage.js'
 export * from './power.js'
 export * from './version-control.js'
 export * from './visual-capture.js'

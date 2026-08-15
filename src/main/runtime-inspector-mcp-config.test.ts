@@ -11,12 +11,11 @@ import {
   type RuntimeInspectorMcpLaunchConfig
 } from './runtime-inspector-mcp-config'
 import {
-  defaultConnectPhoneSettings,
-  defaultRemoteChannelSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
+  defaultSkillsSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
   type AppSettingsV1
@@ -30,7 +29,6 @@ const launch: RuntimeInspectorMcpLaunchConfig = {
 }
 
 function createSettings(): AppSettingsV1 {
-  const remoteChannel = defaultRemoteChannelSettings()
   const sciforge = defaultLocalRuntimeSettings(9876)
   const modelRouter = defaultModelRouterSettings()
   return {
@@ -62,17 +60,7 @@ function createSettings(): AppSettingsV1 {
       channel: 'stable'
     },
     codePromptPrefix: '',
-    remoteChannel: {
-      ...remoteChannel,
-      enabled: true,
-      im: {
-        ...remoteChannel.im,
-        enabled: true,
-        port: 8787,
-        secret: ''
-      }
-    },
-    connectPhone: defaultConnectPhoneSettings()
+    skills: defaultSkillsSettings()
   }
 }
 

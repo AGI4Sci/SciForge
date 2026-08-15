@@ -110,7 +110,6 @@ module.exports = {
     '!**/tsconfig*.json',
     '!**/README*',
     '!**/CHANGELOG*',
-    '!**/node_modules/openclaw/**/*',
     ...releaseWorkerManifest.createBundledFileSets()
   ],
   extraResources: [

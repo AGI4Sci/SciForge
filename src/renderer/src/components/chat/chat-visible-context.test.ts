@@ -29,7 +29,6 @@ describe('chat visible context', () => {
       live: true,
       reasoning: true,
       runtimeConnection: 'ready',
-      remoteChannelMode: false,
       updatedAt: '2026-07-19T00:00:00.000Z'
     })
 
@@ -45,7 +44,6 @@ describe('chat visible context', () => {
       live: true,
       reasoning: true,
       runtimeConnection: 'ready',
-      remoteChannelMode: false,
       hasContent: true
     })
     expect(JSON.stringify(component)).not.toContain('messageText')

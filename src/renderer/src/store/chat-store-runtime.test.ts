@@ -20,12 +20,8 @@ import {
   buildThreadEventSink,
   clearWatchedCompletionNotification,
   clearWatchedCompletionNotifications,
-  clearPendingRemoteChannelMirrors,
   completionNotificationDedupeKeyForWatchedThread,
-  MAX_PENDING_REMOTE_CHANNEL_MIRRORS,
   MAX_WATCHED_COMPLETION_NOTIFICATIONS,
-  rememberPendingRemoteChannelMirror,
-  takePendingRemoteChannelMirror,
   syncTurnCompletionPoll,
   watchTurnCompletionNotification
 } from './chat-store-runtime'
@@ -1393,86 +1389,6 @@ describe('thread event sink runtime errors', () => {
       'user',
       'error'
     ])
-  })
-})
-
-describe('pending remote channel mirrors', () => {
-  afterEach(() => {
-    clearPendingRemoteChannelMirrors()
-  })
-
-  it('normalizes pending mirror fields before storing', () => {
-    rememberPendingRemoteChannelMirror(' turn-1 ', {
-      threadId: ' thread-1 ',
-      userBlockId: ' user-1 ',
-      userText: ' hello '
-    })
-
-    expect(takePendingRemoteChannelMirror('turn-1')).toEqual({
-      threadId: 'thread-1',
-      userBlockId: 'user-1',
-      userText: 'hello'
-    })
-  })
-
-  it('ignores invalid pending mirrors', () => {
-    rememberPendingRemoteChannelMirror('', {
-      threadId: 'thread-1',
-      userBlockId: 'user-1',
-      userText: 'hello'
-    })
-    rememberPendingRemoteChannelMirror('turn-2', {
-      threadId: ' ',
-      userBlockId: 'user-2',
-      userText: 'hello'
-    })
-    rememberPendingRemoteChannelMirror('turn-3', {
-      threadId: 'thread-3',
-      userBlockId: 'user-3',
-      userText: ' '
-    })
-
-    expect(takePendingRemoteChannelMirror('')).toBeUndefined()
-    expect(takePendingRemoteChannelMirror('turn-2')).toBeUndefined()
-    expect(takePendingRemoteChannelMirror('turn-3')).toBeUndefined()
-  })
-
-  it('caps pending mirrors and keeps the latest turns', () => {
-    for (let index = 0; index < MAX_PENDING_REMOTE_CHANNEL_MIRRORS + 5; index += 1) {
-      rememberPendingRemoteChannelMirror(`turn-${index}`, {
-        threadId: `thread-${index}`,
-        userBlockId: `user-${index}`,
-        userText: `hello-${index}`
-      })
-    }
-
-    expect(takePendingRemoteChannelMirror('turn-0')).toBeUndefined()
-    expect(takePendingRemoteChannelMirror('turn-4')).toBeUndefined()
-    expect(takePendingRemoteChannelMirror('turn-5')).toEqual({
-      threadId: 'thread-5',
-      userBlockId: 'user-5',
-      userText: 'hello-5'
-    })
-    expect(takePendingRemoteChannelMirror(`turn-${MAX_PENDING_REMOTE_CHANNEL_MIRRORS + 4}`)).toEqual({
-      threadId: `thread-${MAX_PENDING_REMOTE_CHANNEL_MIRRORS + 4}`,
-      userBlockId: `user-${MAX_PENDING_REMOTE_CHANNEL_MIRRORS + 4}`,
-      userText: `hello-${MAX_PENDING_REMOTE_CHANNEL_MIRRORS + 4}`
-    })
-  })
-
-  it('removes a pending mirror when taking it', () => {
-    rememberPendingRemoteChannelMirror('turn-1', {
-      threadId: 'thread-1',
-      userBlockId: 'user-1',
-      userText: 'hello'
-    })
-
-    expect(takePendingRemoteChannelMirror(' turn-1 ')).toEqual({
-      threadId: 'thread-1',
-      userBlockId: 'user-1',
-      userText: 'hello'
-    })
-    expect(takePendingRemoteChannelMirror('turn-1')).toBeUndefined()
   })
 })
 

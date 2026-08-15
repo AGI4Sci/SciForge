@@ -660,16 +660,16 @@ describe('dev browser bridge server', () => {
     const first = await openSse('/events?clientId=browser-a')
     const second = await openSse('/events?clientId=browser-b')
 
-    server.send('remoteChannel:activity', {
-      channelId: 'channel-1',
+    server.send('agentRuntime:event', {
+      streamId: 'stream-1',
       threadId: 'thread-1',
       runtimeId: 'codex'
     })
 
     await vi.waitFor(() => {
-      expect(first.chunks.join('')).toContain('"channel":"remoteChannel:activity"')
+      expect(first.chunks.join('')).toContain('"channel":"agentRuntime:event"')
       expect(first.chunks.join('')).toContain('"threadId":"thread-1"')
-      expect(second.chunks.join('')).toContain('"channel":"remoteChannel:activity"')
+      expect(second.chunks.join('')).toContain('"channel":"agentRuntime:event"')
       expect(second.chunks.join('')).toContain('"threadId":"thread-1"')
     })
     first.close()

@@ -276,6 +276,27 @@ async function loadApplicationCapabilityModel() {
         invoke: async () => {
           throw new GovernanceError('Governance must not invoke a package system capability.')
         }
+      }),
+      packageStorageFor: () => Object.freeze({
+        settings: Object.freeze({
+          read: async () => Object.freeze({ revision: 0, value: null }),
+          write: async () => {
+            throw new GovernanceError('Governance must not write package settings.')
+          },
+          clear: async () => {
+            throw new GovernanceError('Governance must not clear package settings.')
+          }
+        }),
+        secrets: Object.freeze({
+          has: async () => false,
+          read: async () => null,
+          write: async () => {
+            throw new GovernanceError('Governance must not write package secrets.')
+          },
+          remove: async () => {
+            throw new GovernanceError('Governance must not remove package secrets.')
+          }
+        })
       })
     })
     registry = await module.createApplicationCapabilityRegistry(

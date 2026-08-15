@@ -410,6 +410,7 @@ function lifecycleContext(signal: AbortSignal): DomainMainRuntimeLifecycleContex
         turns: [],
         artifacts: []
       }),
+      subscribeMessages: async function* () {},
       hasActiveTurns: () => false
     },
     capabilities: {

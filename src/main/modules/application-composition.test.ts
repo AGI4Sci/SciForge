@@ -10,12 +10,14 @@ import {
   isAppCapabilityContributionFactory,
   listMainCapabilityDomainPolicies
 } from './main-contributions'
+import { createNonSecretPackageStorageForTest } from './domain-package-storage.test-helper'
 
 describe('application domain composition', () => {
   it('composes explicit host-core and installed package capabilities through one catalog', () => {
     const packageInvokerOwners: Array<{ moduleId: string; moduleVersion: string }> = []
     const catalog = createApplicationDomainCatalog({
       getUserDataDir: () => '/tmp/sciforge-domain-composition-test',
+      packageStorageFor: createNonSecretPackageStorageForTest(),
       capabilityInvokerFor: (owner) => {
         packageInvokerOwners.push(owner)
         return Object.freeze({

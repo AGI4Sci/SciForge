@@ -1,12 +1,5 @@
 import { z } from 'zod'
 import {
-  REMOTE_CHANNEL_FAILURE_CHANNEL_ID_MAX_LENGTH,
-  REMOTE_CHANNEL_FAILURE_KIND_MAX_LENGTH,
-  REMOTE_CHANNEL_FAILURE_MESSAGE_MAX_LENGTH,
-  REMOTE_CHANNEL_FAILURE_OCCURRED_AT_MAX_LENGTH,
-  REMOTE_CHANNEL_FAILURE_THREAD_ID_MAX_LENGTH,
-  REMOTE_CHANNEL_FAILURE_TITLE_MAX_LENGTH,
-  REMOTE_CHANNEL_MODEL_IDS,
   MAX_SUBAGENT_MAX_PARALLEL,
   SCHEDULE_MODEL_IDS,
   SCHEDULE_REASONING_EFFORT_IDS,
@@ -84,7 +77,6 @@ const MAX_NOTIFICATION_BODY_LENGTH = 5_000
 const MAX_CHANNEL_TEXT_LENGTH = 100_000
 const MAX_SKILL_FILE_BYTES = 1_000_000
 const MAX_WORKSPACE_BINARY_BODY_BASE64_CHARS = 90_000_000
-const MAX_DEVICE_CODE_LENGTH = 8_192
 const MAX_EDITOR_COMPLETION_TEXT = 200_000
 const MAX_MIME_TYPE_LENGTH = 128
 
@@ -162,9 +154,6 @@ const mcpSearchModeSchema = z.enum(['direct', 'search', 'auto'])
 const localRuntimeStorageBackendSchema = z.enum(['hybrid', 'file'])
 const localRuntimeCompactionSummaryModeSchema = z.enum(['heuristic', 'model'])
 const runModeSchema = z.enum(['agent', 'plan'])
-const remoteChannelProviderSchema = z.enum(['feishu', 'weixin', 'discord', 'zulip'])
-const remoteChannelGuardModeSchema = z.enum(['only_mention', 'all_messages', 'off'])
-const connectPhoneInstallProviderSchema = z.enum(['feishu', 'weixin'])
 const scheduleKindSchema = z.enum(['manual', 'interval', 'daily', 'at'])
 const taskStatusSchema = z.enum(['idle', 'running', 'success', 'error'])
 const scheduleReasoningEffortSchema = z.enum(SCHEDULE_REASONING_EFFORT_IDS)
@@ -739,154 +728,8 @@ const speechToTextPatchSchema = z.object({
   timeoutMs: z.number().int().min(5_000).max(600_000).optional()
 }).strict()
 
-const remoteChannelSkillPatchSchema = z.object({
-  defaultNames: z.array(trimmedString(128)).max(128).optional(),
-  extraDirs: z.array(trimmedString(MAX_PATH_LENGTH)).max(128).optional(),
-  promptPrefix: z.string().max(MAX_CHANNEL_TEXT_LENGTH).optional()
-}).strict()
-
-const remoteChannelImPatchSchema = z.object({
-  enabled: z.boolean().optional(),
-  provider: remoteChannelProviderSchema.optional(),
-  port: z.number().int().min(1024).max(65_535).optional(),
-  path: trimmedString(MAX_PATH_LENGTH).optional(),
-  secret: z.string().max(MAX_BODY_BYTES).optional(),
-  workspaceRoot: defaultPathSchema,
-  model: z.string().trim().min(1).max(128).optional(),
-  mode: runModeSchema.optional(),
-  responseTimeoutMs: z.number().int().min(5_000).max(600_000).optional()
-}).strict()
-
-const remoteChannelAgentProfilePatchSchema = z.object({
-  name: z.string().max(200).optional(),
-  description: z.string().max(2_000).optional(),
-  identity: z.string().max(MAX_CHANNEL_TEXT_LENGTH).optional(),
-  personality: z.string().max(MAX_CHANNEL_TEXT_LENGTH).optional(),
-  userContext: z.string().max(MAX_CHANNEL_TEXT_LENGTH).optional(),
-  replyRules: z.string().max(MAX_CHANNEL_TEXT_LENGTH).optional()
-}).strict()
-
-const remoteChannelPlatformCredentialPatchSchema = z.union([
-  z.object({
-    kind: z.literal('feishu').optional(),
-    appId: z.string().max(512).optional(),
-    appSecret: z.string().max(MAX_BODY_BYTES).optional(),
-    domain: z.string().max(512).optional(),
-    createdAt: z.string().max(128).optional()
-  }).strict(),
-  z.object({
-    kind: z.literal('weixin'),
-    accountId: z.string().max(512).optional(),
-    sessionKey: z.string().max(MAX_BODY_BYTES).optional(),
-    createdAt: z.string().max(128).optional()
-  }).strict(),
-  z.object({
-    kind: z.literal('discord'),
-    applicationId: z.string().max(MAX_ID_LENGTH).optional(),
-    botId: z.string().max(MAX_ID_LENGTH).optional(),
-    botUsername: z.string().max(512).optional(),
-    guildId: z.string().max(MAX_ID_LENGTH).optional(),
-    guildName: z.string().max(512).optional(),
-    channelId: z.string().max(MAX_ID_LENGTH).optional(),
-    channelName: z.string().max(512).optional(),
-    installationId: z.string().max(128).optional(),
-    guardOwnerInstallationId: z.string().max(128).optional(),
-    guardOwnerUpdatedAt: z.string().max(128).optional(),
-    createdAt: z.string().max(128).optional()
-  }).strict(),
-  z.object({
-    kind: z.literal('zulip'),
-    realmUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
-    botEmail: z.string().trim().max(512).optional(),
-    botUserId: z.string().trim().max(MAX_ID_LENGTH).optional(),
-    botFullName: z.string().trim().max(512).optional(),
-    streamId: z.string().trim().max(MAX_ID_LENGTH).optional(),
-    streamName: z.string().trim().max(512).optional(),
-    topicName: z.string().trim().max(512).optional(),
-    installationId: z.string().max(128).optional(),
-    guardOwnerInstallationId: z.string().max(128).optional(),
-    guardOwnerUpdatedAt: z.string().max(128).optional(),
-    createdAt: z.string().max(128).optional()
-  }).strict()
-])
-
-const remoteChannelRemoteSessionPatchSchema = z.object({
-  chatId: z.string().max(MAX_ID_LENGTH).optional(),
-  messageId: z.string().max(MAX_ID_LENGTH).optional(),
-  threadId: z.string().max(MAX_ID_LENGTH).optional(),
-  senderId: z.string().max(MAX_ID_LENGTH).optional(),
-  senderName: z.string().max(512).optional(),
-  updatedAt: z.string().max(128).optional()
-}).strict()
-
-const remoteChannelRecentMessagePatchSchema = z.object({
-  provider: remoteChannelProviderSchema.optional(),
-  channelId: z.string().max(MAX_ID_LENGTH).optional(),
-  chatId: z.string().max(MAX_ID_LENGTH).optional(),
-  remoteThreadId: z.string().max(MAX_ID_LENGTH).optional(),
-  messageId: z.string().max(MAX_ID_LENGTH).optional(),
-  senderName: z.string().max(512).optional(),
-  text: z.string().max(2_000).optional(),
-  receivedAt: z.string().max(128).optional()
-}).strict()
-
-const remoteChannelLastFailurePatchSchema = z.object({
-  provider: remoteChannelProviderSchema.optional(),
-  message: z.string().max(REMOTE_CHANNEL_FAILURE_MESSAGE_MAX_LENGTH).optional(),
-  failureKind: z.string().max(REMOTE_CHANNEL_FAILURE_KIND_MAX_LENGTH).optional(),
-  failureTitle: z.string().max(REMOTE_CHANNEL_FAILURE_TITLE_MAX_LENGTH).optional(),
-  channelId: z.string().max(REMOTE_CHANNEL_FAILURE_CHANNEL_ID_MAX_LENGTH).optional(),
-  chatId: z.string().max(REMOTE_CHANNEL_FAILURE_THREAD_ID_MAX_LENGTH).optional(),
-  remoteThreadId: z.string().max(REMOTE_CHANNEL_FAILURE_THREAD_ID_MAX_LENGTH).optional(),
-  threadId: z.string().max(REMOTE_CHANNEL_FAILURE_THREAD_ID_MAX_LENGTH).optional(),
-  runtimeId: agentRuntimeIdSchema.optional(),
-  occurredAt: z.string().max(REMOTE_CHANNEL_FAILURE_OCCURRED_AT_MAX_LENGTH).optional()
-}).strict()
-
-const remoteChannelConversationPatchSchema = z.object({
-  id: z.string().max(MAX_ID_LENGTH).optional(),
-  chatId: z.string().max(MAX_ID_LENGTH).optional(),
-  remoteThreadId: z.string().max(MAX_ID_LENGTH).optional(),
-  latestMessageId: z.string().max(MAX_ID_LENGTH).optional(),
-  senderId: z.string().max(MAX_ID_LENGTH).optional(),
-  senderName: z.string().max(512).optional(),
-  runtimeId: agentRuntimeIdSchema.optional(),
-  agentThreadIds: agentThreadIdsSchema.optional(),
-  workspaceRoot: defaultPathSchema,
-  lastFailure: remoteChannelLastFailurePatchSchema.optional(),
-  createdAt: z.string().max(128).optional(),
-  updatedAt: z.string().max(128).optional()
-}).strict()
-
-const remoteChannelPatchSchema = z.object({
-  id: z.string().max(MAX_ID_LENGTH).optional(),
-  provider: remoteChannelProviderSchema.optional(),
-  label: z.string().max(512).optional(),
-  enabled: z.boolean().optional(),
-  guardMode: remoteChannelGuardModeSchema.optional(),
-  model: z.string().trim().min(1).max(128).optional(),
-  runtimeId: agentRuntimeIdSchema.optional(),
-  agentThreadIds: agentThreadIdsSchema.optional(),
-  workspaceRoot: defaultPathSchema,
-  agentProfile: remoteChannelAgentProfilePatchSchema.optional(),
-  platformCredential: remoteChannelPlatformCredentialPatchSchema.optional(),
-  remoteSession: remoteChannelRemoteSessionPatchSchema.optional(),
-  conversations: z.array(remoteChannelConversationPatchSchema).max(512).optional(),
-  recentMessages: z.array(remoteChannelRecentMessagePatchSchema).max(2_000).optional(),
-  lastFailure: remoteChannelLastFailurePatchSchema.optional(),
-  createdAt: z.string().max(128).optional(),
-  updatedAt: z.string().max(128).optional()
-}).strict()
-
-const remoteChannelSettingsPatchSchema = z.object({
-  enabled: z.boolean().optional(),
-  skills: remoteChannelSkillPatchSchema.optional(),
-  im: remoteChannelImPatchSchema.optional(),
-  channels: z.array(remoteChannelPatchSchema).max(512).optional()
-}).strict()
-
-const connectPhoneSettingsPatchSchema = z.object({
-  weixinBridgeUrl: z.string().trim().max(MAX_URL_LENGTH).optional()
+const skillsSettingsPatchSchema = z.object({
+  extraDirs: z.array(trimmedString(MAX_PATH_LENGTH)).max(128).optional()
 }).strict()
 
 const scheduleSkillPatchSchema = z.object({
@@ -1471,8 +1314,7 @@ const settingsPatchObjectSchema = z.object({
   keyboardShortcuts: keyboardShortcutsPatchSchema.optional(),
   write: writeSettingsPatchSchema.optional(),
   speechToText: speechToTextPatchSchema.optional(),
-  remoteChannel: remoteChannelSettingsPatchSchema.optional(),
-  connectPhone: connectPhoneSettingsPatchSchema.optional(),
+  skills: skillsSettingsPatchSchema.optional(),
   schedule: scheduleSettingsPatchSchema.optional(),
   workflow: workflowSettingsPatchSchema.optional(),
   guiUpdate: z.object({
@@ -1883,153 +1725,12 @@ export const logErrorPayloadSchema = z
   })
   .strict()
 
-export const remoteChannelMirrorPayloadSchema = z
-  .object({
-    threadId: trimmedString(MAX_ID_LENGTH),
-    text: z.string().trim().min(1).max(MAX_CHANNEL_TEXT_LENGTH),
-    direction: z.enum(['user', 'assistant'])
-  })
-  .strict()
-
-export const remoteChannelActiveThreadContextPayloadSchema = z
-  .object({
-    threadId: trimmedString(MAX_ID_LENGTH),
-    runtimeId: agentRuntimeIdSchema.optional(),
-    workspaceRoot: defaultPathSchema.optional()
-  })
-  .strict()
-  .nullable()
-
-export const remoteChannelTaskFromTextPayloadSchema = z
-  .object({
-    text: z.string().trim().min(1).max(MAX_CHANNEL_TEXT_LENGTH),
-    channelId: z.string().trim().min(1).max(MAX_ID_LENGTH).nullable().optional(),
-    modelHint: z.string().trim().min(1).max(128).nullable().optional(),
-    mode: z.enum(['agent', 'plan']).nullable().optional()
-  })
-  .strict()
-
-export const discordConfigureTokenPayloadSchema = z
-  .object({
-    token: z.string().trim().min(20).max(4_096),
-    clientId: z.string().trim().max(MAX_ID_LENGTH).optional()
-  })
-  .strict()
-
-export const discordConfigureClientPayloadSchema = z
-  .object({
-    clientId: trimmedString(MAX_ID_LENGTH)
-  })
-  .strict()
-
-export const discordConfigureProxyPayloadSchema = z
-  .object({
-    proxyUrl: z.string().trim().max(2_048)
-  })
-  .strict()
-
-export const discordGuildChannelsPayloadSchema = z
-  .object({
-    guildId: trimmedString(MAX_ID_LENGTH)
-  })
-  .strict()
-
-export const discordBindChannelPayloadSchema = z
-  .object({
-    channelConfigId: z.string().trim().max(MAX_ID_LENGTH).optional(),
-    guildId: trimmedString(MAX_ID_LENGTH),
-    guildName: z.string().trim().max(512).optional(),
-    channelId: trimmedString(MAX_ID_LENGTH),
-    channelName: z.string().trim().max(512).optional(),
-    enabled: z.boolean().optional(),
-    workspaceRoot: defaultPathSchema,
-    model: z.union([z.enum(REMOTE_CHANNEL_MODEL_IDS), trimmedString(128)]).optional(),
-    runtimeId: agentRuntimeIdSchema.optional(),
-    agentProfile: remoteChannelAgentProfilePatchSchema.optional()
-  })
-  .strict()
-
-export const discordTestSendPayloadSchema = z
-  .object({
-    channelId: trimmedString(MAX_ID_LENGTH),
-    text: z.string().trim().min(1).max(2_000).optional(),
-    channelConfigId: z.string().trim().max(MAX_ID_LENGTH).optional()
-  })
-  .strict()
-
-export const discordSetGuardPayloadSchema = z
-  .object({
-    enabled: z.boolean(),
-    channelConfigId: z.string().trim().max(MAX_ID_LENGTH).optional(),
-    forceTakeover: z.boolean().optional()
-  })
-  .strict()
-
-export const zulipConfigurePayloadSchema = z
-  .object({
-    realmUrl: z.string().trim().min(1).max(MAX_URL_LENGTH),
-    botEmail: z.string().trim().min(3).max(512),
-    apiKey: z.string().trim().min(8).max(4_096)
-  })
-  .strict()
-
-export const zulipStreamTopicsPayloadSchema = z
-  .object({
-    streamId: trimmedString(MAX_ID_LENGTH)
-  })
-  .strict()
-
-export const zulipBindChannelPayloadSchema = z
-  .object({
-    channelConfigId: z.string().trim().max(MAX_ID_LENGTH).optional(),
-    streamId: trimmedString(MAX_ID_LENGTH),
-    streamName: z.string().trim().max(512).optional(),
-    topicName: z.string().trim().max(512).optional(),
-    enabled: z.boolean().optional(),
-    workspaceRoot: defaultPathSchema,
-    model: z.union([z.enum(REMOTE_CHANNEL_MODEL_IDS), trimmedString(128)]).optional(),
-    runtimeId: agentRuntimeIdSchema.optional(),
-    agentProfile: remoteChannelAgentProfilePatchSchema.optional()
-  })
-  .strict()
-
-export const zulipTestSendPayloadSchema = z
-  .object({
-    channelId: trimmedString(MAX_ID_LENGTH),
-    topicName: z.string().trim().max(512).optional(),
-    text: z.string().trim().min(1).max(10_000).optional(),
-    channelConfigId: z.string().trim().max(MAX_ID_LENGTH).optional()
-  })
-  .strict()
-
-export const zulipSetGuardPayloadSchema = z
-  .object({
-    enabled: z.boolean(),
-    channelConfigId: z.string().trim().max(MAX_ID_LENGTH).optional(),
-    forceTakeover: z.boolean().optional()
-  })
-  .strict()
-
 export const scheduleTaskFromTextPayloadSchema = z
   .object({
     text: z.string().trim().min(1).max(MAX_CHANNEL_TEXT_LENGTH),
     workspaceRoot: defaultPathSchema,
     modelHint: z.string().trim().min(1).max(128).nullable().optional(),
     mode: z.enum(['agent', 'plan']).nullable().optional()
-  })
-  .strict()
-
-export const connectPhoneInstallQrPayloadSchema = z
-  .object({
-    provider: connectPhoneInstallProviderSchema,
-    isLark: z.boolean().optional()
-  })
-  .strict()
-
-export const connectPhoneInstallPollPayloadSchema = z
-  .object({
-    provider: connectPhoneInstallProviderSchema,
-    deviceCode: trimmedString(MAX_DEVICE_CODE_LENGTH)
   })
   .strict()
 

@@ -38,9 +38,7 @@ export async function guiSkillRootsForRuntime(
   const workspaceRoots = uniqueStrings([
     workspaceRootOverride,
     settings?.workspaceRoot,
-    settings?.remoteChannel.im.workspaceRoot,
     settings?.schedule.defaultWorkspaceRoot,
-    ...(settings?.remoteChannel.channels.map((channel) => channel.workspaceRoot) ?? []),
     ...(settings?.schedule.tasks.map((task) => task.workspaceRoot) ?? [])
   ].map(normalizeSkillRootPath).filter(Boolean))
   const projectRoots = workspaceRoots.flatMap((workspaceRoot) => [
@@ -54,7 +52,7 @@ export async function guiSkillRootsForRuntime(
     ...await discoverCodexPluginSkillRoots()
   ]
   const configuredExtraRoots = [
-    ...(settings?.remoteChannel.skills.extraDirs ?? []),
+    ...(settings?.skills.extraDirs ?? []),
     ...(settings?.schedule.skills.extraDirs ?? [])
   ].map(normalizeSkillRootPath)
 

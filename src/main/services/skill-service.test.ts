@@ -3,8 +3,6 @@ import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
-  defaultConnectPhoneSettings,
-  defaultRemoteChannelSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultScheduleSettings,
@@ -114,7 +112,7 @@ describe('skill-service', () => {
     await writeFile(entryPath, '# Paper Helper\n\nSummarize paper notes.', 'utf8')
 
     const settings = createSettings(workspaceRoot)
-    settings.remoteChannel.skills.extraDirs = [extraRoot]
+    settings.skills.extraDirs = [extraRoot]
 
     const result = await listGuiSkills(settings, workspaceRoot)
 
@@ -146,7 +144,7 @@ describe('skill-service', () => {
     })
 
     const settings = createSettings(workspaceRoot)
-    settings.remoteChannel.skills.extraDirs = [globalRoot]
+    settings.skills.extraDirs = [globalRoot]
 
     const result = await listGuiSkills(settings, workspaceRoot)
 
@@ -175,8 +173,7 @@ describe('skill-service', () => {
       description: 'One external root.'
     })
     const settings = createSettings(workspaceRoot)
-    settings.remoteChannel.im.workspaceRoot = `${workspaceRoot}${sep}`
-    settings.remoteChannel.skills.extraDirs = [
+    settings.skills.extraDirs = [
       projectRoot,
       `${projectRoot}${sep}`,
       `${projectRoot}${sep}..${sep}skills`,
@@ -228,10 +225,9 @@ describe('skill-service', () => {
       appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
       keyboardShortcuts: defaultKeyboardShortcuts(),
       write: defaultWriteSettings(),
-      remoteChannel: defaultRemoteChannelSettings(),
-    connectPhone: defaultConnectPhoneSettings(),
+      skills: { extraDirs: [] },
       schedule: defaultScheduleSettings(),
-    workflow: defaultWorkflowSettings(),
+      workflow: defaultWorkflowSettings(),
       guiUpdate: { channel: 'stable' },
       codePromptPrefix: ''
     }

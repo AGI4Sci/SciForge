@@ -76,6 +76,14 @@ npm run dev
 
 并手动验证受影响流程后再发起 PR。
 
+### 协作服务开发
+
+涉及手机 Zulip、云端协作服务、Session 投影或双向消息时，按
+[协作服务开发启动、香港 ECS 部署与运维手册](./operations/zulip-aliyun-deployment.zh-CN.md)
+使用独立开发数据库启动，并运行 collaboration 类型检查与测试。真实手机/桌面验收方法见
+[手机与多人协作使用手册](./collaboration-user-guide.zh-CN.md)。开发环境不得连接生产数据库、复用生产
+Bot 或把 provider credential 写入仓库。
+
 ## PR 质量标准
 
 代码不难，难得的是好品味。评审要守住产品体验，而不只是实现是否能跑。

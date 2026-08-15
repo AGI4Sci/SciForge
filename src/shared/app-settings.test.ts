@@ -12,11 +12,7 @@ import {
   DEFAULT_LOCAL_RUNTIME_MODEL,
   DEFAULT_APPROVAL_POLICY,
   DEFAULT_SANDBOX_MODE,
-  DEFAULT_WEIXIN_BRIDGE_RPC_URL,
   DEFAULT_SCHEDULE_INTERNAL_PORT,
-  buildRemoteChannelRuntimePrompt,
-  defaultConnectPhoneSettings,
-  defaultRemoteChannelSettings,
   defaultModelRouterSettings,
   defaultSpeechToTextSettings,
   defaultRuntimeGuardSettings,
@@ -32,6 +28,7 @@ import {
   defaultClaudeRuntimeSettings,
   defaultLocalRuntimeSettings,
   defaultScheduleSettings,
+  defaultSkillsSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
   defaultKeyboardShortcuts,
@@ -45,21 +42,18 @@ import {
   getAgentCapabilitySettings,
   isLocalRuntimeInsecure,
   listModelRouterModelIds,
-  mergeRemoteChannelSettings,
+  mergeSkillsSettings,
   normalizeAppSettings,
   normalizeModelAccessSettings,
   normalizeModelRouterSettings,
   normalizeRuntimeGuardSettings,
-  parseRemoteChannelUserPromptForDisplay,
   normalizeScheduleSettings,
   resolveLocalRuntimeSettings,
   resolveSpeechToTextSettings,
   resolveWriteInlineCompletionApiKey,
   resolveWriteInlineCompletionBaseUrl,
   resolveWriteInlineCompletionModel,
-  type AppSettingsV1,
-  type RemoteChannelV1,
-  type RemoteChannelProvider
+  type AppSettingsV1
 } from './app-settings'
 
 function settings(): AppSettingsV1 {
@@ -80,8 +74,7 @@ function settings(): AppSettingsV1 {
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),
     write: defaultWriteSettings(),
-    remoteChannel: defaultRemoteChannelSettings(),
-    connectPhone: defaultConnectPhoneSettings(),
+    skills: defaultSkillsSettings(),
     schedule: defaultScheduleSettings(),
     workflow: defaultWorkflowSettings(),
     guiUpdate: { channel: 'stable' },
@@ -89,38 +82,13 @@ function settings(): AppSettingsV1 {
   }
 }
 
-function clawChannel(provider: RemoteChannelProvider, label: string, name = label): RemoteChannelV1 {
-  const now = '2026-06-01T00:00:00.000Z'
-  return {
-    id: `${provider}-${label}`,
-    provider,
-    label,
-    enabled: true,
-    model: 'auto',
-    runtimeId: 'sciforge',
-    agentThreadIds: {},
-    workspaceRoot: '',
-    agentProfile: {
-      name,
-      description: '',
-      identity: '',
-      personality: '',
-      userContext: '',
-      replyRules: ''
-    },
-    conversations: [],
-    createdAt: now,
-    updatedAt: now
-  }
-}
-
-describe('remote channel public surface', () => {
-  it('does not re-export legacy Claw runtime helper names', () => {
-    expect(appSettingsExports).not.toHaveProperty('DEFAULT_CLAW_MODEL')
-    expect(appSettingsExports).not.toHaveProperty('CLAW_MODEL_IDS')
-    expect(appSettingsExports).not.toHaveProperty('CLAW_MANAGED_INSTRUCTIONS_HEADING')
-    expect(appSettingsExports).not.toHaveProperty('buildClawRuntimePrompt')
-    expect(appSettingsExports).not.toHaveProperty('parseClawUserPromptForDisplay')
+describe('skills settings', () => {
+  it('normalizes and merges generic extra directories', () => {
+    expect(defaultSkillsSettings()).toEqual({ extraDirs: [] })
+    expect(mergeSkillsSettings(defaultSkillsSettings(), {
+      extraDirs: [' /tmp/skills ', '/tmp/skills', '', '/tmp/other']
+    })).toEqual({ extraDirs: ['/tmp/skills', '/tmp/other'] })
+    expect(appSettingsExports).toHaveProperty('defaultSkillsSettings')
   })
 })
 
@@ -455,313 +423,6 @@ describe('speech-to-text settings', () => {
       baseUrl: '',
       apiKey: '',
       model: 'whisper-1'
-    })
-  })
-})
-
-describe('claw settings', () => {
-  it('defaults remote channel webhooks to the canonical path', () => {
-    const defaults = defaultRemoteChannelSettings()
-    expect(defaults.im.path).toBe('/remote-channel/webhook')
-
-    const normalized = normalizeAppSettings({
-      ...settings(),
-      remoteChannel: {
-        ...defaults,
-        im: {
-          ...defaults.im,
-          path: ''
-        }
-      }
-    })
-
-    expect(normalized.remoteChannel.im.path).toBe('/remote-channel/webhook')
-  })
-
-  it('stores the WeChat bridge URL in connect phone settings', () => {
-    const normalized = normalizeAppSettings({
-      ...settings(),
-      connectPhone: {
-        weixinBridgeUrl: '  http://127.0.0.1:8787/rpc  '
-      }
-    })
-
-    expect(defaultConnectPhoneSettings().weixinBridgeUrl).toBe(DEFAULT_WEIXIN_BRIDGE_RPC_URL)
-    expect(normalized.connectPhone.weixinBridgeUrl).toBe('http://127.0.0.1:8787/rpc')
-  })
-
-  it('does not read legacy OpenClaw Gateway URL from remote channel settings', () => {
-    const normalized = normalizeAppSettings({
-      ...settings(),
-      remoteChannel: {
-        ...defaultRemoteChannelSettings(),
-        im: {
-          ...defaultRemoteChannelSettings().im,
-          openClawGatewayUrl: '  http://127.0.0.1:8787/rpc  '
-        } as ReturnType<typeof defaultRemoteChannelSettings>['im'] & { openClawGatewayUrl: string }
-      }
-    })
-
-    expect(normalized.connectPhone.weixinBridgeUrl).toBe(DEFAULT_WEIXIN_BRIDGE_RPC_URL)
-    expect('weixinBridgeUrl' in normalized.remoteChannel.im).toBe(false)
-  })
-
-  it('preserves Codex-only remote-channel conversations without a legacy local runtime thread id', () => {
-    const normalized = normalizeAppSettings({
-      ...settings(),
-      remoteChannel: {
-        ...defaultRemoteChannelSettings(),
-        channels: [{
-          ...clawChannel('feishu', 'team'),
-          runtimeId: 'codex',
-          agentThreadIds: { codex: 'codex-channel-thread' },
-          conversations: [{
-            id: 'conversation-1',
-            chatId: 'chat-1',
-            remoteThreadId: 'remote-1',
-            latestMessageId: 'message-1',
-            senderId: 'sender-1',
-            senderName: 'Ada',
-            runtimeId: 'codex',
-            agentThreadIds: { codex: 'codex-conversation-thread' },
-            workspaceRoot: '/tmp/workspace',
-            createdAt: '2026-06-11T00:00:00.000Z',
-            updatedAt: '2026-06-11T00:00:01.000Z'
-          }]
-        }]
-      }
-    })
-
-    expect(normalized.remoteChannel.channels[0]).toMatchObject({
-      runtimeId: 'codex',
-      agentThreadIds: { codex: 'codex-channel-thread' }
-    })
-    expect(normalized.remoteChannel.channels[0]).not.toHaveProperty('threadId')
-    expect(normalized.remoteChannel.channels[0]?.conversations).toEqual([
-      expect.objectContaining({
-        id: 'conversation-1',
-        runtimeId: 'codex',
-        agentThreadIds: { codex: 'codex-conversation-thread' }
-      })
-    ])
-    expect(normalized.remoteChannel.channels[0]?.conversations[0]).not.toHaveProperty('localThreadId')
-  })
-
-  it('preserves Claude remote-channel thread mappings', () => {
-    const normalized = normalizeAppSettings({
-      ...settings(),
-      remoteChannel: {
-        ...defaultRemoteChannelSettings(),
-        channels: [{
-          ...clawChannel('feishu', 'Claude Channel'),
-          runtimeId: 'claude',
-          agentThreadIds: { claude: 'claude-channel-thread' },
-          conversations: [{
-            id: 'conversation-1',
-            chatId: 'chat-1',
-            remoteThreadId: '',
-            latestMessageId: 'message-1',
-            senderId: '',
-            senderName: '',
-            runtimeId: 'claude',
-            agentThreadIds: { claude: 'claude-conversation-thread' },
-            workspaceRoot: '/tmp/workspace',
-            createdAt: '2026-06-11T00:00:00.000Z',
-            updatedAt: '2026-06-11T00:00:01.000Z'
-          }]
-        }]
-      }
-    })
-
-    const channel = normalized.remoteChannel.channels[0]
-    expect(channel.runtimeId).toBe('claude')
-    expect(channel.agentThreadIds).toEqual({ claude: 'claude-channel-thread' })
-    expect(channel.conversations[0]).toMatchObject({
-      runtimeId: 'claude',
-      agentThreadIds: { claude: 'claude-conversation-thread' }
-    })
-  })
-
-  it('normalizes remote-channel guard mode with an only_mention default', () => {
-    const normalized = normalizeAppSettings({
-      ...settings(),
-      remoteChannel: {
-        ...defaultRemoteChannelSettings(),
-        channels: [
-          clawChannel('feishu', 'Default Guard'),
-          {
-            ...clawChannel('feishu', 'All Messages'),
-            guardMode: 'all_messages'
-          },
-          {
-            ...clawChannel('feishu', 'Bad Guard'),
-            guardMode: 'bogus' as never
-          }
-        ]
-      }
-    })
-
-    expect(normalized.remoteChannel.channels.map((channel) => channel.guardMode)).toEqual([
-      'only_mention',
-      'all_messages',
-      'only_mention'
-    ])
-  })
-
-  it('normalizes phone agent default names without touching custom names', () => {
-    const normalized = normalizeAppSettings({
-      ...settings(),
-      remoteChannel: {
-        ...defaultRemoteChannelSettings(),
-        channels: [
-          clawChannel('weixin', 'WeChat Agent', 'WeChat Agent'),
-          clawChannel('feishu', 'Feishu / Lark', 'Feishu Agent'),
-          clawChannel('weixin', 'Support Bot', '')
-        ]
-      }
-    })
-
-    expect(normalized.remoteChannel.channels.map((channel) => ({
-      label: channel.label,
-      name: channel.agentProfile.name
-    }))).toEqual([
-      { label: 'weixin agent', name: 'weixin agent' },
-      { label: 'feishu agent', name: 'feishu agent' },
-      { label: 'Support Bot', name: 'Support Bot' }
-    ])
-  })
-
-  it('ignores legacy Claw thread fields instead of seeding SciForge mappings', () => {
-    const normalized = normalizeAppSettings({
-      ...settings(),
-      remoteChannel: {
-        ...defaultRemoteChannelSettings(),
-        channels: [{
-          id: 'channel-1',
-          provider: 'weixin',
-          label: 'WeChat Agent',
-          enabled: true,
-          model: 'auto',
-          threadId: ' legacy-channel-thread ',
-          agentThreadIds: {
-            codewhale: ' legacy-codewhale-channel ',
-            reasonix: ' legacy-reasonix-channel '
-          },
-          workspaceRoot: '',
-          agentProfile: {
-            name: 'WeChat Agent',
-            description: '',
-            identity: '',
-            personality: '',
-            userContext: '',
-            replyRules: ''
-          },
-          conversations: [{
-            id: 'conversation-1',
-            chatId: 'chat-1',
-            remoteThreadId: '',
-            latestMessageId: 'message-1',
-            senderId: '',
-            senderName: '',
-            agentThreadIds: {
-              reasonix: ' legacy-reasonix-conversation '
-            },
-            workspaceRoot: '',
-            createdAt: '2026-06-01T00:00:00.000Z',
-            updatedAt: '2026-06-01T00:00:00.000Z'
-          }],
-          createdAt: '2026-06-01T00:00:00.000Z',
-          updatedAt: '2026-06-01T00:00:00.000Z'
-        }]
-      }
-    } as unknown as AppSettingsV1)
-
-    const channel = normalized.remoteChannel.channels[0]
-    expect(channel.runtimeId).toBe('codex')
-    expect(channel).not.toHaveProperty('threadId')
-    expect(channel.agentThreadIds).toEqual({})
-    expect(channel.agentThreadIds?.codex).toBeUndefined()
-
-    expect(channel.conversations).toEqual([])
-  })
-
-  it('round-trips Codex claw thread mappings while keeping SciForge mappings', () => {
-    const normalized = normalizeAppSettings({
-      ...settings(),
-      remoteChannel: {
-        ...defaultRemoteChannelSettings(),
-        channels: [{
-          ...clawChannel('feishu', 'Codex Channel'),
-          runtimeId: 'codex',
-          agentThreadIds: {
-            sciforge: 'sciforge-channel-thread',
-            codex: 'codex-channel-thread'
-          },
-          conversations: [{
-            id: 'conversation-1',
-            chatId: 'chat-1',
-            remoteThreadId: '',
-            latestMessageId: 'message-1',
-            senderId: '',
-            senderName: '',
-            runtimeId: 'codex',
-            agentThreadIds: {
-              sciforge: 'sciforge-conversation-thread',
-              codex: 'codex-conversation-thread'
-            },
-            workspaceRoot: '',
-            createdAt: '2026-06-01T00:00:00.000Z',
-            updatedAt: '2026-06-01T00:00:00.000Z'
-          }]
-        }]
-      }
-    })
-
-    const channel = normalized.remoteChannel.channels[0]
-    expect(channel.runtimeId).toBe('codex')
-    expect(channel).not.toHaveProperty('threadId')
-    expect(channel.agentThreadIds).toEqual({
-      sciforge: 'sciforge-channel-thread',
-      codex: 'codex-channel-thread'
-    })
-
-    const conversation = channel.conversations[0]
-    expect(conversation.runtimeId).toBe('codex')
-    expect(conversation).not.toHaveProperty('localThreadId')
-    expect(conversation.agentThreadIds).toEqual({
-      sciforge: 'sciforge-conversation-thread',
-      codex: 'codex-conversation-thread'
-    })
-  })
-
-  it('merges claw settings without dropping SciForge or Codex thread mappings', () => {
-    const current = normalizeAppSettings({
-      ...settings(),
-      remoteChannel: {
-        ...defaultRemoteChannelSettings(),
-        channels: [{
-          ...clawChannel('feishu', 'Merged Channel'),
-          runtimeId: 'codex',
-          agentThreadIds: {
-            sciforge: 'sciforge-channel-thread',
-            codex: 'codex-channel-thread'
-          }
-        }]
-      }
-    }).remoteChannel
-
-    const merged = mergeRemoteChannelSettings(current, {
-      channels: [{
-        ...current.channels[0],
-        label: 'Merged Channel Renamed'
-      }]
-    })
-
-    expect(merged.channels[0].runtimeId).toBe('codex')
-    expect(merged.channels[0]).not.toHaveProperty('threadId')
-    expect(merged.channels[0].agentThreadIds).toEqual({
-      sciforge: 'sciforge-channel-thread',
-      codex: 'codex-channel-thread'
     })
   })
 })
@@ -1327,36 +988,12 @@ describe('schedule settings', () => {
     expect(defaults.tasks).toEqual([])
   })
 
-  it('normalizes and merges schedule patches without reading legacy claw tasks', () => {
-    const legacyTask = {
-      id: 'legacy-claw-task',
-      title: 'Legacy task',
-      enabled: true,
-      prompt: 'Old Claw task',
-      workspaceRoot: '/tmp/workspace',
-      model: 'auto',
-      reasoningEffort: 'medium' as const,
-      mode: 'agent' as const,
-      schedule: { kind: 'daily' as const, everyMinutes: 60, timeOfDay: '08:00', atTime: '' },
-      createdAt: '2026-06-02T00:00:00.000Z',
-      updatedAt: '2026-06-02T00:00:00.000Z',
-      lastRunAt: '',
-      nextRunAt: '',
-      lastStatus: 'idle' as const,
-      lastMessage: '',
-      runtimeId: 'sciforge' as const,
-      agentThreadIds: {}
-    }
+  it('normalizes and merges schedule patches independently', () => {
     const normalized = normalizeAppSettings({
       ...settings(),
-      remoteChannel: {
-        ...defaultRemoteChannelSettings(),
-        tasks: [legacyTask]
-      } as unknown as AppSettingsV1['remoteChannel'],
       schedule: undefined as unknown as AppSettingsV1['schedule']
     })
 
-    expect('tasks' in normalized.remoteChannel).toBe(false)
     expect(normalized.schedule.tasks).toEqual([])
 
     const merged = mergeScheduleSettings(normalizeScheduleSettings(undefined), {
@@ -1457,148 +1094,6 @@ describe('schedule settings', () => {
       agentThreadIds: {
         claude: 'claude-task-thread'
       }
-    })
-  })
-})
-
-describe('claw runtime prompts', () => {
-  it('does not duplicate default Schedule MCP tool instructions in managed prompts', () => {
-    const state = settings()
-    state.remoteChannel.channels = [{
-      id: 'channel-1',
-      provider: 'feishu',
-      label: 'sciforge',
-      enabled: true,
-      model: 'auto',
-      workspaceRoot: '',
-      conversations: [],
-      agentProfile: {
-        name: 'sciforge',
-        description: '',
-        identity: '',
-        personality: '',
-        userContext: '',
-        replyRules: ''
-      },
-      createdAt: '2026-06-01T00:00:00.000Z',
-      updatedAt: '2026-06-01T00:00:00.000Z'
-    }]
-
-    const prompt = buildRemoteChannelRuntimePrompt(state, 'hi', { channel: state.remoteChannel.channels[0] })
-
-    expect(prompt).toContain('[Remote channel managed instructions]')
-    expect(prompt).toContain('[Agent name]\nsciforge')
-    expect(prompt).not.toContain('gui_schedule')
-    expect(prompt).not.toContain('scheduled-task tools')
-  })
-
-  it('parses managed IM prompts into compact display text', () => {
-    const parsed = parseRemoteChannelUserPromptForDisplay([
-      '[Remote channel managed instructions]',
-      '',
-      '[Remote channel agent instructions]',
-      '',
-      '[Agent name]',
-      'sciforge',
-      '',
-      '---',
-      '[Current user request]',
-      '[Feishu / Lark inbound message]',
-      'Chat type: p2p',
-      'Sender: user-1',
-      '',
-      'hi'
-    ].join('\n'))
-
-    expect(parsed).toMatchObject({
-      text: 'hi',
-      managed: true,
-      inbound: true,
-      sender: 'user-1',
-      chatType: 'p2p'
-    })
-  })
-
-  it('parses Discord inbound prompts with the current remote-channel display logic', () => {
-    const parsed = parseRemoteChannelUserPromptForDisplay([
-      '[Remote channel managed instructions]',
-      '',
-      '[Remote channel agent instructions]',
-      '',
-      '[Agent name]',
-      'discord agent',
-      '',
-      '---',
-      '[Current user request]',
-      '[Discord inbound message]',
-      'Guild: gzy的服务器',
-      'Channel: #debug',
-      'Sender: gzy',
-      '',
-      '你想我吗'
-    ].join('\n'))
-
-    expect(parsed).toMatchObject({
-      text: '你想我吗',
-      managed: true,
-      inbound: true,
-      sourceLabel: 'Discord',
-      sender: 'gzy'
-    })
-  })
-
-  it('does not unwrap legacy Claw managed prompt prefixes for display', () => {
-    const legacyPrefixes = [
-      '[Claw managed instructions]',
-      '[Claw IM agent instructions]\n\n[Agent name]\nlegacy',
-      'Claw skill policy: prefer these configured skills when relevant: old-skill.'
-    ]
-
-    for (const prefix of legacyPrefixes) {
-      const prompt = [
-        prefix,
-        '',
-        '---',
-        '[Current user request]',
-        '[Discord inbound message]',
-        'Guild: gzy的服务器',
-        'Channel: #debug',
-        'Sender: gzy',
-        '',
-        '你想我吗'
-      ].join('\n')
-
-      expect(parseRemoteChannelUserPromptForDisplay(prompt)).toEqual({
-        text: prompt,
-        managed: false,
-        inbound: false
-      })
-    }
-  })
-
-  it('does not parse inbound prompts that omit the canonical blank separator', () => {
-    const parsed = parseRemoteChannelUserPromptForDisplay([
-      '[Remote channel managed instructions]',
-      '',
-      '---',
-      '[Current user request]',
-      '[Discord inbound message]',
-      'Guild: gzy的服务器',
-      'Channel: #debug',
-      'Sender: gzy',
-      '你想我吗'
-    ].join('\n'))
-
-    expect(parsed).toEqual({
-      text: [
-        '[Discord inbound message]',
-        'Guild: gzy的服务器',
-        'Channel: #debug',
-        'Sender: gzy',
-        '你想我吗'
-      ].join('\n'),
-      managed: true,
-      inbound: false
     })
   })
 })

@@ -12,6 +12,7 @@
     "./controlled-process": "./src/controlled-process.ts",
     "./host": "./src/host.ts",
     "./main": "./src/main.ts",
+    "./package-storage": "./src/package-storage.ts",
     "./node/electron-node-executable": "./src/node/electron-node-executable.ts",
     "./node/workspace-paths": "./src/node/workspace-paths.ts",
     "./power": "./src/power.ts",

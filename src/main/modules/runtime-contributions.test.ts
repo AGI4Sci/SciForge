@@ -666,6 +666,7 @@ function runtimeHost(
         turns: [],
         artifacts: []
       })),
+      subscribeMessages: vi.fn(async function* () {}),
       hasActiveTurns: vi.fn(() => false)
     },
     capabilityInvokers,

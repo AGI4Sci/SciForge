@@ -1,0 +1,132 @@
+# SciForge 手机与多人协作使用手册
+
+本文说明统一协作功能的日常使用方式。运维部署、备份和故障恢复见
+[香港 ECS 与 Zulip 运维手册](./operations/zulip-aliyun-deployment.zh-CN.md)。
+
+## 1. 先理解四个对象
+
+| 对象 | 含义 | 权威来源 |
+| --- | --- | --- |
+| User | 稳定的人类身份；Project 成员、Agent 所有者和真人问题都引用它 | 云端协作服务 |
+| 手机端点 | 已验证的个人 Zulip 账号；它代表用户发消息，但不是本机管理员 | 云端绑定 + Zulip 身份 |
+| Agent | 一台明确属于某名用户的 SciForge；每台机器有独立、可撤销的设备身份 | 云端目录 + 本机 secret store |
+| 个人 Session | 一台固定 Agent 上的固定 runtime/thread；可投影到一个手机 Topic | 本地 AgentRuntime thread |
+
+Project 是多人共享的目标和任务账本。Project Topic 只把带真实发送者身份的输入交给唯一
+Coordinator，不是任何成员的私人 Session，也不会广播唤醒全部 Agent。
+
+## 2. 首次准备
+
+管理员需要先为每人创建独立 Zulip 账号并把该账号加入允许的 channel。用户不得共用管理员
+账号或他人的手机账号。
+
+手机端：
+
+1. 安装官方 Zulip App。
+2. Server 填写 `https://chat.sciforge.cn`。
+3. 使用自己的 Zulip 邮箱和密码登录。
+4. 确认能打开管理员指定的 SciForge channel。
+
+桌面端：
+
+1. 启动新版 SciForge，并打开任意 Session；手机绑定本身不要求先选择 Project。
+2. 点击工具栏的协作个体图标，打开右侧“协作”面板。
+3. 在“协作服务地址”填写 `https://chat.sciforge.cn/collaboration`，点击“保存并连接”。
+4. 状态应从“连接中”变为“已连接”。如果显示“连接异常”，不要反复注册；先看“队列与恢复”的明确错误。
+
+## 3. 绑定个人手机端点
+
+1. 在“协作个体”中选择 Zulip，并填写界面要求的 Realm；当前 Realm 为
+   `https://chat.sciforge.cn`。
+2. 点击“开始手机配对”。桌面会显示一条短期、一次性的完整命令，形如
+   `sciforge-pair <challengeId> <challengeCode>`。
+3. 在手机上把整条命令原样发送到管理员指定的配对 Topic。不要截图转发给别人，也不要写入文档或工单。
+4. 保持桌面在线，等待面板显示“手机端点已验证”。命令过期后应重新开始配对，不能复用旧命令。
+
+同一 Zulip 身份不能同时绑定到两个 active User。手机丢失、账号异常或人员变更时，应立即断开本机
+协作连接并联系管理员按端点管理流程撤销绑定；如 Bot 服务凭据也可能泄漏，再由管理员单独轮换。
+
+## 4. 注册并选择主要 Agent
+
+手机端点验证后：
+
+1. 点击“注册这台 SciForge”，输入便于识别的设备名称。
+2. 确认参与者卡片中的 Agent owner 是自己。
+3. 如果拥有多台 Agent，点击“设为主要 Agent”明确选择默认机器。
+
+主要 Agent 离线时，消息会保持有界等待或返回明确离线状态。系统不会选择最近在线机器，也不会
+把工作交给其他用户的 Agent。
+
+## 5. 把现有 Session 分享到手机
+
+1. 切到要继续使用的本地 Session。
+2. 在“个人 Session”中点击“分享当前 Session”。也可以选择“新建并分享 Session”。
+3. 在“请选择容器 / Topic”中选择目标手机 Topic；发现多个 Topic 时必须显式选择，系统不会默认提交
+   第一项。再核对卡片上的 projection ID、执行 Agent、Agent owner 和本地 Session。
+4. 默认保持“仅所有者”。只有确需共享时才编辑允许发送者 userId 列表。
+
+建立映射后，切换桌面焦点、打开其他 Project 或修改 Topic 中文标题，都不会改变该映射。一个 Topic
+只投影一个固定 Session；需要另一个上下文时应建立另一个 projection。
+
+可用操作：
+
+- “重命名”只改显示名，不改变 projection ID；
+- “暂停/恢复”控制新消息处理；
+- “重新链接”必须填写准确的 runtime/thread，不根据桌面焦点猜测；
+- “关闭”终止该远端入口，之后的消息不得继续触发执行；
+- “编辑允许发送者”不会改变实际执行 Agent，界面会持续显示 Agent owner。
+
+## 6. 双向消息规则
+
+手机发消息时，云端先验证 User、手机端点和稳定 locator，再把消息加入 projection 顺序队列。同一
+projection 同时只运行一个 turn，后到消息可见地排队；不同 projection 可以并行。
+
+桌面发消息时，本地 Session 先接受消息，再将同一逻辑 user message 和最终 assistant reply 投影到
+手机。首期仅同步 append-only 文本、明确状态和最终回复，不同步流式 token、编辑、删除、reaction、
+附件或完整工具日志。
+
+如果网络超时，不要复制消息反复发送。系统会用 provider message ID、逻辑消息 ID 和 receipt 对账后
+重试；“队列与恢复”会显示尝试次数和终态。
+
+## 7. Project 与 Task
+
+- Project 成员是 User；Coordinator 和 Task assignee 是 Agent，二者不可互换。
+- 每个 Project 同时只有一个 active Coordinator。只有它能维护正式计划、创建或改派 Task、接受结果。
+- Worker 只处理明确分配给自己的 Task，可提交结果、观察或子任务建议，不能直接改写全局计划。
+- Coordinator 转交必须由有权用户显式完成；旧 Coordinator 随后写入会被拒绝。
+- Project Topic 中每条输入都保留 senderUserId，并进入 Project 队列；它不会进入成员的私人 Session。
+
+## 8. 真人问题与权限
+
+HumanNeeded 必须指定 targetUserId，只投递给该用户的 active 手机端点。其他在线成员不能代答；过期
+或已被新 revision 取代的问题不能改变当前 Task。
+
+通知会附带完整回复格式：`sciforge-answer <humanRequestId> <revision> <answer>`。目标用户应保留前两个
+标识不变，只把 `<answer>` 替换为自己的答案并从收到通知的同一 Topic 发送；不要手工猜测 request ID
+或 revision，也不要让其他成员转发代答。
+
+手机和 Agent 同属一名用户，不代表手机拥有本机高风险批准权。文件写入、命令执行、外部发布和
+凭据使用仍走本地唯一 Capability Broker。没有显式 remote-approval policy 时，手机只会看到“等待
+桌面批准”。
+
+## 9. 断线与恢复
+
+| 现象 | 处理 |
+| --- | --- |
+| 手机离线 | Zulip 保留消息和未读状态；重新联网后正常查看 |
+| Agent 离线 | 云端信箱保留消息；确认消息仍然适用后再让 Agent 连接 |
+| 云端连接异常 | 在“云端连接”点击“重新连接”，再到“队列与恢复”恢复 inbox/outbox |
+| 单条消息失败 | 查看安全错误码和尝试次数；只对 retryable 项点击“重试” |
+| Topic 改名后异常 | 不新建隐藏 Session，也不要重新链接本地 thread；先刷新/重连，持续失败时由管理员检查 provider locator |
+| Agent/手机被撤销 | 旧凭据立即失效；重新验证或重新注册，不复制旧 token |
+
+## 10. 最小个人验收
+
+1. 手机在个人 Topic 发送一条带唯一时间标记的无副作用消息。
+2. 确认桌面固定 Session 只出现一个 user message 和一个 Agent turn。
+3. 确认最终 Agent 回复只在原 Topic 出现一次。
+4. 从桌面同一 Session 再发送一条唯一标记，确认手机看到 user message 和最终回复。
+5. 让桌面暂时离线，手机再发一条消息；重新上线后确认只执行一次且顺序正确。
+6. 触发一项需要桌面批准的测试能力，确认手机不能越过本地批准。
+
+验收时不要使用真实密码、API key、token、私钥、敏感文件内容或破坏性命令。

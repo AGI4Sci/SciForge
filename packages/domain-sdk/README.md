@@ -183,8 +183,14 @@ operation:
   The host owns target lookup, sensitive-target policy, redaction, callout rendering, and PNG byte
   limits; packages cannot submit DOM selectors or redaction bounds.
 - `@sciforge/domain-sdk/agent-execution` runs an agent thread through a host-owned runtime while
-  exposing only stable request and result data, an optional Host-enforced tool allowlist, plus
-  optional cancellation.
+  exposing only stable request and terminal result data, an optional Host-enforced tool allowlist,
+  plus optional cancellation. A request either starts a thread (with or without a workspace) or
+  names an exact runtime/thread pair. Retryable callers reuse one `clientDirectiveId`, which enters
+  the same Host directive ledger as desktop messages instead of creating a second execution path.
+- `@sciforge/domain-sdk/package-storage` exposes package-owner-scoped non-secret settings with
+  optimistic revisions and a main-process-only secret store. Generated composition binds both
+  stores to the manifest owner; packages cannot choose another namespace. Renderer code changes
+  settings only through the canonical capability invoker and never receives secret-store access.
 - `@sciforge/domain-sdk/workflow-template` defines the versioned workflow-template bundle and the
   package-owned execution-receipt adapter used by workflow engines. Engines consume these generic
   contracts instead of another domain's private artifact directories or receipt layout.
@@ -199,6 +205,13 @@ Main runtime lifecycle contributions can subscribe to generic before-turn and te
 events. System capability invocation cannot manufacture user approval. A nested destructive
 operation may request `inherit-current-action`, which the host must reject unless execution is
 already inside a matching approved outer action.
+
+The same lifecycle context exposes a bounded Agent transcript projection. A package first reads a
+thread snapshot, records its watermark and canonical message item IDs, then subscribes after that
+sequence. Only accepted user messages and final assistant messages cross this boundary; streaming
+deltas, reasoning, tools, approvals, and provider payloads do not. This lets projections mirror
+desktop-origin messages without parsing Host-private runtime artifacts or creating another message
+transport.
 
 Trusted capability providers may register bounded `main.system-capability-grant` contributions.
 A lifecycle contribution can request those public grant IDs only through its canonical manifest

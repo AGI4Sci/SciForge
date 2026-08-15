@@ -37,13 +37,7 @@ vi.mock('../../store/chat-store', () => ({
     busy: false,
     watchTurnCompletion: {},
     unreadThreadIds: {},
-    queuedMessages: [],
-    remoteChannels: [],
-    activeRemoteChannelId: null,
-    remoteGuardChannelId: null,
-    selectRemoteGuardChannel: vi.fn(),
-    addRemoteChannel: vi.fn(),
-    deleteRemoteChannel: vi.fn()
+    queuedMessages: []
   })
 }))
 
@@ -64,7 +58,6 @@ describe('Sidebar visible-context lifecycle', () => {
       }],
       activeThreadId: 'thread-active',
       activeView: 'schedule',
-      connectPhoneSidebarOpen: false,
       pluginsActive: false,
       runtimeReady: true,
       threadSearch: '',
@@ -80,7 +73,6 @@ describe('Sidebar visible-context lifecycle', () => {
       onNewChatInWorkspace: vi.fn(),
       onOpenSettings: vi.fn(),
       onOpenPlugins: vi.fn(),
-      onToggleConnectPhone: vi.fn(),
       onScheduleOpen: vi.fn(),
       onToggleSidebar: vi.fn()
     }))

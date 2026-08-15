@@ -22,9 +22,6 @@ import {
   type ScheduleTaskFromTextResult
 } from '../../shared/app-settings'
 import type {
-  ConnectPhoneInstallPollResult,
-  ConnectPhoneInstallQrResult,
-  ConnectPhoneRuntimeStatus,
   DesktopCommand,
   ModelAccessStatus,
   SystemNotificationResult,
@@ -40,18 +37,6 @@ import {
   agentRuntimeConnectPayloadSchema,
   agentRuntimeAuxiliaryPayloadSchema,
   agentRuntimeApprovalResolvePayloadSchema,
-  discordBindChannelPayloadSchema,
-  discordConfigureClientPayloadSchema,
-  discordConfigureProxyPayloadSchema,
-  discordConfigureTokenPayloadSchema,
-  discordGuildChannelsPayloadSchema,
-  discordSetGuardPayloadSchema,
-  discordTestSendPayloadSchema,
-  zulipBindChannelPayloadSchema,
-  zulipConfigurePayloadSchema,
-  zulipSetGuardPayloadSchema,
-  zulipStreamTopicsPayloadSchema,
-  zulipTestSendPayloadSchema,
   agentRuntimeEventSubscribePayloadSchema,
   agentRuntimeListThreadsPayloadSchema,
   agentRuntimeReadThreadPagePayloadSchema,
@@ -69,12 +54,7 @@ import {
   agentRuntimeTurnTargetPayloadSchema,
   agentRuntimeUsagePayloadSchema,
   agentRuntimeUserInputResolvePayloadSchema,
-  connectPhoneInstallPollPayloadSchema,
-  connectPhoneInstallQrPayloadSchema,
   computerUsePermissionKindSchema,
-  remoteChannelActiveThreadContextPayloadSchema,
-  remoteChannelMirrorPayloadSchema,
-  remoteChannelTaskFromTextPayloadSchema,
   remoteWorkspaceAttachPayloadSchema,
   remoteWorkspaceSelectPayloadSchema,
   remoteWorkspaceSessionPayloadSchema,
@@ -204,9 +184,6 @@ import type {
   AgentRuntimeUserInputResolveInput
 } from '../runtime/agent-runtime/adapter'
 import type { JsonSettingsStore } from '../settings-store'
-import type { RemoteChannelRuntime } from '../remote-channel-runtime'
-import type { DiscordBotRuntime } from '../discord-bot-runtime'
-import type { ZulipBotRuntime } from '../zulip-bot-runtime'
 import type { ScheduleRuntime } from '../schedule-runtime'
 import {
   expandHomePath,
@@ -320,9 +297,6 @@ export type RegisterAppIpcHandlersOptions = {
   remoteWorkspace?: RemoteWorkspaceController
   workspacePlacement?: WorkspacePlacementRouter
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
-  getRemoteChannelRuntime: () => RemoteChannelRuntime | null
-  getDiscordBotRuntime?: () => DiscordBotRuntime | null
-  getZulipBotRuntime?: () => ZulipBotRuntime | null
   visibleContext?: {
     publish: (snapshot: VisibleContextSnapshot) => Promise<VisibleContextSnapshot>
     get: () => Promise<VisibleContextSnapshot>
@@ -344,16 +318,7 @@ export type RegisterAppIpcHandlersOptions = {
     ) => Promise<Readonly<{ bindingId: string }> | null>
     discardSurfaceBinding?: (callerId: string, bindingId: string) => Promise<void>
   }
-  setRemoteChannelActiveThreadContext?: (payload: {
-    threadId: string
-    runtimeId?: AgentRuntimeId
-    workspaceRoot?: string
-  } | null) => void
   getScheduleRuntime: () => ScheduleRuntime | null
-  startFeishuInstallQrcode: (isLark: boolean) => Promise<ConnectPhoneInstallQrResult>
-  pollFeishuInstall: (deviceCode: string) => Promise<ConnectPhoneInstallPollResult>
-  startWeixinInstallQrcode: (weixinBridgeUrl?: string) => Promise<ConnectPhoneInstallQrResult>
-  pollWeixinInstall: (deviceCode: string, weixinBridgeUrl?: string) => Promise<ConnectPhoneInstallPollResult>
   researchCards?: ResearchCardService
   showTurnCompleteNotification: (
     payload: TurnCompleteNotificationPayload
@@ -468,15 +433,8 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     remoteWorkspace,
     workspacePlacement,
     fetchUpstreamModels,
-    getRemoteChannelRuntime,
-    getDiscordBotRuntime,
-    getZulipBotRuntime,
     visibleContext,
     getScheduleRuntime,
-    startFeishuInstallQrcode,
-    pollFeishuInstall,
-    startWeixinInstallQrcode,
-    pollWeixinInstall,
     showTurnCompleteNotification,
     getAppVersion,
     readGuiUpdateState,
@@ -869,22 +827,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     ))
   )
 
-  const requireDiscordBotRuntime = (): DiscordBotRuntime => {
-    const runtime = getDiscordBotRuntime?.()
-    if (!runtime) {
-      throw new Error('Discord bot runtime is not initialized.')
-    }
-    return runtime
-  }
-
-  const requireZulipBotRuntime = (): ZulipBotRuntime => {
-    const runtime = getZulipBotRuntime?.()
-    if (!runtime) {
-      throw new Error('Zulip bot runtime is not initialized.')
-    }
-    return runtime
-  }
-
   handleInvoke('agentRuntime:connect', async (_, payload: unknown) => {
     const request = parseIpcPayload('agentRuntime:connect', agentRuntimeConnectPayloadSchema, payload ?? {})
     return requireAgentRuntime().connect(request.runtimeId)
@@ -1072,14 +1014,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
 
   handleInvoke('upstream:models', async () => fetchUpstreamModels())
 
-  handleInvoke('connectPhone:status', async (): Promise<ConnectPhoneRuntimeStatus> =>
-    getRemoteChannelRuntime()?.status() ?? {
-      imServerRunning: false,
-      imUrl: '',
-      runningTaskIds: []
-    }
-  )
-
   handleInvoke('schedule:status', async (): Promise<ScheduleRuntimeStatus> =>
     getScheduleRuntime()?.status() ?? {
       internalServerRunning: false,
@@ -1095,54 +1029,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     if (!scheduleRuntime) return { ok: false, message: 'Schedule runtime is not initialized.' }
     return scheduleRuntime.runTask(normalizedTaskId)
   })
-
-  handleInvoke(
-    'remoteChannel:active-thread-context',
-    async (_, payload: unknown) => {
-      const request = parseIpcPayload(
-        'remoteChannel:active-thread-context',
-        remoteChannelActiveThreadContextPayloadSchema,
-        payload
-      )
-      options.setRemoteChannelActiveThreadContext?.(request)
-    }
-  )
-
-  handleInvoke(
-    'remoteChannel:message:mirror',
-    async (_, payload: unknown) => {
-      const request = parseIpcPayload('remoteChannel:message:mirror', remoteChannelMirrorPayloadSchema, payload)
-      const remoteChannelRuntime = getRemoteChannelRuntime()
-      if (!remoteChannelRuntime) return { ok: false as const, message: 'Remote channel runtime is not initialized.' }
-      return remoteChannelRuntime.mirrorThreadMessageToIm(
-        request.threadId,
-        request.text,
-        request.direction
-      )
-    }
-  )
-
-  handleInvoke(
-    'remoteChannel:task:create-from-text',
-    async (_, payload: unknown): Promise<ScheduleTaskFromTextResult> => {
-      const request = parseIpcPayload(
-        'remoteChannel:task:create-from-text',
-        remoteChannelTaskFromTextPayloadSchema,
-        payload
-      )
-      const scheduleRuntime = getScheduleRuntime()
-      if (!scheduleRuntime) return { kind: 'error', message: 'Schedule runtime is not initialized.' }
-      const settings = await store.load()
-      const channel = request.channelId
-        ? settings.remoteChannel.channels.find((item) => item.id === request.channelId)
-        : undefined
-      return scheduleRuntime.createScheduledTaskFromText(request.text, {
-        workspaceRoot: channel?.workspaceRoot || settings.schedule.defaultWorkspaceRoot || settings.workspaceRoot,
-        modelHint: request.modelHint,
-        mode: request.mode
-      })
-    }
-  )
 
   handleInvoke(
     'schedule:task:create-from-text',
@@ -1161,171 +1047,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       })
     }
   )
-
-  handleInvoke(
-    'connectPhone:install:qrcode',
-    async (_, payload: unknown) => {
-      const request = parseIpcPayload(
-        'connectPhone:install:qrcode',
-        connectPhoneInstallQrPayloadSchema,
-        payload
-      )
-      if (request.provider === 'weixin') {
-        const settings = await store.load()
-        return startWeixinInstallQrcode(settings.connectPhone.weixinBridgeUrl)
-      }
-      return startFeishuInstallQrcode(request.isLark === true)
-    }
-  )
-
-  handleInvoke(
-    'connectPhone:install:poll',
-    async (_, payload: unknown) => {
-      const request = parseIpcPayload(
-        'connectPhone:install:poll',
-        connectPhoneInstallPollPayloadSchema,
-        payload
-      )
-      if (request.provider === 'weixin') {
-        const settings = await store.load()
-        return pollWeixinInstall(request.deviceCode, settings.connectPhone.weixinBridgeUrl)
-      }
-      return pollFeishuInstall(request.deviceCode)
-    }
-  )
-
-  handleInvoke('discord:status', async () =>
-    requireDiscordBotRuntime().status()
-  )
-
-  handleInvoke('discord:configure-client', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'discord:configure-client',
-      discordConfigureClientPayloadSchema,
-      payload
-    )
-    return requireDiscordBotRuntime().configureClientId(request.clientId)
-  })
-
-  handleInvoke('discord:configure-token', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'discord:configure-token',
-      discordConfigureTokenPayloadSchema,
-      payload
-    )
-    return requireDiscordBotRuntime().configureToken(request.token, request.clientId)
-  })
-
-  handleInvoke('discord:configure-proxy', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'discord:configure-proxy',
-      discordConfigureProxyPayloadSchema,
-      payload
-    )
-    return requireDiscordBotRuntime().configureProxy(request.proxyUrl)
-  })
-
-  handleInvoke('discord:guilds', async () =>
-    requireDiscordBotRuntime().listGuilds()
-  )
-
-  handleInvoke('discord:channels', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'discord:channels',
-      discordGuildChannelsPayloadSchema,
-      payload
-    )
-    return requireDiscordBotRuntime().listChannels(request.guildId)
-  })
-
-  handleInvoke('discord:bind-channel', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'discord:bind-channel',
-      discordBindChannelPayloadSchema,
-      payload
-    )
-    return requireDiscordBotRuntime().bindChannel(request)
-  })
-
-  handleInvoke('discord:test-send', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'discord:test-send',
-      discordTestSendPayloadSchema,
-      payload
-    )
-    return requireDiscordBotRuntime().testSend(request.channelId, request.text, request.channelConfigId)
-  })
-
-  handleInvoke('discord:set-guard', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'discord:set-guard',
-      discordSetGuardPayloadSchema,
-      payload
-    )
-    return requireDiscordBotRuntime().setGuard(request.enabled, {
-      channelConfigId: request.channelConfigId,
-      forceTakeover: request.forceTakeover
-    })
-  })
-
-  handleInvoke('zulip:status', async () =>
-    requireZulipBotRuntime().status()
-  )
-
-  handleInvoke('zulip:configure', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'zulip:configure',
-      zulipConfigurePayloadSchema,
-      payload
-    )
-    return requireZulipBotRuntime().configure(request)
-  })
-
-  handleInvoke('zulip:streams', async () =>
-    requireZulipBotRuntime().listStreams()
-  )
-
-  handleInvoke('zulip:topics', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'zulip:topics',
-      zulipStreamTopicsPayloadSchema,
-      payload
-    )
-    return requireZulipBotRuntime().listTopics(request.streamId)
-  })
-
-  handleInvoke('zulip:bind-channel', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'zulip:bind-channel',
-      zulipBindChannelPayloadSchema,
-      payload
-    )
-    return requireZulipBotRuntime().bindChannel(request)
-  })
-
-  handleInvoke('zulip:test-send', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'zulip:test-send',
-      zulipTestSendPayloadSchema,
-      payload
-    )
-    return requireZulipBotRuntime().testSend(request.channelId, request.text, {
-      channelConfigId: request.channelConfigId,
-      topicName: request.topicName
-    })
-  })
-
-  handleInvoke('zulip:set-guard', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'zulip:set-guard',
-      zulipSetGuardPayloadSchema,
-      payload
-    )
-    return requireZulipBotRuntime().setGuard(request.enabled, {
-      channelConfigId: request.channelConfigId,
-      forceTakeover: request.forceTakeover
-    })
-  })
 
   handleInvoke('workspace:pick-directory', async (event, defaultPath: unknown): Promise<WorkspacePickResult> => {
     const normalizedDefaultPath = parseIpcPayload(

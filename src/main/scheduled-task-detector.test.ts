@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  defaultConnectPhoneSettings,
-  defaultRemoteChannelSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
+  defaultSkillsSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
   type AppSettingsV1
@@ -37,8 +36,7 @@ function settings(): AppSettingsV1 {
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),
     write: defaultWriteSettings(),
-    remoteChannel: defaultRemoteChannelSettings(),
-    connectPhone: defaultConnectPhoneSettings(),
+    skills: defaultSkillsSettings(),
     schedule: defaultScheduleSettings(),
     workflow: defaultWorkflowSettings(),
     guiUpdate: { channel: 'stable' },

@@ -12,6 +12,7 @@ import {
   createApplicationCapabilityRegistry,
   createApplicationDomainCatalog
 } from '../modules'
+import { createNonSecretPackageStorageForTest } from '../modules/domain-package-storage.test-helper'
 
 function outputRecord(value: unknown): Record<string, unknown> {
   expect(value).toBeTruthy()
@@ -42,6 +43,7 @@ describe('Workspace Preview capability content transport integration', () => {
       })
       const catalog = createApplicationDomainCatalog({
         getUserDataDir: () => root,
+        packageStorageFor: createNonSecretPackageStorageForTest(),
         capabilityInvokerFor: () => ({
           invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') }
         })

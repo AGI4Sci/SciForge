@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { RemoteChannelV1 } from '@shared/app-settings'
 import type { ChatBlock, NormalizedThread, ToolBlock } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import { MessageTimeline, summarizeToolBlock } from './MessageTimeline'
@@ -59,34 +58,6 @@ function toolBlock(overrides: Partial<ToolBlock>): ToolBlock {
     status: 'success',
     ...overrides
   }
-}
-
-function remoteChannel(overrides: Partial<RemoteChannelV1> = {}): RemoteChannelV1 {
-  const base: RemoteChannelV1 = {
-    id: 'discord-channel',
-    provider: 'discord',
-    label: 'discord bot',
-    enabled: true,
-    model: 'auto',
-    runtimeId: 'codex',
-    agentThreadIds: {
-      codex: 'thr_1'
-    },
-    workspaceRoot: '/tmp/project',
-    agentProfile: {
-      name: 'discord bot',
-      description: '',
-      identity: '',
-      personality: '',
-      userContext: '',
-      replyRules: ''
-    },
-    conversations: [],
-    recentMessages: [],
-    createdAt: '2026-06-13T00:00:00.000Z',
-    updatedAt: '2026-06-13T00:00:00.000Z'
-  }
-  return { ...base, ...overrides }
 }
 
 describe('MessageTimeline tool summaries', () => {
@@ -207,8 +178,6 @@ describe('MessageTimeline local runtime metadata smoke', () => {
       turnDurationByUserId: {},
       turnReasoningFirstAtByUserId: {},
       turnReasoningLastAtByUserId: {},
-      remoteChannels: [],
-      activeRemoteChannelId: '',
       threadHistoryCursor: null,
       threadHistoryLoading: false
     })
@@ -688,134 +657,6 @@ describe('MessageTimeline local runtime metadata smoke', () => {
 
     expect(html).toContain('missing.png')
     expect(html).toContain('Preview unavailable')
-  })
-
-  it('renders managed remote-channel prompts as the user-visible message', () => {
-    const block: ChatBlock = {
-      kind: 'user',
-      id: 'user_claw',
-      text: [
-        '[Remote channel managed instructions]',
-        '',
-        '[Remote channel agent instructions]',
-        '',
-        '[Agent name]',
-        'kun',
-        '',
-        '---',
-        '[Current user request]',
-        '[Feishu / Lark inbound message]',
-        'Chat type: p2p',
-        'Sender: user-1',
-        '',
-        'hi'
-      ].join('\n')
-    }
-
-    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
-
-    expect(html).toContain('hi')
-    expect(html).not.toContain('Remote channel managed instructions')
-    expect(html).not.toContain('Agent name')
-    expect(html).not.toContain('Feishu / Lark inbound message')
-  })
-
-  it('renders Discord inbound prompts without remote wrapper metadata', () => {
-    const displayText = [
-      '[Discord inbound message]',
-      'Guild: gzy的服务器',
-      'Channel: #debug',
-      'Sender: gzy',
-      '',
-      '现在几点啦'
-    ].join('\n')
-    const block: ChatBlock = {
-      kind: 'user',
-      id: 'user_discord',
-      text: [
-        '[Remote channel managed instructions]',
-        '',
-        '---',
-        '[Current user request]',
-        '[Discord inbound message]',
-        'Guild: gzy的服务器',
-        'Channel: #debug',
-        'Sender: gzy',
-        '',
-        '现在几点啦'
-      ].join('\n'),
-      meta: { displayText }
-    }
-
-    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
-
-    expect(html).toContain('现在几点啦')
-    expect(html).toContain('Discord')
-    expect(html).not.toContain('Discord inbound message')
-    expect(html).not.toContain('gzy的服务器')
-    expect(html).not.toContain('#debug')
-  })
-
-  it('does not collapse legacy Claw managed prompts', () => {
-    const block: ChatBlock = {
-      kind: 'user',
-      id: 'user_legacy_claw',
-      text: [
-        '[Claw managed instructions]',
-        '',
-        '---',
-        '[Current user request]',
-        '[Discord inbound message]',
-        'Guild: gzy的服务器',
-        'Channel: #debug',
-        'Sender: gzy',
-        '',
-        '现在几点啦'
-      ].join('\n')
-    }
-
-    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
-
-    expect(html).toContain('Claw managed instructions')
-    expect(html).toContain('Discord inbound message')
-    expect(html).toContain('gzy的服务器')
-    expect(html).toContain('#debug')
-  })
-
-  it('keeps remote-bound plain desktop messages as normal user content', () => {
-    useChatStore.setState({
-      activeThreadId: 'thr_1',
-      remoteChannels: [remoteChannel()]
-    })
-    const block: ChatBlock = {
-      kind: 'user',
-      id: 'user_plain_remote_bound',
-      text: 'plain desktop follow-up'
-    }
-
-    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
-
-    expect(html).toContain('plain desktop follow-up')
-    expect(html).toContain('Desktop')
-    expect(html).not.toContain('Discord inbound message')
-    expect(html).not.toContain('Guild:')
-    expect(html).not.toContain('Channel:')
-  })
-
-  it('uses a neutral label for generic remote-channel user messages', () => {
-    const block: ChatBlock = {
-      kind: 'user',
-      id: 'user_remote_generic',
-      text: 'remote follow-up',
-      managedBy: 'remoteChannel',
-      meta: { source: 'remote' }
-    }
-
-    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
-
-    expect(html).toContain('remote follow-up')
-    expect(html).toContain('Remote channel')
-    expect(html).not.toContain('Feishu / Lark')
   })
 
   it('hides legacy runtime context prefixes from user bubbles', () => {

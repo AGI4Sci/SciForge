@@ -3,18 +3,15 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useTranslation } from 'react-i18next'
-import { Check, ChevronDown, ChevronRight, Copy, FileEdit, Loader2, MessageSquareQuote, PencilLine, Terminal, Wrench } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Copy, FileEdit, Loader2, PencilLine, Terminal, Wrench } from 'lucide-react'
 import type { ChatBlock, RuntimeDisclosureMetadata, ToolBlock, UserInputAnswer, UserInputQuestion } from '../../agent/types'
-import { isRemoteChannelManagedBy } from '../../agent/types'
 import { extractUnifiedDiffText } from '../../lib/diff-stats'
 import { openSafeExternalUrl } from '../../lib/open-external'
 import { useChatStore } from '../../store/chat-store'
 import { getProvider } from '../../agent/registry'
 import {
   CODE_MANAGED_INSTRUCTIONS_HEADING,
-  CODE_CURRENT_USER_REQUEST_HEADING,
-  parseRemoteChannelUserPromptForDisplay,
-  type RemoteChannelUserPromptDisplay
+  CODE_CURRENT_USER_REQUEST_HEADING
 } from '@shared/app-settings'
 import { DiffView } from '../DiffView'
 import { AssistantMarkdown } from './AssistantMarkdown'
@@ -27,7 +24,6 @@ import {
 } from './message-timeline-media'
 import { ModelMetaTag } from './message-timeline-cards'
 import { readNumber, formatDuration, formatToolTitle } from './message-timeline-tools'
-import { remoteChannelThreadBindingsFromChannels } from '../../store/chat-store-helpers'
 import { remoteToolMetadataChips } from './remote-tool-metadata'
 
 const COPY_FEEDBACK_RESET_MS = 1600
@@ -63,8 +59,6 @@ function UserMessageBubble({
 }): ReactElement {
   const { t } = useTranslation('common')
   const busy = useChatStore((s) => s.busy)
-  const activeThreadId = useChatStore((s) => s.activeThreadId)
-  const remoteChannels = useChatStore((s) => s.remoteChannels)
   const rewindAndResend = useChatStore((s) => s.rewindAndResend)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(block.text)
@@ -73,38 +67,15 @@ function UserMessageBubble({
     typeof block.meta?.displayText === 'string' && block.meta.displayText.trim()
       ? block.meta.displayText.trim()
       : null
-  const parsedMetaClawPrompt = useMemo(() => {
-    if (!metaDisplayText) return null
-    const parsed = parseRemoteChannelUserPromptForDisplay(metaDisplayText)
-    return parsed.managed || parsed.inbound ? parsed : null
-  }, [metaDisplayText])
-  const remoteBinding = useMemo(() => {
-    if (!activeThreadId) return null
-    return remoteChannelThreadBindingsFromChannels(remoteChannels).get(activeThreadId) ?? null
-  }, [activeThreadId, remoteChannels])
-  const isRemoteChannelMessage = Boolean(remoteBinding || isRemoteChannelManagedBy(block.managedBy))
-  const parsedRemoteChannelPrompt = useMemo(() => {
-    const parsed = parseRemoteChannelUserPromptForDisplay(block.text)
-    if (!parsed.managed && !parsed.inbound && !isRemoteChannelMessage) {
-      return parsedMetaClawPrompt
-    }
-    return parsed
-  }, [block.text, isRemoteChannelMessage, parsedMetaClawPrompt])
-  const sourceLabel = useMemo(
-    () => messageSourceLabel(block, parsedRemoteChannelPrompt, remoteBinding?.providerLabel),
-    [block, parsedRemoteChannelPrompt, remoteBinding]
-  )
+  const sourceLabel = useMemo(() => messageSourceLabel(block), [block])
   const legacyRuntimeDisplayText = useMemo(
     () => runtimeContextUserTextForDisplay(block.text),
     [block.text]
   )
   const displayText =
-    parsedMetaClawPrompt?.text ??
     metaDisplayText ??
-    parsedRemoteChannelPrompt?.text ??
     legacyRuntimeDisplayText
   const canEdit = !metaDisplayText
-  const showClawInboundCard = isRemoteChannelMessage && parsedRemoteChannelPrompt?.inbound === true
 
   useEffect(() => {
     if (!editing) return
@@ -193,21 +164,16 @@ function UserMessageBubble({
   return (
     <div className="ds-user-message group relative">
       <UserAttachmentPreviews meta={block.meta} />
-      {showClawInboundCard && parsedRemoteChannelPrompt ? (
-        <RemoteChannelInboundMessageCard display={parsedRemoteChannelPrompt} text={displayText} />
-      ) : (
-        <div className="ds-user-message-bubble min-w-0">
-          <div className="ds-selectable-text whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-left">
-            {displayText}
-          </div>
-          <MessageSourceTag label={sourceLabel} align="right" />
-          <RuntimeMetaChips meta={block.meta} align="right" hideAttachments />
+      <div className="ds-user-message-bubble min-w-0">
+        <div className="ds-selectable-text whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-left">
+          {displayText}
         </div>
-      )}
+        <MessageSourceTag label={sourceLabel} align="right" />
+        <RuntimeMetaChips meta={block.meta} align="right" hideAttachments />
+      </div>
       <div className="mt-2 flex min-w-0 items-center justify-between gap-3 text-ds-faint opacity-90 transition group-hover:opacity-100">
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
           <ModelMetaTag label={block.modelLabel} className="justify-start text-left" />
-          {showClawInboundCard ? <MessageSourceTag label={sourceLabel} inline /> : null}
         </div>
         <div className="flex items-center justify-end gap-3">
           <CopyFeedbackButton text={displayText} iconOnly />
@@ -229,83 +195,15 @@ function UserMessageBubble({
   )
 }
 
-function RemoteChannelInboundMessageCard({
-  display,
-  text
-}: {
-  display: RemoteChannelUserPromptDisplay
-  text: string
-}): ReactElement {
-  const { t } = useTranslation('common')
-  const meta = [
-    display.sender ? t('remoteChannelTimelineSender', { sender: display.sender }) : '',
-    display.chatType ? t('remoteChannelTimelineChatType', { chatType: display.chatType }) : '',
-    display.messageType ? t('remoteChannelTimelineMessageType', { messageType: display.messageType }) : '',
-    display.mentions ? t('remoteChannelTimelineMentions', { mentions: display.mentions }) : ''
-  ].filter(Boolean)
-
-  return (
-    <div className="w-full max-w-[min(560px,calc(100vw-3rem))] rounded-[18px] border border-ds-border bg-ds-card px-4 py-3 text-left shadow-[0_14px_34px_rgba(86,103,136,0.08)]">
-      <div className="flex items-center gap-2 text-[12px] font-semibold text-ds-muted">
-        <MessageSquareQuote className="h-3.5 w-3.5" strokeWidth={1.8} />
-        <span>{t('remoteChannelTimelineInbound', { source: display.sourceLabel ?? t('connectPhoneLabel') })}</span>
-      </div>
-      <div className="ds-selectable-text mt-2 whitespace-pre-wrap break-words text-[15px] leading-6 text-ds-ink [overflow-wrap:anywhere]">
-        {text}
-      </div>
-      {meta.length > 0 ? (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {meta.map((item) => (
-            <span
-              key={item}
-              className="rounded-md border border-ds-border-muted bg-ds-subtle px-2 py-0.5 text-[11px] text-ds-muted"
-            >
-              {item}
-            </span>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
 function messageSourceLabel(
-  block: Extract<ChatBlock, { kind: 'user' }>,
-  parsedRemoteChannelPrompt: RemoteChannelUserPromptDisplay | null,
-  remoteProviderLabel?: string
+  block: Extract<ChatBlock, { kind: 'user' }>
 ): string {
   const meta = block.meta as Record<string, unknown> | undefined
   const metaSourceLabel = metaString(meta, 'sourceLabel')
-  if (metaSourceLabel) return normalizeMessageSourceLabel(metaSourceLabel, remoteProviderLabel)
+  if (metaSourceLabel) return metaSourceLabel
   const source = metaString(meta, 'source') || metaString(meta, 'sourceKind')
-  const normalizedSource = source?.toLowerCase() ?? ''
-  if (normalizedSource) {
-    if (normalizedSource.includes('discord')) return 'Discord'
-    if (normalizedSource.includes('zulip')) return 'Zulip'
-    if (normalizedSource.includes('weixin') || normalizedSource.includes('wechat')) return 'WeChat'
-    if (normalizedSource.includes('feishu') || normalizedSource.includes('lark')) return 'Feishu / Lark'
-    if (normalizedSource === 'im' || normalizedSource === 'remote' || normalizedSource === 'claw') {
-      return remoteProviderLabel || parsedRemoteChannelPrompt?.sourceLabel || 'Remote channel'
-    }
-    if (normalizedSource === 'desktop' || normalizedSource === 'ui' || normalizedSource === 'user') return 'Desktop'
-  }
-  if (parsedRemoteChannelPrompt?.inbound) {
-    return normalizeMessageSourceLabel(parsedRemoteChannelPrompt.sourceLabel, remoteProviderLabel)
-  }
-  if (isRemoteChannelManagedBy(block.managedBy)) return remoteProviderLabel || parsedRemoteChannelPrompt?.sourceLabel || 'Remote channel'
+  if (source && !['desktop', 'ui', 'user'].includes(source.toLowerCase())) return source
   return 'Desktop'
-}
-
-function normalizeMessageSourceLabel(label: string | undefined, remoteProviderLabel?: string): string {
-  const normalized = label?.trim()
-  if (!normalized) return remoteProviderLabel || 'Desktop'
-  const lower = normalized.toLowerCase()
-  if (lower.includes('discord')) return 'Discord'
-  if (lower.includes('zulip')) return 'Zulip'
-  if (lower.includes('weixin') || lower.includes('wechat')) return 'WeChat'
-  if (lower.includes('feishu') || lower.includes('lark')) return 'Feishu / Lark'
-  if (lower === 'desktop' || lower === 'ui' || lower === 'user') return 'Desktop'
-  return normalized
 }
 
 const LEGACY_RUNTIME_CONTEXT_HEADINGS = [

@@ -10,6 +10,10 @@ import type {
   DomainExecutionEventV1
 } from './reproducibility.js'
 import type { DomainMainPowerHost } from './power.js'
+import type {
+  DomainMainPackageSecretStoreHost,
+  DomainMainPackageSettingsHost
+} from './package-storage.js'
 import type { TrustedDomainProcessEntryInput } from './process-entry.js'
 import type {
   DomainCapabilityResourceHandle,
@@ -28,6 +32,7 @@ import type {
 } from './workspace-host.js'
 export * from './agent-execution.js'
 export * from './power.js'
+export * from './package-storage.js'
 export * from './renderer-contributions.js'
 export * from './visual-capture.js'
 export * from './workflow-template.js'
@@ -141,7 +146,31 @@ export type DomainAgentThreadTurn = Readonly<{
   id: string
   status?: string
   completedAt?: string
+  messages: readonly DomainAgentTranscriptMessage[]
   artifacts: readonly unknown[]
+}>
+
+/** Append-only user/final-assistant projection of one canonical runtime item. */
+export type DomainAgentTranscriptMessage = Readonly<{
+  itemId: string
+  turnId?: string
+  kind: 'user-message' | 'assistant-message'
+  text: string
+  occurredAt?: string
+}>
+
+export type DomainAgentTranscriptMessageEvent = DomainAgentTranscriptMessage & Readonly<{
+  runtimeId: string
+  threadId: string
+  /** Monotonic canonical runtime event sequence used for reconnect recovery. */
+  sequence: number
+}>
+
+export type DomainAgentTranscriptSubscribeInput = Readonly<{
+  runtimeId: string
+  threadId: string
+  afterSequence?: number
+  signal?: AbortSignal
 }>
 
 export type DomainAgentThreadDetail = DomainAgentThread & Readonly<{
@@ -248,6 +277,13 @@ export type DomainMainAgentThreadsHost = Readonly<{
     runtimeId: string
     threadId: string
   }>) => Promise<DomainAgentThreadDetail>
+  /**
+   * Streams accepted user messages and final assistant messages only. The Host
+   * suppresses deltas and repeated snapshots for the same canonical item.
+   */
+  subscribeMessages: (
+    input: DomainAgentTranscriptSubscribeInput
+  ) => AsyncIterable<DomainAgentTranscriptMessageEvent>
   hasActiveTurns: () => boolean
 }>
 
@@ -668,6 +704,10 @@ export type DomainMainTextSanitizerHost = Readonly<{
 export type DomainMainHost = Readonly<{
   getUserDataDir: () => string
   defineCapability: (options: unknown) => unknown
+  /** Owner-scoped non-secret settings; introduced in Host API 1.2. */
+  packageSettings?: DomainMainPackageSettingsHost
+  /** Owner-scoped main-process-only secrets; introduced in Host API 1.2. */
+  packageSecrets?: DomainMainPackageSecretStoreHost
   /** Opens one absolute local path with the operating system's configured application. */
   openPath?: (path: string) => Promise<void>
   resolveWorkspaceServerArtifact?: () => Promise<WorkspaceHostArtifact>

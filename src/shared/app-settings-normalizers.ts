@@ -1,8 +1,7 @@
 import {
-  type RemoteChannelGuardModeV1,
-  type RemoteChannelProvider,
-  type RemoteChannelModel,
-  type RemoteChannelRunMode,
+  type AgentRuntimeId,
+  type AgentThreadIdsV1,
+  type ScheduleRunMode,
   type ScheduleKind,
   type ScheduleModel,
   type ScheduleReasoningEffort,
@@ -32,34 +31,37 @@ export function normalizeInstallationId(value: unknown): string {
   return /^[A-Za-z0-9._:-]{8,128}$/.test(raw) ? raw : ''
 }
 
+export function normalizeAgentThreadIds(input: unknown): AgentThreadIdsV1 {
+  const raw = input && typeof input === 'object' && !Array.isArray(input)
+    ? input as Record<string, unknown>
+    : {}
+  const sciforgeThreadId = typeof raw.sciforge === 'string' ? raw.sciforge.trim() : ''
+  const codexThreadId = typeof raw.codex === 'string' ? raw.codex.trim() : ''
+  const claudeThreadId = typeof raw.claude === 'string' ? raw.claude.trim() : ''
+  return {
+    ...(sciforgeThreadId ? { sciforge: sciforgeThreadId } : {}),
+    ...(codexThreadId ? { codex: codexThreadId } : {}),
+    ...(claudeThreadId ? { claude: claudeThreadId } : {})
+  }
+}
+
+export function normalizeSettingsRuntimeId(value: unknown): AgentRuntimeId {
+  if (value === 'sciforge' || value === 'codex' || value === 'claude') return value
+  return 'codex'
+}
+
 export function normalizePositiveInteger(value: unknown, fallback: number, min: number, max: number): number {
   const parsed = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(parsed)) return fallback
   return Math.min(max, Math.max(min, Math.floor(parsed)))
 }
 
-export function normalizeRunMode(value: unknown): RemoteChannelRunMode {
+export function normalizeRunMode(value: unknown): ScheduleRunMode {
   return value === 'plan' ? 'plan' : 'agent'
 }
 
-export function normalizeImProvider(value: unknown): RemoteChannelProvider {
-  if (value === 'weixin') return 'weixin'
-  if (value === 'discord') return 'discord'
-  if (value === 'zulip') return 'zulip'
-  return 'feishu'
-}
-
-export function normalizeRemoteChannelGuardMode(value: unknown): RemoteChannelGuardModeV1 {
-  if (value === 'all_messages' || value === 'off') return value
-  return 'only_mention'
-}
-
-export function normalizeRemoteChannelModel(value: unknown): RemoteChannelModel {
-  return value === 'deepseek-v4-pro' || value === 'deepseek-v4-flash' ? value : 'auto'
-}
-
 export function normalizeScheduleModel(value: unknown): ScheduleModel {
-  return normalizeRemoteChannelModel(value)
+  return value === 'deepseek-v4-pro' || value === 'deepseek-v4-flash' ? value : 'auto'
 }
 
 export function normalizeScheduleReasoningEffort(value: unknown): ScheduleReasoningEffort {
@@ -82,12 +84,6 @@ export function normalizeAtTime(value: unknown): string {
   if (!raw) return ''
   const parsed = new Date(raw)
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : ''
-}
-
-export function normalizePathSegment(value: unknown): string {
-  const raw = typeof value === 'string' ? value.trim() : ''
-  if (!raw) return '/remote-channel/webhook'
-  return raw.startsWith('/') ? raw : `/${raw}`
 }
 
 export function normalizeStatus(value: unknown): ScheduleTaskStatus {

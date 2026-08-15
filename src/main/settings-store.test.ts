@@ -6,7 +6,6 @@ import {
   DEFAULT_APPROVAL_POLICY,
   DEFAULT_CODEX_DATA_DIR,
   DEFAULT_CLAUDE_CONFIG_DIR,
-  DEFAULT_WEIXIN_BRIDGE_RPC_URL,
   defaultAgentCapabilitySettings,
   defaultCodexRuntimeSettings,
   getAgentCapabilitySettings,
@@ -595,7 +594,7 @@ describe('JsonSettingsStore', () => {
     expect(loaded.agents.sciforge.port).toBe(8899)
   })
 
-  it('backs up invalid JSON and replaces it with defaults', async () => {
+  it('replaces invalid JSON without duplicating the original settings payload', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-'))
     const legacySettingsPath = join(userDataDir, 'sciforge-settings.json')
     const settingsPath = join(userDataDir, 'sciforge-settings.json')
@@ -604,11 +603,9 @@ describe('JsonSettingsStore', () => {
     const store = new JsonSettingsStore(userDataDir)
     const loaded = await store.load()
     const files = await readdir(userDataDir)
-    const backupName = files.find((file) => file.startsWith('sciforge-settings.invalid-'))
 
     expect(loaded.workspaceRoot.length).toBeGreaterThan(0)
-    expect(backupName).toBeTruthy()
-    expect(await readFile(join(userDataDir, backupName ?? ''), 'utf8')).toBe('{ invalid json')
+    expect(files.some((file) => file.startsWith('sciforge-settings.invalid-'))).toBe(false)
     const replaced = await readFile(settingsPath, 'utf8')
     expect(() => JSON.parse(replaced)).not.toThrow()
   })
@@ -696,203 +693,46 @@ describe('JsonSettingsStore', () => {
     )
   })
 
-  it('drops legacy Claw settings and task entries when writing normalized settings', async () => {
-    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-'))
+  it('migrates only legacy generic skill directories and removes legacy roots from disk', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-skills-migration-'))
     const settingsPath = join(userDataDir, 'sciforge-settings.json')
-
-    await writeFile(
-      settingsPath,
-      JSON.stringify({
-        version: 1,
-        claw: {
-          enabled: true,
-          im: {
-            enabled: true,
-            path: '/claw/webhook',
-            weixinBridgeUrl: 'http://127.0.0.1:9701/rpc',
-            openClawGatewayUrl: 'http://127.0.0.1:9702/rpc'
-          },
-          channels: [
-            {
-              id: 'legacy-claw-channel',
-              provider: 'feishu',
-              label: 'Legacy Claw',
-              threadId: 'legacy-claw-thread'
-            }
-          ],
-          tasks: [
-            {
-              id: 'legacy-claw-task',
-              title: 'Legacy task',
-              prompt: 'Legacy task prompt'
-            }
-          ]
+    await writeFile(settingsPath, JSON.stringify({
+      version: 1,
+      remoteChannel: {
+        skills: {
+          extraDirs: [' /tmp/legacy-skills ', '/tmp/legacy-skills', '/tmp/other-skills']
         },
-        remoteChannel: {
-          enabled: true,
-          im: {
-            enabled: true,
-            path: '/remote-channel/webhook',
-            weixinBridgeUrl: 'http://127.0.0.1:9703/rpc',
-            openClawGatewayUrl: 'http://127.0.0.1:9704/rpc'
-          },
-          tasks: [
-            {
-              id: 'legacy-remote-task',
-              title: 'Legacy remote task',
-              prompt: 'Legacy remote task prompt'
-            }
-          ]
-        }
-      }),
-      'utf8'
-    )
+        opaqueState: { marker: 'must-not-survive' }
+      },
+      connectPhone: { marker: 'must-not-survive' }
+    }), 'utf8')
 
-    const store = new JsonSettingsStore(userDataDir)
-    const loaded = await store.load()
-    await store.save(loaded)
+    const loaded = await new JsonSettingsStore(userDataDir).load()
     const persisted = JSON.parse(await readFile(settingsPath, 'utf8')) as Record<string, unknown>
-    const persistedRemoteChannel = persisted.remoteChannel as Record<string, unknown>
-    const persistedRemoteChannelIm = persistedRemoteChannel.im as Record<string, unknown>
-    const persistedConnectPhone = persisted.connectPhone as Record<string, unknown>
 
-    expect(loaded.remoteChannel.enabled).toBe(true)
-    expect(loaded.remoteChannel.channels).toEqual([])
-    expect('tasks' in loaded.remoteChannel).toBe(false)
-    expect('weixinBridgeUrl' in loaded.remoteChannel.im).toBe(false)
-    expect('openClawGatewayUrl' in loaded.remoteChannel.im).toBe(false)
-    expect(loaded.schedule.tasks).toEqual([])
-    expect(loaded.connectPhone.weixinBridgeUrl).toBe(DEFAULT_WEIXIN_BRIDGE_RPC_URL)
-    expect('claw' in persisted).toBe(false)
-    expect('tasks' in persistedRemoteChannel).toBe(false)
-    expect('weixinBridgeUrl' in persistedRemoteChannelIm).toBe(false)
-    expect('openClawGatewayUrl' in persistedRemoteChannelIm).toBe(false)
-    expect(persistedConnectPhone.weixinBridgeUrl).toBe(DEFAULT_WEIXIN_BRIDGE_RPC_URL)
+    expect(loaded.skills).toEqual({
+      extraDirs: ['/tmp/legacy-skills', '/tmp/other-skills']
+    })
+    expect(persisted.skills).toEqual(loaded.skills)
+    expect('remoteChannel' in persisted).toBe(false)
+    expect('connectPhone' in persisted).toBe(false)
   })
 
-  it('persists WeChat bridge URLs only through connectPhone settings patches', async () => {
-    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-'))
+  it('uses only the generic skills patch path for subsequent writes', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-skills-patch-'))
     const settingsPath = join(userDataDir, 'sciforge-settings.json')
     const store = new JsonSettingsStore(userDataDir)
     await store.load()
 
     const next = await store.patch({
-      connectPhone: {
-        weixinBridgeUrl: '  http://127.0.0.1:9799/rpc  '
-      },
-      remoteChannel: {
-        im: {
-          weixinBridgeUrl: 'http://127.0.0.1:9705/rpc',
-          openClawGatewayUrl: 'http://127.0.0.1:9706/rpc'
-        },
-        tasks: [
-          {
-            id: 'legacy-patch-task',
-            title: 'Legacy patch task',
-            prompt: 'Legacy patch task prompt'
-          }
-        ]
-      },
-      claw: {
-        im: {
-          weixinBridgeUrl: 'http://127.0.0.1:9707/rpc'
-        }
-      }
+      skills: { extraDirs: [' /tmp/current-skills '] },
+      remoteChannel: { skills: { extraDirs: ['/tmp/ignored-skills'] } }
     } as unknown as Parameters<JsonSettingsStore['patch']>[0])
     const persisted = JSON.parse(await readFile(settingsPath, 'utf8')) as Record<string, unknown>
-    const persistedRemoteChannel = persisted.remoteChannel as Record<string, unknown>
-    const persistedRemoteChannelIm = persistedRemoteChannel.im as Record<string, unknown>
-    const persistedConnectPhone = persisted.connectPhone as Record<string, unknown>
 
-    expect(next.connectPhone.weixinBridgeUrl).toBe('http://127.0.0.1:9799/rpc')
-    expect('tasks' in next.remoteChannel).toBe(false)
-    expect('weixinBridgeUrl' in next.remoteChannel.im).toBe(false)
-    expect('openClawGatewayUrl' in next.remoteChannel.im).toBe(false)
-    expect(next.schedule.tasks).toEqual([])
-    expect('claw' in persisted).toBe(false)
-    expect('tasks' in persistedRemoteChannel).toBe(false)
-    expect('weixinBridgeUrl' in persistedRemoteChannelIm).toBe(false)
-    expect('openClawGatewayUrl' in persistedRemoteChannelIm).toBe(false)
-    expect(persistedConnectPhone.weixinBridgeUrl).toBe('http://127.0.0.1:9799/rpc')
-  })
-
-  it('ignores legacy Claw thread id fields when canonical agent mappings are absent', async () => {
-    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-'))
-
-    await writeFile(
-      join(userDataDir, 'sciforge-settings.json'),
-      JSON.stringify({
-        version: 1,
-        remoteChannel: {
-          channels: [
-            {
-              id: 'channel-1',
-              provider: 'feishu',
-              label: 'Feishu Agent',
-              threadId: 'thr_codewhale',
-              agentThreadIds: { reasonix: '2026-06-01T01:00:00.000Z' },
-              conversations: [
-                {
-                  id: 'conversation-1',
-                  chatId: 'chat-1',
-                  latestMessageId: 'message-1',
-                  localThreadId: 'thr_conversation_codewhale',
-                  agentThreadIds: { reasonix: '2026-06-01T02:00:00.000Z' }
-                }
-              ]
-            }
-          ]
-        }
-      }),
-      'utf8'
-    )
-
-    const store = new JsonSettingsStore(userDataDir)
-    const loaded = await store.load()
-    const channel = loaded.remoteChannel.channels[0]
-
-    expect(channel).not.toHaveProperty('threadId')
-    expect(channel?.agentThreadIds).toEqual({})
-    expect(channel?.conversations).toEqual([])
-  })
-
-  it('seeds Reasonix-only Claw conversations into the canonical thread id', async () => {
-    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-'))
-
-    await writeFile(
-      join(userDataDir, 'sciforge-settings.json'),
-      JSON.stringify({
-        version: 1,
-        remoteChannel: {
-          channels: [
-            {
-              id: 'channel-1',
-              provider: 'feishu',
-              label: 'Feishu Agent',
-              agentThreadIds: { reasonix: 'reasonix-channel' },
-              conversations: [
-                {
-                  id: 'conversation-1',
-                  chatId: 'chat-1',
-                  latestMessageId: 'message-1',
-                  localThreadId: '',
-                  agentThreadIds: { reasonix: 'reasonix-conversation' }
-                }
-              ]
-            }
-          ]
-        }
-      }),
-      'utf8'
-    )
-
-    const store = new JsonSettingsStore(userDataDir)
-    const loaded = await store.load()
-    const channel = loaded.remoteChannel.channels[0]
-
-    expect(channel).not.toHaveProperty('threadId')
-    expect(channel?.agentThreadIds).toEqual({})
-    expect(channel?.conversations).toEqual([])
+    expect(next.skills).toEqual({ extraDirs: ['/tmp/current-skills'] })
+    expect(persisted.skills).toEqual(next.skills)
+    expect('remoteChannel' in persisted).toBe(false)
   })
 
   it('saves settings atomically (no .tmp file left on success)', async () => {

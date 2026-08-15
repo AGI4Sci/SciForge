@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **195**
+Registered actions: **207**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -57,6 +57,18 @@ Registered actions: **195**
 | `browser-preview.reload` | 1.0.0 | ui, agent | external-write | confirmation | resource |
 | `browser-preview.select` | 1.0.0 | ui, agent | external-write | confirmation | resource |
 | `change-inspector.open-session` | 1.0.0 | ui | read | none | workspace |
+| `collaboration.agent.register` | 1.0.0 | ui | external-write | confirmation | global |
+| `collaboration.connection.configure` | 1.0.0 | ui | external-write | confirmation | global |
+| `collaboration.connection.connect` | 1.0.0 | ui | external-write | confirmation | global |
+| `collaboration.endpoint.challenge.poll` | 1.0.0 | ui | read | none | global |
+| `collaboration.endpoint.challenge.start` | 1.0.0 | ui | external-write | confirmation | global |
+| `collaboration.participant.primary-agent.select` | 1.0.0 | ui | external-write | confirmation | global |
+| `collaboration.projection.link` | 1.0.0 | ui | external-write | confirmation | global |
+| `collaboration.projection.share` | 1.0.0 | ui | external-write | confirmation | global |
+| `collaboration.projection.update` | 1.0.0 | ui | external-write | confirmation | global |
+| `collaboration.status.read` | 1.0.0 | ui | read | none | global |
+| `collaboration.sync.retry` | 1.0.0 | ui | external-write | confirmation | global |
+| `collaboration.task.list` | 1.0.0 | ui | read | none | global |
 | `controlled-process.create` | 1.0.0 | ui | external-write | none | workspace |
 | `controlled-process.dispose` | 1.0.0 | ui | external-write | none | resource |
 | `controlled-process.read` | 1.0.0 | ui | read | none | resource |
@@ -16597,6 +16609,2647 @@ Issues a read-only resource for one session change snapshot.
     "audit"
   ],
   "title": "Observe session changes"
+}
+```
+
+## `collaboration.agent.register`
+
+Registers the stable installation and saves the one-time device credential in the package secret store.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "capabilities": {
+        "default": [],
+        "items": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 256,
+        "type": "array"
+      },
+      "displayName": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "nodeType": {
+        "default": "desktop",
+        "enum": [
+          "desktop",
+          "server"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "displayName",
+      "nodeType",
+      "capabilities"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "agent": {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "capabilities": {
+            "items": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "displayName": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "lastSeenAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "nodeType": {
+            "enum": [
+              "desktop",
+              "server"
+            ],
+            "type": "string"
+          },
+          "ownerUserId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "primary": {
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "online",
+              "offline",
+              "revoked"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "ownerUserId",
+          "displayName",
+          "nodeType",
+          "status",
+          "capabilities",
+          "primary"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "agent"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Register this Agent"
+}
+```
+
+## `collaboration.connection.configure`
+
+Stores a non-secret HTTPS service location and loads its provider-neutral catalog.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "format": "uri",
+        "maxLength": 2048,
+        "type": "string"
+      }
+    },
+    "required": [
+      "baseUrl"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "connection": {
+        "additionalProperties": false,
+        "properties": {
+          "baseUrl": {
+            "format": "uri",
+            "maxLength": 2048,
+            "type": "string"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "lastConnectedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "lastError": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "lastInboxSequence": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pendingOutboxCount": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "unconfigured",
+              "disconnected",
+              "connecting",
+              "connected",
+              "recovering",
+              "error"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "configured",
+          "state",
+          "lastInboxSequence",
+          "pendingOutboxCount"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "connection"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Configure collaboration service"
+}
+```
+
+## `collaboration.connection.connect`
+
+Connects, disconnects, or explicitly recovers the Agent device connection.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "action": {
+        "enum": [
+          "connect",
+          "disconnect",
+          "recover"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "connection": {
+        "additionalProperties": false,
+        "properties": {
+          "baseUrl": {
+            "format": "uri",
+            "maxLength": 2048,
+            "type": "string"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "lastConnectedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "lastError": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "lastInboxSequence": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pendingOutboxCount": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "unconfigured",
+              "disconnected",
+              "connecting",
+              "connected",
+              "recovering",
+              "error"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "configured",
+          "state",
+          "lastInboxSequence",
+          "pendingOutboxCount"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "connection"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Change collaboration connection"
+}
+```
+
+## `collaboration.endpoint.challenge.poll`
+
+Redeems the package-secret polling credential and saves the one-time user credential in the secret store.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "challengeId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "challengeId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "expiresAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "retryAfterSeconds": {
+            "maximum": 300,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status": {
+            "const": "pending",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "expiresAt",
+          "retryAfterSeconds"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "const": "expired",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "assurance": {
+            "enum": [
+              "low",
+              "verified",
+              "strong"
+            ],
+            "type": "string"
+          },
+          "humanEndpointId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "const": "verified",
+            "type": "string"
+          },
+          "userId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "userId",
+          "humanEndpointId",
+          "assurance"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Poll endpoint verification"
+}
+```
+
+## `collaboration.endpoint.challenge.start`
+
+Starts a short-lived provider identity challenge without returning its polling secret.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "locator": {
+        "additionalProperties": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "type": "string"
+        },
+        "propertyNames": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "providerKey": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "requestedDisplayName": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "providerKey",
+      "requestedDisplayName",
+      "locator"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "challengeId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "expiresAt": {
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+        "type": "string"
+      },
+      "instruction": {
+        "maxLength": 1000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "pairingCode": {
+        "maxLength": 64,
+        "minLength": 4,
+        "type": "string"
+      }
+    },
+    "required": [
+      "challengeId",
+      "pairingCode",
+      "expiresAt",
+      "instruction"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Start endpoint verification"
+}
+```
+
+## `collaboration.participant.primary-agent.select`
+
+Selects an active Agent owned by the current user without guessing from presence.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "agentId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "expectedParticipantRevision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "agentId",
+      "expectedParticipantRevision"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "participant": {
+        "additionalProperties": false,
+        "properties": {
+          "agents": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "agentId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "capabilities": {
+                  "items": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 256,
+                  "type": "array"
+                },
+                "displayName": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "lastSeenAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "nodeType": {
+                  "enum": [
+                    "desktop",
+                    "server"
+                  ],
+                  "type": "string"
+                },
+                "ownerUserId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "primary": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "enum": [
+                    "online",
+                    "offline",
+                    "revoked"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "agentId",
+                "ownerUserId",
+                "displayName",
+                "nodeType",
+                "status",
+                "capabilities",
+                "primary"
+              ],
+              "type": "object"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "displayName": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "endpoints": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "assurance": {
+                  "enum": [
+                    "low",
+                    "verified",
+                    "strong"
+                  ],
+                  "type": "string"
+                },
+                "displayName": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "humanEndpointId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "lastSeenAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "projectionLocators": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "containerDisplayName": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "containerId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "provider": {
+                        "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+                        "type": "string"
+                      },
+                      "realmId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "topicDisplayName": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "topicId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "provider_locator",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "provider",
+                      "realmId",
+                      "containerId",
+                      "topicId"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 500,
+                  "type": "array"
+                },
+                "providerKey": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "active",
+                    "suspended",
+                    "revoked"
+                  ],
+                  "type": "string"
+                },
+                "verifiedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "humanEndpointId",
+                "providerKey",
+                "status",
+                "assurance",
+                "projectionLocators"
+              ],
+              "type": "object"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "primaryAgentId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "primaryHumanEndpointId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "revision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "suspended",
+              "revoked"
+            ],
+            "type": "string"
+          },
+          "userId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "userId",
+          "displayName",
+          "status",
+          "revision",
+          "complete",
+          "endpoints",
+          "agents"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "participant"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Select primary Agent"
+}
+```
+
+## `collaboration.projection.link`
+
+Creates a stable personal Topic projection for an explicit existing or new local Session.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "displayName": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "humanEndpointId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "locator": {
+            "additionalProperties": false,
+            "properties": {
+              "containerDisplayName": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "containerId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "provider": {
+                "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+                "type": "string"
+              },
+              "realmId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "topicDisplayName": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "topicId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "const": "provider_locator",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "provider",
+              "realmId",
+              "containerId",
+              "topicId"
+            ],
+            "type": "object"
+          },
+          "mode": {
+            "const": "existing",
+            "type": "string"
+          },
+          "runtimeId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "threadId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "workspaceRoot": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "humanEndpointId",
+          "locator",
+          "runtimeId",
+          "displayName",
+          "mode",
+          "threadId"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "displayName": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "humanEndpointId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "locator": {
+            "additionalProperties": false,
+            "properties": {
+              "containerDisplayName": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "containerId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "provider": {
+                "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+                "type": "string"
+              },
+              "realmId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "topicDisplayName": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "topicId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "const": "provider_locator",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "provider",
+              "realmId",
+              "containerId",
+              "topicId"
+            ],
+            "type": "object"
+          },
+          "mode": {
+            "const": "new",
+            "type": "string"
+          },
+          "runtimeId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "workspaceRoot": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "humanEndpointId",
+          "locator",
+          "runtimeId",
+          "displayName",
+          "mode"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "projection": {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "agentOwnerUserId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "allowUserIds": {
+            "items": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "displayName": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "humanEndpointId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "lastError": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "lastSynchronizedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "ownerUserId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectionId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "queueDepth": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "remoteDisplay": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "revision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "runtimeId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "linking",
+              "active",
+              "paused",
+              "closed",
+              "error"
+            ],
+            "type": "string"
+          },
+          "threadId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "workspaceRoot": {
+            "maxLength": 4096,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectionId",
+          "ownerUserId",
+          "agentId",
+          "agentOwnerUserId",
+          "humanEndpointId",
+          "runtimeId",
+          "displayName",
+          "status",
+          "allowUserIds",
+          "revision",
+          "queueDepth"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "projection"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Link Session projection"
+}
+```
+
+## `collaboration.projection.share`
+
+Updates the explicit sender user allowlist while retaining the original executing Agent owner.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "allowUserIds": {
+        "items": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 256,
+        "type": "array"
+      },
+      "expectedRevision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "projectionId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "projectionId",
+      "allowUserIds",
+      "expectedRevision"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "projection": {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "agentOwnerUserId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "allowUserIds": {
+            "items": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "displayName": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "humanEndpointId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "lastError": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "lastSynchronizedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "ownerUserId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectionId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "queueDepth": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "remoteDisplay": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "revision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "runtimeId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "linking",
+              "active",
+              "paused",
+              "closed",
+              "error"
+            ],
+            "type": "string"
+          },
+          "threadId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "workspaceRoot": {
+            "maxLength": 4096,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectionId",
+          "ownerUserId",
+          "agentId",
+          "agentOwnerUserId",
+          "humanEndpointId",
+          "runtimeId",
+          "displayName",
+          "status",
+          "allowUserIds",
+          "revision",
+          "queueDepth"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "projection"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Share Session projection"
+}
+```
+
+## `collaboration.projection.update`
+
+Explicitly renames, pauses, resumes, closes, or relinks a stable projection.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "rename",
+            "type": "string"
+          },
+          "displayName": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "expectedRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "projectionId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "projectionId",
+          "displayName",
+          "expectedRevision"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "pause",
+              "resume",
+              "close"
+            ],
+            "type": "string"
+          },
+          "expectedRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "projectionId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "projectionId",
+          "expectedRevision"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "relink",
+            "type": "string"
+          },
+          "expectedRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "projectionId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "runtimeId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "threadId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "workspaceRoot": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "projectionId",
+          "runtimeId",
+          "threadId",
+          "expectedRevision"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "projection": {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "agentOwnerUserId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "allowUserIds": {
+            "items": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "displayName": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "humanEndpointId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "lastError": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "lastSynchronizedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "ownerUserId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectionId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "queueDepth": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "remoteDisplay": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "revision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "runtimeId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "linking",
+              "active",
+              "paused",
+              "closed",
+              "error"
+            ],
+            "type": "string"
+          },
+          "threadId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "workspaceRoot": {
+            "maxLength": 4096,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectionId",
+          "ownerUserId",
+          "agentId",
+          "agentOwnerUserId",
+          "humanEndpointId",
+          "runtimeId",
+          "displayName",
+          "status",
+          "allowUserIds",
+          "revision",
+          "queueDepth"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "projection"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Update Session projection"
+}
+```
+
+## `collaboration.status.read`
+
+Reads the non-secret participant, connection, projection, queue, Project, and Task status.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "connection": {
+        "additionalProperties": false,
+        "properties": {
+          "baseUrl": {
+            "format": "uri",
+            "maxLength": 2048,
+            "type": "string"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "lastConnectedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "lastError": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "lastInboxSequence": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pendingOutboxCount": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "unconfigured",
+              "disconnected",
+              "connecting",
+              "connected",
+              "recovering",
+              "error"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "configured",
+          "state",
+          "lastInboxSequence",
+          "pendingOutboxCount"
+        ],
+        "type": "object"
+      },
+      "diagnostics": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "message": {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            "occurredAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "recoverable": {
+              "type": "boolean"
+            },
+            "severity": {
+              "enum": [
+                "info",
+                "warning",
+                "error"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "severity",
+            "message",
+            "occurredAt",
+            "recoverable"
+          ],
+          "type": "object"
+        },
+        "maxItems": 256,
+        "type": "array"
+      },
+      "participant": {
+        "additionalProperties": false,
+        "properties": {
+          "agents": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "agentId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "capabilities": {
+                  "items": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 256,
+                  "type": "array"
+                },
+                "displayName": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "lastSeenAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "nodeType": {
+                  "enum": [
+                    "desktop",
+                    "server"
+                  ],
+                  "type": "string"
+                },
+                "ownerUserId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "primary": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "enum": [
+                    "online",
+                    "offline",
+                    "revoked"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "agentId",
+                "ownerUserId",
+                "displayName",
+                "nodeType",
+                "status",
+                "capabilities",
+                "primary"
+              ],
+              "type": "object"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "displayName": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "endpoints": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "assurance": {
+                  "enum": [
+                    "low",
+                    "verified",
+                    "strong"
+                  ],
+                  "type": "string"
+                },
+                "displayName": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "humanEndpointId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "lastSeenAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "projectionLocators": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "containerDisplayName": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "containerId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "provider": {
+                        "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+                        "type": "string"
+                      },
+                      "realmId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "topicDisplayName": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "topicId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "provider_locator",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "provider",
+                      "realmId",
+                      "containerId",
+                      "topicId"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 500,
+                  "type": "array"
+                },
+                "providerKey": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "active",
+                    "suspended",
+                    "revoked"
+                  ],
+                  "type": "string"
+                },
+                "verifiedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "humanEndpointId",
+                "providerKey",
+                "status",
+                "assurance",
+                "projectionLocators"
+              ],
+              "type": "object"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "primaryAgentId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "primaryHumanEndpointId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "revision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "suspended",
+              "revoked"
+            ],
+            "type": "string"
+          },
+          "userId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "userId",
+          "displayName",
+          "status",
+          "revision",
+          "complete",
+          "endpoints",
+          "agents"
+        ],
+        "type": "object"
+      },
+      "projections": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "agentOwnerUserId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "allowUserIds": {
+              "items": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 256,
+              "type": "array"
+            },
+            "displayName": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "humanEndpointId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "lastError": {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            "lastSynchronizedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "ownerUserId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "projectionId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "queueDepth": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "remoteDisplay": {
+              "maxLength": 512,
+              "type": "string"
+            },
+            "revision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "runtimeId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "linking",
+                "active",
+                "paused",
+                "closed",
+                "error"
+              ],
+              "type": "string"
+            },
+            "threadId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "workspaceRoot": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          "required": [
+            "projectionId",
+            "ownerUserId",
+            "agentId",
+            "agentOwnerUserId",
+            "humanEndpointId",
+            "runtimeId",
+            "displayName",
+            "status",
+            "allowUserIds",
+            "revision",
+            "queueDepth"
+          ],
+          "type": "object"
+        },
+        "maxItems": 10000,
+        "type": "array"
+      },
+      "projects": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "coordinatorAgentId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "memberUserIds": {
+              "items": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 1000,
+              "type": "array"
+            },
+            "name": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "projectId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "revision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "state": {
+              "enum": [
+                "active",
+                "paused",
+                "completed",
+                "cancelled"
+              ],
+              "type": "string"
+            },
+            "tasks": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "assigneeAgentId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "error": {
+                    "maxLength": 4000,
+                    "type": "string"
+                  },
+                  "localTurnId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "revision": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "state": {
+                    "enum": [
+                      "offered",
+                      "accepted",
+                      "running",
+                      "needs-human",
+                      "completed",
+                      "failed",
+                      "cancelled",
+                      "stale"
+                    ],
+                    "type": "string"
+                  },
+                  "taskId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "title": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "updatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "taskId",
+                  "projectId",
+                  "assigneeAgentId",
+                  "revision",
+                  "title",
+                  "state",
+                  "updatedAt"
+                ],
+                "type": "object"
+              },
+              "maxItems": 10000,
+              "type": "array"
+            }
+          },
+          "required": [
+            "projectId",
+            "name",
+            "state",
+            "revision",
+            "coordinatorAgentId",
+            "memberUserIds",
+            "tasks"
+          ],
+          "type": "object"
+        },
+        "maxItems": 10000,
+        "type": "array"
+      },
+      "providerOptions": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "label": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "locatorFields": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "key": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$",
+                    "type": "string"
+                  },
+                  "label": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "placeholder": {
+                    "maxLength": 256,
+                    "type": "string"
+                  },
+                  "required": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "key",
+                  "label",
+                  "required"
+                ],
+                "type": "object"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "providerKey": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "providerKey",
+            "label",
+            "locatorFields"
+          ],
+          "type": "object"
+        },
+        "maxItems": 32,
+        "type": "array"
+      },
+      "queue": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "attempts": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "createdAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "error": {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "user-message",
+                "assistant-reply",
+                "system-status"
+              ],
+              "type": "string"
+            },
+            "origin": {
+              "enum": [
+                "desktop",
+                "human-endpoint",
+                "agent",
+                "system"
+              ],
+              "type": "string"
+            },
+            "projectionId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "queueItemId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "sequence": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "state": {
+              "enum": [
+                "queued",
+                "executing",
+                "reconciling",
+                "awaiting-approval",
+                "delivering",
+                "completed",
+                "failed",
+                "ignored"
+              ],
+              "type": "string"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "queueItemId",
+            "projectionId",
+            "sequence",
+            "origin",
+            "kind",
+            "state",
+            "attempts",
+            "createdAt",
+            "updatedAt"
+          ],
+          "type": "object"
+        },
+        "maxItems": 10000,
+        "type": "array"
+      },
+      "revision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "revision",
+      "connection",
+      "providerOptions",
+      "projections",
+      "projects",
+      "queue",
+      "diagnostics"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Read collaboration status"
+}
+```
+
+## `collaboration.sync.retry`
+
+Explicitly reconciles durable connection, inbox, outbox, projection, or Task state.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "scope": {
+        "enum": [
+          "connection",
+          "inbox",
+          "outbox",
+          "projection",
+          "task"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "scope"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "accepted": {
+        "type": "boolean"
+      },
+      "connection": {
+        "additionalProperties": false,
+        "properties": {
+          "baseUrl": {
+            "format": "uri",
+            "maxLength": 2048,
+            "type": "string"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "lastConnectedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "lastError": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "lastInboxSequence": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pendingOutboxCount": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "unconfigured",
+              "disconnected",
+              "connecting",
+              "connected",
+              "recovering",
+              "error"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "configured",
+          "state",
+          "lastInboxSequence",
+          "pendingOutboxCount"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "accepted",
+      "connection"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Retry collaboration synchronization"
+}
+```
+
+## `collaboration.task.list`
+
+Reads local canonical cloud Task projections and restart reconciliation state.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "projectId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "states": {
+        "items": {
+          "enum": [
+            "offered",
+            "accepted",
+            "running",
+            "needs-human",
+            "completed",
+            "failed",
+            "cancelled",
+            "stale"
+          ],
+          "type": "string"
+        },
+        "maxItems": 32,
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "tasks": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "assigneeAgentId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "error": {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            "localTurnId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "projectId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "revision": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "state": {
+              "enum": [
+                "offered",
+                "accepted",
+                "running",
+                "needs-human",
+                "completed",
+                "failed",
+                "cancelled",
+                "stale"
+              ],
+              "type": "string"
+            },
+            "taskId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "taskId",
+            "projectId",
+            "assigneeAgentId",
+            "revision",
+            "title",
+            "state",
+            "updatedAt"
+          ],
+          "type": "object"
+        },
+        "maxItems": 100000,
+        "type": "array"
+      }
+    },
+    "required": [
+      "tasks"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "List collaboration Tasks"
 }
 ```
 
@@ -82470,6 +85123,7 @@ Releases an open Workspace Preview session.
 | Biology Room | biologyRoom: |  |
 | Browser Preview | browserPreview: |  |
 | Change Inspector |  |  |
+| Collaboration |  |  |
 | Controlled Process |  |  |
 | Create Loop |  |  |
 | Dataset API |  |  |

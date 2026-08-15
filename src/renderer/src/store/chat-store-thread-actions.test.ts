@@ -3,7 +3,7 @@ import type {
   AgentRuntimeFileReference,
   AgentRuntimeWorkspaceReference
 } from '@shared/agent-runtime-contract'
-import { defaultRemoteChannelSettings } from '@shared/app-settings'
+import { defaultSkillsSettings } from '@shared/app-settings'
 import type { ChatBlock, NormalizedThread, ThreadEventSink } from '../agent/types'
 import type { ChatState, ChatStoreGet, ChatStoreSet, GuiPlanMessageContext } from './chat-store-types'
 
@@ -31,8 +31,7 @@ vi.mock('../lib/session-right-panel-lifecycle', () => ({
   rekeySessionRightPanelWorkspace: rightPanelLifecycleMock.rekeySessionRightPanelWorkspace
 }))
 
-import { createThreadActions, publishRemoteChannelActiveThreadContext } from './chat-store-thread-actions'
-import { clearPendingRemoteChannelMirrors, takePendingRemoteChannelMirror } from './chat-store-runtime'
+import { createThreadActions } from './chat-store-thread-actions'
 import { composerReferenceFromWorkspaceReference } from '../lib/workspace-reference-composer'
 import { guiPlanSession, useGuiPlanStore } from '../plan/plan-store'
 import { normalizePersistedQueuedMessages } from './chat-session-persistence'
@@ -61,7 +60,6 @@ function buildHarness(): {
     blocks: [],
     busy: true,
     activeThreadContextState: null,
-    remoteChannels: [],
     codeWorkspaceRoots: [],
     composerModel: '',
     currentTurnId: null,
@@ -123,14 +121,13 @@ describe('chat-store-thread-actions queued messages', () => {
     runtimeClientMock.getSettings.mockResolvedValue({
       codePromptPrefix: '',
       workspaceRoot: '/workspace/sciforge',
-      remoteChannel: defaultRemoteChannelSettings()
+      skills: defaultSkillsSettings()
     })
     runtimeClientMock.setSettings.mockImplementation(async (patch: { workspaceRoot?: string }) => ({
       codePromptPrefix: '',
       workspaceRoot: patch.workspaceRoot ?? '/workspace/sciforge',
-      remoteChannel: defaultRemoteChannelSettings()
+      skills: defaultSkillsSettings()
     }))
-    clearPendingRemoteChannelMirrors()
     useGuiPlanStore.getState().clearAllSessions()
     vi.stubGlobal('window', {
       sciforge: {
@@ -400,12 +397,12 @@ describe('chat-store-thread-actions queued messages', () => {
     runtimeClientMock.getSettings.mockResolvedValueOnce({
       codePromptPrefix: '',
       workspaceRoot: '/workspace/startup',
-      remoteChannel: defaultRemoteChannelSettings()
+      skills: defaultSkillsSettings()
     })
     runtimeClientMock.setSettings.mockResolvedValueOnce({
       codePromptPrefix: '',
       workspaceRoot: '/workspace/project-b',
-      remoteChannel: defaultRemoteChannelSettings()
+      skills: defaultSkillsSettings()
     })
     state.workspaceRoot = '/workspace/startup'
     state.codeWorkspaceRoots = ['/workspace/startup']
@@ -433,7 +430,7 @@ describe('chat-store-thread-actions queued messages', () => {
     runtimeClientMock.getSettings.mockResolvedValueOnce({
       codePromptPrefix: '',
       workspaceRoot: '/workspace/startup',
-      remoteChannel: defaultRemoteChannelSettings()
+      skills: defaultSkillsSettings()
     })
     runtimeClientMock.setSettings.mockRejectedValueOnce(new Error('settings unavailable'))
     state.workspaceRoot = '/workspace/startup'
@@ -465,7 +462,7 @@ describe('chat-store-thread-actions queued messages', () => {
     runtimeClientMock.getSettings.mockResolvedValueOnce({
       codePromptPrefix: '',
       workspaceRoot: '/workspace/current',
-      remoteChannel: defaultRemoteChannelSettings()
+      skills: defaultSkillsSettings()
     })
     state.threads = [{
       ...thread('thr_existing'),
@@ -495,7 +492,7 @@ describe('chat-store-thread-actions queued messages', () => {
     runtimeClientMock.getSettings.mockResolvedValueOnce({
       codePromptPrefix: '',
       workspaceRoot: '',
-      remoteChannel: defaultRemoteChannelSettings()
+      skills: defaultSkillsSettings()
     })
     state.activeThreadId = null
     state.workspaceRoot = ''
@@ -540,7 +537,7 @@ describe('chat-store-thread-actions queued messages', () => {
     runtimeClientMock.getSettings.mockResolvedValueOnce({
       codePromptPrefix: '',
       workspaceRoot: '/workspace/stale-settings',
-      remoteChannel: defaultRemoteChannelSettings()
+      skills: defaultSkillsSettings()
     })
     state.activeThreadId = null
     state.workspaceRoot = '/workspace/draft'
@@ -2220,137 +2217,4 @@ describe('chat-store-thread-actions queued messages', () => {
     )
   })
 
-  it('mirrors desktop Code route messages when the active thread is bound to an IM channel', async () => {
-    const { actions, state } = buildHarness()
-    const mirrorRemoteChannelMessage = vi.fn(async () => ({ ok: true as const }))
-    vi.stubGlobal('window', {
-      sciforge: {
-        logError: vi.fn(async () => undefined),
-        mirrorRemoteChannelMessage
-      },
-      localStorage: {
-        getItem: vi.fn(() => null),
-        setItem: vi.fn(),
-        removeItem: vi.fn()
-      }
-    })
-    const provider = {
-      sendUserMessage: vi.fn(async () => ({
-        turnId: 'turn-1',
-        userMessageItemId: 'runtime-user-1'
-      })),
-      subscribeThreadEvents: vi.fn(async () => undefined),
-      renameThread: vi.fn(async () => undefined)
-    }
-    registryMock.getProvider.mockReturnValue(provider)
-    state.busy = false
-    state.route = 'chat'
-    state.threads = [{
-      ...thread('thr_existing'),
-      runtimeId: 'codex' as const,
-      title: 'Desktop work'
-    }]
-    state.remoteChannels = [{
-      id: 'channel-1',
-      enabled: true,
-      provider: 'weixin',
-      label: 'WeChat',
-      model: 'auto',
-      runtimeId: 'codex',
-      agentThreadIds: { codex: 'thr_existing' },
-      workspaceRoot: '',
-      conversations: [],
-      agentProfile: {
-        name: 'sciforge',
-        description: '',
-        identity: '',
-        personality: '',
-        userContext: '',
-        replyRules: ''
-      },
-      createdAt: '2026-06-09T00:00:00.000Z',
-      updatedAt: '2026-06-09T00:00:00.000Z'
-    }]
-
-    await expect(actions.sendMessage('hello from desktop')).resolves.toBe(true)
-
-    expect(mirrorRemoteChannelMessage).toHaveBeenCalledWith(
-      'thr_existing',
-      'hello from desktop',
-      'user'
-    )
-    expect(takePendingRemoteChannelMirror('turn-1')).toEqual({
-      threadId: 'thr_existing',
-      userBlockId: 'runtime-user-1',
-      userText: 'hello from desktop'
-    })
-  })
-})
-
-describe('remote-channel active thread context publishing', () => {
-  beforeEach(() => {
-    vi.stubGlobal('window', {
-      sciforge: {
-        updateRemoteChannelActiveThreadContext: vi.fn(async () => undefined)
-      }
-    })
-  })
-
-  it('publishes the active desktop thread context for IM auto-attach', () => {
-    const state = {
-      activeThreadId: 'desktop-thread',
-      workspaceRoot: '/workspace/fallback',
-      threads: [{
-        ...thread('desktop-thread'),
-        runtimeId: 'codex' as const,
-        workspace: '/workspace/desktop'
-      }],
-      remoteChannels: []
-    } as unknown as ChatState
-
-    publishRemoteChannelActiveThreadContext(state, 'desktop-thread')
-
-    expect(window.sciforge.updateRemoteChannelActiveThreadContext).toHaveBeenCalledWith({
-      threadId: 'desktop-thread',
-      runtimeId: 'codex',
-      workspaceRoot: '/workspace/desktop'
-    })
-  })
-
-  it('clears the active context instead of publishing a remote-channel-managed thread', () => {
-    const state = {
-      activeThreadId: 'claw-thread',
-      workspaceRoot: '/workspace/fallback',
-      threads: [{
-        ...thread('claw-thread'),
-        title: '[Remote channel:WeChat] Alice',
-        workspace: '/workspace/claw'
-      }],
-      remoteChannels: [{
-        id: 'channel-1',
-        enabled: true,
-        provider: 'weixin',
-        label: 'WeChat',
-        threadId: 'claw-thread',
-        agentThreadIds: { sciforge: 'claw-thread' },
-        conversations: [],
-        model: 'auto',
-        workspaceRoot: '',
-        agentProfile: {
-          name: 'sciforge',
-          description: '',
-          identity: '',
-          personality: '',
-          userContext: '',
-          replyRules: ''
-        },
-        createdAt: '2026-06-09T00:00:00.000Z',
-        updatedAt: '2026-06-09T00:00:00.000Z'
-      }]
-    } as unknown as ChatState
-
-    publishRemoteChannelActiveThreadContext(state, 'claw-thread')
-
-    expect(window.sciforge.updateRemoteChannelActiveThreadContext).toHaveBeenCalledWith(null)
-  })
 })

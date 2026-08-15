@@ -135,24 +135,6 @@ function createApi(): SciForgeApi {
     lastPublishedVisibleContextRevision = published.revision
     return published
   }
-  const getConnectPhoneStatus: SciForgeApi['getConnectPhoneStatus'] = () => invoke('connectPhone:status')
-  const startConnectPhoneInstallQr: SciForgeApi['startConnectPhoneInstallQr'] = (provider, options) =>
-    invoke('connectPhone:install:qrcode', { provider, isLark: options?.isLark })
-  const pollConnectPhoneInstall: SciForgeApi['pollConnectPhoneInstall'] = (provider, deviceCode) =>
-    invoke('connectPhone:install:poll', { provider, deviceCode })
-  const onRemoteChannelActivity: SciForgeApi['onRemoteChannelActivity'] = (handler) =>
-    onChannel('remoteChannel:activity', handler)
-  const updateRemoteChannelActiveThreadContext: SciForgeApi['updateRemoteChannelActiveThreadContext'] = (payload) =>
-    invoke('remoteChannel:active-thread-context', payload)
-  const mirrorRemoteChannelMessage: SciForgeApi['mirrorRemoteChannelMessage'] = (threadId, text, direction) =>
-    invoke('remoteChannel:message:mirror', { threadId, text, direction })
-  const createRemoteChannelTaskFromText: SciForgeApi['createRemoteChannelTaskFromText'] = (text, options) =>
-    invoke('remoteChannel:task:create-from-text', {
-      text,
-      channelId: options?.channelId,
-      modelHint: options?.modelHint,
-      mode: options?.mode
-    })
   const onSettingsChanged: SciForgeApi['onSettingsChanged'] = (handler) =>
     onChannel('settings:changed', handler)
 
@@ -186,49 +168,8 @@ function createApi(): SciForgeApi {
       rollback: (input) => invoke('extensions:rollback', input),
       setEnabled: (input) => invoke('extensions:set-enabled', input)
     },
-    getConnectPhoneStatus,
     getScheduleStatus: () => invoke('schedule:status'),
     runScheduleTask: (taskId) => invoke('schedule:task:run', taskId),
-    startConnectPhoneInstallQr,
-    pollConnectPhoneInstall,
-    getDiscordBotStatus: () => invoke('discord:status'),
-    configureDiscordClientId: (clientId) =>
-      invoke('discord:configure-client', { clientId }),
-    configureDiscordBotToken: (token, clientId) =>
-      invoke('discord:configure-token', { token, ...(clientId ? { clientId } : {}) }),
-    configureDiscordProxy: (proxyUrl) =>
-      invoke('discord:configure-proxy', { proxyUrl }),
-    listDiscordGuilds: () => invoke('discord:guilds'),
-    listDiscordChannels: (guildId) =>
-      invoke('discord:channels', { guildId }),
-    bindDiscordChannel: (payload) =>
-      invoke('discord:bind-channel', payload),
-    testDiscordChannel: (channelId, text, channelConfigId) =>
-      invoke('discord:test-send', { channelId, text, ...(channelConfigId ? { channelConfigId } : {}) }),
-    setDiscordGuard: (enabled, channelConfigId, forceTakeover) =>
-      invoke('discord:set-guard', {
-        enabled,
-        ...(channelConfigId ? { channelConfigId } : {}),
-        ...(forceTakeover ? { forceTakeover } : {})
-      }),
-    getZulipBotStatus: () => invoke('zulip:status'),
-    configureZulipBot: (payload) => invoke('zulip:configure', payload),
-    listZulipStreams: () => invoke('zulip:streams'),
-    listZulipTopics: (streamId) => invoke('zulip:topics', { streamId }),
-    bindZulipChannel: (payload) => invoke('zulip:bind-channel', payload),
-    testZulipChannel: (channelId, text, channelConfigId, topicName) =>
-      invoke('zulip:test-send', {
-        channelId,
-        ...(text ? { text } : {}),
-        ...(channelConfigId ? { channelConfigId } : {}),
-        ...(topicName ? { topicName } : {})
-      }),
-    setZulipGuard: (enabled, channelConfigId, forceTakeover) =>
-      invoke('zulip:set-guard', {
-        enabled,
-        ...(channelConfigId ? { channelConfigId } : {}),
-        ...(forceTakeover ? { forceTakeover } : {})
-      }),
     pickWorkspaceDirectory: (defaultPath) => invoke('workspace:pick-directory', defaultPath),
     pickFile: (request) => invoke('workspace:pick-file', request),
     buildScientificSkillsMcpConfig: (workspaceRoot) =>
@@ -354,10 +295,6 @@ function createApi(): SciForgeApi {
       onEnd: (handler) => onChannel('agentRuntime:end', handler),
       onError: (handler) => onChannel('agentRuntime:error', handler)
     },
-    onRemoteChannelActivity,
-    updateRemoteChannelActiveThreadContext,
-    mirrorRemoteChannelMessage,
-    createRemoteChannelTaskFromText,
     createScheduleTaskFromText: (text, options) =>
       invoke('schedule:task:create-from-text', {
         text,

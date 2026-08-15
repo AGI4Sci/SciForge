@@ -128,6 +128,16 @@ function turnEvent(
   }
 }
 
+function completedThreadTurn(event: DomainTurnArtifactEvent): DomainAgentThreadTurn {
+  return {
+    id: event.turnId,
+    status: 'completed',
+    completedAt: event.occurredAt,
+    messages: [],
+    artifacts: event.artifacts
+  }
+}
+
 function turnEventWithExactOutputs(
   workspaceRoot: string,
   turnId: string,
@@ -723,6 +733,7 @@ function context(
           artifacts: []
         }
       },
+      subscribeMessages: async function* () {},
       hasActiveTurns: () => false
     },
     turnEvents: {
@@ -828,6 +839,7 @@ test('required before-turn boundary automatically records new work without impor
       id: 'turn-before-automatic-recording',
       status: 'completed',
       completedAt: '2020-01-01T00:00:00.000Z',
+      messages: [],
       artifacts: []
     }
     const turns: DomainAgentThreadTurn[] = [oldTurn]
@@ -863,12 +875,7 @@ test('required before-turn boundary automatically records new work without impor
     )
 
     const firstLive = turnEvent(workspaceRoot, 'turn-first-automatic', 1)
-    turns.push({
-      id: firstLive.turnId,
-      status: 'completed',
-      completedAt: firstLive.occurredAt,
-      artifacts: firstLive.artifacts
-    })
+    turns.push(completedThreadTurn(firstLive))
     await runtime.consume(firstLive)
     await waitForAsync(async () => (
       await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', firstLive.turnId)
@@ -906,12 +913,7 @@ test('required before-turn boundary automatically records new work without impor
     assert.equal(await runtime.automaticRecordingEnabled(workspaceRoot, 'codex', 'thread-1'), false)
 
     const secondLive = turnEvent(workspaceRoot, 'turn-second-automatic-series', 2)
-    turns.push({
-      id: secondLive.turnId,
-      status: 'completed',
-      completedAt: secondLive.occurredAt,
-      artifacts: secondLive.artifacts
-    })
+    turns.push(completedThreadTurn(secondLive))
     await runtime.consume(secondLive)
     assert.equal((await runtime.turnStatus(
       workspaceRoot,
@@ -934,12 +936,7 @@ test('required before-turn boundary automatically records new work without impor
       clientDirectiveId: 'directive-after-explicit-restart'
     }
     await publishExactOutputBoundary(lifecycle, thirdLive)
-    turns.push({
-      id: thirdLive.turnId,
-      status: 'completed',
-      completedAt: thirdLive.occurredAt,
-      artifacts: thirdLive.artifacts
-    })
+    turns.push(completedThreadTurn(thirdLive))
     await runtime.consume(thirdLive)
     await waitForAsync(async () => (
       await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', thirdLive.turnId)
@@ -1238,6 +1235,7 @@ test('Host delivery acks after local enqueue while commit is blocked; stop prese
       id: 'turn-old',
       status: 'completed',
       completedAt: '2020-01-01T00:00:00.000Z',
+      messages: [],
       artifacts: []
     }]
     const runtime = new ResearchCheckpointRuntime({ userDataDir })
@@ -1253,7 +1251,7 @@ test('Host delivery acks after local enqueue while commit is blocked; stop prese
 
     const live = turnEvent(workspaceRoot, 'turn-live', 1)
     await publishExactOutputBoundary(lifecycle, live)
-    turns.push({ id: live.turnId, status: 'completed', completedAt: live.occurredAt, artifacts: live.artifacts })
+    turns.push(completedThreadTurn(live))
     await Promise.race([
       runtime.consume(live),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Host delivery remained blocked')), 250))
@@ -1398,12 +1396,7 @@ test('three pending same-path turns survive restart with the exact locally froze
     }])
     for (const event of [first, second, third]) {
       await publishExactOutputBoundary(firstLifecycle, event)
-      turns.push({
-        id: event.turnId,
-        status: 'completed',
-        completedAt: event.occurredAt,
-        artifacts: event.artifacts
-      })
+      turns.push(completedThreadTurn(event))
       await firstRuntime.consume(event)
       assert.equal((await firstRuntime.turnStatus(
         workspaceRoot,
@@ -1471,7 +1464,7 @@ test('checkpoint response loss survives restart and preserves v1 to v2 identity 
     })
     const first = turnEvent(workspaceRoot, 'turn-1', 1, true)
     await publishExactOutputBoundary(firstLifecycle, first)
-    turns.push({ id: first.turnId, status: 'completed', completedAt: first.occurredAt, artifacts: first.artifacts })
+    turns.push(completedThreadTurn(first))
     await firstRuntime.consume(first)
     await waitFor(() => harness.checkpointResponseLossCount === 1, 8_000)
     assert.equal((await firstRuntime.turnStatus(workspaceRoot, 'codex', 'thread-1', first.turnId)).state, 'pending')
@@ -1491,7 +1484,7 @@ test('checkpoint response loss survives restart and preserves v1 to v2 identity 
     ).state === 'committed', 5_000)
     const second = turnEvent(workspaceRoot, 'turn-2', 2, true)
     await publishExactOutputBoundary(secondLifecycle, second)
-    turns.push({ id: second.turnId, status: 'completed', completedAt: second.occurredAt, artifacts: second.artifacts })
+    turns.push(completedThreadTurn(second))
     await secondRuntime.consume(second)
     await waitForAsync(async () => (
       await secondRuntime.turnStatus(workspaceRoot, 'codex', 'thread-1', second.turnId)
@@ -1574,7 +1567,7 @@ test('Host-frozen dataset and plot outputs persist exact bytes, independent iden
       { path: 'outputs/penguins.png', bytes: 'png-terminal-v1' }
     ])
     await publishExactOutputBoundary(lifecycle, first)
-    turns.push({ id: first.turnId, status: 'completed', completedAt: first.occurredAt, artifacts: first.artifacts })
+    turns.push(completedThreadTurn(first))
     await runtime.consume(first)
     await waitForAsync(async () => (
       await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', first.turnId)
@@ -1620,7 +1613,7 @@ test('Host-frozen dataset and plot outputs persist exact bytes, independent iden
       }
     ])
     await publishExactOutputBoundary(lifecycle, second)
-    turns.push({ id: second.turnId, status: 'completed', completedAt: second.occurredAt, artifacts: second.artifacts })
+    turns.push(completedThreadTurn(second))
     await runtime.consume(second)
     await waitForAsync(async () => (
       await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', second.turnId)
@@ -1675,7 +1668,7 @@ test('same workspace output identity continues across separate research recordin
       { path: 'figures/result.svg', bytes: '<svg>v1</svg>' }
     ])
     await publishExactOutputBoundary(lifecycle, first)
-    turns.push({ id: first.turnId, status: 'completed', completedAt: first.occurredAt, artifacts: first.artifacts })
+    turns.push(completedThreadTurn(first))
     await runtime.consume(first)
     await waitForAsync(async () => (
       await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', first.turnId)
@@ -1694,7 +1687,7 @@ test('same workspace output identity continues across separate research recordin
       { path: 'figures/result.svg', priorBytes: '<svg>v1</svg>', bytes: '<svg>v2</svg>', kind: 'modified' }
     ])
     await publishExactOutputBoundary(lifecycle, second)
-    turns.push({ id: second.turnId, status: 'completed', completedAt: second.occurredAt, artifacts: second.artifacts })
+    turns.push(completedThreadTurn(second))
     await runtime.consume(second)
     await waitForAsync(async () => (
       await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', second.turnId)
@@ -1730,7 +1723,7 @@ test('an active directive keeps its original pre-turn output parent after a late
       { path: 'outputs/result.csv', bytes: 'value\n1\n' }
     ])
     await publishExactOutputBoundary(lifecycle, first)
-    turns.push({ id: first.turnId, status: 'completed', completedAt: first.occurredAt, artifacts: first.artifacts })
+    turns.push(completedThreadTurn(first))
     await runtime.consume(first)
     await waitForAsync(async () => (
       await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', first.turnId)
@@ -1750,13 +1743,13 @@ test('an active directive keeps its original pre-turn output parent after a late
       path: 'outputs/result.csv', priorBytes: 'value\n1\n', bytes: 'value\n2\n', kind: 'modified'
     }])
     await publishExactOutputBoundary(lifecycle, later)
-    turns.push({ id: later.turnId, status: 'completed', completedAt: later.occurredAt, artifacts: later.artifacts })
+    turns.push(completedThreadTurn(later))
     await runtime.consume(later)
     await waitForAsync(async () => (
       await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', later.turnId)
     ).state === 'committed', 5_000)
 
-    turns.push({ id: active.turnId, status: 'completed', completedAt: active.occurredAt, artifacts: active.artifacts })
+    turns.push(completedThreadTurn(active))
     await runtime.consume(active)
     await waitForAsync(async () => (
       await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', active.turnId)
@@ -1789,7 +1782,7 @@ test('an update without its exact boundary lease remains unrecorded without late
       { path: 'outputs/result.csv', bytes: 'value\n1\n' }
     ])
     await publishExactOutputBoundary(lifecycle, first)
-    turns.push({ id: first.turnId, status: 'completed', completedAt: first.occurredAt, artifacts: first.artifacts })
+    turns.push(completedThreadTurn(first))
     await runtime.consume(first)
     await waitForAsync(async () => (
       await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', first.turnId)
@@ -1802,7 +1795,7 @@ test('an update without its exact boundary lease remains unrecorded without late
       }]),
       clientDirectiveId: 'directive-never-captured'
     }
-    turns.push({ id: update.turnId, status: 'completed', completedAt: update.occurredAt, artifacts: update.artifacts })
+    turns.push(completedThreadTurn(update))
     await runtime.consume(update)
     const status = await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', update.turnId)
     assert.equal(status.state, 'unrecorded')
@@ -1834,7 +1827,7 @@ test('an atomic output/checkpoint failure leaves no output current or successful
       { path: 'figures/result.svg', bytes: '<svg/>' }
     ])
     await publishExactOutputBoundary(lifecycle, failed)
-    turns.push({ id: failed.turnId, status: 'completed', completedAt: failed.occurredAt, artifacts: failed.artifacts })
+    turns.push(completedThreadTurn(failed))
     await runtime.consume(failed)
     await waitForAsync(async () => (
       await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', failed.turnId)
@@ -1870,7 +1863,7 @@ test('an unbound checkpoint rebases an output stale batch and retries one whole 
       { path: 'figures/result.svg', bytes: '<svg>retry</svg>' }
     ])
     await publishExactOutputBoundary(lifecycle, event)
-    turns.push({ id: event.turnId, status: 'completed', completedAt: event.occurredAt, artifacts: event.artifacts })
+    turns.push(completedThreadTurn(event))
     await runtime.consume(event)
     await waitForAsync(async () => (
       await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', event.turnId)
@@ -1923,7 +1916,7 @@ test('real Artifact Versions service commits output candidates and checkpoint as
       { path: 'figures/result.svg', bytes: '<svg/>' }
     ])
     await publishExactOutputBoundary(lifecycle, event)
-    turns.push({ id: event.turnId, status: 'completed', completedAt: event.occurredAt, artifacts: event.artifacts })
+    turns.push(completedThreadTurn(event))
     await runtime.consume(event)
     await waitForAsync(async () => (
       await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', event.turnId)
@@ -1975,7 +1968,7 @@ test('atomic multi-output response loss restarts from the durable journal withou
       { path: 'outputs/lost.svg', bytes: '<svg></svg>' }
     ])
     await publishExactOutputBoundary(firstLifecycle, event)
-    turns.push({ id: event.turnId, status: 'completed', completedAt: event.occurredAt, artifacts: event.artifacts })
+    turns.push(completedThreadTurn(event))
     await firstRuntime.consume(event)
     await waitFor(() => harness.outputSnapshotResponseLossCount === 1, 5_000)
     assert.equal(
@@ -2040,7 +2033,7 @@ test('v1 to v2 restore v1 as v3, advance v4, then restore the projected v3 as v5
     })
     const first = turnEvent(workspaceRoot, 'restore-turn-1', 1)
     await publishExactOutputBoundary(lifecycle, first)
-    turns.push({ id: first.turnId, status: 'completed', completedAt: first.occurredAt, artifacts: first.artifacts })
+    turns.push(completedThreadTurn(first))
     await runtime.consume(first)
     await waitForAsync(async () => (
       await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', first.turnId)
@@ -2050,7 +2043,7 @@ test('v1 to v2 restore v1 as v3, advance v4, then restore the projected v3 as v5
 
     const second = turnEvent(workspaceRoot, 'restore-turn-2', 2)
     await publishExactOutputBoundary(lifecycle, second)
-    turns.push({ id: second.turnId, status: 'completed', completedAt: second.occurredAt, artifacts: second.artifacts })
+    turns.push(completedThreadTurn(second))
     await runtime.consume(second)
     await waitForAsync(async () => (
       await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', second.turnId)
@@ -2119,7 +2112,7 @@ test('v1 to v2 restore v1 as v3, advance v4, then restore the projected v3 as v5
 
     const fourth = turnEvent(workspaceRoot, 'restore-turn-4', 4)
     await publishExactOutputBoundary(lifecycle, fourth)
-    turns.push({ id: fourth.turnId, status: 'completed', completedAt: fourth.occurredAt, artifacts: fourth.artifacts })
+    turns.push(completedThreadTurn(fourth))
     await runtime.consume(fourth)
     await waitForAsync(async () => (
       await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', fourth.turnId)
@@ -2172,7 +2165,7 @@ test('restore response loss and restart recover one v3 before allowing v4 from v
     })
     const first = turnEvent(workspaceRoot, 'restore-crash-turn-1', 1)
     await publishExactOutputBoundary(firstLifecycle, first)
-    turns.push({ id: first.turnId, status: 'completed', completedAt: first.occurredAt, artifacts: first.artifacts })
+    turns.push(completedThreadTurn(first))
     await firstRuntime.consume(first)
     await waitForAsync(async () => (
       await firstRuntime.turnStatus(workspaceRoot, 'codex', 'thread-1', first.turnId)
@@ -2182,7 +2175,7 @@ test('restore response loss and restart recover one v3 before allowing v4 from v
 
     const second = turnEvent(workspaceRoot, 'restore-crash-turn-2', 2)
     await publishExactOutputBoundary(firstLifecycle, second)
-    turns.push({ id: second.turnId, status: 'completed', completedAt: second.occurredAt, artifacts: second.artifacts })
+    turns.push(completedThreadTurn(second))
     await firstRuntime.consume(second)
     await waitForAsync(async () => (
       await firstRuntime.turnStatus(workspaceRoot, 'codex', 'thread-1', second.turnId)
@@ -2205,12 +2198,7 @@ test('restore response loss and restart recover one v3 before allowing v4 from v
       deliveryAttemptOrdinal: 3
     }
     await publishExactOutputBoundary(firstLifecycle, earlyFourth)
-    turns.push({
-      id: earlyFourth.turnId,
-      status: 'completed',
-      completedAt: earlyFourth.occurredAt,
-      artifacts: earlyFourth.artifacts
-    })
+    turns.push(completedThreadTurn(earlyFourth))
     // Research Checkpoints durably accepts the event so the shared Host
     // handoff can be acknowledged, but it leaves the operation unprepared
     // while the restore predecessor remains pending.
@@ -2294,6 +2282,7 @@ test('legacy preview lists only completed durable turns and binds digest to the 
         id: 'turn-completed',
         status: 'completed',
         completedAt: '2026-08-11T08:00:01.000Z',
+        messages: [],
         artifacts: [
           { kind: 'user_message', text: 'Compare the samples.' },
           { kind: 'assistant_message', text: 'The treatment group increased.' },
@@ -2303,6 +2292,7 @@ test('legacy preview lists only completed durable turns and binds digest to the 
       {
         id: 'turn-running',
         status: 'running',
+        messages: [],
         artifacts: [{ kind: 'user_message', text: 'Still running' }]
       }
     ]
@@ -2383,6 +2373,7 @@ test('activation recovers a stopped recording pending in the local journal', asy
       id: queuedEvent.turnId,
       status: 'completed',
       completedAt: queuedEvent.occurredAt,
+      messages: [],
       artifacts: queuedEvent.artifacts
     }]
     const runtime = new ResearchCheckpointRuntime({ userDataDir, store: new ResearchCheckpointStore({ userDataDir }) })

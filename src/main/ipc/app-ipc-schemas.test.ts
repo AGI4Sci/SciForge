@@ -4,7 +4,6 @@ import {
   AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS,
   type AgentRuntimeAuxiliaryOperation
 } from '../../shared/agent-runtime-contract'
-import { normalizeAppSettings, type AppSettingsV1 } from '../../shared/app-settings'
 import {
   agentRuntimeApprovalResolvePayloadSchema,
   agentRuntimeAuxiliaryPayloadSchema,
@@ -28,8 +27,6 @@ import {
   remoteWorkspaceAttachPayloadSchema,
   remoteWorkspaceSelectPayloadSchema,
   remoteWorkspaceSessionPayloadSchema,
-  connectPhoneInstallQrPayloadSchema,
-  connectPhoneInstallPollPayloadSchema,
   domainExtensionInstallPayloadSchema,
   domainExtensionListPayloadSchema,
   domainExtensionListResultSchema,
@@ -37,9 +34,6 @@ import {
   domainExtensionSetEnabledPayloadSchema,
   domainExtensionSummarySchema,
   isSafeOpenExternalUrl,
-  remoteChannelActiveThreadContextPayloadSchema,
-  remoteChannelMirrorPayloadSchema,
-  remoteChannelTaskFromTextPayloadSchema,
   scheduleTaskFromTextPayloadSchema,
   settingsPatchSchema,
   shellOpenExternalUrlSchema,
@@ -756,6 +750,9 @@ describe('app-ipc-schemas', () => {
         model: '',
         language: '',
         timeoutMs: 60000
+      },
+      skills: {
+        extraDirs: [' /tmp/sciforge-skills ']
       }
     })
 
@@ -769,6 +766,7 @@ describe('app-ipc-schemas', () => {
     expect(payload.agents?.claude?.configDir).toBe('/tmp/claude-code')
     expect(payload.write?.inlineCompletion?.maxTokens).toBe(128)
     expect(payload.speechToText?.baseUrl).toBe('')
+    expect(payload.skills?.extraDirs).toEqual(['/tmp/sciforge-skills'])
     expect(payload.modelRouter?.profiles?.default?.imageGenerator?.model).toBe('image-model')
   })
 
@@ -796,72 +794,6 @@ describe('app-ipc-schemas', () => {
     expect(() => settingsPatchSchema.parse({
       evidenceDag: { enabled: false }
     })).toThrow()
-  })
-
-  it('accepts normalized full settings snapshots with persisted remote-channel failures', () => {
-    const base = normalizeAppSettings({} as AppSettingsV1)
-    const failure = {
-      provider: 'zulip' as const,
-      message: 'Runtime offline',
-      failureKind: 'runtime_unavailable',
-      failureTitle: 'Runtime unavailable',
-      channelId: 'channel-1',
-      chatId: 'chat-1',
-      remoteThreadId: 'remote-thread-1',
-      threadId: 'thread-1',
-      runtimeId: 'codex' as const,
-      occurredAt: '2026-07-19T00:00:00.000Z'
-    }
-    const normalized = normalizeAppSettings({
-      ...base,
-      remoteChannel: {
-        ...base.remoteChannel,
-        enabled: true,
-        channels: [{
-          id: 'zulip-1',
-          provider: 'zulip',
-          label: 'Zulip',
-          enabled: true,
-          model: 'auto',
-          workspaceRoot: '/tmp/workspace',
-          lastFailure: failure,
-          conversations: [{
-            id: 'conversation-1',
-            chatId: 'chat-1',
-            remoteThreadId: 'remote-thread-1',
-            latestMessageId: 'message-1',
-            senderId: 'sender-1',
-            senderName: 'User',
-            agentThreadIds: { codex: 'thread-1' },
-            workspaceRoot: '/tmp/workspace',
-            lastFailure: failure,
-            createdAt: '2026-07-19T00:00:00.000Z',
-            updatedAt: '2026-07-19T00:00:00.000Z'
-          }],
-          createdAt: '2026-07-19T00:00:00.000Z',
-          updatedAt: '2026-07-19T00:00:00.000Z'
-        }]
-      }
-    } as AppSettingsV1)
-
-    const payload = settingsPatchSchema.parse(normalized)
-    expect(payload.remoteChannel?.channels?.[0]?.lastFailure).toEqual(failure)
-    expect(payload.remoteChannel?.channels?.[0]?.conversations?.[0]?.lastFailure).toEqual(failure)
-  })
-
-  it('keeps persisted remote-channel failure payloads strict', () => {
-    expect(() => settingsPatchSchema.parse({
-      remoteChannel: {
-        channels: [{
-          lastFailure: {
-            provider: 'zulip',
-            message: 'Runtime offline',
-            occurredAt: '2026-07-19T00:00:00.000Z',
-            unexpected: true
-          }
-        }]
-      }
-    })).toThrow(/Unrecognized key/)
   })
 
   it('rejects legacy Model Router member fields', () => {
@@ -1007,26 +939,6 @@ describe('app-ipc-schemas', () => {
           },
           lastStatus: 'idle'
         }]
-      },
-      remoteChannel: {
-        channels: [{
-          id: 'channel-1',
-          provider: 'feishu',
-          label: 'Team',
-          enabled: true,
-          model: 'auto',
-          runtimeId: 'codex',
-          agentThreadIds: { codex: 'codex-channel-thread' },
-          workspaceRoot: '/tmp/claw',
-          conversations: [{
-            id: 'conversation-1',
-            chatId: 'chat-1',
-            latestMessageId: 'message-1',
-            runtimeId: 'codex',
-            agentThreadIds: { codex: 'codex-conversation-thread' },
-            workspaceRoot: '/tmp/claw'
-          }]
-        }]
       }
     })
 
@@ -1034,11 +946,6 @@ describe('app-ipc-schemas', () => {
     expect(payload.schedule?.tasks?.[0]?.schedule?.kind).toBe('daily')
     expect(payload.schedule?.tasks?.[0]?.reasoningEffort).toBe('high')
     expect(payload.schedule?.tasks?.[0]?.agentThreadIds).toEqual({ codex: 'codex-task-thread' })
-    expect(payload.remoteChannel?.channels?.[0]?.agentThreadIds).toEqual({ codex: 'codex-channel-thread' })
-    expect(payload.remoteChannel?.channels?.[0]?.conversations?.[0]?.agentThreadIds).toEqual({
-      codex: 'codex-conversation-thread'
-    })
-
     const fromText = scheduleTaskFromTextPayloadSchema.parse({
       text: 'Remind me tomorrow morning to ship the review',
       workspaceRoot: '/tmp/schedule',
@@ -1070,31 +977,6 @@ describe('app-ipc-schemas', () => {
         agents: {
           sciforge: { port: 9001 },
           reasonix: { model: 'legacy-reasoner' }
-        }
-      })
-    ).toThrow(/Unrecognized key/)
-
-    expect(() =>
-      settingsPatchSchema.parse({
-        remoteChannel: {
-          channels: [{
-            id: 'channel-1',
-            threadId: 'legacy-thread'
-          }]
-        }
-      })
-    ).toThrow(/Unrecognized key/)
-
-    expect(() =>
-      settingsPatchSchema.parse({
-        remoteChannel: {
-          channels: [{
-            id: 'channel-1',
-            conversations: [{
-              id: 'conversation-1',
-              localThreadId: 'legacy-thread'
-            }]
-          }]
         }
       })
     ).toThrow(/Unrecognized key/)
@@ -1160,48 +1042,6 @@ describe('app-ipc-schemas', () => {
     })
 
     expect(payload.keyboardShortcuts?.bindings?.settings).toEqual(['Ctrl+,'])
-  })
-
-  it('enforces canonical settings domains for remote-channel and connect-phone patches', () => {
-    expect(() =>
-      settingsPatchSchema.parse({
-        claw: {}
-      })
-    ).toThrow(/Unrecognized key/)
-
-    expect(() =>
-      settingsPatchSchema.parse({
-        remoteChannel: {
-          tasks: []
-        }
-      })
-    ).toThrow(/Unrecognized key/)
-
-    expect(() =>
-      settingsPatchSchema.parse({
-        remoteChannel: {
-          im: {
-            openClawGatewayUrl: 'https://gateway.example/webhook'
-          }
-        }
-      })
-    ).toThrow(/Unrecognized key/)
-
-    expect(() =>
-      settingsPatchSchema.parse({
-        remoteChannel: {
-          im: {
-            weixinBridgeUrl: 'https://weixin.example/bridge'
-          }
-        }
-      })
-    ).toThrow(/Unrecognized key/)
-
-    expect(settingsPatchSchema.parse({
-      connectPhone: {
-        weixinBridgeUrl: ' https://weixin.example/bridge '
-      }
-    }).connectPhone?.weixinBridgeUrl).toBe('https://weixin.example/bridge')
   })
 
   it('rejects unknown settings patch fields', () => {
@@ -1288,7 +1128,7 @@ describe('app-ipc-schemas', () => {
             id: 'task-1',
             prompt: 'Run',
             schedule: { kind: 'manual' },
-            legacyClawOnlyField: true
+            legacyOnlyField: true
           }]
         }
       })
@@ -1304,111 +1144,6 @@ describe('app-ipc-schemas', () => {
     expect(() => shellOpenExternalUrlSchema.parse('javascript:alert(1)')).toThrow(
       /Only http, https, and mailto URLs are allowed/
     )
-  })
-
-  it('accepts long Feishu install device codes', () => {
-    const deviceCode = 'x'.repeat(2_048)
-    const payload = connectPhoneInstallPollPayloadSchema.parse({
-      provider: 'feishu',
-      deviceCode
-    })
-
-    expect(payload.deviceCode).toBe(deviceCode)
-  })
-
-  it('accepts canonical connect-phone and remote-channel IPC payloads', async () => {
-    const schemas = await import('./app-ipc-schemas')
-    expect('clawImInstallQrPayloadSchema' in schemas).toBe(false)
-    expect('clawImInstallPollPayloadSchema' in schemas).toBe(false)
-    expect('clawActiveThreadContextPayloadSchema' in schemas).toBe(false)
-    expect('clawMirrorPayloadSchema' in schemas).toBe(false)
-    expect('clawTaskFromTextPayloadSchema' in schemas).toBe(false)
-    expect(connectPhoneInstallQrPayloadSchema.parse({
-      provider: 'feishu',
-      isLark: true
-    })).toEqual({
-      provider: 'feishu',
-      isLark: true
-    })
-    expect(connectPhoneInstallPollPayloadSchema.parse({
-      provider: 'weixin',
-      deviceCode: ' device-1 '
-    })).toEqual({
-      provider: 'weixin',
-      deviceCode: 'device-1'
-    })
-    expect(remoteChannelActiveThreadContextPayloadSchema.parse({
-      threadId: ' thread-1 ',
-      runtimeId: 'codex',
-      workspaceRoot: ' /tmp/workspace '
-    })).toEqual({
-      threadId: 'thread-1',
-      runtimeId: 'codex',
-      workspaceRoot: '/tmp/workspace'
-    })
-    expect(remoteChannelMirrorPayloadSchema.parse({
-      threadId: ' thread-1 ',
-      text: ' hello ',
-      direction: 'user'
-    })).toEqual({
-      threadId: 'thread-1',
-      text: 'hello',
-      direction: 'user'
-    })
-    expect(remoteChannelTaskFromTextPayloadSchema.parse({
-      text: ' schedule ',
-      channelId: ' channel-1 ',
-      modelHint: ' auto ',
-      mode: 'agent'
-    })).toEqual({
-      text: 'schedule',
-      channelId: 'channel-1',
-      modelHint: 'auto',
-      mode: 'agent'
-    })
-  })
-
-  it('accepts Discord Client ID, binding, and guarded takeover payloads', async () => {
-    const schemas = await import('./app-ipc-schemas')
-
-    expect(schemas.discordConfigureClientPayloadSchema.parse({
-      clientId: ' client-1 '
-    })).toEqual({ clientId: 'client-1' })
-
-    expect(schemas.discordConfigureProxyPayloadSchema.parse({
-      proxyUrl: ' http://127.0.0.1:7890 '
-    })).toEqual({ proxyUrl: 'http://127.0.0.1:7890' })
-
-    expect(schemas.discordBindChannelPayloadSchema.parse({
-      channelConfigId: ' config-1 ',
-      guildId: ' guild-1 ',
-      guildName: ' Support ',
-      channelId: ' channel-1 ',
-      channelName: ' support ',
-      enabled: false,
-      workspaceRoot: '/tmp/support',
-      model: 'deepseek-v4-flash',
-      agentProfile: {
-        name: 'Support bot'
-      }
-    })).toMatchObject({
-      channelConfigId: 'config-1',
-      guildId: 'guild-1',
-      channelId: 'channel-1',
-      workspaceRoot: '/tmp/support',
-      model: 'deepseek-v4-flash',
-      agentProfile: { name: 'Support bot' }
-    })
-
-    expect(schemas.discordSetGuardPayloadSchema.parse({
-      enabled: true,
-      channelConfigId: ' config-1 ',
-      forceTakeover: true
-    })).toEqual({
-      enabled: true,
-      channelConfigId: 'config-1',
-      forceTakeover: true
-    })
   })
 
   it('accepts workspace directory payloads without a child path', () => {

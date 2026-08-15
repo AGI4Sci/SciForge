@@ -1143,10 +1143,6 @@ pre {
   width: 26px;
 }
 
-.ds-remote-channel-empty-logo.ds-work-logo {
-  transform: translateZ(0) scale(2.35);
-}
-
 .ds-work-logo-gust {
   position: absolute;
   top: 1px;

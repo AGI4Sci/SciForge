@@ -33,11 +33,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
   | 'setRoute'
   | 'openSettings'
   | 'openPlugins'
-  | 'openConnectPhone'
-  | 'setConnectPhonePanelOpen'
   | 'openSchedule'
-  | 'selectRemoteGuardChannel'
-  | 'clearRemoteGuardChannel'
   | 'openInitialSetup'
   | 'closeInitialSetup'
   | 'applyI18nFromSettings'
@@ -122,16 +118,11 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
       return task
     },
 
-    setRoute: (route) => set({
-      route,
-      ...(route === 'chat' ? {} : { remoteGuardChannelId: null, connectPhonePanelOpen: false })
-    }),
+    setRoute: (route) => set({ route }),
 
     openSettings: (section: SettingsRouteSection = 'general') =>
       set((state) => ({
         route: 'settings',
-        remoteGuardChannelId: null,
-        connectPhonePanelOpen: false,
         settingsSection: section,
         settingsReturnRoute: state.route === 'settings' ? state.settingsReturnRoute : state.route
       })),
@@ -139,38 +130,12 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
     openPlugins: (host?: PluginHostRoute) =>
       set((state) => ({
         route: 'plugins',
-        remoteGuardChannelId: null,
-        connectPhonePanelOpen: false,
         pluginHostRoute: host ?? 'chat'
       })),
 
-    openConnectPhone: () => {
-      set({ route: 'chat', remoteGuardChannelId: null, connectPhonePanelOpen: true })
-      void get().refreshRemoteChannels()
-    },
-
-    setConnectPhonePanelOpen: (open) => set({
-      connectPhonePanelOpen: open,
-      ...(open ? { route: 'chat' as const, remoteGuardChannelId: null } : {})
-    }),
-
     openSchedule: () => {
-      set({ route: 'schedule', remoteGuardChannelId: null, connectPhonePanelOpen: false })
+      set({ route: 'schedule' })
     },
-
-    selectRemoteGuardChannel: (channelId) => {
-      const channel = get().remoteChannels.find((item) => item.id === channelId)
-      if (!channel) return
-      set({
-        route: 'chat',
-        remoteGuardChannelId: channel.id,
-        connectPhonePanelOpen: false,
-        activeRemoteChannelId: channel.id,
-        error: null
-      })
-    },
-
-    clearRemoteGuardChannel: () => set({ remoteGuardChannelId: null }),
 
     openInitialSetup: (mode: InitialSetupMode = 'required') =>
       set({ initialSetupOpen: true, initialSetupMode: mode }),
@@ -192,13 +157,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
         workspaceRoot,
         workspaceLabel: workspaceLabelFromPath(workspaceRoot),
         activeAgentRuntime: getActiveAgentRuntime(settings),
-        modelAccessMode: getModelAccessSettings(settings)?.mode ?? null,
-        remoteChannels: settings.remoteChannel.channels,
-        activeRemoteChannelId: settings.remoteChannel.channels.some(
-          (channel) => channel.id === get().activeRemoteChannelId && channel.enabled
-        )
-          ? get().activeRemoteChannelId
-          : settings.remoteChannel.channels.find((channel) => channel.enabled)?.id ?? ''
+        modelAccessMode: getModelAccessSettings(settings)?.mode ?? null
       })
       await get().applyI18nFromSettings(settings.locale)
       if (get().runtimeConnection === 'ready') {

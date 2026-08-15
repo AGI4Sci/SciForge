@@ -398,13 +398,11 @@ export function AgentsSettingsSection({
             wideControl
             control={
               <textarea
-                value={listSettingsText(form.remoteChannel.skills.extraDirs)}
+                value={listSettingsText(form.skills.extraDirs)}
                 onChange={(event) =>
                   update({
-                    remoteChannel: {
-                      skills: {
-                        extraDirs: splitSettingsList(event.target.value)
-                      }
+                    skills: {
+                      extraDirs: splitSettingsList(event.target.value)
                     }
                   })
                 }

@@ -1,7 +1,6 @@
-import { useMemo } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../../store/chat-store'
-import type { AgentRuntimeId, RemoteChannelV1 } from '@shared/app-settings'
+import type { AgentRuntimeId } from '@shared/app-settings'
 import type { NormalizedThread } from '../../agent/types'
 
 type TimelineActiveThread = Pick<
@@ -26,8 +25,6 @@ type TimelineActiveThread = Pick<
 export type TimelineStores = {
   workspaceRoot: string
   chooseWorkspace: () => Promise<string | null>
-  remoteChannels: RemoteChannelV1[]
-  activeRemoteChannel: RemoteChannelV1 | null
   activeAgentRuntime: AgentRuntimeId
   busy: boolean
   currentTurnUserId: string | null
@@ -41,8 +38,6 @@ export type TimelineStores = {
 export function useTimelineStores(activeThreadId: string | null): TimelineStores {
   const workspaceRoot = useChatStore((s) => s.workspaceRoot)
   const chooseWorkspace = useChatStore((s) => s.chooseWorkspace)
-  const remoteChannels = useChatStore((s) => s.remoteChannels)
-  const activeRemoteChannelId = useChatStore((s) => s.activeRemoteChannelId)
   const activeAgentRuntime = useChatStore((s) => s.activeAgentRuntime)
   const busy = useChatStore((s) => s.busy)
   const currentTurnUserId = useChatStore((s) => s.currentTurnUserId)
@@ -68,16 +63,9 @@ export function useTimelineStores(activeThreadId: string | null): TimelineStores
     }
   })
   )
-  const activeRemoteChannel = useMemo(
-    () => remoteChannels.find((channel) => channel.id === activeRemoteChannelId) ?? null,
-    [activeRemoteChannelId, remoteChannels]
-  )
-
   return {
     workspaceRoot,
     chooseWorkspace,
-    remoteChannels,
-    activeRemoteChannel,
     activeAgentRuntime,
     busy,
     currentTurnUserId,

@@ -40,18 +40,6 @@ import type {
 
 export type ToolItemKind = 'tool_call' | 'command_execution' | 'file_change'
 export type RuntimeErrorSeverity = 'info' | 'warning' | 'error'
-export type UserMessageManagedBy = 'remoteChannel' | 'claw'
-
-export function isRemoteChannelManagedBy(value: unknown): value is UserMessageManagedBy {
-  return value === 'remoteChannel' || value === 'claw'
-}
-
-export function normalizeUserMessageManagedBy(value: unknown): UserMessageManagedBy | undefined {
-  if (value === 'remoteChannel') return 'remoteChannel'
-  if (value === 'claw') return 'remoteChannel'
-  return undefined
-}
-
 export type AttachmentReference = {
   id: string
   name?: string
@@ -104,7 +92,7 @@ export type RuntimeReasoningMetadata = {
 
 export type RuntimeDisclosureMetadata = {
   displayText?: string
-  source?: 'desktop' | 'feishu' | 'weixin' | 'discord' | string
+  source?: string
   sourceLabel?: string
   attachmentIds?: string[]
   attachments?: AttachmentReference[]
@@ -314,7 +302,6 @@ export type ChatBlock =
       createdAt?: string
       text: string
       modelLabel?: string
-      managedBy?: UserMessageManagedBy
       meta?: RuntimeDisclosureMetadata
       turnStatus?: string
     }
@@ -449,7 +436,6 @@ export type UserMessageEventPayload = {
   createdAt?: string
   text: string
   modelLabel?: string
-  managedBy?: UserMessageManagedBy
   meta?: RuntimeDisclosureMetadata
 }
 
@@ -609,7 +595,7 @@ export interface AgentProvider {
       reasoningEffort?: string
       workspaceLocator?: WorkspaceLocator
       executionIntent?: AgentRuntimeExecutionIntent
-      governanceProfile?: 'default' | 'write' | 'remote_guard'
+      governanceProfile?: 'default' | 'write'
       displayText?: string
       visibleContextOwnerThreadId?: string
       guiPlan?: {

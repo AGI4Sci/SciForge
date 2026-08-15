@@ -60,7 +60,7 @@ Codex 仍然可以是这些闭环中的规划者、执行者、代码生成者�
 - Evidence DAG 已有不可变 Evidence Snapshot、Artifact/ArtifactVersion/SourceAnchor、结构化运行血缘、L0–L4 provenance、PROV/RO-Crate/DataCite 导出。
 - Project DAG 已能聚合跨会话证据、冲突、Decision、Review 和发布状态，并执行访问策略。
 - Computer Use 已有 GUI-Owl sidecar、MCP 包装、执行授权、安全诊断和 active lease 状态展示的基础结构。
-- 已有远程执行、Schedule、Connect phone、Workspace Preview 和科学对象插件基础。
+- 已有统一协作领域、Schedule、Workspace Preview 和科学对象插件基础。
 
 参考：
 

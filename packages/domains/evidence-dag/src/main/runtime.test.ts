@@ -434,6 +434,7 @@ test('activation proactively consumes ArtifactVersion lifecycle into a new queue
         turns: [],
         artifacts: [{ id: 'dataset', artifactVersionRef: ref }]
       }),
+      subscribeMessages: async function* () {},
       hasActiveTurns: () => false
     }
   })
@@ -472,6 +473,7 @@ function runtimeContext(
           : [],
         ...(workspaceRoot ? { workspaceRoot } : {})
       }),
+      subscribeMessages: async function* () {},
       hasActiveTurns: () => false
     },
     capabilities: {

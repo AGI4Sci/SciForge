@@ -14,7 +14,7 @@ export function useSettingsGuiUpdate({
   form,
   t
 }: {
-  category: 'general' | 'speechToText' | 'agents' | 'shortcuts' | 'connectPhone' | 'remoteResources'
+  category: 'general' | 'speechToText' | 'agents' | 'shortcuts' | 'remoteResources'
   channel: GuiUpdateChannel | undefined
   form: AppSettingsV1 | null
   t: (key: string, values?: Record<string, unknown>) => string

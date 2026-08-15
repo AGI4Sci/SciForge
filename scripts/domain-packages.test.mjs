@@ -34,11 +34,15 @@ test('sorts packages by packageName and omits undeclared process imports', async
   assert.doesNotMatch(generated['src/main/modules/installed-domain-main.ts'], /a-renderer-only/)
   assert.match(
     generated['src/main/modules/installed-domain-main.ts'],
-    /const \{ capabilityInvokerFor, \.\.\.sharedHost \} = host/
+    /const \{ capabilityInvokerFor, packageStorageFor, \.\.\.sharedHost \} = host/
   )
   assert.match(
     generated['src/main/modules/installed-domain-main.ts'],
-    /return \{\n {6}\.\.\.sharedHost,\n {6}capabilities: capabilityInvokerFor\(/
+    /const packageStorage = packageStorageFor\(owner\)/
+  )
+  assert.match(
+    generated['src/main/modules/installed-domain-main.ts'],
+    /return \{\n {6}\.\.\.sharedHost,\n {6}capabilities: capabilityInvokerFor\(owner\),\n {6}packageSettings: packageStorage\.settings,\n {6}packageSecrets: packageStorage\.secrets,/
   )
   assert.doesNotMatch(
     generated['src/main/modules/installed-domain-main.ts'],

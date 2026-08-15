@@ -16,12 +16,11 @@ import {
   MODEL_ROUTER_VISUAL_MODEL_ENV
 } from '../../packages/workers/workspace-intel/src/visual-inspection'
 import {
-  defaultConnectPhoneSettings,
-  defaultRemoteChannelSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
+  defaultSkillsSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
   type AppSettingsV1
@@ -34,7 +33,6 @@ const launch: WorkspaceIntelMcpLaunchConfig = {
 }
 
 function createSettings(workspaceRoot = '/tmp/workspace'): AppSettingsV1 {
-  const remoteChannel = defaultRemoteChannelSettings()
   return {
     version: 1,
     locale: 'en',
@@ -61,8 +59,7 @@ function createSettings(workspaceRoot = '/tmp/workspace'): AppSettingsV1 {
       channel: 'stable'
     },
     codePromptPrefix: '',
-    remoteChannel,
-    connectPhone: defaultConnectPhoneSettings()
+    skills: defaultSkillsSettings()
   }
 }
 

@@ -1,0 +1,79 @@
+{
+  "name": "@sciforge/collaboration-server",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "private": false,
+  "description": "Canonical PostgreSQL collaboration ledger and inbox service for SciForge users and Agent nodes.",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "sciforge": {
+    "lifecycleLayer": "services",
+    "publicContract": true,
+    "runtimeAdapter": true,
+    "mcpServer": false,
+    "sideEffects": "network,database"
+  },
+  "bin": {
+    "sciforge-collaboration-server": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./api": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./auth": {
+      "types": "./dist/auth.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./postgres": {
+      "types": "./dist/postgres.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./repository": {
+      "types": "./dist/repository.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./service": {
+      "types": "./dist/service.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "deploy",
+    "migrations",
+    ".env.example",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "npm run typecheck && tsc -p tsconfig.build.json && esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.js --external:pg --external:ws --external:zod && esbuild src/cli.ts --bundle --platform=node --format=esm --outfile=dist/cli.js --external:pg --external:ws --external:zod",
+    "start": "node dist/cli.js",
+    "dev": "node --env-file-if-exists=.env --import tsx src/cli.ts",
+    "migrate": "node dist/cli.js migrate",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@sciforge/collaboration-contracts": "0.1.0",
+    "@sciforge/collaboration-provider-zulip": "0.1.0",
+    "pg": "^8.16.3",
+    "ws": "8.21.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/pg": "^8.15.5",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
+  }
+}

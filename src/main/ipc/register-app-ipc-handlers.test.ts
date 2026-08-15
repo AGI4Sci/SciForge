@@ -4,11 +4,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   mergeScheduleSettings,
-  defaultConnectPhoneSettings,
-  defaultRemoteChannelSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultScheduleSettings,
+  defaultSkillsSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
   type AppSettingsPatch,
@@ -75,8 +74,7 @@ function settings(): AppSettingsV1 {
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),
     write: defaultWriteSettings(),
-    remoteChannel: defaultRemoteChannelSettings(),
-    connectPhone: defaultConnectPhoneSettings(),
+    skills: defaultSkillsSettings(),
     schedule: defaultScheduleSettings(),
     workflow: defaultWorkflowSettings(),
     guiUpdate: { channel: 'stable' },
@@ -115,12 +113,7 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
       action: 'The wire protocol will be confirmed by the first real request.'
     })),
     fetchUpstreamModels: vi.fn() as never,
-    getRemoteChannelRuntime: () => null,
     getScheduleRuntime: () => null,
-    startFeishuInstallQrcode: vi.fn() as never,
-    pollFeishuInstall: vi.fn() as never,
-    startWeixinInstallQrcode: vi.fn() as never,
-    pollWeixinInstall: vi.fn() as never,
     showTurnCompleteNotification: vi.fn() as never,
     getAppVersion: () => '0.1.0',
     readGuiUpdateState: vi.fn() as never,
@@ -213,16 +206,6 @@ describe('registerAppIpcHandlers', () => {
     vi.clearAllMocks()
     vi.unstubAllEnvs()
     vi.unstubAllGlobals()
-  })
-
-  it('registers only canonical remote channel mirror IPC', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const removedFeishuMirrorChannel = `remoteChannel:message:mirror-to-${'feishu'}`
-
-    registerAppIpcHandlers(registerOptions())
-
-    expect(handlers.get('remoteChannel:message:mirror')).toBeTypeOf('function')
-    expect(handlers.has(removedFeishuMirrorChannel)).toBe(false)
   })
 
   it('rejects IPC from an untrusted renderer before dispatching a handler', async () => {
@@ -543,20 +526,11 @@ describe('registerAppIpcHandlers', () => {
               textReasoner: {
                 baseUrl: 'https://api.example.test/v1',
                 apiKey,
-                model: 'model-1'
+                model: 'model-1',
+                unexpected: true
               }
             }
           }
-        },
-        remoteChannel: {
-          channels: [{
-            lastFailure: {
-              provider: 'zulip',
-              message: 'Runtime offline',
-              occurredAt: '2026-07-19T00:00:00.000Z',
-              unexpected: true
-            }
-          }]
         }
       })
     } catch (error) {
@@ -1693,36 +1667,6 @@ describe('registerAppIpcHandlers', () => {
     expect(applySettingsPatch).toHaveBeenCalledWith(payload)
   })
 
-  it('uses the GUI-managed WeChat bridge for WeChat install handlers', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const configuredSettings = settings()
-    configuredSettings.connectPhone.weixinBridgeUrl = 'http://127.0.0.1:8787/rpc'
-    const store = { load: vi.fn(async () => configuredSettings) }
-    const startWeixinInstallQrcode = vi.fn(async () => ({
-      ok: false as const,
-      message: 'expected test response'
-    }))
-    const pollWeixinInstall = vi.fn(async () => ({ done: false as const }))
-
-    registerAppIpcHandlers(registerOptions({
-      store: store as never,
-      startWeixinInstallQrcode,
-      pollWeixinInstall
-    }))
-
-    expect(handlers.has('remoteChannel:im-install:qrcode')).toBe(false)
-    expect(handlers.has('remoteChannel:im-install:poll')).toBe(false)
-    await expect(
-      handlers.get('connectPhone:install:qrcode')?.({}, { provider: 'weixin' })
-    ).resolves.toMatchObject({ ok: false })
-    await expect(
-      handlers.get('connectPhone:install:poll')?.({}, { provider: 'weixin', deviceCode: 'device-1' })
-    ).resolves.toEqual({ done: false })
-
-    expect(startWeixinInstallQrcode).toHaveBeenCalledWith('http://127.0.0.1:8787/rpc')
-    expect(pollWeixinInstall).toHaveBeenCalledWith('device-1', 'http://127.0.0.1:8787/rpc')
-  })
-
   it('routes schedule task IPC calls to the Schedule runtime', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
     const scheduleRuntime = {
@@ -1745,7 +1689,6 @@ describe('registerAppIpcHandlers', () => {
       getScheduleRuntime: () => scheduleRuntime as never
     }))
 
-    expect(handlers.has('connectPhone:task:run')).toBe(false)
     await expect(handlers.get('schedule:status')?.({})).resolves.toMatchObject({
       internalServerRunning: true,
       runningTaskIds: ['task-1'],
@@ -1772,63 +1715,6 @@ describe('registerAppIpcHandlers', () => {
       workspaceRoot: '/tmp/schedule',
       modelHint: 'deepseek-v4-flash',
       mode: 'plan'
-    })
-  })
-
-  it('routes remote-channel task creation through the Schedule runtime with channel workspace', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const configuredSettings = settings()
-    configuredSettings.remoteChannel.channels = [{
-      id: 'channel-1',
-      provider: 'feishu',
-      label: 'Team channel',
-      enabled: true,
-      model: 'deepseek-v4-pro',
-      workspaceRoot: '/tmp/channel-workspace',
-      agentProfile: {
-        name: 'Team Agent',
-        description: '',
-        identity: '',
-        personality: '',
-        userContext: '',
-        replyRules: ''
-      },
-      conversations: [],
-      createdAt: '2026-06-03T00:00:00.000Z',
-      updatedAt: '2026-06-03T00:00:00.000Z'
-    }]
-    configuredSettings.schedule.defaultWorkspaceRoot = '/tmp/schedule-default'
-    const store = { load: vi.fn(async () => configuredSettings) }
-    const scheduleRuntime = {
-      createScheduledTaskFromText: vi.fn(async () => ({
-        kind: 'created' as const,
-        taskId: 'task-remote',
-        title: 'Remote Reminder',
-        scheduleAt: '2026-06-03T09:00:00.000+08:00',
-        confirmationText: 'Scheduled from remote channel.'
-      }))
-    }
-
-    registerAppIpcHandlers(registerOptions({
-      store: store as never,
-      getScheduleRuntime: () => scheduleRuntime as never
-    }))
-
-    await expect(
-      handlers.get('remoteChannel:task:create-from-text')?.({}, {
-        text: 'Remind the team tomorrow.',
-        channelId: 'channel-1',
-        modelHint: 'deepseek-v4-pro',
-        mode: 'agent'
-      })
-    ).resolves.toMatchObject({
-      kind: 'created',
-      taskId: 'task-remote'
-    })
-    expect(scheduleRuntime.createScheduledTaskFromText).toHaveBeenCalledWith('Remind the team tomorrow.', {
-      workspaceRoot: '/tmp/channel-workspace',
-      modelHint: 'deepseek-v4-pro',
-      mode: 'agent'
     })
   })
 

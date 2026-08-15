@@ -276,13 +276,9 @@ describe('electron-builder release packaging', () => {
     expect(builderConfig.asarUnpack).not.toEqual(expect.arrayContaining([
       '**/node_modules/node-bin-darwin-*/*',
       '**/node_modules/node-bin-linux-*/*',
-      '**/node_modules/node-bin-win-*/*',
-      '**/node_modules/openclaw/**/*',
-      '**/node_modules/@tencent-weixin/openclaw-weixin/**/*'
+      '**/node_modules/node-bin-win-*/*'
     ]))
-    expect(builderConfig.files).toEqual(expect.arrayContaining([
-      '!**/node_modules/openclaw/**/*'
-    ]))
+    expect(stringEntries(builderConfig.files).some((entry) => entry.includes('openclaw'))).toBe(false)
   })
 
   it('derives release worker file sets and unpack globs from the shared manifest', () => {

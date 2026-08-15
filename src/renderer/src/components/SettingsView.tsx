@@ -40,7 +40,6 @@ import {
 import type { InlineNotice } from './settings-controls'
 import {
   AgentsSettingsSection,
-  ConnectPhoneSettingsSection,
   GeneralSettingsSection,
   KeyboardShortcutsSettingsSection,
   RemoteResourcesSettingsSection,
@@ -52,7 +51,6 @@ type SettingsCategory =
   | 'speechToText'
   | 'agents'
   | 'shortcuts'
-  | 'connectPhone'
   | 'remoteResources'
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 type SettingsPatch = AppSettingsPatch
@@ -82,10 +80,6 @@ export function SettingsView(): ReactElement {
   const [workspacePickerError, setWorkspacePickerError] = useState<
     string | null
   >(null)
-  const [
-    connectPhoneWorkspacePickerError,
-    setConnectPhoneWorkspacePickerError
-  ] = useState<string | null>(null)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
   const [saveError, setSaveError] = useState<string | null>(null)
   const [logPath, setLogPath] = useState('')
@@ -202,10 +196,6 @@ export function SettingsView(): ReactElement {
       setCategory('speechToText')
       return
     }
-    if (settingsSection === 'connectPhone') {
-      setCategory('connectPhone')
-      return
-    }
     if (settingsSection === 'shortcuts') {
       setCategory('shortcuts')
       return
@@ -222,7 +212,6 @@ export function SettingsView(): ReactElement {
     if (
       settingsSection === 'general' ||
       settingsSection === 'speechToText' ||
-      settingsSection === 'connectPhone' ||
       settingsSection === 'remoteResources' ||
       settingsSection === 'shortcuts' ||
       category !== 'agents'
@@ -234,7 +223,6 @@ export function SettingsView(): ReactElement {
         SettingsRouteSection,
         | 'general'
         | 'speechToText'
-        | 'connectPhone'
         | 'remoteResources'
         | 'shortcuts'
       >,
@@ -510,28 +498,6 @@ export function SettingsView(): ReactElement {
     update({ workspaceRoot: DEFAULT_WORKSPACE_ROOT })
   }
 
-  const pickConnectPhoneWorkspace = async (): Promise<void> => {
-    try {
-      setConnectPhoneWorkspacePickerError(null)
-      if (typeof window.sciforge?.pickWorkspaceDirectory !== 'function') {
-        throw new Error('workspace:pick-directory unavailable')
-      }
-      const picked = await window.sciforge.pickWorkspaceDirectory(
-        form.remoteChannel.im.workspaceRoot || form.workspaceRoot || undefined
-      )
-      if (!picked.canceled && picked.path) {
-        update({ remoteChannel: { im: { workspaceRoot: picked.path } } })
-      }
-    } catch (e) {
-      setConnectPhoneWorkspacePickerError(formatWorkspacePickerError(e))
-    }
-  }
-
-  const resetConnectPhoneWorkspaceToDefault = (): void => {
-    setConnectPhoneWorkspacePickerError(null)
-    update({ remoteChannel: { im: { workspaceRoot: '' } } })
-  }
-
   const selectControlClass =
     'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
 
@@ -574,9 +540,6 @@ export function SettingsView(): ReactElement {
     skillNotice,
     openSkillRoot,
     openPlugins,
-    pickConnectPhoneWorkspace,
-    resetConnectPhoneWorkspaceToDefault,
-    connectPhoneWorkspacePickerError,
     splitSettingsList,
     listSettingsText
   }
@@ -648,9 +611,6 @@ export function SettingsView(): ReactElement {
           ) : null}
           {category === 'remoteResources' ? (
             <RemoteResourcesSettingsSection ctx={settingsSectionContext} />
-          ) : null}
-          {category === 'connectPhone' ? (
-            <ConnectPhoneSettingsSection ctx={settingsSectionContext} />
           ) : null}
         </div>
       </div>

@@ -1,12 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { buildManagedGuiMcpServers } from './gui-mcp-registry'
 import {
-  defaultConnectPhoneSettings,
-  defaultRemoteChannelSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
+  defaultSkillsSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
   type AppSettingsV1
@@ -68,8 +67,7 @@ function createSettings(): AppSettingsV1 {
       channel: 'stable'
     },
     codePromptPrefix: '',
-    remoteChannel: defaultRemoteChannelSettings(),
-    connectPhone: defaultConnectPhoneSettings()
+    skills: defaultSkillsSettings()
   }
 }
 

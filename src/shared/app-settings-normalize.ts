@@ -4,13 +4,12 @@ import {
   type AppBehaviorConfigV1,
   type AgentCapabilitySettingsPatchV1,
   type AppSettingsV1,
-  type ConnectPhoneSettingsPatchV1,
   type ComputerUseSettingsPatchV1,
-  type RemoteChannelSettingsPatchV1,
   type GuiUpdateConfigV1,
   type ImageGenerationSettingsPatchV1,
   type NotificationConfigV1,
   type ScheduleSettingsPatchV1,
+  type SkillsSettingsPatchV1,
   type SpeechToTextSettingsPatchV1,
   type WorkflowSettingsPatchV1,
   type WriteSettingsPatchV1
@@ -37,8 +36,8 @@ import {
 } from './app-settings-claude'
 import { normalizeModelAccessSettings, normalizeModelRouterSettings } from './app-settings-model-router'
 import { normalizeInstallationId } from './app-settings-normalizers'
-import { normalizeConnectPhoneSettings, normalizeRemoteChannelSettings } from './app-settings-remote-channel'
 import { normalizeScheduleSettings } from './app-settings-schedule'
+import { normalizeSkillsSettings } from './app-settings-skills'
 import { normalizeWorkflowSettings } from './app-settings-workflow'
 import { normalizeWriteSettings } from './app-settings-write'
 import { normalizeSpeechToTextSettings } from './speech-to-text'
@@ -55,8 +54,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     modelAccess?: Parameters<typeof normalizeModelAccessSettings>[0]
     modelRouter?: Parameters<typeof normalizeModelRouterSettings>[0]
     write?: WriteSettingsPatchV1
-    remoteChannel?: RemoteChannelSettingsPatchV1
-    connectPhone?: ConnectPhoneSettingsPatchV1
+    skills?: SkillsSettingsPatchV1
     schedule?: ScheduleSettingsPatchV1
     workflow?: WorkflowSettingsPatchV1
     speechToText?: SpeechToTextSettingsPatchV1
@@ -108,8 +106,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     keyboardShortcuts: normalizeKeyboardShortcuts(maybeSettings.keyboardShortcuts),
     write: normalizeWriteSettings(maybeSettings.write),
     speechToText: normalizeSpeechToTextSettings(maybeSettings.speechToText),
-    remoteChannel: normalizeRemoteChannelSettings(maybeSettings.remoteChannel),
-    connectPhone: normalizeConnectPhoneSettings(maybeSettings.connectPhone),
+    skills: normalizeSkillsSettings(maybeSettings.skills),
     schedule: normalizeScheduleSettings(maybeSettings.schedule),
     workflow: normalizeWorkflowSettings(maybeSettings.workflow),
     guiUpdate: {

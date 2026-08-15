@@ -10,6 +10,8 @@ SciForge 是面向科学研究的本地 AI 工作台：它把 GUI 做成**人机
 | --- | --- |
 | 安装并跑通第一个任务 | [快速开始](./Getting-Started.zh-CN.md) |
 | 选择 Codex / Claude Code，接入模型 | [运行时与模型](./Runtimes-and-Models.zh-CN.md) |
+| 用手机绑定个人 Session、参与多人 Project | [手机与多人协作](../collaboration-user-guide.zh-CN.md) |
+| 启动协作服务、部署或维护香港 ECS | [协作服务开发与部署](../operations/zulip-aliyun-deployment.zh-CN.md) |
 | 论文、实验、科学对象、图表和写作 | [科研工作流](./Scientific-Workflows.zh-CN.md) |
 | 审批、批注、trace、`.sciforge` 和 Evidence DAG | [干预与数据](./Intervention-and-Data.zh-CN.md) |
 | 连接失败、模型无响应、worker 异常 | [故障排查](./Troubleshooting.zh-CN.md) |

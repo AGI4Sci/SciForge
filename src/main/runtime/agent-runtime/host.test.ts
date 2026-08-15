@@ -13,13 +13,12 @@ import {
   type TraceEventInput
 } from '@sciforge/full-trace'
 import {
-  defaultConnectPhoneSettings,
-  defaultRemoteChannelSettings,
   defaultCodexRuntimeSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
+  defaultSkillsSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
   type AppSettingsV1
@@ -119,8 +118,7 @@ function settings(activeAgentRuntime: AppSettingsV1['activeAgentRuntime'] = 'cod
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),
     write: defaultWriteSettings(),
-    remoteChannel: defaultRemoteChannelSettings(),
-    connectPhone: defaultConnectPhoneSettings(),
+    skills: defaultSkillsSettings(),
     schedule: defaultScheduleSettings(),
     workflow: defaultWorkflowSettings(),
     guiUpdate: { channel: 'stable' },

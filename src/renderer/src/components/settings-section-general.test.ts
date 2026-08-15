@@ -2,12 +2,11 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  defaultConnectPhoneSettings,
-  defaultRemoteChannelSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
+  defaultSkillsSettings,
   defaultWorkflowSettings,
   defaultSpeechToTextSettings,
   defaultWriteSettings,
@@ -139,8 +138,7 @@ function buildSettings(mode: 'api' | 'coding-plan' = 'api'): AppSettingsV1 {
     keyboardShortcuts: defaultKeyboardShortcuts(),
     write: defaultWriteSettings(),
     speechToText: defaultSpeechToTextSettings(),
-    remoteChannel: defaultRemoteChannelSettings(),
-    connectPhone: defaultConnectPhoneSettings(),
+    skills: defaultSkillsSettings(),
     schedule: defaultScheduleSettings(),
     workflow: defaultWorkflowSettings(),
     guiUpdate: { channel: 'stable' },

@@ -4,7 +4,6 @@ import type {
   RuntimeDisclosureMetadata,
   UserMessageEventPayload
 } from '../agent/types'
-import { normalizeUserMessageManagedBy } from '../agent/types'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
 import type { ChatState } from './chat-store-types'
 import { clearedAgentFocusState } from './chat-store-focus-actions'
@@ -125,7 +124,6 @@ export function findLatestUserBlockId(blocks: ChatBlock[]): string | null {
 }
 
 export function upsertUserBlock(blocks: ChatBlock[], ev: UserMessageEventPayload): ChatBlock[] {
-  const managedBy = normalizeUserMessageManagedBy(ev.managedBy)
   const nextBlock: ChatBlock = {
     kind: 'user',
     id: ev.itemId,
@@ -133,7 +131,6 @@ export function upsertUserBlock(blocks: ChatBlock[], ev: UserMessageEventPayload
     createdAt: ev.createdAt,
     text: ev.text,
     ...(ev.modelLabel ? { modelLabel: ev.modelLabel } : {}),
-    ...(managedBy ? { managedBy } : {}),
     ...(ev.meta ? { meta: ev.meta } : {})
   }
   const existingIndex = blocks.findIndex((block) => block.kind === 'user' && block.id === ev.itemId)
