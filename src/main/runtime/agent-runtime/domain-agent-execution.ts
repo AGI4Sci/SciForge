@@ -194,14 +194,17 @@ async function executeDomainAgentRequest(
     if (cleanupErrors.length > 0) {
       throw new AggregateError(
         [primaryError, ...cleanupErrors],
-        errorMessage(primaryError),
+        `${errorMessage(primaryError)} Cleanup also failed: ${cleanupErrors.map(errorMessage).join('; ')}`,
         { cause: primaryError }
       )
     }
     throw primaryError
   }
   if (cleanupErrors.length > 0) {
-    throw new AggregateError(cleanupErrors, 'Agent execution succeeded but cleanup failed.')
+    throw new AggregateError(
+      cleanupErrors,
+      `Agent execution succeeded but cleanup failed: ${cleanupErrors.map(errorMessage).join('; ')}`
+    )
   }
   return result as DomainMainAgentExecutionResult
 }

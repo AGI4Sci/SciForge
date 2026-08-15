@@ -192,7 +192,7 @@ describe('createDomainAgentExecutionHost', () => {
     })
 
     await expect(harness.execution.runEphemeral(request)).rejects.toThrow(
-      'Agent execution succeeded but cleanup failed.'
+      'Agent execution succeeded but cleanup failed: delete failed'
     )
     expect(harness.listeners.size).toBe(0)
   })
@@ -206,7 +206,8 @@ describe('createDomainAgentExecutionHost', () => {
 
     const error = await harness.execution.runEphemeral(request).catch((caught) => caught)
     expect(error).toBeInstanceOf(AggregateError)
-    expect(error.message).toBe(primary)
+    expect(error.message).toBe(`${primary} Cleanup also failed: delete failed`)
+    expect(error.cause).toMatchObject({ message: primary })
     expect(error.errors[0]).toMatchObject({ message: primary })
     expect(error.errors[1]).toMatchObject({ message: 'delete failed' })
   })
