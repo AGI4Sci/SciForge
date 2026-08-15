@@ -29,7 +29,7 @@
 | 应用备份 | 未配置 | 尚无定时 Zulip backup 和异机副本 |
 | SSH 加固 | 部分完成 | 禁止密码登录，但仍允许 root 公钥登录；22 端口应限制来源 IP |
 
-与“手机配对一台 SciForge 客户端、topic 投影本地 Session、消息双向同步”相关的目标设计见 [OpenSpec 提案](../../openspec/changes/pair-im-to-sciforge-sessions/proposal.md)。该提案是未来产品架构，不代表当前版本已经实现客户端级自动配对。
+与“一个用户由手机端点和其 SciForge Agent 共同组成、个人 topic 投影本地 Session、多人通过云端 Project/Task 协作”相关的目标设计见 [OpenSpec 提案](../../openspec/changes/unify-user-device-collaboration/proposal.md)。该提案是未来产品架构，不代表当前版本已经实现统一用户身份、客户端级配对或多用户 Agent 协作。
 
 ## 2. 实际资源清单
 
@@ -712,7 +712,7 @@ tail -n 200 /var/log/zulip/errors.log
 5. 建立每日应用 backup、异机复制和季度恢复演练；
 6. 创建非 root 管理员、验证后禁用 root SSH，并限制安全组 22 来源；
 7. 由所有者决定是否接受并启用 Zulip Mobile Push Notification Service；
-8. 实现 [客户端级配对 OpenSpec](../../openspec/changes/pair-im-to-sciforge-sessions/proposal.md) 后更新第 11 节。
+8. 实现 [统一用户—设备协作 OpenSpec](../../openspec/changes/unify-user-device-collaboration/proposal.md) 后更新第 11 节。
 
 ## 22. 官方参考
 
