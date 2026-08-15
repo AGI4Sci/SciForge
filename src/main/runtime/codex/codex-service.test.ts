@@ -677,7 +677,9 @@ describe('CodexRuntimeService storage fallback', () => {
 
     expect(reclaimed).toMatchObject({
       ok: false,
-      message: expect.stringContaining('Could not reclaim ephemeral Codex thread')
+      message: expect.stringContaining(
+        'Could not reclaim ephemeral Codex thread thread-1: Could not completely delete Codex thread owned-child-with-cleanup-failure: child delete failed'
+      )
     })
     expect(client.deleteThread).toHaveBeenCalledTimes(2)
     expect(vi.mocked(client.deleteThread).mock.calls[1]?.[0]).toEqual({ threadId: 'thread-1' })

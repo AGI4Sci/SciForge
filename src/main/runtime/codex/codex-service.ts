@@ -877,7 +877,10 @@ export class CodexRuntimeService {
         if (!result.ok) errors.push(new Error(result.message))
       }
       if (errors.length > 0) {
-        return failure(new AggregateError(errors, `Could not reclaim ephemeral Codex thread ${threadId}.`))
+        return failure(new AggregateError(
+          errors,
+          `Could not reclaim ephemeral Codex thread ${threadId}: ${errors.map(errorMessage).join('; ')}`
+        ))
       }
       this.ephemeralOwnership.completeReclaim(threadId)
       return { ok: true }
