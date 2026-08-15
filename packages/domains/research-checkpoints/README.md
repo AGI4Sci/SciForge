@@ -106,11 +106,11 @@ npm --workspace @sciforge/domain-research-checkpoints run test
 npm --workspace @sciforge/domain-research-checkpoints run typecheck
 ```
 
-Focused and repository-level tests, production build, source/packaged Electron,
-policy-revision CAS, skipped replay, provider-accepted/governed pending recovery,
-issuer/ordinal ownership, at-least-once settlement, double-ACK exact retirement,
-per-thread isolation, ambiguous delivery, pending predecessor overlay, package
-composition, capability governance, and remote mergeability remain final-source
-release gates. They must remain pending until rerun on the final staged-equivalent
-tree. See the Chinese guide:
+The final staged-equivalent tree passed focused and repository-level tests,
+production build, source/packaged Electron, policy-revision CAS, skipped replay,
+provider-accepted/governed pending recovery, issuer/ordinal ownership,
+at-least-once settlement, double-ACK exact retirement, per-thread isolation,
+ambiguous delivery, pending predecessor overlay, package composition and
+capability governance. Dependency audit and remote mergeability are recorded
+separately in PR #63. See the Chinese guide:
 [产物与版本管理](../../../docs/research/artifact-versioning-and-research-checkpoints.zh-CN.md).
