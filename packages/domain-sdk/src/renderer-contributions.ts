@@ -5,6 +5,7 @@ import {
   domainPackageJsonValueSchema,
   type DomainPackageJsonValue
 } from './contract.js'
+import type { DomainWorkbenchOpenResourceInput } from './host.js'
 
 export const RENDERER_COMMAND_CONTRIBUTION_KIND = 'renderer.command' as const
 export const RENDERER_WORKBENCH_TOOLBAR_ACTION_CONTRIBUTION_KIND =
@@ -19,6 +20,8 @@ export const RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND =
   'renderer.composer-context-provider' as const
 export const RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND =
   'renderer.chat-result-panel' as const
+export const RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION_KIND =
+  'renderer.resource-navigation' as const
 export const RENDERER_EXTENSION_CONTRIBUTION_KIND = 'renderer.extension' as const
 
 export const WORKBENCH_TOPBAR_LOCATION = 'workbench.topbar' as const
@@ -106,6 +109,19 @@ export const domainRendererWorkspacePickResultSchema = z.object({
   })
 })
 
+export const domainWorkbenchOpenResourceInputSchema = z.object({
+  sessionId: z.string().trim().min(1).max(256),
+  resource: z.object({
+    resourceKind: z.string().trim().min(1).max(192),
+    resourceId: z.string().trim().min(1).max(512),
+    integrity: z.object({
+      algorithm: z.literal('sha256'),
+      expectedDigest: z.string().trim().toLowerCase()
+        .regex(/^sha256:[0-9a-f]{64}$/u)
+    }).strict().optional()
+  }).strict()
+}).strict()
+
 export type DomainCapabilityResourceHandle = z.infer<
   typeof domainCapabilityResourceHandleSchema
 >
@@ -134,6 +150,15 @@ export type DomainRendererChatResultPanelRenderContext = Readonly<{
   blocks: readonly unknown[]
   workspaceRoot?: string
   sessionId?: string
+  runtimeId?: string
+  threadId?: string
+  turnId?: string
+  turnLifecycle?: Readonly<{
+    phase: 'active' | 'terminal' | 'settled'
+    revision: string
+    isLatest: boolean
+    status?: string
+  }>
   onContinuePrompt?: (prompt: string) => void
 }>
 
@@ -294,6 +319,46 @@ export type DomainRendererWorkbenchBottomPanelValue<View = unknown> =
 
 export type DomainRendererWorkbenchGlobalOverlayValue<View = unknown> =
   DomainRendererWorkbenchSurfaceValue<DomainRendererWorkbenchGlobalOverlayRenderContext, View>
+
+export const domainRendererResourceNavigationContractSchema = z.object({
+  resourceKinds: z.array(z.string().trim().min(1).max(192)).min(1).max(64),
+  target: z.object({
+    surface: z.literal('right-panel'),
+    contributionId: domainPackageContributionIdSchema
+  }).strict()
+}).strict().superRefine((contract, context) => {
+  const seen = new Set<string>()
+  for (const [index, resourceKind] of contract.resourceKinds.entries()) {
+    if (seen.has(resourceKind)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['resourceKinds', index],
+        message: `Resource kind ${resourceKind} is duplicated.`
+      })
+      continue
+    }
+    seen.add(resourceKind)
+  }
+})
+
+export type DomainRendererResourceNavigationContract = z.infer<
+  typeof domainRendererResourceNavigationContractSchema
+>
+
+export type DomainRendererResourceNavigationTarget = Readonly<{
+  activation?: DomainRendererWorkbenchSurfaceActivation
+}>
+
+export type DomainRendererResourceNavigationValue = Readonly<{
+  resolve: (input: DomainWorkbenchOpenResourceInput) =>
+    DomainRendererResourceNavigationTarget | null
+}>
+
+export function isDomainRendererResourceNavigationValue(
+  value: unknown
+): value is DomainRendererResourceNavigationValue {
+  return hasOnlyKeys(value, ['resolve']) && typeof value.resolve === 'function'
+}
 
 export function isDomainRendererWorkbenchSurfaceValue(
   value: unknown

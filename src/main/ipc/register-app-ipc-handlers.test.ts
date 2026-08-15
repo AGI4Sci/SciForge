@@ -1245,6 +1245,24 @@ describe('registerAppIpcHandlers', () => {
       })
     ).resolves.toEqual({ host: 'kun' })
     await expect(
+      handlers.get('agentRuntime:auxiliary')?.({}, {
+        runtimeId: 'codex',
+        operation: 'resolvePendingTurnStart',
+        workspaceLocator: {
+          contractVersion: 1,
+          hostSessionId: 'workspace-session-governance',
+          path: '/tmp/workspace'
+        },
+        payload: {
+          boundaryLeaseId: 'turn-boundary:attempt-1',
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          workspaceRoot: '/tmp/workspace',
+          userMessageItemId: 'user-1'
+        }
+      })
+    ).resolves.toEqual({ host: 'kun' })
+    await expect(
       handlers.get('agentRuntime:subscribeEvents')?.({ sender }, {
         runtimeId: 'codex',
         threadId: 'thread-1',
@@ -1254,6 +1272,22 @@ describe('registerAppIpcHandlers', () => {
     ).resolves.toEqual({ streamId: 'stream-1' })
 
     expect(agentRuntime.capabilities).toHaveBeenCalledWith('codex')
+    expect(agentRuntime.auxiliary).toHaveBeenCalledWith({
+      runtimeId: 'codex',
+      operation: 'resolvePendingTurnStart',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'workspace-session-governance',
+        path: '/tmp/workspace'
+      },
+      payload: {
+        boundaryLeaseId: 'turn-boundary:attempt-1',
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        workspaceRoot: '/tmp/workspace',
+        userMessageItemId: 'user-1'
+      }
+    })
     expect(agentRuntime.startTurn).toHaveBeenCalledWith({
       runtimeId: 'codex',
       threadId: 'side-thread-1',

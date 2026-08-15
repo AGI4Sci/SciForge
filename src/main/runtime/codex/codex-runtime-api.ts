@@ -83,6 +83,8 @@ export type CodexThreadEventPayload = {
   threadId: string
   turnId?: string
   seq?: number
+  /** Host-owned durable timestamp, including lifecycle-only records. */
+  createdAt?: string
   deltas?: Array<{ text: string; kind: 'agent_message' | 'agent_reasoning'; seq?: number; snapshot?: boolean }>
   userMessage?: {
     itemId: string

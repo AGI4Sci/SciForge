@@ -310,6 +310,7 @@ export type ChatBlock =
   | {
       kind: 'user'
       id: string
+      turnId?: string
       createdAt?: string
       text: string
       modelLabel?: string

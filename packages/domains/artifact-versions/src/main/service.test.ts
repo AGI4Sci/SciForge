@@ -1,38 +1,50 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import {
+  cp,
   copyFile,
   mkdtemp,
   mkdir,
+  open,
   readFile,
   realpath,
   rename,
   rm,
+  symlink,
   unlink,
+  utimes,
   writeFile
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import test from 'node:test'
-import type {
-  ArtifactVersionCommitInputV1,
-  ArtifactVersionCommitReceiptV1
+import {
+  ARTIFACT_VERSIONS_SYSTEM_CAPABILITY_GRANTS,
+  type ArtifactVersionCommitInputV1,
+  type ArtifactVersionCommitInputV2,
+  type ArtifactVersionCommitReceiptV1
 } from '../contract.js'
 import {
   ArtifactVersionService,
   type ArtifactVersionAccessContext
 } from './service.js'
-import { stableStringify } from './safe-files.js'
+import { readVerifiedRegularFileRange } from './safe-files.js'
 
 const SYSTEM_ACCESS: ArtifactVersionAccessContext = Object.freeze({
   audience: 'system',
   callerId: 'artifact-versions:test'
 })
-
 type AccessControlledMethod =
   | 'commit'
+  | 'commitV2'
+  | 'stageBegin'
+  | 'stageAppend'
+  | 'stageSeal'
+  | 'stageAbort'
   | 'observe'
   | 'read'
+  | 'readRange'
+  | 'describe'
   | 'list'
   | 'materialize'
   | 'restoreAsNew'
@@ -54,8 +66,15 @@ type TrustedTestService = Omit<ArtifactVersionService, AccessControlledMethod> &
 
 const ACCESS_CONTROLLED_METHODS = new Set<PropertyKey>([
   'commit',
+  'commitV2',
+  'stageBegin',
+  'stageAppend',
+  'stageSeal',
+  'stageAbort',
   'observe',
   'read',
+  'readRange',
+  'describe',
   'list',
   'materialize',
   'restoreAsNew',
@@ -87,17 +106,10 @@ type Fixture = {
   service: TrustedTestService
 }
 
-type MutableBundle = Record<string, unknown> & {
-  versions: Array<{
-    artifactId: string
-    versionId: string
-    sequence: number
-    parentVersionId?: string
-    dependencies: Array<{ target: { mediaType?: string } }>
-  }>
-}
-
-async function fixture(name: string): Promise<Fixture> {
+async function fixture(
+  name: string,
+  options: Omit<ConstructorParameters<typeof ArtifactVersionService>[0], 'userDataDir'> = {}
+): Promise<Fixture> {
   const root = await mkdtemp(join(tmpdir(), `artifact-versions-${name}-`))
   const userDataDir = join(root, 'user-data')
   const workspace = join(root, 'workspace')
@@ -107,7 +119,7 @@ async function fixture(name: string): Promise<Fixture> {
     root,
     userDataDir,
     workspace,
-    service: trustedTestService(new ArtifactVersionService({ userDataDir }))
+    service: trustedTestService(new ArtifactVersionService({ userDataDir, ...options }))
   }
 }
 
@@ -132,11 +144,54 @@ function digest(text: string): string {
   return createHash('sha256').update(text).digest('hex')
 }
 
-function refreshBundleDigest(bundle: Record<string, unknown>): void {
-  const base = structuredClone(bundle)
-  delete base.bundleDigest
-  bundle.bundleDigest = digest(stableStringify(base))
-}
+test('verified ranged reads hash once per stable file identity and remain linear', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'artifact-range-linear-'))
+  try {
+    const path = join(root, 'large-object')
+    const bytes = Buffer.alloc(12 * 1024 * 1024)
+    bytes.fill(17, 0, 4 * 1024 * 1024)
+    bytes.fill(33, 4 * 1024 * 1024, 8 * 1024 * 1024)
+    bytes.fill(49, 8 * 1024 * 1024)
+    await writeFile(path, bytes)
+    const expectedDigest = createHash('sha256').update(bytes).digest('hex')
+    let verifiedIdentity: string | undefined
+    const ranges: Buffer[] = []
+    const fullVerifications: boolean[] = []
+    for (let offset = 0; offset < bytes.byteLength; offset += 4 * 1024 * 1024) {
+      const range = await readVerifiedRegularFileRange(path, {
+        expectedDigest,
+        expectedByteLength: bytes.byteLength,
+        offset,
+        length: 4 * 1024 * 1024,
+        ...(verifiedIdentity ? { verifiedIdentity } : {})
+      })
+      verifiedIdentity = range.verifiedIdentity
+      ranges.push(Buffer.from(range.bytes))
+      fullVerifications.push(range.fullVerification)
+    }
+    assert.deepEqual(fullVerifications, [true, false, false])
+    assert.equal(
+      createHash('sha256').update(Buffer.concat(ranges)).digest('hex'),
+      expectedDigest
+    )
+
+    const handle = await open(path, 'r+')
+    await handle.write(Buffer.from([99]), 0, 1, bytes.byteLength - 1)
+    await handle.close()
+    await assert.rejects(
+      readVerifiedRegularFileRange(path, {
+        expectedDigest,
+        expectedByteLength: bytes.byteLength,
+        offset: 0,
+        length: 16,
+        verifiedIdentity
+      }),
+      { code: 'EINTEGRITY' }
+    )
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
 
 async function legacyRegistryPath(f: Fixture): Promise<string> {
   const workspace = await realpath(f.workspace)
@@ -164,6 +219,194 @@ async function artifactVersionIndexPath(f: Fixture): Promise<string> {
     'index.v1.json'
   )
 }
+
+async function writeSingleLegacySnapshot(
+  f: Fixture,
+  bytes: string
+): Promise<Readonly<{ registryPath: string; objectPath: string }>> {
+  const relativePath = 'legacy-result.txt'
+  await writeFile(join(f.workspace, relativePath), bytes)
+  const registryPath = await legacyRegistryPath(f)
+  const artifactId = 'artifact:legacy-capacity'
+  const versionId = 'artifact-version:legacy-capacity-v1'
+  const legacy = {
+    schemaVersion: 'artifact-registry.v1',
+    artifacts: [{
+      artifactId,
+      kind: 'dataset',
+      createdAt: '2026-01-01T00:00:00Z',
+      currentVersionId: versionId,
+      accessPolicy: {}
+    }],
+    artifactVersions: [{
+      versionId,
+      artifactId,
+      locator: relativePath,
+      contentDigest: `sha256:${digest(bytes)}`,
+      version: 'v1',
+      size: Buffer.byteLength(bytes),
+      mediaType: 'text/plain',
+      observedAt: '2026-01-01T00:00:00Z',
+      availability: 'available',
+      retention: 'snapshot',
+      historicalLocators: [],
+      rebindCandidates: [],
+      supersedes: null
+    }],
+    sourceAnchors: []
+  }
+  await writeFile(registryPath, `${JSON.stringify(legacy, null, 2)}\n`)
+  const workspaceKey = digest(await realpath(f.workspace))
+  return {
+    registryPath,
+    objectPath: join(
+      f.userDataDir,
+      'artifact-versions',
+      'workspaces',
+      workspaceKey,
+      'objects',
+      'sha256',
+      digest(bytes).slice(0, 2),
+      digest(bytes)
+    )
+  }
+}
+
+test('reports typed 80% capacity warnings without rejecting reads', async () => {
+  const f = await fixture('capacity-warning', {
+    maxIndexBytes: 8 * 1024,
+    maxCasBytes: 10,
+    maxActiveStagingBytes: 10
+  })
+  try {
+    valueOf(await f.service.commit(f.workspace, {
+      idempotencyKey: 'capacity-warning-commit',
+      candidates: [{
+        candidateId: 'capacity-warning',
+        expectedCurrentVersionId: null,
+        kind: 'dataset',
+        intent: 'save',
+        content: snapshot('12345678')
+      }]
+    }))
+    const usage = valueOf(await f.service.usage(f.workspace))
+    assert.equal(usage.cas.usedBytes, 8)
+    assert.equal(usage.cas.limitBytes, 10)
+    assert.ok(usage.warnings.some((warning) => warning.dimension === 'cas'))
+  } finally {
+    await cleanup(f)
+  }
+})
+
+test('CAS hard cap rejects before creating an object or replacing the index', async () => {
+  const f = await fixture('capacity-cas-zero-write', {
+    maxIndexBytes: 8 * 1024,
+    maxCasBytes: 4,
+    maxActiveStagingBytes: 1024
+  })
+  try {
+    const indexPath = await artifactVersionIndexPath(f)
+    const failed = await f.service.commit(f.workspace, {
+      idempotencyKey: 'capacity-cas-failure',
+      candidates: [{
+        candidateId: 'too-large',
+        expectedCurrentVersionId: null,
+        kind: 'dataset',
+        intent: 'save',
+        content: snapshot('12345')
+      }]
+    })
+    assert.equal(failed.ok, false)
+    assert.equal(failed.ok ? '' : failed.issue.details?.dimension, 'cas')
+    await assert.rejects(readFile(indexPath), { code: 'ENOENT' })
+    const workspaceKey = digest(await realpath(f.workspace))
+    const objectPath = join(
+      f.userDataDir,
+      'artifact-versions',
+      'workspaces',
+      workspaceKey,
+      'objects',
+      'sha256',
+      digest('12345').slice(0, 2),
+      digest('12345')
+    )
+    await assert.rejects(readFile(objectPath), { code: 'ENOENT' })
+  } finally {
+    await cleanup(f)
+  }
+})
+
+test('active staging hard cap rejects an append before growing staged bytes', async () => {
+  const f = await fixture('capacity-stage-zero-write', {
+    maxIndexBytes: 8 * 1024,
+    maxCasBytes: 1024,
+    maxActiveStagingBytes: 4
+  })
+  try {
+    const begun = valueOf(await f.service.stageBegin(f.workspace, {
+      idempotencyKey: 'capacity-stage-begin'
+    }))
+    const bytes = Buffer.from('12345')
+    const failed = await f.service.stageAppend(f.workspace, {
+      stageToken: begun.stageToken,
+      offset: 0,
+      chunkDigest: digest('12345'),
+      dataBase64: bytes.toString('base64')
+    })
+    assert.equal(failed.ok, false)
+    assert.equal(failed.ok ? '' : failed.issue.details?.dimension, 'active-staging')
+    const usage = valueOf(await f.service.usage(f.workspace))
+    assert.equal(usage.activeStaging.usedBytes, 0)
+  } finally {
+    await cleanup(f)
+  }
+})
+
+test('index hard cap rejects before object creation and preserves the last durable index', async () => {
+  const f = await fixture('capacity-index-zero-write', {
+    maxIndexBytes: 500,
+    maxCasBytes: 1024,
+    maxActiveStagingBytes: 1024
+  })
+  try {
+    const failed = await f.service.commit(f.workspace, {
+      idempotencyKey: 'capacity-index-failure',
+      candidates: [{
+        candidateId: 'index-too-large',
+        expectedCurrentVersionId: null,
+        kind: 'dataset',
+        intent: 'save',
+        content: snapshot('x')
+      }]
+    })
+    assert.equal(failed.ok, false)
+    assert.equal(failed.ok ? '' : failed.issue.details?.dimension, 'index')
+    await assert.rejects(readFile(await artifactVersionIndexPath(f)), { code: 'ENOENT' })
+  } finally {
+    await cleanup(f)
+  }
+})
+
+test('legacy migration preflights CAS and index capacity before writing any immutable state', async () => {
+  for (const [dimension, budgets] of [
+    ['cas', { maxIndexBytes: 8 * 1024, maxCasBytes: 4, maxActiveStagingBytes: 1024 }],
+    ['index', { maxIndexBytes: 500, maxCasBytes: 1024, maxActiveStagingBytes: 1024 }]
+  ] as const) {
+    const f = await fixture(`legacy-capacity-${dimension}`, budgets)
+    try {
+      const before = await writeSingleLegacySnapshot(f, '12345')
+      const originalRegistry = await readFile(before.registryPath, 'utf8')
+      const failed = await f.service.list(f.workspace, {})
+      assert.equal(failed.ok, false)
+      assert.equal(failed.ok ? '' : failed.issue.details?.dimension, dimension)
+      await assert.rejects(readFile(await artifactVersionIndexPath(f)), { code: 'ENOENT' })
+      await assert.rejects(readFile(before.objectPath), { code: 'ENOENT' })
+      assert.equal(await readFile(before.registryPath, 'utf8'), originalRegistry)
+    } finally {
+      await cleanup(f)
+    }
+  }
+})
 
 test('atomically commits snapshot candidates with pinned intra-batch dependencies', async () => {
   const f = await fixture('atomic')
@@ -222,6 +465,457 @@ test('atomically commits snapshot candidates with pinned intra-batch dependencie
   }
 })
 
+test('identity-selection grant allows atomic deterministic identities and other callers cannot', async () => {
+  const f = await fixture('deterministic-identities')
+  const requestedArtifactId = `artifact:${digest('workspace-output:figures/result.svg')}`
+  const requestedVersionId = `artifact-version:${digest('operation-1:figures/result.svg')}`
+  const input: ArtifactVersionCommitInputV2 = {
+    idempotencyKey: 'research-checkpoint:atomic-identities:1',
+    candidates: [{
+      candidateId: 'figure',
+      requestedArtifactId,
+      requestedVersionId,
+      expectedCurrentVersionId: null,
+      kind: 'research-output',
+      intent: 'save',
+      content: snapshot('<svg/>', 'image/svg+xml')
+    }]
+  }
+  try {
+    for (const access of [
+      { audience: 'ui' as const, callerId: 'window:1' },
+      { audience: 'agent' as const, callerId: 'codex:thread-1' },
+      { audience: 'system' as const, callerId: 'domain-runtime:another-owner' }
+    ]) {
+      const denied = await f.service.commitV2(f.workspace, input, access)
+      assert.equal(denied.ok, false)
+      if (!denied.ok) assert.equal(denied.issue.code, 'access-restricted')
+    }
+    assert.equal(valueOf(await f.service.list(f.workspace, {})).items.length, 0)
+    const owner = {
+      audience: 'system' as const,
+      callerId: 'domain-runtime:granted-package',
+      capabilityGrants: [ARTIFACT_VERSIONS_SYSTEM_CAPABILITY_GRANTS.selectIdentities]
+    }
+    const committed = valueOf(await f.service.commitV2(f.workspace, input, owner))
+    assert.equal(committed.versions[0]?.ref.artifactId, requestedArtifactId)
+    assert.equal(committed.versions[0]?.ref.versionId, requestedVersionId)
+    const replay = valueOf(await f.service.commitV2(f.workspace, input, owner))
+    assert.equal(replay.idempotentReplay, true)
+    assert.equal(replay.versions[0]?.ref.versionId, requestedVersionId)
+    const restarted = new ArtifactVersionService({ userDataDir: f.userDataDir })
+    const restartedReplay = valueOf(await restarted.commitV2(f.workspace, input, owner))
+    assert.equal(restartedReplay.idempotentReplay, true)
+    assert.equal(restartedReplay.transactionId, committed.transactionId)
+    assert.equal(restartedReplay.versions[0]?.ref.versionId, requestedVersionId)
+    const collision = await f.service.commit(f.workspace, {
+      idempotencyKey: 'research-checkpoint:atomic-identities:collision',
+      candidates: [{
+        ...input.candidates[0]!,
+        requestedVersionId: `artifact-version:${digest('operation-2:figures/result.svg')}`,
+        content: snapshot('<svg>different</svg>', 'image/svg+xml')
+      }]
+    }, owner)
+    assert.equal(collision.ok, false)
+    if (!collision.ok) assert.equal(collision.issue.code, 'stale-base')
+    assert.equal(valueOf(await f.service.list(f.workspace, {})).items.length, 1)
+  } finally {
+    await cleanup(f)
+  }
+})
+
+test('stages sequential chunks, seals exact bytes, commits once, and supports exact projections', async () => {
+  const f = await fixture('staged-object')
+  const outsider = { audience: 'agent' as const, callerId: 'untrusted:producer' }
+  try {
+    const content = Buffer.from('first chunk\nsecond chunk\n')
+    const first = content.subarray(0, 12)
+    const second = content.subarray(12)
+    const begun = valueOf(await f.service.stageBegin(f.workspace, {
+      idempotencyKey: 'stage:sequential:begin',
+      expectedByteLength: content.byteLength,
+      mediaType: 'text/plain'
+    }))
+    assert.equal(begun.nextOffset, 0)
+    assert.equal(begun.maxChunkBytes, 4 * 1024 * 1024)
+    const replayedBegin = valueOf(await f.service.stageBegin(f.workspace, {
+      idempotencyKey: 'stage:sequential:begin',
+      expectedByteLength: content.byteLength,
+      mediaType: 'text/plain'
+    }))
+    assert.equal(replayedBegin.stageToken, begun.stageToken)
+    assert.equal(replayedBegin.idempotentReplay, true)
+
+    const firstAppend = valueOf(await f.service.stageAppend(f.workspace, {
+      stageToken: begun.stageToken,
+      offset: 0,
+      chunkDigest: digest(first.toString()),
+      dataBase64: first.toString('base64')
+    }))
+    assert.equal(firstAppend.nextOffset, first.byteLength)
+    const replayedAppend = valueOf(await f.service.stageAppend(f.workspace, {
+      stageToken: begun.stageToken,
+      offset: 0,
+      chunkDigest: digest(first.toString()),
+      dataBase64: first.toString('base64')
+    }))
+    assert.equal(replayedAppend.idempotentReplay, true)
+    valueOf(await f.service.stageAppend(f.workspace, {
+      stageToken: begun.stageToken,
+      offset: first.byteLength,
+      chunkDigest: digest(second.toString()),
+      dataBase64: second.toString('base64')
+    }))
+    const sealed = valueOf(await f.service.stageSeal(f.workspace, {
+      stageToken: begun.stageToken,
+      contentDigest: digest(content.toString()),
+      byteLength: content.byteLength
+    }))
+    assert.equal(sealed.contentDigest, digest(content.toString()))
+    assert.equal('path' in sealed, false)
+
+    const denied = await f.service.commit(f.workspace, {
+      idempotencyKey: 'stage:sequential:denied',
+      candidates: [{
+        candidateId: 'output',
+        expectedCurrentVersionId: null,
+        kind: 'dataset',
+        intent: 'save',
+        content: { mode: 'staged-object', stagedObject: sealed }
+      }]
+    }, outsider)
+    assert.equal(denied.ok, false)
+    if (!denied.ok) assert.equal(denied.issue.code, 'access-restricted')
+
+    const committed = valueOf(await f.service.commit(f.workspace, {
+      idempotencyKey: 'stage:sequential:commit',
+      candidates: [{
+        candidateId: 'output',
+        expectedCurrentVersionId: null,
+        kind: 'dataset',
+        intent: 'save',
+        content: { mode: 'staged-object', stagedObject: sealed }
+      }]
+    }))
+    const output = committed.versions[0]!
+    assert.equal(output.ref.contentDigest, sealed.contentDigest)
+    assert.equal(output.version.storage.mode, 'snapshot')
+    const deniedReplay = await f.service.commit(f.workspace, {
+      idempotencyKey: 'stage:sequential:commit',
+      candidates: [{
+        candidateId: 'output',
+        expectedCurrentVersionId: null,
+        kind: 'dataset',
+        intent: 'save',
+        content: { mode: 'staged-object', stagedObject: sealed }
+      }]
+    }, outsider)
+    assert.equal(deniedReplay.ok, false)
+    if (!deniedReplay.ok) assert.equal(deniedReplay.issue.code, 'access-restricted')
+
+    const range = valueOf(await f.service.readRange(f.workspace, {
+      versionId: output.version.versionId,
+      offset: first.byteLength,
+      length: 6
+    }))
+    assert.equal(Buffer.from(range.dataBase64, 'base64').toString(), 'second')
+    assert.equal(range.totalByteLength, content.byteLength)
+    assert.equal(range.eof, false)
+    const described = valueOf(await f.service.describe(f.workspace, {
+      versionId: output.version.versionId
+    }))
+    assert.equal(described.artifactOrdinal, 1)
+    assert.equal(described.isCurrent, true)
+    const listed = valueOf(await f.service.list(f.workspace, {
+      artifactId: output.artifact.artifactId,
+      kind: 'dataset',
+      retention: 'snapshot',
+      availability: 'available',
+      currentOnly: true,
+      limit: 1
+    }))
+    assert.equal(listed.items[0]?.artifactOrdinal, 1)
+    assert.equal(listed.items[0]?.isCurrent, true)
+
+    const consumed = await f.service.stageSeal(f.workspace, {
+      stageToken: begun.stageToken,
+      contentDigest: sealed.contentDigest,
+      byteLength: sealed.byteLength
+    })
+    assert.equal(consumed.ok, false)
+    if (!consumed.ok) assert.equal(consumed.issue.code, 'staged-object-invalid')
+    const replayedCommit = valueOf(await f.service.commit(f.workspace, {
+      idempotencyKey: 'stage:sequential:commit',
+      candidates: [{
+        candidateId: 'output',
+        expectedCurrentVersionId: null,
+        kind: 'dataset',
+        intent: 'save',
+        content: { mode: 'staged-object', stagedObject: sealed }
+      }]
+    }))
+    assert.equal(replayedCommit.idempotentReplay, true)
+    const restagedBegin = valueOf(await f.service.stageBegin(f.workspace, {
+      idempotencyKey: 'stage:sequential:recovery-restage',
+      expectedByteLength: content.byteLength,
+      mediaType: 'text/plain'
+    }))
+    valueOf(await f.service.stageAppend(f.workspace, {
+      stageToken: restagedBegin.stageToken,
+      offset: 0,
+      chunkDigest: digest(content.toString()),
+      dataBase64: content.toString('base64')
+    }))
+    const restaged = valueOf(await f.service.stageSeal(f.workspace, {
+      stageToken: restagedBegin.stageToken,
+      contentDigest: digest(content.toString()),
+      byteLength: content.byteLength
+    }))
+    const recoveredReplay = valueOf(await f.service.commit(f.workspace, {
+      idempotencyKey: 'stage:sequential:commit',
+      candidates: [{
+        candidateId: 'output',
+        expectedCurrentVersionId: null,
+        kind: 'dataset',
+        intent: 'save',
+        content: { mode: 'staged-object', stagedObject: restaged }
+      }]
+    }))
+    assert.equal(recoveredReplay.idempotentReplay, true)
+    assert.equal(recoveredReplay.transactionId, committed.transactionId)
+    assert.equal(valueOf(await f.service.stageAbort(f.workspace, {
+      stageToken: restaged.stageToken
+    })).aborted, true)
+
+    const changed = Buffer.from(content)
+    changed[changed.byteLength - 1] = changed[changed.byteLength - 1]! ^ 1
+    const changedBegin = valueOf(await f.service.stageBegin(f.workspace, {
+      idempotencyKey: 'stage:sequential:changed-restage',
+      expectedByteLength: changed.byteLength,
+      mediaType: 'text/plain'
+    }))
+    valueOf(await f.service.stageAppend(f.workspace, {
+      stageToken: changedBegin.stageToken,
+      offset: 0,
+      chunkDigest: createHash('sha256').update(changed).digest('hex'),
+      dataBase64: changed.toString('base64')
+    }))
+    const changedStage = valueOf(await f.service.stageSeal(f.workspace, {
+      stageToken: changedBegin.stageToken,
+      contentDigest: createHash('sha256').update(changed).digest('hex'),
+      byteLength: changed.byteLength
+    }))
+    const changedConflict = await f.service.commit(f.workspace, {
+      idempotencyKey: 'stage:sequential:commit',
+      candidates: [{
+        candidateId: 'output',
+        expectedCurrentVersionId: null,
+        kind: 'dataset',
+        intent: 'save',
+        content: { mode: 'staged-object', stagedObject: changedStage }
+      }]
+    })
+    assert.equal(changedConflict.ok, false)
+    if (!changedConflict.ok) assert.equal(changedConflict.issue.code, 'idempotency-conflict')
+    assert.equal(valueOf(await f.service.stageAbort(f.workspace, {
+      stageToken: changedStage.stageToken
+    })).aborted, true)
+    const consumedBegin = await f.service.stageBegin(f.workspace, {
+      idempotencyKey: 'stage:sequential:begin',
+      expectedByteLength: content.byteLength,
+      mediaType: 'text/plain'
+    })
+    assert.equal(consumedBegin.ok, false)
+    if (!consumedBegin.ok) assert.equal(consumedBegin.issue.code, 'idempotency-conflict')
+
+    const disposable = valueOf(await f.service.stageBegin(f.workspace, {
+      idempotencyKey: 'stage:sequential:abort'
+    }))
+    assert.equal(valueOf(await f.service.stageAbort(f.workspace, {
+      stageToken: disposable.stageToken
+    })).aborted, true)
+    assert.equal(valueOf(await f.service.stageAbort(f.workspace, {
+      stageToken: disposable.stageToken
+    })).aborted, false)
+  } finally {
+    await cleanup(f)
+  }
+})
+
+test('fails staged chunks closed on offset, digest, caller, seal, and stale target mismatches', async () => {
+  const f = await fixture('staged-failures')
+  const otherSystem = { audience: 'system' as const, callerId: 'other:system' }
+  try {
+    const begun = valueOf(await f.service.stageBegin(f.workspace, {
+      idempotencyKey: 'stage:failures:begin',
+      expectedByteLength: 4
+    }))
+    const denied = await f.service.stageAppend(f.workspace, {
+      stageToken: begun.stageToken,
+      offset: 0,
+      chunkDigest: digest('data'),
+      dataBase64: Buffer.from('data').toString('base64')
+    }, otherSystem)
+    assert.equal(denied.ok, false)
+    if (!denied.ok) assert.equal(denied.issue.code, 'access-restricted')
+
+    const tampered = await f.service.stageAppend(f.workspace, {
+      stageToken: begun.stageToken,
+      offset: 0,
+      chunkDigest: digest('xxxx'),
+      dataBase64: Buffer.from('data').toString('base64')
+    })
+    assert.equal(tampered.ok, false)
+    if (!tampered.ok) assert.equal(tampered.issue.code, 'content-mismatch')
+    const gapped = await f.service.stageAppend(f.workspace, {
+      stageToken: begun.stageToken,
+      offset: 1,
+      chunkDigest: digest('data'),
+      dataBase64: Buffer.from('data').toString('base64')
+    })
+    assert.equal(gapped.ok, false)
+    if (!gapped.ok) assert.equal(gapped.issue.code, 'staged-object-invalid')
+    valueOf(await f.service.stageAppend(f.workspace, {
+      stageToken: begun.stageToken,
+      offset: 0,
+      chunkDigest: digest('data'),
+      dataBase64: Buffer.from('data').toString('base64')
+    }))
+    const badSeal = await f.service.stageSeal(f.workspace, {
+      stageToken: begun.stageToken,
+      contentDigest: digest('else'),
+      byteLength: 4
+    })
+    assert.equal(badSeal.ok, false)
+    if (!badSeal.ok) assert.equal(badSeal.issue.code, 'content-mismatch')
+    const sealed = valueOf(await f.service.stageSeal(f.workspace, {
+      stageToken: begun.stageToken,
+      contentDigest: digest('data'),
+      byteLength: 4
+    }))
+    const alteredRef = await f.service.commit(f.workspace, {
+      idempotencyKey: 'stage:failures:altered-ref',
+      candidates: [{
+        candidateId: 'altered',
+        expectedCurrentVersionId: null,
+        kind: 'diagnostic',
+        intent: 'save',
+        content: {
+          mode: 'staged-object',
+          stagedObject: { ...sealed, byteLength: sealed.byteLength + 1 }
+        }
+      }]
+    })
+    assert.equal(alteredRef.ok, false)
+    if (!alteredRef.ok) assert.equal(alteredRef.issue.code, 'staged-object-invalid')
+
+    const initial = valueOf(await f.service.commit(f.workspace, {
+      idempotencyKey: 'stage:failures:initial',
+      candidates: [{
+        candidateId: 'initial',
+        expectedCurrentVersionId: null,
+        kind: 'dataset',
+        intent: 'save',
+        content: snapshot('v1')
+      }]
+    })).versions[0]!
+    const current = valueOf(await f.service.commit(f.workspace, {
+      idempotencyKey: 'stage:failures:advance',
+      candidates: [{
+        candidateId: 'advance',
+        artifactId: initial.artifact.artifactId,
+        expectedCurrentVersionId: initial.version.versionId,
+        kind: 'dataset',
+        intent: 'save',
+        content: snapshot('v2')
+      }]
+    })).versions[0]!
+    const stale = await f.service.commit(f.workspace, {
+      idempotencyKey: 'stage:failures:stale',
+      candidates: [{
+        candidateId: 'stale-output',
+        artifactId: initial.artifact.artifactId,
+        expectedCurrentVersionId: initial.version.versionId,
+        kind: 'dataset',
+        intent: 'save',
+        content: { mode: 'staged-object', stagedObject: sealed }
+      }]
+    })
+    assert.equal(stale.ok, false)
+    if (!stale.ok) assert.equal(stale.issue.code, 'stale-base')
+    const quarantine = valueOf(await f.service.commit(f.workspace, {
+      idempotencyKey: 'stage:failures:quarantine',
+      candidates: [{
+        candidateId: 'diagnostic',
+        expectedCurrentVersionId: null,
+        kind: 'diagnostic',
+        intent: 'save',
+        content: { mode: 'staged-object', stagedObject: sealed },
+        metadata: { intendedVersionId: current.version.versionId }
+      }]
+    }))
+    assert.equal(quarantine.versions[0]?.ref.contentDigest, digest('data'))
+  } finally {
+    await cleanup(f)
+  }
+})
+
+test('expires abandoned stages and sweeps only old unreferenced CAS objects', async () => {
+  const f = await fixture('staged-expiry-gc')
+  let now = new Date('2026-08-06T00:00:00.000Z')
+  const service = trustedTestService(new ArtifactVersionService({
+    userDataDir: f.userDataDir,
+    now: () => now
+  }))
+  try {
+    const begun = valueOf(await service.stageBegin(f.workspace, {
+      idempotencyKey: 'stage:expiry:begin',
+      expectedByteLength: 4
+    }))
+    now = new Date('2026-08-06T02:00:00.000Z')
+    const expired = await service.stageAppend(f.workspace, {
+      stageToken: begun.stageToken,
+      offset: 0,
+      chunkDigest: digest('data'),
+      dataBase64: Buffer.from('data').toString('base64')
+    })
+    assert.equal(expired.ok, false)
+    if (!expired.ok) assert.equal(expired.issue.code, 'staged-object-expired')
+    const restarted = valueOf(await service.stageBegin(f.workspace, {
+      idempotencyKey: 'stage:expiry:begin',
+      expectedByteLength: 4
+    }))
+    assert.equal(restarted.stageToken, begun.stageToken)
+    assert.equal(restarted.idempotentReplay, false)
+
+    const orphanBytes = Buffer.from('orphan')
+    const orphanDigest = digest(orphanBytes.toString())
+    const workspaceKey = digest(await realpath(f.workspace))
+    const orphanPath = join(
+      f.userDataDir,
+      'artifact-versions',
+      'workspaces',
+      workspaceKey,
+      'objects',
+      'sha256',
+      orphanDigest.slice(0, 2),
+      orphanDigest
+    )
+    await mkdir(dirname(orphanPath), { recursive: true })
+    await writeFile(orphanPath, orphanBytes)
+    await utimes(orphanPath, new Date('2026-07-01T00:00:00.000Z'), new Date('2026-07-01T00:00:00.000Z'))
+    now = new Date('2026-08-14T02:00:00.000Z')
+    const collector = trustedTestService(new ArtifactVersionService({
+      userDataDir: f.userDataDir,
+      now: () => now
+    }))
+    valueOf(await collector.list(f.workspace, {}))
+    await assert.rejects(readFile(orphanPath), { code: 'ENOENT' })
+  } finally {
+    await cleanup(f)
+  }
+})
+
 test('rejects stale multi-candidate batches without exposing partial versions', async () => {
   const f = await fixture('stale')
   try {
@@ -272,6 +966,183 @@ test('rejects stale multi-candidate batches without exposing partial versions', 
     })
     assert.equal(conflict.ok, false)
     if (!conflict.ok) assert.equal(conflict.issue.code, 'idempotency-conflict')
+  } finally {
+    await cleanup(f)
+  }
+})
+
+test('deterministic requested identities keep a concurrent stale batch at zero commits', async () => {
+  const f = await fixture('deterministic-stale-batch')
+  const owner = {
+    audience: 'system' as const,
+    callerId: 'domain-runtime:granted-package',
+    capabilityGrants: [ARTIFACT_VERSIONS_SYSTEM_CAPABILITY_GRANTS.selectIdentities]
+  }
+  const outputArtifactId = `artifact:${digest('workspace-output:outputs/data.csv')}`
+  const outputV1Id = `artifact-version:${digest('operation-1:outputs/data.csv')}`
+  try {
+    const first = valueOf(await f.service.commit(f.workspace, {
+      idempotencyKey: 'deterministic-stale:initial',
+      candidates: [{
+        candidateId: 'output-v1',
+        requestedArtifactId: outputArtifactId,
+        requestedVersionId: outputV1Id,
+        expectedCurrentVersionId: null,
+        kind: 'research-output',
+        intent: 'save',
+        content: snapshot('v1')
+      }]
+    }, owner))
+    const rejected = await f.service.commit(f.workspace, {
+      idempotencyKey: 'deterministic-stale:batch',
+      candidates: [
+        {
+          candidateId: 'output-stale',
+          artifactId: outputArtifactId,
+          requestedVersionId: `artifact-version:${digest('operation-stale:outputs/data.csv')}`,
+          expectedCurrentVersionId: 'artifact-version:not-current',
+          kind: 'research-output',
+          intent: 'save',
+          content: snapshot('stale')
+        },
+        {
+          candidateId: 'checkpoint-must-not-appear',
+          expectedCurrentVersionId: null,
+          kind: 'research-checkpoint',
+          intent: 'save',
+          content: snapshot('checkpoint')
+        }
+      ]
+    }, owner)
+    assert.equal(rejected.ok, false)
+    if (!rejected.ok) assert.equal(rejected.issue.code, 'stale-base')
+    const listed = valueOf(await f.service.list(f.workspace, { limit: 10 }, owner))
+    assert.equal(listed.items.length, 1)
+    assert.equal(listed.items[0]?.ref.versionId, first.versions[0]?.ref.versionId)
+  } finally {
+    await cleanup(f)
+  }
+})
+
+test('pages exact artifact history with artifact-local ordinals and filters', async () => {
+  const f = await fixture('describe-pagination')
+  try {
+    const first = valueOf(await f.service.commit(f.workspace, {
+      idempotencyKey: 'pagination:commit:v1',
+      candidates: [{
+        candidateId: 'v1',
+        expectedCurrentVersionId: null,
+        kind: 'dataset',
+        intent: 'save',
+        content: snapshot('v1')
+      }]
+    })).versions[0]!
+    const second = valueOf(await f.service.commit(f.workspace, {
+      idempotencyKey: 'pagination:commit:v2',
+      candidates: [{
+        candidateId: 'v2',
+        artifactId: first.artifact.artifactId,
+        expectedCurrentVersionId: first.version.versionId,
+        kind: 'dataset',
+        intent: 'rerun',
+        content: snapshot('v2')
+      }]
+    })).versions[0]!
+    const third = valueOf(await f.service.commit(f.workspace, {
+      idempotencyKey: 'pagination:commit:v3',
+      candidates: [{
+        candidateId: 'v3',
+        artifactId: first.artifact.artifactId,
+        expectedCurrentVersionId: second.version.versionId,
+        kind: 'dataset',
+        intent: 'publish',
+        content: snapshot('v3')
+      }]
+    })).versions[0]!
+    const firstPage = valueOf(await f.service.list(f.workspace, {
+      artifactId: first.artifact.artifactId,
+      limit: 2
+    }))
+    assert.deepEqual(
+      firstPage.items.map((item) => [item.version.versionId, item.artifactOrdinal, item.isCurrent]),
+      [
+        [third.version.versionId, 3, true],
+        [second.version.versionId, 2, false]
+      ]
+    )
+    assert.ok(firstPage.nextBeforeSequence)
+    const nextPage = valueOf(await f.service.list(f.workspace, {
+      artifactId: first.artifact.artifactId,
+      beforeSequence: firstPage.nextBeforeSequence,
+      limit: 2
+    }))
+    assert.deepEqual(nextPage.items.map((item) => item.artifactOrdinal), [1])
+    const reruns = valueOf(await f.service.list(f.workspace, {
+      artifactId: first.artifact.artifactId,
+      intent: 'rerun'
+    }))
+    assert.deepEqual(reruns.items.map((item) => item.version.versionId), [second.version.versionId])
+    const described = valueOf(await f.service.describe(f.workspace, {
+      versionId: second.version.versionId
+    }))
+    assert.equal(described.artifactOrdinal, 2)
+    assert.equal(described.isCurrent, false)
+  } finally {
+    await cleanup(f)
+  }
+})
+
+test('artifact-local ordinals stay absolute when earlier history is restricted', async () => {
+  const f = await fixture('absolute-ordinal-access')
+  const owner = { audience: 'agent' as const, callerId: 'researcher:owner' }
+  const outsider = { audience: 'ui' as const, callerId: 'window:outsider' }
+  try {
+    const restricted = valueOf(await f.service.commit(f.workspace, {
+      idempotencyKey: 'ordinal:restricted:v1',
+      candidates: [{
+        candidateId: 'v1',
+        expectedCurrentVersionId: null,
+        kind: 'dataset',
+        intent: 'save',
+        content: snapshot('restricted-v1'),
+        accessPolicy: {
+          visibility: 'restricted',
+          principals: [owner.callerId],
+          allowExport: true
+        }
+      }]
+    }, owner)).versions[0]!
+    const published = valueOf(await f.service.commit(f.workspace, {
+      idempotencyKey: 'ordinal:public:v2',
+      candidates: [{
+        candidateId: 'v2',
+        artifactId: restricted.artifact.artifactId,
+        expectedCurrentVersionId: restricted.version.versionId,
+        kind: 'dataset',
+        intent: 'publish',
+        content: snapshot('public-v2'),
+        accessPolicy: {
+          visibility: 'public',
+          principals: [],
+          allowExport: true
+        }
+      }]
+    }, owner)).versions[0]!
+    const outsiderDescription = valueOf(await f.service.describe(f.workspace, {
+      versionId: published.version.versionId
+    }, outsider))
+    assert.equal(outsiderDescription.artifactOrdinal, 2)
+    const outsiderHistory = valueOf(await f.service.list(f.workspace, {
+      artifactId: published.artifact.artifactId
+    }, outsider))
+    assert.deepEqual(
+      outsiderHistory.items.map((item) => [item.version.versionId, item.artifactOrdinal]),
+      [[published.version.versionId, 2]]
+    )
+    const ownerHistory = valueOf(await f.service.list(f.workspace, {
+      artifactId: published.artifact.artifactId
+    }, owner))
+    assert.deepEqual(ownerHistory.items.map((item) => item.artifactOrdinal), [2, 1])
   } finally {
     await cleanup(f)
   }
@@ -666,12 +1537,6 @@ test('exports, verifies, imports, and detects tampered content-addressed bundles
         content: snapshot('# Result\n42\n', 'text/markdown')
       }]
     }))
-    const implicit = await f.service.exportBundle(f.workspace, {
-      idempotencyKey: 'bundle:export:implicit',
-      destinationPath: 'exports/implicit.artifact-bundle.json'
-    })
-    assert.equal(implicit.ok, false)
-    if (!implicit.ok) assert.equal(implicit.issue.code, 'invalid-input')
     const exported = valueOf(await f.service.exportBundle(f.workspace, {
       idempotencyKey: 'bundle:export:1',
       versionIds: [committed.versions[0]!.version.versionId],
@@ -707,6 +1572,134 @@ test('exports, verifies, imports, and detects tampered content-addressed bundles
     }))
     assert.equal(invalid.valid, false)
     assert.ok(invalid.issues.some((issue) => issue.includes('integrity')))
+  } finally {
+    await cleanup(f)
+  }
+})
+
+test('streams an object larger than the V1 limit through Bundle V2 without base64 buffering', async () => {
+  const f = await fixture('bundle-v2-large')
+  try {
+    const chunkSize = 4 * 1024 * 1024
+    const byteLength = 128 * 1024 * 1024 + 1
+    const fullHash = createHash('sha256')
+    const begun = valueOf(await f.service.stageBegin(f.workspace, {
+      idempotencyKey: 'bundle:v2:large:stage',
+      expectedByteLength: byteLength,
+      mediaType: 'application/octet-stream'
+    }))
+    let offset = 0
+    while (offset < byteLength) {
+      const length = Math.min(chunkSize, byteLength - offset)
+      const chunk = Buffer.alloc(length, offset / chunkSize % 251)
+      fullHash.update(chunk)
+      valueOf(await f.service.stageAppend(f.workspace, {
+        stageToken: begun.stageToken,
+        offset,
+        chunkDigest: createHash('sha256').update(chunk).digest('hex'),
+        dataBase64: chunk.toString('base64')
+      }))
+      offset += length
+    }
+    const contentDigest = fullHash.digest('hex')
+    const sealed = valueOf(await f.service.stageSeal(f.workspace, {
+      stageToken: begun.stageToken,
+      contentDigest,
+      byteLength
+    }))
+    const committed = valueOf(await f.service.commit(f.workspace, {
+      idempotencyKey: 'bundle:v2:large:commit',
+      candidates: [{
+        candidateId: 'large-object',
+        expectedCurrentVersionId: null,
+        kind: 'dataset',
+        intent: 'save',
+        content: { mode: 'staged-object', stagedObject: sealed }
+      }]
+    })).versions[0]!
+
+    const exported = valueOf(await f.service.exportBundle(f.workspace, {
+      idempotencyKey: 'bundle:v2:large:export',
+      versionIds: [committed.version.versionId],
+      destinationPath: 'exports/large.artifact-bundle',
+      format: 'v2-directory' as const
+    }))
+    assert.equal('format' in exported ? exported.format : undefined, 'v2-directory')
+    const replayedExport = valueOf(await f.service.exportBundle(f.workspace, {
+      idempotencyKey: 'bundle:v2:large:export',
+      versionIds: [committed.version.versionId],
+      destinationPath: 'exports/large.artifact-bundle',
+      format: 'v2-directory' as const
+    }))
+    assert.equal(replayedExport.idempotentReplay, true)
+    const manifest = JSON.parse(await readFile(
+      join(f.workspace, exported.path, 'manifest.json'),
+      'utf8'
+    ))
+    assert.equal(manifest.schemaVersion, 2)
+    assert.equal(manifest.objects[0].dataBase64, undefined)
+    assert.equal(manifest.objects[0].byteLength, byteLength)
+    const verified = valueOf(await f.service.verifyBundle(f.workspace, {
+      bundlePath: exported.path
+    }))
+    assert.equal(verified.valid, true, JSON.stringify(verified.issues))
+    assert.equal(verified.format, 'v2-directory')
+
+    const targetWorkspace = join(f.root, 'large-target-workspace')
+    await mkdir(targetWorkspace)
+    await cp(
+      join(f.workspace, exported.path),
+      join(targetWorkspace, 'large.artifact-bundle'),
+      { recursive: true }
+    )
+    const imported = valueOf(await f.service.importBundle(targetWorkspace, {
+      idempotencyKey: 'bundle:v2:large:import',
+      bundlePath: 'large.artifact-bundle'
+    }))
+    assert.equal(imported.importedVersionCount, 1)
+    const replayedImport = valueOf(await f.service.importBundle(targetWorkspace, {
+      idempotencyKey: 'bundle:v2:large:import',
+      bundlePath: 'large.artifact-bundle'
+    }))
+    assert.equal(replayedImport.idempotentReplay, true)
+    const exact = valueOf(await f.service.describe(targetWorkspace, {
+      versionId: committed.version.versionId
+    }))
+    assert.equal(exact.ref.contentDigest, contentDigest)
+    assert.equal(exact.ref.byteLength, byteLength)
+    const firstRange = valueOf(await f.service.readRange(targetWorkspace, {
+      versionId: committed.version.versionId,
+      offset: 0,
+      length: 16
+    }))
+    assert.deepEqual(Buffer.from(firstRange.dataBase64, 'base64'), Buffer.alloc(16, 0))
+
+    const objectPath = join(
+      f.workspace,
+      exported.path,
+      'objects',
+      'sha256',
+      contentDigest.slice(0, 2),
+      contentDigest
+    )
+    const handle = await open(objectPath, 'r+')
+    await handle.write(Buffer.from([255]), 0, 1, 0)
+    await handle.close()
+    const tampered = valueOf(await f.service.verifyBundle(f.workspace, {
+      bundlePath: exported.path
+    }))
+    assert.equal(tampered.valid, false)
+    assert.ok(tampered.issues.some((issue) => issue.includes('integrity')))
+
+    await rm(objectPath)
+    const outsideObject = join(f.workspace, 'outside-object')
+    await writeFile(outsideObject, 'not the bundle object')
+    await symlink(outsideObject, objectPath)
+    const traversed = valueOf(await f.service.verifyBundle(f.workspace, {
+      bundlePath: exported.path
+    }))
+    assert.equal(traversed.valid, false)
+    assert.ok(traversed.issues.some((issue) => issue.includes('unsafe')))
   } finally {
     await cleanup(f)
   }
@@ -878,53 +1871,6 @@ test('exports an old version with only its exact recursive dependency and parent
         expectedBytes.get(object.contentDigest)
       )
     }
-
-    const forgedDependencyBundle = structuredClone(bundle) as MutableBundle
-    const versionWithDependency = forgedDependencyBundle.versions
-      .find((version) => version.dependencies.length > 0)!
-    versionWithDependency.dependencies[0].target.mediaType = 'application/octet-stream'
-    refreshBundleDigest(forgedDependencyBundle)
-    await writeFile(
-      join(f.workspace, 'exports', 'forged-dependency.artifact-bundle.json'),
-      JSON.stringify(forgedDependencyBundle)
-    )
-    const forgedDependency = valueOf(await f.service.verifyBundle(f.workspace, {
-      bundlePath: 'exports/forged-dependency.artifact-bundle.json'
-    }))
-    assert.equal(forgedDependency.valid, false)
-    assert.ok(forgedDependency.issues.some((issue) =>
-      issue.includes('Dependency target reference mismatch')
-    ))
-    const rejectedDependencyImport = await f.service.importBundle(f.workspace, {
-      idempotencyKey: 'bundle:exact:import:forged-dependency',
-      bundlePath: 'exports/forged-dependency.artifact-bundle.json'
-    })
-    assert.equal(rejectedDependencyImport.ok, false)
-    if (!rejectedDependencyImport.ok) {
-      assert.equal(rejectedDependencyImport.issue.code, 'bundle-invalid')
-    }
-
-    const cyclicBundle = structuredClone(bundle) as MutableBundle
-    const figureHistory = cyclicBundle.versions
-      .filter((version) => version.artifactId === figureV1.artifact.artifactId)
-      .sort((left, right) => left.sequence - right.sequence)
-    figureHistory[0]!.parentVersionId = figureHistory.at(-1)!.versionId
-    refreshBundleDigest(cyclicBundle)
-    await writeFile(
-      join(f.workspace, 'exports', 'cyclic.artifact-bundle.json'),
-      JSON.stringify(cyclicBundle)
-    )
-    const cyclic = valueOf(await f.service.verifyBundle(f.workspace, {
-      bundlePath: 'exports/cyclic.artifact-bundle.json'
-    }))
-    assert.equal(cyclic.valid, false)
-    assert.ok(cyclic.issues.some((issue) => issue.includes('cycle')))
-    const rejectedCyclicImport = await f.service.importBundle(f.workspace, {
-      idempotencyKey: 'bundle:exact:import:cyclic',
-      bundlePath: 'exports/cyclic.artifact-bundle.json'
-    })
-    assert.equal(rejectedCyclicImport.ok, false)
-    if (!rejectedCyclicImport.ok) assert.equal(rejectedCyclicImport.issue.code, 'bundle-invalid')
 
     const targetWorkspace = join(f.root, 'exact-target-workspace')
     await mkdir(targetWorkspace)

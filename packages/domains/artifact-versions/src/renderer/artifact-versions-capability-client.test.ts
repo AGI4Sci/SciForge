@@ -81,7 +81,6 @@ test('renderer actions use only the scoped capability broker', async () => {
     ['read', 'compute', 'read', 'workspace-write', 'workspace-write', 'workspace-write', 'read']
   )
 })
-
 test('action defaults stay relative to the caller workspace and remain stable', () => {
   const item = artifactVersionListV1Schema.parse({
     items: [{

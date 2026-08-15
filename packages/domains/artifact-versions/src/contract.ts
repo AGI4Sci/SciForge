@@ -10,18 +10,35 @@ import type {
 
 export const ARTIFACT_VERSION_CONTRACT_VERSION = 1 as const
 export const ARTIFACT_VERSION_BUNDLE_SCHEMA_VERSION = 1 as const
+export const ARTIFACT_VERSION_BUNDLE_V2_SCHEMA_VERSION = 2 as const
+export const ARTIFACT_VERSION_STAGE_CHUNK_BYTES = 4 * 1024 * 1024
+
+/** Provider-owned authority required to choose immutable public identities. */
+export const ARTIFACT_VERSIONS_SYSTEM_CAPABILITY_GRANTS = Object.freeze({
+  selectIdentities: 'artifact-versions.identities.select'
+} as const)
 
 export const ARTIFACT_VERSIONS_CAPABILITY_IDS = Object.freeze({
   commit: 'artifact-versions.commit',
+  commitV2: 'artifact-versions.commit-v2',
+  stageBeginV2: 'artifact-versions.stage.begin-v2',
+  stageAppendV2: 'artifact-versions.stage.append-v2',
+  stageSealV2: 'artifact-versions.stage.seal-v2',
+  stageAbortV2: 'artifact-versions.stage.abort-v2',
   observe: 'artifact-versions.observe',
   read: 'artifact-versions.read',
+  readRangeV2: 'artifact-versions.content.read-range-v2',
+  describeV2: 'artifact-versions.describe-v2',
   list: 'artifact-versions.list',
+  listV2: 'artifact-versions.list-v2',
   materialize: 'artifact-versions.materialize',
   restoreAsNew: 'artifact-versions.restore-as-new',
   compare: 'artifact-versions.compare',
   exportBundle: 'artifact-versions.bundle.export',
+  exportBundleV2: 'artifact-versions.bundle.export-v2',
   importBundle: 'artifact-versions.bundle.import',
   verifyBundle: 'artifact-versions.bundle.verify',
+  verifyBundleV2: 'artifact-versions.bundle.verify-v2',
   listEvents: 'artifact-versions.events.list',
   refresh: 'artifact-versions.lifecycle.refresh'
 } as const)
@@ -32,6 +49,7 @@ const versionIdSchema = identifierSchema.startsWith('artifact-version:')
 const candidateIdSchema = z.string().trim().regex(/^[A-Za-z0-9._:-]{1,200}$/)
 const transactionIdSchema = identifierSchema.startsWith('artifact-commit:')
 const eventIdSchema = identifierSchema.startsWith('artifact-event:')
+const stageTokenSchema = identifierSchema.startsWith('artifact-stage:')
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/)
 const timestampSchema = z.iso.datetime({ offset: true })
 const mediaTypeSchema = z.string().trim().regex(/^[^\s/]+\/[^\s/]+$/).max(256)
@@ -40,6 +58,98 @@ const base64Schema = z.string().max(128 * 1024 * 1024).regex(
 )
 const pathSchema = z.string().trim().min(1).max(8_192)
 const metadataSchema = z.record(z.string().trim().min(1).max(256), domainPackageJsonValueSchema)
+
+function isBase64String(value: string): boolean {
+  if (value.length % 4 !== 0) return false
+  let contentLength = value.length
+  if (value.endsWith('==')) contentLength -= 2
+  else if (value.endsWith('=')) contentLength -= 1
+  for (let index = 0; index < contentLength; index += 1) {
+    const code = value.charCodeAt(index)
+    const valid =
+      (code >= 48 && code <= 57) ||
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122) ||
+      code === 43 ||
+      code === 47
+    if (!valid) return false
+  }
+  for (let index = contentLength; index < value.length; index += 1) {
+    if (value.charCodeAt(index) !== 61) return false
+  }
+  return true
+}
+
+function base64ByteLength(value: string): number {
+  if (!value) return 0
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0
+  return value.length / 4 * 3 - padding
+}
+
+function requireExplicitBundleSelection(
+  value: Readonly<{ artifactIds?: readonly string[]; versionIds?: readonly string[] }>,
+  context: z.RefinementCtx
+): void {
+  if (value.artifactIds?.length || value.versionIds?.length) return
+  context.addIssue({
+    code: 'custom',
+    path: ['versionIds'],
+    message: 'Bundle export requires at least one explicit artifactId or versionId.'
+  })
+}
+
+export const stagedObjectRefV2Schema = z.object({
+  stageToken: stageTokenSchema,
+  contentDigest: sha256Schema,
+  byteLength: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  mediaType: mediaTypeSchema.optional(),
+  expiresAt: timestampSchema
+}).strict()
+
+export const artifactVersionStageBeginInputV2Schema = z.object({
+  idempotencyKey: z.string().trim().min(8).max(512),
+  expectedByteLength: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  mediaType: mediaTypeSchema.optional()
+}).strict()
+export const artifactVersionStageBeginReceiptV2Schema = z.object({
+  stageToken: stageTokenSchema,
+  nextOffset: z.number().int().nonnegative(),
+  maxChunkBytes: z.literal(ARTIFACT_VERSION_STAGE_CHUNK_BYTES),
+  expiresAt: timestampSchema,
+  idempotentReplay: z.boolean()
+}).strict()
+
+export const artifactVersionStageAppendInputV2Schema = z.object({
+  stageToken: stageTokenSchema,
+  offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  chunkDigest: sha256Schema,
+  dataBase64: z.string()
+    .max(Math.ceil(ARTIFACT_VERSION_STAGE_CHUNK_BYTES / 3) * 4 + 4)
+    .refine(isBase64String, { message: 'Expected canonical base64 data.' })
+    .refine((value) => base64ByteLength(value) <= ARTIFACT_VERSION_STAGE_CHUNK_BYTES, {
+      message: `Decoded chunk exceeds ${ARTIFACT_VERSION_STAGE_CHUNK_BYTES} bytes.`
+    })
+}).strict()
+export const artifactVersionStageAppendReceiptV2Schema = z.object({
+  stageToken: stageTokenSchema,
+  nextOffset: z.number().int().nonnegative(),
+  chunkDigest: sha256Schema,
+  byteLength: z.number().int().positive().max(ARTIFACT_VERSION_STAGE_CHUNK_BYTES),
+  idempotentReplay: z.boolean()
+}).strict()
+
+export const artifactVersionStageSealInputV2Schema = z.object({
+  stageToken: stageTokenSchema,
+  contentDigest: sha256Schema,
+  byteLength: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
+}).strict()
+export const artifactVersionStageAbortInputV2Schema = z.object({
+  stageToken: stageTokenSchema
+}).strict()
+export const artifactVersionStageAbortReceiptV2Schema = z.object({
+  stageToken: stageTokenSchema,
+  aborted: z.boolean()
+}).strict()
 
 export const artifactVersionAvailabilityV1Schema = z.enum([
   'available',
@@ -118,6 +228,26 @@ export const artifactVersionCommitContentV1Schema = z.discriminatedUnion('mode',
   }).strict()
 ])
 
+export const artifactVersionCommitContentV2Schema = z.discriminatedUnion('mode', [
+  z.object({
+    mode: z.literal('snapshot'),
+    dataBase64: base64Schema,
+    mediaType: mediaTypeSchema.optional()
+  }).strict(),
+  z.object({
+    mode: z.literal('reference'),
+    locator: z.string().trim().min(1).max(8_192),
+    contentDigest: sha256Schema,
+    byteLength: z.number().int().nonnegative(),
+    mediaType: mediaTypeSchema.optional(),
+    availability: artifactVersionAvailabilityV1Schema.optional()
+  }).strict(),
+  z.object({
+    mode: z.literal('staged-object'),
+    stagedObject: stagedObjectRefV2Schema
+  }).strict()
+])
+
 export const artifactVersionCommitCandidateV1Schema = z.object({
   candidateId: candidateIdSchema,
   artifactId: artifactIdSchema.optional(),
@@ -146,6 +276,40 @@ export const artifactVersionCommitCandidateV1Schema = z.object({
   }
 })
 
+export const artifactVersionCommitCandidateV2Schema = z.object({
+  candidateId: candidateIdSchema,
+  artifactId: artifactIdSchema.optional(),
+  requestedArtifactId: artifactIdSchema.optional(),
+  requestedVersionId: versionIdSchema.optional(),
+  expectedCurrentVersionId: versionIdSchema.nullable(),
+  kind: z.string().trim().regex(/^[a-z][a-z0-9._-]{0,63}$/),
+  label: z.string().trim().min(1).max(512).optional(),
+  intent: artifactVersionIntentV1Schema,
+  content: artifactVersionCommitContentV2Schema,
+  dependencies: z.array(artifactVersionCandidateDependencyV1Schema).max(1_024).optional(),
+  accessPolicy: artifactVersionAccessPolicyV1Schema.optional(),
+  metadata: metadataSchema.optional()
+}).strict().superRefine((value, context) => {
+  if (value.artifactId && value.requestedArtifactId) {
+    context.addIssue({ code: 'custom', path: ['requestedArtifactId'], message: 'A candidate cannot update one artifact while requesting another identity.' })
+  }
+  if (value.requestedArtifactId && value.expectedCurrentVersionId !== null) {
+    context.addIssue({ code: 'custom', path: ['expectedCurrentVersionId'], message: 'A requested new artifact identity must use a null expected current Version.' })
+  }
+  if (value.requestedArtifactId && !value.requestedVersionId) {
+    context.addIssue({ code: 'custom', path: ['requestedVersionId'], message: 'A requested new artifact identity requires an exact requested Version identity.' })
+  }
+  if (value.requestedVersionId && !value.artifactId && !value.requestedArtifactId) {
+    context.addIssue({ code: 'custom', path: ['requestedVersionId'], message: 'A requested Version identity requires an existing or requested Artifact identity.' })
+  }
+  if (!value.artifactId && !value.requestedArtifactId && value.expectedCurrentVersionId !== null) {
+    context.addIssue({ code: 'custom', path: ['expectedCurrentVersionId'], message: 'A new artifact must use a null expectedCurrentVersionId.' })
+  }
+  if (value.artifactId && value.expectedCurrentVersionId === null) {
+    context.addIssue({ code: 'custom', path: ['expectedCurrentVersionId'], message: 'An existing artifact requires its expected current version.' })
+  }
+})
+
 export const artifactVersionCommitInputV1Schema = z.object({
   idempotencyKey: z.string().trim().min(8).max(512),
   candidates: z.array(artifactVersionCommitCandidateV1Schema).min(1).max(128)
@@ -170,6 +334,34 @@ export const artifactVersionCommitInputV1Schema = z.object({
         })
       }
       artifactIds.add(candidate.artifactId)
+    }
+  })
+})
+
+export const artifactVersionCommitInputV2Schema = z.object({
+  idempotencyKey: z.string().trim().min(8).max(512),
+  candidates: z.array(artifactVersionCommitCandidateV2Schema).min(1).max(128)
+}).strict().superRefine((value, context) => {
+  const candidateIds = new Set<string>()
+  const artifactIds = new Set<string>()
+  const versionIds = new Set<string>()
+  value.candidates.forEach((candidate, index) => {
+    if (candidateIds.has(candidate.candidateId)) {
+      context.addIssue({ code: 'custom', path: ['candidates', index, 'candidateId'], message: `Duplicate candidateId: ${candidate.candidateId}` })
+    }
+    candidateIds.add(candidate.candidateId)
+    const artifactIdentity = candidate.artifactId ?? candidate.requestedArtifactId
+    if (artifactIdentity) {
+      if (artifactIds.has(artifactIdentity)) {
+        context.addIssue({ code: 'custom', path: ['candidates', index, candidate.artifactId ? 'artifactId' : 'requestedArtifactId'], message: `Only one candidate per artifact identity is allowed: ${artifactIdentity}` })
+      }
+      artifactIds.add(artifactIdentity)
+    }
+    if (candidate.requestedVersionId) {
+      if (versionIds.has(candidate.requestedVersionId)) {
+        context.addIssue({ code: 'custom', path: ['candidates', index, 'requestedVersionId'], message: `Only one candidate may request a Version identity: ${candidate.requestedVersionId}` })
+      }
+      versionIds.add(candidate.requestedVersionId)
     }
   })
 })
@@ -283,8 +475,42 @@ export function artifactVersionResultV1Schema<T extends z.ZodType>(valueSchema: 
   ])
 }
 
+export const artifactVersionIssueV2Schema = z.object({
+  code: z.enum([
+    ...artifactVersionIssueV1Schema.shape.code.options,
+    'staged-object-invalid',
+    'staged-object-expired',
+    'range-not-satisfiable'
+  ]),
+  message: z.string().trim().min(1).max(4_000),
+  details: metadataSchema.optional()
+}).strict()
+
+export function artifactVersionResultV2Schema<T extends z.ZodType>(valueSchema: T) {
+  return z.discriminatedUnion('ok', [
+    z.object({ ok: z.literal(true), value: valueSchema }).strict(),
+    z.object({ ok: z.literal(false), issue: artifactVersionIssueV2Schema }).strict()
+  ])
+}
+
 export const artifactVersionCommitResultV1Schema = artifactVersionResultV1Schema(
   artifactVersionCommitReceiptV1Schema
+)
+export const artifactVersionCommitResultV2Schema = artifactVersionResultV2Schema(
+  artifactVersionCommitReceiptV1Schema
+)
+
+export const artifactVersionStageBeginResultV2Schema = artifactVersionResultV2Schema(
+  artifactVersionStageBeginReceiptV2Schema
+)
+export const artifactVersionStageAppendResultV2Schema = artifactVersionResultV2Schema(
+  artifactVersionStageAppendReceiptV2Schema
+)
+export const artifactVersionStageSealResultV2Schema = artifactVersionResultV2Schema(
+  stagedObjectRefV2Schema
+)
+export const artifactVersionStageAbortResultV2Schema = artifactVersionResultV2Schema(
+  artifactVersionStageAbortReceiptV2Schema
 )
 
 export const artifactVersionObserveInputV1Schema = z.object({
@@ -316,6 +542,42 @@ export const artifactVersionReadResultV1Schema = artifactVersionResultV1Schema(
   artifactVersionReadV1Schema
 )
 
+export const artifactVersionReadRangeInputV2Schema = z.object({
+  versionId: versionIdSchema,
+  offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  length: z.number().int().positive().max(ARTIFACT_VERSION_STAGE_CHUNK_BYTES)
+}).strict()
+export const artifactVersionReadRangeV2Schema = z.object({
+  ref: artifactVersionRefV1Schema,
+  offset: z.number().int().nonnegative(),
+  byteLength: z.number().int().nonnegative(),
+  totalByteLength: z.number().int().nonnegative(),
+  dataBase64: z.string()
+    .max(Math.ceil(ARTIFACT_VERSION_STAGE_CHUNK_BYTES / 3) * 4 + 4)
+    .refine(isBase64String, { message: 'Expected canonical base64 data.' })
+    .refine((value) => base64ByteLength(value) <= ARTIFACT_VERSION_STAGE_CHUNK_BYTES, {
+      message: `Decoded range exceeds ${ARTIFACT_VERSION_STAGE_CHUNK_BYTES} bytes.`
+    }),
+  eof: z.boolean()
+}).strict()
+export const artifactVersionReadRangeResultV2Schema = artifactVersionResultV2Schema(
+  artifactVersionReadRangeV2Schema
+)
+
+export const artifactVersionDescribeInputV2Schema = z.object({
+  versionId: versionIdSchema
+}).strict()
+export const artifactVersionDescribeV2Schema = z.object({
+  artifact: artifactV1Schema,
+  version: artifactVersionV1Schema,
+  ref: artifactVersionRefV1Schema,
+  artifactOrdinal: z.number().int().positive(),
+  isCurrent: z.boolean()
+}).strict()
+export const artifactVersionDescribeResultV2Schema = artifactVersionResultV1Schema(
+  artifactVersionDescribeV2Schema
+)
+
 export const artifactVersionListInputV1Schema = z.object({
   artifactId: artifactIdSchema.optional(),
   beforeSequence: z.number().int().positive().optional(),
@@ -332,6 +594,31 @@ export const artifactVersionListV1Schema = z.object({
 }).strict()
 export const artifactVersionListResultV1Schema = artifactVersionResultV1Schema(
   artifactVersionListV1Schema
+)
+
+export const artifactVersionListInputV2Schema = z.object({
+  artifactId: artifactIdSchema.optional(),
+  kind: z.string().trim().regex(/^[a-z][a-z0-9._-]{0,63}$/).optional(),
+  intent: artifactVersionIntentV1Schema.optional(),
+  retention: artifactVersionRetentionV1Schema.optional(),
+  availability: artifactVersionAvailabilityV1Schema.optional(),
+  currentOnly: z.boolean().optional(),
+  beforeSequence: z.number().int().positive().optional(),
+  limit: z.number().int().min(1).max(500).optional()
+}).strict()
+export const artifactVersionHistoryItemV2Schema = z.object({
+  artifact: artifactV1Schema,
+  version: artifactVersionV1Schema,
+  ref: artifactVersionRefV1Schema,
+  artifactOrdinal: z.number().int().positive(),
+  isCurrent: z.boolean()
+}).strict()
+export const artifactVersionListV2Schema = z.object({
+  items: z.array(artifactVersionHistoryItemV2Schema).max(500),
+  nextBeforeSequence: z.number().int().positive().optional()
+}).strict()
+export const artifactVersionListResultV2Schema = artifactVersionResultV1Schema(
+  artifactVersionListV2Schema
 )
 
 export const artifactVersionMaterializeInputV1Schema = z.object({
@@ -400,6 +687,20 @@ export const artifactVersionBundleV1Schema = z.object({
   bundleDigest: sha256Schema
 }).strict()
 
+export const artifactVersionBundleFormatV2Schema = z.enum(['v1-json', 'v2-directory'])
+export const artifactVersionBundleObjectV2Schema = z.object({
+  contentDigest: sha256Schema,
+  byteLength: z.number().int().nonnegative()
+}).strict()
+export const artifactVersionBundleV2Schema = z.object({
+  schemaVersion: z.literal(ARTIFACT_VERSION_BUNDLE_V2_SCHEMA_VERSION),
+  createdAt: timestampSchema,
+  artifacts: z.array(artifactV1Schema),
+  versions: z.array(artifactVersionV1Schema),
+  objects: z.array(artifactVersionBundleObjectV2Schema),
+  bundleDigest: sha256Schema
+}).strict()
+
 export const artifactVersionBundleExportInputV1Schema = z.object({
   idempotencyKey: z.string().trim().min(8).max(512),
   artifactIds: z.array(artifactIdSchema).min(1).max(10_000).optional(),
@@ -426,6 +727,21 @@ export const artifactVersionBundleExportResultV1Schema = artifactVersionResultV1
   artifactVersionBundleReceiptV1Schema
 )
 
+export const artifactVersionBundleExportInputV2Schema = z.object({
+  idempotencyKey: z.string().trim().min(8).max(512),
+  artifactIds: z.array(artifactIdSchema).min(1).max(10_000).optional(),
+  versionIds: z.array(versionIdSchema).min(1).max(10_000).optional(),
+  destinationPath: pathSchema,
+  overwrite: z.boolean().optional(),
+  format: z.literal('v2-directory')
+}).strict().superRefine(requireExplicitBundleSelection)
+export const artifactVersionBundleReceiptV2Schema = artifactVersionBundleReceiptV1Schema.extend({
+  format: z.literal('v2-directory')
+}).strict()
+export const artifactVersionBundleExportResultV2Schema = artifactVersionResultV1Schema(
+  artifactVersionBundleReceiptV2Schema
+)
+
 export const artifactVersionBundleVerifyInputV1Schema = z.object({
   bundlePath: pathSchema
 }).strict()
@@ -439,6 +755,12 @@ export const artifactVersionBundleVerificationV1Schema = z.object({
 }).strict()
 export const artifactVersionBundleVerifyResultV1Schema = artifactVersionResultV1Schema(
   artifactVersionBundleVerificationV1Schema
+)
+export const artifactVersionBundleVerificationV2Schema = artifactVersionBundleVerificationV1Schema.extend({
+  format: artifactVersionBundleFormatV2Schema
+}).strict()
+export const artifactVersionBundleVerifyResultV2Schema = artifactVersionResultV1Schema(
+  artifactVersionBundleVerificationV2Schema
 )
 
 export const artifactVersionBundleImportInputV1Schema = z.object({
@@ -504,6 +826,10 @@ export type ArtifactVersionCommitCandidateV1 = z.infer<
   typeof artifactVersionCommitCandidateV1Schema
 >
 export type ArtifactVersionCommitInputV1 = z.infer<typeof artifactVersionCommitInputV1Schema>
+export type ArtifactVersionCommitCandidateV2 = z.infer<
+  typeof artifactVersionCommitCandidateV2Schema
+>
+export type ArtifactVersionCommitInputV2 = z.infer<typeof artifactVersionCommitInputV2Schema>
 export type ArtifactV1 = z.infer<typeof artifactV1Schema>
 export type ArtifactVersionV1 = z.infer<typeof artifactVersionV1Schema>
 export type ArtifactVersionLifecycleEventV1 = z.infer<
@@ -516,12 +842,66 @@ export type ArtifactVersionIssueV1 = z.infer<typeof artifactVersionIssueV1Schema
 export type ArtifactVersionCommitResultV1 = z.infer<
   typeof artifactVersionCommitResultV1Schema
 >
+export type ArtifactVersionIssueV2 = z.infer<typeof artifactVersionIssueV2Schema>
+export type ArtifactVersionCommitResultV2 = z.infer<
+  typeof artifactVersionCommitResultV2Schema
+>
+export type StagedObjectRefV2 = z.infer<typeof stagedObjectRefV2Schema>
+export type ArtifactVersionStageBeginInputV2 = z.infer<
+  typeof artifactVersionStageBeginInputV2Schema
+>
+export type ArtifactVersionStageBeginReceiptV2 = z.infer<
+  typeof artifactVersionStageBeginReceiptV2Schema
+>
+export type ArtifactVersionStageAppendInputV2 = z.infer<
+  typeof artifactVersionStageAppendInputV2Schema
+>
+export type ArtifactVersionStageAppendReceiptV2 = z.infer<
+  typeof artifactVersionStageAppendReceiptV2Schema
+>
+export type ArtifactVersionStageSealInputV2 = z.infer<
+  typeof artifactVersionStageSealInputV2Schema
+>
+export type ArtifactVersionStageAbortInputV2 = z.infer<
+  typeof artifactVersionStageAbortInputV2Schema
+>
+export type ArtifactVersionStageAbortReceiptV2 = z.infer<
+  typeof artifactVersionStageAbortReceiptV2Schema
+>
+export type ArtifactVersionStageBeginResultV2 = z.infer<
+  typeof artifactVersionStageBeginResultV2Schema
+>
+export type ArtifactVersionStageAppendResultV2 = z.infer<
+  typeof artifactVersionStageAppendResultV2Schema
+>
+export type ArtifactVersionStageSealResultV2 = z.infer<
+  typeof artifactVersionStageSealResultV2Schema
+>
+export type ArtifactVersionStageAbortResultV2 = z.infer<
+  typeof artifactVersionStageAbortResultV2Schema
+>
 export type ArtifactVersionObserveInputV1 = z.infer<typeof artifactVersionObserveInputV1Schema>
 export type ArtifactVersionReadInputV1 = z.infer<typeof artifactVersionReadInputV1Schema>
 export type ArtifactVersionReadV1 = z.infer<typeof artifactVersionReadV1Schema>
 export type ArtifactVersionReadResultV1 = z.infer<typeof artifactVersionReadResultV1Schema>
+export type ArtifactVersionReadRangeInputV2 = z.infer<
+  typeof artifactVersionReadRangeInputV2Schema
+>
+export type ArtifactVersionReadRangeV2 = z.infer<typeof artifactVersionReadRangeV2Schema>
+export type ArtifactVersionReadRangeResultV2 = z.infer<
+  typeof artifactVersionReadRangeResultV2Schema
+>
+export type ArtifactVersionDescribeInputV2 = z.infer<
+  typeof artifactVersionDescribeInputV2Schema
+>
+export type ArtifactVersionDescribeV2 = z.infer<typeof artifactVersionDescribeV2Schema>
+export type ArtifactVersionDescribeResultV2 = z.infer<
+  typeof artifactVersionDescribeResultV2Schema
+>
 export type ArtifactVersionListInputV1 = z.infer<typeof artifactVersionListInputV1Schema>
 export type ArtifactVersionListV1 = z.infer<typeof artifactVersionListV1Schema>
+export type ArtifactVersionListInputV2 = z.infer<typeof artifactVersionListInputV2Schema>
+export type ArtifactVersionListV2 = z.infer<typeof artifactVersionListV2Schema>
 export type ArtifactVersionMaterializeInputV1 = z.infer<
   typeof artifactVersionMaterializeInputV1Schema
 >
@@ -534,17 +914,30 @@ export type ArtifactVersionRestoreAsNewInputV1 = z.infer<
 export type ArtifactVersionCompareInputV1 = z.infer<typeof artifactVersionCompareInputV1Schema>
 export type ArtifactVersionCompareV1 = z.infer<typeof artifactVersionCompareV1Schema>
 export type ArtifactVersionBundleV1 = z.infer<typeof artifactVersionBundleV1Schema>
+export type ArtifactVersionBundleV2 = z.infer<typeof artifactVersionBundleV2Schema>
+export type ArtifactVersionBundleFormatV2 = z.infer<
+  typeof artifactVersionBundleFormatV2Schema
+>
 export type ArtifactVersionBundleExportInputV1 = z.infer<
   typeof artifactVersionBundleExportInputV1Schema
 >
 export type ArtifactVersionBundleReceiptV1 = z.infer<
   typeof artifactVersionBundleReceiptV1Schema
 >
+export type ArtifactVersionBundleExportInputV2 = z.infer<
+  typeof artifactVersionBundleExportInputV2Schema
+>
+export type ArtifactVersionBundleReceiptV2 = z.infer<
+  typeof artifactVersionBundleReceiptV2Schema
+>
 export type ArtifactVersionBundleVerifyInputV1 = z.infer<
   typeof artifactVersionBundleVerifyInputV1Schema
 >
 export type ArtifactVersionBundleVerificationV1 = z.infer<
   typeof artifactVersionBundleVerificationV1Schema
+>
+export type ArtifactVersionBundleVerificationV2 = z.infer<
+  typeof artifactVersionBundleVerificationV2Schema
 >
 export type ArtifactVersionBundleImportInputV1 = z.infer<
   typeof artifactVersionBundleImportInputV1Schema
@@ -563,12 +956,30 @@ export type ArtifactVersionRefreshV1 = z.infer<typeof artifactVersionRefreshV1Sc
 export type ArtifactVersionResultV1<T> =
   | Readonly<{ ok: true; value: T }>
   | Readonly<{ ok: false; issue: ArtifactVersionIssueV1 }>
+export type ArtifactVersionResultV2<T> =
+  | Readonly<{ ok: true; value: T }>
+  | Readonly<{ ok: false; issue: ArtifactVersionIssueV2 }>
 
 export type ArtifactVersionCommitPortV1 = Readonly<{
   commit(input: ArtifactVersionCommitInputV1): Promise<ArtifactVersionCommitResultV1>
 }>
+export type ArtifactVersionCommitPortV2 = Readonly<{
+  commit(input: ArtifactVersionCommitInputV2): Promise<ArtifactVersionCommitResultV2>
+}>
 export type ArtifactVersionReadPortV1 = Readonly<{
   read(input: ArtifactVersionReadInputV1): Promise<ArtifactVersionReadResultV1>
+}>
+export type ArtifactVersionStagingPortV2 = Readonly<{
+  begin(input: ArtifactVersionStageBeginInputV2): Promise<ArtifactVersionStageBeginResultV2>
+  append(input: ArtifactVersionStageAppendInputV2): Promise<ArtifactVersionStageAppendResultV2>
+  seal(input: ArtifactVersionStageSealInputV2): Promise<ArtifactVersionStageSealResultV2>
+  abort(input: ArtifactVersionStageAbortInputV2): Promise<ArtifactVersionStageAbortResultV2>
+}>
+export type ArtifactVersionReadRangePortV2 = Readonly<{
+  readRange(input: ArtifactVersionReadRangeInputV2): Promise<ArtifactVersionReadRangeResultV2>
+}>
+export type ArtifactVersionDescribePortV2 = Readonly<{
+  describe(input: ArtifactVersionDescribeInputV2): Promise<ArtifactVersionDescribeResultV2>
 }>
 export type ArtifactVersionEventListResultV1 = ArtifactVersionResultV1<
   ArtifactVersionEventListV1
@@ -589,6 +1000,56 @@ export const ARTIFACT_VERSION_COMMIT_CONTRACT: DomainCapabilityContract<
   outputSchema: artifactVersionCommitResultV1Schema
 })
 
+export const ARTIFACT_VERSION_COMMIT_V2_CONTRACT: DomainCapabilityContract<
+  ArtifactVersionCommitInputV2,
+  ArtifactVersionCommitResultV2
+> = Object.freeze({
+  actionId: ARTIFACT_VERSIONS_CAPABILITY_IDS.commitV2,
+  effect: 'workspace-write',
+  inputSchema: artifactVersionCommitInputV2Schema,
+  outputSchema: artifactVersionCommitResultV2Schema
+})
+
+export const ARTIFACT_VERSION_STAGE_BEGIN_V2_CONTRACT: DomainCapabilityContract<
+  ArtifactVersionStageBeginInputV2,
+  ArtifactVersionStageBeginResultV2
+> = Object.freeze({
+  actionId: ARTIFACT_VERSIONS_CAPABILITY_IDS.stageBeginV2,
+  effect: 'workspace-write',
+  inputSchema: artifactVersionStageBeginInputV2Schema,
+  outputSchema: artifactVersionStageBeginResultV2Schema
+})
+
+export const ARTIFACT_VERSION_STAGE_APPEND_V2_CONTRACT: DomainCapabilityContract<
+  ArtifactVersionStageAppendInputV2,
+  ArtifactVersionStageAppendResultV2
+> = Object.freeze({
+  actionId: ARTIFACT_VERSIONS_CAPABILITY_IDS.stageAppendV2,
+  effect: 'workspace-write',
+  inputSchema: artifactVersionStageAppendInputV2Schema,
+  outputSchema: artifactVersionStageAppendResultV2Schema
+})
+
+export const ARTIFACT_VERSION_STAGE_SEAL_V2_CONTRACT: DomainCapabilityContract<
+  ArtifactVersionStageSealInputV2,
+  ArtifactVersionStageSealResultV2
+> = Object.freeze({
+  actionId: ARTIFACT_VERSIONS_CAPABILITY_IDS.stageSealV2,
+  effect: 'workspace-write',
+  inputSchema: artifactVersionStageSealInputV2Schema,
+  outputSchema: artifactVersionStageSealResultV2Schema
+})
+
+export const ARTIFACT_VERSION_STAGE_ABORT_V2_CONTRACT: DomainCapabilityContract<
+  ArtifactVersionStageAbortInputV2,
+  ArtifactVersionStageAbortResultV2
+> = Object.freeze({
+  actionId: ARTIFACT_VERSIONS_CAPABILITY_IDS.stageAbortV2,
+  effect: 'workspace-write',
+  inputSchema: artifactVersionStageAbortInputV2Schema,
+  outputSchema: artifactVersionStageAbortResultV2Schema
+})
+
 export const ARTIFACT_VERSION_READ_CONTRACT: DomainCapabilityContract<
   ArtifactVersionReadInputV1,
   ArtifactVersionReadResultV1
@@ -597,6 +1058,26 @@ export const ARTIFACT_VERSION_READ_CONTRACT: DomainCapabilityContract<
   effect: 'read',
   inputSchema: artifactVersionReadInputV1Schema,
   outputSchema: artifactVersionReadResultV1Schema
+})
+
+export const ARTIFACT_VERSION_READ_RANGE_V2_CONTRACT: DomainCapabilityContract<
+  ArtifactVersionReadRangeInputV2,
+  ArtifactVersionReadRangeResultV2
+> = Object.freeze({
+  actionId: ARTIFACT_VERSIONS_CAPABILITY_IDS.readRangeV2,
+  effect: 'read',
+  inputSchema: artifactVersionReadRangeInputV2Schema,
+  outputSchema: artifactVersionReadRangeResultV2Schema
+})
+
+export const ARTIFACT_VERSION_DESCRIBE_V2_CONTRACT: DomainCapabilityContract<
+  ArtifactVersionDescribeInputV2,
+  ArtifactVersionDescribeResultV2
+> = Object.freeze({
+  actionId: ARTIFACT_VERSIONS_CAPABILITY_IDS.describeV2,
+  effect: 'read',
+  inputSchema: artifactVersionDescribeInputV2Schema,
+  outputSchema: artifactVersionDescribeResultV2Schema
 })
 
 export const ARTIFACT_VERSION_EVENT_LIST_CONTRACT: DomainCapabilityContract<
@@ -627,6 +1108,51 @@ export function createArtifactVersionCommitPortV1(
   })
 }
 
+export function createArtifactVersionCommitPortV2(
+  invoker: DomainMainSystemCapabilityInvoker,
+  workspaceId: string
+): ArtifactVersionCommitPortV2 {
+  const scope = workspaceId.trim()
+  if (!scope) throw new Error('Artifact version V2 commit port requires a workspaceId.')
+  return Object.freeze({
+    commit: (input) => invoker.invoke(
+      ARTIFACT_VERSION_COMMIT_V2_CONTRACT,
+      input,
+      { workspaceId: scope, idempotencyKey: input.idempotencyKey }
+    )
+  })
+}
+
+export function createArtifactVersionStagingPortV2(
+  invoker: DomainMainSystemCapabilityInvoker,
+  workspaceId: string
+): ArtifactVersionStagingPortV2 {
+  const scope = workspaceId.trim()
+  if (!scope) throw new Error('Artifact version staging port requires a workspaceId.')
+  return Object.freeze({
+    begin: (input) => invoker.invoke(
+      ARTIFACT_VERSION_STAGE_BEGIN_V2_CONTRACT,
+      input,
+      { workspaceId: scope, idempotencyKey: input.idempotencyKey }
+    ),
+    append: (input) => invoker.invoke(
+      ARTIFACT_VERSION_STAGE_APPEND_V2_CONTRACT,
+      input,
+      { workspaceId: scope }
+    ),
+    seal: (input) => invoker.invoke(
+      ARTIFACT_VERSION_STAGE_SEAL_V2_CONTRACT,
+      input,
+      { workspaceId: scope }
+    ),
+    abort: (input) => invoker.invoke(
+      ARTIFACT_VERSION_STAGE_ABORT_V2_CONTRACT,
+      input,
+      { workspaceId: scope }
+    )
+  })
+}
+
 export function createArtifactVersionReadPortV1(
   invoker: DomainMainSystemCapabilityInvoker,
   workspaceId: string
@@ -636,6 +1162,36 @@ export function createArtifactVersionReadPortV1(
   return Object.freeze({
     read: (input) => invoker.invoke(
       ARTIFACT_VERSION_READ_CONTRACT,
+      input,
+      { workspaceId: scope }
+    )
+  })
+}
+
+export function createArtifactVersionReadRangePortV2(
+  invoker: DomainMainSystemCapabilityInvoker,
+  workspaceId: string
+): ArtifactVersionReadRangePortV2 {
+  const scope = workspaceId.trim()
+  if (!scope) throw new Error('Artifact version range-read port requires a workspaceId.')
+  return Object.freeze({
+    readRange: (input) => invoker.invoke(
+      ARTIFACT_VERSION_READ_RANGE_V2_CONTRACT,
+      input,
+      { workspaceId: scope }
+    )
+  })
+}
+
+export function createArtifactVersionDescribePortV2(
+  invoker: DomainMainSystemCapabilityInvoker,
+  workspaceId: string
+): ArtifactVersionDescribePortV2 {
+  const scope = workspaceId.trim()
+  if (!scope) throw new Error('Artifact version describe port requires a workspaceId.')
+  return Object.freeze({
+    describe: (input) => invoker.invoke(
+      ARTIFACT_VERSION_DESCRIBE_V2_CONTRACT,
       input,
       { workspaceId: scope }
     )

@@ -1,0 +1,74 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-research-dossier",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
+  "module": {
+    "id": "sciforge.research-dossier",
+    "displayName": "Research Dossier",
+    "version": "1.0.0",
+    "hostApi": {
+      "minimum": "1.1.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 172
+  },
+  "contributionContracts": {
+    "research-dossier.workbench-right-panel": {
+      "location": "workbench.right-panel",
+      "title": "Research Dossier",
+      "resourceKind": "research-dossier"
+    },
+    "research-dossier.workbench-toolbar-action": {
+      "location": "workbench.topbar",
+      "commandId": "research-dossier.open",
+      "label": "rightPanelResearchDossier"
+    },
+    "research-dossier.resource-navigation": {
+      "resourceKinds": [
+        "artifact-version",
+        "compute-run"
+      ],
+      "target": {
+        "surface": "right-panel",
+        "contributionId": "research-dossier.workbench-right-panel"
+      }
+    }
+  },
+  "entrypoints": [
+    {
+      "process": "renderer",
+      "export": "./renderer",
+      "contributions": [
+        {
+          "kind": "renderer.workbench-right-panel",
+          "id": "research-dossier.workbench-right-panel",
+          "priority": 172
+        },
+        {
+          "kind": "renderer.command",
+          "id": "research-dossier.open",
+          "priority": 172
+        },
+        {
+          "kind": "renderer.workbench-toolbar-action",
+          "id": "research-dossier.workbench-toolbar-action",
+          "priority": 172
+        },
+        {
+          "kind": "renderer.resource-navigation",
+          "id": "research-dossier.resource-navigation",
+          "priority": 172
+        },
+        {
+          "kind": "renderer.i18n-resource",
+          "id": "research-dossier.translations",
+          "priority": 172
+        }
+      ]
+    }
+  ]
+}

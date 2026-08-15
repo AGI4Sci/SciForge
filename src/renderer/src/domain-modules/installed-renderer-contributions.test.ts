@@ -2,10 +2,12 @@ import type { InstalledDomainProcessEntrySet } from '@sciforge/domain-sdk'
 import {
   RENDERER_COMMAND_CONTRIBUTION_KIND,
   RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND,
+  RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION_KIND,
   RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_BOTTOM_PANEL_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
+  type DomainRendererResourceNavigationContract,
   type DomainRendererWorkbenchRightPanelContract
 } from '@sciforge/domain-sdk/renderer'
 import { describe, expect, it, vi } from 'vitest'
@@ -19,6 +21,7 @@ import {
 } from './installed-renderer-contributions'
 import { RENDERER_LIFECYCLE_CONTRIBUTION_KIND } from './renderer-lifecycle'
 import type { ChatResultPanelContribution } from './chat-result-panel-slot'
+import { resolveResourceNavigation } from './resource-navigation-registry'
 import {
   RENDERER_WORKBENCH_TOOLBAR_ACTION_CONTRIBUTION_KIND,
   type WorkbenchToolbarActionContract
@@ -82,6 +85,56 @@ describe('installed renderer contributions', () => {
       ownerId: 'sciforge.dataset-api',
       contributionId: 'dataset-api.timeline-results'
     })
+    const expectedResourceNavigations = installedRendererDomainEntrySet.contributions
+      .filter(({ declaration }) =>
+        declaration.kind === RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION_KIND
+      )
+      .map((installed) => ({
+        installed,
+        contract: installed.contract as DomainRendererResourceNavigationContract
+      }))
+      .sort((left, right) =>
+        left.installed.declaration.priority - right.installed.declaration.priority ||
+        left.installed.owner.moduleId.localeCompare(right.installed.owner.moduleId) ||
+        left.installed.declaration.id.localeCompare(right.installed.declaration.id)
+      )
+      .map(({ installed, contract }) => ({
+        id: installed.declaration.id,
+        ownerId: installed.owner.moduleId,
+        resourceKinds: contract.resourceKinds
+      }))
+    expect(runtime.resourceNavigations.list().map(({ id, ownerId, contribution }) => ({
+      id,
+      ownerId,
+      resourceKinds: contribution.resourceKinds
+    }))).toEqual(expectedResourceNavigations)
+    expect(resolveResourceNavigation(runtime.resourceNavigations, {
+      sessionId: 'session-1',
+      resource: {
+        resourceKind: 'artifact-version',
+        resourceId: 'artifact-version:checkpoint:2',
+        integrity: {
+          algorithm: 'sha256',
+          expectedDigest: `sha256:${'a'.repeat(64)}`
+        }
+      }
+    })).toEqual({
+      contributionId: 'research-dossier.workbench-right-panel',
+      sessionId: 'session-1',
+      activation: {
+        contributionId: 'research-dossier.workbench-right-panel',
+        revision: 1,
+        payload: {
+          contractVersion: 1,
+          target: {
+            kind: 'artifact-version',
+            versionId: 'artifact-version:checkpoint:2'
+          },
+          page: 'overview',
+          expectedDigest: `sha256:${'a'.repeat(64)}`
+        }
+      }
+    })
     const expectedCommands = installedRendererDomainEntrySet.contributions
       .filter(({ declaration }) =>
         declaration.kind === RENDERER_COMMAND_CONTRIBUTION_KIND
@@ -141,6 +194,7 @@ describe('installed renderer contributions', () => {
     expect(runtime.commands.list()).toEqual([])
     expect(runtime.rightPanels.list()).toEqual([])
     expect(runtime.chatResultPanels.list()).toEqual([])
+    expect(runtime.resourceNavigations.list()).toEqual([])
     expect(runtime.bottomPanels.list()).toEqual([])
     expect(runtime.globalOverlays.list()).toEqual([])
     expect(runtime.composerContexts.list()).toEqual([])

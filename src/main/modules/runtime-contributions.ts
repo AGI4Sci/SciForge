@@ -8,10 +8,13 @@ import {
   MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
   MAIN_EXTENSION_CONTRIBUTION_KIND,
   MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
+  MAIN_SYSTEM_CAPABILITY_GRANT_CONTRIBUTION_KIND,
+  domainMainRuntimeLifecycleContractSchema,
   domainMainExtensionContractSchema,
   isDomainArtifactConsumer,
   isDomainMainActionGuard,
   isDomainMainRuntimeLifecycleContribution,
+  isDomainMainSystemCapabilityGrant,
   type DomainArtifactConsumer,
   type DomainMainActionGuard,
   type DomainMainActionGuardInput,
@@ -19,7 +22,9 @@ import {
   type DomainMainRuntimeDisposer,
   type DomainMainRuntimeLifecycleContribution,
   type DomainMainRuntimeLifecycleHost,
-  type DomainMainSystemCapabilityInvoker
+  type DomainMainSystemCapabilityInvoker,
+  type DomainMainSystemCapabilityGrant,
+  type DomainRuntimeContributionOwner
 } from '@sciforge/domain-sdk/host'
 import type { DomainExecutionEventInput } from '@sciforge/domain-sdk/reproducibility'
 import {
@@ -88,6 +93,23 @@ export function listMainExtensionContributions(
   })))
 }
 
+export function listMainSystemCapabilityGrants(
+  catalog: DomainModuleCatalog
+): readonly DomainMainSystemCapabilityGrant[] {
+  return Object.freeze(catalog.listContributions(
+    MAIN_SYSTEM_CAPABILITY_GRANT_CONTRIBUTION_KIND,
+    (value): value is DomainMainSystemCapabilityGrant =>
+      isDomainMainSystemCapabilityGrant(value)
+  ).map((contribution) => {
+    if (contribution.value.id !== contribution.declaration.id) {
+      throw new Error(
+        `System capability grant ${contribution.declaration.id} must match its provider-owned value ID.`
+      )
+    }
+    return contribution.value
+  }))
+}
+
 export function createMainActionGuardEvaluator(
   catalog: DomainModuleCatalog
 ): MainActionGuardEvaluator {
@@ -136,15 +158,43 @@ export function createMainActionGuardEvaluator(
   })
 }
 
-export function createMainSystemCapabilityInvoker(
+export type MainSystemCapabilityInvokerFactory = Readonly<{
+  forDomain: (
+    owner: DomainRuntimeContributionOwner,
+    systemCapabilityGrants?: readonly string[]
+  ) => DomainMainSystemCapabilityInvoker
+}>
+
+export function createMainSystemCapabilityInvokerFactory(
   broker: CapabilityBroker,
   options: Readonly<{
-    callerId?: string
     createInvocationId?: () => string
   }> = {}
-): DomainMainSystemCapabilityInvoker {
-  const callerId = options.callerId?.trim() || 'domain-runtime'
+): MainSystemCapabilityInvokerFactory {
   const createInvocationId = options.createInvocationId ?? randomUUID
+  return Object.freeze({
+    forDomain: (owner, systemCapabilityGrants = []) => {
+      const moduleId = owner.moduleId.trim()
+      if (!moduleId) throw new TypeError('A package-scoped capability invoker requires a module ID.')
+      const parsedContract = domainMainRuntimeLifecycleContractSchema.parse({
+        requestedSystemCapabilityGrants: [...systemCapabilityGrants]
+      })
+      return createSystemCapabilityInvoker(
+        broker,
+        `domain-runtime:${moduleId}`,
+        parsedContract.requestedSystemCapabilityGrants,
+        createInvocationId
+      )
+    }
+  })
+}
+
+function createSystemCapabilityInvoker(
+  broker: CapabilityBroker,
+  callerId: string,
+  systemCapabilityGrants: readonly string[],
+  createInvocationId: () => string
+): DomainMainSystemCapabilityInvoker {
   return Object.freeze({
     invoke: async (contract, input, invokeOptions) => {
       const definition = broker.registry.require(contract.actionId)
@@ -181,9 +231,11 @@ export function createMainSystemCapabilityInvoker(
           )
         }
       }
-      const result = await broker.invoke({
-        audience: 'system',
+      const result = await broker.invokeHostSystem({
         callerId,
+        ...(systemCapabilityGrants.length > 0
+          ? { capabilityGrants: [...systemCapabilityGrants] }
+          : {}),
         ...(invokeOptions?.workspaceId?.trim()
           ? { workspaceId: invokeOptions.workspaceId.trim() }
           : {}),
@@ -216,7 +268,9 @@ export function createMainSystemCapabilityInvoker(
  */
 export async function activateMainRuntimeContributions(
   catalog: DomainModuleCatalog,
-  host: DomainMainRuntimeLifecycleHost
+  host: Omit<DomainMainRuntimeLifecycleHost, 'capabilities'> & Readonly<{
+    capabilityInvokers: MainSystemCapabilityInvokerFactory
+  }>
 ): Promise<ActivatedMainRuntimeContributions> {
   // Validate every value before starting package-owned side effects.
   const lifecycleContributions = catalog.listContributions(
@@ -227,6 +281,22 @@ export async function activateMainRuntimeContributions(
   const artifactConsumers = listMainArtifactConsumers(catalog)
   const workflowExecutionReceipts = listMainWorkflowExecutionReceiptProviders(catalog)
   const mainExtensions = listMainExtensionContributions(catalog)
+  const registeredSystemCapabilityGrants = new Set(
+    listMainSystemCapabilityGrants(catalog).map((grant) => grant.id)
+  )
+  const lifecycleActivations = lifecycleContributions.map((contribution) => {
+    const contract = domainMainRuntimeLifecycleContractSchema.parse(
+      contribution.contract ?? {}
+    )
+    for (const requestedGrant of contract.requestedSystemCapabilityGrants) {
+      if (!registeredSystemCapabilityGrants.has(requestedGrant)) {
+        throw new Error(
+          `Runtime ${contribution.owner.moduleId} requests unregistered system capability grant ${requestedGrant}.`
+        )
+      }
+    }
+    return Object.freeze({ contribution, contract })
+  })
   const contributionHost = Object.freeze({
     list: (kind: typeof MAIN_EXTENSION_CONTRIBUTION_KIND) =>
       kind === MAIN_EXTENSION_CONTRIBUTION_KIND ? mainExtensions : Object.freeze([])
@@ -234,10 +304,10 @@ export async function activateMainRuntimeContributions(
 
   const activated: ActivatedLifecycle[] = []
   try {
-    for (const contribution of lifecycleContributions) {
+    for (const { contribution, contract: lifecycleContract } of lifecycleActivations) {
       const controller = new AbortController()
       const owner = Object.freeze({ ...contribution.owner })
-      const { enablement, executionEvents, ...sharedHost } = host
+      const { enablement, executionEvents, capabilityInvokers, ...sharedHost } = host
       const lifecycle: { controller: AbortController; disposer?: DomainMainRuntimeDisposer } = {
         controller
       }
@@ -245,6 +315,10 @@ export async function activateMainRuntimeContributions(
       const disposer = await contribution.value.activate(Object.freeze({
         ...sharedHost,
         owner,
+        capabilities: capabilityInvokers.forDomain(
+          owner,
+          lifecycleContract.requestedSystemCapabilityGrants
+        ),
         executionEvents: Object.freeze({
           publish: (event: DomainExecutionEventInput) => executionEvents.publish(owner, event)
         }),

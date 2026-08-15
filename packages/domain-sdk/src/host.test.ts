@@ -2,11 +2,15 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   domainArtifactEventScope,
+  defineDomainMainSystemCapabilityGrant,
+  domainMainRuntimeLifecycleContractSchema,
   isDomainArtifactConsumer,
   isDomainMainActionGuard,
   isDomainMainRuntimeLifecycleContribution,
-  type DomainMainTurnLifecycleEvent,
+  type DomainMainAfterTurnEvent,
+  type DomainMainBeforeTurnEvent,
   type DomainMainModelAccessHost,
+  type DomainMainTextSanitizerHost,
   type DomainRendererCapabilityChange,
   type DomainRendererCapabilityInvoker,
   type DomainVisibleContextInspection,
@@ -25,6 +29,29 @@ describe('domain host contracts', () => {
       consume: () => undefined
     }), true)
     assert.equal(isDomainArtifactConsumer(null), false)
+  })
+
+  it('separates provider-owned system grants from lifecycle grant requests', () => {
+    assert.deepEqual(defineDomainMainSystemCapabilityGrant({
+      id: 'artifact-versions.identities.select',
+      eligibility: 'trusted-domain-runtime',
+      description: 'Allows a trusted runtime to select immutable identities.'
+    }), {
+      id: 'artifact-versions.identities.select',
+      eligibility: 'trusted-domain-runtime',
+      description: 'Allows a trusted runtime to select immutable identities.'
+    })
+    assert.deepEqual(domainMainRuntimeLifecycleContractSchema.parse({
+      requestedSystemCapabilityGrants: ['artifact-versions.identities.select']
+    }), {
+      requestedSystemCapabilityGrants: ['artifact-versions.identities.select']
+    })
+    assert.throws(() => domainMainRuntimeLifecycleContractSchema.parse({
+      requestedSystemCapabilityGrants: [
+        'artifact-versions.identities.select',
+        'artifact-versions.identities.select'
+      ]
+    }))
   })
 
   it('derives one stable synthetic DAG scope for threadless executions', () => {
@@ -100,17 +127,29 @@ describe('domain host contracts', () => {
   })
 
   it('models process-neutral turn lifecycle events', () => {
-    const before: DomainMainTurnLifecycleEvent = {
+    const issuerEpoch = 'issuer-00000000000000000000000000000000'
+    const deliveryAttemptId = `delivery-attempt:${issuerEpoch}:1:00000000000000000000000000000000`
+    const before: DomainMainBeforeTurnEvent = {
       kind: 'before-turn',
       state: 'starting',
+      issuerEpoch,
+      deliveryAttemptOrdinal: 1,
+      deliveryAttemptId,
+      boundaryLeaseId: `turn-boundary:${deliveryAttemptId}`,
+      clientDirectiveId: 'directive-1',
       runtimeId: 'runtime-1',
       threadId: 'thread-1',
       workspaceRoot: '/workspace',
       occurredAt: '2026-07-28T00:00:00.000Z'
     }
-    const after: DomainMainTurnLifecycleEvent = {
+    const after: DomainMainAfterTurnEvent = {
       kind: 'after-turn',
       state: 'completed',
+      issuerEpoch,
+      deliveryAttemptOrdinal: 1,
+      deliveryAttemptId,
+      boundaryLeaseId: `turn-boundary:${deliveryAttemptId}`,
+      clientDirectiveId: 'directive-1',
       runtimeId: 'runtime-1',
       threadId: 'thread-1',
       turnId: 'turn-1',
@@ -120,6 +159,17 @@ describe('domain host contracts', () => {
 
     assert.equal(before.kind, 'before-turn')
     assert.equal(after.turnId, 'turn-1')
+  })
+
+  it('lets the Host sanitize opaque settings secrets without disclosing them', () => {
+    const sanitizer: DomainMainTextSanitizerHost = {
+      sanitizeText: (value) => value.replaceAll('opaque-setting-secret', '[REDACTED]')
+    }
+
+    assert.equal(
+      sanitizer.sanitizeText('result opaque-setting-secret'),
+      'result [REDACTED]'
+    )
   })
 
   it('subscribes to canonical capability changes by resource reference', async () => {

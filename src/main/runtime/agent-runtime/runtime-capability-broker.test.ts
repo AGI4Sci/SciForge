@@ -64,6 +64,8 @@ describe('RuntimeCapabilityBroker', () => {
       requestId: 'request-1',
       runtimeId: 'future-runtime',
       threadId: 'thread-1',
+      turnId: 'turn-1',
+      callId: 'call-1',
       workspaceId: '/tmp/workspace'
     }
 
@@ -159,6 +161,8 @@ describe('RuntimeCapabilityBroker', () => {
       requestId: 'stable-id',
       runtimeId: 'future-runtime',
       threadId: 'thread-1',
+      turnId: 'turn-1',
+      callId: 'call-1',
       workspaceId: '/tmp/workspace'
     }
     const alpha = await surface.call({

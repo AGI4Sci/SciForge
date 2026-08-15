@@ -8,6 +8,8 @@ import {
   MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
   MAIN_EXTENSION_CONTRIBUTION_KIND,
   MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
+  MAIN_SYSTEM_CAPABILITY_GRANT_CONTRIBUTION_KIND,
+  defineDomainMainSystemCapabilityGrant,
   type DomainArtifactConsumer,
   type DomainMainRuntimeLifecycleContext
 } from '@sciforge/domain-sdk/host'
@@ -23,7 +25,7 @@ import { DomainModuleCatalog } from './catalog'
 import {
   activateMainRuntimeContributions,
   createMainActionGuardEvaluator,
-  createMainSystemCapabilityInvoker,
+  createMainSystemCapabilityInvokerFactory,
   listMainArtifactConsumers,
   listMainExtensionContributions
 } from './runtime-contributions'
@@ -324,10 +326,9 @@ describe('main runtime contributions', () => {
         handler: execute
       })
     ]))
-    const invoker = createMainSystemCapabilityInvoker(broker, {
-      callerId: 'fixture.runtime',
+    const invoker = createMainSystemCapabilityInvokerFactory(broker, {
       createInvocationId: () => 'generated-invocation'
-    })
+    }).forDomain({ moduleId: 'fixture.runtime', moduleVersion: '1.0.0' })
     const contract = {
       actionId: 'fixture.runtime.compute',
       effect: 'compute' as const,
@@ -353,7 +354,7 @@ describe('main runtime contributions', () => {
       {
         caller: {
           audience: 'system',
-          callerId: 'fixture.runtime',
+          callerId: 'domain-runtime:fixture.runtime',
           workspaceId: '/workspace'
         },
         status: 'success',
@@ -362,13 +363,191 @@ describe('main runtime contributions', () => {
       {
         caller: {
           audience: 'system',
-          callerId: 'fixture.runtime',
+          callerId: 'domain-runtime:fixture.runtime',
           workspaceId: '/workspace'
         },
         status: 'replayed',
         invocationId: 'stable-invocation'
       }
     ])
+  })
+
+  it('projects a package-scoped caller and only its declared lifecycle grants', async () => {
+    let lifecycleContext: DomainMainRuntimeLifecycleContext | undefined
+    const capability = defineCapability({
+      id: 'fixture.authority.inspect',
+      version: '1.0.0',
+      title: 'Inspect runtime authority',
+      description: 'Returns Host-authenticated package authority for the lifecycle test.',
+      audiences: ['system'],
+      scope: 'workspace',
+      effect: 'read',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'none' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({
+        callerId: z.string(),
+        capabilityGrants: z.array(z.string())
+      }).strict(),
+      handler: async (_input, context) => ({
+        output: {
+          callerId: context.caller.callerId,
+          capabilityGrants: [...(context.caller.capabilityGrants ?? [])]
+        }
+      })
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([capability]))
+    const catalog = new DomainModuleCatalog()
+    catalog.registerBatch([
+      fixtureEntry('fixture.provider', '@fixture/provider', 200, [{
+        id: 'fixture.authority.inspect',
+        kind: MAIN_SYSTEM_CAPABILITY_GRANT_CONTRIBUTION_KIND,
+        value: defineDomainMainSystemCapabilityGrant({
+          id: 'fixture.authority.inspect',
+          eligibility: 'trusted-domain-runtime',
+          description: 'Allows inspection of the generic authority projection.'
+        })
+      }]),
+      fixtureEntry('fixture.granted', '@fixture/granted', 100, [{
+        id: 'fixture.granted.runtime',
+        kind: MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
+        contract: { requestedSystemCapabilityGrants: ['fixture.authority.inspect'] },
+        value: {
+          activate: (context: DomainMainRuntimeLifecycleContext) => {
+            lifecycleContext = context
+          }
+        }
+      }])
+    ])
+
+    const activated = await activateMainRuntimeContributions(
+      catalog,
+      runtimeHost(createMainSystemCapabilityInvokerFactory(broker))
+    )
+    expect(lifecycleContext).toBeDefined()
+    expect(Object.hasOwn(lifecycleContext!.capabilities, 'forDomain')).toBe(false)
+    await expect(lifecycleContext!.capabilities.invoke({
+      actionId: capability.descriptor.id,
+      effect: 'read',
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({
+        callerId: z.string(),
+        capabilityGrants: z.array(z.string())
+      }).strict()
+    }, {}, { workspaceId: '/workspace' })).resolves.toEqual({
+      callerId: 'domain-runtime:fixture.granted',
+      capabilityGrants: ['fixture.authority.inspect']
+    })
+    await activated.dispose()
+  })
+
+  it('rejects an unknown lifecycle grant before activating package side effects', async () => {
+    const activate = vi.fn()
+    const catalog = new DomainModuleCatalog()
+    catalog.registerModule(fixtureEntry('fixture.unknown', '@fixture/unknown', 100, [{
+      id: 'fixture.unknown.runtime',
+      kind: MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
+      contract: { requestedSystemCapabilityGrants: ['fixture.authority.unknown'] },
+      value: { activate }
+    }]))
+
+    await expect(activateMainRuntimeContributions(catalog, runtimeHost()))
+      .rejects.toThrow('requests unregistered system capability grant fixture.authority.unknown')
+    expect(activate).not.toHaveBeenCalled()
+  })
+
+  it('rejects a provider grant whose value does not match its declaration', async () => {
+    const catalog = new DomainModuleCatalog()
+    catalog.registerModule(fixtureEntry('fixture.provider', '@fixture/provider', 100, [{
+      id: 'fixture.authority.declared',
+      kind: MAIN_SYSTEM_CAPABILITY_GRANT_CONTRIBUTION_KIND,
+      value: defineDomainMainSystemCapabilityGrant({
+        id: 'fixture.authority.different',
+        eligibility: 'trusted-domain-runtime',
+        description: 'Deliberately mismatched provider grant fixture.'
+      })
+    }]))
+
+    await expect(activateMainRuntimeContributions(catalog, runtimeHost()))
+      .rejects.toThrow('must match its provider-owned value ID')
+  })
+
+  it('does not issue a provider grant to undeclared or non-lifecycle callers', async () => {
+    let lifecycleContext: DomainMainRuntimeLifecycleContext | undefined
+    const capability = defineCapability({
+      id: 'fixture.authority.project',
+      version: '1.0.0',
+      title: 'Project caller authority',
+      description: 'Projects caller identity and grants for negative authority tests.',
+      audiences: ['system'],
+      scope: 'workspace',
+      effect: 'read',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'none' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ callerId: z.string(), capabilityGrants: z.array(z.string()) }).strict(),
+      handler: async (_input, context) => ({
+        output: {
+          callerId: context.caller.callerId,
+          capabilityGrants: [...(context.caller.capabilityGrants ?? [])]
+        }
+      })
+    })
+    const contract = {
+      actionId: capability.descriptor.id,
+      effect: 'read' as const,
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ callerId: z.string(), capabilityGrants: z.array(z.string()) }).strict()
+    }
+    const broker = new CapabilityBroker(new CapabilityRegistry([capability]))
+    const catalog = new DomainModuleCatalog()
+    catalog.registerBatch([
+      fixtureEntry('fixture.provider', '@fixture/provider', 200, [{
+        id: 'fixture.authority.project',
+        kind: MAIN_SYSTEM_CAPABILITY_GRANT_CONTRIBUTION_KIND,
+        value: defineDomainMainSystemCapabilityGrant({
+          id: 'fixture.authority.project',
+          eligibility: 'trusted-domain-runtime',
+          description: 'Allows a trusted runtime to project its authority.'
+        })
+      }]),
+      fixtureEntry('fixture.ungranted', '@fixture/ungranted', 100, [{
+        id: 'fixture.ungranted.runtime',
+        kind: MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
+        value: {
+          activate: (context: DomainMainRuntimeLifecycleContext) => {
+            lifecycleContext = context
+          }
+        }
+      }])
+    ])
+    const activated = await activateMainRuntimeContributions(
+      catalog,
+      runtimeHost(createMainSystemCapabilityInvokerFactory(broker))
+    )
+
+    await expect(lifecycleContext!.capabilities.invoke(
+      contract,
+      {},
+      { workspaceId: '/workspace' }
+    )).resolves.toEqual({
+      callerId: 'domain-runtime:fixture.ungranted',
+      capabilityGrants: []
+    })
+    await expect(broker.invoke({
+      audience: 'system',
+      callerId: 'non-lifecycle-host-caller',
+      workspaceId: '/workspace'
+    }, {
+      actionId: contract.actionId,
+      input: {}
+    })).resolves.toMatchObject({
+      output: {
+        callerId: 'non-lifecycle-host-caller',
+        capabilityGrants: []
+      }
+    })
+    await activated.dispose()
   })
 
   it('only propagates approval from a matching active destructive action', async () => {
@@ -393,13 +572,12 @@ describe('main runtime contributions', () => {
     })
     const registry = new CapabilityRegistry([inner])
     const broker = new CapabilityBroker(registry)
-    const invoker = createMainSystemCapabilityInvoker(broker, {
-      callerId: 'fixture.package',
+    const invoker = createMainSystemCapabilityInvokerFactory(broker, {
       createInvocationId: () => 'inner-invocation'
-    })
+    }).forDomain({ moduleId: 'fixture.package', moduleVersion: '1.0.0' })
     const resource = broker.issueResourceHandle({
       audience: 'system',
-      callerId: 'fixture.package',
+      callerId: 'domain-runtime:fixture.package',
       workspaceId: '/workspace'
     }, {
       resourceId: '/workspace',
@@ -468,7 +646,13 @@ describe('main runtime contributions', () => {
   })
 })
 
-function runtimeHost() {
+function runtimeHost(
+  capabilityInvokers: ReturnType<typeof createMainSystemCapabilityInvokerFactory> = {
+    forDomain: vi.fn(() => ({
+      invoke: vi.fn(async (_contract, input) => input)
+    }))
+  }
+) {
   return {
     userDataDir: '/tmp/sciforge-user-data',
     appRoot: '/tmp/sciforge-app',
@@ -484,9 +668,7 @@ function runtimeHost() {
       })),
       hasActiveTurns: vi.fn(() => false)
     },
-    capabilities: {
-      invoke: vi.fn(async (_contract, input) => input)
-    },
+    capabilityInvokers,
     executionEvents: {
       publish: vi.fn(async (owner, event) => ({
         ...event,

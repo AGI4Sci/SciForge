@@ -3,24 +3,29 @@ import {
   RENDERER_COMMAND_CONTRIBUTION_KIND,
   RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND,
   RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND,
+  RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION_KIND,
   RENDERER_EXTENSION_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_BOTTOM_PANEL_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
   domainRendererComposerContextProviderContractSchema,
   domainRendererExtensionContractSchema,
+  domainRendererResourceNavigationContractSchema,
   domainRendererWorkbenchBottomPanelContractSchema,
   domainRendererWorkbenchGlobalOverlayContractSchema,
   domainRendererWorkbenchRightPanelContractSchema,
   domainRendererWorkbenchToolbarActionContractSchema,
   isDomainRendererCommandHandler,
   isDomainRendererChatResultPanelValue,
+  isDomainRendererResourceNavigationValue,
   isDomainRendererComposerContextProvider,
   isDomainRendererWorkbenchSurfaceValue,
   isDomainRendererWorkbenchToolbarActionValue,
   type DomainRendererCommandHandler,
   type DomainRendererComposerContextProvider,
   type DomainRendererComposerContextProviderContract,
+  type DomainRendererResourceNavigationContract,
+  type DomainRendererResourceNavigationValue,
   type DomainRendererWorkbenchBottomPanelContract,
   type DomainRendererWorkbenchBottomPanelValue,
   type DomainRendererWorkbenchGlobalOverlayContract,
@@ -74,6 +79,11 @@ import {
   ChatResultPanelContributionRegistry,
   type ChatResultPanelContribution
 } from './chat-result-panel-slot'
+import {
+  ResourceNavigationContributionRegistry,
+  resolveResourceNavigation
+} from './resource-navigation-registry'
+import { setDomainWorkbenchResourceNavigationProvider } from './domain-renderer-navigation'
 
 export const RENDERER_I18N_RESOURCE_CONTRIBUTION_KIND = 'renderer.i18n-resource' as const
 
@@ -99,6 +109,7 @@ export type InstalledRendererContributions = Readonly<{
   commands: WorkbenchCommandRegistry
   rightPanels: WorkbenchRightPanelContributionRegistry
   chatResultPanels: ChatResultPanelContributionRegistry
+  resourceNavigations: ResourceNavigationContributionRegistry
   bottomPanels: WorkbenchBottomPanelContributionRegistry
   globalOverlays: WorkbenchGlobalOverlayContributionRegistry
   composerContexts: ComposerContextProviderRegistry
@@ -174,6 +185,14 @@ export function createInstalledRendererContributions(
     ownerId: string
     order: number
     contribution: ChatResultPanelContribution
+    onDispose?: () => void
+  }> = []
+  const resourceNavigations: Array<{
+    id: string
+    ownerId: string
+    order: number
+    contract: DomainRendererResourceNavigationContract
+    value: DomainRendererResourceNavigationValue
     onDispose?: () => void
   }> = []
   const workspacePreviewPlugins: RendererWorkspacePreviewPluginRegistrationInput[] = []
@@ -323,6 +342,23 @@ export function createInstalledRendererContributions(
       })
       continue
     }
+    if (installed.declaration.kind === RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION_KIND) {
+      const contract = domainRendererResourceNavigationContractSchema.safeParse(
+        installed.contract
+      )
+      if (!contract.success || !isDomainRendererResourceNavigationValue(installed.value)) {
+        throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
+      }
+      resourceNavigations.push({
+        id: installed.declaration.id,
+        ownerId: installed.owner.moduleId,
+        order: installed.declaration.priority,
+        contract: contract.data,
+        value: installed.value,
+        ...(installed.onDispose ? { onDispose: installed.onDispose } : {})
+      })
+      continue
+    }
     if (installed.declaration.kind === RENDERER_WORKSPACE_PREVIEW_PLUGIN_CONTRIBUTION_KIND) {
       if (!isRendererWorkspacePreviewPluginContribution(installed.value, installed)) {
         throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
@@ -360,6 +396,7 @@ export function createInstalledRendererContributions(
   const workbenchCommands = new WorkbenchCommandRegistry()
   const rightPanels = new WorkbenchRightPanelContributionRegistry()
   const chatResultPanelRegistry = new ChatResultPanelContributionRegistry()
+  const resourceNavigationRegistry = new ResourceNavigationContributionRegistry(rightPanels)
   const workbenchBottomPanels = new WorkbenchBottomPanelContributionRegistry()
   const workbenchGlobalOverlays = new WorkbenchGlobalOverlayContributionRegistry()
   const workbenchComposerContexts = new ComposerContextProviderRegistry()
@@ -376,6 +413,7 @@ export function createInstalledRendererContributions(
     () => workbenchCommands.dispose(),
     () => rightPanels.dispose(),
     () => chatResultPanelRegistry.dispose(),
+    () => resourceNavigationRegistry.dispose(),
     () => workbenchBottomPanels.dispose(),
     () => workbenchGlobalOverlays.dispose(),
     () => workbenchComposerContexts.dispose(),
@@ -439,6 +477,13 @@ export function createInstalledRendererContributions(
         chatResultPanelRegistry.register(panel).dispose
       )
     }
+    for (const navigation of resourceNavigations) {
+      pushOwnedRegistration(
+        registrationDisposers,
+        navigation.onDispose,
+        resourceNavigationRegistry.register(navigation).dispose
+      )
+    }
     for (const lifecycle of lifecycles) {
       const dispose = lifecycle.contribution.activate()
       if (dispose !== undefined && typeof dispose !== 'function') {
@@ -450,6 +495,10 @@ export function createInstalledRendererContributions(
     for (const extension of extensions) {
       if (extension.onDispose) registrationDisposers.push(extension.onDispose)
     }
+    registrationDisposers.push(setDomainWorkbenchResourceNavigationProvider({
+      canOpen: (resourceKind) => resourceNavigationRegistry.resolve(resourceKind) !== null,
+      resolve: (input) => resolveResourceNavigation(resourceNavigationRegistry, input)
+    }))
   } catch (error) {
     try {
       disposeRegistrationsInReverse(registrationDisposers)
@@ -467,6 +516,7 @@ export function createInstalledRendererContributions(
     commands: workbenchCommands,
     rightPanels,
     chatResultPanels: chatResultPanelRegistry,
+    resourceNavigations: resourceNavigationRegistry,
     bottomPanels: workbenchBottomPanels,
     globalOverlays: workbenchGlobalOverlays,
     composerContexts: workbenchComposerContexts,

@@ -13,10 +13,12 @@ import { domainPackageDefinition as domainPackageDefinition9 } from '@sciforge/d
 import { domainPackageDefinition as domainPackageDefinition10 } from '@sciforge/domain-paper-radar/definition'
 import { domainPackageDefinition as domainPackageDefinition11 } from '@sciforge/domain-project-dag/definition'
 import { domainPackageDefinition as domainPackageDefinition12 } from '@sciforge/domain-remote-ssh/definition'
-import { domainPackageDefinition as domainPackageDefinition13 } from '@sciforge/domain-scientific-compute/definition'
-import { domainPackageDefinition as domainPackageDefinition14 } from '@sciforge/domain-scientific-plotting/definition'
-import { domainPackageDefinition as domainPackageDefinition15 } from '@sciforge/domain-terminal/definition'
-import { domainPackageDefinition as domainPackageDefinition16 } from '@sciforge/domain-visual-review/definition'
+import { domainPackageDefinition as domainPackageDefinition13 } from '@sciforge/domain-research-checkpoints/definition'
+import { domainPackageDefinition as domainPackageDefinition14 } from '@sciforge/domain-research-dossier/definition'
+import { domainPackageDefinition as domainPackageDefinition15 } from '@sciforge/domain-scientific-compute/definition'
+import { domainPackageDefinition as domainPackageDefinition16 } from '@sciforge/domain-scientific-plotting/definition'
+import { domainPackageDefinition as domainPackageDefinition17 } from '@sciforge/domain-terminal/definition'
+import { domainPackageDefinition as domainPackageDefinition18 } from '@sciforge/domain-visual-review/definition'
 
 export const installedDomainPackages = defineInstalledDomainPackageSet([
   domainPackageDefinition0,
@@ -35,5 +37,7 @@ export const installedDomainPackages = defineInstalledDomainPackageSet([
   domainPackageDefinition13,
   domainPackageDefinition14,
   domainPackageDefinition15,
-  domainPackageDefinition16
+  domainPackageDefinition16,
+  domainPackageDefinition17,
+  domainPackageDefinition18
 ])

@@ -40,7 +40,12 @@ describe('Workspace Preview capability content transport integration', () => {
       const workspacePreviewHost = new WorkspacePreviewHost({
         createSessionId: () => 'integration-pdf-session'
       })
-      const catalog = createApplicationDomainCatalog({ getUserDataDir: () => root })
+      const catalog = createApplicationDomainCatalog({
+        getUserDataDir: () => root,
+        capabilityInvokerFor: () => ({
+          invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') }
+        })
+      })
       const broker = new CapabilityBroker(createApplicationCapabilityRegistry(catalog, {
         controlledProcessService: new ControlledProcessService(),
         workspacePreviewHost,

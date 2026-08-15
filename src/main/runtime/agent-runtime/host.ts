@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type {
+  DomainMainAfterTurnEvent,
+  DomainMainBeforeTurnEvent,
   DomainMainTurnLifecycleEvent,
   DomainTurnArtifactEvent
 } from '@sciforge/domain-sdk/host'
@@ -40,6 +42,9 @@ import type {
   AgentRuntimeId,
   AgentRuntimeItem,
   AgentRuntimeMemoryRecord,
+  AgentRuntimePendingTurnStartListInput,
+  AgentRuntimePendingTurnStartReleaseInput,
+  AgentRuntimePendingTurnStartResolutionInput,
   AgentRuntimeThread,
   AgentRuntimeThreadGoal,
   AgentRuntimeThreadGuiPlan,
@@ -94,7 +99,18 @@ import type { AgentRuntimeTraceRecorder } from '../../services/agent-runtime-tra
 import type {
   TurnArtifactIntentPublisher
 } from '../../services/turn-artifact-handoff-service'
-import type { TurnArtifactIntent } from '../../services/turn-artifact-outbox'
+import type {
+  PendingTurnArtifactStart,
+  TurnArtifactIntent,
+  TurnArtifactReplayIntent
+} from '../../services/turn-artifact-outbox'
+import { captureDeclaredTurnFileEffects } from '../../services/turn-file-effect-capture'
+import { captureTurnFilePatchReceipts } from '../../services/turn-file-write-attribution'
+import type {
+  TurnArtifactStart,
+  TurnArtifactStartDraft,
+  TurnArtifactWatch
+} from '../../services/turn-artifact-outbox'
 import type { RuntimeContextStateService } from '../../services/runtime-context-state-service'
 import type { SharedMemoryService } from '../../services/shared-memory-service'
 import type { WorkspaceReferenceService } from '../../services/workspace-reference-service'
@@ -158,6 +174,10 @@ export function createAgentRuntimeHost(options: AgentRuntimeHostOptions): AgentR
   return new AgentRuntimeHost(options)
 }
 
+export type AgentRuntimePendingTurnStartResolution = AgentRuntimePendingTurnStartResolutionInput
+
+export type AgentRuntimePendingTurnStartRelease = AgentRuntimePendingTurnStartReleaseInput
+
 const THREAD_TURN_QUEUE_POLL_MS = 1_000
 const THREAD_TURN_QUEUE_TIMEOUT_MS = 10 * 60_000
 const RUNTIME_HANDOFF_TRANSCRIPT_MAX_BYTES = 32_000
@@ -165,6 +185,8 @@ const RUNTIME_HANDOFF_TRANSCRIPT_ITEM_MAX_BYTES = 4_000
 const RUNTIME_HANDOFF_TRANSCRIPT_TOOL_LIMIT = 8
 const AUXILIARY_READ_CACHE_MS = 1_000
 const AUXILIARY_READ_CACHE_MAX_ENTRIES = 128
+const TURN_ARTIFACT_CAPTURE_RETRY_MIN_MS = 100
+const TURN_ARTIFACT_CAPTURE_RETRY_MAX_MS = 5_000
 // `sciforge` remains accepted as a legacy identifier so persisted metadata can
 // fail with a clear "adapter not registered" result. Production startup only
 // registers Codex and Claude; there is no bundled adapter behind this ID.
@@ -221,7 +243,34 @@ export class AgentRuntimeHost {
   private readonly turnLifecycleSubscribers = new Set<
     (event: DomainMainTurnLifecycleEvent) => void | Promise<void>
   >()
+  private readonly requiredBeforeTurnSubscribers = new Set<
+    (event: DomainMainBeforeTurnEvent) => void | Promise<void>
+  >()
+  private readonly turnBoundaryBindings = new Map<string, Readonly<{
+    issuerEpoch: string
+    deliveryAttemptOrdinal: number
+    boundaryLeaseId: string
+    deliveryAttemptId: string
+    clientDirectiveId: string
+    workspaceRoot?: string
+  }>>()
+  private readonly pendingTurnBoundaries = new Map<string, Readonly<{
+    issuerEpoch: string
+    deliveryAttemptOrdinal: number
+    boundaryLeaseId: string
+    deliveryAttemptId: string
+    clientDirectiveId: string
+    workspaceRoot?: string
+  }>>()
+  private readonly terminalLifecyclePublications = new Map<string, Promise<void>>()
   private readonly traceCaptureTasks = new Map<string, Promise<void>>()
+  private readonly turnArtifactCaptureTasks = new Map<string, Readonly<{
+    controller: AbortController
+    task: Promise<void>
+  }>>()
+  private readonly turnArtifactWatches = new Map<string, TurnArtifactWatch>()
+  private readonly turnArtifactPatchReceiptDrains = new Map<string, Promise<void>>()
+  private readonly terminalArtifactBoundaries = new Map<string, Promise<void>>()
   private readonly capabilityApprovals = new Map<string, CapabilityApprovalRecord>()
   private readonly capabilityApprovalOrder: string[] = []
   private readonly capabilityApprovalSubscribers = new Map<string, Set<CapabilityApprovalSubscriber>>()
@@ -232,6 +281,9 @@ export class AgentRuntimeHost {
 
   constructor(private readonly options: AgentRuntimeHostOptions) {
     this.adapters = normalizeAdapters(options.adapters)
+    options.turnArtifacts?.attachLifecycleSettlementConsumer(
+      (event) => this.deliverTurnLifecycleSettlement(event)
+    )
     this.subagentToolBridge = options.subagentStoreRoot
       ? createAgentRuntimeSubagentToolBridge({
           storeRoot: options.subagentStoreRoot,
@@ -276,6 +328,15 @@ export class AgentRuntimeHost {
     this.turnLifecycleSubscribers.add(listener)
     return () => {
       this.turnLifecycleSubscribers.delete(listener)
+    }
+  }
+
+  subscribeRequiredBeforeTurn(
+    listener: (event: DomainMainBeforeTurnEvent) => void | Promise<void>
+  ): () => void {
+    this.requiredBeforeTurnSubscribers.add(listener)
+    return () => {
+      this.requiredBeforeTurnSubscribers.delete(listener)
     }
   }
 
@@ -472,14 +533,20 @@ export class AgentRuntimeHost {
       const handle = await this.startTurnInternal({
         ...input,
         ...(clientDirectiveId ? { clientDirectiveId } : {})
-      }, { includeSharedContext: true })
+      }, {
+        includeSharedContext: true,
+        clientDirectiveIdWasHostGenerated: Boolean(clientDirectiveId && !input.clientDirectiveId?.trim())
+      })
       return { value: handle, turnId: handle.turnId }
     }, (turnId) => ({ threadId: input.threadId, turnId }))
   }
 
   private async startTurnInternal(
     input: AgentRuntimeTurnStartInput,
-    options: { includeSharedContext: boolean }
+    options: {
+      includeSharedContext: boolean
+      clientDirectiveIdWasHostGenerated?: boolean
+    }
   ): Promise<AgentRuntimeTurnHandle> {
     const { adapter, context: baseContext } = await this.resolveRequiredRuntime(
       input.runtimeId,
@@ -498,16 +565,6 @@ export class AgentRuntimeHost {
     const sharedInput = await this.withSharedContextLedger(adapter.id, contextualInput)
     const visuallyGuardedInput = withVisualExecutionRequirement(sharedInput)
     const integrityGuardedInput = withExecutionIntegrityRequirement(visuallyGuardedInput)
-    await this.publishTurnLifecycle(Object.freeze({
-      kind: 'before-turn',
-      state: 'starting',
-      runtimeId: adapter.id,
-      threadId: integrityGuardedInput.threadId.trim(),
-      ...(integrityGuardedInput.workspace?.trim() || context.settings.workspaceRoot?.trim()
-        ? { workspaceRoot: integrityGuardedInput.workspace?.trim() || context.settings.workspaceRoot?.trim() }
-        : {}),
-      occurredAt: new Date().toISOString()
-    }))
     const traceSinceSeq = this.options.services?.trace
       ? await adapter.readThreadStatus(context, {
           runtimeId: adapter.id,
@@ -517,15 +574,588 @@ export class AgentRuntimeHost {
             : {})
         }).then((status) => status.latestSeq).catch(() => 0)
       : 0
-    const handle = await this.enqueueThreadTurnStart(adapter, context, integrityGuardedInput)
+    let artifactStart: TurnArtifactStart | undefined
+    let artifactInput = integrityGuardedInput
+    let boundArtifactWatch: TurnArtifactWatch | undefined
+    let boundary: DomainMainBeforeTurnEvent | undefined
+    let boundaryReleased = false
+    const releaseBoundary = async (): Promise<void> => {
+      if (!boundary || boundaryReleased) return
+      boundaryReleased = true
+      const pendingKey = threadTurnKey(adapter.id, boundary.threadId)
+      if (this.pendingTurnBoundaries.get(pendingKey)?.boundaryLeaseId === boundary.boundaryLeaseId) {
+        this.pendingTurnBoundaries.delete(pendingKey)
+      }
+      await this.releaseBeforeTurnBoundary(boundary)
+    }
+    let handle: AgentRuntimeTurnHandle
+    try {
+      handle = await this.enqueueThreadTurnStart(
+        adapter,
+        context,
+        integrityGuardedInput,
+        options.clientDirectiveIdWasHostGenerated === true,
+        async (canonicalInput) => {
+          artifactInput = canonicalInput
+          const clientDirectiveId = canonicalInput.clientDirectiveId?.trim()
+          if (!clientDirectiveId) {
+            throw new AgentRuntimeTurnPreflightError(
+              'runtime_before_turn_identity_missing',
+              'A required before-turn boundary requires the Host directive identity.',
+              'precondition_failed',
+              false
+            )
+          }
+          try {
+            try {
+              await this.options.turnArtifacts?.flushThread(
+                adapter.id,
+                canonicalInput.threadId.trim()
+              )
+            } catch (error) {
+              throw new AgentRuntimeTurnPreflightError(
+                'runtime_turn_predecessor_pending',
+                `The previous turn has not reached its durable handoff boundary: ${errorMessage(error)}`,
+                'precondition_failed',
+                true
+              )
+            }
+            if (this.options.turnArtifacts) {
+              const draft = this.turnArtifactStart(
+                adapter.id,
+                canonicalInput,
+                context
+              )
+              artifactStart = await this.options.turnArtifacts.registerStart(draft)
+            } else if (this.requiredBeforeTurnSubscribers.size > 0) {
+              throw new AgentRuntimeTurnPreflightError(
+                'runtime_before_turn_durability_unavailable',
+                'A required before-turn boundary requires the durable Host handoff owner.',
+                'precondition_failed',
+                true
+              )
+            }
+            if (artifactStart) {
+              boundary = Object.freeze({
+                kind: 'before-turn',
+                state: 'starting',
+                issuerEpoch: artifactStart.issuerEpoch,
+                deliveryAttemptId: artifactStart.deliveryAttemptId,
+                deliveryAttemptOrdinal: artifactStart.deliveryAttemptOrdinal,
+                boundaryLeaseId: artifactStart.boundaryLeaseId,
+                runtimeId: adapter.id,
+                threadId: canonicalInput.threadId.trim(),
+                clientDirectiveId,
+                ...(canonicalInput.workspace?.trim() || context.settings.workspaceRoot?.trim()
+                  ? { workspaceRoot: canonicalInput.workspace?.trim() || context.settings.workspaceRoot?.trim() }
+                  : {}),
+                occurredAt: new Date().toISOString()
+              })
+              await this.publishTurnLifecycle(boundary)
+            }
+          } catch (error) {
+            await releaseBoundary()
+            throw error
+          }
+          if (boundary) this.pendingTurnBoundaries.set(
+            threadTurnKey(adapter.id, boundary.threadId),
+            Object.freeze({
+              issuerEpoch: boundary.issuerEpoch,
+              deliveryAttemptOrdinal: boundary.deliveryAttemptOrdinal,
+              boundaryLeaseId: boundary.boundaryLeaseId,
+              deliveryAttemptId: boundary.deliveryAttemptId,
+              clientDirectiveId: boundary.clientDirectiveId,
+              ...(boundary.workspaceRoot ? { workspaceRoot: boundary.workspaceRoot } : {})
+            })
+          )
+          if (!this.options.turnArtifacts) return context
+          return {
+            ...context,
+            onTurnAccepted: async (acceptedHandle) => {
+              if (!artifactStart || !this.options.turnArtifacts) return
+              const watch = this.turnArtifactWatch(
+                adapter.id,
+                artifactInput,
+                context,
+                acceptedHandle,
+                artifactStart
+              )
+              const pending = await this.options.turnArtifacts.bindStart(artifactStart, watch)
+              boundArtifactWatch = watch
+              if (pending) this.startTurnArtifactCapture(watch, { adapter, context })
+            }
+          }
+        }
+      )
+    } catch (error) {
+      if (isDefiniteDirectiveRejection(error)) {
+        await releaseBoundary()
+      }
+      throw error
+    }
     this.rememberThreadWorkspaceHost(
       adapter.id,
       handle.threadId || integrityGuardedInput.threadId,
       context.workspaceHost
     )
     this.rememberTurnWorkspace(adapter.id, integrityGuardedInput, handle)
+    if (this.options.turnArtifacts && artifactStart && !boundArtifactWatch) {
+      const watch = this.turnArtifactWatch(adapter.id, artifactInput, context, handle, artifactStart)
+      if (await this.options.turnArtifacts.bindStart(artifactStart, watch)) {
+        this.startTurnArtifactCapture(watch, { adapter, context })
+      }
+    }
+    if (boundary) {
+      const pendingKey = threadTurnKey(adapter.id, boundary.threadId)
+      const turnKey = turnGovernanceKey(
+        adapter.id,
+        handle.threadId || boundary.threadId,
+        handle.turnId
+      )
+      if (!this.terminalLifecyclePublications.has(turnKey)) {
+        this.turnBoundaryBindings.set(
+          turnKey,
+          Object.freeze({
+            issuerEpoch: boundary.issuerEpoch,
+            deliveryAttemptOrdinal: boundary.deliveryAttemptOrdinal,
+            boundaryLeaseId: boundary.boundaryLeaseId,
+            deliveryAttemptId: boundary.deliveryAttemptId,
+            clientDirectiveId: boundary.clientDirectiveId,
+            ...(boundary.workspaceRoot ? { workspaceRoot: boundary.workspaceRoot } : {})
+          })
+        )
+      }
+      if (this.pendingTurnBoundaries.get(pendingKey)?.boundaryLeaseId === boundary.boundaryLeaseId) {
+        this.pendingTurnBoundaries.delete(pendingKey)
+      }
+    }
     this.startTurnTraceCapture(adapter, context, handle, traceSinceSeq)
     return handle
+  }
+
+  /** Restarts only Host-accepted durable watches; it never infers an old latest turn. */
+  async recoverCompletedTurnArtifacts(): Promise<number> {
+    const publisher = this.options.turnArtifacts
+    if (!publisher || this.disposed) return 0
+    const watches = await publisher.pending()
+    for (const watch of watches) this.startTurnArtifactCapture(watch)
+    return watches.length + (await publisher.pendingStarts()).length
+  }
+
+  /** Explicitly binds an ambiguous durable start to an authoritative provider handle. */
+  async listPendingTurnArtifactStarts(
+    input: AgentRuntimePendingTurnStartListInput = {}
+  ) {
+    const publisher = this.options.turnArtifacts
+    if (!publisher || this.disposed) return []
+    const runtimeId = input.runtimeId
+    const threadId = optionalString(input.threadId)
+    const workspaceRoot = optionalString(input.workspaceRoot)
+    return (await publisher.pendingStarts())
+      .filter((start) => (
+        (!runtimeId || start.runtimeId === runtimeId) &&
+        (!threadId || start.threadId === threadId) &&
+        (!workspaceRoot || start.workspaceRoot === workspaceRoot) &&
+        sameWorkspaceLocator(start.workspaceLocator, input.workspaceLocator)
+      ))
+      .map((start) => Object.freeze({
+        issuerEpoch: start.issuerEpoch,
+        deliveryAttemptOrdinal: start.deliveryAttemptOrdinal,
+        boundaryLeaseId: start.boundaryLeaseId,
+        deliveryAttemptId: start.deliveryAttemptId,
+        runtimeId: start.runtimeId,
+        threadId: start.threadId,
+        clientDirectiveId: start.clientDirectiveId,
+        ...(start.workspaceRoot ? { workspaceRoot: start.workspaceRoot } : {}),
+        ...(start.workspaceLocator ? { workspaceLocator: start.workspaceLocator } : {}),
+        phase: 'pending-start' as const,
+        occurredAt: start.registeredAt
+      }))
+  }
+
+  /** Explicitly binds an ambiguous durable start to an authoritative provider handle. */
+  async resolvePendingTurnArtifactStart(
+    input: AgentRuntimePendingTurnStartResolution
+  ): Promise<boolean> {
+    return this.bindPendingTurnArtifactStart(input, 'explicit-resolution')
+  }
+
+  private async bindPendingTurnArtifactStart(
+    input: AgentRuntimePendingTurnStartResolution,
+    bindingSource: NonNullable<TurnArtifactWatch['bindingSource']>
+  ): Promise<boolean> {
+    const publisher = this.options.turnArtifacts
+    if (!publisher || this.disposed) return false
+    const boundaryLeaseId = input.boundaryLeaseId.trim()
+    const turnId = input.turnId.trim()
+    const threadId = input.threadId.trim()
+    const userMessageItemId = input.userMessageItemId.trim()
+    if (!boundaryLeaseId || !threadId || !turnId || !userMessageItemId) {
+      throw new Error('Pending turn resolution identity and provider correlation are required.')
+    }
+    const start = (await publisher.pendingStarts()).find(
+      (candidate) => candidate.boundaryLeaseId === boundaryLeaseId
+    )
+    if (!start) return false
+    assertPendingTurnStartScope(start, input)
+    const runtimeId = optionalRuntimeId(start.runtimeId)
+    if (!runtimeId) throw new Error(`Unsupported Agent runtime: ${start.runtimeId}`)
+    const resolved = await this.resolveRequiredRuntime(
+      runtimeId,
+      start.threadId,
+      start.workspaceLocator
+    )
+    if (!sameWorkspaceLocator(
+      resolved.context.workspaceHost?.locator,
+      start.workspaceLocator
+    )) {
+      throw new Error('The provider workspace scope does not match the durable owner.')
+    }
+    let cursor: string | undefined
+    let exactHandleVisible = false
+    const seenCursors = new Set<string>()
+    for (let pageCount = 0; pageCount < 100; pageCount += 1) {
+      const page = await resolved.adapter.readThreadPage(resolved.context, {
+        runtimeId,
+        threadId: start.threadId,
+        ...(cursor ? { cursor } : {}),
+        limit: 100,
+        ...(start.workspaceLocator ? { workspaceLocator: start.workspaceLocator } : {})
+      })
+      if (page.runtimeId !== runtimeId || page.threadId !== start.threadId) {
+        throw new Error('The provider page scope does not match the durable owner.')
+      }
+      const turn = page.turns.find((candidate) => candidate.id === turnId)
+      if (turn) {
+        exactHandleVisible = Boolean(turn.items?.some((item) => (
+          item.kind === 'user_message' && item.id === userMessageItemId
+        )))
+        break
+      }
+      cursor = page.nextCursor ?? undefined
+      if (!cursor) break
+      if (seenCursors.has(cursor)) throw new Error('Runtime returned a repeated resolution cursor.')
+      seenCursors.add(cursor)
+    }
+    if (!exactHandleVisible) {
+      throw new Error('The provider does not expose the requested turn/message correlation.')
+    }
+    const watch: TurnArtifactWatch = Object.freeze({
+      runtimeId,
+      threadId: start.threadId,
+      turnId,
+      issuerEpoch: start.issuerEpoch,
+      deliveryAttemptId: start.deliveryAttemptId,
+      deliveryAttemptOrdinal: start.deliveryAttemptOrdinal,
+      boundaryLeaseId: start.boundaryLeaseId,
+      clientDirectiveId: start.clientDirectiveId,
+      inputDigest: start.inputDigest,
+      bindingSource,
+      providerUserMessageItemId: userMessageItemId,
+      ...(start.workspaceRoot ? { workspaceRoot: start.workspaceRoot } : {}),
+      ...(start.workspaceLocator ? { workspaceLocator: start.workspaceLocator } : {}),
+      ...(start.fileBaseline ? { fileBaseline: start.fileBaseline } : {})
+    })
+    const pending = await publisher.bindStart(start, watch)
+    if (pending) this.startTurnArtifactCapture(watch, resolved)
+    return pending
+  }
+
+  /** Explicitly rejects one ambiguous start through the durable terminal settlement path. */
+  async releasePendingTurnArtifactStart(
+    input: AgentRuntimePendingTurnStartRelease
+  ): Promise<boolean> {
+    const publisher = this.options.turnArtifacts
+    if (!publisher || this.disposed) return false
+    const boundaryLeaseId = input.boundaryLeaseId.trim()
+    const threadId = input.threadId.trim()
+    if (!boundaryLeaseId || !threadId) throw new Error('Pending turn release identity is required.')
+    const start = (await publisher.pendingStarts()).find(
+      (candidate) => candidate.boundaryLeaseId === boundaryLeaseId
+    )
+    if (!start) return false
+    assertPendingTurnStartScope(start, input)
+    const runtimeId = optionalRuntimeId(start.runtimeId)
+    if (!runtimeId) throw new Error(`Unsupported Agent runtime: ${start.runtimeId}`)
+    return publisher.rejectStart(start, Object.freeze({
+      kind: 'after-turn',
+      state: 'rejected',
+      issuerEpoch: start.issuerEpoch,
+      boundaryLeaseId: start.boundaryLeaseId,
+      deliveryAttemptId: start.deliveryAttemptId,
+      deliveryAttemptOrdinal: start.deliveryAttemptOrdinal,
+      clientDirectiveId: start.clientDirectiveId,
+      runtimeId,
+      threadId: start.threadId,
+      ...(start.workspaceRoot ? { workspaceRoot: start.workspaceRoot } : {}),
+      settlementSource: 'explicit-pending-start-release',
+      occurredAt: new Date().toISOString()
+    }))
+  }
+
+  async readDurableTurnBoundarySnapshot() {
+    if (!this.options.turnArtifacts) {
+      throw new Error('Durable turn-boundary ownership is unavailable.')
+    }
+    return this.options.turnArtifacts.readDurableTurnBoundarySnapshot()
+  }
+
+  async deliverTurnLifecycleSettlement(event: DomainMainAfterTurnEvent): Promise<void> {
+    await this.publishTurnLifecycle(event)
+  }
+
+  private startTurnArtifactCapture(
+    watch: TurnArtifactWatch,
+    initial?: Readonly<{
+      adapter: AgentRuntimeAdapter
+      context: AgentRuntimeAdapterContext
+    }>
+  ): void {
+    if (!this.options.turnArtifacts || this.disposed) return
+    const runtimeId = optionalRuntimeId(watch.runtimeId)
+    if (!runtimeId) return
+    const key = turnGovernanceKey(runtimeId, watch.threadId, watch.turnId)
+    if (this.turnArtifactCaptureTasks.has(key)) return
+    this.turnArtifactWatches.set(key, watch)
+    const controller = new AbortController()
+    const task = this.captureTurnArtifactTerminal(watch, controller.signal, initial)
+      .catch(() => undefined)
+      .finally(() => {
+        controller.abort()
+        this.turnArtifactCaptureTasks.delete(key)
+        this.turnArtifactWatches.delete(key)
+      })
+    this.turnArtifactCaptureTasks.set(key, Object.freeze({ controller, task }))
+  }
+
+  private async captureTurnArtifactTerminal(
+    watch: TurnArtifactWatch,
+    signal: AbortSignal,
+    initial?: Readonly<{
+      adapter: AgentRuntimeAdapter
+      context: AgentRuntimeAdapterContext
+    }>
+  ): Promise<void> {
+    const publisher = this.options.turnArtifacts
+    if (!publisher) return
+    let resolved = initial
+    let retryMs = TURN_ARTIFACT_CAPTURE_RETRY_MIN_MS
+    while (!signal.aborted && !this.disposed) {
+      try {
+        if (!resolved) {
+          const runtimeId = optionalRuntimeId(watch.runtimeId)
+          if (!runtimeId) throw new Error(`Unsupported Agent runtime: ${watch.runtimeId}`)
+          resolved = await this.resolveRequiredRuntime(
+            runtimeId,
+            watch.threadId,
+            watch.workspaceLocator
+          )
+        }
+        for await (const event of resolved.adapter.subscribeEvents(resolved.context, {
+          runtimeId: resolved.adapter.id,
+          threadId: watch.threadId,
+          sinceSeq: 0,
+          signal
+        })) {
+          if (signal.aborted || this.disposed) return
+          if (event.threadId !== watch.threadId || event.turnId?.trim() !== watch.turnId) continue
+          await this.persistExecutorFilePatchReceipt(resolved.adapter.id, watch, event)
+          const state = event.kind === 'turn_lifecycle'
+            ? normalizeAgentRuntimeTurnState(event.state)
+            : undefined
+          if (!state || !isAgentRuntimeTerminalTurnState(state)) continue
+          await this.persistTerminalArtifactBoundaryOnce(
+            resolved.adapter.id,
+            event,
+            watch,
+            state,
+            durableTurnOccurredAt(event)
+          )
+          this.options.services?.contextState?.observeEvent(event)
+          await this.options.services?.contextLedger?.observeEvent(event).catch(() => undefined)
+          this.observeThreadTurnLifecycle(resolved.adapter.id, event)
+          await this.publishTerminalTurnLifecycle(resolved.adapter.id, resolved.context, event)
+          return
+        }
+        const state = await this.readAcceptedTurnState(resolved.adapter, resolved.context, watch)
+        if (state && isAgentRuntimeTerminalTurnState(state) && state !== 'completed') {
+          await this.releaseAcceptedTurnBoundaryFromStatus(resolved.adapter.id, watch, state)
+          return
+        }
+      } catch {
+        if (signal.aborted || this.disposed) return
+        resolved = undefined
+      }
+      await abortableSleep(retryMs, signal)
+      retryMs = Math.min(TURN_ARTIFACT_CAPTURE_RETRY_MAX_MS, retryMs * 2)
+    }
+  }
+
+  private async persistExecutorFilePatchReceipt(
+    runtimeId: AgentRuntimeId,
+    watch: TurnArtifactWatch,
+    event: AgentRuntimeEvent
+  ): Promise<void> {
+    const publisher = this.options.turnArtifacts
+    if (!publisher || !watch.workspaceRoot || event.kind !== 'tool_event') return
+    const key = turnGovernanceKey(runtimeId, watch.threadId, watch.turnId)
+    const previous = this.turnArtifactPatchReceiptDrains.get(key) ?? Promise.resolve()
+    let drain!: Promise<void>
+    drain = previous.catch(() => undefined).then(async () => {
+      const current = this.turnArtifactWatches.get(key) ?? watch
+      const receipts = captureTurnFilePatchReceipts({
+        runtimeId,
+        workspaceRoot: watch.workspaceRoot!,
+        event
+      })
+      if (receipts.length === 0) return
+      const keyOf = (receipt: (typeof receipts)[number]): string => [
+        receipt.executorSequence, receipt.callId, receipt.path, receipt.patchDigest
+      ].join('\0')
+      const byIdentity = new Map((current.filePatchReceipts ?? []).map((item) => [keyOf(item), item]))
+      const missing = receipts.filter((receipt) => !byIdentity.has(keyOf(receipt)))
+      if (missing.length === 0) return
+      await publisher.appendFilePatchReceipts(watch, missing)
+      for (const receipt of missing) byIdentity.set(keyOf(receipt), receipt)
+      this.turnArtifactWatches.set(key, Object.freeze({
+        ...current,
+        filePatchReceipts: Object.freeze([...byIdentity.values()].sort((left, right) => (
+          left.executorSequence - right.executorSequence ||
+          left.callId.localeCompare(right.callId) ||
+          left.path.localeCompare(right.path) ||
+          left.patchDigest.localeCompare(right.patchDigest)
+        )))
+      }))
+    }).finally(() => {
+      if (this.turnArtifactPatchReceiptDrains.get(key) === drain) {
+        this.turnArtifactPatchReceiptDrains.delete(key)
+      }
+    })
+    this.turnArtifactPatchReceiptDrains.set(key, drain)
+    await drain
+  }
+
+  private async drainExecutorFilePatchReceipts(key: string): Promise<void> {
+    while (true) {
+      const drain = this.turnArtifactPatchReceiptDrains.get(key)
+      if (!drain) return
+      await drain
+    }
+  }
+
+  private async readAcceptedTurnState(
+    adapter: AgentRuntimeAdapter,
+    context: AgentRuntimeAdapterContext,
+    watch: TurnArtifactWatch
+  ): Promise<AgentRuntimeTurnState | undefined> {
+    const status = await adapter.readThreadStatus(context, {
+      runtimeId: adapter.id,
+      threadId: watch.threadId,
+      ...(watch.workspaceLocator ? { workspaceLocator: watch.workspaceLocator } : {})
+    })
+    if (status.id.trim() !== watch.threadId || status.runtimeId !== adapter.id) {
+      throw new Error('Accepted turn artifact recovery resolved to a different thread.')
+    }
+    if (status.latestTurnId?.trim() !== watch.turnId) return undefined
+    return normalizeAgentRuntimeTurnState(status.latestTurnStatus ?? status.status) ?? undefined
+  }
+
+  private async persistTerminalArtifactBoundaryOnce(
+    runtimeId: AgentRuntimeId,
+    event: AgentRuntimeEvent,
+    watch: Pick<TurnArtifactWatch, 'runtimeId' | 'threadId' | 'turnId' | 'workspaceRoot' | 'filePatchReceipts'>,
+    state: AgentRuntimeTurnState,
+    terminalOccurredAt: string
+  ): Promise<void> {
+    const key = turnGovernanceKey(runtimeId, event.threadId, watch.turnId)
+    await this.drainExecutorFilePatchReceipts(key)
+    const existing = this.terminalArtifactBoundaries.get(key)
+    if (existing) return existing
+    const operation = (async () => {
+      const capturedWatch = this.turnArtifactWatches.get(key) ?? watch
+      const terminalFileEffects = state === 'completed' && capturedWatch.workspaceRoot && capturedWatch.filePatchReceipts?.length
+        ? await captureDeclaredTurnFileEffects(
+            capturedWatch.workspaceRoot,
+            capturedWatch.filePatchReceipts,
+            terminalOccurredAt
+          )
+        : undefined
+      if (state === 'completed') {
+        await this.publishCompletedTurnArtifactIntent(
+          runtimeId,
+          event,
+          this.turnArtifactWatches.get(key),
+          terminalFileEffects
+        )
+      }
+    })()
+    let guarded!: Promise<void>
+    guarded = operation.catch((error) => {
+      if (this.terminalArtifactBoundaries.get(key) === guarded) {
+        this.terminalArtifactBoundaries.delete(key)
+      }
+      throw error
+    })
+    this.terminalArtifactBoundaries.set(key, guarded)
+    return guarded
+  }
+
+  private turnArtifactWatch(
+    runtimeId: AgentRuntimeId,
+    input: AgentRuntimeTurnStartInput,
+    context: AgentRuntimeAdapterContext,
+    handle: AgentRuntimeTurnHandle,
+    binding: Pick<
+      TurnArtifactStart,
+      | 'clientDirectiveId'
+      | 'inputDigest'
+      | 'issuerEpoch'
+      | 'deliveryAttemptOrdinal'
+      | 'issuerEpoch'
+      | 'deliveryAttemptId'
+      | 'deliveryAttemptOrdinal'
+      | 'boundaryLeaseId'
+    >
+  ): TurnArtifactWatch {
+    const workspaceRoot = input.workspace?.trim() || context.settings.workspaceRoot?.trim()
+    return Object.freeze({
+      runtimeId,
+      threadId: (handle.threadId || input.threadId).trim(),
+      turnId: handle.turnId.trim(),
+      clientDirectiveId: binding.clientDirectiveId,
+      inputDigest: binding.inputDigest,
+      issuerEpoch: binding.issuerEpoch,
+      deliveryAttemptId: binding.deliveryAttemptId,
+      deliveryAttemptOrdinal: binding.deliveryAttemptOrdinal,
+      boundaryLeaseId: binding.boundaryLeaseId,
+      bindingSource: 'provider-accepted',
+      ...(handle.userMessageItemId
+        ? { providerUserMessageItemId: handle.userMessageItemId }
+        : {}),
+      ...(workspaceRoot ? { workspaceRoot } : {}),
+      ...(context.workspaceHost?.locator ? { workspaceLocator: context.workspaceHost.locator } : {})
+    })
+  }
+
+  private turnArtifactStart(
+    runtimeId: AgentRuntimeId,
+    input: AgentRuntimeTurnStartInput,
+    context: AgentRuntimeAdapterContext
+  ): TurnArtifactStartDraft {
+    const clientDirectiveId = input.clientDirectiveId?.trim() || `directive-${randomUUID()}`
+    const workspaceRoot = input.workspace?.trim() || context.settings.workspaceRoot?.trim()
+    return Object.freeze({
+      runtimeId,
+      threadId: input.threadId.trim(),
+      clientDirectiveId,
+      inputDigest: stableJsonDigest({
+        text: userDirectiveText(input),
+        workspaceRoot: workspaceRoot ?? null,
+        workspaceLocator: context.workspaceHost?.locator ?? null
+      }),
+      ...(workspaceRoot ? { workspaceRoot } : {}),
+      ...(context.workspaceHost?.locator ? { workspaceLocator: context.workspaceHost.locator } : {})
+    })
   }
 
   private startTurnTraceCapture(
@@ -636,8 +1266,12 @@ export class AgentRuntimeHost {
     duplicate: (turnId: string) => T
   ): Promise<T> {
     const service = this.options.services?.contextLedger
-    const clientDirectiveId = input.clientDirectiveId?.trim() || `directive-${randomUUID()}`
-    if (!service) return (await deliver(input.clientDirectiveId?.trim() || undefined)).value
+    const existingDirectiveId = input.clientDirectiveId?.trim()
+    const clientDirectiveId = existingDirectiveId || `directive-${randomUUID()}`
+    if (!service) {
+      const directiveId = 'turnId' in input ? existingDirectiveId : clientDirectiveId
+      return (await deliver(directiveId)).value
+    }
     await service.acceptDirective({
       runtimeId: input.runtimeId,
       threadId: input.threadId,
@@ -728,11 +1362,16 @@ export class AgentRuntimeHost {
     const candidateAssistantEvents = new Map<string, AgentRuntimeEvent[]>()
     const terminalTurns = new Set<string>()
     const recordVisibleEvent = async (event: AgentRuntimeEvent): Promise<void> => {
+      const artifactTurnId = event.turnId?.trim()
+      if (event.kind === 'tool_event' && artifactTurnId) {
+        const artifactKey = turnGovernanceKey(adapter.id, event.threadId, artifactTurnId)
+        const watch = this.turnArtifactWatches.get(artifactKey)
+        if (watch) await this.persistExecutorFilePatchReceipt(adapter.id, watch, event)
+      }
       this.options.services?.contextState?.observeEvent(event)
       await this.options.services?.contextLedger?.observeEvent(event).catch(() => undefined)
       this.observeThreadTurnLifecycle(adapter.id, event)
       await this.publishTerminalTurnLifecycle(adapter.id, context, event)
-      await this.publishCompletedTurnArtifactIntent(adapter.id, event)
     }
     const governEvent = (
       event: AgentRuntimeEvent,
@@ -979,6 +1618,13 @@ export class AgentRuntimeHost {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    for (const capture of this.turnArtifactCaptureTasks.values()) capture.controller.abort()
+    this.turnArtifactCaptureTasks.clear()
+    this.turnArtifactWatches.clear()
+    this.turnArtifactPatchReceiptDrains.clear()
+    this.terminalArtifactBoundaries.clear()
+    this.turnBoundaryBindings.clear()
+    this.pendingTurnBoundaries.clear()
     this.subagentToolBridge?.dispose()
     for (const record of this.capabilityApprovals.values()) {
       if (record.resolve) this.settleCapabilityApproval(record, 'cancelled', 'Agent runtime host stopped.')
@@ -1194,6 +1840,59 @@ export class AgentRuntimeHost {
   ): Promise<{ handled: true; value: unknown } | { handled: false }> {
     const payload = recordPayload(input.payload)
     switch (input.operation) {
+      case 'listPendingTurnStarts': {
+        return {
+          handled: true,
+          value: await this.listPendingTurnArtifactStarts({
+            ...(input.runtimeId ? { runtimeId: input.runtimeId } : {}),
+            ...(optionalString(payload.threadId) ? { threadId: optionalString(payload.threadId) } : {}),
+            ...(optionalString(payload.workspaceRoot)
+              ? { workspaceRoot: optionalString(payload.workspaceRoot) }
+              : {}),
+            ...(input.workspaceLocator ? { workspaceLocator: input.workspaceLocator } : {})
+          })
+        }
+      }
+      case 'resolvePendingTurnStart': {
+        const boundaryLeaseId = requiredString(payload, 'boundaryLeaseId')
+        return {
+          handled: true,
+          value: {
+            action: 'resolve',
+            boundaryLeaseId,
+            applied: await this.resolvePendingTurnArtifactStart({
+              boundaryLeaseId,
+              runtimeId,
+              threadId: requiredString(payload, 'threadId'),
+              turnId: requiredString(payload, 'turnId'),
+              ...(optionalString(payload.workspaceRoot)
+                ? { workspaceRoot: optionalString(payload.workspaceRoot) }
+                : {}),
+              ...(input.workspaceLocator ? { workspaceLocator: input.workspaceLocator } : {}),
+              userMessageItemId: requiredString(payload, 'userMessageItemId')
+            })
+          }
+        }
+      }
+      case 'releasePendingTurnStart': {
+        const boundaryLeaseId = requiredString(payload, 'boundaryLeaseId')
+        return {
+          handled: true,
+          value: {
+            action: 'release-as-rejected',
+            boundaryLeaseId,
+            applied: await this.releasePendingTurnArtifactStart({
+              boundaryLeaseId,
+              runtimeId,
+              threadId: requiredString(payload, 'threadId'),
+              ...(optionalString(payload.workspaceRoot)
+                ? { workspaceRoot: optionalString(payload.workspaceRoot) }
+                : {}),
+              ...(input.workspaceLocator ? { workspaceLocator: input.workspaceLocator } : {})
+            })
+          }
+        }
+      }
       case 'runCodeNavigation': {
         const service = this.options.services?.codeNavigation
         if (!service) return { handled: false }
@@ -1726,6 +2425,16 @@ export class AgentRuntimeHost {
         outputSchema: 'AgentRuntimeThreadGoal'
       })
     }
+    if (this.options.turnArtifacts) {
+      addDescriptor({
+        id: 'turnBoundary.pendingStartGovernance',
+        channel: 'host_service',
+        available: true,
+        readonly: false,
+        inputSchema: 'AgentRuntimePendingTurnStartListInput|ResolutionInput|ReleaseInput',
+        outputSchema: 'AgentRuntimePendingTurnStart[]|GovernanceReceipt'
+      })
+    }
 
     const derivedMatrix = createAgentRuntimeCapabilityMatrix({
       nativeHistory: capabilities.storage.backendThreadIdStable || !capabilities.storage.guiOwnedThreads,
@@ -2180,7 +2889,11 @@ export class AgentRuntimeHost {
   private enqueueThreadTurnStart(
     adapter: AgentRuntimeAdapter,
     context: AgentRuntimeAdapterContext,
-    input: AgentRuntimeTurnStartInput
+    input: AgentRuntimeTurnStartInput,
+    clientDirectiveIdWasHostGenerated: boolean,
+    beforeDispatch?: (
+      canonicalInput: AgentRuntimeTurnStartInput
+    ) => Promise<AgentRuntimeAdapterContext>
   ): Promise<AgentRuntimeTurnHandle> {
     return this.enqueueThreadOperation(adapter.id, input.threadId, async () => {
         const callerId = capabilityAgentCallerId({
@@ -2189,7 +2902,10 @@ export class AgentRuntimeHost {
           requestId: input.threadId
         })
         try {
-          const steeringInput = await this.withCanonicalVisibleState(adapter.id, input, 'reuse')
+          const steeringInputWithDirective = await this.withCanonicalVisibleState(adapter.id, input, 'reuse')
+          const steeringInput = clientDirectiveIdWasHostGenerated
+            ? omitClientDirectiveId(steeringInputWithDirective)
+            : steeringInputWithDirective
           const steered = await this.steerActiveTurnIfSupported(adapter, context, steeringInput)
           if (steered) {
             if (input.visibleContextBindingId) {
@@ -2202,7 +2918,8 @@ export class AgentRuntimeHost {
           }
           await this.waitForThreadTerminal(adapter, context, input)
           const canonicalInput = await this.withCanonicalVisibleState(adapter.id, input)
-          const handle = await this.startAdapterTurn(adapter, context, canonicalInput)
+          const dispatchContext = beforeDispatch ? await beforeDispatch(canonicalInput) : context
+          const handle = await this.startAdapterTurn(adapter, dispatchContext, canonicalInput)
           this.options.services?.visibleContext?.assignSurfaceTurn?.(
             callerId,
             handle.turnId,
@@ -2274,7 +2991,21 @@ export class AgentRuntimeHost {
         nativeVisualProofChainPending: startValidation.nativeVisualObligationsPending
       }
     }
-    const handle = await adapter.startTurn(dispatchContext, adapterInput)
+    let handle: AgentRuntimeTurnHandle
+    if (adapter.prepareTurnCapture && dispatchContext.onTurnAccepted) {
+      const prepared = await adapter.prepareTurnCapture(dispatchContext, adapterInput)
+      await dispatchContext.onTurnAccepted(prepared.handle)
+      handle = await prepared.dispatch()
+      if (
+        handle.threadId !== prepared.handle.threadId ||
+        handle.turnId !== prepared.handle.turnId ||
+        handle.userMessageItemId !== prepared.handle.userMessageItemId
+      ) {
+        throw new Error('Prepared Agent turn dispatched with a different identity.')
+      }
+    } else {
+      handle = await adapter.startTurn(dispatchContext, adapterInput)
+    }
     this.rememberTurnGovernanceProfile(adapter.id, adapterInput, handle)
     this.executionIntegrity.rememberTurn(
       adapter.id,
@@ -3009,8 +3740,82 @@ export class AgentRuntimeHost {
     if (!state || !isAgentRuntimeTerminalTurnState(state)) return
     const turnId = event.turnId?.trim()
     if (!turnId) return
+    let occurredAt: string
+    try {
+      occurredAt = durableTurnOccurredAt(event)
+    } catch {
+      return
+    }
     const key = turnGovernanceKey(runtimeId, event.threadId, turnId)
-    const workspaceRoot = this.turnWorkspaces.get(key) || context.settings.workspaceRoot?.trim()
+    const watch = this.turnArtifactWatches.get(key)
+    const boundary = this.turnBoundaryBindings.get(key) ?? (
+      watch?.clientDirectiveId && watch.deliveryAttemptId && watch.boundaryLeaseId
+      ? Object.freeze({
+          issuerEpoch: watch.issuerEpoch,
+          deliveryAttemptOrdinal: watch.deliveryAttemptOrdinal,
+          boundaryLeaseId: watch.boundaryLeaseId,
+          deliveryAttemptId: watch.deliveryAttemptId,
+          clientDirectiveId: watch.clientDirectiveId,
+          ...(watch.workspaceRoot ? { workspaceRoot: watch.workspaceRoot } : {})
+        })
+      : this.pendingTurnBoundaries.get(threadTurnKey(runtimeId, event.threadId)))
+    if (watch) {
+      await this.persistTerminalArtifactBoundaryOnce(
+        runtimeId,
+        event,
+        watch,
+        state,
+        occurredAt
+      )
+    }
+    const existingPublication = this.terminalLifecyclePublications.get(key)
+    if (existingPublication) {
+      await existingPublication
+      return
+    }
+    const publication = this.publishTerminalTurnLifecycleOnce(
+      runtimeId,
+      context,
+      event,
+      state,
+      turnId,
+      key,
+      occurredAt,
+      boundary
+    )
+    this.terminalLifecyclePublications.set(key, publication)
+    await publication.finally(() => {
+      if (this.terminalLifecyclePublications.get(key) === publication) {
+        this.terminalLifecyclePublications.delete(key)
+      }
+      this.turnBoundaryBindings.delete(key)
+      if (boundary) {
+        const pendingKey = threadTurnKey(runtimeId, event.threadId)
+        if (this.pendingTurnBoundaries.get(pendingKey)?.boundaryLeaseId === boundary.boundaryLeaseId) {
+          this.pendingTurnBoundaries.delete(pendingKey)
+        }
+      }
+    })
+  }
+
+  private async publishTerminalTurnLifecycleOnce(
+    runtimeId: AgentRuntimeId,
+    context: AgentRuntimeAdapterContext,
+    event: AgentRuntimeEvent,
+    state: AgentRuntimeTurnState,
+    turnId: string,
+    key: string,
+    occurredAt: string,
+    boundary?: Readonly<{
+      issuerEpoch: string
+      deliveryAttemptOrdinal: number
+      boundaryLeaseId: string
+      deliveryAttemptId: string
+      clientDirectiveId: string
+      workspaceRoot?: string
+    }>
+  ): Promise<void> {
+    const workspaceRoot = boundary?.workspaceRoot || this.turnWorkspaces.get(key) || context.settings.workspaceRoot?.trim()
     await Promise.resolve(this.options.services?.visibleContext?.releaseSurface?.(
       capabilityAgentCallerId({
         runtimeId,
@@ -3020,8 +3825,10 @@ export class AgentRuntimeHost {
       undefined,
       turnId
     )).catch(() => undefined)
-    await this.publishTurnLifecycle(Object.freeze({
+    if (!boundary) return
+    const lifecycle = Object.freeze({
       kind: 'after-turn',
+      settlementSource: 'runtime',
       state: state === 'completed'
         ? 'completed'
         : state === 'failed'
@@ -3030,16 +3837,130 @@ export class AgentRuntimeHost {
       runtimeId,
       threadId: event.threadId,
       turnId,
+      issuerEpoch: boundary.issuerEpoch,
+      deliveryAttemptOrdinal: boundary.deliveryAttemptOrdinal,
+      boundaryLeaseId: boundary.boundaryLeaseId,
+      deliveryAttemptId: boundary.deliveryAttemptId,
+      clientDirectiveId: boundary.clientDirectiveId,
       ...(workspaceRoot ? { workspaceRoot } : {}),
+      occurredAt
+    }) as DomainMainAfterTurnEvent
+    if (this.options.turnArtifacts) {
+      await this.options.turnArtifacts.publishLifecycleSettlement(lifecycle)
+    } else {
+      await this.publishTurnLifecycle(lifecycle)
+    }
+  }
+
+  private async releaseBeforeTurnBoundary(event: DomainMainBeforeTurnEvent): Promise<void> {
+    const settlement = Object.freeze({
+      kind: 'after-turn',
+      state: 'rejected',
+      settlementSource: 'runtime',
+      issuerEpoch: event.issuerEpoch,
+      deliveryAttemptOrdinal: event.deliveryAttemptOrdinal,
+      boundaryLeaseId: event.boundaryLeaseId,
+      deliveryAttemptId: event.deliveryAttemptId,
+      runtimeId: event.runtimeId,
+      threadId: event.threadId,
+      clientDirectiveId: event.clientDirectiveId,
+      ...(event.workspaceRoot ? { workspaceRoot: event.workspaceRoot } : {}),
+      occurredAt: new Date().toISOString()
+    }) satisfies DomainMainAfterTurnEvent
+    if (this.options.turnArtifacts) {
+      await this.options.turnArtifacts.publishLifecycleSettlement(settlement)
+    } else {
+      await this.publishTurnLifecycle(settlement)
+    }
+  }
+
+  private async releaseAcceptedTurnBoundaryFromStatus(
+    runtimeId: AgentRuntimeId,
+    watch: Pick<
+      TurnArtifactWatch,
+      | 'threadId'
+      | 'turnId'
+      | 'clientDirectiveId'
+      | 'issuerEpoch'
+      | 'deliveryAttemptOrdinal'
+      | 'deliveryAttemptId'
+      | 'boundaryLeaseId'
+      | 'providerUserMessageItemId'
+      | 'bindingSource'
+      | 'workspaceRoot'
+    >,
+    state: AgentRuntimeTurnState
+  ): Promise<void> {
+    const clientDirectiveId = watch.clientDirectiveId?.trim()
+    if (
+      !clientDirectiveId ||
+      !watch.deliveryAttemptId ||
+      !watch.boundaryLeaseId ||
+      state === 'completed'
+    ) return
+    const key = turnGovernanceKey(runtimeId, watch.threadId, watch.turnId)
+    const existing = this.terminalLifecyclePublications.get(key)
+    if (existing) return existing
+    const publication = this.options.turnArtifacts!.publishLifecycleSettlement(Object.freeze({
+      kind: 'after-turn',
+      settlementSource: 'runtime',
+      state: state === 'failed' ? 'failed' : 'cancelled',
+      issuerEpoch: watch.issuerEpoch,
+      deliveryAttemptOrdinal: watch.deliveryAttemptOrdinal,
+      boundaryLeaseId: watch.boundaryLeaseId,
+      deliveryAttemptId: watch.deliveryAttemptId,
+      clientDirectiveId,
+      runtimeId,
+      threadId: watch.threadId,
+      turnId: watch.turnId,
+      ...(watch.workspaceRoot ? { workspaceRoot: watch.workspaceRoot } : {}),
       occurredAt: new Date().toISOString()
     }))
+    this.terminalLifecyclePublications.set(key, publication)
+    await publication.finally(() => {
+      this.turnBoundaryBindings.delete(key)
+      const pendingKey = threadTurnKey(runtimeId, watch.threadId)
+      if (
+        this.pendingTurnBoundaries.get(pendingKey)?.boundaryLeaseId ===
+        watch.boundaryLeaseId
+      ) {
+        this.pendingTurnBoundaries.delete(pendingKey)
+      }
+      if (this.terminalLifecyclePublications.get(key) === publication) {
+        this.terminalLifecyclePublications.delete(key)
+      }
+    })
   }
 
   private async publishTurnLifecycle(event: DomainMainTurnLifecycleEvent): Promise<void> {
+    if (event.kind === 'before-turn' && this.requiredBeforeTurnSubscribers.size > 0) {
+      const results = await Promise.allSettled(
+        [...this.requiredBeforeTurnSubscribers].map((listener) => Promise.resolve(listener(event)))
+      )
+      const failures = results.flatMap((result) => (
+        result.status === 'rejected' ? [result.reason] : []
+      ))
+      if (failures.length > 0) {
+        throw new AgentRuntimeTurnPreflightError(
+          'runtime_before_turn_barrier_failed',
+          `A required before-turn boundary failed: ${failures.map(errorMessage).join('; ')}`,
+          'precondition_failed',
+          true
+        )
+      }
+    }
     if (this.turnLifecycleSubscribers.size === 0) return
-    await Promise.allSettled(
+    const results = await Promise.allSettled(
       [...this.turnLifecycleSubscribers].map((listener) => Promise.resolve(listener(event)))
     )
+    if (event.kind === 'after-turn') {
+      const failures = results.flatMap((result) => (
+        result.status === 'rejected' ? [result.reason] : []
+      ))
+      if (failures.length > 0) {
+        throw new AggregateError(failures, 'Turn lifecycle settlement fan-out failed.')
+      }
+    }
   }
 
   private governanceProfileForEvent(
@@ -3054,7 +3975,23 @@ export class AgentRuntimeHost {
 
   private async publishCompletedTurnArtifactIntent(
     runtimeId: AgentRuntimeId,
-    event: AgentRuntimeEvent
+    event: AgentRuntimeEvent,
+    watch?: Pick<
+      TurnArtifactWatch,
+      | 'clientDirectiveId'
+      | 'inputDigest'
+      | 'issuerEpoch'
+      | 'deliveryAttemptOrdinal'
+      | 'deliveryAttemptId'
+      | 'boundaryLeaseId'
+      | 'providerUserMessageItemId'
+      | 'bindingSource'
+      | 'workspaceRoot'
+      | 'workspaceLocator'
+      | 'fileBaseline'
+      | 'filePatchReceipts'
+    >,
+    terminalFileEffects?: TurnArtifactIntent['fileEffects']
   ): Promise<void> {
     const publisher = this.options.turnArtifacts
     if (!publisher) return
@@ -3064,27 +4001,55 @@ export class AgentRuntimeHost {
     ) return
     const threadId = event.threadId.trim()
     const turnId = event.turnId?.trim()
-    if (!threadId || !turnId) return
+    if (!threadId || !turnId || !watch) return
     const key = turnGovernanceKey(runtimeId, threadId, turnId)
+    const workspaceRoot = watch.workspaceRoot?.trim() || this.turnWorkspaces.get(key)
+    const workspaceLocator = watch.workspaceLocator ?? this.threadWorkspaceHosts.get(
+      threadTurnKey(runtimeId, threadId)
+    )?.locator
     await publisher.publish(Object.freeze({
       runtimeId,
       threadId,
       turnId,
-      ...(event.seq === undefined ? {} : { sequence: event.seq }),
-      ...(this.turnWorkspaces.get(key)
-        ? { workspaceRoot: this.turnWorkspaces.get(key) }
+      issuerEpoch: watch.issuerEpoch,
+      deliveryAttemptId: watch.deliveryAttemptId,
+      deliveryAttemptOrdinal: watch.deliveryAttemptOrdinal,
+      boundaryLeaseId: watch.boundaryLeaseId,
+      ...(watch.providerUserMessageItemId
+        ? { providerUserMessageItemId: watch.providerUserMessageItemId }
         : {}),
+      ...(watch.bindingSource ? { bindingSource: watch.bindingSource } : {}),
+      ...(watch.clientDirectiveId && watch.inputDigest ? {
+        clientDirectiveId: watch.clientDirectiveId,
+        inputDigest: watch.inputDigest
+      } : {}),
+      ...(watch?.fileBaseline ? { fileBaseline: watch.fileBaseline } : {}),
+      ...(terminalFileEffects ? { fileEffects: terminalFileEffects } : {}),
+      ...(watch?.filePatchReceipts?.length ? { filePatchReceipts: watch.filePatchReceipts } : {}),
+      ...(event.seq === undefined ? {} : { sequence: event.seq }),
+      ...(workspaceRoot ? { workspaceRoot } : {}),
+      ...(workspaceLocator ? { workspaceLocator } : {}),
       occurredAt: durableTurnOccurredAt(event)
     }))
   }
 
   /** Materializes one already-durable turn intent exactly once before fan-out. */
   async materializeCompletedTurnArtifact(
-    intent: TurnArtifactIntent
+    intent: TurnArtifactReplayIntent
   ): Promise<DomainTurnArtifactEvent> {
     const runtimeId = optionalRuntimeId(intent.runtimeId)
     if (!runtimeId) throw new Error(`Unsupported Agent runtime: ${intent.runtimeId}`)
-    const { adapter, context } = await this.resolveRequiredRuntime(runtimeId, intent.threadId)
+    const { adapter, context } = await this.resolveRequiredRuntime(
+      runtimeId,
+      intent.threadId,
+      intent.workspaceLocator
+    )
+    const throughSeq = intent.sequence
+    if (!Number.isSafeInteger(throughSeq) || Number(throughSeq) <= 0) {
+      throw new Error(
+        `Completed Agent turn ${runtimeId}:${intent.threadId}:${intent.turnId} has no positive durable terminal sequence.`
+      )
+    }
     const status = withWorkspaceHostOnStatus(await adapter.readThreadStatus(context, {
       runtimeId,
       threadId: intent.threadId
@@ -3152,16 +4117,29 @@ export class AgentRuntimeHost {
         `Completed Agent turn ${runtimeId}:${intent.threadId}:${intent.turnId} changed workspace before materialization.`
       )
     }
+    const filePatchReceipts = intent.filePatchReceipts ?? []
+    if (filePatchReceipts.some((receipt) => receipt.executorSequence >= Number(throughSeq))) {
+      throw new Error('Executor file patch receipt does not precede the terminal sequence.')
+    }
     return Object.freeze({
       contractVersion: 1,
       kind: 'turn-completed',
       runtimeId,
       threadId: intent.threadId,
       turnId: intent.turnId,
+      ...(intent.issuerEpoch ? { issuerEpoch: intent.issuerEpoch } : {}),
+      ...(intent.deliveryAttemptOrdinal === undefined
+        ? {}
+        : { deliveryAttemptOrdinal: intent.deliveryAttemptOrdinal }),
+      ...(intent.deliveryAttemptId ? { deliveryAttemptId: intent.deliveryAttemptId } : {}),
+      ...(intent.boundaryLeaseId ? { boundaryLeaseId: intent.boundaryLeaseId } : {}),
+      ...(intent.clientDirectiveId ? { clientDirectiveId: intent.clientDirectiveId } : {}),
       targetWatermark: String(intent.sequence ?? intent.turnId),
       ...(intent.sequence === undefined ? {} : { sequence: intent.sequence }),
       workspaceRoot,
       occurredAt: intent.occurredAt,
+      ...(intent.fileEffects ? { fileEffects: intent.fileEffects } : {}),
+      ...(filePatchReceipts.length ? { filePatchReceipts } : {}),
       artifacts: Object.freeze([...artifacts])
     })
   }
@@ -3280,6 +4258,19 @@ function shouldClearTrackedActiveTurn(activity: ThreadTurnActivity, trackedTurnI
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve()
+  return new Promise((resolve) => {
+    const timeout = setTimeout(finish, ms)
+    function finish(): void {
+      clearTimeout(timeout)
+      signal.removeEventListener('abort', finish)
+      resolve()
+    }
+    signal.addEventListener('abort', finish, { once: true })
+  })
 }
 
 function threadDetailItems(detail: AgentRuntimeThreadSnapshot): AgentRuntimeItem[] {
@@ -3434,15 +4425,17 @@ function optionalString(value: unknown): string | undefined {
 
 function durableTurnOccurredAt(event: AgentRuntimeEvent): string {
   const createdAt = event.createdAt?.trim()
-  if (createdAt && Number.isFinite(Date.parse(createdAt))) {
+  if (
+    createdAt &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(createdAt) &&
+    Number.isFinite(Date.parse(createdAt))
+  ) {
     return new Date(createdAt).toISOString()
   }
-  const sequence = typeof event.seq === 'number' &&
-    Number.isSafeInteger(event.seq) &&
-    event.seq >= 0
-    ? Math.min(event.seq, 8_640_000_000_000_000)
-    : 0
-  return new Date(sequence).toISOString()
+  throw new Error(
+    `Completed Agent turn ${event.runtimeId}:${event.threadId}:${event.turnId ?? '<missing>'} ` +
+    'has no authoritative durable occurrence timestamp.'
+  )
 }
 
 function optionalRuntimeId(value: unknown): AgentRuntimeId | undefined {
@@ -3466,6 +4459,32 @@ function assertPayloadRuntimeIdMatchesOwner(
   if (runtimeId && runtimeId !== ownerRuntimeId) {
     throw new Error(`Agent runtime auxiliary payload.${key} must match the top-level runtimeId.`)
   }
+}
+
+function assertPendingTurnStartScope(
+  start: PendingTurnArtifactStart,
+  input: AgentRuntimePendingTurnStartResolution | AgentRuntimePendingTurnStartRelease
+): void {
+  const workspaceRoot = optionalString(input.workspaceRoot)
+  const ownerWorkspaceRoot = optionalString(start.workspaceRoot)
+  if (
+    start.runtimeId !== input.runtimeId ||
+    start.threadId !== input.threadId.trim() ||
+    ownerWorkspaceRoot !== workspaceRoot ||
+    !sameWorkspaceLocator(start.workspaceLocator, input.workspaceLocator)
+  ) {
+    throw new Error('Pending turn governance scope does not match the durable owner.')
+  }
+}
+
+function sameWorkspaceLocator(
+  left: WorkspaceLocator | undefined,
+  right: WorkspaceLocator | undefined
+): boolean {
+  if (!left || !right) return left === right
+  return left.contractVersion === right.contractVersion &&
+    left.hostSessionId === right.hostSessionId &&
+    left.path === right.path
 }
 
 function governanceProfile(value: unknown): AgentRuntimeGovernanceProfile | undefined {
@@ -3651,26 +4670,35 @@ function errorMessage(error: unknown): string {
 }
 
 function isDefiniteDirectiveRejection(error: unknown): boolean {
+  const typedCode = optionalString(recordPayload(error).code)
+  if (typedCode && DEFINITE_DIRECTIVE_REJECTION_CODES.has(typedCode)) return true
   const message = errorMessage(error).trim()
   if (!message.startsWith('{')) return false
   try {
     const code = optionalString(recordPayload(JSON.parse(message)).code)
-    return code === 'validation_error' ||
-      code === 'unauthorized' ||
-      code === 'forbidden' ||
-      code === 'not_found' ||
-      code === 'conflict' ||
-      code === 'turn_in_progress' ||
-      code === 'turn_not_running' ||
-      code === 'capability_unavailable' ||
-      code === 'policy_blocked' ||
-      code === 'model_modality_unsupported' ||
-      code === 'attachment_validation_failed' ||
-      code === 'not_implemented'
+    return Boolean(code && DEFINITE_DIRECTIVE_REJECTION_CODES.has(code))
   } catch {
     return false
   }
 }
+
+const DEFINITE_DIRECTIVE_REJECTION_CODES = new Set([
+  'runtime_before_turn_barrier_failed',
+  'runtime_turn_predecessor_pending',
+  'runtime_turn_boundary_snapshot_failed',
+  'validation_error',
+  'unauthorized',
+  'forbidden',
+  'not_found',
+  'conflict',
+  'turn_in_progress',
+  'turn_not_running',
+  'capability_unavailable',
+  'policy_blocked',
+  'model_modality_unsupported',
+  'attachment_validation_failed',
+  'not_implemented'
+])
 
 function normalizeRuntimeFileReference(
   reference: AgentRuntimeFileReference,
@@ -4303,6 +5331,14 @@ function withWorkspaceLocatorPath<
     ...input,
     workspace: input.workspaceLocator.path
   }
+}
+
+function omitClientDirectiveId(
+  input: AgentRuntimeTurnStartInput
+): AgentRuntimeTurnStartInput {
+  if (!input.clientDirectiveId) return input
+  const { clientDirectiveId: _clientDirectiveId, ...rest } = input
+  return rest
 }
 
 function withWorkspaceHostOnThread<Thread extends AgentRuntimeThread>(
