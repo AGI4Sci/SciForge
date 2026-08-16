@@ -259,7 +259,7 @@ function WorkflowCanvasNode({ id, data, selected }: NodeProps): ReactElement {
   return (
     <div
       className={`relative w-[260px] border px-3 py-2.5 shadow-sm transition-shadow hover:shadow-md ${visual.shell} ${ring} ${disabled}`}
-      title="Inspect this node's live input and output"
+      title={t('workflowInspectNode')}
     >
       <NodeToolbar isVisible={selected} position={Position.Top} offset={8}>
         <div className="flex items-center gap-0.5 rounded-lg border border-ds-border bg-ds-card p-1 shadow-md">
