@@ -328,6 +328,7 @@ function blockFromItem(item: AgentRuntimeItem, turnStatus?: string): ChatBlock |
       return {
         kind: 'user',
         id: item.id,
+        ...(item.turnId ? { turnId: item.turnId } : {}),
         createdAt: item.createdAt,
         text: item.text ?? '',
         meta: disclosureMeta(item.meta),

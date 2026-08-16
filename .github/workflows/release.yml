@@ -12,17 +12,11 @@ on:
         required: true
         default: "gui"
         type: string
-  pull_request:
-    types:
-      - closed
-    branches:
-      - master
-
 permissions:
   contents: write
 
 concurrency:
-  group: release-master
+  group: release-gui
   cancel-in-progress: false
 
 env:
@@ -35,26 +29,31 @@ jobs:
   prepare:
     name: Prepare release version
     runs-on: ubuntu-latest
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (
-        github.event.pull_request.merged == true &&
-        github.event.pull_request.base.ref == 'master' &&
-        github.event.pull_request.head.ref == 'develop' &&
-        github.event.pull_request.head.repo.full_name == github.repository
-      )
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
       release_name: ${{ steps.version.outputs.release_name }}
       previous_tag: ${{ steps.version.outputs.previous_tag }}
       existing_tag: ${{ steps.version.outputs.existing_tag }}
+      source_sha: ${{ steps.source.outputs.sha }}
     steps:
-      - name: Check out merge commit
+      - name: Check out release source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.event.pull_request.merge_commit_sha }}
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Pin a commit from gui
+        id: source
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin refs/heads/gui:refs/remotes/origin/gui
+          source_sha="$(git rev-parse HEAD)"
+          if ! git merge-base --is-ancestor "${source_sha}" origin/gui; then
+            echo "::error::Release ref must resolve to a commit in origin/gui"
+            exit 1
+          fi
+          echo "sha=${source_sha}" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -64,7 +63,7 @@ jobs:
       - name: Compute release version
         id: version
         env:
-          CI_RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || '' }}
+          CI_RELEASE_VERSION: ${{ github.event.inputs.version }}
         run: node ./scripts/compute-ci-release-version.cjs
 
   build-macos:
@@ -78,13 +77,12 @@ jobs:
       CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
       APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
       APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-      CSC_FOR_PULL_REQUEST: "true"
     steps:
-      - name: Check out merge commit
+      - name: Check out pinned release commit
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.event.pull_request.merge_commit_sha }}
+          ref: ${{ needs.prepare.outputs.source_sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -96,7 +94,6 @@ jobs:
         run: npm ci
 
       - name: Decode Apple signing credentials
-        if: github.event_name != 'workflow_dispatch'
         env:
           MAC_CODESIGN_P12_BASE64: ${{ secrets.MAC_CODESIGN_P12_BASE64 }}
           APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
@@ -128,7 +125,6 @@ jobs:
           } >> "${GITHUB_ENV}"
 
       - name: Verify Apple signing credentials
-        if: github.event_name != 'workflow_dispatch'
         run: >
           npm run verify:apple -- --p12 "${CSC_LINK}"
           --p12-password "${CSC_KEY_PASSWORD}"
@@ -138,12 +134,7 @@ jobs:
           --check-notary
 
       - name: Build signed macOS packages
-        if: github.event_name != 'workflow_dispatch'
         run: npm run dist:mac:signed
-
-      - name: Build unsigned macOS packages for manual release
-        if: github.event_name == 'workflow_dispatch'
-        run: npm run dist:mac
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
@@ -167,11 +158,11 @@ jobs:
       RELEASE_CHANNEL: stable
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
-      - name: Check out merge commit
+      - name: Check out pinned release commit
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.event.pull_request.merge_commit_sha }}
+          ref: ${{ needs.prepare.outputs.source_sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -206,11 +197,11 @@ jobs:
       RELEASE_CHANNEL: stable
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
-      - name: Check out merge commit
+      - name: Check out pinned release commit
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.event.pull_request.merge_commit_sha }}
+          ref: ${{ needs.prepare.outputs.source_sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -253,6 +244,8 @@ jobs:
       TAG_NAME: ${{ needs.prepare.outputs.tag }}
       RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
       RELEASE_NAME: ${{ needs.prepare.outputs.release_name }}
+      RELEASE_SOURCE_REF: ${{ github.event.inputs.ref }}
+      RELEASE_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
       PREVIOUS_TAG: ${{ needs.prepare.outputs.previous_tag }}
       RELEASE_CHANNEL: stable
       SCIFORGE_UPDATE_CHANNEL: stable
@@ -264,11 +257,11 @@ jobs:
       R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
       R2_RELEASE_PREFIX: ${{ secrets.R2_RELEASE_PREFIX }}
     steps:
-      - name: Check out merge commit
+      - name: Check out pinned release commit
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ needs.prepare.outputs.source_sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -328,8 +321,8 @@ jobs:
             echo
             echo "- Release version: \`${RELEASE_VERSION}\`"
             echo "- Release channel: \`${RELEASE_CHANNEL}\`"
-            echo "- Branch: \`master\`"
-            echo "- Commit: \`${GITHUB_SHA::7}\`"
+            echo "- Source ref: \`${RELEASE_SOURCE_REF}\`"
+            echo "- Commit: \`${RELEASE_SOURCE_SHA}\`"
             echo "- macOS: Developer ID signed and notarized"
             echo "- Platforms: macOS arm64/x64, Windows x64, Linux x64"
           } >> release-notes.md

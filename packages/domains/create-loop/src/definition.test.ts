@@ -15,7 +15,7 @@ import {
 test('declares the canonical Create Loop package identity', () => {
   assert.equal(WORKFLOW_AUTOMATION_DOMAIN_PACKAGE_NAME, '@sciforge/domain-create-loop')
   assert.equal(WORKFLOW_AUTOMATION_DOMAIN_MODULE_ID, 'sciforge.create-loop')
-  assert.equal(domainPackageDefinition.module.version, '1.0.0')
+  assert.equal(domainPackageDefinition.module.version, '1.0.1')
 })
 
 test('owns main runtime and command-driven renderer contributions', () => {

@@ -256,6 +256,7 @@ test('manual update rejects project-only discovery and cross-workspace explicit 
         turns: [],
         artifacts: []
       }),
+      subscribeMessages: async function* () {},
       hasActiveTurns: () => false
     }
   }))
@@ -319,6 +320,7 @@ test('artifact handoff rejects forged Agent workspace and unbound package execut
         turns: [],
         artifacts: []
       }),
+      subscribeMessages: async function* () {},
       hasActiveTurns: () => false
     }
   }))
@@ -576,6 +578,7 @@ test('execution completion uses a Host-bound synthetic scope through the durable
       read: async () => {
         throw new Error('Synthetic execution scope must not read an Agent thread.')
       },
+      subscribeMessages: async function* () {},
       hasActiveTurns: () => false
     },
     capabilities: {
@@ -756,6 +759,7 @@ function lifecycleContext(
         turns: [],
         artifacts: []
       }),
+      subscribeMessages: async function* () {},
       hasActiveTurns: () => false
     },
     capabilities: {

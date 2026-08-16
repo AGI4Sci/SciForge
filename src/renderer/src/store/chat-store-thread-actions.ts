@@ -23,27 +23,17 @@ import { workspaceLabelFromPath } from '../lib/workspace-label'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
 import { parseSteerCommand } from '../lib/steer-command'
 import {
-  mirrorRemoteChannelMessageApi,
-  updateRemoteChannelActiveThreadContextApi
-} from '../lib/remote-channel-api'
-import {
-  buildRemoteChannelRuntimePrompt,
   buildCodeRuntimePrompt,
-  getActiveAgentApiKey,
-  type RemoteChannelV1
+  getActiveAgentApiKey
 } from '@shared/app-settings'
 import type { AgentRuntimeContextState, AgentRuntimeFileReference } from '@shared/agent-runtime-contract'
 import type { ChatState, ChatStoreGet, ChatStoreSet, QueuedUserMessage } from './chat-store-types'
 import { resetAgentFocusState } from './chat-store-focus-actions'
 import {
-  activeRemoteChannel,
   createClientDirectiveId,
-  remoteChannelThreadBindingsFromChannels,
-  remoteChannelThreadIdsFromChannels,
   compactCodeWorkspaceRoots,
   forgetCodeWorkspaceRoot,
   hydrateBlockModelLabels,
-  isRemoteChannelThread,
   optimisticUserModelLabel,
   readCodeWorkspaceRoots,
   readStoredComposerModel,
@@ -78,7 +68,6 @@ import {
   forkedTurnCount,
   isCodeThread,
   latestThread,
-  rememberPendingRemoteChannelMirror,
   runtimeErrorDetail,
   runtimeStreamRecoveringMessage,
   shouldOpenSettingsForError,
@@ -90,18 +79,6 @@ import { rekeySessionRightPanelWorkspace } from '../lib/session-right-panel-life
 import { draftSessionRightPanelId } from '../lib/session-right-panel-owner'
 
 type SseAbortRef = { current: AbortController | null }
-
-function remoteChannelForThread(state: ChatState, threadId: string | null | undefined): RemoteChannelV1 | null {
-  const targetThreadId = threadId?.trim() ?? ''
-  if (!targetThreadId) return null
-  const binding = remoteChannelThreadBindingsFromChannels(state.remoteChannels).get(targetThreadId)
-  if (binding) {
-    return state.remoteChannels.find((channel) => channel.id === binding.channelId) ?? null
-  }
-  const thread = state.threads.find((item) => item.id === targetThreadId) ?? null
-  if (!thread || !isRemoteChannelThread(thread, state.remoteChannels)) return null
-  return activeRemoteChannel(state)
-}
 
 function adoptExplicitHandoffThread(
   threads: NormalizedThread[],
@@ -247,25 +224,6 @@ function canSteerPlainTextMessage(
     !message.attachments?.length &&
     !message.fileReferences?.length &&
     !message.guiPlan
-}
-
-export function publishRemoteChannelActiveThreadContext(state: ChatState, threadId: string | null): void {
-  const updateRemoteChannelActiveThreadContext = updateRemoteChannelActiveThreadContextApi(window.sciforge)
-  if (typeof updateRemoteChannelActiveThreadContext !== 'function') return
-  if (!threadId) {
-    void updateRemoteChannelActiveThreadContext(null).catch(() => undefined)
-    return
-  }
-  const thread = state.threads.find((item) => item.id === threadId)
-  if (thread && isRemoteChannelThread(thread, state.remoteChannels)) {
-    void updateRemoteChannelActiveThreadContext(null).catch(() => undefined)
-    return
-  }
-  void updateRemoteChannelActiveThreadContext({
-    threadId,
-    runtimeId: thread?.runtimeId,
-    workspaceRoot: thread?.workspace || state.workspaceRoot || undefined
-  }).catch(() => undefined)
 }
 
 function subscribeThreadEventsWithRecovery(
@@ -502,7 +460,7 @@ export function createThreadActions(
         reusableThreadId = await findReusableEmptyThreadId(
           get(),
           workspaceRoot,
-          (thread) => isCodeThread(thread, get().remoteChannels)
+          (thread) => isCodeThread(thread)
         )
       }
       if (reusableThreadId) {
@@ -525,7 +483,6 @@ export function createThreadActions(
       set((s) => ({
         ...clearedThreadSelection(),
         route: 'chat',
-        remoteGuardChannelId: null,
         workspaceRoot,
         workspaceLabel: workspaceLabelFromPath(workspaceRoot),
         codeWorkspaceRoots: rememberCodeWorkspaceRoots(s.codeWorkspaceRoots, [workspaceRoot]),
@@ -611,8 +568,6 @@ export function createThreadActions(
         turnDurationByUserId,
         queuedMessages: s.queuedMessages
       }))
-      publishRemoteChannelActiveThreadContext(get(), activeThreadId)
-
       const ac = new AbortController()
       sseAbortRef.current = ac
       const sink = buildThreadEventSink(set, get, { threadId: activeThreadId, signal: ac.signal, sinceSeq: latestSeq })
@@ -668,7 +623,6 @@ export function createThreadActions(
       watchTurnCompletion: nextWatch,
       unreadThreadIds: nextUnread,
       activeThreadId: id,
-      remoteGuardChannelId: null,
       error: null,
       threadHistoryCursor: null,
       threadHistoryLoading: false
@@ -705,7 +659,6 @@ export function createThreadActions(
         watchTurnCompletion: nextWatch,
         unreadThreadIds: nextUnread,
         activeThreadId: id,
-        remoteGuardChannelId: null,
         activeThreadGoal: goal ?? null,
         activeThreadTodos: todos ?? null,
         activeThreadContextState: contextState,
@@ -724,7 +677,6 @@ export function createThreadActions(
         turnReasoningFirstAtByUserId: {},
         turnReasoningLastAtByUserId: {}
       })
-      publishRemoteChannelActiveThreadContext(get(), id)
       syncTurnCompletionPoll(set, get)
       const ac = new AbortController()
       sseAbortRef.current = ac
@@ -803,10 +755,6 @@ export function createThreadActions(
     // runtime or session identity behind the user's back.
     const targetRuntimeId = queued.runtimeId ?? thread.runtimeId
     if (!targetRuntimeId || targetRuntimeId !== initialState.activeAgentRuntime) return false
-    // Remote-channel sends also require mirroring and governance side effects
-    // owned by the foreground send path. Keep them queued until selected.
-    if (remoteChannelForThread(initialState, targetThreadId)) return false
-
     backgroundQueueDrains.add(targetThreadId)
     let deliveryStartedAt: number | undefined
     try {
@@ -1111,10 +1059,9 @@ export function createThreadActions(
         ? initialState.threads.find((thread) => thread.id === activeThreadId)
         : undefined
       const queuedTargetThreadId = ownerThreadId || undefined
-      const remoteChannel = remoteChannelForThread(initialState, queuedTargetThreadId)
       const overrideModel = overrides?.model?.trim()
       const composerModel =
-        overrideModel ?? remoteChannel?.model ?? initialState.composerModel.trim()
+        overrideModel ?? initialState.composerModel.trim()
       const userModelChip =
         overrides?.modelLabel ?? optimisticUserModelLabel(composerModel, threadSnap?.model)
       const displayText = overrides?.displayText?.trim()
@@ -1209,8 +1156,7 @@ export function createThreadActions(
     const displayText = queued?.displayText ?? overrides?.displayText?.trim() ?? messageText
     const userDisplayText = displayText !== messageText ? displayText : undefined
     const generatedTitle = deriveThreadTitleFromPrompt(displayText)
-    const initialRemoteChannel = remoteChannelForThread(initialState, activeThreadId)
-    const shouldAutoRenameForRoute = sourceRoute === 'chat' && initialRemoteChannel == null
+    const shouldAutoRenameForRoute = sourceRoute === 'chat'
     const activeThread = activeThreadId
       ? initialState.threads.find((thread) => thread.id === activeThreadId) ?? null
       : null
@@ -1219,10 +1165,9 @@ export function createThreadActions(
       !!activeThreadId &&
       shouldAutoTitleThread(activeThread)
     const threadSnap = initialState.threads.find((thread) => thread.id === activeThreadId)
-    const remoteChannel = remoteChannelForThread(initialState, activeThreadId)
     const overrideModel = overrides?.model?.trim()
     const composerModel =
-      queued?.model ?? overrideModel ?? remoteChannel?.model ?? initialState.composerModel.trim()
+      queued?.model ?? overrideModel ?? initialState.composerModel.trim()
     const reasoningEffort = queued?.reasoningEffort ?? overrides?.reasoningEffort?.trim()
     const userModelChip =
       queued?.modelLabel ?? overrides?.modelLabel ?? optimisticUserModelLabel(composerModel, threadSnap?.model)
@@ -1338,7 +1283,7 @@ export function createThreadActions(
           : await findReusableEmptyThreadId(
               get(),
               workspaceRoot,
-              (thread) => isCodeThread(thread, get().remoteChannels)
+              (thread) => isCodeThread(thread)
             )
         const reusableThread = reusableThreadId
           ? get().threads.find((thread) => thread.id === reusableThreadId) ?? null
@@ -1442,27 +1387,17 @@ export function createThreadActions(
       const seqAtSend = deliveryStartedInForeground ? previousLastSeq : 0
       const sendingThread = get().threads.find((thread) => thread.id === previousThreadId)
       rememberProviderThreadRuntime(p, previousThreadId, get().threads)
-      const channel = remoteChannelForThread(get(), previousThreadId)
-      const desiredRuntimeId = channel?.runtimeId ?? (
-        deliveryStartedInForeground ? initialActiveRuntimeId : sendingThread?.runtimeId
-      )
+      const desiredRuntimeId = deliveryStartedInForeground
+        ? initialActiveRuntimeId
+        : sendingThread?.runtimeId
       const sendingRuntimeId = sendingThread?.runtimeId
       const runtimeSwitchExpected = Boolean(
         sendingRuntimeId && desiredRuntimeId && sendingRuntimeId !== desiredRuntimeId
       )
       const settings = await rendererRuntimeClient.getSettings()
-      let runtimeText: string
-      if (channel) {
-        runtimeText = buildRemoteChannelRuntimePrompt(settings, messageText, { channel })
-      } else {
-        runtimeText = buildCodeRuntimePrompt(settings, messageText)
-      }
-      const runtimeDisplayText = channel ? displayText : (userDisplayText ?? messageText)
-      const governanceProfile = requestedGovernanceProfile ?? (
-        channel
-          ? 'remote_guard'
-          : undefined
-      )
+      const runtimeText = buildCodeRuntimePrompt(settings, messageText)
+      const runtimeDisplayText = userDisplayText ?? messageText
+      const governanceProfile = requestedGovernanceProfile
       const turnHandle = await p.sendUserMessage(previousThreadId, runtimeText, {
         clientDirectiveId: userBlockId,
         mode,
@@ -1590,24 +1525,6 @@ export function createThreadActions(
             return next
           })()
         }))
-      }
-      const shouldMirrorToIm =
-        Boolean(channel) ||
-        remoteChannelThreadIdsFromChannels(get().remoteChannels).has(activeThreadId)
-      const mirrorRemoteChannelMessage = mirrorRemoteChannelMessageApi(window.sciforge)
-      if (shouldMirrorToIm && typeof mirrorRemoteChannelMessage === 'function') {
-        const userMirror = await mirrorRemoteChannelMessage(
-          activeThreadId,
-          messageText,
-          'user'
-        )
-        if (userMirror.ok) {
-          rememberPendingRemoteChannelMirror(turnId, {
-            threadId: activeThreadId,
-            userBlockId: userMessageItemId ?? userBlockId,
-            userText: messageText
-          })
-        }
       }
       if (shouldRenameThreadAfterSend) {
         const renamed = await p.renameThread(activeThreadId, generatedTitle).then(() => true).catch(() => {
@@ -1768,7 +1685,7 @@ export function createThreadActions(
           : await findReusableEmptyThreadId(
               get(),
               workspaceRoot,
-              (thread) => isCodeThread(thread, get().remoteChannels)
+              (thread) => isCodeThread(thread)
             )
         const createdThread =
           reusableThreadId == null

@@ -323,7 +323,13 @@ test('routes AI Agent nodes through the Host agent execution port and records th
     agentExecution: {
       run: async (request) => {
         requests.push(request)
-        return { text: 'agent result', threadId: 'thread-agent-1' }
+        return {
+          runtimeId: 'codex',
+          threadId: 'thread-agent-1',
+          turnId: 'turn-agent-1',
+          state: 'completed',
+          text: 'agent result'
+        }
       }
     }
   }))
@@ -1287,7 +1293,10 @@ test('hydrates dataset preparation from the immutable execution report instead o
           processingComplete: true,
           groundingComplete: true
         }),
-        threadId: 'preparation-thread'
+        runtimeId: 'codex',
+        threadId: 'preparation-thread',
+        turnId: 'preparation-turn',
+        state: 'completed'
       })
     }
   }))
@@ -1464,7 +1473,11 @@ test('replaces an Agent-reported failed preparation plan with a matching success
           preparationArtifacts: [],
           processingComplete: false,
           groundingComplete: false
-        })
+        }),
+        runtimeId: 'codex',
+        threadId: 'preparation-thread',
+        turnId: 'preparation-turn',
+        state: 'completed'
       })
     }
   }))
@@ -1791,6 +1804,7 @@ function runtimeContext(
         turns: [],
         artifacts: []
       }),
+      subscribeMessages: async function* () {},
       hasActiveTurns: () => false
     },
     capabilities: {

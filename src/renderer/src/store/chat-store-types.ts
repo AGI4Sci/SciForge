@@ -12,13 +12,7 @@ import type {
   UserInputAnswer
 } from '../agent/types'
 import type {
-  RemoteChannelAgentProfileV1,
-  RemoteChannelV1,
-  RemoteChannelPlatformCredentialV1,
-  RemoteChannelProvider,
-  RemoteChannelImSettingsV1,
-  AgentRuntimeId,
-  RemoteChannelModel
+  AgentRuntimeId
 } from '@shared/app-settings'
 import type {
   AgentRuntimeContextState,
@@ -38,7 +32,7 @@ export type QueuedUserMessage = {
   sourceRoute?: AppRoute
   targetThreadId?: string
   workspaceRoot?: string
-  governanceProfile?: AgentRuntimeGovernanceProfile
+  governanceProfile?: Extract<AgentRuntimeGovernanceProfile, 'default' | 'write'>
   model?: string
   modelLabel?: string
   reasoningEffort?: string
@@ -113,7 +107,7 @@ export type SendMessageOverrides = {
   sourceRoute?: AppRoute
   targetThreadId?: string
   workspaceRoot?: string
-  governanceProfile?: AgentRuntimeGovernanceProfile
+  governanceProfile?: Extract<AgentRuntimeGovernanceProfile, 'default' | 'write'>
   guiPlan?: GuiPlanMessageContext
   attachmentIds?: string[]
   attachments?: AttachmentReference[]
@@ -128,7 +122,6 @@ export type SettingsRouteSection =
   | 'skill'
   | 'mcp'
   | 'shortcuts'
-  | 'connectPhone'
   | 'remoteResources'
 export type AppRoute = 'chat' | 'settings' | 'plugins' | 'schedule'
 export type PluginHostRoute = 'chat'
@@ -217,7 +210,6 @@ export type ChatState = {
   settingsSection: SettingsRouteSection
   initialSetupOpen: boolean
   initialSetupMode: InitialSetupMode
-  connectPhonePanelOpen: boolean
   workspaceRoot: string
   workspaceLabel: string
   runtimeConnection: RuntimeConnectionStatus
@@ -275,11 +267,7 @@ export type ChatState = {
    */
   sideConversations: Record<string, SideConversation>
   sidePanel: SidePanelState
-  remoteChannels: RemoteChannelV1[]
-  activeRemoteChannelId: string
-  remoteGuardChannelId: string | null
   workspaceLocator: WorkspaceLocator | null
-  appendLocalRemoteChannelTurn: (userText: string, replyText: string) => void
   setError: (message: string | null) => void
   setComposerModel: (modelId: string) => void
   setActiveAgentRuntime: (runtimeId: AgentRuntimeId) => Promise<void>
@@ -288,31 +276,8 @@ export type ChatState = {
   openCode: () => Promise<void>
   openSettings: (section?: SettingsRouteSection) => void
   openPlugins: (host?: PluginHostRoute) => void
-  openConnectPhone: () => void
-  setConnectPhonePanelOpen: (open: boolean) => void
   openSchedule: () => void
-  selectRemoteGuardChannel: (channelId: string) => void
-  clearRemoteGuardChannel: () => void
   setWorkspaceLocator: (locator: WorkspaceLocator | null) => void
-  refreshRemoteChannels: () => Promise<void>
-  addRemoteChannel: (
-    provider: RemoteChannelProvider,
-    agentProfile?: Partial<RemoteChannelAgentProfileV1>,
-    platformCredential?: RemoteChannelPlatformCredentialV1,
-    options?: {
-      channelId?: string
-      model?: string
-      workspaceRoot?: string
-      enabled?: boolean
-      im?: Partial<RemoteChannelImSettingsV1>
-      preserveRoute?: boolean
-    }
-  ) => Promise<void>
-  selectRemoteChannel: (channelId: string) => Promise<void>
-  selectRemoteChannelConversation: (channelId: string, threadId: string) => Promise<void>
-  deleteRemoteChannel: (channelId: string) => Promise<void>
-  resetRemoteChannelSession: (channelId: string) => Promise<void>
-  setRemoteChannelModel: (channelId: string, model: string) => Promise<void>
   openInitialSetup: (mode?: InitialSetupMode) => void
   closeInitialSetup: () => void
   boot: () => Promise<void>

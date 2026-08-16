@@ -1,0 +1,54 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+
+import {
+  acceptanceEnvironmentContract,
+  createZulipAcceptanceDriver
+} from './collaboration-zulip-acceptance-driver.mjs'
+
+const requiredMethods = [
+  'bindParticipant',
+  'createPersonalProjection',
+  'sendMobileMessage',
+  'awaitDesktopTurn',
+  'replyFromAgent',
+  'awaitMobileMessage',
+  'sendDesktopMessage',
+  'setAgentOnline',
+  'createProject',
+  'sendProjectInput',
+  'awaitProjectInput',
+  'createTask',
+  'awaitTaskOffer',
+  'completeTask',
+  'awaitTaskResult',
+  'createHumanNeeded',
+  'awaitHumanNeeded',
+  'assertNoHumanNeeded',
+  'answerHumanNeeded',
+  'awaitHumanAnswer',
+  'handoffCoordinator',
+  'createTaskAsAgent'
+]
+
+test('real Zulip acceptance adapter exposes the complete driver contract without reading credentials at import', async () => {
+  const values = new Map([
+    ['SCIFORGE_COLLAB_ZULIP_SERVER_URL', 'https://collaboration.example.invalid/collaboration'],
+    ['SCIFORGE_COLLAB_ZULIP_REALM_URL', 'https://zulip.example.invalid'],
+    ['SCIFORGE_COLLAB_ZULIP_STREAM', '验收'],
+    ['SCIFORGE_COLLAB_ZULIP_BOT_EMAIL', 'collaboration-bot@example.invalid']
+  ])
+  const driver = createZulipAcceptanceDriver({ environment: (name) => values.get(name) })
+  for (const method of requiredMethods) assert.equal(typeof driver[method], 'function')
+  await assert.rejects(driver.bindParticipant({ slot: 'A' }), (error) => {
+    assert.equal(error?.code, 'ACCEPTANCE_CONFIGURATION_MISSING')
+    assert.doesNotMatch(error.message, /credential|secret|token|api.?key/iu)
+    return true
+  })
+})
+
+test('environment contract publishes names and placeholders only', () => {
+  const serialized = JSON.stringify(acceptanceEnvironmentContract)
+  assert.match(serialized, /<SLOT>/u)
+  assert.doesNotMatch(serialized, /Bearer\s+|Basic\s+|-----BEGIN/u)
+})

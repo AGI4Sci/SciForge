@@ -2,15 +2,6 @@ function normalizePathForMatch(path: string): string {
   return path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 }
 
-function isNormalizedRemoteChannelWorkspacePath(normalized: string): boolean {
-  return (
-    normalized === '~/.sciforge/remote-channel'
-    || normalized.startsWith('~/.sciforge/remote-channel/')
-    || normalized.endsWith('/.sciforge/remote-channel')
-    || normalized.includes('/.sciforge/remote-channel/')
-  )
-}
-
 export function workspaceRootIdentityKey(path?: string): string {
   const trimmed = path?.trim() ?? ''
   if (!trimmed) return ''
@@ -38,13 +29,6 @@ export function isInternalTemporaryWorkspace(path?: string): boolean {
     || /^\/private\/var\/folders\/[^/]+\/[^/]+\/t(?:\/|$)/.test(normalized)
     || /\/appdata\/local\/temp(?:\/|$)/.test(normalized)
   )
-}
-
-export function isRemoteChannelWorkspacePath(path?: string): boolean {
-  const trimmed = path?.trim() ?? ''
-  if (!trimmed) return false
-  const normalized = normalizePathForMatch(trimmed)
-  return isNormalizedRemoteChannelWorkspacePath(normalized)
 }
 
 export function isInternalSciForgeWorkspace(path?: string): boolean {

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type {
   AgentRuntimeCapabilities,
   AgentRuntimeThread
@@ -28,6 +29,42 @@ import {
 export function createClaudeCodeAgentRuntimeAdapter(
   service: ClaudeCodeRuntimeService
 ): AgentRuntimeAdapter {
+  const start = async (
+    context: Parameters<AgentRuntimeAdapter['startTurn']>[0],
+    input: Parameters<AgentRuntimeAdapter['startTurn']>[1],
+    requested?: Readonly<{ turnId: string; userMessageItemId: string }>
+  ) => {
+    const result = await service.startTurn({
+      threadId: input.threadId,
+      text: input.text,
+      displayText: input.displayText,
+      workspace: input.workspace,
+      reasoningEffort: input.reasoningEffort,
+      ...(input.allowedTools ? { allowedTools: input.allowedTools } : {}),
+      ...(requested ? {
+        requestedTurnId: requested.turnId,
+        requestedUserMessageItemId: requested.userMessageItemId
+      } : {}),
+      ownedVisualToolsAvailable:
+        context.turnGovernanceSnapshot?.ownedVisualToolsAvailable === true,
+      nativeVisualProofChainPending:
+        context.turnGovernanceSnapshot?.nativeVisualProofChainPending === true
+    })
+    if (!result.ok) throw claudeFailure(result)
+    if (requested && (
+      result.turnId !== requested.turnId ||
+      result.userMessageItemId !== requested.userMessageItemId
+    )) {
+      throw new Error('Claude Code returned a different identity than its prepared turn.')
+    }
+    const handle = {
+      threadId: result.threadId,
+      turnId: result.turnId,
+      userMessageItemId: result.userMessageItemId
+    }
+    await context.onTurnAccepted?.(handle)
+    return handle
+  }
   return {
     id: 'claude',
     transport: 'cli_process',
@@ -90,24 +127,16 @@ export function createClaudeCodeAgentRuntimeAdapter(
       return result.artifact
     },
 
-    async startTurn(context, input) {
-      const result = await service.startTurn({
-        threadId: input.threadId,
-        text: input.text,
-        displayText: input.displayText,
-        workspace: input.workspace,
-        reasoningEffort: input.reasoningEffort,
-        ...(input.allowedTools ? { allowedTools: input.allowedTools } : {}),
-        ownedVisualToolsAvailable:
-          context.turnGovernanceSnapshot?.ownedVisualToolsAvailable === true,
-        nativeVisualProofChainPending:
-          context.turnGovernanceSnapshot?.nativeVisualProofChainPending === true
-      })
-      if (!result.ok) throw claudeFailure(result)
+    startTurn: (context, input) => start(context, input),
+
+    async prepareTurnCapture(context, input) {
+      const requested = {
+        turnId: `claude-turn-${randomUUID()}`,
+        userMessageItemId: `claude-user-${randomUUID()}`
+      }
       return {
-        threadId: result.threadId,
-        turnId: result.turnId,
-        userMessageItemId: result.userMessageItemId
+        handle: { threadId: input.threadId, ...requested },
+        dispatch: () => start({ ...context, onTurnAccepted: undefined }, input, requested)
       }
     },
 

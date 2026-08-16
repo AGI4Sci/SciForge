@@ -127,7 +127,7 @@ function sanitizeQueuedMessage(value: unknown, restored: boolean): QueuedUserMes
   const sourceRoute = appRoute(input.sourceRoute)
   const workspaceRoot = text(input.workspaceRoot, MAX_MESSAGE_CHARS)
   const governanceProfile = input.governanceProfile === 'default' ||
-    input.governanceProfile === 'write' || input.governanceProfile === 'remote_guard'
+    input.governanceProfile === 'write'
     ? input.governanceProfile
     : undefined
   const model = text(input.model)

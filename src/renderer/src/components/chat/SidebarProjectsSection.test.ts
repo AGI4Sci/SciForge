@@ -2,7 +2,6 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { NormalizedThread } from '../../agent/types'
-import type { RemoteChannelThreadBinding } from '../../store/chat-store-helpers'
 import {
   buildSidebarWorkspaceGroups,
   SidebarProjectsSection,
@@ -163,70 +162,6 @@ describe('SidebarProjectsSection groups', () => {
     expect(groups).toHaveLength(1)
     expect(groups[0]?.[0]).toBe('C:\\Users\\zxy\\.sciforge\\default_workspace')
     expect(groups[0]?.[1].map((item) => item.id)).toEqual(['default-short', 'default-absolute'])
-  })
-
-  it('marks threads that are watched by an IM bot', () => {
-    const html = renderProjectsSectionHtml({
-      threads: [
-        thread({
-          id: 'bot-thread',
-          title: 'Bot watched thread',
-          workspace: '/Users/zxy/project-a'
-        })
-      ],
-      activeThreadId: 'bot-thread',
-      botWatchedThreadIds: new Set(['bot-thread'])
-    })
-
-    expect(html).toContain('Bot watched thread')
-    expect(html).toContain('Bot is watching')
-  })
-
-  it('distinguishes remote bot states in thread rows', () => {
-    const baseBinding: Omit<RemoteChannelThreadBinding, 'threadId' | 'channelEnabled'> = {
-      provider: 'weixin',
-      providerLabel: 'WeChat',
-      channelId: 'channel-1',
-      channelLabel: 'WeChat Agent',
-      guardMode: 'only_mention',
-      scope: 'conversation',
-      senderName: 'Alex',
-      chatId: 'chat-1',
-      updatedAt: '2026-06-01T00:00:00.000Z'
-    }
-    const binding = (threadId: string, channelEnabled = true): RemoteChannelThreadBinding => ({
-      ...baseBinding,
-      threadId,
-      channelEnabled
-    })
-    const html = renderProjectsSectionHtml({
-      threads: [
-        thread({ id: 'watched-thread', title: 'Watched remote', workspace: '/Users/zxy/project-a' }),
-        thread({ id: 'bound-thread', title: 'Bound remote', workspace: '/Users/zxy/project-a' }),
-        thread({ id: 'running-thread', title: 'Running remote', workspace: '/Users/zxy/project-a', status: 'running' }),
-        thread({ id: 'queued-thread', title: 'Queued remote', workspace: '/Users/zxy/project-a' }),
-        thread({ id: 'error-thread', title: 'Error remote', workspace: '/Users/zxy/project-a', latestTurnStatus: 'failed' })
-      ],
-      activeThreadId: 'watched-thread',
-      unreadThreadIds: { 'queued-thread': true },
-      botThreadBindings: new Map([
-        ['watched-thread', binding('watched-thread')],
-        ['bound-thread', binding('bound-thread', false)],
-        ['running-thread', binding('running-thread')],
-        ['queued-thread', binding('queued-thread')],
-        ['error-thread', binding('error-thread')]
-      ]),
-      queuedThreadIds: new Set(['queued-thread']),
-      activeRemoteThreadIds: new Set(['watched-thread'])
-    })
-
-    expect(html).toContain('Bot is watching')
-    expect(html).toContain('Remote bound')
-    expect(html).toContain('Remote running')
-    expect(html).toContain('Remote queued')
-    expect(html).toContain('Remote error')
-    expect(html).toContain('Remote active')
-    expect(html).toContain('Remote unread')
   })
 
   it('keeps running thread order stable while refreshed snapshots update timestamps', () => {

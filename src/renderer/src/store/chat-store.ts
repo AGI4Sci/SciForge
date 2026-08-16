@@ -22,7 +22,7 @@ import {
 } from '../lib/thread-fork-registry'
 import { workspaceLabelFromPath } from '../lib/workspace-label'
 import { isInternalTemporaryWorkspace, normalizeWorkspaceRoot } from '../lib/workspace-path'
-import { buildRemoteChannelRuntimePrompt, getActiveAgentApiKey } from '@shared/app-settings'
+import { getActiveAgentApiKey } from '@shared/app-settings'
 import type {
   AppRoute,
   ChatState,
@@ -33,17 +33,12 @@ import type {
   SettingsRouteSection
 } from './chat-store-types'
 import { createAppActions } from './chat-store-app-actions'
-import { createRemoteChannelActions } from './chat-store-remote-channel-actions'
 import { createSideActions } from './chat-store-side-actions'
 import {
-  activeRemoteChannel,
   compactCodeWorkspaceRoots,
   forgetCodeWorkspaceRoot,
   hydrateBlockModelLabels,
-  isRemoteChannelThread,
   mergeComposerPickList,
-  newRemoteChannel,
-  normalizeRemoteChannelComposerModel,
   optimisticUserModelLabel,
   persistComposerModel,
   readCodeWorkspaceRoots,
@@ -75,7 +70,6 @@ import {
   forkedTurnCount,
   isCodeThread,
   latestThread,
-  rememberPendingRemoteChannelMirror,
   runtimeErrorDetail,
   runtimeStreamRecoveringMessage,
   shouldOpenSettingsForError,
@@ -99,7 +93,6 @@ import {
 } from '../lib/session-right-panel-lifecycle'
 
 export type { AppRoute, SettingsRouteSection } from './chat-store-types'
-export { REMOTE_CHANNEL_COMPOSER_MODEL_IDS } from './chat-store-helpers'
 
 let sseAbort: AbortController | null = null
 const sseAbortRef = {
@@ -122,7 +115,6 @@ export const useChatStore = create<ChatState>((set, get) => {
   settingsSection: 'general',
   initialSetupOpen: false,
   initialSetupMode: 'required',
-  connectPhonePanelOpen: false,
   workspaceRoot: '',
   workspaceLabel: i18n.t('common:workingDirectory'),
   runtimeConnection: 'idle',
@@ -166,27 +158,8 @@ export const useChatStore = create<ChatState>((set, get) => {
   unreadThreadIds: {},
   sideConversations: {},
   sidePanel: { open: false, activeSideId: null },
-  remoteChannels: [],
-  activeRemoteChannelId: '',
-  remoteGuardChannelId: null,
   workspaceLocator: null,
   setWorkspaceLocator: (locator) => trackedSet({ workspaceLocator: locator }),
-
-  ...createRemoteChannelActions({
-    set: trackedSet,
-    get,
-    i18n,
-    getProvider,
-    newRemoteChannel,
-    normalizeRemoteChannelComposerModel,
-    activeRemoteChannel,
-    normalizeWorkspaceRoot: (workspaceRoot) => normalizeWorkspaceRoot(workspaceRoot ?? undefined),
-    formatRuntimeError,
-    shouldOpenSettingsForError,
-    clearedThreadSelection,
-    sseAbortRef,
-    clearBusyWatchdog
-  }),
 
   ...createAppActions({
     set: trackedSet,

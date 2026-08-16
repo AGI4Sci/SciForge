@@ -1,0 +1,1651 @@
+import React, { type FormEvent, type ReactElement, type ReactNode } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronDown,
+  CircleDot,
+  Cloud,
+  CloudOff,
+  Link2,
+  Loader2,
+  Monitor,
+  Pause,
+  Play,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Server,
+  ShieldCheck,
+  Smartphone,
+  Unlink,
+  Users,
+  X
+} from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+
+import type {
+  CollaborationAgentRegisterInput,
+  CollaborationEndpointChallengeStartInput,
+  CollaborationProjectionLinkInput,
+  CollaborationProjectionQueueItemView,
+  CollaborationProjectionView,
+  CollaborationStatusSnapshot,
+  CollaborationTaskView
+} from '../contract.js'
+import type { CollaborationRendererClient } from './collaboration-capability-client.js'
+
+type ParticipantView = NonNullable<CollaborationStatusSnapshot['participant']>
+type EndpointView = ParticipantView['endpoints'][number]
+type ProjectionLocator = EndpointView['projectionLocators'][number]
+type AgentView = ParticipantView['agents'][number]
+type ProjectView = CollaborationStatusSnapshot['projects'][number]
+
+export type CollaborationPanelSession = Readonly<{
+  id: string
+  runtimeId?: string
+  workspaceRoot?: string
+}>
+
+export type CollaborationPanelProps = Readonly<{
+  client: CollaborationRendererClient
+  session: CollaborationPanelSession
+  className?: string
+  onCollapse?: () => void
+}>
+
+export function projectionLocatorKey(locator: ProjectionLocator): string {
+  return JSON.stringify([
+    locator.provider,
+    locator.realmId,
+    locator.containerId,
+    locator.topicId
+  ])
+}
+
+export function reconcileProjectionLocatorSelection(
+  currentKey: string,
+  locators: readonly ProjectionLocator[]
+): string {
+  if (currentKey && locators.some((item) => projectionLocatorKey(item) === currentKey)) {
+    return currentKey
+  }
+  return locators.length === 1 ? projectionLocatorKey(locators[0]) : ''
+}
+
+export function resolveProjectionLocatorSelection(
+  selectedKey: string,
+  locators: readonly ProjectionLocator[]
+): ProjectionLocator | undefined {
+  if (!selectedKey) return undefined
+  return locators.find((item) => projectionLocatorKey(item) === selectedKey)
+}
+
+export function buildProjectionLinkInput(input: Readonly<{
+  mode: 'existing' | 'new'
+  selectedLocatorKey: string
+  locators: readonly ProjectionLocator[]
+  agentId: string
+  humanEndpointId: string
+  runtimeId: string
+  threadId: string
+  workspaceRoot?: string
+  displayName: string
+}>): CollaborationProjectionLinkInput | undefined {
+  const locator = resolveProjectionLocatorSelection(input.selectedLocatorKey, input.locators)
+  if (!locator || (input.mode === 'existing' && !input.threadId)) return undefined
+  const common = {
+    agentId: input.agentId,
+    humanEndpointId: input.humanEndpointId,
+    locator,
+    runtimeId: input.runtimeId,
+    ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}),
+    displayName: input.displayName
+  }
+  return input.mode === 'existing'
+    ? { mode: 'existing', ...common, threadId: input.threadId }
+    : { mode: 'new', ...common }
+}
+
+export function buildEndpointChallengeInput(input: Readonly<{
+  providerKey: string
+  requestedDisplayName: string
+  locator: Readonly<Record<string, string>>
+}>): CollaborationEndpointChallengeStartInput | undefined {
+  const requestedDisplayName = input.requestedDisplayName.trim()
+  if (!input.providerKey.trim() || !requestedDisplayName) return undefined
+  return {
+    providerKey: input.providerKey,
+    requestedDisplayName,
+    locator: Object.fromEntries(
+      Object.entries(input.locator)
+        .map(([key, value]) => [key, value.trim()] as const)
+        .filter(([, value]) => value.length > 0)
+    )
+  }
+}
+
+export function buildAgentRegistrationInput(
+  displayName: string
+): CollaborationAgentRegisterInput | undefined {
+  const normalized = displayName.trim()
+  return normalized
+    ? { displayName: normalized, nodeType: 'desktop', capabilities: [] }
+    : undefined
+}
+
+type PairingDisplay = Readonly<{
+  status: 'pending' | 'verified' | 'expired'
+  pairingCode?: string
+  expiresAt?: string
+  instruction?: string
+  userId?: string
+  assurance?: 'low' | 'verified' | 'strong'
+}>
+
+type PairingCopyState = 'idle' | 'copied' | 'failed'
+
+type ClipboardWriter = Readonly<{
+  writeText: (value: string) => Promise<void>
+}>
+
+export async function writePairingCommandToClipboard(
+  pairingCode: string,
+  clipboard: ClipboardWriter | undefined = globalThis.navigator?.clipboard
+): Promise<Exclude<PairingCopyState, 'idle'>> {
+  if (!pairingCode.trim() || !clipboard) return 'failed'
+  try {
+    await clipboard.writeText(pairingCode)
+    return 'copied'
+  } catch {
+    return 'failed'
+  }
+}
+
+const MINIMUM_PAIRING_POLL_MILLISECONDS = 3_000
+const PAIRING_ERROR_RETRY_MILLISECONDS = 4_000
+
+export function nextPairingPollDelayMilliseconds(input: Readonly<{
+  nowMilliseconds: number
+  expiresAt: string
+  retryAfterSeconds?: number
+  fallbackMilliseconds?: number
+}>): number | null {
+  const expiresAtMilliseconds = Date.parse(input.expiresAt)
+  const remainingMilliseconds = expiresAtMilliseconds - input.nowMilliseconds
+  if (!Number.isFinite(expiresAtMilliseconds) || remainingMilliseconds <= 0) return null
+  const requestedMilliseconds = input.retryAfterSeconds === undefined
+    ? input.fallbackMilliseconds ?? MINIMUM_PAIRING_POLL_MILLISECONDS
+    : input.retryAfterSeconds * 1_000
+  return Math.min(
+    Math.max(MINIMUM_PAIRING_POLL_MILLISECONDS, requestedMilliseconds),
+    remainingMilliseconds
+  )
+}
+
+const PANEL_SECTION = 'rounded-lg border border-ds-border bg-ds-card p-3'
+const SECONDARY_BUTTON =
+  'inline-flex items-center justify-center gap-1.5 rounded-md border border-ds-border bg-ds-card px-2.5 py-1.5 text-xs font-medium text-ds-ink transition-colors hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-50'
+const PRIMARY_BUTTON =
+  'inline-flex items-center justify-center gap-1.5 rounded-md bg-ds-ink px-2.5 py-1.5 text-xs font-medium text-ds-card transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40'
+const INPUT =
+  'w-full rounded-md border border-ds-border bg-ds-card px-2.5 py-2 text-xs text-ds-ink outline-none placeholder:text-ds-faint focus:border-ds-muted'
+
+export function CollaborationPanel({
+  client,
+  session,
+  className = '',
+  onCollapse
+}: CollaborationPanelProps): ReactElement {
+  const { t } = useTranslation('common')
+  const [snapshot, setSnapshot] = useState<CollaborationStatusSnapshot | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [busyKey, setBusyKey] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [baseUrl, setBaseUrl] = useState('')
+  const [selectedProviderKey, setSelectedProviderKey] = useState('')
+  const [locator, setLocator] = useState<Record<string, string>>({})
+  const [participantDisplayName, setParticipantDisplayName] = useState('')
+  const [agentDisplayName, setAgentDisplayName] = useState('')
+  const [sessionDisplayName, setSessionDisplayName] = useState('')
+  const [selectedProjectionLocatorKey, setSelectedProjectionLocatorKey] = useState('')
+  const [pairing, setPairing] = useState<PairingDisplay | null>(null)
+  // The stable poll handle is deliberately kept out of React state, rendered
+  // diagnostics, and snapshots. Only the short-lived code intended for the
+  // human is represented in PairingDisplay.
+  const challengeHandleRef = useRef<string | null>(null)
+  const challengeExpiresAtRef = useRef<string | null>(null)
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const refresh = useCallback(async (): Promise<void> => {
+    setLoading(true)
+    try {
+      const next = await client.readStatus()
+      setSnapshot(next)
+      setBaseUrl((current) => current || next.connection.baseUrl || '')
+      setSelectedProviderKey((current) => current || next.providerOptions[0]?.providerKey || '')
+      setActionError(null)
+    } catch (error) {
+      setActionError(errorMessage(error, t('collaborationUnavailable')))
+    } finally {
+      setLoading(false)
+    }
+  }, [client, t])
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  useEffect(() => () => {
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
+    challengeHandleRef.current = null
+    challengeExpiresAtRef.current = null
+  }, [])
+
+  const expirePairing = useCallback((): void => {
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
+    pollTimerRef.current = null
+    challengeHandleRef.current = null
+    challengeExpiresAtRef.current = null
+    setPairing({ status: 'expired' })
+  }, [])
+
+  const runAction = useCallback(async (
+    key: string,
+    action: () => Promise<unknown>,
+    options: Readonly<{ refresh?: boolean }> = { refresh: true }
+  ): Promise<boolean> => {
+    setBusyKey(key)
+    setActionError(null)
+    try {
+      await action()
+      if (options.refresh !== false) await refresh()
+      return true
+    } catch (error) {
+      setActionError(errorMessage(error, t('collaborationActionFailed')))
+      return false
+    } finally {
+      setBusyKey(null)
+    }
+  }, [refresh, t])
+
+  const selectedProvider = useMemo(
+    () => snapshot?.providerOptions.find(({ providerKey }) =>
+      providerKey === selectedProviderKey
+    ),
+    [selectedProviderKey, snapshot]
+  )
+
+  const pollPairing = useCallback(async (): Promise<void> => {
+    pollTimerRef.current = null
+    const challengeId = challengeHandleRef.current
+    const expiresAt = challengeExpiresAtRef.current
+    if (!challengeId || !expiresAt) return
+    if (nextPairingPollDelayMilliseconds({
+      nowMilliseconds: Date.now(),
+      expiresAt
+    }) === null) {
+      expirePairing()
+      return
+    }
+    try {
+      const result = await client.pollEndpointChallenge({ challengeId })
+      if (challengeHandleRef.current !== challengeId) return
+      if (result.status === 'pending') {
+        challengeExpiresAtRef.current = result.expiresAt
+        setPairing((current) => current
+          ? { ...current, status: 'pending', expiresAt: result.expiresAt }
+          : { status: 'pending', expiresAt: result.expiresAt })
+        const delay = nextPairingPollDelayMilliseconds({
+          nowMilliseconds: Date.now(),
+          expiresAt: result.expiresAt,
+          retryAfterSeconds: result.retryAfterSeconds
+        })
+        if (delay === null) expirePairing()
+        else pollTimerRef.current = setTimeout(() => void pollPairing(), delay)
+        return
+      }
+      if (result.status === 'expired') {
+        expirePairing()
+        return
+      }
+      challengeHandleRef.current = null
+      challengeExpiresAtRef.current = null
+      setPairing({
+        status: 'verified',
+        userId: result.userId,
+        assurance: result.assurance
+      })
+      await refresh()
+    } catch (error) {
+      const retryExpiresAt = challengeExpiresAtRef.current
+      const delay = retryExpiresAt
+        ? nextPairingPollDelayMilliseconds({
+            nowMilliseconds: Date.now(),
+            expiresAt: retryExpiresAt,
+            fallbackMilliseconds: PAIRING_ERROR_RETRY_MILLISECONDS
+          })
+        : null
+      if (delay === null) {
+        expirePairing()
+        return
+      }
+      setActionError(errorMessage(error, t('collaborationActionFailed')))
+      if (challengeHandleRef.current === challengeId) {
+        pollTimerRef.current = setTimeout(() => void pollPairing(), delay)
+      }
+    }
+  }, [client, expirePairing, refresh, t])
+
+  const startPairing = useCallback(async (): Promise<void> => {
+    if (!selectedProvider) return
+    const normalizedLocator = Object.fromEntries(
+      selectedProvider.locatorFields
+        .map(({ key }) => [key, locator[key]?.trim() ?? ''] as const)
+        .filter(([, value]) => value.length > 0)
+    )
+    const complete = selectedProvider.locatorFields.every((field) =>
+      !field.required || Boolean(normalizedLocator[field.key])
+    )
+    if (!complete) return
+    const input = buildEndpointChallengeInput({
+      providerKey: selectedProvider.providerKey,
+      requestedDisplayName: participantDisplayName,
+      locator: normalizedLocator
+    })
+    if (!input) return
+    const succeeded = await runAction('pairing', async () => {
+      const result = await client.startEndpointChallenge(input)
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
+      challengeHandleRef.current = result.challengeId
+      challengeExpiresAtRef.current = result.expiresAt
+      setPairing({
+        status: 'pending',
+        pairingCode: result.pairingCode,
+        expiresAt: result.expiresAt,
+        instruction: result.instruction
+      })
+    }, { refresh: false })
+    if (succeeded) {
+      const expiresAt = challengeExpiresAtRef.current
+      const delay = expiresAt
+        ? nextPairingPollDelayMilliseconds({ nowMilliseconds: Date.now(), expiresAt })
+        : null
+      if (delay === null) expirePairing()
+      else pollTimerRef.current = setTimeout(() => void pollPairing(), delay)
+    }
+  }, [client, expirePairing, locator, participantDisplayName, pollPairing, runAction, selectedProvider])
+
+  const participant = snapshot?.participant
+  const primaryAgent = participant?.agents.find(({ agentId }) =>
+    agentId === participant.primaryAgentId
+  )
+  const primaryEndpoint = participant?.endpoints.find(({ humanEndpointId }) =>
+    humanEndpointId === participant.primaryHumanEndpointId
+  )
+  const projectionLocators = useMemo(
+    () => primaryEndpoint?.projectionLocators ?? [],
+    [primaryEndpoint]
+  )
+  useEffect(() => {
+    setSelectedProjectionLocatorKey((current) =>
+      reconcileProjectionLocatorSelection(current, projectionLocators)
+    )
+  }, [projectionLocators])
+  const selectedProjectionLocator = resolveProjectionLocatorSelection(
+    selectedProjectionLocatorKey,
+    projectionLocators
+  )
+  const canLink = Boolean(
+    participant?.userId &&
+    primaryAgent &&
+    primaryEndpoint &&
+    selectedProjectionLocator &&
+    sessionDisplayName.trim() &&
+    session.runtimeId
+  )
+
+  const linkSession = useCallback(async (mode: 'existing' | 'new'): Promise<void> => {
+    if (
+      !participant ||
+      !primaryAgent ||
+      !primaryEndpoint ||
+      !session.runtimeId
+    ) return
+    const input = buildProjectionLinkInput({
+      mode,
+      selectedLocatorKey: selectedProjectionLocatorKey,
+      locators: projectionLocators,
+      agentId: primaryAgent.agentId,
+      humanEndpointId: primaryEndpoint.humanEndpointId,
+      runtimeId: session.runtimeId,
+      threadId: session.id,
+      ...(session.workspaceRoot ? { workspaceRoot: session.workspaceRoot } : {}),
+      displayName: sessionDisplayName.trim()
+    })
+    if (!input) return
+    await runAction(`projection-${mode}`, () => client.linkProjection(input))
+  }, [
+    client,
+    participant,
+    primaryAgent,
+    primaryEndpoint,
+    projectionLocators,
+    runAction,
+    selectedProjectionLocatorKey,
+    session,
+    sessionDisplayName
+  ])
+
+  if (loading && !snapshot) {
+    return (
+      <div className={`flex h-full items-center justify-center text-xs text-ds-muted ${className}`}>
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        {t('collaborationLoading')}
+      </div>
+    )
+  }
+
+  return (
+    <div
+      className={`flex h-full min-h-0 flex-col bg-ds-card text-ds-ink ${className}`}
+      data-collaboration-panel="true"
+    >
+      <header className="flex items-center gap-2 border-b border-ds-border px-3 py-2.5">
+        <Users className="h-4 w-4" />
+        <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">
+          {t('collaborationTitle')}
+        </h2>
+        <button
+          type="button"
+          className={SECONDARY_BUTTON}
+          onClick={() => void refresh()}
+          disabled={loading || busyKey !== null}
+          aria-label={t('collaborationRefresh')}
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+        </button>
+        {onCollapse ? (
+          <button
+            type="button"
+            className={SECONDARY_BUTTON}
+            onClick={onCollapse}
+            aria-label={t('collaborationCollapse')}
+          >
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
+      </header>
+
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+        {actionError ? (
+          <ExplicitError message={actionError} />
+        ) : null}
+
+        {snapshot ? (
+          <>
+            <CloudConnectionSection
+              connection={snapshot.connection}
+              baseUrl={baseUrl}
+              busyKey={busyKey}
+              onBaseUrlChange={setBaseUrl}
+              onConfigure={(event) => {
+                event.preventDefault()
+                void runAction('connection-configure', () =>
+                  client.configureConnection({ baseUrl: baseUrl.trim() })
+                )
+              }}
+              onConnectionAction={(action) => {
+                void runAction(`connection-${action}`, () =>
+                  client.changeConnection({ action })
+                )
+              }}
+            />
+
+            <ParticipantSection
+              participant={participant}
+              providerOptions={snapshot.providerOptions}
+              selectedProviderKey={selectedProviderKey}
+              locator={locator}
+              participantDisplayName={participantDisplayName}
+              agentDisplayName={agentDisplayName}
+              pairing={pairing}
+              busyKey={busyKey}
+              onProviderChange={(providerKey) => {
+                setSelectedProviderKey(providerKey)
+                setLocator({})
+                challengeHandleRef.current = null
+                setPairing(null)
+              }}
+              onLocatorChange={(key, value) => {
+                setLocator((current) => ({ ...current, [key]: value }))
+              }}
+              onParticipantDisplayNameChange={setParticipantDisplayName}
+              onAgentDisplayNameChange={setAgentDisplayName}
+              onStartPairing={() => void startPairing()}
+              onRegisterAgent={() => {
+                const input = buildAgentRegistrationInput(agentDisplayName)
+                if (!input) return
+                void runAction('agent-register', () => client.registerAgent(input))
+              }}
+              onSelectPrimary={(agentId) => {
+                if (!participant) return
+                void runAction(`primary-${agentId}`, () => client.selectPrimaryAgent({
+                  agentId,
+                  expectedParticipantRevision: participant.revision
+                }))
+              }}
+            />
+
+            <section className={PANEL_SECTION} data-collaboration-section="projections">
+              <SectionTitle icon={<Link2 className="h-4 w-4" />}>
+                {t('collaborationPersonalSessions')}
+              </SectionTitle>
+              <p className="mb-3 text-xs text-ds-muted">
+                {t('collaborationNoProjectRequired')}
+              </p>
+              <SessionDisplayNameField
+                value={sessionDisplayName}
+                disabled={busyKey !== null}
+                onChange={setSessionDisplayName}
+              />
+              <ProjectionLocatorSelector
+                locators={projectionLocators}
+                selectedKey={selectedProjectionLocatorKey}
+                busy={busyKey !== null}
+                onSelect={setSelectedProjectionLocatorKey}
+              />
+              <div className="mb-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className={PRIMARY_BUTTON}
+                  disabled={!canLink || busyKey !== null}
+                  onClick={() => void linkSession('existing')}
+                >
+                  <Link2 className="h-3.5 w-3.5" />
+                  {t('collaborationShareCurrent')}
+                </button>
+                <button
+                  type="button"
+                  className={SECONDARY_BUTTON}
+                  disabled={!canLink || busyKey !== null}
+                  onClick={() => void linkSession('new')}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  {t('collaborationCreateNew')}
+                </button>
+              </div>
+              {snapshot.projections.length ? (
+                <div className="space-y-2">
+                  {snapshot.projections.map((projection) => (
+                    <ProjectionCard
+                      key={projection.projectionId}
+                      projection={projection}
+                      agentName={participant?.agents.find(({ agentId }) =>
+                        agentId === projection.agentId
+                      )?.displayName}
+                      ownerName={projection.agentOwnerUserId === participant?.userId
+                        ? participant.displayName
+                        : undefined}
+                      busy={busyKey !== null}
+                      onUpdate={(input) => void runAction(
+                        `projection-${input.action}-${projection.projectionId}`,
+                        () => client.updateProjection(input)
+                      )}
+                      onShare={(allowUserIds) => void runAction(
+                        `projection-share-${projection.projectionId}`,
+                        () => client.shareProjection({
+                          projectionId: projection.projectionId,
+                          allowUserIds,
+                          expectedRevision: projection.revision
+                        })
+                      )}
+                      onRetry={() => void runAction(
+                        `projection-retry-${projection.projectionId}`,
+                        () => client.retrySynchronization({
+                          scope: 'projection',
+                          id: projection.projectionId
+                        })
+                      )}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <EmptyState>{t('collaborationNoProjections')}</EmptyState>
+              )}
+            </section>
+
+            <ProjectsSection projects={snapshot.projects} participant={participant} />
+
+            <RecoverySection
+              queue={snapshot.queue}
+              diagnostics={snapshot.diagnostics}
+              busy={busyKey !== null}
+              onRetry={(scope, id) => void runAction(
+                `retry-${scope}-${id ?? ''}`,
+                () => client.retrySynchronization({ scope, ...(id ? { id } : {}) })
+              )}
+            />
+          </>
+        ) : (
+          <ExplicitError message={t('collaborationUnavailable')} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function ProjectionLocatorSelector({
+  locators,
+  selectedKey,
+  busy,
+  onSelect
+}: Readonly<{
+  locators: readonly ProjectionLocator[]
+  selectedKey: string
+  busy: boolean
+  onSelect: (key: string) => void
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  const requiresExplicitSelection = locators.length !== 1
+  return (
+    <label className="mb-3 block text-xs text-ds-muted">
+      <span className="mb-1 block">{t('collaborationProjectionDestination')}</span>
+      <select
+        className={INPUT}
+        data-projection-locator-selector="true"
+        value={selectedKey}
+        disabled={busy || locators.length === 0}
+        onChange={(event) => onSelect(event.currentTarget.value)}
+      >
+        {requiresExplicitSelection ? (
+          <option value="">
+            {locators.length === 0
+              ? t('collaborationNoProjectionDestinations')
+              : t('collaborationSelectProjectionDestination')}
+          </option>
+        ) : null}
+        {locators.map((item) => {
+          const key = projectionLocatorKey(item)
+          const container = item.containerDisplayName || item.containerId
+          const topic = item.topicDisplayName || item.topicId
+          return (
+            <option key={key} value={key}>
+              {container} / {topic}
+            </option>
+          )
+        })}
+      </select>
+    </label>
+  )
+}
+
+export function SessionDisplayNameField({
+  value,
+  disabled,
+  onChange
+}: Readonly<{
+  value: string
+  disabled: boolean
+  onChange: (value: string) => void
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  return (
+    <label className="mb-3 block text-xs text-ds-muted">
+      <span className="mb-1 block">{t('collaborationSessionDisplayName')}</span>
+      <input
+        className={INPUT}
+        data-collaboration-session-name="true"
+        required
+        disabled={disabled}
+        value={value}
+        placeholder={t('collaborationSessionDisplayNamePlaceholder')}
+        onChange={(event) => onChange(event.currentTarget.value)}
+      />
+    </label>
+  )
+}
+
+type CloudConnectionSectionProps = Readonly<{
+  connection: CollaborationStatusSnapshot['connection']
+  baseUrl: string
+  busyKey: string | null
+  onBaseUrlChange: (value: string) => void
+  onConfigure: (event: FormEvent<HTMLFormElement>) => void
+  onConnectionAction: (action: 'connect' | 'disconnect' | 'recover') => void
+}>
+
+export function CloudConnectionSection({
+  connection,
+  baseUrl,
+  busyKey,
+  onBaseUrlChange,
+  onConfigure,
+  onConnectionAction
+}: CloudConnectionSectionProps): ReactElement {
+  const { t } = useTranslation('common')
+  const connected = connection.state === 'connected'
+  return (
+    <section className={PANEL_SECTION} data-collaboration-section="connection">
+      <SectionTitle icon={connected
+        ? <Cloud className="h-4 w-4" />
+        : <CloudOff className="h-4 w-4" />}
+      >
+        {t('collaborationCloud')}
+        <StatusPill status={connection.state} />
+      </SectionTitle>
+      <form className="space-y-2" onSubmit={onConfigure}>
+        <label className="block text-xs text-ds-muted">
+          <span className="mb-1 block">{t('collaborationCloudAddress')}</span>
+          <input
+            className={INPUT}
+            type="url"
+            required
+            value={baseUrl}
+            placeholder={t('collaborationCloudAddressPlaceholder')}
+            onChange={(event) => onBaseUrlChange(event.currentTarget.value)}
+          />
+        </label>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="submit"
+            className={PRIMARY_BUTTON}
+            disabled={!baseUrl.trim() || busyKey !== null}
+          >
+            {t('collaborationConfigure')}
+          </button>
+          {connected ? (
+            <button
+              type="button"
+              className={SECONDARY_BUTTON}
+              disabled={busyKey !== null}
+              onClick={() => onConnectionAction('disconnect')}
+            >
+              <Unlink className="h-3.5 w-3.5" />
+              {t('collaborationDisconnect')}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={SECONDARY_BUTTON}
+              disabled={!connection.configured || busyKey !== null}
+              onClick={() => onConnectionAction('connect')}
+            >
+              <Play className="h-3.5 w-3.5" />
+              {t('collaborationConnect')}
+            </button>
+          )}
+          <button
+            type="button"
+            className={SECONDARY_BUTTON}
+            disabled={!connection.configured || busyKey !== null}
+            onClick={() => onConnectionAction('recover')}
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            {t('collaborationReconnect')}
+          </button>
+        </div>
+      </form>
+      <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-ds-muted">
+        <span>Inbox #{connection.lastInboxSequence}</span>
+        <span>Outbox {connection.pendingOutboxCount}</span>
+      </div>
+      {connection.lastError ? <ExplicitError message={connection.lastError} compact /> : null}
+    </section>
+  )
+}
+
+type ParticipantSectionProps = Readonly<{
+  participant?: ParticipantView
+  providerOptions: CollaborationStatusSnapshot['providerOptions']
+  selectedProviderKey: string
+  locator: Readonly<Record<string, string>>
+  participantDisplayName: string
+  agentDisplayName: string
+  pairing: PairingDisplay | null
+  busyKey: string | null
+  onProviderChange: (providerKey: string) => void
+  onLocatorChange: (key: string, value: string) => void
+  onParticipantDisplayNameChange: (value: string) => void
+  onAgentDisplayNameChange: (value: string) => void
+  onStartPairing: () => void
+  onRegisterAgent: () => void
+  onSelectPrimary: (agentId: string) => void
+}>
+
+export function ParticipantSection({
+  participant,
+  providerOptions,
+  selectedProviderKey,
+  locator,
+  participantDisplayName,
+  agentDisplayName,
+  pairing,
+  busyKey,
+  onProviderChange,
+  onLocatorChange,
+  onParticipantDisplayNameChange,
+  onAgentDisplayNameChange,
+  onStartPairing,
+  onRegisterAgent,
+  onSelectPrimary
+}: ParticipantSectionProps): ReactElement {
+  const { t } = useTranslation('common')
+  const selectedProvider = providerOptions.find(({ providerKey }) =>
+    providerKey === selectedProviderKey
+  )
+  const missingRequiredLocator = selectedProvider?.locatorFields.some((field) =>
+    field.required && !locator[field.key]?.trim()
+  ) ?? true
+
+  return (
+    <section className={PANEL_SECTION} data-collaboration-section="participant">
+      <SectionTitle icon={<Users className="h-4 w-4" />}>
+        {t('collaborationParticipants')}
+        {participant ? <StatusPill status={participant.complete ? participant.status : 'incomplete'} /> : null}
+      </SectionTitle>
+
+      {participant ? (
+        <div className="mb-3">
+          <div className="font-medium">{participant.displayName}</div>
+          <code className="text-[10px] text-ds-faint">{participant.userId}</code>
+        </div>
+      ) : null}
+
+      <div className="grid gap-3">
+        <div className="rounded-md border border-ds-border p-2.5">
+          <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+            <Smartphone className="h-4 w-4" />
+            {t('collaborationEndpoint')}
+          </div>
+          {participant?.endpoints.length ? (
+            <div className="space-y-2">
+              {participant.endpoints.map((endpoint) => (
+                <EndpointRow
+                  key={endpoint.humanEndpointId}
+                  endpoint={endpoint}
+                  primary={endpoint.humanEndpointId === participant.primaryHumanEndpointId}
+                />
+              ))}
+            </div>
+          ) : (
+            <>
+              <p className="mb-2 text-xs text-ds-muted">
+                {t('collaborationEndpointMissing')}
+              </p>
+              <div className="space-y-2">
+                <label className="block text-xs text-ds-muted">
+                  <span className="mb-1 block">{t('collaborationUserDisplayName')}</span>
+                  <input
+                    className={INPUT}
+                    data-collaboration-user-name="true"
+                    required
+                    value={participantDisplayName}
+                    placeholder={t('collaborationUserDisplayNamePlaceholder')}
+                    onChange={(event) => onParticipantDisplayNameChange(event.currentTarget.value)}
+                  />
+                </label>
+                <label className="block text-xs text-ds-muted">
+                  <span className="mb-1 block">{t('collaborationProvider')}</span>
+                  <select
+                    className={INPUT}
+                    value={selectedProviderKey}
+                    onChange={(event) => onProviderChange(event.currentTarget.value)}
+                  >
+                    <option value="" disabled>—</option>
+                    {providerOptions.map((provider) => (
+                      <option key={provider.providerKey} value={provider.providerKey}>
+                        {provider.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {selectedProvider?.locatorFields.map((field) => (
+                  <label key={field.key} className="block text-xs text-ds-muted">
+                    <span className="mb-1 block">{field.label}</span>
+                    <input
+                      className={INPUT}
+                      required={field.required}
+                      value={locator[field.key] ?? ''}
+                      placeholder={field.placeholder}
+                      onChange={(event) => onLocatorChange(field.key, event.currentTarget.value)}
+                    />
+                  </label>
+                ))}
+                <button
+                  type="button"
+                  className={PRIMARY_BUTTON}
+                  disabled={
+                    !participantDisplayName.trim() ||
+                    missingRequiredLocator ||
+                    busyKey !== null ||
+                    pairing?.status === 'pending'
+                  }
+                  onClick={onStartPairing}
+                >
+                  {busyKey === 'pairing' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Smartphone className="h-3.5 w-3.5" />}
+                  {t('collaborationStartPairing')}
+                </button>
+              </div>
+              {pairing ? <PairingStatus pairing={pairing} /> : null}
+            </>
+          )}
+        </div>
+
+        <div className="rounded-md border border-ds-border p-2.5">
+          <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+            <Monitor className="h-4 w-4" />
+            {t('collaborationAgent')}
+          </div>
+          {participant?.agents.length ? (
+            <div className="space-y-2">
+              {participant.agents.map((agent) => (
+                <AgentRow
+                  key={agent.agentId}
+                  agent={agent}
+                  busy={busyKey !== null}
+                  onSelectPrimary={() => onSelectPrimary(agent.agentId)}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <span className="text-xs text-ds-muted">{t('collaborationAgentMissing')}</span>
+              <label className="block text-xs text-ds-muted">
+                <span className="mb-1 block">{t('collaborationAgentDisplayName')}</span>
+                <input
+                  className={INPUT}
+                  data-collaboration-agent-name="true"
+                  required
+                  value={agentDisplayName}
+                  placeholder={t('collaborationAgentDisplayNamePlaceholder')}
+                  onChange={(event) => onAgentDisplayNameChange(event.currentTarget.value)}
+                />
+              </label>
+              <button
+                type="button"
+                className={PRIMARY_BUTTON}
+                disabled={
+                  !agentDisplayName.trim() ||
+                  !participant?.endpoints.some(({ status }) => status === 'active') ||
+                  busyKey !== null
+                }
+                onClick={onRegisterAgent}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                {t('collaborationRegisterAgent')}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function EndpointRow({ endpoint, primary }: Readonly<{
+  endpoint: EndpointView
+  primary: boolean
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  return (
+    <div
+      className="rounded-md bg-ds-hover p-2 text-xs"
+      data-endpoint-status={endpoint.status}
+      data-endpoint-assurance={endpoint.assurance}
+    >
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1 truncate font-medium">
+          {endpoint.displayName || endpoint.humanEndpointId}
+        </span>
+        {primary ? <StatusPill status="primary" /> : null}
+        <StatusPill status={endpoint.status} />
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-3 text-ds-muted">
+        <span>{t('collaborationProvider')}: {endpoint.providerKey}</span>
+        <span>{t('collaborationAssurance')}: {endpoint.assurance}</span>
+        {endpoint.verifiedAt ? (
+          <span>{t('collaborationVerifiedAt')}: {formatDate(endpoint.verifiedAt)}</span>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function AgentRow({ agent, busy, onSelectPrimary }: Readonly<{
+  agent: AgentView
+  busy: boolean
+  onSelectPrimary: () => void
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  return (
+    <div
+      className="rounded-md bg-ds-hover p-2 text-xs"
+      data-agent-status={agent.status}
+      data-agent-owner={agent.ownerUserId}
+      data-primary-agent={agent.primary ? 'true' : 'false'}
+    >
+      <div className="flex items-center gap-2">
+        {agent.nodeType === 'server'
+          ? <Server className="h-3.5 w-3.5" />
+          : <Monitor className="h-3.5 w-3.5" />}
+        <span className="min-w-0 flex-1 truncate font-medium">{agent.displayName}</span>
+        <StatusPill status={agent.status} />
+      </div>
+      <code className="mt-1 block text-[10px] text-ds-faint">{agent.agentId}</code>
+      {agent.primary ? (
+        <div className="mt-1 flex items-center gap-1 text-ds-muted">
+          <ShieldCheck className="h-3.5 w-3.5" />
+          {t('collaborationPrimaryAgent')}
+        </div>
+      ) : agent.status !== 'revoked' ? (
+        <button
+          type="button"
+          className={`${SECONDARY_BUTTON} mt-2`}
+          disabled={busy}
+          onClick={onSelectPrimary}
+        >
+          {t('collaborationSetPrimary')}
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+export function PairingStatus({ pairing }: Readonly<{ pairing: PairingDisplay }>): ReactElement {
+  const { t } = useTranslation('common')
+  const [copyState, setCopyState] = useState<PairingCopyState>('idle')
+  useEffect(() => setCopyState('idle'), [pairing.pairingCode])
+  if (pairing.status === 'verified') {
+    return (
+      <div className="mt-3 rounded-md border border-ds-border bg-ds-hover p-2 text-xs">
+        <div className="flex items-center gap-1.5 font-medium">
+          <CheckCircle2 className="h-4 w-4" />
+          {t('collaborationPairingComplete')}
+        </div>
+        <code className="mt-1 block text-[10px] text-ds-muted">{pairing.userId}</code>
+        <span className="text-ds-muted">{t('collaborationAssurance')}: {pairing.assurance}</span>
+      </div>
+    )
+  }
+  if (pairing.status === 'expired') {
+    return <ExplicitError message={t('collaborationPairingExpired')} compact />
+  }
+  return (
+    <div className="mt-3 rounded-md border border-ds-border bg-ds-hover p-2 text-xs">
+      <div className="text-ds-muted">{t('collaborationPairingCode')}</div>
+      {pairing.pairingCode ? (
+        <div className="my-1 select-all font-mono text-lg font-semibold tracking-widest">
+          {pairing.pairingCode}
+        </div>
+      ) : null}
+      {pairing.instruction ? <p>{pairing.instruction}</p> : null}
+      {pairing.pairingCode ? (
+        <div className="mt-2">
+          <p className="mb-2 text-ds-muted">{t('collaborationPairingCopyHint')}</p>
+          <button
+            type="button"
+            className={PRIMARY_BUTTON}
+            data-collaboration-copy-pairing="true"
+            onClick={() => {
+              void writePairingCommandToClipboard(pairing.pairingCode ?? '')
+                .then(setCopyState)
+            }}
+          >
+            {t('collaborationCopyPairingInstruction')}
+          </button>
+          <PairingCopyFeedback state={copyState} />
+        </div>
+      ) : null}
+      {pairing.expiresAt ? (
+        <p className="mt-1 text-ds-muted">
+          {t('collaborationPairingExpires')}: {formatDate(pairing.expiresAt)}
+        </p>
+      ) : null}
+      <p className="mt-1 flex items-center gap-1 text-ds-muted">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        {t('collaborationPairingWaiting')}
+      </p>
+    </div>
+  )
+}
+
+export function PairingCopyFeedback({ state }: Readonly<{
+  state: PairingCopyState
+}>): ReactElement | null {
+  const { t } = useTranslation('common')
+  if (state === 'idle') return null
+  if (state === 'failed') {
+    return (
+      <p className="mt-2 text-xs text-ds-muted" role="alert">
+        {t('collaborationPairingCopyFailed')}
+      </p>
+    )
+  }
+  return (
+    <p className="mt-2 text-xs text-ds-muted" role="status" aria-live="polite">
+      {t('collaborationPairingCopied')}
+    </p>
+  )
+}
+
+type ProjectionCardProps = Readonly<{
+  projection: CollaborationProjectionView
+  agentName?: string
+  ownerName?: string
+  busy: boolean
+  onUpdate: (input:
+    | Readonly<{ action: 'rename'; projectionId: string; displayName: string; expectedRevision: number }>
+    | Readonly<{ action: 'pause' | 'resume' | 'close'; projectionId: string; expectedRevision: number }>
+    | Readonly<{ action: 'relink'; projectionId: string; runtimeId: string; threadId: string; workspaceRoot?: string; expectedRevision: number }>
+  ) => void
+  onShare: (allowUserIds: string[]) => void
+  onRetry: () => void
+}>
+
+export function ProjectionCard({
+  projection,
+  agentName,
+  ownerName,
+  busy,
+  onUpdate,
+  onShare,
+  onRetry
+}: ProjectionCardProps): ReactElement {
+  const { t } = useTranslation('common')
+  const [editor, setEditor] = useState<'rename' | 'relink' | 'allowlist' | 'close' | null>(null)
+  const [editorValue, setEditorValue] = useState('')
+  const updateBase = {
+    projectionId: projection.projectionId,
+    expectedRevision: projection.revision
+  } as const
+  const openEditor = (
+    next: 'rename' | 'relink' | 'allowlist' | 'close',
+    value = ''
+  ): void => {
+    setEditorValue(value)
+    setEditor(next)
+  }
+  const submitEditor = (): void => {
+    const value = editorValue.trim()
+    if (editor === 'rename' && value) {
+      onUpdate({ action: 'rename', ...updateBase, displayName: value })
+    } else if (editor === 'relink' && value) {
+      onUpdate({
+        action: 'relink',
+        ...updateBase,
+        runtimeId: projection.runtimeId,
+        threadId: value,
+        ...(projection.workspaceRoot ? { workspaceRoot: projection.workspaceRoot } : {})
+      })
+    } else if (editor === 'allowlist') {
+      onShare([...new Set(editorValue.split(',').map((item) => item.trim()).filter(Boolean))])
+    } else {
+      return
+    }
+    setEditor(null)
+  }
+  return (
+    <article
+      className="rounded-md border border-ds-border p-2.5 text-xs"
+      data-projection-id={projection.projectionId}
+      data-projection-status={projection.status}
+      data-execution-agent={projection.agentId}
+      data-execution-owner={projection.agentOwnerUserId}
+    >
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-semibold">{projection.displayName}</div>
+          <code className="text-[10px] text-ds-faint">{projection.projectionId}</code>
+        </div>
+        <StatusPill status={projection.status} />
+      </div>
+      <dl className="mt-2 grid gap-1 text-ds-muted">
+        <div className="flex gap-1">
+          <dt>{t('collaborationOwner')}:</dt>
+          <dd className="font-medium text-ds-ink">
+            {ownerName || projection.agentOwnerUserId} · {agentName || projection.agentId}
+          </dd>
+        </div>
+        <div className="flex gap-1">
+          <dt>Session:</dt>
+          <dd>{projection.runtimeId}/{projection.threadId || 'pending'}</dd>
+        </div>
+        <div className="flex gap-1">
+          <dt>{t('collaborationTopic')}:</dt>
+          <dd>{projection.remoteDisplay || '—'}</dd>
+        </div>
+        <div className="flex gap-1">
+          <dt>{t('collaborationSync')}:</dt>
+          <dd>{projection.lastSynchronizedAt ? formatDate(projection.lastSynchronizedAt) : '—'}</dd>
+        </div>
+        <div className="flex gap-1">
+          <dt>{t('collaborationQueued')}:</dt>
+          <dd>{projection.queueDepth}</dd>
+        </div>
+        <div className="flex gap-1">
+          <dt>{t('collaborationSharedWith')}:</dt>
+          <dd>{projection.allowUserIds.length
+            ? projection.allowUserIds.join(', ')
+            : t('collaborationOwnerOnly')}</dd>
+        </div>
+      </dl>
+      {projection.allowUserIds.length ? (
+        <p className="mt-2 rounded bg-ds-hover p-2 text-ds-muted">
+          {t('collaborationSharedExecutionNotice')}
+        </p>
+      ) : null}
+      {projection.lastError ? <ExplicitError message={projection.lastError} compact /> : null}
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          className={SECONDARY_BUTTON}
+          disabled={busy || ['closed', 'linking'].includes(projection.status)}
+          onClick={() => openEditor('rename', projection.displayName)}
+        >
+          {t('collaborationRename')}
+        </button>
+        {projection.status === 'paused' ? (
+          <button
+            type="button"
+            className={SECONDARY_BUTTON}
+            disabled={busy}
+            onClick={() => onUpdate({ action: 'resume', ...updateBase })}
+          >
+            <Play className="h-3.5 w-3.5" />
+            {t('collaborationResume')}
+          </button>
+        ) : projection.status !== 'closed' ? (
+          <button
+            type="button"
+            className={SECONDARY_BUTTON}
+            disabled={busy || projection.status === 'linking'}
+            onClick={() => onUpdate({ action: 'pause', ...updateBase })}
+          >
+            <Pause className="h-3.5 w-3.5" />
+            {t('collaborationPause')}
+          </button>
+        ) : null}
+        {projection.status !== 'closed' ? (
+          <button
+            type="button"
+            className={SECONDARY_BUTTON}
+            disabled={busy}
+            onClick={() => openEditor('close')}
+          >
+            <X className="h-3.5 w-3.5" />
+            {t('collaborationClose')}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className={SECONDARY_BUTTON}
+          disabled={busy}
+          onClick={() => openEditor('relink', projection.threadId)}
+        >
+          <Link2 className="h-3.5 w-3.5" />
+          {t('collaborationRelink')}
+        </button>
+        <button
+          type="button"
+          className={SECONDARY_BUTTON}
+          disabled={busy || projection.status === 'closed'}
+          onClick={() => openEditor('allowlist', projection.allowUserIds.join(', '))}
+        >
+          {t('collaborationSaveAllowlist')}
+        </button>
+        {(projection.status === 'error' || projection.lastError) ? (
+          <button type="button" className={PRIMARY_BUTTON} disabled={busy} onClick={onRetry}>
+            <RotateCcw className="h-3.5 w-3.5" />
+            {t('collaborationRetry')}
+          </button>
+        ) : null}
+      </div>
+      {editor && editor !== 'close' ? (
+        <InlineTextActionEditor
+          label={editor === 'rename'
+            ? t('collaborationRenameSessionLabel')
+            : editor === 'relink'
+              ? t('collaborationRelinkPrompt')
+              : t('collaborationAllowlistPrompt')}
+          value={editorValue}
+          allowEmpty={editor === 'allowlist'}
+          busy={busy}
+          submitLabel={editor === 'rename'
+            ? t('collaborationRename')
+            : editor === 'relink'
+              ? t('collaborationRelink')
+              : t('collaborationSaveAllowlist')}
+          onChange={setEditorValue}
+          onSubmit={submitEditor}
+          onCancel={() => setEditor(null)}
+        />
+      ) : null}
+      {editor === 'close' ? (
+        <InlineConfirmationEditor
+          message={t('collaborationCloseConfirm', { name: projection.displayName })}
+          busy={busy}
+          onConfirm={() => {
+            onUpdate({ action: 'close', ...updateBase })
+            setEditor(null)
+          }}
+          onCancel={() => setEditor(null)}
+        />
+      ) : null}
+    </article>
+  )
+}
+
+export function InlineTextActionEditor({
+  label,
+  value,
+  allowEmpty = false,
+  busy,
+  submitLabel,
+  onChange,
+  onSubmit,
+  onCancel
+}: Readonly<{
+  label: string
+  value: string
+  allowEmpty?: boolean
+  busy: boolean
+  submitLabel: string
+  onChange: (value: string) => void
+  onSubmit: () => void
+  onCancel: () => void
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  return (
+    <form
+      className="mt-2 space-y-2 rounded-md bg-ds-hover p-2"
+      data-collaboration-inline-editor="text"
+      onSubmit={(event) => {
+        event.preventDefault()
+        onSubmit()
+      }}
+    >
+      <label className="block text-xs text-ds-muted">
+        <span className="mb-1 block">{label}</span>
+        <input
+          className={INPUT}
+          value={value}
+          required={!allowEmpty}
+          disabled={busy}
+          onChange={(event) => onChange(event.currentTarget.value)}
+        />
+      </label>
+      <div className="flex gap-2">
+        <button
+          type="submit"
+          className={PRIMARY_BUTTON}
+          disabled={busy || (!allowEmpty && !value.trim())}
+        >
+          {submitLabel}
+        </button>
+        <button type="button" className={SECONDARY_BUTTON} disabled={busy} onClick={onCancel}>
+          {t('collaborationCancel')}
+        </button>
+      </div>
+    </form>
+  )
+}
+
+export function InlineConfirmationEditor({
+  message,
+  busy,
+  onConfirm,
+  onCancel
+}: Readonly<{
+  message: string
+  busy: boolean
+  onConfirm: () => void
+  onCancel: () => void
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  return (
+    <div
+      className="mt-2 rounded-md bg-ds-hover p-2"
+      data-collaboration-inline-editor="confirmation"
+      role="group"
+      aria-label={message}
+    >
+      <p className="mb-2 text-xs">{message}</p>
+      <div className="flex gap-2">
+        <button type="button" className={PRIMARY_BUTTON} disabled={busy} onClick={onConfirm}>
+          {t('collaborationConfirm')}
+        </button>
+        <button type="button" className={SECONDARY_BUTTON} disabled={busy} onClick={onCancel}>
+          {t('collaborationCancel')}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+export function ProjectsSection({ projects, participant }: Readonly<{
+  projects: readonly ProjectView[]
+  participant?: ParticipantView
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  return (
+    <section className={PANEL_SECTION} data-collaboration-section="projects">
+      <SectionTitle icon={<Server className="h-4 w-4" />}>
+        {t('collaborationProjects')}
+      </SectionTitle>
+      {projects.length ? (
+        <div className="space-y-2">
+          {projects.map((project) => (
+            <article
+              key={project.projectId}
+              className="rounded-md border border-ds-border p-2.5 text-xs"
+              data-project-id={project.projectId}
+              data-project-status={project.state}
+            >
+              <div className="flex items-start gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-semibold">{project.name}</div>
+                  <code className="text-[10px] text-ds-faint">{project.projectId}</code>
+                </div>
+                <StatusPill status={project.state} />
+              </div>
+              <dl className="my-2 grid gap-1 text-ds-muted">
+                <div className="flex gap-1">
+                  <dt>{t('collaborationCoordinator')}:</dt>
+                  <dd className="text-ds-ink">
+                    {participant?.agents.find(({ agentId }) =>
+                      agentId === project.coordinatorAgentId
+                    )?.displayName || project.coordinatorAgentId}
+                  </dd>
+                </div>
+                <div>Members: {project.memberUserIds.length} · Revision {project.revision}</div>
+              </dl>
+              {project.tasks.length ? (
+                <div className="space-y-1.5">
+                  {project.tasks.map((task) => (
+                    <TaskRow key={task.taskId} task={task} participant={participant} />
+                  ))}
+                </div>
+              ) : <EmptyState>{t('collaborationNoTasks')}</EmptyState>}
+            </article>
+          ))}
+        </div>
+      ) : <EmptyState>{t('collaborationNoProjects')}</EmptyState>}
+    </section>
+  )
+}
+
+function TaskRow({ task, participant }: Readonly<{
+  task: CollaborationTaskView
+  participant?: ParticipantView
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  const agent = participant?.agents.find(({ agentId }) => agentId === task.assigneeAgentId)
+  return (
+    <div
+      className="rounded bg-ds-hover p-2"
+      data-task-id={task.taskId}
+      data-task-status={task.state}
+    >
+      <div className="flex items-center gap-2">
+        <CircleDot className="h-3.5 w-3.5" />
+        <span className="min-w-0 flex-1 truncate font-medium">{task.title}</span>
+        <StatusPill status={task.state} />
+      </div>
+      <div className="mt-1 text-ds-muted">
+        {t('collaborationAssignee')}: {agent?.displayName || task.assigneeAgentId} · Revision {task.revision}
+      </div>
+      {task.error ? <ExplicitError message={task.error} compact /> : null}
+    </div>
+  )
+}
+
+export function RecoverySection({ queue, diagnostics, busy, onRetry }: Readonly<{
+  queue: readonly CollaborationProjectionQueueItemView[]
+  diagnostics: CollaborationStatusSnapshot['diagnostics']
+  busy: boolean
+  onRetry: (scope: 'connection' | 'inbox' | 'outbox' | 'projection' | 'task', id?: string) => void
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  return (
+    <section className={PANEL_SECTION} data-collaboration-section="recovery">
+      <SectionTitle icon={<RotateCcw className="h-4 w-4" />}>
+        {t('collaborationRecovery')}
+      </SectionTitle>
+      <div className="mb-2 flex flex-wrap gap-1.5">
+        <button type="button" className={SECONDARY_BUTTON} disabled={busy} onClick={() => onRetry('inbox')}>
+          Inbox {t('collaborationRecover')}
+        </button>
+        <button type="button" className={SECONDARY_BUTTON} disabled={busy} onClick={() => onRetry('outbox')}>
+          Outbox {t('collaborationRecover')}
+        </button>
+      </div>
+      {queue.length ? (
+        <ol className="space-y-1.5">
+          {queue.slice(0, 50).map((item) => (
+            <li
+              key={item.queueItemId}
+              className="rounded bg-ds-hover p-2 text-xs"
+              data-queue-sequence={item.sequence}
+              data-queue-state={item.state}
+            >
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[10px]">#{item.sequence}</span>
+                <span className="min-w-0 flex-1 truncate">{item.kind} · {item.origin}</span>
+                <StatusPill status={item.state} />
+              </div>
+              <div className="mt-1 text-ds-muted">
+                {t('collaborationAttempts')}: {item.attempts} · {formatDate(item.updatedAt)}
+              </div>
+              {item.error ? <ExplicitError message={item.error} compact /> : null}
+            </li>
+          ))}
+        </ol>
+      ) : null}
+      {diagnostics.length ? (
+        <div className="mt-2 space-y-1.5">
+          {diagnostics.map((diagnostic, index) => (
+            <div
+              key={`${diagnostic.code}-${diagnostic.occurredAt}-${index}`}
+              className="rounded border border-ds-border p-2 text-xs"
+              data-diagnostic-code={diagnostic.code}
+              data-diagnostic-severity={diagnostic.severity}
+            >
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium">{diagnostic.message}</div>
+                  <div className="text-ds-muted">{diagnostic.code} · {formatDate(diagnostic.occurredAt)}</div>
+                </div>
+              </div>
+              {diagnostic.recoverable ? (
+                <button
+                  type="button"
+                  className={`${SECONDARY_BUTTON} mt-2`}
+                  disabled={busy}
+                  onClick={() => onRetry('connection')}
+                >
+                  {t('collaborationRecover')}
+                </button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+export function ExplicitError({ message, compact = false }: Readonly<{
+  message: string
+  compact?: boolean
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  return (
+    <div
+      className={`${compact ? 'mt-2 p-2' : 'p-3'} flex items-start gap-2 rounded-md border border-ds-border bg-ds-hover text-xs`}
+      role="alert"
+      data-collaboration-error="true"
+    >
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+      <div>
+        <div className="font-semibold">{t('collaborationError')}</div>
+        <div className="break-words text-ds-muted">{message}</div>
+      </div>
+    </div>
+  )
+}
+
+function SectionTitle({ icon, children }: Readonly<{
+  icon: ReactElement
+  children: ReactNode
+}>): ReactElement {
+  return (
+    <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold">
+      {icon}
+      <span className="min-w-0 flex-1">{children}</span>
+    </h3>
+  )
+}
+
+function StatusPill({ status }: Readonly<{ status: string }>): ReactElement {
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-ds-border bg-ds-card px-1.5 py-0.5 text-[10px] font-medium text-ds-muted"
+      data-status={status}
+    >
+      {status === 'online' || status === 'connected' || status === 'active' || status === 'completed'
+        ? <CheckCircle2 className="h-3 w-3" />
+        : status === 'connecting' || status === 'recovering' || status === 'linking' || status === 'running'
+          ? <Loader2 className="h-3 w-3 animate-spin" />
+          : status === 'error' || status === 'failed'
+            ? <AlertTriangle className="h-3 w-3" />
+            : <CircleDot className="h-3 w-3" />}
+      {status}
+    </span>
+  )
+}
+
+function EmptyState({ children }: Readonly<{ children: string }>): ReactElement {
+  return <div className="rounded-md bg-ds-hover p-3 text-xs text-ds-muted">{children}</div>
+}
+
+function formatDate(value: string): string {
+  const time = Date.parse(value)
+  if (!Number.isFinite(time)) return value
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  }).format(new Date(time))
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) return error.message
+  return fallback
+}

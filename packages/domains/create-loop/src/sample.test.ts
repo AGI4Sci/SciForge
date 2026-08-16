@@ -322,6 +322,7 @@ function runtimeContext(): DomainMainRuntimeLifecycleContext {
         turns: [],
         artifacts: []
       }),
+      subscribeMessages: async function* () {},
       hasActiveTurns: () => false
     },
     capabilities: {

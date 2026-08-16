@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { mkdir, open, rename, rm } from 'node:fs/promises'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { z } from 'zod'
 import { domainPackageJsonValueSchema } from '@sciforge/domain-sdk/contract'
 import {
@@ -8,69 +9,124 @@ import {
   artifactVersionBundleImportInputV1Schema,
   artifactVersionBundleImportReceiptV1Schema,
   artifactVersionBundleV1Schema,
+  artifactVersionBundleV2Schema,
   artifactVersionBundleVerificationV1Schema,
+  artifactVersionBundleVerificationV2Schema,
+  artifactVersionBundleExportInputV1Schema,
+  artifactVersionBundleExportInputV2Schema,
+  artifactVersionBundleReceiptV1Schema,
+  artifactVersionBundleReceiptV2Schema,
   artifactVersionBundleVerifyInputV1Schema,
   artifactVersionCommitInputV1Schema,
+  artifactVersionCommitInputV2Schema,
   artifactVersionCommitReceiptV1Schema,
   artifactVersionCompareInputV1Schema,
   artifactVersionCompareV1Schema,
+  artifactVersionDescribeInputV2Schema,
+  artifactVersionDescribeV2Schema,
   artifactVersionEventListInputV1Schema,
   artifactVersionEventListV1Schema,
   artifactVersionLifecycleEventV1Schema,
   artifactVersionListInputV1Schema,
   artifactVersionListV1Schema,
+  artifactVersionListInputV2Schema,
+  artifactVersionListV2Schema,
   artifactVersionLocationV1Schema,
   artifactVersionMaterializeInputV1Schema,
   artifactVersionMaterializeReceiptV1Schema,
   artifactVersionObserveInputV1Schema,
   artifactVersionReadInputV1Schema,
+  artifactVersionReadRangeInputV2Schema,
+  artifactVersionReadRangeV2Schema,
   artifactVersionReadV1Schema,
   artifactVersionRefreshInputV1Schema,
   artifactVersionRefreshV1Schema,
   artifactVersionRestoreAsNewInputV1Schema,
+  artifactVersionStageAbortInputV2Schema,
+  artifactVersionStageAbortReceiptV2Schema,
+  artifactVersionStageAppendInputV2Schema,
+  artifactVersionStageAppendReceiptV2Schema,
+  artifactVersionStageBeginInputV2Schema,
+  artifactVersionStageBeginReceiptV2Schema,
+  artifactVersionStageSealInputV2Schema,
   artifactVersionV1Schema,
+  stagedObjectRefV2Schema,
+  ARTIFACT_VERSION_STAGE_CHUNK_BYTES,
+  ARTIFACT_VERSIONS_SYSTEM_CAPABILITY_GRANTS,
   type ArtifactV1,
   type ArtifactVersionBundleImportInputV1,
   type ArtifactVersionBundleImportReceiptV1,
   type ArtifactVersionBundleExportInputV1,
+  type ArtifactVersionBundleExportInputV2,
   type ArtifactVersionBundleReceiptV1,
+  type ArtifactVersionBundleReceiptV2,
   type ArtifactVersionBundleV1,
+  type ArtifactVersionBundleV2,
   type ArtifactVersionBundleVerificationV1,
+  type ArtifactVersionBundleVerificationV2,
   type ArtifactVersionBundleVerifyInputV1,
   type ArtifactVersionCommitCandidateV1,
+  type ArtifactVersionCommitCandidateV2,
   type ArtifactVersionCommitInputV1,
+  type ArtifactVersionCommitInputV2,
   type ArtifactVersionCommitReceiptV1,
   type ArtifactVersionCompareInputV1,
   type ArtifactVersionCompareV1,
+  type ArtifactVersionDescribeInputV2,
+  type ArtifactVersionDescribeV2,
   type ArtifactVersionDependencyRefV1,
   type ArtifactVersionEventListInputV1,
   type ArtifactVersionEventListV1,
   type ArtifactVersionIssueV1,
+  type ArtifactVersionIssueV2,
   type ArtifactVersionLifecycleEventV1,
   type ArtifactVersionListInputV1,
   type ArtifactVersionListV1,
+  type ArtifactVersionListInputV2,
+  type ArtifactVersionListV2,
   type ArtifactVersionLocationV1,
   type ArtifactVersionMaterializeInputV1,
   type ArtifactVersionMaterializeReceiptV1,
   type ArtifactVersionObserveInputV1,
   type ArtifactVersionReadInputV1,
+  type ArtifactVersionReadRangeInputV2,
+  type ArtifactVersionReadRangeV2,
   type ArtifactVersionReadV1,
   type ArtifactVersionRefreshInputV1,
   type ArtifactVersionRefreshV1,
   type ArtifactVersionRefV1,
   type ArtifactVersionRestoreAsNewInputV1,
   type ArtifactVersionResultV1,
-  type ArtifactVersionV1
+  type ArtifactVersionResultV2,
+  type ArtifactVersionStageAbortInputV2,
+  type ArtifactVersionStageAbortReceiptV2,
+  type ArtifactVersionStageAppendInputV2,
+  type ArtifactVersionStageAppendReceiptV2,
+  type ArtifactVersionStageBeginInputV2,
+  type ArtifactVersionStageBeginReceiptV2,
+  type ArtifactVersionStageSealInputV2,
+  type ArtifactVersionV1,
+  type StagedObjectRefV2
 } from '../contract.js'
 import {
   DestinationExistsError,
   WorkspacePathError,
   atomicWriteSafeData,
   atomicWriteWorkspaceBytes,
+  atomicWriteWorkspaceDirectory,
+  appendOrVerifySafeDataBytes,
   canonicalDirectory,
+  copyVerifiedRegularFile,
+  inspectRegularFile,
+  listSafeDataRegularFiles,
+  measureSafeDataRegularFiles,
   readSafeDataBytes,
   readSafeDataText,
+  readVerifiedRegularFileRange,
   readWorkspaceBytes,
+  removeSafeDataFile,
+  resolveWorkspaceEntry,
+  safeDataPath,
   sha256,
   stableStringify
 } from './safe-files.js'
@@ -79,11 +135,47 @@ const STORE_SCHEMA_VERSION = 1 as const
 const INDEX_SEGMENTS = ['index.v1.json'] as const
 const LEGACY_REGISTRY_SCHEMA_VERSION = 'artifact-registry.v1' as const
 const LEGACY_MIGRATION_KEY = 'evidenceArtifactRegistryV1' as const
+const OPEN_STAGE_TTL_MS = 60 * 60 * 1_000
+const SEALED_STAGE_TTL_MS = 24 * 60 * 60 * 1_000
+const ORPHAN_OBJECT_TTL_MS = 7 * 24 * 60 * 60 * 1_000
+const STAGING_SEGMENTS = ['staging'] as const
+export const DEFAULT_ARTIFACT_VERSION_INDEX_BYTES = 64 * 1024 * 1024
+export const DEFAULT_ARTIFACT_VERSION_CAS_BYTES = 4 * 1024 * 1024 * 1024
+// Existing public staging supports >128 MiB objects. Preserve that surface;
+// the default policy therefore bounds aggregate active staging, not one object.
+export const DEFAULT_ARTIFACT_VERSION_ACTIVE_STAGING_BYTES = 512 * 1024 * 1024
+const CAPACITY_WARNING_RATIO = 0.8
+
+const stagedObjectRecordSchema = z.object({
+  schemaVersion: z.literal(1),
+  stageToken: z.string().trim().startsWith('artifact-stage:'),
+  workspaceKey: z.string().regex(/^[a-f0-9]{64}$/),
+  callerId: z.string().trim().min(1).max(512),
+  idempotencyKey: z.string().trim().min(8).max(512),
+  requestDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  state: z.enum(['open', 'sealed']),
+  expectedByteLength: z.number().int().nonnegative().optional(),
+  receivedByteLength: z.number().int().nonnegative(),
+  mediaType: z.string().trim().regex(/^[^\s/]+\/[^\s/]+$/).max(256).optional(),
+  contentDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  createdAt: z.iso.datetime({ offset: true }),
+  updatedAt: z.iso.datetime({ offset: true }),
+  expiresAt: z.iso.datetime({ offset: true })
+}).strict()
+
+type StagedObjectRecord = z.infer<typeof stagedObjectRecordSchema>
 
 const idempotencyRecordSchema = z.object({
   operation: z.string().trim().min(1).max(128),
   requestDigest: z.string().regex(/^[a-f0-9]{64}$/),
   value: domainPackageJsonValueSchema
+}).strict()
+
+const consumedStageRecordSchema = z.object({
+  transactionId: z.string().trim().startsWith('artifact-commit:'),
+  requestDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  callerId: z.string().trim().min(1).max(512),
+  consumedAt: z.iso.datetime({ offset: true })
 }).strict()
 
 const locationBindingSchema = artifactVersionLocationV1Schema.extend({
@@ -140,6 +232,8 @@ const storeIndexSchema = z.object({
   events: z.array(artifactVersionLifecycleEventV1Schema),
   locations: z.array(locationBindingSchema),
   idempotency: z.record(z.string(), idempotencyRecordSchema),
+  consumedStages: z.record(z.string().regex(/^[a-f0-9]{64}$/), consumedStageRecordSchema)
+    .default({}),
   migrations: z.object({
     [LEGACY_MIGRATION_KEY]: legacyMigrationRecordSchema.optional()
   }).strict().default({})
@@ -169,37 +263,179 @@ type PreparedLegacyVersion = Readonly<{
 type Clock = () => Date
 type IdFactory = () => string
 
+function positiveSafeBudget(value: number | undefined, fallback: number, label: string): number {
+  const resolved = value ?? fallback
+  if (!Number.isSafeInteger(resolved) || resolved <= 0) {
+    throw new Error(`${label} must be a positive safe integer.`)
+  }
+  return resolved
+}
+
+function artifactVersionWorkspaceBudgets(
+  options: Pick<ArtifactVersionServiceOptions, 'maxIndexBytes' | 'maxCasBytes' | 'maxActiveStagingBytes'>
+): ArtifactVersionWorkspaceBudgets {
+  return Object.freeze({
+    maxIndexBytes: positiveSafeBudget(
+      options.maxIndexBytes,
+      DEFAULT_ARTIFACT_VERSION_INDEX_BYTES,
+      'Artifact Versions index capacity'
+    ),
+    maxCasBytes: positiveSafeBudget(
+      options.maxCasBytes,
+      DEFAULT_ARTIFACT_VERSION_CAS_BYTES,
+      'Artifact Versions CAS capacity'
+    ),
+    maxActiveStagingBytes: positiveSafeBudget(
+      options.maxActiveStagingBytes,
+      DEFAULT_ARTIFACT_VERSION_ACTIVE_STAGING_BYTES,
+      'Artifact Versions active staging capacity'
+    )
+  })
+}
+
+function usageDimension(usedBytes: number, limitBytes: number): ArtifactVersionUsageDimensionV1 {
+  return Object.freeze({ usedBytes, limitBytes, ratio: usedBytes / limitBytes })
+}
+
 export type ArtifactVersionServiceOptions = Readonly<{
   userDataDir: string
   now?: Clock
   id?: IdFactory
+  maxIndexBytes?: number
+  maxCasBytes?: number
+  maxActiveStagingBytes?: number
+}>
+
+export type ArtifactVersionUsageV1 = Readonly<{
+  index: ArtifactVersionUsageDimensionV1
+  cas: ArtifactVersionUsageDimensionV1
+  activeStaging: ArtifactVersionUsageDimensionV1
+  warnings: readonly ArtifactVersionCapacityWarningV1[]
+}>
+
+export type ArtifactVersionUsageDimensionV1 = Readonly<{
+  usedBytes: number
+  limitBytes: number
+  ratio: number
+}>
+
+export type ArtifactVersionCapacityWarningV1 = Readonly<{
+  code: 'artifact-version-capacity-warning'
+  dimension: 'index' | 'cas' | 'active-staging'
+  usedBytes: number
+  limitBytes: number
+  ratio: number
 }>
 
 export type ArtifactVersionAccessContext = Readonly<{
   audience: 'ui' | 'agent' | 'system'
   callerId: string
+  capabilityGrants?: readonly string[]
 }>
 
 export class ArtifactVersionService {
   readonly #userDataDir: string
   readonly #now: Clock
   readonly #id: IdFactory
+  readonly #budgets: ArtifactVersionWorkspaceBudgets
   readonly #stores = new Map<string, Promise<ArtifactVersionWorkspaceStore>>()
 
   constructor(options: ArtifactVersionServiceOptions) {
     this.#userDataDir = options.userDataDir
     this.#now = options.now ?? (() => new Date())
     this.#id = options.id ?? randomUUID
+    this.#budgets = artifactVersionWorkspaceBudgets(options)
+  }
+
+  async usage(workspaceRoot: string): Promise<ArtifactVersionResultV1<ArtifactVersionUsageV1>> {
+    return this.#attempt(async () => (await this.#store(workspaceRoot)).usage())
   }
 
   async commit(
     workspaceRoot: string,
     input: ArtifactVersionCommitInputV1,
     access: ArtifactVersionAccessContext
-  ): Promise<ArtifactVersionResultV1<ArtifactVersionCommitReceiptV1>> {
-    return this.#attempt(async () => {
-      const parsed = artifactVersionCommitInputV1Schema.parse(input)
+  ): Promise<ArtifactVersionResultV1<ArtifactVersionCommitReceiptV1>>
+  async commit(
+    workspaceRoot: string,
+    input: ArtifactVersionCommitInputV2,
+    access: ArtifactVersionAccessContext
+  ): Promise<ArtifactVersionResultV2<ArtifactVersionCommitReceiptV1>>
+  async commit(
+    workspaceRoot: string,
+    input: ArtifactVersionCommitInputV1 | ArtifactVersionCommitInputV2,
+    access: ArtifactVersionAccessContext
+  ): Promise<ArtifactVersionResultV1<ArtifactVersionCommitReceiptV1> | ArtifactVersionResultV2<ArtifactVersionCommitReceiptV1>> {
+    const isV2 = input.candidates.some((candidate) => (
+      'requestedArtifactId' in candidate ||
+      'requestedVersionId' in candidate ||
+      candidate.content.mode === 'staged-object'
+    ))
+    return isV2
+      ? this.commitV2(workspaceRoot, artifactVersionCommitInputV2Schema.parse(input), access)
+      : this.#attempt(async () => {
+          const parsed = artifactVersionCommitInputV1Schema.parse(input)
+          return (await this.#store(workspaceRoot)).commit(parsed, { access })
+        })
+  }
+
+  async commitV2(
+    workspaceRoot: string,
+    input: ArtifactVersionCommitInputV2,
+    access: ArtifactVersionAccessContext
+  ): Promise<ArtifactVersionResultV2<ArtifactVersionCommitReceiptV1>> {
+    return this.#attemptV2(async () => {
+      const parsed = artifactVersionCommitInputV2Schema.parse(input)
+      assertRequestedIdentitiesAccess(parsed, access)
       return (await this.#store(workspaceRoot)).commit(parsed, { access })
+    })
+  }
+
+  async stageBegin(
+    workspaceRoot: string,
+    input: ArtifactVersionStageBeginInputV2,
+    access: ArtifactVersionAccessContext
+  ): Promise<ArtifactVersionResultV2<ArtifactVersionStageBeginReceiptV2>> {
+    return this.#attemptV2(async () => {
+      assertSystemAccess(access)
+      const parsed = artifactVersionStageBeginInputV2Schema.parse(input)
+      return (await this.#store(workspaceRoot)).stageBegin(parsed, access)
+    })
+  }
+
+  async stageAppend(
+    workspaceRoot: string,
+    input: ArtifactVersionStageAppendInputV2,
+    access: ArtifactVersionAccessContext
+  ): Promise<ArtifactVersionResultV2<ArtifactVersionStageAppendReceiptV2>> {
+    return this.#attemptV2(async () => {
+      assertSystemAccess(access)
+      const parsed = artifactVersionStageAppendInputV2Schema.parse(input)
+      return (await this.#store(workspaceRoot)).stageAppend(parsed, access)
+    })
+  }
+
+  async stageSeal(
+    workspaceRoot: string,
+    input: ArtifactVersionStageSealInputV2,
+    access: ArtifactVersionAccessContext
+  ): Promise<ArtifactVersionResultV2<StagedObjectRefV2>> {
+    return this.#attemptV2(async () => {
+      assertSystemAccess(access)
+      const parsed = artifactVersionStageSealInputV2Schema.parse(input)
+      return (await this.#store(workspaceRoot)).stageSeal(parsed, access)
+    })
+  }
+
+  async stageAbort(
+    workspaceRoot: string,
+    input: ArtifactVersionStageAbortInputV2,
+    access: ArtifactVersionAccessContext
+  ): Promise<ArtifactVersionResultV2<ArtifactVersionStageAbortReceiptV2>> {
+    return this.#attemptV2(async () => {
+      assertSystemAccess(access)
+      const parsed = artifactVersionStageAbortInputV2Schema.parse(input)
+      return (await this.#store(workspaceRoot)).stageAbort(parsed, access)
     })
   }
 
@@ -274,13 +510,46 @@ export class ArtifactVersionService {
     })
   }
 
-  async list(
+  async readRange(
+    workspaceRoot: string,
+    input: ArtifactVersionReadRangeInputV2,
+    access: ArtifactVersionAccessContext
+  ): Promise<ArtifactVersionResultV2<ArtifactVersionReadRangeV2>> {
+    return this.#attemptV2(async () => {
+      const parsed = artifactVersionReadRangeInputV2Schema.parse(input)
+      return (await this.#store(workspaceRoot)).readRange(parsed, access)
+    })
+  }
+
+  async describe(
+    workspaceRoot: string,
+    input: ArtifactVersionDescribeInputV2,
+    access: ArtifactVersionAccessContext
+  ): Promise<ArtifactVersionResultV1<ArtifactVersionDescribeV2>> {
+    return this.#attempt(async () => {
+      const parsed = artifactVersionDescribeInputV2Schema.parse(input)
+      return (await this.#store(workspaceRoot)).describe(parsed, access)
+    })
+  }
+
+  async listV1(
     workspaceRoot: string,
     input: ArtifactVersionListInputV1,
     access: ArtifactVersionAccessContext
   ): Promise<ArtifactVersionResultV1<ArtifactVersionListV1>> {
     return this.#attempt(async () => {
       const parsed = artifactVersionListInputV1Schema.parse(input)
+      return (await this.#store(workspaceRoot)).listV1(parsed, access)
+    })
+  }
+
+  async list(
+    workspaceRoot: string,
+    input: ArtifactVersionListInputV2,
+    access: ArtifactVersionAccessContext
+  ): Promise<ArtifactVersionResultV1<ArtifactVersionListV2>> {
+    return this.#attempt(async () => {
+      const parsed = artifactVersionListInputV2Schema.parse(input)
       return (await this.#store(workspaceRoot)).list(parsed, access)
     })
   }
@@ -361,19 +630,28 @@ export class ArtifactVersionService {
     })
   }
 
-  async exportBundle(
+  async exportBundle<TInput extends ArtifactVersionBundleExportInputV1 | ArtifactVersionBundleExportInputV2>(
     workspaceRoot: string,
-    input: ArtifactVersionBundleExportInputV1,
+    input: TInput,
     access: ArtifactVersionAccessContext
-  ): Promise<ArtifactVersionResultV1<ArtifactVersionBundleReceiptV1>> {
+  ): Promise<ArtifactVersionResultV1<
+    TInput extends ArtifactVersionBundleExportInputV2
+      ? ArtifactVersionBundleReceiptV2
+      : ArtifactVersionBundleReceiptV1
+  >> {
     return this.#attempt(async () => {
-      const { artifactVersionBundleExportInputV1Schema } = await import('../contract.js')
-      const parsed = artifactVersionBundleExportInputV1Schema.parse(input)
-      return (await this.#store(workspaceRoot)).exportBundle(parsed, access)
-    })
+      const store = await this.#store(workspaceRoot)
+      return 'format' in input
+        ? store.exportBundle(artifactVersionBundleExportInputV2Schema.parse(input), access)
+        : store.exportBundle(artifactVersionBundleExportInputV1Schema.parse(input), access)
+    }) as Promise<ArtifactVersionResultV1<
+      TInput extends ArtifactVersionBundleExportInputV2
+        ? ArtifactVersionBundleReceiptV2
+        : ArtifactVersionBundleReceiptV1
+    >>
   }
 
-  async verifyBundle(
+  async verifyBundleV1(
     workspaceRoot: string,
     input: ArtifactVersionBundleVerifyInputV1
   ): Promise<ArtifactVersionResultV1<ArtifactVersionBundleVerificationV1>> {
@@ -384,6 +662,16 @@ export class ArtifactVersionService {
     })
   }
 
+  async verifyBundle(
+    workspaceRoot: string,
+    input: ArtifactVersionBundleVerifyInputV1
+  ): Promise<ArtifactVersionResultV1<ArtifactVersionBundleVerificationV2>> {
+    return this.#attempt(async () => {
+      const parsed = artifactVersionBundleVerifyInputV1Schema.parse(input)
+      return (await verifyBundleAtWorkspacePath(workspaceRoot, parsed.bundlePath)).verification
+    })
+  }
+
   async importBundle(
     workspaceRoot: string,
     input: ArtifactVersionBundleImportInputV1,
@@ -391,14 +679,18 @@ export class ArtifactVersionService {
   ): Promise<ArtifactVersionResultV1<ArtifactVersionBundleImportReceiptV1>> {
     return this.#attempt(async () => {
       const parsed = artifactVersionBundleImportInputV1Schema.parse(input)
-      const file = await readWorkspaceBytes(workspaceRoot, parsed.bundlePath)
-      const verified = verifyBundleBytes(file.bytes)
+      const verified = await verifyBundleAtWorkspacePath(workspaceRoot, parsed.bundlePath)
       if (!verified.bundle || !verified.verification.valid) {
         throw domainError('bundle-invalid', 'The bundle failed integrity validation.', {
           issues: verified.verification.issues
         })
       }
-      return (await this.#store(workspaceRoot)).importBundle(parsed, verified.bundle, access)
+      return (await this.#store(workspaceRoot)).importBundle(
+        parsed,
+        verified.bundle,
+        access,
+        verified.format === 'v2-directory' ? verified.relativePath : undefined
+      )
     })
   }
 
@@ -432,7 +724,8 @@ export class ArtifactVersionService {
         userDataDir: this.#userDataDir,
         workspaceRoot: canonical,
         now: this.#now,
-        id: this.#id
+        id: this.#id,
+        budgets: this.#budgets
       })
       this.#stores.set(canonical, store)
     }
@@ -446,6 +739,14 @@ export class ArtifactVersionService {
       return { ok: false, issue: issueFrom(error) }
     }
   }
+
+  async #attemptV2<T>(operation: () => Promise<T>): Promise<ArtifactVersionResultV2<T>> {
+    try {
+      return { ok: true, value: await operation() }
+    } catch (error) {
+      return { ok: false, issue: issueFromV2(error) }
+    }
+  }
 }
 
 type WorkspaceStoreOptions = Readonly<{
@@ -453,6 +754,13 @@ type WorkspaceStoreOptions = Readonly<{
   workspaceRoot: string
   now: Clock
   id: IdFactory
+  budgets: ArtifactVersionWorkspaceBudgets
+}>
+
+type ArtifactVersionWorkspaceBudgets = Readonly<{
+  maxIndexBytes: number
+  maxCasBytes: number
+  maxActiveStagingBytes: number
 }>
 
 type CommitOptions = Readonly<{
@@ -474,7 +782,10 @@ class ArtifactVersionWorkspaceStore {
   readonly #workspaceKey: string
   readonly #now: Clock
   readonly #id: IdFactory
+  readonly #budgets: ArtifactVersionWorkspaceBudgets
   #queue: Promise<void> = Promise.resolve()
+  #lastGarbageCollectionAt = 0
+  readonly #verifiedObjectIdentities = new Map<string, string>()
 
   private constructor(options: WorkspaceStoreOptions & Readonly<{ dataRoot: string }>) {
     this.#dataRoot = options.dataRoot
@@ -482,6 +793,7 @@ class ArtifactVersionWorkspaceStore {
     this.#workspaceKey = sha256(options.workspaceRoot)
     this.#now = options.now
     this.#id = options.id
+    this.#budgets = options.budgets
   }
 
   static async open(options: WorkspaceStoreOptions): Promise<ArtifactVersionWorkspaceStore> {
@@ -492,15 +804,251 @@ class ArtifactVersionWorkspaceStore {
     return new ArtifactVersionWorkspaceStore({ ...options, dataRoot })
   }
 
+  stageBegin(
+    input: ArtifactVersionStageBeginInputV2,
+    access: ArtifactVersionAccessContext
+  ): Promise<ArtifactVersionStageBeginReceiptV2> {
+    return this.#enqueue(async () => {
+      assertSystemAccess(access)
+      await this.#cleanupExpiredStages()
+      const requestDigest = sha256(stableStringify(input))
+      const stageToken = `artifact-stage:${sha256(
+        `${this.#workspaceKey}\0${access.callerId}\0${input.idempotencyKey}`
+      )}`
+      const index = await this.#load()
+      if (index.consumedStages[sha256(stageToken)]) {
+        throw domainError(
+          'idempotency-conflict',
+          'The staging idempotency key already belongs to a consumed object.'
+        )
+      }
+      const existing = await this.#readStage(stageToken)
+      if (existing) {
+        if (
+          existing.workspaceKey !== this.#workspaceKey ||
+          existing.callerId !== access.callerId
+        ) {
+          throw domainError('access-restricted', 'The staged object is not available to this caller.')
+        }
+        if (existing.requestDigest !== requestDigest) {
+          throw domainError(
+            'idempotency-conflict',
+            'The staging idempotency key was reused for different input.'
+          )
+        }
+        if (new Date(existing.expiresAt).getTime() <= this.#now().getTime()) {
+          await this.#deleteStage(stageToken)
+        } else {
+          return artifactVersionStageBeginReceiptV2Schema.parse({
+            stageToken,
+            nextOffset: existing.receivedByteLength,
+            maxChunkBytes: ARTIFACT_VERSION_STAGE_CHUNK_BYTES,
+            expiresAt: existing.expiresAt,
+            idempotentReplay: true
+          })
+        }
+      }
+      await this.#assertActiveStagingBudget(input.expectedByteLength ?? 0)
+      const now = this.#now()
+      const record = stagedObjectRecordSchema.parse({
+        schemaVersion: 1,
+        stageToken,
+        workspaceKey: this.#workspaceKey,
+        callerId: access.callerId,
+        idempotencyKey: input.idempotencyKey,
+        requestDigest,
+        state: 'open',
+        ...(input.expectedByteLength !== undefined
+          ? { expectedByteLength: input.expectedByteLength }
+          : {}),
+        receivedByteLength: 0,
+        ...(input.mediaType ? { mediaType: input.mediaType } : {}),
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+        expiresAt: new Date(now.getTime() + OPEN_STAGE_TTL_MS).toISOString()
+      })
+      // A host crash can leave the deterministic token's empty data file before
+      // the record is published. With no authorizing record it is unreachable,
+      // so retry removes that orphan and recreates the stage idempotently.
+      await removeSafeDataFile(
+        this.#workspaceDataRoot(),
+        this.#stageSegments(stageToken, 'data')
+      ).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        return false
+      })
+      await atomicWriteSafeData(
+        this.#workspaceDataRoot(),
+        this.#stageSegments(stageToken, 'data'),
+        new Uint8Array(),
+        { replace: false }
+      )
+      await this.#writeStage(record)
+      return artifactVersionStageBeginReceiptV2Schema.parse({
+        stageToken,
+        nextOffset: 0,
+        maxChunkBytes: ARTIFACT_VERSION_STAGE_CHUNK_BYTES,
+        expiresAt: record.expiresAt,
+        idempotentReplay: false
+      })
+    })
+  }
+
+  stageAppend(
+    input: ArtifactVersionStageAppendInputV2,
+    access: ArtifactVersionAccessContext
+  ): Promise<ArtifactVersionStageAppendReceiptV2> {
+    return this.#enqueue(async () => {
+      const record = await this.#requireStage(input.stageToken, access, 'open')
+      const bytes = Buffer.from(input.dataBase64, 'base64')
+      if (bytes.byteLength === 0 || bytes.byteLength > ARTIFACT_VERSION_STAGE_CHUNK_BYTES) {
+        throw domainError(
+          'invalid-input',
+          `Staged chunks must contain 1-${ARTIFACT_VERSION_STAGE_CHUNK_BYTES} bytes.`
+        )
+      }
+      if (sha256(bytes) !== input.chunkDigest) {
+        throw domainError('content-mismatch', 'The staged chunk digest does not match its bytes.')
+      }
+      if (input.offset > record.receivedByteLength) {
+        throw domainError('staged-object-invalid', 'Staged chunks must be appended contiguously.')
+      }
+      if (
+        record.expectedByteLength !== undefined &&
+        input.offset + bytes.byteLength > record.expectedByteLength
+      ) {
+        throw domainError(
+          'staged-object-invalid',
+          'The staged chunk exceeds the declared object length.'
+        )
+      }
+      const appendedGrowth = Math.max(
+        0,
+        input.offset + bytes.byteLength - record.receivedByteLength
+      )
+      await this.#assertActiveStagingBudget(appendedGrowth)
+      let appended: Readonly<{ nextOffset: number; idempotentReplay: boolean }>
+      try {
+        appended = await appendOrVerifySafeDataBytes(
+          this.#workspaceDataRoot(),
+          this.#stageSegments(input.stageToken, 'data'),
+          input.offset,
+          bytes
+        )
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ESTAGEMISMATCH') {
+          throw domainError(
+            'content-mismatch',
+            'The staged chunk conflicts with bytes already received.'
+          )
+        }
+        if ((error as NodeJS.ErrnoException).code === 'ESTAGEOFFSET') {
+          throw domainError('staged-object-invalid', 'Staged chunks must be appended contiguously.')
+        }
+        throw error
+      }
+      record.receivedByteLength = Math.max(record.receivedByteLength, appended.nextOffset)
+      record.updatedAt = this.#now().toISOString()
+      await this.#writeStage(record)
+      return artifactVersionStageAppendReceiptV2Schema.parse({
+        stageToken: input.stageToken,
+        nextOffset: record.receivedByteLength,
+        chunkDigest: input.chunkDigest,
+        byteLength: bytes.byteLength,
+        idempotentReplay: appended.idempotentReplay
+      })
+    })
+  }
+
+  stageSeal(
+    input: ArtifactVersionStageSealInputV2,
+    access: ArtifactVersionAccessContext
+  ): Promise<StagedObjectRefV2> {
+    return this.#enqueue(async () => {
+      const record = await this.#requireStage(input.stageToken, access)
+      if (record.state === 'sealed') {
+        if (
+          record.contentDigest !== input.contentDigest ||
+          record.receivedByteLength !== input.byteLength
+        ) {
+          throw domainError(
+            'staged-object-invalid',
+            'A sealed staged object cannot be resealed with different identity.'
+          )
+        }
+        return this.#stageRef(record)
+      }
+      if (
+        record.receivedByteLength !== input.byteLength ||
+        (record.expectedByteLength !== undefined &&
+          record.expectedByteLength !== input.byteLength)
+      ) {
+        throw domainError('content-mismatch', 'The staged object length does not match its seal.')
+      }
+      const path = await safeDataPath(
+        this.#workspaceDataRoot(),
+        this.#stageSegments(input.stageToken, 'data'),
+        { createParent: false }
+      )
+      const inspected = await inspectRegularFile(path)
+      if (
+        inspected.byteLength !== input.byteLength ||
+        inspected.contentDigest !== input.contentDigest
+      ) {
+        throw domainError('content-mismatch', 'The staged object failed complete digest verification.')
+      }
+      const now = this.#now()
+      record.state = 'sealed'
+      record.contentDigest = input.contentDigest
+      record.updatedAt = now.toISOString()
+      record.expiresAt = new Date(now.getTime() + SEALED_STAGE_TTL_MS).toISOString()
+      await this.#writeStage(record)
+      return this.#stageRef(record)
+    })
+  }
+
+  stageAbort(
+    input: ArtifactVersionStageAbortInputV2,
+    access: ArtifactVersionAccessContext
+  ): Promise<ArtifactVersionStageAbortReceiptV2> {
+    return this.#enqueue(async () => {
+      assertSystemAccess(access)
+      const record = await this.#readStage(input.stageToken)
+      if (!record) {
+        return artifactVersionStageAbortReceiptV2Schema.parse({
+          stageToken: input.stageToken,
+          aborted: false
+        })
+      }
+      this.#assertStageAccess(record, access)
+      await this.#deleteStage(input.stageToken)
+      return artifactVersionStageAbortReceiptV2Schema.parse({
+        stageToken: input.stageToken,
+        aborted: true
+      })
+    })
+  }
+
+  usage(): Promise<ArtifactVersionUsageV1> {
+    return this.#enqueue(async () => this.#usage())
+  }
+
   commit(
-    input: ArtifactVersionCommitInputV1,
+    input: ArtifactVersionCommitInputV1 | ArtifactVersionCommitInputV2,
     options: CommitOptions
   ): Promise<ArtifactVersionCommitReceiptV1> {
     return this.#enqueue(async () => {
       const index = await this.#load()
       const access = options.access
+      if (input.candidates.some((candidate) => candidate.content.mode === 'staged-object')) {
+        assertSystemAccess(access)
+      }
       const operation = options.idempotencyOperation ?? 'commit'
-      const requestDigest = sha256(stableStringify(options.idempotencyRequest ?? input))
+      const requestDigest = sha256(stableStringify(
+        operation === 'commit'
+          ? semanticCommitRequest(input)
+          : options.idempotencyRequest ?? input
+      ))
       const replay = this.#idempotentReplay(
         index,
         operation,
@@ -509,6 +1057,24 @@ class ArtifactVersionWorkspaceStore {
         artifactVersionCommitReceiptV1Schema
       )
       if (replay) {
+        for (const candidate of input.candidates) {
+          if (candidate.content.mode !== 'staged-object') continue
+          const token = candidate.content.stagedObject.stageToken
+          const consumed = index.consumedStages[sha256(token)]
+          if (
+            consumed?.transactionId === replay.transactionId &&
+            consumed.requestDigest === requestDigest &&
+            consumed.callerId === access.callerId
+          ) continue
+          if (consumed) {
+            throw domainError(
+              'staged-object-invalid',
+              'The replay staged object token was consumed by another caller or transaction.'
+            )
+          }
+          const record = await this.#requireStage(token, access, 'sealed')
+          assertStageRefMatchesRecord(candidate.content.stagedObject, record)
+        }
         for (const item of replay.versions) {
           assertVersionAccess(requiredVersion(index, item.version.versionId), access)
         }
@@ -516,6 +1082,27 @@ class ArtifactVersionWorkspaceStore {
       }
 
       validateCandidateGraph(input.candidates)
+      const stagedRecords = new Map<string, StagedObjectRecord>()
+      for (const candidate of input.candidates) {
+        if (candidate.content.mode !== 'staged-object') continue
+        const token = candidate.content.stagedObject.stageToken
+        if (index.consumedStages[sha256(token)]) {
+          throw domainError(
+            'staged-object-invalid',
+            'The sealed staged object token has already been consumed.'
+          )
+        }
+        if (stagedRecords.has(token)) {
+          throw domainError(
+            'staged-object-invalid',
+            'A sealed staged object token can be consumed by only one candidate.'
+          )
+        }
+        const record = await this.#requireStage(token, access, 'sealed')
+        const ref = candidate.content.stagedObject
+        assertStageRefMatchesRecord(ref, record)
+        stagedRecords.set(token, record)
+      }
       const artifacts = new Map(index.artifacts.map((artifact) => [artifact.artifactId, artifact]))
       const versions = new Map(index.versions.map((version) => [version.versionId, version]))
       const now = this.#now().toISOString()
@@ -523,6 +1110,12 @@ class ArtifactVersionWorkspaceStore {
       const planned = new Map<string, PlannedCommit>()
 
       for (const candidate of input.candidates) {
+        const requestedArtifactId = 'requestedArtifactId' in candidate
+          ? candidate.requestedArtifactId
+          : undefined
+        const requestedVersionId = 'requestedVersionId' in candidate
+          ? candidate.requestedVersionId
+          : undefined
         const existing = candidate.artifactId
           ? artifacts.get(candidate.artifactId)
           : undefined
@@ -550,8 +1143,22 @@ class ArtifactVersionWorkspaceStore {
             receivedKind: candidate.kind
           })
         }
-        const artifactId = existing?.artifactId ?? `artifact:${this.#id()}`
-        const versionId = `artifact-version:${this.#id()}`
+        if (requestedArtifactId && artifacts.has(requestedArtifactId)) {
+          throw domainError(
+            'stale-base',
+            'The requested new artifact identity already exists.',
+            { artifactId: requestedArtifactId }
+          )
+        }
+        if (requestedVersionId && versions.has(requestedVersionId)) {
+          throw domainError(
+            'idempotency-conflict',
+            'The requested Version identity already exists outside this idempotent request.',
+            { versionId: requestedVersionId }
+          )
+        }
+        const artifactId = existing?.artifactId ?? requestedArtifactId ?? `artifact:${this.#id()}`
+        const versionId = requestedVersionId ?? `artifact-version:${this.#id()}`
         const storage = commitStorage(candidate)
         const artifact: ArtifactV1 = existing
           ? artifactV1Schema.parse({
@@ -618,14 +1225,6 @@ class ArtifactVersionWorkspaceStore {
           }
         })
         artifactVersionV1Schema.parse(item.version)
-      }
-
-      for (const item of planned.values()) {
-        if (item.version.storage.mode !== 'snapshot') continue
-        const bytes = Buffer.from(item.candidate.content.mode === 'snapshot'
-          ? item.candidate.content.dataBase64
-          : '', 'base64')
-        await this.#writeObject(item.version.storage.contentDigest, bytes)
       }
 
       const committedEvents: ArtifactVersionLifecycleEventV1[] = []
@@ -712,7 +1311,32 @@ class ArtifactVersionWorkspaceStore {
         events: committedEvents
       })
       this.#remember(index, operation, input.idempotencyKey, requestDigest, receipt)
+      for (const record of stagedRecords.values()) {
+        index.consumedStages[sha256(record.stageToken)] = consumedStageRecordSchema.parse({
+          transactionId,
+          requestDigest,
+          callerId: access.callerId,
+          consumedAt: now
+        })
+      }
+      await this.#assertCommitCapacity(index, planned)
+      for (const item of planned.values()) {
+        if (item.version.storage.mode !== 'snapshot') continue
+        if (item.candidate.content.mode === 'staged-object') {
+          await this.#installStagedObject(
+            stagedRecords.get(item.candidate.content.stagedObject.stageToken)!
+          )
+        } else {
+          const bytes = Buffer.from(item.candidate.content.mode === 'snapshot'
+            ? item.candidate.content.dataBase64
+            : '', 'base64')
+          await this.#writeObject(item.version.storage.contentDigest, bytes)
+        }
+      }
       await this.#save(index)
+      for (const record of stagedRecords.values()) {
+        await this.#deleteStage(record.stageToken).catch(() => undefined)
+      }
       return receipt
     })
   }
@@ -748,7 +1372,95 @@ class ArtifactVersionWorkspaceStore {
     })
   }
 
-  list(
+  readRange(
+    input: ArtifactVersionReadRangeInputV2,
+    access: ArtifactVersionAccessContext
+  ): Promise<ArtifactVersionReadRangeV2> {
+    return this.#enqueue(async () => {
+      const index = await this.#load()
+      const version = requiredVersion(index, input.versionId)
+      assertVersionAccess(version, access)
+      if (version.storage.mode !== 'snapshot') {
+        throw domainError(
+          'content-unavailable',
+          'Exact ranged reads require a snapshot-backed artifact version.'
+        )
+      }
+      if (input.offset > version.storage.byteLength) {
+        throw domainError('range-not-satisfiable', 'The requested range starts beyond the object.')
+      }
+      const requestedLength = Math.min(
+        input.length,
+        version.storage.byteLength - input.offset
+      )
+      const objectPath = await safeDataPath(
+        this.#workspaceDataRoot(),
+        this.#objectSegments(version.storage.contentDigest),
+        { createParent: false }
+      )
+      let ranged: Awaited<ReturnType<typeof readVerifiedRegularFileRange>>
+      try {
+        ranged = await readVerifiedRegularFileRange(objectPath, {
+          expectedDigest: version.storage.contentDigest,
+          expectedByteLength: version.storage.byteLength,
+          offset: input.offset,
+          length: requestedLength,
+          ...(this.#verifiedObjectIdentities.has(version.storage.contentDigest)
+            ? {
+                verifiedIdentity: this.#verifiedObjectIdentities.get(
+                  version.storage.contentDigest
+                )
+              }
+            : {})
+        })
+      } catch (error) {
+        this.#verifiedObjectIdentities.delete(version.storage.contentDigest)
+        if (['EINTEGRITY', 'ESTALE'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+          throw domainError('content-mismatch', 'Snapshot object failed ranged-read verification.')
+        }
+        throw error
+      }
+      this.#verifiedObjectIdentities.set(
+        version.storage.contentDigest,
+        ranged.verifiedIdentity
+      )
+      const bytes = ranged.bytes
+      return artifactVersionReadRangeV2Schema.parse({
+        ref: versionRef(version),
+        offset: input.offset,
+        byteLength: bytes.byteLength,
+        totalByteLength: version.storage.byteLength,
+        dataBase64: Buffer.from(bytes).toString('base64'),
+        eof: input.offset + bytes.byteLength >= version.storage.byteLength
+      })
+    })
+  }
+
+  describe(
+    input: ArtifactVersionDescribeInputV2,
+    access: ArtifactVersionAccessContext
+  ): Promise<ArtifactVersionDescribeV2> {
+    return this.#enqueue(async () => {
+      const index = await this.#load()
+      const version = requiredVersion(index, input.versionId)
+      assertVersionAccess(version, access)
+      const artifact = projectArtifactForAccess(
+        index,
+        requiredArtifact(index, version.artifactId),
+        access
+      )
+      const projectedVersion = projectVersionForAccess(index, version, access)
+      return artifactVersionDescribeV2Schema.parse({
+        artifact,
+        version: projectedVersion,
+        ref: versionRef(projectedVersion, locationFor(index, version.versionId)),
+        artifactOrdinal: artifactOrdinalForAccess(index, version, access),
+        isCurrent: artifact.currentVersionId === version.versionId
+      })
+    })
+  }
+
+  listV1(
     input: ArtifactVersionListInputV1,
     access: ArtifactVersionAccessContext
   ): Promise<ArtifactVersionListV1> {
@@ -776,6 +1488,65 @@ class ArtifactVersionWorkspaceStore {
             ),
             version: projectedVersion,
             ref: versionRef(projectedVersion, locationFor(index, version.versionId))
+          }
+        }),
+        ...(candidates.length > limit && page.length
+          ? { nextBeforeSequence: page.at(-1)!.sequence }
+          : {})
+      })
+    })
+  }
+
+  list(
+    input: ArtifactVersionListInputV2,
+    access: ArtifactVersionAccessContext
+  ): Promise<ArtifactVersionListV2> {
+    return this.#enqueue(async () => {
+      const index = await this.#load()
+      const artifacts = new Map(index.artifacts.map((artifact) => [artifact.artifactId, artifact]))
+      if (input.artifactId && !artifacts.has(input.artifactId)) {
+        throw domainError('artifact-not-found', `Artifact not found: ${input.artifactId}`)
+      }
+      const limit = input.limit ?? 100
+      const candidates = index.versions
+        .filter((version) => !input.artifactId || version.artifactId === input.artifactId)
+        .filter((version) => !input.kind || artifacts.get(version.artifactId)?.kind === input.kind)
+        .filter((version) => !input.intent || version.intent === input.intent)
+        .filter((version) => !input.retention || version.storage.mode === input.retention)
+        .filter((version) => !input.beforeSequence || version.sequence < input.beforeSequence)
+        .filter((version) => canAccessVersion(version, access))
+        .filter((version) => {
+          if (!input.availability) return true
+          return versionRef(version, locationFor(index, version.versionId)).availability ===
+            input.availability
+        })
+        .filter((version) => {
+          if (!input.currentOnly) return true
+          return projectArtifactForAccess(
+            index,
+            artifacts.get(version.artifactId)!,
+            access
+          ).currentVersionId === version.versionId
+        })
+        .sort((left, right) => right.sequence - left.sequence)
+      const page = candidates.slice(0, limit)
+      return artifactVersionListV2Schema.parse({
+        items: page.map((version) => {
+          const projectedVersion = projectVersionForAccess(index, version, access)
+          return {
+            artifact: projectArtifactForAccess(
+              index,
+              artifacts.get(version.artifactId)!,
+              access
+            ),
+            version: projectedVersion,
+            ref: versionRef(projectedVersion, locationFor(index, version.versionId)),
+            artifactOrdinal: artifactOrdinalForAccess(index, version, access),
+            isCurrent: projectArtifactForAccess(
+              index,
+              artifacts.get(version.artifactId)!,
+              access
+            ).currentVersionId === version.versionId
           }
         }),
         ...(candidates.length > limit && page.length
@@ -1068,13 +1839,19 @@ class ArtifactVersionWorkspaceStore {
   exportBundle(
     input: ArtifactVersionBundleExportInputV1,
     access: ArtifactVersionAccessContext
-  ): Promise<ArtifactVersionBundleReceiptV1> {
+  ): Promise<ArtifactVersionBundleReceiptV1>
+  exportBundle(
+    input: ArtifactVersionBundleExportInputV2,
+    access: ArtifactVersionAccessContext
+  ): Promise<ArtifactVersionBundleReceiptV2>
+  exportBundle(
+    input: ArtifactVersionBundleExportInputV1 | ArtifactVersionBundleExportInputV2,
+    access: ArtifactVersionAccessContext
+  ): Promise<ArtifactVersionBundleReceiptV1 | ArtifactVersionBundleReceiptV2> {
     return this.#enqueue(async () => {
-      const { artifactVersionBundleReceiptV1Schema } = await import('../contract.js')
       const index = await this.#load()
       const requestDigest = sha256(stableStringify(input))
       const artifactMap = new Map(index.artifacts.map((artifact) => [artifact.artifactId, artifact]))
-      const versionMap = new Map(index.versions.map((version) => [version.versionId, version]))
       const selectedVersionIds = new Set<string>()
       for (const artifactId of input.artifactIds ?? []) {
         if (!artifactMap.has(artifactId)) {
@@ -1114,13 +1891,23 @@ class ArtifactVersionWorkspaceStore {
           'One or more selected artifact versions do not permit export.'
         )
       }
-      const replay = this.#idempotentReplay(
-        index,
-        'bundle-export',
-        input.idempotencyKey,
-        requestDigest,
-        artifactVersionBundleReceiptV1Schema
-      )
+      const format = 'format' in input ? input.format : 'v1-json'
+      const operation = format === 'v2-directory' ? 'bundle-export-v2' : 'bundle-export'
+      const replay = format === 'v2-directory'
+        ? this.#idempotentReplay(
+            index,
+            operation,
+            input.idempotencyKey,
+            requestDigest,
+            artifactVersionBundleReceiptV2Schema
+          )
+        : this.#idempotentReplay(
+            index,
+            operation,
+            input.idempotencyKey,
+            requestDigest,
+            artifactVersionBundleReceiptV1Schema
+          )
       if (replay) return { ...replay, idempotentReplay: true }
       const versionsByArtifact = new Map<string, ArtifactVersionV1[]>()
       for (const version of versions) {
@@ -1141,56 +1928,122 @@ class ArtifactVersionWorkspaceStore {
           })
         })
         .sort((left, right) => left.artifactId.localeCompare(right.artifactId))
-      const objects = []
+      const objectDescriptors: Array<Readonly<{
+        contentDigest: string
+        byteLength: number
+      }>> = []
       const seenObjects = new Set<string>()
       for (const version of versions) {
         if (version.storage.mode !== 'snapshot' || seenObjects.has(version.storage.contentDigest)) {
           continue
         }
         seenObjects.add(version.storage.contentDigest)
-        const bytes = await this.#readObject(version.storage.contentDigest)
-        objects.push({
+        objectDescriptors.push({
           contentDigest: version.storage.contentDigest,
-          byteLength: bytes.byteLength,
-          dataBase64: Buffer.from(bytes).toString('base64')
+          byteLength: version.storage.byteLength
         })
       }
-      const bundleBase = {
-        schemaVersion: 1 as const,
-        createdAt: this.#now().toISOString(),
-        artifacts,
-        versions,
-        objects
-      }
-      const bundle = artifactVersionBundleV1Schema.parse({
-        ...bundleBase,
-        bundleDigest: sha256(stableStringify(bundleBase))
-      })
-      const bytes = Buffer.from(`${JSON.stringify(bundle, null, 2)}\n`, 'utf8')
+      let bundle: ArtifactVersionBundleV1 | ArtifactVersionBundleV2
       let path: string
-      try {
-        path = await atomicWriteWorkspaceBytes(
-          this.#workspaceRoot,
-          input.destinationPath,
-          bytes,
-          input.overwrite ?? false
-        )
-      } catch (error) {
-        if (!(error instanceof DestinationExistsError)) throw error
-        const existing = await readWorkspaceBytes(this.#workspaceRoot, input.destinationPath)
-        const verified = verifyBundleBytes(existing.bytes)
-        if (verified.bundle?.bundleDigest !== bundle.bundleDigest) throw error
-        path = existing.relativePath
+      if (format === 'v2-directory') {
+        const bundleBase = {
+          schemaVersion: 2 as const,
+          createdAt: this.#now().toISOString(),
+          artifacts,
+          versions,
+          objects: objectDescriptors
+        }
+        bundle = artifactVersionBundleV2Schema.parse({
+          ...bundleBase,
+          bundleDigest: sha256(stableStringify(bundleBase))
+        })
+        try {
+          path = await atomicWriteWorkspaceDirectory(
+            this.#workspaceRoot,
+            input.destinationPath,
+            input.overwrite ?? false,
+            async (temporaryDirectory) => {
+              for (const object of objectDescriptors) {
+                const prefix = object.contentDigest.slice(0, 2)
+                const directory = join(temporaryDirectory, 'objects', 'sha256', prefix)
+                await mkdir(directory, { recursive: true, mode: 0o700 })
+                const source = await safeDataPath(
+                  this.#workspaceDataRoot(),
+                  this.#objectSegments(object.contentDigest),
+                  { createParent: false }
+                )
+                await copyVerifiedRegularFile(
+                  source,
+                  join(directory, object.contentDigest),
+                  object.contentDigest,
+                  object.byteLength
+                )
+              }
+              await atomicWriteSafeData(
+                temporaryDirectory,
+                ['manifest.json'],
+                `${stableStringify(bundle)}\n`,
+                { replace: false }
+              )
+            }
+          )
+        } catch (error) {
+          if (!(error instanceof DestinationExistsError)) throw error
+          const existing = await verifyBundleAtWorkspacePath(
+            this.#workspaceRoot,
+            input.destinationPath
+          )
+          if (existing.bundle?.bundleDigest !== bundle.bundleDigest) throw error
+          path = existing.relativePath
+        }
+      } else {
+        const objects = []
+        for (const descriptor of objectDescriptors) {
+          const bytes = await this.#readObject(descriptor.contentDigest)
+          objects.push({
+            ...descriptor,
+            dataBase64: Buffer.from(bytes).toString('base64')
+          })
+        }
+        const bundleBase = {
+          schemaVersion: 1 as const,
+          createdAt: this.#now().toISOString(),
+          artifacts,
+          versions,
+          objects
+        }
+        bundle = artifactVersionBundleV1Schema.parse({
+          ...bundleBase,
+          bundleDigest: sha256(stableStringify(bundleBase))
+        })
+        const bytes = Buffer.from(`${JSON.stringify(bundle, null, 2)}\n`, 'utf8')
+        try {
+          path = await atomicWriteWorkspaceBytes(
+            this.#workspaceRoot,
+            input.destinationPath,
+            bytes,
+            input.overwrite ?? false
+          )
+        } catch (error) {
+          if (!(error instanceof DestinationExistsError)) throw error
+          const existing = await readWorkspaceBytes(this.#workspaceRoot, input.destinationPath)
+          const verified = verifyBundleBytes(existing.bytes)
+          if (verified.bundle?.bundleDigest !== bundle.bundleDigest) throw error
+          path = existing.relativePath
+        }
       }
-      const receipt = artifactVersionBundleReceiptV1Schema.parse({
+      const receiptBase = {
         bundleDigest: bundle.bundleDigest,
         path,
         artifactCount: artifacts.length,
         versionCount: versions.length,
-        objectCount: objects.length,
+        objectCount: objectDescriptors.length,
         idempotentReplay: false
-      })
-      this.#remember(index, 'bundle-export', input.idempotencyKey, requestDigest, receipt)
+      }
+      const receipt = format === 'v2-directory'
+        ? artifactVersionBundleReceiptV2Schema.parse({ ...receiptBase, format })
+        : artifactVersionBundleReceiptV1Schema.parse(receiptBase)
+      this.#remember(index, operation, input.idempotencyKey, requestDigest, receipt)
       await this.#save(index)
       return receipt
     })
@@ -1198,8 +2051,9 @@ class ArtifactVersionWorkspaceStore {
 
   importBundle(
     input: ArtifactVersionBundleImportInputV1,
-    bundle: ArtifactVersionBundleV1,
-    access: ArtifactVersionAccessContext
+    bundle: ArtifactVersionBundleV1 | ArtifactVersionBundleV2,
+    access: ArtifactVersionAccessContext,
+    v2BundlePath?: string
   ): Promise<ArtifactVersionBundleImportReceiptV1> {
     return this.#enqueue(async () => {
       const index = await this.#load()
@@ -1256,7 +2110,29 @@ class ArtifactVersionWorkspaceStore {
         }
       }
       for (const object of bundle.objects) {
-        await this.#writeObject(object.contentDigest, Buffer.from(object.dataBase64, 'base64'))
+        if (bundle.schemaVersion === 1) {
+          const source = bundle.objects.find((candidate) =>
+            candidate.contentDigest === object.contentDigest
+          )!
+          await this.#writeObject(
+            source.contentDigest,
+            Buffer.from(source.dataBase64, 'base64')
+          )
+          continue
+        }
+        if (!v2BundlePath) {
+          throw domainError('bundle-invalid', 'Bundle V2 import source directory is absent.')
+        }
+        const source = await resolveWorkspaceEntry(
+          this.#workspaceRoot,
+          `${v2BundlePath}/objects/sha256/${object.contentDigest.slice(0, 2)}/${object.contentDigest}`,
+          'file'
+        )
+        await this.#writeObjectFromFile(
+          object.contentDigest,
+          object.byteLength,
+          source.absolutePath
+        )
       }
       const importedArtifacts: ArtifactV1[] = []
       const importedVersions: ArtifactVersionV1[] = []
@@ -1469,6 +2345,7 @@ class ArtifactVersionWorkspaceStore {
       const migrated = await this.#migrateLegacyRegistry(index)
       if (migrated) await this.#save(index)
     }
+    await this.#cleanupOrphanObjects(index)
     return index
   }
 
@@ -1484,6 +2361,7 @@ class ArtifactVersionWorkspaceStore {
       events: [],
       locations: [],
       idempotency: {},
+      consumedStages: {},
       migrations: {}
     })
   }
@@ -1594,10 +2472,6 @@ class ArtifactVersionWorkspaceStore {
       })
     }
 
-    for (const item of prepared) {
-      if (item.bytes) await this.#writeObject(item.version.storage.contentDigest, item.bytes)
-    }
-
     const versions = new Map(prepared.map((item) => [item.version.versionId, item.version]))
     index.artifacts = legacy.artifacts.map((item) => {
       const history = prepared.filter((candidate) =>
@@ -1623,6 +2497,19 @@ class ArtifactVersionWorkspaceStore {
       versionCount: index.versions.length,
       snapshotCount: prepared.filter((item) => item.bytes).length
     })
+
+    await this.#assertSnapshotCapacity(
+      index,
+      prepared.flatMap((item) => item.bytes
+        ? [{
+            contentDigest: item.version.storage.contentDigest,
+            byteLength: item.bytes.byteLength
+          }]
+        : [])
+    )
+    for (const item of prepared) {
+      if (item.bytes) await this.#writeObject(item.version.storage.contentDigest, item.bytes)
+    }
     return true
   }
 
@@ -1680,15 +2567,348 @@ class ArtifactVersionWorkspaceStore {
     }
   }
 
-  async #save(index: StoreIndex): Promise<void> {
-    index.revision += 1
-    const parsed = storeIndexSchema.parse(index)
+  #stageSegments(stageToken: string, kind: 'record' | 'data'): readonly string[] {
+    const key = sha256(stageToken)
+    return [...STAGING_SEGMENTS, `${key}.${kind === 'record' ? 'record.json' : 'data'}`]
+  }
+
+  async #readStage(stageToken: string): Promise<StagedObjectRecord | null> {
+    try {
+      const raw = await readSafeDataText(
+        this.#workspaceDataRoot(),
+        this.#stageSegments(stageToken, 'record')
+      )
+      const parsed = stagedObjectRecordSchema.parse(JSON.parse(raw))
+      if (parsed.stageToken !== stageToken || parsed.workspaceKey !== this.#workspaceKey) {
+        throw domainError('staged-object-invalid', 'The staged object record is invalid.')
+      }
+      return parsed
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      if (error instanceof ArtifactVersionDomainError) throw error
+      if (error instanceof z.ZodError || error instanceof SyntaxError) {
+        throw domainError('staged-object-invalid', 'The staged object record is invalid.')
+      }
+      throw error
+    }
+  }
+
+  async #writeStage(record: StagedObjectRecord): Promise<void> {
+    const parsed = stagedObjectRecordSchema.parse(record)
     await atomicWriteSafeData(
       this.#workspaceDataRoot(),
-      INDEX_SEGMENTS,
+      this.#stageSegments(record.stageToken, 'record'),
       `${JSON.stringify(parsed, null, 2)}\n`,
       { replace: true }
     )
+  }
+
+  #assertStageAccess(
+    record: StagedObjectRecord,
+    access: ArtifactVersionAccessContext
+  ): void {
+    assertSystemAccess(access)
+    if (
+      record.workspaceKey !== this.#workspaceKey ||
+      record.callerId !== access.callerId
+    ) {
+      throw domainError('access-restricted', 'The staged object is not available to this caller.')
+    }
+  }
+
+  async #requireStage(
+    stageToken: string,
+    access: ArtifactVersionAccessContext,
+    state?: 'open' | 'sealed'
+  ): Promise<StagedObjectRecord> {
+    const record = await this.#readStage(stageToken)
+    if (!record) {
+      throw domainError('staged-object-invalid', 'The staged object token is absent or consumed.')
+    }
+    this.#assertStageAccess(record, access)
+    if (new Date(record.expiresAt).getTime() <= this.#now().getTime()) {
+      await this.#deleteStage(stageToken)
+      throw domainError('staged-object-expired', 'The staged object token has expired.')
+    }
+    if (state && record.state !== state) {
+      throw domainError(
+        'staged-object-invalid',
+        `The staged object must be ${state} for this operation.`
+      )
+    }
+    return record
+  }
+
+  #stageRef(record: StagedObjectRecord): StagedObjectRefV2 {
+    if (record.state !== 'sealed' || !record.contentDigest) {
+      throw domainError('staged-object-invalid', 'The staged object is not sealed.')
+    }
+    return stagedObjectRefV2Schema.parse({
+      stageToken: record.stageToken,
+      contentDigest: record.contentDigest,
+      byteLength: record.receivedByteLength,
+      ...(record.mediaType ? { mediaType: record.mediaType } : {}),
+      expiresAt: record.expiresAt
+    })
+  }
+
+  async #deleteStage(stageToken: string): Promise<void> {
+    await Promise.all([
+      removeSafeDataFile(
+        this.#workspaceDataRoot(),
+        this.#stageSegments(stageToken, 'record')
+      ).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        return false
+      }),
+      removeSafeDataFile(
+        this.#workspaceDataRoot(),
+        this.#stageSegments(stageToken, 'data')
+      ).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        return false
+      })
+    ])
+  }
+
+  async #installStagedObject(record: StagedObjectRecord): Promise<void> {
+    const ref = this.#stageRef(record)
+    const source = await safeDataPath(
+      this.#workspaceDataRoot(),
+      this.#stageSegments(record.stageToken, 'data'),
+      { createParent: false }
+    )
+    await this.#writeObjectFromFile(
+      ref.contentDigest,
+      ref.byteLength,
+      source
+    )
+  }
+
+  async #writeObjectFromFile(
+    digest: string,
+    byteLength: number,
+    sourcePath: string
+  ): Promise<void> {
+    const target = await safeDataPath(
+      this.#workspaceDataRoot(),
+      this.#objectSegments(digest)
+    )
+    try {
+      const existing = await inspectRegularFile(target)
+      if (
+        existing.contentDigest !== digest ||
+        existing.byteLength !== byteLength
+      ) {
+        throw domainError('content-mismatch', 'Existing snapshot object failed verification.')
+      }
+      return
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    const temporary = join(resolve(target, '..'), `.${digest}.${this.#id()}.tmp`)
+    try {
+      await copyVerifiedRegularFile(sourcePath, temporary, digest, byteLength)
+      await rename(temporary, target)
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => undefined)
+      if ((error as NodeJS.ErrnoException).code === 'EINTEGRITY') {
+        throw domainError('content-mismatch', 'Snapshot object failed integrity verification.')
+      }
+      throw error
+    }
+  }
+
+  async #cleanupExpiredStages(): Promise<void> {
+    const files = await listSafeDataRegularFiles(this.#workspaceDataRoot(), STAGING_SEGMENTS)
+    const now = this.#now().getTime()
+    for (const file of files) {
+      if (!/^[a-f0-9]{64}\.record\.json$/.test(file.name)) continue
+      const key = file.name.slice(0, 64)
+      try {
+        const raw = await readSafeDataText(
+          this.#workspaceDataRoot(),
+          [...STAGING_SEGMENTS, file.name]
+        )
+        const record = stagedObjectRecordSchema.parse(JSON.parse(raw))
+        if (new Date(record.expiresAt).getTime() > now) continue
+        await this.#deleteStage(record.stageToken)
+      } catch {
+        await removeSafeDataFile(
+          this.#workspaceDataRoot(),
+          [...STAGING_SEGMENTS, file.name]
+        ).catch(() => undefined)
+        await removeSafeDataFile(
+          this.#workspaceDataRoot(),
+          [...STAGING_SEGMENTS, `${key}.data`]
+        ).catch(() => undefined)
+      }
+    }
+  }
+
+  async #cleanupOrphanObjects(index: StoreIndex): Promise<void> {
+    const now = this.#now().getTime()
+    if (now - this.#lastGarbageCollectionAt < OPEN_STAGE_TTL_MS) return
+    this.#lastGarbageCollectionAt = now
+    await this.#cleanupExpiredStages()
+    const referenced = new Set(
+      index.versions
+        .filter((version) => version.storage.mode === 'snapshot')
+        .map((version) => version.storage.contentDigest)
+    )
+    const cutoff = now - ORPHAN_OBJECT_TTL_MS
+    for (let value = 0; value < 256; value += 1) {
+      const prefix = value.toString(16).padStart(2, '0')
+      const files = await listSafeDataRegularFiles(
+        this.#workspaceDataRoot(),
+        ['objects', 'sha256', prefix]
+      )
+      for (const file of files) {
+        if (!/^[a-f0-9]{64}$/.test(file.name)) continue
+        if (referenced.has(file.name) || file.modifiedAt.getTime() > cutoff) continue
+        await removeSafeDataFile(
+          this.#workspaceDataRoot(),
+          ['objects', 'sha256', prefix, file.name]
+        )
+      }
+    }
+  }
+
+  async #save(index: StoreIndex): Promise<void> {
+    const parsed = storeIndexSchema.parse({ ...index, revision: index.revision + 1 })
+    const serialized = `${JSON.stringify(parsed, null, 2)}\n`
+    this.#assertBudget('index', Buffer.byteLength(serialized, 'utf8'), this.#budgets.maxIndexBytes)
+    await atomicWriteSafeData(
+      this.#workspaceDataRoot(),
+      INDEX_SEGMENTS,
+      serialized,
+      { replace: true }
+    )
+    index.revision = parsed.revision
+  }
+
+  async #usage(): Promise<ArtifactVersionUsageV1> {
+    const [index, cas, activeStaging] = await Promise.all([
+      this.#indexUsageBytes(),
+      measureSafeDataRegularFiles(this.#workspaceDataRoot(), ['objects', 'sha256'])
+        .then((value) => value.byteLength),
+      this.#activeStagingUsageBytes()
+    ])
+    const dimensions = {
+      index: usageDimension(index, this.#budgets.maxIndexBytes),
+      cas: usageDimension(cas, this.#budgets.maxCasBytes),
+      activeStaging: usageDimension(activeStaging, this.#budgets.maxActiveStagingBytes)
+    }
+    const warnings: ArtifactVersionCapacityWarningV1[] = []
+    for (const [dimension, usage] of Object.entries(dimensions) as Array<[
+      keyof typeof dimensions,
+      ArtifactVersionUsageDimensionV1
+    ]>) {
+      if (usage.ratio < CAPACITY_WARNING_RATIO) continue
+      warnings.push({
+        code: 'artifact-version-capacity-warning',
+        dimension: dimension === 'activeStaging' ? 'active-staging' : dimension,
+        ...usage
+      })
+    }
+    return Object.freeze({ ...dimensions, warnings: Object.freeze(warnings) })
+  }
+
+  async #indexUsageBytes(): Promise<number> {
+    try {
+      return (await listSafeDataRegularFiles(this.#workspaceDataRoot(), [])).find(
+        (file) => file.name === INDEX_SEGMENTS[0]
+      )?.byteLength ?? 0
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0
+      throw error
+    }
+  }
+
+  async #activeStagingUsageBytes(): Promise<number> {
+    const files = await listSafeDataRegularFiles(this.#workspaceDataRoot(), STAGING_SEGMENTS)
+    return files
+      .filter((file) => /^[a-f0-9]{64}\.data$/u.test(file.name))
+      .reduce((total, file) => total + file.byteLength, 0)
+  }
+
+  async #assertActiveStagingBudget(additionalBytes: number): Promise<void> {
+    if (additionalBytes <= 0) return
+    const current = await this.#activeStagingUsageBytes()
+    this.#assertBudget(
+      'active-staging',
+      current + additionalBytes,
+      this.#budgets.maxActiveStagingBytes
+    )
+  }
+
+  async #assertCommitCapacity(
+    index: StoreIndex,
+    planned: ReadonlyMap<string, PlannedCommit>
+  ): Promise<void> {
+    await this.#assertSnapshotCapacity(
+      index,
+      [...planned.values()].flatMap((item) => item.version.storage.mode === 'snapshot'
+        ? [{
+            contentDigest: item.version.storage.contentDigest,
+            byteLength: item.version.storage.byteLength
+          }]
+        : [])
+    )
+  }
+
+  async #assertSnapshotCapacity(
+    index: StoreIndex,
+    snapshots: readonly Readonly<{ contentDigest: string; byteLength: number }>[]
+  ): Promise<void> {
+    const existingObjectFiles = await measureSafeDataRegularFiles(
+      this.#workspaceDataRoot(),
+      ['objects', 'sha256']
+    )
+    const existingObjects = new Set<string>()
+    for (let value = 0; value < 256; value += 1) {
+      const prefix = value.toString(16).padStart(2, '0')
+      for (const file of await listSafeDataRegularFiles(
+        this.#workspaceDataRoot(),
+        ['objects', 'sha256', prefix]
+      )) {
+        if (/^[a-f0-9]{64}$/u.test(file.name)) existingObjects.add(file.name)
+      }
+    }
+    let additionalCasBytes = 0
+    for (const snapshot of snapshots) {
+      const digest = snapshot.contentDigest
+      if (existingObjects.has(digest)) continue
+      existingObjects.add(digest)
+      additionalCasBytes += snapshot.byteLength
+    }
+    this.#assertBudget(
+      'cas',
+      existingObjectFiles.byteLength + additionalCasBytes,
+      this.#budgets.maxCasBytes
+    )
+    this.#assertBudget(
+      'index',
+      Buffer.byteLength(`${JSON.stringify(
+        storeIndexSchema.parse({ ...index, revision: index.revision + 1 }),
+        null,
+        2
+      )}\n`, 'utf8'),
+      this.#budgets.maxIndexBytes
+    )
+  }
+
+  #assertBudget(
+    dimension: 'index' | 'cas' | 'active-staging',
+    proposedBytes: number,
+    limitBytes: number
+  ): void {
+    if (proposedBytes <= limitBytes) return
+    throw domainError('content-unavailable', `Artifact Versions ${dimension} capacity exceeded.`, {
+      dimension,
+      proposedBytes,
+      limitBytes
+    })
   }
 
   #workspaceDataRoot(): string {
@@ -2032,13 +3252,51 @@ function isUnavailableLegacyPathError(error: unknown): boolean {
 }
 
 type PlannedCommit = {
-  candidate: ArtifactVersionCommitCandidateV1
+  candidate: ArtifactVersionCommitCandidateV1 | ArtifactVersionCommitCandidateV2
   artifact: ArtifactV1
   version: ArtifactVersionV1
   ref: ArtifactVersionRefV1
 }
 
-function commitStorage(candidate: ArtifactVersionCommitCandidateV1): ArtifactVersionV1['storage'] {
+function semanticCommitRequest(input: ArtifactVersionCommitInputV1 | ArtifactVersionCommitInputV2): unknown {
+  return {
+    ...input,
+    candidates: input.candidates.map((candidate) => ({
+      ...candidate,
+      content: candidate.content.mode === 'staged-object'
+        ? {
+            mode: 'staged-object',
+            contentDigest: candidate.content.stagedObject.contentDigest,
+            byteLength: candidate.content.stagedObject.byteLength,
+            ...(candidate.content.stagedObject.mediaType
+              ? { mediaType: candidate.content.stagedObject.mediaType }
+              : {})
+          }
+        : candidate.content
+    }))
+  }
+}
+
+function assertStageRefMatchesRecord(
+  ref: StagedObjectRefV2,
+  record: StagedObjectRecord
+): void {
+  if (
+    record.contentDigest !== ref.contentDigest ||
+    record.receivedByteLength !== ref.byteLength ||
+    record.mediaType !== ref.mediaType ||
+    record.expiresAt !== ref.expiresAt
+  ) {
+    throw domainError(
+      'staged-object-invalid',
+      'The staged object reference does not match its sealed server record.'
+    )
+  }
+}
+
+function commitStorage(
+  candidate: ArtifactVersionCommitCandidateV1 | ArtifactVersionCommitCandidateV2
+): ArtifactVersionV1['storage'] {
   if (candidate.content.mode === 'snapshot') {
     const bytes = Buffer.from(candidate.content.dataBase64, 'base64')
     return {
@@ -2046,6 +3304,16 @@ function commitStorage(candidate: ArtifactVersionCommitCandidateV1): ArtifactVer
       contentDigest: sha256(bytes),
       byteLength: bytes.byteLength,
       ...(candidate.content.mediaType ? { mediaType: candidate.content.mediaType } : {})
+    }
+  }
+  if (candidate.content.mode === 'staged-object') {
+    return {
+      mode: 'snapshot',
+      contentDigest: candidate.content.stagedObject.contentDigest,
+      byteLength: candidate.content.stagedObject.byteLength,
+      ...(candidate.content.stagedObject.mediaType
+        ? { mediaType: candidate.content.stagedObject.mediaType }
+        : {})
     }
   }
   return {
@@ -2091,6 +3359,49 @@ function canAccessVersion(
   if (access.audience === 'system') return true
   if (version.accessPolicy.visibility !== 'restricted') return true
   return version.accessPolicy.principals.includes(access.callerId)
+}
+
+function assertSystemAccess(access: ArtifactVersionAccessContext): void {
+  if (access.audience === 'system') return
+  throw domainError(
+    'access-restricted',
+    'Streaming staged objects are available only to trusted system callers.'
+  )
+}
+
+function assertRequestedIdentitiesAccess(
+  input: ArtifactVersionCommitInputV2,
+  access: ArtifactVersionAccessContext
+): void {
+  if (!input.candidates.some((candidate) => (
+    candidate.requestedArtifactId || candidate.requestedVersionId
+  ))) return
+  if (
+    access.audience === 'system' &&
+    access.capabilityGrants?.includes(
+      ARTIFACT_VERSIONS_SYSTEM_CAPABILITY_GRANTS.selectIdentities
+    )
+  ) return
+  throw domainError(
+    'access-restricted',
+    'Caller-selected Artifact and Version identities require the Artifact Versions identity-selection grant.'
+  )
+}
+
+function artifactOrdinalForAccess(
+  index: StoreIndex,
+  version: ArtifactVersionV1,
+  access: ArtifactVersionAccessContext
+): number {
+  assertVersionAccess(version, access)
+  const history = index.versions
+    .filter((candidate) => candidate.artifactId === version.artifactId)
+    .sort((left, right) => left.sequence - right.sequence)
+  const ordinal = history.findIndex((candidate) => candidate.versionId === version.versionId) + 1
+  if (ordinal <= 0) {
+    throw domainError('access-restricted', 'The requested artifact version is not available.')
+  }
+  return ordinal
 }
 
 function assertVersionAccess(
@@ -2222,7 +3533,9 @@ function validatedDependencyRef(
   return canonical
 }
 
-function validateCandidateGraph(candidates: readonly ArtifactVersionCommitCandidateV1[]): void {
+function validateCandidateGraph(
+  candidates: readonly (ArtifactVersionCommitCandidateV1 | ArtifactVersionCommitCandidateV2)[]
+): void {
   const ids = new Set(candidates.map((candidate) => candidate.candidateId))
   const edges = new Map(candidates.map((candidate) => [
     candidate.candidateId,
@@ -2391,12 +3704,14 @@ function verifyBundleBytes(bytes: Uint8Array): Readonly<{
         issues.push(`Dependency target is missing: ${dependency.target.versionId}`)
         continue
       }
-      if (stableStringify(versionRef(target)) !== stableStringify(dependency.target)) {
-        issues.push(`Dependency target reference mismatch: ${dependency.target.versionId}`)
+      if (
+        target.storage.contentDigest !== dependency.target.contentDigest ||
+        target.storage.byteLength !== dependency.target.byteLength
+      ) {
+        issues.push(`Dependency target integrity mismatch: ${dependency.target.versionId}`)
       }
     }
   }
-  validateBundleGraph(bundle, versionMap, issues)
   return {
     bundle,
     verification: artifactVersionBundleVerificationV1Schema.parse({
@@ -2410,99 +3725,174 @@ function verifyBundleBytes(bytes: Uint8Array): Readonly<{
   }
 }
 
-function validateBundleGraph(
-  bundle: ArtifactVersionBundleV1,
-  versionMap: ReadonlyMap<string, ArtifactVersionV1>,
-  issues: string[]
-): void {
-  const versionsByArtifact = new Map<string, ArtifactVersionV1[]>()
-  const sequenceOwners = new Map<number, string>()
-  for (const version of bundle.versions) {
-    const sequenceOwner = sequenceOwners.get(version.sequence)
-    if (sequenceOwner && sequenceOwner !== version.versionId) {
-      issues.push(
-        `Duplicate version sequence ${version.sequence}: ${sequenceOwner}, ${version.versionId}`
-      )
-    } else {
-      sequenceOwners.set(version.sequence, version.versionId)
+async function verifyBundleAtWorkspacePath(
+  workspaceRoot: string,
+  bundlePath: string
+): Promise<Readonly<{
+  bundle?: ArtifactVersionBundleV1 | ArtifactVersionBundleV2
+  verification: ArtifactVersionBundleVerificationV2
+  format: 'v1-json' | 'v2-directory'
+  relativePath: string
+}>> {
+  const entry = await resolveWorkspaceEntry(workspaceRoot, bundlePath)
+  if (entry.kind === 'file') {
+    const file = await readWorkspaceBytes(workspaceRoot, entry.relativePath)
+    const verified = verifyBundleBytes(file.bytes)
+    return {
+      bundle: verified.bundle,
+      verification: artifactVersionBundleVerificationV2Schema.parse({
+        ...verified.verification,
+        format: 'v1-json'
+      }),
+      format: 'v1-json',
+      relativePath: entry.relativePath
     }
-    const history = versionsByArtifact.get(version.artifactId) ?? []
-    history.push(version)
-    versionsByArtifact.set(version.artifactId, history)
   }
+  const verified = await verifyBundleV2Directory(workspaceRoot, entry.relativePath)
+  return {
+    ...verified,
+    format: 'v2-directory',
+    relativePath: entry.relativePath
+  }
+}
 
+async function verifyBundleV2Directory(
+  workspaceRoot: string,
+  bundlePath: string
+): Promise<Readonly<{
+  bundle?: ArtifactVersionBundleV2
+  verification: ArtifactVersionBundleVerificationV2
+}>> {
+  const issues: string[] = []
+  let raw: unknown
+  try {
+    const manifest = await readWorkspaceBytes(workspaceRoot, `${bundlePath}/manifest.json`)
+    raw = JSON.parse(Buffer.from(manifest.bytes).toString('utf8'))
+  } catch (error) {
+    return {
+      verification: artifactVersionBundleVerificationV2Schema.parse({
+        valid: false,
+        artifactCount: 0,
+        versionCount: 0,
+        objectCount: 0,
+        issues: [`Bundle V2 manifest is unreadable: ${messageOf(error)}`],
+        format: 'v2-directory'
+      })
+    }
+  }
+  const parsed = artifactVersionBundleV2Schema.safeParse(raw)
+  if (!parsed.success) {
+    return {
+      verification: artifactVersionBundleVerificationV2Schema.parse({
+        valid: false,
+        artifactCount: 0,
+        versionCount: 0,
+        objectCount: 0,
+        issues: parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`),
+        format: 'v2-directory'
+      })
+    }
+  }
+  const bundle = parsed.data
+  const { bundleDigest, ...base } = bundle
+  if (sha256(stableStringify(base)) !== bundleDigest) {
+    issues.push('Bundle manifest digest mismatch.')
+  }
+  const artifactIds = new Set<string>()
+  const versionMap = new Map<string, ArtifactVersionV1>()
+  const objectMap = new Map<string, { byteLength: number }>()
   for (const artifact of bundle.artifacts) {
-    const history = versionsByArtifact.get(artifact.artifactId) ?? []
-    if (!history.length) continue
-    const roots = history.filter((version) => !version.parentVersionId)
-    if (roots.length !== 1) {
-      issues.push(`Artifact history must have exactly one root: ${artifact.artifactId}`)
-    }
-    const childByParent = new Map<string, ArtifactVersionV1>()
-    for (const version of history) {
-      if (!version.parentVersionId) continue
-      const parent = versionMap.get(version.parentVersionId)
-      if (!parent || parent.artifactId !== artifact.artifactId) continue
-      const existingChild = childByParent.get(parent.versionId)
-      if (existingChild && existingChild.versionId !== version.versionId) {
-        issues.push(`Artifact history branches at version: ${parent.versionId}`)
-      } else {
-        childByParent.set(parent.versionId, version)
-      }
-      if (parent.sequence >= version.sequence) {
-        issues.push(`Artifact history sequence is not increasing: ${version.versionId}`)
-      }
-    }
-    const current = versionMap.get(artifact.currentVersionId)
-    if (current && childByParent.has(current.versionId)) {
-      issues.push(`Artifact current version is not the history tip: ${artifact.artifactId}`)
-    }
-    if (roots.length === 1) {
-      const visited = new Set<string>()
-      let cursor: ArtifactVersionV1 | undefined = roots[0]
-      while (cursor && !visited.has(cursor.versionId)) {
-        visited.add(cursor.versionId)
-        cursor = childByParent.get(cursor.versionId)
-      }
-      if (visited.size !== history.length) {
-        issues.push(`Artifact history is disconnected or cyclic: ${artifact.artifactId}`)
-      }
-      if (!visited.has(artifact.currentVersionId)) {
-        issues.push(`Artifact current version is outside its history: ${artifact.artifactId}`)
-      }
-    }
+    if (artifactIds.has(artifact.artifactId)) issues.push(`Duplicate artifact: ${artifact.artifactId}`)
+    artifactIds.add(artifact.artifactId)
   }
-
-  const edges = new Map<string, string[]>()
   for (const version of bundle.versions) {
-    edges.set(version.versionId, [
-      ...(version.parentVersionId ? [version.parentVersionId] : []),
-      ...version.dependencies.map((dependency) => dependency.target.versionId)
-    ].filter((versionId) => versionMap.has(versionId)))
-  }
-  const visiting = new Set<string>()
-  const visited = new Set<string>()
-  const reported = new Set<string>()
-  const visit = (versionId: string): void => {
-    if (visited.has(versionId)) return
-    if (visiting.has(versionId)) {
-      if (!reported.has(versionId)) {
-        issues.push(`Artifact version graph contains a cycle involving: ${versionId}`)
-        reported.add(versionId)
-      }
-      return
+    if (versionMap.has(version.versionId)) issues.push(`Duplicate version: ${version.versionId}`)
+    versionMap.set(version.versionId, version)
+    if (!artifactIds.has(version.artifactId)) {
+      issues.push(`Version references missing artifact: ${version.versionId}`)
     }
-    visiting.add(versionId)
-    for (const target of edges.get(versionId) ?? []) visit(target)
-    visiting.delete(versionId)
-    visited.add(versionId)
   }
-  for (const versionId of edges.keys()) visit(versionId)
+  for (const object of bundle.objects) {
+    if (objectMap.has(object.contentDigest)) {
+      issues.push(`Duplicate object: ${object.contentDigest}`)
+      continue
+    }
+    objectMap.set(object.contentDigest, object)
+    try {
+      const entry = await resolveWorkspaceEntry(
+        workspaceRoot,
+        `${bundlePath}/objects/sha256/${object.contentDigest.slice(0, 2)}/${object.contentDigest}`,
+        'file'
+      )
+      const inspected = await inspectRegularFile(entry.absolutePath)
+      if (
+        inspected.byteLength !== object.byteLength ||
+        inspected.contentDigest !== object.contentDigest
+      ) {
+        issues.push(`Object integrity mismatch: ${object.contentDigest}`)
+      }
+    } catch (error) {
+      issues.push(`Snapshot object is missing or unsafe: ${object.contentDigest}: ${messageOf(error)}`)
+    }
+  }
+  for (const artifact of bundle.artifacts) {
+    const current = versionMap.get(artifact.currentVersionId)
+    if (!current || current.artifactId !== artifact.artifactId) {
+      issues.push(`Artifact current version is missing: ${artifact.artifactId}`)
+    }
+    const count = bundle.versions.filter((version) =>
+      version.artifactId === artifact.artifactId
+    ).length
+    if (count !== artifact.versionCount) {
+      issues.push(`Artifact version count mismatch: ${artifact.artifactId}`)
+    }
+  }
+  for (const version of bundle.versions) {
+    if (version.parentVersionId) {
+      const parent = versionMap.get(version.parentVersionId)
+      if (!parent || parent.artifactId !== version.artifactId) {
+        issues.push(`Version parent is missing or belongs to another artifact: ${version.versionId}`)
+      }
+    }
+    if (version.storage.mode === 'snapshot') {
+      const object = objectMap.get(version.storage.contentDigest)
+      if (!object) {
+        issues.push(`Snapshot object is missing: ${version.storage.contentDigest}`)
+      } else if (object.byteLength !== version.storage.byteLength) {
+        issues.push(`Snapshot object length mismatch: ${version.storage.contentDigest}`)
+      }
+    }
+    for (const dependency of version.dependencies) {
+      const target = versionMap.get(dependency.target.versionId)
+      if (!target || target.artifactId !== dependency.target.artifactId) {
+        issues.push(`Dependency target is missing: ${dependency.target.versionId}`)
+        continue
+      }
+      if (
+        target.storage.contentDigest !== dependency.target.contentDigest ||
+        target.storage.byteLength !== dependency.target.byteLength
+      ) {
+        issues.push(`Dependency target integrity mismatch: ${dependency.target.versionId}`)
+      }
+    }
+  }
+  return {
+    bundle,
+    verification: artifactVersionBundleVerificationV2Schema.parse({
+      valid: issues.length === 0,
+      bundleDigest,
+      artifactCount: bundle.artifacts.length,
+      versionCount: bundle.versions.length,
+      objectCount: bundle.objects.length,
+      issues,
+      format: 'v2-directory'
+    })
+  }
 }
 
 class ArtifactVersionDomainError extends Error {
   constructor(
-    readonly code: ArtifactVersionIssueV1['code'],
+    readonly code: ArtifactVersionIssueV2['code'],
     message: string,
     readonly details?: Record<string, unknown>
   ) {
@@ -2511,7 +3901,7 @@ class ArtifactVersionDomainError extends Error {
 }
 
 function domainError(
-  code: ArtifactVersionIssueV1['code'],
+  code: ArtifactVersionIssueV2['code'],
   message: string,
   details?: Record<string, unknown>
 ): ArtifactVersionDomainError {
@@ -2519,11 +3909,19 @@ function domainError(
 }
 
 function issueFrom(error: unknown): ArtifactVersionIssueV1 {
+  const issue = issueFromV2(error)
+  if (['staged-object-invalid', 'staged-object-expired', 'range-not-satisfiable'].includes(issue.code)) {
+    return { code: 'io-failure', message: issue.message, ...(issue.details ? { details: issue.details } : {}) }
+  }
+  return issue as ArtifactVersionIssueV1
+}
+
+function issueFromV2(error: unknown): ArtifactVersionIssueV2 {
   if (error instanceof ArtifactVersionDomainError) {
     return {
       code: error.code,
       message: error.message,
-      ...(error.details ? { details: error.details as ArtifactVersionIssueV1['details'] } : {})
+      ...(error.details ? { details: error.details as ArtifactVersionIssueV2['details'] } : {})
     }
   }
   if (error instanceof z.ZodError) {

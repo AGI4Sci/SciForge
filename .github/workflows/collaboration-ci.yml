@@ -1,0 +1,63 @@
+name: Collaboration CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/collaboration-ci.yml"
+      - "packages/collaboration-*/**"
+      - "packages/domains/collaboration/**"
+      - "packages/domain-sdk/**"
+      - "scripts/collaboration-*.mjs"
+      - "scripts/domain-packages.mjs"
+      - "src/main/domain-*.ts"
+      - "package.json"
+      - "package-lock.json"
+  push:
+    branches:
+      - gui
+    paths:
+      - ".github/workflows/collaboration-ci.yml"
+      - "packages/collaboration-*/**"
+      - "packages/domains/collaboration/**"
+      - "packages/domain-sdk/**"
+      - "scripts/collaboration-*.mjs"
+      - "scripts/domain-packages.mjs"
+      - "src/main/domain-*.ts"
+      - "package.json"
+      - "package-lock.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: collaboration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check contracts and package boundaries
+        run: npm run collaboration:typecheck
+
+      - name: Run collaboration production-path tests
+        run: npm run collaboration:test
+
+      - name: Verify generated composition and capabilities
+        run: npm run capability:check
+
+      - name: Build deployable collaboration server
+        run: npm --workspace @sciforge/collaboration-server run build
+
+      - name: Verify server package contents
+        run: npm pack --workspace @sciforge/collaboration-server --dry-run

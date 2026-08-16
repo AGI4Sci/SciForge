@@ -25,23 +25,22 @@ Contributions are welcome for:
 
 ## Branch Strategy
 
-The expected branch flow is:
+The repository keeps one long-lived branch:
 
-- `develop`: active collaboration and daily integration branch
-- `master`: stable release branch, updated by maintainers from `develop`
-- feature branches: optional short-lived branches created from `develop`
+- `gui`: the shared main branch for the desktop app, cloud collaboration service, and mobile collaboration contract
+- feature branches: short-lived branches created from `gui` and deleted after merge
 
 Rules:
 
-- Do not develop directly on `master`
-- Prefer starting work from the latest `develop`
-- If you create a feature branch, branch off from `develop`
-- Open pull requests into `develop` unless maintainers explicitly request another base branch
+- Except for maintainer releases or emergency fixes, do not push directly to `gui`
+- Start daily work from a short-lived branch based on the latest `gui`
+- Open pull requests into `gui` unless maintainers explicitly request another base branch
+- Separate desktop, cloud, and future native mobile targets by directories, packages, and release artifacts—not permanent target branches
 
 ## Before You Start
 
 1. Make sure your local repository is up to date.
-2. Switch to `develop`.
+2. Switch to `gui` and create a short-lived feature branch from it.
 3. Install dependencies with `npm install`.
 4. Confirm the project starts or builds successfully before making changes.
 
@@ -137,7 +136,7 @@ Attach a video or GIF if UI changed. Screenshots are welcome as extra context.
 List unit tests added or updated if project logic changed.
 ```
 
-For most contributions, opening the PR from a short-lived feature branch is preferred over pushing directly to `develop` or `master`.
+For most contributions, open a short-lived feature branch PR into `gui` instead of pushing directly to `gui`.
 
 ## Review Standards
 

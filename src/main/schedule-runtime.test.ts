@@ -1,12 +1,11 @@
 import { createServer, type AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  defaultConnectPhoneSettings,
-  defaultRemoteChannelSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
+  defaultSkillsSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
   mergeScheduleSettings,
@@ -76,8 +75,7 @@ function settingsWith(
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),
     write: defaultWriteSettings(),
-    remoteChannel: defaultRemoteChannelSettings(),
-    connectPhone: defaultConnectPhoneSettings(),
+    skills: defaultSkillsSettings(),
     schedule: mergeScheduleSettings(defaultScheduleSettings(), {
       enabled: true,
       tasks,
@@ -96,8 +94,7 @@ function createStore(initial: AppSettingsV1) {
     patch: vi.fn(async (partial: AppSettingsPatch) => {
       current = {
         ...current,
-        schedule: mergeScheduleSettings(current.schedule, partial.schedule),
-        remoteChannel: current.remoteChannel
+        schedule: mergeScheduleSettings(current.schedule, partial.schedule)
       }
       return current
     }),
@@ -240,7 +237,6 @@ describe('ScheduleRuntime', () => {
       mode: 'plan',
       schedule: { kind: 'at', atTime: future }
     })
-    expect('tasks' in store.read().remoteChannel).toBe(false)
   })
 
   it('runs manual Schedule tasks directly through AgentRuntime', async () => {

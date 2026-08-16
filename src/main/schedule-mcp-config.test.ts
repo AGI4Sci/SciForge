@@ -15,11 +15,10 @@ import {
   type ScheduleMcpLaunchConfig
 } from './schedule-mcp-config'
 import {
-  defaultConnectPhoneSettings,
-  defaultRemoteChannelSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultScheduleSettings,
+  defaultSkillsSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
   type AppSettingsV1
@@ -27,7 +26,6 @@ import {
 import { SCHEDULE_TOOL_SIDE_EFFECTS } from '../../packages/workers/schedule/src/contract'
 
 function createSettings(patch: Partial<AppSettingsV1['schedule']['internal']> = {}): AppSettingsV1 {
-  const remoteChannel = defaultRemoteChannelSettings()
   const schedule = defaultScheduleSettings()
   return {
     version: 1,
@@ -60,17 +58,7 @@ function createSettings(patch: Partial<AppSettingsV1['schedule']['internal']> = 
       channel: 'stable'
     },
     codePromptPrefix: '',
-    remoteChannel: {
-      ...remoteChannel,
-      enabled: true,
-      im: {
-        ...remoteChannel.im,
-        enabled: true,
-        port: 8787,
-        secret: ''
-      }
-    },
-    connectPhone: defaultConnectPhoneSettings()
+    skills: defaultSkillsSettings()
   }
 }
 

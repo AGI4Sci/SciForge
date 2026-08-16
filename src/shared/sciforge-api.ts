@@ -2,7 +2,6 @@ import type {
   AppSettingsPatch,
   AppSettingsV1,
   AgentRuntimeId,
-  RemoteChannelAgentProfileV1,
   ComputerUseSettingsV1,
   ScheduleRunResult,
   ScheduleRuntimeStatus,
@@ -360,20 +359,6 @@ export type TurnCompleteNotificationPayload = {
 export type SystemNotificationResult =
   | { ok: true; shown: boolean; reason?: string }
   | { ok: false; message: string }
-export type RemoteChannelActivityPayload = {
-  channelId: string
-  threadId: string
-  runtimeId?: AgentRuntimeId
-  previousThreadId?: string
-}
-export type RemoteChannelActiveThreadContextPayload = {
-  threadId: string
-  runtimeId?: AgentRuntimeId
-  workspaceRoot?: string
-}
-export type RemoteChannelMirrorResult =
-  | { ok: true }
-  | { ok: false; message: string }
 export type UpstreamModelsResult =
   | { ok: true; modelIds: string[]; modelGroups?: ModelProviderModelGroup[] }
   | { ok: false; message: string }
@@ -456,180 +441,6 @@ export type ComputerUseStatusView = {
   permissions: ComputerUsePermissions
   runtime: ComputerUseRuntimeStatusView
 }
-export type ConnectPhoneInstallQrResult =
-  | { ok: true; url: string; deviceCode: string; userCode: string; interval: number; expireIn: number }
-  | { ok: false; message: string }
-export type ConnectPhoneInstallPollResult =
-  | { done: true; kind: 'feishu'; appId: string; appSecret: string; domain: string }
-  | { done: true; kind: 'weixin'; accountId: string; sessionKey: string }
-  | { done: false; error?: string }
-export type ConnectPhoneRuntimeStatus = {
-  imServerRunning: boolean
-  imUrl: string
-  runningTaskIds: string[]
-}
-export type RemoteChannelTaskFromTextResult = ScheduleTaskFromTextResult
-export type DiscordBotInfo = {
-  applicationId: string
-  botId: string
-  botUsername: string
-  inviteUrl: string
-}
-export type DiscordGuild = {
-  id: string
-  name: string
-}
-export type DiscordChannel = {
-  id: string
-  name: string
-  type: number
-}
-export type DiscordGuardConflictStatus = {
-  channelConfigId: string
-  guildId: string
-  guildName: string
-  channelId: string
-  channelName: string
-  ownerInstallationId: string
-  currentInstallationId: string
-  takeoverAvailable: boolean
-  message: string
-}
-export type DiscordBotChannelStatus = {
-  channelConfigId: string
-  guildId: string
-  guildName: string
-  channelId: string
-  channelName: string
-  label: string
-  enabled: boolean
-  connected: boolean
-  conflict?: DiscordGuardConflictStatus
-  guardOwnerInstallationId?: string
-  guardOwnerUpdatedAt?: string
-  workspaceRoot: string
-  model: string
-  runtimeId?: AgentRuntimeId
-  agentName: string
-  accessError?: string
-}
-export type DiscordBotStatus = {
-  installationId?: string
-  clientId?: string
-  inviteUrl?: string
-  tokenConfigured?: boolean
-  proxyUrl?: string
-  configured: boolean
-  connected: boolean
-  enabled: boolean
-  bot?: DiscordBotInfo
-  channels?: DiscordBotChannelStatus[]
-  conflict?: DiscordGuardConflictStatus
-  guildId?: string
-  guildName?: string
-  channelId?: string
-  channelName?: string
-  message?: string
-}
-export type DiscordConfigureClientResult =
-  | { ok: true; status: DiscordBotStatus }
-  | { ok: false; message: string }
-export type DiscordConfigureTokenResult =
-  | { ok: true; status: DiscordBotStatus }
-  | { ok: false; message: string }
-export type DiscordConfigureProxyResult =
-  | { ok: true; status: DiscordBotStatus }
-  | { ok: false; message: string }
-export type DiscordGuildListResult =
-  | { ok: true; guilds: DiscordGuild[] }
-  | { ok: false; message: string }
-export type DiscordChannelListResult =
-  | { ok: true; channels: DiscordChannel[] }
-  | { ok: false; message: string }
-export type DiscordBindChannelResult =
-  | { ok: true; status: DiscordBotStatus; channelConfigId: string }
-  | { ok: false; message: string }
-export type DiscordTestSendResult =
-  | { ok: true; messageId: string }
-  | { ok: false; message: string }
-export type DiscordGuardResult =
-  | { ok: true; status: DiscordBotStatus }
-  | { ok: false; message: string; status?: DiscordBotStatus; conflict?: DiscordGuardConflictStatus }
-export type ZulipBotInfo = {
-  realmUrl: string
-  botEmail: string
-  botUserId: string
-  botFullName: string
-}
-export type ZulipStream = {
-  id: string
-  name: string
-}
-export type ZulipTopic = {
-  name: string
-  maxId?: number
-}
-export type ZulipGuardConflictStatus = {
-  channelConfigId: string
-  streamId: string
-  streamName: string
-  topicName: string
-  ownerInstallationId: string
-  currentInstallationId: string
-  takeoverAvailable: boolean
-  message: string
-}
-export type ZulipBotChannelStatus = {
-  channelConfigId: string
-  streamId: string
-  streamName: string
-  topicName: string
-  label: string
-  enabled: boolean
-  connected: boolean
-  conflict?: ZulipGuardConflictStatus
-  guardOwnerInstallationId?: string
-  guardOwnerUpdatedAt?: string
-  workspaceRoot: string
-  model: string
-  runtimeId?: AgentRuntimeId
-  agentName: string
-  accessError?: string
-}
-export type ZulipBotStatus = {
-  installationId?: string
-  realmUrl?: string
-  botEmail?: string
-  tokenConfigured?: boolean
-  configured: boolean
-  connected: boolean
-  enabled: boolean
-  bot?: ZulipBotInfo
-  channels?: ZulipBotChannelStatus[]
-  conflict?: ZulipGuardConflictStatus
-  streamId?: string
-  streamName?: string
-  topicName?: string
-  message?: string
-}
-export type ZulipConfigureResult =
-  | { ok: true; status: ZulipBotStatus }
-  | { ok: false; message: string }
-export type ZulipStreamListResult =
-  | { ok: true; streams: ZulipStream[] }
-  | { ok: false; message: string }
-export type ZulipTopicListResult =
-  | { ok: true; topics: ZulipTopic[] }
-  | { ok: false; message: string }
-export type ZulipBindChannelResult =
-  | { ok: true; status: ZulipBotStatus; channelConfigId: string }
-  | { ok: false; message: string }
-export type ZulipTestSendResult =
-  | { ok: true; messageId: string }
-  | { ok: false; message: string }
-export type ZulipGuardResult =
-  | { ok: true; status: ZulipBotStatus }
-  | { ok: false; message: string; status?: ZulipBotStatus; conflict?: ZulipGuardConflictStatus }
 export type PerformanceSnapshotResult =
   | { ok: true; snapshot: unknown }
   | { ok: false; message: string }
@@ -788,71 +599,8 @@ export type SciForgeApi = {
     clear: () => Promise<TraceClearResult>
   }
   extensions: DomainExtensionsApi
-  getConnectPhoneStatus: () => Promise<ConnectPhoneRuntimeStatus>
   getScheduleStatus: () => Promise<ScheduleRuntimeStatus>
   runScheduleTask: (taskId: string) => Promise<ScheduleRunResult>
-  startConnectPhoneInstallQr: (
-    provider: 'feishu' | 'weixin',
-    options?: { isLark?: boolean }
-  ) => Promise<ConnectPhoneInstallQrResult>
-  pollConnectPhoneInstall: (
-    provider: 'feishu' | 'weixin',
-    deviceCode: string
-  ) => Promise<ConnectPhoneInstallPollResult>
-  getDiscordBotStatus: () => Promise<DiscordBotStatus>
-  configureDiscordClientId: (clientId: string) => Promise<DiscordConfigureClientResult>
-  configureDiscordBotToken: (token: string, clientId?: string) => Promise<DiscordConfigureTokenResult>
-  configureDiscordProxy: (proxyUrl: string) => Promise<DiscordConfigureProxyResult>
-  listDiscordGuilds: () => Promise<DiscordGuildListResult>
-  listDiscordChannels: (guildId: string) => Promise<DiscordChannelListResult>
-  bindDiscordChannel: (payload: {
-    channelConfigId?: string
-    guildId: string
-    guildName?: string
-    channelId: string
-    channelName?: string
-    enabled?: boolean
-    workspaceRoot?: string
-    model?: string
-    runtimeId?: AgentRuntimeId
-    agentProfile?: Partial<RemoteChannelAgentProfileV1>
-  }) => Promise<DiscordBindChannelResult>
-  testDiscordChannel: (channelId: string, text?: string, channelConfigId?: string) => Promise<DiscordTestSendResult>
-  setDiscordGuard: (
-    enabled: boolean,
-    channelConfigId?: string,
-    forceTakeover?: boolean
-  ) => Promise<DiscordGuardResult>
-  getZulipBotStatus: () => Promise<ZulipBotStatus>
-  configureZulipBot: (payload: {
-    realmUrl: string
-    botEmail: string
-    apiKey: string
-  }) => Promise<ZulipConfigureResult>
-  listZulipStreams: () => Promise<ZulipStreamListResult>
-  listZulipTopics: (streamId: string) => Promise<ZulipTopicListResult>
-  bindZulipChannel: (payload: {
-    channelConfigId?: string
-    streamId: string
-    streamName?: string
-    topicName?: string
-    enabled?: boolean
-    workspaceRoot?: string
-    model?: string
-    runtimeId?: AgentRuntimeId
-    agentProfile?: Partial<RemoteChannelAgentProfileV1>
-  }) => Promise<ZulipBindChannelResult>
-  testZulipChannel: (
-    channelId: string,
-    text?: string,
-    channelConfigId?: string,
-    topicName?: string
-  ) => Promise<ZulipTestSendResult>
-  setZulipGuard: (
-    enabled: boolean,
-    channelConfigId?: string,
-    forceTakeover?: boolean
-  ) => Promise<ZulipGuardResult>
   pickWorkspaceDirectory: (defaultPath?: string) => Promise<WorkspacePickResult>
   pickFile: (request: WorkspaceFilePickerRequest) => Promise<WorkspacePickResult>
   buildScientificSkillsMcpConfig: (workspaceRoot?: string) => Promise<ScientificSkillsMcpConfigResult>
@@ -1017,17 +765,6 @@ export type SciForgeApi = {
     onEnd: (handler: (payload: AgentRuntimeEventEndPayload) => void) => () => void
     onError: (handler: (payload: AgentRuntimeEventErrorPayload) => void) => () => void
   }
-  onRemoteChannelActivity: (handler: (payload: RemoteChannelActivityPayload) => void) => () => void
-  updateRemoteChannelActiveThreadContext: (payload: RemoteChannelActiveThreadContextPayload | null) => Promise<void>
-  mirrorRemoteChannelMessage: (
-    threadId: string,
-    text: string,
-    direction: 'user' | 'assistant'
-  ) => Promise<RemoteChannelMirrorResult>
-  createRemoteChannelTaskFromText: (
-    text: string,
-    options?: { channelId?: string; modelHint?: string; mode?: 'agent' | 'plan' }
-  ) => Promise<RemoteChannelTaskFromTextResult>
   createScheduleTaskFromText: (
     text: string,
     options?: { workspaceRoot?: string; modelHint?: string; mode?: 'agent' | 'plan' }

@@ -3,20 +3,22 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createExecutionReceipt } from '@sciforge/execution-governance'
-import { WORKSPACE_HOST_PROTOCOL_VERSION } from '@sciforge/domain-sdk/workspace-host'
+import {
+  WORKSPACE_HOST_PROTOCOL_VERSION,
+  type WorkspaceLocator
+} from '@sciforge/domain-sdk/workspace-host'
 import {
   sanitizeTraceTextChunks,
   type TraceEvent,
   type TraceEventInput
 } from '@sciforge/full-trace'
 import {
-  defaultConnectPhoneSettings,
-  defaultRemoteChannelSettings,
   defaultCodexRuntimeSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
+  defaultSkillsSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
   type AppSettingsV1
@@ -58,7 +60,15 @@ import { RuntimeContextLedgerService } from '../../services/runtime-context-ledg
 import { SharedMemoryService } from '../../services/shared-memory-service'
 import { RuntimeGoalService } from '../../services/runtime-goal-service'
 import { WorkspaceReferenceService } from '../../services/workspace-reference-service'
-import type { TurnArtifactIntent } from '../../services/turn-artifact-outbox'
+import type {
+  PendingTurnArtifactStart,
+  PendingTurnArtifactWatch,
+  TurnArtifactIntent,
+  TurnArtifactReplayIntent,
+  TurnArtifactStart,
+  TurnArtifactWatch
+} from '../../services/turn-artifact-outbox'
+import type { TurnArtifactIntentPublisher } from '../../services/turn-artifact-handoff-service'
 import { readWorkspaceFile } from '../../services/workspace-files'
 import { composerReferenceFromWorkspaceReference } from '../../../renderer/src/lib/workspace-reference-composer'
 import { buildComposerFileContextPrompt } from '../../../renderer/src/lib/composer-file-references'
@@ -108,8 +118,7 @@ function settings(activeAgentRuntime: AppSettingsV1['activeAgentRuntime'] = 'cod
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),
     write: defaultWriteSettings(),
-    remoteChannel: defaultRemoteChannelSettings(),
-    connectPhone: defaultConnectPhoneSettings(),
+    skills: defaultSkillsSettings(),
     schedule: defaultScheduleSettings(),
     workflow: defaultWorkflowSettings(),
     guiUpdate: { channel: 'stable' },
@@ -129,6 +138,50 @@ function fakeTraceRecorder(): {
       sanitizeTextChunks: (chunks) => sanitizeTraceTextChunks(chunks)
     }),
     append
+  }
+}
+
+function fakeTurnArtifactPublisher(
+  publish: TurnArtifactIntentPublisher['publish'] = vi.fn(async () => undefined)
+): TurnArtifactIntentPublisher {
+  let lifecycleConsumer: ((event: import('@sciforge/domain-sdk/host').DomainMainAfterTurnEvent) => Promise<void>) | undefined
+  let nextOrdinal = 1
+  const deliveredLifecycle = new Set<string>()
+  return {
+    registerStart: vi.fn(async (draft) => {
+      const ordinal = nextOrdinal++
+      const issuerEpoch = 'issuer-00000000000000000000000000000000'
+      const deliveryAttemptId = `delivery-attempt:${issuerEpoch}:${ordinal}:00000000000000000000000000000000`
+      return Object.freeze({
+        ...draft,
+        issuerEpoch,
+        deliveryAttemptOrdinal: ordinal,
+        deliveryAttemptId,
+        boundaryLeaseId: `turn-boundary:${deliveryAttemptId}`,
+        key: `start:${ordinal}`,
+        registeredAt: '2026-08-15T00:00:00.000Z'
+      })
+    }),
+    bindStart: vi.fn(async () => true),
+    rejectStart: vi.fn(async () => true),
+    pendingStarts: vi.fn(async () => []),
+    pending: vi.fn(async () => []),
+    appendFilePatchReceipts: vi.fn(async () => undefined),
+    publish,
+    publishLifecycleSettlement: vi.fn(async (event) => {
+      if (deliveredLifecycle.has(event.boundaryLeaseId)) return
+      deliveredLifecycle.add(event.boundaryLeaseId)
+      await lifecycleConsumer?.(event)
+    }),
+    attachLifecycleSettlementConsumer: (consumer) => { lifecycleConsumer = consumer },
+    readDurableTurnBoundarySnapshot: vi.fn(async () => ({
+      issuerEpoch: 'issuer-00000000000000000000000000000000',
+      nextDeliveryAttemptOrdinal: nextOrdinal,
+      retiredThroughOrdinal: 0,
+      retiredOrdinalRanges: [],
+      owners: []
+    })),
+    flushThread: vi.fn(async () => undefined)
   }
 }
 
@@ -4278,7 +4331,7 @@ describe('AgentRuntimeHost', () => {
     expect(claude.snapshot).not.toHaveBeenCalled()
   })
 
-  it('publishes replayable completed-turn intents without materializing in the event loop', async () => {
+  it('does not retroactively publish replayed completed turns without an accepted durable watch', async () => {
     const claude = fakeAdapter('claude', {
       id: 'claude-thread',
       runtimeId: 'claude',
@@ -4319,7 +4372,7 @@ describe('AgentRuntimeHost', () => {
     const host = createAgentRuntimeHost({
       settings: async () => settings('claude'),
       adapters: [claude],
-      turnArtifacts: { publish }
+      turnArtifacts: fakeTurnArtifactPublisher(publish)
     })
 
     for (let replay = 0; replay < 2; replay += 1) {
@@ -4332,21 +4385,22 @@ describe('AgentRuntimeHost', () => {
       }
     }
 
-    expect(publish).toHaveBeenCalledTimes(2)
+    expect(publish).not.toHaveBeenCalled()
     expect(claude.snapshot).not.toHaveBeenCalled()
-    expect(publish).toHaveBeenNthCalledWith(1, {
+
+    const intent: TurnArtifactReplayIntent = {
       runtimeId: 'claude',
       threadId: 'claude-thread',
       turnId: 'turn-1',
       sequence: 7,
       occurredAt: '2026-07-26T09:00:00.000Z'
-    })
+    }
 
     vi.mocked(claude.snapshot).mockRejectedValueOnce(new Error('thread still materializing'))
     await expect(host.materializeCompletedTurnArtifact(
-      publish.mock.calls[0]![0]
+      intent
     )).rejects.toThrow('thread still materializing')
-    const materialized = await host.materializeCompletedTurnArtifact(publish.mock.calls[0]![0])
+    const materialized = await host.materializeCompletedTurnArtifact(intent)
     expect(claude.snapshot).toHaveBeenCalledTimes(3)
     expect(claude.readThreadStatus).toHaveBeenCalledTimes(2)
     expect(claude.readThreadPage).toHaveBeenCalledTimes(1)
@@ -4378,9 +4432,9 @@ describe('AgentRuntimeHost', () => {
     const host = createAgentRuntimeHost({
       settings: async () => settings('claude'),
       adapters: [claude],
-      turnArtifacts: { publish: vi.fn(async () => undefined) }
+      turnArtifacts: fakeTurnArtifactPublisher()
     })
-    const intent: TurnArtifactIntent = {
+    const intent: TurnArtifactReplayIntent = {
       runtimeId: 'claude',
       threadId: 'claude-thread',
       turnId: 'turn-1',
@@ -4433,7 +4487,7 @@ describe('AgentRuntimeHost', () => {
     )
   })
 
-  it('derives the same durable timestamp when a replayed completion omits createdAt', async () => {
+  it('does not publish a replayed completion that lacks an authoritative durable timestamp', async () => {
     const codex = fakeAdapter('codex', {
       id: 'codex-thread',
       runtimeId: 'codex',
@@ -4455,7 +4509,7 @@ describe('AgentRuntimeHost', () => {
     const host = createAgentRuntimeHost({
       settings: async () => settings('codex'),
       adapters: [codex],
-      turnArtifacts: { publish }
+      turnArtifacts: fakeTurnArtifactPublisher(publish)
     })
 
     for (let replay = 0; replay < 2; replay += 1) {
@@ -4468,11 +4522,7 @@ describe('AgentRuntimeHost', () => {
       }
     }
 
-    expect(publish).toHaveBeenCalledTimes(2)
-    expect(publish.mock.calls.map(([intent]) => intent.occurredAt)).toEqual([
-      '1970-01-01T00:00:00.009Z',
-      '1970-01-01T00:00:00.009Z'
-    ])
+    expect(publish).not.toHaveBeenCalled()
   })
 
   it('steers repeated tool activity once before interrupting the next exact repeat', async () => {
@@ -5666,6 +5716,668 @@ describe('AgentRuntimeHost', () => {
     expect(codex.startTurn).toHaveBeenCalledTimes(1)
     await expect(contextLedger.get({ runtimeId: 'codex', threadId: 'codex-thread' }))
       .resolves.toMatchObject({ directives: [{ id: 'directive-uncertain', delivery: 'uncertain' }] })
+  })
+
+  it('keeps an ambiguous pending start durable without scanning matching historical text', async () => {
+    const issuerEpoch = 'issuer-00000000000000000000000000000000'
+    const deliveryAttemptId = `delivery-attempt:${issuerEpoch}:1:00000000000000000000000000000000`
+    const start: PendingTurnArtifactStart = Object.freeze({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      clientDirectiveId: 'directive-ambiguous-recovery',
+      issuerEpoch,
+      deliveryAttemptOrdinal: 1,
+      deliveryAttemptId,
+      boundaryLeaseId: `turn-boundary:${deliveryAttemptId}`,
+      inputDigest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      workspaceRoot: '/tmp/workspace',
+      key: 'start-1',
+      registeredAt: '2026-08-15T00:00:00.000Z'
+    })
+    const publisher = fakeTurnArtifactPublisher()
+    vi.mocked(publisher.pendingStarts).mockResolvedValue([start])
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread', runtimeId: 'codex', title: 'Codex', workspace: '/tmp/workspace',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.snapshot).mockResolvedValue({
+      id: 'codex-thread', runtimeId: 'codex', title: 'Codex', workspace: '/tmp/workspace',
+      updatedAt: '2026-06-10T00:00:00.000Z', latestSeq: 2,
+      latestTurnId: 'turn-matching', latestTurnStatus: 'completed', turns: [{
+        id: 'turn-matching', threadId: 'codex-thread', status: 'completed',
+        items: [{ id: 'user-matching', kind: 'user_message', text: 'Modify the document.' }]
+      }]
+    })
+    const recovered = createAgentRuntimeHost({
+      settings: async () => settings('codex'), adapters: [codex], turnArtifacts: publisher
+    })
+    await expect(recovered.recoverCompletedTurnArtifacts()).resolves.toBe(1)
+    expect(publisher.bindStart).not.toHaveBeenCalled()
+    expect(codex.readThreadPage).not.toHaveBeenCalled()
+    await recovered.dispose()
+  })
+
+  it('durably audits explicit pending-start resolution and release', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread', runtimeId: 'codex', title: 'Codex', workspace: '/tmp/workspace',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.snapshot).mockResolvedValue({
+      id: 'codex-thread', runtimeId: 'codex', title: 'Codex', workspace: '/tmp/workspace',
+      updatedAt: '2026-06-10T00:00:00.000Z', latestSeq: 4,
+      latestTurnId: 'turn-explicit', latestTurnStatus: 'running', turns: [{
+        id: 'turn-explicit', threadId: 'codex-thread', status: 'running',
+        items: [{ id: 'user-explicit', kind: 'user_message', text: 'Modify the document.' }]
+      }]
+    })
+    const issuerEpoch = 'issuer-00000000000000000000000000000000'
+    const deliveryAttemptId = `delivery-attempt:${issuerEpoch}:1:00000000000000000000000000000000`
+    const start: PendingTurnArtifactStart = {
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      clientDirectiveId: 'directive-explicit',
+      issuerEpoch,
+      deliveryAttemptOrdinal: 1,
+      deliveryAttemptId,
+      boundaryLeaseId: `turn-boundary:${deliveryAttemptId}`,
+      inputDigest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      workspaceRoot: '/tmp/workspace',
+      key: 'start-explicit',
+      registeredAt: '2026-08-15T00:00:00.000Z'
+    }
+    const turnArtifacts = fakeTurnArtifactPublisher()
+    vi.mocked(turnArtifacts.pendingStarts).mockResolvedValue([start])
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'), adapters: [codex], turnArtifacts
+    })
+
+    await expect(host.resolvePendingTurnArtifactStart({
+      boundaryLeaseId: start.boundaryLeaseId,
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      turnId: 'turn-explicit',
+      workspaceRoot: '/tmp/workspace',
+      userMessageItemId: 'user-explicit'
+    })).resolves.toBe(true)
+    expect(turnArtifacts.bindStart).toHaveBeenCalledWith(start, expect.objectContaining({
+      turnId: 'turn-explicit',
+      providerUserMessageItemId: 'user-explicit',
+      bindingSource: 'explicit-resolution'
+    }))
+
+    vi.mocked(turnArtifacts.pendingStarts).mockResolvedValue([start])
+    await expect(host.releasePendingTurnArtifactStart({
+      boundaryLeaseId: start.boundaryLeaseId,
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      workspaceRoot: '/tmp/workspace'
+    })).resolves.toBe(true)
+    expect(turnArtifacts.rejectStart).toHaveBeenCalledWith(
+      start,
+      expect.objectContaining({
+        state: 'rejected',
+        boundaryLeaseId: start.boundaryLeaseId,
+        settlementSource: 'explicit-pending-start-release'
+      })
+    )
+    await host.dispose()
+  })
+
+  it('governs pending starts through the canonical Host-owned auxiliary surface', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread', runtimeId: 'codex', title: 'Codex', workspace: '/tmp/workspace',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.snapshot).mockResolvedValue({
+      id: 'codex-thread', runtimeId: 'codex', title: 'Codex', workspace: '/tmp/workspace',
+      updatedAt: '2026-06-10T00:00:00.000Z', latestSeq: 4,
+      latestTurnId: 'turn-governed', latestTurnStatus: 'running', turns: [{
+        id: 'turn-governed', threadId: 'codex-thread', status: 'running',
+        items: [{ id: 'user-governed', kind: 'user_message', text: 'Modify the document.' }]
+      }]
+    })
+    const issuerEpoch = 'issuer-00000000000000000000000000000000'
+    const deliveryAttemptId = `delivery-attempt:${issuerEpoch}:1:00000000000000000000000000000000`
+    const start: PendingTurnArtifactStart = {
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      clientDirectiveId: 'directive-governed',
+      issuerEpoch,
+      deliveryAttemptId,
+      deliveryAttemptOrdinal: 1,
+      boundaryLeaseId: `turn-boundary:${deliveryAttemptId}`,
+      inputDigest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      workspaceRoot: '/tmp/workspace',
+      key: 'start-governed',
+      registeredAt: '2026-08-15T00:00:00.000Z'
+    }
+    const turnArtifacts = fakeTurnArtifactPublisher()
+    vi.mocked(turnArtifacts.pendingStarts).mockResolvedValue([start])
+    vi.mocked(turnArtifacts.readDurableTurnBoundarySnapshot).mockResolvedValue({
+      issuerEpoch,
+      nextDeliveryAttemptOrdinal: 3,
+      retiredThroughOrdinal: 0,
+      retiredOrdinalRanges: [],
+      owners: [{
+        issuerEpoch: start.issuerEpoch,
+        deliveryAttemptOrdinal: start.deliveryAttemptOrdinal,
+        boundaryLeaseId: start.boundaryLeaseId,
+        deliveryAttemptId: start.deliveryAttemptId,
+        runtimeId: start.runtimeId,
+        threadId: start.threadId,
+        clientDirectiveId: start.clientDirectiveId,
+        workspaceRoot: start.workspaceRoot,
+        phase: 'pending-start',
+        occurredAt: start.registeredAt
+      },
+      {
+        issuerEpoch,
+        deliveryAttemptOrdinal: 2,
+        boundaryLeaseId: `turn-boundary:delivery-attempt:${issuerEpoch}:2:11111111111111111111111111111111`,
+        deliveryAttemptId: `delivery-attempt:${issuerEpoch}:2:11111111111111111111111111111111`,
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        clientDirectiveId: 'directive-watching',
+        workspaceRoot: '/tmp/workspace',
+        phase: 'watching',
+        turnId: 'turn-watching',
+        occurredAt: start.registeredAt
+      }]
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'), adapters: [codex], turnArtifacts
+    })
+
+    await expect(host.auxiliary({
+      runtimeId: 'codex',
+      operation: 'listPendingTurnStarts',
+      payload: { threadId: 'codex-thread', workspaceRoot: '/tmp/workspace' }
+    })).resolves.toEqual([
+      expect.objectContaining({ boundaryLeaseId: start.boundaryLeaseId, phase: 'pending-start' })
+    ])
+
+    await expect(host.auxiliary({
+      runtimeId: 'codex',
+      operation: 'resolvePendingTurnStart',
+      payload: {
+        boundaryLeaseId: start.boundaryLeaseId,
+        threadId: start.threadId,
+        turnId: 'turn-governed',
+        workspaceRoot: start.workspaceRoot,
+        userMessageItemId: 'user-governed'
+      }
+    })).resolves.toEqual({
+      action: 'resolve',
+      boundaryLeaseId: start.boundaryLeaseId,
+      applied: true
+    })
+    expect(turnArtifacts.bindStart).toHaveBeenCalledWith(start, expect.objectContaining({
+      turnId: 'turn-governed',
+      providerUserMessageItemId: 'user-governed',
+      bindingSource: 'explicit-resolution'
+    }))
+
+    vi.mocked(turnArtifacts.bindStart).mockResolvedValueOnce(false)
+    await expect(host.auxiliary({
+      runtimeId: 'codex',
+      operation: 'resolvePendingTurnStart',
+      payload: {
+        boundaryLeaseId: start.boundaryLeaseId,
+        threadId: start.threadId,
+        turnId: 'turn-governed',
+        workspaceRoot: start.workspaceRoot,
+        userMessageItemId: 'user-governed'
+      }
+    })).resolves.toEqual({
+      action: 'resolve',
+      boundaryLeaseId: start.boundaryLeaseId,
+      applied: false
+    })
+
+    await expect(host.auxiliary({
+      runtimeId: 'codex',
+      operation: 'releasePendingTurnStart',
+      payload: {
+        boundaryLeaseId: start.boundaryLeaseId,
+        threadId: start.threadId,
+        workspaceRoot: '/tmp/other-workspace'
+      }
+    })).rejects.toThrow('scope does not match')
+    expect(turnArtifacts.rejectStart).not.toHaveBeenCalled()
+
+    await expect(host.auxiliary({
+      runtimeId: 'codex',
+      operation: 'releasePendingTurnStart',
+      payload: {
+        boundaryLeaseId: start.boundaryLeaseId,
+        threadId: start.threadId,
+        workspaceRoot: start.workspaceRoot
+      }
+    })).resolves.toEqual({
+      action: 'release-as-rejected',
+      boundaryLeaseId: start.boundaryLeaseId,
+      applied: true
+    })
+    expect(turnArtifacts.rejectStart).toHaveBeenCalledWith(
+      start,
+      expect.objectContaining({
+        boundaryLeaseId: start.boundaryLeaseId,
+        settlementSource: 'explicit-pending-start-release'
+      })
+    )
+    vi.mocked(turnArtifacts.rejectStart).mockResolvedValueOnce(false)
+    await expect(host.auxiliary({
+      runtimeId: 'codex',
+      operation: 'releasePendingTurnStart',
+      payload: {
+        boundaryLeaseId: start.boundaryLeaseId,
+        threadId: start.threadId,
+        workspaceRoot: start.workspaceRoot
+      }
+    })).resolves.toEqual({
+      action: 'release-as-rejected',
+      boundaryLeaseId: start.boundaryLeaseId,
+      applied: false
+    })
+    await host.dispose()
+  })
+
+  it('governs pending starts against the exact Workspace Host and provider page scope', async () => {
+    const ownerLocator: WorkspaceLocator = {
+      contractVersion: WORKSPACE_HOST_PROTOCOL_VERSION,
+      hostSessionId: 'workspace-session-owner',
+      path: '/cluster/project'
+    }
+    const otherSessionLocator: WorkspaceLocator = {
+      ...ownerLocator,
+      hostSessionId: 'workspace-session-other'
+    }
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread', runtimeId: 'codex', title: 'Codex', workspace: ownerLocator.path,
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    const issuerEpoch = 'issuer-00000000000000000000000000000000'
+    const deliveryAttemptId = `delivery-attempt:${issuerEpoch}:1:00000000000000000000000000000000`
+    const start: PendingTurnArtifactStart = {
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      clientDirectiveId: 'directive-exact-workspace',
+      issuerEpoch,
+      deliveryAttemptId,
+      deliveryAttemptOrdinal: 1,
+      boundaryLeaseId: `turn-boundary:${deliveryAttemptId}`,
+      inputDigest: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+      workspaceRoot: ownerLocator.path,
+      workspaceLocator: ownerLocator,
+      key: 'start-exact-workspace',
+      registeredAt: '2026-08-15T00:00:00.000Z'
+    }
+    const turnArtifacts = fakeTurnArtifactPublisher()
+    vi.mocked(turnArtifacts.pendingStarts).mockResolvedValue([start])
+    const resolvePlacement = vi.fn(async (locator: WorkspaceLocator): Promise<WorkspaceHostPlacement> => ({
+      locator,
+      session: {
+        protocolVersion: WORKSPACE_HOST_PROTOCOL_VERSION,
+        serverVersion: '1.0.0',
+        serverInstanceId: 'server-exact-workspace',
+        sessionId: locator.hostSessionId,
+        lifecycleMode: 'persistent-daemon',
+        locator,
+        platform: { os: 'linux', architecture: 'x64' },
+        capabilities: [],
+        contributions: [],
+        eventSequence: 0,
+        replay: { earliestSequence: 0, latestSequence: 0 },
+        egress: { mode: 'none', status: 'disabled' }
+      }
+    }))
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      turnArtifacts,
+      services: { workspaceHosts: { resolvePlacement } }
+    })
+
+    await expect(host.auxiliary({
+      runtimeId: 'codex',
+      operation: 'listPendingTurnStarts',
+      workspaceLocator: ownerLocator,
+      payload: { threadId: start.threadId, workspaceRoot: start.workspaceRoot }
+    })).resolves.toEqual([
+      expect.objectContaining({
+        boundaryLeaseId: start.boundaryLeaseId,
+        workspaceLocator: ownerLocator
+      })
+    ])
+    await expect(host.auxiliary({
+      runtimeId: 'codex',
+      operation: 'listPendingTurnStarts',
+      workspaceLocator: otherSessionLocator,
+      payload: { threadId: start.threadId, workspaceRoot: start.workspaceRoot }
+    })).resolves.toEqual([])
+    await expect(host.auxiliary({
+      runtimeId: 'codex',
+      operation: 'listPendingTurnStarts',
+      payload: { threadId: start.threadId, workspaceRoot: start.workspaceRoot }
+    })).resolves.toEqual([])
+
+    const resolutionPayload = {
+      boundaryLeaseId: start.boundaryLeaseId,
+      threadId: start.threadId,
+      turnId: 'turn-exact-workspace',
+      workspaceRoot: start.workspaceRoot,
+      userMessageItemId: 'user-exact-workspace'
+    }
+    await expect(host.auxiliary({
+      runtimeId: 'codex',
+      operation: 'resolvePendingTurnStart',
+      workspaceLocator: otherSessionLocator,
+      payload: resolutionPayload
+    })).rejects.toThrow('scope does not match')
+    await expect(host.auxiliary({
+      runtimeId: 'codex',
+      operation: 'releasePendingTurnStart',
+      payload: {
+        boundaryLeaseId: start.boundaryLeaseId,
+        threadId: start.threadId,
+        workspaceRoot: start.workspaceRoot
+      }
+    })).rejects.toThrow('scope does not match')
+
+    for (const page of [{
+      runtimeId: 'claude' as const,
+      threadId: start.threadId
+    }, {
+      runtimeId: 'codex' as const,
+      threadId: 'wrong-thread'
+    }]) {
+      vi.mocked(codex.readThreadPage).mockResolvedValueOnce({
+        ...page,
+        latestSeq: 1,
+        turns: [{
+          id: 'turn-exact-workspace',
+          threadId: page.threadId,
+          status: 'running',
+          items: [{ id: 'user-exact-workspace', kind: 'user_message' }]
+        }],
+        nextCursor: null
+      })
+      await expect(host.auxiliary({
+        runtimeId: 'codex',
+        operation: 'resolvePendingTurnStart',
+        workspaceLocator: ownerLocator,
+        payload: resolutionPayload
+      })).rejects.toThrow('provider page scope does not match')
+    }
+    expect(turnArtifacts.bindStart).not.toHaveBeenCalled()
+    expect(turnArtifacts.rejectStart).not.toHaveBeenCalled()
+    expect(turnArtifacts.publishLifecycleSettlement).not.toHaveBeenCalled()
+    await host.dispose()
+  })
+
+  it.each([
+    ['required preflight failure', 'preflight'],
+    ['artifact preflight failure', 'artifact'],
+    ['definite provider rejection', 'provider']
+  ] as const)('releases the durable turn boundary after %s', async (_label, failurePoint) => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    if (failurePoint === 'provider') {
+      vi.mocked(codex.startTurn).mockRejectedValue(
+        Object.assign(new Error('provider rejected input'), { code: 'validation_error' })
+      )
+    }
+    const turnArtifacts = fakeTurnArtifactPublisher()
+    if (failurePoint === 'artifact') {
+      vi.mocked(turnArtifacts.registerStart).mockRejectedValue(new Error('artifact preflight unavailable'))
+    }
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      turnArtifacts
+    })
+    const required: Array<import('@sciforge/domain-sdk/host').DomainMainBeforeTurnEvent> = []
+    const lifecycle: Array<import('@sciforge/domain-sdk/host').DomainMainTurnLifecycleEvent> = []
+    host.subscribeRequiredBeforeTurn(async (event) => {
+      required.push(event)
+      if (failurePoint === 'preflight') throw new Error('checkpoint store unavailable')
+    })
+    host.subscribeTurnLifecycle((event) => { lifecycle.push(event) })
+
+    await expect(host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Create the result.',
+      workspace: '/tmp/workspace',
+      clientDirectiveId: `directive-${failurePoint}`
+    })).rejects.toThrow()
+
+    if (failurePoint === 'artifact') {
+      expect(required).toEqual([])
+      expect(lifecycle.filter((event) => event.kind === 'after-turn')).toEqual([])
+    } else {
+      expect(required).toEqual([
+        expect.objectContaining({
+          kind: 'before-turn',
+          boundaryLeaseId: expect.stringMatching(/^turn-boundary:delivery-attempt:issuer-/u),
+          clientDirectiveId: `directive-${failurePoint}`
+        })
+      ])
+      expect(lifecycle.filter((event) => event.kind === 'after-turn')).toEqual([
+        expect.objectContaining({
+          kind: 'after-turn',
+          state: 'rejected',
+          boundaryLeaseId: required[0]?.boundaryLeaseId,
+          clientDirectiveId: `directive-${failurePoint}`
+        })
+      ])
+    }
+    expect(codex.startTurn).toHaveBeenCalledTimes(failurePoint === 'provider' ? 1 : 0)
+  })
+
+  it('mints a new delivery attempt when the same directive retries after definite rejection', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread', runtimeId: 'codex', title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.startTurn)
+      .mockRejectedValueOnce(Object.assign(new Error('provider rejected input'), {
+        code: 'validation_error'
+      }))
+      .mockResolvedValueOnce({ threadId: 'codex-thread', turnId: 'turn-retry' })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      turnArtifacts: fakeTurnArtifactPublisher()
+    })
+    const acquired: Array<import('@sciforge/domain-sdk/host').DomainMainBeforeTurnEvent> = []
+    host.subscribeRequiredBeforeTurn((event) => { acquired.push(event) })
+    const input = {
+      runtimeId: 'codex' as const,
+      threadId: 'codex-thread',
+      text: 'Create the result.',
+      workspace: '/tmp/workspace',
+      clientDirectiveId: 'directive-retry'
+    }
+
+    await expect(host.startTurn(input)).rejects.toThrow('provider rejected input')
+    await expect(host.startTurn(input)).resolves.toEqual({
+      threadId: 'codex-thread',
+      turnId: 'turn-retry'
+    })
+
+    expect(acquired).toHaveLength(2)
+    expect(acquired[0]?.deliveryAttemptId).not.toBe(acquired[1]?.deliveryAttemptId)
+    expect(acquired[0]?.boundaryLeaseId).toBe(`turn-boundary:${acquired[0]?.deliveryAttemptId}`)
+    expect(acquired[1]?.boundaryLeaseId).toBe(`turn-boundary:${acquired[1]?.deliveryAttemptId}`)
+  })
+
+  it.each(['completed', 'failed', 'cancelled'] as const)(
+    'settles the accepted turn boundary for a %s turn',
+    async (state) => {
+      const codex = fakeAdapter('codex', {
+        id: 'codex-thread',
+        runtimeId: 'codex',
+        title: 'Codex',
+        updatedAt: '2026-06-10T00:00:00.000Z'
+      })
+      vi.mocked(codex.startTurn).mockResolvedValue({ threadId: 'codex-thread', turnId: 'turn-terminal' })
+      vi.mocked(codex.subscribeEvents).mockImplementation(async function* () {
+        yield {
+          kind: 'turn_lifecycle',
+          runtimeId: 'codex',
+          threadId: 'codex-thread',
+          turnId: 'turn-terminal',
+          state,
+          seq: 2,
+          createdAt: '2026-08-15T10:00:00.000Z'
+        } satisfies AgentRuntimeEvent
+      })
+      const host = createAgentRuntimeHost({
+        settings: async () => settings('codex'),
+        adapters: [codex],
+        turnArtifacts: fakeTurnArtifactPublisher()
+      })
+      const lifecycle: Array<import('@sciforge/domain-sdk/host').DomainMainTurnLifecycleEvent> = []
+      host.subscribeTurnLifecycle((event) => { lifecycle.push(event) })
+      await host.startTurn({
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        text: 'Create the result.',
+        workspace: '/tmp/workspace',
+        clientDirectiveId: `directive-${state}`
+      })
+      for await (const _event of host.subscribeEvents({
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        sinceSeq: 0
+      })) {
+        // Drain the exact terminal event.
+      }
+
+      expect(lifecycle.filter((event) => event.kind === 'after-turn')).toEqual([
+        expect.objectContaining({
+          kind: 'after-turn',
+          state,
+          turnId: 'turn-terminal',
+          boundaryLeaseId: expect.stringMatching(/^turn-boundary:delivery-attempt:issuer-/u),
+          clientDirectiveId: `directive-${state}`
+        })
+      ])
+    }
+  )
+
+  it('settles a terminal event published before the provider returns its turn handle', async () => {
+    const emitTerminal = deferred<void>()
+    const boundarySettled = deferred<void>()
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.startTurn).mockImplementation(async () => {
+      emitTerminal.resolve(undefined)
+      await boundarySettled.promise
+      return { threadId: 'codex-thread', turnId: 'turn-fast-terminal' }
+    })
+    vi.mocked(codex.subscribeEvents).mockImplementation(async function* () {
+      await emitTerminal.promise
+      yield {
+        kind: 'turn_lifecycle',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'turn-fast-terminal',
+        state: 'failed',
+        seq: 2,
+        createdAt: '2026-08-15T10:00:00.000Z'
+      } satisfies AgentRuntimeEvent
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      turnArtifacts: fakeTurnArtifactPublisher()
+    })
+    const lifecycle: Array<import('@sciforge/domain-sdk/host').DomainMainTurnLifecycleEvent> = []
+    host.subscribeTurnLifecycle((event) => {
+      lifecycle.push(event)
+      if (event.kind === 'after-turn') boundarySettled.resolve(undefined)
+    })
+    const drain = (async () => {
+      for await (const _event of host.subscribeEvents({
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        sinceSeq: 0
+      })) {
+        // Drain the terminal event while startTurn is still awaiting its handle.
+      }
+    })()
+
+    await expect(host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Create the result.',
+      workspace: '/tmp/workspace',
+      clientDirectiveId: 'directive-fast-terminal'
+    })).resolves.toEqual({ threadId: 'codex-thread', turnId: 'turn-fast-terminal' })
+    await drain
+
+    expect(lifecycle.filter((event) => event.kind === 'after-turn')).toEqual([
+      expect.objectContaining({
+        state: 'failed',
+        turnId: 'turn-fast-terminal',
+        boundaryLeaseId: expect.stringMatching(/^turn-boundary:delivery-attempt:issuer-/u),
+        clientDirectiveId: 'directive-fast-terminal'
+      })
+    ])
+  })
+
+  it('releases a boundary when restart recovery observes failure without a terminal event', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.startTurn).mockResolvedValue({ threadId: 'codex-thread', turnId: 'turn-recovered-failure' })
+    vi.mocked(codex.snapshot).mockResolvedValue({
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z',
+      latestSeq: 3,
+      latestTurnId: 'turn-recovered-failure',
+      latestTurnStatus: 'failed',
+      turns: [{ id: 'turn-recovered-failure', threadId: 'codex-thread', status: 'failed' }]
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      turnArtifacts: fakeTurnArtifactPublisher()
+    })
+    const lifecycle: Array<import('@sciforge/domain-sdk/host').DomainMainTurnLifecycleEvent> = []
+    host.subscribeTurnLifecycle((event) => { lifecycle.push(event) })
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Create the result.',
+      workspace: '/tmp/workspace',
+      clientDirectiveId: 'directive-recovered-failure'
+    })
+
+    await vi.waitFor(() => {
+      expect(lifecycle.filter((event) => event.kind === 'after-turn')).toEqual([
+        expect.objectContaining({
+          state: 'failed',
+          turnId: 'turn-recovered-failure',
+          boundaryLeaseId: expect.stringMatching(/^turn-boundary:delivery-attempt:issuer-/u)
+        })
+      ])
+    })
   })
 
   it('routes running-thread input through steerTurn when the runtime supports steering', async () => {

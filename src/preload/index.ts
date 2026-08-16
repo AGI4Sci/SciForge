@@ -5,44 +5,6 @@ import { capabilityResourceContentSourceUrl } from '../shared/workspace-preview-
 const transcribeSpeech = (payload: Parameters<SciForgeApi['speechToText']['transcribe']>[0]) =>
   ipcRenderer.invoke('speech:transcribe', payload)
 
-const getConnectPhoneStatus = () => ipcRenderer.invoke('connectPhone:status')
-const startConnectPhoneInstallQr = (
-  provider: Parameters<SciForgeApi['startConnectPhoneInstallQr']>[0],
-  options?: Parameters<SciForgeApi['startConnectPhoneInstallQr']>[1]
-) => ipcRenderer.invoke('connectPhone:install:qrcode', { provider, isLark: options?.isLark })
-const pollConnectPhoneInstall = (
-  provider: Parameters<SciForgeApi['pollConnectPhoneInstall']>[0],
-  deviceCode: string
-) => ipcRenderer.invoke('connectPhone:install:poll', { provider, deviceCode })
-const onRemoteChannelActivity = (
-  handler: Parameters<SciForgeApi['onRemoteChannelActivity']>[0]
-) => {
-  const wrapped = (
-    _: Electron.IpcRendererEvent,
-    payload: Parameters<typeof handler>[0]
-  ) => handler(payload)
-  ipcRenderer.on('remoteChannel:activity', wrapped)
-  return () => ipcRenderer.removeListener('remoteChannel:activity', wrapped)
-}
-const updateRemoteChannelActiveThreadContext = (
-  payload: Parameters<SciForgeApi['updateRemoteChannelActiveThreadContext']>[0]
-) => ipcRenderer.invoke('remoteChannel:active-thread-context', payload)
-const mirrorRemoteChannelMessage = (
-  threadId: string,
-  text: string,
-  direction: Parameters<SciForgeApi['mirrorRemoteChannelMessage']>[2]
-) => ipcRenderer.invoke('remoteChannel:message:mirror', { threadId, text, direction })
-const createRemoteChannelTaskFromText = (
-  text: string,
-  options?: Parameters<SciForgeApi['createRemoteChannelTaskFromText']>[1]
-) =>
-  ipcRenderer.invoke('remoteChannel:task:create-from-text', {
-    text,
-    channelId: options?.channelId,
-    modelHint: options?.modelHint,
-    mode: options?.mode
-  })
-
 const api = {
   platform: process.platform,
   setUiZoomFactor: (factor: number) => {
@@ -77,53 +39,9 @@ const api = {
     rollback: (input) => ipcRenderer.invoke('extensions:rollback', input),
     setEnabled: (input) => ipcRenderer.invoke('extensions:set-enabled', input)
   },
-  getConnectPhoneStatus,
   getScheduleStatus: () => ipcRenderer.invoke('schedule:status'),
   runScheduleTask: (taskId) =>
     ipcRenderer.invoke('schedule:task:run', taskId),
-  startConnectPhoneInstallQr,
-  pollConnectPhoneInstall,
-  getDiscordBotStatus: () => ipcRenderer.invoke('discord:status'),
-  configureDiscordClientId: (clientId) =>
-    ipcRenderer.invoke('discord:configure-client', { clientId }),
-  configureDiscordBotToken: (token, clientId) =>
-    ipcRenderer.invoke('discord:configure-token', { token, ...(clientId ? { clientId } : {}) }),
-  configureDiscordProxy: (proxyUrl) =>
-    ipcRenderer.invoke('discord:configure-proxy', { proxyUrl }),
-  listDiscordGuilds: () => ipcRenderer.invoke('discord:guilds'),
-  listDiscordChannels: (guildId) =>
-    ipcRenderer.invoke('discord:channels', { guildId }),
-  bindDiscordChannel: (payload) =>
-    ipcRenderer.invoke('discord:bind-channel', payload),
-  testDiscordChannel: (channelId, text, channelConfigId) =>
-    ipcRenderer.invoke('discord:test-send', { channelId, text, ...(channelConfigId ? { channelConfigId } : {}) }),
-  setDiscordGuard: (enabled, channelConfigId, forceTakeover) =>
-    ipcRenderer.invoke('discord:set-guard', {
-      enabled,
-      ...(channelConfigId ? { channelConfigId } : {}),
-      ...(forceTakeover ? { forceTakeover } : {})
-    }),
-  getZulipBotStatus: () => ipcRenderer.invoke('zulip:status'),
-  configureZulipBot: (payload) =>
-    ipcRenderer.invoke('zulip:configure', payload),
-  listZulipStreams: () => ipcRenderer.invoke('zulip:streams'),
-  listZulipTopics: (streamId) =>
-    ipcRenderer.invoke('zulip:topics', { streamId }),
-  bindZulipChannel: (payload) =>
-    ipcRenderer.invoke('zulip:bind-channel', payload),
-  testZulipChannel: (channelId, text, channelConfigId, topicName) =>
-    ipcRenderer.invoke('zulip:test-send', {
-      channelId,
-      ...(text ? { text } : {}),
-      ...(channelConfigId ? { channelConfigId } : {}),
-      ...(topicName ? { topicName } : {})
-    }),
-  setZulipGuard: (enabled, channelConfigId, forceTakeover) =>
-    ipcRenderer.invoke('zulip:set-guard', {
-      enabled,
-      ...(channelConfigId ? { channelConfigId } : {}),
-      ...(forceTakeover ? { forceTakeover } : {})
-    }),
   pickWorkspaceDirectory: (defaultPath) =>
     ipcRenderer.invoke('workspace:pick-directory', defaultPath),
   pickFile: (request) => ipcRenderer.invoke('workspace:pick-file', request),
@@ -332,10 +250,6 @@ const api = {
       return () => ipcRenderer.removeListener('agentRuntime:error', wrapped)
     }
   },
-  onRemoteChannelActivity,
-  updateRemoteChannelActiveThreadContext,
-  mirrorRemoteChannelMessage,
-  createRemoteChannelTaskFromText,
   createScheduleTaskFromText: (text, options) =>
     ipcRenderer.invoke('schedule:task:create-from-text', {
       text,

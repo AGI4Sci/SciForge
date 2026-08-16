@@ -135,7 +135,7 @@ Download a macOS, Windows, or Linux installer from [GitHub Releases](https://git
 
 ### Run from Source
 
-Requirements: Node.js 20+ and a locally installed, authenticated Codex (default) or Claude Code CLI.
+Requirements: Node.js 22.12+ and a locally installed, authenticated Codex (default) or Claude Code CLI.
 
 ```bash
 git clone https://github.com/AGI4Sci/SciForge.git
@@ -154,6 +154,14 @@ npm run build
 
 For complete instructions on installation, first-time setup, runtime selection, worker startup, scientific workflows, data locations, and troubleshooting, see the **[SciForge Usage Wiki](./docs/wiki/README.md)**.
 
+### Mobile and cloud collaboration
+
+The collaboration backend is part of this open-source repository rather than a hidden desktop service. The cloud server and PostgreSQL migrations live in [`packages/collaboration-server`](./packages/collaboration-server/), the Zulip provider in [`packages/collaboration-provider-zulip`](./packages/collaboration-provider-zulip/), the shared protocol in [`packages/collaboration-contracts`](./packages/collaboration-contracts/), and the desktop domain in [`packages/domains/collaboration`](./packages/domains/collaboration/).
+
+The repository has one long-lived branch, `gui`. Desktop, cloud, and the current Zulip phone entrypoint are built and tested from the same exact commit instead of drifting per-client source branches. They still release independently: Electron installers contain the desktop application; ECS installs only the contracts, Zulip provider, and collaboration-server tarballs; phones currently use the official Zulip app. The future native client entrypoint is reserved at [`apps/mobile`](./apps/mobile/); it currently contains architecture and open-source reuse guidance, not installable code. Shared-contract changes run both desktop and cloud validation.
+
+See the [server README](./packages/collaboration-server/README.md) for source builds, migrations, configuration, probes, and tests. Production systemd, Nginx, backup, upgrade, and rollback procedures are documented in the [Chinese operations guide](./docs/operations/zulip-aliyun-deployment.zh-CN.md). Passwords, API keys, private keys, and tokens must always be injected from deployment-managed secret files or a secret manager outside Git.
+
 ## Documentation
 
 | Entry | Contents |
@@ -161,6 +169,9 @@ For complete instructions on installation, first-time setup, runtime selection, 
 | [Usage Wiki](./docs/wiki/README.md) | From installation to your first task, plus common scenarios, configuration, and troubleshooting |
 | [SciForge Paper](./paper/sciforge-report.pdf) | System positioning, architecture, real interfaces, and eight end-to-end showcases |
 | [Development Guide](./docs/DEVELOPMENT.md) | Local development, testing, and builds |
+| [Collaboration Server README](./packages/collaboration-server/README.md) | Cloud architecture, source startup, migrations, configuration, probes, and tests |
+| [Collaboration User Guide (Chinese)](./docs/collaboration-user-guide.zh-CN.md) | Phone pairing, Agent registration, personal Sessions, Projects, and recovery |
+| [Collaboration Operations Guide (Chinese)](./docs/operations/zulip-aliyun-deployment.zh-CN.md) | Production deployment, systemd, Nginx, backups, upgrades, and rollback |
 | [Runtime Contract](./docs/agent-runtime-contract.md) | The unified adaptation boundary for Codex, Claude Code, and the GUI |
 | [Architecture](./DESIGN.md) | Agent runtime, GUI, and service boundaries |
 | [Contribution Guide](./docs/CONTRIBUTING.md) | How to contribute to the project |

@@ -32,6 +32,22 @@ test('sorts packages by packageName and omits undeclared process imports', async
   ])
   assert.match(generated['src/main/modules/installed-domain-main.ts'], /@fixture\/z-main-only\/main/)
   assert.doesNotMatch(generated['src/main/modules/installed-domain-main.ts'], /a-renderer-only/)
+  assert.match(
+    generated['src/main/modules/installed-domain-main.ts'],
+    /const \{ capabilityInvokerFor, packageStorageFor, \.\.\.sharedHost \} = host/
+  )
+  assert.match(
+    generated['src/main/modules/installed-domain-main.ts'],
+    /const packageStorage = packageStorageFor\(owner\)/
+  )
+  assert.match(
+    generated['src/main/modules/installed-domain-main.ts'],
+    /return \{\n {6}\.\.\.sharedHost,\n {6}capabilities: capabilityInvokerFor\(owner\),\n {6}packageSettings: packageStorage\.settings,\n {6}packageSecrets: packageStorage\.secrets,/
+  )
+  assert.doesNotMatch(
+    generated['src/main/modules/installed-domain-main.ts'],
+    /return \{\n {6}\.\.\.host,/
+  )
   assert.match(generated['src/renderer/src/domain-modules/installed-domain-renderer.ts'], /@fixture\/a-renderer-only\/renderer/)
   assert.doesNotMatch(generated['src/renderer/src/domain-modules/installed-domain-renderer.ts'], /z-main-only/)
   assert.match(
@@ -99,6 +115,21 @@ test('fails closed when a process entry does not export its conventional factory
   await assert.rejects(
     discoverDomainPackages(root, { parseDefinition: (definition) => definition }),
     /must export createDomainMainEntry/
+  )
+})
+
+test('fails closed when package and manifest release versions drift', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  await createFixture(root, 'version-drift', {
+    packageName: '@fixture/version-drift',
+    process: 'main',
+    packageVersion: '1.0.1'
+  })
+
+  await assert.rejects(
+    discoverDomainPackages(root, { parseDefinition: (definition) => definition }),
+    /package\.json version must equal manifest module\.version 1\.0\.0/
   )
 })
 
@@ -374,6 +405,7 @@ async function createFixture(root, directoryName, options) {
   await writeFile(path.join(packageRoot, 'sciforge.domain.json'), JSON.stringify(manifest))
   await writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({
     name: options.packageName,
+    version: options.packageVersion ?? '1.0.0',
     type: 'module',
     exports: {
       './definition': './src/definition.ts',

@@ -5,12 +5,11 @@ import {
   type ImageGenerationMcpLaunchConfig
 } from './image-generation-mcp-config'
 import {
-  defaultConnectPhoneSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
-  defaultRemoteChannelSettings,
   defaultScheduleSettings,
+  defaultSkillsSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
   type AppSettingsV1,
@@ -22,7 +21,6 @@ function createSettings(
   imageGenerator: ModelRouterMemberSettingsPatchV1 = {},
   imageGeneration: ImageGenerationSettingsPatchV1 = {}
 ): AppSettingsV1 {
-  const remoteChannel = defaultRemoteChannelSettings()
   const modelRouter = defaultModelRouterSettings()
   return {
     version: 1,
@@ -69,17 +67,7 @@ function createSettings(
       channel: 'stable'
     },
     codePromptPrefix: '',
-    remoteChannel: {
-      ...remoteChannel,
-      enabled: true,
-      im: {
-        ...remoteChannel.im,
-        enabled: true,
-        port: 8787,
-        secret: ''
-      }
-    },
-    connectPhone: defaultConnectPhoneSettings()
+    skills: defaultSkillsSettings()
   }
 }
 

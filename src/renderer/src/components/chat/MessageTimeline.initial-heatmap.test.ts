@@ -5,7 +5,6 @@ import i18n from '../../i18n'
 import { MessageTimelineEmptyHero } from './message-timeline-empty'
 
 function renderHero(options: {
-  remoteChannelMode?: boolean
   ready?: boolean
   hasWorkspace?: boolean
   runtimeError?: string | null
@@ -13,12 +12,10 @@ function renderHero(options: {
 } = {}): string {
   return renderToStaticMarkup(
     createElement(MessageTimelineEmptyHero, {
-      remoteChannelMode: options.remoteChannelMode ?? false,
       ready: options.ready ?? true,
       hasWorkspace: options.hasWorkspace ?? true,
       runtimeError: options.runtimeError ?? null,
       runtimeId: options.runtimeId ?? 'codex',
-      activeRemoteChannel: null,
       onPickWorkspace: () => undefined,
       onRetry: () => undefined,
       onOpenSettings: () => undefined,
@@ -50,17 +47,12 @@ describe('MessageTimeline initial heatmap empty hero routing', () => {
     expect(html).not.toContain('Codex activity pulse')
   })
 
-  it('keeps offline, missing-workspace, and remote-channel empty states gated away from the heatmap', () => {
+  it('keeps offline and missing-workspace empty states gated away from the heatmap', () => {
     const offlineHtml = renderHero({ ready: false })
     expect(offlineHtml).toContain('SciForge is waking the local agent')
     expect(offlineHtml).not.toContain('ds-runtime-wake-stage')
     expect(offlineHtml).not.toContain('ds-runtime-wake-logo')
     expect(renderHero({ hasWorkspace: false })).toContain('Choose working directory')
-    const clawHtml = renderHero({ remoteChannelMode: true })
-    expect(clawHtml).toContain('Start a conversation with this assistant')
-    expect(clawHtml).toContain('ds-remote-channel-empty-logo')
-    expect(clawHtml).toContain('ds-work-logo')
-    expect(clawHtml).not.toContain('ds-initial-usage-heatmap')
   })
 
   it('shows the runtime error in the offline hero when one is available', () => {

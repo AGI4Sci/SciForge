@@ -158,8 +158,10 @@ function renderMain(packages) {
   const imports = packages.map((candidate, index) =>
     `import { createDomainMainEntry as createDomainMainEntry${index} } from '${candidate.packageName}/main'`
   )
-  const values = packages.map((_candidate, index) => `      createDomainMainEntry${index}(domainHost)`)
-  return `${GENERATED_HEADER}import type { DomainMainHost } from '@sciforge/domain-sdk/host'\nimport { defineInstalledMainDomainEntrySet } from '@sciforge/domain-sdk/main'\n${imports.join('\n')}${imports.length > 0 ? '\n' : ''}import type { z } from 'zod'\nimport { installedDomainPackages } from '../../shared/installed-domain-packages'\nimport { defineCapability, type DefineCapabilityOptions } from '../capabilities/registry'\n\nexport type InstalledMainDomainHost = Omit<DomainMainHost, 'defineCapability'>\n\nexport function createInstalledMainDomainEntries(host: InstalledMainDomainHost) {\n  const domainHost: DomainMainHost = {\n    ...host,\n    defineCapability: (options) => defineCapability(\n      options as DefineCapabilityOptions<z.ZodType, z.ZodType>\n    )\n  }\n  return defineInstalledMainDomainEntrySet<unknown>(\n    installedDomainPackages,\n    [\n${values.join(',\n')}\n    ]\n  ).entries\n}\n`
+  const values = packages.map((candidate, index) =>
+    `      createDomainMainEntry${index}(domainHostFor(${JSON.stringify(candidate.packageName)}))`
+  )
+  return `${GENERATED_HEADER}import type {\n  DomainMainHost,\n  DomainMainPackageStorageHost,\n  DomainMainSystemCapabilityInvoker,\n  DomainRuntimeContributionOwner\n} from '@sciforge/domain-sdk/host'\nimport { defineInstalledMainDomainEntrySet } from '@sciforge/domain-sdk/main'\n${imports.join('\n')}${imports.length > 0 ? '\n' : ''}import type { z } from 'zod'\nimport { installedDomainPackages } from '../../shared/installed-domain-packages'\nimport { defineCapability, type DefineCapabilityOptions } from '../capabilities/registry'\n\nexport type InstalledMainDomainHost = Omit<\n  DomainMainHost,\n  'defineCapability' | 'capabilities' | 'packageSettings' | 'packageSecrets'\n> & Readonly<{\n  capabilityInvokerFor: (owner: DomainRuntimeContributionOwner) => DomainMainSystemCapabilityInvoker\n  packageStorageFor: (owner: DomainRuntimeContributionOwner) => DomainMainPackageStorageHost\n}>\n\nexport function createInstalledMainDomainEntries(host: InstalledMainDomainHost) {\n  const { capabilityInvokerFor, packageStorageFor, ...sharedHost } = host\n  const domainHostFor = (packageName: string): DomainMainHost => {\n    const definition = installedDomainPackages.definitions.find(\n      (candidate) => candidate.packageName === packageName\n    )\n    if (!definition) throw new Error(\`Installed main domain package \${packageName} is unavailable.\`)\n    const owner = Object.freeze({\n      moduleId: definition.module.id,\n      moduleVersion: definition.module.version\n    })\n    const packageStorage = packageStorageFor(owner)\n    return {\n      ...sharedHost,\n      capabilities: capabilityInvokerFor(owner),\n      packageSettings: packageStorage.settings,\n      packageSecrets: packageStorage.secrets,\n      defineCapability: (options) => defineCapability(\n        options as DefineCapabilityOptions<z.ZodType, z.ZodType>\n      )\n    }\n  }\n  return defineInstalledMainDomainEntrySet<unknown>(\n    installedDomainPackages,\n    [\n${values.join(',\n')}\n    ]\n  ).entries\n}\n`
 }
 
 function renderRenderer(packages) {
@@ -194,6 +196,11 @@ async function validatePackageLayout({ packageRoot, definition, packageJson }) {
   if (packageJson.name !== definition.packageName) {
     throw new Error(
       `${relative(packageRoot)}/package.json name must equal manifest packageName ${definition.packageName}.`
+    )
+  }
+  if (packageJson.version !== definition.module.version) {
+    throw new Error(
+      `Domain package ${definition.packageName} package.json version must equal manifest module.version ${definition.module.version}.`
     )
   }
   if (!isRecord(packageJson.exports)) {

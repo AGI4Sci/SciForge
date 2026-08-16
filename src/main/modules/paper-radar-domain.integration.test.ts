@@ -13,6 +13,7 @@ import {
   createApplicationCapabilityRegistry,
   createApplicationDomainCatalog
 } from './application-composition'
+import { createNonSecretPackageStorageForTest } from './domain-package-storage.test-helper'
 
 const temporaryDirectories: string[] = []
 
@@ -26,7 +27,13 @@ describe('installed Paper Radar domain package', () => {
   it('exposes the same package-owned handler through agent discovery and generic invocation', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-paper-radar-domain-'))
     temporaryDirectories.push(userDataDir)
-    const catalog = createApplicationDomainCatalog({ getUserDataDir: () => userDataDir })
+    const catalog = createApplicationDomainCatalog({
+      getUserDataDir: () => userDataDir,
+      packageStorageFor: createNonSecretPackageStorageForTest(),
+      capabilityInvokerFor: () => ({
+        invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') }
+      })
+    })
     const broker = new CapabilityBroker(
       createApplicationCapabilityRegistry(catalog, unavailableCoreDependencies())
     )

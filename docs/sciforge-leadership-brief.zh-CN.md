@@ -35,17 +35,15 @@ SciForge 的重要差异是把科研能力拆成可配置、可审计、可替�
 - 这让 SciForge 可以逐步扩展，而不是把所有能力写死在单一客户端里。
 - 对机构部署更友好：哪些工具可用、哪些需要审批、哪些只读、哪些能写入，都可以在边界上治理。
 
-### 移动/IM 监督：不是单人桌面孤岛
+### 统一协作：手机不是第二套桌面上下文
 
-![SciForge 真实运行截图：Connect Phone](assets/sciforge-leadership/real-connect-phone-crop.png)
-
-SciForge 已经有手机/IM 连接入口，支持飞书、Lark、微信、Discord、Zulip 等通道。这一点适合讲“团队治理”和“长任务监督”：PI 或团队成员不一定守在桌面前，可以通过 IM/手机处理状态查看、审批和任务交接。
+当前协作领域把真人、Zulip 手机端点和本地 Agent 组成可审计的 Participant。个人 Zulip Topic 固定投影到一台明确 Agent 的一个 Session；手机消息、Agent 最终回复和桌面消息沿同一顺序队列双向同步。多人 Project 则由唯一 Coordinator 分派结构化 Task，保留真实发送者、权限和人工问题目标，不用共享 Topic 命令静默切换桌面上下文。
 
 ## SciForge 的系统主线
 
 结合 `paper/sciforge-report.tex` 和当前项目代码，SciForge 的主线可以概括为五层：
 
-1. **用户交互与协作层**：桌面工作台、机器人值守、Connect Phone、团队消息通道。
+1. **用户交互与协作层**：桌面工作台、协作右侧面板、Zulip 手机端点、固定 Session 投影和团队 Project/Task。
 2. **研究能力模式层**：文献收集、科研写作、图表审改、报告/PPT、研究任务规划。
 3. **核心引擎层**：Agent Runtime、Workflow/Automation、Goal/Plan、Evidence DAG、审批和治理。
 4. **科学模型路由层**：统一 Model Router，面向文本、视觉和科学模态文件做路由。
@@ -111,7 +109,7 @@ SciForge 的本地工作区、worker 边界、MCP/Skill、Model Router 和 Evide
 | 长任务研究工作台 | 真实截图显示 33 篇 AI4AI 论文整理、综述扩展、文件列表和成本/cache 信息。 |
 | 本地 workspace 操作 | 会话和文件树绑定真实目录，可读写论文、Markdown、CSV、提取文本等。 |
 | 插件/worker 接入 | 插件页显示定时任务、K-Dense Skill、Scientific Plotting、Image Generation、Canvas、ppt-master 等入口。 |
-| 手机/IM 协作 | Connect Phone 弹窗显示飞书/Lark/微信/Discord/Zulip 授权入口。 |
+| 手机/IM 协作 | 协作右侧面板提供云端连接、Zulip 身份挑战、Agent 注册、固定 Session 投影和队列恢复；云端服务统一处理身份、顺序、回执和权限。 |
 | 科学扩展架构 | 代码中已有 `evidence-dag`、`project-dag`、`paper-radar` 等领域包，以及 `model-router`、`sci-modality-router`、`scientific-plotting`、`ppt-master`、`canvas` 等 worker。 |
 | 研究案例 | 报告中的 scenario-01 research sprint 记录了长周期研究闭环：132 stages、约 199 commits、文献、候选基因、结构验证、图表与手稿包。 |
 

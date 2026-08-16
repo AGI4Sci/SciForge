@@ -17,7 +17,6 @@ Package metadata policy:
 | `packages/full-trace` | package-local license field absent | Project-owned workspace package; source release follows root `LICENSE`. |
 | `packages/domains/*` | `license: MIT` | Independently owned domain packages; backend and optional UI ship at one version. |
 | `packages/workers/*` | `license: MIT` | Project-owned non-domain worker packages. |
-| `vendor/openclaw-shim` | `private: true`, `license: MIT` | Project-local compatibility shim for peer imports; not an upstream OpenClaw source distribution. |
 
 ## Reference-Only Upstream Inspiration
 
@@ -64,11 +63,9 @@ Direct root dependencies recorded in `package-lock.json`:
 | `@codemirror/state` | `^6.6.0` | `MIT` |
 | `@codemirror/view` | `^6.43.0` | `MIT` |
 | `@jbrowse/react-linear-genome-view2` | `4.3.0` | `MIT` |
-| `@larksuiteoapi/node-sdk` | `^1.64.0` | `MIT` |
 | `@modelcontextprotocol/sdk` | `^1.29.0` | `MIT` |
 | `@napi-rs/canvas` | `^0.1.100` | `MIT` |
 | `@sciforge/full-trace` | `0.1.0` | Package-local license field absent; project source follows root `LICENSE` |
-| `@tencent-weixin/openclaw-weixin` | `2.4.3` | `MIT` |
 | `@tiptap/core` | `3.26.0` | `MIT` |
 | `@tiptap/extension-image` | `3.26.0` | `MIT` |
 | `@tiptap/extension-list` | `3.26.0` | `MIT` |
@@ -91,7 +88,6 @@ Direct root dependencies recorded in `package-lock.json`:
 | `lucide-react` | `^0.544.0` | `ISC` |
 | `molstar` | `5.10.1` | `MIT` |
 | `node-pty` | `^1.1.0` | `MIT` |
-| `openclaw` | `file:vendor/openclaw-shim` | `MIT`, project-local shim |
 | `pdf-lib` | `^1.17.1` | `MIT` |
 | `pdfjs-dist` | `5.4.394` | `Apache-2.0` |
 | `proxy-from-env` | `^2.1.0` | `MIT` |
@@ -185,12 +181,6 @@ provenance is documented in `src/asset/img/README.md`.
 Release rule: only project-owned, generated-with-appropriate-rights, or clearly
 permissive assets may be bundled. Third-party logos, screenshots, videos, and
 trademarks must not be treated as covered by the project license.
-
-## Vendored Code
-
-`vendor/openclaw-shim` is a project-local compatibility shim named `openclaw` so `@tencent-weixin/openclaw-weixin` peer imports can resolve inside SciForge packaging. The shim is marked private and MIT in its package metadata. It is not intended to redistribute upstream OpenClaw source code.
-
-If future changes copy implementation code, generated code, or assets from upstream OpenClaw or Tencent packages into this shim, the copied material must be listed here with its upstream copyright and license.
 
 ## Python and Sidecar Worker Dependencies
 

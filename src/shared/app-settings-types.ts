@@ -14,18 +14,12 @@ export type ScheduleKind = 'manual' | 'interval' | 'daily' | 'at'
 export type ScheduleTaskStatus = 'idle' | 'running' | 'success' | 'error'
 export type ScheduleModel = 'auto' | 'deepseek-v4-pro' | 'deepseek-v4-flash'
 export type ScheduleReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max'
-export type RemoteChannelRunMode = ScheduleRunMode
-export type RemoteChannelProvider = 'feishu' | 'weixin' | 'discord' | 'zulip'
-export type RemoteChannelGuardModeV1 = 'only_mention' | 'all_messages' | 'off'
-export type RemoteChannelModel = ScheduleModel
 
 export const DEFAULT_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1'
 export const DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS = 'sciforge-router'
 export const DEFAULT_MODEL_ROUTER_PROVIDER_ID = 'sciforge-model-router'
-export const DEFAULT_REMOTE_CHANNEL_MODEL = 'auto'
-export const REMOTE_CHANNEL_MODEL_IDS = ['auto', 'deepseek-v4-pro', 'deepseek-v4-flash'] as const
-export const DEFAULT_SCHEDULE_MODEL = DEFAULT_REMOTE_CHANNEL_MODEL
-export const SCHEDULE_MODEL_IDS = REMOTE_CHANNEL_MODEL_IDS
+export const DEFAULT_SCHEDULE_MODEL = 'auto'
+export const SCHEDULE_MODEL_IDS = ['auto', 'deepseek-v4-pro', 'deepseek-v4-flash'] as const
 export const DEFAULT_SCHEDULE_REASONING_EFFORT = 'medium'
 export const SCHEDULE_REASONING_EFFORT_IDS = ['off', 'low', 'medium', 'high', 'max'] as const
 export const DEFAULT_SCHEDULE_INTERNAL_PORT = 8788
@@ -41,7 +35,6 @@ export const DEFAULT_WRITE_INLINE_LONG_COMPLETION_DEBOUNCE_MS = 2_800
 export const DEFAULT_WRITE_INLINE_LONG_COMPLETION_MIN_ACCEPT_SCORE = 0.36
 export const DEFAULT_WRITE_INLINE_LONG_COMPLETION_MAX_TOKENS = 256
 export const DEFAULT_LOCAL_RUNTIME_PORT = 8899
-export const DEFAULT_WEIXIN_BRIDGE_RPC_URL = 'http://127.0.0.1:18790/api/v1/admin/rpc'
 export type { SpeechToTextSettingsPatchV1, SpeechToTextSettingsV1 } from './speech-to-text'
 
 export const MODEL_ACCESS_MODES = ['api', 'coding-plan'] as const
@@ -368,161 +361,8 @@ export type ScheduleSettingsV1 = {
   tasks: ScheduledTaskV1[]
 }
 
-export type RemoteChannelSkillSettingsV1 = {
-  defaultNames: string[]
+export type SkillsSettingsV1 = {
   extraDirs: string[]
-  promptPrefix: string
-}
-
-export type RemoteChannelImSettingsV1 = {
-  enabled: boolean
-  provider: RemoteChannelProvider
-  port: number
-  path: string
-  secret: string
-  workspaceRoot: string
-  model: string
-  mode: RemoteChannelRunMode
-  responseTimeoutMs: number
-}
-
-export type ConnectPhoneSettingsV1 = {
-  weixinBridgeUrl: string
-}
-
-export type RemoteChannelAgentProfileV1 = {
-  name: string
-  description: string
-  identity: string
-  personality: string
-  userContext: string
-  replyRules: string
-}
-
-export type RemoteChannelFeishuPlatformCredentialV1 = {
-  kind: 'feishu'
-  appId: string
-  appSecret: string
-  domain: string
-  createdAt: string
-}
-
-export type RemoteChannelWeixinPlatformCredentialV1 = {
-  kind: 'weixin'
-  accountId: string
-  sessionKey: string
-  createdAt: string
-}
-
-export type RemoteChannelDiscordPlatformCredentialV1 = {
-  kind: 'discord'
-  applicationId: string
-  botId: string
-  botUsername: string
-  guildId: string
-  guildName: string
-  channelId: string
-  channelName: string
-  installationId?: string
-  guardOwnerInstallationId?: string
-  guardOwnerUpdatedAt?: string
-  createdAt: string
-}
-
-export type RemoteChannelZulipPlatformCredentialV1 = {
-  kind: 'zulip'
-  realmUrl: string
-  botEmail: string
-  botUserId: string
-  botFullName: string
-  streamId: string
-  streamName: string
-  topicName: string
-  installationId?: string
-  guardOwnerInstallationId?: string
-  guardOwnerUpdatedAt?: string
-  createdAt: string
-}
-
-export type RemoteChannelPlatformCredentialV1 =
-  | RemoteChannelFeishuPlatformCredentialV1
-  | RemoteChannelWeixinPlatformCredentialV1
-  | RemoteChannelDiscordPlatformCredentialV1
-  | RemoteChannelZulipPlatformCredentialV1
-
-export type RemoteChannelRemoteSessionV1 = {
-  chatId: string
-  messageId: string
-  threadId: string
-  senderId: string
-  senderName: string
-  updatedAt: string
-}
-
-export type RemoteChannelRecentMessageV1 = {
-  provider: RemoteChannelProvider
-  channelId: string
-  chatId: string
-  remoteThreadId: string
-  messageId: string
-  senderName?: string
-  text?: string
-  receivedAt: string
-}
-
-export type RemoteChannelLastFailureV1 = {
-  provider: RemoteChannelProvider
-  message: string
-  failureKind?: string
-  failureTitle?: string
-  channelId?: string
-  chatId?: string
-  remoteThreadId?: string
-  threadId?: string
-  runtimeId?: AgentRuntimeId
-  occurredAt: string
-}
-
-export type RemoteChannelConversationV1 = {
-  id: string
-  chatId: string
-  remoteThreadId: string
-  latestMessageId: string
-  senderId: string
-  senderName: string
-  runtimeId?: AgentRuntimeId
-  agentThreadIds?: AgentThreadIdsV1
-  workspaceRoot: string
-  lastFailure?: RemoteChannelLastFailureV1
-  createdAt: string
-  updatedAt: string
-}
-
-export type RemoteChannelV1 = {
-  id: string
-  provider: RemoteChannelProvider
-  label: string
-  enabled: boolean
-  guardMode?: RemoteChannelGuardModeV1
-  model: string
-  runtimeId?: AgentRuntimeId
-  agentThreadIds?: AgentThreadIdsV1
-  workspaceRoot: string
-  agentProfile: RemoteChannelAgentProfileV1
-  platformCredential?: RemoteChannelPlatformCredentialV1
-  remoteSession?: RemoteChannelRemoteSessionV1
-  conversations: RemoteChannelConversationV1[]
-  recentMessages?: RemoteChannelRecentMessageV1[]
-  lastFailure?: RemoteChannelLastFailureV1
-  createdAt: string
-  updatedAt: string
-}
-
-export type RemoteChannelSettingsV1 = {
-  enabled: boolean
-  skills: RemoteChannelSkillSettingsV1
-  im: RemoteChannelImSettingsV1
-  channels: RemoteChannelV1[]
 }
 
 // Workflow (n8n-style node-based automation)
@@ -1252,13 +1092,7 @@ export type WriteSettingsV1 = {
   inlineCompletion: WriteInlineCompletionSettingsV1
 }
 
-export type RemoteChannelSettingsPatchV1 = Partial<Omit<RemoteChannelSettingsV1, 'skills' | 'im' | 'channels'>> & {
-  skills?: Partial<RemoteChannelSkillSettingsV1>
-  im?: Partial<RemoteChannelImSettingsV1>
-  channels?: Array<Partial<RemoteChannelV1>>
-}
-
-export type ConnectPhoneSettingsPatchV1 = Partial<ConnectPhoneSettingsV1>
+export type SkillsSettingsPatchV1 = Partial<SkillsSettingsV1>
 
 export type ScheduleSettingsPatchV1 = Partial<
   Omit<ScheduleSettingsV1, 'skills' | 'internal' | 'tasks'>
@@ -1272,28 +1106,20 @@ export type WriteSettingsPatchV1 = Partial<Omit<WriteSettingsV1, 'inlineCompleti
   inlineCompletion?: Partial<WriteInlineCompletionSettingsV1>
 }
 
-export type RemoteChannelGeneratedFileV1 = {
+export type ScheduleGeneratedFileV1 = {
   path: string
   relativePath?: string
   fileName: string
 }
 
-export type RemoteChannelRunResult =
-  | { ok: true; threadId: string; turnId?: string; text?: string; message?: string; files?: RemoteChannelGeneratedFileV1[] }
+export type ScheduleRunResult =
+  | { ok: true; threadId: string; turnId?: string; text?: string; message?: string; files?: ScheduleGeneratedFileV1[] }
   | { ok: false; message: string }
-
-export type ScheduleRunResult = RemoteChannelRunResult
 
 export type ScheduleTaskFromTextResult =
   | { kind: 'noop' }
   | { kind: 'created'; taskId: string; title: string; scheduleAt: string; confirmationText: string }
   | { kind: 'error'; message: string }
-
-export type RemoteChannelRuntimeStatus = {
-  imServerRunning: boolean
-  imUrl: string
-  runningTaskIds: string[]
-}
 
 export type ScheduleRuntimeStatus = {
   internalServerRunning: boolean
@@ -1328,8 +1154,7 @@ export type AppSettingsV1 = {
   keyboardShortcuts: KeyboardShortcutsConfigV1
   write: WriteSettingsV1
   speechToText?: SpeechToTextSettingsV1
-  remoteChannel: RemoteChannelSettingsV1
-  connectPhone: ConnectPhoneSettingsV1
+  skills: SkillsSettingsV1
   schedule: ScheduleSettingsV1
   workflow: WorkflowSettingsV1
   guiUpdate: GuiUpdateConfigV1
@@ -1337,7 +1162,7 @@ export type AppSettingsV1 = {
 }
 
 export type AppSettingsPatch = Partial<
-  Omit<AppSettingsV1, 'modelAccess' | 'modelRouter' | 'agents' | 'log' | 'notifications' | 'appBehavior' | 'workbenchToolbar' | 'keyboardShortcuts' | 'write' | 'speechToText' | 'remoteChannel' | 'connectPhone' | 'schedule' | 'workflow' | 'guiUpdate' | 'computerUse' | 'agentCapabilities' | 'imageGeneration'>
+  Omit<AppSettingsV1, 'modelAccess' | 'modelRouter' | 'agents' | 'log' | 'notifications' | 'appBehavior' | 'workbenchToolbar' | 'keyboardShortcuts' | 'write' | 'speechToText' | 'skills' | 'schedule' | 'workflow' | 'guiUpdate' | 'computerUse' | 'agentCapabilities' | 'imageGeneration'>
 > & {
   modelAccess?: ModelAccessSettingsPatchV1
   modelRouter?: ModelRouterSettingsPatchV1
@@ -1353,8 +1178,7 @@ export type AppSettingsPatch = Partial<
   keyboardShortcuts?: Partial<KeyboardShortcutsConfigV1>
   write?: WriteSettingsPatchV1
   speechToText?: SpeechToTextSettingsPatchV1
-  remoteChannel?: RemoteChannelSettingsPatchV1
-  connectPhone?: ConnectPhoneSettingsPatchV1
+  skills?: SkillsSettingsPatchV1
   schedule?: ScheduleSettingsPatchV1
   workflow?: WorkflowSettingsPatchV1
   guiUpdate?: Partial<GuiUpdateConfigV1>

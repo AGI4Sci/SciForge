@@ -8,6 +8,7 @@ import {
   Notification,
   powerSaveBlocker,
   protocol,
+  safeStorage,
   session,
   shell,
   Tray,
@@ -31,8 +32,6 @@ import {
   agentRuntimeSettingsEnvelope,
   getActiveAgentRuntime,
   getModelAccessSettings,
-  mergeConnectPhoneSettings,
-  mergeRemoteChannelSettings,
   mergeAgentCapabilitySettings,
   mergeComputerUseSettings,
   mergeModelRouterSettings,
@@ -46,7 +45,6 @@ import {
   resolveRuntimeModelRouterSettings,
   modelAccessRuntimePolicyChanged,
   resolveModelAccessRuntimePolicy,
-  type AgentRuntimeId,
   type AppBehaviorConfigV1,
   type AppSettingsPatch,
   type AppSettingsV1
@@ -78,7 +76,7 @@ import {
 } from './runtime/agent-runtime/workspace-host-agent-runtime-adapter'
 import { ClaudeCodeRuntimeService, createClaudeCodeAgentRuntimeAdapter } from './runtime/claude-code'
 import { LspCodeNavigationService } from './services/lsp-code-navigation-service'
-import { LocalTraceStore } from '@sciforge/full-trace'
+import { LocalTraceStore, sanitizeTraceTextChunks } from '@sciforge/full-trace'
 import { WorkspaceEgressService } from '@sciforge/workspace-egress'
 import {
   VISUAL_SOURCE_CONTRACT_VERSION,
@@ -119,9 +117,6 @@ import {
   resolveApplicationWorkspaceHostArtifact,
   resolveApplicationWorkspaceHostArtifactBaseDirectory
 } from './workspace-host/artifact-resolver'
-import { createRemoteChannelRuntime, type RemoteChannelRuntime } from './remote-channel-runtime'
-import { createDiscordBotRuntime, type DiscordBotRuntime } from './discord-bot-runtime'
-import { createZulipBotRuntime, type ZulipBotRuntime } from './zulip-bot-runtime'
 import { createScheduleRuntime, type ScheduleRuntime } from './schedule-runtime'
 import { syncScheduleMcpConfig, type ScheduleMcpLaunchConfig } from './schedule-mcp-config'
 import type { ResearchSearchMcpLaunchConfig } from './research-search-mcp-config'
@@ -156,7 +151,7 @@ import {
   createApplicationCapabilityRegistry,
   createApplicationDomainCatalog,
   createMainActionGuardEvaluator,
-  createMainSystemCapabilityInvoker,
+  createMainSystemCapabilityInvokerFactory,
   listMainArtifactConsumers,
   listMainVisualSourceContributions,
   listMainWorkspacePreviewPluginContributions,
@@ -175,23 +170,15 @@ import {
   registerCapabilityResourceContentScheme
 } from './workspace-preview-asset-protocol'
 import { startDevBrowserBridgeServer, type DevBrowserBridgeServer } from './dev-browser-bridge'
-import {
-  configureManagedWeixinBridgeUrlResolver,
-  pollFeishuInstall,
-  pollWeixinInstall,
-  startFeishuInstallQrcode,
-  startWeixinInstallQrcode
-} from './claw-platform-install'
 import { CodexRuntimeService } from './runtime/codex'
-import {
-  configureWeixinBridgeRuntimeContextProvider,
-  ensureWeixinBridgeRpcUrl,
-  sendWeixinBridgeMessage,
-  stopWeixinBridgeRuntime
-} from './weixin-bridge-runtime'
-import { webhookUrl } from './remote-channel-runtime-helpers'
 import { APP_USER_MODEL_ID } from '../shared/app-brand'
 import { mainPerformanceMonitor } from './performance-monitor'
+import { createDomainPackageStorageFactory } from './domain-package-storage'
+import {
+  projectDomainAgentTurnMessages,
+  subscribeDomainAgentTranscriptMessages
+} from './domain-agent-transcript'
+import { createDomainAgentExecutionHost } from './domain-agent-execution'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const HIDDEN_START_ARG = '--hidden'
@@ -206,23 +193,6 @@ function traceStartup(label: string, detail?: unknown): void {
   } else {
     console.info(`[startup +${elapsed}ms] ${label}`, detail)
   }
-}
-
-function shouldStartWeixinBridgeRuntime(settings: AppSettingsV1): boolean {
-  return (
-    settings.remoteChannel.enabled &&
-    settings.remoteChannel.im.enabled &&
-    settings.remoteChannel.channels.some((channel) => channel.enabled && channel.provider === 'weixin')
-  )
-}
-
-function syncWeixinBridgeRuntime(settings: AppSettingsV1): void {
-  if (!shouldStartWeixinBridgeRuntime(settings)) return
-  void ensureWeixinBridgeRpcUrl().catch((error) => {
-    logWarn('weixin-bridge', 'Failed to start managed WeChat bridge.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
-  })
 }
 
 function resolveLogDirectory(): string {
@@ -396,9 +366,6 @@ if (process.platform === 'win32') {
 let mainWindow: BrowserWindow | null = null
 let store: JsonSettingsStore
 let logDir = ''
-let remoteChannelRuntime: RemoteChannelRuntime | null = null
-let discordBotRuntime: DiscordBotRuntime | null = null
-let zulipBotRuntime: ZulipBotRuntime | null = null
 let scheduleRuntime: ScheduleRuntime | null = null
 let codexRuntime: CodexRuntimeService | null = null
 let capabilityAgentTools: CapabilityAgentToolSurface | null = null
@@ -421,12 +388,6 @@ let isQuitting = false
 let devBrowserBridgeServer: DevBrowserBridgeServer | null = null
 let codexRuntimePrewarmTimer: ReturnType<typeof setTimeout> | null = null
 let codexRuntimePrewarmPromise: Promise<void> | null = null
-let remoteChannelActiveThreadContext: {
-  threadId: string
-  runtimeId?: AgentRuntimeId
-  workspaceRoot?: string
-  updatedAt: string
-} | null = null
 
 async function captureMainWindowPage(bounds?: VisibleContextBounds): Promise<CapturedVisualPage> {
   const window = mainWindow
@@ -580,21 +541,6 @@ type GuiUpdaterModule = typeof import('./gui-updater')
 let guiUpdaterModulePromise: Promise<GuiUpdaterModule> | null = null
 let guiUpdaterInitialized = false
 
-function emitRemoteChannelActivity(payload: {
-  channelId: string
-  threadId: string
-  runtimeId?: AgentRuntimeId
-  previousThreadId?: string
-}): void {
-  const startedAt = mainPerformanceMonitor.now()
-  mainPerformanceMonitor.count('main.remoteChannel.activity')
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('remoteChannel:activity', payload)
-  }
-  devBrowserBridgeServer?.send('remoteChannel:activity', payload)
-  mainPerformanceMonitor.sample('main.remoteChannel.activity.send', mainPerformanceMonitor.now() - startedAt)
-}
-
 function emitSettingsChanged(settings: AppSettingsV1): void {
   const startedAt = mainPerformanceMonitor.now()
   mainPerformanceMonitor.count('main.settings.changed')
@@ -716,9 +662,6 @@ async function stopManagedRuntimes(): Promise<void> {
     managedRuntimesStopPromise = (async () => {
       cancelCodexRuntimePrewarm()
       scheduleRuntime?.stop()
-      discordBotRuntime?.stop()
-      zulipBotRuntime?.stop()
-      remoteChannelRuntime?.stop()
       // Stop every producer before closing the durable execution/turn sinks.
       // Otherwise a disposer or a final runtime event can be accepted after
       // retry timers are gone and remain invisible until the next launch.
@@ -749,7 +692,6 @@ async function stopManagedRuntimes(): Promise<void> {
       const catalog = domainModuleCatalog
       domainModuleCatalog = null
       catalog?.dispose()
-      stopWeixinBridgeRuntime()
       await runtimeMcpToolGateway?.close('service_shutdown')
       runtimeMcpToolGateway = null
       // Drain model clients before terminating the shared access sidecar so an
@@ -1077,7 +1019,9 @@ app
     const runtimeGoalService = new RuntimeGoalService(app.getPath('userData'))
     const researchCardService = new ResearchCardService(app.getPath('userData'))
     const workspaceReferenceService = new WorkspaceReferenceService()
-    let domainSystemCapabilityInvoker: ReturnType<typeof createMainSystemCapabilityInvoker> | null = null
+    let domainSystemCapabilityInvokers: ReturnType<
+      typeof createMainSystemCapabilityInvokerFactory
+    > | null = null
     let capabilityBrokerForVisibleContext: CapabilityBroker | null = null
     const visibleContextService = new VisibleContextService(app.getPath('userData'), {
       surfaceCaptureProvider: visibleContextSurfaceCaptureProvider,
@@ -1113,8 +1057,17 @@ app
         }
       }
     })
+    const domainPackageStorage = createDomainPackageStorageFactory({
+      userDataDir: app.getPath('userData'),
+      encryption: safeStorage
+    })
     const catalog = createApplicationDomainCatalog({
       getUserDataDir: () => app.getPath('userData'),
+      textSanitizer: {
+        sanitizeText: (value) => sanitizeTraceTextChunks([value], {
+          sensitiveValues: traceSensitiveSettings.values()
+        })[0] ?? ''
+      },
       openPath: async (targetPath) => {
         const error = await shell.openPath(targetPath)
         if (error) throw new Error(error)
@@ -1127,14 +1080,23 @@ app
             resourcesPath: process.resourcesPath
           })
         }),
-      capabilities: {
-        invoke: (contract, input, options) => {
-          if (!domainSystemCapabilityInvoker) {
-            throw new Error('The Host capability broker is not ready.')
+      capabilityInvokerFor: (owner) => {
+        let scopedInvoker: ReturnType<
+          ReturnType<typeof createMainSystemCapabilityInvokerFactory>['forDomain']
+        > | null = null
+        return Object.freeze({
+          invoke: (contract, input, options) => {
+            if (!scopedInvoker) {
+              if (!domainSystemCapabilityInvokers) {
+                throw new Error('The Host capability broker is not ready.')
+              }
+              scopedInvoker = domainSystemCapabilityInvokers.forDomain(owner)
+            }
+            return scopedInvoker.invoke(contract, input, options)
           }
-          return domainSystemCapabilityInvoker.invoke(contract, input, options)
-        }
+        })
       },
+      packageStorageFor: (owner) => domainPackageStorage.forOwner(owner),
       visualCapture: registeredTargetVisualCapture
     })
     const workspaceEgressService = new WorkspaceEgressService({
@@ -1239,7 +1201,7 @@ app
       createApplicationCapabilityRegistry(catalog, appCapabilityDependencies)
     )
     capabilityBrokerForVisibleContext = capabilityBroker
-    domainSystemCapabilityInvoker = createMainSystemCapabilityInvoker(capabilityBroker)
+    domainSystemCapabilityInvokers = createMainSystemCapabilityInvokerFactory(capabilityBroker)
     const visualSourceRegistry = new VisualSourceRegistry([
       {
         ownerId: 'sciforge.agent-runtime',
@@ -1333,7 +1295,8 @@ app
       resolveCaller: (context) => ({
         audience: 'agent',
         callerId: capabilityAgentCallerId(context),
-        ...(context.workspaceId ? { workspaceId: context.workspaceId } : {})
+        ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
+        ...(context.workspaceLocator ? { workspaceLocator: context.workspaceLocator } : {})
       }),
       requestApproval: (request, options) =>
         agentRuntimeHostRef.current?.requestCapabilityApproval(request, options) ?? 'cancelled',
@@ -1457,6 +1420,7 @@ app
                   id: turn.id,
                   status: turn.status,
                   ...(turn.completedAt ? { completedAt: turn.completedAt } : {}),
+                  messages: projectDomainAgentTurnMessages(turn),
                   artifacts: Object.freeze([...(turn.items ?? [])])
                 })
               )
@@ -1464,141 +1428,21 @@ app
             artifacts: Object.freeze(detail.turns.flatMap((turn) => turn.items ?? []))
           })
         },
+        subscribeMessages: (input) =>
+          subscribeDomainAgentTranscriptMessages(agentRuntimeHost, input),
         hasActiveTurns: () => agentRuntimeHost.hasActiveTurns()
       },
       turnEvents: {
-        subscribe: (listener) => agentRuntimeHost.subscribeTurnLifecycle(listener)
+        subscribe: (listener) => agentRuntimeHost.subscribeTurnLifecycle(listener),
+        subscribeRequiredBeforeTurn: (listener) =>
+          agentRuntimeHost.subscribeRequiredBeforeTurn(listener),
+        readDurableTurnBoundarySnapshot: () =>
+          agentRuntimeHost.readDurableTurnBoundarySnapshot()
       },
-      agentExecution: {
-        run: async (request) => {
-          const requestedRuntimeId = request.runtimeId?.trim()
-          if (
-            requestedRuntimeId !== undefined &&
-            requestedRuntimeId !== 'codex' &&
-            requestedRuntimeId !== 'claude' &&
-            requestedRuntimeId !== 'sciforge'
-          ) {
-            throw new Error(`Unsupported agent runtime: ${requestedRuntimeId}`)
-          }
-          if (request.signal?.aborted) throw request.signal.reason
-          const runtimeId = requestedRuntimeId ?? getActiveAgentRuntime(await store.load())
-          const thread = await agentRuntimeHost.startThread({
-            runtimeId,
-            workspace: request.workspaceRoot,
-            mode: request.mode,
-            ...(request.model ? { model: request.model } : {}),
-            relation: 'side',
-            threadSource: 'domain-runtime',
-            sidebarVisibility: request.interaction === 'reviewable' ? 'main' : 'hidden',
-            ...(request.allowedTools ? { allowedTools: request.allowedTools } : {})
-          })
-          let turnId = ''
-          let terminalState: 'completed' | 'failed' | 'cancelled' | null = null
-          let consecutivePolledTerminalFailures = 0
-          let resolveTerminal!: () => void
-          let rejectTerminal!: (reason?: unknown) => void
-          const terminal = new Promise<void>((resolve, reject) => {
-            resolveTerminal = resolve
-            rejectTerminal = reject
-          })
-          const pendingTerminalEvents: Array<
-            Readonly<{
-              turnId: string
-              state: 'completed' | 'failed' | 'cancelled'
-            }>
-          > = []
-          const acceptTerminalEvent = (
-            event: Readonly<{
-              turnId: string
-              state: 'completed' | 'failed' | 'cancelled'
-            }>
-          ): void => {
-            if (!turnId) {
-              pendingTerminalEvents.push(event)
-              return
-            }
-            if (event.turnId !== turnId || terminalState) return
-            terminalState = event.state
-            resolveTerminal()
-          }
-          const unsubscribe = agentRuntimeHost.subscribeTurnLifecycle((event) => {
-            if (event.kind !== 'after-turn' || event.runtimeId !== runtimeId || event.threadId !== thread.id) return
-            acceptTerminalEvent({ turnId: event.turnId, state: event.state })
-          })
-          const abort = (): void => {
-            if (turnId) {
-              void agentRuntimeHost
-                .interruptTurn({
-                  runtimeId,
-                  threadId: thread.id,
-                  turnId,
-                  discard: false
-                })
-                .catch(() => undefined)
-            }
-            rejectTerminal(request.signal?.reason ?? new Error('Agent execution aborted.'))
-          }
-          request.signal?.addEventListener('abort', abort, { once: true })
-          try {
-            const handle = await agentRuntimeHost.startTurn({
-              runtimeId,
-              threadId: thread.id,
-              text: request.prompt,
-              workspace: request.workspaceRoot,
-              mode: request.mode,
-              ...(request.model ? { model: request.model } : {}),
-              ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
-              ...(request.allowedTools ? { allowedTools: request.allowedTools } : {})
-            })
-            turnId = handle.turnId
-            for (const event of pendingTerminalEvents) acceptTerminalEvent(event)
-            if (request.signal?.aborted) abort()
-            while (!terminalState) {
-              await Promise.race([terminal, new Promise<void>((resolve) => setTimeout(resolve, 1_000))])
-              if (terminalState) break
-              const detail = await agentRuntimeHost.readThreadStatus({
-                runtimeId,
-                threadId: thread.id
-              })
-              const polledStatus =
-                detail.latestTurnId === turnId ? (detail.latestTurnStatus ?? detail.status) : detail.status
-              // A recoverable tool failure can temporarily surface as failed
-              // while Codex is still deciding whether to retry. Require three
-              // consecutive failed polls before polling terminalizes a missed
-              // failure lifecycle event.
-              if (polledStatus === 'completed') {
-                terminalState = 'completed'
-                consecutivePolledTerminalFailures = 0
-              } else if (polledStatus === 'failed' || polledStatus === 'cancelled') {
-                consecutivePolledTerminalFailures += 1
-                if (consecutivePolledTerminalFailures >= 3) terminalState = polledStatus
-              } else {
-                consecutivePolledTerminalFailures = 0
-              }
-            }
-            if (terminalState !== 'completed') {
-              throw new Error(`Agent execution ${terminalState ?? 'failed'}.`)
-            }
-            const page = await agentRuntimeHost.readThreadPage({
-              runtimeId,
-              threadId: thread.id,
-              limit: 20
-            })
-            const items = page.turns.find((turn) => turn.id === turnId)?.items ?? []
-            return {
-              threadId: thread.id,
-              text: items
-                .filter((item) => item.kind === 'assistant_message')
-                .map((item) => item.text?.trim() || item.summary?.trim() || '')
-                .filter(Boolean)
-                .join('\n\n')
-            }
-          } finally {
-            request.signal?.removeEventListener('abort', abort)
-            unsubscribe()
-          }
-        }
-      },
+      agentExecution: createDomainAgentExecutionHost({
+        runtime: agentRuntimeHost,
+        defaultRuntimeId: async () => getActiveAgentRuntime(await store.load())
+      }),
       power: {
         acquire: async () => {
           const blockerId = powerSaveBlocker.start('prevent-app-suspension')
@@ -1614,7 +1458,7 @@ app
           }
         }
       },
-      capabilities: domainSystemCapabilityInvoker,
+      capabilityInvokers: domainSystemCapabilityInvokers,
       modelAccess: {
         textReasoner: async () => {
           const settings = await store.load()
@@ -1648,6 +1492,9 @@ app
     void domainExecutionEvents.replayPending().catch((error) => {
       logError('domain-execution-events', 'Durable execution event replay failed.', error)
     })
+    void agentRuntimeHost.recoverCompletedTurnArtifacts().catch((error) => {
+      logError('turn-artifact-handoff', 'Accepted turn artifact watcher recovery failed.', error)
+    })
     void turnArtifactHandoff.replayPending().catch((error) => {
       logError('turn-artifact-handoff', 'Durable completed turn replay failed.', error)
     })
@@ -1658,81 +1505,6 @@ app
       powerSaveBlocker
     })
     scheduleRuntime.sync(initial)
-    discordBotRuntime = createDiscordBotRuntime({
-      store,
-      userDataPath: app.getPath('userData'),
-      handleIncomingMessage: async (input) => {
-        if (!remoteChannelRuntime)
-          return {
-            ok: false,
-            message: 'Remote channel runtime is not initialized.'
-          }
-        return remoteChannelRuntime.handleIncomingImMessage(input)
-      },
-      onSettingsChanged: (settings) => {
-        scheduleRuntime?.sync(settings)
-        remoteChannelRuntime?.sync(settings)
-        discordBotRuntime?.sync(settings)
-        syncWeixinBridgeRuntime(settings)
-      },
-      logError
-    })
-    zulipBotRuntime = createZulipBotRuntime({
-      store,
-      userDataPath: app.getPath('userData'),
-      handleIncomingMessage: async (input) => {
-        if (!remoteChannelRuntime)
-          return {
-            ok: false,
-            message: 'Remote channel runtime is not initialized.'
-          }
-        return remoteChannelRuntime.handleIncomingImMessage(input)
-      },
-      onSettingsChanged: (settings) => {
-        scheduleRuntime?.sync(settings)
-        remoteChannelRuntime?.sync(settings)
-        discordBotRuntime?.sync(settings)
-        zulipBotRuntime?.sync(settings)
-        syncWeixinBridgeRuntime(settings)
-      },
-      logError
-    })
-    remoteChannelRuntime = createRemoteChannelRuntime({
-      store,
-      agentRuntime: agentRuntimeHost,
-      getActiveThreadContext: () => remoteChannelActiveThreadContext,
-      logError,
-      notifyChannelActivity: emitRemoteChannelActivity,
-      sendWeixinBridgeMessage,
-      sendDiscordChannelMessage: (options) =>
-        discordBotRuntime?.sendChannelMessage(options) ??
-        Promise.resolve({
-          ok: false,
-          message: 'Discord bot runtime is not initialized.'
-        }),
-      sendZulipChannelMessage: (options) =>
-        zulipBotRuntime?.sendChannelMessage(options) ??
-        Promise.resolve({
-          ok: false,
-          message: 'Zulip bot runtime is not initialized.'
-        }),
-      createScheduledTaskFromText: (text, options) =>
-        scheduleRuntime?.createScheduledTaskFromText(text, options) ?? Promise.resolve({ kind: 'noop' })
-    })
-    remoteChannelRuntime.sync(initial)
-    discordBotRuntime.sync(initial)
-    zulipBotRuntime.sync(initial)
-    configureWeixinBridgeRuntimeContextProvider(async () => {
-      const settings = await store.load()
-      const channel = settings.remoteChannel.channels.find((item) => item.enabled && item.provider === 'weixin')
-      return {
-        webhookUrl: webhookUrl(settings),
-        webhookSecret: settings.remoteChannel.im.secret,
-        channelId: channel?.id ?? ''
-      }
-    })
-    configureManagedWeixinBridgeUrlResolver(ensureWeixinBridgeRpcUrl)
-    syncWeixinBridgeRuntime(initial)
 
     traceStartup('ipc registration:start')
     const applySettingsPatch = async (partial: AppSettingsPatch): Promise<AppSettingsV1> => {
@@ -1743,7 +1515,6 @@ app
         agentCapabilities: agentCapabilitiesPatch,
         computerUse: computerUsePatch,
         speechToText: speechToTextPatch,
-        connectPhone: connectPhonePatch,
         ...restPatch
       } = partial
       const next = normalizeAppSettings({
@@ -1769,8 +1540,6 @@ app
         }),
         write: mergeWriteSettings(prev.write, partial.write),
         speechToText: mergeSpeechToTextSettings(prev.speechToText, speechToTextPatch),
-        remoteChannel: mergeRemoteChannelSettings(prev.remoteChannel, partial.remoteChannel),
-        connectPhone: mergeConnectPhoneSettings(prev.connectPhone, connectPhonePatch),
         schedule: mergeScheduleSettings(prev.schedule, partial.schedule),
         workflow: mergeWorkflowSettings(prev.workflow, partial.workflow),
         guiUpdate: { ...prev.guiUpdate, ...(partial.guiUpdate ?? {}) }
@@ -1806,10 +1575,6 @@ app
       }
       scheduleCodexRuntimePrewarm(saved, 'settings-switch')
       scheduleRuntime?.sync(saved)
-      remoteChannelRuntime?.sync(saved)
-      discordBotRuntime?.sync(saved)
-      zulipBotRuntime?.sync(saved)
-      syncWeixinBridgeRuntime(saved)
       syncLoginItemSettings(saved)
       syncTray(saved)
       return saved
@@ -1870,23 +1635,8 @@ app
       remoteWorkspace: remoteWorkspaceController,
       workspacePlacement,
       fetchUpstreamModels: fetchModels,
-      getRemoteChannelRuntime: () => remoteChannelRuntime,
-      getDiscordBotRuntime: () => discordBotRuntime,
-      getZulipBotRuntime: () => zulipBotRuntime,
       visibleContext: visibleContextService,
-      setRemoteChannelActiveThreadContext: (payload) => {
-        remoteChannelActiveThreadContext = payload
-          ? {
-              ...payload,
-              updatedAt: new Date().toISOString()
-            }
-          : null
-      },
       getScheduleRuntime: () => scheduleRuntime,
-      startFeishuInstallQrcode,
-      pollFeishuInstall,
-      startWeixinInstallQrcode,
-      pollWeixinInstall,
       researchCards: researchCardService,
       showTurnCompleteNotification,
       getAppVersion: () => app.getVersion(),

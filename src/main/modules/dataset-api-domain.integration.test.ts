@@ -13,6 +13,7 @@ import {
   createApplicationCapabilityRegistry,
   createApplicationDomainCatalog
 } from './application-composition'
+import { createNonSecretPackageStorageForTest } from './domain-package-storage.test-helper'
 
 const temporaryDirectories: string[] = []
 
@@ -27,7 +28,11 @@ describe('installed Dataset API domain package', () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-domain-'))
     temporaryDirectories.push(workspaceRoot)
     const catalog = createApplicationDomainCatalog({
-      getUserDataDir: () => workspaceRoot
+      getUserDataDir: () => workspaceRoot,
+      packageStorageFor: createNonSecretPackageStorageForTest(),
+      capabilityInvokerFor: () => ({
+        invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') }
+      })
     })
     const broker = new CapabilityBroker(
       createApplicationCapabilityRegistry(catalog, unavailableCoreDependencies())
@@ -43,7 +48,9 @@ describe('installed Dataset API domain package', () => {
     const context = {
       requestId: 'request-1',
       runtimeId: 'codex',
-      threadId: 'thread-1'
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      callId: 'call-1'
     }
 
     const discovery = await agent.call({
@@ -101,14 +108,20 @@ describe('installed Dataset API domain package', () => {
       value: {
         output: {
           datasetApi: {
-            actionId: DATASET_API_CAPABILITY_IDS.list,
-            result: {
-              sources: [{ id: 'uniprot' }]
-            }
+            actionId: DATASET_API_CAPABILITY_IDS.list
           }
         }
       }
     })
+    if (listed.tool !== CAPABILITY_AGENT_TOOL_NAMES.invoke) {
+      throw new Error('Expected Dataset capability invocation result.')
+    }
+    const listedOutput = listed.value.output as {
+      datasetApi?: { result?: { sources?: Array<{ id?: string }> } }
+    }
+    expect(listedOutput.datasetApi?.result?.sources).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: 'uniprot' })])
+    )
 
     catalog.dispose()
   })

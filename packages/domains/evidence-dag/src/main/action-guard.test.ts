@@ -129,10 +129,12 @@ function lifecycleContext(userDataDir: string): DomainMainRuntimeLifecycleContex
         turns: [{
           id: 'turn-1',
           status: 'completed',
+          messages: [],
           artifacts: [{ id: 'artifact-1', type: 'message', content: 'Evidence.' }]
         }],
         artifacts: []
       }),
+      subscribeMessages: async function* () {},
       hasActiveTurns: () => false
     },
     capabilities: {

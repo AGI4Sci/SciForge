@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-project-dag",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -34,7 +34,7 @@
   },
   "dependencies": {
     "@sciforge/domain-evidence-dag": "^1.0.0",
-    "@sciforge/domain-sdk": "^0.1.0",
+    "@sciforge/domain-sdk": "^0.2.0",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",
     "react-i18next": "^15.7.4",

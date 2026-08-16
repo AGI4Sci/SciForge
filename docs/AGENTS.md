@@ -6,11 +6,11 @@ Code must be selected explicitly. SciForge does not ship or expose a custom
 agent runtime, and a runtime failure must never silently switch the user to the
 other runtime.
 
-Code, Write, Connect phone, and scheduled tasks should enter agent work through
+Code, Write, Collaboration, and scheduled tasks should enter agent work through
 the runtime-neutral `AgentRuntime` contract. Renderer code uses
 `AgentRuntimeProvider` and the `window.sciforge.agentRuntime` preload API; it
 must not call Codex app-server JSON-RPC or the Claude Agent SDK directly.
-Connect phone and scheduled tasks record runtime ids and keep runtime-specific
+Collaboration projections and scheduled tasks record runtime ids and keep runtime-specific
 thread mappings. A background workflow must fail closed when its selected
 runtime does not support a required operation.
 
@@ -74,8 +74,8 @@ cleanup. They are historical input, not a compatibility API for new writes:
 - Historical `sciforge`, `codewhale`, and `reasonix` thread mappings may be read
   only where migration requires them. New mappings use `codex` or `claude` and
   remain owned by that runtime.
-- Historical internal `claw` filenames or symbols in remote-channel code may
-  remain for compatibility, but they are not user-visible or public API names.
+- Historical remote-channel and `claw` runtime files are migration input only;
+  production code must not restore them or expose compatibility APIs for them.
 
 ## Verification
 
@@ -100,6 +100,6 @@ Manual smoke:
   the other runtime.
 - Write uses the selected runtime for inline and selected-text assistant work;
   assistant threads stay isolated by runtime.
-- Connect phone, schedules, and workflows preserve their selected runtime id
+- Collaboration projections, schedules, and workflows preserve their selected runtime id
   and fail closed for unsupported operations.
 - Saved settings do not reintroduce a removed runtime as a selectable value.

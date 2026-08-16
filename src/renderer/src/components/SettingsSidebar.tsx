@@ -1,7 +1,7 @@
 import type { Dispatch, ReactElement, SetStateAction } from 'react'
-import { Bot, ChevronLeft, Globe, Keyboard, Mic, ServerCog, Settings, Smartphone } from 'lucide-react'
+import { Bot, ChevronLeft, Globe, Keyboard, Mic, ServerCog, Settings } from 'lucide-react'
 
-type SettingsCategory = 'general' | 'speechToText' | 'agents' | 'shortcuts' | 'connectPhone' | 'remoteResources'
+type SettingsCategory = 'general' | 'speechToText' | 'agents' | 'shortcuts' | 'remoteResources'
 
 export function SettingsSidebar({
   category,
@@ -54,10 +54,6 @@ export function SettingsSidebar({
         <button type="button" className={catCls('remoteResources')} onClick={() => setCategory('remoteResources')}>
           <ServerCog className="h-4 w-4 shrink-0 opacity-70" strokeWidth={1.75} />
           {t('remoteResources')}
-        </button>
-        <button type="button" className={catCls('connectPhone')} onClick={() => setCategory('connectPhone')}>
-          <Smartphone className="h-4 w-4 shrink-0 opacity-70" strokeWidth={1.75} />
-          {t('connectPhone')}
         </button>
       </nav>
       <div className="ds-no-drag mt-auto border-t border-ds-border p-3">

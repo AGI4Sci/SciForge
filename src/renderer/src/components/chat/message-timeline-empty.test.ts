@@ -17,12 +17,10 @@ import { MessageTimelineEmptyHero } from './message-timeline-empty'
 function renderOfflineHero(runtimeError: string | null = null): string {
   return renderToStaticMarkup(
     createElement(MessageTimelineEmptyHero, {
-      remoteChannelMode: false,
       ready: false,
       hasWorkspace: true,
       runtimeError,
       runtimeId: 'codex',
-      activeRemoteChannel: null,
       onPickWorkspace: () => undefined,
       onRetry: () => undefined,
       onOpenSettings: () => undefined,

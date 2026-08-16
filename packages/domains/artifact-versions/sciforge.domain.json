@@ -9,9 +9,9 @@
   "module": {
     "id": "sciforge.artifact-versions",
     "displayName": "Artifact Versions",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "hostApi": {
-      "minimum": "1.0.0",
+      "minimum": "1.1.0",
       "maximumExclusive": "2.0.0"
     },
     "priority": 170
@@ -41,6 +41,11 @@
         {
           "kind": "main.runtime-lifecycle",
           "id": "artifact-versions.runtime-lifecycle",
+          "priority": 170
+        },
+        {
+          "kind": "main.system-capability-grant",
+          "id": "artifact-versions.identities.select",
           "priority": 170
         }
       ]

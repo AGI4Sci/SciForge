@@ -567,4 +567,103 @@ describe('CapabilityBroker', () => {
     })).rejects.toSatisfy((error) => expectBrokerCode(error, 'idempotency_conflict'))
     expect(handler).toHaveBeenCalledTimes(1)
   })
+
+  it('rejects raw grants and preserves Host-issued grants across resource issue and mutation', async () => {
+    const resourceHandleSchema = z.object({
+      token: z.string(),
+      semanticRevision: z.string(),
+      expiresAt: z.string()
+    }).strict()
+    const open = defineCapability({
+      id: 'authority.resource.open',
+      version: '1.0.0',
+      title: 'Open authority resource',
+      description: 'Issues a resource while preserving Host-issued caller authority.',
+      audiences: ['system'],
+      scope: 'workspace',
+      effect: 'read',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'none' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: resourceHandleSchema,
+      handler: async (_input, context) => {
+        expect(context.caller.capabilityGrants).toEqual(['authority.resource.mutate'])
+        return {
+          output: context.issueResource({
+            resourceId: 'authority-state',
+            resourceKind: 'authority-state',
+            workspaceId: context.caller.workspaceId,
+            audiences: ['system'],
+            semanticRevision: 'revision-1',
+            observe: async () => ({ state: {}, semanticRevision: 'revision-1' })
+          })
+        }
+      }
+    })
+    const mutate = defineCapability({
+      id: 'authority.resource.mutate',
+      version: '1.0.0',
+      title: 'Mutate authority resource',
+      description: 'Mutates a resource while preserving Host-issued caller authority.',
+      audiences: ['system'],
+      scope: 'resource',
+      resourceKinds: ['authority-state'],
+      effect: 'workspace-write',
+      approval: 'none',
+      concurrency: { revision: 'optimistic', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.literal(true) }).strict(),
+      handler: async (_input, context) => {
+        expect(context.caller.capabilityGrants).toEqual(['authority.resource.mutate'])
+        return {
+          output: { ok: true as const },
+          changed: true,
+          semanticRevision: 'revision-2'
+        }
+      }
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([open, mutate]))
+    const forgedCaller = {
+      audience: 'system',
+      callerId: 'domain-runtime:forged',
+      workspaceId: '/workspace',
+      capabilityGrants: ['authority.resource.mutate']
+    }
+    await expect(broker.invoke(forgedCaller as never, {
+      actionId: open.descriptor.id,
+      input: {}
+    })).rejects.toSatisfy((error) => expectBrokerCode(error, 'invalid_caller'))
+
+    const caller = {
+      callerId: 'domain-runtime:fixture.authority',
+      workspaceId: '/workspace',
+      capabilityGrants: ['authority.resource.mutate']
+    }
+    const opened = await broker.invokeHostSystem(caller, {
+      actionId: open.descriptor.id,
+      input: {}
+    })
+    const handle = resourceHandleSchema.parse(opened.output) as CapabilityResourceHandle
+    await expect(broker.invokeHostSystem(caller, {
+      actionId: mutate.descriptor.id,
+      invocationId: 'authority-mutation-1',
+      resource: handle,
+      expectedRevision: 'revision-1',
+      input: {}
+    })).resolves.toMatchObject({
+      changed: true,
+      afterRevision: 'revision-2',
+      resource: { semanticRevision: 'revision-2' }
+    })
+    await expect(broker.invokeHostSystem({
+      callerId: caller.callerId,
+      workspaceId: caller.workspaceId
+    }, {
+      actionId: mutate.descriptor.id,
+      invocationId: 'authority-mutation-1',
+      resource: handle,
+      expectedRevision: 'revision-1',
+      input: {}
+    })).rejects.toSatisfy((error) => expectBrokerCode(error, 'idempotency_conflict'))
+  })
 })

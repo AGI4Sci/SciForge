@@ -20,16 +20,14 @@ import {
 } from '../agent/agent-runtime-event-dispatcher'
 import i18n from '../i18n'
 import { describeRuntimeError, formatRuntimeError } from '../lib/format-runtime-error'
-import { isInternalTemporaryWorkspace, isRemoteChannelWorkspacePath, normalizeWorkspaceRoot } from '../lib/workspace-path'
-import { mirrorRemoteChannelMessageApi } from '../lib/remote-channel-api'
-import type { RemoteChannelV1 } from '@shared/app-settings'
+import { isInternalTemporaryWorkspace, normalizeWorkspaceRoot } from '../lib/workspace-path'
 import {
   isAgentRuntimeActiveTurnState,
   isAgentRuntimeTerminalTurnState
 } from '@shared/agent-runtime-contract'
 import type { AgentRuntimeEvent } from '@shared/agent-runtime-contract'
 import type { ChatState } from './chat-store-types'
-import { hydrateBlockModelLabels, isRemoteChannelThread } from './chat-store-helpers'
+import { hydrateBlockModelLabels } from './chat-store-helpers'
 import {
   collectAssistantTextForTurn,
   hasPendingRuntimeWork,
@@ -59,18 +57,10 @@ const RUNTIME_STREAM_RECOVERING_KEY = 'common:runtimeStreamRecovering'
 const LEGACY_RUNTIME_STREAM_RECOVERING_VALUE = 'runtimeStreamRecovering'
 const COMPLETION_NOTIFICATION_DEDUPE_LIMIT = 200
 export const MAX_WATCHED_COMPLETION_NOTIFICATIONS = 200
-export const MAX_PENDING_REMOTE_CHANNEL_MIRRORS = 50
 const completionNotificationKeys: string[] = []
 const completionNotificationKeySet = new Set<string>()
 const watchCompletionNotificationKeys = new Map<string, string>()
 
-export type PendingRemoteChannelMirror = {
-  threadId: string
-  userBlockId: string
-  userText: string
-}
-
-const pendingRemoteChannelMirrors = new Map<string, PendingRemoteChannelMirror>()
 
 export function watchTurnCompletionNotification(threadId: string, now = Date.now()): void {
   const normalizedThreadId = threadId.trim()
@@ -95,47 +85,6 @@ export function completionNotificationDedupeKeyForWatchedThread(
 
 export function clearWatchedCompletionNotifications(): void {
   watchCompletionNotificationKeys.clear()
-}
-
-export function rememberPendingRemoteChannelMirror(
-  turnId: string,
-  mirror: PendingRemoteChannelMirror
-): void {
-  const normalizedTurnId = turnId.trim()
-  const normalizedMirror = {
-    threadId: mirror.threadId.trim(),
-    userBlockId: mirror.userBlockId.trim(),
-    userText: mirror.userText.trim()
-  }
-  if (
-    !normalizedTurnId ||
-    !normalizedMirror.threadId ||
-    !normalizedMirror.userBlockId ||
-    !normalizedMirror.userText
-  ) {
-    return
-  }
-  pendingRemoteChannelMirrors.delete(normalizedTurnId)
-  pendingRemoteChannelMirrors.set(normalizedTurnId, normalizedMirror)
-  while (pendingRemoteChannelMirrors.size > MAX_PENDING_REMOTE_CHANNEL_MIRRORS) {
-    const oldestTurnId = pendingRemoteChannelMirrors.keys().next().value
-    if (!oldestTurnId) break
-    pendingRemoteChannelMirrors.delete(oldestTurnId)
-  }
-}
-
-export function takePendingRemoteChannelMirror(
-  turnId: string | null | undefined
-): PendingRemoteChannelMirror | undefined {
-  const normalizedTurnId = turnId?.trim()
-  if (!normalizedTurnId) return undefined
-  const mirror = pendingRemoteChannelMirrors.get(normalizedTurnId)
-  pendingRemoteChannelMirrors.delete(normalizedTurnId)
-  return mirror
-}
-
-export function clearPendingRemoteChannelMirrors(): void {
-  pendingRemoteChannelMirrors.clear()
 }
 
 function isUserInputInterruptError(message: string | undefined): boolean {
@@ -547,16 +496,11 @@ export function shouldOpenSettingsForError(error: unknown): boolean {
   return describeRuntimeError(error).settingsAction === 'agents'
 }
 
-export function isCodeThread(
-  thread: NormalizedThread,
-  remoteChannels: RemoteChannelV1[] = []
-): boolean {
+export function isCodeThread(thread: NormalizedThread): boolean {
   const workspace = normalizeWorkspaceRoot(thread.workspace)
   return Boolean(workspace) &&
     thread.archived !== true &&
     !isInternalTemporaryWorkspace(thread.workspace) &&
-    !isRemoteChannelWorkspacePath(thread.workspace) &&
-    !isRemoteChannelThread(thread, remoteChannels) &&
     !isSddAssistantThread(thread) &&
     !isEmptySddAssistantThreadCandidate(thread)
 }
@@ -882,25 +826,15 @@ export function buildThreadEventSink(
     clearBusyWatchdog()
     const completedState = get()
     const completedThreadId = completedState.activeThreadId
-    const completedTurnId = completedState.currentTurnId
     const completedKey = completedState.currentTurnId
       ? `turn:${completedState.currentTurnId}`
       : `active:${completedThreadId ?? 'unknown'}:${completedState.lastSeq}`
     const completed = ev.state === 'completed'
-    const pendingMirror = takePendingRemoteChannelMirror(completedTurnId)
-    const assistantMirrorText =
-      completed && pendingMirror
-        ? collectAssistantTextForTurn(
-            completedState.blocks,
-            pendingMirror.userBlockId,
-            completedState.liveAssistant
-          )
-        : ''
     set((s) => {
       const patchedThreads = patchThreadRuntimeStatus(s.threads, {
         threadId: completedThreadId,
         status: 'idle',
-        latestTurnId: ev.turnId ?? completedTurnId,
+        latestTurnId: ev.turnId ?? completedState.currentTurnId ?? undefined,
         latestTurnStatus: ev.state,
         updatedAt: runtimeEventUpdatedAt(ev.createdAt)
       })
@@ -930,21 +864,6 @@ export function buildThreadEventSink(
       return base
     })
     if (completed) refreshCompletedThreadSnapshot(completedThreadId, set, get)
-    const mirrorRemoteChannelMessage = typeof window !== 'undefined'
-      ? mirrorRemoteChannelMessageApi(window.sciforge)
-      : undefined
-    if (
-      completed &&
-      pendingMirror &&
-      assistantMirrorText &&
-      typeof mirrorRemoteChannelMessage === 'function'
-    ) {
-      void mirrorRemoteChannelMessage(
-        pendingMirror.threadId,
-        assistantMirrorText,
-        'assistant'
-      ).catch(() => undefined)
-    }
     if (completed) notifyTurnComplete(completedThreadId, completedState, completedKey)
     syncTurnCompletionPoll(set, get)
     requestRuntimeThreadRefresh(get)
@@ -1556,7 +1475,6 @@ export function buildThreadEventSink(
       const state = get()
       const message = formatRuntimeError(err)
       const detail = runtimeErrorDetail(err)
-      takePendingRemoteChannelMirror(state.currentTurnId)
       set((s) => {
         const wasBusy = s.busy
         const out = flushLiveBlocks(s, {

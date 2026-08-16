@@ -767,7 +767,10 @@ test('runs the generated loop through grounding, generation, evaluation, and pub
               processingComplete: false,
               groundingComplete: false
             })}\n\`\`\``,
-            threadId: 'grounding-thread'
+            runtimeId: 'codex',
+            threadId: 'grounding-thread',
+            turnId: 'grounding-turn',
+            state: 'completed' as const
           }
         }
         if (request.prompt.includes('bounded Dataset API preparation stage')) {
@@ -781,7 +784,10 @@ test('runs the generated loop through grounding, generation, evaluation, and pub
               processingComplete: true,
               groundingComplete: true
             }),
-            threadId: 'preparation-thread'
+            runtimeId: 'codex',
+            threadId: 'preparation-thread',
+            turnId: 'preparation-turn',
+            state: 'completed' as const
           }
         }
         if (request.prompt.includes('final publication stage')) {
@@ -794,7 +800,10 @@ test('runs the generated loop through grounding, generation, evaluation, and pub
               publication: { status: 'succeeded', artifact: { path: 'published/synthetic/manifest.json', sha256: 'publication-sha' } },
               execution: { completedSteps: 3, failedSteps: 0, totalSteps: 3 }
             })}`,
-            threadId: 'publication-thread'
+            runtimeId: 'codex',
+            threadId: 'publication-thread',
+            turnId: 'publication-turn',
+            state: 'completed' as const
           }
         }
         throw new Error('Unexpected agent prompt.')
@@ -922,6 +931,7 @@ function runtimeContext(
     agentThreads: {
       list: async () => [],
       read: async () => ({ id: 'thread', runtimeId: 'codex', watermark: '0', turns: [], artifacts: [] }),
+      subscribeMessages: async function* () {},
       hasActiveTurns: () => false
     },
     capabilities: { invoke: async () => { throw new Error('not used') } },

@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next'
 import type { ChatBlock, RuntimeConnectionStatus, RuntimeDisclosureMetadata } from '../../agent/types'
 import type { VisibleContextComponentSnapshot } from '@shared/visible-context'
 import { useChatStore } from '../../store/chat-store'
-import { isRemoteChannelThread } from '../../store/chat-store-helpers'
 import { useTimelineStores } from './use-timeline-stores'
 import { useTimelineScroll } from './use-timeline-scroll'
 import { deriveTurnSections } from './derive-turn-sections'
@@ -32,6 +31,8 @@ import { performanceMonitor } from '../../lib/performance-monitor'
 import { registerVisibleContextComponent } from '../../lib/visible-context'
 import { TimelineScientificObjectsPanel } from './TimelineScientificObjectsPanel'
 import { installedRendererContributions } from '../../domain-modules/installed-renderer-contributions'
+import type { DomainRendererChatResultPanelRenderContext } from '@sciforge/domain-sdk/renderer'
+import { normalizeAgentRuntimeTurnState } from '@shared/agent-runtime-contract'
 
 export { summarizeToolBlock } from './message-timeline-process'
 
@@ -80,7 +81,6 @@ export function buildMessageTimelineVisibleContextComponent(input: {
   live: boolean
   reasoning: boolean
   runtimeConnection: RuntimeConnectionStatus
-  remoteChannelMode: boolean
   updatedAt?: string
 }): VisibleContextComponentSnapshot {
   const active = Boolean(input.activeThreadId)
@@ -106,7 +106,6 @@ export function buildMessageTimelineVisibleContextComponent(input: {
       live: input.live,
       reasoning: input.reasoning,
       runtimeConnection: input.runtimeConnection,
-      remoteChannelMode: input.remoteChannelMode,
       hasContent: input.blockCount > 0 || input.live || input.reasoning
     }
   }
@@ -165,6 +164,43 @@ function blockScrollStamp(block: ChatBlock | undefined): string {
   }
 }
 
+export function canonicalTurnId(turn: Turn): string | undefined {
+  for (const block of [turn.user, ...turn.blocks]) {
+    if (!block || typeof block !== 'object') continue
+    const value = Reflect.get(block, 'turnId')
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return undefined
+}
+
+export function chatResultTurnLifecycle(input: Readonly<{
+  turnId?: string
+  isProcessing: boolean
+  isLatest: boolean
+  terminalStatus?: string
+  threadRevision?: string
+}>): DomainRendererChatResultPanelRenderContext['turnLifecycle'] {
+  const turnId = input.turnId?.trim()
+  if (!turnId) return undefined
+  const normalizedStatus = normalizeAgentRuntimeTurnState(input.terminalStatus)
+  const phase = input.isProcessing
+    ? 'active'
+    : normalizedStatus === 'completed'
+      ? 'terminal'
+      : 'settled'
+  return {
+    phase,
+    revision: [
+      turnId,
+      phase,
+      normalizedStatus ?? input.terminalStatus?.trim().toLowerCase() ?? '',
+      input.threadRevision?.trim() ?? ''
+    ].join('\0'),
+    isLatest: input.isLatest,
+    ...(input.terminalStatus?.trim() ? { status: input.terminalStatus.trim() } : {})
+  }
+}
+
 export function MessageTimeline(props: Props): ReactElement {
   const onRetryConnection = useStableCallback(props.onRetryConnection)
   const onOpenSettings = useStableCallback(props.onOpenSettings)
@@ -215,8 +251,6 @@ function MessageTimelineComponent({
   const {
     workspaceRoot,
     chooseWorkspace,
-    remoteChannels,
-    activeRemoteChannel,
     activeAgentRuntime,
     busy,
     currentTurnUserId,
@@ -247,7 +281,8 @@ function MessageTimelineComponent({
   const stableOnOpenImageArtifactInVisualReview = onOpenImageArtifactInVisualReview
   const stableOnContinueScientificObject = useStableOptionalCallback(onSelectSuggestion)
 
-  const remoteChannelMode = Boolean(activeThread && isRemoteChannelThread(activeThread, remoteChannels))
+  const timelineRuntimeId = activeThread?.runtimeId ?? activeAgentRuntime
+  const timelineWorkspaceRoot = activeThread?.workspace?.trim() || workspaceRoot
   const hasContent = blocks.length > 0 || live || liveReasoning
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -301,8 +336,7 @@ function MessageTimelineComponent({
     busy: effectiveBusy,
     live: Boolean(live.trim()),
     reasoning: Boolean(liveReasoning.trim()),
-    runtimeConnection,
-    remoteChannelMode
+    runtimeConnection
   })), [
     activeThreadId,
     blocks.length,
@@ -311,7 +345,6 @@ function MessageTimelineComponent({
     live,
     liveReasoning,
     pendingRuntimeTurnCount,
-    remoteChannelMode,
     runtimeConnection,
     turns.length,
     visibleTurnCount
@@ -338,12 +371,10 @@ function MessageTimelineComponent({
       <div className="ds-message-timeline-content ds-chat-column-inset mx-auto flex w-full min-w-0 max-w-4xl flex-col gap-8 pb-10 pt-8">
         {!hasContent || !activeThreadId ? (
           <MessageTimelineEmptyHero
-            remoteChannelMode={remoteChannelMode}
             ready={runtimeConnection === 'ready'}
             hasWorkspace={!!workspaceRoot}
             runtimeError={runtimeError}
             runtimeId={activeAgentRuntime}
-            activeRemoteChannel={activeRemoteChannel}
             onPickWorkspace={() => void chooseWorkspace()}
             onRetry={onRetryConnection}
             onOpenSettings={onOpenSettings}
@@ -399,6 +430,23 @@ function MessageTimelineComponent({
           const turnPending = turnHasPendingRuntimeWork(turn)
           const isLatestTurn = index === visibleTurns.length - 1
           const hasLiveStream = isLatestTurn && !!(liveReasoning.trim() || live.trim())
+          const turnId = canonicalTurnId(turn)
+          const threadScopedStatus = (
+            isLatestTurn &&
+            turnId &&
+            (!activeThread?.latestTurnId || activeThread.latestTurnId === turnId)
+              ? activeThread?.latestTurnStatus
+              : undefined
+          )
+          const terminalStatus = threadScopedStatus ?? turn.user?.turnStatus
+          const isProcessing = (effectiveBusy && isLatestTurn) || turnPending || hasLiveStream
+          const turnLifecycle = chatResultTurnLifecycle({
+            turnId,
+            isProcessing,
+            isLatest: isLatestTurn,
+            terminalStatus,
+            threadRevision: isLatestTurn ? activeThread?.updatedAt : turn.user?.createdAt
+          })
           const showForkPoint =
             forkBoundaryTurnCount !== undefined && absoluteTurnIndex === forkBoundaryTurnCount
           return (
@@ -407,8 +455,13 @@ function MessageTimelineComponent({
               <MemoMessageTurn
                 turn={turn}
                 sessionId={activeThreadId ?? undefined}
-                isProcessing={(effectiveBusy && isLatestTurn) || turnPending || hasLiveStream}
-                terminalStatus={turn.user?.turnStatus}
+                workspaceRoot={timelineWorkspaceRoot}
+                runtimeId={timelineRuntimeId}
+                threadId={activeThreadId ?? undefined}
+                turnId={turnId}
+                turnLifecycle={turnLifecycle}
+                isProcessing={isProcessing}
+                terminalStatus={terminalStatus}
                 liveReasoning={isLatestTurn ? liveReasoning : ''}
                 liveReasoningMeta={isLatestTurn ? liveReasoningMeta : null}
                 live={isLatestTurn ? live : ''}
@@ -450,6 +503,9 @@ function MessageTimelineComponent({
           <MemoMessageTurn
             turn={{ blocks: [] }}
             sessionId={activeThreadId ?? undefined}
+            workspaceRoot={timelineWorkspaceRoot}
+            runtimeId={timelineRuntimeId}
+            threadId={activeThreadId ?? undefined}
             isProcessing={effectiveBusy}
             liveReasoning={liveReasoning}
             liveReasoningMeta={liveReasoningMeta}
@@ -481,6 +537,11 @@ const MemoMessageTimelineComponent = memo(MessageTimelineComponent)
 function MessageTurn({
   turn,
   sessionId,
+  workspaceRoot,
+  runtimeId,
+  threadId,
+  turnId,
+  turnLifecycle,
   isProcessing,
   terminalStatus,
   liveReasoning,
@@ -498,6 +559,11 @@ function MessageTurn({
 }: {
   turn: Turn
   sessionId?: string
+  workspaceRoot: string
+  runtimeId?: string
+  threadId?: string
+  turnId?: string
+  turnLifecycle?: DomainRendererChatResultPanelRenderContext['turnLifecycle']
   isProcessing: boolean
   terminalStatus?: string
   liveReasoning: string
@@ -514,7 +580,6 @@ function MessageTurn({
   viewportRef: RefObject<HTMLDivElement | null>
 }): ReactElement {
   const { t } = useTranslation('common')
-  const workspaceRoot = useChatStore((s) => s.workspaceRoot)
   // Inline Review Plan card: surfaced under a turn that produced a
   // successful `create_plan` result so the user can open/build the plan
   // without leaving the conversation.
@@ -663,6 +728,10 @@ function MessageTurn({
             blocks: isProcessing ? [] : turn.blocks,
             workspaceRoot,
             sessionId,
+            runtimeId,
+            threadId,
+            turnId,
+            turnLifecycle,
             onContinuePrompt: onContinueScientificObject
           })}
         </Fragment>
@@ -713,6 +782,12 @@ function LiveTurnProgressRow(): ReactElement {
 const MemoMessageTurn = memo(MessageTurn, (prev, next) => (
   sameTurnContent(prev.turn, next.turn) &&
   prev.sessionId === next.sessionId &&
+  prev.workspaceRoot === next.workspaceRoot &&
+  prev.runtimeId === next.runtimeId &&
+  prev.threadId === next.threadId &&
+  prev.turnId === next.turnId &&
+  prev.turnLifecycle?.revision === next.turnLifecycle?.revision &&
+  prev.turnLifecycle?.isLatest === next.turnLifecycle?.isLatest &&
   prev.isProcessing === next.isProcessing &&
   prev.terminalStatus === next.terminalStatus &&
   prev.liveReasoning === next.liveReasoning &&

@@ -1,5 +1,4 @@
 import type { NormalizedThread } from '../agent/types'
-import { isRemoteChannelManagedBy } from '../agent/types'
 import { getProvider } from '../agent/registry'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import i18n from '../i18n'
@@ -25,10 +24,8 @@ import {
 } from '../lib/thread-fork-registry'
 import { workspaceLabelFromPath } from '../lib/workspace-label'
 import { isInternalTemporaryWorkspace, normalizeWorkspaceRoot } from '../lib/workspace-path'
-import { onRemoteChannelActivityApi } from '../lib/remote-channel-api'
 import { disposeSessionRightPanelWorkspace } from '../lib/session-right-panel-lifecycle'
 import {
-  buildRemoteChannelRuntimePrompt,
   getActiveAgentApiKey,
   getActiveAgentRuntime,
   getModelAccessSettings,
@@ -36,13 +33,11 @@ import {
 } from '@shared/app-settings'
 import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
 import {
-  activeRemoteChannel,
   compactCodeWorkspaceRoots,
   filterHiddenCodeWorkspaceRoots,
   forgetCodeWorkspaceRoot,
   hideCodeWorkspaceRoot,
   hydrateBlockModelLabels,
-  isRemoteChannelThread,
   optimisticUserModelLabel,
   readCodeWorkspaceRoots,
   readHiddenCodeWorkspaceRoots,
@@ -87,7 +82,6 @@ import {
   forkedTurnCount,
   isCodeThread,
   latestThread,
-  rememberPendingRemoteChannelMirror,
   runtimeErrorDetail,
   runtimeStreamRecoveringMessage,
   shouldOpenSettingsForError,
@@ -104,7 +98,6 @@ type StoreActionContext = {
 }
 
 let bootPromise: Promise<void> | null = null
-let remoteChannelActivityUnsubscribe: (() => void) | null = null
 let refreshThreadsRequestSeq = 0
 const DEFAULT_THREAD_LIST_LIMIT = 80
 const EXPANDED_THREAD_LIST_LIMIT = 200
@@ -128,7 +121,7 @@ function stateHasRecoverableActiveTurn(state: ChatState): boolean {
 
 function titleFromLocalUserBlocks(blocks: ChatState['blocks']): string | null {
   for (const block of blocks) {
-    if (block.kind !== 'user' || isRemoteChannelManagedBy(block.managedBy)) continue
+    if (block.kind !== 'user') continue
     const text = block.meta?.displayText?.trim() || block.text.trim()
     if (!text) continue
     const title = deriveThreadTitleFromPrompt(text)
@@ -179,58 +172,6 @@ function threadIsAuxiliarySidebarEntry(
     shouldHideThreadFromSidebarByDefault(thread)
 }
 
-export async function syncRemoteChannelActivityToStore(
-  set: ChatStoreSet,
-  get: ChatStoreGet,
-  payload: { channelId: string; threadId: string; runtimeId?: AgentRuntimeId; previousThreadId?: string }
-): Promise<void> {
-  const threadId = payload.threadId.trim()
-  if (!threadId) return
-  const state = get()
-  const previousThreadId = payload.previousThreadId?.trim() ?? ''
-  const settings = await rendererRuntimeClient.getSettings({ forceRefresh: true })
-  const channels = settings.remoteChannel.channels
-  const activityChannel = channels.find((channel) => channel.id === payload.channelId && channel.enabled)
-  const activeChannelId = channels.some(
-    (channel) => channel.id === state.activeRemoteChannelId && channel.enabled
-  )
-    ? state.activeRemoteChannelId
-    : channels.find((channel) => channel.enabled)?.id ?? ''
-  const nextActiveChannelId = state.connectPhonePanelOpen && activityChannel ? payload.channelId : activeChannelId
-  set({ remoteChannels: channels, activeRemoteChannelId: nextActiveChannelId })
-
-  const provider = getProvider()
-  provider.rememberThreadRuntime?.(threadId, payload.runtimeId)
-
-  if (state.connectPhonePanelOpen && activityChannel) {
-    if (state.activeThreadId === threadId) {
-      await get().recoverActiveTurn()
-    } else {
-      await get().selectRemoteChannelConversation(payload.channelId, threadId)
-    }
-    return
-  }
-
-  if (state.activeThreadId === threadId) {
-    await get().recoverActiveTurn()
-    await get().refreshThreads()
-    return
-  }
-
-  if (previousThreadId && previousThreadId === state.activeThreadId && previousThreadId !== threadId) {
-    await get().selectThread(threadId)
-    return
-  }
-
-  set((snapshot) => ({
-    watchTurnCompletion: { ...snapshot.watchTurnCompletion, [threadId]: true },
-    unreadThreadIds: { ...snapshot.unreadThreadIds, [threadId]: true }
-  }))
-  watchTurnCompletionNotification(threadId)
-  syncTurnCompletionPoll(set, get)
-  await get().refreshThreads()
-}
-
 export function createNavigationActions(
   { set, get, sseAbortRef }: StoreActionContext
 ): Pick<ChatState, 'openCode' | 'probeRuntime' | 'boot' | 'chooseWorkspace' | 'clearWorkspace' | 'deleteWorkspace' | 'refreshThreads' | 'setThreadSearch' | 'setShowArchivedThreads'> {
@@ -240,21 +181,21 @@ export function createNavigationActions(
     const activeThread = state.activeThreadId
       ? state.threads.find((thread) => thread.id === state.activeThreadId) ?? null
       : null
-    if (activeThread && isCodeThread(activeThread, state.remoteChannels)) {
-      set({ route: 'chat', remoteGuardChannelId: null })
+    if (activeThread && isCodeThread(activeThread)) {
+      set({ route: 'chat' })
       if (stateHasRecoverableActiveTurn(state)) {
         await get().recoverActiveTurn()
       }
       return
     }
 
-    const codeThreads = state.threads.filter((thread) => isCodeThread(thread, state.remoteChannels))
+    const codeThreads = state.threads.filter((thread) => isCodeThread(thread))
     const selectedWorkspace = normalizeWorkspaceRoot(state.workspaceRoot)
     const target =
       latestThread(codeThreads.filter((thread) => threadBelongsToWorkspace(thread, selectedWorkspace))) ??
       latestThread(codeThreads)
 
-    set({ route: 'chat', remoteGuardChannelId: null })
+    set({ route: 'chat' })
     if (target && state.runtimeConnection === 'ready') {
       await get().selectThread(target.id)
       return
@@ -271,7 +212,6 @@ export function createNavigationActions(
     set({
       ...clearedThreadSelection(),
       route: 'chat',
-      remoteGuardChannelId: null,
       watchTurnCompletion: nextWatch
     })
     syncTurnCompletionPoll(set, get)
@@ -406,23 +346,8 @@ export function createNavigationActions(
         applyTheme(settings.theme)
         applyUiFontScale(settings.uiFontScale)
         await get().applyI18nFromSettings(settings.locale)
-        const onRemoteChannelActivity = onRemoteChannelActivityApi(window.sciforge)
-        if (!remoteChannelActivityUnsubscribe && typeof onRemoteChannelActivity === 'function') {
-          remoteChannelActivityUnsubscribe = onRemoteChannelActivity(({
-            channelId,
-            threadId,
-            runtimeId,
-            previousThreadId
-          }) => {
-            void (async () => {
-              if (typeof window.sciforge === 'undefined') return
-              await syncRemoteChannelActivityToStore(set, get, { channelId, threadId, runtimeId, previousThreadId })
-            })()
-          })
-        }
         set({
           route: 'chat',
-          remoteGuardChannelId: null,
           initialSetupOpen: needsInitialSetup,
           initialSetupMode: 'required',
           workspaceRoot,
@@ -431,8 +356,6 @@ export function createNavigationActions(
           workspaceLabel: workspaceLabelFromPath(workspaceRoot),
           activeAgentRuntime: getActiveAgentRuntime(settings),
           modelAccessMode: modelAccess?.mode ?? null,
-          remoteChannels: settings.remoteChannel.channels,
-          activeRemoteChannelId: settings.remoteChannel.channels.find((channel) => channel.enabled)?.id ?? '',
           runtimeConnection: needsInitialSetup ? 'idle' : get().runtimeConnection,
           error: needsInitialSetup ? null : get().error,
           runtimeErrorDetail: needsInitialSetup ? null : get().runtimeErrorDetail
@@ -529,7 +452,7 @@ export function createNavigationActions(
         // If we successfully moved the active thread, stay on it.
         if (movedActiveThread) return workspaceRoot
         const workspaceThreads = get().threads
-          .filter((thread) => isCodeThread(thread, get().remoteChannels))
+          .filter((thread) => isCodeThread(thread))
           .filter((thread) => threadBelongsToWorkspace(thread, workspaceRoot))
           .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
 
@@ -556,7 +479,6 @@ export function createNavigationActions(
               set({
                 ...clearedThreadSelection(),
                 route: 'chat',
-                remoteGuardChannelId: null,
                 watchTurnCompletion: nextWatch
               })
               syncTurnCompletionPoll(set, get)
@@ -675,7 +597,7 @@ export function createNavigationActions(
         get().codeWorkspaceRoots,
         filterHiddenCodeWorkspaceRoots(
           threads
-            .filter((thread) => isCodeThread(thread, get().remoteChannels))
+            .filter((thread) => isCodeThread(thread))
             .map((thread) => thread.workspace),
           hiddenCodeWorkspaceRoots
         )
@@ -745,10 +667,6 @@ export function createNavigationActions(
         const activeThread = activeThreadId
           ? displayThreads.find((thread) => thread.id === activeThreadId) ?? null
           : null
-        const activeThreadIsManagedInCodeRoute =
-          get().route === 'chat' &&
-          activeThread != null &&
-          isRemoteChannelThread(activeThread, get().remoteChannels)
         const activeThreadHasLocalConversation =
           activeId != null &&
           (
@@ -805,7 +723,7 @@ export function createNavigationActions(
             codeWorkspaceRoots: filterHiddenCodeWorkspaceRoots(
               compactCodeWorkspaceRoots([
                 ...displayThreads
-                  .filter((thread) => isCodeThread(thread, s.remoteChannels))
+                  .filter((thread) => isCodeThread(thread))
                   .map((thread) => thread.workspace),
                 ...codeWorkspaceRoots
               ]),
@@ -821,9 +739,6 @@ export function createNavigationActions(
           armBusyWatchdog(set, get)
         }
         syncRuntimeThreadRefreshPoll(get)
-        if (activeThreadIsManagedInCodeRoute) {
-          await get().openCode()
-        }
       }
 
       const filteredThreads = filterThreadsForSidebar(threads, {

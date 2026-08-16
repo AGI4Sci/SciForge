@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-visual-review",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -23,8 +23,8 @@
   },
   "dependencies": {
     "@napi-rs/canvas": "^0.1.100",
-    "@sciforge/domain-artifact-versions": "^0.1.0",
-    "@sciforge/domain-sdk": "^0.1.0",
+    "@sciforge/domain-artifact-versions": "^1.1.0",
+    "@sciforge/domain-sdk": "^0.2.0",
     "@sciforge/scientific-plotting": "^0.1.0",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",

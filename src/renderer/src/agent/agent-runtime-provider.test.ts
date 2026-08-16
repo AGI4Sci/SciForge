@@ -1,12 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  defaultConnectPhoneSettings,
-  defaultRemoteChannelSettings,
   defaultCodexRuntimeSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
+  defaultSkillsSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
   type AgentRuntimeId,
@@ -39,8 +38,7 @@ function settings(activeAgentRuntime: AgentRuntimeId): AppSettingsV1 {
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),
     write: defaultWriteSettings(),
-    remoteChannel: defaultRemoteChannelSettings(),
-    connectPhone: defaultConnectPhoneSettings(),
+    skills: defaultSkillsSettings(),
     schedule: defaultScheduleSettings(),
     workflow: defaultWorkflowSettings(),
     guiUpdate: { channel: 'stable' },
@@ -863,6 +861,7 @@ describe('AgentRuntimeProvider', () => {
               items: [
                 {
                   id: 'user-1',
+                  turnId: 'turn-1',
                   kind: 'user_message',
                   text: 'hello',
                   createdAt: '2026-06-11T00:00:01.000Z'
@@ -904,7 +903,12 @@ describe('AgentRuntimeProvider', () => {
     const detail = await provider.getRecentThreadView('thread-completed-tool')
 
     expect(detail.blocks).toEqual([
-      expect.objectContaining({ kind: 'user', id: 'user-1', turnStatus: 'completed' }),
+      expect.objectContaining({
+        kind: 'user',
+        id: 'user-1',
+        turnId: 'turn-1',
+        turnStatus: 'completed'
+      }),
       expect.objectContaining({ kind: 'tool', id: 'tool-result-1', status: 'success' }),
       expect.objectContaining({ kind: 'assistant', id: 'assistant-1', text: 'done' })
     ])

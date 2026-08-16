@@ -6,17 +6,15 @@ import {
   type ScheduledTaskV1
 } from './app-settings-types'
 import {
-  normalizeAgentThreadIds,
-  normalizeSettingsRuntimeId
-} from './app-settings-prompts'
-import {
   compactStrings,
+  normalizeAgentThreadIds,
   normalizeAtTime,
   normalizeBoolean,
   normalizePositiveInteger,
   normalizeRunMode,
   normalizeScheduleKind,
   normalizeScheduleReasoningEffort,
+  normalizeSettingsRuntimeId,
   normalizeStatus,
   normalizeTimeOfDay
 } from './app-settings-normalizers'

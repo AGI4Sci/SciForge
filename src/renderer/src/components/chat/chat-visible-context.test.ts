@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildMessageTimelineVisibleContextComponent,
+  canonicalTurnId,
   messageTimelineVisibleContextComponentId
 } from './MessageTimeline'
 import {
@@ -9,6 +10,13 @@ import {
 } from './FloatingComposer'
 
 describe('chat visible context', () => {
+  it('keeps the exact runtime turn identity available to timeline contributions', () => {
+    expect(canonicalTurnId({
+      user: { kind: 'user', id: 'user-1', turnId: 'turn-1', text: 'hello' },
+      blocks: []
+    })).toBe('turn-1')
+  })
+
   it('publishes bounded timeline semantics without message or reasoning text', () => {
     const component = buildMessageTimelineVisibleContextComponent({
       activeThreadId: 'thread-1',
@@ -21,7 +29,6 @@ describe('chat visible context', () => {
       live: true,
       reasoning: true,
       runtimeConnection: 'ready',
-      remoteChannelMode: false,
       updatedAt: '2026-07-19T00:00:00.000Z'
     })
 
@@ -37,7 +44,6 @@ describe('chat visible context', () => {
       live: true,
       reasoning: true,
       runtimeConnection: 'ready',
-      remoteChannelMode: false,
       hasContent: true
     })
     expect(JSON.stringify(component)).not.toContain('messageText')

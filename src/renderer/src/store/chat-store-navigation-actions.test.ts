@@ -27,7 +27,7 @@ vi.mock('../agent/runtime-client', () => ({
 }))
 vi.mock('../lib/session-right-panel-lifecycle', () => lifecycleMock)
 
-import { createNavigationActions, syncRemoteChannelActivityToStore } from './chat-store-navigation-actions'
+import { createNavigationActions } from './chat-store-navigation-actions'
 
 function thread(id: string, runtimeId?: AgentRuntimeId): NormalizedThread {
   return {
@@ -104,7 +104,6 @@ function buildHarness(options: {
     activeThreadId: options.activeThread.id,
     blocks: options.blocks ?? [],
     busy: false,
-    remoteChannels: [],
     codeWorkspaceRoots: [],
     error: null,
     route: 'chat',
@@ -531,14 +530,11 @@ describe('chat-store-navigation-actions chooseWorkspace', () => {
     runtimeClientMock.setSettings.mockImplementation(async (patch: { workspaceRoot?: string }) => ({
       activeAgentRuntime: 'codex',
       workspaceRoot: patch.workspaceRoot ?? '/workspace/new',
-      remoteChannel: { channels: [] }
     }))
     const state = {
       activeThreadId: 'old-thread',
-      remoteGuardChannelId: null,
       blocks: [],
       busy: false,
-      remoteChannels: [],
       codeWorkspaceRoots: ['/workspace/old'],
       hiddenCodeWorkspaceRoots: [],
       error: null,
@@ -666,7 +662,6 @@ describe('chat-store-navigation-actions boot', () => {
       modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' },
       modelRouter: { runtimeApiKey: 'runtime-key' },
       agents: {},
-      remoteChannel: { channels: [] }
     } as unknown as AppSettingsV1
     runtimeClientMock.getSettings.mockResolvedValue(settings)
     let state: ChatState
@@ -708,7 +703,6 @@ describe('chat-store-navigation-actions boot', () => {
       workspaceRoot: '/workspace/sciforge',
       modelRouter: { runtimeApiKey: 'legacy-runtime-key' },
       agents: {},
-      remoteChannel: { channels: [] }
     } as unknown as AppSettingsV1
     runtimeClientMock.getSettings.mockResolvedValue(settings)
     let state: ChatState
@@ -991,7 +985,6 @@ describe('chat-store-navigation-actions deleteWorkspace', () => {
       activeThreadId: 'other-thread',
       blocks: [],
       busy: false,
-      remoteChannels: [],
       codeWorkspaceRoots: ['/workspace/sciforge', '/workspace/other'],
       hiddenCodeWorkspaceRoots: [],
       error: 'previous error',
@@ -1031,132 +1024,5 @@ describe('chat-store-navigation-actions deleteWorkspace', () => {
     expect(state.watchTurnCompletion).toEqual({})
     expect(state.error).toBeNull()
     expect(state.refreshThreads).toHaveBeenCalledTimes(1)
-  })
-})
-
-describe('remote-channel activity sync', () => {
-  beforeEach(() => {
-    registryMock.getProvider.mockReset()
-    runtimeClientMock.getSettings.mockReset()
-  })
-
-  function buildActivityHarness(options?: Partial<ChatState>): {
-    state: ChatState
-    provider: { rememberThreadRuntime: ReturnType<typeof vi.fn> }
-  } {
-    const provider = {
-      rememberThreadRuntime: vi.fn()
-    }
-    registryMock.getProvider.mockReturnValue(provider)
-    runtimeClientMock.getSettings.mockResolvedValue({
-      remoteChannel: {
-        channels: [{
-          id: 'channel-1',
-          enabled: true,
-          provider: 'weixin',
-          label: 'WeChat',
-          threadId: '',
-          conversations: []
-        }]
-      }
-    })
-    const state = {
-      activeRemoteChannelId: '',
-      activeThreadId: 'desktop-thread',
-      connectPhonePanelOpen: false,
-      remoteChannels: [],
-      recoverActiveTurn: vi.fn(async () => true),
-      refreshThreads: vi.fn(async () => undefined),
-      route: 'chat',
-      selectRemoteChannelConversation: vi.fn(async () => undefined),
-      selectThread: vi.fn(async (threadId: string) => {
-        state.activeThreadId = threadId
-      }),
-      unreadThreadIds: {},
-      watchTurnCompletion: {},
-      ...options
-    } as unknown as ChatState
-    return { state, provider }
-  }
-
-  it('recovers the current desktop thread when phone activity targets it outside IM route', async () => {
-    const { state, provider } = buildActivityHarness()
-    const set: ChatStoreSet = (partial) => {
-      const update = typeof partial === 'function' ? partial(state) : partial
-      Object.assign(state, update)
-    }
-
-    await syncRemoteChannelActivityToStore(set, () => state, {
-      channelId: 'channel-1',
-      threadId: 'desktop-thread',
-      runtimeId: 'codex'
-    })
-
-    expect(provider.rememberThreadRuntime).toHaveBeenCalledWith('desktop-thread', 'codex')
-    expect(state.recoverActiveTurn).toHaveBeenCalledTimes(1)
-    expect(state.refreshThreads).toHaveBeenCalledTimes(1)
-    expect(state.selectRemoteChannelConversation).not.toHaveBeenCalled()
-    expect(state.activeRemoteChannelId).toBe('channel-1')
-  })
-
-  it('marks a different phone-updated thread unread without switching the desktop selection', async () => {
-    const { state } = buildActivityHarness()
-    const set: ChatStoreSet = (partial) => {
-      const update = typeof partial === 'function' ? partial(state) : partial
-      Object.assign(state, update)
-    }
-
-    await syncRemoteChannelActivityToStore(set, () => state, {
-      channelId: 'channel-1',
-      threadId: 'remote-thread',
-      runtimeId: 'codex'
-    })
-
-    expect(state.activeThreadId).toBe('desktop-thread')
-    expect(state.recoverActiveTurn).not.toHaveBeenCalled()
-    expect(state.selectRemoteChannelConversation).not.toHaveBeenCalled()
-    expect(state.refreshThreads).toHaveBeenCalledTimes(1)
-    expect(state.unreadThreadIds['remote-thread']).toBe(true)
-    expect(state.watchTurnCompletion['remote-thread']).toBe(true)
-  })
-
-  it('follows phone activity while the Connect phone panel is open', async () => {
-    const { state } = buildActivityHarness({ connectPhonePanelOpen: true })
-    const set: ChatStoreSet = (partial) => {
-      const update = typeof partial === 'function' ? partial(state) : partial
-      Object.assign(state, update)
-    }
-
-    await syncRemoteChannelActivityToStore(set, () => state, {
-      channelId: 'channel-1',
-      threadId: 'remote-thread',
-      runtimeId: 'codex'
-    })
-
-    expect(state.activeRemoteChannelId).toBe('channel-1')
-    expect(state.selectRemoteChannelConversation).toHaveBeenCalledWith('channel-1', 'remote-thread')
-    expect(state.refreshThreads).not.toHaveBeenCalled()
-    expect(state.unreadThreadIds['remote-thread']).toBeUndefined()
-  })
-
-  it('follows a replacement thread when phone activity replaces the current desktop thread', async () => {
-    const { state } = buildActivityHarness()
-    const set: ChatStoreSet = (partial) => {
-      const update = typeof partial === 'function' ? partial(state) : partial
-      Object.assign(state, update)
-    }
-
-    await syncRemoteChannelActivityToStore(set, () => state, {
-      channelId: 'channel-1',
-      threadId: 'replacement-thread',
-      previousThreadId: 'desktop-thread',
-      runtimeId: 'codex'
-    })
-
-    expect(state.selectThread).toHaveBeenCalledWith('replacement-thread')
-    expect(state.activeThreadId).toBe('replacement-thread')
-    expect(state.recoverActiveTurn).not.toHaveBeenCalled()
-    expect(state.refreshThreads).not.toHaveBeenCalled()
-    expect(state.unreadThreadIds['replacement-thread']).toBeUndefined()
   })
 })

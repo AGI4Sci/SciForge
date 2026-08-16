@@ -46,10 +46,6 @@ import type { AgentRuntimeContextState } from '@shared/agent-runtime-contract'
 import type { VisibleContextComponentSnapshot } from '@shared/visible-context'
 import type { AgentProviderCapabilities, AttachmentReference, ReviewTarget } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
-import {
-  isRemoteChannelThread as threadIsRemoteChannel,
-  remoteChannelThreadIdsFromChannels
-} from '../../store/chat-store-helpers'
 import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
 import {
   composerFileReferenceKey,
@@ -801,33 +797,16 @@ export function FloatingComposer({
   const setActiveThreadGoal = useChatStore((s) => s.setActiveThreadGoal)
   const setActiveThreadGoalStatus = useChatStore((s) => s.setActiveThreadGoalStatus)
   const clearActiveThreadGoal = useChatStore((s) => s.clearActiveThreadGoal)
-  const remoteChannels = useChatStore((s) => s.remoteChannels)
-  const activeRemoteChannelId = useChatStore((s) => s.activeRemoteChannelId)
   const compact = variant === 'compact'
   const activeThreadId = threadIdOverride === undefined ? storeActiveThreadId : threadIdOverride
   const activeThreadGoal = disableThreadManagementCommands ? null : storeActiveThreadGoal
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const activeRemoteChannel = useMemo(
-    () => remoteChannels.find((channel) => channel.id === activeRemoteChannelId) ?? null,
-    [activeRemoteChannelId, remoteChannels]
-  )
   const activeThreadWorkspace = activeThreadId
     ? threads.find((thread) => thread.id === activeThreadId)?.workspace
     : ''
   const activeThread = activeThreadId
     ? threads.find((thread) => thread.id === activeThreadId) ?? null
     : null
-  const remoteChannelThreadIds = useMemo(
-    () => remoteChannelThreadIdsFromChannels(remoteChannels),
-    [remoteChannels]
-  )
-  const isActiveRemoteChannelThread = Boolean(
-    activeThreadId &&
-    (
-      remoteChannelThreadIds.has(activeThreadId) ||
-      (activeThread && threadIsRemoteChannel(activeThread, remoteChannels))
-    )
-  )
   const activeThreadArchived = activeThread?.archived === true
   const showThreadUsageFooter = !compact && route === 'chat' && Boolean(activeThreadId) && runtimeReady
   const threadUsageState = useThreadUsageState(
@@ -841,26 +820,8 @@ export function FloatingComposer({
     ? workspaceRootOverride || activeThreadWorkspace
     : activeThreadWorkspace || workspaceRootOverride
   const effectiveWorkspaceRoot = normalizeWorkspaceRoot(preferredWorkspaceRoot || workspaceRoot)
-  const remoteChannelAgentName =
-    activeRemoteChannel?.agentProfile.name.trim()
-    || activeRemoteChannel?.label.trim()
-    || t('remoteChannelEmptyHeroFallbackName')
-  const remoteChannelHasInboundConversation = Boolean(
-    activeThreadId ||
-    Object.values(activeRemoteChannel?.agentThreadIds ?? {}).some((threadId) => threadId.trim()) ||
-    activeRemoteChannel?.conversations.some((conversation) =>
-      Object.values(conversation.agentThreadIds ?? {}).some((threadId) => threadId.trim())
-    ) ||
-    activeRemoteChannel?.conversations.length ||
-    activeRemoteChannel?.remoteSession?.chatId?.trim()
-  )
-
-  const canEditComposer = isActiveRemoteChannelThread ? remoteChannelHasInboundConversation : true
-  const canCompose = runtimeReady && (
-    isActiveRemoteChannelThread
-      ? remoteChannelHasInboundConversation
-      : (hasActiveThread || !!effectiveWorkspaceRoot)
-  )
+  const canEditComposer = true
+  const canCompose = runtimeReady && (hasActiveThread || !!effectiveWorkspaceRoot)
   const canChangeModel = canCompose && !busy
   const draftNonEmpty = input.trim().length > 0
   const canSend = canCompose && (
@@ -916,7 +877,7 @@ export function FloatingComposer({
   const canPickAttachment = canOpenAttachmentPicker && attachmentUploadEnabled
   const imageGenerationSettings = useImageGenerationComposerSettings()
   const imageGenerationConfigured = isImageGenerationConfigured(imageGenerationSettings)
-  const showImageGenerationMenuItem = !compact && route === 'chat' && !isActiveRemoteChannelThread
+  const showImageGenerationMenuItem = !compact && route === 'chat'
   const canCreateImageRequest = showImageGenerationMenuItem && canCompose
   const runtimeSupportsCompact = runtimeCapabilities?.compact !== false
   const runtimeSupportsFork = runtimeCapabilities?.fork !== false
@@ -934,8 +895,8 @@ export function FloatingComposer({
   const showAttachmentToolbarButton = Boolean(onPickAttachments)
   const canTogglePlanMode = canCompose && Boolean(onPlanCommand)
   const canOpenGoalPanel =
-    !disableThreadManagementCommands && canCompose && !isActiveRemoteChannelThread && runtimeSupportsGoals
-  const canRunReview = canCompose && !isActiveRemoteChannelThread && runtimeSupportsReview && Boolean(onReviewCommand)
+    !disableThreadManagementCommands && canCompose && runtimeSupportsGoals
+  const canRunReview = canCompose && runtimeSupportsReview && Boolean(onReviewCommand)
   const canOpenComposerMenu = showComposerMenuButton && (
     showImageGenerationMenuItem ||
     canOpenAttachmentPicker ||
@@ -1067,7 +1028,7 @@ export function FloatingComposer({
     ? t('runtimeActionNeedsConnection')
     : !hasActiveThread && !effectiveWorkspaceRoot
       ? t('workspaceRequiredToCreateThread')
-      : goalPanelOpen && !isActiveRemoteChannelThread
+      : goalPanelOpen
       ? t('goalComposerPlaceholder')
       : busy
         ? preferSteerWhileBusy && runtimeSupportsSteer
@@ -1075,11 +1036,7 @@ export function FloatingComposer({
           : t('composerQueuePlaceholder')
         : imageGenerationMode
           ? t('composerImageGenerationPlaceholder')
-          : isActiveRemoteChannelThread
-            ? remoteChannelHasInboundConversation
-              ? t('remoteChannelPlaceholder', { name: remoteChannelAgentName })
-              : t('remoteChannelPlaceholderNeedsInbound')
-            : mode === 'plan'
+          : mode === 'plan'
               ? t('composerPlanPlaceholder')
               : hasActiveThread
                 ? t('placeholder')
@@ -1088,11 +1045,7 @@ export function FloatingComposer({
     ? t('composerOfflineHint')
     : !hasActiveThread && !effectiveWorkspaceRoot
       ? t('composerWorkspaceHint')
-      : isActiveRemoteChannelThread
-          ? remoteChannelHasInboundConversation
-            ? t('remoteChannelComposerHint')
-            : t('remoteChannelComposerHintNeedsInbound')
-          : t('composerSlashHint')
+      : t('composerSlashHint')
   const slashCommands = useMemo<SlashCommand[]>(() => {
     const threadActionDisabled = !runtimeReady || busy || !activeThreadId
     const steerActionDisabled = !runtimeReady || !busy || !activeThreadId || !runtimeSupportsSteer
@@ -1108,7 +1061,7 @@ export function FloatingComposer({
       })
     }
 
-    if (!isActiveRemoteChannelThread) {
+    {
       const dynamicSkillCommands = runtimeSupportsSkills
         ? skillCommands
           .filter((skill) => skill.id.trim() && skill.name.trim())
@@ -1250,7 +1203,6 @@ export function FloatingComposer({
     onBtwCommand,
     onPlanCommand,
     onReviewCommand,
-    isActiveRemoteChannelThread,
     runtimeReady,
     runtimeSupportsCompact,
     runtimeSupportsFork,
@@ -1297,8 +1249,7 @@ export function FloatingComposer({
   const parsedSteerCommand = parseSteerCommand(input)
   const goalPanelDraftObjective = getGoalPanelDraftObjective(input, goalPanelOpen)
   const canSetGoalPanelDraft =
-    !isActiveRemoteChannelThread
-    && runtimeReady
+    runtimeReady
     && canOpenGoalPanel
     && goalPanelDraftObjective.length > 0
   const primaryActionLabel = highlightedSlashCommand

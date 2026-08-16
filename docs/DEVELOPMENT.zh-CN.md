@@ -6,35 +6,35 @@
 
 ## 开发基线
 
-- `develop` 是开发协作与日常集成分支
-- `master` 是稳定发布分支，由维护者从 `develop` 合入
-- 日常功能开发和缺陷修复都应从最新 `develop` 开始
-- 对于稍大一些的改动，建议使用短期功能分支
+- `gui` 是唯一长期主分支，也是桌面、云端和手机协作集成的共同事实源
+- 日常功能开发和缺陷修复从最新 `gui` 创建短期分支
+- 桌面、云端和未来原生手机端按目录与 package 分离，不维护永久的端专用源码分支
+- 各端从同一个精确 commit 独立构建、测试、打 tag 和发布
 
 ## 推荐流程
 
 1. 先同步本地仓库。
-2. 切换到 `develop`。
-3. 拉取 `develop` 最新代码。
-4. 如有需要，从 `develop` 拉出功能分支开展开发。
+2. 切换到 `gui`。
+3. 拉取 `gui` 最新代码。
+4. 从 `gui` 拉出短期功能分支开展开发。
 5. 在本地完成实现并做好校验。
-6. 提交 PR 回到 `develop`。
+6. 提交 PR 回到 `gui`。
 7. 在通过评审和检查后合并。
 
 ## 示例命令
 
-### 同步 `develop`
+### 同步 `gui`
 
 ```bash
-git checkout develop
-git pull origin develop
+git checkout gui
+git pull --ff-only origin gui
 ```
 
-### 从 `develop` 拉功能分支
+### 从 `gui` 拉功能分支
 
 ```bash
-git checkout develop
-git pull origin develop
+git checkout gui
+git pull --ff-only origin gui
 git checkout -b feat/short-description
 ```
 
@@ -48,13 +48,13 @@ git push origin feat/short-description
 
 默认目标分支：
 
-- `develop`
+- `gui`
 
 典型流程如下：
 
-1. 在从 `develop` 拉出的短期功能分支上开发
+1. 在从 `gui` 拉出的短期功能分支上开发
 2. 将分支推送到远端
-3. 发起指向 `develop` 的 PR
+3. 发起指向 `gui` 的 PR
 4. 根据 Review 意见继续修改
 5. 在通过校验并获得认可后合并
 
@@ -75,6 +75,25 @@ npm run dev
 ```
 
 并手动验证受影响流程后再发起 PR。
+
+### 协作服务开发
+
+涉及手机 Zulip、云端协作服务、Session 投影或双向消息时，按
+[协作服务开发启动、香港 ECS 部署与运维手册](./operations/zulip-aliyun-deployment.zh-CN.md)
+使用独立开发数据库启动，并运行 collaboration 类型检查与测试。真实手机/桌面验收方法见
+[手机与多人协作使用手册](./collaboration-user-guide.zh-CN.md)。开发环境不得连接生产数据库、复用生产
+Bot 或把 provider credential 写入仓库。
+
+### 多端目录与发布边界
+
+所有端都在 `gui` 的同一 commit 上协同：`src/` 与 `packages/domains/collaboration/` 属于桌面端，
+`packages/collaboration-server/` 与 `packages/collaboration-provider-zulip/` 属于云端部署，
+`packages/collaboration-contracts/` 是两端共同协议。当前手机端使用官方 Zulip App；未来如增加原生应用，
+应在独立目录中实现，但仍从 `gui` 集成，而不是建立永久 mobile 分支。
+
+部署目标必须按产物隔离：Electron release 不打入云端 secret；ECS 只安装版本匹配的 contracts、provider
+和 server tarball；手机应用只使用公开 API。每次发布记录目标端版本、Git commit 和合同版本。修改共享
+合同后必须运行 `npm run collaboration:test`，并同时验证桌面和 packed server 路径。
 
 ## PR 质量标准
 
@@ -129,22 +148,24 @@ PR 描述建议至少包含：
 
 ## 合并建议
 
-贡献改动只有在满足以下条件后，才应该合入 `develop`：
+贡献改动只有在满足以下条件后，才应该合入 `gui`：
 
 - Review 意见已处理
 - 检查项通过
-- 改动已经达到适合进入日常集成分支的稳定程度
+- 改动已经达到适合进入唯一集成主分支的稳定程度
 
-`master` 仅用于稳定发布。维护者确认 `develop` 中的改动适合发布后，再将 `develop` 合入 `master`。
+不要用 desktop/cloud/mobile 长期分支表达发布状态；使用目标端 tag、GitHub Release 和不可变构建产物。
 
 ## 自动发布
 
-当同仓库内从 `develop` 指向 `master` 的 PR 被合并后，GitHub Actions 会自动发布稳定版本。
+稳定版本由维护者手动触发 GitHub Actions；workflow 输入的 ref 默认是 `gui`，也可填写 `gui` 历史中的
+获批完整 commit。工作流先验证来源属于 `origin/gui`，再固定其 SHA 供所有平台构建。发布完成后使用
+目标端 tag 和 release metadata 记录来源，不通过合并长期发布分支触发。
 
 发布 workflow 会：
 
-- 基于最新三段式 semver tag 自动生成下一个 `vX.Y.Z` patch tag
-- 如果 rerun 时当前 merge commit 已经有 tag，则复用该 tag
+- 校验维护者输入的三段式 semver，并生成对应 `vX.Y.Z` tag
+- 如果 rerun 时相同来源 commit 已经有目标 tag，则安全复用该 tag
 - 构建已签名并公证的 macOS arm64/x64 包、Windows x64 安装器、Linux x64 AppImage
 - 将发布产物和更新元数据上传到 GitHub Releases 与 R2 `stable` 渠道
 - 只有在全部平台上传成功后，才会 promote R2 `stable/latest`

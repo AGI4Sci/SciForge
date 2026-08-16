@@ -3,7 +3,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Archive,
-  Bot,
   ChevronDown,
   ChevronRight,
   Folder,
@@ -25,7 +24,6 @@ import { workspaceLabelFromPath } from '../../lib/workspace-label'
 import {
   isInternalSciForgeWorkspace,
   isInternalTemporaryWorkspace,
-  isRemoteChannelWorkspacePath,
   normalizeWorkspaceRoot,
   workspaceRootIdentityKey
 } from '../../lib/workspace-path'
@@ -34,11 +32,6 @@ import {
   SidebarSearchField,
   SidebarTreeRow
 } from '../sidebar/SidebarPrimitives'
-import {
-  deriveRemoteChannelThreadStatusKind,
-  type RemoteChannelThreadBinding,
-  type RemoteChannelThreadStatusKind
-} from '../../store/chat-store-helpers'
 
 type SidebarProjectsSectionProps = {
   threads: NormalizedThread[]
@@ -53,10 +46,6 @@ type SidebarProjectsSectionProps = {
   busy: boolean
   watchTurnCompletion: Record<string, boolean>
   unreadThreadIds: Record<string, boolean>
-  botWatchedThreadIds?: ReadonlySet<string>
-  botThreadBindings?: ReadonlyMap<string, RemoteChannelThreadBinding>
-  queuedThreadIds?: ReadonlySet<string>
-  activeRemoteThreadIds?: ReadonlySet<string>
   locale: string
   onPickWorkspace: () => void
   onRemoveWorkspace: (workspacePath: string) => Promise<void>
@@ -163,7 +152,6 @@ export function buildSidebarWorkspaceGroups(options: {
   for (const th of options.threads) {
     if (isInternalTemporaryWorkspace(th.workspace)) continue
     if (isInternalSciForgeWorkspace(th.workspace)) continue
-    if (isRemoteChannelWorkspacePath(th.workspace)) continue
     if ((th.archived === true) !== options.showArchived) continue
     const key = normalizeWorkspaceRoot(th.workspace)
     if (!key) continue
@@ -188,7 +176,6 @@ export function buildSidebarWorkspaceGroups(options: {
       if (isHiddenWorkspace(key)) continue
       if (isInternalTemporaryWorkspace(key)) continue
       if (isInternalSciForgeWorkspace(key)) continue
-      if (isRemoteChannelWorkspacePath(key)) continue
       upsertWorkspace(key)
     }
   }
@@ -215,10 +202,6 @@ export function SidebarProjectsSection({
   busy,
   watchTurnCompletion,
   unreadThreadIds,
-  botWatchedThreadIds = new Set<string>(),
-  botThreadBindings = new Map<string, RemoteChannelThreadBinding>(),
-  queuedThreadIds = new Set<string>(),
-  activeRemoteThreadIds = new Set<string>(),
   locale,
   onPickWorkspace,
   onRemoveWorkspace,
@@ -571,17 +554,6 @@ export function SidebarProjectsSection({
                         busy,
                         watchTurnCompletion
                       })
-                      const remoteBinding = botThreadBindings.get(thread.id)
-                      const hasRemoteState = Boolean(remoteBinding) || botWatchedThreadIds.has(thread.id)
-                      const remoteStatusKind = hasRemoteState
-                        ? deriveRemoteChannelThreadStatusKind({
-                            binding: remoteBinding,
-                            running: showRunning,
-                            queued: queuedThreadIds.has(thread.id),
-                            status: thread.status,
-                            latestTurnStatus: thread.latestTurnStatus
-                          }) ?? 'watched'
-                        : null
                       const showUnread = unreadThreadIds[thread.id] === true && activeThreadId !== thread.id
                       return (
                         <ThreadRow
@@ -592,10 +564,6 @@ export function SidebarProjectsSection({
                           locale={locale}
                           showRunning={showRunning}
                           showUnread={showUnread}
-                          remoteStatusKind={remoteStatusKind}
-                          remoteBinding={remoteBinding}
-                          remoteActive={activeRemoteThreadIds.has(thread.id)}
-                          remoteUnread={showUnread && Boolean(remoteStatusKind)}
                           onSelect={() => onSelectThread(thread.id)}
                           onContextMenu={(event) => openThreadContextMenu(event, thread)}
                           onRename={() => openRenameThreadDialog(thread)}
@@ -666,10 +634,6 @@ type ThreadRowProps = {
   locale: string
   showRunning: boolean
   showUnread: boolean
-  remoteStatusKind: RemoteChannelThreadStatusKind | null
-  remoteBinding?: RemoteChannelThreadBinding
-  remoteActive: boolean
-  remoteUnread: boolean
   onSelect: () => void
   onContextMenu: (event: ReactMouseEvent<HTMLDivElement>) => void
   onRename: () => void
@@ -685,10 +649,6 @@ function ThreadRow({
   locale,
   showRunning,
   showUnread,
-  remoteStatusKind,
-  remoteBinding,
-  remoteActive,
-  remoteUnread,
   onSelect,
   onContextMenu,
   onRename,
@@ -707,22 +667,10 @@ function ThreadRow({
       : t('sidebarThreadForked')
     : ''
   const updatedLabel = showRunning ? t('sidebarThreadRunning') : formatRelativeTime(thread.updatedAt, locale)
-  const remoteStatusLabel = remoteStatusKind ? sidebarRemoteStatusLabel(remoteStatusKind, t) : ''
-  const remoteAriaLabel = remoteStatusKind
-    ? remoteBinding?.providerLabel
-      ? t('sidebarThreadRemoteBadgeTitle', {
-          provider: remoteBinding.providerLabel,
-          status: remoteStatusLabel
-        })
-      : remoteStatusLabel
-    : ''
   const ariaLabel = [
     thread.title,
     updatedLabel,
     showUnreadDot ? t('sidebarThreadUnread') : '',
-    remoteAriaLabel,
-    remoteActive ? t('sidebarThreadRemoteActive') : '',
-    remoteUnread ? t('sidebarThreadRemoteUnread') : '',
     forkLabel
   ].filter(Boolean).join(' — ')
 
@@ -788,16 +736,6 @@ function ThreadRow({
             <GitFork className="h-2.5 w-2.5" strokeWidth={1.8} />
             {t('sidebarThreadForkBadge')}
           </span>
-        ) : null}
-        {remoteStatusKind ? (
-          <ThreadRemoteStatusBadge
-            kind={remoteStatusKind}
-            providerLabel={remoteBinding?.providerLabel}
-            detailLabel={remoteBindingDetailLabel(remoteBinding)}
-            active={remoteActive}
-            unread={remoteUnread}
-            t={t}
-          />
         ) : null}
         <span
           className={`ml-auto flex shrink-0 items-center gap-1.5 transition ${
@@ -998,91 +936,6 @@ function workspaceContextLabel(workspacePath: string, folderName: string): strin
   const parent = parts[parts.length - 2] ?? ''
   if (!parent || parent.toLowerCase() === folderName.toLowerCase()) return ''
   return parent
-}
-
-function sidebarRemoteStatusLabel(
-  kind: RemoteChannelThreadStatusKind,
-  t: (k: string, opts?: Record<string, unknown>) => string
-): string {
-  switch (kind) {
-    case 'bound':
-      return t('sidebarThreadBotBound')
-    case 'running':
-      return t('sidebarThreadBotRunning')
-    case 'queued':
-      return t('sidebarThreadBotQueued')
-    case 'error':
-      return t('sidebarThreadBotError')
-    case 'watched':
-    default:
-      return t('sidebarThreadBotWatched')
-  }
-}
-
-function remoteBindingDetailLabel(binding: RemoteChannelThreadBinding | undefined): string {
-  if (!binding) return ''
-  return [
-    binding.channelLabel,
-    binding.senderName,
-    binding.remoteThreadId || binding.chatId
-  ].filter(Boolean).join(' · ')
-}
-
-function ThreadRemoteStatusBadge({
-  kind,
-  providerLabel,
-  detailLabel,
-  active,
-  unread,
-  t
-}: {
-  kind: RemoteChannelThreadStatusKind
-  providerLabel?: string
-  detailLabel: string
-  active: boolean
-  unread: boolean
-  t: (k: string, opts?: Record<string, unknown>) => string
-}): ReactElement {
-  const statusLabel = sidebarRemoteStatusLabel(kind, t)
-  const title = providerLabel
-    ? t('sidebarThreadRemoteBadgeTitle', { provider: providerLabel, status: statusLabel })
-    : statusLabel
-  const detailTitle = detailLabel ? `${title}\n${detailLabel}` : title
-  const tone =
-    kind === 'error'
-      ? 'border-red-400/35 bg-red-500/12 text-red-700 dark:text-red-300'
-      : kind === 'running'
-        ? 'border-emerald-400/35 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300'
-        : kind === 'queued'
-          ? 'border-amber-400/35 bg-amber-500/14 text-amber-800 dark:text-amber-200'
-          : kind === 'watched'
-            ? 'border-accent/25 bg-accent/10 text-accent'
-            : 'border-ds-border-muted bg-ds-subtle text-ds-faint'
-
-  return (
-    <span className="inline-flex min-w-0 shrink-0 items-center gap-1">
-      <span
-        className={`inline-flex min-h-5 max-w-[118px] items-center gap-1 rounded-full border px-1.5 text-[10.5px] font-semibold leading-none ${tone}`}
-        title={detailTitle}
-        aria-label={title}
-      >
-        <Bot className="h-3 w-3 shrink-0" strokeWidth={1.9} />
-        <span className="truncate">{statusLabel}</span>
-      </span>
-      {active ? (
-        <span
-          className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"
-          title={t('sidebarThreadRemoteActive')}
-        />
-      ) : null}
-      {unread ? (
-        <span
-          className="h-2 w-2 shrink-0 rounded-full bg-accent"
-          title={t('sidebarThreadRemoteUnread')}
-        />
-      ) : null}
-    </span>
-  )
 }
 
 function ThreadActivityDot({

@@ -1,12 +1,19 @@
 import { z } from 'zod'
 
 import type { DomainMainAgentExecutionHost } from './agent-execution.js'
-import type { DomainPackageJsonValue } from './contract.js'
+import {
+  domainPackagePermissionIdSchema,
+  type DomainPackageJsonValue
+} from './contract.js'
 import type {
   DomainExecutionEventInput,
   DomainExecutionEventV1
 } from './reproducibility.js'
 import type { DomainMainPowerHost } from './power.js'
+import type {
+  DomainMainPackageSecretStoreHost,
+  DomainMainPackageSettingsHost
+} from './package-storage.js'
 import type { TrustedDomainProcessEntryInput } from './process-entry.js'
 import type {
   DomainCapabilityResourceHandle,
@@ -25,6 +32,7 @@ import type {
 } from './workspace-host.js'
 export * from './agent-execution.js'
 export * from './power.js'
+export * from './package-storage.js'
 export * from './renderer-contributions.js'
 export * from './visual-capture.js'
 export * from './workflow-template.js'
@@ -34,6 +42,58 @@ export const MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND =
   'main.artifact-consumer' as const
 export const MAIN_ACTION_GUARD_CONTRIBUTION_KIND = 'main.action-guard' as const
 export const MAIN_EXTENSION_CONTRIBUTION_KIND = 'main.extension' as const
+export const MAIN_SYSTEM_CAPABILITY_GRANT_CONTRIBUTION_KIND =
+  'main.system-capability-grant' as const
+
+export const domainMainSystemCapabilityGrantSchema = z.object({
+  id: domainPackagePermissionIdSchema,
+  // Trusted compile-time packages are part of the bundled Host composition.
+  // This eligibility is intentionally package-generic: any such installed
+  // package may request the provider-owned grant in its canonical manifest.
+  eligibility: z.literal('trusted-domain-runtime'),
+  description: z.string().trim().min(1).max(500)
+}).strict()
+
+export type DomainMainSystemCapabilityGrant = z.infer<
+  typeof domainMainSystemCapabilityGrantSchema
+>
+
+export function defineDomainMainSystemCapabilityGrant(
+  input: DomainMainSystemCapabilityGrant
+): DomainMainSystemCapabilityGrant {
+  return Object.freeze(domainMainSystemCapabilityGrantSchema.parse(input))
+}
+
+export function isDomainMainSystemCapabilityGrant(
+  value: unknown
+): value is DomainMainSystemCapabilityGrant {
+  return domainMainSystemCapabilityGrantSchema.safeParse(value).success
+}
+
+/**
+ * Declarative authority request for one package-owned lifecycle. Grant
+ * identifiers are provider-owned public contract values; the Host resolves
+ * the request against installed providers before issuing scoped authority and
+ * does not recognize domain-specific IDs.
+ */
+export const domainMainRuntimeLifecycleContractSchema = z.object({
+  requestedSystemCapabilityGrants: z.array(domainPackagePermissionIdSchema).max(128).default([])
+}).strict().superRefine((contract, context) => {
+  if (
+    new Set(contract.requestedSystemCapabilityGrants).size !==
+    contract.requestedSystemCapabilityGrants.length
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['requestedSystemCapabilityGrants'],
+      message: 'Requested system capability grants must be unique.'
+    })
+  }
+})
+
+export type DomainMainRuntimeLifecycleContract = z.infer<
+  typeof domainMainRuntimeLifecycleContractSchema
+>
 
 export const domainMainExtensionContractSchema = z.object({
   location: z.string().trim().min(1).max(192)
@@ -86,7 +146,31 @@ export type DomainAgentThreadTurn = Readonly<{
   id: string
   status?: string
   completedAt?: string
+  messages: readonly DomainAgentTranscriptMessage[]
   artifacts: readonly unknown[]
+}>
+
+/** Append-only user/final-assistant projection of one canonical runtime item. */
+export type DomainAgentTranscriptMessage = Readonly<{
+  itemId: string
+  turnId?: string
+  kind: 'user-message' | 'assistant-message'
+  text: string
+  occurredAt?: string
+}>
+
+export type DomainAgentTranscriptMessageEvent = DomainAgentTranscriptMessage & Readonly<{
+  runtimeId: string
+  threadId: string
+  /** Monotonic canonical runtime event sequence used for reconnect recovery. */
+  sequence: number
+}>
+
+export type DomainAgentTranscriptSubscribeInput = Readonly<{
+  runtimeId: string
+  threadId: string
+  afterSequence?: number
+  signal?: AbortSignal
 }>
 
 export type DomainAgentThreadDetail = DomainAgentThread & Readonly<{
@@ -98,6 +182,12 @@ export type DomainAgentThreadDetail = DomainAgentThread & Readonly<{
 type DomainMainTurnLifecycleEventBase = Readonly<{
   runtimeId: string
   threadId: string
+  /** Stable Host installation epoch that issued this delivery attempt. */
+  issuerEpoch: string
+  /** Monotonic Host-issued identity within issuerEpoch. */
+  deliveryAttemptOrdinal: number
+  /** Host-owned stable identity for the accepted user directive. */
+  clientDirectiveId?: string
   workspaceRoot?: string
   occurredAt: string
 }>
@@ -105,23 +195,80 @@ type DomainMainTurnLifecycleEventBase = Readonly<{
 export type DomainMainBeforeTurnEvent = DomainMainTurnLifecycleEventBase & Readonly<{
   kind: 'before-turn'
   state: 'starting'
-  turnId?: string
+  /** Stable Host-owned identity for this exact provider delivery attempt. */
+  deliveryAttemptId: string
+  /** Stable Host-owned identity for the durable pre-dispatch lease. */
+  boundaryLeaseId: string
+  clientDirectiveId: string
 }>
 
 export type DomainMainAfterTurnEvent = DomainMainTurnLifecycleEventBase & Readonly<{
   kind: 'after-turn'
-  state: 'completed' | 'failed' | 'cancelled'
-  turnId: string
-}>
+  deliveryAttemptId: string
+  boundaryLeaseId: string
+  clientDirectiveId: string
+  /** Durable audit source for terminal settlement of this delivery attempt. */
+  settlementSource?: 'runtime' | 'explicit-pending-start-release'
+}> & (
+  | Readonly<{
+      state: 'completed' | 'failed' | 'cancelled'
+      turnId: string
+    }>
+  | Readonly<{
+      state: 'rejected'
+      turnId?: never
+    }>
+)
 
 export type DomainMainTurnLifecycleEvent =
   | DomainMainBeforeTurnEvent
   | DomainMainAfterTurnEvent
 
+export type DomainMainDurableTurnBoundary = Readonly<{
+  issuerEpoch: string
+  deliveryAttemptOrdinal: number
+  boundaryLeaseId: string
+  deliveryAttemptId: string
+  runtimeId: string
+  threadId: string
+  clientDirectiveId: string
+  workspaceRoot?: string
+  phase: 'pending-start' | 'watching' | 'completed-intent' | 'terminal-settlement'
+  turnId?: string
+  terminalState?: 'completed' | 'failed' | 'cancelled' | 'rejected'
+  occurredAt: string
+}>
+
+export type DomainMainRetiredTurnBoundaryRange = Readonly<{
+  first: number
+  last: number
+}>
+
+/**
+ * Complete Host-authoritative ownership and exact anti-replay state for one
+ * issuer epoch. Missing issued ordinals are corruption, never implicit release.
+ */
+export type DomainMainDurableTurnBoundarySnapshot = Readonly<{
+  issuerEpoch: string
+  nextDeliveryAttemptOrdinal: number
+  retiredThroughOrdinal: number
+  retiredOrdinalRanges: readonly DomainMainRetiredTurnBoundaryRange[]
+  owners: readonly DomainMainDurableTurnBoundary[]
+}>
+
 export type DomainMainTurnLifecycleEventsHost = Readonly<{
   subscribe: (
     listener: (event: DomainMainTurnLifecycleEvent) => void | Promise<void>
   ) => DomainMainRuntimeDisposer
+  /** Required pre-dispatch barriers reject before the provider turn starts. */
+  subscribeRequiredBeforeTurn: (
+    listener: (event: DomainMainBeforeTurnEvent) => void | Promise<void>
+  ) => DomainMainRuntimeDisposer
+  /**
+   * Host-authoritative durable ownership used to reconcile package-local
+   * leases after activation. Absence means the Host no longer owns the lease.
+   */
+  readDurableTurnBoundarySnapshot: () => Promise<DomainMainDurableTurnBoundarySnapshot>
 }>
 
 export type DomainMainAgentThreadsHost = Readonly<{
@@ -130,6 +277,13 @@ export type DomainMainAgentThreadsHost = Readonly<{
     runtimeId: string
     threadId: string
   }>) => Promise<DomainAgentThreadDetail>
+  /**
+   * Streams accepted user messages and final assistant messages only. The Host
+   * suppresses deltas and repeated snapshots for the same canonical item.
+   */
+  subscribeMessages: (
+    input: DomainAgentTranscriptSubscribeInput
+  ) => AsyncIterable<DomainAgentTranscriptMessageEvent>
   hasActiveTurns: () => boolean
 }>
 
@@ -228,6 +382,57 @@ export type DomainMainRuntimeLifecycleContribution = Readonly<{
   ) => void | DomainMainRuntimeDisposer | Promise<void | DomainMainRuntimeDisposer>
 }>
 
+type DomainTurnFileEffectBaseV1 = Readonly<{
+  contractVersion: 1
+  path: string
+  byteLength: number
+}>
+
+export type DomainTurnFileEffectV1 =
+  | (DomainTurnFileEffectBaseV1 & Readonly<{
+      kind: 'created' | 'modified'
+      contentDigest: string
+      mediaType?: string
+      dataBase64: string
+    }>)
+  | (DomainTurnFileEffectBaseV1 & Readonly<{
+      kind: 'deleted'
+      baselineFingerprint: string
+    }>)
+
+export type DomainTurnFileEffectIssueV1 = Readonly<{
+  code: string
+  blocking: true
+  message: string
+  path?: string
+}>
+
+/** Ambient observation only; never sufficient to claim producer attribution. */
+export type DomainTurnFileEffectsV1 = Readonly<{
+  contractVersion: 1
+  capture: 'host-turn-boundary'
+  baselineDigest: string
+  baselineCapturedAt: string
+  terminalCapturedAt: string
+  effects: readonly DomainTurnFileEffectV1[]
+  issues: readonly DomainTurnFileEffectIssueV1[]
+}>
+
+/** Exact Host-authenticated apply_patch/fileChange receipt. */
+export type DomainTurnFilePatchReceiptV1 = Readonly<{
+  contractVersion: 1
+  kind: 'host-authenticated-file-patch'
+  issuer: 'sciforge.agent-runtime-host'
+  source: 'codex-app-server-file-change'
+  callId: string
+  executorSequence: number
+  path: string
+  operation: 'add' | 'update' | 'delete'
+  patchFormat: 'full-content' | 'unified-hunks'
+  patchText: string
+  patchDigest: string
+}>
+
 /** Opaque completed Agent turn delivered through the canonical artifact stream. */
 export type DomainTurnArtifactEvent = Readonly<{
   contractVersion: 1
@@ -235,10 +440,17 @@ export type DomainTurnArtifactEvent = Readonly<{
   runtimeId: string
   threadId: string
   turnId: string
+  issuerEpoch?: string
+  deliveryAttemptOrdinal?: number
+  deliveryAttemptId?: string
+  boundaryLeaseId?: string
+  clientDirectiveId?: string
   targetWatermark: string
   sequence?: number
   workspaceRoot?: string
   occurredAt: string
+  fileEffects?: DomainTurnFileEffectsV1
+  filePatchReceipts?: readonly DomainTurnFilePatchReceiptV1[]
   artifacts: readonly unknown[]
 }>
 
@@ -396,6 +608,25 @@ export type DomainWorkbenchOpenRightPanelInput = Readonly<{
   activation?: DomainWorkbenchRightPanelActivation
 }>
 
+/**
+ * Exact, domain-neutral resource identity used to request a renderer-owned
+ * presentation without naming that renderer contribution or its activation
+ * payload contract.
+ */
+export type DomainWorkbenchExactResource = Readonly<{
+  resourceKind: string
+  resourceId: string
+  integrity?: Readonly<{
+    algorithm: 'sha256'
+    expectedDigest: string
+  }>
+}>
+
+export type DomainWorkbenchOpenResourceInput = Readonly<{
+  sessionId: string
+  resource: DomainWorkbenchExactResource
+}>
+
 export type DomainWorkbenchOpenSurfaceInput = Readonly<{
   contributionId: string
   sessionId?: string
@@ -411,6 +642,7 @@ export type DomainWorkspacePreviewTarget = Readonly<{
   path: string
   sessionId: string
   workspaceRoot?: string
+  mimeType?: string
   kind?: 'file' | 'directory'
   line?: number
   column?: number
@@ -441,12 +673,25 @@ export type DomainRendererWorkspaceHost = Readonly<{
 }>
 
 export type DomainRendererWorkbenchHost = Readonly<{
+  canOpenResource?: (resourceKind: string) => boolean
+  openResource?: (input: DomainWorkbenchOpenResourceInput) => boolean
   openRightPanel: (input: DomainWorkbenchOpenRightPanelInput) => void
   openBottomPanel?: (input: DomainWorkbenchOpenSurfaceInput) => void
   toggleGlobalOverlay?: (input: DomainWorkbenchToggleGlobalOverlayInput) => void
   sendMessage?: (
     input: DomainRendererWorkbenchSendMessageInput
   ) => Promise<DomainRendererWorkbenchSendMessageResult>
+}>
+
+/**
+ * Host-owned persistence-boundary text sanitization.
+ *
+ * Domain packages must still apply their own structural redaction. This
+ * optional service additionally removes opaque secret values known only to
+ * current Host settings without exposing that secret inventory to packages.
+ */
+export type DomainMainTextSanitizerHost = Readonly<{
+  sanitizeText: (value: string) => string
 }>
 
 /**
@@ -459,11 +704,16 @@ export type DomainRendererWorkbenchHost = Readonly<{
 export type DomainMainHost = Readonly<{
   getUserDataDir: () => string
   defineCapability: (options: unknown) => unknown
+  /** Owner-scoped non-secret settings; introduced in Host API 1.2. */
+  packageSettings?: DomainMainPackageSettingsHost
+  /** Owner-scoped main-process-only secrets; introduced in Host API 1.2. */
+  packageSecrets?: DomainMainPackageSecretStoreHost
   /** Opens one absolute local path with the operating system's configured application. */
   openPath?: (path: string) => Promise<void>
   resolveWorkspaceServerArtifact?: () => Promise<WorkspaceHostArtifact>
   capabilities?: DomainMainSystemCapabilityInvoker
   visualCapture?: DomainMainVisualCaptureHost
+  textSanitizer?: DomainMainTextSanitizerHost
 }>
 
 export type DomainRendererCapabilityContract<TInput, TOutput> =

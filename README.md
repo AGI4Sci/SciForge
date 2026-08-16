@@ -157,6 +157,19 @@ npm run build
 
 完整的安装、首次配置、runtime 选择、worker 启动、科研工作流、数据位置与排障说明，请看 **[SciForge 使用 Wiki](./docs/wiki/README.md)**。
 
+### 手机与云端协作服务
+
+手机协作不是一个只存在于桌面端的隐藏后端：云端服务、共享合同、Zulip Provider、数据库迁移和生产部署模板都随本仓库公开、共同版本化并接受审查。核心源码位于：
+
+- [`packages/collaboration-server`](./packages/collaboration-server/)：Node.js 云端协作服务及 PostgreSQL 迁移；
+- [`packages/collaboration-provider-zulip`](./packages/collaboration-provider-zulip/)：可安装的 Zulip Human Endpoint Provider；
+- [`packages/collaboration-contracts`](./packages/collaboration-contracts/)：桌面、云端与 Provider 共用的严格协议；
+- [`packages/domains/collaboration`](./packages/domains/collaboration/)：SciForge 桌面端协作领域及右侧面板。
+
+仓库只维护一个长期主分支 `gui`。桌面端、云端和当前 Zulip 手机入口都从同一个精确 commit 构建和验证，不为不同端维护会漂移的长期源码分支。各端仍然独立发布：桌面端构建 Electron 安装包；ECS 只安装 contracts、Zulip Provider 与 collaboration server 的 tarball；当前手机端直接使用官方 Zulip App。未来原生手机端的入口已预留在 [`apps/mobile`](./apps/mobile/)，目前只有架构与开源复用说明，没有可安装代码。共享合同变化会同时触发桌面和云端测试。
+
+开发者从源码启动服务请看[服务端 README](./packages/collaboration-server/README.md)；生产部署、迁移、systemd、Nginx、备份和回滚请看[中文运维手册](./docs/operations/zulip-aliyun-deployment.zh-CN.md)。用户配对、分享 Session 和故障恢复步骤见[协作用户指南](./docs/collaboration-user-guide.zh-CN.md)。所有密码、API Key、私钥和 token 必须通过仓库外的 secret 文件或部署密钥管理注入，严禁提交到 Git。
+
 ## 文档
 
 | 入口 | 内容 |
@@ -164,6 +177,9 @@ npm run build
 | [使用 Wiki](./docs/wiki/README.md) | 从安装到第一个任务，以及常用场景、配置和排障 |
 | [SciForge 论文](./paper/sciforge-report.pdf) | 系统定位、架构、真实界面与 8 个端到端 Showcase |
 | [开发指南](./docs/DEVELOPMENT.zh-CN.md) | 本地开发、测试与构建 |
+| [协作服务 README](./packages/collaboration-server/README.md) | 云端服务架构、源码启动、迁移、配置、探针与测试 |
+| [协作用户指南](./docs/collaboration-user-guide.zh-CN.md) | 手机配对、Agent 注册、个人 Session、Project 与恢复 |
+| [香港 ECS 协作服务运维](./docs/operations/zulip-aliyun-deployment.zh-CN.md) | 生产部署、systemd、Nginx、备份、升级与回滚 |
 | [Runtime contract](./docs/agent-runtime-contract.md) | Codex、Claude Code 与 GUI 的统一适配边界 |
 | [Remote Workspace](./docs/remote-workspace.zh-CN.md) | VPN/SSH、远端目录、本地 UI、网络出口与科学预览 |
 | [架构说明](./DESIGN.md) | Agent runtime、GUI 与服务边界 |

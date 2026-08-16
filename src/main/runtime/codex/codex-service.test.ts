@@ -5,13 +5,12 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_MODEL_ROUTER_PROVIDER_ID,
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
-  defaultConnectPhoneSettings,
-  defaultRemoteChannelSettings,
   defaultCodexRuntimeSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
+  defaultSkillsSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
   type AppSettingsV1
@@ -71,8 +70,7 @@ function settings(): AppSettingsV1 {
     },
     keyboardShortcuts: defaultKeyboardShortcuts(),
     write: defaultWriteSettings(),
-    remoteChannel: defaultRemoteChannelSettings(),
-    connectPhone: defaultConnectPhoneSettings(),
+    skills: defaultSkillsSettings(),
     schedule: defaultScheduleSettings(),
     workflow: defaultWorkflowSettings(),
     guiUpdate: { channel: 'stable' },
@@ -1907,7 +1905,12 @@ describe('CodexRuntimeService storage fallback', () => {
     })
 
     await expect(service.readStoredEvents('codex-thread-1', 1)).resolves.toEqual([
-      { threadId: 'codex-thread-1', seq: 2, turnComplete: true }
+      expect.objectContaining({
+        threadId: 'codex-thread-1',
+        seq: 2,
+        turnComplete: true,
+        createdAt: expect.any(String)
+      })
     ])
     expect(createClient).not.toHaveBeenCalled()
   })
@@ -2484,6 +2487,63 @@ describe('CodexRuntimeService compatibility operations', () => {
         })
       }
     )
+  })
+
+  it('uses a stable Host JSON-RPC identity when legacy tool calls omit provider callId', async () => {
+    const storageRoot = await tempRoot()
+    const managedCodexHome = await tempRoot()
+    const client = controllableClient()
+    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
+    const observedCallIds: Array<string | undefined> = []
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot,
+      managedCodexHome,
+      capabilityAgentTools: {
+        tools: () => [{
+          type: 'function',
+          name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+          description: 'Invoke.',
+          inputSchema: { type: 'object', properties: {} }
+        }],
+        call: async (request) => {
+          observedCallIds.push(request.context.callId)
+          return {
+            tool: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+            value: { changed: false }
+          }
+        }
+      },
+      createClient: (options) => {
+        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
+        return client
+      }
+    })
+
+    await expect(service.startTurn({
+      threadId: 'thread-legacy-call-id',
+      text: 'invoke',
+      workspace: '/tmp/capability-workspace'
+    })).resolves.toMatchObject({ ok: true, turnId: 'turn-1' })
+
+    const invoke = (requestId: string, callId?: string) => pendingServerRequests?.onToolCallRequest?.({
+      requestId,
+      threadId: 'thread-legacy-call-id',
+      turnId: 'turn-1',
+      ...(callId ? { callId } : {}),
+      tool: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: 'op_legacy' }
+    })
+    await invoke('rpc-request-stable')
+    await invoke('rpc-request-stable')
+    await invoke('rpc-request-distinct')
+    await invoke('rpc-request-explicit', 'provider-call-id')
+
+    expect(observedCallIds[0]).toMatch(/^codex_rpc_[a-f0-9]{64}$/u)
+    expect(observedCallIds[1]).toBe(observedCallIds[0])
+    expect(observedCallIds[2]).toMatch(/^codex_rpc_[a-f0-9]{64}$/u)
+    expect(observedCallIds[2]).not.toBe(observedCallIds[0])
+    expect(observedCallIds[3]).toBe('provider-call-id')
   })
 
   it('mints completion receipts only for strict in-process native visual results', async () => {
