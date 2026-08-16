@@ -173,6 +173,70 @@ function nodeSummary(node: WorkflowNodeV1): string {
   }
 }
 
+type NodeVisual = Readonly<{
+  shell: string
+  icon: string
+}>
+
+function nodeVisual(node: WorkflowNodeV1): NodeVisual {
+  if (
+    node.type === 'manual-trigger' ||
+    node.type === 'schedule-trigger' ||
+    node.type === 'webhook-trigger'
+  ) {
+    return {
+      shell: 'rounded-full border-slate-300/80 bg-slate-50/80 dark:border-slate-600/80 dark:bg-slate-900/35',
+      icon: 'bg-slate-500/15 text-slate-700 dark:text-slate-300'
+    }
+  }
+  if (node.type === 'llm' || node.type === 'ai-agent' || node.type === 'custom') {
+    return {
+      shell: 'rounded-lg border-violet-300/80 bg-violet-50/75 dark:border-violet-700/80 dark:bg-violet-950/20',
+      icon: 'bg-violet-500/15 text-violet-700 dark:text-violet-300'
+    }
+  }
+  if (
+    node.type === 'research-search' ||
+    node.type === 'paper-download' ||
+    node.type === 'http-request' ||
+    node.type === 'resource'
+  ) {
+    return {
+      shell: 'rounded-md border-teal-300/80 bg-teal-50/75 dark:border-teal-700/80 dark:bg-teal-950/20',
+      icon: 'bg-teal-500/15 text-teal-700 dark:text-teal-300'
+    }
+  }
+  if (
+    node.type === 'condition' ||
+    node.type === 'switch' ||
+    node.type === 'filter' ||
+    node.type === 'merge' ||
+    node.type === 'loop' ||
+    node.type === 'delay'
+  ) {
+    return {
+      shell: 'rounded-md border-amber-300/80 bg-amber-50/80 dark:border-amber-700/80 dark:bg-amber-950/20',
+      icon: 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+    }
+  }
+  if (node.type === 'human-approval') {
+    return {
+      shell: 'rounded-lg border-rose-300/80 bg-rose-50/75 dark:border-rose-700/80 dark:bg-rose-950/20',
+      icon: 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
+    }
+  }
+  if (node.type === 'output') {
+    return {
+      shell: 'rounded-r-lg rounded-bl-lg border-slate-300/80 bg-slate-50/80 dark:border-slate-600/80 dark:bg-slate-900/35',
+      icon: 'bg-slate-500/15 text-slate-700 dark:text-slate-300'
+    }
+  }
+  return {
+    shell: 'rounded-lg border-cyan-300/80 bg-cyan-50/75 dark:border-cyan-700/80 dark:bg-cyan-950/20',
+    icon: 'bg-cyan-500/15 text-cyan-700 dark:text-cyan-300'
+  }
+}
+
 const TOOLBAR_BTN =
   'nodrag nopan flex h-7 w-7 items-center justify-center rounded-md text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink'
 
@@ -187,13 +251,15 @@ function WorkflowCanvasNode({ id, data, selected }: NodeProps): ReactElement {
     node.type === 'manual-trigger' || node.type === 'schedule-trigger' || node.type === 'webhook-trigger'
   const isCondition = node.type === 'condition'
   const summary = nodeSummary(node)
+  const visual = nodeVisual(node)
 
-  const ring = selected ? 'border-accent ring-2 ring-accent/30' : 'border-ds-border'
+  const ring = selected ? 'border-accent ring-2 ring-accent/30' : ''
   const disabled = node.disabled ? 'opacity-50' : ''
 
   return (
     <div
-      className={`relative w-[210px] rounded-xl border bg-ds-card px-3 py-2.5 shadow-sm ${ring} ${disabled}`}
+      className={`relative w-[260px] border px-3 py-2.5 shadow-sm transition-shadow hover:shadow-md ${visual.shell} ${ring} ${disabled}`}
+      title={t('workflowInspectNode')}
     >
       <NodeToolbar isVisible={selected} position={Position.Top} offset={8}>
         <div className="flex items-center gap-0.5 rounded-lg border border-ds-border bg-ds-card p-1 shadow-md">
@@ -232,17 +298,20 @@ function WorkflowCanvasNode({ id, data, selected }: NodeProps): ReactElement {
       {!isTrigger ? (
         <Handle type="target" position={Position.Left} id="in" />
       ) : null}
+      {!isTrigger ? <Handle type="target" position={Position.Right} id="in-right" className="!opacity-0" /> : null}
+      {!isTrigger ? <Handle type="target" position={Position.Top} id="in-top" className="!opacity-0" /> : null}
+      {!isTrigger ? <Handle type="target" position={Position.Bottom} id="in-bottom" className="!opacity-0" /> : null}
 
-      <div className="flex items-center gap-2">
-        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
+      <div className="flex items-start gap-2">
+        <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${visual.icon}`}>
           <Icon className="h-4 w-4" strokeWidth={1.9} />
         </span>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] font-semibold text-ds-ink">
+        <div className="min-w-0 flex-1 pt-0.5">
+          <div className="line-clamp-2 text-[13px] font-semibold leading-4 text-ds-ink">
             {node.name.trim() || t(`workflowNode_${node.type}`)}
           </div>
           {summary ? (
-            <div className="truncate text-[11px] text-ds-faint">{summary}</div>
+            <div className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-ds-faint">{summary}</div>
           ) : null}
         </div>
         <span className={`h-2 w-2 shrink-0 rounded-full ${statusDotClass(status)}`} />
@@ -309,7 +378,12 @@ function WorkflowCanvasNode({ id, data, selected }: NodeProps): ReactElement {
           })}
         </>
       ) : node.type === 'output' ? null : (
-        <Handle type="source" position={Position.Right} id="out" />
+        <>
+          <Handle type="source" position={Position.Right} id="out" />
+          <Handle type="source" position={Position.Left} id="out-left" className="!opacity-0" />
+          <Handle type="source" position={Position.Top} id="out-top" className="!opacity-0" />
+          <Handle type="source" position={Position.Bottom} id="out-bottom" className="!opacity-0" />
+        </>
       )}
     </div>
   )
