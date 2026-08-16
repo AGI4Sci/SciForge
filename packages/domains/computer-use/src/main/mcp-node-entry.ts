@@ -1,4 +1,4 @@
-import { runComputerUseMcpServerFromArgv } from './computer-use-mcp-server'
+import { runComputerUseMcpServerFromArgv } from './mcp-server'
 
 void runComputerUseMcpServerFromArgv(process.argv)
   .then((handled) => {

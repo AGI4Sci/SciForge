@@ -6,6 +6,8 @@ import {
   domainMainRuntimeLifecycleContractSchema,
   isDomainArtifactConsumer,
   isDomainMainActionGuard,
+  isDomainMainRuntimeMcpServerContribution,
+  isDomainMcpTrustedInvocationMetadataContribution,
   isDomainMainRuntimeLifecycleContribution,
   type DomainMainAfterTurnEvent,
   type DomainMainBeforeTurnEvent,
@@ -29,6 +31,24 @@ describe('domain host contracts', () => {
       consume: () => undefined
     }), true)
     assert.equal(isDomainArtifactConsumer(null), false)
+  })
+
+  it('validates generic managed MCP and trusted metadata contributions', () => {
+    assert.equal(isDomainMainRuntimeMcpServerContribution({
+      serverId: 'fixture', createConfig: () => null,
+      isRuntimeEnabled: () => true
+    }), true)
+    assert.equal(isDomainMainRuntimeMcpServerContribution({
+      serverId: '', createConfig: () => null
+    }), false)
+    assert.equal(isDomainMcpTrustedInvocationMetadataContribution({
+      serverId: 'fixture', tools: ['mutate'], metadataKey: 'fixture/trusted',
+      source: 'trusted-invocation'
+    }), true)
+    assert.equal(isDomainMcpTrustedInvocationMetadataContribution({
+      serverId: 'fixture', tools: ['mutate', 'mutate'], metadataKey: 'fixture/trusted',
+      source: 'trusted-invocation'
+    }), false)
   })
 
   it('separates provider-owned system grants from lifecycle grant requests', () => {

@@ -34,6 +34,16 @@ export type RuntimeToolCallRequest = {
   namespace?: string
   tool: string
   arguments: unknown
+  trustedInvocation?: {
+    requestId: string
+    runtimeId: string
+    threadId: string
+    turnId?: string
+    callId?: string
+    actionId: string
+    invocationId?: string
+    approval: 'none' | 'confirmation' | 'system'
+  }
 }
 
 export type RuntimeToolOutputContentItem =

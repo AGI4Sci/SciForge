@@ -1,0 +1,31 @@
+{
+  "name": "@sciforge/domain-computer-use",
+  "version": "1.0.0",
+  "license": "MIT",
+  "type": "module",
+  "private": false,
+  "description": "Domain-owned managed MCP Computer Use with target-scoped CDP execution.",
+  "exports": {
+    "./contract": "./src/contract.ts",
+    "./definition": "./src/definition.ts",
+    "./main": "./src/main.ts",
+    "./main/mcp-config": "./src/main/mcp-config.ts"
+  },
+  "files": ["src", "sciforge.domain.json", "package.json"],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@sciforge/domain-sdk": "^0.2.0",
+    "playwright-core": "1.61.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "electron": "^42.7.0",
+    "typescript": "^5.8.2",
+    "vitest": "^4.1.7"
+  }
+}

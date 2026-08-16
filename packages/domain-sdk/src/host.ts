@@ -41,6 +41,33 @@ export const MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND = 'main.runtime-lifecycle'
 export const MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND =
   'main.artifact-consumer' as const
 export const MAIN_ACTION_GUARD_CONTRIBUTION_KIND = 'main.action-guard' as const
+export const MAIN_RUNTIME_MCP_SERVER_CONTRIBUTION_KIND =
+  'main.runtime-mcp-server' as const
+export const MAIN_MCP_TRUSTED_INVOCATION_METADATA_CONTRIBUTION_KIND =
+  'main.mcp-trusted-invocation-metadata' as const
+
+export type DomainRuntimeMcpServerConfig = Readonly<{
+  id: string
+  command: string
+  args?: readonly string[]
+  env?: Readonly<Record<string, string>>
+  timeoutMs?: number
+  enabledTools?: readonly string[]
+  disabled?: boolean
+}>
+
+export type DomainMainRuntimeMcpServerContribution = Readonly<{
+  serverId: string
+  createConfig: (settings: unknown) => DomainRuntimeMcpServerConfig | null
+  isRuntimeEnabled?: (settings: unknown, runtimeId: string) => boolean
+}>
+
+export type DomainMcpTrustedInvocationMetadataContribution = Readonly<{
+  serverId: string
+  tools: readonly string[]
+  metadataKey: string
+  source: 'trusted-invocation'
+}>
 export const MAIN_EXTENSION_CONTRIBUTION_KIND = 'main.extension' as const
 export const MAIN_SYSTEM_CAPABILITY_GRANT_CONTRIBUTION_KIND =
   'main.system-capability-grant' as const
@@ -581,6 +608,26 @@ export function isDomainMainActionGuard(
     new Set(actions).size === actions.length
 }
 
+export function isDomainMainRuntimeMcpServerContribution(
+  value: unknown
+): value is DomainMainRuntimeMcpServerContribution {
+  if (!isRecord(value)) return false
+  return typeof value.serverId === 'string' && Boolean(value.serverId.trim()) &&
+    typeof value.createConfig === 'function' &&
+    (value.isRuntimeEnabled === undefined || typeof value.isRuntimeEnabled === 'function')
+}
+
+export function isDomainMcpTrustedInvocationMetadataContribution(
+  value: unknown
+): value is DomainMcpTrustedInvocationMetadataContribution {
+  if (!isRecord(value) || value.source !== 'trusted-invocation') return false
+  if (typeof value.serverId !== 'string' || !value.serverId.trim()) return false
+  if (typeof value.metadataKey !== 'string' || !value.metadataKey.trim()) return false
+  return Array.isArray(value.tools) && value.tools.length > 0 &&
+    value.tools.every((tool) => typeof tool === 'string' && Boolean(tool.trim())) &&
+    new Set(value.tools).size === value.tools.length
+}
+
 export type DomainWorkbenchRightPanelSession = Readonly<{
   id: string
   runtimeId?: string
@@ -703,6 +750,12 @@ export type DomainMainTextSanitizerHost = Readonly<{
  */
 export type DomainMainHost = Readonly<{
   getUserDataDir: () => string
+  /** Application root used to resolve trusted bundled process entries. */
+  getAppRoot?: () => string
+  /** Executable used to launch trusted bundled Node process entries. */
+  getExecutablePath?: () => string
+  /** Whether the current application is running from a packaged build. */
+  isPackaged?: () => boolean
   defineCapability: (options: unknown) => unknown
   /** Owner-scoped non-secret settings; introduced in Host API 1.2. */
   packageSettings?: DomainMainPackageSettingsHost

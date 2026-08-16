@@ -46,6 +46,10 @@ describe('RuntimeCapabilityBroker', () => {
         command: '/bin/image-generation',
         enabledTools: ['visual.render']
       }],
+      trustedInvocationMetadata: [{
+        serverId: 'image-generation', tools: ['visual.render'],
+        metadataKey: 'fixture/trusted-invocation', source: 'trusted-invocation'
+      }],
       clientFactory: async () => client
     })
     const broker = createRuntimeCapabilityBroker({
@@ -127,6 +131,13 @@ describe('RuntimeCapabilityBroker', () => {
       arguments: {
         workspaceRoot: '/tmp/workspace',
         recipe: { scene: 'cells' }
+      },
+      _meta: {
+        'fixture/trusted-invocation': expect.objectContaining({
+          requestId: 'request-1', runtimeId: 'future-runtime',
+          threadId: 'thread-1', turnId: 'turn-1', callId: 'call-1',
+          actionId: expect.any(String)
+        })
       }
     }, expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 }))
   })

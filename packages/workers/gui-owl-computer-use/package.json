@@ -3,17 +3,16 @@
   "version": "0.1.0",
   "license": "MIT",
   "private": false,
-  "description": "GUI-Owl computer-use worker: turns one natural-language task into desktop actions through the app-owned Model Router. Exposed as an MCP stdio server and an HTTP ServiceResult sidecar.",
+  "description": "Target-scoped CDP Computer Use session and control service.",
   "sciforge": {
     "lifecycleLayer": "workers",
     "runtime": "python",
     "skillFacing": false,
-    "sideEffects": "host-ui, process, network, filesystem",
+    "sideEffects": "target-scoped-browser, process, network",
     "publicContract": true,
     "runtimeAdapter": true,
-    "mcpServer": true,
+    "mcpServer": false,
     "entry": {
-      "mcp": "python -m cua.cli --stdio",
       "http": "python -m cua.cli --http"
     }
   },
@@ -28,8 +27,8 @@
   ],
   "scripts": {
     "setup": "python -m pip install -r requirements.txt",
-    "start": "python -m cua.cli --stdio",
+    "start": "python -m cua.cli --http",
     "start:http": "python -m cua.cli --http",
-    "test": "python -m pytest -q tests || python tests/test_contract.py"
+    "test": "python -m pytest -q tests"
   }
 }

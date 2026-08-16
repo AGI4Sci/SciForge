@@ -128,11 +128,6 @@ import type { ScientificPlottingMcpLaunchConfig } from './scientific-plotting-mc
 import type { BgcDiscoveryMcpLaunchConfig } from './bgc-discovery-mcp-config'
 import { type ImageGenerationMcpLaunchConfig } from './image-generation-mcp-config'
 import type { PptMasterMcpLaunchConfig } from './ppt-master-mcp-config'
-import {
-  GUI_COMPUTER_USE_MCP_SERVER_NAME,
-  isComputerUseMcpConfigured,
-  type ComputerUseMcpLaunchConfig
-} from './computer-use-mcp-config'
 import { buildManagedGuiMcpServers } from './gui-mcp-registry'
 import { migrateLegacyKunGlobalConfig } from './legacy-kun-global-config-migration'
 import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
@@ -153,6 +148,8 @@ import {
   createMainActionGuardEvaluator,
   createMainSystemCapabilityInvokerFactory,
   listMainArtifactConsumers,
+  listMainMcpTrustedInvocationMetadataContributions,
+  listMainRuntimeMcpServerContributions,
   listMainVisualSourceContributions,
   listMainWorkspacePreviewPluginContributions,
   type ActivatedMainRuntimeContributions
@@ -305,16 +302,8 @@ function getPptMasterMcpLaunchConfig(): PptMasterMcpLaunchConfig {
   }
 }
 
-function getComputerUseMcpLaunchConfig(): ComputerUseMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
-}
-
 function managedGuiMcpServers(settings: AppSettingsV1) {
-  return buildManagedGuiMcpServers({
+  const builtIn = buildManagedGuiMcpServers({
     settings,
     scheduleMcp: { settings, launch: getScheduleMcpLaunchConfig() },
     researchMcp: { launch: getResearchSearchMcpLaunchConfig() },
@@ -337,15 +326,36 @@ function managedGuiMcpServers(settings: AppSettingsV1) {
       settings,
       launch: getImageGenerationMcpLaunchConfig()
     },
-    pptMasterMcp: { settings, launch: getPptMasterMcpLaunchConfig() },
-    computerUseMcp: { settings, launch: getComputerUseMcpLaunchConfig() }
+    pptMasterMcp: { settings, launch: getPptMasterMcpLaunchConfig() }
   })
+  const contributed = domainModuleCatalog
+    ? listMainRuntimeMcpServerContributions(domainModuleCatalog)
+      .map((contribution) => contribution.createConfig(settings))
+      .filter((config): config is NonNullable<typeof config> => config !== null)
+      .map((config) => ({
+        ...config,
+        args: config.args ? [...config.args] : undefined,
+        env: config.env ? { ...config.env } : undefined,
+        enabledTools: config.enabledTools ? [...config.enabledTools] : undefined
+      }))
+    : []
+  const combined = [...builtIn, ...contributed]
+  const ids = new Set<string>()
+  for (const server of combined) {
+    if (ids.has(server.id)) throw new Error(`Duplicate managed MCP server id: ${server.id}`)
+    ids.add(server.id)
+  }
+  return combined
 }
 
 async function runtimeMayUseManagedTool(runtimeId: string, tool: RuntimeToolDefinition): Promise<boolean> {
-  if (tool.providerId !== GUI_COMPUTER_USE_MCP_SERVER_NAME) return true
-  if (runtimeId !== 'codex' && runtimeId !== 'claude') return false
-  return isComputerUseMcpConfigured(await store.load(), runtimeId)
+  const contribution = domainModuleCatalog
+    ? listMainRuntimeMcpServerContributions(domainModuleCatalog)
+      .find((candidate) => candidate.serverId === tool.providerId)
+    : undefined
+  return contribution?.isRuntimeEnabled
+    ? contribution.isRuntimeEnabled(await store.load(), runtimeId)
+    : true
 }
 
 traceStartup('main module evaluated')
@@ -1063,6 +1073,9 @@ app
     })
     const catalog = createApplicationDomainCatalog({
       getUserDataDir: () => app.getPath('userData'),
+      getAppRoot: () => app.getAppPath(),
+      getExecutablePath: () => process.execPath,
+      isPackaged: () => app.isPackaged,
       textSanitizer: {
         sanitizeText: (value) => sanitizeTraceTextChunks([value], {
           sensitiveValues: traceSensitiveSettings.values()
@@ -1252,7 +1265,8 @@ app
     ])
     domainModuleCatalog = catalog
     runtimeMcpToolGateway = createRuntimeMcpToolGateway({
-      servers: managedGuiMcpServers(initial)
+      servers: managedGuiMcpServers(initial),
+      trustedInvocationMetadata: listMainMcpTrustedInvocationMetadataContributions(catalog)
     })
     const runtimeCapabilityBroker = createRuntimeCapabilityBroker({
       broker: capabilityBroker,
