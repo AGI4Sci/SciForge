@@ -252,6 +252,35 @@ describe('CodexPreToolUseGovernanceBridge', () => {
     })).resolves.toEqual({})
   })
 
+  it('materializes a narrowed child snapshot that cannot regain parent shell access', async () => {
+    const bridge = await createBridge()
+    await bridge.seedSession('parent-session', {
+      ownedVisualToolsAvailable: false,
+      nativeVisualProofChainPending: false
+    }, ['Bash', 'sciforge_discover', 'sciforge_invoke'])
+    await bridge.bindTurn({
+      threadId: 'parent-thread', turnId: 'parent-turn', sessionId: 'parent-session'
+    })
+    await bridge.seedNarrowedSessionForGovernanceTurn(
+      'child-session', 'parent-turn', ['sciforge_discover', 'sciforge_invoke', 'shell']
+    )
+    await bridge.bindTurn({
+      threadId: 'child-thread', turnId: 'child-turn', sessionId: 'child-session'
+    })
+
+    await expect(bridge.evaluate({
+      ...hookInput('sciforge_discover', {}), turn_id: 'child-turn'
+    })).resolves.toEqual({})
+    await expect(bridge.evaluate({
+      ...hookInput('Bash', { command: 'pwd' }), turn_id: 'child-turn'
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining('tool_policy_denied')
+      }
+    })
+  })
+
   it('blocks controls for an existing executor session when a snapshot becomes pending', async () => {
     const bridge = await createBridge()
     await bridge.updateSnapshot({

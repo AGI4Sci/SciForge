@@ -217,6 +217,39 @@ export class CodexPreToolUseGovernanceBridge {
     )
   }
 
+  async seedNarrowedSessionForGovernanceTurn(
+    sessionId: string,
+    governanceTurnId: string,
+    allowedTools: readonly string[]
+  ): Promise<void> {
+    const normalizedSessionId = requiredIdentity(sessionId, 'sessionId')
+    const normalizedGovernanceTurnId = requiredIdentity(
+      governanceTurnId,
+      'governanceTurnId'
+    )
+    const parent = await requiredGovernanceSnapshot(this.rootDir, normalizedGovernanceTurnId)
+    const requested = normalizeAllowedTools(allowedTools)
+    const inherited = parent.snapshot.allowedTools
+    const narrowed = inherited === undefined
+      ? requested
+      : requested.filter((tool) => inherited.includes(tool))
+    const stored: StoredCodexSessionGovernanceSnapshotSeed = {
+      schema: SNAPSHOT_SCHEMA,
+      kind: 'session_snapshot',
+      runtimeId: 'codex',
+      sessionId: normalizedSessionId,
+      snapshot: {
+        ownedVisualToolsAvailable: parent.snapshot.ownedVisualToolsAvailable,
+        nativeVisualProofChainPending: parent.snapshot.nativeVisualProofChainPending,
+        allowedTools: narrowed
+      }
+    }
+    await atomicWriteFile(
+      sessionSeedPath(this.rootDir, normalizedSessionId),
+      `${JSON.stringify(stored)}\n`
+    )
+  }
+
   async deleteSessionSeed(sessionId: string): Promise<void> {
     const normalizedSessionId = sessionId.trim()
     if (!normalizedSessionId) return

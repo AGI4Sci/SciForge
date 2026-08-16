@@ -52,6 +52,7 @@ export function createDomainMainEntry(host: DomainMainHost): TrustedDomainProces
           !isComputerUseMcpConfigured(appSettings, 'claude')) return null
       return {
         id: GUI_COMPUTER_USE_MCP_SERVER_NAME,
+        packageId: 'computer-use',
         command: resolveComputerUseMcpCommand(launch),
         args: buildComputerUseMcpArgs(launch),
         env: computerUseMcpEnv(),

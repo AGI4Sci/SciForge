@@ -456,6 +456,69 @@ describe('ClaudeCodeRuntimeService', () => {
     })).resolves.toMatchObject({ state: 'missing' })
   })
 
+  it('rolls back a persistent Claude child thread when turn startup fails', async () => {
+    const { sdk } = fakeSdk(async () => [])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    vi.spyOn(service, 'startTurn').mockResolvedValue({
+      ok: false,
+      message: 'turn startup failed',
+      code: 'turn_start_failed',
+      recoverable: true
+    })
+    const rollback = vi.spyOn(service, 'deleteThread')
+
+    await expect(service.spawnSubagent({
+      childId: 'rollback-child',
+      parentThreadId: 'parent-thread',
+      parentTurnId: 'parent-turn',
+      prompt: 'This child must be rolled back.',
+      signal: new AbortController().signal,
+      appendTranscript: vi.fn(async () => undefined),
+      onSpawned: vi.fn()
+    })).rejects.toThrow('turn startup failed')
+    expect(rollback).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the startup error as cause when Claude child rollback also fails', async () => {
+    const { sdk } = fakeSdk(async () => [])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    vi.spyOn(service, 'startTurn').mockResolvedValue({
+      ok: false,
+      message: 'primary startup failure',
+      code: 'turn_start_failed',
+      recoverable: true
+    })
+    vi.spyOn(service, 'deleteThread').mockResolvedValue({
+      ok: false,
+      message: 'rollback failure',
+      code: 'rollback_failed',
+      recoverable: true
+    })
+
+    await expect(service.spawnSubagent({
+      childId: 'aggregate-child',
+      parentThreadId: 'parent-thread',
+      parentTurnId: 'parent-turn',
+      prompt: 'This child startup fails.',
+      signal: new AbortController().signal,
+      appendTranscript: vi.fn(async () => undefined),
+      onSpawned: vi.fn()
+    })).rejects.toSatisfy((error: unknown) =>
+      error instanceof AggregateError &&
+      error.cause instanceof Error &&
+      error.cause.message === 'primary startup failure' &&
+      error.errors.some((entry) => entry instanceof Error && entry.message === 'rollback failure')
+    )
+  })
+
   it('denies non-native visual bypasses before Claude dispatch while the Host snapshot is pending', async () => {
     let releaseQuery: (() => void) | undefined
     const messages = new Promise<SDKMessage[]>((resolve) => {

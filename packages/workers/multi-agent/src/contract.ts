@@ -204,6 +204,8 @@ export const MultiAgentDiagnostics = z
     contractVersion: z.literal(MULTI_AGENT_CONTRACT_VERSION),
     config: MultiAgentRuntimeConfig,
     active: z.number().int().nonnegative(),
+    activeLifecycleControls: z.number().int().nonnegative(),
+    activeBoundaries: z.number().int().nonnegative(),
     childRuns: z.array(MultiAgentChildRunRecord),
     statusCounts: MultiAgentStatusCounts,
     usage: MultiAgentUsage,
@@ -270,6 +272,8 @@ export type MultiAgentExecutorInput = {
   workspace?: string
   model?: string
   allowedToolNames?: readonly string[]
+  brokerScope?: Readonly<{ providerFamily: 'managed-mcp'; packageId?: string }>
+  deadlineMs?: number
   strictAllowedToolNames?: boolean
   bashCommandPolicy?: Record<string, unknown>
   filePathPolicy?: Record<string, unknown>

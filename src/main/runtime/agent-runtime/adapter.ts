@@ -24,6 +24,7 @@ import type {
 } from '../../../shared/agent-runtime-contract'
 import type { WorkspaceHostPlacement } from '../../../shared/workspace-host-state'
 import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
+import type { AgentRuntimeBrokerScope } from './agent-tool-surface'
 
 export type AgentRuntimeAdapterContext = {
   settings: AppSettingsV1
@@ -185,6 +186,9 @@ export type AgentRuntimeSubagentSpawnInput = AgentRuntimeSubagentTarget & {
   prompt: string
   workspace?: string
   model?: string
+  allowedTools?: readonly string[]
+  brokerScope?: AgentRuntimeBrokerScope
+  maxToolCalls?: number
   signal: AbortSignal
   appendTranscript(entry: AgentRuntimeSubagentTranscriptEntry): Promise<void>
   onSpawned(threadRef: AgentRuntimeSubagentThreadRef): void | Promise<void>

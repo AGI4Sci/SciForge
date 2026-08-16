@@ -52,6 +52,8 @@ export type RunChildInput = {
   workspace?: string
   model?: string
   allowedToolNames?: readonly string[]
+  brokerScope?: Readonly<{ providerFamily: 'managed-mcp'; packageId?: string }>
+  deadlineMs?: number
   strictAllowedToolNames?: boolean
   bashCommandPolicy?: Record<string, unknown>
   filePathPolicy?: Record<string, unknown>
@@ -209,7 +211,7 @@ export class MultiAgentRuntime {
       throw error
     }
 
-    const boundary = createExecutionBoundary(input.signal)
+    const boundary = createExecutionBoundary(input.signal, normalized.deadlineMs)
     this.boundariesByChildId.set(id, boundary)
     let acceptingTranscript = true
     let lifecycleControl: MultiAgentLifecycleControl | undefined
@@ -237,6 +239,8 @@ export class MultiAgentRuntime {
           workspace: normalized.workspace,
           model: normalized.model,
           allowedToolNames: normalized.allowedToolNames,
+          brokerScope: normalized.brokerScope,
+          deadlineMs: normalized.deadlineMs,
           strictAllowedToolNames: normalized.strictAllowedToolNames,
           bashCommandPolicy: normalized.bashCommandPolicy,
           filePathPolicy: normalized.filePathPolicy,
@@ -435,6 +439,8 @@ export class MultiAgentRuntime {
       contractVersion: MULTI_AGENT_CONTRACT_VERSION,
       config: this.config,
       active: this.active,
+      activeLifecycleControls: this.lifecycleControlsByChildId.size,
+      activeBoundaries: this.boundariesByChildId.size,
       childRuns,
       statusCounts: countStatuses(childRuns),
       usage: sumUsage(childRuns),
@@ -634,6 +640,8 @@ function normalizeRunChildInput(input: RunChildInput): Required<Pick<RunChildInp
     workspace: trimOptional(input.workspace),
     model: trimOptional(input.model),
     allowedToolNames: normalizeAllowedToolNames(input.allowedToolNames),
+    brokerScope: normalizeBrokerScope(input.brokerScope),
+    deadlineMs: normalizeDeadlineMs(input.deadlineMs),
     strictAllowedToolNames: input.strictAllowedToolNames === true,
     bashCommandPolicy: input.bashCommandPolicy,
     filePathPolicy: input.filePathPolicy,
@@ -645,6 +653,19 @@ function normalizePositiveInteger(value: number | undefined): number | undefined
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
   const normalized = Math.trunc(value)
   return normalized > 0 ? normalized : undefined
+}
+
+function normalizeDeadlineMs(value: number | undefined): number | undefined {
+  const normalized = normalizePositiveInteger(value)
+  return normalized === undefined ? undefined : Math.min(normalized, 600_000)
+}
+
+function normalizeBrokerScope(
+  value: RunChildInput['brokerScope']
+): RunChildInput['brokerScope'] {
+  if (!value || value.providerFamily !== 'managed-mcp') return undefined
+  const packageId = value.packageId?.trim()
+  return Object.freeze({ providerFamily: 'managed-mcp' as const, ...(packageId ? { packageId } : {}) })
 }
 
 function normalizeWaitTimeoutMs(value: number | undefined): number {
@@ -964,7 +985,7 @@ function objectRecord(value: unknown): Record<string, unknown> {
     : {}
 }
 
-function createExecutionBoundary(parentSignal: AbortSignal | undefined) {
+function createExecutionBoundary(parentSignal: AbortSignal | undefined, deadlineMs: number | undefined) {
   const controller = new AbortController()
   let resolveParentAbort!: () => void
   const parentAborted = new Promise<void>((resolve) => {
@@ -976,6 +997,10 @@ function createExecutionBoundary(parentSignal: AbortSignal | undefined) {
   }
   if (parentSignal?.aborted) abortFromParent()
   else parentSignal?.addEventListener('abort', abortFromParent, { once: true })
+  const deadlineHandle = deadlineMs === undefined ? undefined : setTimeout(() => {
+    if (!controller.signal.aborted) controller.abort(abortError('multi-agent child execution deadline exceeded'))
+    resolveParentAbort()
+  }, deadlineMs)
   return {
     signal: controller.signal,
     parentAborted,
@@ -983,6 +1008,7 @@ function createExecutionBoundary(parentSignal: AbortSignal | undefined) {
       if (!controller.signal.aborted) controller.abort(reason)
     },
     dispose() {
+      if (deadlineHandle !== undefined) clearTimeout(deadlineHandle)
       parentSignal?.removeEventListener('abort', abortFromParent)
     }
   }

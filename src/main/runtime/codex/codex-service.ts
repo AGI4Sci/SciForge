@@ -94,6 +94,7 @@ import {
 import {
   filterAgentRuntimeToolSurface,
   nativeAgentToolExecutionMetadata,
+  scopeAgentRuntimeToolSurface,
   type AgentRuntimeToolSurface
 } from '../agent-runtime/agent-tool-surface'
 import type {
@@ -284,6 +285,7 @@ export class CodexRuntimeService {
   private readonly preToolUseGovernanceBridge: CodexPreToolUseGovernanceBridge | null
   private readonly activeSubagents = new Map<string, ActiveCodexSubagent>()
   private readonly allowedToolsByThread = new Map<string, ReadonlySet<string>>()
+  private readonly scopedAgentToolsByThread = new Map<string, AgentRuntimeToolSurface>()
   private usageBackfillPromise: Promise<void> | null = null
   private readonly activeTurns = new Map<string, string>()
   private readonly turnTimings = new Map<string, CodexTurnTiming>()
@@ -1037,6 +1039,14 @@ export class CodexRuntimeService {
     }
     if (input.parent) {
       const parent = this.resolveParentCodexTurnGovernance(input.parent)
+      if (input.allowedTools !== undefined) {
+        await this.preToolUseGovernanceBridge.seedNarrowedSessionForGovernanceTurn(
+          sessionId,
+          parent.governanceTurnId,
+          input.allowedTools
+        )
+        return { sessionId }
+      }
       await this.preToolUseGovernanceBridge.seedSessionForGovernanceTurn(sessionId, parent.governanceTurnId)
       return {
         sessionId,
@@ -1663,17 +1673,18 @@ export class CodexRuntimeService {
     const threadId = stringValue(request.threadId).trim()
     const allowed = threadId ? this.allowedToolsByThread.get(threadId) : undefined
     if (allowed && !allowed.has(request.tool)) return false
-    return this.options.capabilityAgentTools.tools().some((tool) => tool.name === request.tool)
+    const surface = this.scopedAgentToolsByThread.get(threadId) ?? this.options.capabilityAgentTools
+    return surface.tools().some((tool) => tool.name === request.tool)
   }
 
   private async handleCapabilityAgentToolCall(
     request: RuntimeToolCallRequest,
     settings: AppSettingsV1
   ): Promise<RuntimeToolCallResponse> {
-    const surface = this.options.capabilityAgentTools
-    if (!surface) return failedDynamicToolCall('The SciForge capability agent surface is not configured.')
     const threadId = stringValue(request.threadId).trim()
     if (!threadId) return failedDynamicToolCall('SciForge capability tools require a thread context.')
+    const surface = this.scopedAgentToolsByThread.get(threadId) ?? this.options.capabilityAgentTools
+    if (!surface) return failedDynamicToolCall('The SciForge capability agent surface is not configured.')
     const storedThread = await this.findStoredThread(threadId)
     const workspaceId = resolveCodexWorkspace(settings, storedThread?.workspace)
     const callId = codexHostToolCallId(request)
@@ -1781,7 +1792,21 @@ export class CodexRuntimeService {
       turnId: input.parentTurnId
     })
     const workspace = resolveCodexWorkspace(settings, input.workspace)
-    const dynamicTools = await this.codexDynamicTools(settings)
+    const scopedAgentTools = this.options.capabilityAgentTools
+      ? scopeAgentRuntimeToolSurface(this.options.capabilityAgentTools, {
+          allowedTools: input.allowedTools,
+          brokerScope: input.brokerScope,
+          maxToolCalls: input.maxToolCalls
+        })
+      : undefined
+    const dynamicTools = scopedAgentTools
+      ? scopedAgentTools.tools().map((tool) => ({
+          type: tool.type,
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema
+        }))
+      : []
     const threadResponse = await client.startThread({
       ...baseThreadParams(settings, workspace, {
         subagentsConfigured: false,
@@ -1802,34 +1827,57 @@ export class CodexRuntimeService {
         agentRole: 'subagent'
       }
     })
-    if (input.signal.aborted) throw new Error('Codex child turn was aborted during thread startup.')
     const childThread = normalizeThread(readThread(threadResponse))
     if (!childThread.id) throw new Error('Codex child thread did not return a thread id.')
-    const title = input.label || childThreadTitle(input.prompt)
-    const storedChild = await this.persistThread(
-      {
-        ...childThread,
-        workspace: childThread.workspace || workspace,
-        title,
-        relation: childThread.relation ?? 'side',
-        threadSource: childThread.threadSource || 'subagent',
-        parentThreadId: childThread.parentThreadId || input.parentThreadId,
-        parentTurnId: childThread.parentTurnId || input.parentTurnId,
-        agentNickname: childThread.agentNickname || input.label,
-        agentRole: childThread.agentRole || 'subagent'
-      },
-      {
-        workspace,
-        title
+    if (input.signal.aborted) {
+      const startupError = new Error('Codex child turn was aborted during thread startup.')
+      try {
+        await client.request('thread/archive', { threadId: childThread.id })
+      } catch (cleanupError) {
+        throw childStartupRollbackError('Codex', startupError, cleanupError)
       }
-    )
+      throw startupError
+    }
+    const title = input.label || childThreadTitle(input.prompt)
+    let storedChild
+    try {
+      storedChild = await this.persistThread(
+        {
+          ...childThread,
+          workspace: childThread.workspace || workspace,
+          title,
+          relation: childThread.relation ?? 'side',
+          threadSource: childThread.threadSource || 'subagent',
+          parentThreadId: childThread.parentThreadId || input.parentThreadId,
+          parentTurnId: childThread.parentTurnId || input.parentTurnId,
+          agentNickname: childThread.agentNickname || input.label,
+          agentRole: childThread.agentRole || 'subagent'
+        },
+        {
+          workspace,
+          title
+        }
+      )
+    } catch (error) {
+      try {
+        await client.request('thread/archive', { threadId: childThread.id })
+      } catch (cleanupError) {
+        throw childStartupRollbackError('Codex', error, cleanupError)
+      }
+      throw error
+    }
     const childGuiThreadId = storedChild?.guiThreadId ?? childThread.id
     const childCodexThreadId = storedChild?.codexThreadId ?? childThread.id
+    if (scopedAgentTools) {
+      this.scopedAgentToolsByThread.set(childGuiThreadId, scopedAgentTools)
+      this.scopedAgentToolsByThread.set(childCodexThreadId, scopedAgentTools)
+    }
     const subscriber = this.addEventSubscriber(childGuiThreadId)
     const startedAtMs = Date.now()
     let childTurnId = ''
     let preparedGovernance: CodexPreparedTurnGovernance | null = null
     let terminationPromise: Promise<void> | null = null
+    let startupCommitted = false
     const terminateChildTurn = (signal?: AbortSignal): Promise<void> => {
       if (!childTurnId) return Promise.resolve()
       if (terminationPromise) return terminationPromise
@@ -1852,6 +1900,7 @@ export class CodexRuntimeService {
       const modelAccess = codexModelAccessThreadParams(settings)
       preparedGovernance = await this.prepareCodexTurnGovernance({
         sessionId: childCodexThreadId,
+        allowedTools: input.allowedTools,
         parent: {
           threadId: input.parentThreadId,
           turnId: input.parentTurnId
@@ -1911,6 +1960,7 @@ export class CodexRuntimeService {
         createdAt: new Date().toISOString(),
         metadata: { threadId: childGuiThreadId, turnId: childTurnId }
       })
+      startupCommitted = true
       const result = await this.waitForCodexChildTurn({
         subscriber,
         threadId: childGuiThreadId,
@@ -1930,8 +1980,27 @@ export class CodexRuntimeService {
           turnId: childTurnId
         }
       }
+    } catch (error) {
+      if (!startupCommitted) {
+        const cleanupErrors: unknown[] = []
+        if (childTurnId) {
+          try {
+            await terminateChildTurn()
+          } catch (cleanupError) {
+            cleanupErrors.push(cleanupError)
+          }
+        }
+        const cleanup = await this.deleteThread(childGuiThreadId)
+        if (!cleanup.ok) cleanupErrors.push(new Error(cleanup.message))
+        if (cleanupErrors.length > 0) {
+          throw childStartupRollbackError('Codex', error, ...cleanupErrors)
+        }
+      }
+      throw error
     } finally {
       this.activeSubagents.delete(input.childId)
+      this.scopedAgentToolsByThread.delete(childGuiThreadId)
+      this.scopedAgentToolsByThread.delete(childCodexThreadId)
       await this.releasePreparedCodexTurnGovernance(preparedGovernance).catch(() => undefined)
       if (childTurnId) {
         await this.clearTurnTracking(childGuiThreadId, childTurnId).catch(() => undefined)
@@ -4211,6 +4280,15 @@ function failure(error: unknown): {
     message: error instanceof Error ? error.message : String(error),
     recoverable: true
   }
+}
+
+function childStartupRollbackError(runtime: string, primary: unknown, ...cleanup: unknown[]): AggregateError {
+  const error = new AggregateError(
+    [primary, ...cleanup],
+    `${runtime} child startup failed and rollback was incomplete.`
+  )
+  Object.defineProperty(error, 'cause', { value: primary, configurable: true })
+  return error
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

@@ -48,6 +48,8 @@ export const MAIN_MCP_TRUSTED_INVOCATION_METADATA_CONTRIBUTION_KIND =
 
 export type DomainRuntimeMcpServerConfig = Readonly<{
   id: string
+  /** Generic owning package identity used for broker scoping. */
+  packageId?: string
   command: string
   args?: readonly string[]
   env?: Readonly<Record<string, string>>

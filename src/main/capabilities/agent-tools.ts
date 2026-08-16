@@ -36,6 +36,7 @@ import {
   type AgentRuntimeToolTurnIdentity,
   type NativeVisualToolErrorContext
 } from '../runtime/agent-runtime/agent-tool-surface'
+import type { AgentRuntimeBrokerScope } from '../runtime/agent-runtime/agent-tool-surface'
 
 export const CAPABILITY_AGENT_TOOL_NAMES = Object.freeze({
   discover: 'sciforge_discover',
@@ -65,6 +66,7 @@ export type CapabilityAgentToolRequestContext = Readonly<{
   workspaceId?: string
   /** Host workspace placement; never included in model-visible schemas. */
   workspaceLocator?: WorkspaceLocator
+  brokerScope?: AgentRuntimeBrokerScope
 }>
 
 export type CapabilityAgentToolCall = Readonly<{
@@ -325,13 +327,23 @@ export class CapabilityAgentToolSurface {
             value: [this.#agentOperation(cache, descriptor, parsed.includeSchema === true)]
           }
         }
+        if (request.context.brokerScope &&
+            parsed.providerFamily &&
+            parsed.providerFamily !== request.context.brokerScope.providerFamily) {
+          throw new CapabilityAgentToolError(
+            'broker_scope_denied',
+            'The requested provider family is outside the delegated broker scope.'
+          )
+        }
         const descriptors = await this.#broker.discover(caller, {
           ...(parsed.capabilityId ? { capabilityId: parsed.capabilityId } : {}),
           ...(parsed.text ? { text: parsed.text } : {}),
           ...(parsed.scope ? { scope: parsed.scope } : {}),
           ...(parsed.acceptedResourceKind ? { acceptedResourceKind: parsed.acceptedResourceKind } : {}),
           ...(parsed.producedResourceKind ? { producedResourceKind: parsed.producedResourceKind } : {}),
-          ...(parsed.providerFamily ? { providerFamily: parsed.providerFamily } : {}),
+          ...(request.context.brokerScope
+            ? { providerFamily: request.context.brokerScope.providerFamily }
+            : parsed.providerFamily ? { providerFamily: parsed.providerFamily } : {}),
           ...(parsed.effects ? { effects: parsed.effects } : {}),
           ...(parsed.tags ? { tags: parsed.tags } : {}),
           limit: parsed.limit
@@ -796,6 +808,7 @@ export class CapabilityAgentToolError extends Error {
     | 'unknown_resource_ref'
     | 'resource_ref_retired'
     | 'capability_discovery_empty'
+    | 'broker_scope_denied'
     | 'capability_identity_mismatch'
     | 'stale_resource_ref'
     | 'missing_invocation_context'

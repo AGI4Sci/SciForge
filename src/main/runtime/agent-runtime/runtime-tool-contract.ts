@@ -9,6 +9,8 @@ export type RuntimeToolFunctionDefinition = {
   namespace?: string
   /** Stable internal provider identity. */
   providerId?: string
+  /** Generic package identity for least-privilege broker scoping. */
+  providerPackageId?: string
   /** Original provider tool name. */
   providerToolName?: string
   name: string
@@ -34,6 +36,11 @@ export type RuntimeToolCallRequest = {
   namespace?: string
   tool: string
   arguments: unknown
+  /** Host-only policy inherited by delegated child execution. */
+  delegationContext?: {
+    allowedToolNames?: readonly string[]
+    brokerScope?: Readonly<{ providerFamily: 'managed-mcp'; packageId?: string }>
+  }
   trustedInvocation?: {
     requestId: string
     runtimeId: string

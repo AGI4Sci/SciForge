@@ -42,8 +42,8 @@ import {
   resolveClaudeWorkspace
 } from './claude-code-config'
 import {
-  filterAgentRuntimeToolSurface,
   nativeAgentToolExecutionMetadata,
+  scopeAgentRuntimeToolSurface,
   type AgentRuntimeToolSurface
 } from '../agent-runtime/agent-tool-surface'
 import type {
@@ -398,6 +398,8 @@ export class ClaudeCodeRuntimeService {
     workspace?: string
     reasoningEffort?: string
     allowedTools?: string[]
+    brokerScope?: Readonly<{ providerFamily: 'managed-mcp'; packageId?: string }>
+    maxToolCalls?: number
     ownedVisualToolsAvailable?: boolean
     nativeVisualProofChainPending?: boolean
     streamingInput?: boolean
@@ -460,7 +462,11 @@ export class ClaudeCodeRuntimeService {
       })
       const abortController = new AbortController()
       const agentToolSurface = this.options.agentTools
-        ? filterAgentRuntimeToolSurface(this.options.agentTools, payload.allowedTools)
+        ? scopeAgentRuntimeToolSurface(this.options.agentTools, {
+            allowedTools: payload.allowedTools,
+            brokerScope: payload.brokerScope,
+            maxToolCalls: payload.maxToolCalls
+          })
         : undefined
       const agentToolServer = agentToolSurface && agentToolSurface.tools().length > 0
         ? createClaudeCodeAgentToolTransport({
@@ -591,35 +597,48 @@ export class ClaudeCodeRuntimeService {
       title: input.label || firstLineTitle(input.prompt)
     })
     if (!threadResult.ok) throw new Error(threadResult.message)
-    const turnResult = await this.startTurn({
-      threadId: threadResult.thread.id,
-      text: input.prompt,
-      displayText: input.prompt,
-      workspace: input.workspace,
-      streamingInput: true
-    })
-    if (!turnResult.ok) throw new Error(turnResult.message)
-    const active: ActiveClaudeSubagent = {
-      childId: input.childId,
-      parentThreadId: input.parentThreadId,
-      parentTurnId: input.parentTurnId,
-      threadId: turnResult.threadId,
-      turnId: turnResult.turnId
+    let active: ActiveClaudeSubagent
+    try {
+      const turnResult = await this.startTurn({
+        threadId: threadResult.thread.id,
+        text: input.prompt,
+        displayText: input.prompt,
+        workspace: input.workspace,
+        streamingInput: true,
+        ...(input.allowedTools ? { allowedTools: [...input.allowedTools] } : {}),
+        ...(input.brokerScope ? { brokerScope: input.brokerScope } : {}),
+        ...(input.maxToolCalls ? { maxToolCalls: input.maxToolCalls } : {})
+      })
+      if (!turnResult.ok) throw new Error(turnResult.message)
+      active = {
+        childId: input.childId,
+        parentThreadId: input.parentThreadId,
+        parentTurnId: input.parentTurnId,
+        threadId: turnResult.threadId,
+        turnId: turnResult.turnId
+      }
+      this.activeSubagents.set(input.childId, active)
+      await input.onSpawned({
+        runtime: 'claude',
+        threadId: active.threadId,
+        turnId: active.turnId
+      })
+      await input.appendTranscript({
+        id: `${input.childId}-thread-start`,
+        kind: 'event',
+        summary: 'Claude child thread started',
+        text: `Thread: ${active.threadId}`,
+        createdAt: new Date().toISOString(),
+        metadata: { threadId: active.threadId, turnId: active.turnId }
+      })
+    } catch (error) {
+      this.activeSubagents.delete(input.childId)
+      const cleanup = await this.deleteThread(threadResult.thread.id)
+      if (!cleanup.ok) {
+        throw childStartupRollbackError('Claude', error, new Error(cleanup.message))
+      }
+      throw error
     }
-    this.activeSubagents.set(input.childId, active)
-    await input.onSpawned({
-      runtime: 'claude',
-      threadId: active.threadId,
-      turnId: active.turnId
-    })
-    await input.appendTranscript({
-      id: `${input.childId}-thread-start`,
-      kind: 'event',
-      summary: 'Claude child thread started',
-      text: `Thread: ${active.threadId}`,
-      createdAt: new Date().toISOString(),
-      metadata: { threadId: active.threadId, turnId: active.turnId }
-    })
 
     const transcript: AgentRuntimeSubagentTranscriptEntry[] = []
     const summary: string[] = []
@@ -2358,6 +2377,15 @@ function failure(error: unknown, defaultCode = 'claude_runtime_error'): ClaudeCo
     code: (error as NodeJS.ErrnoException)?.code || defaultCode,
     recoverable: true
   }
+}
+
+function childStartupRollbackError(runtime: string, primary: unknown, ...cleanup: unknown[]): AggregateError {
+  const error = new AggregateError(
+    [primary, ...cleanup],
+    `${runtime} child startup failed and rollback was incomplete.`
+  )
+  Object.defineProperty(error, 'cause', { value: primary, configurable: true })
+  return error
 }
 
 function stringifyUnknown(value: unknown): string | undefined {

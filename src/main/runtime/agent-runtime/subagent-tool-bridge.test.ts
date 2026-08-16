@@ -148,6 +148,35 @@ describe('AgentRuntime subagent tool bridge', () => {
     expect(adapter.spawn).toHaveBeenCalledTimes(10)
   })
 
+  it('intersects child tools with parent policy and forwards generic broker/deadline budgets', async () => {
+    const adapter = completedAdapter('codex')
+    const bridge = bridgeWith(adapter)
+    await bridge.callTool({
+      requestId: 'scoped-child',
+      runtimeId: 'codex',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn',
+      tool: AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME,
+      delegationContext: {
+        allowedToolNames: ['sciforge_discover', 'sciforge_invoke'],
+        brokerScope: { providerFamily: 'managed-mcp', packageId: 'computer-use' }
+      },
+      arguments: {
+        prompt: 'use one managed package',
+        allowedToolNames: ['sciforge_discover', 'sciforge_invoke', 'shell'],
+        brokerScope: { providerFamily: 'managed-mcp', packageId: 'computer-use' },
+        deadlineMs: 30_000,
+        maxToolCalls: 32
+      }
+    })
+
+    expect(adapter.spawn).toHaveBeenCalledWith(context(), expect.objectContaining({
+      allowedTools: ['sciforge_discover', 'sciforge_invoke'],
+      brokerScope: { providerFamily: 'managed-mcp', packageId: 'computer-use' },
+      maxToolCalls: 32
+    }))
+  })
+
   it.each<AgentRuntimeId>(['codex', 'claude'])(
     'routes spawn and observation through the %s adapter contract',
     async (runtimeId) => {

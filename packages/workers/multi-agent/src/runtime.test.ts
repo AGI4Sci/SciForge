@@ -696,6 +696,34 @@ test('parent abort uses lifecycle termination control', async () => {
   assert.deepEqual(terminationReasons, ['parent_abort'])
 })
 
+test('execution deadline aborts the provider child and releases all active controls', async () => {
+  let observedSignal: AbortSignal | undefined
+  const runtime = new MultiAgentRuntime({
+    store: new InMemoryMultiAgentStore(),
+    executor: async (input) => {
+      observedSignal = input.signal
+      input.registerLifecycleControl({
+        sendMessage: async () => ({ established: true }),
+        inspect: async () => ({ state: 'active', observedAt: new Date().toISOString() }),
+        terminate: async () => undefined
+      })
+      await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      throw input.signal.reason
+    }
+  })
+  const record = await runtime.runChild({
+    parentThreadId: 'parent',
+    parentTurnId: 'turn',
+    prompt: 'bounded work',
+    deadlineMs: 5
+  })
+  assert.equal(observedSignal?.aborted, true)
+  assert.equal(record.status, 'aborted')
+  assert.equal((await runtime.diagnostics()).active, 0)
+  assert.equal((await runtime.diagnostics()).activeLifecycleControls, 0)
+  assert.equal((await runtime.diagnostics()).activeBoundaries, 0)
+})
+
 function clock(): () => string {
   let tick = 0
   return () => `2026-06-27T00:00:${String(tick++).padStart(2, '0')}.000Z`

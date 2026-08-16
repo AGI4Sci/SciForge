@@ -68,6 +68,10 @@ type DelegatedTaskInput = {
   label?: string
   workspace?: string
   model?: string
+  allowedToolNames?: string[]
+  brokerScope?: Readonly<{ providerFamily: 'managed-mcp'; packageId?: string }>
+  deadlineMs?: number
+  maxToolCalls?: number
 }
 
 type DelegatedTaskBatch = {
@@ -108,7 +112,11 @@ export class AgentRuntimeSubagentToolBridge {
           ...(call.context.turnId ? { turnId: call.context.turnId } : {}),
           ...(call.context.callId ? { callId: call.context.callId } : {}),
           tool: call.name,
-          arguments: call.arguments
+          arguments: call.arguments,
+          delegationContext: {
+            allowedToolNames: call.context.allowedToolNames,
+            brokerScope: call.context.brokerScope
+          }
         })
         if (!response.success) {
           throw new AgentRuntimeToolError(
@@ -145,7 +153,26 @@ export class AgentRuntimeSubagentToolBridge {
       name: { type: 'string', description: 'Alias for label.' },
       workspace: { type: 'string', description: 'Workspace root for the child task.' },
       cwd: { type: 'string', description: 'Alias for workspace.' },
-      model: { type: 'string', description: 'Optional model override for the child agent.' }
+      model: { type: 'string', description: 'Optional model override for the child agent.' },
+      allowedToolNames: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 32,
+        uniqueItems: true,
+        items: { type: 'string' },
+        description: 'Explicit child tool allowlist, intersected with the parent policy.'
+      },
+      brokerScope: {
+        type: 'object',
+        properties: {
+          providerFamily: { type: 'string', enum: ['managed-mcp'] },
+          packageId: { type: 'string' }
+        },
+        required: ['providerFamily'],
+        additionalProperties: false
+      },
+      deadlineMs: { type: 'number', minimum: 1, maximum: 600_000 },
+      maxToolCalls: { type: 'number', minimum: 1, maximum: 256 }
     }
     return [{
       type: 'function',
@@ -305,6 +332,17 @@ export class AgentRuntimeSubagentToolBridge {
             prompt: task.prompt,
             workspace: task.workspace,
             model: task.model,
+            allowedToolNames: intersectAllowedToolNames(
+              request.delegationContext?.allowedToolNames,
+              task.allowedToolNames
+            ),
+            strictAllowedToolNames: true,
+            brokerScope: narrowBrokerScope(
+              request.delegationContext?.brokerScope,
+              task.brokerScope
+            ),
+            deadlineMs: task.deadlineMs,
+            maxToolCalls: task.maxToolCalls,
             signal: active.controller.signal
           })
           this.trackActiveChild(runtimeId, record)
@@ -465,6 +503,9 @@ export class AgentRuntimeSubagentToolBridge {
       prompt: input.prompt,
       ...(input.workspace ? { workspace: input.workspace } : {}),
       ...(input.model ? { model: input.model } : {}),
+      ...(input.allowedToolNames ? { allowedTools: input.allowedToolNames } : {}),
+      ...(input.brokerScope ? { brokerScope: input.brokerScope } : {}),
+      ...(input.maxToolCalls ? { maxToolCalls: input.maxToolCalls } : {}),
       signal: input.signal,
       appendTranscript: input.appendTranscript,
       onSpawned: async (threadRef) => {
@@ -692,12 +733,65 @@ function parseDelegatedTask(
   const label = firstString(args.label, args.name, args.agentName, args.agent)
   const workspace = firstString(args.workspace, args.cwd, args.workspaceRoot, defaults.workspace)
   const model = firstString(args.model, defaults.model)
+  const allowedToolNames = stringArray(args.allowedToolNames) ?? defaults.allowedToolNames
+  const brokerScope = delegatedBrokerScope(args.brokerScope) ?? defaults.brokerScope
+  const deadlineMs = boundedInteger(args.deadlineMs, 1, 600_000) ?? defaults.deadlineMs
+  const maxToolCalls = boundedInteger(args.maxToolCalls, 1, 256) ?? defaults.maxToolCalls
   return {
     prompt,
     ...(label ? { label } : {}),
     ...(workspace ? { workspace } : {}),
-    ...(model ? { model } : {})
+    ...(model ? { model } : {}),
+    ...(allowedToolNames ? { allowedToolNames } : {}),
+    ...(brokerScope ? { brokerScope } : {}),
+    ...(deadlineMs ? { deadlineMs } : {}),
+    ...(maxToolCalls ? { maxToolCalls } : {})
   }
+}
+
+function stringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const names = value.map((entry) => typeof entry === 'string' ? entry.trim() : '').filter(Boolean)
+  return names.length ? [...new Set(names)] : undefined
+}
+
+function delegatedBrokerScope(value: unknown): DelegatedTaskInput['brokerScope'] | undefined {
+  const record = recordArguments(value)
+  if (record.providerFamily !== 'managed-mcp') return undefined
+  const packageId = firstString(record.packageId)
+  return Object.freeze({ providerFamily: 'managed-mcp', ...(packageId ? { packageId } : {}) })
+}
+
+function boundedInteger(value: unknown, minimum: number, maximum: number): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
+  const normalized = Math.trunc(value)
+  return normalized >= minimum && normalized <= maximum ? normalized : undefined
+}
+
+function intersectAllowedToolNames(
+  parent: readonly string[] | undefined,
+  requested: readonly string[] | undefined
+): string[] | undefined {
+  if (parent === undefined) return requested ? [...requested] : undefined
+  const inherited = new Set(parent)
+  if (requested === undefined) return [...inherited]
+  return requested.filter((name) => inherited.has(name))
+}
+
+function narrowBrokerScope(
+  parent: DelegatedTaskInput['brokerScope'] | undefined,
+  requested: DelegatedTaskInput['brokerScope'] | undefined
+): DelegatedTaskInput['brokerScope'] | undefined {
+  if (!parent) return requested
+  if (!requested) return parent
+  if (parent.providerFamily !== requested.providerFamily ||
+      (parent.packageId && requested.packageId && parent.packageId !== requested.packageId)) {
+    throw new Error('Delegated broker scope cannot exceed or conflict with the parent scope.')
+  }
+  return Object.freeze({
+    providerFamily: parent.providerFamily,
+    packageId: parent.packageId ?? requested.packageId
+  })
 }
 
 function normalizedToolName(request: RuntimeToolCallRequest): string {
