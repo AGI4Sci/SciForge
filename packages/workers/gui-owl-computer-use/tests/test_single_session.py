@@ -68,6 +68,40 @@ def test_click_verification_and_readback():
     assert backend.actions == 1
 
 
+def test_expectation_waits_for_bounded_async_readback():
+    service, backend, session_id = bound()
+    original_observe = backend.observe
+    ready_at = None
+
+    def delayed_observe(handle):
+        if ready_at is not None and time.monotonic() >= ready_at:
+            backend.text = "Committed later"
+        return original_observe(handle)
+
+    original_perform = backend.perform
+
+    def delayed_perform(handle, action, expected_revision):
+        nonlocal ready_at
+        receipt = original_perform(handle, action, expected_revision)
+        backend.text = "Pending"
+        ready_at = time.monotonic() + 0.15
+        return receipt
+
+    backend.observe = delayed_observe
+    backend.perform = delayed_perform
+    result = service.run({
+        "sessionId": session_id,
+        "deadlineMs": 1000,
+        "semanticAction": {
+            "kind": "click", "role": "button", "name": "Commit",
+            "expect": {"kind": "text-present", "text": "Committed later"},
+        },
+    }, run_task, invocation=identity())
+    assert result["ok"]
+    assert result["data"]["verification"]["matched"] is True
+    assert result["data"]["finalObservation"]["semanticTree"][1]["name"] == "Committed later"
+
+
 def test_typed_input_is_redacted_from_action_timeline():
     service, _backend, session_id = bound()
     result = service.run({

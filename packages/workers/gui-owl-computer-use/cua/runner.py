@@ -31,8 +31,8 @@ def run_task(request: dict[str, Any], channel: SessionInputChannel) -> dict[str,
                 record = _perform_step(channel, current, step, index)
                 records.append(record)
                 current = channel.observe()
+        matched, current = _verify_expectation(channel, current, action.get("expect"))
         final = _observation(current)
-        matched = _verify_expectation(channel, current, action.get("expect"))
         if matched is not None and not matched:
             return R.err(
                 "ACTION_UNVERIFIED", "structured action readback did not match",
@@ -105,16 +105,28 @@ def _redacted_semantic_action(value: Mapping[str, Any]) -> dict[str, Any]:
     return dict(value)
 
 
-def _verify_expectation(channel: SessionInputChannel, observation, expectation: dict[str, Any] | None) -> bool | None:
+def _verify_expectation(channel: SessionInputChannel, observation,
+                        expectation: dict[str, Any] | None) -> tuple[bool | None, Any]:
     if expectation is None:
-        return None
-    matched = _text_present(_semantic_tree(observation.metadata), expectation["text"])
-    stable = int(expectation.get("stableForMs", 0))
-    if matched and stable:
-        channel.wait(stable / 1000)
-        observation = channel.observe()
+        return None, observation
+    stable_seconds = int(expectation.get("stableForMs", 0)) / 1000
+    remaining = channel.remaining_seconds
+    verify_deadline = time.monotonic() + min(3.0, remaining if remaining is not None else 0.0)
+    matched_since: float | None = None
+    while True:
+        now = time.monotonic()
         matched = _text_present(_semantic_tree(observation.metadata), expectation["text"])
-    return matched
+        if matched:
+            matched_since = matched_since or now
+            if now - matched_since >= stable_seconds:
+                return True, observation
+        else:
+            matched_since = None
+        wait_seconds = min(0.05, verify_deadline - now)
+        if wait_seconds <= 0:
+            return False, observation
+        channel.wait(wait_seconds)
+        observation = channel.observe()
 
 
 def _data(channel: SessionInputChannel, request: dict[str, Any], initial: dict[str, Any],
