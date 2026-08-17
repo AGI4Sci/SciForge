@@ -1,6 +1,21 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 import type { SciForgeApi } from '../shared/sciforge-api'
+import { unwrapCapabilityTransportEnvelope } from '../shared/capability-transport-error'
 import { capabilityResourceContentSourceUrl } from '../shared/workspace-preview-asset-url'
+
+type CapabilityObservationResult = Awaited<
+  ReturnType<SciForgeApi['capabilities']['observe']>
+>
+type CapabilityInvocationResult = Awaited<
+  ReturnType<SciForgeApi['capabilities']['invoke']>
+>
+
+function createTransportRequestId(): string {
+  if (typeof globalThis.crypto?.randomUUID !== 'function') {
+    throw new Error('Secure transport request IDs are unavailable in this renderer.')
+  }
+  return globalThis.crypto.randomUUID()
+}
 
 const transcribeSpeech = (payload: Parameters<SciForgeApi['speechToText']['transcribe']>[0]) =>
   ipcRenderer.invoke('speech:transcribe', payload)
@@ -134,9 +149,20 @@ const api = {
   capabilities: {
     readiness: (input) => ipcRenderer.invoke('capability:readiness', input),
     discover: (input = {}) => ipcRenderer.invoke('capability:discover', input),
-    observe: (input) => ipcRenderer.invoke('capability:observe', input),
+    observe: async (input) => unwrapCapabilityTransportEnvelope<CapabilityObservationResult>(
+      await ipcRenderer.invoke('capability:observe', {
+        ...input,
+        transportRequestId: input.transportRequestId ?? createTransportRequestId()
+      })
+    ),
     bind: (input) => ipcRenderer.invoke('capability:bind', input),
-    invoke: (input) => ipcRenderer.invoke('capability:invoke', input),
+    invoke: async (input) => unwrapCapabilityTransportEnvelope<CapabilityInvocationResult>(
+      await ipcRenderer.invoke('capability:invoke', {
+        ...input,
+        transportRequestId: input.transportRequestId ?? createTransportRequestId()
+      })
+    ),
+    cancel: (transportRequestId) => ipcRenderer.invoke('capability:cancel', { transportRequestId }),
     events: (input = {}) => ipcRenderer.invoke('capability:events', input),
     subscribe: (workspaceId) => ipcRenderer.invoke('capability:subscribe', { workspaceId }),
     unsubscribe: (subscriptionId) => ipcRenderer.invoke('capability:unsubscribe', { subscriptionId }),
@@ -149,6 +175,21 @@ const api = {
       ipcRenderer.on('capability:event', wrapped)
       return () => ipcRenderer.removeListener('capability:event', wrapped)
     }
+  },
+  fileTransfers: {
+    pickUploadSource: (input) => ipcRenderer.invoke('fileTransfer:pick-upload-source', {
+      ...input,
+      transportRequestId: input.transportRequestId ?? createTransportRequestId()
+    }),
+    pickDownloadDestination: (input) =>
+      ipcRenderer.invoke('fileTransfer:pick-download-destination', {
+        ...input,
+        transportRequestId: input.transportRequestId ?? createTransportRequestId()
+      }),
+    cancel: (transportRequestId) =>
+      ipcRenderer.invoke('fileTransfer:cancel', { transportRequestId }),
+    settle: (transportRequestId) =>
+      ipcRenderer.invoke('fileTransfer:settle', { transportRequestId })
   },
   exportWriteDocument: (payload) =>
     ipcRenderer.invoke('write:export', payload),

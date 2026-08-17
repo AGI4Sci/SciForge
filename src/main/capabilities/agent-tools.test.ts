@@ -55,6 +55,28 @@ const context: CapabilityAgentToolRequestContext = {
 }
 
 describe('CapabilityAgentToolSurface', () => {
+  it('fails closed when the Host cannot match a tool request to its captured Principal lease', async () => {
+    const discover = vi.fn(async () => [])
+    const assertPrincipalLease = vi.fn(() => {
+      throw new CapabilityAgentToolError(
+        'principal_changed',
+        'The turn Principal lease is unknown.'
+      )
+    })
+    const surface = createCapabilityAgentToolSurface({
+      broker: { ...brokerStub(), discover },
+      assertPrincipalLease,
+      resolveCaller: () => caller
+    })
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context: { ...context, turnId: 'forged-turn' }
+    })).rejects.toMatchObject({ code: 'principal_changed' })
+    expect(discover).not.toHaveBeenCalled()
+  })
+
   it('publishes the broker meta-tools and native visual tools without authority fields', () => {
     const surface = createCapabilityAgentToolSurface({ broker: brokerStub(), resolveCaller: () => caller })
 
@@ -609,6 +631,384 @@ describe('CapabilityAgentToolSurface', () => {
     expect(JSON.stringify(surface.tools())).not.toContain('workspaceLocator')
   })
 
+  it('isolates opaque caches by exact Principal context lease and workspace locator', async () => {
+    const operation = descriptor('document.lease-read', 'Lease read', 'global', 'read')
+    let identityVersion = 1
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => [operation])
+      },
+      assertPrincipalLease: () => ({ identityVersion, principal: null }),
+      resolveCaller: (request) => ({
+        ...caller,
+        ...(request.workspaceLocator ? { workspaceLocator: request.workspaceLocator } : {})
+      })
+    })
+    const firstLocator = {
+      contractVersion: 1 as const,
+      hostSessionId: 'workspace-host-session-1',
+      path: '/remote/workspace'
+    }
+    const first = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context: { ...context, workspaceLocator: firstLocator }
+    })
+    if (first.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discover result.')
+    const operationRef = first.value[0]!.operationRef
+
+    identityVersion = 2
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { operationRef },
+      context: { ...context, workspaceLocator: firstLocator }
+    })).rejects.toMatchObject({ code: 'unknown_operation_ref' })
+
+    identityVersion = 1
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { operationRef },
+      context: {
+        ...context,
+        workspaceLocator: {
+          ...firstLocator,
+          hostSessionId: 'workspace-host-session-2'
+        }
+      }
+    })).rejects.toMatchObject({ code: 'unknown_operation_ref' })
+  })
+
+  it('rechecks the Principal lease after async caller resolution before direct discovery delivery', async () => {
+    const operation = descriptor('document.resolve-barrier', 'Resolve barrier', 'global', 'read')
+    let leaseCurrent = true
+    let switchDuringResolve = false
+    const surface = createCapabilityAgentToolSurface({
+      broker: { ...brokerStub(), discover: vi.fn(async () => [operation]) },
+      assertPrincipalLease: () => {
+        if (!leaseCurrent) throw new CapabilityAgentToolError('principal_changed', 'Principal changed.')
+      },
+      resolveCaller: async () => {
+        await Promise.resolve()
+        if (switchDuringResolve) leaseCurrent = false
+        return caller
+      }
+    })
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context
+    })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discovery.')
+
+    switchDuringResolve = true
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { operationRef: discovered.value[0]!.operationRef },
+      context
+    })).rejects.toMatchObject({ code: 'principal_changed' })
+  })
+
+  it('rechecks the Principal lease after an async resource-reference bind', async () => {
+    let leaseCurrent = true
+    const observe = vi.fn()
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        bindResourceRef: vi.fn(async () => {
+          await Promise.resolve()
+          leaseCurrent = false
+          return handle('1', 'b')
+        }),
+        observe
+      },
+      assertPrincipalLease: () => {
+        if (!leaseCurrent) throw new CapabilityAgentToolError('principal_changed', 'Principal changed.')
+      },
+      resolveCaller: () => caller
+    })
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: `res_${'b'.repeat(26)}` },
+      context
+    })).rejects.toMatchObject({ code: 'principal_changed' })
+    expect(observe).not.toHaveBeenCalled()
+  })
+
+  it('rechecks the Principal lease after nested observation sanitization', async () => {
+    const outerHandle = handle('1', 'o')
+    const nestedHandle = handle('1', 'n')
+    let leaseCurrent = true
+    let observations = 0
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        bindResourceRef: vi.fn(async () => outerHandle),
+        observe: vi.fn(async () => {
+          observations += 1
+          if (observations === 1) {
+            return observation(
+              outerHandle,
+              `res_${'o'.repeat(26)}`,
+              'document',
+              nestedHandle,
+              []
+            )
+          }
+          await Promise.resolve()
+          leaseCurrent = false
+          return observation(
+            nestedHandle,
+            `res_${'n'.repeat(26)}`,
+            'document',
+            { title: 'Principal A state' },
+            []
+          )
+        })
+      },
+      assertPrincipalLease: () => {
+        if (!leaseCurrent) throw new CapabilityAgentToolError('principal_changed', 'Principal changed.')
+      },
+      resolveCaller: () => caller
+    })
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: `res_${'o'.repeat(26)}` },
+      context
+    })).rejects.toMatchObject({ code: 'principal_changed' })
+  })
+
+  it('reports outcome_unknown when Principal changes while sanitizing a committed mutation result', async () => {
+    const operation = globalMutationDescriptor('document.sanitize-barrier', 'Sanitize barrier')
+    const outputHandle = handle('1', 's')
+    let leaseCurrent = true
+    const invoke = vi.fn(async (): Promise<CapabilityInvocationResult> => ({
+      actionId: operation.id,
+      output: outputHandle,
+      changed: true,
+      replayed: false,
+      completedAt: '2026-07-16T11:00:00.000Z'
+    }))
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => [operation]),
+        invoke,
+        observe: vi.fn(async () => {
+          await Promise.resolve()
+          leaseCurrent = false
+          return observation(
+            outputHandle,
+            `res_${'s'.repeat(26)}`,
+            'document',
+            { title: 'Committed result' },
+            []
+          )
+        })
+      },
+      assertPrincipalLease: () => {
+        if (!leaseCurrent) throw new CapabilityAgentToolError('principal_changed', 'Principal changed.')
+      },
+      resolveCaller: () => caller
+    })
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context
+    })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discovery.')
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: discovered.value[0]!.operationRef, input: {} },
+      context: { ...context, turnId: 'turn-sanitize-barrier', callId: 'call-sanitize-barrier' }
+    })).rejects.toMatchObject({ code: 'outcome_unknown' })
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
+  it('normalizes a Broker Principal rejection after mutation dispatch as non-retryable outcome_unknown', async () => {
+    const operation = globalMutationDescriptor('document.dispatch-principal-barrier', 'Dispatch barrier')
+    const invoke = vi.fn(async () => {
+      throw Object.assign(new Error('Principal changed at Broker delivery.'), {
+        code: 'principal_changed'
+      })
+    })
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => [operation]),
+        invoke
+      },
+      resolveCaller: () => caller
+    })
+    const invocationContext = {
+      ...context,
+      turnId: 'turn-dispatch-principal-barrier',
+      callId: 'call-dispatch-principal-barrier'
+    }
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context: invocationContext
+    })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discovery.')
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: discovered.value[0]!.operationRef, input: {} },
+      context: invocationContext
+    })).rejects.toMatchObject({ code: 'outcome_unknown', retryable: false })
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
+  it('normalizes outcome_unknown after an expired resource renewal without a blind retry', async () => {
+    const mutation = defineCapability({
+      id: 'document.renewed-dispatch-barrier',
+      version: '1',
+      title: 'Renewed dispatch barrier',
+      description: 'Exercises outcome classification after one expired handle renewal.',
+      audiences: ['agent'],
+      scope: 'resource',
+      resourceKinds: ['document'],
+      effect: 'workspace-write',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async () => ({ output: { ok: true } })
+    }).descriptor
+    const resourceRef = `res_${'r'.repeat(26)}`
+    const expired = handle('1', 'e')
+    const renewed = handle('1', 'u')
+    const bindResourceRef = vi.fn()
+      .mockResolvedValueOnce(expired)
+      .mockResolvedValueOnce(renewed)
+    const observe = vi.fn(async () => observation(
+      expired,
+      resourceRef,
+      'document',
+      { title: 'Renewable document' },
+      [mutation]
+    ))
+    const invoke = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('expired'), { code: 'resource_handle_expired' }))
+      .mockRejectedValueOnce(Object.assign(new Error('unknown'), { code: 'outcome_unknown' }))
+    const surface = createCapabilityAgentToolSurface({
+      broker: { ...brokerStub(), bindResourceRef, observe, invoke },
+      resolveCaller: () => caller
+    })
+    const invocationContext = {
+      ...context,
+      turnId: 'turn-renewed-dispatch-barrier',
+      callId: 'call-renewed-dispatch-barrier'
+    }
+    const observed = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef },
+      context: invocationContext
+    })
+    if (observed.tool !== CAPABILITY_AGENT_TOOL_NAMES.observe) throw new Error('Expected observation.')
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: {
+        operationRef: observed.value.operations[0]!.operationRef,
+        resourceRef,
+        input: {}
+      },
+      context: invocationContext
+    })).rejects.toMatchObject({ code: 'outcome_unknown', retryable: false })
+    expect(bindResourceRef).toHaveBeenCalledTimes(2)
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects a prior Principal resource reference before approval or label projection', async () => {
+    const protectedOperation = defineCapability({
+      id: 'document.publish-principal-bound-resource',
+      version: '1',
+      title: 'Publish Principal-bound resource',
+      description: 'Requires confirmation without exposing another Principal resource label.',
+      audiences: ['agent'],
+      scope: 'resource',
+      resourceKinds: ['document'],
+      effect: 'external-write',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async () => ({ output: { ok: true } })
+    }).descriptor
+    const priorResourceRef = `res_${'p'.repeat(26)}`
+    const resourceHandle = handle('1', 'p')
+    const bindResourceRef = vi.fn(async () => resourceHandle)
+    const observe = vi.fn(async () => observation(
+      resourceHandle,
+      priorResourceRef,
+      'document',
+      { title: 'Principal A confidential title' },
+      [protectedOperation]
+    ))
+    const invoke = vi.fn()
+    const requestApproval = vi.fn(async () => 'allowed' as const)
+    let principalVersion = 1
+    let principalSubject = 'person-a'
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => [protectedOperation]),
+        bindResourceRef,
+        observe,
+        invoke
+      },
+      assertPrincipalLease: () => ({
+        identityVersion: principalVersion,
+        principal: {
+          authority: 'sciforge.identity-access',
+          subject: principalSubject,
+          assurance: 'local-selection' as const,
+          deviceId: 'installation-1',
+          identityVersion: principalVersion
+        }
+      }),
+      resolveCaller: () => caller,
+      requestApproval
+    })
+
+    await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: priorResourceRef },
+      context
+    })
+
+    principalVersion = 2
+    principalSubject = 'person-b'
+    const discoveredForB = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context
+    })
+    if (discoveredForB.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) {
+      throw new Error('Expected discover result.')
+    }
+    const operationRefForB = discoveredForB.value[0]!.operationRef
+    const error = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: {
+        operationRef: operationRefForB,
+        resourceRef: priorResourceRef,
+        input: {}
+      },
+      context: { ...context, turnId: 'turn-b', callId: 'call-b' }
+    }).then(() => undefined, (caught: unknown) => caught)
+
+    expect(error).toMatchObject({ code: 'unknown_resource_ref' })
+    expect(String((error as Error).message)).not.toContain('Principal A confidential title')
+    expect(requestApproval).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
   it('derives one stable mutation identity from trusted provider call context', async () => {
     const handler = vi.fn(async (input: { value: string }) => ({ output: { value: input.value } }))
     const mutate = defineCapability({
@@ -905,6 +1305,59 @@ describe('CapabilityAgentToolSurface', () => {
       { runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1' },
       'user_stop'
     )
+  })
+
+  it('rechecks the captured Principal lease after approval and before dispatch', async () => {
+    const protectedCapability = defineCapability({
+      id: 'test.principal-bound-publish',
+      version: '1',
+      title: 'Principal-bound publish',
+      description: 'Requires confirmation and one unchanged Principal lease.',
+      audiences: ['agent'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async () => ({ output: { ok: true } })
+    })
+    const protectedDescriptor = protectedCapability.descriptor
+    const invoke = vi.fn()
+    let leaseCurrent = true
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => [protectedDescriptor]),
+        invoke
+      },
+      assertPrincipalLease: () => {
+        if (!leaseCurrent) {
+          throw new CapabilityAgentToolError('principal_changed', 'Principal changed.')
+        }
+      },
+      resolveCaller: () => caller,
+      requestApproval: async () => {
+        leaseCurrent = false
+        return 'allowed' as const
+      }
+    })
+    const invocationContext = { ...context, turnId: 'turn-a', callId: 'call-a' }
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context: invocationContext
+    })
+    const operationRef = discovered.tool === CAPABILITY_AGENT_TOOL_NAMES.discover
+      ? discovered.value[0]?.operationRef
+      : undefined
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef, input: {} },
+      context: invocationContext
+    })).rejects.toMatchObject({ code: 'principal_changed' })
+    expect(invoke).not.toHaveBeenCalled()
   })
 
   it('aborts an active native broker invocation when its runtime turn stops', async () => {

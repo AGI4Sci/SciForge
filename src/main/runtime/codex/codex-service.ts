@@ -94,6 +94,7 @@ import {
 import {
   filterAgentRuntimeToolSurface,
   nativeAgentToolExecutionMetadata,
+  type AgentRuntimeToolCallContext,
   type AgentRuntimeToolSurface
 } from '../agent-runtime/agent-tool-surface'
 import type {
@@ -122,6 +123,14 @@ import { probeCodexPreToolUseHook, type CodexPreToolUseHookDefinition } from './
 import type { ManagedGuiMcpLaunchConfig } from '../../managed-gui-mcp-config'
 
 class CodexCodingPlanLoginInProgressError extends Error {}
+
+const dynamicToolDeliveryEffect = Symbol('sciforge.dynamic-tool-delivery-effect')
+type DynamicToolDeliveryEffect = NonNullable<
+  Awaited<ReturnType<AgentRuntimeToolSurface['call']>>['deliveryEffect']
+>
+type DynamicToolResponseWithDelivery = RuntimeToolCallResponse & {
+  [dynamicToolDeliveryEffect]?: DynamicToolDeliveryEffect
+}
 
 export type CodexRuntimeServiceOptions = {
   settings: () => Promise<AppSettingsV1>
@@ -1622,9 +1631,24 @@ export class CodexRuntimeService {
   private async handleDynamicToolCall(request: RuntimeToolCallRequest): Promise<RuntimeToolCallResponse> {
     const settings = await this.options.settings()
     const contextualRequest = await this.requestWithGuiThreadContext(request)
-    await this.publishDynamicToolExecutionFact(contextualRequest, 'dispatched')
+    const principalLeaseContext = codexCapabilityPrincipalLeaseContext(contextualRequest)
+    const assertPrincipalLease = (): void => {
+      this.options.capabilityAgentTools?.assertPrincipalLease?.(principalLeaseContext)
+    }
+    try {
+      assertPrincipalLease()
+    } catch (error) {
+      return principalDeliveryFailure(contextualRequest, undefined, error)
+    }
+    await this.publishDynamicToolExecutionFact(
+      contextualRequest,
+      'dispatched',
+      undefined,
+      { includePayload: false }
+    )
     let response: RuntimeToolCallResponse
     try {
+      assertPrincipalLease()
       response = await this.executeDynamicToolCall(contextualRequest, settings)
     } catch (error) {
       const name = request.namespace ? `${request.namespace}.${request.tool}` : request.tool
@@ -1639,7 +1663,22 @@ export class CodexRuntimeService {
         ...dynamicToolErrorMetadata(error)
       }
     }
-    await this.publishDynamicToolExecutionFact(contextualRequest, response.success ? 'succeeded' : 'failed', response)
+    try {
+      assertPrincipalLease()
+    } catch (error) {
+      response = principalDeliveryFailure(contextualRequest, response, error)
+    }
+    await this.publishDynamicToolExecutionFact(
+      contextualRequest,
+      response.success ? 'succeeded' : 'failed',
+      response,
+      { includePayload: false }
+    )
+    try {
+      assertPrincipalLease()
+    } catch (error) {
+      response = principalDeliveryFailure(contextualRequest, response, error)
+    }
     return response
   }
 
@@ -1697,7 +1736,7 @@ export class CodexRuntimeService {
       { tool: request.tool, value: result.value },
       callId
     )
-    return {
+    const response: DynamicToolResponseWithDelivery = {
       success: true,
       contentItems: [{ type: 'inputText', text: JSON.stringify(result.value, null, 2) }],
       structuredContent: result.value,
@@ -1713,12 +1752,22 @@ export class CodexRuntimeService {
           }
         : {})
     }
+    if (result.deliveryEffect) {
+      Object.defineProperty(response, dynamicToolDeliveryEffect, {
+        configurable: false,
+        enumerable: false,
+        value: result.deliveryEffect,
+        writable: false
+      })
+    }
+    return response
   }
 
   private async publishDynamicToolExecutionFact(
     request: RuntimeToolCallRequest,
     phase: 'dispatched' | 'succeeded' | 'failed',
-    response?: RuntimeToolCallResponse
+    response?: RuntimeToolCallResponse,
+    options: { includePayload?: boolean } = {}
   ): Promise<void> {
     const threadId = stringValue(request.threadId).trim()
     const turnId = stringValue(request.turnId).trim()
@@ -1735,23 +1784,37 @@ export class CodexRuntimeService {
         status: phase === 'dispatched' ? 'running' : phase === 'succeeded' ? 'success' : 'error',
         toolKind: 'tool_call',
         ...(response?.effects?.length ? { effects: response.effects } : {}),
-        ...(response?.completionReceipts?.length ? { completionReceipts: response.completionReceipts } : {}),
-        ...(terminal && response ? { detail: dynamicToolResponseSummary(response) } : {}),
+        ...(options.includePayload !== false && response?.completionReceipts?.length
+          ? { completionReceipts: response.completionReceipts }
+          : {}),
+        ...(terminal && response
+          ? {
+              detail: options.includePayload === false
+                ? response.success ? 'Dynamic tool completed successfully.' : 'Dynamic tool failed.'
+                : dynamicToolResponseSummary(response)
+            }
+          : {}),
         meta: {
           callId,
           toolName,
           phase,
           factSource: terminal ? 'executor_result' : 'runtime_lifecycle',
           evidenceStrength: terminal ? 'executor_receipt' : 'runtime_lifecycle',
-          arguments: dynamicToolArgumentsRecord(request.arguments) ?? request.arguments,
+          ...(options.includePayload === false
+            ? {}
+            : { arguments: dynamicToolArgumentsRecord(request.arguments) ?? request.arguments }),
           ...(terminal ? { success: response?.success === true } : {}),
-          ...(response?.structuredContent !== undefined ? { structuredContent: response.structuredContent } : {}),
+          ...(options.includePayload !== false && response?.structuredContent !== undefined
+            ? { structuredContent: response.structuredContent }
+            : {}),
           ...(response?.errorCode ? { errorCode: response.errorCode } : {}),
           ...(response?.failureClass ? { failureClass: response.failureClass } : {}),
           ...(response?.retryable !== undefined ? { retryable: response.retryable } : {}),
           ...(response?.recoveryGuidance ? { recoveryGuidance: response.recoveryGuidance } : {}),
           ...(response?.providerStage ? { providerStage: response.providerStage } : {}),
-          ...(response?.resourceIdentity ? { resourceIdentity: response.resourceIdentity } : {}),
+          ...(options.includePayload !== false && response?.resourceIdentity
+            ? { resourceIdentity: response.resourceIdentity }
+            : {}),
           ...(response?.evidenceDelta !== undefined ? { evidenceDelta: response.evidenceDelta } : {}),
           ...(response?.stateChanged !== undefined ? { stateChanged: response.stateChanged } : {}),
           ...(request.namespace ? { namespace: request.namespace } : {})
@@ -3674,6 +3737,54 @@ function failedDynamicToolCall(
     contentItems: [{ type: 'inputText', text: message }],
     ...metadata
   }
+}
+
+function codexCapabilityPrincipalLeaseContext(
+  request: RuntimeToolCallRequest
+): AgentRuntimeToolCallContext {
+  const threadId = stringValue(request.threadId).trim()
+  const turnId = stringValue(request.turnId).trim()
+  return {
+    requestId: request.requestId,
+    runtimeId: 'codex',
+    ...(threadId ? { threadId } : {}),
+    ...(turnId ? { turnId } : {}),
+    callId: codexHostToolCallId(request)
+  }
+}
+
+function principalDeliveryFailure(
+  request: RuntimeToolCallRequest,
+  response: RuntimeToolCallResponse | undefined,
+  error: unknown
+): RuntimeToolCallResponse {
+  const existingCode = stringValue(response?.errorCode).trim()
+  const deliveryEffect = (response as DynamicToolResponseWithDelivery | undefined)
+    ?.[dynamicToolDeliveryEffect]
+  const outcomeUnknown = existingCode === 'outcome_unknown' || (
+    response?.success === true && isCommittedMutationEffect(deliveryEffect)
+  )
+  const code = outcomeUnknown ? 'outcome_unknown' : 'principal_changed'
+  const diagnostic = error instanceof Error && error.message.trim()
+    ? error.message.trim()
+    : 'The Host Principal changed before dynamic tool result delivery.'
+  return failedDynamicToolCall(
+    outcomeUnknown
+      ? 'The Principal changed after capability dispatch; the mutation outcome is unknown and must not be retried blindly.'
+      : diagnostic,
+    {
+      errorCode: code,
+      failureClass: outcomeUnknown ? 'outcome_unknown' : 'authorization_changed',
+      retryable: false,
+      evidenceDelta: false
+    }
+  )
+}
+
+function isCommittedMutationEffect(
+  effect: DynamicToolDeliveryEffect | undefined
+): boolean {
+  return effect === 'workspace-write' || effect === 'external-write' || effect === 'destructive'
 }
 
 function codexModelAccessThreadParams(settings: AppSettingsV1): {

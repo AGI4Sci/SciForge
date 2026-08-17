@@ -306,34 +306,91 @@ describe('app capability registry', () => {
     }).map(({ id }) => id)).not.toContain(CONTROLLED_PROCESS_CREATE_ACTION_ID)
   })
 
-  it('registers current-surface discovery without exposing legacy visual inspection operations', async () => {
+  it('reuses one current-surface registration while observing each agent caller dynamically', async () => {
     const { dependencies } = createDependencies()
-    const broker = new CapabilityBroker(createRegistry({
-      ...dependencies,
-      visibleContextService: {
-        currentSurface: vi.fn(async () => ({
-          resourceId: 'electron:1',
-          workspaceId: '/workspace',
-          semanticRevision: 'surface-semantic-1',
-          layoutRevision: '12',
-          state: {
-            layoutFreshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
-            targets: [{ targetRef: `target_${'f'.repeat(26)}`, kind: 'window' }],
-            resources: []
-          }
-        }))
+    const currentSurface = vi.fn(async (_callerId?: string) => ({
+      resourceId: 'electron:1',
+      workspaceId: '/workspace',
+      semanticRevision: 'surface-semantic-1',
+      layoutRevision: '12',
+      state: {
+        layoutFreshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
+        targets: [{ targetRef: `target_${'f'.repeat(26)}`, kind: 'window' as const }],
+        resources: []
       }
     }))
-    const caller = { audience: 'agent' as const, callerId: 'thread-1', workspaceId: '/workspace' }
+    const broker = new CapabilityBroker(createRegistry({
+      ...dependencies,
+      visibleContextService: { currentSurface }
+    }))
+    const firstCaller = { audience: 'agent' as const, callerId: 'thread-1', workspaceId: '/workspace' }
+    const secondCaller = { ...firstCaller, callerId: 'thread-2' }
 
-    const opened = await broker.invoke(caller, { actionId: APP_CAPABILITY_IDS.surfaceCurrent, input: {} })
-    expect(record(opened.output).current).toMatchObject({
+    const firstOpened = await broker.invoke(firstCaller, {
+      actionId: APP_CAPABILITY_IDS.surfaceCurrent,
+      input: {}
+    })
+    const secondOpened = await broker.invoke(secondCaller, {
+      actionId: APP_CAPABILITY_IDS.surfaceCurrent,
+      input: {}
+    })
+    expect(record(firstOpened.output).current).toMatchObject({
       layoutFreshness: { stale: false },
       resources: []
     })
-    const surface = capabilityResourceHandleSchema.parse(record(opened.output).surface)
-    const observed = await broker.observe(caller, { resource: surface })
-    expect(observed.operations).toEqual([])
+    const firstSurface = capabilityResourceHandleSchema.parse(record(firstOpened.output).surface)
+    const secondSurface = capabilityResourceHandleSchema.parse(record(secondOpened.output).surface)
+    await expect(broker.observe(firstCaller, { resource: firstSurface }))
+      .resolves.toMatchObject({ operations: [] })
+    await expect(broker.observe(secondCaller, { resource: secondSurface }))
+      .resolves.toMatchObject({ operations: [] })
+    expect(currentSurface.mock.calls.map(([callerId]) => callerId)).toEqual([
+      'thread-1',
+      'thread-2',
+      'thread-1',
+      'thread-2'
+    ])
+  })
+
+  it('bounds current-surface registrations and reclaims capacity after handle expiry', async () => {
+    vi.useFakeTimers()
+    try {
+      let resourceSequence = 0
+      const { dependencies } = createDependencies()
+      const broker = new CapabilityBroker(createRegistry({
+        ...dependencies,
+        visibleContextService: {
+          currentSurface: vi.fn(async () => ({
+            resourceId: `electron:${resourceSequence++}`,
+            workspaceId: '/workspace',
+            semanticRevision: 'surface-semantic-1',
+            layoutRevision: '12',
+            state: {
+              layoutFreshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
+              targets: [{ targetRef: `target_${'f'.repeat(26)}`, kind: 'window' as const }],
+              resources: []
+            }
+          }))
+        }
+      }), { handleTtlMs: 5 })
+      const caller = { audience: 'agent' as const, callerId: 'thread-1', workspaceId: '/workspace' }
+
+      for (let index = 0; index < 512; index += 1) {
+        await broker.invoke(caller, { actionId: APP_CAPABILITY_IDS.surfaceCurrent, input: {} })
+      }
+      await expect(broker.invoke(caller, {
+        actionId: APP_CAPABILITY_IDS.surfaceCurrent,
+        input: {}
+      })).rejects.toMatchObject({ code: 'handler_failed' })
+
+      await vi.advanceTimersByTimeAsync(6)
+      await expect(broker.invoke(caller, {
+        actionId: APP_CAPABILITY_IDS.surfaceCurrent,
+        input: {}
+      })).resolves.toMatchObject({ replayed: false })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('keeps Workspace Preview discoverable when a visual-file query includes surplus format words', () => {
@@ -378,6 +435,27 @@ describe('app capability registry', () => {
     expect(open).toHaveBeenNthCalledWith(2, input)
     expect(capabilityResourceHandleSchema.parse(record(uiResult.output).resource)).toBeTruthy()
     expect(capabilityResourceHandleSchema.parse(record(agentResult.output).resource)).toBeTruthy()
+  })
+
+  it('rejects Workspace Preview capacity before allocating another provider session', async () => {
+    const { dependencies, open } = createDependencies()
+    let identityVersion = 1
+    const broker = new CapabilityBroker(createRegistry(dependencies), {
+      resolveCurrentPrincipalContext: () => ({ identityVersion, principal: null })
+    })
+    const previewCaller = { audience: 'ui' as const, callerId: 'window-1', workspaceId: '/workspace' }
+    const request = {
+      actionId: APP_CAPABILITY_IDS.workspacePreviewOpen,
+      input: { path: '/workspace/paper.md', workspaceRoot: '/workspace' }
+    }
+
+    for (identityVersion = 1; identityVersion <= 512; identityVersion += 1) {
+      await broker.invoke(previewCaller, request)
+    }
+    identityVersion = 513
+    await expect(broker.invoke(previewCaller, request))
+      .rejects.toMatchObject({ code: 'handler_failed' })
+    expect(open).toHaveBeenCalledTimes(512)
   })
 
   it('explicitly shares Workspace Preview resource handles across trusted audiences in one workspace', async () => {
@@ -429,6 +507,10 @@ describe('app capability registry', () => {
     expect(dependencies.workspacePreviewHost.releaseSession).toHaveBeenCalledWith('preview-1')
     expect(() => broker.describeResourceRef(agentCaller, observed.resourceRef))
       .toThrow(expect.objectContaining({ code: 'resource_ref_retired' }))
+    await expect(broker.invoke(uiCaller, {
+      actionId: APP_CAPABILITY_IDS.workspacePreviewOpen,
+      input: { path: '/workspace/paper.md', workspaceRoot: '/workspace' }
+    })).resolves.toMatchObject({ replayed: false })
   })
 
   it('streams resource content by invoking the registered describe and range capabilities', async () => {

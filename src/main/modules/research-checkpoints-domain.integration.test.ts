@@ -195,6 +195,8 @@ describe('installed Research Checkpoints and Artifact Versions domains', () => {
       threadId: event.threadId,
       clientDirectiveId: event.clientDirectiveId!,
       inputDigest: `sha256:${digest('crash-replay-input')}`,
+      principal: null,
+      principalContext: { identityVersion: 0, principal: null },
       workspaceRoot
     }
 
@@ -230,6 +232,8 @@ describe('installed Research Checkpoints and Artifact Versions domains', () => {
       boundaryLeaseId: start.boundaryLeaseId,
       clientDirectiveId: start.clientDirectiveId,
       inputDigest: start.inputDigest,
+      principal: start.principal,
+      principalContext: start.principalContext,
       workspaceRoot
     }
     const firstActivated = await activateResearchComposition({

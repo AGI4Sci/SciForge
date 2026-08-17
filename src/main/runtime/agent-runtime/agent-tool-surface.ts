@@ -32,6 +32,8 @@ export type AgentRuntimeToolCall = Readonly<{
 export type AgentRuntimeToolResult = Readonly<{
   tool: string
   value: unknown
+  /** Host-private delivery classification; runtime adapters must not expose it to the model. */
+  deliveryEffect?: 'read' | 'compute' | 'workspace-write' | 'external-write' | 'destructive'
 }>
 
 export type NativeAgentToolExecutionMetadata = Readonly<{
@@ -616,6 +618,8 @@ function errorMessage(error: unknown): string {
  */
 export type AgentRuntimeToolSurface = Readonly<{
   tools(): readonly AgentRuntimeToolDefinition[]
+  /** Host-private exact historical-turn Principal lease verification. */
+  assertPrincipalLease?(context: AgentRuntimeToolCallContext): void
   call(
     request: AgentRuntimeToolCall,
     options?: { signal?: AbortSignal }
@@ -640,6 +644,7 @@ export function filterAgentRuntimeToolSurface(
   const allowed = new Set(allowedTools)
   return {
     tools: () => surface.tools().filter((tool) => allowed.has(tool.name)),
+    assertPrincipalLease: (context) => surface.assertPrincipalLease?.(context),
     call: (request, options) => {
       if (!allowed.has(request.name)) {
         throw new Error(`AgentRuntime tool is not allowed for this execution: ${request.name}`)
@@ -671,6 +676,9 @@ export function composeAgentRuntimeToolSurfaces(
       owners()
       return surfaces.flatMap((surface) => [...surface.tools()])
     },
+    assertPrincipalLease: (context) => {
+      for (const surface of surfaces) surface.assertPrincipalLease?.(context)
+    },
     call: (request, options) => {
       const owner = owners().get(request.name)
       if (!owner) throw new Error(`Unknown AgentRuntime tool: ${request.name}`)
@@ -689,6 +697,11 @@ export function createDeferredAgentRuntimeToolSurface(
 ): AgentRuntimeToolSurface {
   return {
     tools: () => resolve()?.tools() ?? [],
+    assertPrincipalLease: (context) => {
+      const surface = resolve()
+      if (!surface) throw new Error('AgentRuntime Host tools are not initialized.')
+      surface.assertPrincipalLease?.(context)
+    },
     call: (request, options) => {
       const surface = resolve()
       if (!surface) throw new Error('AgentRuntime Host tools are not initialized.')

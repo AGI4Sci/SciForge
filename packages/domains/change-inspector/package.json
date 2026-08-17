@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-change-inspector",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "license": "MIT",
   "type": "module",
   "private": false,

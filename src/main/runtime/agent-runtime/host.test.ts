@@ -8,6 +8,11 @@ import {
   type WorkspaceLocator
 } from '@sciforge/domain-sdk/workspace-host'
 import {
+  samePrincipalContextSnapshot,
+  type PrincipalContextSnapshot,
+  type PrincipalSnapshot
+} from '@sciforge/domain-sdk/principal'
+import {
   sanitizeTraceTextChunks,
   type TraceEvent,
   type TraceEventInput
@@ -4421,6 +4426,778 @@ describe('AgentRuntimeHost', () => {
     })
   })
 
+  it('captures one Host Principal at dispatch and overwrites adapter attribution through materialization', async () => {
+    const principalA: PrincipalSnapshot = Object.freeze({
+      authority: 'identity-access.local',
+      subject: 'user-a',
+      assurance: 'local-selection',
+      deviceId: 'device-a',
+      identityVersion: 3
+    })
+    const forgedPrincipal: PrincipalSnapshot = Object.freeze({
+      authority: 'provider.forged',
+      subject: 'attacker',
+      assurance: 'cloud-authenticated',
+      deviceId: 'untrusted-device',
+      identityVersion: 88
+    })
+    const principalContext: PrincipalContextSnapshot = Object.freeze({
+      identityVersion: principalA.identityVersion,
+      principal: principalA
+    })
+    const forgedPrincipalContext: PrincipalContextSnapshot = Object.freeze({
+      identityVersion: forgedPrincipal.identityVersion,
+      principal: forgedPrincipal
+    })
+    let currentPrincipalContext: PrincipalContextSnapshot = Object.freeze({
+      identityVersion: principalA.identityVersion,
+      principal: principalA
+    })
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      workspace: '/tmp/workspace',
+      updatedAt: '2026-08-16T00:00:00.000Z'
+    })
+    vi.mocked(codex.startTurn).mockImplementation(async (context) => {
+      expect(context.principal).toEqual(principalA)
+      expect(context.principalContext).toEqual(principalContext)
+      currentPrincipalContext = Object.freeze({ identityVersion: 4, principal: null })
+      return { threadId: 'codex-thread', turnId: 'turn-principal' }
+    })
+    vi.mocked(codex.snapshot).mockResolvedValue({
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      workspace: '/tmp/workspace',
+      updatedAt: '2026-08-16T00:00:00.000Z',
+      latestSeq: 4,
+      latestTurnId: 'turn-principal',
+      latestTurnStatus: 'completed',
+      turns: [{
+        id: 'turn-principal',
+        threadId: 'codex-thread',
+        status: 'completed',
+        items: [{
+          id: 'assistant-principal',
+          turnId: 'turn-principal',
+          kind: 'assistant_message',
+          text: 'done',
+          principal: forgedPrincipal,
+          principalContext: forgedPrincipalContext
+        }]
+      }]
+    })
+    vi.mocked(codex.subscribeEvents).mockImplementation(async function* () {
+      yield {
+        kind: 'item_snapshot',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'turn-principal',
+        seq: 3,
+        principal: forgedPrincipal,
+        principalContext: forgedPrincipalContext,
+        item: {
+          id: 'assistant-principal',
+          turnId: 'turn-principal',
+          kind: 'assistant_message',
+          principal: forgedPrincipal,
+          principalContext: forgedPrincipalContext
+        }
+      } satisfies AgentRuntimeEvent
+      yield {
+        kind: 'turn_lifecycle',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'turn-principal',
+        state: 'completed',
+        seq: 4,
+        createdAt: '2026-08-16T00:00:01.000Z',
+        principal: forgedPrincipal,
+        principalContext: forgedPrincipalContext
+      } satisfies AgentRuntimeEvent
+    })
+    const publish = vi.fn(async (_intent: TurnArtifactIntent) => undefined)
+    const turnArtifacts = fakeTurnArtifactPublisher(publish)
+    const { recorder: trace, append } = fakeTraceRecorder()
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      turnArtifacts,
+      services: { trace },
+      getPrincipalContext: () => currentPrincipalContext
+    })
+    const lifecycle: Array<import('@sciforge/domain-sdk/host').DomainMainTurnLifecycleEvent> = []
+    host.subscribeTurnLifecycle((event) => { lifecycle.push(event) })
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Create the result.',
+      workspace: '/tmp/workspace',
+      clientDirectiveId: 'directive-principal'
+    })
+    expect(turnArtifacts.registerStart).toHaveBeenCalledWith(expect.objectContaining({
+      principal: principalA,
+      principalContext
+    }))
+    expect(turnArtifacts.bindStart).toHaveBeenCalledWith(
+      expect.objectContaining({ principal: principalA, principalContext }),
+      expect.objectContaining({ principal: principalA, principalContext })
+    )
+    expect(host.principalForToolRequest({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      turnId: 'turn-principal'
+    })).toEqual({ identityVersion: 3, principal: principalA })
+    expect(() => host.principalForToolRequest({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      turnId: 'provider-invented-turn'
+    })).toThrow('no Host Principal binding')
+
+    const visible: AgentRuntimeEvent[] = []
+    for await (const event of host.subscribeEvents({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      sinceSeq: 0
+    })) visible.push(event)
+    expect(visible).toHaveLength(2)
+    expect(visible).toEqual(expect.arrayContaining([
+      expect.objectContaining({ principal: principalA, principalContext })
+    ]))
+    const snapshotEvent = visible.find((event) => event.kind === 'item_snapshot')
+    expect(snapshotEvent).toEqual(expect.objectContaining({
+      principal: principalA,
+      principalContext,
+      item: expect.objectContaining({ principal: principalA, principalContext })
+    }))
+
+    await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(append).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(append).mock.calls.every(([record]) => (
+      (record.payload.event as AgentRuntimeEvent).principal?.subject === principalA.subject
+    ))).toBe(true)
+    await vi.waitFor(() => expect(lifecycle.some((event) => event.kind === 'after-turn')).toBe(true))
+    expect(lifecycle).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'before-turn', principal: principalA, principalContext }),
+      expect.objectContaining({ kind: 'after-turn', principal: principalA, principalContext })
+    ]))
+    const intent = vi.mocked(publish).mock.calls[0]![0]
+    expect(intent.principal).toEqual(principalA)
+    expect(intent.principalContext).toEqual(principalContext)
+    const materialized = await host.materializeCompletedTurnArtifact(intent)
+    expect(materialized.principal).toEqual(principalA)
+    expect(materialized.principalContext).toEqual(principalContext)
+    expect(materialized.artifacts).toEqual([
+      expect.objectContaining({ principal: principalA, principalContext })
+    ])
+    await host.dispose()
+  })
+
+  it('binds and removes one exact Host-originated tool Principal lease', async () => {
+    const principal: PrincipalSnapshot = Object.freeze({
+      authority: 'identity-access.local',
+      subject: 'smoke-user',
+      assurance: 'local-selection',
+      deviceId: 'device-a',
+      identityVersion: 7
+    })
+    const principalContext: PrincipalContextSnapshot = Object.freeze({
+      identityVersion: principal.identityVersion,
+      principal
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [fakeAdapter('codex', {
+        id: 'host-workflow-thread',
+        runtimeId: 'codex',
+        title: 'Host workflow',
+        updatedAt: '2026-08-17T00:00:00.000Z'
+      })],
+      getPrincipalContext: () => principalContext
+    })
+    const identity = {
+      runtimeId: 'codex',
+      threadId: 'host-workflow-thread',
+      turnId: 'host-workflow-turn'
+    }
+
+    const observed = await host.withHostToolRequestPrincipalLease(identity, async () => {
+      expect(host.principalForToolRequest(identity)).toEqual(principalContext)
+      await expect(host.withHostToolRequestPrincipalLease(identity, async () => undefined))
+        .rejects.toThrow('already has a Host Principal binding')
+      return 'done'
+    })
+
+    expect(observed).toBe('done')
+    expect(() => host.principalForToolRequest(identity)).toThrow('no Host Principal binding')
+    await host.dispose()
+  })
+
+  it('captures Principal after the durable predecessor flush, not when a turn is queued', async () => {
+    const principalA: PrincipalSnapshot = Object.freeze({
+      authority: 'identity-access.local',
+      subject: 'user-a',
+      assurance: 'local-selection',
+      deviceId: 'device-a',
+      identityVersion: 1
+    })
+    const principalB: PrincipalSnapshot = Object.freeze({
+      ...principalA,
+      subject: 'user-b',
+      identityVersion: 2
+    })
+    let current: PrincipalContextSnapshot = Object.freeze({
+      identityVersion: principalA.identityVersion,
+      principal: principalA
+    })
+    const predecessor = deferred<void>()
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-08-16T00:00:00.000Z'
+    })
+    const turnArtifacts = fakeTurnArtifactPublisher()
+    vi.mocked(turnArtifacts.flushThread).mockImplementationOnce(async () => predecessor.promise)
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      turnArtifacts,
+      getPrincipalContext: () => current
+    })
+
+    const start = host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Run after the predecessor.',
+      clientDirectiveId: 'directive-after-predecessor'
+    })
+    await vi.waitFor(() => expect(turnArtifacts.flushThread).toHaveBeenCalledTimes(1))
+    current = Object.freeze({ identityVersion: principalB.identityVersion, principal: principalB })
+    predecessor.resolve(undefined)
+    await start
+
+    expect(turnArtifacts.registerStart).toHaveBeenCalledWith(expect.objectContaining({
+      principal: principalB
+    }))
+    expect(codex.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ principal: principalB }),
+      expect.anything()
+    )
+    host.dispose()
+  })
+
+  it('retains an exact signed-out context lease and detects sign-in/sign-out ABA', async () => {
+    const signedInPrincipal: PrincipalSnapshot = Object.freeze({
+      authority: 'identity-access.local',
+      subject: 'user-a',
+      assurance: 'local-selection',
+      deviceId: 'device-a',
+      identityVersion: 2
+    })
+    const signedOutV1: PrincipalContextSnapshot = Object.freeze({
+      identityVersion: 1,
+      principal: null
+    })
+    let liveContext = signedOutV1
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-08-16T00:00:00.000Z'
+    })
+    vi.mocked(codex.startTurn).mockResolvedValue({
+      threadId: 'codex-thread',
+      turnId: 'turn-signed-out-v1'
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      getPrincipalContext: () => liveContext
+    })
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Inspect while signed out.',
+      clientDirectiveId: 'directive-signed-out-v1'
+    })
+    const captured = host.principalForToolRequest({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      turnId: 'turn-signed-out-v1'
+    })
+    expect(captured).toEqual(signedOutV1)
+    expect(samePrincipalContextSnapshot(captured, liveContext)).toBe(true)
+
+    liveContext = Object.freeze({ identityVersion: 2, principal: signedInPrincipal })
+    expect(samePrincipalContextSnapshot(captured, liveContext)).toBe(false)
+    liveContext = Object.freeze({ identityVersion: 3, principal: null })
+    expect(samePrincipalContextSnapshot(captured, liveContext)).toBe(false)
+    expect(host.principalForToolRequest({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      turnId: 'turn-signed-out-v1'
+    })).toEqual(signedOutV1)
+    await host.dispose()
+  })
+
+  it('rejects a durable start when the Principal changes after the before-turn barrier', async () => {
+    const signedOutV1: PrincipalContextSnapshot = Object.freeze({
+      identityVersion: 1,
+      principal: null
+    })
+    const signedOutV2: PrincipalContextSnapshot = Object.freeze({
+      identityVersion: 2,
+      principal: null
+    })
+    let liveContext = signedOutV1
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-08-16T00:00:00.000Z'
+    })
+    const turnArtifacts = fakeTurnArtifactPublisher()
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      turnArtifacts,
+      getPrincipalContext: () => liveContext
+    })
+    host.subscribeRequiredBeforeTurn(async (event) => {
+      expect(event.principalContext).toEqual(signedOutV1)
+      liveContext = signedOutV2
+    })
+
+    await expect(host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Do not dispatch after the Principal changes.',
+      clientDirectiveId: 'directive-principal-barrier-race'
+    })).rejects.toMatchObject({
+      name: 'AgentRuntimeTurnPreflightError',
+      code: 'runtime_turn_principal_changed',
+      retryable: false
+    })
+    expect(codex.startTurn).not.toHaveBeenCalled()
+    expect(turnArtifacts.bindStart).not.toHaveBeenCalled()
+    expect(turnArtifacts.publishLifecycleSettlement).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: 'rejected',
+        principalContext: signedOutV1
+      })
+    )
+    await host.dispose()
+  })
+
+  it('rechecks the Principal after prepared identity capture and before durable binding', async () => {
+    const signedOutV1: PrincipalContextSnapshot = Object.freeze({
+      identityVersion: 1,
+      principal: null
+    })
+    const signedOutV2: PrincipalContextSnapshot = Object.freeze({
+      identityVersion: 2,
+      principal: null
+    })
+    let liveContext = signedOutV1
+    const dispatch = vi.fn(async () => ({
+      threadId: 'claude-thread',
+      turnId: 'turn-prepared-principal-race'
+    }))
+    const claude = fakeAdapter('claude', {
+      id: 'claude-thread',
+      runtimeId: 'claude',
+      title: 'Claude',
+      updatedAt: '2026-08-16T00:00:00.000Z'
+    })
+    claude.prepareTurnCapture = vi.fn(async () => {
+      liveContext = signedOutV2
+      return {
+        handle: {
+          threadId: 'claude-thread',
+          turnId: 'turn-prepared-principal-race'
+        },
+        dispatch
+      }
+    })
+    const turnArtifacts = fakeTurnArtifactPublisher()
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('claude'),
+      adapters: [claude],
+      turnArtifacts,
+      getPrincipalContext: () => liveContext
+    })
+
+    await expect(host.startTurn({
+      runtimeId: 'claude',
+      threadId: 'claude-thread',
+      text: 'Do not bind or dispatch after capture changes identity.',
+      clientDirectiveId: 'directive-prepared-principal-race'
+    })).rejects.toMatchObject({ code: 'runtime_turn_principal_changed' })
+    expect(turnArtifacts.bindStart).not.toHaveBeenCalled()
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(turnArtifacts.publishLifecycleSettlement).toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'rejected', principalContext: signedOutV1 })
+    )
+    await host.dispose()
+  })
+
+  it('rechecks the Principal after prepared durable binding and before dispatch', async () => {
+    const signedOutV1: PrincipalContextSnapshot = Object.freeze({
+      identityVersion: 1,
+      principal: null
+    })
+    const signedOutV2: PrincipalContextSnapshot = Object.freeze({
+      identityVersion: 2,
+      principal: null
+    })
+    let liveContext = signedOutV1
+    const dispatch = vi.fn(async () => ({
+      threadId: 'claude-thread',
+      turnId: 'turn-bound-principal-race'
+    }))
+    const claude = fakeAdapter('claude', {
+      id: 'claude-thread',
+      runtimeId: 'claude',
+      title: 'Claude',
+      updatedAt: '2026-08-16T00:00:00.000Z'
+    })
+    claude.prepareTurnCapture = vi.fn(async () => ({
+      handle: {
+        threadId: 'claude-thread',
+        turnId: 'turn-bound-principal-race'
+      },
+      dispatch
+    }))
+    const turnArtifacts = fakeTurnArtifactPublisher()
+    vi.mocked(turnArtifacts.bindStart).mockImplementation(async () => {
+      liveContext = signedOutV2
+      return true
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('claude'),
+      adapters: [claude],
+      turnArtifacts,
+      getPrincipalContext: () => liveContext
+    })
+
+    await expect(host.startTurn({
+      runtimeId: 'claude',
+      threadId: 'claude-thread',
+      text: 'Do not dispatch after durable binding changes identity.',
+      clientDirectiveId: 'directive-bound-principal-race'
+    })).rejects.toMatchObject({ code: 'runtime_turn_principal_changed' })
+    expect(turnArtifacts.bindStart).toHaveBeenCalledOnce()
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(claude.subscribeEvents).not.toHaveBeenCalled()
+    expect(turnArtifacts.publishLifecycleSettlement).toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'rejected', principalContext: signedOutV1 })
+    )
+    await host.dispose()
+  })
+
+  it('keeps steering bound to the original turn context and rejects a later Principal', async () => {
+    const signedOutV1: PrincipalContextSnapshot = Object.freeze({
+      identityVersion: 1,
+      principal: null
+    })
+    const signedOutV2: PrincipalContextSnapshot = Object.freeze({
+      identityVersion: 2,
+      principal: null
+    })
+    let liveContext = signedOutV1
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-08-16T00:00:00.000Z'
+    })
+    vi.mocked(codex.capabilities).mockResolvedValue({
+      ...capabilities('codex'),
+      controls: {
+        ...capabilities('codex').controls,
+        steer: true
+      }
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      getPrincipalContext: () => liveContext
+    })
+
+    const initial = await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Start under signed-out context v1.',
+      clientDirectiveId: 'directive-steer-principal-initial'
+    })
+    vi.mocked(codex.snapshot).mockResolvedValue({
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-08-16T00:00:00.000Z',
+      latestSeq: 1,
+      latestTurnId: initial.turnId,
+      latestTurnStatus: 'running',
+      turns: [{
+        id: initial.turnId,
+        threadId: 'codex-thread',
+        status: 'running',
+        items: []
+      }]
+    })
+    await expect(host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Steer under the same context.',
+      clientDirectiveId: 'directive-steer-principal-same'
+    })).resolves.toEqual(initial)
+    expect(codex.steerTurn).toHaveBeenCalledTimes(1)
+    expect(host.principalForToolRequest({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      turnId: initial.turnId
+    })).toEqual(signedOutV1)
+
+    liveContext = signedOutV2
+    await expect(host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Do not steer the old turn after the Principal changes.',
+      clientDirectiveId: 'directive-steer-principal-changed'
+    })).rejects.toMatchObject({ code: 'runtime_turn_principal_changed' })
+    await expect(host.steerTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      turnId: initial.turnId,
+      text: 'Direct steering must fail too.',
+      clientDirectiveId: 'directive-direct-steer-principal-changed'
+    })).rejects.toMatchObject({ code: 'runtime_turn_principal_changed' })
+    expect(codex.steerTurn).toHaveBeenCalledTimes(1)
+    expect(host.principalForToolRequest({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      turnId: initial.turnId
+    })).toEqual(signedOutV1)
+    await host.dispose()
+  })
+
+  it('recovers a durable watch with its original Principal instead of the current identity', async () => {
+    const original: PrincipalSnapshot = Object.freeze({
+      authority: 'identity-access.local',
+      subject: 'user-a',
+      assurance: 'local-selection',
+      deviceId: 'device-a',
+      identityVersion: 3
+    })
+    const current: PrincipalSnapshot = Object.freeze({
+      authority: 'identity-access.local',
+      subject: 'user-b',
+      assurance: 'local-selection',
+      deviceId: 'device-a',
+      identityVersion: 4
+    })
+    const issuerEpoch = 'issuer-00000000000000000000000000000000'
+    const deliveryAttemptId = `delivery-attempt:${issuerEpoch}:1:00000000000000000000000000000000`
+    const watch: PendingTurnArtifactWatch = Object.freeze({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      turnId: 'turn-recovered-principal',
+      issuerEpoch,
+      deliveryAttemptId,
+      deliveryAttemptOrdinal: 1,
+      boundaryLeaseId: `turn-boundary:${deliveryAttemptId}`,
+      clientDirectiveId: 'directive-recovered-principal',
+      inputDigest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      bindingSource: 'provider-accepted',
+      principal: original,
+      principalContext: { identityVersion: original.identityVersion, principal: original },
+      key: 'watch-recovered-principal',
+      registeredAt: '2026-08-16T00:00:00.000Z'
+    })
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-08-16T00:00:00.000Z'
+    })
+    vi.mocked(codex.subscribeEvents).mockImplementation(async function* (context) {
+      expect(context.principal).toEqual(original)
+      yield {
+        kind: 'turn_lifecycle',
+        runtimeId: 'codex',
+        threadId: watch.threadId,
+        turnId: watch.turnId,
+        state: 'completed',
+        seq: 5,
+        createdAt: '2026-08-16T00:00:01.000Z',
+        principal: current
+      } satisfies AgentRuntimeEvent
+    })
+    const publish = vi.fn(async (_intent: TurnArtifactIntent) => undefined)
+    const turnArtifacts = fakeTurnArtifactPublisher(publish)
+    vi.mocked(turnArtifacts.pending).mockResolvedValue([watch])
+    const getPrincipalContext = vi.fn(() => ({
+      identityVersion: current.identityVersion,
+      principal: current
+    }))
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      turnArtifacts,
+      getPrincipalContext
+    })
+
+    await expect(host.recoverCompletedTurnArtifacts()).resolves.toBe(1)
+    expect(host.principalForToolRequest({
+      runtimeId: watch.runtimeId,
+      threadId: watch.threadId,
+      turnId: watch.turnId
+    })).toEqual({ identityVersion: original.identityVersion, principal: original })
+    await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(publish).mock.calls[0]![0].principal).toEqual(original)
+    expect(getPrincipalContext).not.toHaveBeenCalled()
+    host.dispose()
+  })
+
+  it('recovers the exact signed-out context revision without current-context backfill', async () => {
+    const issuerEpoch = 'issuer-00000000000000000000000000000000'
+    const deliveryAttemptId = `delivery-attempt:${issuerEpoch}:1:00000000000000000000000000000000`
+    const signedOutV3: PrincipalContextSnapshot = Object.freeze({
+      identityVersion: 3,
+      principal: null
+    })
+    const watch: PendingTurnArtifactWatch = Object.freeze({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      turnId: 'turn-recovered-signed-out-v3',
+      issuerEpoch,
+      deliveryAttemptId,
+      deliveryAttemptOrdinal: 1,
+      boundaryLeaseId: `turn-boundary:${deliveryAttemptId}`,
+      clientDirectiveId: 'directive-recovered-signed-out-v3',
+      inputDigest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      bindingSource: 'provider-accepted',
+      principal: null,
+      principalContext: signedOutV3,
+      key: 'watch-recovered-signed-out-v3',
+      registeredAt: '2026-08-16T00:00:00.000Z'
+    })
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-08-16T00:00:00.000Z'
+    })
+    vi.mocked(codex.subscribeEvents).mockImplementation(async function* (context) {
+      expect(context.principal).toBeUndefined()
+      expect(context.principalContext).toEqual(signedOutV3)
+      yield* []
+    })
+    const turnArtifacts = fakeTurnArtifactPublisher()
+    vi.mocked(turnArtifacts.pending).mockResolvedValue([watch])
+    const getPrincipalContext = vi.fn(() => ({ identityVersion: 7, principal: null }))
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      turnArtifacts,
+      getPrincipalContext
+    })
+
+    await expect(host.recoverCompletedTurnArtifacts()).resolves.toBe(1)
+    expect(host.principalForToolRequest({
+      runtimeId: watch.runtimeId,
+      threadId: watch.threadId,
+      turnId: watch.turnId
+    })).toEqual(signedOutV3)
+    await vi.waitFor(() => expect(codex.subscribeEvents).toHaveBeenCalled())
+    expect(getPrincipalContext).not.toHaveBeenCalled()
+    await host.dispose()
+  })
+
+  it('bounds settled Principal history without evicting an active turn binding', async () => {
+    const principal: PrincipalSnapshot = Object.freeze({
+      authority: 'identity-access.local',
+      subject: 'long-running-user',
+      assurance: 'local-selection',
+      deviceId: 'device-a',
+      identityVersion: 1
+    })
+    const codex = fakeAdapter('codex', {
+      id: 'active-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-08-16T00:00:00.000Z'
+    })
+    vi.mocked(codex.startTurn).mockImplementation(async (_context, input) => ({
+      threadId: input.threadId,
+      turnId: `turn-${input.threadId}`
+    }))
+    vi.mocked(codex.subscribeEvents).mockImplementation(async function* (_context, input) {
+      yield {
+        kind: 'turn_lifecycle',
+        runtimeId: 'codex',
+        threadId: input.threadId,
+        turnId: `turn-${input.threadId}`,
+        state: 'completed',
+        seq: 1,
+        createdAt: '2026-08-16T00:00:01.000Z'
+      } satisfies AgentRuntimeEvent
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      getPrincipalContext: () => ({ identityVersion: principal.identityVersion, principal })
+    })
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'active-thread',
+      text: 'Remain active.',
+      clientDirectiveId: 'directive-active'
+    })
+
+    // The Host retains 256 settled bindings. Overflow must evict only the
+    // oldest terminal attribution, never an active or recovery-owned binding.
+    for (let index = 0; index < 257; index += 1) {
+      const threadId = `terminal-${index}`
+      await host.startTurn({
+        runtimeId: 'codex',
+        threadId,
+        text: `Settle ${index}.`,
+        clientDirectiveId: `directive-terminal-${index}`
+      })
+      for await (const _event of host.subscribeEvents({
+        runtimeId: 'codex',
+        threadId,
+        sinceSeq: 0
+      })) {
+        // Drain the terminal event so its Host attribution becomes evictable.
+      }
+    }
+
+    expect(host.principalForToolRequest({
+      runtimeId: 'codex',
+      threadId: 'active-thread',
+      turnId: 'turn-active-thread'
+    })).toEqual({ identityVersion: principal.identityVersion, principal })
+    expect(() => host.principalForToolRequest({
+      runtimeId: 'codex',
+      threadId: 'terminal-0',
+      turnId: 'turn-terminal-0'
+    })).toThrow('no Host Principal binding')
+    expect(host.principalForToolRequest({
+      runtimeId: 'codex',
+      threadId: 'terminal-256',
+      turnId: 'turn-terminal-256'
+    })).toEqual({ identityVersion: principal.identityVersion, principal })
+    host.dispose()
+  })
+
   it('fails closed when a completed-turn intent is partial or crosses workspaces', async () => {
     const claude = fakeAdapter('claude', {
       id: 'claude-thread',
@@ -5730,6 +6507,8 @@ describe('AgentRuntimeHost', () => {
       deliveryAttemptId,
       boundaryLeaseId: `turn-boundary:${deliveryAttemptId}`,
       inputDigest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      principal: null,
+      principalContext: null,
       workspaceRoot: '/tmp/workspace',
       key: 'start-1',
       registeredAt: '2026-08-15T00:00:00.000Z'
@@ -5781,6 +6560,8 @@ describe('AgentRuntimeHost', () => {
       deliveryAttemptId,
       boundaryLeaseId: `turn-boundary:${deliveryAttemptId}`,
       inputDigest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      principal: null,
+      principalContext: null,
       workspaceRoot: '/tmp/workspace',
       key: 'start-explicit',
       registeredAt: '2026-08-15T00:00:00.000Z'
@@ -5847,6 +6628,8 @@ describe('AgentRuntimeHost', () => {
       deliveryAttemptOrdinal: 1,
       boundaryLeaseId: `turn-boundary:${deliveryAttemptId}`,
       inputDigest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      principal: null,
+      principalContext: null,
       workspaceRoot: '/tmp/workspace',
       key: 'start-governed',
       registeredAt: '2026-08-15T00:00:00.000Z'
@@ -6007,6 +6790,8 @@ describe('AgentRuntimeHost', () => {
       deliveryAttemptOrdinal: 1,
       boundaryLeaseId: `turn-boundary:${deliveryAttemptId}`,
       inputDigest: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+      principal: null,
+      principalContext: null,
       workspaceRoot: ownerLocator.path,
       workspaceLocator: ownerLocator,
       key: 'start-exact-workspace',

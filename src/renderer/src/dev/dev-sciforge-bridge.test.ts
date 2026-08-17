@@ -95,6 +95,10 @@ describe('dev sciforge browser bridge', () => {
       value: { randomUUID: () => 'client-1' },
       configurable: true
     })
+    Object.defineProperty(globalThis, '__SCIFORGE_DEV_INSTANCE_ID__', {
+      value: '',
+      configurable: true
+    })
   })
 
   afterEach(() => {
@@ -143,6 +147,45 @@ describe('dev sciforge browser bridge', () => {
         'http://localhost:5173/__sciforge-dev-bridge/events?clientId=client-1'
       )
     })
+    unsubscribe()
+  })
+
+  it('adds the configured dev instance credential to browser bridge transports', async () => {
+    Object.defineProperty(globalThis, '__SCIFORGE_DEV_INSTANCE_ID__', {
+      value: 'main-instance',
+      configurable: true
+    })
+    installWindow()
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      payload: { activeAgentRuntime: 'codex' }
+    })))
+    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
+    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
+
+    installDevSciForgeBridge()
+    await window.sciforge.getSettings()
+    const unsubscribe = window.sciforge.onSettingsChanged(vi.fn())
+    const resourceUrl = window.sciforge.capabilities.resourceContentUrl({
+      workspaceId: '/tmp/work',
+      resource: {
+        token: 'cap_abcdefghijklmnopqrstuvwxyz',
+        semanticRevision: 'revision-1',
+        expiresAt: '2026-07-16T14:00:00.000Z'
+      }
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-SciForge-Dev-Instance': 'main-instance'
+        })
+      })
+    )
+    expect(new URL(MockEventSource.instances[0].url).searchParams.get('devInstanceId'))
+      .toBe('main-instance')
+    expect(new URL(resourceUrl!).searchParams.get('devInstanceId')).toBe('main-instance')
     unsubscribe()
   })
 
@@ -233,6 +276,10 @@ describe('dev sciforge browser bridge', () => {
   })
 
   it('rasterizes CSS color() pseudo-element styles into revision-bound browser pixels', async () => {
+    Object.defineProperty(globalThis, '__SCIFORGE_DEV_INSTANCE_ID__', {
+      value: 'main-instance',
+      configurable: true
+    })
     installWindow()
     Object.assign(window, {
       innerWidth: 800,
@@ -315,7 +362,8 @@ describe('dev sciforge browser bridge', () => {
         expect.objectContaining({
           method: 'POST',
           headers: expect.objectContaining({
-            'X-SciForge-Client': 'client-1'
+            'X-SciForge-Client': 'client-1',
+            'X-SciForge-Dev-Instance': 'main-instance'
           })
         })
       )
@@ -435,6 +483,7 @@ describe('dev sciforge browser bridge', () => {
     expect('paperRadar' in window.sciforge).toBe(false)
     expect(window.sciforge.capabilities.bind).toBeTypeOf('function')
     expect(window.sciforge.capabilities.invoke).toBeTypeOf('function')
+    expect(window.sciforge.capabilities.cancel).toBeTypeOf('function')
   })
 
   it('forwards workspace entry import calls through the dev bridge', async () => {
@@ -512,6 +561,12 @@ describe('dev sciforge browser bridge', () => {
       if (body.channel === 'file:unwatch-workspace') {
         return new Response(JSON.stringify({ ok: true, payload: true }))
       }
+      if (body.channel === 'capability:observe' || body.channel === 'capability:invoke') {
+        return new Response(JSON.stringify({
+          ok: true,
+          payload: { contractVersion: 1, ok: true, payload: { ok: true } }
+        }))
+      }
       return new Response(JSON.stringify({
         ok: true,
         payload: { ok: true }
@@ -524,7 +579,25 @@ describe('dev sciforge browser bridge', () => {
     const capabilityRequest = {
       request: { actionId: 'workspace-preview.list', input: {} }
     }
+    const capabilityObserveRequest = {
+      request: {
+        resource: {
+          token: 'cap_abcdefghijklmnopqrstuvwxyz',
+          semanticRevision: 'revision-1',
+          expiresAt: '2026-07-16T14:00:00.000Z'
+        }
+      }
+    }
+    await window.sciforge.capabilities.observe(capabilityObserveRequest)
     await window.sciforge.capabilities.invoke(capabilityRequest)
+    await window.sciforge.capabilities.cancel('123e4567-e89b-42d3-a456-426614174000')
+    await window.sciforge.fileTransfers.pickUploadSource({
+      ownerId: 'sciforge.content-space',
+      request: { title: 'Upload', maxBytes: 1_024 },
+      transportRequestId: '223e4567-e89b-42d3-a456-426614174000'
+    })
+    await window.sciforge.fileTransfers.cancel('223e4567-e89b-42d3-a456-426614174000')
+    await window.sciforge.fileTransfers.settle('223e4567-e89b-42d3-a456-426614174000')
     const assetSourceUrl = window.sciforge.capabilities.resourceContentUrl({
       workspaceId: '/tmp/work',
       resource: {
@@ -546,20 +619,104 @@ describe('dev sciforge browser bridge', () => {
     const bridgeRequests = fetchMock.mock.calls.map(([, init]) => (
       JSON.parse(String(init?.body)) as {
         channel: string
-        payload?: { request?: { actionId?: string } }
+        payload?: unknown
       }
     ))
     expect(bridgeRequests.map((request) => request.channel)).toEqual(expect.arrayContaining([
       'capability:invoke',
+      'capability:observe',
+      'capability:cancel',
+      'fileTransfer:pick-upload-source',
+      'fileTransfer:cancel',
+      'fileTransfer:settle',
       'file:watch-workspace',
       'file:unwatch-workspace'
     ]))
-    expect(bridgeRequests).toContainEqual({ channel: 'capability:invoke', payload: capabilityRequest })
+    expect(bridgeRequests).toContainEqual({
+      channel: 'capability:observe',
+      payload: {
+        ...capabilityObserveRequest,
+        transportRequestId: expect.any(String)
+      }
+    })
+    expect(bridgeRequests).toContainEqual({
+      channel: 'capability:invoke',
+      payload: {
+        ...capabilityRequest,
+        transportRequestId: expect.any(String)
+      }
+    })
+    expect(bridgeRequests).toContainEqual({
+      channel: 'capability:cancel',
+      payload: { transportRequestId: '123e4567-e89b-42d3-a456-426614174000' }
+    })
+    expect(bridgeRequests).toContainEqual({
+      channel: 'fileTransfer:pick-upload-source',
+      payload: {
+        ownerId: 'sciforge.content-space',
+        request: { title: 'Upload', maxBytes: 1_024 },
+        transportRequestId: '223e4567-e89b-42d3-a456-426614174000'
+      }
+    })
+    expect(bridgeRequests).toContainEqual({
+      channel: 'fileTransfer:cancel',
+      payload: { transportRequestId: '223e4567-e89b-42d3-a456-426614174000' }
+    })
+    expect(bridgeRequests).toContainEqual({
+      channel: 'fileTransfer:settle',
+      payload: { transportRequestId: '223e4567-e89b-42d3-a456-426614174000' }
+    })
     expect(bridgeRequests).toContainEqual({
       channel: 'file:watch-workspace',
       payload: { path: 'protein.pdb', workspaceRoot: '/tmp/work' }
     })
     expect(bridgeRequests).toContainEqual({ channel: 'file:unwatch-workspace', payload: 'watch-1' })
+  })
+
+  it('unwraps dev HTTP capability errors into preload-shaped typed Errors', async () => {
+    installWindow()
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      payload: {
+        contractVersion: 1,
+        ok: false,
+        error: {
+          code: 'outcome_unknown',
+          message: 'The mutation outcome is unknown.',
+          category: 'failed',
+          retryable: false,
+          details: { expected: 'revision-2' }
+        }
+      }
+    })))
+    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
+    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
+
+    installDevSciForgeBridge()
+
+    await expect(window.sciforge.capabilities.invoke({
+      request: {
+        actionId: 'content-space.upload-new',
+        invocationId: 'upload-1',
+        input: {}
+      }
+    })).rejects.toMatchObject({
+      name: 'CapabilityTransportError',
+      message: 'The mutation outcome is unknown.',
+      code: 'outcome_unknown',
+      category: 'failed',
+      retryable: false,
+      details: { expected: 'revision-2' }
+    })
+    await expect(window.sciforge.capabilities.observe({
+      request: {
+        resource: {
+          token: 'cap_abcdefghijklmnopqrst',
+          semanticRevision: '1',
+          expiresAt: '2026-08-17T00:00:00.000Z'
+        }
+      }
+    })).rejects.toMatchObject({ code: 'outcome_unknown', retryable: false })
   })
 
   it('replaces a stale browser bridge in a plain dev browser', async () => {

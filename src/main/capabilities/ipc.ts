@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { ipcMain } from 'electron'
+import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { z } from 'zod'
 import {
   workspaceLocatorSchema,
@@ -15,10 +15,15 @@ import {
   capabilityReadinessSchema,
   capabilityResourceBindRequestSchema,
   capabilityResourceHandleSchema,
+  capabilityTransportRequestIdSchema,
   type CapabilityApprovalGrant,
   type CapabilityCallerContextInput,
   type CapabilityResourceChangeEvent
 } from '../../shared/capability-broker'
+import {
+  capabilityTransportFailure,
+  capabilityTransportSuccess
+} from '../../shared/capability-transport-error'
 import type { CapabilityBroker } from './broker'
 
 export const CAPABILITY_IPC_CHANNELS = Object.freeze({
@@ -27,6 +32,7 @@ export const CAPABILITY_IPC_CHANNELS = Object.freeze({
   observe: 'capability:observe',
   bind: 'capability:bind',
   invoke: 'capability:invoke',
+  cancel: 'capability:cancel',
   events: 'capability:events',
   subscribe: 'capability:subscribe',
   unsubscribe: 'capability:unsubscribe',
@@ -39,6 +45,7 @@ const capabilityDiscoverIpcSchema = z.object({
   query: capabilityDiscoveryQuerySchema.optional()
 }).strict()
 const capabilityObserveIpcSchema = z.object({
+  transportRequestId: capabilityTransportRequestIdSchema,
   workspaceId: workspaceIdSchema.optional(),
   request: capabilityObserveRequestSchema
 }).strict()
@@ -47,10 +54,14 @@ const capabilityBindIpcSchema = z.object({
   request: capabilityResourceBindRequestSchema
 }).strict()
 const capabilityInvokeIpcSchema = z.object({
+  transportRequestId: capabilityTransportRequestIdSchema,
   workspaceId: workspaceIdSchema.optional(),
   workspaceLocator: workspaceLocatorSchema.optional(),
   request: capabilityInvocationRequestSchema,
   approval: z.object({ mode: z.enum(['confirmation']) }).strict().optional()
+}).strict()
+const capabilityCancelIpcSchema = z.object({
+  transportRequestId: capabilityTransportRequestIdSchema
 }).strict()
 const capabilityEventsIpcSchema = z.object({
   workspaceId: workspaceIdSchema.optional(),
@@ -79,10 +90,24 @@ type CapabilityIpcSender = {
 type CapabilityIpcEvent = { sender: CapabilityIpcSender }
 type CapabilityIpcHandler = (event: CapabilityIpcEvent, payload: unknown) => unknown
 type CapabilityIpcMain = Pick<typeof ipcMain, 'handle' | 'removeHandler'>
+type CapabilityIpcHandlerOptions = Readonly<{ typedErrors?: boolean }>
+
+class CapabilityIpcTransportError extends Error {
+  readonly code: string
+  readonly category = 'rejected'
+  readonly retryable = false
+
+  constructor(code: string, message: string) {
+    super(message)
+    this.name = 'CapabilityIpcTransportError'
+    this.code = code
+  }
+}
 
 export type RegisterCapabilityIpcOptions = {
   broker: CapabilityBroker
   ipc?: CapabilityIpcMain
+  isTrustedIpcSender: (event: IpcMainInvokeEvent) => boolean
   onCallerDestroyed?: (callerId: string) => void
 }
 
@@ -101,6 +126,31 @@ type Subscription = {
   dispose: () => void
 }
 
+type ActiveInvocation = {
+  senderId: number
+  controller: AbortController
+}
+
+type WatchedCaller = {
+  sender: CapabilityIpcSender
+  listener: () => void
+  destroyed: boolean
+}
+
+const MAX_PENDING_CANCELLATIONS = 1_024
+
+function transportInvocationKey(senderId: number, transportRequestId: string): string {
+  return `${senderId}:${transportRequestId}`
+}
+
+/** Canonical UI caller identity shared by capability and Host-owned picker IPC. */
+export function capabilityUiCallerId(senderId: number): string {
+  if (!Number.isSafeInteger(senderId)) {
+    throw new TypeError('Capability UI sender ID must be a safe integer.')
+  }
+  return `window:${senderId}`
+}
+
 function uiCaller(
   sender: CapabilityIpcSender,
   workspaceId?: string,
@@ -109,7 +159,7 @@ function uiCaller(
 ): CapabilityCallerContextInput {
   return {
     audience: 'ui',
-    callerId: `window:${sender.id}`,
+    callerId: capabilityUiCallerId(sender.id),
     ...(workspaceId ? { workspaceId } : {}),
     ...(workspaceLocator ? { workspaceLocator } : {}),
     approvals
@@ -123,32 +173,80 @@ function parse<T>(schema: z.ZodType<T>, payload: unknown): T {
 export function registerCapabilityIpc(options: RegisterCapabilityIpcOptions): CapabilityIpcRegistration {
   const ipc = options.ipc ?? ipcMain
   const subscriptions = new Map<string, Subscription>()
-  const watchedCallers = new Map<number, { sender: CapabilityIpcSender; listener: () => void }>()
+  const watchedCallers = new Map<number, WatchedCaller>()
+  const destroyedCallerIds = new Set<number>()
+  const activeInvocations = new Map<string, ActiveInvocation>()
+  const pendingCancellations = new Map<string, number>()
   const invokeHandlers = new Map<string, CapabilityIpcHandler>()
   const channels = Object.values(CAPABILITY_IPC_CHANNELS).filter((channel) => channel !== CAPABILITY_IPC_CHANNELS.event)
 
-  const handle = (channel: string, handler: CapabilityIpcHandler): void => {
-    invokeHandlers.set(channel, handler)
+  const handle = (
+    channel: string,
+    handler: CapabilityIpcHandler,
+    handlerOptions: CapabilityIpcHandlerOptions = {}
+  ): void => {
+    const transportedHandler: CapabilityIpcHandler = handlerOptions.typedErrors
+      ? async (event, payload) => {
+          try {
+            return capabilityTransportSuccess(await handler(event, payload))
+          } catch (error) {
+            return capabilityTransportFailure(error)
+          }
+        }
+      : handler
+    invokeHandlers.set(channel, transportedHandler)
     ipc.removeHandler(channel)
     ipc.handle(channel, (event, payload) => {
+      if (!options.isTrustedIpcSender(event)) {
+        throw new Error('Rejected capability IPC invocation from an untrusted renderer frame.')
+      }
       watchCaller(event.sender)
-      return handler(event, payload)
+      return transportedHandler(event, payload)
     })
   }
 
-  const watchCaller = (sender: CapabilityIpcSender): void => {
-    if (watchedCallers.has(sender.id)) return
+  const watchCaller = (sender: CapabilityIpcSender): WatchedCaller => {
+    if (destroyedCallerIds.has(sender.id)) {
+      throw new Error('Rejected capability IPC invocation from a destroyed renderer.')
+    }
+    const existing = watchedCallers.get(sender.id)
+    if (existing) return existing
+    const watched: WatchedCaller = {
+      sender,
+      destroyed: false,
+      listener: () => undefined
+    }
     const listener = () => {
-      watchedCallers.delete(sender.id)
+      if (watched.destroyed) return
+      watched.destroyed = true
+      destroyedCallerIds.add(sender.id)
+      if (watchedCallers.get(sender.id) === watched) watchedCallers.delete(sender.id)
+      for (const [key, active] of activeInvocations) {
+        if (active.senderId !== sender.id) continue
+        active.controller.abort()
+        activeInvocations.delete(key)
+      }
+      for (const [key, senderId] of pendingCancellations) {
+        if (senderId === sender.id) pendingCancellations.delete(key)
+      }
       for (const [subscriptionId, subscription] of subscriptions) {
         if (subscription.sender.id !== sender.id) continue
         subscription.dispose()
         subscriptions.delete(subscriptionId)
       }
-      options.onCallerDestroyed?.(`window:${sender.id}`)
+      options.onCallerDestroyed?.(capabilityUiCallerId(sender.id))
     }
-    watchedCallers.set(sender.id, { sender, listener })
+    watched.listener = listener
+    watchedCallers.set(sender.id, watched)
     sender.once('destroyed', listener)
+    // Electron may destroy a WebContents before or during listener
+    // registration. Re-check after publishing the watched state so a
+    // capability can never dispatch through that gap.
+    if (sender.isDestroyed()) listener()
+    if (watched.destroyed || watchedCallers.get(sender.id) !== watched) {
+      throw new Error('Rejected capability IPC invocation from a destroyed renderer.')
+    }
+    return watched
   }
 
   handle(CAPABILITY_IPC_CHANNELS.discover, (event, payload) => {
@@ -190,10 +288,44 @@ export function registerCapabilityIpc(options: RegisterCapabilityIpcOptions): Ca
       message
     })
   })
-  handle(CAPABILITY_IPC_CHANNELS.observe, (event, payload) => {
+  handle(CAPABILITY_IPC_CHANNELS.observe, async (event, payload) => {
+    const watched = watchCaller(event.sender)
     const input = parse(capabilityObserveIpcSchema, payload)
-    return options.broker.observe(uiCaller(event.sender, input.workspaceId), input.request)
-  })
+    const invocationKey = transportInvocationKey(event.sender.id, input.transportRequestId)
+    if (activeInvocations.has(invocationKey)) {
+      throw new CapabilityIpcTransportError(
+        'transport_request_conflict',
+        'A capability transport request with this ID is already active.'
+      )
+    }
+    if (pendingCancellations.delete(invocationKey)) {
+      throw new CapabilityIpcTransportError(
+        'invocation_cancelled',
+        'Capability observation was cancelled before dispatch.'
+      )
+    }
+    const controller = new AbortController()
+    activeInvocations.set(invocationKey, { senderId: event.sender.id, controller })
+    if (watched.destroyed || watchedCallers.get(event.sender.id) !== watched || event.sender.isDestroyed()) {
+      controller.abort()
+      activeInvocations.delete(invocationKey)
+      throw new CapabilityIpcTransportError(
+        'invocation_cancelled',
+        'Capability observation sender was destroyed before dispatch.'
+      )
+    }
+    try {
+      return await options.broker.observe(
+        uiCaller(event.sender, input.workspaceId),
+        input.request,
+        { signal: controller.signal }
+      )
+    } finally {
+      if (activeInvocations.get(invocationKey)?.controller === controller) {
+        activeInvocations.delete(invocationKey)
+      }
+    }
+  }, { typedErrors: true })
   handle(CAPABILITY_IPC_CHANNELS.bind, (event, payload) => {
     const input = parse(capabilityBindIpcSchema, payload)
     return options.broker.bindResourceRef(
@@ -201,8 +333,22 @@ export function registerCapabilityIpc(options: RegisterCapabilityIpcOptions): Ca
       input.request.resourceRef
     )
   })
-  handle(CAPABILITY_IPC_CHANNELS.invoke, (event, payload) => {
+  handle(CAPABILITY_IPC_CHANNELS.invoke, async (event, payload) => {
+    const watched = watchCaller(event.sender)
     const input = parse(capabilityInvokeIpcSchema, payload)
+    const invocationKey = transportInvocationKey(event.sender.id, input.transportRequestId)
+    if (activeInvocations.has(invocationKey)) {
+      throw new CapabilityIpcTransportError(
+        'transport_request_conflict',
+        'A capability transport request with this ID is already active.'
+      )
+    }
+    if (pendingCancellations.delete(invocationKey)) {
+      throw new CapabilityIpcTransportError(
+        'invocation_cancelled',
+        'Capability invocation was cancelled before dispatch.'
+      )
+    }
     const approvals: CapabilityApprovalGrant[] = input.approval && input.request.invocationId
       ? [{
           actionId: input.request.actionId,
@@ -210,10 +356,45 @@ export function registerCapabilityIpc(options: RegisterCapabilityIpcOptions): Ca
           mode: input.approval.mode
         }]
       : []
-    return options.broker.invoke(
-      uiCaller(event.sender, input.workspaceId, approvals, input.workspaceLocator),
-      input.request
-    )
+    const controller = new AbortController()
+    activeInvocations.set(invocationKey, { senderId: event.sender.id, controller })
+    if (watched.destroyed || watchedCallers.get(event.sender.id) !== watched || event.sender.isDestroyed()) {
+      controller.abort()
+      activeInvocations.delete(invocationKey)
+      throw new CapabilityIpcTransportError(
+        'invocation_cancelled',
+        'Capability invocation sender was destroyed before dispatch.'
+      )
+    }
+    try {
+      return await options.broker.invoke(
+        uiCaller(event.sender, input.workspaceId, approvals, input.workspaceLocator),
+        input.request,
+        { signal: controller.signal }
+      )
+    } finally {
+      if (activeInvocations.get(invocationKey)?.controller === controller) {
+        activeInvocations.delete(invocationKey)
+      }
+    }
+  }, { typedErrors: true })
+  handle(CAPABILITY_IPC_CHANNELS.cancel, (event, payload) => {
+    const input = parse(capabilityCancelIpcSchema, payload)
+    const invocationKey = transportInvocationKey(event.sender.id, input.transportRequestId)
+    const active = activeInvocations.get(invocationKey)
+    if (active) {
+      active.controller.abort()
+      return true
+    }
+    // The browser dev bridge uses concurrent HTTP requests. Remember a bounded
+    // early cancellation so request reordering cannot start a cancelled write.
+    pendingCancellations.set(invocationKey, event.sender.id)
+    while (pendingCancellations.size > MAX_PENDING_CANCELLATIONS) {
+      const oldest = pendingCancellations.keys().next().value
+      if (oldest === undefined) break
+      pendingCancellations.delete(oldest)
+    }
+    return true
   })
   handle(CAPABILITY_IPC_CHANNELS.events, (event, payload) => {
     const input = parse(capabilityEventsIpcSchema, payload)
@@ -269,12 +450,16 @@ export function registerCapabilityIpc(options: RegisterCapabilityIpcOptions): Ca
     },
     dispose: () => {
       for (const channel of channels) ipc.removeHandler(channel)
+      for (const active of activeInvocations.values()) active.controller.abort()
+      activeInvocations.clear()
+      pendingCancellations.clear()
       for (const subscription of subscriptions.values()) subscription.dispose()
       subscriptions.clear()
       for (const watched of watchedCallers.values()) {
         watched.sender.removeListener('destroyed', watched.listener)
       }
       watchedCallers.clear()
+      destroyedCallerIds.clear()
       invokeHandlers.clear()
     }
   }

@@ -1,0 +1,79 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-identity-access",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
+  "module": {
+    "id": "sciforge.identity-access",
+    "displayName": "Identity and Access",
+    "version": "1.0.0",
+    "hostApi": {
+      "minimum": "1.3.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 900
+  },
+  "contributionContracts": {
+    "identity-access.workbench-toolbar-action": {
+      "location": "workbench.topbar",
+      "commandId": "identity-access.open-account",
+      "label": "Local Account"
+    },
+    "identity-access.account-overlay": {
+      "location": "workbench.global-overlay",
+      "title": "Local Account"
+    }
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        {
+          "id": "identity-access.capabilities",
+          "kind": "main.capability-factory",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.principal-provider",
+          "kind": "main.principal-provider",
+          "priority": 900
+        }
+      ]
+    },
+    {
+      "process": "renderer",
+      "export": "./renderer",
+      "contributions": [
+        {
+          "id": "identity-access.open-account",
+          "kind": "renderer.command",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.workbench-toolbar-action",
+          "kind": "renderer.workbench-toolbar-action",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.account-overlay",
+          "kind": "renderer.workbench-global-overlay",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.lifecycle",
+          "kind": "renderer.lifecycle",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.translations",
+          "kind": "renderer.i18n-resource",
+          "priority": 900
+        }
+      ]
+    }
+  ]
+}

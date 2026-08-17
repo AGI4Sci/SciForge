@@ -19,6 +19,14 @@ import type {
 } from '@sciforge/domain-sdk/host'
 import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 import {
+  definePrincipalContextSnapshot,
+  definePrincipalSnapshot,
+  samePrincipalContextSnapshot,
+  samePrincipalSnapshot,
+  type PrincipalContextSnapshot,
+  type PrincipalSnapshot
+} from '@sciforge/domain-sdk/principal'
+import {
   isSensitiveWorkspacePath,
   TURN_FILE_CAPTURE_LIMITS,
   type TurnFileBaselineV1,
@@ -26,8 +34,8 @@ import {
   type TurnFileMetadataV1
 } from './turn-file-effect-capture'
 
-const OUTBOX_VERSION = 4
-const LEGACY_OUTBOX_VERSIONS = new Set([1, 2, 3])
+const OUTBOX_VERSION = 5
+const LEGACY_OUTBOX_VERSIONS = new Set([1, 2, 3, 4])
 const MAX_PENDING_TURNS = 1_000
 const MAX_TERMINAL_RECEIPTS = 1_024
 const MAX_ARTIFACT_RECEIPTS = 1_024
@@ -50,6 +58,10 @@ type TurnArtifactIntentPayload = Readonly<{
   fileBaseline?: TurnFileBaselineV1
   fileEffects?: DomainTurnFileEffectsV1
   filePatchReceipts?: readonly DomainTurnFilePatchReceiptV1[]
+  /** Host-captured at dispatch; null is an explicit signed-out attribution. */
+  principal: PrincipalSnapshot | null
+  /** Exact Host lease; null means legacy attribution was unknowable. */
+  principalContext: PrincipalContextSnapshot | null
   occurredAt: string
 }>
 
@@ -62,7 +74,14 @@ export type TurnArtifactIntent = TurnArtifactIntentPayload & Readonly<{
 }>
 
 /** Artifact-only replay envelope for records persisted before Host boundary ownership. */
-export type TurnArtifactReplayIntent = TurnArtifactIntentPayload & Readonly<{
+export type TurnArtifactReplayIntent = Omit<
+  TurnArtifactIntentPayload,
+  'principal' | 'principalContext'
+> & Readonly<{
+  /** Missing only while replaying a pre-V5 artifact record. */
+  principal?: PrincipalSnapshot | null
+  /** Missing only in caller envelopes for legacy artifact-only replay. */
+  principalContext?: PrincipalContextSnapshot | null
   deliveryAttemptId?: string
   issuerEpoch?: string
   deliveryAttemptOrdinal?: number
@@ -94,6 +113,10 @@ export type TurnArtifactWatch = Readonly<{
   workspaceLocator?: WorkspaceLocator
   fileBaseline?: TurnFileBaselineV1
   filePatchReceipts?: readonly DomainTurnFilePatchReceiptV1[]
+  /** Host-captured at dispatch; null is an explicit signed-out attribution. */
+  principal: PrincipalSnapshot | null
+  /** Exact Host lease; null means legacy attribution was unknowable. */
+  principalContext: PrincipalContextSnapshot | null
 }>
 
 export type PendingTurnArtifactWatch = TurnArtifactWatch & Readonly<{
@@ -114,6 +137,10 @@ export type TurnArtifactStart = Readonly<{
   workspaceRoot?: string
   workspaceLocator?: WorkspaceLocator
   fileBaseline?: TurnFileBaselineV1
+  /** Host-captured immediately before this durable start is registered. */
+  principal: PrincipalSnapshot | null
+  /** Exact signed-in or signed-out Host authorization lease at dispatch. */
+  principalContext: PrincipalContextSnapshot | null
 }>
 
 export type TurnArtifactStartDraft = Omit<
@@ -201,7 +228,15 @@ type TurnArtifactDeliveryReceipt = Readonly<{
   /** Irreversible binding; delivered tombstones never retain absolute paths. */
   workspaceBindingDigest?: string
   fileBaselineDigest?: string
-  /** Digest of the complete validated intent, including any former snapshots. */
+  /** Retained bounded attribution so later lifecycle replay cannot rebind it. */
+  principal?: PrincipalSnapshot
+  /** Irreversible proof of the Host-captured Principal (including null). */
+  principalDigest: string
+  /** Retained exact signed-in/signed-out lease; absent for legacy unknown. */
+  principalContext?: PrincipalContextSnapshot
+  /** Irreversible proof of the exact lease, including legacy unknown null. */
+  principalContextDigest: string
+  /** Digest of the validated pre-context V5 intent; context has its own proof. */
   intentDigest: string
   deliveredAt: string
 }>
@@ -329,6 +364,9 @@ export class TurnArtifactOutbox {
 
   async registerStart(input: TurnArtifactStartDraft): Promise<PendingTurnArtifactStart> {
     const draft = parseStartDraft(input)
+    if (draft.principalContext === null) {
+      throw new Error('A new turn requires an exact Principal context attribution.')
+    }
     const key = turnArtifactStartKey(draft)
     await this.load()
     let pending: PendingTurnArtifactStart | undefined
@@ -398,6 +436,8 @@ export class TurnArtifactOutbox {
       deliveryAttemptId: start.deliveryAttemptId,
       deliveryAttemptOrdinal: start.deliveryAttemptOrdinal,
       boundaryLeaseId: start.boundaryLeaseId,
+      principal: start.principal,
+      principalContext: start.principalContext,
       ...(start.fileBaseline ? { fileBaseline: start.fileBaseline } : {})
     })
     if (start.runtimeId !== watch.runtimeId || start.threadId !== watch.threadId) {
@@ -495,7 +535,11 @@ export class TurnArtifactOutbox {
   ): Promise<boolean> {
     const start = parseStartInput(input)
     const startKey = turnArtifactStartKey(start)
-    const event = parseLifecycleSettlement(settlementInput)
+    const event = bindLifecyclePrincipalContext(
+      parseLifecycleSettlement(settlementInput),
+      start.principal,
+      start.principalContext
+    )
     if (event.state !== 'rejected') {
       throw new Error('A pending turn start may only transition to rejected.')
     }
@@ -694,39 +738,45 @@ export class TurnArtifactOutbox {
   }
 
   async enqueueLifecycleSettlement(input: DomainMainAfterTurnEvent): Promise<void> {
-    const event = parseLifecycleSettlement(input)
-    const key = turnLifecycleSettlementKey(event)
+    const submittedEvent = parseLifecycleSettlement(input)
+    const key = turnLifecycleSettlementKey(submittedEvent)
     await this.load()
     await this.#mutate(async () => {
-      this.#assertLiveIssuedAttempt(event)
+      this.#assertLiveIssuedAttempt(submittedEvent)
       const existing = this.#lifecycleSettlements.get(key)
+      const receipt = this.#lifecycleReceipts.get(key)
+      const matchingStart = [...this.#starts.values()].find(
+        (candidate) => candidate.boundaryLeaseId === submittedEvent.boundaryLeaseId
+      )
+      const matchingWatch = [...this.#watches.values()].find(
+        (candidate) => candidate.boundaryLeaseId === submittedEvent.boundaryLeaseId
+      )
+      const matchingIntent = [...this.#records.values()]
+        .map((record) => record.intent)
+        .find((candidate) => candidate.boundaryLeaseId === submittedEvent.boundaryLeaseId)
+      const matchingArtifactReceipt = [...this.#receipts.values()].find(
+        (candidate) => candidate.boundaryLeaseId === submittedEvent.boundaryLeaseId
+      )
+      const boundaryOwner = matchingStart ?? matchingWatch ?? matchingIntent ??
+        existing?.event ?? receipt?.event ?? matchingArtifactReceipt
+      if (!boundaryOwner) {
+        throw new Error('Turn lifecycle settlement has no durable boundary owner.')
+      }
+      const event = bindLifecyclePrincipalContext(
+        submittedEvent,
+        principalFromBoundaryOwner(boundaryOwner),
+        principalContextFromBoundaryOwner(boundaryOwner)
+      )
       if (existing) {
         assertSameLifecycleSettlement(existing.event, event, key)
         return
       }
-      const receipt = this.#lifecycleReceipts.get(key)
       if (receipt) {
         assertSameLifecycleSettlement(receipt.event, event, key)
         return
       }
       if (this.#lifecycleSettlements.size >= MAX_PENDING_TURNS) {
         throw new Error('Turn lifecycle settlement outbox is full.')
-      }
-      const matchingStart = [...this.#starts.values()].find(
-        (candidate) => candidate.boundaryLeaseId === event.boundaryLeaseId
-      )
-      const matchingWatch = [...this.#watches.values()].find(
-        (candidate) => candidate.boundaryLeaseId === event.boundaryLeaseId
-      )
-      const matchingIntent = [...this.#records.values()]
-        .map((record) => record.intent)
-        .find((candidate) => candidate.boundaryLeaseId === event.boundaryLeaseId)
-      const matchingArtifactReceipt = [...this.#receipts.values()].find(
-        (candidate) => candidate.boundaryLeaseId === event.boundaryLeaseId
-      )
-      const boundaryOwner = matchingStart ?? matchingWatch ?? matchingIntent ?? matchingArtifactReceipt
-      if (!boundaryOwner) {
-        throw new Error('Turn lifecycle settlement has no durable boundary owner.')
       }
       assertSettlementMatchesBoundary(event, boundaryOwner)
       if (matchingStart) this.#starts.delete(matchingStart.key)
@@ -864,6 +914,8 @@ export class TurnArtifactOutbox {
         runtimeId: watch.runtimeId,
         threadId: watch.threadId,
         clientDirectiveId: watch.clientDirectiveId,
+        ...(watch.principal ? { principal: watch.principal } : {}),
+        ...(watch.principalContext ? { principalContext: watch.principalContext } : {}),
         ...(watch.workspaceRoot ? { workspaceRoot: watch.workspaceRoot } : {}),
         turnId: watch.turnId
       }, 'watching', watch.registeredAt))
@@ -880,6 +932,8 @@ export class TurnArtifactOutbox {
           runtimeId: intent.runtimeId,
           threadId: intent.threadId,
           clientDirectiveId: intent.clientDirectiveId,
+          ...(intent.principal ? { principal: intent.principal } : {}),
+          ...(intent.principalContext ? { principalContext: intent.principalContext } : {}),
           ...(intent.workspaceRoot ? { workspaceRoot: intent.workspaceRoot } : {}),
           turnId: intent.turnId
         },
@@ -1399,6 +1453,7 @@ function assertAttemptLedgerComplete(
 
 function parseOutbox(value: unknown): PersistedOutbox & Readonly<{ migrate: boolean }> {
   const legacy = isRecord(value) && value.version !== OUTBOX_VERSION
+  const persistedVersion = isRecord(value) ? Number(value.version) : Number.NaN
   if (
     !isRecord(value) ||
     (value.version !== OUTBOX_VERSION && !LEGACY_OUTBOX_VERSIONS.has(Number(value.version))) ||
@@ -1430,11 +1485,38 @@ function parseOutbox(value: unknown): PersistedOutbox & Readonly<{ migrate: bool
       receipt.workspaceLocator !== undefined
     )
   ))
+  const principalContextNeedsMigration = [
+    ...rawStarts,
+    ...rawWatches,
+    ...value.records.map((record) => isRecord(record) ? record.intent : undefined)
+  ].some((owner) => (
+    isRecord(owner) && !Object.prototype.hasOwnProperty.call(owner, 'principalContext')
+  )) || value.receipts.some((receipt) => (
+    isRecord(receipt) && !Object.prototype.hasOwnProperty.call(receipt, 'principalContextDigest')
+  )) || [
+    ...value.records.map((record) => (
+      isRecord(record) && record.stage === 'pending_fanout' ? record.event : undefined
+    )),
+    ...rawLifecycleSettlements.map((record) => isRecord(record) ? record.event : undefined),
+    ...rawLifecycleReceipts.map((receipt) => isRecord(receipt) ? receipt.event : undefined)
+  ].some((event) => (
+    isRecord(event) &&
+    event.principal !== undefined &&
+    !Object.prototype.hasOwnProperty.call(event, 'principalContext')
+  ))
   // Pre-V4 captures have no Host delivery-attempt identity and therefore
   // cannot be authoritative boundary owners. Only completed artifact records
-  // remain replayable across that migration boundary.
-  const starts = legacy ? [] : rawStarts.map((start) => parsePersistedStart(start))
-  const watches = legacy ? [] : rawWatches.map((watch) => parsePersistedWatch(watch))
+  // remain replayable across that migration boundary. V4 boundary owners stay
+  // recoverable, but their missing attribution is normalized to fail-closed
+  // signed-out state instead of being rebound to the current Principal.
+  const preBoundaryOwnership = persistedVersion < 4
+  const legacyPrincipal = persistedVersion < OUTBOX_VERSION
+  const starts = preBoundaryOwnership
+    ? []
+    : rawStarts.map((start) => parsePersistedStart(start, legacyPrincipal))
+  const watches = preBoundaryOwnership
+    ? []
+    : rawWatches.map((watch) => parsePersistedWatch(watch, legacyPrincipal))
   if (starts.length + watches.length + value.records.length > MAX_PENDING_TURNS) {
     throw new Error('Accepted and completed turn artifact outbox exceeds its bounded capacity.')
   }
@@ -1466,8 +1548,12 @@ function parseOutbox(value: unknown): PersistedOutbox & Readonly<{ migrate: bool
   if (watches.some((watch) => pendingKeys.has(watch.key) || receiptKeys.has(watch.key))) {
     throw new Error('Turn artifact outbox contains duplicate watch and completion state.')
   }
-  const lifecycleSettlements = rawLifecycleSettlements.map(parseLifecycleSettlementRecord)
-  const lifecycleReceipts = rawLifecycleReceipts.map(parseLifecycleSettlementReceipt)
+  const lifecycleSettlements = rawLifecycleSettlements.map((record) => (
+    parseLifecycleSettlementRecord(record, legacyPrincipal)
+  ))
+  const lifecycleReceipts = rawLifecycleReceipts.map((receipt) => (
+    parseLifecycleSettlementReceipt(receipt, legacyPrincipal)
+  ))
   if (lifecycleSettlements.length > MAX_PENDING_TURNS) {
     throw new Error('Turn lifecycle settlement outbox exceeds its bounded capacity.')
   }
@@ -1484,7 +1570,17 @@ function parseOutbox(value: unknown): PersistedOutbox & Readonly<{ migrate: bool
     ...records.map((record) => record.intent),
     ...receipts.map(receiptBinding)
   ])
-  const attemptIssuer = legacy ? newAttemptIssuer() : parseAttemptIssuer(value.attemptIssuer)
+  assertBoundaryPrincipalAttributionConsistent([
+    ...starts,
+    ...watches,
+    ...records.map((record) => record.intent),
+    ...receipts,
+    ...lifecycleSettlements.map((record) => record.event),
+    ...lifecycleReceipts.map((receipt) => receipt.event)
+  ])
+  const attemptIssuer = preBoundaryOwnership
+    ? newAttemptIssuer()
+    : parseAttemptIssuer(value.attemptIssuer)
   assertAttemptLedgerComplete(attemptIssuer, [
     ...starts,
     ...watches,
@@ -1502,11 +1598,17 @@ function parseOutbox(value: unknown): PersistedOutbox & Readonly<{ migrate: bool
     lifecycleSettlements,
     lifecycleReceipts,
     attemptIssuer,
-    migrate: value.version !== OUTBOX_VERSION || receiptsNeedCompaction
+    migrate: value.version !== OUTBOX_VERSION ||
+      receiptsNeedCompaction ||
+      principalContextNeedsMigration
   }
 }
 
-function parseStartDraft(value: unknown): TurnArtifactStartDraft {
+function parseStartDraft(
+  value: unknown,
+  legacyPrincipal = false,
+  persisted = false
+): TurnArtifactStartDraft {
   if (!isRecord(value)) throw new Error('Turn artifact start must be an object.')
   const runtimeId = required(value.runtimeId, 'runtimeId')
   const threadId = required(value.threadId, 'threadId')
@@ -1520,6 +1622,13 @@ function parseStartDraft(value: unknown): TurnArtifactStartDraft {
     : required(value.workspaceRoot, 'workspaceRoot', 16_384)
   const workspaceLocator = parseWorkspaceLocator(value.workspaceLocator)
   const fileBaseline = parseFileBaseline(value.fileBaseline)
+  const principal = parsePrincipalAttribution(value, legacyPrincipal)
+  const principalContext = parsePrincipalContextAttribution(
+    value,
+    principal,
+    legacyPrincipal,
+    persisted
+  )
   if (workspaceRoot && workspaceLocator && workspaceRoot !== workspaceLocator.path) {
     throw new Error('Turn artifact start workspace locator does not match workspaceRoot.')
   }
@@ -1528,22 +1637,31 @@ function parseStartDraft(value: unknown): TurnArtifactStartDraft {
     threadId,
     clientDirectiveId,
     inputDigest,
+    principal,
+    principalContext,
     ...(workspaceRoot ? { workspaceRoot } : {}),
     ...(workspaceLocator ? { workspaceLocator } : {}),
     ...(fileBaseline ? { fileBaseline } : {})
   })
 }
 
-function parseStartInput(value: unknown): TurnArtifactStart {
+function parseStartInput(
+  value: unknown,
+  legacyPrincipal = false,
+  persisted = false
+): TurnArtifactStart {
   if (!isRecord(value)) throw new Error('Turn artifact start must be an object.')
   return Object.freeze({
-    ...parseStartDraft(value),
+    ...parseStartDraft(value, legacyPrincipal, persisted),
     ...parseRequiredBoundaryBinding(value)
   })
 }
 
-function parsePersistedStart(value: unknown): PendingTurnArtifactStart {
-  const start = parseStartInput(value)
+function parsePersistedStart(
+  value: unknown,
+  legacyPrincipal = false
+): PendingTurnArtifactStart {
+  const start = parseStartInput(value, legacyPrincipal, true)
   if (!isRecord(value)) throw new Error('Turn artifact start must be an object.')
   const key = turnArtifactStartKey(start)
   if (value.key !== key) throw new Error('Turn artifact start has an invalid key.')
@@ -1554,7 +1672,11 @@ function parsePersistedStart(value: unknown): PendingTurnArtifactStart {
   })
 }
 
-function parseWatchInput(value: unknown): TurnArtifactWatch {
+function parseWatchInput(
+  value: unknown,
+  legacyPrincipal = false,
+  persisted = false
+): TurnArtifactWatch {
   if (!isRecord(value)) throw new Error('Accepted turn artifact watch must be an object.')
   const runtimeId = required(value.runtimeId, 'runtimeId')
   const threadId = required(value.threadId, 'threadId')
@@ -1571,6 +1693,13 @@ function parseWatchInput(value: unknown): TurnArtifactWatch {
     ? undefined
     : required(value.providerUserMessageItemId, 'providerUserMessageItemId', 4_096)
   const bindingSource = parseBindingSource(value.bindingSource)
+  const principal = parsePrincipalAttribution(value, legacyPrincipal)
+  const principalContext = parsePrincipalContextAttribution(
+    value,
+    principal,
+    legacyPrincipal,
+    persisted
+  )
   if (workspaceRoot && workspaceLocator && workspaceRoot !== workspaceLocator.path) {
     throw new Error('Accepted turn artifact workspace locator does not match workspaceRoot.')
   }
@@ -1580,6 +1709,8 @@ function parseWatchInput(value: unknown): TurnArtifactWatch {
     turnId,
     ...binding,
     ...boundary,
+    principal,
+    principalContext,
     ...(providerUserMessageItemId ? { providerUserMessageItemId } : {}),
     ...(bindingSource ? { bindingSource } : {}),
     ...(workspaceRoot ? { workspaceRoot } : {}),
@@ -1589,8 +1720,11 @@ function parseWatchInput(value: unknown): TurnArtifactWatch {
   })
 }
 
-function parsePersistedWatch(value: unknown): PendingTurnArtifactWatch {
-  const watch = parseWatchInput(value)
+function parsePersistedWatch(
+  value: unknown,
+  legacyPrincipal = false
+): PendingTurnArtifactWatch {
+  const watch = parseWatchInput(value, legacyPrincipal, true)
   if (!isRecord(value)) throw new Error('Accepted turn artifact watch must be an object.')
   const key = turnArtifactIntentKey(watch)
   if (value.key !== key) throw new Error('Accepted turn artifact watch has an invalid key.')
@@ -1618,6 +1752,113 @@ function parseWorkspaceLocator(value: unknown): WorkspaceLocator | undefined {
     hostSessionId: value.hostSessionId.trim(),
     path: value.path.trim()
   })
+}
+
+function parsePrincipalAttribution(
+  value: Record<string, unknown>,
+  legacyPrincipal: boolean
+): PrincipalSnapshot | null {
+  if (!Object.prototype.hasOwnProperty.call(value, 'principal')) {
+    if (legacyPrincipal) return null
+    throw new Error('Turn artifact Principal attribution is required.')
+  }
+  if (value.principal === null) return null
+  try {
+    return definePrincipalSnapshot(value.principal as PrincipalSnapshot)
+  } catch {
+    throw new Error('Turn artifact Principal attribution is invalid.')
+  }
+}
+
+function parseOptionalPrincipalSnapshot(value: unknown): PrincipalSnapshot {
+  try {
+    return definePrincipalSnapshot(value as PrincipalSnapshot)
+  } catch {
+    throw new Error('Turn lifecycle Principal attribution is invalid.')
+  }
+}
+
+function parsePrincipalContextAttribution(
+  value: Record<string, unknown>,
+  principal: PrincipalSnapshot | null,
+  legacyPrincipal: boolean,
+  persisted: boolean
+): PrincipalContextSnapshot | null {
+  if (!Object.prototype.hasOwnProperty.call(value, 'principalContext')) {
+    if (persisted) {
+      if (legacyPrincipal) {
+        if (principal !== null) {
+          throw new Error('Legacy signed-in Principal attribution has no exact context.')
+        }
+        return null
+      }
+      if (principal === null) return null
+      return definePrincipalContextSnapshot({
+        identityVersion: principal.identityVersion,
+        principal
+      })
+    }
+    throw new Error('Turn artifact Principal context attribution is required.')
+  }
+  if (value.principalContext === null) {
+    if (principal !== null) {
+      throw new Error('A signed-in Principal requires an exact context attribution.')
+    }
+    return null
+  }
+  let context: PrincipalContextSnapshot
+  try {
+    context = definePrincipalContextSnapshot(value.principalContext as PrincipalContextSnapshot)
+  } catch {
+    throw new Error('Turn artifact Principal context attribution is invalid.')
+  }
+  const projected = context.principal
+  if (
+    (principal === null && projected !== null) ||
+    (principal !== null && (
+      projected === null || !samePrincipalSnapshot(principal, projected)
+    ))
+  ) {
+    throw new Error('Turn artifact Principal projection does not match its context attribution.')
+  }
+  return context
+}
+
+function bindLifecyclePrincipalContext(
+  event: DomainMainAfterTurnEvent,
+  principal: PrincipalSnapshot | null,
+  principalContext: PrincipalContextSnapshot | null
+): DomainMainAfterTurnEvent {
+  const {
+    principal: _untrustedPrincipal,
+    principalContext: _untrustedPrincipalContext,
+    ...base
+  } = event
+  return Object.freeze({
+    ...base,
+    ...(principal ? { principal } : {}),
+    ...(principalContext ? { principalContext } : {})
+  }) as DomainMainAfterTurnEvent
+}
+
+function principalFromBoundaryOwner(value: unknown): PrincipalSnapshot | null {
+  if (!isRecord(value) || value.principal === undefined || value.principal === null) return null
+  return parseOptionalPrincipalSnapshot(value.principal)
+}
+
+function principalContextFromBoundaryOwner(value: unknown): PrincipalContextSnapshot | null {
+  if (!isRecord(value) || value.principalContext === undefined || value.principalContext === null) {
+    return null
+  }
+  return parseOptionalPrincipalContextSnapshot(value.principalContext)
+}
+
+function parseOptionalPrincipalContextSnapshot(value: unknown): PrincipalContextSnapshot {
+  try {
+    return definePrincipalContextSnapshot(value as PrincipalContextSnapshot)
+  } catch {
+    throw new Error('Turn lifecycle Principal context attribution is invalid.')
+  }
 }
 
 function parseFileBaseline(value: unknown): TurnFileBaselineV1 | undefined {
@@ -1864,7 +2105,7 @@ function parseReceipt(value: unknown, legacy = false): TurnArtifactDeliveryRecei
   // V1/V2 kept the full immutable intent as the delivery tombstone. Migrate
   // those records in memory to a compact identity + digest before V3 persists.
   if (value.intent !== undefined) {
-    const intent = parseIntent(value.intent, legacy)
+    const intent = parseIntent(value.intent, legacy, true)
     const key = turnArtifactIntentKey(intent)
     if (value.key !== key) throw new Error('Completed turn artifact receipt has an invalid key.')
     return compactReceipt(intent, timestamp(value.deliveredAt, 'deliveredAt'))
@@ -1899,6 +2140,38 @@ function parseReceipt(value: unknown, legacy = false): TurnArtifactDeliveryRecei
     ? undefined
     : digest(value.fileBaselineDigest, 'receipt.fileBaselineDigest')
   const intentDigest = digest(value.intentDigest, 'receipt.intentDigest')
+  const principal = value.principal === undefined
+    ? undefined
+    : parseOptionalPrincipalSnapshot(value.principal)
+  if (value.principalContext === null) {
+    throw new Error('Completed turn artifact receipt Principal context is invalid.')
+  }
+  const principalContext = value.principalContext === undefined
+    ? (!legacy && principal
+        ? definePrincipalContextSnapshot({
+            identityVersion: principal.identityVersion,
+            principal
+          })
+        : undefined)
+    : parseOptionalPrincipalContextSnapshot(value.principalContext)
+  if (
+    principalContext &&
+    !samePrincipalAttribution(principal ?? null, principalContext.principal)
+  ) {
+    throw new Error('Completed turn artifact receipt Principal projection does not match its context.')
+  }
+  const principalDigest = value.principalDigest === undefined && legacy
+    ? principalAttributionDigest(null)
+    : digest(value.principalDigest, 'receipt.principalDigest')
+  if (principalAttributionDigest(principal ?? null) !== principalDigest) {
+    throw new Error('Completed turn artifact receipt Principal proof is invalid.')
+  }
+  const principalContextDigest = value.principalContextDigest === undefined
+    ? principalContextAttributionDigest(principalContext ?? null)
+    : digest(value.principalContextDigest, 'receipt.principalContextDigest')
+  if (principalContextAttributionDigest(principalContext ?? null) !== principalContextDigest) {
+    throw new Error('Completed turn artifact receipt Principal context proof is invalid.')
+  }
   return Object.freeze({
     key,
     runtimeId,
@@ -1908,6 +2181,10 @@ function parseReceipt(value: unknown, legacy = false): TurnArtifactDeliveryRecei
     ...binding,
     ...(workspaceBindingDigest ? { workspaceBindingDigest } : {}),
     ...(fileBaselineDigest ? { fileBaselineDigest } : {}),
+    ...(principal ? { principal } : {}),
+    principalDigest,
+    ...(principalContext ? { principalContext } : {}),
+    principalContextDigest,
     intentDigest,
     deliveredAt: timestamp(value.deliveredAt, 'deliveredAt')
   })
@@ -1939,6 +2216,10 @@ function compactReceipt(
         }
       : {}),
     ...(intent.fileBaseline ? { fileBaselineDigest: intent.fileBaseline.digest } : {}),
+    ...(intent.principal ? { principal: intent.principal } : {}),
+    principalDigest: principalAttributionDigest(intent.principal ?? null),
+    ...(intent.principalContext ? { principalContext: intent.principalContext } : {}),
+    principalContextDigest: principalContextAttributionDigest(intent.principalContext ?? null),
     intentDigest: turnArtifactIntentDigest(intent),
     deliveredAt
   })
@@ -1981,12 +2262,25 @@ function workspaceReceiptBindingDigest(
 }
 
 function turnArtifactIntentDigest(intent: TurnArtifactReplayIntent): string {
-  return createHash('sha256').update(JSON.stringify(intent)).digest('hex')
+  // Preserve the existing V5 intent digest so principal-only receipts remain
+  // replayable. The complete context is bound by its independent digest.
+  const { principalContext: _principalContext, ...v5Intent } = intent
+  return createHash('sha256').update(JSON.stringify(v5Intent)).digest('hex')
+}
+
+function principalAttributionDigest(principal: PrincipalSnapshot | null): string {
+  return createHash('sha256').update(JSON.stringify(principal)).digest('hex')
+}
+
+function principalContextAttributionDigest(
+  principalContext: PrincipalContextSnapshot | null
+): string {
+  return createHash('sha256').update(JSON.stringify(principalContext)).digest('hex')
 }
 
 function parseRecord(value: unknown, legacy = false): TurnArtifactOutboxRecord {
   if (!isRecord(value)) throw new Error('Completed turn artifact record must be an object.')
-  const intent = parseIntent(value.intent, legacy)
+  const intent = parseIntent(value.intent, legacy, true)
   const expectedKey = turnArtifactIntentKey(intent)
   if (value.key !== expectedKey) {
     throw new Error('Completed turn artifact record has an invalid intent key.')
@@ -2024,7 +2318,11 @@ function parseRecord(value: unknown, legacy = false): TurnArtifactOutboxRecord {
       } as PendingTurnArtifactFanout)
 }
 
-function parseIntent(value: unknown, legacy = false): TurnArtifactReplayIntent {
+function parseIntent(
+  value: unknown,
+  legacy = false,
+  persisted = false
+): TurnArtifactReplayIntent {
   if (!isRecord(value)) throw new Error('Completed turn artifact intent must be an object.')
   const runtimeId = required(value.runtimeId, 'runtimeId')
   const threadId = required(value.threadId, 'threadId')
@@ -2049,6 +2347,13 @@ function parseIntent(value: unknown, legacy = false): TurnArtifactReplayIntent {
     ? undefined
     : required(value.providerUserMessageItemId, 'providerUserMessageItemId', 4_096)
   const bindingSource = parseBindingSource(value.bindingSource)
+  const principal = parsePrincipalAttribution(value, legacy)
+  const principalContext = parsePrincipalContextAttribution(
+    value,
+    principal,
+    legacy,
+    persisted
+  )
   if (
     filePatchReceipts.length > 0 &&
     (sequence === undefined || filePatchReceipts.some((receipt) => (
@@ -2066,6 +2371,8 @@ function parseIntent(value: unknown, legacy = false): TurnArtifactReplayIntent {
     turnId,
     ...binding,
     ...boundary,
+    principal,
+    principalContext,
     ...(providerUserMessageItemId ? { providerUserMessageItemId } : {}),
     ...(bindingSource ? { bindingSource } : {}),
     ...(sequence === undefined ? {} : { sequence: Number(sequence) }),
@@ -2142,9 +2449,45 @@ function parseTurnArtifactEvent(
     occurredAt,
     ...(intent.fileEffects ? { fileEffects: intent.fileEffects } : {}),
     ...(filePatchReceipts.length ? { filePatchReceipts } : {}),
-    artifacts: value.artifacts
+    artifacts: value.artifacts.map((artifact) => bindArtifactPrincipal(
+      artifact,
+      intent.principal ?? null
+    )),
+    ...(intent.principal ? { principal: intent.principal } : {}),
+    ...(intent.principalContext ? { principalContext: intent.principalContext } : {})
   })
   return deepFreeze(durable) as DomainTurnArtifactEvent
+}
+
+function bindArtifactPrincipal(
+  value: unknown,
+  principal: PrincipalSnapshot | null
+): unknown {
+  if (!isRecord(value)) return value
+  const {
+    principal: _untrustedPrincipal,
+    principalContext: _untrustedPrincipalContext,
+    ...artifact
+  } = value
+  return principal ? { ...artifact, principal } : artifact
+}
+
+function samePrincipalAttribution(
+  left: PrincipalSnapshot | null | undefined,
+  right: PrincipalSnapshot | null | undefined
+): boolean {
+  if (left === undefined || right === undefined) return left === right
+  if (left === null || right === null) return left === right
+  return samePrincipalSnapshot(left, right)
+}
+
+function samePrincipalContextAttribution(
+  left: PrincipalContextSnapshot | null | undefined,
+  right: PrincipalContextSnapshot | null | undefined
+): boolean {
+  if (left === undefined || right === undefined) return left === right
+  if (left === null || right === null) return left === right
+  return samePrincipalContextSnapshot(left, right)
 }
 
 function bindMaterializedWorkspace(
@@ -2183,6 +2526,8 @@ function assertSameIntent(
     left.workspaceLocator?.hostSessionId !== right.workspaceLocator?.hostSessionId ||
     left.workspaceLocator?.path !== right.workspaceLocator?.path ||
     left.fileBaseline?.digest !== right.fileBaseline?.digest ||
+    !samePrincipalAttribution(left.principal, right.principal) ||
+    !samePrincipalContextAttribution(left.principalContext, right.principalContext) ||
     fileEffectsDigest(left.fileEffects) !== fileEffectsDigest(right.fileEffects) ||
     JSON.stringify(left.filePatchReceipts ?? []) !== JSON.stringify(right.filePatchReceipts ?? []) ||
     left.occurredAt !== right.occurredAt
@@ -2200,6 +2545,8 @@ function assertReceiptMatchesIntent(
     receipt.runtimeId !== intent.runtimeId ||
     receipt.threadId !== intent.threadId ||
     receipt.turnId !== intent.turnId ||
+    receipt.principalContextDigest !==
+      principalContextAttributionDigest(intent.principalContext ?? null) ||
     receipt.intentDigest !== turnArtifactIntentDigest(intent)
   ) throw new Error(`Completed turn artifact intent key collision: ${key}`)
 }
@@ -2221,6 +2568,13 @@ function assertSameArtifactReceipt(
     left.inputDigest !== right.inputDigest ||
     left.workspaceBindingDigest !== right.workspaceBindingDigest ||
     left.fileBaselineDigest !== right.fileBaselineDigest ||
+    !samePrincipalAttribution(left.principal ?? null, right.principal ?? null) ||
+    left.principalDigest !== right.principalDigest ||
+    !samePrincipalContextAttribution(
+      left.principalContext ?? null,
+      right.principalContext ?? null
+    ) ||
+    left.principalContextDigest !== right.principalContextDigest ||
     left.intentDigest !== right.intentDigest ||
     left.deliveredAt !== right.deliveredAt
   ) throw new Error(`Completed turn artifact receipt proof collision: ${left.key}`)
@@ -2241,6 +2595,9 @@ function assertWatchMatchesReceipt(
     watch.boundaryLeaseId !== receipt.boundaryLeaseId ||
     watch.clientDirectiveId !== receipt.clientDirectiveId ||
     watch.inputDigest !== receipt.inputDigest ||
+    principalAttributionDigest(watch.principal) !== receipt.principalDigest ||
+    principalContextAttributionDigest(watch.principalContext) !==
+      receipt.principalContextDigest ||
     workspaceReceiptBindingDigest(watch.workspaceRoot, watch.workspaceLocator) !==
       receipt.workspaceBindingDigest ||
     (watch.fileBaseline !== undefined && watch.fileBaseline.digest !== receipt.fileBaselineDigest)
@@ -2268,7 +2625,9 @@ function assertSameWatch(
     left.workspaceLocator?.contractVersion !== right.workspaceLocator?.contractVersion ||
     left.workspaceLocator?.hostSessionId !== right.workspaceLocator?.hostSessionId ||
     left.workspaceLocator?.path !== right.workspaceLocator?.path ||
-    left.fileBaseline?.digest !== right.fileBaseline?.digest
+    left.fileBaseline?.digest !== right.fileBaseline?.digest ||
+    !samePrincipalAttribution(left.principal, right.principal) ||
+    !samePrincipalContextAttribution(left.principalContext, right.principalContext)
   ) {
     throw new Error(`Accepted turn artifact watch key collision: ${key}`)
   }
@@ -2292,7 +2651,9 @@ function assertSameStart(
     left.workspaceLocator?.contractVersion !== right.workspaceLocator?.contractVersion ||
     left.workspaceLocator?.hostSessionId !== right.workspaceLocator?.hostSessionId ||
     left.workspaceLocator?.path !== right.workspaceLocator?.path ||
-    left.fileBaseline?.digest !== right.fileBaseline?.digest
+    left.fileBaseline?.digest !== right.fileBaseline?.digest ||
+    !samePrincipalAttribution(left.principal, right.principal) ||
+    !samePrincipalContextAttribution(left.principalContext, right.principalContext)
   ) {
     throw new Error(`Turn artifact start key collision: ${key}`)
   }
@@ -2312,7 +2673,9 @@ function assertSameStartDraft(
     left.workspaceLocator?.contractVersion !== right.workspaceLocator?.contractVersion ||
     left.workspaceLocator?.hostSessionId !== right.workspaceLocator?.hostSessionId ||
     left.workspaceLocator?.path !== right.workspaceLocator?.path ||
-    left.fileBaseline?.digest !== right.fileBaseline?.digest
+    left.fileBaseline?.digest !== right.fileBaseline?.digest ||
+    !samePrincipalAttribution(left.principal, right.principal) ||
+    !samePrincipalContextAttribution(left.principalContext, right.principalContext)
   ) throw new Error(`Turn artifact start key collision: ${key}`)
 }
 
@@ -2336,7 +2699,9 @@ function assertWatchMatchesIntent(
     (watch.workspaceRoot !== undefined && watch.workspaceRoot !== intent.workspaceRoot) ||
     watch.workspaceLocator?.hostSessionId !== intent.workspaceLocator?.hostSessionId ||
     watch.workspaceLocator?.path !== intent.workspaceLocator?.path ||
-    watch.fileBaseline?.digest !== intent.fileBaseline?.digest
+    watch.fileBaseline?.digest !== intent.fileBaseline?.digest ||
+    !samePrincipalAttribution(watch.principal, intent.principal) ||
+    !samePrincipalContextAttribution(watch.principalContext, intent.principalContext)
   ) {
     throw new Error(`Accepted turn artifact watch does not match completed intent: ${key}`)
   }
@@ -2375,6 +2740,35 @@ function assertUniqueDirectiveBindings(
       throw new Error('Turn artifact outbox binds one directive to multiple turns.')
     }
     turnsByDirective.set(key, value.turnId)
+  }
+}
+
+function assertBoundaryPrincipalAttributionConsistent(
+  values: readonly Readonly<{
+    boundaryLeaseId?: string
+    principal?: PrincipalSnapshot | null
+    principalContext?: PrincipalContextSnapshot | null
+  }>[]
+): void {
+  const owners = new Map<string, Readonly<{
+    principal?: PrincipalSnapshot | null
+    principalContext?: PrincipalContextSnapshot | null
+  }>>()
+  for (const value of values) {
+    if (!value.boundaryLeaseId) continue
+    const existing = owners.get(value.boundaryLeaseId)
+    if (existing && (
+      !samePrincipalAttribution(existing.principal ?? null, value.principal ?? null) ||
+      !samePrincipalContextAttribution(
+        existing.principalContext ?? null,
+        value.principalContext ?? null
+      )
+    )) {
+      throw new Error(
+        `Turn boundary Principal attribution collision: ${value.boundaryLeaseId}`
+      )
+    }
+    owners.set(value.boundaryLeaseId, value)
   }
 }
 
@@ -2488,7 +2882,11 @@ export function turnLifecycleSettlementKey(
   return `turn-lifecycle:${createHash('sha256').update(boundaryLeaseId).digest('hex')}`
 }
 
-function parseLifecycleSettlement(value: unknown): DomainMainAfterTurnEvent {
+function parseLifecycleSettlement(
+  value: unknown,
+  persisted = false,
+  legacyPrincipal = false
+): DomainMainAfterTurnEvent {
   if (!isRecord(value) || value.kind !== 'after-turn') {
     throw new Error('Turn lifecycle settlement must be an after-turn event.')
   }
@@ -2518,6 +2916,23 @@ function parseLifecycleSettlement(value: unknown): DomainMainAfterTurnEvent {
     settlementSource !== 'explicit-pending-start-release'
   ) throw new Error('Turn lifecycle settlement source is invalid.')
   const turnId = value.turnId === undefined ? undefined : required(value.turnId, 'turnId')
+  const principal = value.principal === undefined
+    ? undefined
+    : parseOptionalPrincipalSnapshot(value.principal)
+  const principalContext = value.principalContext === undefined
+    ? (persisted && !legacyPrincipal && principal
+        ? definePrincipalContextSnapshot({
+            identityVersion: principal.identityVersion,
+            principal
+          })
+        : undefined)
+    : parseOptionalPrincipalContextSnapshot(value.principalContext)
+  if (
+    principalContext &&
+    !samePrincipalAttribution(principal ?? null, principalContext.principal)
+  ) {
+    throw new Error('Turn lifecycle Principal projection does not match its context attribution.')
+  }
   if (state === 'rejected' ? turnId !== undefined : turnId === undefined) {
     throw new Error('Turn lifecycle settlement turn identity does not match its terminal state.')
   }
@@ -2532,6 +2947,8 @@ function parseLifecycleSettlement(value: unknown): DomainMainAfterTurnEvent {
     threadId,
     clientDirectiveId,
     ...(turnId ? { turnId } : {}),
+    ...(principal ? { principal } : {}),
+    ...(principalContext ? { principalContext } : {}),
     ...(workspaceRoot ? { workspaceRoot } : {}),
     settlementSource,
     occurredAt
@@ -2559,6 +2976,8 @@ function completedLifecycleSettlementForIntent(
     threadId: intent.threadId,
     turnId: intent.turnId,
     clientDirectiveId: intent.clientDirectiveId,
+    ...(intent.principal ? { principal: intent.principal } : {}),
+    ...(intent.principalContext ? { principalContext: intent.principalContext } : {}),
     ...(intent.workspaceRoot ? { workspaceRoot: intent.workspaceRoot } : {}),
     settlementSource: 'runtime',
     occurredAt: intent.occurredAt
@@ -2579,9 +2998,12 @@ function createLifecycleSettlementRecord(
   })
 }
 
-function parseLifecycleSettlementRecord(value: unknown): TurnLifecycleSettlementRecord {
+function parseLifecycleSettlementRecord(
+  value: unknown,
+  legacyPrincipal = false
+): TurnLifecycleSettlementRecord {
   if (!isRecord(value)) throw new Error('Turn lifecycle settlement record must be an object.')
-  const event = parseLifecycleSettlement(value.event)
+  const event = parseLifecycleSettlement(value.event, true, legacyPrincipal)
   const key = turnLifecycleSettlementKey(event)
   if (value.key !== key) throw new Error('Turn lifecycle settlement record has an invalid key.')
   const attempts = value.attempts
@@ -2601,9 +3023,12 @@ function parseLifecycleSettlementRecord(value: unknown): TurnLifecycleSettlement
   })
 }
 
-function parseLifecycleSettlementReceipt(value: unknown): TurnLifecycleSettlementReceipt {
+function parseLifecycleSettlementReceipt(
+  value: unknown,
+  legacyPrincipal = false
+): TurnLifecycleSettlementReceipt {
   if (!isRecord(value)) throw new Error('Turn lifecycle settlement receipt must be an object.')
-  const event = parseLifecycleSettlement(value.event)
+  const event = parseLifecycleSettlement(value.event, true, legacyPrincipal)
   const key = turnLifecycleSettlementKey(event)
   if (value.key !== key) throw new Error('Turn lifecycle settlement receipt has an invalid key.')
   return Object.freeze({
@@ -2629,6 +3054,11 @@ function assertSameLifecycleSettlement(
     left.deliveryAttemptId !== right.deliveryAttemptId ||
     left.boundaryLeaseId !== right.boundaryLeaseId ||
     left.clientDirectiveId !== right.clientDirectiveId ||
+    !samePrincipalAttribution(left.principal ?? null, right.principal ?? null) ||
+    !samePrincipalContextAttribution(
+      left.principalContext ?? null,
+      right.principalContext ?? null
+    ) ||
     left.workspaceRoot !== right.workspaceRoot ||
     left.settlementSource !== right.settlementSource ||
     left.occurredAt !== right.occurredAt
@@ -2649,6 +3079,8 @@ function assertSettlementMatchesBoundary(
     boundaryLeaseId?: string
     clientDirectiveId?: string
     workspaceRoot?: string
+    principal?: PrincipalSnapshot | null
+    principalContext?: PrincipalContextSnapshot | null
   }>
 ): void {
   if (
@@ -2659,6 +3091,11 @@ function assertSettlementMatchesBoundary(
     event.deliveryAttemptId !== owner.deliveryAttemptId ||
     event.boundaryLeaseId !== owner.boundaryLeaseId ||
     event.clientDirectiveId !== owner.clientDirectiveId ||
+    !samePrincipalAttribution(event.principal ?? null, owner.principal ?? null) ||
+    !samePrincipalContextAttribution(
+      event.principalContext ?? null,
+      owner.principalContext ?? null
+    ) ||
     event.workspaceRoot !== owner.workspaceRoot ||
     (event.state !== 'rejected' && owner.turnId !== undefined && event.turnId !== owner.turnId)
   ) {
@@ -2676,6 +3113,8 @@ function assertSameBoundaryIdentity(
     boundaryLeaseId?: string
     clientDirectiveId?: string
     workspaceRoot?: string
+    principal?: PrincipalSnapshot | null
+    principalContext?: PrincipalContextSnapshot | null
   }>,
   right: Readonly<{
     runtimeId: string
@@ -2686,6 +3125,8 @@ function assertSameBoundaryIdentity(
     boundaryLeaseId?: string
     clientDirectiveId?: string
     workspaceRoot?: string
+    principal?: PrincipalSnapshot | null
+    principalContext?: PrincipalContextSnapshot | null
   }>
 ): void {
   if (
@@ -2696,6 +3137,11 @@ function assertSameBoundaryIdentity(
     left.deliveryAttemptId !== right.deliveryAttemptId ||
     left.boundaryLeaseId !== right.boundaryLeaseId ||
     left.clientDirectiveId !== right.clientDirectiveId ||
+    !samePrincipalAttribution(left.principal ?? null, right.principal ?? null) ||
+    !samePrincipalContextAttribution(
+      left.principalContext ?? null,
+      right.principalContext ?? null
+    ) ||
     left.workspaceRoot !== right.workspaceRoot
   ) {
     throw new Error('Turn artifact start successor does not match its durable boundary owner.')
@@ -2713,6 +3159,8 @@ function boundarySnapshot(
     clientDirectiveId: string
     workspaceRoot?: string
     turnId?: string
+    principal?: PrincipalSnapshot | null
+    principalContext?: PrincipalContextSnapshot | null
   }>,
   phase: DomainMainDurableTurnBoundary['phase'],
   occurredAt: string,
@@ -2726,6 +3174,8 @@ function boundarySnapshot(
     runtimeId: value.runtimeId,
     threadId: value.threadId,
     clientDirectiveId: value.clientDirectiveId,
+    ...(value.principal ? { principal: value.principal } : {}),
+    ...(value.principalContext ? { principalContext: value.principalContext } : {}),
     ...(value.workspaceRoot ? { workspaceRoot: value.workspaceRoot } : {}),
     phase,
     ...(value.turnId ? { turnId: value.turnId } : {}),
@@ -2746,6 +3196,8 @@ function boundarySnapshotFromSettlement(
     runtimeId: event.runtimeId,
     threadId: event.threadId,
     clientDirectiveId: event.clientDirectiveId,
+    ...(event.principal ? { principal: event.principal } : {}),
+    ...(event.principalContext ? { principalContext: event.principalContext } : {}),
     ...(event.workspaceRoot ? { workspaceRoot: event.workspaceRoot } : {}),
     ...(event.state === 'rejected' ? {} : { turnId: event.turnId })
   }, 'terminal-settlement', occurredAt, event.state)
@@ -2763,6 +3215,11 @@ function setBoundarySnapshot(
     current.runtimeId !== next.runtimeId ||
     current.threadId !== next.threadId ||
     current.clientDirectiveId !== next.clientDirectiveId ||
+    !samePrincipalAttribution(current.principal ?? null, next.principal ?? null) ||
+    !samePrincipalContextAttribution(
+      current.principalContext ?? null,
+      next.principalContext ?? null
+    ) ||
     current.workspaceRoot !== next.workspaceRoot ||
     (current.turnId !== undefined && next.turnId !== undefined && current.turnId !== next.turnId)
   )) {

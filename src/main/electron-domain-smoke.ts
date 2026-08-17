@@ -13,6 +13,7 @@ import type {
   CapabilityAgentToolRequestContext,
   CapabilityAgentToolSurface
 } from './capabilities/agent-tools'
+import type { AgentRuntimeToolTurnIdentity } from './runtime/agent-runtime/agent-tool-surface'
 import { nativeAgentToolExecutionMetadata } from './runtime/agent-runtime/agent-tool-surface'
 import { RuntimeExecutionIntegrityGuard } from './runtime/agent-runtime/execution-integrity-guard'
 import {
@@ -26,6 +27,11 @@ const FIXTURE_HEIGHT = 100
 const REGION = Object.freeze({ x: 0.25, y: 0.2, width: 0.5, height: 0.6 })
 const EXPECTED_CAPTURE_WIDTH = FIXTURE_WIDTH * REGION.width
 const EXPECTED_CAPTURE_HEIGHT = FIXTURE_HEIGHT * REGION.height
+const SMOKE_TOOL_TURN = Object.freeze({
+  runtimeId: 'codex',
+  threadId: 'electron-domain-smoke-thread',
+  turnId: 'electron-domain-smoke-turn'
+}) satisfies AgentRuntimeToolTurnIdentity
 
 export type ElectronDomainNativeVisualSmokeInput = Readonly<{
   workspaceDirectory: string
@@ -64,11 +70,17 @@ declare global {
 }
 
 export function installElectronDomainNativeVisualSmoke(
-  agentTools: CapabilityAgentToolSurface
+  agentTools: CapabilityAgentToolSurface,
+  withPrincipalLease: <T>(
+    identity: AgentRuntimeToolTurnIdentity,
+    operation: () => Promise<T>
+  ) => Promise<T>
 ): void {
   if (process.env.SCIFORGE_ELECTRON_SMOKE !== '1') return
   globalThis.__SCIFORGE_ELECTRON_DOMAIN_NATIVE_VISUAL_SMOKE__ = async (input) =>
-    runElectronDomainNativeVisualSmoke(agentTools, input)
+    withPrincipalLease(SMOKE_TOOL_TURN, () =>
+      runElectronDomainNativeVisualSmoke(agentTools, input)
+    )
   globalThis.__SCIFORGE_ELECTRON_DOMAIN_CODEX_HOOK_SMOKE__ = async (input) => {
     const workspaceDirectory = resolveWorkspaceDirectory(input.workspaceDirectory)
     return probeCodexPreToolUseHook({
@@ -104,9 +116,7 @@ async function runElectronDomainNativeVisualSmoke(
     }
   }
 
-  const runtimeId = 'codex'
-  const threadId = 'electron-domain-smoke-thread'
-  const turnId = 'electron-domain-smoke-turn'
+  const { runtimeId, threadId, turnId } = SMOKE_TOOL_TURN
   const context = {
     runtimeId,
     threadId,
@@ -237,7 +247,6 @@ async function runElectronDomainNativeVisualSmoke(
   }
 
   let unavailableRouteFailedVisibly = false
-  const unavailableTurnId = 'electron-domain-smoke-unavailable-turn'
   try {
     await agentTools.call({
       name: 'sciforge_look',
@@ -249,7 +258,7 @@ async function runElectronDomainNativeVisualSmoke(
       context: {
         runtimeId,
         threadId,
-        turnId: unavailableTurnId,
+        turnId,
         workspaceId: workspaceDirectory,
         requestId: 'electron-domain-smoke-look-unavailable',
         callId: 'electron-domain-smoke-look-unavailable'

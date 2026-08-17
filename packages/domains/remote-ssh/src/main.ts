@@ -1,5 +1,6 @@
 import type { DomainMainHost } from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
+import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 import type {
   WorkspaceHostClient,
   WorkspaceHostProvider,
@@ -99,6 +100,8 @@ import {
 
 type CapabilityAudience = 'ui' | 'agent' | 'system'
 type CapabilityEffect = 'read' | 'workspace-write' | 'external-write' | 'destructive'
+// Matches the bounded target catalog/list contracts; additional live identities fail closed.
+const REMOTE_SSH_TARGET_RESOURCE_BINDING_LIMIT = 512
 
 export type RemoteSshCapabilityResourceRegistration = Readonly<{
   resourceId: string
@@ -106,18 +109,24 @@ export type RemoteSshCapabilityResourceRegistration = Readonly<{
   workspaceId: string
   audiences: CapabilityAudience[]
   semanticRevision: string
+  retireAfterLastHandleExpires: true
   observe: (caller: Readonly<{ audience: CapabilityAudience }>) => Promise<Readonly<{
     semanticRevision: string
     state: unknown
     operationIds: string[]
   }>>
+  dispose: () => void
+}>
+
+type RemoteSshCapabilityCaller = Readonly<{
+  audience: CapabilityAudience
+  workspaceId?: string
+  principal?: PrincipalSnapshot
+  principalContextVersion?: number
 }>
 
 export type RemoteSshCapabilityHandlerContext = Readonly<{
-  caller: Readonly<{
-    audience: CapabilityAudience
-    workspaceId?: string
-  }>
+  caller: RemoteSshCapabilityCaller
   resource?: Readonly<{
     resourceId: string
     workspaceId?: string
@@ -250,6 +259,11 @@ type RemoteSshMainHost = DomainMainHost & Readonly<{
   createService?: (options: RemoteSshServiceOptions) => RemoteSshServicePort
 }>
 
+type RemoteSshCapabilityFactoryOptions<CapabilityDefinition> = Readonly<{
+  defineCapability: RemoteSshCapabilityBuilder<CapabilityDefinition>
+  getService: () => RemoteSshServicePort
+}>
+
 /** Creates the raw main-process entry and lazily owns exactly one service. */
 export function createDomainMainEntry(
   host: RemoteSshMainHost
@@ -265,10 +279,11 @@ export function createDomainMainEntry(
     })
     return service
   }
-  const capabilityFactory = createRemoteSshCapabilityFactory({
+  const resourceBindings = createRemoteSshTargetResourceBindings(getService)
+  const capabilityFactory = createRemoteSshCapabilityFactoryWithBindings({
     defineCapability: host.defineCapability,
     getService
-  })
+  }, resourceBindings)
 
   return {
     definition: domainPackageDefinition,
@@ -277,6 +292,7 @@ export function createDomainMainEntry(
         ...REMOTE_SSH_CAPABILITY_FACTORY_CONTRIBUTION,
         value: capabilityFactory,
         onDispose: () => {
+          resourceBindings.dispose()
           service?.close()
           service = undefined
         }
@@ -299,6 +315,16 @@ export function createRemoteSshCapabilityFactory<CapabilityDefinition>(options: 
   defineCapability: RemoteSshCapabilityBuilder<CapabilityDefinition>
   getService: () => RemoteSshServicePort
 }>): RemoteSshCapabilityFactory<CapabilityDefinition> {
+  return createRemoteSshCapabilityFactoryWithBindings(
+    options,
+    createRemoteSshTargetResourceBindings(options.getService)
+  )
+}
+
+function createRemoteSshCapabilityFactoryWithBindings<CapabilityDefinition>(
+  options: RemoteSshCapabilityFactoryOptions<CapabilityDefinition>,
+  resourceBindings: RemoteSshTargetResourceBindings
+): RemoteSshCapabilityFactory<CapabilityDefinition> {
   const { defineCapability, getService } = options
   const allAudiences = ['ui', 'agent', 'system'] as const
   const interactiveAudiences = ['ui', 'agent'] as const
@@ -519,14 +545,21 @@ export function createRemoteSshCapabilityFactory<CapabilityDefinition>(options: 
         outputSchema: remoteSshTargetListResultSchema,
         handler: async (_, context) => {
           const workspaceId = requireCallerWorkspace(context)
-          const targets = await getService().listTargets(workspaceId)
-          return {
-            output: remoteSshTargetListResultSchema.parse({
-              targets: targets.map((target) => ({
+          const reservation = resourceBindings.reserveList(workspaceId, context.caller)
+          try {
+            const targets = await getService().listTargets(workspaceId)
+            const registrations = reservation.registrations(targets)
+            const output = remoteSshTargetListResultSchema.parse({
+              targets: targets.map((target, index) => ({
                 target: targetSummary(target),
-                resource: context.issueResource(targetResource(getService, workspaceId, target))
+                resource: context.issueResource(registrations[index]!)
               }))
             })
+            reservation.commit()
+            return { output }
+          } catch (error) {
+            reservation.rollback()
+            throw error
           }
         }
       }),
@@ -733,53 +766,230 @@ export function createRemoteSshCapabilityFactory<CapabilityDefinition>(options: 
   })
 }
 
-function targetResource(
-  getService: () => RemoteSshServicePort,
-  workspaceId: string,
-  target: RemoteSshTarget
-): RemoteSshCapabilityResourceRegistration {
-  return {
-    resourceId: target.id,
-    resourceKind: REMOTE_SSH_TARGET_RESOURCE_KIND,
-    workspaceId,
-    audiences: ['ui', 'agent', 'system'],
-    semanticRevision: target.revision,
-    observe: async (caller) => {
-      const observation = await getService().observeTarget(workspaceId, target.id)
-      const operationIds: string[] = [REMOTE_SSH_CAPABILITY_IDS.probeTarget]
-      if (caller.audience !== 'system') {
-        if (observation.target.capabilities.includes('shell')) {
-          operationIds.push(REMOTE_SSH_CAPABILITY_IDS.executeCommand)
-        }
-        if (observation.target.capabilities.includes('file-transfer')) {
-          operationIds.push(
-            REMOTE_SSH_CAPABILITY_IDS.uploadFile,
-            REMOTE_SSH_CAPABILITY_IDS.downloadFile
-          )
-        }
+type RemoteSshTargetResourceListReservation = Readonly<{
+  registrations: (
+    targets: readonly RemoteSshTarget[]
+  ) => readonly RemoteSshCapabilityResourceRegistration[]
+  commit: () => void
+  rollback: () => void
+}>
+
+type RemoteSshTargetResourceBindings = Readonly<{
+  reserveList: (
+    workspaceId: string,
+    caller: RemoteSshCapabilityCaller
+  ) => RemoteSshTargetResourceListReservation
+  dispose: () => void
+}>
+
+function createRemoteSshTargetResourceBindings(
+  getService: () => RemoteSshServicePort
+): RemoteSshTargetResourceBindings {
+  type ResourceBinding = {
+    observe: RemoteSshCapabilityResourceRegistration['observe']
+    dispose: RemoteSshCapabilityResourceRegistration['dispose']
+    pendingReservations: number
+    registered: boolean
+  }
+  const bindings = new Map<string, ResourceBinding>()
+  let pendingListReservations = 0
+  let lifecycleEpoch = 0
+
+  const createBinding = (
+    identity: ReturnType<typeof remoteSshTargetResourceIdentity>,
+    bindingEpoch: number
+  ): ResourceBinding => {
+    let binding!: ResourceBinding
+    binding = {
+      dispose: () => {
+        binding.registered = false
         if (
-          observation.target.capabilities.includes('shell') &&
-          observation.target.capabilities.includes('file-transfer') &&
-          caller.audience === 'ui'
+          binding.pendingReservations === 0 &&
+          bindings.get(identity.key) === binding
         ) {
-          operationIds.push(REMOTE_SSH_CAPABILITY_IDS.openWorkspaceHostSession)
+          bindings.delete(identity.key)
         }
+      },
+      observe: async (observerCaller) => {
+        if (bindingEpoch !== lifecycleEpoch) {
+          throw new Error('Remote SSH target resource binding is retired.')
+        }
+        const observation = await getService().observeTarget(
+          identity.workspaceId,
+          identity.resourceId
+        )
+        const operationIds: string[] = [REMOTE_SSH_CAPABILITY_IDS.probeTarget]
+        if (observerCaller.audience !== 'system') {
+          if (observation.target.capabilities.includes('shell')) {
+            operationIds.push(REMOTE_SSH_CAPABILITY_IDS.executeCommand)
+          }
+          if (observation.target.capabilities.includes('file-transfer')) {
+            operationIds.push(
+              REMOTE_SSH_CAPABILITY_IDS.uploadFile,
+              REMOTE_SSH_CAPABILITY_IDS.downloadFile
+            )
+          }
+          if (
+            observation.target.capabilities.includes('shell') &&
+            observation.target.capabilities.includes('file-transfer') &&
+            observerCaller.audience === 'ui'
+          ) {
+            operationIds.push(REMOTE_SSH_CAPABILITY_IDS.openWorkspaceHostSession)
+          }
+          if (
+            observation.target.capabilities.includes('shell') &&
+            observerCaller.audience === 'ui'
+          ) {
+            operationIds.push(REMOTE_SSH_CAPABILITY_IDS.openEgressSession)
+          }
+        }
+        return {
+          semanticRevision: observation.target.revision,
+          state: remoteSshTargetObserveResultSchema.parse({
+            ...observation,
+            target: targetSummary(observation.target)
+          }),
+          operationIds
+        }
+      },
+      pendingReservations: 0,
+      registered: false
+    }
+    return binding
+  }
+
+  const reserveList = (
+    rawWorkspaceId: string,
+    caller: RemoteSshCapabilityCaller
+  ): RemoteSshTargetResourceListReservation => {
+    const reservationEpoch = lifecycleEpoch
+    const workspaceId = rawWorkspaceId.trim()
+    if (!workspaceId) throw new Error('Remote SSH target workspace is required.')
+    if (
+      bindings.size + pendingListReservations >=
+      REMOTE_SSH_TARGET_RESOURCE_BINDING_LIMIT
+    ) {
+      throw new Error('Remote SSH target resource binding capacity was exceeded.')
+    }
+    pendingListReservations += 1
+    let ownsListSlot = true
+    let settled = false
+    let selectedBindings: ReadonlyMap<string, ResourceBinding> | undefined
+
+    const settle = (commit: boolean): void => {
+      if (settled) return
+      settled = true
+      if (reservationEpoch !== lifecycleEpoch) return
+      if (ownsListSlot) pendingListReservations -= 1
+      for (const [key, binding] of selectedBindings ?? []) {
+        binding.pendingReservations -= 1
+        if (commit) binding.registered = true
         if (
-          observation.target.capabilities.includes('shell') &&
-          caller.audience === 'ui'
+          !binding.registered &&
+          binding.pendingReservations === 0 &&
+          bindings.get(key) === binding
         ) {
-          operationIds.push(REMOTE_SSH_CAPABILITY_IDS.openEgressSession)
+          bindings.delete(key)
         }
-      }
-      return {
-        semanticRevision: observation.target.revision,
-        state: remoteSshTargetObserveResultSchema.parse({
-          ...observation,
-          target: targetSummary(observation.target)
-        }),
-        operationIds
       }
     }
+
+    return Object.freeze({
+      registrations: (targets) => {
+        if (
+          selectedBindings ||
+          settled ||
+          reservationEpoch !== lifecycleEpoch
+        ) {
+          throw new Error('Remote SSH target list reservation is already settled.')
+        }
+        const identities = targets.map((target) =>
+          remoteSshTargetResourceIdentity(workspaceId, target.id, caller)
+        )
+        const newKeys = new Set(
+          identities
+            .filter((identity) => !bindings.has(identity.key))
+            .map((identity) => identity.key)
+        )
+        const capacityAvailable = REMOTE_SSH_TARGET_RESOURCE_BINDING_LIMIT -
+          bindings.size - (pendingListReservations - 1)
+        if (newKeys.size > capacityAvailable) {
+          throw new Error('Remote SSH target resource binding capacity was exceeded.')
+        }
+        pendingListReservations -= 1
+        ownsListSlot = false
+        const selected = new Map<string, ResourceBinding>()
+        for (const identity of identities) {
+          if (selected.has(identity.key)) continue
+          let binding = bindings.get(identity.key)
+          if (!binding) {
+            binding = createBinding(identity, reservationEpoch)
+            bindings.set(identity.key, binding)
+          }
+          binding.pendingReservations += 1
+          selected.set(identity.key, binding)
+        }
+        selectedBindings = selected
+        return targets.map((target, index) => {
+          const identity = identities[index]!
+          const binding = selected.get(identity.key)!
+          return {
+            resourceId: identity.resourceId,
+            resourceKind: REMOTE_SSH_TARGET_RESOURCE_KIND,
+            workspaceId: identity.workspaceId,
+            audiences: ['ui', 'agent', 'system'],
+            semanticRevision: target.revision,
+            retireAfterLastHandleExpires: true,
+            observe: binding.observe,
+            dispose: binding.dispose
+          }
+        })
+      },
+      commit: () => settle(true),
+      rollback: () => settle(false)
+    })
+  }
+
+  return {
+    reserveList,
+    dispose: () => {
+      lifecycleEpoch += 1
+      pendingListReservations = 0
+      bindings.clear()
+    }
+  }
+}
+
+function remoteSshTargetResourceIdentity(
+  rawWorkspaceId: string,
+  rawResourceId: string,
+  caller: RemoteSshCapabilityCaller
+): Readonly<{
+  key: string
+  workspaceId: string
+  resourceId: string
+}> {
+  const workspaceId = rawWorkspaceId.trim()
+  const resourceId = rawResourceId.trim()
+  if (!workspaceId || !resourceId) throw new Error('Remote SSH target resource identity is invalid.')
+  return {
+    key: JSON.stringify([
+      workspaceId,
+      REMOTE_SSH_TARGET_RESOURCE_KIND,
+      resourceId,
+      caller.principalContextVersion ?? caller.principal?.identityVersion ?? 0,
+      caller.principal
+        ? [
+            caller.principal.authority,
+            caller.principal.subject,
+            caller.principal.assurance,
+            caller.principal.deviceId,
+            caller.principal.identityVersion
+          ]
+        : null
+    ]),
+    workspaceId,
+    resourceId
   }
 }
 

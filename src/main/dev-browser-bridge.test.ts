@@ -4,7 +4,7 @@ import { request } from 'node:http'
 import { readFileSync } from 'node:fs'
 import { createCanvas } from '@napi-rs/canvas'
 import { z } from 'zod'
-import { CapabilityBroker } from './capabilities/broker'
+import { CapabilityBroker, CapabilityBrokerError } from './capabilities/broker'
 import { registerCapabilityIpc } from './capabilities/ipc'
 import { CapabilityRegistry, defineCapability } from './capabilities/registry'
 import {
@@ -143,6 +143,7 @@ describe('dev browser bridge server', () => {
     expect(allowedChannels.some((channel) => channel.startsWith('paperRadar:'))).toBe(false)
     expect(allowedChannels).toEqual(expect.arrayContaining([
       'capability:bind',
+      'capability:cancel',
       'capability:readiness',
       'capability:discover',
       'capability:events',
@@ -151,6 +152,18 @@ describe('dev browser bridge server', () => {
       'capability:subscribe',
       'capability:unsubscribe'
     ]))
+  })
+
+  it('keeps application bootstrap explicitly instance-gated without an allow-all channel bypass', () => {
+    const mainSource = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
+
+    expect(mainSource).toContain(
+      'const devBrowserBridgeInstanceId = process.env.SCIFORGE_DEV_INSTANCE_ID?.trim()'
+    )
+    expect(mainSource).toContain("process.env.SCIFORGE_DEV_BROWSER_BRIDGE !== '0'")
+    expect(mainSource).toContain('!app.isPackaged')
+    expect(mainSource).toContain('instanceId: devBrowserBridgeInstanceId')
+    expect(mainSource).not.toContain('allowAllChannels')
   })
 
   it('serves health and forwards local read requests to the dispatcher', async () => {
@@ -182,7 +195,7 @@ describe('dev browser bridge server', () => {
     )
   })
 
-  it('rejects browser requests from a different dev instance', async () => {
+  it('keeps health non-secret and requires the exact configured instance credential', async () => {
     const invoke = vi.fn(async () => ({ ok: true }))
     server = await startDevBrowserBridgeServer({
       dispatcher: { invoke },
@@ -191,13 +204,30 @@ describe('dev browser bridge server', () => {
     })
 
     const health = await readFromResponse('/health')
-    expect(JSON.parse(health.body)).toEqual({ ok: true, instanceId: 'main-instance' })
+    expect(JSON.parse(health.body)).toEqual({ ok: true })
+    expect(health.body).not.toContain('main-instance')
+
+    const missing = await postJson('/invoke', { channel: 'settings:get' })
+    expect(missing.status).toBe(409)
 
     const stale = await postJson('/invoke', { channel: 'settings:get' }, {
       devInstanceId: 'stale-renderer'
     })
     expect(stale.status).toBe(409)
     expect(JSON.parse(stale.body)).toEqual(expect.objectContaining({ ok: false }))
+
+    const conflicting = await postJson(
+      '/invoke?devInstanceId=stale-renderer',
+      { channel: 'settings:get' },
+      { devInstanceId: 'main-instance' }
+    )
+    expect(conflicting.status).toBe(409)
+
+    const duplicated = await postJson(
+      '/invoke?devInstanceId=main-instance&devInstanceId=main-instance',
+      { channel: 'settings:get' }
+    )
+    expect(duplicated.status).toBe(409)
     expect(invoke).not.toHaveBeenCalled()
 
     const current = await postJson('/invoke', { channel: 'settings:get' }, {
@@ -226,7 +256,11 @@ describe('dev browser bridge server', () => {
       removeHandler: vi.fn(),
       handle: vi.fn()
     }
-    const capabilityDispatcher = registerCapabilityIpc({ broker, ipc: ipc as never })
+    const capabilityDispatcher = registerCapabilityIpc({
+      broker,
+      ipc: ipc as never,
+      isTrustedIpcSender: () => true
+    })
 
     server = await startDevBrowserBridgeServer({
       dispatcher: capabilityDispatcher,
@@ -236,6 +270,7 @@ describe('dev browser bridge server', () => {
     const response = await postJson('/invoke', {
       channel: 'capability:invoke',
       payload: {
+        transportRequestId: '123e4567-e89b-42d3-a456-426614174000',
         request: {
           actionId: 'workspace-preview.list',
           input: {}
@@ -247,11 +282,66 @@ describe('dev browser bridge server', () => {
     expect(JSON.parse(response.body)).toMatchObject({
       ok: true,
       payload: {
-        actionId: 'workspace-preview.list',
-        output: [{ id: 'pdf' }],
-        changed: false
+        contractVersion: 1,
+        ok: true,
+        payload: {
+          actionId: 'workspace-preview.list',
+          output: [{ id: 'pdf' }],
+          changed: false
+        }
       }
     })
+  })
+
+  it('preserves typed capability errors inside the dev HTTP bridge envelope', async () => {
+    const brokerError = new CapabilityBrokerError(
+      'outcome_unknown',
+      'The mutation outcome is unknown.',
+      {
+        category: 'failed',
+        cause: new Error('provider stack'),
+        details: { expected: 'revision-2', path: '/private/provider/cache' }
+      }
+    )
+    const capabilityDispatcher = registerCapabilityIpc({
+      broker: { invoke: vi.fn(async () => Promise.reject(brokerError)) } as never,
+      ipc: { removeHandler: vi.fn(), handle: vi.fn() } as never,
+      isTrustedIpcSender: () => true
+    })
+    server = await startDevBrowserBridgeServer({
+      dispatcher: capabilityDispatcher,
+      port: 0
+    })
+
+    const response = await postJson('/invoke', {
+      channel: 'capability:invoke',
+      payload: {
+        transportRequestId: '123e4567-e89b-42d3-a456-426614174090',
+        request: {
+          actionId: 'content-space.upload-new',
+          invocationId: 'upload-90',
+          input: {}
+        }
+      }
+    })
+
+    expect(response.status).toBe(200)
+    expect(JSON.parse(response.body)).toEqual({
+      ok: true,
+      payload: {
+        contractVersion: 1,
+        ok: false,
+        error: {
+          code: 'outcome_unknown',
+          message: 'The mutation outcome is unknown.',
+          category: 'failed',
+          retryable: false,
+          details: { expected: 'revision-2' }
+        }
+      }
+    })
+    expect(response.body).not.toContain('/private/provider/cache')
+    expect(response.body).not.toContain('provider stack')
   })
 
   it('serves generic broker-managed resource content with HTTP byte ranges', async () => {
@@ -279,14 +369,28 @@ describe('dev browser bridge server', () => {
     server = await startDevBrowserBridgeServer({
       dispatcher: { invoke: vi.fn() },
       resourceContent: { describe, readRange },
-      port: 0
+      port: 0,
+      instanceId: 'resource-instance'
     })
+    const access = JSON.stringify({ workspaceId: '/workspace', resource })
+    const missingCredential = await readFromResponse(
+      `/capability/resources/content?${new URLSearchParams({
+        clientId: 'browser-resource',
+        access
+      })}`,
+      { origin: null }
+    )
+    expect(missingCredential.status).toBe(409)
+    expect(describe).not.toHaveBeenCalled()
+
     const query = new URLSearchParams({
       clientId: 'browser-resource',
-      access: JSON.stringify({ workspaceId: '/workspace', resource })
+      devInstanceId: 'resource-instance',
+      access
     })
 
     const response = await readFromResponse(`/capability/resources/content?${query}`, {
+      origin: null,
       headers: { Range: 'bytes=4-7' }
     })
 
@@ -350,6 +454,105 @@ describe('dev browser bridge server', () => {
     expect(JSON.parse(response.body)).toEqual({
       ok: false,
       message: 'Origin is not allowed.'
+    })
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    '',
+    'https://localhost:5173',
+    'http://localhost:5172',
+    'http://localhost.example.com:5173',
+    'http://127.0.0.1.example.com:5173',
+    'null'
+  ])('rejects an untrusted browser Origin value: %s', async (origin) => {
+    const invoke = vi.fn(async () => ({ ok: true }))
+    server = await startDevBrowserBridgeServer({
+      dispatcher: { invoke },
+      port: 0,
+      instanceId: 'main-instance'
+    })
+
+    const payload = JSON.stringify({ channel: 'settings:get' })
+    const response = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const req = request(new URL('/invoke', server?.url), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+          'X-SciForge-Client': 'browser-1',
+          'X-SciForge-Dev-Instance': 'main-instance',
+          Origin: origin
+        }
+      }, (res) => {
+        let body = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk) => {
+          body += chunk
+        })
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }))
+      })
+      req.on('error', reject)
+      req.write(payload)
+      req.end()
+    })
+
+    expect(response.status).toBe(403)
+    expect(JSON.parse(response.body)).toEqual({
+      ok: false,
+      message: 'Origin is not allowed.'
+    })
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('treats CORS preflight as non-authorizing and still rejects non-local origins', async () => {
+    const invoke = vi.fn(async () => ({ ok: true }))
+    server = await startDevBrowserBridgeServer({
+      dispatcher: { invoke },
+      port: 0,
+      instanceId: 'main-instance'
+    })
+    const preflight = (origin: string): Promise<{ status: number; body: string }> =>
+      new Promise((resolve, reject) => {
+        const req = request(new URL('/invoke', server?.url), {
+          method: 'OPTIONS',
+          headers: {
+            Origin: origin,
+            'Access-Control-Request-Method': 'POST',
+            'Access-Control-Request-Headers': 'content-type,x-sciforge-dev-instance'
+          }
+        }, (res) => {
+          let body = ''
+          res.setEncoding('utf8')
+          res.on('data', (chunk) => {
+            body += chunk
+          })
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body }))
+        })
+        req.on('error', reject)
+        req.end()
+      })
+
+    await expect(preflight('http://localhost:5173')).resolves.toEqual({ status: 204, body: '' })
+    const untrusted = await preflight('https://example.com')
+    expect(untrusted.status).toBe(403)
+    expect(JSON.parse(untrusted.body)).toEqual({
+      ok: false,
+      message: 'Origin is not allowed.'
+    })
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('rejects origin-less privileged requests when no instance credential is configured', async () => {
+    const invoke = vi.fn(async () => ({ ok: true }))
+    server = await startDevBrowserBridgeServer({ dispatcher: { invoke }, port: 0 })
+
+    const response = await readFromResponse('/events?clientId=browser-local', { origin: null })
+
+    expect(response.status).toBe(403)
+    expect(JSON.parse(response.body)).toEqual({
+      ok: false,
+      message: 'A trusted local Origin is required.'
     })
     expect(invoke).not.toHaveBeenCalled()
   })
@@ -440,53 +643,26 @@ describe('dev browser bridge server', () => {
     expect(invoke).toHaveBeenCalledTimes(2)
   })
 
-  it('allows callers to explicitly opt into mutating channels', async () => {
+  it('allows callers to opt into an additional channel only through an explicit allowlist', async () => {
     const invoke = vi.fn(async (_channel, payload) => ({ ok: true, payload }))
     const dispatcher: DevBrowserBridgeDispatcher = { invoke }
 
     server = await startDevBrowserBridgeServer({
       dispatcher,
       port: 0,
-      allowedChannels: ['settings:set']
+      allowedChannels: ['custom:channel']
     })
 
     const response = await postJson('/invoke', {
-      channel: 'settings:set',
+      channel: 'custom:channel',
       payload: { theme: 'dark' }
     })
 
     expect(response.status).toBe(200)
     expect(JSON.parse(response.body)).toEqual({ ok: true, payload: { ok: true, payload: { theme: 'dark' } } })
     expect(invoke).toHaveBeenCalledWith(
-      'settings:set',
-      { theme: 'dark' },
-      expect.objectContaining({ id: expect.any(Number), send: expect.any(Function) })
-    )
-  })
-
-  it('allows all app bridge channels when explicitly enabled for local dev parity', async () => {
-    const invoke = vi.fn(async (_channel, payload) => ({ ok: true, payload }))
-    const dispatcher: DevBrowserBridgeDispatcher = { invoke }
-
-    server = await startDevBrowserBridgeServer({
-      dispatcher,
-      port: 0,
-      allowAllChannels: true
-    })
-
-    const response = await postJson('/invoke', {
-      channel: 'custom:channel',
-      payload: { threadId: 'thread-1', text: 'hello' }
-    })
-
-    expect(response.status).toBe(200)
-    expect(JSON.parse(response.body)).toEqual({
-      ok: true,
-      payload: { ok: true, payload: { threadId: 'thread-1', text: 'hello' } }
-    })
-    expect(invoke).toHaveBeenCalledWith(
       'custom:channel',
-      { threadId: 'thread-1', text: 'hello' },
+      { theme: 'dark' },
       expect.objectContaining({ id: expect.any(Number), send: expect.any(Function) })
     )
   })

@@ -136,7 +136,11 @@ describe('main runtime contributions', () => {
 
   it('projects declared main extensions through the generic lifecycle host', async () => {
     const contexts: DomainMainRuntimeLifecycleContext[] = []
-    const executor = Object.freeze({ id: 'fixture-provider', execute: vi.fn() })
+    const executor = Object.freeze({
+      id: 'fixture-provider',
+      version: 'runtime-cannot-override-declaration',
+      execute: vi.fn()
+    })
     const contract = Object.freeze({
       location: 'fixture.resource-executor',
       providerId: 'fixture-provider'
@@ -146,6 +150,7 @@ describe('main runtime contributions', () => {
       {
         id: 'fixture.extensions.executor',
         kind: MAIN_EXTENSION_CONTRIBUTION_KIND,
+        version: '1.3.0',
         contract,
         value: executor
       },
@@ -164,6 +169,7 @@ describe('main runtime contributions', () => {
       id: 'fixture.extensions.executor',
       kind: MAIN_EXTENSION_CONTRIBUTION_KIND,
       packageName: '@fixture/extensions',
+      version: '1.3.0',
       contract,
       value: executor
     }])
@@ -644,6 +650,201 @@ describe('main runtime contributions', () => {
       output: { restored: true }
     })
   })
+
+  it('rejects inherited approval when the live Principal changed inside the outer action', async () => {
+    const principalA = {
+      authority: 'sciforge.identity-access',
+      subject: 'person-a',
+      assurance: 'local-selection' as const,
+      deviceId: 'installation-1',
+      identityVersion: 1
+    }
+    const principalB = {
+      ...principalA,
+      subject: 'person-b',
+      identityVersion: 2
+    }
+    let currentPrincipal = principalA
+    const innerHandler = vi.fn(async () => ({ output: { restored: true } }))
+    const inner = defineCapability({
+      id: 'fixture.principal-bound-inner',
+      version: '1.0.0',
+      title: 'Principal-bound inner action',
+      description: 'Must inherit approval only under the same Principal lease.',
+      audiences: ['system'],
+      scope: 'workspace',
+      effect: 'destructive',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ restored: z.boolean() }).strict(),
+      handler: innerHandler
+    })
+    const registry = new CapabilityRegistry([inner])
+    const broker = new CapabilityBroker(registry, {
+      resolveCurrentPrincipal: () => currentPrincipal
+    })
+    const invoker = createMainSystemCapabilityInvokerFactory(broker, {
+      createInvocationId: () => 'principal-inner-invocation'
+    }).forDomain({ moduleId: 'fixture.package', moduleVersion: '1.0.0' })
+    const contract = {
+      actionId: inner.descriptor.id,
+      effect: 'destructive' as const,
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ restored: z.boolean() }).strict()
+    }
+    const outer = defineCapability({
+      id: 'fixture.principal-bound-outer',
+      version: '1.0.0',
+      title: 'Principal-bound outer action',
+      description: 'Switches Principal before attempting nested approval inheritance.',
+      audiences: ['ui'],
+      scope: 'workspace',
+      effect: 'destructive',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ restored: z.boolean() }).strict(),
+      handler: async () => {
+        currentPrincipal = principalB
+        return {
+          output: await invoker.invoke(contract, {}, {
+            workspaceId: '/workspace',
+            authorization: { mode: 'inherit-current-action' }
+          })
+        }
+      }
+    })
+    registry.register(outer)
+
+    await expect(broker.invoke({
+      audience: 'ui',
+      callerId: 'renderer',
+      workspaceId: '/workspace',
+      approvals: [{
+        actionId: outer.descriptor.id,
+        invocationId: 'principal-outer-invocation',
+        mode: 'confirmation'
+      }]
+    }, {
+      actionId: outer.descriptor.id,
+      invocationId: 'principal-outer-invocation',
+      input: {}
+    })).rejects.toMatchObject({ code: 'principal_changed' })
+    expect(innerHandler).not.toHaveBeenCalled()
+  })
+
+  it('expires inherited approval when a deferred callback outlives its outer handler', async () => {
+    const innerHandler = vi.fn(async () => ({ output: { ok: true } }))
+    const inner = defineCapability({
+      id: 'fixture.deferred-inner',
+      version: '1.0.0',
+      title: 'Deferred inner action',
+      description: 'Must not inherit an already-settled outer approval.',
+      audiences: ['system'],
+      scope: 'workspace',
+      effect: 'destructive',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: innerHandler
+    })
+    const registry = new CapabilityRegistry([inner])
+    const broker = new CapabilityBroker(registry)
+    const invoker = createMainSystemCapabilityInvokerFactory(broker)
+      .forDomain({ moduleId: 'fixture.package', moduleVersion: '1.0.0' })
+    const contract = {
+      actionId: inner.descriptor.id,
+      effect: 'destructive' as const,
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict()
+    }
+    let invokeDeferred: (() => Promise<{ ok: boolean }>) | undefined
+    const outer = defineCapability({
+      id: 'fixture.deferred-outer',
+      version: '1.0.0',
+      title: 'Deferred outer action',
+      description: 'Schedules work after the approved handler settles.',
+      audiences: ['ui'],
+      scope: 'workspace',
+      effect: 'destructive',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ scheduled: z.boolean() }).strict(),
+      handler: async () => {
+        invokeDeferred = () => invoker.invoke(contract, {}, {
+          workspaceId: '/workspace',
+          authorization: { mode: 'inherit-current-action' }
+        })
+        return { output: { scheduled: true } }
+      }
+    })
+    registry.register(outer)
+
+    await expect(broker.invoke({
+      audience: 'ui',
+      callerId: 'renderer',
+      workspaceId: '/workspace',
+      approvals: [{
+        actionId: outer.descriptor.id,
+        invocationId: 'deferred-outer-invocation',
+        mode: 'confirmation'
+      }]
+    }, {
+      actionId: outer.descriptor.id,
+      invocationId: 'deferred-outer-invocation',
+      input: {}
+    })).resolves.toMatchObject({ output: { scheduled: true } })
+
+    await expect(invokeDeferred?.()).rejects.toThrow('cannot inherit approval')
+    expect(innerHandler).not.toHaveBeenCalled()
+  })
+
+  it('forwards AbortSignal through the package-scoped system capability invoker', async () => {
+    let handlerSignal: AbortSignal | undefined
+    let started: (() => void) | undefined
+    const handlerStarted = new Promise<void>((resolve) => { started = resolve })
+    const capability = defineCapability({
+      id: 'fixture.cancellable-system-read',
+      version: '1.0.0',
+      title: 'Cancellable system read',
+      description: 'Observes the caller-provided system cancellation signal.',
+      audiences: ['system'],
+      scope: 'workspace',
+      effect: 'read',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'none' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ cancelled: z.boolean() }).strict(),
+      handler: async (_input, context) => {
+        handlerSignal = context.signal
+        started?.()
+        if (!context.signal?.aborted) {
+          await new Promise<void>((resolve) => {
+            context.signal?.addEventListener('abort', () => resolve(), { once: true })
+          })
+        }
+        return { output: { cancelled: context.signal?.aborted === true } }
+      }
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([capability]))
+    const invoker = createMainSystemCapabilityInvokerFactory(broker)
+      .forDomain({ moduleId: 'fixture.package', moduleVersion: '1.0.0' })
+    const controller = new AbortController()
+    const pending = invoker.invoke({
+      actionId: capability.descriptor.id,
+      effect: 'read',
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ cancelled: z.boolean() }).strict()
+    }, {}, { workspaceId: '/workspace', signal: controller.signal })
+
+    await handlerStarted
+    controller.abort()
+    await expect(pending).resolves.toEqual({ cancelled: true })
+    expect(handlerSignal).toBe(controller.signal)
+  })
 })
 
 function runtimeHost(
@@ -701,6 +902,7 @@ function fixtureEntry(
     id: string
     kind: string
     priority?: number
+    version?: string
     contract?: DomainPackageJsonValue
     value: unknown
   }>
@@ -723,10 +925,11 @@ function fixtureEntry(
       entrypoints: [{
         process: 'main',
         export: './main',
-        contributions: contributions.map(({ id, kind, priority }) => ({
+        contributions: contributions.map(({ id, kind, priority, version }) => ({
           id,
           kind,
-          ...(priority === undefined ? {} : { priority })
+          ...(priority === undefined ? {} : { priority }),
+          ...(version === undefined ? {} : { version })
         }))
       }]
     },

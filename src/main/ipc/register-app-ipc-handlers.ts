@@ -3,6 +3,15 @@ import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
+import { domainPackageModuleIdSchema } from '@sciforge/domain-sdk'
+import {
+  domainRendererDownloadSelectionSchema,
+  domainRendererPickDownloadDestinationInputSchema,
+  domainRendererPickUploadSourceInputSchema,
+  domainRendererUploadSelectionSchema,
+  type DomainRendererDownloadSelection,
+  type DomainRendererUploadSelection
+} from '@sciforge/domain-sdk/file-transfer'
 import type {
   TraceClearResult,
   TraceExportOptions,
@@ -14,6 +23,8 @@ import type {
 } from '@sciforge/full-trace'
 import { mainPerformanceMonitor } from '../performance-monitor'
 import { capabilityAgentCallerId } from '../capabilities/agent-tools'
+import { capabilityUiCallerId } from '../capabilities/ipc'
+import { capabilityTransportRequestIdSchema } from '../../shared/capability-broker'
 import {
   type AppSettingsPatch,
   type AppSettingsV1,
@@ -219,6 +230,21 @@ type AgentRuntimeEventStreamRecord = {
   sender: AppBridgeSender
 }
 
+type FileTransferRequestRecord = {
+  controller: AbortController
+  settlementTimer?: ReturnType<typeof setTimeout>
+}
+
+type FileTransferSenderState = {
+  sender: AppBridgeSender
+  controllers: Map<string, FileTransferRequestRecord>
+  listener: () => void
+  destroyed: boolean
+}
+
+const MAX_FILE_TRANSFER_REQUESTS = 1_024
+const FILE_TRANSFER_SETTLEMENT_TTL_MS = 30_000
+
 export type AppBridgeSender = {
   id: number
   isDestroyed: () => boolean
@@ -271,6 +297,23 @@ export type RegisterAppIpcHandlersOptions = {
     clear: () => Promise<TraceClearResult>
   }
   extensions?: DomainExtensionsApi
+  fileTransfers?: {
+    isInstalledRendererOwner(ownerId: string): boolean
+    registerUpload(input: Readonly<{
+      ownerId: string
+      callerId: string
+      path: string
+      maxBytes: number
+      signal?: AbortSignal
+    }>): Promise<DomainRendererUploadSelection>
+    registerDownload(input: Readonly<{
+      ownerId: string
+      callerId: string
+      path: string
+      signal?: AbortSignal
+    }>): Promise<DomainRendererDownloadSelection>
+    revokeCaller(callerId: string): void | Promise<void>
+  }
   agentRuntime?: {
     connect: (runtimeId?: AgentRuntimeId) => Promise<void>
     capabilities: (runtimeId?: AgentRuntimeId) => Promise<AgentRuntimeCapabilities>
@@ -429,6 +472,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     getModelAccessStatus,
     traces,
     extensions,
+    fileTransfers,
     agentRuntime,
     remoteWorkspace,
     workspacePlacement,
@@ -455,6 +499,9 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     number,
     { sender: AppBridgeSender; listener: () => void }
   >()
+  const fileTransferSenderStates = new Map<number, FileTransferSenderState>()
+  const destroyedFileTransferSenderIds = new Set<number>()
+  const pendingFileTransferCancellations = new Map<string, number>()
   const invokeHandlers = new Map<string, AppBridgeInvokeHandler>()
   const requireTraceStore = (): NonNullable<RegisterAppIpcHandlersOptions['traces']> => {
     if (!traces) throw new Error('Full trace storage is not initialized.')
@@ -463,6 +510,99 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   const requireExtensionManager = (): DomainExtensionsApi => {
     if (!extensions) throw new Error('Extension management is not initialized.')
     return extensions
+  }
+  const requireFileTransfers = (): NonNullable<RegisterAppIpcHandlersOptions['fileTransfers']> => {
+    if (!fileTransfers) throw new Error('Host file transfers are not initialized.')
+    return fileTransfers
+  }
+  const clearFileTransferRequest = (
+    state: FileTransferSenderState,
+    requestKey: string,
+    record: FileTransferRequestRecord,
+    abort: boolean
+  ): void => {
+    if (state.controllers.get(requestKey) !== record) return
+    state.controllers.delete(requestKey)
+    if (record.settlementTimer) clearTimeout(record.settlementTimer)
+    if (abort) record.controller.abort()
+  }
+  const watchFileTransferSender = (sender: AppBridgeSender): FileTransferSenderState => {
+    if (destroyedFileTransferSenderIds.has(sender.id)) {
+      throw new Error('Rejected file-transfer IPC invocation from a destroyed renderer.')
+    }
+    const existing = fileTransferSenderStates.get(sender.id)
+    if (existing) return existing
+    const controllers = new Map<string, FileTransferRequestRecord>()
+    const state: FileTransferSenderState = {
+      sender,
+      controllers,
+      listener: () => undefined,
+      destroyed: false
+    }
+    const listener = () => {
+      if (state.destroyed) return
+      state.destroyed = true
+      destroyedFileTransferSenderIds.add(sender.id)
+      if (fileTransferSenderStates.get(sender.id) === state) {
+        fileTransferSenderStates.delete(sender.id)
+      }
+      for (const record of controllers.values()) {
+        if (record.settlementTimer) clearTimeout(record.settlementTimer)
+        record.controller.abort()
+      }
+      controllers.clear()
+      for (const [key, senderId] of pendingFileTransferCancellations) {
+        if (senderId === sender.id) pendingFileTransferCancellations.delete(key)
+      }
+      void Promise.resolve(
+        fileTransfers?.revokeCaller(capabilityUiCallerId(sender.id))
+      ).catch((error) => {
+        logError('file-transfer', 'Failed to revoke file-transfer grants for a closed renderer.', {
+          callerId: capabilityUiCallerId(sender.id),
+          message: error instanceof Error ? error.message : String(error)
+        })
+      })
+    }
+    state.listener = listener
+    fileTransferSenderStates.set(sender.id, state)
+    sender.once('destroyed', listener)
+    if (sender.isDestroyed()) listener()
+    if (state.destroyed || fileTransferSenderStates.get(sender.id) !== state) {
+      throw new Error('Rejected file-transfer IPC invocation from a destroyed renderer.')
+    }
+    return state
+  }
+  const fileTransferRequestKey = (senderId: number, transportRequestId: string) =>
+    `${senderId}:${transportRequestId}`
+  const markFileTransferResponsePendingSettlement = (
+    state: FileTransferSenderState,
+    requestKey: string,
+    record: FileTransferRequestRecord
+  ): void => {
+    if (
+      state.destroyed ||
+      fileTransferSenderStates.get(state.sender.id) !== state ||
+      state.sender.isDestroyed() ||
+      record.controller.signal.aborted ||
+      state.controllers.get(requestKey) !== record
+    ) {
+      clearFileTransferRequest(state, requestKey, record, true)
+      throw new DOMException('The file-transfer renderer was destroyed before delivery.', 'AbortError')
+    }
+    record.settlementTimer = setTimeout(() => {
+      clearFileTransferRequest(state, requestKey, record, true)
+    }, FILE_TRANSFER_SETTLEMENT_TTL_MS)
+    record.settlementTimer.unref?.()
+    if (
+      state.destroyed ||
+      fileTransferSenderStates.get(state.sender.id) !== state ||
+      state.sender.isDestroyed() ||
+      record.controller.signal.aborted ||
+      state.controllers.get(requestKey) !== record
+    ) {
+      clearFileTransferRequest(state, requestKey, record, true)
+      throw new DOMException('The file-transfer renderer was destroyed before delivery.', 'AbortError')
+    }
   }
   const requireWorkspacePlacement = (): WorkspacePlacementRouter => {
     if (!workspacePlacement) throw new Error('Workspace placement router is not initialized.')
@@ -1098,6 +1238,177 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       canceled: result.canceled,
       path: result.canceled ? null : (result.filePaths[0] ?? null)
     }
+  })
+
+  handleInvoke('fileTransfer:pick-upload-source', async (event, payload: unknown) => {
+    const input = parseIpcPayload(
+      'fileTransfer:pick-upload-source',
+      z.object({
+        ownerId: domainPackageModuleIdSchema,
+        request: domainRendererPickUploadSourceInputSchema,
+        transportRequestId: capabilityTransportRequestIdSchema
+      }).strict(),
+      payload
+    )
+    const transfers = requireFileTransfers()
+    if (!transfers.isInstalledRendererOwner(input.ownerId)) {
+      throw new Error('The file-transfer owner is not an installed renderer domain.')
+    }
+    const senderState = watchFileTransferSender(event.sender)
+    const requestKey = fileTransferRequestKey(event.sender.id, input.transportRequestId)
+    if (senderState.controllers.has(requestKey)) {
+      throw new Error('A file-transfer picker request with this ID is already active.')
+    }
+    if (pendingFileTransferCancellations.delete(requestKey)) {
+      throw new Error('The file-transfer picker was cancelled before dispatch.')
+    }
+    if (senderState.controllers.size >= MAX_FILE_TRANSFER_REQUESTS) {
+      throw new Error('The file-transfer picker request capacity is exhausted.')
+    }
+    const record: FileTransferRequestRecord = { controller: new AbortController() }
+    senderState.controllers.set(requestKey, record)
+    if (
+      senderState.destroyed ||
+      fileTransferSenderStates.get(event.sender.id) !== senderState ||
+      event.sender.isDestroyed()
+    ) {
+      clearFileTransferRequest(senderState, requestKey, record, true)
+      throw new Error('The file-transfer picker sender was destroyed before dispatch.')
+    }
+    const dialogParent = dialogParentForSender(event.sender, getMainWindow)
+    const dialogOptions: Electron.OpenDialogOptions = {
+      title: input.request.title,
+      properties: ['openFile', 'dontAddToRecent']
+    }
+    try {
+      const selected = dialogParent
+        ? await dialog.showOpenDialog(dialogParent, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions)
+      if (selected.canceled || !selected.filePaths[0]) {
+        const selection = domainRendererUploadSelectionSchema.parse({ cancelled: true })
+        markFileTransferResponsePendingSettlement(senderState, requestKey, record)
+        return selection
+      }
+      record.controller.signal.throwIfAborted()
+      const selection = domainRendererUploadSelectionSchema.parse(
+        await transfers.registerUpload({
+          ownerId: input.ownerId,
+          callerId: capabilityUiCallerId(event.sender.id),
+          path: selected.filePaths[0],
+          maxBytes: input.request.maxBytes,
+          signal: record.controller.signal
+        })
+      )
+      markFileTransferResponsePendingSettlement(senderState, requestKey, record)
+      return selection
+    } finally {
+      if (!record.settlementTimer) {
+        clearFileTransferRequest(senderState, requestKey, record, false)
+      }
+    }
+  })
+
+  handleInvoke('fileTransfer:pick-download-destination', async (event, payload: unknown) => {
+    const input = parseIpcPayload(
+      'fileTransfer:pick-download-destination',
+      z.object({
+        ownerId: domainPackageModuleIdSchema,
+        request: domainRendererPickDownloadDestinationInputSchema,
+        transportRequestId: capabilityTransportRequestIdSchema
+      }).strict(),
+      payload
+    )
+    const transfers = requireFileTransfers()
+    if (!transfers.isInstalledRendererOwner(input.ownerId)) {
+      throw new Error('The file-transfer owner is not an installed renderer domain.')
+    }
+    const senderState = watchFileTransferSender(event.sender)
+    const requestKey = fileTransferRequestKey(event.sender.id, input.transportRequestId)
+    if (senderState.controllers.has(requestKey)) {
+      throw new Error('A file-transfer picker request with this ID is already active.')
+    }
+    if (pendingFileTransferCancellations.delete(requestKey)) {
+      throw new Error('The file-transfer picker was cancelled before dispatch.')
+    }
+    if (senderState.controllers.size >= MAX_FILE_TRANSFER_REQUESTS) {
+      throw new Error('The file-transfer picker request capacity is exhausted.')
+    }
+    const record: FileTransferRequestRecord = { controller: new AbortController() }
+    senderState.controllers.set(requestKey, record)
+    if (
+      senderState.destroyed ||
+      fileTransferSenderStates.get(event.sender.id) !== senderState ||
+      event.sender.isDestroyed()
+    ) {
+      clearFileTransferRequest(senderState, requestKey, record, true)
+      throw new Error('The file-transfer picker sender was destroyed before dispatch.')
+    }
+    const dialogParent = dialogParentForSender(event.sender, getMainWindow)
+    const dialogOptions: Electron.SaveDialogOptions = {
+      title: input.request.title,
+      defaultPath: input.request.suggestedName,
+      properties: ['dontAddToRecent']
+    }
+    try {
+      const selected = dialogParent
+        ? await dialog.showSaveDialog(dialogParent, dialogOptions)
+        : await dialog.showSaveDialog(dialogOptions)
+      if (selected.canceled || !selected.filePath) {
+        const selection = domainRendererDownloadSelectionSchema.parse({ cancelled: true })
+        markFileTransferResponsePendingSettlement(senderState, requestKey, record)
+        return selection
+      }
+      record.controller.signal.throwIfAborted()
+      const selection = domainRendererDownloadSelectionSchema.parse(
+        await transfers.registerDownload({
+          ownerId: input.ownerId,
+          callerId: capabilityUiCallerId(event.sender.id),
+          path: selected.filePath,
+          signal: record.controller.signal
+        })
+      )
+      markFileTransferResponsePendingSettlement(senderState, requestKey, record)
+      return selection
+    } finally {
+      if (!record.settlementTimer) {
+        clearFileTransferRequest(senderState, requestKey, record, false)
+      }
+    }
+  })
+  handleInvoke('fileTransfer:cancel', async (event, payload: unknown) => {
+    const input = parseIpcPayload(
+      'fileTransfer:cancel',
+      z.object({ transportRequestId: capabilityTransportRequestIdSchema }).strict(),
+      payload
+    )
+    const senderState = watchFileTransferSender(event.sender)
+    const requestKey = fileTransferRequestKey(event.sender.id, input.transportRequestId)
+    const active = senderState.controllers.get(requestKey)
+    if (active) {
+      clearFileTransferRequest(senderState, requestKey, active, true)
+      return true
+    }
+    pendingFileTransferCancellations.set(requestKey, event.sender.id)
+    while (pendingFileTransferCancellations.size > 1_024) {
+      const oldest = pendingFileTransferCancellations.keys().next().value
+      if (oldest === undefined) break
+      pendingFileTransferCancellations.delete(oldest)
+    }
+    return true
+  })
+  handleInvoke('fileTransfer:settle', async (event, payload: unknown) => {
+    const input = parseIpcPayload(
+      'fileTransfer:settle',
+      z.object({ transportRequestId: capabilityTransportRequestIdSchema }).strict(),
+      payload
+    )
+    const senderState = watchFileTransferSender(event.sender)
+    const requestKey = fileTransferRequestKey(event.sender.id, input.transportRequestId)
+    const active = senderState.controllers.get(requestKey)
+    if (!active) return false
+    const accepted = !active.controller.signal.aborted && !senderState.destroyed
+    clearFileTransferRequest(senderState, requestKey, active, false)
+    return accepted
   })
   handleInvoke(
     'skill:save-file',

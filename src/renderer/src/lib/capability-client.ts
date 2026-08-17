@@ -38,29 +38,34 @@ export type RendererCapabilityInvokeOptions = Readonly<{
   resource?: DomainCapabilityResourceHandle
   expectedRevision?: string
   approval?: { mode: 'confirmation' }
+  signal?: AbortSignal
 }>
 
 export type RendererCapabilityObserveOptions = Readonly<{
   workspaceId?: string
+  signal?: AbortSignal
 }>
 
 type CapabilityTransport = Pick<
   SciForgeApi['capabilities'],
-  'readiness' | 'observe' | 'invoke' | 'subscribe' | 'unsubscribe' | 'onEvent'
+  'readiness' | 'observe' | 'invoke' | 'cancel' | 'subscribe' | 'unsubscribe' | 'onEvent'
 >
 
 export type RendererCapabilityClientOptions = Readonly<{
   getTransport?: () => CapabilityTransport
   createInvocationId?: () => string
+  createTransportRequestId?: () => string
 }>
 
 export class RendererCapabilityClient {
   private readonly getTransport: () => CapabilityTransport
   private readonly createInvocationId: () => string
+  private readonly createTransportRequestId: () => string
 
   constructor(options: RendererCapabilityClientOptions = {}) {
     this.getTransport = options.getTransport ?? defaultTransport
     this.createInvocationId = options.createInvocationId ?? defaultInvocationId
+    this.createTransportRequestId = options.createTransportRequestId ?? defaultTransportRequestId
   }
 
   async readiness(
@@ -80,11 +85,30 @@ export class RendererCapabilityClient {
     resource: DomainCapabilityResourceHandle,
     options: RendererCapabilityObserveOptions = {}
   ): Promise<DomainRendererCapabilityObservation<TState>> {
+    throwIfAborted(options.signal)
     const request = capabilityObserveRequestSchema.parse({ resource })
-    const observation = capabilityObservationSchema.parse(await this.getTransport().observe({
-      ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
-      request
-    }))
+    const transport = this.getTransport()
+    const transportRequestId = this.createTransportRequestId()
+    let cancellationSent = false
+    const cancel = (): void => {
+      if (cancellationSent) return
+      cancellationSent = true
+      void transport.cancel(transportRequestId).catch(() => undefined)
+    }
+    options.signal?.addEventListener('abort', cancel, { once: true })
+    if (options.signal?.aborted) cancel()
+    let rawObservation: Awaited<ReturnType<CapabilityTransport['observe']>>
+    try {
+      rawObservation = await transport.observe({
+        transportRequestId,
+        ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
+        request
+      })
+    } finally {
+      options.signal?.removeEventListener('abort', cancel)
+    }
+    throwIfAborted(options.signal)
+    const observation = capabilityObservationSchema.parse(rawObservation)
     if (observation.resourceKind !== contract.resourceKind) {
       throw new Error(
         `Capability observation resource kind mismatch: expected "${contract.resourceKind}", received "${observation.resourceKind}".`
@@ -110,7 +134,9 @@ export class RendererCapabilityClient {
     const effect = capabilityEffectSchema.parse(contract.effect)
     const parsedInput = contract.inputSchema.parse(input)
     const jsonInput = capabilityJsonValueSchema.parse(parsedInput)
+    throwIfAborted(options.signal)
     const readiness = await this.readiness([actionId], options.workspaceId)
+    throwIfAborted(options.signal)
     if (readiness.status !== 'ready') throw new Error(readiness.message)
     const workspaceLocator = options.workspaceLocator ??
       activeWorkspaceLocator(options.workspaceId)
@@ -124,12 +150,30 @@ export class RendererCapabilityClient {
         : { expectedRevision: options.expectedRevision }),
       ...(effect === 'read' ? {} : { invocationId: this.createInvocationId() })
     })
-    const result = capabilityInvocationResultSchema.parse(await this.getTransport().invoke({
-      ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
-      ...(workspaceLocator ? { workspaceLocator } : {}),
-      request,
-      ...(options.approval ? { approval: options.approval } : {})
-    }))
+    const transport = this.getTransport()
+    const transportRequestId = this.createTransportRequestId()
+    let cancellationSent = false
+    const cancel = (): void => {
+      if (cancellationSent) return
+      cancellationSent = true
+      void transport.cancel(transportRequestId).catch(() => undefined)
+    }
+    options.signal?.addEventListener('abort', cancel, { once: true })
+    if (options.signal?.aborted) cancel()
+
+    let rawResult: Awaited<ReturnType<CapabilityTransport['invoke']>>
+    try {
+      rawResult = await transport.invoke({
+        transportRequestId,
+        ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
+        ...(workspaceLocator ? { workspaceLocator } : {}),
+        request,
+        ...(options.approval ? { approval: options.approval } : {})
+      })
+    } finally {
+      options.signal?.removeEventListener('abort', cancel)
+    }
+    const result = capabilityInvocationResultSchema.parse(rawResult)
     if (result.actionId !== actionId) {
       throw new Error(`Capability result action mismatch: expected "${actionId}", received "${result.actionId}".`)
     }
@@ -211,4 +255,15 @@ function defaultTransport(): CapabilityTransport {
 
 function defaultInvocationId(): string {
   return `ui_${globalThis.crypto.randomUUID()}`
+}
+
+function defaultTransportRequestId(): string {
+  return globalThis.crypto.randomUUID()
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return
+  const error = new Error('Capability invocation was cancelled.')
+  error.name = 'AbortError'
+  throw error
 }

@@ -1,4 +1,5 @@
 import type { SciForgeApi } from '@shared/sciforge-api'
+import { unwrapCapabilityTransportEnvelope } from '@shared/capability-transport-error'
 import type { VisibleContextSnapshot } from '@shared/visible-context'
 import { serializeCapabilityResourceContentAccess } from '@shared/workspace-preview-asset-url'
 import {
@@ -21,6 +22,13 @@ type BridgeMessage = {
   channel: string
   payload: unknown
 }
+
+type CapabilityObservationResult = Awaited<
+  ReturnType<SciForgeApi['capabilities']['observe']>
+>
+type CapabilityInvocationResult = Awaited<
+  ReturnType<SciForgeApi['capabilities']['invoke']>
+>
 
 type ChannelHandler = (payload: never) => void
 
@@ -46,6 +54,20 @@ function detectPlatform(): string {
 
 function resolveClientId(): string {
   return PAGE_INCARNATION_CLIENT_ID
+}
+
+function createCapabilityTransportRequestId(): string {
+  const candidate = globalThis.crypto?.randomUUID?.()
+  if (candidate && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(candidate)) {
+    return candidate
+  }
+  // This path exists only for constrained browser-test environments. The ID
+  // is correlation metadata, not an authority token, but it must remain UUID-shaped.
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/gu, (character) => {
+    const random = Math.floor(Math.random() * 16)
+    const value = character === 'x' ? random : (random & 0x3) | 0x8
+    return value.toString(16)
+  })
 }
 
 function ensureEventSource(): void {
@@ -230,9 +252,20 @@ function createApi(): SciForgeApi {
     capabilities: {
       readiness: (input) => invoke('capability:readiness', input),
       discover: (input = {}) => invoke('capability:discover', input),
-      observe: (input) => invoke('capability:observe', input),
+      observe: async (input) => unwrapCapabilityTransportEnvelope<CapabilityObservationResult>(
+        await invoke('capability:observe', {
+          ...input,
+          transportRequestId: input.transportRequestId ?? createCapabilityTransportRequestId()
+        })
+      ),
       bind: (input) => invoke('capability:bind', input),
-      invoke: (input) => invoke('capability:invoke', input),
+      invoke: async (input) => unwrapCapabilityTransportEnvelope<CapabilityInvocationResult>(
+        await invoke('capability:invoke', {
+          ...input,
+          transportRequestId: input.transportRequestId ?? createCapabilityTransportRequestId()
+        })
+      ),
+      cancel: (transportRequestId) => invoke('capability:cancel', { transportRequestId }),
       events: (input = {}) => invoke('capability:events', input),
       subscribe: (workspaceId) => invoke('capability:subscribe', { workspaceId }),
       unsubscribe: (subscriptionId) => invoke('capability:unsubscribe', { subscriptionId }),
@@ -244,6 +277,19 @@ function createApi(): SciForgeApi {
         return url.toString()
       },
       onEvent: (handler) => onChannel('capability:event', handler)
+    },
+    fileTransfers: {
+      pickUploadSource: (input) => invoke('fileTransfer:pick-upload-source', {
+        ...input,
+        transportRequestId: input.transportRequestId ?? createCapabilityTransportRequestId()
+      }),
+      pickDownloadDestination: (input) =>
+        invoke('fileTransfer:pick-download-destination', {
+          ...input,
+          transportRequestId: input.transportRequestId ?? createCapabilityTransportRequestId()
+        }),
+      cancel: (transportRequestId) => invoke('fileTransfer:cancel', { transportRequestId }),
+      settle: (transportRequestId) => invoke('fileTransfer:settle', { transportRequestId })
     },
     requestWriteInlineCompletion: (payload) => invoke('write:inline-completion', payload),
     retrieveWriteContext: (payload) => invoke('write:retrieve-context', payload),

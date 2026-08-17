@@ -20,7 +20,10 @@ import {
   VERSION_CONTROL_STATUS_CONTRACT,
   VERSION_CONTROL_WORKSPACE_RESOURCE_KIND
 } from '@sciforge/domain-sdk/version-control'
-import { capabilityJsonValueSchema } from '../../shared/capability-broker'
+import {
+  capabilityJsonValueSchema,
+  type CapabilityCallerContext
+} from '../../shared/capability-broker'
 import type {
   VersionControlWorkspaceService,
   VersionControlWorkspaceSession
@@ -31,6 +34,11 @@ import {
   type CapabilityHandlerContext,
   type CapabilityResourceRegistration
 } from './registry'
+import {
+  principalContextBindingKey,
+  StableResourceBindingRegistry,
+  type StableResourceBindingReservation
+} from './stable-resource-bindings'
 
 const VERSION_CONTROL_RESOURCE_OPERATIONS = Object.freeze([
   VERSION_CONTROL_STATUS_ACTION_ID,
@@ -49,6 +57,8 @@ const REMOTE_VERSION_CONTROL_RESOURCE_OPERATIONS = Object.freeze([
   VERSION_CONTROL_PREVIEW_RESTORE_ACTION_ID
 ])
 
+const MAX_VERSION_CONTROL_RESOURCE_BINDINGS = 512
+
 export type VersionControlCapabilityDependencies = Readonly<{
   versionControlWorkspaceService: Pick<
     VersionControlWorkspaceService,
@@ -64,36 +74,108 @@ export type VersionControlCapabilityDependencies = Readonly<{
   >
 }>
 
-function workspaceResource(
-  dependencies: VersionControlCapabilityDependencies,
-  session: VersionControlWorkspaceSession,
-  callerAudience: 'ui' | 'agent' | 'system'
-): CapabilityResourceRegistration {
-  return {
-    resourceId: session.resourceId,
-    resourceKind: VERSION_CONTROL_WORKSPACE_RESOURCE_KIND,
-    workspaceId: session.workspaceId,
-    audiences: [callerAudience],
-    semanticRevision: 'opening',
-    observe: async (caller) => {
-      const owned = dependencies.versionControlWorkspaceService.requireSession(
-        caller.callerId,
-        caller.audience,
-        session.resourceId,
-        caller.workspaceId ?? ''
-      )
-      const status = await dependencies.versionControlWorkspaceService.status(owned)
-      return {
-        state: capabilityJsonValueSchema.parse(status),
-        semanticRevision: status.revision,
-        operationIds: [
-          ...(session.workspaceLocator
-            ? REMOTE_VERSION_CONTROL_RESOURCE_OPERATIONS
-            : VERSION_CONTROL_RESOURCE_OPERATIONS)
-        ]
+function createWorkspaceResourceFactory(
+  dependencies: VersionControlCapabilityDependencies
+) {
+  type RegistrationBinding = Pick<CapabilityResourceRegistration, 'observe'>
+  type Reservation = Readonly<{
+    requestKey: string
+    expectedActualKey?: string
+    binding: StableResourceBindingReservation<RegistrationBinding>
+  }>
+  const bindings = new StableResourceBindingRegistry<RegistrationBinding>(
+    MAX_VERSION_CONTROL_RESOURCE_BINDINGS,
+    'Version-control'
+  )
+  const actualKeysByRequestKey = new Map<string, string>()
+  return Object.freeze({
+    reserve: (caller: CapabilityCallerContext, workspaceId: string): Reservation => {
+      const requestKey = versionControlRequestBindingKey(caller, workspaceId)
+      const expectedActualKey = actualKeysByRequestKey.get(requestKey)
+      return Object.freeze({
+        requestKey,
+        ...(expectedActualKey ? { expectedActualKey } : {}),
+        binding: bindings.reserve(expectedActualKey)
+      })
+    },
+    create: (
+      reservation: Reservation,
+      session: VersionControlWorkspaceSession,
+      caller: CapabilityCallerContext
+    ) => {
+      const actualKey = versionControlActualBindingKey(caller, session)
+      const mappedActualKey = actualKeysByRequestKey.get(reservation.requestKey)
+      if (
+        (reservation.expectedActualKey && reservation.expectedActualKey !== actualKey) ||
+        (mappedActualKey && mappedActualKey !== actualKey)
+      ) {
+        reservation.binding.release()
+        throw new Error('Version-control provider changed a canonical workspace session identity.')
       }
+      const committed = reservation.binding.commit(actualKey, () => {
+        const created: RegistrationBinding = {
+          observe: async (observerCaller) => {
+            const owned = dependencies.versionControlWorkspaceService.requireSession(
+              observerCaller.callerId,
+              observerCaller.audience,
+              session.resourceId,
+              observerCaller.workspaceId ?? ''
+            )
+            const status = await dependencies.versionControlWorkspaceService.status(owned)
+            return {
+              state: capabilityJsonValueSchema.parse(status),
+              semanticRevision: status.revision,
+              operationIds: [
+                ...(session.workspaceLocator
+                  ? REMOTE_VERSION_CONTROL_RESOURCE_OPERATIONS
+                  : VERSION_CONTROL_RESOURCE_OPERATIONS)
+              ]
+            }
+          }
+        }
+        return created
+      })
+      actualKeysByRequestKey.set(reservation.requestKey, actualKey)
+      return Object.freeze({
+        registration: {
+          resourceId: session.resourceId,
+          resourceKind: VERSION_CONTROL_WORKSPACE_RESOURCE_KIND,
+          workspaceId: session.workspaceId,
+          audiences: [caller.audience],
+          semanticRevision: 'opening',
+          observe: committed.binding.observe,
+          retireAfterLastHandleExpires: true
+        } satisfies CapabilityResourceRegistration
+      })
     }
-  }
+  })
+}
+
+function versionControlRequestBindingKey(
+  caller: CapabilityCallerContext,
+  workspaceId: string
+): string {
+  return JSON.stringify([
+    workspaceId,
+    caller.callerId,
+    caller.audience,
+    caller.workspaceLocator ?? null,
+    principalContextBindingKey(caller)
+  ])
+}
+
+function versionControlActualBindingKey(
+  caller: CapabilityCallerContext,
+  session: VersionControlWorkspaceSession
+): string {
+  return JSON.stringify([
+    session.workspaceId,
+    session.resourceId,
+    caller.callerId,
+    caller.audience,
+    session.workspaceLocator ?? caller.workspaceLocator ?? null,
+    principalContextBindingKey(caller)
+  ])
 }
 
 function requireSession(
@@ -125,6 +207,7 @@ function requireLocalSession(
 }
 
 function versionControlCapabilities(dependencies: VersionControlCapabilityDependencies) {
+  const workspaceResource = createWorkspaceResourceFactory(dependencies)
   return [
     defineCapability({
       id: VERSION_CONTROL_OPEN_WORKSPACE_ACTION_ID,
@@ -150,29 +233,31 @@ function versionControlCapabilities(dependencies: VersionControlCapabilityDepend
         if (!workspaceMatches) {
           throw new Error('Version-control workspace cannot open another workspace.')
         }
-        const session = await dependencies.versionControlWorkspaceService.open(
-          context.caller.callerId,
-          context.caller.audience,
-          workspaceId,
-          context.caller.workspaceLocator
-        )
-        const status = await dependencies.versionControlWorkspaceService.status(session)
-        const registration = workspaceResource(
-          dependencies,
-          session,
-          context.caller.audience
-        )
-        const resource = context.issueResource({
-          ...registration,
-          semanticRevision: status.revision
-        })
-        return {
-          output: {
-            resourceKind: VERSION_CONTROL_WORKSPACE_RESOURCE_KIND,
-            resource,
-            provider: 'git'
-          },
-          changed: false
+        const reservation = workspaceResource.reserve(context.caller, workspaceId)
+        try {
+          const session = await dependencies.versionControlWorkspaceService.open(
+            context.caller.callerId,
+            context.caller.audience,
+            workspaceId,
+            context.caller.workspaceLocator
+          )
+          const prepared = workspaceResource.create(reservation, session, context.caller)
+          const status = await dependencies.versionControlWorkspaceService.status(session)
+          const resource = context.issueResource({
+            ...prepared.registration,
+            semanticRevision: status.revision
+          })
+          return {
+            output: {
+              resourceKind: VERSION_CONTROL_WORKSPACE_RESOURCE_KIND,
+              resource,
+              provider: 'git'
+            },
+            changed: false
+          }
+        } catch (error) {
+          reservation.binding.release()
+          throw error
         }
       }
     }),

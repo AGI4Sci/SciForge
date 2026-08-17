@@ -1,6 +1,11 @@
 import { z } from 'zod'
 
 import type { DomainMainAgentExecutionHost } from './agent-execution.js'
+import type { DomainMainExternalNavigationHost } from './external-navigation.js'
+import type {
+  DomainMainFileTransferHost,
+  DomainRendererFileTransferHost
+} from './file-transfer.js'
 import {
   domainPackagePermissionIdSchema,
   type DomainPackageJsonValue
@@ -10,6 +15,11 @@ import type {
   DomainExecutionEventV1
 } from './reproducibility.js'
 import type { DomainMainPowerHost } from './power.js'
+import type { DomainMainPortableResourceReferencesHost } from './portable-resource-references.js'
+import type {
+  PrincipalContextSnapshot,
+  PrincipalSnapshot
+} from './principal.js'
 import type {
   DomainMainPackageSecretStoreHost,
   DomainMainPackageSettingsHost
@@ -31,7 +41,10 @@ import type {
   WorkspaceHostOpenRemoteSessionInput
 } from './workspace-host.js'
 export * from './agent-execution.js'
+export * from './external-navigation.js'
+export * from './file-transfer.js'
 export * from './power.js'
+export * from './portable-resource-references.js'
 export * from './package-storage.js'
 export * from './renderer-contributions.js'
 export * from './visual-capture.js'
@@ -113,6 +126,8 @@ export type DomainMainContribution = Readonly<{
   kind: typeof MAIN_EXTENSION_CONTRIBUTION_KIND
   packageName: string
   owner: DomainRuntimeContributionOwner
+  /** Optional manifest declaration version, projected only from trusted metadata. */
+  version?: string
   contract: DomainPackageJsonValue
   value: unknown
 }>
@@ -189,6 +204,10 @@ type DomainMainTurnLifecycleEventBase = Readonly<{
   /** Host-owned stable identity for the accepted user directive. */
   clientDirectiveId?: string
   workspaceRoot?: string
+  /** Immutable Host attribution captured for this exact delivery attempt. */
+  principal?: PrincipalSnapshot
+  /** Exact signed-in or signed-out Host authorization lease for this attempt. */
+  principalContext?: PrincipalContextSnapshot
   occurredAt: string
 }>
 
@@ -233,6 +252,10 @@ export type DomainMainDurableTurnBoundary = Readonly<{
   threadId: string
   clientDirectiveId: string
   workspaceRoot?: string
+  /** Immutable Host attribution; absent for signed-out or pre-attribution history. */
+  principal?: PrincipalSnapshot
+  /** Exact Host authorization lease; absent only for legacy unknown attribution. */
+  principalContext?: PrincipalContextSnapshot
   phase: 'pending-start' | 'watching' | 'completed-intent' | 'terminal-settlement'
   turnId?: string
   terminalState?: 'completed' | 'failed' | 'cancelled' | 'rejected'
@@ -321,6 +344,7 @@ export type DomainMainSystemCapabilityInvoker = Readonly<{
       idempotencyKey?: string
       resource?: DomainCapabilityResourceHandle
       expectedRevision?: string
+      signal?: AbortSignal
       authorization?: Readonly<{
         /**
          * The host may propagate an already-approved outer action. It must
@@ -452,6 +476,10 @@ export type DomainTurnArtifactEvent = Readonly<{
   fileEffects?: DomainTurnFileEffectsV1
   filePatchReceipts?: readonly DomainTurnFilePatchReceiptV1[]
   artifacts: readonly unknown[]
+  /** Host-captured immutable attribution; absent for a signed-out turn. */
+  principal?: PrincipalSnapshot
+  /** Exact Host authorization lease; absent only for legacy unknown attribution. */
+  principalContext?: PrincipalContextSnapshot
 }>
 
 /** Opaque completed non-Agent execution delivered through the same stream. */
@@ -703,6 +731,8 @@ export type DomainMainTextSanitizerHost = Readonly<{
  */
 export type DomainMainHost = Readonly<{
   getUserDataDir: () => string
+  /** Stable opaque Host installation identity; introduced in Host API 1.3. */
+  getDeviceId?: () => string
   defineCapability: (options: unknown) => unknown
   /** Owner-scoped non-secret settings; introduced in Host API 1.2. */
   packageSettings?: DomainMainPackageSettingsHost
@@ -712,6 +742,15 @@ export type DomainMainHost = Readonly<{
   openPath?: (path: string) => Promise<void>
   resolveWorkspaceServerArtifact?: () => Promise<WorkspaceHostArtifact>
   capabilities?: DomainMainSystemCapabilityInvoker
+  /**
+   * Owner-scoped Host facade. It derives caller and Principal exclusively from
+   * the active capability invocation; packages cannot supply either value.
+   */
+  fileTransfers?: DomainMainFileTransferHost
+  /** Owner-scoped, active-invocation-bound, one-shot safe navigation targets. */
+  externalNavigation?: DomainMainExternalNavigationHost
+  /** Owner-scoped materialization/export facade bound to the active capability invocation. */
+  portableResources?: DomainMainPortableResourceReferencesHost
   visualCapture?: DomainMainVisualCaptureHost
   textSanitizer?: DomainMainTextSanitizerHost
 }>
@@ -848,7 +887,7 @@ export type DomainRendererCapabilityInvoker = Readonly<{
   observe<TState>(
     contract: DomainRendererCapabilityObservationContract<TState>,
     resource: DomainCapabilityResourceHandle,
-    options?: Readonly<{ workspaceId?: string }>
+    options?: Readonly<{ workspaceId?: string; signal?: AbortSignal }>
   ): Promise<DomainRendererCapabilityObservation<TState>>
   invoke<TInput, TOutput>(
     contract: DomainRendererCapabilityContract<TInput, TOutput>,
@@ -858,6 +897,7 @@ export type DomainRendererCapabilityInvoker = Readonly<{
       resource?: DomainCapabilityResourceHandle
       expectedRevision?: string
       approval?: Readonly<{ mode: 'confirmation' }>
+      signal?: AbortSignal
     }>
   ): Promise<TOutput>
   subscribe?(
@@ -873,6 +913,8 @@ export type DomainRendererHost = Readonly<{
   /** Lazily exposes installed renderer extension points to other trusted packages. */
   contributions?: DomainRendererContributionHost
   openExternal: (url: string) => void | Promise<void>
+  /** Renderer-safe pickers return opaque handles; local paths never cross this boundary. */
+  fileTransfers?: DomainRendererFileTransferHost
   workspace?: DomainRendererWorkspaceHost
   workspacePreview?: DomainRendererWorkspacePreviewHost
   workbench?: DomainRendererWorkbenchHost

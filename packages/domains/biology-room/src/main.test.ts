@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   BIOLOGY_ROOM_CAPABILITY_IDS,
+  BIOLOGY_ROOM_DEFAULT_OBSERVE_ANNOTATION_LIMIT,
+  BIOLOGY_ROOM_DEFAULT_OBSERVE_ASSET_LIMIT,
+  BIOLOGY_ROOM_DEFAULT_OBSERVE_CONTIG_LIMIT,
   BIOLOGY_ROOM_RESOURCE_KIND,
   type BiologyRoomManifest,
   type BiologyRoomObserveResult
@@ -8,7 +11,9 @@ import {
 import { domainPackageDefinition } from './definition.js'
 import {
   createDomainMainEntry,
+  type BiologyRoomCapabilityHandlerContext,
   type BiologyRoomCapabilityOptions,
+  type BiologyRoomCapabilityResourceRegistration,
   type BiologyRoomServicePort
 } from './main.js'
 
@@ -95,6 +100,64 @@ function buildEntry() {
   return { entry, definitions, services, created: () => created }
 }
 
+function strictResourceIssuer() {
+  const live = new Map<string, BiologyRoomCapabilityResourceRegistration>()
+  const issuedKeys = new Map<BiologyRoomCapabilityResourceRegistration, string>()
+  const issued: BiologyRoomCapabilityResourceRegistration[] = []
+  const registrationKey = (
+    registration: BiologyRoomCapabilityResourceRegistration,
+    caller: BiologyRoomCapabilityHandlerContext['caller']
+  ) =>
+    JSON.stringify([
+      registration.workspaceId,
+      registration.resourceKind,
+      registration.resourceId,
+      [...registration.audiences].sort(),
+      caller.principalContextVersion ?? caller.principal?.identityVersion ?? 0,
+      caller.principal
+        ? [
+            caller.principal.authority,
+            caller.principal.subject,
+            caller.principal.assurance,
+            caller.principal.deviceId,
+            caller.principal.identityVersion
+          ]
+        : null
+    ])
+  const issueResourceFor = (caller: BiologyRoomCapabilityHandlerContext['caller']) =>
+    (registration: BiologyRoomCapabilityResourceRegistration) => {
+      const key = registrationKey(registration, caller)
+      const existing = live.get(key)
+      if (existing && (
+        existing.observe !== registration.observe ||
+        existing.dispose !== registration.dispose
+      )) {
+        throw new Error('resource_registration_conflict')
+      }
+      live.set(key, registration)
+      issuedKeys.set(registration, key)
+      issued.push(registration)
+      return {
+        token: `cap_${issued.length.toString().padStart(20, '0')}`,
+        semanticRevision: registration.semanticRevision,
+        expiresAt: now
+      }
+    }
+  return {
+    issued,
+    issueResource: issueResourceFor({}),
+    issueResourceFor,
+    async retire(registration: BiologyRoomCapabilityResourceRegistration) {
+      const key = issuedKeys.get(registration)
+      if (!key) throw new Error('resource_unavailable')
+      const existing = live.get(key)
+      if (!existing) throw new Error('resource_unavailable')
+      live.delete(key)
+      await existing.dispose()
+    }
+  }
+}
+
 describe('Biology Room main domain entry', () => {
   it('matches its manifest and owns one lazy, disposable service', async () => {
     const harness = buildEntry()
@@ -157,6 +220,193 @@ describe('Biology Room main domain entry', () => {
       workspaceId: '/workspace',
       semanticRevision: '1'
     })
+  })
+
+  it('keeps one Broker registration callback per canonical room identity', async () => {
+    const harness = buildEntry()
+    const factory = harness.entry.contributions[0]!.value as {
+      createDefinitions(): readonly BiologyRoomCapabilityOptions[]
+    }
+    factory.createDefinitions()
+    const create = harness.definitions.find((candidate) =>
+      candidate.id === BIOLOGY_ROOM_CAPABILITY_IDS.create
+    )!
+    const load = harness.definitions.find((candidate) =>
+      candidate.id === BIOLOGY_ROOM_CAPABILITY_IDS.load
+    )!
+    const open = harness.definitions.find((candidate) =>
+      candidate.id === BIOLOGY_ROOM_CAPABILITY_IDS.open
+    )!
+    const issuer = strictResourceIssuer()
+    const firstContext = {
+      caller: { workspaceId: '/workspace' },
+      issueResource: issuer.issueResource
+    }
+
+    await create.handler({ title: 'Room' }, firstContext)
+    await create.handler({ title: 'Room' }, firstContext)
+    await load.handler({ roomId: 'room-1' }, firstContext)
+    await open.handler({ roomId: 'room-1', assetLimit: 1 }, firstContext)
+
+    expect(issuer.issued).toHaveLength(4)
+    expect(issuer.issued.slice(1).every((registration) =>
+      registration.observe === issuer.issued[0]!.observe
+    )).toBe(true)
+    expect(issuer.issued.slice(1).every((registration) =>
+      registration.dispose === issuer.issued[0]!.dispose
+    )).toBe(true)
+    expect(issuer.issued.every((registration) =>
+      registration.retireAfterLastHandleExpires
+    )).toBe(true)
+
+    await issuer.issued[0]!.observe()
+    expect(harness.services[0]!.observe).toHaveBeenLastCalledWith({
+      workspaceRoot: '/workspace',
+      roomId: 'room-1',
+      assetLimit: BIOLOGY_ROOM_DEFAULT_OBSERVE_ASSET_LIMIT,
+      annotationLimit: BIOLOGY_ROOM_DEFAULT_OBSERVE_ANNOTATION_LIMIT,
+      contigLimit: BIOLOGY_ROOM_DEFAULT_OBSERVE_CONTIG_LIMIT
+    })
+
+    const original = issuer.issued[0]!
+    await issuer.retire(issuer.issued[3]!)
+    await open.handler({ roomId: 'room-1' }, firstContext)
+    const replacement = issuer.issued[4]!
+    expect(replacement.observe).not.toBe(original.observe)
+    expect(replacement.dispose).not.toBe(original.dispose)
+
+    original.dispose()
+    await open.handler({ roomId: 'room-1' }, firstContext)
+    expect(issuer.issued[5]!.observe).toBe(replacement.observe)
+    expect(issuer.issued[5]!.dispose).toBe(replacement.dispose)
+
+    await open.handler(
+      { roomId: 'room-1' },
+      {
+        caller: { workspaceId: '/workspace-2' },
+        issueResource: issuer.issueResource
+      }
+    )
+    expect(issuer.issued[6]!.observe).not.toBe(replacement.observe)
+
+    harness.entry.contributions[0]!.onDispose?.()
+    let afterContributionDispose: BiologyRoomCapabilityResourceRegistration | undefined
+    await open.handler(
+      { roomId: 'room-1' },
+      {
+        caller: { workspaceId: '/workspace' },
+        issueResource: (registration) => {
+          afterContributionDispose = registration
+          return {}
+        }
+      }
+    )
+    expect(afterContributionDispose!.observe).not.toBe(replacement.observe)
+    expect(afterContributionDispose!.dispose).not.toBe(replacement.dispose)
+  })
+
+  it('bounds live room registration bindings and reclaims disposed capacity', async () => {
+    const harness = buildEntry()
+    const factory = harness.entry.contributions[0]!.value as {
+      createDefinitions(): readonly BiologyRoomCapabilityOptions[]
+    }
+    factory.createDefinitions()
+    const open = harness.definitions.find((candidate) =>
+      candidate.id === BIOLOGY_ROOM_CAPABILITY_IDS.open
+    )!
+    const create = harness.definitions.find((candidate) =>
+      candidate.id === BIOLOGY_ROOM_CAPABILITY_IDS.create
+    )!
+    const openOrCreate = harness.definitions.find((candidate) =>
+      candidate.id === BIOLOGY_ROOM_CAPABILITY_IDS.openOrCreate
+    )!
+    let first: BiologyRoomCapabilityResourceRegistration | undefined
+    const issueResource = (registration: BiologyRoomCapabilityResourceRegistration) => {
+      first ??= registration
+      return {}
+    }
+
+    for (let index = 0; index < 500; index += 1) {
+      await open.handler(
+        { roomId: `room-${index}` },
+        { caller: { workspaceId: '/workspace' }, issueResource }
+      )
+    }
+    await expect(open.handler(
+      { roomId: 'room-over-capacity' },
+      { caller: { workspaceId: '/workspace' }, issueResource }
+    )).rejects.toThrow('Biology Room resource binding capacity was exceeded.')
+    const service = harness.services[0]!
+    expect(service.observe).toHaveBeenCalledTimes(500)
+    await expect(create.handler(
+      { title: 'Over capacity' },
+      { caller: { workspaceId: '/workspace' }, issueResource }
+    )).rejects.toThrow('Biology Room resource binding capacity was exceeded.')
+    await expect(openOrCreate.handler(
+      { path: 'over-capacity.pdb' },
+      { caller: { workspaceId: '/workspace' }, issueResource }
+    )).rejects.toThrow('Biology Room resource binding capacity was exceeded.')
+    expect(service.create).not.toHaveBeenCalled()
+    expect(service.openOrCreate).not.toHaveBeenCalled()
+
+    first!.dispose()
+    await expect(open.handler(
+      { roomId: 'room-after-dispose' },
+      { caller: { workspaceId: '/workspace' }, issueResource }
+    )).resolves.toBeDefined()
+  })
+
+  it('isolates bindings by exact Principal lease and retiring A leaves B stable', async () => {
+    const harness = buildEntry()
+    const factory = harness.entry.contributions[0]!.value as {
+      createDefinitions(): readonly BiologyRoomCapabilityOptions[]
+    }
+    factory.createDefinitions()
+    const open = harness.definitions.find((candidate) =>
+      candidate.id === BIOLOGY_ROOM_CAPABILITY_IDS.open
+    )!
+    const issuer = strictResourceIssuer()
+    const callerA = {
+      workspaceId: '/workspace',
+      principalContextVersion: 1,
+      principal: {
+        authority: 'local',
+        subject: 'user-a',
+        assurance: 'local-selection',
+        deviceId: 'device-a',
+        identityVersion: 1
+      }
+    } as const
+    const callerB = {
+      workspaceId: '/workspace',
+      principalContextVersion: 2,
+      principal: {
+        authority: 'local',
+        subject: 'user-b',
+        assurance: 'local-selection',
+        deviceId: 'device-a',
+        identityVersion: 2
+      }
+    } as const
+
+    await open.handler(
+      { roomId: 'room-1' },
+      { caller: callerA, issueResource: issuer.issueResourceFor(callerA) }
+    )
+    await open.handler(
+      { roomId: 'room-1' },
+      { caller: callerB, issueResource: issuer.issueResourceFor(callerB) }
+    )
+    expect(issuer.issued[1]!.observe).not.toBe(issuer.issued[0]!.observe)
+    expect(issuer.issued[1]!.dispose).not.toBe(issuer.issued[0]!.dispose)
+
+    await issuer.retire(issuer.issued[0]!)
+    await open.handler(
+      { roomId: 'room-1' },
+      { caller: callerB, issueResource: issuer.issueResourceFor(callerB) }
+    )
+    expect(issuer.issued[2]!.observe).toBe(issuer.issued[1]!.observe)
+    expect(issuer.issued[2]!.dispose).toBe(issuer.issued[1]!.dispose)
   })
 
   it('applies resource-scoped operations with optimistic revision semantics', async () => {

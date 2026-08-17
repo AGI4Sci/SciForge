@@ -88,6 +88,9 @@ export function listMainExtensionContributions(
     kind: MAIN_EXTENSION_CONTRIBUTION_KIND,
     packageName: contribution.packageName,
     owner: contribution.owner,
+    ...(contribution.declaration.version === undefined
+      ? {}
+      : { version: contribution.declaration.version }),
     contract: contribution.contract!,
     value: contribution.value
   })))
@@ -230,6 +233,10 @@ function createSystemCapabilityInvoker(
             `Capability ${contract.actionId} cannot inherit approval outside a matching approved destructive action.`
           )
         }
+        broker.assertPrincipalCurrent(
+          inherited.caller.principal,
+          inherited.caller.principalContextVersion
+        )
       }
       const result = await broker.invokeHostSystem({
         callerId,
@@ -256,7 +263,7 @@ function createSystemCapabilityInvoker(
           ? { expectedRevision: invokeOptions.expectedRevision.trim() }
           : {}),
         input: parsedInput
-      })
+      }, { signal: invokeOptions?.signal })
       return contract.outputSchema.parse(result.output)
     }
   })

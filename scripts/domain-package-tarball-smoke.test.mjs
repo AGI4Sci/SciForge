@@ -22,7 +22,10 @@ const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 const targetPackageDirectories = Object.freeze([
   'packages/domain-sdk',
   'packages/domains/artifact-versions',
+  'packages/domains/content-space',
+  'packages/domains/content-space-mock-provider',
   'packages/domains/git-checkpoints',
+  'packages/domains/identity-access',
   'packages/domains/research-checkpoints',
   'packages/domains/research-dossier',
   'packages/domains/visual-review'
@@ -91,7 +94,7 @@ function publicExportSpecifiers(packageJson) {
   })
 }
 
-test('research artifact domains resolve every public export from independent tarballs', {
+test('publishable domain packages resolve every public export from independent tarballs', {
   timeout: 120_000
 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'sciforge-domain-tarball-smoke-'))
@@ -159,6 +162,12 @@ test('research artifact domains resolve every public export from independent tar
     const sdkPackage = installedPackages.get('@sciforge/domain-sdk').packageJson
     const artifact = installedPackages.get('@sciforge/domain-artifact-versions')
     const artifactPackage = artifact.packageJson
+    const content = installedPackages.get('@sciforge/domain-content-space')
+    const contentPackage = content.packageJson
+    const contentMock = installedPackages.get('@sciforge/domain-content-space-mock-provider')
+    const contentMockPackage = contentMock.packageJson
+    const identity = installedPackages.get('@sciforge/domain-identity-access')
+    const identityPackage = identity.packageJson
     const checkpointPackage = installedPackages.get(
       '@sciforge/domain-research-checkpoints'
     ).packageJson
@@ -167,10 +176,46 @@ test('research artifact domains resolve every public export from independent tar
       join(artifact.root, 'sciforge.domain.json'),
       'utf8'
     ))
-    assert.equal(sdkPackage.version, '0.2.0')
+    const contentManifest = JSON.parse(await readFile(
+      join(content.root, 'sciforge.domain.json'),
+      'utf8'
+    ))
+    const contentMockManifest = JSON.parse(await readFile(
+      join(contentMock.root, 'sciforge.domain.json'),
+      'utf8'
+    ))
+    const identityManifest = JSON.parse(await readFile(
+      join(identity.root, 'sciforge.domain.json'),
+      'utf8'
+    ))
+    assert.equal(sdkPackage.version, '0.2.1')
+    assert.equal(sdkPackage.exports['./external-navigation'], './src/external-navigation.ts')
+    assert.equal(sdkPackage.exports['./file-transfer'], './src/file-transfer.ts')
+    assert.equal(
+      sdkPackage.exports['./portable-resource-references'],
+      './src/portable-resource-references.ts'
+    )
+    assert.equal(sdkPackage.exports['./principal'], './src/principal.ts')
+    assert.equal(sdkPackage.exports['./provider-composition'], './src/provider-composition.ts')
     assert.equal(artifactPackage.version, '1.1.0')
     assert.equal(artifactManifest.module.version, '1.1.0')
     assert.equal(artifactPackage.dependencies['@sciforge/domain-sdk'], '^0.2.0')
+    assert.equal(contentPackage.version, '1.0.0')
+    assert.equal(contentManifest.module.version, '1.0.0')
+    assert.equal(contentManifest.module.hostApi.minimum, '1.3.0')
+    assert.equal(contentPackage.dependencies['@sciforge/domain-sdk'], '^0.2.1')
+    assert.equal(contentMockPackage.version, '1.0.0')
+    assert.equal(contentMockManifest.module.version, '1.0.0')
+    assert.equal(contentMockManifest.module.hostApi.minimum, '1.3.0')
+    assert.equal(
+      contentMockPackage.dependencies['@sciforge/domain-content-space'],
+      '1.0.0'
+    )
+    assert.equal(contentMockPackage.dependencies['@sciforge/domain-sdk'], '^0.2.1')
+    assert.equal(identityPackage.version, '1.0.0')
+    assert.equal(identityManifest.module.version, '1.0.0')
+    assert.equal(identityManifest.module.hostApi.minimum, '1.3.0')
+    assert.equal(identityPackage.dependencies['@sciforge/domain-sdk'], '^0.2.1')
     assert.equal(
       checkpointPackage.dependencies['@sciforge/domain-artifact-versions'],
       '^1.1.0'

@@ -1,0 +1,401 @@
+import { describe, expect, it, vi } from 'vitest'
+
+import type { DomainPackageJsonValue } from '@sciforge/domain-sdk/contract'
+import {
+  MAIN_EXTENSION_CONTRIBUTION_KIND,
+  type DomainMainContribution,
+  type DomainMainContributionHost,
+  type DomainMainHost,
+  type DomainMainRuntimeLifecycleContribution
+} from '@sciforge/domain-sdk/host'
+import {
+  MAIN_CONTENT_SPACE_PROVIDER_FACTORY_LOCATION,
+  MAIN_PROVIDER_INSTANCE_DIRECTORY_ENTRY_LOCATION,
+  PROVIDER_FACTORY_CONTRACT_VERSION,
+  defineContentSpaceProviderFactory,
+  defineProviderInstanceDirectoryEntry
+} from '@sciforge/domain-sdk/provider-composition'
+import { DomainExternalNavigationError } from '@sciforge/domain-sdk/external-navigation'
+
+import {
+  CONTENT_SPACE_CAPABILITY_IDS,
+  CONTENT_SPACE_PROVIDER_CONTRACT_VERSION,
+  ContentSpaceOperationError,
+  contentSpaceSuccess,
+  defineContentSpaceProvider,
+  type ContentSpaceProvider,
+  type ContentSpaceResult
+} from '../contract.js'
+import {
+  CONTENT_SPACE_CAPABILITY_FACTORY_CONTRIBUTION,
+  CONTENT_SPACE_RUNTIME_LIFECYCLE_CONTRIBUTION
+} from '../definition.js'
+import * as mainExports from './index.js'
+import { createDomainMainEntry } from './index.js'
+
+const PROVIDER_INSTANCE_REF = 'provider-instance-alpha'
+const FILE = Object.freeze({
+  providerInstanceRef: PROVIDER_INSTANCE_REF,
+  fileId: 'file-one'
+})
+const exactSignedUrl = 'https://provider.invalid/portal?sig=a%2Bb&token=opaque%2Fvalue'
+const principal = Object.freeze({
+  authority: 'sciforge.identity-access',
+  subject: '123e4567-e89b-42d3-a456-426614174000',
+  assurance: 'local-selection' as const,
+  deviceId: 'content-space-main-test-device',
+  identityVersion: 1
+})
+
+type CapabilityContext = Readonly<{
+  caller: Readonly<{
+    audience: 'ui'
+    callerId: string
+    principal: typeof principal
+  }>
+  invocationId: string
+  signal: AbortSignal
+  assertPrincipalCurrent(): void
+}>
+
+type CapabilityDefinition = Readonly<{
+  id: string
+  effect: 'read' | 'external-write'
+  approval: 'none' | 'confirmation'
+  concurrency: Readonly<{ revision: 'none'; idempotency: 'none' | 'required' }>
+  handler(input: unknown, context: CapabilityContext): Promise<Readonly<{
+    output: ContentSpaceResult<unknown>
+  }>>
+}>
+
+describe('Content Space main composition', () => {
+  it('exports only the standard process entry, not raw catalog/service/Provider paths', () => {
+    expect(Object.keys(mainExports).sort()).toEqual(['createDomainMainEntry'])
+  })
+
+  it('stays lazy through composition and lists instances without creating a Provider', async () => {
+    const createProvider = vi.fn(() => providerFixture())
+    const defineCapability = vi.fn((options: unknown) => options)
+    const host = mainHost({ defineCapability })
+    const entry = createDomainMainEntry(host)
+    expect(defineCapability).not.toHaveBeenCalled()
+    expect(createProvider).not.toHaveBeenCalled()
+
+    const definitions = await activateDefinitions(entry.contributions, contributionHost(
+      providerContributions(createProvider)
+    ))
+    const expectedCapabilityIds = Object.values(CONTENT_SPACE_CAPABILITY_IDS).sort()
+    expect(definitions.map(({ id }) => id).sort()).toEqual(expectedCapabilityIds)
+    expect(defineCapability).toHaveBeenCalledTimes(expectedCapabilityIds.length)
+    const list = definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.listProviderInstances)
+    const result = await list.handler({}, capabilityContext())
+    expect(result.output).toEqual(contentSpaceSuccess({
+      items: [{ providerInstanceRef: PROVIDER_INSTANCE_REF, label: 'Fixture Content Space' }]
+    }))
+    expect(createProvider).not.toHaveBeenCalled()
+  })
+
+  it('fails Provider Instance discovery when the Host Principal lease is stale', async () => {
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture()))
+    )
+    const list = definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.listProviderInstances)
+    const result = await list.handler({}, capabilityContext(() => {
+      throw new Error('Principal changed')
+    }))
+    expect(result.output).toMatchObject({
+      ok: false,
+      error: { code: 'unauthorized' }
+    })
+  })
+
+  it('keeps signed Provider query text inside Host navigation and returns only an opaque handle', async () => {
+    const handle = `portal_${'a'.repeat(32)}`
+    const issueTarget = vi.fn((_input: Readonly<{ url: string; expiresAt: string }>) => ({
+      handle,
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    }))
+    const openTarget = vi.fn(async (_input: Readonly<{
+      handle: string
+      signal?: AbortSignal
+    }>) => undefined)
+    const host = mainHost({ externalNavigation: { issueTarget, openTarget } })
+    const entry = createDomainMainEntry(host)
+    const definitions = await activateDefinitions(
+      entry.contributions,
+      contributionHost(providerContributions(() => providerFixture()))
+    )
+    const resolved = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.resolvePortalTarget
+    ).handler({ reference: FILE }, capabilityContext())
+    expect(resolved.output).toMatchObject({ ok: true, value: { handle } })
+    expect(JSON.stringify(resolved.output)).not.toContain('token=')
+    expect(JSON.stringify(resolved.output)).not.toContain('opaque%2Fvalue')
+    expect(issueTarget.mock.calls[0]?.[0].url).toBe(exactSignedUrl)
+
+    const opened = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.openPortalTarget
+    ).handler({ handle }, capabilityContext())
+    expect(opened.output).toEqual(contentSpaceSuccess({ opened: true }))
+    expect(openTarget).toHaveBeenCalledTimes(1)
+    expect(openTarget.mock.calls[0]?.[0]).toMatchObject({ handle })
+    expect(openTarget.mock.calls[0]?.[0].signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it.each([
+    ['principal_changed', 'unauthorized'],
+    ['invalid_target', 'unsafe_portal_target'],
+    ['capacity_exceeded', 'bounds_exceeded']
+  ] as const)('maps Host issueTarget %s without leaking Host details', async (hostCode, domainCode) => {
+    const host = mainHost({
+      externalNavigation: {
+        issueTarget: () => {
+          throw new DomainExternalNavigationError(hostCode, 'signed token=do-not-leak')
+        },
+        openTarget: vi.fn(async () => undefined)
+      }
+    })
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(host).contributions,
+      contributionHost(providerContributions(() => providerFixture()))
+    )
+    const result = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.resolvePortalTarget
+    ).handler({ reference: FILE }, capabilityContext())
+
+    expect(result.output).toMatchObject({ ok: false, error: { code: domainCode } })
+    expect(JSON.stringify(result.output)).not.toContain('do-not-leak')
+  })
+
+  it('projects typed errors with domain-owned messages so Provider secrets cannot escape', async () => {
+    const provider = providerFixture({
+      resolvePortalTarget: async () => {
+        throw new ContentSpaceOperationError({
+          code: 'provider_unavailable',
+          message: 'signed token=do-not-leak',
+          retry: 'never'
+        })
+      }
+    })
+    const host = mainHost({
+      externalNavigation: {
+        issueTarget: vi.fn((_input: Readonly<{ url: string; expiresAt: string }>) => ({
+          handle: `portal_${'b'.repeat(32)}`,
+          expiresAt: new Date(Date.now() + 60_000).toISOString()
+        })),
+        openTarget: vi.fn(async (_input: Readonly<{
+          handle: string
+          signal?: AbortSignal
+        }>) => undefined)
+      }
+    })
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(host).contributions,
+      contributionHost(providerContributions(() => provider))
+    )
+    const result = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.resolvePortalTarget
+    ).handler({ reference: FILE }, capabilityContext())
+    expect(result.output).toMatchObject({
+      ok: false,
+      error: {
+        code: 'provider_unavailable',
+        message: 'The selected Provider is unavailable.'
+      }
+    })
+    expect(JSON.stringify(result.output)).not.toContain('do-not-leak')
+  })
+
+  it('declares every write as confirmation + required idempotency', async () => {
+    const entry = createDomainMainEntry(mainHost())
+    const definitions = await activateDefinitions(
+      entry.contributions,
+      contributionHost(providerContributions(() => providerFixture()))
+    )
+    const writeIds = new Set<string>([
+      CONTENT_SPACE_CAPABILITY_IDS.createFolder,
+      CONTENT_SPACE_CAPABILITY_IDS.uploadNew,
+      CONTENT_SPACE_CAPABILITY_IDS.download,
+      CONTENT_SPACE_CAPABILITY_IDS.openPortalTarget
+    ])
+    for (const capability of definitions) {
+      if (writeIds.has(capability.id)) {
+        expect(capability).toMatchObject({
+          effect: 'external-write',
+          approval: 'confirmation',
+          concurrency: { idempotency: 'required' }
+        })
+      } else {
+        expect(capability.effect).toBe('read')
+        expect(capability.approval).toBe('none')
+      }
+    }
+  })
+})
+
+function mainHost(overrides: Partial<DomainMainHost> = {}): DomainMainHost {
+  return Object.freeze({
+    getUserDataDir: () => '/private/tmp/sciforge-content-space-main-test',
+    defineCapability: (options: unknown) => options,
+    ...overrides
+  })
+}
+
+async function activateDefinitions(
+  contributions: readonly Readonly<{ id: string; value: unknown }>[],
+  composed: DomainMainContributionHost
+): Promise<readonly CapabilityDefinition[]> {
+  const lifecycle = contributions.find(({ id }) =>
+    id === CONTENT_SPACE_RUNTIME_LIFECYCLE_CONTRIBUTION.id
+  )?.value as DomainMainRuntimeLifecycleContribution | undefined
+  const factory = contributions.find(({ id }) =>
+    id === CONTENT_SPACE_CAPABILITY_FACTORY_CONTRIBUTION.id
+  )?.value as Readonly<{ createDefinitions(): readonly unknown[] }> | undefined
+  if (!lifecycle || !factory) throw new Error('Content Space composition is incomplete')
+  await lifecycle.activate({
+    contributions: composed
+  } as unknown as Parameters<DomainMainRuntimeLifecycleContribution['activate']>[0])
+  return factory.createDefinitions() as readonly CapabilityDefinition[]
+}
+
+function definition(
+  definitions: readonly CapabilityDefinition[],
+  id: string
+): CapabilityDefinition {
+  const found = definitions.find((candidate) => candidate.id === id)
+  if (!found) throw new Error(`Missing capability ${id}`)
+  return found
+}
+
+function capabilityContext(
+  assertPrincipalCurrent: () => void = () => undefined
+): CapabilityContext {
+  return Object.freeze({
+    caller: Object.freeze({ audience: 'ui' as const, callerId: 'renderer:test', principal }),
+    invocationId: 'invocation_content_space_main_0001',
+    signal: new AbortController().signal,
+    assertPrincipalCurrent
+  })
+}
+
+function providerFixture(overrides: Partial<ContentSpaceProvider> = {}): ContentSpaceProvider {
+  const ready = ([
+    'list-containers',
+    'list-entries',
+    'observe-entry',
+    'create-folder',
+    'upload-new',
+    'download',
+    'portal-target',
+    'observe-immutable-version'
+  ] as const).map((operation) => ({
+    operation,
+    readiness: 'production_ready' as const,
+    reasonCode: 'available' as const
+  }))
+  return defineContentSpaceProvider({
+    contractVersion: CONTENT_SPACE_PROVIDER_CONTRACT_VERSION,
+    describeCapabilities: async () => ready,
+    listContainers: async ({ context }) => ({
+      providerInstanceRef: context.providerInstanceRef,
+      items: []
+    }),
+    listEntries: async ({ parent }) => ({ parent, items: [] }),
+    observeEntry: async ({ reference }) => ({
+      entry: 'containerId' in reference
+        ? { kind: 'container' as const, reference, label: 'Container' }
+        : {
+            kind: 'file' as const,
+            reference: {
+              providerInstanceRef: reference.providerInstanceRef,
+              fileId: reference.fileId
+            },
+            label: 'File',
+            size: 0
+          },
+      capabilities: ready
+    }),
+    createFolder: async ({ context, parent, name }) => ({
+      invocationId: context.invocationId,
+      parent,
+      name,
+      reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, containerId: 'created' }
+    }),
+    uploadNewFile: async ({ context, parent, name, source }) => ({
+      invocationId: context.invocationId,
+      parent,
+      name,
+      sourceSize: source.size,
+      reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'uploaded' }
+    }),
+    downloadFile: async ({ context, reference }) => ({
+      invocationId: context.invocationId,
+      reference,
+      bytesWritten: 0
+    }),
+    resolvePortalTarget: async () => ({
+      url: exactSignedUrl,
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    }),
+    observeImmutableVersion: async () => ({
+      proven: false,
+      reasonCode: 'resource_capability_missing'
+    }),
+    ...overrides
+  })
+}
+
+function providerContributions(
+  createProvider: () => ContentSpaceProvider | Promise<ContentSpaceProvider>
+): readonly DomainMainContribution[] {
+  return Object.freeze([
+    contribution('fixture.factory', {
+      location: MAIN_CONTENT_SPACE_PROVIDER_FACTORY_LOCATION,
+      contractVersion: PROVIDER_FACTORY_CONTRACT_VERSION,
+      providerKind: 'fixture-content-space'
+    }, defineContentSpaceProviderFactory({
+      contractVersion: PROVIDER_FACTORY_CONTRACT_VERSION,
+      providerKind: 'fixture-content-space',
+      createProvider
+    })),
+    contribution('fixture.instance', {
+      location: MAIN_PROVIDER_INSTANCE_DIRECTORY_ENTRY_LOCATION,
+      contractVersion: PROVIDER_FACTORY_CONTRACT_VERSION,
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      providerKind: 'fixture-content-space',
+      displayName: 'Fixture Content Space'
+    }, defineProviderInstanceDirectoryEntry({
+      contractVersion: PROVIDER_FACTORY_CONTRACT_VERSION,
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      providerKind: 'fixture-content-space',
+      displayName: 'Fixture Content Space'
+    }))
+  ])
+}
+
+function contribution(
+  id: string,
+  contract: DomainPackageJsonValue,
+  value: unknown
+): DomainMainContribution {
+  return Object.freeze({
+    id,
+    kind: MAIN_EXTENSION_CONTRIBUTION_KIND,
+    packageName: '@fixture/content-space-provider',
+    owner: Object.freeze({ moduleId: 'fixture.content-space', moduleVersion: '1.0.0' }),
+    version: PROVIDER_FACTORY_CONTRACT_VERSION,
+    contract,
+    value
+  })
+}
+
+function contributionHost(
+  contributions: readonly DomainMainContribution[]
+): DomainMainContributionHost {
+  return Object.freeze({ list: () => contributions })
+}
