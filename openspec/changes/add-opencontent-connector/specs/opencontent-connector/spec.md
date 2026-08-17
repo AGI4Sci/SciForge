@@ -15,7 +15,7 @@ Defines the OpenContent integration package that enrolls existing accounts and o
 
 ### Requirement: Enrollment binds an existing account without retaining a password
 
-Only trusted Human UI MAY submit an existing OpenContent username/password for one bind or reauthenticate transaction. The Connector SHALL fetch the trusted login key, use RSA-OAEP-SHA256, validate the returned Token and current account identity, persist only the encrypted Token, and release the password. SciForge SHALL NOT create an OpenContent account or expose credentials to Agent, logs, traces, settings, Workspace, Project, Task, URLs, fixtures, or public status.
+Only trusted Human UI MAY submit an existing OpenContent username/password for one bind or reauthenticate transaction. The Connector SHALL fetch the trusted login key, use RSA-OAEP-SHA256, validate the returned Token and current account identity, persist only the encrypted Token, and release the password. SciForge SHALL NOT create an OpenContent account or expose credentials to Agent, logs, traces, settings, Workspace, Project, Task, fixtures, public status, or any public/caller-controlled/durable URL. A Token MAY appear only in a Connector-private outbound HTTPS query when the verified OpenContent operation requires it, and that ephemeral request SHALL remain inside bounded use, target a pinned origin/path, reject redirects, and never be exposed or persisted.
 
 #### Scenario: Authentication or identity validation fails
 

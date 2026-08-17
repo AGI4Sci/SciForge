@@ -7,7 +7,9 @@ import type {
   DomainRendererFileTransferHost
 } from './file-transfer.js'
 import {
+  domainPackageModuleIdSchema,
   domainPackagePermissionIdSchema,
+  domainPackageStableVersionSchema,
   type DomainPackageJsonValue
 } from './contract.js'
 import type {
@@ -55,6 +57,8 @@ export const MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND =
   'main.artifact-consumer' as const
 export const MAIN_ACTION_GUARD_CONTRIBUTION_KIND = 'main.action-guard' as const
 export const MAIN_EXTENSION_CONTRIBUTION_KIND = 'main.extension' as const
+export const MAIN_INTERNAL_SERVICE_DESCRIPTOR_LOCATION =
+  'main.internal-service-descriptor' as const
 export const MAIN_SYSTEM_CAPABILITY_GRANT_CONTRIBUTION_KIND =
   'main.system-capability-grant' as const
 
@@ -115,6 +119,41 @@ export const domainMainExtensionContractSchema = z.object({
 export type DomainMainExtensionContract = z.infer<
   typeof domainMainExtensionContractSchema
 >
+
+export const domainMainInternalServiceDescriptorSchema = z.object({
+  location: z.literal(MAIN_INTERNAL_SERVICE_DESCRIPTOR_LOCATION),
+  serviceId: domainPackageModuleIdSchema,
+  contractVersion: domainPackageStableVersionSchema,
+  allowedConsumerModuleIds: z.array(domainPackageModuleIdSchema).min(1).max(128)
+}).strict().superRefine((descriptor, context) => {
+  if (new Set(descriptor.allowedConsumerModuleIds).size !==
+    descriptor.allowedConsumerModuleIds.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['allowedConsumerModuleIds'],
+      message: 'Internal service consumer module IDs must be unique.'
+    })
+  }
+})
+
+type ParsedDomainMainInternalServiceDescriptor = z.infer<
+  typeof domainMainInternalServiceDescriptorSchema
+>
+export type DomainMainInternalServiceDescriptor = Readonly<
+  Omit<ParsedDomainMainInternalServiceDescriptor, 'allowedConsumerModuleIds'> & {
+    allowedConsumerModuleIds: readonly string[]
+  }
+>
+
+export function defineDomainMainInternalServiceDescriptor(
+  input: DomainMainInternalServiceDescriptor
+): DomainMainInternalServiceDescriptor {
+  const descriptor = domainMainInternalServiceDescriptorSchema.parse(input)
+  return Object.freeze({
+    ...descriptor,
+    allowedConsumerModuleIds: Object.freeze([...descriptor.allowedConsumerModuleIds])
+  })
+}
 
 export type DomainRuntimeContributionOwner = Readonly<{
   moduleId: string

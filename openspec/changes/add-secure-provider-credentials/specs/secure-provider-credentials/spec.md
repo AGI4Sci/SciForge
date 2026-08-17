@@ -42,7 +42,7 @@ Each record SHALL be keyed and cryptographically or structurally bound to owner 
 - **THEN** access SHALL fail without trying usernames, email equality, Project roles, other local accounts, or administrator records
 
 ### Requirement: Secret use is bounded and non-exporting
-The facility SHALL expose secret material only inside the owning main-process operation for the minimum lifetime needed. It SHALL never return secret material through capability output, renderer, Agent/model traffic, URL, log, trace, Workspace, Project, Task, cross-node message, diagnostics, or public connection summary.
+The facility SHALL expose secret material only inside the owning main-process operation for the minimum lifetime needed. It SHALL never return secret material through capability output, renderer, Agent/model traffic, public/caller-controlled/durable URL, log, trace, Workspace, Project, Task, cross-node message, diagnostics, or public connection summary. When a verified provider contract requires a query credential, only the owning main-process Connector MAY construct and immediately send the exact outbound request inside bounded use. That request SHALL target Connector-pinned HTTPS origins and paths, reject redirects, omit referrer and ambient credentials, discard raw provider/network diagnostics, and never expose or persist the credential-bearing URL.
 
 #### Scenario: Public status is requested
 - **WHEN** a caller observes connection or credential status
@@ -51,6 +51,10 @@ The facility SHALL expose secret material only inside the owning main-process op
 #### Scenario: Operation or error echoes a secret
 - **WHEN** provider output, an exception, or a diagnostic contains an active credential value
 - **THEN** managed logs and trace capture SHALL redact the value before persistence
+
+#### Scenario: Verified provider requires a query Token
+- **WHEN** the owning Connector performs an operation whose pinned provider contract requires the credential in the HTTPS query
+- **THEN** it MAY serialize and immediately send that exact private request inside bounded use, while every public, durable, redirected, caller-controlled, or cross-node URL remains forbidden
 
 ### Requirement: Replacement and deletion are atomic
 Credential create or rotation SHALL commit one versioned record atomically, and deletion SHALL make the local record unusable immediately. Interrupted replacement SHALL leave either the prior valid record or the complete new record, never a partial or silently mixed credential.

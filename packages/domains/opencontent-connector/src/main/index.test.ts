@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { OPENCONTENT_CONNECTION_CAPABILITY_IDS } from '../contract.js'
+import {
+  OPENCONTENT_CONNECTION_CAPABILITY_IDS,
+  openContentConnectionStatusSchema,
+  openContentUnbindOutputSchema
+} from '../contract.js'
 import { createOpenContentCapabilityFactory, type OpenContentCapabilityOptions } from './index.js'
 import type { OpenContentConnectionService } from './connection-service.js'
 
@@ -49,6 +53,26 @@ describe('OpenContent connection capabilities', () => {
       password: 'fixture-password',
       assertPrincipalCurrent
     }))
+  })
+
+  it('rejects a Token canary from every renderer-visible capability output', () => {
+    const canary = 'opaque-capability-canary-2a81'
+    expect(openContentConnectionStatusSchema.safeParse({
+      state: 'connected',
+      providerInstanceRef: 'opencontent-edoc2-demo',
+      externalAccount: {
+        id: 'external-user-1',
+        identityId: 1,
+        account: 'scientist',
+        name: 'Scientist'
+      },
+      token: canary
+    }).success).toBe(false)
+    expect(openContentUnbindOutputSchema.safeParse({
+      state: 'disconnected',
+      remoteRevocation: 'unsupported',
+      token: canary
+    }).success).toBe(false)
   })
 })
 

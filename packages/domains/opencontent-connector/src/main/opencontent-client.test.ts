@@ -29,6 +29,37 @@ describe('OpenContent client enrollment', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps a provider-mandated query Token inside one pinned ephemeral HTTPS request', async () => {
+    const canary = 'opaque-provider-query-canary-7f91'
+    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input))
+      expect(url.origin).toBe('https://opencontent.invalid')
+      expect(url.pathname).toBe('/flatsdk/api/services/Auth/CheckUserTokenValidity')
+      expect(Object.fromEntries(url.searchParams)).toEqual({ token: canary })
+      expect(init).toMatchObject({
+        method: 'POST',
+        redirect: 'error',
+        credentials: 'omit',
+        referrerPolicy: 'no-referrer'
+      })
+      throw new Error(`provider transport echoed ${url}`)
+    })
+    const client = createOpenContentClient({
+      baseUrl: 'https://opencontent.invalid',
+      fetch
+    })
+
+    const error = await client.isTokenValid({ token: canary }).catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({ code: 'provider_unavailable' })
+    expect(JSON.stringify({
+      name: error instanceof Error ? error.name : '',
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : ''
+    })).not.toContain(canary)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
   it('authenticates through RSA login then validates the Token and stable account identity', async () => {
     const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
     const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString()
@@ -39,8 +70,9 @@ describe('OpenContent client enrollment', () => {
       if (url.endsWith('/inbiz/org/api/auth/GetLoginRsaPublicKey')) {
         return jsonResponse({
           result: 0,
-          msg: '',
-          data: { PublicKey: publicKeyPem, Algorithm: 'RSA', Padding: 'OAEP-SHA256' }
+          message: null,
+          data: { PublicKey: publicKeyPem, Algorithm: 'RSA', Padding: 'OAEP-SHA256' },
+          totalCount: 0
         })
       }
       if (url.endsWith('/flatsdk/api/services/Auth/UserLogin')) {
@@ -89,6 +121,26 @@ describe('OpenContent client enrollment', () => {
       }
     })
     expect(requests).toHaveLength(4)
+  })
+
+  it('fails before credential submission when the RSA-key envelope drifts from the verified contract', async () => {
+    const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString()
+    const fetch = vi.fn(async () => jsonResponse({
+      result: 0,
+      msg: '',
+      data: { PublicKey: publicKeyPem, Algorithm: 'RSA', Padding: 'OAEP-SHA256' }
+    }))
+    const client = createOpenContentClient({
+      baseUrl: 'https://opencontent.invalid',
+      fetch
+    })
+
+    await expect(client.authenticateExistingAccount({
+      username: 'fixture-user',
+      password: 'fixture-password'
+    })).rejects.toMatchObject({ code: 'provider_contract_violation' })
+    expect(fetch).toHaveBeenCalledTimes(1)
   })
 
   it('resolves personal and Team roots to stable folder GUID facts', async () => {
@@ -235,6 +287,36 @@ describe('OpenContent client enrollment', () => {
     })
   })
 
+  it('observes the exact file-detail response without reusing listing field names', async () => {
+    const fetch = vi.fn(async () => jsonResponse({
+      result: 0,
+      msg: '',
+      data: {
+        fileId: 10802,
+        fileGuid: 'child-file-guid',
+        fileName: 'result.txt',
+        fileSize: 98,
+        parentFolderId: 2213,
+        permission: 7
+      }
+    }))
+    const client = createOpenContentClient({
+      baseUrl: 'https://opencontent.invalid',
+      fetch
+    })
+
+    await expect(client.observeEntry({
+      token: 'fixture-token-value',
+      kind: 'file',
+      resourceGuid: 'child-file-guid'
+    })).resolves.toEqual({
+      kind: 'file',
+      fileGuid: 'child-file-guid',
+      label: 'result.txt',
+      size: 98
+    })
+  })
+
   it('uploads new bytes through main-site creation and bounded region transfer', async () => {
     const bytes = new TextEncoder().encode('fixture upload bytes')
     const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -285,11 +367,11 @@ describe('OpenContent client enrollment', () => {
           result: 0,
           msg: '',
           data: {
-            id: 10802,
+            fileId: 10802,
             fileGuid: 'uploaded-file-guid',
-            name: 'result.txt',
+            fileName: 'result.txt',
             parentFolderId: 2213,
-            size: bytes.byteLength,
+            fileSize: bytes.byteLength,
             permission: 7
           }
         })

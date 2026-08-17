@@ -17,11 +17,22 @@ export const OPENCONTENT_CAPABILITY_FACTORY_CONTRIBUTION = contributionFor(
 
 export const OPENCONTENT_PROVIDER_INSTANCE_CONTRIBUTION = contributionFor(
   'main',
-  'main.extension'
+  'main.extension',
+  'opencontent-connector.provider-instance'
 )
 export const OPENCONTENT_PROVIDER_INSTANCE_CONTRACT =
   domainPackageDefinition.contributionContracts[
     OPENCONTENT_PROVIDER_INSTANCE_CONTRIBUTION.id
+  ]!
+
+export const OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRIBUTION = contributionFor(
+  'main',
+  'main.extension',
+  'opencontent-connector.content-space-service'
+)
+export const OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRIBUTION.id
   ]!
 
 export const OPENCONTENT_RENDERER_RIGHT_PANEL_CONTRIBUTION = contributionFor(
@@ -45,10 +56,10 @@ export const OPENCONTENT_RENDERER_TOOLBAR_ACTION_CONTRACT =
     OPENCONTENT_RENDERER_TOOLBAR_ACTION_CONTRIBUTION.id
   ]!
 
-function contributionFor(process: 'main' | 'renderer', kind: string) {
+function contributionFor(process: 'main' | 'renderer', kind: string, id?: string) {
   const contribution = domainPackageDefinition.entrypoints
     .find((entrypoint) => entrypoint.process === process)
-    ?.contributions.find((candidate) => candidate.kind === kind)
+    ?.contributions.find((candidate) => candidate.kind === kind && (!id || candidate.id === id))
   if (!contribution) {
     throw new Error(`OpenContent Connector manifest is missing ${process}:${kind}.`)
   }

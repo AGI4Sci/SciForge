@@ -23,6 +23,6 @@
 
 - [x] 4.1 Pin exact read/write schemas with least-privilege `test3` probes; locate exact Team `sciforge test`, create it with `test3` only if absent and permitted, otherwise stop before administrator use.
 - [x] 4.2 Verify personal/team browse, folder create, upload-new conflict/uncertainty, and download without remote cleanup or destructive operations outside explicitly created test fixtures.
-- [ ] 4.3 Test unauthorized, missing binding, reauthentication, wrong Principal, scope escape, unsafe Workspace path, cancellation, size bounds, token leakage, and adapter removal.
-- [ ] 4.4 Run package tests/typecheck, Content Space regression, generator freshness, governance/boundaries, changed-file lint, and source/packaged smoke.
+- [x] 4.3 Test unauthorized, missing binding, reauthentication, wrong Principal, scope escape, unsafe Workspace path, cancellation, size bounds, token leakage, and adapter removal.
+- [x] 4.4 Run package tests/typecheck, Content Space regression, generator freshness, governance/boundaries, changed-file lint, and source/packaged smoke.
 - [x] 4.5 Keep production, ProjectContentSpaceBinding, ACL/member operations, automatic sync, Shared Documents, and ArtifactReference issuance blocked.

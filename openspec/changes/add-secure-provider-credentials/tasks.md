@@ -16,7 +16,7 @@
 
 - [x] 3.1 Test forged owner, wrong node, wrong/current/absent principal, insufficient assurance, wrong instance/connection, cross-package access, and another-principal enumeration.
 - [x] 3.2 Test interruption during replacement/deletion and prove restart yields exactly one committed or absent state.
-- [ ] 3.3 Run secret canaries through errors, logs, traces, diagnostics, renderer IPC, capability traffic, URLs, and cross-node serialization.
+- [x] 3.3 Run secret canaries through errors, logs, traces, diagnostics, renderer IPC, capability traffic, provider-mandated private HTTPS query URLs, every forbidden/public URL surface, and cross-node serialization.
 
 ## 4. Platform Acceptance
 

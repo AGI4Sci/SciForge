@@ -19,11 +19,16 @@ const UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024
 const MAX_UPLOAD_BYTES = 16 * 1024 * 1024
 const MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
 
-const publicKeyResponseSchema = envelopeSchema(z.object({
-  PublicKey: z.string().min(64).max(32_768),
-  Algorithm: z.string().trim().min(1).max(64),
-  Padding: z.string().trim().min(1).max(64)
-}).strict())
+const publicKeyResponseSchema = z.object({
+  result: z.number().int(),
+  message: z.string().max(1024).nullable(),
+  data: z.object({
+    PublicKey: z.string().min(64).max(32_768),
+    Algorithm: z.string().trim().min(1).max(64),
+    Padding: z.string().trim().min(1).max(64)
+  }).strict(),
+  totalCount: z.number().int().nonnegative().safe()
+}).strict()
 
 const loginResponseSchema = z.object({
   result: z.number().int(),
@@ -102,7 +107,14 @@ const folderByGuidResponseSchema = envelopeSchema(z.object({
   permission: z.number().int()
 }))
 
-const fileByGuidResponseSchema = envelopeSchema(fileChildSchema)
+const fileDetailResponseSchema = envelopeSchema(z.object({
+  fileId: z.number().int().nonnegative().safe(),
+  fileGuid: z.string().trim().min(1).max(256),
+  fileName: z.string().trim().min(1).max(512),
+  fileSize: z.number().int().nonnegative().safe(),
+  parentFolderId: z.number().int().nonnegative().safe(),
+  permission: z.number().int()
+}))
 
 const folderChildrenResponseSchema = envelopeSchema(z.object({
   folderId: z.number().int().nonnegative().safe(),
@@ -301,12 +313,19 @@ export function createOpenContentClient(options: Readonly<{
       signal
     })
     const envelope = parseProviderResponse(
-      fileByGuidResponseSchema,
+      fileDetailResponseSchema,
       response,
       'provider_contract_violation'
     )
     requireBusinessSuccess(envelope.result, 'unauthorized')
-    return envelope.data
+    return Object.freeze({
+      id: envelope.data.fileId,
+      fileGuid: envelope.data.fileGuid,
+      name: envelope.data.fileName,
+      parentFolderId: envelope.data.parentFolderId,
+      size: envelope.data.fileSize,
+      permission: envelope.data.permission
+    })
   }
 
   return Object.freeze({
@@ -529,7 +548,7 @@ export function createOpenContentClient(options: Readonly<{
         })
       }
       const envelope = parseProviderResponse(
-        fileByGuidResponseSchema,
+        fileDetailResponseSchema,
         response,
         'provider_contract_violation'
       )
@@ -540,8 +559,8 @@ export function createOpenContentClient(options: Readonly<{
       return Object.freeze({
         kind: 'file' as const,
         fileGuid: envelope.data.fileGuid,
-        label: envelope.data.name,
-        size: envelope.data.size
+        label: envelope.data.fileName,
+        size: envelope.data.fileSize
       })
     },
     createFolder: async (rawInput) => {

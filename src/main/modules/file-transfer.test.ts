@@ -1015,7 +1015,11 @@ describe('Host-owned file transfers', () => {
     })
     const port = service.forOwner('domain.content-space', () => invocation)
     try {
-      await writeFile(join(workspace, 'upload.txt'), 'workspace bytes')
+      await Promise.all([
+        writeFile(join(workspace, 'upload.txt'), 'workspace bytes'),
+        writeFile(join(workspace, 'too-large.bin'), Buffer.alloc(1_025)),
+        writeFile(join(outside, 'secret.txt'), 'outside bytes')
+      ])
       const source = await port.openWorkspaceUploadSource({
         relativePath: 'upload.txt',
         maxBytes: 1024
@@ -1043,10 +1047,31 @@ describe('Host-owned file transfers', () => {
       })).rejects.toMatchObject({ code: 'destination_conflict' })
 
       await symlink(outside, join(workspace, 'escaped'), 'dir')
+      await expect(port.openWorkspaceUploadSource({
+        relativePath: 'escaped/secret.txt',
+        maxBytes: 1024
+      })).rejects.toMatchObject({ code: 'source_unavailable' })
       await expect(port.openWorkspaceDownloadDestination({
         relativePath: 'escaped/file.txt',
         maxBytes: 1024
       })).rejects.toMatchObject({ code: 'destination_unavailable' })
+
+      await expect(port.openWorkspaceUploadSource({
+        relativePath: 'too-large.bin',
+        maxBytes: 1024
+      })).rejects.toMatchObject({ code: 'bound_exceeded' })
+      const cancelled = new AbortController()
+      cancelled.abort()
+      await expect(port.openWorkspaceUploadSource({
+        relativePath: 'upload.txt',
+        maxBytes: 1024,
+        signal: cancelled.signal
+      })).rejects.toMatchObject({ code: 'cancelled' })
+      await expect(port.openWorkspaceDownloadDestination({
+        relativePath: 'cancelled.txt',
+        maxBytes: 1024,
+        signal: cancelled.signal
+      })).rejects.toMatchObject({ code: 'cancelled' })
 
       invocation = invocationFor(caller, { audience: 'ui', workspaceId: workspace })
       await expect(port.openWorkspaceUploadSource({

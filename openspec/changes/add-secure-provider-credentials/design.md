@@ -40,6 +40,14 @@ The facade provides owner-only operations that deliver the decrypted value insid
 
 Alternative rejected: return a long-lived string to package services. JavaScript cannot guarantee zeroization, but the Host can still minimize scope and prevent accidental transport through public APIs.
 
+### Permit only provider-mandated private HTTPS query serialization
+
+Some verified provider contracts, including the current OpenContent Token validation and transfer APIs, require the Token in the outbound HTTPS query. The owning Connector MAY construct that exact request URL only inside the bounded credential-use callback and immediately pass it to the network implementation. The Connector pins the permitted HTTPS origin/path, rejects redirects, omits referrer and ambient credentials, discards provider/network error text, and never returns or persists the credential-bearing URL. Managed redaction still treats active and recently retired values as sensitive in case infrastructure echoes the URL.
+
+Alternative rejected: silently move the Token to a header or body. The current provider contract does not establish those transports and changing them would make the verified integration fail at runtime.
+
+Alternative rejected: treat arbitrary URLs as credential transports. Renderer, Agent, capability, diagnostic, trace, Workspace, Project, Task, portable-reference, and cross-node surfaces remain forbidden, as do caller-controlled endpoints and redirects.
+
 ### Separate local deletion from provider revocation
 
 This change guarantees atomic local deletion and reports secure-store outcomes. Provider logout/revocation attempts and their remote confirmation belong to the connector that understands the provider contract.
@@ -49,6 +57,7 @@ This change guarantees atomic local deletion and reports secure-store outcomes. 
 - **[OS secure-storage guarantees differ]** → Define an approved guarantee per supported OS and fail closed where it cannot be met.
 - **[Generated composition currently shares one Host object]** → Introduce generic per-entry Host binding and architecture tests; do not special-case OpenContent.
 - **[Secrets may survive in third-party error text]** → Register active/recent values with canonical redaction and use canary tests across logs/traces.
+- **[Provider-mandated query Tokens may be observed outside SciForge]** → Limit the exception to pinned HTTPS requests inside the Connector, disable redirects/referrers, discard raw network/provider diagnostics, and keep production readiness separately gated.
 - **[Provider policy and Principal assurance diverge]** → Make the accepted assurances an explicit trusted policy and require the connector to prove the external account independently.
 
 ## Migration Plan
@@ -58,3 +67,19 @@ This change guarantees atomic local deletion and reports secure-store outcomes. 
 3. Harden and verify supported OS behavior without insecure fallback or a second store.
 4. Integrate the canonical redaction registry.
 5. Enable no provider connection until its connector separately satisfies identity and authentication Gates.
+
+## Platform Acceptance Evidence
+
+Status as of 2026-08-17:
+
+| Platform/path | Evidence | Status |
+| --- | --- | --- |
+| macOS arm64 source application | Real Electron `safeStorage`; four isolated launches verify store, restart/use, rotate, delete, and restart-absent | Verified |
+| macOS arm64 packaged `.app` | Real packaged Electron application (`app.isPackaged === true`); the same four-launch lifecycle | Verified |
+| macOS installed through a distribution image | Not exercised; no DMG or `/Applications` installation is required for this source checkpoint | Pending |
+| Windows source and installed package | Requires a Windows execution node and its OS credential service | Pending |
+| Linux source and installed package with `gnome_libsecret`, `kwallet`, `kwallet5`, or `kwallet6` | Requires a Linux execution node with an approved backend | Pending |
+| Linux `basic_text` or unknown backend | Policy test proves `secure_storage_insecure`; provider credential operations fail closed | Verified by automated policy test |
+| Unsupported platform or unavailable OS encryption | Policy test proves unavailable state; provider credential operations fail closed without plaintext fallback | Verified by automated policy test |
+
+Tasks 4.1 and 4.2 remain incomplete until every supported operating system and the installed-distribution paths above have real execution evidence. Packaged artifacts under `dist/` are verification-only, ignored by Git, and are not release deliverables.

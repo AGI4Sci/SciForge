@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { sanitizeTraceTextChunks } from '@sciforge/full-trace'
+import { sanitizeTraceTextChunks, sanitizeTraceValue } from '@sciforge/full-trace'
 
 import { ManagedSecretRedactionRegistry } from './managed-secret-redaction'
+import { redactExactSensitiveValues } from '../shared/secret-redaction'
 
 describe('managed secret redaction registry', () => {
   it('keeps active and recently replaced values, then retires them on a bounded clock', () => {
@@ -43,5 +44,24 @@ describe('managed secret redaction registry', () => {
     ], { sensitiveValues: registry.values() })).toEqual([
       'provider failure echoed [REDACTED]'
     ])
+  })
+
+  it('removes one opaque canary from errors, diagnostics, URLs, and serialized trace values', () => {
+    const registry = new ManagedSecretRedactionRegistry()
+    const canary = 'opaque-provider-surface-canary-11d8'
+    registry.activate({ recordId: 'record-surface', secret: canary })
+    const url = `https://opencontent.invalid/download?token=${canary}`
+    const diagnostic = `provider error echoed ${url}`
+    const redactedDiagnostic = redactExactSensitiveValues(diagnostic, registry.values())
+    const redactedTrace = sanitizeTraceValue({
+      error: new Error(diagnostic),
+      diagnostic,
+      url,
+      nested: { token: canary }
+    }, { sensitiveValues: registry.values() })
+
+    expect(redactedDiagnostic).not.toContain(canary)
+    expect(JSON.stringify(redactedTrace)).not.toContain(canary)
+    expect(JSON.stringify(redactedTrace)).toContain('[REDACTED]')
   })
 })

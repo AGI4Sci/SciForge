@@ -52,7 +52,7 @@ _Avoid_: Provider Instance Reference, cross-node credential handle
 
 **Provider Credential**:
 Secret material associated with one Provider Connection and protected for use only by its trusted local integration owner.
-_Avoid_: Provider Connection, Token in URL, shared integration key
+_Avoid_: Provider Connection, Token in public/caller-controlled URL, shared integration key. A verified provider-mandated query Token is permitted only inside the owning main-process Connector's immediate request to a pinned HTTPS target and never becomes a public or durable URL.
 
 **Provider Enrollment**:
 A Human-only interaction that proves control of an existing External Account and creates or replaces the current Principal's node-local Provider Connection. Enrollment UI belongs to the Provider Integration Package while credential use and network transport remain main-process only.

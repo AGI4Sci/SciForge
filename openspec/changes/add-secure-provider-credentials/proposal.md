@@ -9,7 +9,7 @@ SciForge now has one generic owner-scoped `DomainMainPackageSecretStoreHost` bac
 - Bind each credential record to the execution node, Host-asserted Human Principal, Provider Instance, and local connection identity.
 - Separate secret records from non-secret connection metadata and public status.
 - Define atomic replacement, bounded use, deletion, logout/revocation reporting, lifecycle states, and managed secret redaction.
-- Prohibit credentials in renderer state, Agent capability traffic, logs, traces, URLs, Workspace, Project, Task, cross-node messages, plaintext settings, and package-private fallback stores.
+- Prohibit credentials in renderer state, Agent capability traffic, logs, traces, public/caller-controlled/durable URLs, Workspace, Project, Task, cross-node messages, plaintext settings, and package-private fallback stores. Permit only a verified provider-mandated outbound HTTPS query serialized and immediately sent inside the owning Connector's bounded main-process use to a pinned target with redirects disabled.
 
 ## Capabilities
 

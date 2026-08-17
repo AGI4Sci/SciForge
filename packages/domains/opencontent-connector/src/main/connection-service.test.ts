@@ -140,11 +140,25 @@ describe('OpenContent connection service', () => {
       principal,
       assertPrincipalCurrent: () => undefined
     }, async (token) => token.length)).resolves.toBe(18)
+    const otherPrincipal = Object.freeze({ ...principal, subject: 'local-account-b' })
+    await expect(service.status(otherPrincipal)).resolves.toEqual({ state: 'disconnected' })
+    await expect(service.useCurrentToken({
+      principal: otherPrincipal,
+      assertPrincipalCurrent: () => undefined
+    }, async () => 'must not run')).rejects.toMatchObject({
+      code: 'reauthentication_required'
+    })
     await expect(service.unbind({
       principal,
       assertPrincipalCurrent: () => undefined
     })).resolves.toEqual({ state: 'disconnected', remoteRevocation: 'unsupported' })
     await expect(service.status(principal)).resolves.toEqual({ state: 'disconnected' })
+    await expect(service.useCurrentToken({
+      principal,
+      assertPrincipalCurrent: () => undefined
+    }, async () => 'must not run')).rejects.toMatchObject({
+      code: 'reauthentication_required'
+    })
     expect(credentials.values).toEqual(new Map())
   })
 

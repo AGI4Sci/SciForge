@@ -17,8 +17,14 @@ const principal = Object.freeze({
 
 describe('OpenContent Content Space Provider', () => {
   it.each([
+    ['unauthorized', 'unauthorized'],
+    ['reauthentication_required', 'unauthorized'],
+    ['cancelled', 'cancelled'],
     ['rate_limited', 'rate_limited'],
-    ['provider_contract_violation', 'provider_contract_violation']
+    ['provider_contract_violation', 'provider_contract_violation'],
+    ['bounds_exceeded', 'bounds_exceeded'],
+    ['conflict', 'conflict'],
+    ['outcome_unknown', 'outcome_unknown']
   ] as const)('preserves the bounded %s Connector outcome', async (connectorCode, contentCode) => {
     const provider = createOpenContentContentSpaceProvider({
       providerInstanceRef: 'opencontent-edoc2-demo',
@@ -34,16 +40,18 @@ describe('OpenContent Content Space Provider', () => {
       }
     })
 
-    await expect(provider.listContainers({
+    const error = await provider.listContainers({
       context: {
         principal,
         providerInstanceRef: 'opencontent-edoc2-demo',
         deadlineAt: new Date(Date.now() + 10_000).toISOString()
       },
       page: { limit: 20 }
-    })).rejects.toMatchObject({
+    }).catch((caught: unknown) => caught)
+    expect(error).toMatchObject({
       detail: { code: contentCode }
     })
+    expect(JSON.stringify(error)).not.toContain('secret provider diagnostic')
   })
 
   it('maps the personal root and Team roots to stable scoped containers', async () => {

@@ -87,6 +87,42 @@ describe('ContentSpacePanel', () => {
     expect(mounted.container.textContent).toContain('Select a Provider Instance.')
   })
 
+  it('admits trusted development-profile operations without presenting them as production-ready', async () => {
+    const mounted = await mountPanel(panelClient({
+      describeCapabilities: async () => ok({
+        items: [
+          {
+            operation: 'list-containers',
+            readiness: 'poc_only',
+            reasonCode: 'verification_profile_required'
+          },
+          {
+            operation: 'list-entries',
+            readiness: 'poc_only',
+            reasonCode: 'verification_profile_required'
+          }
+        ]
+      }),
+      listContainers: async () => ok({
+        providerInstanceRef: providerOne,
+        items: [{
+          reference: rootReference,
+          scope: 'personal',
+          label: 'Development library'
+        }]
+      })
+    }))
+
+    await selectProvider(mounted.container, providerOne)
+    await settleReact()
+
+    const readiness = mounted.container.querySelector(
+      '[aria-label="Content Space Provider readiness"]'
+    )
+    expect(readiness?.textContent).toContain('list-containers: ready (development)')
+    expect(buttonContainingText(mounted.container, 'Development library').disabled).toBe(false)
+  })
+
   it('finishes independent Provider discovery while opening an initial resource', async () => {
     const discovered = deferred<Awaited<ReturnType<
       ContentSpaceCapabilityClient['listProviderInstances']

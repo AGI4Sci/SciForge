@@ -1,4 +1,5 @@
 import type { DomainMainHost } from '@sciforge/domain-sdk/host'
+import { defineDomainMainInternalServiceDescriptor } from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
 import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 import type { z } from 'zod'
@@ -22,6 +23,8 @@ import {
 import {
   OPENCONTENT_CAPABILITY_FACTORY_CONTRIBUTION,
   OPENCONTENT_CONNECTOR_DOMAIN_MODULE_ID,
+  OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRACT,
+  OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRIBUTION,
   OPENCONTENT_PROVIDER_INSTANCE_CONTRACT,
   OPENCONTENT_PROVIDER_INSTANCE_CONTRIBUTION,
   domainPackageDefinition
@@ -34,6 +37,13 @@ import { createOpenContentClient } from './opencontent-client.js'
 
 const OPENCONTENT_DEVELOPMENT_BASE_URL = 'https://test1.edoc2.com'
 const OPENCONTENT_ADAPTER_MODULE_ID = 'sciforge.opencontent-content-space-provider'
+
+const internalServiceDescriptor = defineDomainMainInternalServiceDescriptor({
+  location: 'main.internal-service-descriptor',
+  serviceId: OPENCONTENT_CONTENT_SPACE_SERVICE_ID,
+  contractVersion: OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION,
+  allowedConsumerModuleIds: [OPENCONTENT_ADAPTER_MODULE_ID]
+})
 
 const instance = defineProviderInstanceDirectoryEntry({
   contractVersion: PROVIDER_FACTORY_CONTRACT_VERSION,
@@ -82,7 +92,10 @@ export type OpenContentCapabilityFactory<CapabilityDefinition = unknown> = Reado
   createDefinitions(): readonly CapabilityDefinition[]
 }>
 
-type OpenContentMainContribution = typeof instance | OpenContentCapabilityFactory
+type OpenContentMainContribution =
+  | typeof instance
+  | typeof internalServiceDescriptor
+  | OpenContentCapabilityFactory
 
 export function createDomainMainEntry(
   host: DomainMainHost
@@ -191,6 +204,11 @@ export function createDomainMainEntry(
         ...OPENCONTENT_PROVIDER_INSTANCE_CONTRIBUTION,
         contract: OPENCONTENT_PROVIDER_INSTANCE_CONTRACT,
         value: instance
+      },
+      {
+        ...OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRIBUTION,
+        contract: OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRACT,
+        value: internalServiceDescriptor
       }
     ]
   }

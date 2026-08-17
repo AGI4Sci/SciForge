@@ -625,7 +625,11 @@ export function ContentSpacePanel({
             className="mt-2 grid grid-cols-2 gap-x-2 text-[11px] text-slate-500">
             {displayedCapabilities.map((state) => (
               <li key={state.operation}>
-                {state.operation}: {state.readiness === 'production_ready' ? 'ready' : 'unavailable'}
+                {state.operation}: {state.readiness === 'production_ready'
+                  ? 'ready'
+                  : state.readiness === 'poc_only'
+                    ? 'ready (development)'
+                    : 'unavailable'}
               </li>
             ))}
           </ul>
@@ -789,7 +793,7 @@ function isOperationReady(
   operation: ContentSpaceOperation
 ): boolean {
   return capabilities.some((state) =>
-    state.operation === operation && state.readiness === 'production_ready'
+    state.operation === operation && state.readiness !== 'blocked_by_contract'
   )
 }
 

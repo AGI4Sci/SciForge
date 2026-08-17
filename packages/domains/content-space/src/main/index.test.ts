@@ -16,6 +16,7 @@ import {
   defineProviderInstanceDirectoryEntry
 } from '@sciforge/domain-sdk/provider-composition'
 import { DomainExternalNavigationError } from '@sciforge/domain-sdk/external-navigation'
+import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 
 import {
   CONTENT_CONTAINER_RESOURCE_KIND,
@@ -40,7 +41,7 @@ const FILE = Object.freeze({
   fileId: 'file-one'
 })
 const exactSignedUrl = 'https://provider.invalid/portal?sig=a%2Bb&token=opaque%2Fvalue'
-const principal = Object.freeze({
+const principal: PrincipalSnapshot = Object.freeze({
   authority: 'sciforge.identity-access',
   subject: '123e4567-e89b-42d3-a456-426614174000',
   assurance: 'local-selection' as const,
@@ -324,6 +325,80 @@ describe('Content Space main composition', () => {
       maxBytes: 16 * 1024 * 1024
     }))
   })
+
+  it('rejects raw GUIDs and Agent resources outside the exact Principal, caller, Workspace, and kind', async () => {
+    const listEntries = vi.fn(async ({ parent }: Parameters<ContentSpaceProvider['listEntries']>[0]) => ({
+      parent,
+      items: []
+    }))
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture({ listEntries })))
+    )
+    let registration: any
+    await definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot).handler({
+      root: { providerInstanceRef: PROVIDER_INSTANCE_REF, containerId: 'root' }
+    }, capabilityContext(undefined, 'agent', {
+      callerId: 'agent:thread-1',
+      workspaceId: '/workspace-a',
+      issueResource: (value) => {
+        registration = value
+        return {
+          token: `cap_${'b'.repeat(32)}`,
+          semanticRevision: 'live:root',
+          expiresAt: '2026-08-17T17:00:00.000Z'
+        }
+      }
+    }))
+
+    const validResource = Object.freeze({
+      resourceId: registration.resourceId as string,
+      resourceKind: CONTENT_CONTAINER_RESOURCE_KIND,
+      workspaceId: '/workspace-a'
+    })
+    const attempts = [
+      capabilityContext(undefined, 'agent', {
+        callerId: 'agent:thread-1',
+        workspaceId: '/workspace-a',
+        resource: { ...validResource, resourceId: 'raw-team-folder-guid' }
+      }),
+      capabilityContext(undefined, 'agent', {
+        callerId: 'agent:thread-2',
+        workspaceId: '/workspace-a',
+        resource: validResource
+      }),
+      capabilityContext(undefined, 'agent', {
+        callerId: 'agent:thread-1',
+        principal: { ...principal, subject: '123e4567-e89b-42d3-a456-426614174001' },
+        workspaceId: '/workspace-a',
+        resource: validResource
+      }),
+      capabilityContext(undefined, 'agent', {
+        callerId: 'agent:thread-1',
+        workspaceId: '/workspace-b',
+        resource: validResource
+      }),
+      capabilityContext(undefined, 'agent', {
+        callerId: 'agent:thread-1',
+        workspaceId: '/workspace-a',
+        resource: { ...validResource, resourceKind: 'content-space.file' }
+      })
+    ]
+    const list = definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.agentListEntries)
+    for (const context of attempts) {
+      await expect(list.handler({ page: { limit: 20 } }, context)).resolves.toMatchObject({
+        output: { ok: false, error: { code: 'unauthorized' } }
+      })
+    }
+    expect(listEntries).not.toHaveBeenCalled()
+
+    await expect(list.handler({ page: { limit: 20 } }, capabilityContext(undefined, 'agent', {
+      callerId: 'agent:thread-1',
+      workspaceId: '/workspace-a',
+      resource: validResource
+    }))).resolves.toMatchObject({ output: { ok: true } })
+    expect(listEntries).toHaveBeenCalledTimes(1)
+  })
 })
 
 function mainHost(overrides: Partial<DomainMainHost> = {}): DomainMainHost {
@@ -364,6 +439,8 @@ function capabilityContext(
   assertPrincipalCurrent: (() => void) | undefined = () => undefined,
   audience: 'ui' | 'agent' | 'system' = 'ui',
   options: Readonly<{
+    callerId?: string
+    principal?: typeof principal
     workspaceId?: string
     resource?: CapabilityContext['resource']
     issueResource?: CapabilityContext['issueResource']
@@ -372,8 +449,8 @@ function capabilityContext(
   return Object.freeze({
     caller: Object.freeze({
       audience,
-      callerId: 'renderer:test',
-      principal,
+      callerId: options.callerId ?? 'renderer:test',
+      principal: options.principal ?? principal,
       ...(options.workspaceId ? { workspaceId: options.workspaceId } : {})
     }),
     invocationId: 'invocation_content_space_main_0001',

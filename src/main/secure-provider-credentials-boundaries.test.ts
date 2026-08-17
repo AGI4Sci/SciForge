@@ -60,12 +60,13 @@ describe('secure provider credential architecture', () => {
     expect(providerIpc.map(({ path }) => path)).toEqual([])
   })
 
-  it('allows the provider facade only in the SDK, canonical Host, and owning connector main', () => {
+  it('allows the provider facade only in the SDK, canonical Host, acceptance driver, and owning connector main', () => {
     const users = productionSources()
       .filter(({ source }) => /providerCredentials|DomainMainProviderCredential/u.test(source))
       .map(({ path }) => path)
     expect(users).toEqual([
       'src/main/domain-package-storage.ts',
+      'src/main/provider-credential-acceptance.ts',
       'packages/domains/opencontent-connector/src/main/connection-service.ts',
       'packages/domains/opencontent-connector/src/main/index.ts',
       'packages/domain-sdk/src/package-storage.ts'
@@ -81,5 +82,28 @@ describe('secure provider credential architecture', () => {
     expect(collaboration).toContain('packageSecrets.write')
     expect(collaboration).not.toContain('providerCredentials')
     expect(collaboration).not.toContain('safeStorage')
+  })
+
+  it('keeps query Tokens in the Connector client and out of public URL and serialization surfaces', () => {
+    const sources = productionSources()
+    const queryTokenUsers = sources
+      .filter(({ source }) => /query:\s*\{[^}]*\btoken\b/su.test(source))
+      .map(({ path }) => path)
+    expect(queryTokenUsers).toEqual([
+      'packages/domains/opencontent-connector/src/main/opencontent-client.ts'
+    ])
+
+    const forbiddenSurfaceUsers = sources.filter(({ path, source }) => {
+      const forbiddenSurface = path.startsWith('src/preload/') ||
+        path.startsWith('src/renderer/') ||
+        path.includes('/agent-runtime/') ||
+        path.includes('/portable-resource') ||
+        path.includes('/workspace-host')
+      return forbiddenSurface && (
+        /openContentAuthenticatedSession|providerCredentials/u.test(source) ||
+        /query:\s*\{[^}]*\btoken\b/su.test(source)
+      )
+    })
+    expect(forbiddenSurfaceUsers.map(({ path }) => path)).toEqual([])
   })
 })

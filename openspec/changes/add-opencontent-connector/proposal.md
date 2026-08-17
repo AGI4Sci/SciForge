@@ -9,9 +9,10 @@ Content Space V1 is provider-neutral and cannot authenticate or speak OpenConten
 - Bind at most one node-local Provider Connection to each `(current Human Principal, Provider Instance)`; the executing node owner's current connection is always authoritative and cannot be supplied by a requester, Task, prompt, or portable reference.
 - Accept an existing username/password only for the bind transaction, validate the resulting Token with OpenContent, persist only the encrypted Token, and never persist or trace the password.
 - Make the Connector the sole owner of OpenContent endpoint policy, authentication/session lifecycle, pinned schemas, redaction, and canonical two-stage transfer transport.
+- Permit the Token in a private outbound HTTPS query only for OpenContent operations whose verified contract requires it; construct and immediately send the request inside bounded credential use to pinned targets with redirects disabled, without exposing or persisting the credential-bearing URL.
 - Publish only a non-callable service descriptor and register the callable implementation through a generic Host-mediated owner-scoped internal-service contract. Only the separately composed OpenContent Content Space adapter receives its token-free facade.
 - Contribute the reviewed OpenContent Provider Instance as a non-secret directory entry. The shared demonstration endpoint is admitted only by a trusted development profile; caller input cannot select an endpoint or promote readiness.
-- Define no Document port/provider, Shared Documents behavior, ContentSpaceProvider factory, portable resolver, raw public client, or credential-bearing renderer/Agent capability.
+- Define no Document port/provider, Shared Documents behavior, ContentSpaceProvider factory, portable resolver, raw public client, credential-bearing renderer/Agent capability, or public/caller-controlled Token URL.
 
 ## Capabilities
 

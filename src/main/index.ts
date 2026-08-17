@@ -154,7 +154,6 @@ import {
 import { DomainFileTransferError } from '@sciforge/domain-sdk/file-transfer'
 import { HostFileTransferService } from './modules/file-transfer'
 import { HostExternalNavigationService } from './modules/external-navigation'
-import { HostInternalServiceRegistry } from './modules/internal-services'
 import {
   createPortableResourceReferenceService,
   type PortableResourceReferenceService
@@ -181,6 +180,7 @@ import {
   type CapabilityAgentToolSurface
 } from './capabilities/agent-tools'
 import { installElectronDomainNativeVisualSmoke } from './electron-domain-smoke'
+import { installProviderCredentialAcceptance } from './provider-credential-acceptance'
 import { VisualSourceRegistry } from './runtime/agent-runtime/visual-source-registry'
 import {
   installCapabilityResourceContentProtocol,
@@ -1124,7 +1124,6 @@ app
       currentPrincipal: () => principalContextForDomainServices?.current(),
       secretRedaction: managedSecretRedaction
     })
-    const hostInternalServices = new HostInternalServiceRegistry()
     const isPrincipalCurrentForDomainServices = (principal: Parameters<
       typeof samePrincipalSnapshot
     >[0]): boolean => samePrincipalSnapshot(
@@ -1182,7 +1181,6 @@ app
         })
       },
       packageStorageFor: (owner) => domainPackageStorage.forOwner(owner),
-      internalServicesFor: (owner) => hostInternalServices.forOwner(owner),
       fileTransfersFor: (owner) => hostFileTransfers.forOwner(
         owner.moduleId,
         () => capabilityBrokerForDomainServices?.currentInvocation()
@@ -1311,6 +1309,7 @@ app
       createApplicationCapabilityRegistry(catalog, appCapabilityDependencies),
       { resolveCurrentPrincipalContext: () => principalContext.snapshot() }
     )
+    installProviderCredentialAcceptance(domainPackageStorage)
     capabilityBrokerForDomainServices = capabilityBroker
     portableResourceReferences = createPortableResourceReferenceService(
       capabilityBroker,

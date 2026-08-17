@@ -32,6 +32,14 @@
       "providerInstanceRef": "opencontent-edoc2-demo",
       "providerKind": "opencontent",
       "displayName": "OpenContent (development)"
+    },
+    "opencontent-connector.content-space-service": {
+      "location": "main.internal-service-descriptor",
+      "serviceId": "opencontent.content-space",
+      "contractVersion": "1.0.0",
+      "allowedConsumerModuleIds": [
+        "sciforge.opencontent-content-space-provider"
+      ]
     }
   },
   "entrypoints": [
@@ -46,6 +54,12 @@
         },
         {
           "id": "opencontent-connector.provider-instance",
+          "kind": "main.extension",
+          "version": "1.0.0",
+          "priority": 280
+        },
+        {
+          "id": "opencontent-connector.content-space-service",
           "kind": "main.extension",
           "version": "1.0.0",
           "priority": 280

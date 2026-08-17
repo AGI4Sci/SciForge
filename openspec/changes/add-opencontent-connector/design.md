@@ -47,6 +47,8 @@ The Connector publishes a non-callable service descriptor through standard main 
 
 Every admitted API validates HTTP status, OpenContent business result, and an exact bounded schema. Personal and Team roots normalize numeric IDs internally; the adapter receives stable folder identity facts and prefers `folderGuid` as portable container identity. Upload/download region URLs never reach renderer or Agent. Create/upload collision maps to conflict. Timeout, cancellation, session supersession, or an ambiguous second-stage receipt maps to `outcome_unknown`; writes are never retried automatically.
 
+The verified OpenContent contract places Tokens in the query for Token validation and selected metadata/transfer requests. Those URLs are Connector-private ephemeral transport values: they are constructed only during bounded credential use, restricted to the pinned main or validated region HTTPS origin and exact request path, sent with redirects rejected, ambient credentials omitted, and referrer disabled, and discarded without entering errors, logs, traces, diagnostics, renderer, Agent, capability output, or cross-node serialization. Header/body authentication SHALL NOT be substituted without a separately verified provider contract.
+
 ## Risks / Trade-offs
 
 - A new login may supersede another OpenContent session. The Connector treats it as explicit Human enrollment and requires reauthentication when the saved Token becomes invalid.

@@ -1,8 +1,14 @@
 import type {
+  DomainMainInternalServiceDescriptor,
   DomainMainInternalServiceHost,
   DomainMainInternalServiceRegistration,
   DomainRuntimeContributionOwner
 } from '@sciforge/domain-sdk/host'
+import {
+  MAIN_EXTENSION_CONTRIBUTION_KIND,
+  domainMainInternalServiceDescriptorSchema
+} from '@sciforge/domain-sdk/host'
+import type { InstalledMainDomainContribution } from '@sciforge/domain-sdk/main'
 
 type RegisteredService = Readonly<{
   provider: DomainRuntimeContributionOwner
@@ -11,9 +17,34 @@ type RegisteredService = Readonly<{
   service: object
 }>
 
+type DeclaredService = Readonly<{
+  provider: DomainRuntimeContributionOwner
+  descriptor: DomainMainInternalServiceDescriptor
+}>
+
 export class HostInternalServiceRegistry {
+  readonly #declarations = new Map<string, DeclaredService>()
   readonly #services = new Map<string, RegisteredService>()
   readonly #hosts = new Map<string, DomainMainInternalServiceHost>()
+
+  constructor(contributions: readonly InstalledMainDomainContribution[] = []) {
+    for (const contribution of contributions) {
+      if (contribution.declaration.kind !== MAIN_EXTENSION_CONTRIBUTION_KIND) continue
+      const parsed = domainMainInternalServiceDescriptorSchema.safeParse(contribution.contract)
+      if (!parsed.success) continue
+      const descriptor = Object.freeze({
+        ...parsed.data,
+        allowedConsumerModuleIds: Object.freeze([...parsed.data.allowedConsumerModuleIds].sort())
+      })
+      if (this.#declarations.has(descriptor.serviceId)) {
+        throw new Error(`Internal service ${descriptor.serviceId} descriptor is duplicated.`)
+      }
+      this.#declarations.set(descriptor.serviceId, Object.freeze({
+        provider: parseOwner(contribution.owner),
+        descriptor
+      }))
+    }
+  }
 
   forOwner(rawOwner: DomainRuntimeContributionOwner): DomainMainInternalServiceHost {
     const owner = parseOwner(rawOwner)
@@ -24,6 +55,22 @@ export class HostInternalServiceRegistry {
       register: <Service extends object>(rawRegistration:
       DomainMainInternalServiceRegistration<Service>): void => {
         const registration = parseRegistration(rawRegistration)
+        const declaration = this.#declarations.get(registration.serviceId)
+        if (!declaration) {
+          throw new Error(`Internal service ${registration.serviceId} has no declared descriptor.`)
+        }
+        if (!sameOwner(declaration.provider, owner)) {
+          throw new Error(`Package ${owner.moduleId} does not own internal service ${registration.serviceId}.`)
+        }
+        if (declaration.descriptor.contractVersion !== registration.contractVersion) {
+          throw new Error(`Internal service ${registration.serviceId} implementation has an incompatible contract version.`)
+        }
+        if (!sameStrings(
+          declaration.descriptor.allowedConsumerModuleIds,
+          registration.allowedConsumerModuleIds
+        )) {
+          throw new Error(`Internal service ${registration.serviceId} consumer policy does not match its descriptor.`)
+        }
         if (this.#services.has(registration.serviceId)) {
           throw new Error(`Internal service ${registration.serviceId} is already registered.`)
         }
@@ -50,6 +97,14 @@ export class HostInternalServiceRegistry {
     })
     this.#hosts.set(ownerKey, host)
     return host
+  }
+
+  assertComplete(): void {
+    for (const serviceId of this.#declarations.keys()) {
+      if (!this.#services.has(serviceId)) {
+        throw new Error(`Internal service ${serviceId} has no registered implementation.`)
+      }
+    }
   }
 }
 
@@ -91,6 +146,17 @@ function parseOwner(owner: DomainRuntimeContributionOwner): DomainRuntimeContrib
     moduleId: parseCanonicalId(owner.moduleId, 'module ID'),
     moduleVersion: parseVersion(owner.moduleVersion)
   })
+}
+
+function sameOwner(
+  left: DomainRuntimeContributionOwner,
+  right: DomainRuntimeContributionOwner
+): boolean {
+  return left.moduleId === right.moduleId && left.moduleVersion === right.moduleVersion
+}
+
+function sameStrings(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
 function parseCanonicalId(value: string, label: string): string {

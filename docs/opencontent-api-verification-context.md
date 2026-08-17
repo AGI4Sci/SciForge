@@ -250,6 +250,24 @@ DocList/GetFileInfoById
 - 两阶段上传的第一阶段一旦成功，后续 schema、region 或传输结果不明确均必须返回 `outcome_unknown`，不得自动重试；
 - 本地浏览器会话、Token、region 数据、控制台记录和临时测试副本已清理；仓库只保留不含凭据的合同事实。
 
+### 4.8 Change 1 本机长期使用验收（2026-08-18）
+
+本轮只使用 `test3`，从 SciForge 源码 Electron 应用完成现有账号绑定，并验证应用重启后仍从 Host 安全存储恢复同一连接。随后通过正式 Content Space UI 完成个人库和 Team `sciforge test` 浏览，在既有 Change 1 目录下创建并按授权保留：
+
+```text
+验收文件夹：sciforge-local-acceptance-20260818-0144
+验收文件：LICENSE
+验收文件大小：1096 字节
+下载 SHA-256：ba09a097dc4b6e645061b4882038aae16b5f20d2f898fa86cf0cfee4ed18ea27
+```
+
+真实验收发现并修正了两个先前被 mock 掩盖的严格合同差异：
+
+- `GetLoginRsaPublicKey` 返回 `message` 和 `totalCount`，不是通用业务 envelope 的 `msg`；登录公钥响应现使用独立 strict schema，旧 `msg` 形状继续 fail closed；
+- `GetFileByIdOrGuid` 的详情字段为 `fileId`、`fileName`、`fileSize`，不是目录 listing DTO 的 `id`、`name`、`size`；详情读取现使用独立 schema 并在 Connector 内映射为规范化文件结果。
+
+修正后再次验证：文件详情可观察，下载经新目标文件完成，1096 字节结果与源文件 SHA-256 完全一致；同名 `LICENSE` 再次 upload-new 返回 typed `conflict`，没有覆盖或自动改名。第一次上传在文件已实际提交后因旧详情 schema 返回 `outcome_unknown`，SciForge 未自动重试，而是先重新 listing 确认 Provider 状态，符合不确定写入策略。用于本地散列验证的临时下载副本已清理；远端验收资源按“不做破坏性清理”约束保留。
+
 ## 5. 个人库和个人共享验证
 
 ### 5.1 个人库

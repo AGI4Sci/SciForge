@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   domainArtifactEventScope,
+  defineDomainMainInternalServiceDescriptor,
   defineDomainMainSystemCapabilityGrant,
   domainMainRuntimeLifecycleContractSchema,
   isDomainArtifactConsumer,
@@ -18,6 +19,29 @@ import {
 } from './host.js'
 
 describe('domain host contracts', () => {
+  it('defines strict non-callable internal service descriptors', () => {
+    assert.deepEqual(defineDomainMainInternalServiceDescriptor({
+      location: 'main.internal-service-descriptor',
+      serviceId: 'opencontent.content-space',
+      contractVersion: '1.0.0',
+      allowedConsumerModuleIds: ['sciforge.opencontent-content-space-provider']
+    }), {
+      location: 'main.internal-service-descriptor',
+      serviceId: 'opencontent.content-space',
+      contractVersion: '1.0.0',
+      allowedConsumerModuleIds: ['sciforge.opencontent-content-space-provider']
+    })
+    assert.throws(() => defineDomainMainInternalServiceDescriptor({
+      location: 'main.internal-service-descriptor',
+      serviceId: 'opencontent.content-space',
+      contractVersion: '1.0.0',
+      allowedConsumerModuleIds: [
+        'sciforge.opencontent-content-space-provider',
+        'sciforge.opencontent-content-space-provider'
+      ]
+    }))
+  })
+
   it('validates runtime lifecycle and artifact consumer contributions structurally', () => {
     assert.equal(isDomainMainRuntimeLifecycleContribution({
       activate: () => undefined

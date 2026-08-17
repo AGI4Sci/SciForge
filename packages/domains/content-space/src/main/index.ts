@@ -7,7 +7,10 @@ import type {
   DomainMainRuntimeLifecycleContribution
 } from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
-import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
+import {
+  samePrincipalSnapshot,
+  type PrincipalSnapshot
+} from '@sciforge/domain-sdk/principal'
 import type { PortableResourceAuthorityResolver } from '@sciforge/domain-sdk/portable-resource-references'
 import { DomainExternalNavigationError } from '@sciforge/domain-sdk/external-navigation'
 
@@ -261,6 +264,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
     root: ContentContainerReference
     reference: ContentEntryReference
     callerId: string
+    principal: PrincipalSnapshot
     workspaceId?: string
   }>
   const agentResources = new Map<string, AgentResourceRecord>()
@@ -297,7 +301,12 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
     if (
       context.caller.audience !== 'agent' || !record ||
       record.callerId !== context.caller.callerId ||
+      !samePrincipalSnapshot(record.principal, context.caller.principal) ||
       record.workspaceId !== context.caller.workspaceId ||
+      context.resource?.resourceKind !== (kind === 'container'
+        ? CONTENT_CONTAINER_RESOURCE_KIND
+        : CONTENT_FILE_RESOURCE_KIND) ||
+      context.resource?.workspaceId !== record.workspaceId ||
       (kind === 'container' ? !('containerId' in record.reference) : !('fileId' in record.reference))
     ) {
       throw operationError('unauthorized', 'The Agent Content Space scope is unavailable.')
@@ -321,6 +330,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       root,
       reference,
       callerId: context.caller.callerId,
+      principal: context.caller.principal,
       ...(context.caller.workspaceId ? { workspaceId: context.caller.workspaceId } : {})
     })
     agentResources.set(resourceId, record)
@@ -339,7 +349,9 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         observe: async (caller, observationContext) => {
           if (
             caller.audience !== 'agent' || caller.callerId !== record.callerId ||
-            caller.workspaceId !== record.workspaceId || !caller.principal
+            caller.workspaceId !== record.workspaceId ||
+            !caller.principal ||
+            !samePrincipalSnapshot(caller.principal, record.principal)
           ) {
             throw operationError('unauthorized', 'The Agent Content Space scope changed.')
           }
