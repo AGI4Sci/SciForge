@@ -1,6 +1,10 @@
 import { appendFile, mkdir, readdir, stat, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import { redactSecrets, redactSecretText } from '../shared/secret-redaction'
+import {
+  redactExactSensitiveValues,
+  redactSecrets,
+  redactSecretText
+} from '../shared/secret-redaction'
 
 export type LogLevel = 'error' | 'warn' | 'info'
 export type ManagedLogFilePrefix = 'sciforge' | 'sciforge-runtime' | 'kun'
@@ -12,9 +16,15 @@ type LoggerConfig = {
   enabled: boolean
   /** Delete log files older than this many days. */
   retentionDays: number
+  sensitiveValues: () => readonly string[]
 }
 
-let cfg: LoggerConfig = { dir: '', enabled: true, retentionDays: 2 }
+let cfg: LoggerConfig = {
+  dir: '',
+  enabled: true,
+  retentionDays: 2,
+  sensitiveValues: () => []
+}
 const MANAGED_LOG_FILE_PREFIXES = ['sciforge', 'sciforge-runtime', 'kun'] as const
 
 export function configureLogger(config: Partial<LoggerConfig>): void {
@@ -62,7 +72,10 @@ export async function appendManagedLogLine(
 ): Promise<void> {
   if (!cfg.enabled || !cfg.dir) return
 
-  const redactedLine = redactSecretText(line)
+  const redactedLine = redactExactSensitiveValues(
+    redactSecretText(line),
+    safeSensitiveValues()
+  )
   const text = redactedLine.endsWith('\n') ? redactedLine : `${redactedLine}\n`
 
   try {
@@ -72,6 +85,14 @@ export async function appendManagedLogLine(
     await pruneOldLogs()
   } catch {
     /* never crash the app because of logging */
+  }
+}
+
+function safeSensitiveValues(): readonly string[] {
+  try {
+    return cfg.sensitiveValues()
+  } catch {
+    return []
   }
 }
 

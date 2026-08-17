@@ -29,4 +29,23 @@ describe('logger', () => {
     expect(content).not.toContain('local-webhook-secret')
     expect(content).toContain('<redacted>')
   })
+
+  it('redacts an opaque active or recently retired credential by exact value', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'sciforge-managed-secret-logs-'))
+    tempDirs.push(dir)
+    const canary = 'opaque-provider-canary-without-a-secret-looking-prefix'
+    configureLogger({
+      dir,
+      enabled: true,
+      retentionDays: 7,
+      sensitiveValues: () => [canary]
+    })
+
+    await appendManagedLogLine('sciforge', `provider failed with ${canary}`)
+
+    const files = await readdir(dir)
+    const content = await readFile(join(dir, files[0]), 'utf8')
+    expect(content).not.toContain(canary)
+    expect(content).toContain('<redacted>')
+  })
 })

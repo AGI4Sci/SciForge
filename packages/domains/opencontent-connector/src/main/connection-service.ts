@@ -85,6 +85,10 @@ export function createOpenContentConnectionService(options: Readonly<{
     .parse(options.providerInstanceRef)
   const createConnectionId = options.createConnectionId ?? randomUUID
   const now = options.now ?? (() => new Date())
+  const credentialAccess = (connectionId: string) => Object.freeze({
+    binding: Object.freeze({ providerInstanceRef, connectionId }),
+    acceptedPrincipalAssurances: ['local-selection'] as const
+  })
   let operationTail = Promise.resolve()
   const serialize = async <T>(operation: () => Promise<T>): Promise<T> => {
     const previous = operationTail
@@ -102,10 +106,9 @@ export function createOpenContentConnectionService(options: Readonly<{
     const snapshot = await readSettings(options.settings)
     const connection = findConnection(snapshot.connections, principal, providerInstanceRef)
     if (!connection) return Object.freeze({ state: 'disconnected' })
-    const binding = { providerInstanceRef, connectionId: connection.connectionId }
-    const hasCredential = await options.credentials.has(binding)
+    const credential = await options.credentials.status(credentialAccess(connection.connectionId))
     return Object.freeze(openContentConnectionStatusSchema.parse({
-      state: hasCredential ? connection.state : 'reauthentication_required',
+      state: credential.state === 'available' ? connection.state : 'reauthentication_required',
       providerInstanceRef,
       externalAccount: connection.externalAccount
     }))
@@ -127,32 +130,36 @@ export function createOpenContentConnectionService(options: Readonly<{
     }), snapshot.revision)
   })
 
+  const useCurrentToken: OpenContentConnectionService['useCurrentToken'] = async (
+    input,
+    operation
+  ) => {
+    input.assertPrincipalCurrent()
+    const snapshot = await readSettings(options.settings)
+    const connection = findConnection(snapshot.connections, input.principal, providerInstanceRef)
+    if (!connection || connection.state !== 'connected') throw reauthenticationRequired()
+    return options.credentials.use(credentialAccess(connection.connectionId), async (token) => {
+      input.assertPrincipalCurrent()
+      const valid = await options.client.isTokenValid({ token, signal: input.signal })
+      input.assertPrincipalCurrent()
+      if (!valid) throw reauthenticationRequired()
+      return operation(token)
+    }).catch((error: unknown) => {
+      const missingCredential = error instanceof DomainMainProviderCredentialError && (
+        error.code === 'credential_unavailable' ||
+        error.code === 'credential_binding_mismatch'
+      )
+      const invalidProviderSession = error instanceof OpenContentConnectorError &&
+        error.code === 'reauthentication_required'
+      if (!missingCredential && !invalidProviderSession) throw error
+      return markReauthenticationRequired(input.principal, connection.connectionId)
+        .then(() => { throw reauthenticationRequired() })
+    })
+  }
+
   return Object.freeze({
     status,
-    useCurrentToken: async (input, operation) => {
-      input.assertPrincipalCurrent()
-      const snapshot = await readSettings(options.settings)
-      const connection = findConnection(snapshot.connections, input.principal, providerInstanceRef)
-      if (!connection || connection.state !== 'connected') throw reauthenticationRequired()
-      return options.credentials.use({
-        providerInstanceRef,
-        connectionId: connection.connectionId
-      }, async (token) => {
-        input.assertPrincipalCurrent()
-        const valid = await options.client.isTokenValid({ token, signal: input.signal })
-        input.assertPrincipalCurrent()
-        if (!valid) throw reauthenticationRequired()
-        return operation(token)
-      }).catch((error: unknown) => {
-        if (
-          !(error instanceof DomainMainProviderCredentialError) &&
-          !(error instanceof OpenContentConnectorError &&
-            error.code === 'reauthentication_required')
-        ) throw error
-        return markReauthenticationRequired(input.principal, connection.connectionId)
-          .then(() => { throw reauthenticationRequired() })
-      })
-    },
+    useCurrentToken,
     unbind: (input) => serialize(async () => {
       input.assertPrincipalCurrent()
       const snapshot = await readSettings(options.settings)
@@ -160,10 +167,7 @@ export function createOpenContentConnectionService(options: Readonly<{
       if (!connection) {
         return Object.freeze({ state: 'disconnected' as const, remoteRevocation: 'unsupported' as const })
       }
-      await options.credentials.remove({
-        providerInstanceRef,
-        connectionId: connection.connectionId
-      })
+      await options.credentials.remove(credentialAccess(connection.connectionId))
       input.assertPrincipalCurrent()
       const next = connectionSettingsSchema.parse({
         version: 1,
@@ -184,8 +188,8 @@ export function createOpenContentConnectionService(options: Readonly<{
       })
       input.assertPrincipalCurrent()
       const connectionId = z.string().trim().min(1).max(256).parse(createConnectionId())
-      const binding = Object.freeze({ providerInstanceRef, connectionId })
-      await options.credentials.write(binding, session.token)
+      const access = credentialAccess(connectionId)
+      await options.credentials.replace(access, session.token)
       let prior: ConnectionRecord | undefined
       try {
         const snapshot = await readSettings(options.settings)
@@ -216,14 +220,11 @@ export function createOpenContentConnectionService(options: Readonly<{
         input.assertPrincipalCurrent()
         await options.settings.write(next, snapshot.revision)
       } catch (error) {
-        await options.credentials.remove(binding).catch(() => undefined)
+        await options.credentials.remove(access).catch(() => undefined)
         throw error
       }
       if (prior) {
-        await options.credentials.remove({
-          providerInstanceRef,
-          connectionId: prior.connectionId
-        })
+        await options.credentials.remove(credentialAccess(prior.connectionId))
       }
       return status(input.principal)
     })

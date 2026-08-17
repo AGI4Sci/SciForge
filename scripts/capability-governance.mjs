@@ -297,8 +297,8 @@ async function loadApplicationCapabilityModel() {
             throw new GovernanceError('Governance must not remove package secrets.')
           },
           providerCredentials: Object.freeze({
-            has: async () => false,
-            write: async () => {
+            status: async () => Object.freeze({ state: 'absent' }),
+            replace: async () => {
               throw new GovernanceError('Governance must not write provider credentials.')
             },
             use: async () => {

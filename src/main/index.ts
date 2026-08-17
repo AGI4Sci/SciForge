@@ -190,7 +190,11 @@ import { startDevBrowserBridgeServer, type DevBrowserBridgeServer } from './dev-
 import { CodexRuntimeService } from './runtime/codex'
 import { APP_USER_MODEL_ID } from '../shared/app-brand'
 import { mainPerformanceMonitor } from './performance-monitor'
-import { createDomainPackageStorageFactory } from './domain-package-storage'
+import {
+  createDomainPackageStorageFactory,
+  createPlatformPackageEncryption
+} from './domain-package-storage'
+import { ManagedSecretRedactionRegistry } from './managed-secret-redaction'
 import {
   projectDomainAgentTurnMessages,
   subscribeDomainAgentTranscriptMessages
@@ -1044,16 +1048,22 @@ app
       console.error('[schedule-mcp] failed to sync config on startup:', error)
     })
     logDir = resolveLogDirectory()
+    const traceSensitiveSettings = new CurrentTraceSensitiveSettings(initial)
+    const managedSecretRedaction = new ManagedSecretRedactionRegistry()
+    const currentSensitiveValues = () => [
+      ...traceSensitiveSettings.values(),
+      ...managedSecretRedaction.values()
+    ]
     configureLogger({
       dir: logDir,
       enabled: initial.log.enabled,
-      retentionDays: initial.log.retentionDays
+      retentionDays: initial.log.retentionDays,
+      sensitiveValues: currentSensitiveValues
     })
     traceStartup('logger configured')
-    const traceSensitiveSettings = new CurrentTraceSensitiveSettings(initial)
     const fullTraceStore = new LocalTraceStore({
       userDataDirectory: app.getPath('userData'),
-      sensitiveValues: traceSensitiveSettings.values
+      sensitiveValues: currentSensitiveValues
     })
     await fullTraceStore.initialize()
     const agentTraceRecorder = new AgentRuntimeTraceRecorder(fullTraceStore)
@@ -1109,9 +1119,10 @@ app
     let portableResourceReferences: PortableResourceReferenceService | null = null
     const domainPackageStorage = createDomainPackageStorageFactory({
       userDataDir: app.getPath('userData'),
-      encryption: safeStorage,
+      encryption: createPlatformPackageEncryption({ safeStorage }),
       getDeviceId: () => hostDeviceId,
-      currentPrincipal: () => principalContextForDomainServices?.current()
+      currentPrincipal: () => principalContextForDomainServices?.current(),
+      secretRedaction: managedSecretRedaction
     })
     const hostInternalServices = new HostInternalServiceRegistry()
     const isPrincipalCurrentForDomainServices = (principal: Parameters<
@@ -1139,7 +1150,7 @@ app
       getDeviceId: () => hostDeviceId,
       textSanitizer: {
         sanitizeText: (value) => sanitizeTraceTextChunks([value], {
-          sensitiveValues: traceSensitiveSettings.values()
+          sensitiveValues: currentSensitiveValues()
         })[0] ?? ''
       },
       openPath: async (targetPath) => {

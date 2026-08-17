@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import { z } from 'zod'
 
 import {
+  domainMainProviderCredentialAccessSchema,
   domainMainProviderCredentialBindingSchema,
   domainMainPackageSecretKeySchema,
   domainMainPackageSettingsSnapshotSchema,
@@ -82,6 +83,26 @@ describe('package-owned storage contracts', () => {
     assert.throws(() => domainMainProviderCredentialBindingSchema.parse({
       providerInstanceRef: 'https://caller.invalid',
       connectionId: 'connection-a'
+    }), z.ZodError)
+    assert.deepEqual(domainMainProviderCredentialAccessSchema.parse({
+      binding: {
+        providerInstanceRef: 'opencontent.demo',
+        connectionId: 'connection-a'
+      },
+      acceptedPrincipalAssurances: ['local-selection']
+    }), {
+      binding: {
+        providerInstanceRef: 'opencontent.demo',
+        connectionId: 'connection-a'
+      },
+      acceptedPrincipalAssurances: ['local-selection']
+    })
+    assert.throws(() => domainMainProviderCredentialAccessSchema.parse({
+      binding: {
+        providerInstanceRef: 'opencontent.demo',
+        connectionId: 'connection-a'
+      },
+      acceptedPrincipalAssurances: []
     }), z.ZodError)
   })
 })

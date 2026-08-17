@@ -77,8 +77,8 @@ const sandboxedDefinitionFixture: SandboxedDomainPackageDefinitionInput = {
 }
 
 describe('domain package packaging contract', () => {
-  it('publishes Host API 1.3 while preserving compatible 1.1 package ranges', () => {
-    assert.equal(DOMAIN_PACKAGE_HOST_API_VERSION, '1.3.0')
+  it('publishes Host API 1.4 while preserving compatible 1.1 package ranges', () => {
+    assert.equal(DOMAIN_PACKAGE_HOST_API_VERSION, '1.4.0')
     assert.equal(isDomainPackageHostApiCompatible({
       minimum: '1.1.0',
       maximumExclusive: '2.0.0'

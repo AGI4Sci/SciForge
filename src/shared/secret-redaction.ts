@@ -53,3 +53,16 @@ export function redactSecretText(value: string): string {
     }), value)
   return redacted.replace(PRIVATE_KEY_BLOCK_PATTERN, REDACTED_SECRET)
 }
+
+export function redactExactSensitiveValues(
+  value: string,
+  sensitiveValues: readonly string[]
+): string {
+  const exact = [...new Set(sensitiveValues.filter((candidate) => (
+    typeof candidate === 'string' && candidate.length > 0 && candidate !== REDACTED_SECRET
+  )))].sort((left, right) => right.length - left.length)
+  return exact.reduce(
+    (current, sensitiveValue) => current.replaceAll(sensitiveValue, REDACTED_SECRET),
+    value
+  )
+}

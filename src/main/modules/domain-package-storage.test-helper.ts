@@ -55,8 +55,8 @@ export function createNonSecretPackageStorageForTest(): (
         },
         remove: async () => undefined,
         providerCredentials: Object.freeze({
-          has: async () => false,
-          write: async () => {
+          status: async () => Object.freeze({ state: 'absent' as const }),
+          replace: async () => {
             throw new Error('Provider credential writes are unavailable in this test host.')
           },
           use: async () => {

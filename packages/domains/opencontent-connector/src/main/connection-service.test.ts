@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import type {
-  DomainMainPackageSettingsHost,
-  DomainMainProviderCredentialStoreHost
+import {
+  DomainMainProviderCredentialError,
+  type DomainMainPackageSettingsHost,
+  type DomainMainProviderCredentialStoreHost
 } from '@sciforge/domain-sdk/package-storage'
 
 import type { OpenContentClient } from './opencontent-client.js'
@@ -200,6 +201,60 @@ describe('OpenContent connection service', () => {
     })
     expect(isTokenValid).toHaveBeenCalledTimes(1)
   })
+
+  it('propagates secure-storage failures without mislabeling the connection as invalid', async () => {
+    const settings = inMemorySettings()
+    const credentials = inMemoryCredentials()
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: 'opencontent-edoc2-demo',
+      settings,
+      credentials,
+      client: {
+        authenticateExistingAccount: async () => ({
+          token: 'bound-opaque-token',
+          account: {
+            id: 'external-user-a',
+            identityId: 41,
+            account: 'fixture-user-a',
+            name: 'Fixture User A',
+            topPersonalFolderId: '1001'
+          }
+        }),
+        isTokenValid: async () => true,
+        listRootFolders: async () => ({ roots: [] }),
+        listFolderEntries: async ({ parentFolderGuid }) => ({
+          parentFolderGuid,
+          entries: []
+        }),
+        observeEntry: async ({ kind, resourceGuid }) => kind === 'container'
+          ? { kind, folderGuid: resourceGuid, label: 'Folder' }
+          : { kind, fileGuid: resourceGuid, label: 'File', size: 0 },
+        createFolder: async () => ({ folderGuid: 'created-folder-guid' }),
+        uploadNewFile: async () => ({ fileGuid: 'uploaded-file-guid' }),
+        downloadFile: async () => ({ bytesWritten: 0 })
+      },
+      createConnectionId: () => 'connection-current'
+    })
+    await service.bindExistingAccount({
+      principal,
+      username: 'fixture-user-a',
+      password: 'fixture-password',
+      assertPrincipalCurrent: () => undefined
+    })
+    credentials.failUse(new DomainMainProviderCredentialError(
+      'secure_storage_unavailable',
+      'The operating-system secure storage service is unavailable.'
+    ))
+
+    await expect(service.useCurrentToken({
+      principal,
+      assertPrincipalCurrent: () => undefined
+    }, async () => 'must not run')).rejects.toMatchObject({
+      code: 'secure_storage_unavailable'
+    })
+    credentials.failUse(undefined)
+    await expect(service.status(principal)).resolves.toMatchObject({ state: 'connected' })
+  })
 })
 
 function inMemorySettings(): DomainMainPackageSettingsHost {
@@ -224,19 +279,26 @@ function inMemorySettings(): DomainMainPackageSettingsHost {
 
 function inMemoryCredentials(): DomainMainProviderCredentialStoreHost & Readonly<{
   values: Map<string, string>
+  failUse: (error: Error | undefined) => void
 }> {
   const values = new Map<string, string>()
-  const key = (binding: Readonly<{ providerInstanceRef: string; connectionId: string }>) =>
-    `${binding.providerInstanceRef}:${binding.connectionId}`
+  let useFailure: Error | undefined
+  const key = (access: Readonly<{
+    binding: Readonly<{ providerInstanceRef: string; connectionId: string }>
+  }>) => `${access.binding.providerInstanceRef}:${access.binding.connectionId}`
   return {
     values,
-    has: async (binding) => values.has(key(binding)),
-    write: async (binding, secret) => { values.set(key(binding), secret) },
-    use: async (binding, operation) => {
-      const value = values.get(key(binding))
+    failUse: (error) => { useFailure = error },
+    status: async (access) => values.has(key(access))
+      ? { state: 'available' as const, recordVersion: 1 as const }
+      : { state: 'absent' as const },
+    replace: async (access, secret) => { values.set(key(access), secret) },
+    use: async (access, operation) => {
+      if (useFailure) throw useFailure
+      const value = values.get(key(access))
       if (!value) throw new Error('credential unavailable')
       return operation(value)
     },
-    remove: async (binding) => { values.delete(key(binding)) }
+    remove: async (access) => { values.delete(key(access)) }
   }
 }
