@@ -427,6 +427,27 @@ describe('codex config launch helpers', () => {
     })
   })
 
+  it('keeps the Coding Plan provider at the TOML root when hooks are enabled', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-codex-plan-hook-home-'))
+    const codexHome = join(root, 'codex-home')
+    const current = settings(codexHome)
+    current.modelAccess = { mode: 'coding-plan', planAdapterId: 'codex' }
+
+    await prepareCodexAppServerLaunch({
+      settings: current,
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1/' },
+      preToolUseHookLaunch: {
+        appPath: join(root, 'SciForge App'),
+        execPath: process.execPath,
+        isPackaged: false
+      }
+    })
+
+    const config = await readFile(join(codexHome, 'config.toml'), 'utf8')
+    expect(config.indexOf(`model_provider = "${CODEX_PLAN_GATEWAY_PROVIDER_ID}"`))
+      .toBeLessThan(config.indexOf('[features]'))
+  })
+
   it('drops Codex runtime-only profile args before launching app-server', async () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'sciforge-codex-home-'))
     const launch = await prepareCodexAppServerLaunch({
