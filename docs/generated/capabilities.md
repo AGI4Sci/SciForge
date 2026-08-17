@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **226**
+Registered actions: **234**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -69,17 +69,22 @@ Registered actions: **226**
 | `collaboration.status.read` | 1.0.0 | ui | read | none | global |
 | `collaboration.sync.retry` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.task.list` | 1.0.0 | ui | read | none | global |
-| `content-space.create-folder` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
+| `content-space.agent-create-folder` | 1.0.0 | agent | external-write | confirmation | resource |
+| `content-space.agent-download` | 1.0.0 | agent | external-write | confirmation | resource |
+| `content-space.agent-list-entries` | 1.0.0 | agent | read | none | resource |
+| `content-space.agent-upload-new` | 1.0.0 | agent | external-write | confirmation | resource |
+| `content-space.authorize-agent-root` | 1.0.0 | agent | external-write | confirmation | global |
+| `content-space.create-folder` | 1.0.0 | ui | external-write | confirmation | global |
 | `content-space.describe-capabilities` | 1.0.0 | ui, agent, system | read | none | global |
-| `content-space.download` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
-| `content-space.list-containers` | 1.0.0 | ui, agent, system | read | none | global |
-| `content-space.list-entries` | 1.0.0 | ui, agent, system | read | none | global |
+| `content-space.download` | 1.0.0 | ui | external-write | confirmation | global |
+| `content-space.list-containers` | 1.0.0 | ui | read | none | global |
+| `content-space.list-entries` | 1.0.0 | ui | read | none | global |
 | `content-space.list-provider-instances` | 1.0.0 | ui, agent, system | read | none | global |
-| `content-space.observe-entry` | 1.0.0 | ui, agent, system | read | none | global |
+| `content-space.observe-entry` | 1.0.0 | ui | read | none | global |
 | `content-space.observe-immutable-version` | 1.0.0 | ui, agent, system | read | none | global |
 | `content-space.open-portal-target` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
 | `content-space.resolve-portal-target` | 1.0.0 | ui, agent, system | read | none | global |
-| `content-space.upload-new` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
+| `content-space.upload-new` | 1.0.0 | ui | external-write | confirmation | global |
 | `controlled-process.create` | 1.0.0 | ui | external-write | none | workspace |
 | `controlled-process.dispose` | 1.0.0 | ui | external-write | none | resource |
 | `controlled-process.read` | 1.0.0 | ui | read | none | resource |
@@ -144,6 +149,9 @@ Registered actions: **226**
 | `identity.local.list-accounts` | 1.0.0 | ui | read | none | global |
 | `identity.local.rename-account` | 1.0.0 | ui | external-write | none | global |
 | `identity.local.select-account` | 1.0.0 | ui | external-write | none | global |
+| `opencontent.connection.bind` | 1.0.0 | ui | external-write | none | global |
+| `opencontent.connection.status` | 1.0.0 | ui | read | none | global |
+| `opencontent.connection.unbind` | 1.0.0 | ui | external-write | none | global |
 | `paper-radar.digest` | 1.0.0 | ui, agent, system | read | none | global |
 | `paper-radar.profiles.list` | 1.0.0 | ui, agent, system | read | none | global |
 | `paper-radar.profiles.save` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
@@ -19272,12 +19280,1209 @@ Reads local canonical cloud Task projections and restart reconciliation state.
 }
 ```
 
+## `content-space.agent-create-folder`
+
+Creates one folder beneath the exact authorized Agent directory.
+
+- Version: `1.0.0`
+- Audiences: agent
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "name"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "invocationId": {
+                "maxLength": 128,
+                "minLength": 16,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "name": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "parent": {
+                "additionalProperties": false,
+                "properties": {
+                  "containerId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "providerInstanceRef",
+                  "containerId"
+                ],
+                "type": "object"
+              },
+              "reference": {
+                "additionalProperties": false,
+                "properties": {
+                  "containerId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "providerInstanceRef",
+                  "containerId"
+                ],
+                "type": "object"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "invocationId",
+              "parent",
+              "name",
+              "reference"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [
+    "content-space.container"
+  ],
+  "tags": [
+    "content-space",
+    "provider-neutral"
+  ],
+  "title": "Create Folder in Authorized Agent Content Space"
+}
+```
+
+## `content-space.agent-download`
+
+Downloads one authorized file to a confirmed new Workspace-relative destination.
+
+- Version: `1.0.0`
+- Audiences: agent
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceRelativePath": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "workspaceRelativePath"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "bytesWritten": {
+                "maximum": 1073741824,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "digest": {
+                "additionalProperties": false,
+                "properties": {
+                  "algorithm": {
+                    "const": "sha256",
+                    "type": "string"
+                  },
+                  "value": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "algorithm",
+                  "value"
+                ],
+                "type": "object"
+              },
+              "invocationId": {
+                "maxLength": 128,
+                "minLength": 16,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "reference": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fileId": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                        "type": "string"
+                      },
+                      "providerInstanceRef": {
+                        "maxLength": 256,
+                        "minLength": 3,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "providerInstanceRef",
+                      "fileId"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "digest": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "algorithm": {
+                            "const": "sha256",
+                            "type": "string"
+                          },
+                          "value": {
+                            "pattern": "^[a-f0-9]{64}$",
+                            "type": "string"
+                          }
+                        },
+                        "readOnly": true,
+                        "required": [
+                          "algorithm",
+                          "value"
+                        ],
+                        "type": "object"
+                      },
+                      "fileId": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                        "type": "string"
+                      },
+                      "immutableVersionId": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                        "type": "string"
+                      },
+                      "providerInstanceRef": {
+                        "maxLength": 256,
+                        "minLength": 3,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "providerInstanceRef",
+                      "fileId",
+                      "immutableVersionId"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "invocationId",
+              "reference",
+              "bytesWritten"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [
+    "content-space.file"
+  ],
+  "tags": [
+    "content-space",
+    "provider-neutral"
+  ],
+  "title": "Download Authorized Content Space File to Workspace"
+}
+```
+
+## `content-space.agent-list-entries`
+
+Lists direct children beneath one Human-authorized Agent directory scope.
+
+- Version: `1.0.0`
+- Audiences: agent
+- Effect: `read`
+- Approval: none
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "page": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "limit"
+        ],
+        "type": "object"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "page"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "entry": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "kind": {
+                              "const": "container",
+                              "type": "string"
+                            },
+                            "label": {
+                              "maxLength": 256,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "reference": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "containerId": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                                  "type": "string"
+                                },
+                                "providerInstanceRef": {
+                                  "maxLength": 256,
+                                  "minLength": 3,
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                  "type": "string"
+                                }
+                              },
+                              "readOnly": true,
+                              "required": [
+                                "providerInstanceRef",
+                                "containerId"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "readOnly": true,
+                          "required": [
+                            "kind",
+                            "reference",
+                            "label"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "kind": {
+                              "const": "file",
+                              "type": "string"
+                            },
+                            "label": {
+                              "maxLength": 256,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "modifiedAt": {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            "reference": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fileId": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                                  "type": "string"
+                                },
+                                "providerInstanceRef": {
+                                  "maxLength": 256,
+                                  "minLength": 3,
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                  "type": "string"
+                                }
+                              },
+                              "readOnly": true,
+                              "required": [
+                                "providerInstanceRef",
+                                "fileId"
+                              ],
+                              "type": "object"
+                            },
+                            "size": {
+                              "maximum": 1073741824,
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "readOnly": true,
+                          "required": [
+                            "kind",
+                            "reference",
+                            "label",
+                            "size"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "resource": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "expiresAt": {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "semanticRevision": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "token": {
+                          "maxLength": 4096,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "token",
+                        "semanticRevision",
+                        "expiresAt"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "readOnly": true,
+                  "required": [
+                    "entry",
+                    "resource"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 200,
+                "readOnly": true,
+                "type": "array"
+              },
+              "nextCursor": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "parent": {
+                "additionalProperties": false,
+                "properties": {
+                  "containerId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "providerInstanceRef",
+                  "containerId"
+                ],
+                "type": "object"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "parent",
+              "items"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "producedResourceKinds": [
+    "content-space.container",
+    "content-space.file"
+  ],
+  "resourceKinds": [
+    "content-space.container"
+  ],
+  "tags": [
+    "content-space",
+    "provider-neutral"
+  ],
+  "title": "List Authorized Agent Content Space Entries"
+}
+```
+
+## `content-space.agent-upload-new`
+
+Uploads one confirmed Workspace-relative file beneath the exact Agent directory.
+
+- Version: `1.0.0`
+- Audiences: agent
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "workspaceRelativePath": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "name",
+      "workspaceRelativePath"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "invocationId": {
+                "maxLength": 128,
+                "minLength": 16,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "name": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "parent": {
+                "additionalProperties": false,
+                "properties": {
+                  "containerId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "providerInstanceRef",
+                  "containerId"
+                ],
+                "type": "object"
+              },
+              "reference": {
+                "additionalProperties": false,
+                "properties": {
+                  "fileId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "providerInstanceRef",
+                  "fileId"
+                ],
+                "type": "object"
+              },
+              "sourceSize": {
+                "maximum": 16777216,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "invocationId",
+              "parent",
+              "name",
+              "sourceSize",
+              "reference"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [
+    "content-space.container"
+  ],
+  "tags": [
+    "content-space",
+    "provider-neutral"
+  ],
+  "title": "Upload Workspace File to Authorized Content Space"
+}
+```
+
+## `content-space.authorize-agent-root`
+
+Confirms one exact Content Space directory as the bounded root for this Agent context.
+
+- Version: `1.0.0`
+- Audiences: agent
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "root": {
+        "additionalProperties": false,
+        "properties": {
+          "containerId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "type": "string"
+          },
+          "providerInstanceRef": {
+            "maxLength": 256,
+            "minLength": 3,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "providerInstanceRef",
+          "containerId"
+        ],
+        "type": "object"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "root"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "resource": {
+                "additionalProperties": false,
+                "properties": {
+                  "expiresAt": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "semanticRevision": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "token": {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "token",
+                  "semanticRevision",
+                  "expiresAt"
+                ],
+                "type": "object"
+              },
+              "root": {
+                "additionalProperties": false,
+                "properties": {
+                  "containerId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "providerInstanceRef",
+                  "containerId"
+                ],
+                "type": "object"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "root",
+              "resource"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "producedResourceKinds": [
+    "content-space.container"
+  ],
+  "resourceKinds": [],
+  "tags": [
+    "content-space",
+    "provider-neutral"
+  ],
+  "title": "Authorize Agent Content Space Root"
+}
+```
+
 ## `content-space.create-folder`
 
 Creates one new folder without overwrite at an explicit parent.
 
 - Version: `1.0.0`
-- Audiences: ui, agent, system
+- Audiences: ui
 - Effect: `external-write`
 - Approval: confirmation
 - Scope: global
@@ -19435,6 +20640,8 @@ Creates one new folder without overwrite at an explicit parent.
                   "unknown_provider_instance",
                   "missing_provider",
                   "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
                   "unauthorized",
                   "blocked_by_contract",
                   "bounds_exceeded",
@@ -19621,6 +20828,8 @@ Reads operation readiness for one pinned Provider Instance.
                   "unknown_provider_instance",
                   "missing_provider",
                   "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
                   "unauthorized",
                   "blocked_by_contract",
                   "bounds_exceeded",
@@ -19682,7 +20891,7 @@ Reads operation readiness for one pinned Provider Instance.
 Downloads bytes only to a Host-owned no-overwrite destination.
 
 - Version: `1.0.0`
-- Audiences: ui, agent, system
+- Audiences: ui
 - Effect: `external-write`
 - Approval: confirmation
 - Scope: global
@@ -19940,6 +21149,8 @@ Downloads bytes only to a Host-owned no-overwrite destination.
                   "unknown_provider_instance",
                   "missing_provider",
                   "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
                   "unauthorized",
                   "blocked_by_contract",
                   "bounds_exceeded",
@@ -20001,7 +21212,7 @@ Downloads bytes only to a Host-owned no-overwrite destination.
 Lists one bounded container page from an explicit Provider Instance.
 
 - Version: `1.0.0`
-- Audiences: ui, agent, system
+- Audiences: ui
 - Effect: `read`
 - Approval: none
 - Scope: global
@@ -20097,11 +21308,19 @@ Lists one bounded container page from an explicit Provider Instance.
                         "containerId"
                       ],
                       "type": "object"
+                    },
+                    "scope": {
+                      "enum": [
+                        "personal",
+                        "shared"
+                      ],
+                      "type": "string"
                     }
                   },
                   "readOnly": true,
                   "required": [
                     "reference",
+                    "scope",
                     "label"
                   ],
                   "type": "object"
@@ -20153,6 +21372,8 @@ Lists one bounded container page from an explicit Provider Instance.
                   "unknown_provider_instance",
                   "missing_provider",
                   "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
                   "unauthorized",
                   "blocked_by_contract",
                   "bounds_exceeded",
@@ -20214,7 +21435,7 @@ Lists one bounded container page from an explicit Provider Instance.
 Lists one bounded page of direct children for an explicit container.
 
 - Version: `1.0.0`
-- Audiences: ui, agent, system
+- Audiences: ui
 - Effect: `read`
 - Approval: none
 - Scope: global
@@ -20464,6 +21685,8 @@ Lists one bounded page of direct children for an explicit container.
                   "unknown_provider_instance",
                   "missing_provider",
                   "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
                   "unauthorized",
                   "blocked_by_contract",
                   "bounds_exceeded",
@@ -20616,6 +21839,8 @@ Lists explicit trusted Provider Instances supported by Content Space.
                   "unknown_provider_instance",
                   "missing_provider",
                   "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
                   "unauthorized",
                   "blocked_by_contract",
                   "bounds_exceeded",
@@ -20677,7 +21902,7 @@ Lists explicit trusted Provider Instances supported by Content Space.
 Reads provider-neutral metadata for an exact Content Space reference.
 
 - Version: `1.0.0`
-- Audiences: ui, agent, system
+- Audiences: ui
 - Effect: `read`
 - Approval: none
 - Scope: global
@@ -20999,6 +22224,8 @@ Reads provider-neutral metadata for an exact Content Space reference.
                   "unknown_provider_instance",
                   "missing_provider",
                   "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
                   "unauthorized",
                   "blocked_by_contract",
                   "bounds_exceeded",
@@ -21237,6 +22464,8 @@ Issues an ArtifactReference only from exact Provider proof.
                   "unknown_provider_instance",
                   "missing_provider",
                   "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
                   "unauthorized",
                   "blocked_by_contract",
                   "bounds_exceeded",
@@ -21375,6 +22604,8 @@ Opens one short-lived Host-validated target in the system browser.
                   "unknown_provider_instance",
                   "missing_provider",
                   "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
                   "unauthorized",
                   "blocked_by_contract",
                   "bounds_exceeded",
@@ -21614,6 +22845,8 @@ Converts a bounded HTTPS Provider target into a Host-owned handle.
                   "unknown_provider_instance",
                   "missing_provider",
                   "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
                   "unauthorized",
                   "blocked_by_contract",
                   "bounds_exceeded",
@@ -21675,7 +22908,7 @@ Converts a bounded HTTPS Provider target into a Host-owned handle.
 Uploads one bounded Host-selected file without overwrite.
 
 - Version: `1.0.0`
-- Audiences: ui, agent, system
+- Audiences: ui
 - Effect: `external-write`
 - Approval: confirmation
 - Scope: global
@@ -21844,6 +23077,8 @@ Uploads one bounded Host-selected file without overwrite.
                   "unknown_provider_instance",
                   "missing_provider",
                   "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
                   "unauthorized",
                   "blocked_by_contract",
                   "bounds_exceeded",
@@ -36919,6 +38154,299 @@ Selects an existing display-only Local Account on this installation.
     "local-account"
   ],
   "title": "Select Local Account"
+}
+```
+
+## `opencontent.connection.bind`
+
+Validates and binds one existing OpenContent account to the current Local Account.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "password": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
+      "username": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "username",
+      "password"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "const": "disconnected",
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "externalAccount": {
+            "additionalProperties": false,
+            "properties": {
+              "account": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "identityId": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "name": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "id",
+              "identityId",
+              "account",
+              "name"
+            ],
+            "type": "object"
+          },
+          "providerInstanceRef": {
+            "maxLength": 256,
+            "minLength": 3,
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "connected",
+              "reauthentication_required"
+            ],
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "state",
+          "providerInstanceRef",
+          "externalAccount"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "opencontent",
+    "provider-connection",
+    "sensitive-input"
+  ],
+  "title": "Bind Existing OpenContent Account"
+}
+```
+
+## `opencontent.connection.status`
+
+Reads the current Local Account connection status for OpenContent.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "readOnly": true,
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "const": "disconnected",
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "externalAccount": {
+            "additionalProperties": false,
+            "properties": {
+              "account": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "identityId": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "name": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "id",
+              "identityId",
+              "account",
+              "name"
+            ],
+            "type": "object"
+          },
+          "providerInstanceRef": {
+            "maxLength": 256,
+            "minLength": 3,
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "connected",
+              "reauthentication_required"
+            ],
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "state",
+          "providerInstanceRef",
+          "externalAccount"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "opencontent",
+    "provider-connection"
+  ],
+  "title": "Inspect OpenContent Connection"
+}
+```
+
+## `opencontent.connection.unbind`
+
+Removes this node-local OpenContent credential and connection metadata.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "readOnly": true,
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "remoteRevocation": {
+        "const": "unsupported",
+        "type": "string"
+      },
+      "state": {
+        "const": "disconnected",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "state",
+      "remoteRevocation"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "opencontent",
+    "provider-connection"
+  ],
+  "title": "Unbind OpenContent Account"
 }
 ```
 
@@ -88795,6 +90323,7 @@ Releases an open Workspace Preview session.
 | Evidence DAG | evidenceDag: |  |
 | Git Checkpoints |  |  |
 | Identity and Access |  |  |
+| OpenContent Connection |  |  |
 | Paper Radar | paperRadar: |  |
 | Project DAG | projectDag: |  |
 | Remote SSH |  |  |

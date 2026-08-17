@@ -10,7 +10,24 @@ export const DOMAIN_FILE_TRANSFER_LIMITS = Object.freeze({
 export const domainFileTransferHandleSchema = z.string()
   .regex(/^xfer_[A-Za-z0-9_-]{32}$/u)
 
+export const domainWorkspaceRelativePathSchema = z.string().min(1).max(4_096)
+  .refine((value) => value.trim().length > 0, {
+    message: 'The Workspace-relative path must not be blank.'
+  })
+  .refine((value) => !/^(?:[\\/]|[A-Za-z]:[\\/])/u.test(value), {
+    message: 'The Workspace file path must be relative.'
+  })
+  .refine((value) => !value.split(/[\\/]+/u).some((segment) => (
+    segment === '' || segment === '.' || segment === '..'
+  )), {
+    message: 'The Workspace-relative path contains an unsafe segment.'
+  })
+  .refine(isControlFreeText, {
+    message: 'The Workspace-relative path must not contain control characters.'
+  })
+
 export type DomainFileTransferHandle = z.infer<typeof domainFileTransferHandleSchema>
+export type DomainWorkspaceRelativePath = z.infer<typeof domainWorkspaceRelativePathSchema>
 
 export const domainFileTransferLabelSchema = z.string().min(1)
   .max(DOMAIN_FILE_TRANSFER_LIMITS.maxLabelCharacters)
@@ -146,6 +163,22 @@ export type DomainMainFileTransferHost = Readonly<{
   /** Requires an active Broker invocation; caller and Principal are Host-derived. */
   openDownloadDestination(input: Readonly<{
     handle: DomainFileTransferHandle
+    maxBytes: number
+    signal?: AbortSignal
+  }>): Promise<DomainMainDownloadDestination>
+  /**
+   * Agent-only canonical Workspace path. The Host derives the active Task
+   * Workspace and internally mints then consumes the same one-shot grant used
+   * by renderer pickers; packages never receive an absolute path.
+   */
+  openWorkspaceUploadSource(input: Readonly<{
+    relativePath: DomainWorkspaceRelativePath
+    maxBytes: number
+    signal?: AbortSignal
+  }>): Promise<DomainMainUploadSource>
+  /** Agent-only, confirmed, no-overwrite Workspace destination. */
+  openWorkspaceDownloadDestination(input: Readonly<{
+    relativePath: DomainWorkspaceRelativePath
     maxBytes: number
     signal?: AbortSignal
   }>): Promise<DomainMainDownloadDestination>

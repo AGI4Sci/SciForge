@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 import { z } from 'zod'
 
 import type {
@@ -24,6 +26,8 @@ import {
   domainPackageDefinition
 } from '../definition.js'
 import {
+  CONTENT_CONTAINER_RESOURCE_KIND,
+  CONTENT_FILE_RESOURCE_KIND,
   CONTENT_SPACE_CAPABILITY_IDS,
   CONTENT_SPACE_LIMITS,
   ContentSpaceOperationError,
@@ -31,6 +35,13 @@ import {
   contentContainerReferenceCodec,
   contentFileReferenceCodec,
   contentSpaceCapabilityListResultSchema,
+  contentSpaceAgentCreateFolderInputSchema,
+  contentSpaceAgentDownloadInputSchema,
+  contentSpaceAgentEntryPageResultSchema,
+  contentSpaceAgentListEntriesInputSchema,
+  contentSpaceAgentRootAuthorizationResultSchema,
+  contentSpaceAgentUploadNewInputSchema,
+  contentSpaceAuthorizeAgentRootInputSchema,
   contentSpaceContainerPageResultSchema,
   contentSpaceCreateFolderInputSchema,
   contentSpaceDownloadInputSchema,
@@ -45,6 +56,7 @@ import {
   contentSpaceOpenPortalTargetInputSchema,
   contentSpaceOpenPortalTargetResultSchema,
   contentSpacePortalTargetResultSchema,
+  contentSpacePortableResourceStateSchema,
   contentSpaceProviderInstanceInputSchema,
   contentSpaceProviderInstanceListResultSchema,
   contentSpaceResolvePortalTargetInputSchema,
@@ -55,6 +67,9 @@ import {
   immutableVersionObservationResultSchema,
   uploadNewResultSchema,
   type ContentSpaceError,
+  type ContentContainerReference,
+  type ContentEntryReference,
+  type ContentFileReference,
   type ContentSpaceResult
 } from '../contract.js'
 import { createContentSpacePortableAuthorityResolver } from './portable-authority-resolver.js'
@@ -70,10 +85,30 @@ type ContentSpaceCapabilityContext = Readonly<{
     audience: 'ui' | 'agent' | 'system'
     callerId: string
     principal?: PrincipalSnapshot
+    workspaceId?: string
   }>
   invocationId?: string
   signal?: AbortSignal
   assertPrincipalCurrent(): void
+  resource?: Readonly<{
+    resourceId: string
+    resourceKind: string
+    workspaceId?: string
+  }>
+  issueResource(registration: Readonly<{
+    resourceId: string
+    resourceKind: string
+    workspaceId?: string
+    audiences?: readonly ('ui' | 'agent' | 'system')[]
+    semanticRevision: string
+    observe(
+      caller: ContentSpaceCapabilityContext['caller'],
+      context: Readonly<{ signal?: AbortSignal }>
+    ): unknown | Promise<unknown>
+    dispose?: () => void | Promise<void>
+    retireAfterLastHandleExpires?: boolean
+    expiresInMs?: number
+  }>): unknown
 }>
 
 type ContentSpaceCapabilityOptions = Readonly<{
@@ -82,7 +117,9 @@ type ContentSpaceCapabilityOptions = Readonly<{
   title: string
   description: string
   audiences: readonly ('ui' | 'agent' | 'system')[]
-  scope: 'global'
+  scope: 'global' | 'resource'
+  resourceKinds?: readonly string[]
+  producedResourceKinds?: readonly string[]
   effect: 'read' | 'external-write'
   approval: 'none' | 'confirmation'
   concurrency: Readonly<{
@@ -206,14 +243,130 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
   externalNavigation?: NonNullable<DomainMainHost['externalNavigation']>
 }>): ContentSpaceCapabilityFactory<CapabilityDefinition> {
   const define = (
-    input: Omit<ContentSpaceCapabilityOptions, 'version' | 'audiences' | 'scope' | 'tags'>
+    input: Omit<ContentSpaceCapabilityOptions, 'version' | 'audiences' | 'scope' | 'tags'> &
+      Readonly<{
+        audiences?: ContentSpaceCapabilityOptions['audiences']
+        scope?: ContentSpaceCapabilityOptions['scope']
+      }>
   ): CapabilityDefinition => options.defineCapability({
     ...input,
     version: '1.0.0',
-    audiences: ['ui', 'agent', 'system'],
-    scope: 'global',
+    audiences: input.audiences ?? ['ui', 'agent', 'system'],
+    scope: input.scope ?? 'global',
     tags: ['content-space', 'provider-neutral']
   })
+
+  type AgentResourceRecord = Readonly<{
+    resourceId: string
+    root: ContentContainerReference
+    reference: ContentEntryReference
+    callerId: string
+    workspaceId?: string
+  }>
+  const agentResources = new Map<string, AgentResourceRecord>()
+  const assertSelectableAgentRoot = async (
+    root: ContentContainerReference,
+    context: ContentSpaceCapabilityContext
+  ): Promise<void> => {
+    let cursor: string | undefined
+    const seen = new Set<string>()
+    for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
+      const page = await options.getService().listContainers({
+        providerInstanceRef: root.providerInstanceRef,
+        page: { limit: CONTENT_SPACE_LIMITS.maxPageItems, ...(cursor ? { cursor } : {}) }
+      }, call(context))
+      if (page.items.some((item) => (
+        item.reference.providerInstanceRef === root.providerInstanceRef &&
+        item.reference.containerId === root.containerId
+      ))) return
+      if (!page.nextCursor || seen.has(page.nextCursor)) break
+      seen.add(page.nextCursor)
+      cursor = page.nextCursor
+    }
+    throw operationError(
+      'unauthorized',
+      'The selected Agent root is not an accessible personal or Team library root.'
+    )
+  }
+  const requireAgentResource = (
+    context: ContentSpaceCapabilityContext,
+    kind: 'container' | 'file'
+  ): AgentResourceRecord => {
+    const resourceId = context.resource?.resourceId
+    const record = resourceId ? agentResources.get(resourceId) : undefined
+    if (
+      context.caller.audience !== 'agent' || !record ||
+      record.callerId !== context.caller.callerId ||
+      record.workspaceId !== context.caller.workspaceId ||
+      (kind === 'container' ? !('containerId' in record.reference) : !('fileId' in record.reference))
+    ) {
+      throw operationError('unauthorized', 'The Agent Content Space scope is unavailable.')
+    }
+    return record
+  }
+  const issueAgentResource = (
+    context: ContentSpaceCapabilityContext,
+    root: ContentContainerReference,
+    reference: ContentEntryReference
+  ) => {
+    if (context.caller.audience !== 'agent' || !context.caller.principal) {
+      throw operationError('unauthorized', 'Only a current Agent Principal can receive this scope.')
+    }
+    if (agentResources.size >= 2_048) {
+      throw operationError('bounds_exceeded', 'The Agent Content Space scope table is full.')
+    }
+    const resourceId = `content-space-agent-${randomUUID()}`
+    const record: AgentResourceRecord = Object.freeze({
+      resourceId,
+      root,
+      reference,
+      callerId: context.caller.callerId,
+      ...(context.caller.workspaceId ? { workspaceId: context.caller.workspaceId } : {})
+    })
+    agentResources.set(resourceId, record)
+    const assertPrincipalCurrent = context.assertPrincipalCurrent
+    try {
+      return context.issueResource({
+        resourceId,
+        resourceKind: 'containerId' in reference
+          ? CONTENT_CONTAINER_RESOURCE_KIND
+          : CONTENT_FILE_RESOURCE_KIND,
+        ...(record.workspaceId ? { workspaceId: record.workspaceId } : {}),
+        audiences: ['agent'],
+        semanticRevision: contentSpaceResourceRevision(reference),
+        expiresInMs: 15 * 60_000,
+        retireAfterLastHandleExpires: true,
+        observe: async (caller, observationContext) => {
+          if (
+            caller.audience !== 'agent' || caller.callerId !== record.callerId ||
+            caller.workspaceId !== record.workspaceId || !caller.principal
+          ) {
+            throw operationError('unauthorized', 'The Agent Content Space scope changed.')
+          }
+          const observation = await options.getService().observeEntry(record.reference, {
+            reauthorizedPrincipal: caller.principal,
+            assertPrincipalCurrent,
+            audience: 'agent',
+            ...(observationContext.signal ? { signal: observationContext.signal } : {})
+          })
+          return Object.freeze({
+            state: contentSpacePortableResourceStateSchema.parse({
+              reference: record.reference,
+              entry: observation.entry,
+              capabilities: observation.capabilities
+            }),
+            semanticRevision: contentSpaceResourceRevision(record.reference, observation.entry)
+          })
+        },
+        dispose: () => {
+          if (agentResources.get(resourceId) === record) agentResources.delete(resourceId)
+        }
+      })
+    } catch (error) {
+      agentResources.delete(resourceId)
+      throw error
+    }
+  }
 
   return Object.freeze({
     moduleId: CONTENT_SPACE_DOMAIN_MODULE_ID,
@@ -252,6 +405,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       }),
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.listContainers,
+        audiences: ['ui'],
         title: 'List Content Space Containers',
         description: 'Lists one bounded container page from an explicit Provider Instance.',
         effect: 'read',
@@ -265,6 +419,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       }),
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.listEntries,
+        audiences: ['ui'],
         title: 'List Content Space Entries',
         description: 'Lists one bounded page of direct children for an explicit container.',
         effect: 'read',
@@ -278,6 +433,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       }),
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.observeEntry,
+        audiences: ['ui'],
         title: 'Observe Content Space Entry',
         description: 'Reads provider-neutral metadata for an exact Content Space reference.',
         effect: 'read',
@@ -291,6 +447,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       }),
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.createFolder,
+        audiences: ['ui'],
         title: 'Create Content Space Folder',
         description: 'Creates one new folder without overwrite at an explicit parent.',
         effect: 'external-write',
@@ -304,6 +461,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       }),
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.uploadNew,
+        audiences: ['ui'],
         title: 'Upload New Content Space File',
         description: 'Uploads one bounded Host-selected file without overwrite.',
         effect: 'external-write',
@@ -332,6 +490,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       }),
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.download,
+        audiences: ['ui'],
         title: 'Download Content Space File',
         description: 'Downloads bytes only to a Host-owned no-overwrite destination.',
         effect: 'external-write',
@@ -358,6 +517,135 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
               })
             }
           }, invocation)
+        })
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot,
+        title: 'Authorize Agent Content Space Root',
+        description: 'Confirms one exact Content Space directory as the bounded root for this Agent context.',
+        audiences: ['agent'],
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        producedResourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
+        inputSchema: contentSpaceAuthorizeAgentRootInputSchema,
+        outputSchema: contentSpaceAgentRootAuthorizationResultSchema,
+        handler: async ({ root }, context) => capabilityResult(async () => {
+          await assertSelectableAgentRoot(root, context)
+          const observation = await options.getService().observeEntry(root, call(context))
+          if (observation.entry.kind !== 'container') {
+            throw operationError('invalid_target', 'The authorized Agent root must be a directory.')
+          }
+          return Object.freeze({ root, resource: issueAgentResource(context, root, root) })
+        })
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.agentListEntries,
+        title: 'List Authorized Agent Content Space Entries',
+        description: 'Lists direct children beneath one Human-authorized Agent directory scope.',
+        audiences: ['agent'],
+        scope: 'resource',
+        resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
+        producedResourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND, CONTENT_FILE_RESOURCE_KIND],
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        inputSchema: contentSpaceAgentListEntriesInputSchema,
+        outputSchema: contentSpaceAgentEntryPageResultSchema,
+        handler: async ({ page }, context) => capabilityResult(async () => {
+          const record = requireAgentResource(context, 'container')
+          const parent = record.reference as ContentContainerReference
+          const listed = await options.getService().listEntries({ parent, page }, call(context))
+          return Object.freeze({
+            parent: listed.parent,
+            items: Object.freeze(listed.items.map((entry) => Object.freeze({
+              entry,
+              resource: issueAgentResource(context, record.root, entry.reference)
+            }))),
+            ...(listed.nextCursor ? { nextCursor: listed.nextCursor } : {})
+          })
+        })
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.agentCreateFolder,
+        title: 'Create Folder in Authorized Agent Content Space',
+        description: 'Creates one folder beneath the exact authorized Agent directory.',
+        audiences: ['agent'],
+        scope: 'resource',
+        resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: contentSpaceAgentCreateFolderInputSchema,
+        outputSchema: createFolderResultSchema,
+        handler: async ({ name }, context) => capabilityResult(() => {
+          const record = requireAgentResource(context, 'container')
+          return options.getService().createFolder({
+            parent: record.reference as ContentContainerReference,
+            name
+          }, writeCall(context))
+        })
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.agentUploadNew,
+        title: 'Upload Workspace File to Authorized Content Space',
+        description: 'Uploads one confirmed Workspace-relative file beneath the exact Agent directory.',
+        audiences: ['agent'],
+        scope: 'resource',
+        resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: contentSpaceAgentUploadNewInputSchema,
+        outputSchema: uploadNewResultSchema,
+        handler: async ({ name, workspaceRelativePath }, context) => capabilityResult(() => {
+          const record = requireAgentResource(context, 'container')
+          return options.getService().uploadNewFile({
+            parent: record.reference as ContentContainerReference,
+            name,
+            openSource: (signal) => {
+              if (!options.fileTransfers) {
+                throw operationError('source_unavailable', 'Host file transfer is unavailable.')
+              }
+              return options.fileTransfers.openWorkspaceUploadSource({
+                relativePath: workspaceRelativePath,
+                maxBytes: CONTENT_SPACE_LIMITS.maxUploadBytes,
+                signal
+              })
+            }
+          }, writeCall(context))
+        })
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.agentDownload,
+        title: 'Download Authorized Content Space File to Workspace',
+        description: 'Downloads one authorized file to a confirmed new Workspace-relative destination.',
+        audiences: ['agent'],
+        scope: 'resource',
+        resourceKinds: [CONTENT_FILE_RESOURCE_KIND],
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: contentSpaceAgentDownloadInputSchema,
+        outputSchema: downloadResultSchema,
+        handler: async ({ workspaceRelativePath }, context) => capabilityResult(() => {
+          const record = requireAgentResource(context, 'file')
+          return options.getService().downloadFile({
+            reference: record.reference as ContentFileReference,
+            openDestination: (signal) => {
+              if (!options.fileTransfers) {
+                throw operationError(
+                  'destination_unavailable',
+                  'Host file transfer is unavailable.'
+                )
+              }
+              return options.fileTransfers.openWorkspaceDownloadDestination({
+                relativePath: workspaceRelativePath,
+                maxBytes: CONTENT_SPACE_LIMITS.maxFileBytes,
+                signal
+              })
+            }
+          }, writeCall(context))
         })
       }),
       define({
@@ -445,8 +733,17 @@ function call(context: ContentSpaceCapabilityContext): ContentSpaceServiceCallCo
   return Object.freeze({
     reauthorizedPrincipal: context.caller.principal,
     assertPrincipalCurrent: context.assertPrincipalCurrent,
+    audience: context.caller.audience,
     ...(context.signal ? { signal: context.signal } : {})
   })
+}
+
+function contentSpaceResourceRevision(
+  reference: ContentEntryReference,
+  entry?: Readonly<{ kind: string; modifiedAt?: string }>
+): string {
+  const identity = 'containerId' in reference ? reference.containerId : reference.fileId
+  return entry?.modifiedAt ? `live:${identity}:${entry.modifiedAt}` : `live:${identity}`
 }
 
 function writeCall(context: ContentSpaceCapabilityContext): ContentSpaceServiceWriteCallContext {
@@ -504,6 +801,8 @@ const SAFE_ERROR_MESSAGES = Object.freeze({
   unknown_provider_instance: 'The selected Provider Instance is unknown.',
   missing_provider: 'The selected Provider is not installed.',
   provider_unavailable: 'The selected Provider is unavailable.',
+  rate_limited: 'The selected Provider is temporarily rate limited.',
+  provider_contract_violation: 'The selected Provider returned an unsupported response.',
   unauthorized: 'The current Principal is not authorized for this operation.',
   blocked_by_contract: 'The selected Provider does not enable this operation.',
   bounds_exceeded: 'The Content Space operation exceeded a configured bound.',

@@ -1,0 +1,40 @@
+{
+  "name": "@sciforge/domain-opencontent-connector",
+  "version": "1.0.0",
+  "license": "MIT",
+  "type": "module",
+  "private": false,
+  "description": "Principal-bound OpenContent enrollment and transport integration for SciForge.",
+  "exports": {
+    "./contract": "./src/contract.ts",
+    "./definition": "./src/definition.ts",
+    "./main": "./src/main/index.ts",
+    "./main/client": "./src/main/opencontent-client.ts",
+    "./renderer": "./src/renderer/index.tsx"
+  },
+  "files": [
+    "src",
+    "sciforge.domain.json",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@sciforge/domain-sdk": "^0.2.1",
+    "lucide-react": "^0.544.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.0",
+    "happy-dom": "^20.11.2",
+    "typescript": "^5.8.2",
+    "vitest": "^4.1.7"
+  }
+}

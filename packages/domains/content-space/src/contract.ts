@@ -1,6 +1,10 @@
 import { z } from 'zod'
 
-import { domainFileTransferHandleSchema } from '@sciforge/domain-sdk/file-transfer'
+import {
+  domainCapabilityResourceHandleSchema,
+  domainFileTransferHandleSchema,
+  domainWorkspaceRelativePathSchema
+} from '@sciforge/domain-sdk/host'
 import {
   domainExternalNavigationIssuedTargetSchema,
   domainExternalNavigationTargetHandleSchema
@@ -42,6 +46,11 @@ export const CONTENT_SPACE_CAPABILITY_IDS = Object.freeze({
   createFolder: 'content-space.create-folder',
   uploadNew: 'content-space.upload-new',
   download: 'content-space.download',
+  authorizeAgentRoot: 'content-space.authorize-agent-root',
+  agentListEntries: 'content-space.agent-list-entries',
+  agentCreateFolder: 'content-space.agent-create-folder',
+  agentUploadNew: 'content-space.agent-upload-new',
+  agentDownload: 'content-space.agent-download',
   resolvePortalTarget: 'content-space.resolve-portal-target',
   openPortalTarget: 'content-space.open-portal-target',
   observeImmutableVersion: 'content-space.observe-immutable-version'
@@ -150,6 +159,8 @@ export const contentSpaceErrorCodeSchema = z.enum([
   'unknown_provider_instance',
   'missing_provider',
   'provider_unavailable',
+  'rate_limited',
+  'provider_contract_violation',
   'unauthorized',
   'blocked_by_contract',
   'bounds_exceeded',
@@ -286,6 +297,7 @@ export type ContentSpacePageRequest = z.infer<typeof contentSpacePageRequestSche
 
 export const contentSpaceContainerSummarySchema = z.object({
   reference: contentContainerReferenceSchema,
+  scope: z.enum(['personal', 'shared']),
   label: z.string().trim().min(1).max(CONTENT_SPACE_LIMITS.maxLabelCharacters)
 }).strict().readonly()
 export const contentSpaceEntrySummarySchema = z.discriminatedUnion('kind', [
@@ -424,6 +436,7 @@ export const contentSpaceCreateFolderInputSchema = z.object({
   parent: contentContainerReferenceSchema,
   name: contentSpaceEntryNameSchema
 }).strict().readonly()
+
 export const contentSpaceUploadNewInputSchema = z.object({
   parent: contentContainerReferenceSchema,
   name: contentSpaceEntryNameSchema,
@@ -432,6 +445,34 @@ export const contentSpaceUploadNewInputSchema = z.object({
 export const contentSpaceDownloadInputSchema = z.object({
   reference: z.union([contentFileReferenceSchema, artifactReferenceSchema]),
   destinationHandle: domainFileTransferHandleSchema
+}).strict().readonly()
+export const contentSpaceAuthorizeAgentRootInputSchema = z.object({
+  root: contentContainerReferenceSchema
+}).strict().readonly()
+export const contentSpaceAgentRootAuthorizationSchema = z.object({
+  root: contentContainerReferenceSchema,
+  resource: domainCapabilityResourceHandleSchema
+}).strict().readonly()
+export const contentSpaceAgentListEntriesInputSchema = z.object({
+  page: contentSpacePageRequestSchema
+}).strict().readonly()
+export const contentSpaceAgentEntryPageSchema = z.object({
+  parent: contentContainerReferenceSchema,
+  items: z.array(z.object({
+    entry: contentSpaceEntrySummarySchema,
+    resource: domainCapabilityResourceHandleSchema
+  }).strict().readonly()).max(CONTENT_SPACE_LIMITS.maxPageItems).readonly(),
+  nextCursor: z.string().trim().min(1).max(256).optional()
+}).strict().readonly()
+export const contentSpaceAgentCreateFolderInputSchema = z.object({
+  name: contentSpaceEntryNameSchema
+}).strict().readonly()
+export const contentSpaceAgentUploadNewInputSchema = z.object({
+  name: contentSpaceEntryNameSchema,
+  workspaceRelativePath: domainWorkspaceRelativePathSchema
+}).strict().readonly()
+export const contentSpaceAgentDownloadInputSchema = z.object({
+  workspaceRelativePath: domainWorkspaceRelativePathSchema
 }).strict().readonly()
 export const contentSpaceResolvePortalTargetInputSchema = z.object({
   reference: contentEntryReferenceSchema
@@ -465,6 +506,12 @@ export const contentSpaceEntryObservationResultSchema = contentSpaceResultSchema
 export const createFolderResultSchema = contentSpaceResultSchema(createFolderReceiptSchema)
 export const uploadNewResultSchema = contentSpaceResultSchema(uploadNewReceiptSchema)
 export const downloadResultSchema = contentSpaceResultSchema(downloadReceiptSchema)
+export const contentSpaceAgentRootAuthorizationResultSchema = contentSpaceResultSchema(
+  contentSpaceAgentRootAuthorizationSchema
+)
+export const contentSpaceAgentEntryPageResultSchema = contentSpaceResultSchema(
+  contentSpaceAgentEntryPageSchema
+)
 export const contentSpacePortalTargetResultSchema = contentSpaceResultSchema(
   contentSpacePortalTargetHandleSchema
 )

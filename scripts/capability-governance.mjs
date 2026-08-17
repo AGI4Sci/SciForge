@@ -295,7 +295,19 @@ async function loadApplicationCapabilityModel() {
           },
           remove: async () => {
             throw new GovernanceError('Governance must not remove package secrets.')
-          }
+          },
+          providerCredentials: Object.freeze({
+            has: async () => false,
+            write: async () => {
+              throw new GovernanceError('Governance must not write provider credentials.')
+            },
+            use: async () => {
+              throw new GovernanceError('Governance must not use provider credentials.')
+            },
+            remove: async () => {
+              throw new GovernanceError('Governance must not remove provider credentials.')
+            }
+          })
         })
       })
     })

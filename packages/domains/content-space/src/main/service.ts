@@ -55,6 +55,8 @@ export type ContentSpaceServiceCallContext = Readonly<{
   reauthorizedPrincipal: PrincipalSnapshot
   /** Host-owned invocation lease check; packages never choose the current Principal. */
   assertPrincipalCurrent(): void | Promise<void>
+  /** Trusted Broker audience; absent direct/internal calls cannot execute PoC operations. */
+  audience?: 'ui' | 'agent' | 'system'
   signal?: AbortSignal
 }>
 
@@ -117,7 +119,7 @@ export class ContentSpaceService {
       call.assertPrincipalCurrent
     )
     return parseOutput(contentSpaceCapabilityListSchema, {
-      items: await this.#describe(provider, context, call.assertPrincipalCurrent)
+      items: await this.#describe(provider, context, call.assertPrincipalCurrent, call.audience)
     })
   }
 
@@ -165,7 +167,8 @@ export class ContentSpaceService {
       context,
       parent,
       'list-entries',
-      call.assertPrincipalCurrent
+      call.assertPrincipalCurrent,
+      call.audience
     )
     const output = parseOutput(contentSpaceEntryPageSchema, await boundedProviderCall(
       () => provider.listEntries({ context, parent, page }),
@@ -206,7 +209,8 @@ export class ContentSpaceService {
         provider,
         context,
         reference,
-        call.assertPrincipalCurrent
+        call.assertPrincipalCurrent,
+        call.audience
       )
     }
     return this.#observeBoundEntry(
@@ -214,7 +218,8 @@ export class ContentSpaceService {
       context,
       reference,
       call.assertPrincipalCurrent,
-      capabilities
+      capabilities,
+      call.audience
     )
   }
 
@@ -234,7 +239,8 @@ export class ContentSpaceService {
       context,
       parent,
       'create-folder',
-      call.assertPrincipalCurrent
+      call.assertPrincipalCurrent,
+      call.audience
     )
     const receipt = parseWriteOutput(createFolderReceiptSchema, await writeDispatch(() => boundedProviderCall(
       () => provider.createFolder({ context, parent, name }),
@@ -273,7 +279,8 @@ export class ContentSpaceService {
       context,
       parent,
       'upload-new',
-      call.assertPrincipalCurrent
+      call.assertPrincipalCurrent,
+      call.audience
     )
     let source: ContentSpaceUploadSource & Readonly<{ close(): Promise<void> }>
     try {
@@ -379,7 +386,8 @@ export class ContentSpaceService {
         provider,
         context,
         reference,
-        call.assertPrincipalCurrent
+        call.assertPrincipalCurrent,
+        call.audience
       )
     }
     await this.#assertResourceReady(
@@ -387,7 +395,8 @@ export class ContentSpaceService {
       context,
       reference,
       'download',
-      call.assertPrincipalCurrent
+      call.assertPrincipalCurrent,
+      call.audience
     )
     let destination: Awaited<ReturnType<typeof input.openDestination>>
     try {
@@ -533,7 +542,8 @@ export class ContentSpaceService {
         provider,
         context,
         reference,
-        call.assertPrincipalCurrent
+        call.assertPrincipalCurrent,
+        call.audience
       )
     }
     await this.#assertResourceReady(
@@ -541,7 +551,8 @@ export class ContentSpaceService {
       context,
       reference,
       'portal-target',
-      call.assertPrincipalCurrent
+      call.assertPrincipalCurrent,
+      call.audience
     )
     const target = await boundedProviderCall(
       () => provider.resolvePortalTarget({ context, reference }),
@@ -627,7 +638,8 @@ export class ContentSpaceService {
       context,
       reference,
       'observe-immutable-version',
-      call.assertPrincipalCurrent
+      call.assertPrincipalCurrent,
+      call.audience
     )
     const observation = parseOutput(
       contentSpaceProviderImmutableVersionObservationSchema,
@@ -657,7 +669,8 @@ export class ContentSpaceService {
     provider: ContentSpaceProvider,
     context: ContentSpaceProviderOperationContext,
     artifact: ArtifactReference,
-    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent']
+    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent'],
+    audience: ContentSpaceServiceCallContext['audience']
   ): Promise<void> {
     const file = contentFileReferenceSchema.parse({
       providerInstanceRef: artifact.providerInstanceRef,
@@ -666,7 +679,8 @@ export class ContentSpaceService {
     const capabilities = await this.#describe(
       provider,
       context,
-      assertPrincipalCurrent
+      assertPrincipalCurrent,
+      audience
     )
     const immutableState = capabilities.find((candidate) =>
       candidate.operation === 'observe-immutable-version'
@@ -679,7 +693,8 @@ export class ContentSpaceService {
       context,
       file,
       'observe-immutable-version',
-      assertPrincipalCurrent
+      assertPrincipalCurrent,
+      audience
     )
     const observation = parseOutput(
       contentSpaceProviderImmutableVersionObservationSchema,
@@ -704,7 +719,8 @@ export class ContentSpaceService {
     assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent'],
     globalCapabilities?: readonly z.infer<
       typeof contentSpaceCapabilityStateListSchema
-    >[number][]
+    >[number][],
+    audience: ContentSpaceServiceCallContext['audience'] = 'system'
   ) {
     const output = parseOutput(contentSpaceEntryObservationSchema, await boundedProviderCall(
       () => provider.observeEntry({ context, reference }),
@@ -720,7 +736,7 @@ export class ContentSpaceService {
             const globalState = globalCapabilities.find((candidate) =>
               candidate.operation === state.operation
             )
-            return globalState?.readiness === 'production_ready'
+            return globalState && readinessExecutable(globalState.readiness, audience)
               ? state
               : Object.freeze({
                   operation: state.operation,
@@ -737,7 +753,8 @@ export class ContentSpaceService {
     context: ContentSpaceProviderOperationContext,
     reference: ContentEntryReference,
     operation: ContentSpaceOperation,
-    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent']
+    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent'],
+    audience: ContentSpaceServiceCallContext['audience']
   ): Promise<void> {
     const observation = await this.#observeBoundEntry(
       provider,
@@ -748,7 +765,7 @@ export class ContentSpaceService {
     const state = observation.capabilities.find((candidate) =>
       candidate.operation === operation
     )
-    if (!state || state.readiness !== 'production_ready') {
+    if (!state || !readinessExecutable(state.readiness, audience)) {
       fail('blocked_by_contract', `Content Space resource operation ${operation} is unavailable.`)
     }
   }
@@ -773,11 +790,12 @@ export class ContentSpaceService {
     const capabilities = await this.#describe(
       provider,
       context,
-      call.assertPrincipalCurrent
+      call.assertPrincipalCurrent,
+      call.audience
     )
     assertNotCancelled(context.signal)
     const state = capabilities.find((candidate) => candidate.operation === operation)
-    if (!state || state.readiness !== 'production_ready') {
+    if (!state || !readinessExecutable(state.readiness, call.audience)) {
       fail('blocked_by_contract', `Content Space operation ${operation} is unavailable.`)
     }
     return Object.freeze({ provider, context, capabilities })
@@ -815,7 +833,8 @@ export class ContentSpaceService {
   async #describe(
     provider: ContentSpaceProvider,
     context: ContentSpaceProviderOperationContext,
-    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent']
+    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent'],
+    audience: ContentSpaceServiceCallContext['audience']
   ) {
     return this.#effectiveCapabilities(
       parseOutput(
@@ -826,16 +845,20 @@ export class ContentSpaceService {
           assertPrincipalCurrent
         )
       ),
-      true
+      true,
+      audience
     )
   }
 
   #effectiveCapabilities(
     states: readonly z.infer<typeof contentSpaceCapabilityStateListSchema>[number][],
-    requireObservationGate: boolean
+    requireObservationGate: boolean,
+    audience: ContentSpaceServiceCallContext['audience'] = 'system'
   ) {
     const observationState = states.find((state) => state.operation === 'observe-entry')
-    const observationReady = observationState?.readiness === 'production_ready'
+    const observationReady = observationState
+      ? readinessExecutable(observationState.readiness, audience)
+      : false
     return contentSpaceCapabilityStateListSchema.parse(states.map((state) => {
       const observationBlocked = requireObservationGate && !observationReady && [
         'list-entries',
@@ -1198,6 +1221,14 @@ function sameDownloadReference(
   const leftDigest = 'digest' in left ? left.digest?.value : undefined
   const rightDigest = 'digest' in right ? right.digest?.value : undefined
   return leftVersion === rightVersion && leftDigest === rightDigest
+}
+
+function readinessExecutable(
+  readiness: 'poc_only' | 'blocked_by_contract' | 'production_ready',
+  audience: ContentSpaceServiceCallContext['audience']
+): boolean {
+  return readiness === 'production_ready' ||
+    (readiness === 'poc_only' && (audience === 'ui' || audience === 'agent'))
 }
 
 function operationError(

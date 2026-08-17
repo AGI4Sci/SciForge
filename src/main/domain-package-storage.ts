@@ -3,13 +3,24 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import {
+  DomainMainProviderCredentialError,
   domainMainPackageSecretKeySchema,
   domainMainPackageSettingsSnapshotSchema,
+  domainMainProviderCredentialBindingSchema,
   type DomainMainPackageSecretStoreHost,
-  type DomainMainPackageSettingsHost
+  type DomainMainPackageSettingsHost,
+  type DomainMainProviderCredentialBinding,
+  type DomainMainProviderCredentialStoreHost
 } from '@sciforge/domain-sdk/package-storage'
 import type { DomainPackageJsonValue } from '@sciforge/domain-sdk/contract'
 import type { DomainRuntimeContributionOwner } from '@sciforge/domain-sdk/host'
+import {
+  principalAssuranceSchema,
+  principalAuthoritySchema,
+  principalSubjectSchema,
+  type PrincipalSnapshot
+} from '@sciforge/domain-sdk/principal'
+import { z } from 'zod'
 
 type PackageEncryption = Readonly<{
   isEncryptionAvailable: () => boolean
@@ -36,9 +47,25 @@ type SecretsFile = Readonly<{
   encrypted: Readonly<Record<string, string>>
 }>
 
+const storedProviderCredentialSchema = z.object({
+  version: z.literal(1),
+  nodeId: z.string().min(1).max(256),
+  principal: z.object({
+    authority: principalAuthoritySchema,
+    subject: principalSubjectSchema,
+    assurance: principalAssuranceSchema
+  }).strict(),
+  binding: domainMainProviderCredentialBindingSchema,
+  secret: z.string().min(1).max(1_000_000)
+}).strict()
+
+type StoredProviderCredential = z.infer<typeof storedProviderCredentialSchema>
+
 export function createDomainPackageStorageFactory(input: Readonly<{
   userDataDir: string
   encryption: PackageEncryption
+  getDeviceId: () => string
+  currentPrincipal: () => PrincipalSnapshot | undefined
 }>): DomainPackageStorageFactory {
   const root = join(input.userDataDir, 'domain-package-storage')
   const stores = new Map<string, DomainPackageStorage>()
@@ -71,6 +98,60 @@ export function createDomainPackageStorageFactory(input: Readonly<{
       const secretsPath = join(packageRoot, 'secrets.enc.json')
       const settingsLock = `${ownerKey}:settings`
       const secretsLock = `${ownerKey}:secrets`
+
+      const providerCredentials: DomainMainProviderCredentialStoreHost = Object.freeze({
+        has: (rawBinding) => serialize(secretsLock, async () => {
+          const context = providerCredentialContext(input, rawBinding)
+          const file = await readSecrets(secretsPath)
+          const encrypted = file.encrypted[context.key]
+          if (encrypted === undefined) return false
+          readProviderCredential(input.encryption, encrypted, context)
+          return true
+        }),
+        write: (rawBinding, secret) => serialize(secretsLock, async () => {
+          const context = providerCredentialContext(input, rawBinding)
+          if (typeof secret !== 'string' || secret.length === 0 || secret.length > 1_000_000) {
+            throw new TypeError('Provider credential values must be non-empty bounded strings.')
+          }
+          requireEncryption(input.encryption)
+          assertCurrentProviderPrincipal(input, context.principal)
+          const file = await readSecrets(secretsPath)
+          const record = storedProviderCredentialSchema.parse({
+            version: 1,
+            nodeId: context.nodeId,
+            principal: stablePrincipalIdentity(context.principal),
+            binding: context.binding,
+            secret
+          })
+          const encryptedValue = input.encryption
+            .encryptString(JSON.stringify(record))
+            .toString('base64')
+          assertCurrentProviderPrincipal(input, context.principal)
+          await writeJsonFile(secretsPath, {
+            version: 1,
+            encrypted: { ...file.encrypted, [context.key]: encryptedValue }
+          } satisfies SecretsFile)
+        }),
+        use: (rawBinding, operation) => serialize(secretsLock, async () => {
+          if (typeof operation !== 'function') throw new TypeError('Credential use requires an operation.')
+          const context = providerCredentialContext(input, rawBinding)
+          const file = await readSecrets(secretsPath)
+          const encrypted = file.encrypted[context.key]
+          if (encrypted === undefined) throw providerCredentialError('credential_unavailable')
+          const record = readProviderCredential(input.encryption, encrypted, context)
+          assertCurrentProviderPrincipal(input, context.principal)
+          return operation(record.secret)
+        }),
+        remove: (rawBinding) => serialize(secretsLock, async () => {
+          const context = providerCredentialContext(input, rawBinding)
+          const file = await readSecrets(secretsPath)
+          if (!Object.hasOwn(file.encrypted, context.key)) return
+          const encrypted = { ...file.encrypted }
+          delete encrypted[context.key]
+          assertCurrentProviderPrincipal(input, context.principal)
+          await writeJsonFile(secretsPath, { version: 1, encrypted } satisfies SecretsFile)
+        })
+      })
 
       const settings: DomainMainPackageSettingsHost = Object.freeze({
         read: () => serialize(settingsLock, () => readSettings(settingsPath)),
@@ -130,7 +211,8 @@ export function createDomainPackageStorageFactory(input: Readonly<{
           const encrypted = { ...file.encrypted }
           delete encrypted[key]
           await writeJsonFile(secretsPath, { version: 1, encrypted } satisfies SecretsFile)
-        })
+        }),
+        providerCredentials
       })
 
       const created = Object.freeze({ settings, secrets })
@@ -152,6 +234,104 @@ function packageOwnerKey(owner: DomainRuntimeContributionOwner): string {
     .digest('hex')
     .slice(0, 16)
   return `${readable}-${digest}`
+}
+
+type ProviderCredentialContext = Readonly<{
+  key: string
+  nodeId: string
+  principal: PrincipalSnapshot
+  binding: DomainMainProviderCredentialBinding
+}>
+
+function providerCredentialContext(
+  input: Readonly<{
+    getDeviceId: () => string
+    currentPrincipal: () => PrincipalSnapshot | undefined
+  }>,
+  rawBinding: DomainMainProviderCredentialBinding
+): ProviderCredentialContext {
+  const principal = input.currentPrincipal()
+  if (!principal) throw providerCredentialError('principal_unavailable')
+  const nodeId = input.getDeviceId().trim()
+  if (!nodeId || principal.deviceId !== nodeId) {
+    throw providerCredentialError('principal_device_mismatch')
+  }
+  const binding = domainMainProviderCredentialBindingSchema.parse(rawBinding)
+  const digest = createHash('sha256')
+    .update(JSON.stringify({
+      nodeId,
+      principal: stablePrincipalIdentity(principal),
+      binding
+    }))
+    .digest('hex')
+  return Object.freeze({
+    key: domainMainPackageSecretKeySchema.parse(`provider.${digest}`),
+    nodeId,
+    principal,
+    binding
+  })
+}
+
+function stablePrincipalIdentity(principal: PrincipalSnapshot): StoredProviderCredential['principal'] {
+  return Object.freeze({
+    authority: principal.authority,
+    subject: principal.subject,
+    assurance: principal.assurance
+  })
+}
+
+function assertCurrentProviderPrincipal(
+  input: Readonly<{
+    getDeviceId: () => string
+    currentPrincipal: () => PrincipalSnapshot | undefined
+  }>,
+  captured: PrincipalSnapshot
+): void {
+  const current = input.currentPrincipal()
+  if (!current) throw providerCredentialError('principal_unavailable')
+  if (
+    input.getDeviceId().trim() !== captured.deviceId ||
+    current.authority !== captured.authority ||
+    current.subject !== captured.subject ||
+    current.assurance !== captured.assurance ||
+    current.deviceId !== captured.deviceId
+  ) {
+    throw providerCredentialError('credential_binding_mismatch')
+  }
+}
+
+function readProviderCredential(
+  encryption: PackageEncryption,
+  encrypted: string,
+  context: ProviderCredentialContext
+): StoredProviderCredential {
+  requireEncryption(encryption)
+  const record = storedProviderCredentialSchema.parse(JSON.parse(
+    encryption.decryptString(Buffer.from(encrypted, 'base64'))
+  ))
+  if (
+    record.nodeId !== context.nodeId ||
+    record.principal.authority !== context.principal.authority ||
+    record.principal.subject !== context.principal.subject ||
+    record.principal.assurance !== context.principal.assurance ||
+    record.binding.providerInstanceRef !== context.binding.providerInstanceRef ||
+    record.binding.connectionId !== context.binding.connectionId
+  ) {
+    throw providerCredentialError('credential_binding_mismatch')
+  }
+  return record
+}
+
+function providerCredentialError(
+  code: ConstructorParameters<typeof DomainMainProviderCredentialError>[0]
+): DomainMainProviderCredentialError {
+  const messages = {
+    principal_unavailable: 'A current Host principal is required for provider credentials.',
+    principal_device_mismatch: 'The current Host principal does not belong to this execution node.',
+    credential_unavailable: 'No provider credential is available for the current binding.',
+    credential_binding_mismatch: 'The provider credential binding does not match the current Host context.'
+  } as const
+  return new DomainMainProviderCredentialError(code, messages[code])
 }
 
 async function readSettings(path: string): Promise<SettingsFile> {

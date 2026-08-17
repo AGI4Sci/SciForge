@@ -71,6 +71,64 @@ const readyCapabilities: readonly ContentSpaceCapabilityState[] = Object.freeze(
 )
 
 describe('ContentSpaceService', () => {
+  it('admits PoC-only reads only for trusted UI and Agent caller audiences', async () => {
+    const provider = providerFixture({
+      describeCapabilities: async () => operations.map((operation) => ({
+        operation,
+        readiness: operation === 'list-containers' ? 'poc_only' : 'blocked_by_contract',
+        reasonCode: operation === 'list-containers'
+          ? 'verification_profile_required'
+          : 'provider_contract_missing'
+      }))
+    })
+    const service = serviceFor(provider)
+    const request = { providerInstanceRef: PROVIDER_INSTANCE_REF, page: { limit: 10 } }
+
+    await expect(service.listContainers(request, {
+      ...readCall(),
+      audience: 'ui'
+    })).resolves.toMatchObject({ providerInstanceRef: PROVIDER_INSTANCE_REF })
+    await expect(service.listContainers(request, {
+      ...readCall(),
+      audience: 'agent'
+    })).resolves.toMatchObject({ providerInstanceRef: PROVIDER_INSTANCE_REF })
+    await expect(service.listContainers(request, {
+      ...readCall(),
+      audience: 'system'
+    })).rejects.toMatchObject({ detail: { code: 'blocked_by_contract' } })
+  })
+
+  it('applies the same trusted-audience gate to PoC resource reads', async () => {
+    const poc = operations.map((operation) => ({
+      operation,
+      readiness: ['list-entries', 'observe-entry'].includes(operation)
+        ? 'poc_only' as const
+        : 'blocked_by_contract' as const,
+      reasonCode: ['list-entries', 'observe-entry'].includes(operation)
+        ? 'verification_profile_required' as const
+        : 'provider_contract_missing' as const
+    }))
+    const provider = providerFixture({
+      describeCapabilities: async () => poc,
+      observeEntry: async ({ reference }) => {
+        if (!('containerId' in reference)) throw new Error('Expected container')
+        return {
+          entry: { kind: 'container' as const, reference, label: 'Root' },
+          capabilities: poc
+        }
+      }
+    })
+    const service = serviceFor(provider)
+    const request = { parent: ROOT, page: { limit: 10 } }
+
+    await expect(service.listEntries(request, { ...readCall(), audience: 'ui' }))
+      .resolves.toMatchObject({ parent: ROOT })
+    await expect(service.listEntries(request, { ...readCall(), audience: 'agent' }))
+      .resolves.toMatchObject({ parent: ROOT })
+    await expect(service.listEntries(request, { ...readCall(), audience: 'system' }))
+      .rejects.toMatchObject({ detail: { code: 'blocked_by_contract' } })
+  })
+
   it('keeps one shared pending Provider pin when one caller aborts', async () => {
     const firstFactory = deferred<ContentSpaceProvider>()
     const unexpectedSecondFactory = deferred<ContentSpaceProvider>()
@@ -625,6 +683,7 @@ describe('ContentSpaceService', () => {
         providerInstanceRef: PROVIDER_INSTANCE_REF,
         items: [{
           reference: { providerInstanceRef: 'provider-instance-beta', containerId: 'root' },
+          scope: 'shared',
           label: 'Wrong authority'
         }]
       })
@@ -688,7 +747,7 @@ function providerFixture(
     describeCapabilities: async () => readyCapabilities,
     listContainers: async ({ context }) => ({
       providerInstanceRef: context.providerInstanceRef,
-      items: [{ reference: ROOT, label: 'Root' }]
+      items: [{ reference: ROOT, scope: 'personal', label: 'Root' }]
     }),
     listEntries: async ({ parent }) => ({ parent, items: [] }),
     observeEntry: async ({ reference }) => observationFor(reference),

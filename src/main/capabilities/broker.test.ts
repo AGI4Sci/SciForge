@@ -1622,6 +1622,42 @@ describe('CapabilityBroker', () => {
     expect(handler).toHaveBeenCalledTimes(1)
   })
 
+  it('preserves idempotency for sensitive input without exposing it in the audit journal', async () => {
+    const handler = vi.fn(async (input: { password: string }) => ({
+      output: { accepted: input.password.length > 0 }
+    }))
+    const capability = defineCapability({
+      id: 'provider-connection.bind',
+      version: '1',
+      title: 'Bind provider connection',
+      description: 'Validates a provider credential without retaining it in broker journals.',
+      audiences: ['ui'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      tags: ['sensitive-input'],
+      inputSchema: z.object({ password: z.string().min(1) }).strict(),
+      outputSchema: z.object({ accepted: z.boolean() }).strict(),
+      handler
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([capability]))
+    const request = {
+      actionId: capability.descriptor.id,
+      invocationId: 'bind-sensitive-1',
+      input: { password: 'fixture-secret-never-journal' }
+    }
+
+    await expect(broker.invoke(ui, request)).resolves.toMatchObject({ replayed: false })
+    await expect(broker.invoke(ui, request)).resolves.toMatchObject({ replayed: true })
+    await expect(broker.invoke(ui, {
+      ...request,
+      input: { password: 'different-fixture-secret' }
+    })).rejects.toSatisfy((error) => expectBrokerCode(error, 'idempotency_conflict'))
+    expect(handler).toHaveBeenCalledOnce()
+    expect(JSON.stringify(broker.listAuditRecords())).not.toContain('fixture-secret')
+  })
+
   it('never evicts pending idempotency work or redispatches a failed write', async () => {
     let release: (() => void) | undefined
     let markStarted: (() => void) | undefined

@@ -1,6 +1,7 @@
 import { constants } from 'node:fs'
 import {
   link,
+  mkdir,
   mkdtemp,
   open,
   readFile,
@@ -993,6 +994,70 @@ describe('Host-owned file transfers', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it('mints one-shot Agent transfers only from the active Workspace relative path', async () => {
+    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const workspace = join(root, 'workspace')
+    const outside = join(root, 'outside')
+    await Promise.all([
+      mkdir(workspace, { recursive: true }),
+      mkdir(outside, { recursive: true }),
+      mkdir(join(root, 'temporary'), { recursive: true })
+    ])
+    const service = createService(join(root, 'temporary'), () => principalV1)
+    const caller = grantCaller('agent:thread-1', principalV1)
+    let invocation: HostResourceGrantInvocation | undefined = invocationFor(caller, {
+      audience: 'agent',
+      workspaceId: workspace,
+      effect: 'external-write',
+      approval: 'confirmation',
+      approved: true
+    })
+    const port = service.forOwner('domain.content-space', () => invocation)
+    try {
+      await writeFile(join(workspace, 'upload.txt'), 'workspace bytes')
+      const source = await port.openWorkspaceUploadSource({
+        relativePath: 'upload.txt',
+        maxBytes: 1024
+      })
+      expect(Buffer.from(await source.read({ offset: 0, length: source.size })).toString())
+        .toBe('workspace bytes')
+      await source.close()
+
+      const destination = await port.openWorkspaceDownloadDestination({
+        relativePath: 'download.txt',
+        maxBytes: 1024
+      })
+      await destination.write(new TextEncoder().encode('downloaded bytes'))
+      await destination.commit()
+      await expect(readFile(join(workspace, 'download.txt'), 'utf8'))
+        .resolves.toBe('downloaded bytes')
+
+      await expect(port.openWorkspaceUploadSource({
+        relativePath: '../outside/secret.txt',
+        maxBytes: 1024
+      })).rejects.toMatchObject({ code: 'invalid_request' })
+      await expect(port.openWorkspaceDownloadDestination({
+        relativePath: 'download.txt',
+        maxBytes: 1024
+      })).rejects.toMatchObject({ code: 'destination_conflict' })
+
+      await symlink(outside, join(workspace, 'escaped'), 'dir')
+      await expect(port.openWorkspaceDownloadDestination({
+        relativePath: 'escaped/file.txt',
+        maxBytes: 1024
+      })).rejects.toMatchObject({ code: 'destination_unavailable' })
+
+      invocation = invocationFor(caller, { audience: 'ui', workspaceId: workspace })
+      await expect(port.openWorkspaceUploadSource({
+        relativePath: 'upload.txt',
+        maxBytes: 1024
+      })).rejects.toMatchObject({ code: 'invalid_request' })
+    } finally {
+      await service.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })
 
 function createService(
@@ -1009,8 +1074,25 @@ function grantCaller(callerId: string, principal: PrincipalSnapshot): HostResour
   return Object.freeze({ callerId, principal })
 }
 
-function invocationFor(caller: HostResourceGrantCaller): HostResourceGrantInvocation {
-  return Object.freeze({ caller: Object.freeze({ ...caller }) })
+function invocationFor(
+  caller: HostResourceGrantCaller,
+  context: Readonly<{
+    audience?: 'ui' | 'agent' | 'system'
+    workspaceId?: string
+    effect?: string
+    approval?: string
+    approved?: boolean
+  }> = {}
+): HostResourceGrantInvocation {
+  const { audience, workspaceId, ...invocation } = context
+  return Object.freeze({
+    caller: Object.freeze({
+      ...caller,
+      ...(audience ? { audience } : {}),
+      ...(workspaceId ? { workspaceId } : {})
+    }),
+    ...invocation
+  })
 }
 
 function requireUploadHandle(

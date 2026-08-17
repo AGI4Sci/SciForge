@@ -18,6 +18,7 @@ import {
 import { DomainExternalNavigationError } from '@sciforge/domain-sdk/external-navigation'
 
 import {
+  CONTENT_CONTAINER_RESOURCE_KIND,
   CONTENT_SPACE_CAPABILITY_IDS,
   CONTENT_SPACE_PROVIDER_CONTRACT_VERSION,
   ContentSpaceOperationError,
@@ -49,17 +50,23 @@ const principal = Object.freeze({
 
 type CapabilityContext = Readonly<{
   caller: Readonly<{
-    audience: 'ui'
+    audience: 'ui' | 'agent' | 'system'
     callerId: string
     principal: typeof principal
+    workspaceId?: string
   }>
   invocationId: string
   signal: AbortSignal
   assertPrincipalCurrent(): void
+  resource?: Readonly<{ resourceId: string; resourceKind: string; workspaceId?: string }>
+  issueResource(registration: any): unknown
 }>
 
 type CapabilityDefinition = Readonly<{
   id: string
+  audiences: readonly ('ui' | 'agent' | 'system')[]
+  scope: 'global' | 'resource'
+  resourceKinds?: readonly string[]
   effect: 'read' | 'external-write'
   approval: 'none' | 'confirmation'
   concurrency: Readonly<{ revision: 'none'; idempotency: 'none' | 'required' }>
@@ -221,6 +228,10 @@ describe('Content Space main composition', () => {
       CONTENT_SPACE_CAPABILITY_IDS.createFolder,
       CONTENT_SPACE_CAPABILITY_IDS.uploadNew,
       CONTENT_SPACE_CAPABILITY_IDS.download,
+      CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot,
+      CONTENT_SPACE_CAPABILITY_IDS.agentCreateFolder,
+      CONTENT_SPACE_CAPABILITY_IDS.agentUploadNew,
+      CONTENT_SPACE_CAPABILITY_IDS.agentDownload,
       CONTENT_SPACE_CAPABILITY_IDS.openPortalTarget
     ])
     for (const capability of definitions) {
@@ -235,6 +246,83 @@ describe('Content Space main composition', () => {
         expect(capability.approval).toBe('none')
       }
     }
+  })
+
+  it('keeps Human browsing global while Agent content access starts from a confirmed resource root', async () => {
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture()))
+    )
+    expect(definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.listContainers)).toMatchObject({
+      audiences: ['ui'],
+      scope: 'global'
+    })
+    expect(definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot)).toMatchObject({
+      audiences: ['agent'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'confirmation'
+    })
+    expect(definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.agentListEntries)).toMatchObject({
+      audiences: ['agent'],
+      scope: 'resource',
+      resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
+      effect: 'read'
+    })
+  })
+
+  it('routes Agent upload input through the active Workspace transfer port only', async () => {
+    const openWorkspaceUploadSource = vi.fn(async () => Object.freeze({
+      name: 'input.txt',
+      size: 5,
+      read: async () => new TextEncoder().encode('input'),
+      close: async () => undefined
+    }))
+    const host = mainHost({
+      fileTransfers: {
+        openUploadSource: vi.fn(async () => { throw new Error('UI handle path was used') }),
+        openDownloadDestination: vi.fn(async () => { throw new Error('unused') }),
+        openWorkspaceUploadSource,
+        openWorkspaceDownloadDestination: vi.fn(async () => { throw new Error('unused') })
+      }
+    })
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(host).contributions,
+      contributionHost(providerContributions(() => providerFixture()))
+    )
+    let registration: any
+    const resource = { token: `cap_${'a'.repeat(32)}`, semanticRevision: 'live:root', expiresAt: '2026-08-17T17:00:00.000Z' }
+    const authorization = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot
+    ).handler({
+      root: { providerInstanceRef: PROVIDER_INSTANCE_REF, containerId: 'root' }
+    }, capabilityContext(undefined, 'agent', {
+      workspaceId: '/workspace',
+      issueResource: (value) => {
+        registration = value
+        return resource
+      }
+    }))
+    expect(authorization.output).toMatchObject({ ok: true })
+
+    const result = await definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.agentUploadNew).handler({
+      name: 'input.txt',
+      workspaceRelativePath: 'results/input.txt'
+    }, capabilityContext(undefined, 'agent', {
+      workspaceId: '/workspace',
+      resource: {
+        resourceId: registration.resourceId,
+        resourceKind: CONTENT_CONTAINER_RESOURCE_KIND,
+        workspaceId: '/workspace'
+      }
+    }))
+
+    expect(result.output).toMatchObject({ ok: true })
+    expect(openWorkspaceUploadSource).toHaveBeenCalledWith(expect.objectContaining({
+      relativePath: 'results/input.txt',
+      maxBytes: 16 * 1024 * 1024
+    }))
   })
 })
 
@@ -273,13 +361,28 @@ function definition(
 }
 
 function capabilityContext(
-  assertPrincipalCurrent: () => void = () => undefined
+  assertPrincipalCurrent: (() => void) | undefined = () => undefined,
+  audience: 'ui' | 'agent' | 'system' = 'ui',
+  options: Readonly<{
+    workspaceId?: string
+    resource?: CapabilityContext['resource']
+    issueResource?: CapabilityContext['issueResource']
+  }> = {}
 ): CapabilityContext {
   return Object.freeze({
-    caller: Object.freeze({ audience: 'ui' as const, callerId: 'renderer:test', principal }),
+    caller: Object.freeze({
+      audience,
+      callerId: 'renderer:test',
+      principal,
+      ...(options.workspaceId ? { workspaceId: options.workspaceId } : {})
+    }),
     invocationId: 'invocation_content_space_main_0001',
     signal: new AbortController().signal,
-    assertPrincipalCurrent
+    assertPrincipalCurrent: assertPrincipalCurrent ?? (() => undefined),
+    ...(options.resource ? { resource: options.resource } : {}),
+    issueResource: options.issueResource ?? (() => {
+      throw new Error('Unexpected resource issuance')
+    })
   })
 }
 
@@ -303,7 +406,11 @@ function providerFixture(overrides: Partial<ContentSpaceProvider> = {}): Content
     describeCapabilities: async () => ready,
     listContainers: async ({ context }) => ({
       providerInstanceRef: context.providerInstanceRef,
-      items: []
+      items: [{
+        reference: { providerInstanceRef: context.providerInstanceRef, containerId: 'root' },
+        scope: 'personal',
+        label: 'Root'
+      }]
     }),
     listEntries: async ({ parent }) => ({ parent, items: [] }),
     observeEntry: async ({ reference }) => ({

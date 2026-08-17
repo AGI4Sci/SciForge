@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { z } from 'zod'
 import {
@@ -196,6 +196,22 @@ function stableJson(value: CapabilityJsonValue): string {
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
     .join(',')}}`
+}
+
+/**
+ * Sensitive capability input is needed by the handler but must not be retained
+ * verbatim by the broker's restart-bounded idempotency journal. The digest still
+ * preserves exact retry/conflict semantics without turning that journal into a
+ * credential store.
+ */
+function idempotencyInput(
+  definition: CapabilityDefinition,
+  input: CapabilityJsonValue
+): CapabilityJsonValue {
+  if (!definition.descriptor.tags.includes('sensitive-input')) return input
+  return {
+    sensitiveInputSha256: createHash('sha256').update(stableJson(input)).digest('hex')
+  }
 }
 
 function normalizedWorkspaceId(value: string | undefined): string | undefined {
@@ -738,7 +754,7 @@ export class CapabilityBroker {
         ...(principalScopedIdempotency ? { workspaceScope: workspaceInvocationScope(caller) } : {}),
         resourceRef: resource?.resourceRef ?? null,
         expectedRevision: request.expectedRevision ?? null,
-        input: request.input
+        input: idempotencyInput(definition, request.input)
       })
       const idempotencyKey = request.invocationId
         ? `${caller.audience}\u0000${caller.callerId}\u0000${principalScopedIdempotency ? workspaceInvocationScope(caller) : 'global'}\u0000${principalScopedIdempotency ? callerLease : 'host-principal-transition'}\u0000${request.actionId}\u0000${request.invocationId}`

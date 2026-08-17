@@ -2,6 +2,7 @@ import { mkdtemp, readFile, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 
 import { createDomainPackageStorageFactory } from './domain-package-storage'
 
@@ -15,7 +16,7 @@ afterEach(async () => {
   })))
 })
 
-async function fixture() {
+async function fixture(currentPrincipal?: () => PrincipalSnapshot | undefined) {
   const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-domain-storage-'))
   temporaryDirectories.push(userDataDir)
   const encryption = {
@@ -34,7 +35,12 @@ async function fixture() {
   return {
     userDataDir,
     encryption,
-    factory: createDomainPackageStorageFactory({ userDataDir, encryption })
+    factory: createDomainPackageStorageFactory({
+      userDataDir,
+      encryption,
+      getDeviceId: () => 'test-device',
+      currentPrincipal: currentPrincipal ?? (() => undefined)
+    })
   }
 }
 
@@ -90,5 +96,45 @@ describe('domain package storage', () => {
     await expect(storage.secrets.write('device.credential', 'fixture-value')).rejects.toThrow(
       'encryption is unavailable'
     )
+  })
+
+  it('uses a provider credential only for the current principal binding', async () => {
+    let currentPrincipal: PrincipalSnapshot | undefined = {
+      authority: 'sciforge.local-account',
+      subject: 'local-account-a',
+      assurance: 'local-selection',
+      deviceId: 'test-device',
+      identityVersion: 1
+    }
+    const { factory } = await fixture(() => currentPrincipal)
+    const storage = factory.forOwner({
+      moduleId: 'example.opencontent-connector',
+      moduleVersion: '1.0.0'
+    })
+    const credentials = storage.secrets.providerCredentials!
+    const binding = {
+      providerInstanceRef: 'opencontent.demo',
+      connectionId: 'connection-a'
+    }
+
+    await credentials.write(binding, 'opaque-token')
+    await expect(credentials.use(binding, async (secret) => secret.length)).resolves.toBe(12)
+
+    currentPrincipal = {
+      ...currentPrincipal,
+      subject: 'local-account-b',
+      identityVersion: 2
+    }
+    await expect(credentials.has(binding)).resolves.toBe(false)
+    await expect(credentials.use(binding, async () => undefined)).rejects.toMatchObject({
+      code: 'credential_unavailable'
+    })
+
+    currentPrincipal = {
+      ...currentPrincipal,
+      subject: 'local-account-a',
+      identityVersion: 3
+    }
+    await expect(credentials.use(binding, async (secret) => secret.length)).resolves.toBe(12)
   })
 })

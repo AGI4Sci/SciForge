@@ -18,6 +18,7 @@ import {
   MAIN_CAPABILITY_FACTORY_CONTRIBUTION_KIND,
   composeMainCapabilityRegistry
 } from './main-contributions'
+import { HostInternalServiceRegistry } from './internal-services'
 
 const CORE_MAIN_DOMAIN_ENTRIES: readonly MainDomainModuleDefinition[] = Object.freeze([
   coreCapabilityEntry({
@@ -56,9 +57,14 @@ const CORE_MAIN_DOMAIN_ENTRIES: readonly MainDomainModuleDefinition[] = Object.f
 
 export function createApplicationDomainCatalog(host: InstalledMainDomainHost): DomainModuleCatalog {
   const catalog = new DomainModuleCatalog()
+  const internalServices = new HostInternalServiceRegistry()
   catalog.registerBatch([
     ...CORE_MAIN_DOMAIN_ENTRIES,
-    ...createInstalledMainDomainEntries(host)
+    ...createInstalledMainDomainEntries({
+      ...host,
+      internalServicesFor: host.internalServicesFor ?? ((owner) =>
+        internalServices.forOwner(owner))
+    })
   ])
   return catalog
 }

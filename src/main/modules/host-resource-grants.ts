@@ -13,7 +13,16 @@ export type HostResourceGrantInvocation = Readonly<{
   caller: Readonly<{
     callerId: string
     principal?: PrincipalSnapshot
+    audience?: 'ui' | 'agent' | 'system'
+    workspaceId?: string
   }>
+  effect?: string
+  approval?: string
+  approved?: boolean
+}>
+
+export type HostAgentWorkspaceResourceGrantCaller = HostResourceGrantCaller & Readonly<{
+  workspaceId: string
 }>
 
 export type HostResourceGrantInvocationProvider = () =>
@@ -45,6 +54,26 @@ export function requireActiveHostResourceGrantCaller(
   return defineHostResourceGrantCaller({
     callerId: invocation.caller.callerId,
     principal: invocation.caller.principal
+  })
+}
+
+export function requireActiveAgentWorkspaceResourceGrantCaller(
+  currentInvocation: HostResourceGrantInvocationProvider
+): HostAgentWorkspaceResourceGrantCaller {
+  const invocation = currentInvocation()
+  const workspaceId = invocation?.caller.workspaceId?.trim()
+  if (
+    invocation?.caller.audience !== 'agent' || !workspaceId ||
+    invocation.effect !== 'external-write' ||
+    invocation.approval !== 'confirmation' || invocation.approved !== true
+  ) {
+    throw new Error(
+      'An approved Agent external-write invocation with an active Workspace is required.'
+    )
+  }
+  return Object.freeze({
+    ...requireActiveHostResourceGrantCaller(currentInvocation),
+    workspaceId
   })
 }
 

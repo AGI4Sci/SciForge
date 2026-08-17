@@ -164,7 +164,7 @@ export function ContentSpacePanel({
       const states = unwrap(result).items
       setNavigationCapabilities(states)
       const listState = states.find(({ operation }) => operation === 'list-containers')
-      if (listState?.readiness !== 'production_ready') {
+      if (!listState || listState.readiness === 'blocked_by_contract') {
         setStatus('This Provider cannot list Content Space containers yet.')
         return
       }
@@ -656,6 +656,9 @@ export function ContentSpacePanel({
                 disabled={busy || !isOperationReady(navigationCapabilities, 'list-entries')}
                 className="flex w-full items-center rounded border border-slate-200 px-3 py-2 text-left text-sm hover:bg-slate-50">
                 <span className="mr-2" aria-hidden>▣</span>{container.label}
+                <span className="ml-2 text-[10px] uppercase text-muted-foreground">
+                  {container.scope === 'personal' ? 'Personal' : 'Shared'}
+                </span>
               </button>
             ))}
             {containerCursor && (

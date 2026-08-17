@@ -20,6 +20,7 @@ import {
   DomainFileTransferError,
   domainFileTransferHandleSchema,
   domainFileTransferLabelSchema,
+  domainWorkspaceRelativePathSchema,
   type DomainFileTransferHandle,
   type DomainMainDownloadDestination,
   type DomainMainFileTransferHost,
@@ -28,8 +29,13 @@ import {
   type DomainRendererUploadSelection
 } from '@sciforge/domain-sdk/file-transfer'
 import {
+  resolveOpenTargetPath,
+  resolveSafeWorkspaceWriteTarget
+} from '@sciforge/domain-sdk/node/workspace-paths'
+import {
   boundedHostResourceGrantOwnerId,
   defineHostResourceGrantCaller,
+  requireActiveAgentWorkspaceResourceGrantCaller,
   requireActiveHostResourceGrantCaller,
   type HostResourceGrantCaller,
   type HostResourceGrantInvocationProvider
@@ -194,7 +200,74 @@ export class HostFileTransferService {
         ...input,
         ownerId: owner,
         caller: activeCaller()
-      })
+      }),
+      openWorkspaceUploadSource: async (input) => {
+        const context = activeAgentWorkspaceContext(currentInvocation)
+        const relativePath = parseWorkspaceRelativePath(input.relativePath)
+        let sourcePath: string
+        try {
+          sourcePath = await resolveOpenTargetPath(relativePath, context.workspaceId, {
+            allowBasenameFallback: false
+          })
+        } catch (error) {
+          throw new DomainFileTransferError(
+            'source_unavailable',
+            'The Agent upload source is unavailable inside the active Workspace.',
+            { cause: error }
+          )
+        }
+        const selection = await this.registerUpload({
+          ownerId: owner,
+          caller: context,
+          path: sourcePath,
+          maxBytes: input.maxBytes,
+          signal: input.signal
+        })
+        if (selection.cancelled) {
+          throw new DomainFileTransferError('cancelled', 'The Agent upload was cancelled.')
+        }
+        return this.#openUploadSourceForCaller({
+          ownerId: owner,
+          caller: context,
+          handle: selection.handle,
+          maxBytes: input.maxBytes,
+          signal: input.signal
+        })
+      },
+      openWorkspaceDownloadDestination: async (input) => {
+        const context = activeAgentWorkspaceContext(currentInvocation)
+        const relativePath = parseWorkspaceRelativePath(input.relativePath)
+        let destinationPath: string
+        try {
+          destinationPath = (await resolveSafeWorkspaceWriteTarget(
+            relativePath,
+            context.workspaceId,
+            { createParentDirectories: false, targetKind: 'file' }
+          )).path
+        } catch (error) {
+          throw new DomainFileTransferError(
+            'destination_unavailable',
+            'The Agent download destination is unavailable inside the active Workspace.',
+            { cause: error }
+          )
+        }
+        const selection = await this.registerDownload({
+          ownerId: owner,
+          caller: context,
+          path: destinationPath,
+          signal: input.signal
+        })
+        if (selection.cancelled) {
+          throw new DomainFileTransferError('cancelled', 'The Agent download was cancelled.')
+        }
+        return this.#openDownloadDestinationForCaller({
+          ownerId: owner,
+          caller: context,
+          handle: selection.handle,
+          maxBytes: input.maxBytes,
+          signal: input.signal
+        })
+      }
     })
   }
 
@@ -1285,6 +1358,31 @@ function boundedAbsolutePath(value: string): string {
     throw new DomainFileTransferError('invalid_request', 'The Host-owned file path is invalid.')
   }
   return value
+}
+
+function activeAgentWorkspaceContext(
+  currentInvocation: HostResourceGrantInvocationProvider
+) {
+  try {
+    return requireActiveAgentWorkspaceResourceGrantCaller(currentInvocation)
+  } catch (error) {
+    throw new DomainFileTransferError(
+      'invalid_request',
+      'Agent Workspace transfers require an approved active Task Workspace.',
+      { cause: error }
+    )
+  }
+}
+
+function parseWorkspaceRelativePath(value: string): string {
+  const parsed = domainWorkspaceRelativePathSchema.safeParse(value)
+  if (!parsed.success) {
+    throw new DomainFileTransferError(
+      'invalid_request',
+      'The Agent file path must be a safe Workspace-relative path.'
+    )
+  }
+  return parsed.data
 }
 
 function boundedLabel(value: string): string {

@@ -154,6 +154,7 @@ import {
 import { DomainFileTransferError } from '@sciforge/domain-sdk/file-transfer'
 import { HostFileTransferService } from './modules/file-transfer'
 import { HostExternalNavigationService } from './modules/external-navigation'
+import { HostInternalServiceRegistry } from './modules/internal-services'
 import {
   createPortableResourceReferenceService,
   type PortableResourceReferenceService
@@ -1103,13 +1104,16 @@ app
         }
       }
     })
-    const domainPackageStorage = createDomainPackageStorageFactory({
-      userDataDir: app.getPath('userData'),
-      encryption: safeStorage
-    })
     let principalContextForDomainServices: HostPrincipalContext | null = null
     let capabilityBrokerForDomainServices: CapabilityBroker | null = null
     let portableResourceReferences: PortableResourceReferenceService | null = null
+    const domainPackageStorage = createDomainPackageStorageFactory({
+      userDataDir: app.getPath('userData'),
+      encryption: safeStorage,
+      getDeviceId: () => hostDeviceId,
+      currentPrincipal: () => principalContextForDomainServices?.current()
+    })
+    const hostInternalServices = new HostInternalServiceRegistry()
     const isPrincipalCurrentForDomainServices = (principal: Parameters<
       typeof samePrincipalSnapshot
     >[0]): boolean => samePrincipalSnapshot(
@@ -1167,6 +1171,7 @@ app
         })
       },
       packageStorageFor: (owner) => domainPackageStorage.forOwner(owner),
+      internalServicesFor: (owner) => hostInternalServices.forOwner(owner),
       fileTransfersFor: (owner) => hostFileTransfers.forOwner(
         owner.moduleId,
         () => capabilityBrokerForDomainServices?.currentInvocation()

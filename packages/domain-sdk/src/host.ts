@@ -722,6 +722,24 @@ export type DomainMainTextSanitizerHost = Readonly<{
   sanitizeText: (value: string) => string
 }>
 
+export type DomainMainInternalServiceRegistration<Service extends object = object> = Readonly<{
+  serviceId: string
+  contractVersion: string
+  allowedConsumerModuleIds: readonly string[]
+  service: Service
+}>
+
+/**
+ * Owner-scoped main-process service mediation. The Host derives both owners
+ * from generated composition; runtime input cannot name either package owner.
+ */
+export type DomainMainInternalServiceHost = Readonly<{
+  register<Service extends object>(
+    registration: DomainMainInternalServiceRegistration<Service>
+  ): void
+  acquire<Service extends object>(serviceId: string, contractVersion: string): Service
+}>
+
 /**
  * Main-process services available to every trusted domain package.
  *
@@ -751,6 +769,8 @@ export type DomainMainHost = Readonly<{
   externalNavigation?: DomainMainExternalNavigationHost
   /** Owner-scoped materialization/export facade bound to the active capability invocation. */
   portableResources?: DomainMainPortableResourceReferencesHost
+  /** Owner-scoped, main-process-only package service mediation. */
+  internalServices?: DomainMainInternalServiceHost
   visualCapture?: DomainMainVisualCaptureHost
   textSanitizer?: DomainMainTextSanitizerHost
 }>

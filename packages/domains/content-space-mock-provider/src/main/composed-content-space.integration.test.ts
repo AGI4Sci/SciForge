@@ -66,6 +66,12 @@ describe('composed Content Space with local mock Provider', () => {
           commit,
           abort
         })
+      }),
+      openWorkspaceUploadSource: vi.fn(async () => {
+        throw new Error('Agent Workspace transfers are outside this UI integration case.')
+      }),
+      openWorkspaceDownloadDestination: vi.fn(async () => {
+        throw new Error('Agent Workspace transfers are outside this UI integration case.')
       })
     })
     const host: DomainMainHost = Object.freeze({
@@ -90,7 +96,11 @@ describe('composed Content Space with local mock Provider', () => {
       const definitions = factory.createDefinitions()
       const containers = await invoke<Readonly<{
         providerInstanceRef: string
-        items: readonly Readonly<{ reference: ContentContainerReference; label: string }>[]
+        items: readonly Readonly<{
+          reference: ContentContainerReference
+          scope: 'personal' | 'shared'
+          label: string
+        }>[]
       }>>(definitions, CONTENT_SPACE_CAPABILITY_IDS.listContainers, {
         providerInstanceRef: LOCAL_MOCK_PROVIDER_INSTANCE_REF,
         page: { limit: 10 }

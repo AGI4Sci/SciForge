@@ -99,6 +99,7 @@ export function createLocalMockContentSpaceProvider(
         providerInstanceRef,
         ...pageItems([{
           reference: containerReference(providerInstanceRef, ROOT_CONTAINER_ID),
+          scope: 'personal' as const,
           label: 'Local Content Space'
         }], request)
       })

@@ -34,7 +34,7 @@ test('sorts packages by packageName and omits undeclared process imports', async
   assert.doesNotMatch(generated['src/main/modules/installed-domain-main.ts'], /a-renderer-only/)
   assert.match(
     generated['src/main/modules/installed-domain-main.ts'],
-    /capabilityInvokerFor,\n {4}packageStorageFor,\n {4}fileTransfersFor,\n {4}externalNavigationFor,\n {4}portableResourcesFor,\n {4}\.\.\.sharedHost/
+    /capabilityInvokerFor,\n {4}packageStorageFor,\n {4}fileTransfersFor,\n {4}externalNavigationFor,\n {4}portableResourcesFor,\n {4}internalServicesFor,\n {4}\.\.\.sharedHost/
   )
   assert.match(
     generated['src/main/modules/installed-domain-main.ts'],
@@ -42,7 +42,7 @@ test('sorts packages by packageName and omits undeclared process imports', async
   )
   assert.match(
     generated['src/main/modules/installed-domain-main.ts'],
-    /return \{\n {6}\.\.\.sharedHost,\n {6}capabilities: capabilityInvokerFor\(owner\),\n {6}packageSettings: packageStorage\.settings,\n {6}packageSecrets: packageStorage\.secrets,\n {6}\.\.\.\(fileTransfersFor \? \{ fileTransfers: fileTransfersFor\(owner\) \} : \{\}\),\n {6}\.\.\.\(externalNavigationFor \? \{ externalNavigation: externalNavigationFor\(owner\) \} : \{\}\),\n {6}\.\.\.\(portableResourcesFor \? \{ portableResources: portableResourcesFor\(owner\) \} : \{\}\),/
+    /return \{\n {6}\.\.\.sharedHost,\n {6}capabilities: capabilityInvokerFor\(owner\),\n {6}packageSettings: packageStorage\.settings,\n {6}packageSecrets: packageStorage\.secrets,\n {6}\.\.\.\(fileTransfersFor \? \{ fileTransfers: fileTransfersFor\(owner\) \} : \{\}\),\n {6}\.\.\.\(externalNavigationFor \? \{ externalNavigation: externalNavigationFor\(owner\) \} : \{\}\),\n {6}\.\.\.\(portableResourcesFor \? \{ portableResources: portableResourcesFor\(owner\) \} : \{\}\),\n {6}\.\.\.\(internalServicesFor \? \{ internalServices: internalServicesFor\(owner\) \} : \{\}\),/
   )
   assert.doesNotMatch(
     generated['src/main/modules/installed-domain-main.ts'],

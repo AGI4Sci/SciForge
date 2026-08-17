@@ -80,6 +80,13 @@ describe('Content Space public contract', () => {
       name: 'file.txt',
       sourceHandle: '/Users/example/file.txt'
     })).toThrow()
+    expect(contract.contentSpaceAgentUploadNewInputSchema.parse({
+      name: 'file.txt',
+      workspaceRelativePath: 'results/file.txt'
+    }).workspaceRelativePath).toBe('results/file.txt')
+    expect(() => contract.contentSpaceAgentDownloadInputSchema.parse({
+      workspaceRelativePath: '../escape.txt'
+    })).toThrow()
     expect(contract.contentSpaceOpenPortalTargetInputSchema.parse({
       handle: `portal_${'p'.repeat(32)}`
     }).handle).toBe(`portal_${'p'.repeat(32)}`)
@@ -100,6 +107,17 @@ describe('Content Space public contract', () => {
       retry: 'never'
     }).retry).toBe('never')
   })
+
+  it.each(['rate_limited', 'provider_contract_violation'] as const)(
+    'admits the bounded provider-neutral %s outcome',
+    (code) => {
+      expect(contract.contentSpaceErrorSchema.parse({
+        code,
+        message: 'Bounded provider outcome',
+        retry: 'after-human-action'
+      }).code).toBe(code)
+    }
+  )
 
   it('reports only finite operation-bound transfer phases without arbitrary payloads', () => {
     expect(contract.contentSpaceTransferProgressSchema.parse({
@@ -150,6 +168,27 @@ describe('Content Space public contract', () => {
       ...provider,
       contractVersion: '2.0.0'
     } as unknown as typeof provider)).toThrow()
+  })
+
+  it('requires every selectable container to declare personal or shared scope', () => {
+    const reference = {
+      providerInstanceRef: 'provider-instance-alpha',
+      containerId: 'root'
+    }
+    expect(contract.contentSpaceContainerSummarySchema.parse({
+      reference,
+      scope: 'personal',
+      label: 'Personal library'
+    }).scope).toBe('personal')
+    expect(() => contract.contentSpaceContainerSummarySchema.parse({
+      reference,
+      label: 'Unscoped library'
+    })).toThrow()
+    expect(() => contract.contentSpaceContainerSummarySchema.parse({
+      reference,
+      scope: 'team',
+      label: 'Vendor-specific scope'
+    })).toThrow()
   })
 })
 
