@@ -10,6 +10,7 @@ import type {
 } from './adapter'
 import {
   AGENT_RUNTIME_SUBAGENT_CANCEL_TOOL_NAME,
+  AGENT_RUNTIME_SUBAGENT_DIAGNOSTICS_TOOL_NAME,
   AGENT_RUNTIME_SUBAGENT_MESSAGE_TOOL_NAME,
   AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME,
   AGENT_RUNTIME_SUBAGENT_STATUS_TOOL_NAME,
@@ -70,7 +71,8 @@ describe('AgentRuntime subagent tool bridge', () => {
       AGENT_RUNTIME_SUBAGENT_STATUS_TOOL_NAME,
       AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME,
       AGENT_RUNTIME_SUBAGENT_MESSAGE_TOOL_NAME,
-      AGENT_RUNTIME_SUBAGENT_CANCEL_TOOL_NAME
+      AGENT_RUNTIME_SUBAGENT_CANCEL_TOOL_NAME,
+      AGENT_RUNTIME_SUBAGENT_DIAGNOSTICS_TOOL_NAME
     ])
     expect(bridge.canHandle({
       requestId: 'legacy',
@@ -84,6 +86,48 @@ describe('AgentRuntime subagent tool bridge', () => {
     expect(bridge.dynamicTools()[0]?.description).toContain(
       'configured parallel capacity'
     )
+  })
+
+  it('exposes only redacted product-level lifecycle counters', async () => {
+    const bridge = bridgeWith(completedAdapter('codex'))
+    const started = await bridge.callTool({
+      requestId: 'diagnostic-child',
+      runtimeId: 'codex',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn',
+      tool: AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME,
+      arguments: { prompt: 'sensitive child prompt' }
+    })
+    await bridge.callTool({
+      requestId: 'wait-diagnostic-child',
+      runtimeId: 'codex',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn',
+      tool: AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME,
+      arguments: { childId: childId(started), timeoutMs: 1_000 }
+    })
+
+    const response = await bridge.callTool({
+      requestId: 'read-diagnostics',
+      runtimeId: 'codex',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn',
+      tool: AGENT_RUNTIME_SUBAGENT_DIAGNOSTICS_TOOL_NAME,
+      arguments: {}
+    })
+
+    expect(response).toMatchObject({
+      success: true,
+      structuredContent: {
+        activeChildExecutions: 0,
+        activeLifecycleControls: 0,
+        activeBoundaries: 0,
+        pendingDelegationRequests: 0,
+        trackedChildren: 1,
+        statusCounts: { completed: 1 }
+      }
+    })
+    expect(JSON.stringify(response)).not.toContain('sensitive child prompt')
   })
 
   it('explains concurrency capacity before an oversized batch can start', async () => {
@@ -146,6 +190,57 @@ describe('AgentRuntime subagent tool bridge', () => {
       }
     })
     expect(adapter.spawn).toHaveBeenCalledTimes(10)
+  })
+
+  it('cancels every active child when its exact parent turn is aborted after delegation returns', async () => {
+    const adapter: AgentRuntimeSubagentAdapter = {
+      spawn: vi.fn(async (_context, input) => {
+        await input.onSpawned({
+          runtime: 'codex',
+          threadId: `child-thread-${input.childId}`,
+          turnId: `child-turn-${input.childId}`
+        })
+        await new Promise<void>((resolve) => {
+          if (input.signal.aborted) resolve()
+          else input.signal.addEventListener('abort', () => resolve(), { once: true })
+        })
+        const error = new Error('cancelled')
+        error.name = 'AbortError'
+        throw error
+      }),
+      inspect: vi.fn(async () => ({ state: 'active' as const, observedAt: new Date().toISOString() })),
+      message: vi.fn(async () => ({ established: true })),
+      cancel: vi.fn(async () => undefined)
+    }
+    const bridge = bridgeWith(adapter, { maxParallel: 8 })
+    const started = await bridge.callTool({
+      requestId: 'eight-child-parent-cancel',
+      runtimeId: 'codex',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn',
+      tool: AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME,
+      arguments: {
+        tasks: Array.from({ length: 8 }, (_, index) => ({ prompt: `task ${index + 1}` }))
+      }
+    })
+    expect(started).toMatchObject({ success: true })
+
+    expect(bridge.abortRequestsForTurn('codex', 'parent-thread', 'parent-turn')).toBe(8)
+    await vi.waitFor(async () => {
+      const diagnostics = await bridge.callTool({
+        requestId: 'diagnostics-after-parent-cancel',
+        runtimeId: 'codex',
+        threadId: 'parent-thread',
+        tool: AGENT_RUNTIME_SUBAGENT_DIAGNOSTICS_TOOL_NAME,
+        arguments: {}
+      })
+      expect(diagnostics.structuredContent).toMatchObject({
+        activeChildExecutions: 0,
+        activeLifecycleControls: 0,
+        activeBoundaries: 0
+      })
+    })
+    expect(adapter.cancel).toHaveBeenCalledTimes(8)
   })
 
   it('intersects child tools with parent policy and forwards generic broker/deadline budgets', async () => {
@@ -364,5 +459,53 @@ describe('AgentRuntime subagent tool bridge', () => {
       success: false,
       contentItems: [{ text: 'Subagent delegation is disabled inside child agents.' }]
     })
+  })
+
+  it('suspends only the exact persistent child deadline during external interaction', async () => {
+    let resolveSpawned!: () => void
+    const spawned = new Promise<void>((resolve) => { resolveSpawned = resolve })
+    let childSignal: AbortSignal | undefined
+    const adapter: AgentRuntimeSubagentAdapter = {
+      spawn: vi.fn(async (_context, input) => {
+        childSignal = input.signal
+        await input.onSpawned({
+          runtime: 'codex',
+          threadId: 'codex-waiting-child',
+          turnId: 'codex-waiting-turn'
+        })
+        resolveSpawned()
+        await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+        throw input.signal.reason
+      }),
+      inspect: vi.fn(async () => ({ state: 'active' as const, observedAt: '2026-08-02T00:00:00.000Z' })),
+      message: vi.fn(async () => ({ established: true })),
+      cancel: vi.fn(async () => undefined)
+    }
+    const bridge = bridgeWith(adapter)
+    const started = await bridge.callTool({
+      requestId: 'spawn-waiting-child',
+      runtimeId: 'codex',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn',
+      tool: AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME,
+      arguments: { prompt: 'wait for approval', deadlineMs: 40 }
+    })
+    await spawned
+
+    expect(bridge.suspendChildExecutionDeadline('codex', 'codex-waiting-child', 'approval-1')).toBe(true)
+    expect(bridge.suspendChildExecutionDeadline('codex', 'unrelated-child', 'approval-2')).toBe(false)
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    expect(childSignal?.aborted).toBe(false)
+    expect(bridge.resumeChildExecutionDeadline('codex', 'codex-waiting-child', 'approval-1')).toBe(true)
+
+    const waited = await bridge.callTool({
+      requestId: 'wait-for-deadline',
+      runtimeId: 'codex',
+      threadId: 'parent-thread',
+      tool: AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME,
+      arguments: { childId: childId(started), timeoutMs: 1_000 }
+    })
+    expect(waited.structuredContent).toMatchObject({ status: 'aborted' })
+    expect(bridge.resumeChildExecutionDeadline('codex', 'codex-waiting-child', 'approval-1')).toBe(false)
   })
 })

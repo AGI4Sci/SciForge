@@ -724,6 +724,69 @@ test('execution deadline aborts the provider child and releases all active contr
   assert.equal((await runtime.diagnostics()).activeBoundaries, 0)
 })
 
+test('execution deadline excludes independently tokenized external interaction waits', async () => {
+  const entered = deferred<void>()
+  let observedSignal: AbortSignal | undefined
+  const runtime = new MultiAgentRuntime({
+    store: new InMemoryMultiAgentStore(),
+    idGenerator: () => 'child-suspended-deadline',
+    executor: async (input) => {
+      observedSignal = input.signal
+      entered.resolve()
+      return waitForAbort(input.signal)
+    }
+  })
+
+  const running = runtime.runChild({
+    parentThreadId: 'parent',
+    parentTurnId: 'turn',
+    prompt: 'wait for external interaction',
+    deadlineMs: 40
+  })
+  await entered.promise
+  assert.equal(runtime.suspendChildExecutionDeadline('child-suspended-deadline', 'approval-a'), true)
+  assert.equal(runtime.suspendChildExecutionDeadline('child-suspended-deadline', 'approval-b'), true)
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  assert.equal(observedSignal?.aborted, false)
+
+  assert.equal(runtime.resumeChildExecutionDeadline('child-suspended-deadline', 'approval-a'), true)
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  assert.equal(observedSignal?.aborted, false)
+  assert.equal(runtime.resumeChildExecutionDeadline('child-suspended-deadline', 'approval-b'), true)
+
+  const record = await running
+  assert.equal(record.status, 'aborted')
+  assert.equal((await runtime.diagnostics()).activeBoundaries, 0)
+})
+
+test('parent abort remains immediate while the execution deadline is suspended', async () => {
+  const parent = new AbortController()
+  const entered = deferred<void>()
+  const runtime = new MultiAgentRuntime({
+    store: new InMemoryMultiAgentStore(),
+    idGenerator: () => 'child-parent-abort-suspended',
+    executor: async (input) => {
+      entered.resolve()
+      return waitForAbort(input.signal)
+    }
+  })
+
+  const running = runtime.runChild({
+    parentThreadId: 'parent',
+    parentTurnId: 'turn',
+    prompt: 'wait for parent abort',
+    deadlineMs: 10_000,
+    signal: parent.signal
+  })
+  await entered.promise
+  assert.equal(runtime.suspendChildExecutionDeadline('child-parent-abort-suspended', 'approval'), true)
+  parent.abort(new Error('parent stopped'))
+
+  const record = await running
+  assert.equal(record.status, 'aborted')
+  assert.equal((await runtime.diagnostics()).activeBoundaries, 0)
+})
+
 function clock(): () => string {
   let tick = 0
   return () => `2026-06-27T00:00:${String(tick++).padStart(2, '0')}.000Z`

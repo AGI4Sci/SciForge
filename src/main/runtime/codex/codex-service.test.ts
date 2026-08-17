@@ -380,6 +380,88 @@ describe('Codex child summary index', () => {
   })
 })
 
+describe('Codex persistent child receipt lifecycle', () => {
+  it('does not publish a late child tool fact into an inactive or newer parent turn', async () => {
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await tempRoot()
+    })
+    const probe = service as unknown as {
+      activeTurns: Map<string, string>
+      publishCodexChildToolFactToParent(
+        event: CodexThreadEventPayload,
+        input: {
+          parentThreadId: string
+          parentTurnId: string
+          childThreadId: string
+          childTurnId: string
+        }
+      ): Promise<void>
+    }
+    const event: CodexThreadEventPayload = {
+      threadId: 'child-thread',
+      turnId: 'child-turn',
+      tool: {
+        itemId: 'child-tool-call',
+        summary: 'Child tool call',
+        status: 'success'
+      }
+    }
+    const input = {
+      parentThreadId: 'parent-thread',
+      parentTurnId: 'parent-turn-old',
+      childThreadId: 'child-thread',
+      childTurnId: 'child-turn'
+    }
+
+    await expect(probe.publishCodexChildToolFactToParent(event, input)).resolves.toBeUndefined()
+
+    probe.activeTurns.set(input.parentThreadId, 'parent-turn-new')
+    await expect(probe.publishCodexChildToolFactToParent(event, input)).resolves.toBeUndefined()
+  })
+
+  it('still fails closed when the active parent turn has no Host proof ledger', async () => {
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await tempRoot()
+    })
+    const probe = service as unknown as {
+      activeTurns: Map<string, string>
+      publishCodexChildToolFactToParent(
+        event: CodexThreadEventPayload,
+        input: {
+          parentThreadId: string
+          parentTurnId: string
+          childThreadId: string
+          childTurnId: string
+        }
+      ): Promise<void>
+    }
+    const input = {
+      parentThreadId: 'parent-thread',
+      parentTurnId: 'parent-turn',
+      childThreadId: 'child-thread',
+      childTurnId: 'child-turn'
+    }
+    probe.activeTurns.set(input.parentThreadId, input.parentTurnId)
+
+    await expect(
+      probe.publishCodexChildToolFactToParent(
+        {
+          threadId: input.childThreadId,
+          turnId: input.childTurnId,
+          tool: {
+            itemId: 'child-tool-call',
+            summary: 'Child tool call',
+            status: 'success'
+          }
+        },
+        input
+      )
+    ).rejects.toThrow('cannot resolve the parent Host proof ledger')
+  })
+})
+
 describe('CodexRuntimeService storage fallback', () => {
   it('lists stored Codex threads when app-server list is unavailable', async () => {
     const storageRoot = await tempRoot()

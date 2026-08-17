@@ -424,6 +424,18 @@ export class MultiAgentRuntime {
     return waited?.record ?? record
   }
 
+  suspendChildExecutionDeadline(childId: string, token: string): boolean {
+    const boundary = this.boundariesByChildId.get(childId)
+    if (!boundary) return false
+    return boundary.suspend(token)
+  }
+
+  resumeChildExecutionDeadline(childId: string, token: string): boolean {
+    const boundary = this.boundariesByChildId.get(childId)
+    if (!boundary) return false
+    return boundary.resume(token)
+  }
+
   async transcript(
     parentThreadId: string,
     childId: string,
@@ -987,6 +999,10 @@ function objectRecord(value: unknown): Record<string, unknown> {
 
 function createExecutionBoundary(parentSignal: AbortSignal | undefined, deadlineMs: number | undefined) {
   const controller = new AbortController()
+  const suspensionTokens = new Set<string>()
+  let remainingMs = deadlineMs
+  let activeSince = deadlineMs === undefined ? undefined : Date.now()
+  let deadlineHandle: ReturnType<typeof setTimeout> | undefined
   let resolveParentAbort!: () => void
   const parentAborted = new Promise<void>((resolve) => {
     resolveParentAbort = resolve
@@ -997,18 +1013,49 @@ function createExecutionBoundary(parentSignal: AbortSignal | undefined, deadline
   }
   if (parentSignal?.aborted) abortFromParent()
   else parentSignal?.addEventListener('abort', abortFromParent, { once: true })
-  const deadlineHandle = deadlineMs === undefined ? undefined : setTimeout(() => {
+
+  const abortFromDeadline = () => {
     if (!controller.signal.aborted) controller.abort(abortError('multi-agent child execution deadline exceeded'))
     resolveParentAbort()
-  }, deadlineMs)
+  }
+  const stopDeadlineClock = () => {
+    if (remainingMs === undefined || activeSince === undefined) return
+    remainingMs = Math.max(0, remainingMs - Math.max(0, Date.now() - activeSince))
+    activeSince = undefined
+    if (deadlineHandle !== undefined) clearTimeout(deadlineHandle)
+    deadlineHandle = undefined
+  }
+  const startDeadlineClock = () => {
+    if (remainingMs === undefined || controller.signal.aborted || suspensionTokens.size > 0) return
+    if (remainingMs <= 0) {
+      abortFromDeadline()
+      return
+    }
+    activeSince = Date.now()
+    deadlineHandle = setTimeout(abortFromDeadline, remainingMs)
+  }
+  startDeadlineClock()
   return {
     signal: controller.signal,
     parentAborted,
+    suspend(token: string) {
+      if (!token || controller.signal.aborted || suspensionTokens.has(token)) return false
+      if (suspensionTokens.size === 0) stopDeadlineClock()
+      suspensionTokens.add(token)
+      return true
+    },
+    resume(token: string) {
+      if (!suspensionTokens.delete(token)) return false
+      if (suspensionTokens.size > 0) return true
+      startDeadlineClock()
+      return true
+    },
     abort(reason?: unknown) {
       if (!controller.signal.aborted) controller.abort(reason)
     },
     dispose() {
       if (deadlineHandle !== undefined) clearTimeout(deadlineHandle)
+      suspensionTokens.clear()
       parentSignal?.removeEventListener('abort', abortFromParent)
     }
   }

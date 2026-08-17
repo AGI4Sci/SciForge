@@ -41,6 +41,7 @@ type Harness = {
     getCapabilities: ReturnType<typeof vi.fn>
     rememberThreadRuntime: ReturnType<typeof vi.fn>
     resumeSession: ReturnType<typeof vi.fn>
+    submitApprovalDecision: ReturnType<typeof vi.fn>
     submitUserInputResponse: ReturnType<typeof vi.fn>
     cancelUserInput: ReturnType<typeof vi.fn>
     setThreadGoal: ReturnType<typeof vi.fn>
@@ -134,6 +135,7 @@ function buildHarness(options: {
       threadId: 'thr_resumed',
       runtimeId: 'codex' as const
     })),
+    submitApprovalDecision: vi.fn(async () => undefined),
     submitUserInputResponse: vi.fn(async () => undefined),
     cancelUserInput: vi.fn(async () => undefined),
     setThreadGoal: vi.fn(async (threadId: string, patch: GoalPatch) =>
@@ -249,6 +251,151 @@ describe('chat-store-maintenance-actions goal actions', () => {
 
     expect(provider.deleteThread).toHaveBeenCalledWith('thr_existing')
     expect(lifecycleMock.disposeSessionRightPanelWorkspace).toHaveBeenCalledWith('thr_existing')
+  })
+
+  it('resolves a persistent child approval in its owning side thread', async () => {
+    const { actions, provider, state } = buildHarness()
+    const childApproval: ChatBlock = {
+      kind: 'approval',
+      id: 'approval-shared',
+      approvalId: 'approval-shared',
+      summary: 'Approve child tool',
+      status: 'pending'
+    }
+    Object.assign(state, {
+      blocks: [{ ...childApproval, summary: 'Parent approval' }],
+      sideConversations: {
+        'child-thread': {
+          threadId: 'child-thread',
+          parentThreadId: 'thr_existing',
+          source: 'child_agent',
+          title: 'Child',
+          createdAt: '2026-08-16T00:00:00.000Z',
+          inheritedAt: '2026-08-16T00:00:00.000Z',
+          blocks: [childApproval],
+          liveReasoning: '',
+          liveAssistant: '',
+          lastSeq: 1,
+          input: '',
+          model: 'gpt-5',
+          reasoningEffort: 'medium',
+          busy: true,
+          turnId: 'child-turn',
+          userItemId: null,
+          error: null
+        }
+      }
+    })
+
+    await actions.resolveApproval('approval-shared', 'allow', 'child-thread')
+
+    expect(provider.submitApprovalDecision).toHaveBeenCalledWith(
+      'approval-shared',
+      'allow',
+      false,
+      'child-thread'
+    )
+    expect(state.sideConversations['child-thread'].blocks[0]).toMatchObject({
+      kind: 'approval',
+      status: 'allowed'
+    })
+    expect(state.blocks[0]).toMatchObject({ kind: 'approval', status: 'pending' })
+  })
+
+  it('consumes concurrent activation of one child approval only once', async () => {
+    const { actions, provider, state } = buildHarness()
+    let complete!: () => void
+    provider.submitApprovalDecision.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      complete = resolve
+    }))
+    Object.assign(state, {
+      sideConversations: {
+        'child-thread': {
+          threadId: 'child-thread',
+          parentThreadId: 'thr_existing',
+          source: 'child_agent',
+          title: 'Child',
+          createdAt: '2026-08-16T00:00:00.000Z',
+          inheritedAt: '2026-08-16T00:00:00.000Z',
+          blocks: [{
+            kind: 'approval',
+            id: 'approval-once',
+            approvalId: 'approval-once',
+            summary: 'Approve once',
+            status: 'pending'
+          }],
+          liveReasoning: '',
+          liveAssistant: '',
+          lastSeq: 1,
+          input: '',
+          model: 'gpt-5',
+          reasoningEffort: 'medium',
+          busy: true,
+          turnId: 'child-turn',
+          userItemId: null,
+          error: null
+        }
+      }
+    })
+
+    const click = actions.resolveApproval('approval-once', 'allow', 'child-thread')
+    const keyboard = actions.resolveApproval('approval-once', 'allow', 'child-thread')
+    expect(provider.submitApprovalDecision).toHaveBeenCalledTimes(1)
+    complete()
+    await Promise.all([click, keyboard])
+
+    expect(provider.submitApprovalDecision).toHaveBeenCalledTimes(1)
+    expect(state.sideConversations['child-thread'].blocks[0]).toMatchObject({
+      kind: 'approval',
+      status: 'allowed'
+    })
+  })
+
+  it('marks a failed child approval terminal and does not resubmit it', async () => {
+    const { actions, provider, state } = buildHarness()
+    vi.stubGlobal('window', {
+      sciforge: { logError: vi.fn(async () => undefined) }
+    })
+    provider.submitApprovalDecision.mockRejectedValueOnce(new Error('resolver failed'))
+    Object.assign(state, {
+      sideConversations: {
+        'child-thread': {
+          threadId: 'child-thread',
+          parentThreadId: 'thr_existing',
+          source: 'child_agent',
+          title: 'Child',
+          createdAt: '2026-08-16T00:00:00.000Z',
+          inheritedAt: '2026-08-16T00:00:00.000Z',
+          blocks: [{
+            kind: 'approval',
+            id: 'approval-error',
+            approvalId: 'approval-error',
+            summary: 'Approve child tool',
+            status: 'pending'
+          }],
+          liveReasoning: '',
+          liveAssistant: '',
+          lastSeq: 1,
+          input: '',
+          model: 'gpt-5',
+          reasoningEffort: 'medium',
+          busy: true,
+          turnId: 'child-turn',
+          userItemId: null,
+          error: null
+        }
+      }
+    })
+
+    await actions.resolveApproval('approval-error', 'allow', 'child-thread')
+    await actions.resolveApproval('approval-error', 'allow', 'child-thread')
+
+    expect(provider.submitApprovalDecision).toHaveBeenCalledTimes(1)
+    expect(state.sideConversations['child-thread'].blocks[0]).toMatchObject({
+      kind: 'approval',
+      status: 'error',
+      errorMessage: 'resolver failed'
+    })
   })
 
   it('sets a goal on the active thread, syncs snapshots, and starts the goal turn', async () => {

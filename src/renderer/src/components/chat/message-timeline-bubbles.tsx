@@ -856,11 +856,13 @@ function formatMessageDateTime(input: string, locale: string): string {
 function MessageBubbleComponent({
   block,
   nested = false,
+  threadId,
   markdownImages = [],
   onOpenImageArtifactInVisualReview
 }: {
   block: ChatBlock
   nested?: boolean
+  threadId?: string
   markdownImages?: TimelineImageReference[]
   onOpenImageArtifactInVisualReview?: (artifact: TimelineVisualReviewArtifact) => void
 }): ReactElement {
@@ -953,14 +955,14 @@ function MessageBubbleComponent({
             <button
               type="button"
               className="rounded-lg bg-emerald-600 px-3 py-1.5 text-[13px] font-medium text-white hover:bg-emerald-700"
-              onClick={() => void resolveApproval(block.id, 'allow')}
+              onClick={() => void resolveApproval(block.id, 'allow', threadId)}
             >
               {t('approvalAllow')}
             </button>
             <button
               type="button"
               className="rounded-lg border border-ds-border bg-ds-card px-3 py-1.5 text-[13px] font-medium text-ds-ink hover:bg-ds-hover"
-              onClick={() => void resolveApproval(block.id, 'deny')}
+              onClick={() => void resolveApproval(block.id, 'deny', threadId)}
             >
               {t('approvalDeny')}
             </button>
@@ -1228,6 +1230,7 @@ function ToolEntry({
 export const MessageBubble = memo(MessageBubbleComponent, (prev, next) => (
   prev.block === next.block &&
   prev.nested === next.nested &&
+  prev.threadId === next.threadId &&
   prev.markdownImages === next.markdownImages &&
   prev.onOpenImageArtifactInVisualReview === next.onOpenImageArtifactInVisualReview
 ))

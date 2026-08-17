@@ -2127,7 +2127,7 @@ export class CodexRuntimeService {
     const tool = event.tool
     if (!tool) return
     if (this.activeTurns.get(input.parentThreadId) !== input.parentTurnId) {
-      throw new Error('Codex child receipt cannot target an inactive parent turn.')
+      return
     }
     const parentBinding = this.governanceBindingsByTurn.get(turnTimingKey(input.parentThreadId, input.parentTurnId))
     if (

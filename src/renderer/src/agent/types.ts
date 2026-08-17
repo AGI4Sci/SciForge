@@ -737,7 +737,8 @@ export interface AgentProvider {
   submitApprovalDecision?(
     approvalId: string,
     decision: 'allow' | 'deny',
-    remember?: boolean
+    remember?: boolean,
+    threadId?: string
   ): Promise<void>
   /** Resolve a runtime user-input request through the active provider. */
   submitUserInputResponse?(requestId: string, answers: UserInputAnswer[]): Promise<void>

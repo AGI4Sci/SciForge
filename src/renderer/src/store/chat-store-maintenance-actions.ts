@@ -1,4 +1,5 @@
 import type {
+  ChatBlock,
   ThreadGoal,
   ThreadGoalStatus,
   ThreadTodoList,
@@ -80,6 +81,25 @@ import {
 } from '../plan/plan-todo-sync'
 import { providerSupportsCapability } from './chat-store-provider-capabilities'
 import { disposeSessionRightPanelWorkspace } from '../lib/session-right-panel-lifecycle'
+
+function patchApprovalBlock(
+  state: ChatState,
+  blockId: string,
+  ownerThreadId: string | undefined,
+  update: (block: Extract<ChatBlock, { kind: 'approval' }>) => Extract<ChatBlock, { kind: 'approval' }>
+): Partial<ChatState> {
+  const patchBlocks = (blocks: ChatBlock[]): ChatBlock[] => blocks.map((block) =>
+    block.id === blockId && block.kind === 'approval' ? update(block) : block)
+  if (!ownerThreadId) return { blocks: patchBlocks(state.blocks) }
+  const side = state.sideConversations[ownerThreadId]
+  if (!side) return {}
+  return {
+    sideConversations: {
+      ...state.sideConversations,
+      [ownerThreadId]: { ...side, blocks: patchBlocks(side.blocks) }
+    }
+  }
+}
 
 type SseAbortRef = { current: AbortController | null }
 
@@ -169,6 +189,7 @@ function rememberActionThreadRuntime(
 export function createMaintenanceActions(
   { set, get, sseAbortRef }: StoreActionContext
 ): Pick<ChatState, 'renameActiveThread' | 'renameThread' | 'archiveThread' | 'compactActiveThread' | 'forkActiveThread' | 'setActiveThreadGoal' | 'setActiveThreadGoalStatus' | 'clearActiveThreadGoal' | 'setThreadTodoStatus' | 'clearThreadTodos' | 'syncPlanTodosFromMarkdown' | 'resumeSessionIntoThread' | 'deleteThread' | 'rewindAndResend' | 'resolveApproval' | 'resolveUserInput' | 'interrupt'> {
+  const approvalDecisionsInFlight = new Set<string>()
   return {
   renameActiveThread: async (title) => {
     const { activeThreadId } = get()
@@ -655,8 +676,13 @@ export function createMaintenanceActions(
     await get().sendMessage(trimmed)
   },
 
-  resolveApproval: async (blockId, decision) => {
-    const { blocks } = get()
+  resolveApproval: async (blockId, decision, threadId) => {
+    const state = get()
+    const ownerThreadId = threadId?.trim()
+    const decisionKey = `${ownerThreadId ?? ''}\u0000${blockId}`
+    if (approvalDecisionsInFlight.has(decisionKey)) return
+    const side = ownerThreadId ? state.sideConversations[ownerThreadId] : undefined
+    const blocks = side?.blocks ?? state.blocks
     const block = blocks.find((b) => b.id === blockId)
     if (!block || block.kind !== 'approval' || block.status !== 'pending') return
     const p = getProvider()
@@ -664,19 +690,18 @@ export function createMaintenanceActions(
       set({ error: i18n.t('common:runtimeFeatureUnsupported') })
       return
     }
+    approvalDecisionsInFlight.add(decisionKey)
     try {
       await p.submitApprovalDecision(
         block.approvalId,
         decision === 'allow' ? 'allow' : 'deny',
-        false
+        false,
+        ownerThreadId
       )
-      set((s) => ({
-        blocks: s.blocks.map((b) =>
-          b.id === blockId && b.kind === 'approval'
-            ? { ...b, status: decision === 'allow' ? ('allowed' as const) : ('denied' as const) }
-            : b
-        )
-      }))
+      set((s) => patchApprovalBlock(s, blockId, side ? ownerThreadId : undefined, (current) => ({
+        ...current,
+        status: decision === 'allow' ? 'allowed' : 'denied'
+      })))
     } catch (e) {
       const msg = formatRuntimeError(e)
       void window.sciforge.logError('approval', 'Failed to submit approval decision', {
@@ -684,16 +709,18 @@ export function createMaintenanceActions(
         blockId
       }).catch(() => undefined)
       set((s) => ({
-        error: msg,
+        ...patchApprovalBlock(s, blockId, side ? ownerThreadId : undefined, (current) => ({
+          ...current,
+          status: 'error',
+          errorMessage: msg
+        })),
+          error: msg,
         ...(shouldOpenSettingsForError(e)
           ? { route: 'settings' as const, settingsSection: 'agents' as const }
-          : {}),
-        blocks: s.blocks.map((b) =>
-          b.id === blockId && b.kind === 'approval'
-            ? { ...b, status: 'error' as const, errorMessage: msg }
-            : b
-        )
+          : {})
       }))
+    } finally {
+      approvalDecisionsInFlight.delete(decisionKey)
     }
   },
 

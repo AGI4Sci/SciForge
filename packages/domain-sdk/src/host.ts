@@ -249,9 +249,24 @@ export type DomainMainAfterTurnEvent = DomainMainTurnLifecycleEventBase & Readon
     }>
 )
 
+/** Terminal ownership event for a persistent child provider turn. */
+export type DomainMainPersistentChildAfterTurnEvent = Readonly<{
+  kind: 'after-persistent-child-turn'
+  state: 'completed' | 'failed' | 'cancelled'
+  runtimeId: string
+  threadId: string
+  turnId: string
+  childId: string
+  parentThreadId: string
+  parentTurnId: string
+  workspaceRoot?: string
+  occurredAt: string
+}>
+
 export type DomainMainTurnLifecycleEvent =
   | DomainMainBeforeTurnEvent
   | DomainMainAfterTurnEvent
+  | DomainMainPersistentChildAfterTurnEvent
 
 export type DomainMainDurableTurnBoundary = Readonly<{
   issuerEpoch: string

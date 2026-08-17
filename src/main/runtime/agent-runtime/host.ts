@@ -309,6 +309,25 @@ export class AgentRuntimeHost {
               turnId: event.parentTurnId,
               child: agentRuntimeChildFromMultiAgentRecord(runtimeId, record, event)
             })
+            if (
+              (record.status === 'completed' || record.status === 'failed' || record.status === 'aborted') &&
+              record.threadRef?.threadId && record.threadRef.turnId
+            ) {
+              await this.publishTurnLifecycle(Object.freeze({
+                kind: 'after-persistent-child-turn',
+                state: record.status === 'completed'
+                  ? 'completed'
+                  : record.status === 'failed' ? 'failed' : 'cancelled',
+                runtimeId,
+                threadId: record.threadRef.threadId,
+                turnId: record.threadRef.turnId,
+                childId: record.id,
+                parentThreadId: record.parentThreadId,
+                parentTurnId: record.parentTurnId,
+                ...(record.workspace ? { workspaceRoot: record.workspace } : {}),
+                occurredAt: record.finishedAt ?? record.updatedAt
+              }))
+            }
           }
         })
       : null
@@ -437,8 +456,11 @@ export class AgentRuntimeHost {
       input.threadId,
       input.workspaceLocator
     )
+    const page = await adapter.readThreadPage(context, input)
     return assertAgentRuntimeThreadPageDeliverySize(
-      await adapter.readThreadPage(context, input)
+      input.cursor
+        ? page
+        : this.withCapabilityApprovalsOnThreadPage(adapter.id, page)
     )
   }
 
@@ -1601,6 +1623,7 @@ export class AgentRuntimeHost {
       }
       this.capabilityApprovals.set(approvalId, record)
       this.capabilityApprovalOrder.push(approvalId)
+      this.subagentToolBridge?.suspendChildExecutionDeadline(runtimeId, threadId, approvalId)
       this.publishCapabilityApprovalEvent(record, event)
       this.pruneCapabilityApprovalHistory()
     })
@@ -3116,8 +3139,29 @@ export class AgentRuntimeHost {
     runtimeId: AgentRuntimeId,
     detail: AgentRuntimeThreadSnapshot
   ): AgentRuntimeThreadSnapshot {
-    const key = threadTurnKey(runtimeId, detail.id)
-    const approvals = this.capabilityApprovalOrder
+    const approvals = this.capabilityApprovalItems(runtimeId, detail.id)
+    if (approvals.length === 0) return detail
+    return {
+      ...detail,
+      turns: mergeCapabilityApprovalItems(detail.turns, approvals)
+    }
+  }
+
+  private withCapabilityApprovalsOnThreadPage(
+    runtimeId: AgentRuntimeId,
+    page: AgentRuntimeThreadPage
+  ): AgentRuntimeThreadPage {
+    const approvals = this.capabilityApprovalItems(runtimeId, page.threadId)
+    if (approvals.length === 0) return page
+    return {
+      ...page,
+      turns: mergeCapabilityApprovalItems(page.turns, approvals)
+    }
+  }
+
+  private capabilityApprovalItems(runtimeId: AgentRuntimeId, threadId: string): AgentRuntimeItem[] {
+    const key = threadTurnKey(runtimeId, threadId)
+    return this.capabilityApprovalOrder
       .map((approvalId) => this.capabilityApprovals.get(approvalId))
       .filter((record): record is CapabilityApprovalRecord => Boolean(
         record && capabilityApprovalRecordKey(record) === key
@@ -3139,18 +3183,6 @@ export class AgentRuntimeHost {
           toolName: record.requestedEvent.toolName
         }
       }))
-    if (approvals.length === 0) return detail
-    const merge = (items: AgentRuntimeItem[] | undefined, additions: AgentRuntimeItem[]): AgentRuntimeItem[] => {
-      const additionIds = new Set(additions.map((item) => item.id))
-      return [...(items ?? []).filter((item) => !additionIds.has(item.id)), ...additions]
-    }
-    return {
-      ...detail,
-      turns: detail.turns.map((turn) => ({
-        ...turn,
-        items: merge(turn.items, approvals.filter((item) => item.turnId === turn.id))
-      }))
-    }
   }
 
   private subscribeCapabilityApprovalEvents(
@@ -3219,6 +3251,11 @@ export class AgentRuntimeHost {
     record.resolve = undefined
     record.removeAbortListener?.()
     record.removeAbortListener = undefined
+    this.subagentToolBridge?.resumeChildExecutionDeadline(
+      record.runtimeId,
+      record.threadId,
+      record.approvalId
+    )
     const resolvedDecision = decision === 'cancelled' ? 'error' : decision
     this.publishCapabilityApprovalEvent(record, {
       kind: 'approval_resolved',
@@ -3953,7 +3990,7 @@ export class AgentRuntimeHost {
     const results = await Promise.allSettled(
       [...this.turnLifecycleSubscribers].map((listener) => Promise.resolve(listener(event)))
     )
-    if (event.kind === 'after-turn') {
+    if (event.kind === 'after-turn' || event.kind === 'after-persistent-child-turn') {
       const failures = results.flatMap((result) => (
         result.status === 'rejected' ? [result.reason] : []
       ))
@@ -5318,6 +5355,21 @@ async function* mergeRuntimeEventStreams(
 
 function turnGovernanceKey(runtimeId: AgentRuntimeId, threadId: string, turnId: string): string {
   return `${runtimeId}:${threadId}:${turnId}`
+}
+
+function mergeCapabilityApprovalItems(
+  turns: AgentRuntimeThreadPage['turns'],
+  approvals: AgentRuntimeItem[]
+): AgentRuntimeThreadPage['turns'] {
+  return turns.map((turn) => {
+    const additions = approvals.filter((item) => item.turnId === turn.id)
+    if (additions.length === 0) return turn
+    const additionIds = new Set(additions.map((item) => item.id))
+    return {
+      ...turn,
+      items: [...(turn.items ?? []).filter((item) => !additionIds.has(item.id)), ...additions]
+    }
+  })
 }
 
 function withWorkspaceLocatorPath<

@@ -31,6 +31,7 @@ export const AGENT_RUNTIME_SUBAGENT_STATUS_TOOL_NAME = 'subagent_status'
 export const AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME = 'subagent_wait'
 export const AGENT_RUNTIME_SUBAGENT_MESSAGE_TOOL_NAME = 'subagent_send'
 export const AGENT_RUNTIME_SUBAGENT_CANCEL_TOOL_NAME = 'subagent_cancel'
+export const AGENT_RUNTIME_SUBAGENT_DIAGNOSTICS_TOOL_NAME = 'subagent_diagnostics'
 
 export type AgentRuntimeSubagentBinding = {
   adapter: AgentRuntimeSubagentAdapter
@@ -92,6 +93,7 @@ export class AgentRuntimeSubagentToolBridge {
   private readonly runtimes = new Map<AgentRuntimeId, RuntimeEntry>()
   private readonly activeRequests = new Set<ActiveRequest>()
   private readonly childThreadIds = new Map<AgentRuntimeId, Set<string>>()
+  private readonly childIdsByThreadId = new Map<AgentRuntimeId, Map<string, string>>()
   private readonly activeChildrenByTurn = new Map<string, Set<string>>()
 
   constructor(private readonly options: AgentRuntimeSubagentToolBridgeOptions) {}
@@ -171,7 +173,12 @@ export class AgentRuntimeSubagentToolBridge {
         required: ['providerFamily'],
         additionalProperties: false
       },
-      deadlineMs: { type: 'number', minimum: 1, maximum: 600_000 },
+      deadlineMs: {
+        type: 'number',
+        minimum: 1,
+        maximum: 600_000,
+        description: 'Active child execution budget. Host-managed human approval waits do not consume it.'
+      },
       maxToolCalls: { type: 'number', minimum: 1, maximum: 256 }
     }
     return [{
@@ -246,6 +253,15 @@ export class AgentRuntimeSubagentToolBridge {
       name: AGENT_RUNTIME_SUBAGENT_CANCEL_TOOL_NAME,
       description: 'Explicitly cancel a running child agent.',
       inputSchema: childIdInputSchema()
+    }, {
+      type: 'function',
+      name: AGENT_RUNTIME_SUBAGENT_DIAGNOSTICS_TOOL_NAME,
+      description: 'Read redacted multi-agent lifecycle counters without changing child state.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false
+      }
     }]
   }
 
@@ -255,7 +271,8 @@ export class AgentRuntimeSubagentToolBridge {
       name === AGENT_RUNTIME_SUBAGENT_STATUS_TOOL_NAME ||
       name === AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME ||
       name === AGENT_RUNTIME_SUBAGENT_MESSAGE_TOOL_NAME ||
-      name === AGENT_RUNTIME_SUBAGENT_CANCEL_TOOL_NAME
+      name === AGENT_RUNTIME_SUBAGENT_CANCEL_TOOL_NAME ||
+      name === AGENT_RUNTIME_SUBAGENT_DIAGNOSTICS_TOOL_NAME
   }
 
   async callTool(
@@ -279,6 +296,9 @@ export class AgentRuntimeSubagentToolBridge {
     if (toolName === AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME) return this.waitTool(entry.runtime, request.threadId, request.arguments)
     if (toolName === AGENT_RUNTIME_SUBAGENT_MESSAGE_TOOL_NAME) return this.sendTool(entry.runtime, request.threadId, request.arguments)
     if (toolName === AGENT_RUNTIME_SUBAGENT_CANCEL_TOOL_NAME) return this.cancelTool(entry.runtime, request.threadId, request.arguments)
+    if (toolName === AGENT_RUNTIME_SUBAGENT_DIAGNOSTICS_TOOL_NAME) {
+      return this.diagnosticsTool(entry.runtime, runtimeId, request.threadId)
+    }
     const input = parseDelegateTaskArguments(request.arguments)
     if (input.tasks.length === 0) {
       return failedMultiAgentResponse(
@@ -395,6 +415,29 @@ export class AgentRuntimeSubagentToolBridge {
     return { ...childObservationResponse(record, { cancelled: true }), success: true }
   }
 
+  private async diagnosticsTool(
+    runtime: MultiAgentRuntime,
+    runtimeId: AgentRuntimeId,
+    parentThreadId: string
+  ): Promise<RuntimeToolCallResponse> {
+    const diagnostics = await runtime.diagnostics(parentThreadId)
+    const structuredContent = {
+      activeChildExecutions: diagnostics.active,
+      activeLifecycleControls: diagnostics.activeLifecycleControls,
+      activeBoundaries: diagnostics.activeBoundaries,
+      pendingDelegationRequests: [...this.activeRequests].filter((request) => (
+        request.runtimeId === runtimeId && request.threadId === parentThreadId
+      )).length,
+      trackedChildren: diagnostics.childRuns.length,
+      statusCounts: diagnostics.statusCounts
+    }
+    return {
+      success: true,
+      contentItems: [{ type: 'inputText', text: JSON.stringify(structuredContent) }],
+      structuredContent
+    }
+  }
+
   abortRequestsForTurn(runtimeId: AgentRuntimeId, threadId: string, turnId: string): number {
     let aborted = 0
     for (const request of this.activeRequests) {
@@ -412,6 +455,18 @@ export class AgentRuntimeSubagentToolBridge {
       }
     }
     return aborted
+  }
+
+  suspendChildExecutionDeadline(runtimeId: AgentRuntimeId, threadId: string, token: string): boolean {
+    const childId = this.childIdsByThreadId.get(runtimeId)?.get(threadId)
+    const runtime = this.runtimes.get(runtimeId)?.runtime
+    return Boolean(childId && runtime?.suspendChildExecutionDeadline(childId, token))
+  }
+
+  resumeChildExecutionDeadline(runtimeId: AgentRuntimeId, threadId: string, token: string): boolean {
+    const childId = this.childIdsByThreadId.get(runtimeId)?.get(threadId)
+    const runtime = this.runtimes.get(runtimeId)?.runtime
+    return Boolean(childId && runtime?.resumeChildExecutionDeadline(childId, token))
   }
 
   dispose(): void {
@@ -514,6 +569,9 @@ export class AgentRuntimeSubagentToolBridge {
           const threadIds = this.childThreadIds.get(runtimeId) ?? new Set<string>()
           threadIds.add(threadRef.threadId)
           this.childThreadIds.set(runtimeId, threadIds)
+          const childIds = this.childIdsByThreadId.get(runtimeId) ?? new Map<string, string>()
+          childIds.set(threadRef.threadId, input.childId)
+          this.childIdsByThreadId.set(runtimeId, childIds)
         }
       }
     })
@@ -540,6 +598,12 @@ export class AgentRuntimeSubagentToolBridge {
     }
     children.delete(record.id)
     if (children.size === 0) this.activeChildrenByTurn.delete(key)
+    const threadId = record.threadRef?.threadId
+    if (threadId) {
+      const childIds = this.childIdsByThreadId.get(runtimeId)
+      childIds?.delete(threadId)
+      if (childIds?.size === 0) this.childIdsByThreadId.delete(runtimeId)
+    }
   }
 }
 
