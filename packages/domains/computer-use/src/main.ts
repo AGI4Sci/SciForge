@@ -99,7 +99,10 @@ export function createDomainMainEntry(host: DomainMainHost): TrustedDomainProces
       }
       const unsubscribeTurnEvents = serviceUrl && serviceToken && context.turnEvents
         ? context.turnEvents.subscribe(async (event) => {
-            if (event.kind !== 'after-turn' || !event.turnId) return
+            if (
+              (event.kind !== 'after-turn' && event.kind !== 'after-persistent-child-turn') ||
+              !event.turnId
+            ) return
             try {
               await reclaimTurnSessions({
                 serviceUrl,
