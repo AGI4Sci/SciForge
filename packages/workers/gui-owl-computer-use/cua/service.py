@@ -11,6 +11,7 @@ from driver.channel import ChannelError, SessionInputChannel
 from driver.router import BackendRouter, PendingOpenSelection, RoutingError
 
 from . import contract, result as R
+from .invocation_ledger import InvocationLedger, InvocationLedgerError
 from .invocation_proof import InvocationIdentity
 from .isolation import RequestedIsolation
 from .session_registry import RegistryError, RequestState, SessionOwner, SessionRegistry
@@ -28,12 +29,15 @@ class ComputerUseService:
     def __init__(self, registry: SessionRegistry | None = None,
                  router: BackendRouter | None = None,
                  lease_ttl_seconds: float | None = None,
-                 server_instance_id: str | None = None) -> None:
+                 server_instance_id: str | None = None,
+                 invocation_ledger: InvocationLedger | None = None) -> None:
         self.registry = registry or SessionRegistry()
         self.router = router or _default_router()
         self.lease_ttl_seconds = lease_ttl_seconds
         self.server_instance_id = server_instance_id or f"cua-{uuid.uuid4()}"
+        self.invocation_ledger = invocation_ledger or InvocationLedger()
         self._lock = threading.RLock()
+        self._shutdown_lock = threading.RLock()
         self._channels: dict[str, SessionInputChannel] = {}
         self._request_owner: dict[str, SessionOwner] = {}
         self._cleanup_pending: dict[str, SessionInputChannel] = {}
@@ -59,6 +63,13 @@ class ComputerUseService:
 
     def bind_session(self, value: object,
                      invocation: InvocationIdentity | None = None) -> dict[str, Any]:
+        return self._invoke_once(
+            "bind_session", invocation,
+            lambda: self._bind_session(value, invocation),
+        )
+
+    def _bind_session(self, value: object,
+                      invocation: InvocationIdentity | None) -> dict[str, Any]:
         try:
             if not isinstance(value, dict) or set(value) != {"target"}:
                 raise ValueError("bind input must contain only target")
@@ -73,6 +84,16 @@ class ComputerUseService:
     def run(self, value: object, executor: ChannelExecutor, *,
             channel_options: dict[str, Any] | None = None,
             invocation: InvocationIdentity | None = None) -> dict[str, Any]:
+        return self._invoke_once(
+            "run", invocation,
+            lambda: self._run(
+                value, executor, channel_options=channel_options, invocation=invocation,
+            ),
+        )
+
+    def _run(self, value: object, executor: ChannelExecutor, *,
+             channel_options: dict[str, Any] | None = None,
+             invocation: InvocationIdentity | None = None) -> dict[str, Any]:
         if self._lifecycle_state != "running":
             return R.err("UNAVAILABLE", "computer use service is stopping")
         try:
@@ -102,7 +123,7 @@ class ComputerUseService:
                 open_context=BackendOpenContext(
                     request_id=request_id, execute=True,
                     settle_s=float((channel_options or {}).get("settle_s", 0.25)),
-                    show_overlay=False, cancellation=cancellation,
+                    show_overlay=False, cancellation=cancellation, deadline=deadline,
                 ), lease_ttl_seconds=self.lease_ttl_seconds,
             )
             channel = SessionInputChannel(
@@ -151,6 +172,13 @@ class ComputerUseService:
 
     def cancel(self, value: object, _legacy=None,
                invocation: InvocationIdentity | None = None) -> dict[str, Any]:
+        return self._invoke_once(
+            "cancel", invocation,
+            lambda: self._cancel(value, invocation=invocation),
+        )
+
+    def _cancel(self, value: object,
+                invocation: InvocationIdentity | None = None) -> dict[str, Any]:
         try:
             if not isinstance(value, dict) or set(value) - {"requestId", "reason"}:
                 raise ValueError("cancel input is invalid")
@@ -168,6 +196,13 @@ class ComputerUseService:
 
     def release_session(self, value: object,
                         invocation: InvocationIdentity | None = None) -> dict[str, Any]:
+        return self._invoke_once(
+            "release_session", invocation,
+            lambda: self._release_session(value, invocation),
+        )
+
+    def _release_session(self, value: object,
+                         invocation: InvocationIdentity | None) -> dict[str, Any]:
         try:
             if not isinstance(value, dict) or set(value) != {"sessionId"}:
                 raise ValueError("release input must contain only sessionId")
@@ -175,7 +210,10 @@ class ComputerUseService:
             session = self.registry.get_session(session_id)
             self._assert_owner(session.owner, invocation)
             if session.active_request_id:
-                cancelled = self.cancel({"requestId": session.active_request_id, "reason": "client_release"}, invocation=invocation)
+                cancelled = self._cancel(
+                    {"requestId": session.active_request_id, "reason": "client_release"},
+                    invocation=invocation,
+                )
                 if not cancelled.get("ok"): return cancelled
                 return R.err("CANCEL_PENDING", "active request cancellation is pending", retryable=True)
             closed = self.registry.close_session(session_id)
@@ -267,32 +305,48 @@ class ComputerUseService:
                 "approvalProof": self._approval_proof, "lifecycleState": self._lifecycle_state,
                 "registry": self.registry.snapshot(), "runtime": self.capabilities()["runtime"]}
 
-    def shutdown(self) -> dict[str, Any]:
-        self._lifecycle_state = "stopping"
-        with self._lock: channels = list(self._channels.items())
-        for request_id, channel in channels:
-            try: channel.request_cancel("server_stop")
-            except Exception: pass
-            cleanup = channel.close("server_stop")
-            if cleanup.lease_released:
-                with self._lock:
-                    self._channels.pop(request_id, None)
-                    self._request_owner.pop(request_id, None)
-                try: self.registry.finish_request(request_id, RequestState.CANCELLED, reason="server_stop")
-                except RegistryError: pass
-            else:
-                with self._lock: self._cleanup_pending[request_id] = channel
-        self.reclaim_cleanup()
-        with self._lock:
-            cleanup_pending = len(self._cleanup_pending) + len(self._pending_open_cleanup)
-        if cleanup_pending:
-            return R.err(
-                "CLEANUP_INCOMPLETE", "service shutdown retained unresolved cleanup ownership",
-                details={"cleanupPending": cleanup_pending}, retryable=True,
+    def _invoke_once(
+        self,
+        operation: str,
+        invocation: InvocationIdentity | None,
+        executor: Callable[[], dict[str, Any]],
+    ) -> dict[str, Any]:
+        try:
+            return self.invocation_ledger.execute(
+                invocation, operation=operation, executor=executor,
             )
-        counts = self.registry.shutdown()
-        self._lifecycle_state = "stopped"
-        return R.ok({"status": "stopped", "counts": counts})
+        except InvocationLedgerError as error:
+            return R.err(error.code, str(error), retryable=False)
+
+    def shutdown(self) -> dict[str, Any]:
+        with self._shutdown_lock:
+            if self._lifecycle_state == "stopped":
+                return R.ok({"status": "stopped", "counts": self.registry.snapshot_counts()})
+            self._lifecycle_state = "stopping"
+            with self._lock: channels = list(self._channels.items())
+            for request_id, channel in channels:
+                try: channel.request_cancel("server_stop")
+                except Exception: pass
+                cleanup = channel.close("server_stop")
+                if cleanup.lease_released:
+                    with self._lock:
+                        self._channels.pop(request_id, None)
+                        self._request_owner.pop(request_id, None)
+                    try: self.registry.finish_request(request_id, RequestState.CANCELLED, reason="server_stop")
+                    except RegistryError: pass
+                else:
+                    with self._lock: self._cleanup_pending[request_id] = channel
+            self.reclaim_cleanup()
+            with self._lock:
+                cleanup_pending = len(self._cleanup_pending) + len(self._pending_open_cleanup)
+            if cleanup_pending:
+                return R.err(
+                    "CLEANUP_INCOMPLETE", "service shutdown retained unresolved cleanup ownership",
+                    details={"cleanupPending": cleanup_pending}, retryable=True,
+                )
+            counts = self.registry.shutdown()
+            self._lifecycle_state = "stopped"
+            return R.ok({"status": "stopped", "counts": counts})
 
     def _resolve_public_target(self, target: TargetDescriptor) -> TargetDescriptor:
         for candidate in self.router.discover_targets():

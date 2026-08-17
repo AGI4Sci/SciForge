@@ -5,6 +5,7 @@ import base64
 import io
 import os
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Mapping
@@ -30,6 +31,7 @@ _ACTIONS = (
     "type", "key", "hotkey", "scroll", "wait",
 )
 _DEFAULT_ACTION_TIMEOUT_S = 30.0
+_MIN_ACTION_TIMEOUT_S = 0.001
 
 
 class CdpAdapterResponseError(RuntimeError):
@@ -349,7 +351,7 @@ class CdpAdapterBackend:
                         "expectedRevision": expected_revision,
                         "action": dict(action),
                     },
-                    timeout_s=self.action_timeout_s,
+                    timeout_s=self._action_timeout(h),
                 )
         except BackendOperationError:
             raise
@@ -385,6 +387,13 @@ class CdpAdapterBackend:
             may_have_taken_effect=payload.get("mayHaveTakenEffect") is True,
             backend_evidence={"adapter": "cdp-adapter"},
         )
+
+    def _action_timeout(self, handle: CdpAdapterHandle) -> float:
+        deadline = handle.context.deadline
+        if deadline is None:
+            return self.action_timeout_s
+        remaining = deadline - time.time()
+        return min(self.action_timeout_s, max(_MIN_ACTION_TIMEOUT_S, remaining))
 
     def verify(
         self,

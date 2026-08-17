@@ -9,6 +9,8 @@ from driver.channel import ChannelError, SessionInputChannel
 
 from . import result as R
 
+EXPECTATION_DISCOVERY_SECONDS = 3.0
+
 
 def run_task(request: dict[str, Any], channel: SessionInputChannel) -> dict[str, Any]:
     started = time.time()
@@ -111,9 +113,21 @@ def _verify_expectation(channel: SessionInputChannel, observation,
         return None, observation
     stable_seconds = int(expectation.get("stableForMs", 0)) / 1000
     remaining = channel.remaining_seconds
-    verify_deadline = time.monotonic() + min(3.0, remaining if remaining is not None else 0.0)
+    # The discovery window is independent of the requested stability period:
+    # a value that appears near the end of discovery still gets the complete
+    # stableForMs interval promised by the input contract. A request deadline,
+    # when present, remains the outer bound.
+    verification_budget = EXPECTATION_DISCOVERY_SECONDS + stable_seconds
+    deadline_limited = remaining is not None and remaining <= verification_budget
+    if deadline_limited:
+        assert remaining is not None
+        verification_budget = min(verification_budget, remaining)
+    verify_deadline = time.monotonic() + verification_budget
     matched_since: float | None = None
     while True:
+        # Enforce deadline/cancellation even when an already-matching
+        # expectation would otherwise return without another backend call.
+        channel.wait(0)
         now = time.monotonic()
         matched = _text_present(_semantic_tree(observation.metadata), expectation["text"])
         if matched:
@@ -124,6 +138,14 @@ def _verify_expectation(channel: SessionInputChannel, observation,
             matched_since = None
         wait_seconds = min(0.05, verify_deadline - now)
         if wait_seconds <= 0:
+            if deadline_limited:
+                # Let the channel's absolute deadline decide the terminal
+                # state. In particular, a post-dispatch expiry must be an
+                # unknown outcome, not a locally exhausted verification
+                # window reported as ACTION_UNVERIFIED.
+                deadline_remaining = channel.remaining_seconds or 0.0
+                channel.wait(deadline_remaining)
+                channel.wait(0)
             return False, observation
         channel.wait(wait_seconds)
         observation = channel.observe()

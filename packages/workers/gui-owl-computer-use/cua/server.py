@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import hmac
 import json
+import signal
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from types import FrameType
+from typing import Any, Callable
 
 from . import result as R
 from .config import CONFIG
@@ -115,8 +118,83 @@ def _status(result: dict[str, Any]) -> int:
     return 400
 
 
+def _install_signal_shutdown(
+    server: ThreadingHTTPServer,
+) -> Callable[[], None]:
+    """Route process termination signals through BaseServer.shutdown safely.
+
+    ``BaseServer.shutdown`` must not run on the thread that is currently inside
+    ``serve_forever``. Python delivers signals on the main thread, so the signal
+    handler only wakes a small helper thread which performs the blocking call.
+    Signal handlers can only be installed from the main thread; embedded/test
+    servers running elsewhere still retain the normal finally-based cleanup.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        return lambda: None
+
+    shutdown_requested = threading.Event()
+    watcher_stopped = threading.Event()
+    previous_handlers: dict[signal.Signals, Any] = {}
+
+    def handle_signal(_signum: int, _frame: FrameType | None) -> None:
+        shutdown_requested.set()
+
+    for candidate in (signal.SIGINT, signal.SIGTERM):
+        try:
+            previous_handlers[candidate] = signal.getsignal(candidate)
+            signal.signal(candidate, handle_signal)
+        except (OSError, RuntimeError, ValueError):
+            previous_handlers.pop(candidate, None)
+
+    if not previous_handlers:
+        return lambda: None
+
+    def watch_for_shutdown() -> None:
+        while not watcher_stopped.is_set():
+            if shutdown_requested.wait(0.1):
+                if not watcher_stopped.is_set():
+                    server.shutdown()
+                return
+
+    watcher = threading.Thread(
+        target=watch_for_shutdown,
+        name="computer-use-signal-shutdown",
+        daemon=True,
+    )
+    watcher.start()
+
+    def restore() -> None:
+        watcher_stopped.set()
+        for candidate, previous in previous_handlers.items():
+            try:
+                signal.signal(candidate, previous)
+            except (OSError, RuntimeError, ValueError):
+                pass
+        watcher.join(timeout=1)
+
+    return restore
+
+
+def serve(server: ThreadingHTTPServer, *, service: Any = SERVICE) -> dict[str, Any]:
+    """Serve requests and always reclaim service-owned runtime resources."""
+    restore_signals = _install_signal_shutdown(server)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        # Covers embedded platforms where installing a SIGINT handler is not
+        # supported. Cleanup is centralized in the finally block below.
+        pass
+    finally:
+        try:
+            result = service.shutdown()
+        finally:
+            server.server_close()
+            restore_signals()
+    return result
+
+
 def main() -> None:
-    ThreadingHTTPServer(("127.0.0.1", CONFIG.port), Handler).serve_forever()
+    serve(ThreadingHTTPServer(("127.0.0.1", CONFIG.port), Handler))
 
 
 if __name__ == "__main__": main()

@@ -5,6 +5,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import {
   COMPUTER_USE_INVOCATION_HEADER,
+  computerUseArgumentDigest,
   createComputerUseInvocationProof,
   encodeComputerUseInvocationProof,
   parseTrustedComputerUseInvocation,
@@ -44,7 +45,23 @@ type ComputerUseServiceConfig = {
   invocationProofTtlMs?: number
 }
 
+type ComputerUseEffect = 'read-only' | 'mutation' | 'run'
+
 const DEFAULT_TIMEOUT_MS = 600_000
+const MAX_MUTATION_LEDGER_ENTRIES = 4_096
+
+type MutationLedgerEntry = {
+  tool: string
+  argumentDigest: string
+  result: Promise<ComputerUseToolResult>
+}
+
+type MutationLedger = Map<string, MutationLedgerEntry>
+
+type MutationDispatch = {
+  tool: string
+  requestId: string
+}
 
 export type StartComputerUseMcpServerOptions = {
   transport?: Transport
@@ -71,6 +88,7 @@ export async function startComputerUseMcpServer(
 export function createComputerUseMcpServer(
   config: ComputerUseServiceConfig | null = resolveComputerUseServiceConfig()
 ): McpServer {
+  const mutationLedger: MutationLedger = new Map()
   const server = new McpServer(
     { name: GUI_COMPUTER_USE_MCP_SERVER_NAME, version: '0.1.0' },
     { capabilities: { logging: {} } }
@@ -83,7 +101,7 @@ export function createComputerUseMcpServer(
     inputSchema: computerUseEmptyInputSchema,
     annotations: { title: 'Computer use capabilities', readOnlyHint: true }
   }, async (_args, extra) => callComputerUseServiceEndpoint(
-    config, '/computer-use/capabilities', 'GET', undefined, extra.signal
+    config, '/computer-use/capabilities', 'GET', undefined, extra.signal, 'read-only'
   ))
 
   server.registerTool(COMPUTER_USE_LIST_TARGETS_TOOL_NAME, {
@@ -91,7 +109,7 @@ export function createComputerUseMcpServer(
     inputSchema: computerUseEmptyInputSchema,
     annotations: { title: 'Computer use targets', readOnlyHint: true }
   }, async (_args, extra) => callComputerUseServiceEndpoint(
-    config, '/computer-use/targets', 'GET', undefined, extra.signal
+    config, '/computer-use/targets', 'GET', undefined, extra.signal, 'read-only'
   ))
 
   server.registerTool(COMPUTER_USE_BIND_TARGET_TOOL_NAME, {
@@ -103,6 +121,7 @@ export function createComputerUseMcpServer(
     if (!parsed.success) return errorToolResult('INVALID_ARGUMENT', 'invalid target binding')
     return callAuthorizedComputerUseEndpoint(
       config,
+      mutationLedger,
       '/computer-use/sessions/bind',
       'computer_use_bind_target',
       parsed.data,
@@ -137,7 +156,7 @@ export function createComputerUseMcpServer(
           : 'invalid structured Computer Use input'
       )
     }
-    return callComputerUseService(config, parsed.data, extra._meta, extra.signal)
+    return callComputerUseService(config, mutationLedger, parsed.data, extra._meta, extra.signal)
   })
 
   server.registerTool(COMPUTER_USE_RELEASE_SESSION_TOOL_NAME, {
@@ -149,6 +168,7 @@ export function createComputerUseMcpServer(
     if (!parsed.success) return errorToolResult('INVALID_ARGUMENT', 'invalid session release')
     return callAuthorizedComputerUseEndpoint(
       config,
+      mutationLedger,
       '/computer-use/sessions/release',
       'computer_use_release_session',
       parsed.data,
@@ -187,13 +207,28 @@ async function callComputerUseServiceEndpoint(
   method: 'GET' | 'POST',
   body: Record<string, unknown> | undefined,
   signal: AbortSignal,
-  invocationProof?: string
+  effect: ComputerUseEffect,
+  invocationProof?: string,
+  mutation?: MutationDispatch
 ): Promise<ComputerUseToolResult> {
   const controller = new AbortController()
   const unlink = linkAbortSignal(signal, controller)
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs)
+  let endpoint: string
   try {
-    const response = await fetch(trustedLoopbackEndpoint(config.serviceUrl, path), {
+    endpoint = trustedLoopbackEndpoint(config.serviceUrl, path)
+  } catch (error) {
+    clearTimeout(timeout)
+    unlink()
+    return unavailableToolResult(error, controller.signal.aborted)
+  }
+  if (controller.signal.aborted) {
+    clearTimeout(timeout)
+    unlink()
+    return unavailableToolResult(undefined, true)
+  }
+  try {
+    const response = await fetch(endpoint, {
       method,
       headers: jsonHeaders(config.serviceToken, invocationProof),
       ...(body ? { body: JSON.stringify(body) } : {}),
@@ -201,17 +236,22 @@ async function callComputerUseServiceEndpoint(
       redirect: 'error'
     })
     const payload = await response.json().catch(() => null)
-    if (!payload || typeof payload !== 'object') {
-      return errorToolResult('BAD_RESPONSE', `computer-use service returned non-JSON (HTTP ${response.status})`)
+    if (!isServiceResponse(payload)) {
+      return mutation
+        ? unknownMutationOutcomeToolResult(
+            mutation,
+            `computer-use service returned an invalid JSON response (HTTP ${response.status})`
+          )
+        : errorToolResult('BAD_RESPONSE', `computer-use service returned an invalid JSON response (HTTP ${response.status})`)
     }
-    return serviceResponseToToolResult(response, payload as Record<string, unknown>)
+    return serviceResponseToToolResult(response, payload, effect)
   } catch (error) {
-    return errorToolResult(
-      'UNAVAILABLE',
-      controller.signal.aborted
-        ? 'computer-use call timed out or was cancelled'
-        : `computer-use call failed: ${error instanceof Error ? error.message : String(error)}`
-    )
+    return mutation && !isConnectionRefused(error)
+      ? unknownMutationOutcomeToolResult(
+          mutation,
+          mutationFailureMessage(error, controller.signal.aborted)
+        )
+      : unavailableToolResult(error, controller.signal.aborted)
   } finally {
     clearTimeout(timeout)
     unlink()
@@ -220,6 +260,7 @@ async function callComputerUseServiceEndpoint(
 
 async function callAuthorizedComputerUseEndpoint(
   config: ComputerUseServiceConfig,
+  mutationLedger: MutationLedger,
   path: string,
   tool: string,
   body: Record<string, unknown>,
@@ -228,13 +269,19 @@ async function callAuthorizedComputerUseEndpoint(
 ): Promise<ComputerUseToolResult> {
   try {
     const authorization = authorizeMutation(config, tool, body, meta)
-    return callComputerUseServiceEndpoint(
-      config,
-      path,
-      'POST',
-      authorization.body,
-      signal,
-      authorization.proof
+    return dispatchAuthorizedMutation(
+      mutationLedger,
+      authorization,
+      () => callComputerUseServiceEndpoint(
+        config,
+        path,
+        'POST',
+        authorization.body,
+        signal,
+        'mutation',
+        authorization.proof,
+        { tool, requestId: authorization.requestId }
+      )
     )
   } catch (error) {
     return proofErrorToolResult(error)
@@ -243,6 +290,7 @@ async function callAuthorizedComputerUseEndpoint(
 
 async function callComputerUseService(
   config: ComputerUseServiceConfig,
+  mutationLedger: MutationLedger,
   input: ComputerUseRunInput,
   meta: Record<string, unknown> | undefined,
   signal: AbortSignal
@@ -254,13 +302,25 @@ async function callComputerUseService(
       config,
       COMPUTER_USE_MCP_TOOL_NAME,
       argumentsForProof,
-      meta,
-      `mcp-cua-${randomUUID()}`
+      meta
     )
   } catch (error) {
     return proofErrorToolResult(error)
   }
-  const requestId = String(authorization.body.requestId)
+  return dispatchAuthorizedMutation(
+    mutationLedger,
+    authorization,
+    () => dispatchComputerUseRun(config, authorization, meta, signal)
+  )
+}
+
+async function dispatchComputerUseRun(
+  config: ComputerUseServiceConfig,
+  authorization: AuthorizedMutation,
+  meta: Record<string, unknown> | undefined,
+  signal: AbortSignal
+): Promise<ComputerUseToolResult> {
+  const requestId = authorization.requestId
   const controller = new AbortController()
   const unlink = linkAbortSignal(signal, controller)
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs)
@@ -286,8 +346,24 @@ async function callComputerUseService(
   }
   controller.signal.addEventListener('abort', cancel, { once: true })
 
+  let endpoint: string
   try {
-    const response = await fetch(trustedLoopbackEndpoint(config.serviceUrl, '/computer-use/run'), {
+    endpoint = trustedLoopbackEndpoint(config.serviceUrl, '/computer-use/run')
+  } catch (error) {
+    clearTimeout(timeout)
+    controller.signal.removeEventListener('abort', cancel)
+    unlink()
+    return unavailableToolResult(error, controller.signal.aborted)
+  }
+  if (controller.signal.aborted) {
+    clearTimeout(timeout)
+    controller.signal.removeEventListener('abort', cancel)
+    unlink()
+    return unavailableToolResult(undefined, true)
+  }
+
+  try {
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: jsonHeaders(config.serviceToken, authorization.proof),
       body: JSON.stringify(authorization.body),
@@ -295,17 +371,20 @@ async function callComputerUseService(
       redirect: 'error'
     })
     const payload = await response.json().catch(() => null)
-    if (!payload || typeof payload !== 'object') {
-      return errorToolResult('BAD_RESPONSE', `computer-use service returned non-JSON (HTTP ${response.status})`)
+    if (!isServiceResponse(payload)) {
+      return unknownMutationOutcomeToolResult(
+        { tool: COMPUTER_USE_MCP_TOOL_NAME, requestId },
+        `computer-use service returned an invalid JSON response (HTTP ${response.status})`
+      )
     }
-    return serviceResponseToToolResult(response, payload as Record<string, unknown>)
+    return serviceResponseToToolResult(response, payload, 'run')
   } catch (error) {
-    return errorToolResult(
-      'UNAVAILABLE',
-      controller.signal.aborted
-        ? 'computer-use call timed out or was cancelled'
-        : `computer-use call failed: ${error instanceof Error ? error.message : String(error)}`
-    )
+    return isConnectionRefused(error)
+      ? unavailableToolResult(error, controller.signal.aborted)
+      : unknownMutationOutcomeToolResult(
+          { tool: COMPUTER_USE_MCP_TOOL_NAME, requestId },
+          mutationFailureMessage(error, controller.signal.aborted)
+        )
   } finally {
     clearTimeout(timeout)
     controller.signal.removeEventListener('abort', cancel)
@@ -315,7 +394,8 @@ async function callComputerUseService(
 
 function serviceResponseToToolResult(
   response: Response,
-  record: Record<string, unknown>
+  record: Record<string, unknown>,
+  effect: ComputerUseEffect
 ): ComputerUseToolResult {
   const summary = typeof record.summary === 'string' && record.summary.trim()
     ? record.summary
@@ -324,9 +404,35 @@ function serviceResponseToToolResult(
       : `computer-use failed (HTTP ${response.status})`
   return {
     content: [{ type: 'text', text: summary }],
-    structuredContent: record,
+    structuredContent: { ...record, changed: computerUseStateChanged(record, effect) },
     ...(record.ok === false || !response.ok ? { isError: true as const } : {})
   }
+}
+
+function computerUseStateChanged(
+  record: Record<string, unknown>,
+  effect: ComputerUseEffect
+): boolean {
+  if (effect === 'read-only') return false
+  const data = recordValue(record.data)
+  const error = recordValue(record.error)
+  const details = recordValue(error?.details)
+  if (effect === 'run') {
+    return data?.executed === true || details?.executed === true ||
+      details?.mayHaveTakenEffect === true || error?.code === 'ACTION_OUTCOME_UNKNOWN'
+  }
+  return record.ok === true || error?.code === 'CANCEL_PENDING' ||
+    details?.mayHaveTakenEffect === true
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
+function isServiceResponse(value: unknown): value is Record<string, unknown> {
+  return Boolean(recordValue(value)) && typeof (value as Record<string, unknown>).ok === 'boolean'
 }
 
 function jsonHeaders(serviceToken: string, invocationProof?: string): Record<string, string> {
@@ -340,6 +446,10 @@ function jsonHeaders(serviceToken: string, invocationProof?: string): Record<str
 type AuthorizedMutation = {
   body: Record<string, unknown>
   proof?: string
+  requestId: string
+  ledgerIdentity?: string
+  tool: string
+  argumentDigest: string
 }
 
 function authorizeMutation(
@@ -349,17 +459,32 @@ function authorizeMutation(
   meta: Record<string, unknown> | undefined,
   requestId?: string
 ): AuthorizedMutation {
-  const resolvedRequestId = requestId ?? `mcp-cua-${randomUUID()}`
+  const argumentDigest = computerUseArgumentDigest(body)
   if ((config.invocationProofMode ?? 'required') === 'legacy') {
+    const resolvedRequestId = requestId ?? `mcp-cua-${randomUUID()}`
     return {
       body: {
         ...body,
         ...(tool === COMPUTER_USE_MCP_TOOL_NAME ? { requestId: resolvedRequestId } : {})
-      }
+      },
+      requestId: resolvedRequestId,
+      tool,
+      argumentDigest
     }
   }
   const trusted = parseTrustedComputerUseInvocation(meta)
   requireConfirmedInvocation(trusted)
+  const ledgerIdentity = [
+    trusted.runtimeId,
+    trusted.threadId,
+    trusted.turnId,
+    trusted.invocationId
+  ].join('\0')
+  const resolvedRequestId = requestId ?? stableMutationRequestId(
+    ledgerIdentity,
+    tool,
+    argumentDigest
+  )
   const secret = config.invocationSecret ?? ''
   if (!secret) throw new InvocationProofError(
     'APPROVAL_PROOF_REQUIRED',
@@ -378,8 +503,48 @@ function authorizeMutation(
       ...body,
       ...(tool === COMPUTER_USE_MCP_TOOL_NAME ? { requestId: proof.requestId } : {})
     },
-    proof: encodeComputerUseInvocationProof(proof)
+    proof: encodeComputerUseInvocationProof(proof),
+    requestId: proof.requestId,
+    ledgerIdentity,
+    tool,
+    argumentDigest
   }
+}
+
+function dispatchAuthorizedMutation(
+  ledger: MutationLedger,
+  authorization: AuthorizedMutation,
+  dispatch: () => Promise<ComputerUseToolResult>
+): Promise<ComputerUseToolResult> {
+  const identity = authorization.ledgerIdentity
+  if (!identity) return dispatch()
+  const existing = ledger.get(identity)
+  if (existing) {
+    if (existing.tool !== authorization.tool || existing.argumentDigest !== authorization.argumentDigest) {
+      return Promise.resolve(errorToolResult(
+        'INVOCATION_IDENTITY_MISMATCH',
+        'Computer Use invocation ID was already used with a different mutation.'
+      ))
+    }
+    return existing.result
+  }
+  if (ledger.size >= MAX_MUTATION_LEDGER_ENTRIES) {
+    return Promise.resolve(errorToolResult(
+      'INVOCATION_LEDGER_CAPACITY',
+      'Computer Use invocation ledger is at capacity; refusing an untracked mutation.'
+    ))
+  }
+  const result = Promise.resolve().then(dispatch)
+  ledger.set(identity, {
+    tool: authorization.tool,
+    argumentDigest: authorization.argumentDigest,
+    result
+  })
+  return result
+}
+
+function stableMutationRequestId(identity: string, tool: string, argumentDigest: string): string {
+  return `mcp-cua-${computerUseArgumentDigest({ identity, tool, argumentDigest })}`
 }
 
 function requireConfirmedInvocation(
@@ -428,10 +593,76 @@ function linkAbortSignal(signal: AbortSignal, controller: AbortController): () =
   return () => signal.removeEventListener('abort', abort)
 }
 
+function unknownMutationOutcomeToolResult(
+  mutation: MutationDispatch,
+  cause: string
+): ComputerUseToolResult {
+  const message = [
+    `Computer Use ${mutation.tool} was dispatched but its final result is unknown.`,
+    'Observe the current target/session state before deciding whether to issue a new mutation.',
+    cause
+  ].join(' ')
+  return {
+    content: [{ type: 'text', text: message }],
+    structuredContent: {
+      ok: false,
+      changed: true,
+      error: {
+        code: 'ACTION_OUTCOME_UNKNOWN',
+        message,
+        retryable: false,
+        details: {
+          requestId: mutation.requestId,
+          tool: mutation.tool,
+          mayHaveTakenEffect: true
+        }
+      }
+    },
+    isError: true
+  }
+}
+
+function unavailableToolResult(error: unknown, aborted: boolean): ComputerUseToolResult {
+  return errorToolResult(
+    'UNAVAILABLE',
+    aborted
+      ? 'computer-use call was cancelled before dispatch'
+      : `computer-use call failed before dispatch: ${safeErrorMessage(error)}`
+  )
+}
+
+function mutationFailureMessage(error: unknown, aborted: boolean): string {
+  return aborted
+    ? 'The response was lost after the call timed out or was cancelled.'
+    : `The response was lost after dispatch: ${safeErrorMessage(error)}`
+}
+
+function isConnectionRefused(error: unknown): boolean {
+  const safePreDispatchCodes = new Set([
+    'ECONNREFUSED',
+    'EAI_AGAIN',
+    'EHOSTUNREACH',
+    'ENETDOWN',
+    'ENETUNREACH',
+    'ENOTFOUND'
+  ])
+  let current: unknown = error
+  for (let depth = 0; depth < 5 && current && typeof current === 'object'; depth += 1) {
+    const record = current as { code?: unknown; cause?: unknown }
+    if (typeof record.code === 'string' && safePreDispatchCodes.has(record.code)) return true
+    current = record.cause
+  }
+  return false
+}
+
+function safeErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error ?? 'unknown error')
+}
+
 function errorToolResult(code: string, message: string): ComputerUseToolResult {
   return {
     content: [{ type: 'text', text: message }],
-    structuredContent: { ok: false, error: { code, message } },
+    structuredContent: { ok: false, changed: false, error: { code, message } },
     isError: true
   }
 }

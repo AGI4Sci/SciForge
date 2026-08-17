@@ -1,5 +1,10 @@
-import { join, posix } from 'node:path'
 import { resolveElectronRunAsNodeExecutable } from '@sciforge/domain-sdk/node/electron-node-executable'
+import {
+  buildDomainRuntimeMcpProcessArgs,
+  resolveDomainRuntimeMcpNodeEntryPath,
+  type DomainRuntimeMcpLaunchConfig
+} from '@sciforge/domain-sdk/node/runtime-mcp-launcher'
+import { COMPUTER_USE_RUNTIME_MCP_SERVER_CONTRIBUTION } from '../definition.js'
 
 export type AgentRuntimeId = 'codex' | 'claude'
 export type ComputerUseSettingsLike = Readonly<{
@@ -7,10 +12,8 @@ export type ComputerUseSettingsLike = Readonly<{
   runtimeEnabled?: Readonly<Partial<Record<AgentRuntimeId, boolean>>>
 }>
 export type AppSettingsLike = Readonly<{ computerUse?: ComputerUseSettingsLike }>
-export type ComputerUseMcpLaunchConfig = Readonly<{
-  appPath: string
+export type ComputerUseMcpLaunchConfig = DomainRuntimeMcpLaunchConfig & Readonly<{
   execPath: string
-  isPackaged: boolean
 }>
 export const GUI_COMPUTER_USE_MCP_SERVER_NAME = 'gui_owl_computer_use'
 export const COMPUTER_USE_MCP_TOOL_NAME = 'computer_use'
@@ -18,7 +21,6 @@ export const COMPUTER_USE_GET_CAPABILITIES_TOOL_NAME = 'computer_use_get_capabil
 export const COMPUTER_USE_LIST_TARGETS_TOOL_NAME = 'computer_use_list_targets'
 export const COMPUTER_USE_BIND_TARGET_TOOL_NAME = 'computer_use_bind_target'
 export const COMPUTER_USE_RELEASE_SESSION_TOOL_NAME = 'computer_use_release_session'
-const GUI_COMPUTER_USE_MCP_NODE_ENTRY = 'out/main/computer-use-mcp-node-entry.js'
 export const COMPUTER_USE_MCP_LAUNCH_FLAG = '--gui-owl-computer-use-mcp-server'
 export const COMPUTER_USE_MCP_TIMEOUT_MS = 600_000
 
@@ -45,16 +47,15 @@ export function isComputerUseMcpConfigured(
 }
 
 export function buildComputerUseMcpArgs(launch: ComputerUseMcpLaunchConfig): string[] {
-  return [
-    resolveComputerUseMcpNodeEntryPath(launch),
-    COMPUTER_USE_MCP_LAUNCH_FLAG
-  ]
+  return buildDomainRuntimeMcpProcessArgs(
+    launch,
+    COMPUTER_USE_RUNTIME_MCP_SERVER_CONTRIBUTION.id,
+    [COMPUTER_USE_MCP_LAUNCH_FLAG]
+  )
 }
 
 export function resolveComputerUseMcpNodeEntryPath(launch: ComputerUseMcpLaunchConfig): string {
-  return launch.appPath.includes('/') && !launch.appPath.includes('\\')
-    ? posix.join(launch.appPath, GUI_COMPUTER_USE_MCP_NODE_ENTRY)
-    : join(launch.appPath, GUI_COMPUTER_USE_MCP_NODE_ENTRY)
+  return resolveDomainRuntimeMcpNodeEntryPath(launch)
 }
 
 export function resolveComputerUseMcpCommand(

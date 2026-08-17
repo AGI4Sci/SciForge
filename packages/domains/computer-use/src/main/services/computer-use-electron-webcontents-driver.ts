@@ -319,10 +319,12 @@ export function createElectronWebContentsCdpDriver(
         await dispatchKeyChord(handle, keys)
         verification = { status: 'unverified', details: { chord: keys.join('+') } }
       } else if (name === 'scroll') {
-        const pixels = finiteNumber(action.pixels, 1)
+        const deltaX = finiteNumber(action.deltaX, 0)
+        const deltaY = finiteNumber(action.deltaY, 0)
         const before = await scrollPosition(handle.contents)
         await handle.contents.debugger.sendCommand('Runtime.evaluate', {
-          expression: `window.scrollBy(0, ${JSON.stringify(pixels)})`, returnByValue: true
+          expression: `window.scrollBy(${JSON.stringify(deltaX)}, ${JSON.stringify(deltaY)})`,
+          returnByValue: true
         })
         const after = await scrollPosition(handle.contents)
         verification = {
