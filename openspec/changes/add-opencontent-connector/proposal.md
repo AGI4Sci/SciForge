@@ -1,23 +1,23 @@
 ## Why
 
-After provider-neutral Content Space and a separately reviewed Secure Provider Credentials capability exist, an OpenContent ContentSpaceProvider needs one independently owned authentication and transport implementation. That integration must not move vendor infrastructure into Content Space or Host Core, and it must not pull deferred Shared Documents work into the cloud-space delivery path.
+Content Space V1 is provider-neutral and cannot authenticate or speak OpenContent. Change 1 needs one independently owned integration that binds an existing OpenContent account to the current Local Account, protects its Token, and exposes only a narrow validated transport facade to the OpenContent ContentSpaceProvider.
 
 ## What Changes
 
-- Add one optional trusted compile-time, main-only `opencontent-connector` package through the standard manifest/generated composition path.
-- Make it the sole owner of OpenContent node-local per-Principal connections, authentication/Token lifecycle, owner-scoped credential use, pinned schemas, redaction, and canonical transport.
-- Add or reuse a generic Host-mediated owner-scoped internal-service contract. The Connector SHALL publish only a non-callable service descriptor through `main.extension` and register its callable internal-service implementation only through the private generic mediator on its trusted main-entry Host facade; Host SHALL issue the narrow token-free facade only to the allowlisted adapter owner. This is a facade implementation registration, not `main.document-provider-factory` or `main.content-space-provider-factory`.
-- Contribute each reviewed OpenContent Provider Instance as a non-secret `main.provider-instance-directory-entry`, and bind Connector-private endpoint/tenant policy to the same reference without exposing it in the directory.
-- Define no Document port, optional Document method, universal client, UI/Agent capability, renderer, provider factory, or portable-reference resolver.
-- Fail session supersession and uncertain writes closed; never silently log in, retry, choose another connection, or fall back.
-- Keep all network operations blocked until Secure Provider Credentials and exact identity/session/schema/authorization/tenant Gates pass.
-- Permit the Connector and all OpenContent packages to be absent or paused without affecting Content Space, its mock Provider, or other Providers.
+- Add one optional trusted compile-time `opencontent-connector` package with separate main and renderer entrypoints in the same package/version.
+- Add a Human-only enrollment panel for bind, connection status, reauthenticate, and unbind. SciForge never creates an OpenContent account.
+- Bind at most one node-local Provider Connection to each `(current Human Principal, Provider Instance)`; the executing node owner's current connection is always authoritative and cannot be supplied by a requester, Task, prompt, or portable reference.
+- Accept an existing username/password only for the bind transaction, validate the resulting Token with OpenContent, persist only the encrypted Token, and never persist or trace the password.
+- Make the Connector the sole owner of OpenContent endpoint policy, authentication/session lifecycle, pinned schemas, redaction, and canonical two-stage transfer transport.
+- Publish only a non-callable service descriptor and register the callable implementation through a generic Host-mediated owner-scoped internal-service contract. Only the separately composed OpenContent Content Space adapter receives its token-free facade.
+- Contribute the reviewed OpenContent Provider Instance as a non-secret directory entry. The shared demonstration endpoint is admitted only by a trusted development profile; caller input cannot select an endpoint or promote readiness.
+- Define no Document port/provider, Shared Documents behavior, ContentSpaceProvider factory, portable resolver, raw public client, or credential-bearing renderer/Agent capability.
 
 ## Capabilities
 
 ### New Capabilities
 
-- `opencontent-connector`: Future main-only OpenContent connection, credential use, validated transport, and least-privilege Content Space adapter-port infrastructure.
+- `opencontent-connector`: Human enrollment plus main-process OpenContent connection, credential use, validated transport, and least-privilege Content Space adapter infrastructure.
 
 ### Modified Capabilities
 
@@ -25,8 +25,7 @@ None.
 
 ## Impact
 
-- This is a future change after Content Space V1 and `add-secure-provider-credentials`; the current Content Space change implements neither credentials nor OpenContent network access.
-- Uses generic main-extension/runtime-lifecycle composition, with no Host OpenContent feature map or Provider/vendor switch.
-- The Connector itself registers neither DocumentProvider nor ContentSpaceProvider; the later adapter owns the Content Space factory.
-- Content Space already owns portable reference codecs/resolution. The Connector does not compete for those kinds.
-- After the adapter is complete, a separate OpenContent cloud-space PoC milestone must add a trusted Content Space service policy/audience Gate before any `poc_only` operation can execute. Shared Documents stays deferred.
+- Depends on provider-neutral Content Space V1 and `add-secure-provider-credentials`.
+- Uses standard manifest/generated composition and generic Host contracts; Host Core gains no OpenContent switch or feature map.
+- The later `add-opencontent-content-space-provider-v1` change maps the facade into ContentSpaceProvider and admits the exact Change 1 operation set for trusted UI and Agent audiences.
+- Shared Documents and every Document adapter/port remain deferred by ADR-0025.

@@ -183,6 +183,8 @@ npm run build
 | [Runtime contract](./docs/agent-runtime-contract.md) | Codex、Claude Code 与 GUI 的统一适配边界 |
 | [Remote Workspace](./docs/remote-workspace.zh-CN.md) | VPN/SSH、远端目录、本地 UI、网络出口与科学预览 |
 | [架构说明](./DESIGN.md) | Agent runtime、GUI 与服务边界 |
+| [Context Map](./CONTEXT-MAP.md) | Identity、Cloud Collaboration、Content Space、Shared Documents 与 Provider Integration 的权威边界 |
+| [架构决策索引](./docs/adr/README.md) | ADR 生命周期、superseded/deferred 状态与当前决策优先级 |
 | [贡献指南](./docs/CONTRIBUTING.zh-CN.md) | 如何参与项目 |
 | [安全策略](./SECURITY.zh-CN.md) | 漏洞报告与安全说明 |
 

@@ -1,5 +1,7 @@
 ---
 status: accepted
+supersedes: ADR-0017 milestone scope
+reviewed: 2026-08-17
 ---
 
 # Stage OpenContent Content Space before Shared Documents

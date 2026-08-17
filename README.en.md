@@ -174,6 +174,8 @@ See the [server README](./packages/collaboration-server/README.md) for source bu
 | [Collaboration Operations Guide (Chinese)](./docs/operations/zulip-aliyun-deployment.zh-CN.md) | Production deployment, systemd, Nginx, backups, upgrades, and rollback |
 | [Runtime Contract](./docs/agent-runtime-contract.md) | The unified adaptation boundary for Codex, Claude Code, and the GUI |
 | [Architecture](./DESIGN.md) | Agent runtime, GUI, and service boundaries |
+| [Context Map](./CONTEXT-MAP.md) | Authority boundaries across identity, collaboration, content, documents, and provider integration |
+| [Architecture Decision Index](./docs/adr/README.md) | ADR lifecycle, superseded/deferred states, and current authority order |
 | [Contribution Guide](./docs/CONTRIBUTING.md) | How to contribute to the project |
 | [Security Policy](./SECURITY.md) | Vulnerability reporting and security information |
 

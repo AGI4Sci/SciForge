@@ -1,64 +1,64 @@
 ## Context
 
-The required order is Content Space V1 → Secure Provider Credentials → OpenContent Connector Content Space port → OpenContent ContentSpaceProvider → cloud-space PoC. ADR 0025 records that Shared Documents and all Document adapter/provider work remain later.
-
-Content Space resolves its own portable reference kinds through its domain resolver, trusted Provider Instance Directory, domain catalog, and current Principal. The Connector belongs below the OpenContent adapter: it owns vendor authentication/transport facts but no business-resource semantics.
+The current desktop asserts a Local Account as a `local-selection` Human Principal. ADR-0026 allows that Principal to own a separately authenticated node-local Provider Connection; it does not treat the Local Account as proof of the OpenContent identity. The offline SDK and the read-only `test3` probe confirm RSA-OAEP-SHA256 login, opaque Token validation, stable external user ID, personal-root discovery, Team discovery, and folder metadata. Upload/download use main-site validation/creation followed by region transfer, so transport schemas remain Connector-owned.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Compose one optional main-only OpenContent infrastructure owner without Host/vendor routing.
-- Reuse one per-Principal connection/session path through a least-privilege Content Space adapter port.
-- Store/use secrets only through the future owner-scoped Secure Provider Credentials facade.
-- Pin and validate every selected request/response and fail closed on session or outcome uncertainty.
+- Enroll one existing OpenContent account per Principal/instance without implementing account registration.
+- Persist only a Host-encrypted Token and non-secret connection metadata.
+- Keep all Token, endpoint, session, HTTP, provider DTO, and transfer-region details in main process.
+- Give only the OpenContent Content Space adapter a bounded token-free facade.
+- Fail closed on stale/superseded sessions, schema drift, authorization failure, and uncertain writes.
 
 **Non-Goals:**
 
-- Implementing this Connector as part of Content Space V1.
-- Owning Content Space containers/files/artifacts or Shared Document revisions/edits.
-- Contributing a Provider factory, portable codec/resolver, public Broker capability, UI, Agent/MCP surface, raw HTTP client, or Provider DTO.
-- Adding a Document port before Shared Documents or adding placeholder/optional methods now.
-- Claiming production readiness or enabling an OpenContent cloud-space PoC without a separate Gate decision.
+- SciForge login, OpenContent account creation, ACL/member administration, Project semantics, Shared Documents, or collaborative editing.
+- A public raw client, Agent-supplied credentials/connections, automatic login, automatic retry, fallback account, or administrator borrowing.
 
 ## Decisions
 
-### Use a standard main-only package and exact extension location
+### Keep enrollment UI and transport in separate entrypoints of one package
 
-The Connector declares only a main entrypoint and generic `main.extension` descriptors plus package runtime lifecycle as needed. Declaration/runtime location, version, owner, and port contract match exactly. No Host-private OpenContent service, package-load singleton, dynamic plugin loader, or OpenContent switch is added.
+The renderer entrypoint contributes only Human enrollment/status UI. Password input is sent once over a dedicated trusted enrollment capability, used immediately by the main entrypoint, and then released. It never enters domain state, settings, Workspace, logs, traces, Agent traffic, or fixtures. The main entrypoint owns authentication, Token validation, secure persistence, logout, redaction, and transport. No transport callable is exported to renderer or Agent code.
 
-### Keep directory, connection metadata, and credentials separate
+### Make the executing Principal's connection non-selectable
 
-For V1, the Connector package contributes each reviewed OpenContent instance through `main.provider-instance-directory-entry`. The generic entry contains only opaque instance, Provider Kind `opencontent`, safe display name, version, and trusted contribution owner. Connector-private configuration is keyed by that exact ProviderInstanceRef and owns endpoint/tenant/TLS/redirect policy; lifecycle validation rejects a missing, duplicate, wrong-kind, or foreign dynamic registration. Connector-owned local connection metadata then binds one Host Principal to the instance without storing secrets. Secret material stays in the separately reviewed credential store under an owner-scoped facade. Portable and business input can select only a registered reference and never supplies or mutates endpoint policy.
+Connection metadata has a unique `(principalId, providerInstanceRef)` key and a local `connectionId`. Bind either creates the missing record or explicitly replaces the current record after successful authentication. All operations derive the current Principal from Host context and locate that exact record. A caller cannot pass a connection ID, username, or alternate Principal. Principal switch cancels live sessions and operations; it does not delete either Principal's stored binding.
 
-### Acquire one least-privilege adapter port through Host mediation
+The stable OpenContent `GetUserInfoByToken.data.id` is stored as the external account ID. `identityId` is optional diagnostic metadata only. A changed stable ID during reauthentication is an explicit replacement, never silent continuation.
 
-The current generic contribution host lists installed extensions and is not itself service authorization. This future change SHALL therefore add or reuse a package-generic Host-mediated owner-scoped internal-service contract. The Connector publishes only a validated non-callable service descriptor through `main.extension` and registers its callable internal-service implementation through the private generic mediator exposed on its trusted main-entry Host facade. This facade implementation registration is neither `main.document-provider-factory` nor `main.content-space-provider-factory`. Raw callable transport never appears in the global contribution list. Host closes and validates the complete descriptor/implementation registration set before dependent lifecycle acquisition; missing, duplicate, incompatible, or mismatched ownership fails without priority, last-wins, or package-load-order selection. Host derives the requesting module owner from its trusted main entry and issues the bounded token-free facade only when the descriptor allowlists that exact owner. Runtime input cannot name or impersonate the owner. Content Space never receives this facade and the Broker is not used as a private service bus.
+### Persist the Token, never the password
 
-No Document port exists in this milestone. A separate later change may extend the same Connector only after Shared Documents has a reviewed contract, with independent declaration, authorization, readiness, and tests.
+Bind fetches the login RSA key, encrypts the password with RSA-OAEP-SHA256, calls `UserLogin`, validates the returned opaque Token through `CheckUserTokenValidity` and `GetUserInfoByToken`, and only then atomically commits connection metadata plus the Token through the owner-scoped secure credential facade. Failed validation commits nothing. Every later facade operation checks Token validity before provider content access. An invalid, expired, revoked, or superseded Token atomically moves local connection metadata to `reauthentication_required`; the Connector never silently logs in because no password is retained.
 
-### Do not contribute portable reference resolution
+Unbind first invalidates local usability, attempts provider logout/revocation when supported, removes the encrypted Token and metadata, and reports remote revocation separately. Local deletion is never contingent on remote success.
 
-Content Space owns the resolver for its Container/File/Artifact kinds and routes it through the pinned ContentSpaceProvider. Adding an OpenContent authority resolver would duplicate ownership and fail composition. The Connector therefore only serves the Host-issued adapter facade; reference materialization reaches it indirectly through Content Space service → pinned OpenContent Provider → Host-mediated Connector facade.
+### Separate trusted instance policy from portable identity
 
-### Treat evidence and sessions as operation-specific
+The package contributes a safe `main.provider-instance-directory-entry`. Connector-private policy binds the exact ProviderInstanceRef to HTTPS endpoint, tenant/build expectations, redirect policy, timeouts, and the development profile. Neither portable references nor ordinary configuration may provide an endpoint. The shared demonstration instance is development-only and uses least-privilege accounts; production remains blocked.
 
-Every transport operation begins `blocked_by_contract`. Formal per-user identity/authentication, Token issue/expiry/renewal/rotation/logout/revocation, API/browser coexistence, schema, metadata authorization, and tenant isolation must pass independently. Evidence may make a Connector operation eligible for a later PoC, but `poc_only` remains non-executable through the normal product path until a separate cloud-space PoC change installs a trusted policy/audience Gate in Content Space service composition. Supersession terminates the current session and uncertain writes return `outcome_unknown`; no automatic login or retry occurs.
+### Use one Host-mediated internal facade
+
+The Connector publishes a non-callable service descriptor through standard main extension composition. Its implementation is registered privately through a generic Host mediator, which derives both provider and consumer owners from trusted package entrypoints and issues the token-free facade only to the allowlisted OpenContent adapter. Descriptor/implementation owner, version, and location mismatches fail composition. Content Space and the Broker are not private service buses.
+
+### Pin schemas and preserve two-stage transfer uncertainty
+
+Every admitted API validates HTTP status, OpenContent business result, and an exact bounded schema. Personal and Team roots normalize numeric IDs internally; the adapter receives stable folder identity facts and prefers `folderGuid` as portable container identity. Upload/download region URLs never reach renderer or Agent. Create/upload collision maps to conflict. Timeout, cancellation, session supersession, or an ambiguous second-stage receipt maps to `outcome_unknown`; writes are never retried automatically.
 
 ## Risks / Trade-offs
 
-- **Provider service differs from documentation** is contained by pinned runtime schemas and fail-closed result mapping.
-- **New login invalidates existing work** is represented as superseded and requires Human action.
-- **Known-ID metadata bypasses authorization** blocks materialization/readiness until a provider fix or validated oracle exists.
-- **Connector becomes a hidden public client** is prevented by Host-mediated owner-scoped facade acquisition and boundary tests forbidding a raw callable port in the global contribution host or UI/Agent/MCP/raw transport exports.
-- **Document work blocks Content Space** is prevented by omitting every Document port and placeholder from this milestone.
+- A new login may supersede another OpenContent session. The Connector treats it as explicit Human enrollment and requires reauthentication when the saved Token becomes invalid.
+- JavaScript cannot guarantee password zeroization, so the contract minimizes lifetime and prohibits every durable/observable copy.
+- The current shared demo endpoint is not a production security boundary. Exact compile-time policy limits development use; production requires a separate readiness decision.
+- Some SDK response shapes remain under-documented. Operations stay blocked until contract probes and fixtures pin them.
 
 ## Migration Plan
 
-1. Complete Content Space V1 and separately archive Secure Provider Credentials.
-2. Add the package-generic Host-mediated owner-scoped service mechanism, non-callable Connector descriptor, privately registered internal-service implementation factory, reviewed non-secret instance entry, and exact adapter facade with all network operations blocked.
-3. Implement connection/session state, schema fixtures, redaction, and transport mocks.
-4. Mark no operation PoC-eligible until its exact contract/evidence passes; normal Content Space execution remains blocked.
-5. Let the later adapter register the OpenContent ContentSpaceProvider factory.
-6. In a separate cloud-space PoC change, add the trusted Content Space policy/audience Gate and admit only exact operations after adapter and environment Gates pass.
-7. Removing the Connector/adapter leaves generic Content Space and other Providers operational with no shim or fallback.
+1. Complete the canonical secure provider-credential facade.
+2. Add package manifests, enrollment UI contract, connection metadata, and trusted instance profile with network operations mocked.
+3. Implement bind/status/reauthenticate/unbind and schema-pinned read transport.
+4. Implement two-stage create/upload/download transport with conflict, cancellation, bounds, and uncertainty handling.
+5. Compose the separate OpenContent ContentSpaceProvider and verify the Change 1 UI/Agent path against the exact development profile.
+6. Removing the Connector/adapter leaves generic Content Space and other Providers operational with no fallback.

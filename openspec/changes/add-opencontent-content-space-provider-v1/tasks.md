@@ -1,27 +1,28 @@
-## 1. Package and Predecessors
+## 1. Contract and Package Foundation
 
-- [ ] 1.1 Complete/archive Content Space V1, Secure Provider Credentials, and the OpenContent Connector Content Space port; do not require Shared Documents or any Document package.
-- [ ] 1.2 Add the optional main-only adapter with standard manifest, exact public exports, lazy factory, package tests/typecheck, and no renderer/Agent/MCP/IPC/sidecar.
-- [ ] 1.3 Register exactly one `main.content-space-provider-factory` extension for Provider Kind `opencontent`; add no Document factory, portable codec/resolver, or alias.
-- [ ] 1.4 Acquire only the Host-issued owner-scoped Connector facade, reject raw global callable transport and consumer impersonation, and prove factory/catalog construction has no network, credential, login, or remote side effect.
+- [ ] 1.1 Complete Secure Provider Credentials and the OpenContent Connector; keep Shared Documents and Project binding out of the dependency chain.
+- [x] 1.2 Extend `ContentContainerSummary` with required provider-neutral `scope: personal | shared` and update mock/provider/UI tests.
+- [x] 1.3 Add the optional main-only adapter with one exact `main.content-space-provider-factory` contribution, standard manifest/generated composition, lazy construction, and no OpenContent-specific Host branch.
+- [x] 1.4 Acquire only the Host-issued token-free Connector facade; prove catalog/factory construction has no login, credential, network, or remote side effect.
 
-## 2. Strict Mapping and Governance
+## 2. Read Mapping and Authorization
 
-- [ ] 2.1 Map only pinned validated transport results into bounded Content Space contracts; expose no raw DTO/client/Token/endpoint.
-- [ ] 2.2 Bind every result to the exact Connector-contributed Provider Instance, parent/resource, current Principal lease, Broker-admitted write invocation, cancellation state, and readiness.
-- [ ] 2.3 Map collision to typed conflict and uncertain completion to `outcome_unknown`; never retry, overwrite, retarget, choose another connection, or fall back.
-- [ ] 2.4 Leave Content Space codecs/resolver, Broker capability handlers, Host file destination, portal grants, renderer, and Artifact issuance in their owning layers.
+- [x] 2.1 Map the personal root to `personal` and accessible Team roots to `shared`, using stable folder identity for portable references and bounded labels for display.
+- [x] 2.2 Map paginated folder/file entries and typed unauthorized/unavailable/malformed/rate outcomes without exposing DTOs, Tokens, endpoints, or numeric internal handles.
+- [x] 2.3 Bind every result to the exact Provider Instance, current Principal-owned connection, explicit target, cancellation state, and trusted development profile.
+- [x] 2.4 Enforce Personal Session Human-authorized roots and prepare the generic descendant-scope input required by Change 2 Project Tasks; callers cannot pass a connection.
 
-## 3. Evidence-Gated Operations
+## 3. Write and Workspace Transfer Path
 
-- [ ] 3.1 Start container selection, listing, create-folder, upload-new, download, portal, observation/materialization, and Artifact proof as `blocked_by_contract`.
-- [ ] 3.2 Validate schemas, business outcomes, current authorization, pagination/bounds, progress, cancellation, transfers, portal origins, and session supersession independently.
-- [ ] 3.3 Keep ArtifactReference blocked until immutable identity, retention, version-specific retrieval, exact instance/file/version proof, and optional-digest matching pass.
-- [ ] 3.4 Keep production metadata/materialization blocked while BOLA or session/tenant isolation evidence is incomplete.
+- [x] 3.1 Implement create-folder and upload-new only, mapping name collision to conflict and ambiguous completion to `outcome_unknown` with no overwrite, rename, retry, or fallback.
+- [x] 3.2 Add canonical Agent upload grants for Human-confirmed Workspace-relative regular files; validate real path, symlink escape, type, and 16 MiB limit in Host.
+- [x] 3.3 Add canonical Agent download grants for Human-confirmed new Workspace-relative destinations; use a temporary file plus atomic commit, prohibit overwrite, and enforce 1 GiB limit.
+- [x] 3.4 Preserve progress, cancellation, one-shot handle ownership, current Principal, audience, invocation identity, and cleanup across UI and Agent transfers.
 
-## 4. Verification and PoC Handoff
+## 4. Development Profile and Verification
 
-- [ ] 4.1 Test missing/duplicate/incompatible Provider, unknown instance, wrong Principal/connection, cross-instance result, consumer impersonation, cancellation, collision, uncertainty, token leakage, unsafe portal, and no fallback.
-- [ ] 4.2 Run adapter/Connector/catalog/reference tests and typecheck, generator freshness, governance/boundaries, lint, regression, and source/packaged smoke.
-- [ ] 4.3 Hand exact proven operations to a separate dedicated-tenant OpenContent cloud-space PoC change that adds the trusted Content Space policy/audience Gate; do not promote from caller/configuration input.
-- [ ] 4.4 Prove removing the adapter leaves Content Space mocks/other Providers/UI operational and Shared Documents remains deferred.
+- [x] 4.1 Pin exact read/write schemas with least-privilege `test3` probes; locate exact Team `sciforge test`, create it with `test3` only if absent and permitted, otherwise stop before administrator use.
+- [x] 4.2 Verify personal/team browse, folder create, upload-new conflict/uncertainty, and download without remote cleanup or destructive operations outside explicitly created test fixtures.
+- [ ] 4.3 Test unauthorized, missing binding, reauthentication, wrong Principal, scope escape, unsafe Workspace path, cancellation, size bounds, token leakage, and adapter removal.
+- [ ] 4.4 Run package tests/typecheck, Content Space regression, generator freshness, governance/boundaries, changed-file lint, and source/packaged smoke.
+- [x] 4.5 Keep production, ProjectContentSpaceBinding, ACL/member operations, automatic sync, Shared Documents, and ArtifactReference issuance blocked.

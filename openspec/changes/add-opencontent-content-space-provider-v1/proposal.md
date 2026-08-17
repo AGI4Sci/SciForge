@@ -1,30 +1,30 @@
 ## Why
 
-After Content Space V1, Secure Provider Credentials, and the OpenContent Connector Content Space port are complete, OpenContent needs an optional adapter that implements the provider-neutral ContentSpaceProvider contract. Keeping that mapper/factory in its own package lets the vendor track be paused or fail without changing Content Space, Host Core, its UI, or other Providers.
+The OpenContent Connector owns authentication and transport but intentionally knows no Content Space business semantics. Change 1 needs a separate adapter that maps one bound OpenContent account's personal library and Team libraries into the existing provider-neutral ContentSpaceProvider path for trusted Human UI and Agent operations.
 
 ## What Changes
 
 - Add an optional trusted compile-time, main-only `opencontent-content-space-provider` package.
-- Register exactly one generic `main.extension` at `main.content-space-provider-factory` for Provider Kind `opencontent`, with exact declaration/runtime version/location/owner binding.
-- Acquire only the Host-issued owner-scoped token-free Content Space facade from `opencontent-connector`; no raw callable port is exposed through the global contribution host.
-- Map pinned OpenContent transport facts into strict Content Space references, capabilities, readiness, results, errors, progress, cancellation, and uncertain-write semantics.
-- Use the Connector-contributed trusted non-secret OpenContent Provider Instance entry and remain pinned to the selected instance; add no dynamic registration, default, or fallback.
-- Register no portable codec/resolver, renderer, public capability, IPC/MCP, credential store, raw client, or DocumentProvider.
-- Keep every operation blocked through the normal product path; the following cloud-space PoC change must add a trusted Content Space service policy/audience Gate before any exact evidence-backed `poc_only` operation can execute.
+- Register exactly one `main.content-space-provider-factory` contribution for Provider Kind `opencontent` and acquire only the Host-issued token-free Connector facade.
+- Map the personal root to one `personal` Content Container and each accessible Team root to one `shared` Content Container. Prefer stable `folderGuid` as portable container identity; keep numeric folder IDs inside the integration.
+- Implement the strict Change 1 operation set: list containers, browse directories, create folder, upload-new up to 16 MiB, and download up to 1 GiB.
+- Preserve OpenContent ACL as the only permission truth. Unauthorized is returned directly with Human guidance; the adapter never creates accounts, invites members, changes ACLs, or borrows owner/coordinator/admin credentials.
+- Enforce Agent scope with confirmed, caller-bound Broker root resources and descendant resources issued only by authorized directory listing. Personal Session can authorize an enumerated personal or Team root; Project Task will use only the Change 2 binding directory and descendants. Every transfer uses a separate explicit approved one-shot Host Workspace grant.
+- Keep overwrite, rename, move, delete, share, ACL administration, automatic sync, Artifact issuance without immutable proof, Project binding, and Shared Documents outside this change.
 
 ## Capabilities
 
 ### New Capabilities
 
-- `opencontent-content-space-provider`: Future optional OpenContent implementation of ContentSpaceProvider with strict mapping and operation-specific readiness.
+- `opencontent-content-space-provider`: OpenContent implementation of ContentSpaceProvider for bound-account personal/team file access.
 
 ### Modified Capabilities
 
-None.
+- `content-space`: adds provider-neutral `ContentContainerSummary.scope` and Agent Workspace transfer admission needed by the real provider.
 
 ## Impact
 
-- Depends in order on Content Space V1, Secure Provider Credentials, and the Connector Content Space port.
-- Changes no Host feature switch, Agent branch, Content Space contract/UI, portable resolver, or generated-composition exception.
-- Shared Documents, a Document Connector port, and OpenContent DocumentProvider are not prerequisites and remain deferred.
-- Cloud-space PoC admission follows this adapter and requires its own exact evidence/environment decision.
+- Depends on Content Space V1, Secure Provider Credentials, and the OpenContent Connector.
+- Uses the one canonical Content Space capability/service/provider path for both renderer and Agent; no OpenContent-specific IPC/MCP or Host switch is added.
+- Change 2 later adds Cloud Collaboration-owned `ProjectContentSpaceBinding`; this adapter never imports Project models.
+- Shared Documents remains deferred by ADR-0025.

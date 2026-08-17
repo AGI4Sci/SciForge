@@ -1,61 +1,56 @@
 ## Context
 
-Content Space already owns the business contract, service, capabilities, renderer, portable codecs/resolver, and immutable-artifact rules. Provider Composition supplies exact generic main extensions and a trusted non-secret instance directory. The preceding OpenContent Connector contributes each reviewed OpenContent instance and owns vendor connections, credential use, session lifecycle, schema validation, and transport behind a generic Host-mediated owner-scoped token-free facade.
-
-The delivery order is therefore Content Space → Secure Credentials → Connector port → Provider adapter → cloud-space PoC; Shared Documents stays deferred.
+Content Space already owns references, capabilities, confirmation policy, service routing, transfer handles, UI, and the ContentSpaceProvider SPI. The Connector contributes the reviewed OpenContent instance and owns binding, Token use, API schemas, and two-stage transport behind a Host-mediated token-free facade. This adapter only maps between those contracts.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Implement one bounded OpenContent mapping to ContentSpaceProvider without leaking vendor details.
-- Register one exact lazy factory and remain pinned to the resolved OpenContent instance.
-- Preserve current Principal, cancellation, invocation identity, conflict, `outcome_unknown`, transfer, portal, and immutable-proof requirements.
-- Keep each operation independently readiness-gated and blocked by default.
+- Show the bound account's personal library and accessible Team libraries through provider-neutral containers.
+- Browse, create folders, upload new files, and download files through one canonical UI/Agent path.
+- Preserve exact Principal/connection, scope, target ancestry, confirmation, Workspace, limits, cancellation, conflict, and uncertainty boundaries.
 
 **Non-Goals:**
 
-- Implementing OpenContent HTTP/authentication/credentials/Token lifecycle in the adapter.
-- Owning Content Space UI, codecs/resolver, Host transfer/navigation, or Project/Task semantics.
-- Registering DocumentProvider, Document port, universal Provider/client, public capability, renderer, IPC, or MCP.
-- Claiming production readiness, running an unbounded/shared-tenant PoC, or falling back.
+- Login/Token/HTTP behavior, endpoint selection, Provider ACL/member management, Project lifecycle, Shared Documents, collaborative editing, or automatic synchronization.
+- Overwrite/update, automatic rename, delete, move, share, search, or immutable ArtifactReference claims.
 
 ## Decisions
 
-### Contribute only one exact Content Space factory
+### Map OpenContent libraries without importing vendor terms into the domain
 
-The package declares a generic `main.extension` whose location is `main.content-space-provider-factory`. Manifest version, contract version, Provider Kind, trusted owner, and runtime value match exactly. It creates the Provider lazily only after a trusted directory entry pins an OpenContent ProviderInstanceRef. It has no package-load singleton or network side effect during catalog construction.
+`GetTopPersonalFolderId` becomes one container with `scope: personal`. Each `GetMyTeamList` item becomes one container with `scope: shared`. Team is a provider DTO, not a SciForge Project. The adapter resolves the Team root and uses `folderGuid` as the stable portable `containerId`; numeric `folderId` remains an internal lookup detail. Folder/file child identity is validated and bounded before mapping.
 
-### Consume only the Host-issued Connector facade
+### Keep one service path with audience-specific Broker admission
 
-The adapter's trusted main entry asks the package-generic Host mediator for the service identified by the Connector's non-callable descriptor. Host resolves the privately registered Connector factory, derives the adapter main-entry owner, and issues the token-free facade only when the Connector policy allowlists it; raw callable transport is never available from the global contribution list. The adapter cannot request credentials, endpoints, raw HTTP/client/DTOs, another consumer's facade, or login lifecycle. The Connector cannot return business references or Content Space UI data without adapter validation.
+Both audiences converge on the same Content Space service, pinned Provider, and Connector facade. Human UI capabilities remain global only for the current renderer Principal. Agent content capabilities are resource-scoped: the Agent must first request a confirmed `authorize-agent-root` operation for an exact personal or Team root currently returned by `listContainers`. The Broker returns only an opaque, caller/Principal/Workspace-bound resource; listing a directory issues descendant resources, and later Agent operations derive their target from those resources instead of accepting raw parent/file references. Writes retain a separate confirmation for every create, upload, and download. The adapter receives no caller-selected connection and can neither widen the current execution authorization nor choose an account.
 
-### Let Content Space own references and resolution
+Personal Session authorization contains an explicit personal or Team library root approved by the Human and expires with its bounded Broker resources. The Agent cannot call the Human global browse/write actions. Project Task authorization, once Change 2 exists, will disable ad-hoc root authorization and issue only the current Project Content Directory resource. Descendants arise only from listing an already-authorized directory, so a raw sibling GUID cannot widen scope; OpenContent ACL then independently authorizes the account.
 
-The adapter returns provider-neutral identity/proof facts to Content Space. It does not contribute Container/File/Artifact codecs or an OpenContent authority resolver. Portable materialization follows Content Space resolver → service → directory → catalog → pinned OpenContent Provider → Host-issued Connector facade, so there is one resolver and one operation path.
+### Keep Workspace bytes behind Host one-shot grants
 
-### Preserve current Principal and write uncertainty
+Agent upload input is only a relative path inside its currently authorized Workspace. Host resolves and validates the real path, regular-file status, symlink escape, size, and access, then creates one upload handle after Human confirmation. Agent download names a new relative path in that Workspace; Host rejects an existing destination, downloads to a temporary file, and atomically commits it. The provider and renderer never receive arbitrary filesystem paths. Each transfer is independent; there is no sync/mirror/mount/delete coupling.
 
-The Host Principal arrives through the canonical Broker/domain service. For writes, the logical invocation identity is admitted and idempotency-bound by the Broker envelope outside Content Space business input. Adapter/provider input and output cannot replace either value. The adapter binds results to the exact instance, target, resource, and invocation. Collision maps to typed conflict. Timeout, cancellation, session supersession, or ambiguous remote receipt maps to `outcome_unknown`; no blind retry occurs.
+### Admit an exact development profile, not caller-controlled readiness
 
-### Separate adapter completion from PoC admission
+The compile-time development profile pins the shared demonstration Provider Instance, Change 1 operations, UI/Agent audiences, 16 MiB upload and 1 GiB download limits. Production remains blocked. A successful operation cannot promote another operation, account class, instance, or audience.
 
-All operations start `blocked_by_contract`. Evidence alone does not make `poc_only` executable through the normal Content Space service. A later cloud-space PoC change must add a trusted policy/audience Gate to that service composition and may admit only exact operations in a dedicated non-production tenant after least-privilege identity, BOLA, schema, transfer, portal, outcome, cancellation, and session coexistence Gates pass. Production remains separately gated.
+### Preserve conflicts and ambiguous writes
+
+Create-folder/upload-new send exact names. Existing names return typed conflict; no overwrite or automatic rename occurs. If the Connector cannot prove whether a write committed, the adapter returns `outcome_unknown` and never retries. Download never overwrites a local file and commits only after complete validated transfer.
 
 ## Risks / Trade-offs
 
-- **Schema or business-code drift** is closed by Connector validation plus strict adapter mapping.
-- **Token-bearing transfer leaks to renderer** keeps download blocked until main-process Host-owned delivery is proven.
-- **Upload creates duplicate data** is closed by the Broker-admitted out-of-band invocation identity and `outcome_unknown`, never blind retry.
-- **Known-ID metadata survives revocation** blocks reference materialization/readiness until a provider fix or validated oracle.
-- **Artifact fields look versioned but are mutable** keeps ArtifactReference blocked until exact immutable identity, retention, version-specific retrieval, instance/file/version binding, and optional-digest matching pass.
-- **Adapter pause disrupts generic UI** is avoided because Content Space and other/mock Providers compose independently; pinned OpenContent instances simply report unavailable.
+- A Team name is display-only and may change; stable folder identity anchors the reference.
+- Folder ancestry checks may require provider metadata calls. Failure or ambiguity denies access rather than assuming containment.
+- A shared demo instance cannot prove production isolation. The trusted profile is intentionally development-only.
+- The current 16 MiB upload limit is lower than OpenContent's chunking capacity; raising it is a later contract change after two-stage transfer evidence.
 
 ## Migration Plan
 
-1. Complete Content Space V1, Secure Credentials, and Connector port changes.
-2. Add package/factory/mapper tests with all operation readiness blocked.
-3. Validate exact instance pinning, Principal/connection binding, cancellation, conflicts, uncertain outcomes, transfer, portal, and immutable proof.
-4. Regenerate and verify source/packaged composition and boundary/governance scans.
-5. In the separate cloud-space PoC change, add the trusted Content Space service policy/audience Gate and admit only evidence-backed exact operations.
-6. Remove/pause the package cleanly through standard composition without fallback or compatibility alias.
+1. Extend the provider-neutral container summary with `scope` and add contract tests.
+2. Add the adapter package/factory and strict mappings with a mocked Connector facade.
+3. Add Host-governed Agent Workspace transfer grants and scope enforcement through the canonical Content Space capability path.
+4. Admit read operations after exact schema tests, then create/upload/download independently after write probes.
+5. Verify UI and Agent flows against `test3` in the development profile and run source/packaged composition tests.
+6. Build `ProjectContentSpaceBinding` only in the separate Change 2.

@@ -1,32 +1,31 @@
-## 1. Dependency and Gate Baseline
+## 1. Dependency and Contract Baseline
 
-- [ ] 1.1 Complete/archive Content Space V1 and the separate `add-secure-provider-credentials` change; verify a stable Host Principal at required assurance.
-- [ ] 1.2 Record formal OpenContent evidence for build/schema, per-user identity/authentication, Token lifecycle/revocation, session coexistence, metadata authorization, tenant isolation, and operation readiness.
-- [ ] 1.3 Keep every network operation `blocked_by_contract` until its exact dependency and environment Gate passes.
+- [ ] 1.1 Complete the `add-secure-provider-credentials` canonical Host facade and verify owner/Principal/node binding.
+- [x] 1.2 Record the read-only `test3` contract probe for login, Token validation, who-am-I, personal root, Team list, and folder identity without persisting credentials.
+- [x] 1.3 Pin unresolved create-folder/upload/download schemas with least-privilege test-account probes before admitting each write.
 
-## 2. Main-Only Package and Composition
+## 2. Package, Composition, and Enrollment
 
-- [ ] 2.1 Add the trusted compile-time main-only Connector with standard manifest, exact public exports, lazy lifecycle, tests/typecheck, and no renderer/Agent/MCP/sidecar.
-- [ ] 2.2 Add or reuse a package-generic Host-mediated owner-scoped internal-service contract; expose only a non-callable Connector descriptor globally, register the internal-service implementation factory only through the private generic main-entry Host mediator, and issue the token-free facade only to the allowlisted trusted owner. This registration is neither `main.document-provider-factory` nor `main.content-space-provider-factory`.
-- [ ] 2.3 Define no Document port, universal client, ContentSpaceProvider factory, portable codec/resolver, public capability, compatibility alias, or fallback.
-- [ ] 2.4 Close and validate the complete service registration set before acquisition; test declaration/runtime version/location/owner mismatch, duplicate/missing/incompatible implementation, load-order independence, global raw-callable rejection, consumer impersonation, and source/packaged composition.
+- [x] 2.1 Add the trusted compile-time Connector package with separate main and renderer entrypoints, exact manifest/generated composition, lazy lifecycle, and no Host vendor switch.
+- [x] 2.2 Add a Human-only enrollment/status contract for bind, reauthenticate, and unbind existing accounts; prohibit account registration and Agent-supplied credentials.
+- [x] 2.3 Implement unique node-local `(Principal, Provider Instance)` connection metadata and explicit replacement semantics using stable external user ID.
+- [x] 2.4 Prove password ephemerality and that only the validated Token enters the owner-scoped secure credential facility.
 
-## 3. Connection, Credential, and Transport Foundation
+## 3. Private Service and Trusted Instance
 
-- [ ] 3.1 Contribute reviewed OpenContent instances through `main.provider-instance-directory-entry`; bind Connector-private endpoint/tenant policy to the same exact reference and keep entries separate from per-Principal connection metadata and credential-store records.
-- [ ] 3.2 Use only the owner-scoped secure-credential facade and implement the documented per-user Token/session state machine after evidence passes.
-- [ ] 3.3 Pin trusted endpoint/tenant/TLS/redirect policy and runtime-validate every selected request, response, business result, error, cursor, and receipt.
-- [ ] 3.4 Add timeouts, cancellation, bounds, rate classification, redaction, and explicit missing/ambiguous/reauthentication/superseded/revoked/disabled outcomes.
+- [x] 3.1 Add or reuse one package-generic Host-mediated owner-scoped internal-service contract; publish only a non-callable descriptor and issue the facade only to the allowlisted adapter owner.
+- [ ] 3.2 Validate missing/duplicate/incompatible descriptors, implementation ownership, consumer impersonation, load-order independence, and source/packaged composition.
+- [x] 3.3 Contribute the reviewed non-secret OpenContent instance and bind the HTTPS endpoint, tenant/build expectations, limits, and UI/Agent audiences in Connector-private trusted policy.
 
-## 4. Content Space Port and Safety Gates
+## 4. Authentication and Transport
 
-- [ ] 4.1 Return only bounded token-free transport facts needed by the adapter; expose no raw HTTP, Token, Cookie, credential record, DTO, endpoint, or business semantics.
-- [ ] 4.2 Prove Content Space portable materialization uses its own resolver and pinned Provider; the Connector registers no competing resolver.
-- [ ] 4.3 Keep production metadata/materialization blocked while known-ID BOLA, session coexistence, or object-level authorization remains unproven.
-- [ ] 4.4 Return `outcome_unknown` for uncertain writes and never silently log in, blindly retry, choose another connection, or fall back.
+- [x] 4.1 Implement RSA-OAEP-SHA256 login, Token validity and who-am-I validation, status, reauthentication-required, supersession, logout/revocation reporting, and local unbind.
+- [x] 4.2 Implement schema-pinned personal root, Team roots, folder metadata, and paginated child listing with current-Principal authorization.
+- [x] 4.3 Implement create-folder, upload-new, and download two-stage transport with bounds, progress, cancellation, conflict, and `outcome_unknown`; never overwrite, rename, retry, or expose region URLs.
+- [x] 4.4 Add timeouts, business-result validation, redaction, and bounded typed errors for unauthorized, unavailable, rate-limited, malformed, cancelled, and uncertain outcomes.
 
 ## 5. Verification and Handoff
 
-- [ ] 5.1 Run package tests/typecheck, credential contract tests, generator freshness, governance/boundary checks, lint, and source/packaged smoke.
-- [ ] 5.2 Hand the Host-issued narrow facade to the separate OpenContent ContentSpaceProvider change with no UI/domain or OpenContent-specific Host coupling.
-- [ ] 5.3 Keep cloud-space PoC admission as a later change that adds a trusted Content Space policy/audience Gate; keep Shared Documents/Document port/provider deferred.
+- [ ] 5.1 Run package tests/typecheck, credential/security tests, generator freshness, governance/boundary checks, changed-file lint, regression tests, and source/packaged smoke.
+- [x] 5.2 Hand only the token-free facade to `add-opencontent-content-space-provider-v1`; keep Content Space, Project, Workspace, and Shared Documents models out of the Connector.
+- [x] 5.3 Verify the exact development profile with `test3`; use no administrator credential unless a separately approved setup step proves it necessary.
