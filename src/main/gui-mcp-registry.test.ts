@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { buildManagedGuiMcpServers } from './gui-mcp-registry'
 import {
   defaultKeyboardShortcuts,
@@ -10,19 +10,12 @@ import {
   defaultWriteSettings,
   type AppSettingsV1
 } from '../shared/app-settings'
-import {
-  COMPUTER_USE_MCP_TOOL_NAME,
-  GUI_COMPUTER_USE_MCP_SERVER_NAME
-} from './computer-use-mcp-config'
 
 const launch = {
   appPath: '/Applications/SciForge.app/Contents/Resources/app.asar.unpacked',
   execPath: '/Applications/SciForge.app/Contents/MacOS/SciForge',
   isPackaged: true
 }
-
-const originalCuaServiceUrl = process.env.SCIFORGE_CUA_SERVICE_URL
-const originalCuaServiceToken = process.env.SCIFORGE_CUA_SERVICE_TOKEN
 
 function createSettings(): AppSettingsV1 {
   const schedule = defaultScheduleSettings()
@@ -72,36 +65,6 @@ function createSettings(): AppSettingsV1 {
 }
 
 describe('GUI MCP runtime registry', () => {
-  afterEach(() => {
-    if (originalCuaServiceUrl === undefined) delete process.env.SCIFORGE_CUA_SERVICE_URL
-    else process.env.SCIFORGE_CUA_SERVICE_URL = originalCuaServiceUrl
-    if (originalCuaServiceToken === undefined) delete process.env.SCIFORGE_CUA_SERVICE_TOKEN
-    else process.env.SCIFORGE_CUA_SERVICE_TOKEN = originalCuaServiceToken
-  })
-
-  it('builds one runtime-neutral managed computer-use MCP server', () => {
-    process.env.SCIFORGE_CUA_SERVICE_URL = 'http://127.0.0.1:3900'
-    process.env.SCIFORGE_CUA_SERVICE_TOKEN = 'test-token'
-    const settings = createSettings()
-
-    const servers = buildManagedGuiMcpServers({
-      settings,
-      computerUseMcp: { settings, launch }
-    })
-    expect(servers).toEqual([
-      expect.objectContaining({
-        id: GUI_COMPUTER_USE_MCP_SERVER_NAME,
-        args: expect.arrayContaining(['--gui-owl-computer-use-mcp-server']),
-        enabledTools: [COMPUTER_USE_MCP_TOOL_NAME],
-        env: {
-          ELECTRON_RUN_AS_NODE: '1',
-          SCIFORGE_CUA_SERVICE_URL: 'http://127.0.0.1:3900',
-          SCIFORGE_CUA_SERVICE_TOKEN: 'test-token'
-        }
-      })
-    ])
-  })
-
   it('builds managed MCP server configs with contract-derived tools and local secrets', () => {
     const settings = createSettings()
     settings.modelRouter = {

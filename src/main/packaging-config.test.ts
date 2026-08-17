@@ -660,6 +660,7 @@ describe('electron-builder release packaging', () => {
     )
     expect(afterPack.PACKAGED_EXECUTABLE_NODE_ENTRY_REQUIRED_PATHS).toEqual(expect.arrayContaining([
       'out/main/codex-pre-tool-use-governance-node-entry.js',
+      'out/main/domain-runtime-mcp-node-entry.js',
       'out/main/model-router-sidecar-node-entry.js',
       'out/main/plan-gateway-sidecar-node-entry.js',
       'out/main/schedule-mcp-node-entry.js',

@@ -106,7 +106,6 @@ import type {
   AgentRuntimeSubagentUsage,
   AgentRuntimeTurnGovernanceSnapshotInput
 } from '../agent-runtime/adapter'
-import { GUI_COMPUTER_USE_MCP_SERVER_NAME, isComputerUseMcpConfigured } from '../../computer-use-mcp-config'
 import {
   type RuntimeToolCallRequest,
   type RuntimeToolCallResponse,
@@ -1593,9 +1592,6 @@ export class CodexRuntimeService {
     return Boolean(this.options.capabilityAgentTools)
   }
 
-  isComputerUseMcpConfigured(settings?: AppSettingsV1): boolean {
-    return Boolean(this.options.capabilityAgentTools && isComputerUseMcpConfigured(settings, 'codex'))
-  }
 
   isMcpConfigured(): boolean {
     return Boolean(this.options.capabilityAgentTools)

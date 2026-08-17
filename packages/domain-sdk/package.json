@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-sdk",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -14,6 +14,7 @@
     "./main": "./src/main.ts",
     "./package-storage": "./src/package-storage.ts",
     "./node/electron-node-executable": "./src/node/electron-node-executable.ts",
+    "./node/runtime-mcp-launcher": "./src/node/runtime-mcp-launcher.ts",
     "./node/workspace-paths": "./src/node/workspace-paths.ts",
     "./power": "./src/power.ts",
     "./reproducibility": "./src/reproducibility.ts",
