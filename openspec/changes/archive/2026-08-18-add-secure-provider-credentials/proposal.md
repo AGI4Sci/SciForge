@@ -25,5 +25,5 @@ None.
 
 - Evolves the existing public Domain Main Host/package-storage contract with the smallest provider-credential bindings and bounded-use semantics.
 - Requires a stable Host Human Principal at the assurance level demanded by each provider policy. Under ADR-0026, `local-selection` may own a separately authenticated node-local OpenContent connection but never proves the external account identity.
-- Requires source and packaged tests on every supported operating system.
+- Requires a real Electron source-development lifecycle on the current supported development platform plus automated cross-platform backend-policy and fail-closed tests. Installed/distribution package acceptance is outside this open-source development change.
 - Provides a prerequisite for `add-opencontent-connector` without exposing OpenContent-specific types in Host core.

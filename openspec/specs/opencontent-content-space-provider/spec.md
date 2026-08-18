@@ -1,9 +1,8 @@
+# opencontent-content-space-provider Specification
+
 ## Purpose
-
 Defines the OpenContent ContentSpaceProvider mapping for bound-account personal/team libraries and the exact Change 1 Human/Agent file-operation boundary.
-
-## ADDED Requirements
-
+## Requirements
 ### Requirement: Adapter is independently composed and lazy
 
 `opencontent-content-space-provider` SHALL be an optional trusted compile-time main-only package with exactly one generic extension at `main.content-space-provider-factory` for Provider Kind `opencontent`. It SHALL acquire only its Host-issued token-free Connector facade and SHALL register no renderer, public OpenContent capability, IPC/MCP, credential store, raw client, portable resolver, or DocumentProvider. Construction SHALL perform no login, credential, network, content, or mutation work.
@@ -11,7 +10,7 @@ Defines the OpenContent ContentSpaceProvider mapping for bound-account personal/
 #### Scenario: Adapter is absent
 
 - **WHEN** the package is omitted
-- **THEN** generic Content Space, its UI, mock/other Providers, and source/packaged application SHALL continue without fallback
+- **THEN** generic Content Space, its UI, mock/other Providers, and the source-development application SHALL continue without fallback
 
 ### Requirement: Personal and Team libraries map to provider-neutral containers
 

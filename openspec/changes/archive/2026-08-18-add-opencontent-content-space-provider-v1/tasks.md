@@ -1,6 +1,6 @@
 ## 1. Contract and Package Foundation
 
-- [ ] 1.1 Complete Secure Provider Credentials and the OpenContent Connector; keep Shared Documents and Project binding out of the dependency chain.
+- [x] 1.1 Complete Secure Provider Credentials and the OpenContent Connector; keep Shared Documents and Project binding out of the dependency chain.
 - [x] 1.2 Extend `ContentContainerSummary` with required provider-neutral `scope: personal | shared` and update mock/provider/UI tests.
 - [x] 1.3 Add the optional main-only adapter with one exact `main.content-space-provider-factory` contribution, standard manifest/generated composition, lazy construction, and no OpenContent-specific Host branch.
 - [x] 1.4 Acquire only the Host-issued token-free Connector facade; prove catalog/factory construction has no login, credential, network, or remote side effect.
@@ -26,6 +26,6 @@
 - [x] 4.1 Pin exact read/write schemas with least-privilege `test3` probes; locate exact Team `sciforge test`, create it with `test3` only if absent and permitted, otherwise stop before administrator use.
 - [x] 4.2 Verify personal/team browse, folder create, upload-new conflict/uncertainty, and download without remote cleanup or destructive operations outside explicitly created test fixtures.
 - [x] 4.3 Test unauthorized, missing binding, reauthentication, wrong Principal, scope escape, unsafe Workspace path, cancellation, size bounds, token leakage, and adapter removal.
-- [x] 4.4 Run package tests/typecheck, Content Space regression, generator freshness, governance/boundaries, changed-file lint, and source/packaged smoke.
+- [x] 4.4 Run package tests/typecheck, Content Space regression, generator freshness, governance/boundaries, changed-file lint, and source-development smoke.
 - [x] 4.5 Keep production, ProjectContentSpaceBinding, ACL/member operations, automatic sync, Shared Documents, and ArtifactReference issuance blocked.
 - [x] 4.6 Add registry and authorization regressions for natural-language discovery, pagination, wrong scope, missing/duplicate labels, raw identity rejection, and opaque caller/Principal/Workspace-bound descendants.

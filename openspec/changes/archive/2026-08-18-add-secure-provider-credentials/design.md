@@ -1,6 +1,6 @@
 ## Context
 
-`DomainMainHost` already exposes owner-scoped `packageSecrets`, and generated composition derives each installed package owner before issuing that facade. The Host persists encrypted package records through Electron `safeStorage`, atomically replaces the encrypted file, and fails when OS encryption is unavailable. This is the canonical storage primitive, but its current key/value API lacks provider-specific binding, assurance, bounded-use, rotation/redaction, and packaged-platform acceptance semantics. ADR 0006 requires those guarantees. ADR-0026 further establishes that `local-selection` may scope a separately authenticated external Provider Connection without becoming proof of the external identity.
+`DomainMainHost` already exposes owner-scoped `packageSecrets`, and generated composition derives each installed package owner before issuing that facade. The Host persists encrypted package records through Electron `safeStorage`, atomically replaces the encrypted file, and fails when OS encryption is unavailable. This is the canonical storage primitive, but its current key/value API lacks provider-specific binding, assurance, bounded-use, rotation/redaction, and source-platform acceptance semantics. ADR 0006 requires those guarantees. ADR-0026 further establishes that `local-selection` may scope a separately authenticated external Provider Connection without becoming proof of the external identity.
 
 ## Goals / Non-Goals
 
@@ -8,7 +8,7 @@
 
 - Harden the existing provider-neutral package-storage boundary instead of adding another secret path.
 - Bind owner identity and current Human Principal outside package-controlled input.
-- Make lifecycle and failure behavior testable in source and packaged builds.
+- Make lifecycle and failure behavior testable through the real Electron source-development path and automated platform-policy tests.
 - Keep secret values out of every public or durable application surface.
 
 **Non-Goals:**
@@ -26,7 +26,7 @@ Generated main composition already derives installed package identity and suppli
 
 Alternative rejected: accept `ownerId` on every call. A trusted package could then impersonate another integration accidentally or deliberately.
 
-Alternative rejected: keep `packageSecrets` and introduce a separate secure-provider vault. Two stores would create ambiguous rotation, deletion, redaction, recovery, and packaged behavior.
+Alternative rejected: keep `packageSecrets` and introduce a separate secure-provider vault. Two stores would create ambiguous rotation, deletion, redaction, and restart behavior.
 
 ### Keep non-secret metadata outside secure records
 
@@ -68,18 +68,16 @@ This change guarantees atomic local deletion and reports secure-store outcomes. 
 4. Integrate the canonical redaction registry.
 5. Enable no provider connection until its connector separately satisfies identity and authentication Gates.
 
-## Platform Acceptance Evidence
+## Source Development Acceptance Evidence
 
 Status as of 2026-08-17:
 
 | Platform/path | Evidence | Status |
 | --- | --- | --- |
 | macOS arm64 source application | Real Electron `safeStorage`; four isolated launches verify store, restart/use, rotate, delete, and restart-absent | Verified |
-| macOS arm64 packaged `.app` | Real packaged Electron application (`app.isPackaged === true`); the same four-launch lifecycle | Verified |
-| macOS installed through a distribution image | Not exercised; no DMG or `/Applications` installation is required for this source checkpoint | Pending |
-| Windows source and installed package | Requires a Windows execution node and its OS credential service | Pending |
-| Linux source and installed package with `gnome_libsecret`, `kwallet`, `kwallet5`, or `kwallet6` | Requires a Linux execution node with an approved backend | Pending |
+| Windows/macOS/Linux backend admission | Automated platform-policy tests admit Electron OS encryption on Windows/macOS and only `gnome_libsecret`, `kwallet`, `kwallet5`, or `kwallet6` on Linux | Verified |
 | Linux `basic_text` or unknown backend | Policy test proves `secure_storage_insecure`; provider credential operations fail closed | Verified by automated policy test |
 | Unsupported platform or unavailable OS encryption | Policy test proves unavailable state; provider credential operations fail closed without plaintext fallback | Verified by automated policy test |
+| Installed or distribution application packages | Not required for the `npm run dev` open-source development baseline | Out of scope |
 
-Tasks 4.1 and 4.2 remain incomplete until every supported operating system and the installed-distribution paths above have real execution evidence. Packaged artifacts under `dist/` are verification-only, ignored by Git, and are not release deliverables.
+The source checkpoint requires the real Electron lifecycle on the current development platform and deterministic automated policy coverage for the remaining platform/backend decisions. Release engineering may add installed-package acceptance later without reopening the source contract.

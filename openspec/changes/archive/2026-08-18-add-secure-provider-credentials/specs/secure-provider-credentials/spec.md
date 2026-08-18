@@ -74,9 +74,13 @@ Active and recently retired credential values SHALL participate in the canonical
 - **WHEN** a late error contains the recently retired credential
 - **THEN** persistence SHALL still redact it during the retention window
 
-### Requirement: Source and packaged behavior are equivalent
-Enrollment storage, restart recovery, bounded use, rotation, deletion, principal/node isolation, redaction, and unavailable-key-service behavior SHALL be verified through source and installed packaged application paths on every supported operating system.
+### Requirement: Source development behavior is verified
+Enrollment storage, restart recovery, bounded use, rotation, deletion, principal/node isolation, redaction, and unavailable-key-service behavior SHALL be verified through a real Electron source-development application lifecycle on the current supported development platform. Automated platform-policy tests SHALL cover approved Windows, macOS, and Linux secure-storage backends plus insecure, unavailable, and unsupported fail-closed outcomes. Installed or distribution package acceptance is outside this open-source development change.
 
-#### Scenario: Packaged application restarts
-- **WHEN** a credential is stored, the packaged application restarts under the same authorized OS identity, then deletes the record and restarts again
+#### Scenario: Source application restarts
+- **WHEN** a credential is stored, the source-development application restarts under the same authorized OS identity, then rotates and deletes the record and restarts again
 - **THEN** the record SHALL be usable only before deletion and absent afterward
+
+#### Scenario: A platform backend is insecure or unavailable
+- **WHEN** automated policy evaluation observes an unapproved, unavailable, or unsupported secure-storage backend
+- **THEN** provider credential operations SHALL fail closed without plaintext fallback

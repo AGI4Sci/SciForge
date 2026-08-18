@@ -1,9 +1,8 @@
+# opencontent-connector Specification
+
 ## Purpose
-
 Defines the OpenContent integration package that enrolls existing accounts and owns Principal-bound authentication, secure Token use, validated transport, and one Host-mediated Content Space adapter facade.
-
-## ADDED Requirements
-
+## Requirements
 ### Requirement: Connector is one independently composed integration package
 
 `opencontent-connector` SHALL be a trusted compile-time package discovered through standard manifest/generated composition. Its renderer entrypoint SHALL expose only Human enrollment/status UI; its main entrypoint SHALL own connection state, credential use, endpoint policy, authentication, schemas, transport, and redaction. It SHALL register no ContentSpaceProvider, DocumentProvider, portable resolver, raw public client, Agent credential surface, sidecar, or Host vendor switch.
@@ -11,7 +10,7 @@ Defines the OpenContent integration package that enrolls existing accounts and o
 #### Scenario: Connector is absent
 
 - **WHEN** the Connector and adapter are omitted
-- **THEN** generic Content Space, mock/other Providers, renderer, and source/packaged application SHALL continue without alias or fallback
+- **THEN** generic Content Space, mock/other Providers, renderer, and the source-development application SHALL continue without alias or fallback
 
 ### Requirement: Enrollment binds an existing account without retaining a password
 

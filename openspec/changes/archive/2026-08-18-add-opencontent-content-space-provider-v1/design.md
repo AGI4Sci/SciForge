@@ -55,5 +55,5 @@ Create-folder/upload-new send exact names. Existing names return typed conflict;
 2. Add the adapter package/factory and strict mappings with a mocked Connector facade.
 3. Add Host-governed Agent Workspace transfer grants and scope enforcement through the canonical Content Space capability path.
 4. Admit read operations after exact schema tests, then create/upload/download independently after write probes.
-5. Verify UI and Agent flows against `test3` in the development profile and run source/packaged composition tests.
+5. Verify UI and Agent flows against `test3` in the development profile and run source-development composition tests.
 6. Build `ProjectContentSpaceBinding` only in the separate Change 2.

@@ -1,6 +1,6 @@
 ## 1. Dependency and Contract Baseline
 
-- [ ] 1.1 Complete the `add-secure-provider-credentials` canonical Host facade and verify owner/Principal/node binding.
+- [x] 1.1 Complete the `add-secure-provider-credentials` canonical Host facade and verify owner/Principal/node binding.
 - [x] 1.2 Record the read-only `test3` contract probe for login, Token validation, who-am-I, personal root, Team list, and folder identity without persisting credentials.
 - [x] 1.3 Pin unresolved create-folder/upload/download schemas with least-privilege test-account probes before admitting each write.
 
@@ -14,7 +14,7 @@
 ## 3. Private Service and Trusted Instance
 
 - [x] 3.1 Add or reuse one package-generic Host-mediated owner-scoped internal-service contract; publish only a non-callable descriptor and issue the facade only to the allowlisted adapter owner.
-- [x] 3.2 Validate missing/duplicate/incompatible descriptors, implementation ownership, consumer impersonation, load-order independence, and source/packaged composition.
+- [x] 3.2 Validate missing/duplicate/incompatible descriptors, implementation ownership, consumer impersonation, load-order independence, and source-development composition.
 - [x] 3.3 Contribute the reviewed non-secret OpenContent instance and bind the HTTPS endpoint, tenant/build expectations, limits, and UI/Agent audiences in Connector-private trusted policy.
 
 ## 4. Authentication and Transport
@@ -26,6 +26,6 @@
 
 ## 5. Verification and Handoff
 
-- [x] 5.1 Run package tests/typecheck, credential/security tests, generator freshness, governance/boundary checks, changed-file lint, regression tests, and source/packaged smoke.
+- [x] 5.1 Run package tests/typecheck, credential/security tests, generator freshness, governance/boundary checks, changed-file lint, regression tests, and source-development smoke.
 - [x] 5.2 Hand only the token-free facade to `add-opencontent-content-space-provider-v1`; keep Content Space, Project, Workspace, and Shared Documents models out of the Connector.
 - [x] 5.3 Verify the exact development profile with `test3`; use no administrator credential unless a separately approved setup step proves it necessary.
