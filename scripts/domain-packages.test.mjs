@@ -68,6 +68,37 @@ test('sorts packages by packageName and omits undeclared process imports', async
   )
 })
 
+test('validates development fixtures without projecting them into production', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  await createFixture(root, 'production', {
+    packageName: '@fixture/production',
+    process: 'main'
+  })
+  await createFixture(root, 'development-only', {
+    packageName: '@fixture/development-only',
+    process: 'main',
+    composition: 'development-only'
+  })
+
+  const packages = await discoverDomainPackages(root, {
+    parseDefinition: (definition) => definition
+  })
+  const generated = renderGeneratedDomainPackageFiles(packages)
+
+  assert.deepEqual(packages.map(({ packageName }) => packageName), [
+    '@fixture/development-only',
+    '@fixture/production'
+  ])
+  for (const content of Object.values(generated)) {
+    assert.doesNotMatch(content, /@fixture\/development-only/)
+  }
+  assert.match(
+    generated['src/main/modules/installed-domain-main.ts'],
+    /@fixture\/production\/main/
+  )
+})
+
 test('projects only workspace-server process entries into the server composition', async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
   context.after(() => rm(root, { recursive: true, force: true }))
@@ -446,6 +477,7 @@ async function createFixture(root, directoryName, options) {
   const manifest = {
     contractVersion: 1,
     kind: 'trusted-compile-time',
+    ...(options.composition ? { composition: options.composition } : {}),
     packageName: options.packageName,
     module: {
       id: `fixture.${directoryName}`,

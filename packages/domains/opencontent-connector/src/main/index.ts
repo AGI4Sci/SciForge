@@ -12,7 +12,7 @@ import {
   OPENCONTENT_CONTENT_SPACE_SERVICE_ID,
   OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION,
   OPENCONTENT_CONNECTION_CAPABILITY_IDS,
-  OPENCONTENT_DEMO_INSTANCE_REF,
+  OPENCONTENT_DEFAULT_INSTANCE_REF,
   OPENCONTENT_PROVIDER_KIND,
   openContentBindInputSchema,
   openContentConnectionStatusSchema,
@@ -33,9 +33,12 @@ import {
   createOpenContentConnectionService,
   type OpenContentConnectionService
 } from './connection-service.js'
-import { createOpenContentClient } from './opencontent-client.js'
+import {
+  createOpenContentClient,
+  createUnavailableOpenContentClient
+} from './opencontent-client.js'
 
-const OPENCONTENT_DEVELOPMENT_BASE_URL = 'https://test1.edoc2.com'
+export const OPENCONTENT_BASE_URL_ENVIRONMENT_VARIABLE = 'SCIFORGE_OPENCONTENT_BASE_URL'
 const OPENCONTENT_ADAPTER_MODULE_ID = 'sciforge.opencontent-content-space-provider'
 
 const internalServiceDescriptor = defineDomainMainInternalServiceDescriptor({
@@ -47,9 +50,9 @@ const internalServiceDescriptor = defineDomainMainInternalServiceDescriptor({
 
 const instance = defineProviderInstanceDirectoryEntry({
   contractVersion: PROVIDER_FACTORY_CONTRACT_VERSION,
-  providerInstanceRef: OPENCONTENT_DEMO_INSTANCE_REF,
+  providerInstanceRef: OPENCONTENT_DEFAULT_INSTANCE_REF,
   providerKind: OPENCONTENT_PROVIDER_KIND,
-  displayName: 'OpenContent (development)'
+  displayName: 'OpenContent'
 })
 
 type OpenContentCapabilityContext = Readonly<{
@@ -98,7 +101,11 @@ type OpenContentMainContribution =
   | OpenContentCapabilityFactory
 
 export function createDomainMainEntry(
-  host: DomainMainHost
+  host: DomainMainHost,
+  options: Readonly<{
+    environment?: Readonly<Record<string, string | undefined>>
+    fetch?: typeof fetch
+  }> = {}
 ): TrustedDomainProcessEntryInput<OpenContentMainContribution> {
   if (!host.packageSettings || !host.packageSecrets?.providerCredentials) {
     throw new Error('OpenContent Connector requires secure owner-scoped package storage.')
@@ -106,11 +113,15 @@ export function createDomainMainEntry(
   if (!host.internalServices) {
     throw new Error('OpenContent Connector requires Host internal-service mediation.')
   }
-  const client = createOpenContentClient({
-    baseUrl: OPENCONTENT_DEVELOPMENT_BASE_URL
-  })
+  const baseUrl = resolveOpenContentBaseUrl(options.environment ?? process.env)
+  const client = baseUrl === null
+    ? createUnavailableOpenContentClient()
+    : createOpenContentClient({
+        baseUrl,
+        ...(options.fetch ? { fetch: options.fetch } : {})
+      })
   const connections = createOpenContentConnectionService({
-    providerInstanceRef: OPENCONTENT_DEMO_INSTANCE_REF,
+    providerInstanceRef: OPENCONTENT_DEFAULT_INSTANCE_REF,
     settings: host.packageSettings,
     credentials: host.packageSecrets.providerCredentials,
     client
@@ -212,6 +223,13 @@ export function createDomainMainEntry(
       }
     ]
   }
+}
+
+export function resolveOpenContentBaseUrl(
+  environment: Readonly<Record<string, string | undefined>>
+): string | null {
+  const configured = environment[OPENCONTENT_BASE_URL_ENVIRONMENT_VARIABLE]?.trim()
+  return configured ? configured : null
 }
 
 export function createOpenContentCapabilityFactory<CapabilityDefinition>(options: Readonly<{

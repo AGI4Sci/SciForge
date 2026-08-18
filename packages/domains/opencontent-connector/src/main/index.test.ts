@@ -5,7 +5,12 @@ import {
   openContentConnectionStatusSchema,
   openContentUnbindOutputSchema
 } from '../contract.js'
-import { createOpenContentCapabilityFactory, type OpenContentCapabilityOptions } from './index.js'
+import {
+  OPENCONTENT_BASE_URL_ENVIRONMENT_VARIABLE,
+  createOpenContentCapabilityFactory,
+  resolveOpenContentBaseUrl,
+  type OpenContentCapabilityOptions
+} from './index.js'
 import type { OpenContentConnectionService } from './connection-service.js'
 
 const principal = Object.freeze({
@@ -17,6 +22,16 @@ const principal = Object.freeze({
 })
 
 describe('OpenContent connection capabilities', () => {
+  it('uses only an explicitly configured package-owned Provider endpoint', () => {
+    expect(resolveOpenContentBaseUrl({})).toBeNull()
+    expect(resolveOpenContentBaseUrl({
+      [OPENCONTENT_BASE_URL_ENVIRONMENT_VARIABLE]: '   '
+    })).toBeNull()
+    expect(resolveOpenContentBaseUrl({
+      [OPENCONTENT_BASE_URL_ENVIRONMENT_VARIABLE]: ' https://content.example.test/root '
+    })).toBe('https://content.example.test/root')
+  })
+
   it('keeps enrollment UI-only and marks credential input as sensitive', () => {
     const definitions = capabilityDefinitions(connectionService())
     const bind = definitions.find(({ id }) => id === OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind)
@@ -59,7 +74,7 @@ describe('OpenContent connection capabilities', () => {
     const canary = 'opaque-capability-canary-2a81'
     expect(openContentConnectionStatusSchema.safeParse({
       state: 'connected',
-      providerInstanceRef: 'opencontent-edoc2-demo',
+      providerInstanceRef: 'opencontent-default',
       externalAccount: {
         id: 'external-user-1',
         identityId: 1,
@@ -88,7 +103,7 @@ function connectionService(): OpenContentConnectionService {
     status: vi.fn(async () => ({ state: 'disconnected' as const })),
     bindExistingAccount: vi.fn(async () => ({
       state: 'connected' as const,
-      providerInstanceRef: 'opencontent-edoc2-demo',
+      providerInstanceRef: 'opencontent-default',
       externalAccount: {
         id: 'external-user-1',
         identityId: 1,

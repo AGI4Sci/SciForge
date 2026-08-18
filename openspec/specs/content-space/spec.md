@@ -29,10 +29,10 @@ Content Space SHALL own a strict provider-neutral ContentSpaceProvider contract 
 - **WHEN** the same package contributes both domain factories
 - **THEN** Content Space SHALL validate and consume only its exact Content Space contribution and SHALL NOT observe document methods or readiness
 
-#### Scenario: Mock Provider is installed
+#### Scenario: Mock Provider is available for contract tests
 
-- **WHEN** the trusted compile-time `content-space-mock-provider` contributes its standard manifest factory and instance
-- **THEN** the production catalog/service/UI path SHALL operate without a test-only registry or Host exception
+- **WHEN** the `content-space-mock-provider` declares `composition: development-only`
+- **THEN** generated production composition SHALL omit it while package and integration tests exercise the same manifest factory and instance contracts without a Host exception
 
 ### Requirement: Content Space owns typed portable reference kinds
 

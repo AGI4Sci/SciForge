@@ -252,6 +252,7 @@ export const domainPackagePackagingSchema = z.object({
 export const trustedDomainPackageDefinitionSchema = z.object({
   contractVersion: z.literal(DOMAIN_PACKAGE_CONTRACT_VERSION),
   kind: z.literal('trusted-compile-time'),
+  composition: z.enum(['production', 'development-only']).default('production'),
   packageName: domainPackageNameSchema,
   publisher: domainPackagePublisherSchema.optional(),
   module: domainPackageModuleSchema,
@@ -330,6 +331,7 @@ export type DomainPackageRequestedPermission = z.infer<
 export type DomainPackageRuntimePackaging = z.infer<typeof domainPackageRuntimePackagingSchema>
 export type DomainPackagePackaging = z.infer<typeof domainPackagePackagingSchema>
 export type TrustedDomainPackageDefinition = z.infer<typeof trustedDomainPackageDefinitionSchema>
+export type TrustedDomainPackageComposition = TrustedDomainPackageDefinition['composition']
 export type TrustedDomainPackageDefinitionInput = z.input<typeof trustedDomainPackageDefinitionSchema>
 export type SandboxedDomainPackageDefinition = z.infer<
   typeof sandboxedDomainPackageDefinitionSchema

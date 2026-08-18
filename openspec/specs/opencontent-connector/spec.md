@@ -46,12 +46,17 @@ Secret material SHALL exist only in the owner-scoped secure credential facility.
 
 ### Requirement: Instance policy and callable transport are trusted and private
 
-The Connector SHALL contribute a non-secret OpenContent Provider Instance directory entry and bind its exact reference to Connector-private HTTPS endpoint, tenant/build expectations, limits, and readiness/audience policy. Callers SHALL NOT supply an endpoint or promote readiness. A generic Host mediator SHALL issue the narrow token-free callable facade only to the allowlisted OpenContent Content Space adapter owner; the global contribution list SHALL contain only a non-callable descriptor.
+The Connector SHALL contribute a non-secret OpenContent Provider Instance directory entry and bind its exact reference to Connector-private HTTPS endpoint, tenant/build expectations, limits, and readiness/audience policy. The endpoint SHALL come only from explicit package-owned deployment configuration; no development or demonstration origin SHALL be compiled as a default, and an absent or invalid endpoint SHALL fail unavailable before credential or network use. Callers SHALL NOT supply an endpoint or promote readiness. A generic Host mediator SHALL issue the narrow token-free callable facade only to the allowlisted OpenContent Content Space adapter owner; the global contribution list SHALL contain only a non-callable descriptor.
 
 #### Scenario: Consumer impersonates the adapter or supplies an endpoint
 
 - **WHEN** an untrusted package/runtime caller requests the facade or changes instance policy
 - **THEN** access SHALL fail before credential or network use
+
+#### Scenario: Deployment endpoint is not configured
+
+- **WHEN** the Provider-owned OpenContent base URL is absent
+- **THEN** enrollment and content operations SHALL fail unavailable without contacting a fallback service
 
 ### Requirement: Authentication and transport validate exact schemas
 

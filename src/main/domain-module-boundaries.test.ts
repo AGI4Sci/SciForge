@@ -266,20 +266,23 @@ describe('domain module boundaries', () => {
     for (const manifestPath of filesNamed(packagesRoot, 'sciforge.domain.json')) {
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
         packageName: string
+        composition?: 'production' | 'development-only'
         entrypoints: Array<{ process: 'main' | 'renderer' | 'workspace-server' }>
       }
-      expect(sharedInstallation).toContain(`${manifest.packageName}/definition`)
+      const installed = manifest.composition !== 'development-only'
+      expect(sharedInstallation.includes(`${manifest.packageName}/definition`)).toBe(installed)
       expect(mainInstallation.includes(`${manifest.packageName}/main`)).toBe(
-        manifest.entrypoints.some(({ process }) => process === 'main')
+        installed && manifest.entrypoints.some(({ process }) => process === 'main')
       )
       expect(rendererInstallation.includes(`${manifest.packageName}/renderer`)).toBe(
-        manifest.entrypoints.some(({ process }) => process === 'renderer')
+        installed && manifest.entrypoints.some(({ process }) => process === 'renderer')
       )
       expect(
         workspaceServerInstallation.includes(`${manifest.packageName}/workspace-server`)
       ).toBe(
-        manifest.entrypoints.some(({ process }) => process === 'workspace-server')
+        installed && manifest.entrypoints.some(({ process }) => process === 'workspace-server')
       )
+      if (!installed) expect(runtimeMcpInstallation).not.toContain(`${manifest.packageName}/`)
     }
   })
 

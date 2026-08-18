@@ -1,6 +1,7 @@
 {
   "contractVersion": 1,
   "kind": "trusted-compile-time",
+  "composition": "development-only",
   "packageName": "@sciforge/domain-content-space-mock-provider",
   "publisher": {
     "id": "sciforge",

@@ -126,13 +126,20 @@ function validatePreviewContributionContracts(definition) {
 }
 
 export function renderGeneratedDomainPackageFiles(packages) {
+  const installedPackages = packages.filter((candidate) =>
+    candidate.definition.composition !== 'development-only'
+  )
   return Object.freeze({
-    [GENERATED_PATHS.definitions]: renderDefinitions(packages),
-    [GENERATED_PATHS.main]: renderMain(packages.filter(hasEntrypoint('main'))),
-    [GENERATED_PATHS.runtimeMcp]: renderRuntimeMcp(packages.filter(hasRuntimeMcpServer)),
-    [GENERATED_PATHS.renderer]: renderRenderer(packages.filter(hasEntrypoint('renderer'))),
+    [GENERATED_PATHS.definitions]: renderDefinitions(installedPackages),
+    [GENERATED_PATHS.main]: renderMain(installedPackages.filter(hasEntrypoint('main'))),
+    [GENERATED_PATHS.runtimeMcp]: renderRuntimeMcp(
+      installedPackages.filter(hasRuntimeMcpServer)
+    ),
+    [GENERATED_PATHS.renderer]: renderRenderer(
+      installedPackages.filter(hasEntrypoint('renderer'))
+    ),
     [GENERATED_PATHS.workspaceServer]: renderWorkspaceServer(
-      packages.filter(hasEntrypoint('workspace-server'))
+      installedPackages.filter(hasEntrypoint('workspace-server'))
     )
   })
 }

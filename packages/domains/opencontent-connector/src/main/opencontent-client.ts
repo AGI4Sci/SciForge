@@ -788,6 +788,22 @@ export function createOpenContentClient(options: Readonly<{
   })
 }
 
+export function createUnavailableOpenContentClient(): OpenContentClient {
+  const unavailable = async (): Promise<never> => {
+    throw connectorError('provider_unavailable')
+  }
+  return Object.freeze({
+    authenticateExistingAccount: unavailable,
+    isTokenValid: unavailable,
+    listRootFolders: unavailable,
+    listFolderEntries: unavailable,
+    observeEntry: unavailable,
+    createFolder: unavailable,
+    uploadNewFile: unavailable,
+    downloadFile: unavailable
+  })
+}
+
 const enrollmentInputSchema = z.object({
   username: z.string().trim().min(1).max(256),
   password: z.string().min(1).max(4096),
@@ -1076,12 +1092,56 @@ async function requestRaw(input: Readonly<{
 }
 
 async function parseJsonBody(response: Response): Promise<unknown> {
-  const text = await response.text()
-  if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BYTES) {
-    throw connectorError('provider_contract_violation')
-  }
+  const text = await readBoundedResponseText(response)
   try {
     return JSON.parse(text)
+  } catch {
+    throw connectorError('provider_contract_violation')
+  }
+}
+
+async function readBoundedResponseText(response: Response): Promise<string> {
+  const declaredLength = response.headers.get('content-length')
+  if (declaredLength !== null) {
+    const validLength = /^\d+$/u.test(declaredLength)
+      ? Number(declaredLength)
+      : Number.NaN
+    if (!Number.isSafeInteger(validLength) || validLength > MAX_RESPONSE_BYTES) {
+      await response.body?.cancel().catch(() => undefined)
+      throw connectorError('provider_contract_violation')
+    }
+  }
+  if (!response.body) return ''
+
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let totalBytes = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      totalBytes += value.byteLength
+      if (totalBytes > MAX_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => undefined)
+        throw connectorError('provider_contract_violation')
+      }
+      chunks.push(value)
+    }
+  } catch (error) {
+    if (error instanceof OpenContentConnectorError) throw error
+    throw connectorError('provider_unavailable')
+  } finally {
+    reader.releaseLock()
+  }
+
+  const bytes = new Uint8Array(totalBytes)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
   } catch {
     throw connectorError('provider_contract_violation')
   }

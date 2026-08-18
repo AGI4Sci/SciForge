@@ -2,9 +2,23 @@ import { generateKeyPairSync } from 'node:crypto'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { createOpenContentClient } from './opencontent-client.js'
+import {
+  createOpenContentClient,
+  createUnavailableOpenContentClient
+} from './opencontent-client.js'
 
 describe('OpenContent client enrollment', () => {
+  it('fails closed without a configured Provider endpoint', async () => {
+    const client = createUnavailableOpenContentClient()
+
+    await expect(client.isTokenValid({ token: 'fixture-token-value' }))
+      .rejects.toMatchObject({ code: 'provider_unavailable' })
+    await expect(client.authenticateExistingAccount({
+      username: 'fixture-user',
+      password: 'fixture-password'
+    })).rejects.toMatchObject({ code: 'provider_unavailable' })
+  })
+
   it('maps HTTP throttling to a bounded rate-limited error', async () => {
     const client = createOpenContentClient({
       baseUrl: 'https://opencontent.invalid',
@@ -13,6 +27,43 @@ describe('OpenContent client enrollment', () => {
 
     await expect(client.isTokenValid({ token: 'fixture-token-value' }))
       .rejects.toMatchObject({ code: 'rate_limited' })
+  })
+
+  it('rejects an oversized declared JSON body before reading it', async () => {
+    let cancelled = false
+    const body = new ReadableStream<Uint8Array>({
+      cancel: () => { cancelled = true }
+    })
+    const client = createOpenContentClient({
+      baseUrl: 'https://opencontent.invalid',
+      fetch: vi.fn(async () => new Response(body, {
+        status: 200,
+        headers: { 'content-length': '1000001' }
+      }))
+    })
+
+    await expect(client.isTokenValid({ token: 'fixture-token-value' }))
+      .rejects.toMatchObject({ code: 'provider_contract_violation' })
+    expect(cancelled).toBe(true)
+  })
+
+  it('cancels a streamed JSON body as soon as the cumulative limit is exceeded', async () => {
+    let cancelled = false
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(600_000))
+        controller.enqueue(new Uint8Array(600_000))
+      },
+      cancel: () => { cancelled = true }
+    })
+    const client = createOpenContentClient({
+      baseUrl: 'https://opencontent.invalid',
+      fetch: vi.fn(async () => new Response(body, { status: 200 }))
+    })
+
+    await expect(client.isTokenValid({ token: 'fixture-token-value' }))
+      .rejects.toMatchObject({ code: 'provider_contract_violation' })
+    expect(cancelled).toBe(true)
   })
 
   it('checks a stored Token without attempting a background login', async () => {

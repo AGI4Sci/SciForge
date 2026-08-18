@@ -44,7 +44,7 @@ describe('OpenContent connection service', () => {
       })
     let sequence = 0
     const service = createOpenContentConnectionService({
-      providerInstanceRef: 'opencontent-edoc2-demo',
+      providerInstanceRef: 'opencontent-default',
       settings,
       credentials,
       client: {
@@ -88,7 +88,7 @@ describe('OpenContent connection service', () => {
       }
     })
     expect(credentials.values).toEqual(new Map([
-      ['opencontent-edoc2-demo:connection-2', 'second-opaque-token']
+      ['opencontent-default:connection-2', 'second-opaque-token']
     ]))
     const persisted = await settings.read()
     expect(JSON.stringify(persisted.value)).not.toContain('password')
@@ -100,7 +100,7 @@ describe('OpenContent connection service', () => {
     const settings = inMemorySettings()
     const credentials = inMemoryCredentials()
     const service = createOpenContentConnectionService({
-      providerInstanceRef: 'opencontent-edoc2-demo',
+      providerInstanceRef: 'opencontent-default',
       settings,
       credentials,
       client: {
@@ -168,7 +168,7 @@ describe('OpenContent connection service', () => {
     const isTokenValid = vi.fn<OpenContentClient['isTokenValid']>()
       .mockResolvedValueOnce(false)
     const service = createOpenContentConnectionService({
-      providerInstanceRef: 'opencontent-edoc2-demo',
+      providerInstanceRef: 'opencontent-default',
       settings,
       credentials,
       client: {
@@ -220,7 +220,7 @@ describe('OpenContent connection service', () => {
     const settings = inMemorySettings()
     const credentials = inMemoryCredentials()
     const service = createOpenContentConnectionService({
-      providerInstanceRef: 'opencontent-edoc2-demo',
+      providerInstanceRef: 'opencontent-default',
       settings,
       credentials,
       client: {

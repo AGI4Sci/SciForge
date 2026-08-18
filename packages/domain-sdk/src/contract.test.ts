@@ -77,6 +77,14 @@ const sandboxedDefinitionFixture: SandboxedDomainPackageDefinitionInput = {
 }
 
 describe('domain package packaging contract', () => {
+  it('defaults trusted packages to production composition and accepts explicit test fixtures', () => {
+    assert.equal(defineTrustedDomainPackage(definitionFixture).composition, 'production')
+    assert.equal(defineTrustedDomainPackage({
+      ...definitionFixture,
+      composition: 'development-only'
+    }).composition, 'development-only')
+  })
+
   it('publishes Host API 1.4 while preserving compatible 1.1 package ranges', () => {
     assert.equal(DOMAIN_PACKAGE_HOST_API_VERSION, '1.4.0')
     assert.equal(isDomainPackageHostApiCompatible({

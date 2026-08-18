@@ -27,7 +27,7 @@ describe('OpenContent Content Space Provider', () => {
     ['outcome_unknown', 'outcome_unknown']
   ] as const)('preserves the bounded %s Connector outcome', async (connectorCode, contentCode) => {
     const provider = createOpenContentContentSpaceProvider({
-      providerInstanceRef: 'opencontent-edoc2-demo',
+      providerInstanceRef: 'opencontent-default',
       facade: {
         listRootFolders: vi.fn().mockRejectedValue(
           new OpenContentConnectorError(connectorCode, 'secret provider diagnostic')
@@ -43,7 +43,7 @@ describe('OpenContent Content Space Provider', () => {
     const error = await provider.listContainers({
       context: {
         principal,
-        providerInstanceRef: 'opencontent-edoc2-demo',
+        providerInstanceRef: 'opencontent-default',
         deadlineAt: new Date(Date.now() + 10_000).toISOString()
       },
       page: { limit: 20 }
@@ -71,7 +71,7 @@ describe('OpenContent Content Space Provider', () => {
         }]
       })
     const provider = createOpenContentContentSpaceProvider({
-      providerInstanceRef: 'opencontent-edoc2-demo',
+      providerInstanceRef: 'opencontent-default',
       facade: {
         listRootFolders,
         listFolderEntries: vi.fn(),
@@ -83,7 +83,7 @@ describe('OpenContent Content Space Provider', () => {
     })
     const context = {
       principal,
-      providerInstanceRef: 'opencontent-edoc2-demo',
+      providerInstanceRef: 'opencontent-default',
       deadlineAt: new Date(Date.now() + 10_000).toISOString()
     }
 
@@ -91,10 +91,10 @@ describe('OpenContent Content Space Provider', () => {
       context,
       page: { limit: 20 }
     })).resolves.toEqual({
-      providerInstanceRef: 'opencontent-edoc2-demo',
+      providerInstanceRef: 'opencontent-default',
       items: [{
         reference: {
-          providerInstanceRef: 'opencontent-edoc2-demo',
+          providerInstanceRef: 'opencontent-default',
           containerId: 'personal-folder-guid'
         },
         scope: 'personal',
@@ -106,10 +106,10 @@ describe('OpenContent Content Space Provider', () => {
       context,
       page: { limit: 20, cursor: 'teams_1' }
     })).resolves.toEqual({
-      providerInstanceRef: 'opencontent-edoc2-demo',
+      providerInstanceRef: 'opencontent-default',
       items: [{
         reference: {
-          providerInstanceRef: 'opencontent-edoc2-demo',
+          providerInstanceRef: 'opencontent-default',
           containerId: 'team-folder-guid'
         },
         scope: 'shared',
@@ -143,7 +143,7 @@ describe('OpenContent Content Space Provider', () => {
         }]
       })
     const provider = createOpenContentContentSpaceProvider({
-      providerInstanceRef: 'opencontent-edoc2-demo',
+      providerInstanceRef: 'opencontent-default',
       facade: {
         listRootFolders: vi.fn(),
         listFolderEntries,
@@ -154,14 +154,14 @@ describe('OpenContent Content Space Provider', () => {
       }
     })
     const parent = {
-      providerInstanceRef: 'opencontent-edoc2-demo',
+      providerInstanceRef: 'opencontent-default',
       containerId: 'team-folder-guid'
     }
 
     await expect(provider.listEntries({
       context: {
         principal,
-        providerInstanceRef: 'opencontent-edoc2-demo',
+        providerInstanceRef: 'opencontent-default',
         deadlineAt: new Date(Date.now() + 10_000).toISOString()
       },
       parent,
@@ -171,14 +171,14 @@ describe('OpenContent Content Space Provider', () => {
       items: [{
         kind: 'container',
         reference: {
-          providerInstanceRef: 'opencontent-edoc2-demo',
+          providerInstanceRef: 'opencontent-default',
           containerId: 'child-folder-guid'
         },
         label: 'Experiment A'
       }, {
         kind: 'file',
         reference: {
-          providerInstanceRef: 'opencontent-edoc2-demo',
+          providerInstanceRef: 'opencontent-default',
           fileId: 'child-file-guid'
         },
         label: 'result.txt',
@@ -199,7 +199,7 @@ describe('OpenContent Content Space Provider', () => {
         return { bytesWritten: bytes.byteLength }
       })
     const provider = createOpenContentContentSpaceProvider({
-      providerInstanceRef: 'opencontent-edoc2-demo',
+      providerInstanceRef: 'opencontent-default',
       facade: {
         listRootFolders: vi.fn(),
         listFolderEntries: vi.fn(),
@@ -210,12 +210,12 @@ describe('OpenContent Content Space Provider', () => {
       }
     })
     const parent = {
-      providerInstanceRef: 'opencontent-edoc2-demo',
+      providerInstanceRef: 'opencontent-default',
       containerId: 'team-folder-guid'
     }
     const context = {
       principal,
-      providerInstanceRef: 'opencontent-edoc2-demo',
+      providerInstanceRef: 'opencontent-default',
       invocationId: 'invocation-opencontent-001',
       deadlineAt: new Date(Date.now() + 10_000).toISOString(),
       signal: new AbortController().signal
@@ -244,7 +244,7 @@ describe('OpenContent Content Space Provider', () => {
     await expect(provider.downloadFile({
       context,
       reference: {
-        providerInstanceRef: 'opencontent-edoc2-demo',
+        providerInstanceRef: 'opencontent-default',
         fileId: 'uploaded-file-guid'
       },
       destination: { write: async (chunk) => { writes.push(Uint8Array.from(chunk)) } }

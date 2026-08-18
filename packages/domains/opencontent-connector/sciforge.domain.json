@@ -29,9 +29,9 @@
     "opencontent-connector.provider-instance": {
       "location": "main.provider-instance-directory-entry",
       "contractVersion": "1.0.0",
-      "providerInstanceRef": "opencontent-edoc2-demo",
+      "providerInstanceRef": "opencontent-default",
       "providerKind": "opencontent",
-      "displayName": "OpenContent (development)"
+      "displayName": "OpenContent"
     },
     "opencontent-connector.content-space-service": {
       "location": "main.internal-service-descriptor",

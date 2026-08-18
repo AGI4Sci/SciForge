@@ -2,7 +2,7 @@ import { z } from 'zod'
 import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 
 export const OPENCONTENT_PROVIDER_KIND = 'opencontent' as const
-export const OPENCONTENT_DEMO_INSTANCE_REF = 'opencontent-edoc2-demo' as const
+export const OPENCONTENT_DEFAULT_INSTANCE_REF = 'opencontent-default' as const
 export const OPENCONTENT_CONTENT_SPACE_SERVICE_ID = 'opencontent.content-space' as const
 export const OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION = '1.0.0' as const
 
