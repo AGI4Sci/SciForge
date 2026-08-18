@@ -1,0 +1,54 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "composition": "development-only",
+  "packageName": "@sciforge/domain-content-space-mock-provider",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
+  "module": {
+    "id": "sciforge.content-space-mock-provider",
+    "displayName": "Content Space local mock Provider",
+    "version": "1.0.0",
+    "hostApi": {
+      "minimum": "1.3.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 290
+  },
+  "contributionContracts": {
+    "content-space-mock.provider-factory": {
+      "location": "main.content-space-provider-factory",
+      "contractVersion": "1.0.0",
+      "providerKind": "sciforge-local-mock"
+    },
+    "content-space-mock.provider-instance": {
+      "location": "main.provider-instance-directory-entry",
+      "contractVersion": "1.0.0",
+      "providerInstanceRef": "sciforge-content-space-local",
+      "providerKind": "sciforge-local-mock",
+      "displayName": "Local Content Space"
+    }
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        {
+          "id": "content-space-mock.provider-factory",
+          "kind": "main.extension",
+          "version": "1.0.0",
+          "priority": 290
+        },
+        {
+          "id": "content-space-mock.provider-instance",
+          "kind": "main.extension",
+          "version": "1.0.0",
+          "priority": 290
+        }
+      ]
+    }
+  ]
+}

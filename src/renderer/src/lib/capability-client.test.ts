@@ -36,6 +36,7 @@ function transport(output: CapabilityJsonValue) {
   const invoke = vi.fn(async ({ request }: Parameters<SciForgeApi['capabilities']['invoke']>[0]) =>
     result(request.actionId, output, request.invocationId)
   )
+  const cancel = vi.fn(async () => true)
   const subscribe = vi.fn(async () => ({
     subscriptionId: '123e4567-e89b-12d3-a456-426614174000'
   }))
@@ -50,6 +51,7 @@ function transport(output: CapabilityJsonValue) {
     readiness,
     observe,
     invoke,
+    cancel,
     subscribe,
     unsubscribe,
     onEvent,
@@ -61,7 +63,10 @@ function transport(output: CapabilityJsonValue) {
 describe('RendererCapabilityClient', () => {
   it('validates readiness, input and output around one generic invocation', async () => {
     const bridge = transport({ value: 2 })
-    const client = new RendererCapabilityClient({ getTransport: () => bridge })
+    const client = new RendererCapabilityClient({
+      getTransport: () => bridge,
+      createTransportRequestId: () => '123e4567-e89b-42d3-a456-426614174010'
+    })
     const contract: RendererCapabilityContract<{ value: number }, { value: number }> = {
       actionId: 'example.read',
       effect: 'read',
@@ -78,6 +83,56 @@ describe('RendererCapabilityClient', () => {
       actionId: 'example.read',
       input: { value: 1 }
     })
+    expect(bridge.invoke.mock.calls[0]?.[0].transportRequestId).toMatch(/^[0-9a-f-]{36}$/u)
+  })
+
+  it('forwards AbortSignal cancellation by transport request ID without replacing provider output', async () => {
+    const bridge = transport({ ok: true })
+    let resolveInvocation: ((value: ReturnType<typeof result>) => void) | undefined
+    bridge.invoke.mockImplementation(({ request }) => new Promise((resolve) => {
+      resolveInvocation = resolve
+      void request
+    }))
+    const client = new RendererCapabilityClient({
+      getTransport: () => bridge,
+      createInvocationId: () => 'invocation-cancel-1',
+      createTransportRequestId: () => '123e4567-e89b-42d3-a456-426614174010'
+    })
+    const controller = new AbortController()
+    const contract = {
+      actionId: 'example.compute',
+      effect: 'compute' as const,
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict()
+    }
+
+    const invocation = client.invoke(contract, {}, { signal: controller.signal })
+    await vi.waitFor(() => expect(bridge.invoke).toHaveBeenCalledOnce())
+    controller.abort()
+    expect(bridge.cancel).toHaveBeenCalledWith('123e4567-e89b-42d3-a456-426614174010')
+    resolveInvocation?.(result('example.compute', { ok: true }, 'invocation-cancel-1'))
+
+    await expect(invocation).resolves.toEqual({ ok: true })
+  })
+
+  it('rejects an already-aborted invocation before readiness or transport dispatch', async () => {
+    const bridge = transport(null)
+    const client = new RendererCapabilityClient({
+      getTransport: () => bridge,
+      createTransportRequestId: () => '123e4567-e89b-42d3-a456-426614174010'
+    })
+    const controller = new AbortController()
+    controller.abort()
+
+    await expect(client.invoke({
+      actionId: 'example.read',
+      effect: 'read',
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.null()
+    }, {}, { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' })
+    expect(bridge.readiness).not.toHaveBeenCalled()
+    expect(bridge.invoke).not.toHaveBeenCalled()
+    expect(bridge.cancel).not.toHaveBeenCalled()
   })
 
   it('adds an invocation ID to every non-read action', async () => {
@@ -127,6 +182,7 @@ describe('RendererCapabilityClient', () => {
       requiredCapabilityIds: ['example.compute']
     })
     expect(bridge.invoke).toHaveBeenCalledWith({
+      transportRequestId: expect.any(String),
       workspaceId: '/workspace',
       request: {
         actionId: 'example.compute',
@@ -155,7 +211,10 @@ describe('RendererCapabilityClient', () => {
       state: { status: 'online' },
       operations: []
     })
-    const client = new RendererCapabilityClient({ getTransport: () => bridge })
+    const client = new RendererCapabilityClient({
+      getTransport: () => bridge,
+      createTransportRequestId: () => '123e4567-e89b-42d3-a456-426614174010'
+    })
 
     await expect(client.observe({
       resourceKind: 'example-resource',
@@ -169,9 +228,49 @@ describe('RendererCapabilityClient', () => {
       state: { status: 'online' }
     })
     expect(bridge.observe).toHaveBeenCalledWith({
+      transportRequestId: '123e4567-e89b-42d3-a456-426614174010',
       workspaceId: '/workspace',
       request: { resource }
     })
+  })
+
+  it('cancels an in-flight observation through the generic transport request', async () => {
+    const bridge = transport(null)
+    const resource = {
+      token: 'cap_abcdefghijklmnopqrst',
+      semanticRevision: 'revision-7',
+      expiresAt: '2026-07-22T01:00:00.000Z'
+    }
+    let releaseObservation: (() => void) | undefined
+    bridge.observe.mockImplementation(async () => {
+      await new Promise<void>((resolve) => { releaseObservation = resolve })
+      return {
+        resource,
+        resourceRef: 'res_abcdefghijklmnopqrst',
+        resourceKind: 'example-resource',
+        semanticRevision: 'revision-7',
+        observedAt: '2026-07-22T00:05:00.000Z',
+        state: { status: 'online' },
+        operations: []
+      }
+    })
+    const client = new RendererCapabilityClient({
+      getTransport: () => bridge,
+      createTransportRequestId: () => '123e4567-e89b-42d3-a456-426614174011'
+    })
+    const controller = new AbortController()
+    const observation = client.observe({
+      resourceKind: 'example-resource',
+      stateSchema: z.object({ status: z.literal('online') }).strict()
+    }, resource, { signal: controller.signal })
+    await vi.waitFor(() => expect(bridge.observe).toHaveBeenCalledOnce())
+
+    controller.abort()
+    await vi.waitFor(() => expect(bridge.cancel).toHaveBeenCalledWith(
+      '123e4567-e89b-42d3-a456-426614174011'
+    ))
+    releaseObservation?.()
+    await expect(observation).rejects.toMatchObject({ name: 'AbortError' })
   })
 
   it('rejects observations whose resource kind does not match the domain contract', async () => {

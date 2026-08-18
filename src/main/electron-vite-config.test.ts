@@ -61,5 +61,8 @@ describe('electron renderer dev server config', () => {
     expect(bridgeProxy?.target).toBe('http://127.0.0.1:5174')
     expect(bridgeProxy?.changeOrigin).toBe(true)
     expect(bridgeProxy?.rewrite?.('/__sciforge-dev-bridge/health')).toBe('/health')
+    expect(bridgeProxy?.rewrite?.(
+      '/__sciforge-dev-bridge/capability/resources/content?devInstanceId=main-instance&access=opaque'
+    )).toBe('/capability/resources/content?devInstanceId=main-instance&access=opaque')
   })
 })

@@ -2583,6 +2583,148 @@ describe('CodexRuntimeService compatibility operations', () => {
     )
   })
 
+  it('revalidates the turn Principal after terminal fact I/O without publishing capability payloads', async () => {
+    const storageRoot = await tempRoot()
+    const client = controllableClient()
+    const broadcast = captureBroadcastEvents()
+    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
+    let principalCurrent = true
+    let deliveryEffect: 'read' | 'external-write' = 'external-write'
+    const call = vi.fn(async () => ({
+      tool: 'sciforge_invoke',
+      deliveryEffect,
+      value: {
+        capabilityId: 'content-space.create-folder',
+        operationRef: `op_${'a'.repeat(24)}`,
+        output: { ok: true },
+        changed: false,
+        replayed: false,
+        completedAt: '2026-08-17T00:00:00.000Z'
+      }
+    }))
+    const capabilityAgentTools: AgentRuntimeToolSurface = {
+      tools: () => [{
+        type: 'function',
+        name: 'sciforge_invoke',
+        description: 'Invoke a capability.',
+        inputSchema: { type: 'object', properties: {} }
+      }],
+      assertPrincipalLease: () => {
+        if (!principalCurrent) {
+          throw Object.assign(new Error('The captured Principal changed.'), {
+            code: 'principal_changed',
+            retryable: false
+          })
+        }
+      },
+      call
+    }
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot,
+      capabilityAgentTools,
+      createClient: (options) => {
+        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
+        return client
+      }
+    })
+
+    await service.startThread({
+      threadId: 'principal-terminal-thread',
+      title: 'Principal terminal barrier',
+      workspace: '/tmp/capability-workspace'
+    })
+    broadcast.mockImplementation((event) => {
+      if (event.tool?.meta?.phase === 'succeeded') principalCurrent = false
+    })
+    try {
+      await expect(pendingServerRequests?.onToolCallRequest?.({
+        requestId: 'principal-terminal-request',
+        callId: 'principal-terminal-call',
+        threadId: 'principal-terminal-thread',
+        turnId: 'turn-1',
+        tool: 'sciforge_invoke',
+        arguments: { secretTarget: 'must-not-enter-terminal-fact' }
+      })).resolves.toMatchObject({
+        success: false,
+        errorCode: 'outcome_unknown',
+        retryable: false
+      })
+
+      principalCurrent = true
+      deliveryEffect = 'read'
+      await expect(pendingServerRequests?.onToolCallRequest?.({
+        requestId: 'principal-terminal-read-request',
+        callId: 'principal-terminal-read-call',
+        threadId: 'principal-terminal-thread',
+        turnId: 'turn-1',
+        tool: 'sciforge_invoke',
+        arguments: { operationRef: 'read-only-operation' }
+      })).resolves.toMatchObject({
+        success: false,
+        errorCode: 'principal_changed',
+        retryable: false
+      })
+
+      const factsBeforeRejectedPreflight = broadcast.mock.calls.length
+      principalCurrent = false
+      await expect(pendingServerRequests?.onToolCallRequest?.({
+        requestId: 'principal-preflight-rejected-request',
+        callId: 'principal-preflight-rejected-call',
+        threadId: 'principal-terminal-thread',
+        turnId: 'turn-1',
+        tool: 'sciforge_invoke',
+        arguments: { secretTarget: 'must-not-enter-dispatched-fact' }
+      })).resolves.toMatchObject({
+        success: false,
+        errorCode: 'principal_changed',
+        retryable: false
+      })
+      expect(broadcast.mock.calls).toHaveLength(factsBeforeRejectedPreflight)
+
+      principalCurrent = true
+      const factsBeforeDispatchedBarrier = broadcast.mock.calls.length
+      broadcast.mockImplementation((event) => {
+        if (event.tool?.meta?.phase === 'dispatched') principalCurrent = false
+      })
+      await expect(pendingServerRequests?.onToolCallRequest?.({
+        requestId: 'principal-dispatched-barrier-request',
+        callId: 'principal-dispatched-barrier-call',
+        threadId: 'principal-terminal-thread',
+        turnId: 'turn-1',
+        tool: 'sciforge_invoke',
+        arguments: { secretTarget: 'must-not-cross-dispatched-barrier' }
+      })).resolves.toMatchObject({
+        success: false,
+        errorCode: 'principal_changed',
+        retryable: false
+      })
+      expect(call).toHaveBeenCalledTimes(2)
+      const dispatchedBarrierFacts = broadcast.mock.calls
+        .slice(factsBeforeDispatchedBarrier)
+        .map(([event]) => event)
+      expect(dispatchedBarrierFacts.map((event) => event.tool?.meta?.phase)).toEqual([
+        'dispatched',
+        'failed'
+      ])
+      for (const event of dispatchedBarrierFacts) {
+        expect(event.tool?.meta).not.toHaveProperty('arguments')
+        expect(event.tool?.meta).not.toHaveProperty('structuredContent')
+      }
+
+      const terminal = broadcast.mock.calls
+        .map(([event]) => event)
+        .find((event) => event.tool?.meta?.phase === 'succeeded')
+      expect(terminal?.tool?.detail).toBe('Dynamic tool completed successfully.')
+      expect(terminal?.tool?.meta).not.toHaveProperty('arguments')
+      expect(terminal?.tool?.meta).not.toHaveProperty('structuredContent')
+    } finally {
+      broadcast.mockRestore()
+    }
+
+    expect(call).toHaveBeenCalledTimes(2)
+  })
+
   it('uses a stable Host JSON-RPC identity when legacy tool calls omit provider callId', async () => {
     const storageRoot = await tempRoot()
     const managedCodexHome = await tempRoot()

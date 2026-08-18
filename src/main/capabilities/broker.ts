@@ -1,6 +1,12 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { z } from 'zod'
+import {
+  principalContextSnapshotSchema,
+  principalSnapshotSchema,
+  type PrincipalContextSnapshot,
+  type PrincipalSnapshot
+} from '@sciforge/domain-sdk/principal'
 import {
   capabilityAuditRecordSchema,
   capabilityAudienceSchema,
@@ -35,6 +41,7 @@ import {
 import {
   CapabilityRegistry,
   type CapabilityDefinition,
+  type IssuedCapabilityResource,
   type CapabilityResourceRegistration,
   type ResolvedCapabilityResource
 } from './registry'
@@ -51,6 +58,8 @@ const MAX_HANDLE_TTL_MS = 24 * 60 * 60_000
 const DEFAULT_MAX_AUDIT_RECORDS = 2_000
 const DEFAULT_MAX_EVENTS = 2_000
 const DEFAULT_MAX_IDEMPOTENCY_ENTRIES = 2_000
+const MAX_RESOURCE_RETIREMENT_ATTEMPTS = 3
+const RESOURCE_RETIREMENT_RETRY_MS = 1_000
 
 type BrokerErrorCategory = 'rejected' | 'failed'
 
@@ -74,10 +83,15 @@ export class CapabilityBrokerError extends Error {
 
 export type CapabilityBrokerOptions = {
   now?: () => Date
+  /** Captures Host-owned authority after the public caller envelope is validated. */
+  resolveCurrentPrincipal?: () => PrincipalSnapshot | null
+  /** Captures the signed-in or signed-out Host Principal context revision. */
+  resolveCurrentPrincipalContext?: () => PrincipalContextSnapshot
   handleTtlMs?: number
   maxAuditRecords?: number
   maxEvents?: number
   maxIdempotencyEntries?: number
+  reportCleanupError?: (error: unknown) => void
 }
 
 type ResourceState = {
@@ -87,35 +101,55 @@ type ResourceState = {
   resourceKind: string
   workspaceId?: string
   allowedAudiences: CapabilityAudience[]
+  principalLease: string
   semanticRevision: string
   layoutRevision?: string
   observe: CapabilityResourceRegistration['observe']
   dispose?: CapabilityResourceRegistration['dispose']
   contentTransport?: CapabilityResourceRegistration['contentTransport']
+  retireAfterLastHandleExpires: boolean
   retentionCount: number
+  inFlightCount: number
+  expiryRetirementPending: boolean
   retirementRequested: boolean
+  retirementIgnoresRetentions: boolean
+  retirementPromise?: Promise<void>
+  retirementWake?: () => void
+  retirementAttempts: number
+  retirementRetryTimer?: ReturnType<typeof setTimeout>
+  /**
+   * Invocation transactions that have issued this resource before any one of
+   * them commits. `undefined` means the resource has a committed adopter and
+   * must never be retired by another invocation's rollback.
+   */
+  provisionalTransactions?: Set<InvocationResourceTransaction>
 }
 
 type ResourceGrant = {
   token: string
   resourceKey: string
   workspaceId?: string
+  principalLease: string
   semanticRevision: string
   expiresAt: string
 }
 
 type RetiredResourceState = Pick<
   ResourceState,
-  'resourceRef' | 'workspaceId' | 'allowedAudiences'
+  'resourceRef' | 'workspaceId' | 'allowedAudiences' | 'principalLease'
 >
 
 type IdempotencyEntry = {
   fingerprint: string
   promise: Promise<CapabilityInvocationResult>
+  settled: boolean
+  retainUntilRestart: boolean
+  resultPrincipalLease?: string
+  postDispatchMutation?: boolean
 }
 
 type EventSubscription = {
-  caller: CapabilityCallerContext
+  caller: CapabilityCallerContextInput
   listener: (event: CapabilityResourceChangeEvent) => void
 }
 
@@ -127,6 +161,22 @@ export type ActiveCapabilityInvocation = Readonly<{
   approval: CapabilityDefinition['descriptor']['approval']
   approved: boolean
 }>
+
+type ActiveCapabilityInvocationState = {
+  active: boolean
+  invocation: ActiveCapabilityInvocation
+  resourceTransaction: InvocationResourceTransaction
+}
+
+type InvocationResourceIssuance = {
+  resource: ResourceState
+  grant: ResourceGrant
+}
+
+type InvocationResourceTransaction = {
+  issuances: InvocationResourceIssuance[]
+  state: 'pending' | 'committed' | 'rolled-back'
+}
 
 type HostSystemCapabilityCaller = Readonly<{
   callerId: string
@@ -148,6 +198,22 @@ function stableJson(value: CapabilityJsonValue): string {
     .join(',')}}`
 }
 
+/**
+ * Sensitive capability input is needed by the handler but must not be retained
+ * verbatim by the broker's restart-bounded idempotency journal. The digest still
+ * preserves exact retry/conflict semantics without turning that journal into a
+ * credential store.
+ */
+function idempotencyInput(
+  definition: CapabilityDefinition,
+  input: CapabilityJsonValue
+): CapabilityJsonValue {
+  if (!definition.descriptor.tags.includes('sensitive-input')) return input
+  return {
+    sensitiveInputSha256: createHash('sha256').update(stableJson(input)).digest('hex')
+  }
+}
+
 function normalizedWorkspaceId(value: string | undefined): string | undefined {
   const trimmed = value?.trim()
   return trimmed || undefined
@@ -155,14 +221,59 @@ function normalizedWorkspaceId(value: string | undefined): string | undefined {
 
 function resourceKey(
   registration: Pick<CapabilityResourceRegistration, 'workspaceId' | 'resourceKind' | 'resourceId'>,
-  allowedAudiences: readonly CapabilityAudience[]
+  allowedAudiences: readonly CapabilityAudience[],
+  principalLease: string
 ): string {
   return stableJson({
     workspaceId: registration.workspaceId ?? null,
     resourceKind: registration.resourceKind,
     resourceId: registration.resourceId,
-    allowedAudiences: [...allowedAudiences].sort()
+    allowedAudiences: [...allowedAudiences].sort(),
+    principalLease
   })
+}
+
+function sameContentTransport(
+  left: CapabilityResourceRegistration['contentTransport'],
+  right: CapabilityResourceRegistration['contentTransport']
+): boolean {
+  if (!left || !right) return left === right
+  return left.describeActionId === right.describeActionId &&
+    left.readRangeActionId === right.readRangeActionId
+}
+
+function principalLease(
+  principal: PrincipalSnapshot | undefined,
+  principalContextVersion: number
+): string {
+  return stableJson({
+    principalContextVersion,
+    principal: principal === undefined ? null : { ...principal }
+  })
+}
+
+function callerPrincipalLease(caller: CapabilityCallerContext): string {
+  return principalLease(
+    caller.principal,
+    caller.principalContextVersion ?? caller.principal?.identityVersion ?? 0
+  )
+}
+
+function workspaceInvocationScope(caller: CapabilityCallerContext): string {
+  return stableJson(capabilityJsonValueSchema.parse({
+    workspaceId: caller.workspaceId ?? null,
+    workspaceLocator: caller.workspaceLocator ?? null
+  }))
+}
+
+function publicCallerProjection(caller: CapabilityCallerContext): CapabilityCallerContextInput {
+  return {
+    audience: caller.audience,
+    callerId: caller.callerId,
+    ...(caller.workspaceId ? { workspaceId: caller.workspaceId } : {}),
+    ...(caller.workspaceLocator ? { workspaceLocator: caller.workspaceLocator } : {}),
+    approvals: [...caller.approvals]
+  }
 }
 
 function isMutation(definition: CapabilityDefinition): boolean {
@@ -171,48 +282,78 @@ function isMutation(definition: CapabilityDefinition): boolean {
     || definition.descriptor.effect === 'destructive'
 }
 
+function handlerResultRequestsStateChange(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return true
+  const candidate = result as Record<string, unknown>
+  return candidate.changed === true ||
+    candidate.retireResource === true ||
+    candidate.retireResource === 'defer-while-retained' ||
+    candidate.semanticRevision !== undefined ||
+    candidate.layoutRevision !== undefined
+}
+
 export class CapabilityBroker {
   readonly registry: CapabilityRegistry
   readonly #now: () => Date
+  readonly #resolveCurrentPrincipal: (() => PrincipalSnapshot | null) | undefined
+  readonly #resolveCurrentPrincipalContext: (() => PrincipalContextSnapshot) | undefined
   readonly #handleTtlMs: number
   readonly #maxAuditRecords: number
   readonly #maxEvents: number
   readonly #maxIdempotencyEntries: number
+  readonly #reportCleanupError: (error: unknown) => void
   readonly #resources = new Map<string, ResourceState>()
   readonly #resourcesByRef = new Map<string, ResourceState>()
   readonly #retiredResourcesByRef = new Map<string, RetiredResourceState>()
   readonly #handles = new Map<string, ResourceGrant>()
+  readonly #handleExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>()
   readonly #idempotency = new Map<string, IdempotencyEntry>()
   readonly #auditRecords: CapabilityAuditRecord[] = []
   readonly #events: CapabilityResourceChangeEvent[] = []
   readonly #subscriptions = new Set<EventSubscription>()
-  readonly #activeInvocation = new AsyncLocalStorage<ActiveCapabilityInvocation>()
+  readonly #activeInvocation = new AsyncLocalStorage<ActiveCapabilityInvocationState>()
 
   constructor(registry: CapabilityRegistry, options: CapabilityBrokerOptions = {}) {
     this.registry = registry
     this.#now = options.now ?? (() => new Date())
+    this.#resolveCurrentPrincipal = options.resolveCurrentPrincipal
+    this.#resolveCurrentPrincipalContext = options.resolveCurrentPrincipalContext
     this.#handleTtlMs = Math.min(MAX_HANDLE_TTL_MS, Math.max(1, options.handleTtlMs ?? DEFAULT_HANDLE_TTL_MS))
     this.#maxAuditRecords = Math.max(1, options.maxAuditRecords ?? DEFAULT_MAX_AUDIT_RECORDS)
     this.#maxEvents = Math.max(1, options.maxEvents ?? DEFAULT_MAX_EVENTS)
     this.#maxIdempotencyEntries = Math.max(1, options.maxIdempotencyEntries ?? DEFAULT_MAX_IDEMPOTENCY_ENTRIES)
+    this.#reportCleanupError = options.reportCleanupError ?? (() => undefined)
   }
 
   discover(rawCaller: CapabilityCallerContextInput, query?: CapabilityDiscoveryQuery) {
-    return this.registry.discover(rawCaller, query)
+    const caller = this.#parseCaller(rawCaller)
+    return this.registry.discover(publicCallerProjection(caller), query)
+  }
+
+  /**
+   * Atomically issues both projections of one Broker resource registration.
+   * The opaque portable-reference layer consumes the stable resourceRef while
+   * renderer and runtime callers receive only the expiring resource handle.
+   */
+  issueResource(
+    rawCaller: CapabilityCallerContextInput,
+    rawRegistration: CapabilityResourceRegistration
+  ): IssuedCapabilityResource {
+    const caller = this.#hostResourceCaller(rawCaller)
+    return this.#issueResourceAs(caller, rawRegistration)
   }
 
   issueResourceHandle(
     rawCaller: CapabilityCallerContextInput,
     rawRegistration: CapabilityResourceRegistration
   ): CapabilityResourceHandle {
-    const caller = this.#parseCaller(rawCaller)
-    return this.#issueResourceHandleAs(caller, rawRegistration)
+    return this.issueResource(rawCaller, rawRegistration).resource
   }
 
-  #issueResourceHandleAs(
+  #issueResourceAs(
     caller: CapabilityCallerContext,
     rawRegistration: CapabilityResourceRegistration
-  ): CapabilityResourceHandle {
+  ): IssuedCapabilityResource {
     const registration = this.#parseResourceRegistration(rawRegistration)
     const workspaceId = registration.workspaceId ?? caller.workspaceId
     if (registration.workspaceId && registration.workspaceId !== caller.workspaceId) {
@@ -223,16 +364,42 @@ export class CapabilityBroker {
     }
 
     const allowedAudiences = [...(registration.audiences ?? [caller.audience])].sort()
+    const callerLease = callerPrincipalLease(caller)
     if (registration.contentTransport) {
       this.#validateContentAction(registration.resourceKind, registration.contentTransport.describeActionId)
       this.#validateContentAction(registration.resourceKind, registration.contentTransport.readRangeActionId)
     }
-    const key = resourceKey({ ...registration, workspaceId }, allowedAudiences)
+    const key = resourceKey(
+      { ...registration, workspaceId },
+      allowedAudiences,
+      callerLease
+    )
     const existing = this.#resources.get(key)
+    const resourceTransaction = this.#invocationResourceTransaction(caller)
     if (!allowedAudiences.includes(caller.audience)) {
       throw new CapabilityBrokerError(
         'resource_audience_denied',
         'A resource handle cannot be issued to an audience outside the resource transfer policy.'
+      )
+    }
+    if (existing && this.#resourceRetirementBlocksUse(existing)) {
+      throw new CapabilityBrokerError(
+        'resource_retiring',
+        'A retiring resource cannot issue or renew capability handles.'
+      )
+    }
+    if (
+      existing &&
+      (
+        existing.observe !== registration.observe ||
+        existing.dispose !== registration.dispose ||
+        !sameContentTransport(existing.contentTransport, registration.contentTransport) ||
+        existing.retireAfterLastHandleExpires !== registration.retireAfterLastHandleExpires
+      )
+    ) {
+      throw new CapabilityBrokerError(
+        'resource_registration_conflict',
+        'A live resource identity cannot be rebound to a different provider registration.'
       )
     }
     const resource: ResourceState = existing ?? {
@@ -242,13 +409,30 @@ export class CapabilityBroker {
       resourceKind: registration.resourceKind,
       workspaceId,
       allowedAudiences,
+      principalLease: callerLease,
       semanticRevision: registration.semanticRevision,
       layoutRevision: registration.layoutRevision,
       observe: registration.observe,
       dispose: registration.dispose,
       contentTransport: registration.contentTransport,
+      retireAfterLastHandleExpires: registration.retireAfterLastHandleExpires === true,
       retentionCount: 0,
-      retirementRequested: false
+      inFlightCount: 0,
+      expiryRetirementPending: false,
+      retirementRequested: false,
+      retirementIgnoresRetentions: false,
+      retirementAttempts: 0,
+      ...(resourceTransaction
+        ? { provisionalTransactions: new Set([resourceTransaction]) }
+        : {})
+    }
+    if (existing?.provisionalTransactions) {
+      if (resourceTransaction) {
+        existing.provisionalTransactions.add(resourceTransaction)
+      } else {
+        // A Host issuance outside an invocation is itself a committed adopter.
+        existing.provisionalTransactions = undefined
+      }
     }
     resource.semanticRevision = registration.semanticRevision
     resource.layoutRevision = registration.layoutRevision
@@ -256,6 +440,7 @@ export class CapabilityBroker {
     resource.observe = registration.observe
     resource.dispose = registration.dispose
     resource.contentTransport = registration.contentTransport
+    resource.retireAfterLastHandleExpires = registration.retireAfterLastHandleExpires === true
     this.#resources.set(key, resource)
     this.#resourcesByRef.set(resource.resourceRef, resource)
 
@@ -266,14 +451,26 @@ export class CapabilityBroker {
       token,
       resourceKey: key,
       workspaceId,
+      principalLease: callerLease,
       semanticRevision: registration.semanticRevision,
       expiresAt
     }
     this.#handles.set(token, grant)
-    return capabilityResourceHandleSchema.parse({
+    resource.expiryRetirementPending = false
+    this.#scheduleHandleExpiry(grant, resource)
+    const resourceHandle = capabilityResourceHandleSchema.parse({
       token,
       semanticRevision: registration.semanticRevision,
       expiresAt
+    })
+    this.#trackInvocationResourceIssuance(resourceTransaction, resource, grant)
+    return Object.freeze({
+      resource: resourceHandle,
+      resourceRef: resource.resourceRef,
+      retire: (options) => this.#requestResourceRetirement(
+        resource,
+        options.deferWhileRetained
+      )
     })
   }
 
@@ -281,9 +478,9 @@ export class CapabilityBroker {
     rawCaller: CapabilityCallerContextInput,
     resourceRef: string
   ): CapabilityResourceHandle {
-    const caller = this.#parseCaller(rawCaller)
+    const caller = this.#hostResourceCaller(rawCaller)
     const state = this.#authorizedResourceRef(caller, resourceRef)
-    return this.#issueResourceHandleAs(caller, {
+    return this.#issueResourceAs(caller, {
       resourceId: state.resourceId,
       resourceKind: state.resourceKind,
       workspaceId: state.workspaceId,
@@ -292,8 +489,9 @@ export class CapabilityBroker {
       layoutRevision: state.layoutRevision,
       observe: state.observe,
       dispose: state.dispose,
-      contentTransport: state.contentTransport
-    })
+      contentTransport: state.contentTransport,
+      retireAfterLastHandleExpires: state.retireAfterLastHandleExpires
+    }).resource
   }
 
   /**
@@ -315,7 +513,12 @@ export class CapabilityBroker {
       for (const resource of resources) {
         resource.retentionCount = Math.max(0, resource.retentionCount - 1)
         if (resource.retentionCount === 0 && resource.retirementRequested) {
-          await this.#finalizeResourceRetirement(resource)
+          this.#wakeResourceRetirement(resource)
+          if (this.#resourceRetirementEligible(resource)) {
+            await resource.retirementPromise
+          }
+        } else if (resource.retentionCount === 0 && resource.expiryRetirementPending) {
+          await this.#finalizeExpiryRetirement(resource)
         }
       }
     }
@@ -329,7 +532,7 @@ export class CapabilityBroker {
     rawCaller: CapabilityCallerContextInput,
     resourceRef: string
   ): ResolvedCapabilityResource {
-    const caller = this.#parseCaller(rawCaller)
+    const caller = this.#hostResourceCaller(rawCaller)
     const state = this.#authorizedResourceRef(caller, resourceRef)
     return {
       resourceId: state.resourceId,
@@ -343,66 +546,111 @@ export class CapabilityBroker {
 
   async observe(
     rawCaller: CapabilityCallerContextInput,
-    rawRequest: CapabilityObserveRequest
+    rawRequest: CapabilityObserveRequest,
+    options: Readonly<{ signal?: AbortSignal }> = {}
   ): Promise<CapabilityObservation> {
     const caller = this.#parseCaller(rawCaller)
     const request = capabilityObserveRequestSchema.parse(rawRequest)
     const { state } = this.#resolveHandle(caller, request.resource)
-    let rawObservation: Awaited<ReturnType<ResourceState['observe']>>
+    const releaseInFlight = this.#pinResource(state)
+    let refreshedHandle: CapabilityResourceHandle | undefined
+    let result!: CapabilityObservation
     try {
-      rawObservation = await state.observe(caller)
-    } catch (error) {
-      throw new CapabilityBrokerError('observation_failed', 'The resource provider failed to observe its state.', {
-        category: 'failed',
-        cause: error
-      })
-    }
-    const observed = resourceObservationResultSchema.safeParse(rawObservation)
-    if (!observed.success) {
-      throw new CapabilityBrokerError('invalid_observation', 'The resource provider returned an invalid observation.', {
-        category: 'failed',
-        details: { issues: observed.error.issues.map((issue) => issue.message) }
-      })
-    }
-
-    state.semanticRevision = observed.data.semanticRevision
-    state.layoutRevision = observed.data.layoutRevision
-    const refreshedHandle = this.#issueResourceHandleAs(caller, {
-      resourceId: state.resourceId,
-      resourceKind: state.resourceKind,
-      workspaceId: state.workspaceId,
-      audiences: state.allowedAudiences,
-      semanticRevision: state.semanticRevision,
-      layoutRevision: state.layoutRevision,
-      observe: state.observe,
-      dispose: state.dispose,
-      contentTransport: state.contentTransport
-    })
-    const discovered = this.registry.discover(caller, { acceptedResourceKind: state.resourceKind })
-    const operations = observed.data.operationIds
-      ? observed.data.operationIds.map((id) => {
-          const descriptor = discovered.find((candidate) => candidate.id === id)
-          if (!descriptor) {
-            throw new CapabilityBrokerError(
-              'unregistered_operation',
-              `Resource observation advertised unavailable operation ${id}.`,
-              { category: 'failed' }
-            )
-          }
-          return descriptor
+      if (options.signal?.aborted) {
+        throw new CapabilityBrokerError('invocation_cancelled', 'Capability observation was cancelled before dispatch.')
+      }
+      this.#assertCurrentPrincipal(caller)
+      let rawObservation: Awaited<ReturnType<ResourceState['observe']>>
+      try {
+        rawObservation = await state.observe(caller, { signal: options.signal })
+      } catch (error) {
+        if (options.signal?.aborted) {
+          throw new CapabilityBrokerError(
+            'invocation_cancelled',
+            'Capability observation was cancelled during dispatch.',
+            { cause: error }
+          )
+        }
+        throw new CapabilityBrokerError('observation_failed', 'The resource provider failed to observe its state.', {
+          category: 'failed',
+          cause: error
         })
-      : discovered
+      }
+      if (options.signal?.aborted) {
+        throw new CapabilityBrokerError('invocation_cancelled', 'Capability observation was cancelled after dispatch.')
+      }
+      const observed = resourceObservationResultSchema.safeParse(rawObservation)
+      if (!observed.success) {
+        throw new CapabilityBrokerError('invalid_observation', 'The resource provider returned an invalid observation.', {
+          category: 'failed',
+          details: { issues: observed.error.issues.map((issue) => issue.message) }
+        })
+      }
 
-    return capabilityObservationSchema.parse({
-      resource: refreshedHandle,
-      resourceRef: state.resourceRef,
-      resourceKind: state.resourceKind,
-      semanticRevision: state.semanticRevision,
-      layoutRevision: state.layoutRevision,
-      observedAt: this.#now().toISOString(),
-      state: observed.data.state,
-      operations
-    })
+      const discovered = this.registry.discover(
+        publicCallerProjection(caller),
+        { acceptedResourceKind: state.resourceKind }
+      )
+      const operations = observed.data.operationIds
+        ? observed.data.operationIds.map((id) => {
+            const descriptor = discovered.find((candidate) => candidate.id === id)
+            if (!descriptor) {
+              throw new CapabilityBrokerError(
+                'unregistered_operation',
+                `Resource observation advertised unavailable operation ${id}.`,
+                { category: 'failed' }
+              )
+            }
+            return descriptor
+          })
+        : discovered
+
+      // Validate every provider-advertised operation before minting the next
+      // handle. A contract failure must not leave an undisclosed live grant.
+      this.#assertCurrentPrincipal(caller)
+      state.semanticRevision = observed.data.semanticRevision
+      state.layoutRevision = observed.data.layoutRevision
+      refreshedHandle = this.#issueResourceAs(caller, {
+        resourceId: state.resourceId,
+        resourceKind: state.resourceKind,
+        workspaceId: state.workspaceId,
+        audiences: state.allowedAudiences,
+        semanticRevision: state.semanticRevision,
+        layoutRevision: state.layoutRevision,
+        observe: state.observe,
+        dispose: state.dispose,
+        contentTransport: state.contentTransport,
+        retireAfterLastHandleExpires: state.retireAfterLastHandleExpires
+      }).resource
+
+      result = capabilityObservationSchema.parse({
+        resource: refreshedHandle,
+        resourceRef: state.resourceRef,
+        resourceKind: state.resourceKind,
+        semanticRevision: state.semanticRevision,
+        layoutRevision: state.layoutRevision,
+        observedAt: this.#now().toISOString(),
+        state: observed.data.state,
+        operations
+      })
+    } catch (error) {
+      // A handle minted for a result that cannot be delivered must not remain
+      // live until TTL merely because the observation failed afterwards.
+      if (refreshedHandle) this.#deleteHandle(refreshedHandle.token)
+      throw error
+    } finally {
+      await releaseInFlight().catch(this.#reportCleanupError)
+    }
+    try {
+      // `await releaseInFlight()` yields even when cleanup is already done.
+      // Revalidate at the actual public delivery boundary so Principal A state
+      // can never resolve after the Host has switched to Principal B.
+      this.#assertCurrentPrincipal(caller)
+    } catch (error) {
+      if (refreshedHandle) this.#deleteHandle(refreshedHandle.token)
+      throw error
+    }
+    return result
   }
 
   async invoke(
@@ -464,6 +712,7 @@ export class CapabilityBroker {
     const request = requestResult.data
     let definition: CapabilityDefinition | undefined
     let resource: ResourceState | undefined
+    let releaseResourcePin: (() => Promise<void>) | undefined
     try {
       definition = this.registry.get(request.actionId)
       if (!definition) {
@@ -471,6 +720,7 @@ export class CapabilityBroker {
       }
       this.#authorizeAudience(caller, definition)
       resource = this.#authorizeScope(caller, definition, request)
+      releaseResourcePin = resource ? this.#pinResource(resource) : undefined
       this.#authorizeApproval(caller, definition, request.invocationId)
 
       const parsedInput = definition.inputSchema.safeParse(request.input)
@@ -489,17 +739,25 @@ export class CapabilityBroker {
       if (request.expectedRevision && !resource) {
         throw new CapabilityBrokerError('revision_without_resource', 'Expected revision requires a resource handle.')
       }
+      if (options.signal?.aborted) {
+        throw new CapabilityBrokerError('invocation_cancelled', 'Capability invocation was cancelled before dispatch.')
+      }
+      this.#assertCurrentPrincipal(caller)
 
       const beforeRevision = resource?.semanticRevision
+      const callerLease = callerPrincipalLease(caller)
+      const principalScopedIdempotency = definition.descriptor.principalTransition !== 'host-authority'
       const fingerprint = stableJson({
         actionId: request.actionId,
         capabilityGrants: [...(caller.capabilityGrants ?? [])].sort(),
+        ...(principalScopedIdempotency ? { principalLease: callerLease } : {}),
+        ...(principalScopedIdempotency ? { workspaceScope: workspaceInvocationScope(caller) } : {}),
         resourceRef: resource?.resourceRef ?? null,
         expectedRevision: request.expectedRevision ?? null,
-        input: request.input
+        input: idempotencyInput(definition, request.input)
       })
       const idempotencyKey = request.invocationId
-        ? `${caller.audience}\u0000${caller.callerId}\u0000${caller.workspaceId ?? ''}\u0000${request.actionId}\u0000${request.invocationId}`
+        ? `${caller.audience}\u0000${caller.callerId}\u0000${principalScopedIdempotency ? workspaceInvocationScope(caller) : 'global'}\u0000${principalScopedIdempotency ? callerLease : 'host-principal-transition'}\u0000${request.actionId}\u0000${request.invocationId}`
         : undefined
 
       if (idempotencyKey) {
@@ -512,6 +770,24 @@ export class CapabilityBroker {
             )
           }
           const original = await existing.promise
+          if (definition.descriptor.principalTransition === 'host-authority') {
+            if (!existing.resultPrincipalLease || existing.resultPrincipalLease !== this.#currentPrincipalLease()) {
+              throw new CapabilityBrokerError(
+                'idempotency_post_state_mismatch',
+                'The Host Principal no longer matches this transition invocation result.'
+              )
+            }
+          } else {
+            if (this.#currentPrincipalLease() !== callerLease) {
+              const outcomeUnknown = isMutation(definition) || existing.postDispatchMutation === true
+              throw new CapabilityBrokerError(
+                outcomeUnknown ? 'outcome_unknown' : 'principal_changed',
+                outcomeUnknown
+                  ? 'The Principal changed after capability dispatch; the mutation outcome is unknown.'
+                  : 'The current Principal changed before capability result delivery.'
+              )
+            }
+          }
           const replayed = capabilityInvocationResultSchema.parse({ ...original, replayed: true })
           this.#appendAudit({
             status: 'replayed',
@@ -522,6 +798,21 @@ export class CapabilityBroker {
             beforeRevision: replayed.beforeRevision,
             afterRevision: replayed.afterRevision
           })
+          const replayRelease = releaseResourcePin
+          releaseResourcePin = undefined
+          if (replayRelease) await replayRelease().catch(this.#reportCleanupError)
+          const expectedLease = definition.descriptor.principalTransition === 'host-authority'
+            ? existing.resultPrincipalLease
+            : callerLease
+          if (!expectedLease || this.#currentPrincipalLease() !== expectedLease) {
+            const outcomeUnknown = isMutation(definition) || existing.postDispatchMutation === true
+            throw new CapabilityBrokerError(
+              outcomeUnknown ? 'outcome_unknown' : 'principal_changed',
+              outcomeUnknown
+                ? 'The Principal changed after capability dispatch; the mutation outcome is unknown.'
+                : 'The current Principal changed before capability result delivery.'
+            )
+          }
           return replayed
         }
       }
@@ -548,21 +839,63 @@ export class CapabilityBroker {
         }
       }
 
+      if (idempotencyKey) this.#reserveIdempotencyCapacity()
+      const activeDefinition = definition
+      let postDispatchMutation = isMutation(activeDefinition)
+      let acceptedResultPrincipalLease = callerLease
+      const executionRelease = releaseResourcePin
+      releaseResourcePin = undefined
       const execution = this.#execute({
         caller,
-        definition,
+        definition: activeDefinition,
         request,
         parsedInput: parsedInput.data,
         resource,
         beforeRevision,
-        signal: options.signal
+        signal: options.signal,
+        releaseResourcePinForRetirement: executionRelease,
+        captureAcceptedPrincipalLease: (lease) => { acceptedResultPrincipalLease = lease },
+        capturePostDispatchMutation: (value) => { postDispatchMutation = value },
+        prepareDelivery: async () => {
+          if (executionRelease) {
+            await executionRelease().catch(this.#reportCleanupError)
+          }
+        },
+        assertDelivery: (result) => {
+          if (this.#currentPrincipalLease() !== acceptedResultPrincipalLease) {
+            const outcomeUnknown = postDispatchMutation || result.changed
+            throw new CapabilityBrokerError(
+              outcomeUnknown ? 'outcome_unknown' : 'principal_changed',
+              outcomeUnknown
+                ? 'The Principal changed after capability dispatch; the mutation outcome is unknown.'
+                : 'The current Principal changed before capability result delivery.'
+            )
+          }
+        },
+        cleanupAfterFailure: async () => {
+          if (executionRelease) {
+            await executionRelease().catch(this.#reportCleanupError)
+          }
+        }
       })
       if (idempotencyKey) {
-        this.#idempotency.set(idempotencyKey, { fingerprint, promise: execution })
-        this.#trimMap(this.#idempotency, this.#maxIdempotencyEntries)
-        void execution.catch(() => {
-          if (this.#idempotency.get(idempotencyKey)?.promise === execution) this.#idempotency.delete(idempotencyKey)
-        })
+        const entry: IdempotencyEntry = {
+          fingerprint,
+          promise: execution,
+          settled: false,
+          retainUntilRestart: activeDefinition.descriptor.principalTransition === 'host-authority'
+        }
+        this.#idempotency.set(idempotencyKey, entry)
+        void execution.then(
+          () => {
+            entry.settled = true
+            if (activeDefinition.descriptor.principalTransition === 'host-authority') {
+              entry.resultPrincipalLease = acceptedResultPrincipalLease
+            }
+            entry.postDispatchMutation = postDispatchMutation
+          },
+          () => { entry.settled = true }
+        )
       }
       return await execution
     } catch (error) {
@@ -582,6 +915,8 @@ export class CapabilityBroker {
         errorCode: brokerError.code
       })
       throw brokerError
+    } finally {
+      if (releaseResourcePin) await releaseResourcePin().catch(this.#reportCleanupError)
     }
   }
 
@@ -591,7 +926,26 @@ export class CapabilityBroker {
    * runtimes may inherit an existing approval, but cannot manufacture one.
    */
   currentInvocation(): ActiveCapabilityInvocation | undefined {
-    return this.#activeInvocation.getStore()
+    const state = this.#activeInvocation.getStore()
+    return state?.active ? state.invocation : undefined
+  }
+
+  /** Host-private exact lease check for nested trusted invocation composition. */
+  assertPrincipalCurrent(
+    expected: PrincipalSnapshot | undefined,
+    expectedContextVersion?: number
+  ): void {
+    if (
+      this.#currentPrincipalLease() !== principalLease(
+        expected,
+        expectedContextVersion ?? expected?.identityVersion ?? 0
+      )
+    ) {
+      throw new CapabilityBrokerError(
+        'principal_changed',
+        'The current Principal no longer matches the inherited invocation lease.'
+      )
+    }
   }
 
   async describeResourceContent(
@@ -602,7 +956,11 @@ export class CapabilityBroker {
     const handle = capabilityResourceHandleSchema.parse(rawHandle)
     const { state } = this.#resolveHandle(caller, handle)
     const actionId = this.#contentAction(state, 'describeActionId')
-    const result = await this.invoke(caller, { actionId, resource: handle, input: {} })
+    const result = await this.#invokeAs(
+      caller,
+      { actionId, resource: handle, input: {} },
+      {}
+    )
     const parsed = z.object({
       ok: z.literal(true),
       descriptor: z.object({
@@ -643,7 +1001,7 @@ export class CapabilityBroker {
     const handle = capabilityResourceHandleSchema.parse(rawHandle)
     const { state } = this.#resolveHandle(caller, handle)
     const actionId = this.#contentAction(state, 'readRangeActionId')
-    const result = await this.invoke(caller, {
+    const result = await this.#invokeAs(caller, {
       actionId,
       resource: handle,
       input: {
@@ -652,7 +1010,7 @@ export class CapabilityBroker {
           length: z.number().int().positive()
         }).strict().parse(range)
       }
-    })
+    }, {})
     const parsed = z.object({
       ok: z.literal(true),
       offset: z.number().int().nonnegative(),
@@ -719,7 +1077,7 @@ export class CapabilityBroker {
     if (typeof listener !== 'function') {
       throw new CapabilityBrokerError('invalid_listener', 'Capability event listener must be a function.')
     }
-    const subscription = { caller, listener }
+    const subscription = { caller: publicCallerProjection(caller), listener }
     this.#subscriptions.add(subscription)
     return () => this.#subscriptions.delete(subscription)
   }
@@ -732,9 +1090,57 @@ export class CapabilityBroker {
     resource?: ResourceState
     beforeRevision?: string
     signal?: AbortSignal
+    releaseResourcePinForRetirement?: () => Promise<void>
+    captureAcceptedPrincipalLease?: (lease: string) => void
+    capturePostDispatchMutation?: (value: boolean) => void
+    prepareDelivery?: () => Promise<void>
+    assertDelivery?: (result: CapabilityInvocationResult) => void
+    cleanupAfterFailure?: () => Promise<void>
   }): Promise<CapabilityInvocationResult> {
+    const resourceTransaction: InvocationResourceTransaction = {
+      issuances: [],
+      state: 'pending'
+    }
+    try {
+      const result = await this.#executeWithResourceTransaction(options, resourceTransaction)
+      await options.prepareDelivery?.()
+      options.assertDelivery?.(result)
+      this.#commitInvocationResourceTransaction(resourceTransaction)
+      return result
+    } catch (error) {
+      await options.cleanupAfterFailure?.()
+      await this.#rollbackInvocationResourceTransaction(resourceTransaction)
+      throw error
+    }
+  }
+
+  async #executeWithResourceTransaction(options: {
+    caller: CapabilityCallerContext
+    definition: CapabilityDefinition
+    request: CapabilityInvocationRequest
+    parsedInput: unknown
+    resource?: ResourceState
+    beforeRevision?: string
+    signal?: AbortSignal
+    releaseResourcePinForRetirement?: () => Promise<void>
+    captureAcceptedPrincipalLease?: (lease: string) => void
+    capturePostDispatchMutation?: (value: boolean) => void
+  }, resourceTransaction: InvocationResourceTransaction): Promise<CapabilityInvocationResult> {
     const { caller, definition, request, resource, beforeRevision, signal } = options
     let rawResult: Awaited<ReturnType<CapabilityDefinition['handler']>>
+    let principalMismatchObserved = false
+    let observedPrincipalLease: string | undefined
+    const assertPrincipalCurrent = (): void => {
+      const currentLease = this.#currentPrincipalLease()
+      if (currentLease !== callerPrincipalLease(caller)) {
+        principalMismatchObserved = true
+        observedPrincipalLease = currentLease
+        throw new CapabilityBrokerError(
+          'principal_changed',
+          'The current Principal changed before capability dispatch.'
+        )
+      }
+    }
     try {
       const approval = definition.descriptor.approval
       const approved = approval === 'none' || Boolean(
@@ -745,20 +1151,66 @@ export class CapabilityBroker {
           grant.mode === approval
         ))
       )
-      rawResult = await this.#activeInvocation.run(Object.freeze({
-        caller,
-        actionId: request.actionId,
-        ...(request.invocationId ? { invocationId: request.invocationId } : {}),
-        effect: definition.descriptor.effect,
-        approval,
-        approved
-      }), () => definition.handler(options.parsedInput, {
-        caller,
-        resource: resource && this.#resolvedResource(resource),
-        issueResource: (registration) => this.#issueResourceHandleAs(caller, registration),
-        signal
-      }))
+      const activeState: ActiveCapabilityInvocationState = {
+        active: true,
+        resourceTransaction,
+        invocation: Object.freeze({
+          caller,
+          actionId: request.actionId,
+          ...(request.invocationId ? { invocationId: request.invocationId } : {}),
+          effect: definition.descriptor.effect,
+          approval,
+          approved
+        })
+      }
+      rawResult = await this.#activeInvocation.run(activeState, async () => {
+        try {
+          if (signal?.aborted) {
+            throw new CapabilityBrokerError(
+              'invocation_cancelled',
+              'Capability invocation was cancelled before handler dispatch.'
+            )
+          }
+          assertPrincipalCurrent()
+          return await definition.handler(options.parsedInput, {
+            caller,
+            ...(request.invocationId ? { invocationId: request.invocationId } : {}),
+            assertPrincipalCurrent,
+            resource: resource && this.#resolvedResource(resource),
+            issueResource: (registration) => this.#issueResourceAs(caller, registration).resource,
+            signal
+          })
+        } finally {
+          activeState.active = false
+        }
+      })
+      const postHandlerPrincipalLease = this.#currentPrincipalLease()
+      let acceptedPrincipalLease = callerPrincipalLease(caller)
+      if (postHandlerPrincipalLease !== acceptedPrincipalLease) {
+        const acknowledgedPrincipalTransition =
+          definition.descriptor.principalTransition === 'host-authority' &&
+          principalMismatchObserved &&
+          observedPrincipalLease === postHandlerPrincipalLease &&
+          !handlerResultRequestsStateChange(rawResult)
+        const acknowledgedTypedFailure =
+          definition.descriptor.principalTransition === undefined &&
+          principalMismatchObserved &&
+          observedPrincipalLease === postHandlerPrincipalLease &&
+          !handlerResultRequestsStateChange(rawResult)
+        if (!acknowledgedPrincipalTransition && !acknowledgedTypedFailure) {
+          const outcomeUnknown = isMutation(definition) || handlerResultRequestsStateChange(rawResult)
+          throw new CapabilityBrokerError(
+            outcomeUnknown ? 'outcome_unknown' : 'principal_changed',
+            outcomeUnknown
+              ? 'The Principal changed after capability dispatch; the mutation outcome is unknown.'
+              : 'The current Principal changed before capability result acceptance.'
+          )
+        }
+        acceptedPrincipalLease = postHandlerPrincipalLease
+      }
+      options.captureAcceptedPrincipalLease?.(acceptedPrincipalLease)
     } catch (error) {
+      if (error instanceof CapabilityBrokerError) throw error
       throw new CapabilityBrokerError('handler_failed', `Handler for ${request.actionId} failed.`, {
         category: 'failed',
         cause: error
@@ -819,6 +1271,7 @@ export class CapabilityBroker {
         category: 'failed'
       })
     }
+    options.capturePostDispatchMutation?.(mutation || retireResource || changed)
 
     let afterRevision = beforeRevision
     let refreshedHandle: CapabilityResourceHandle | undefined
@@ -834,7 +1287,7 @@ export class CapabilityBroker {
       resource.semanticRevision = semanticRevision
       resource.layoutRevision = rawResult.layoutRevision ?? resource.layoutRevision
       afterRevision = semanticRevision
-      refreshedHandle = this.#issueResourceHandleAs(caller, {
+      refreshedHandle = this.#issueResourceAs(caller, {
         resourceId: resource.resourceId,
         resourceKind: resource.resourceKind,
         workspaceId: resource.workspaceId,
@@ -843,8 +1296,17 @@ export class CapabilityBroker {
         layoutRevision: resource.layoutRevision,
         observe: resource.observe,
         dispose: resource.dispose,
-        contentTransport: resource.contentTransport
-      })
+        contentTransport: resource.contentTransport,
+        retireAfterLastHandleExpires: resource.retireAfterLastHandleExpires
+      }).resource
+    }
+
+    if (retireResource && resource) {
+      this.#beginResourceRetirement(
+        resource,
+        rawResult.retireResource === 'defer-while-retained'
+      )
+      await options.releaseResourcePinForRetirement?.()
     }
 
     const result = capabilityInvocationResultSchema.parse({
@@ -868,13 +1330,6 @@ export class CapabilityBroker {
       afterRevision
     })
 
-    if (retireResource && resource) {
-      await this.#requestResourceRetirement(
-        resource,
-        rawResult.retireResource === 'defer-while-retained'
-      )
-    }
-
     if (changed && resource && beforeRevision && afterRevision && request.invocationId) {
       this.#publishEvent(capabilityResourceChangeEventSchema.parse({
         id: opaqueId('event'),
@@ -892,6 +1347,80 @@ export class CapabilityBroker {
     return result
   }
 
+  #hostResourceCaller(rawCaller: CapabilityCallerContextInput): CapabilityCallerContext {
+    const active = this.#activeInvocation.getStore()
+    if (active?.active && rawCaller === active.invocation.caller) {
+      return active.invocation.caller
+    }
+    return this.#parseCaller(rawCaller)
+  }
+
+  #invocationResourceTransaction(
+    caller: CapabilityCallerContext
+  ): InvocationResourceTransaction | undefined {
+    const active = this.#activeInvocation.getStore()
+    if (!active?.active) return undefined
+    const invocationCaller = active.invocation.caller
+    if (
+      caller.callerId !== invocationCaller.callerId ||
+      caller.audience !== invocationCaller.audience ||
+      workspaceInvocationScope(caller) !== workspaceInvocationScope(invocationCaller) ||
+      callerPrincipalLease(caller) !== callerPrincipalLease(invocationCaller)
+    ) return undefined
+    return active.resourceTransaction
+  }
+
+  #trackInvocationResourceIssuance(
+    transaction: InvocationResourceTransaction | undefined,
+    resource: ResourceState,
+    grant: ResourceGrant
+  ): void {
+    if (!transaction || transaction.state !== 'pending') return
+    transaction.issuances.push({ resource, grant })
+  }
+
+  #commitInvocationResourceTransaction(
+    transaction: InvocationResourceTransaction
+  ): void {
+    if (transaction.state !== 'pending') return
+    transaction.state = 'committed'
+    for (const { resource } of transaction.issuances) {
+      if (resource.provisionalTransactions?.has(transaction)) {
+        // One successful adopter commits the shared resource for every handle.
+        resource.provisionalTransactions = undefined
+      }
+    }
+    transaction.issuances.length = 0
+  }
+
+  async #rollbackInvocationResourceTransaction(
+    transaction: InvocationResourceTransaction
+  ): Promise<void> {
+    if (transaction.state !== 'pending') return
+    transaction.state = 'rolled-back'
+    const touchedResources = new Set<ResourceState>()
+    for (const issuance of [...transaction.issuances].reverse()) {
+      if (this.#handles.get(issuance.grant.token) === issuance.grant) {
+        this.#deleteHandle(issuance.grant.token)
+      }
+      touchedResources.add(issuance.resource)
+    }
+    transaction.issuances.length = 0
+    for (const resource of touchedResources) {
+      const provisionalTransactions = resource.provisionalTransactions
+      if (!provisionalTransactions?.delete(transaction)) continue
+      if (provisionalTransactions.size > 0) continue
+      if (this.#resources.get(resource.key) !== resource) continue
+      try {
+        await this.#requestResourceRetirement(resource, false)
+      } catch (error) {
+        // The resource stays poisoned and cannot issue, bind, describe, or be
+        // used while the bounded retirement retry runs.
+        this.#reportCleanupError(error)
+      }
+    }
+  }
+
   #parseCaller(rawCaller: CapabilityCallerContextInput): CapabilityCallerContext {
     const result = capabilityCallerContextSchema.safeParse(rawCaller)
     if (!result.success) {
@@ -899,7 +1428,73 @@ export class CapabilityBroker {
         details: { issues: result.error.issues.map((issue) => issue.message) }
       })
     }
-    return result.data
+    const principalContext = this.#captureCurrentPrincipalContext()
+    const principal = principalContext.principal ?? undefined
+    return Object.freeze({
+      ...result.data,
+      ...(principal ? { principal } : {}),
+      principalContextVersion: principalContext.identityVersion
+    })
+  }
+
+  #captureCurrentPrincipalContext(): PrincipalContextSnapshot {
+    if (this.#resolveCurrentPrincipalContext) {
+      try {
+        return principalContextSnapshotSchema.parse(this.#resolveCurrentPrincipalContext())
+      } catch (error) {
+        if (error instanceof CapabilityBrokerError) throw error
+        throw new CapabilityBrokerError(
+          'principal_unavailable',
+          'The Host Principal context could not be read.',
+          { category: 'failed', cause: error }
+        )
+      }
+    }
+    if (!this.#resolveCurrentPrincipal) {
+      return principalContextSnapshotSchema.parse({ identityVersion: 0, principal: null })
+    }
+    let rawPrincipal: PrincipalSnapshot | null
+    try {
+      rawPrincipal = this.#resolveCurrentPrincipal()
+    } catch (error) {
+      throw new CapabilityBrokerError(
+        'principal_unavailable',
+        'The Host Principal authority could not be read.',
+        { category: 'failed', cause: error }
+      )
+    }
+    if (rawPrincipal === null) {
+      return principalContextSnapshotSchema.parse({ identityVersion: 0, principal: null })
+    }
+    const parsed = principalSnapshotSchema.safeParse(rawPrincipal)
+    if (!parsed.success) {
+      throw new CapabilityBrokerError(
+        'invalid_principal',
+        'The Host Principal authority returned an invalid snapshot.',
+        {
+          category: 'failed',
+          details: { issues: parsed.error.issues.map((issue) => issue.message) }
+        }
+      )
+    }
+    return principalContextSnapshotSchema.parse({
+      identityVersion: parsed.data.identityVersion,
+      principal: parsed.data
+    })
+  }
+
+  #currentPrincipalLease(): string {
+    const context = this.#captureCurrentPrincipalContext()
+    return principalLease(context.principal ?? undefined, context.identityVersion)
+  }
+
+  #assertCurrentPrincipal(caller: CapabilityCallerContext): void {
+    if (this.#currentPrincipalLease() !== callerPrincipalLease(caller)) {
+      throw new CapabilityBrokerError(
+        'principal_changed',
+        'The current Principal changed before capability dispatch.'
+      )
+    }
   }
 
   #parseResourceRegistration(raw: CapabilityResourceRegistration): CapabilityResourceRegistration {
@@ -908,6 +1503,15 @@ export class CapabilityBroker {
     }
     if (raw.dispose !== undefined && typeof raw.dispose !== 'function') {
       throw new CapabilityBrokerError('invalid_resource_registration', 'Resource disposal must be a function.')
+    }
+    if (
+      raw.retireAfterLastHandleExpires !== undefined &&
+      typeof raw.retireAfterLastHandleExpires !== 'boolean'
+    ) {
+      throw new CapabilityBrokerError(
+        'invalid_resource_registration',
+        'Automatic resource retirement must be a boolean.'
+      )
     }
     const resourceId = raw.resourceId?.trim()
     const resourceKind = raw.resourceKind?.trim()
@@ -931,6 +1535,7 @@ export class CapabilityBroker {
           ).parse(raw.audiences),
       semanticRevision,
       layoutRevision: raw.layoutRevision?.trim() || undefined,
+      retireAfterLastHandleExpires: raw.retireAfterLastHandleExpires === true,
       contentTransport: raw.contentTransport
         ? z.object({
             describeActionId: z.string().trim().min(1).max(192),
@@ -948,7 +1553,10 @@ export class CapabilityBroker {
     if (!state) {
       const retired = this.#retiredResourcesByRef.get(resourceRef)
       if (retired) {
-        if (retired.workspaceId !== caller.workspaceId) {
+        if (
+          retired.workspaceId !== caller.workspaceId ||
+          retired.principalLease !== callerPrincipalLease(caller)
+        ) {
           throw new CapabilityBrokerError('resource_scope_mismatch', 'Resource reference is outside the caller scope.')
         }
         if (!retired.allowedAudiences.includes(caller.audience)) {
@@ -961,11 +1569,17 @@ export class CapabilityBroker {
       }
       throw new CapabilityBrokerError('resource_unavailable', 'Resource reference is no longer available.')
     }
-    if (state.workspaceId !== caller.workspaceId) {
+    if (
+      state.workspaceId !== caller.workspaceId ||
+      state.principalLease !== callerPrincipalLease(caller)
+    ) {
       throw new CapabilityBrokerError('resource_scope_mismatch', 'Resource reference is outside the caller scope.')
     }
     if (!state.allowedAudiences.includes(caller.audience)) {
       throw new CapabilityBrokerError('resource_audience_denied', 'Resource reference is not transferable to this audience.')
+    }
+    if (this.#resourceRetirementBlocksUse(state)) {
+      throw new CapabilityBrokerError('resource_retiring', 'Resource reference retirement is in progress.')
     }
     return state
   }
@@ -986,16 +1600,27 @@ export class CapabilityBroker {
       throw new CapabilityBrokerError('invalid_resource_handle', 'Resource handle is unknown or forged.')
     }
     if (new Date(grant.expiresAt).getTime() <= this.#now().getTime()) {
-      this.#handles.delete(grant.token)
+      this.#deleteHandle(grant.token)
+      void this.#requestExpiryRetirement(grant.resourceKey).catch(this.#reportCleanupError)
       throw new CapabilityBrokerError('resource_handle_expired', 'Resource handle has expired.')
     }
-    if (grant.workspaceId !== caller.workspaceId) {
+    const callerLease = callerPrincipalLease(caller)
+    if (
+      grant.workspaceId !== caller.workspaceId ||
+      grant.principalLease !== callerLease
+    ) {
       throw new CapabilityBrokerError('resource_scope_mismatch', 'Resource handle is outside the caller scope.')
     }
     const state = this.#resources.get(grant.resourceKey)
     if (!state) throw new CapabilityBrokerError('resource_unavailable', 'Resource is no longer available.')
+    if (state.principalLease !== callerLease) {
+      throw new CapabilityBrokerError('resource_scope_mismatch', 'Resource handle is outside the caller scope.')
+    }
     if (!state.allowedAudiences.includes(caller.audience)) {
       throw new CapabilityBrokerError('resource_audience_denied', 'Resource handle is not transferable to this audience.')
+    }
+    if (this.#resourceRetirementBlocksUse(state)) {
+      throw new CapabilityBrokerError('resource_retiring', 'Resource retirement is in progress.')
     }
     return { grant, state }
   }
@@ -1142,11 +1767,15 @@ export class CapabilityBroker {
     this.#events.push(event)
     if (this.#events.length > this.#maxEvents) this.#events.splice(0, this.#events.length - this.#maxEvents)
     for (const subscription of this.#subscriptions) {
-      if (!this.#eventVisibleToCaller(event, subscription.caller)) continue
       try {
+        // Re-capture Host authority for every delivery. A subscription created
+        // by Principal A cannot keep receiving A's resource events after the
+        // application switches to Principal B.
+        const caller = this.#parseCaller(subscription.caller)
+        if (!this.#eventVisibleToCaller(event, caller)) continue
         subscription.listener(capabilityResourceChangeEventSchema.parse({
           ...event,
-          resourceStatus: this.#resourceReferenceStatus(subscription.caller, event.resourceRef)
+          resourceStatus: this.#resourceReferenceStatus(caller, event.resourceRef)
         }))
       } catch {
         // Event consumers are isolated from successful domain mutations.
@@ -1155,7 +1784,14 @@ export class CapabilityBroker {
   }
 
   #eventVisibleToCaller(event: CapabilityResourceChangeEvent, caller: CapabilityCallerContext): boolean {
-    return event.workspaceId === caller.workspaceId
+    if (event.workspaceId !== caller.workspaceId) return false
+    const resource = this.#resourcesByRef.get(event.resourceRef)
+      ?? this.#retiredResourcesByRef.get(event.resourceRef)
+    return Boolean(
+      resource &&
+      resource.principalLease === callerPrincipalLease(caller) &&
+      resource.allowedAudiences.includes(caller.audience)
+    )
   }
 
   #resourceReferenceStatus(
@@ -1165,47 +1801,217 @@ export class CapabilityBroker {
     const state = this.#resourcesByRef.get(resourceRef)
     return state
       && state.workspaceId === caller.workspaceId
+      && state.principalLease === callerPrincipalLease(caller)
       && state.allowedAudiences.includes(caller.audience)
       ? 'live'
       : 'retired'
+  }
+
+  #scheduleHandleExpiry(grant: ResourceGrant, resource: ResourceState): void {
+    if (!resource.retireAfterLastHandleExpires) return
+    const existing = this.#handleExpiryTimers.get(grant.token)
+    if (existing) clearTimeout(existing)
+    const delay = Math.max(0, new Date(grant.expiresAt).getTime() - this.#now().getTime())
+    const timer = setTimeout(() => {
+      this.#handleExpiryTimers.delete(grant.token)
+      void this.#expireHandle(grant).catch(this.#reportCleanupError)
+    }, Math.min(delay, 2_147_483_647))
+    timer.unref?.()
+    this.#handleExpiryTimers.set(grant.token, timer)
+  }
+
+  async #expireHandle(grant: ResourceGrant): Promise<void> {
+    if (this.#handles.get(grant.token) !== grant) return
+    if (new Date(grant.expiresAt).getTime() > this.#now().getTime()) {
+      const resource = this.#resources.get(grant.resourceKey)
+      if (resource) this.#scheduleHandleExpiry(grant, resource)
+      return
+    }
+    this.#deleteHandle(grant.token)
+    await this.#requestExpiryRetirement(grant.resourceKey)
+  }
+
+  #deleteHandle(token: string): void {
+    this.#handles.delete(token)
+    const timer = this.#handleExpiryTimers.get(token)
+    if (timer) clearTimeout(timer)
+    this.#handleExpiryTimers.delete(token)
+  }
+
+  async #requestExpiryRetirement(resourceKeyValue: string): Promise<void> {
+    const resource = this.#resources.get(resourceKeyValue)
+    if (!resource?.retireAfterLastHandleExpires) return
+    const now = this.#now().getTime()
+    for (const [token, grant] of this.#handles) {
+      if (grant.resourceKey !== resourceKeyValue) continue
+      if (new Date(grant.expiresAt).getTime() > now) {
+        resource.expiryRetirementPending = false
+        return
+      }
+      this.#deleteHandle(token)
+    }
+    resource.expiryRetirementPending = true
+    await this.#finalizeExpiryRetirement(resource)
+  }
+
+  async #finalizeExpiryRetirement(resource: ResourceState): Promise<void> {
+    if (!resource.expiryRetirementPending) return
+    if (resource.retentionCount > 0 || resource.inFlightCount > 0) return
+    const now = this.#now().getTime()
+    for (const [token, grant] of this.#handles) {
+      if (grant.resourceKey !== resource.key) continue
+      if (new Date(grant.expiresAt).getTime() > now) {
+        resource.expiryRetirementPending = false
+        return
+      }
+      this.#deleteHandle(token)
+    }
+    resource.expiryRetirementPending = false
+    await this.#requestResourceRetirement(resource, false)
   }
 
   async #requestResourceRetirement(
     resource: ResourceState,
     deferWhileRetained: boolean
   ): Promise<void> {
-    resource.retirementRequested = true
-    if (deferWhileRetained && resource.retentionCount > 0) return
-    await this.#finalizeResourceRetirement(resource, !deferWhileRetained)
+    const retirement = this.#beginResourceRetirement(resource, deferWhileRetained)
+    if (
+      deferWhileRetained &&
+      (resource.retentionCount > 0 || resource.inFlightCount > 0)
+    ) return
+    await retirement
   }
 
-  async #finalizeResourceRetirement(
+  #beginResourceRetirement(
     resource: ResourceState,
-    ignoreRetentions = false
+    deferWhileRetained: boolean
   ): Promise<void> {
-    if (this.#resourcesByRef.get(resource.resourceRef) !== resource) return
-    if ((!ignoreRetentions && resource.retentionCount > 0) || !resource.retirementRequested) return
-    try {
-      await resource.dispose?.()
-    } catch (error) {
-      resource.retirementRequested = false
-      throw new CapabilityBrokerError(
-        'resource_disposal_failed',
-        'The resource provider failed to dispose its retired resource.',
-        { category: 'failed', cause: error }
-      )
+    resource.retirementRequested = true
+    resource.expiryRetirementPending = false
+    if (!deferWhileRetained) resource.retirementIgnoresRetentions = true
+    if (resource.retirementRetryTimer) {
+      clearTimeout(resource.retirementRetryTimer)
+      resource.retirementRetryTimer = undefined
     }
-    this.#resources.delete(resource.key)
-    this.#resourcesByRef.delete(resource.resourceRef)
-    this.#retiredResourcesByRef.set(resource.resourceRef, {
-      resourceRef: resource.resourceRef,
-      workspaceId: resource.workspaceId,
-      allowedAudiences: [...resource.allowedAudiences]
+    if (resource.retirementPromise) {
+      this.#wakeResourceRetirement(resource)
+      return resource.retirementPromise
+    }
+    const operation = (async () => {
+      await this.#waitForResourceRetirementEligibility(resource)
+      try {
+        await resource.dispose?.()
+      } catch (error) {
+        resource.retirementAttempts += 1
+        this.#scheduleResourceRetirementRetry(resource)
+        throw new CapabilityBrokerError(
+          'resource_disposal_failed',
+          'The resource provider failed to dispose its retired resource.',
+          { category: 'failed', cause: error }
+        )
+      }
+      resource.retirementAttempts = 0
+      this.#resources.delete(resource.key)
+      this.#resourcesByRef.delete(resource.resourceRef)
+      this.#retiredResourcesByRef.set(resource.resourceRef, {
+        resourceRef: resource.resourceRef,
+        workspaceId: resource.workspaceId,
+        allowedAudiences: [...resource.allowedAudiences],
+        principalLease: resource.principalLease
+      })
+      this.#trimMap(this.#retiredResourcesByRef, this.#maxEvents)
+      for (const [token, grant] of this.#handles) {
+        if (grant.resourceKey === resource.key) this.#deleteHandle(token)
+      }
+    })()
+    const retirement = operation.finally(() => {
+      if (resource.retirementPromise === retirement) {
+        resource.retirementPromise = undefined
+      }
     })
-    this.#trimMap(this.#retiredResourcesByRef, this.#maxEvents)
-    for (const [token, grant] of this.#handles) {
-      if (grant.resourceKey === resource.key) this.#handles.delete(token)
+    resource.retirementPromise = retirement
+    return retirement
+  }
+
+  async #waitForResourceRetirementEligibility(resource: ResourceState): Promise<void> {
+    while (!this.#resourceRetirementEligible(resource)) {
+      await new Promise<void>((resolve) => {
+        resource.retirementWake = resolve
+        if (this.#resourceRetirementEligible(resource)) {
+          resource.retirementWake = undefined
+          resolve()
+        }
+      })
     }
+  }
+
+  #resourceRetirementEligible(resource: ResourceState): boolean {
+    return resource.retirementRequested &&
+      resource.inFlightCount === 0 &&
+      (resource.retirementIgnoresRetentions || resource.retentionCount === 0)
+  }
+
+  #resourceRetirementBlocksUse(resource: ResourceState): boolean {
+    return resource.retirementRequested && (
+      resource.retirementIgnoresRetentions || resource.retentionCount === 0
+    )
+  }
+
+  #wakeResourceRetirement(resource: ResourceState): void {
+    const wake = resource.retirementWake
+    resource.retirementWake = undefined
+    wake?.()
+  }
+
+  #scheduleResourceRetirementRetry(resource: ResourceState): void {
+    if (
+      resource.retirementAttempts >= MAX_RESOURCE_RETIREMENT_ATTEMPTS ||
+      resource.retirementRetryTimer ||
+      this.#resourcesByRef.get(resource.resourceRef) !== resource
+    ) return
+    const timer = setTimeout(() => {
+      if (resource.retirementRetryTimer !== timer) return
+      resource.retirementRetryTimer = undefined
+      const retry = this.#beginResourceRetirement(
+        resource,
+        !resource.retirementIgnoresRetentions
+      )
+      void retry.catch(this.#reportCleanupError)
+    }, RESOURCE_RETIREMENT_RETRY_MS * resource.retirementAttempts)
+    timer.unref?.()
+    resource.retirementRetryTimer = timer
+  }
+
+  #pinResource(resource: ResourceState): () => Promise<void> {
+    resource.inFlightCount += 1
+    let released = false
+    return async () => {
+      if (released) return
+      released = true
+      resource.inFlightCount = Math.max(0, resource.inFlightCount - 1)
+      if (resource.inFlightCount > 0) return
+      if (resource.retirementRequested) {
+        this.#wakeResourceRetirement(resource)
+        if (this.#resourceRetirementEligible(resource)) {
+          await resource.retirementPromise
+        }
+      } else if (resource.expiryRetirementPending) {
+        await this.#finalizeExpiryRetirement(resource)
+      }
+    }
+  }
+
+  #reserveIdempotencyCapacity(): void {
+    if (this.#idempotency.size < this.#maxIdempotencyEntries) return
+    for (const [key, entry] of this.#idempotency) {
+      if (!entry.settled || entry.retainUntilRestart) continue
+      this.#idempotency.delete(key)
+      if (this.#idempotency.size < this.#maxIdempotencyEntries) return
+    }
+    throw new CapabilityBrokerError(
+      'idempotency_capacity_exceeded',
+      'The capability idempotency journal is full of pending invocations.'
+    )
   }
 
   #trimMap<Key, Value>(map: Map<Key, Value>, maxSize: number): void {

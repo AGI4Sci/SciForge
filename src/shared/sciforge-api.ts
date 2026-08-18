@@ -64,6 +64,12 @@ import type {
 } from './workspace-file'
 import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 import type {
+  DomainRendererDownloadSelection,
+  DomainRendererPickDownloadDestinationInput,
+  DomainRendererPickUploadSourceInput,
+  DomainRendererUploadSelection
+} from '@sciforge/domain-sdk/file-transfer'
+import type {
   WorkspaceObservation,
   WorkspacePreviewArtifactDescriptor,
   WorkspacePreviewAnchor,
@@ -94,7 +100,8 @@ import type {
   CapabilityResourceContentAccess,
   CapabilityResourceHandle,
   CapabilityResourceBinding as BrokerCapabilityResourceBinding,
-  CapabilityResourceChangeEvent
+  CapabilityResourceChangeEvent,
+  CapabilityTransportRequestId
 } from './capability-broker'
 import type { BioGymDoctorResult, BioGymRunEvent } from './biogym'
 import type {
@@ -678,6 +685,7 @@ export type SciForgeApi = {
       query?: CapabilityDiscoveryQuery
     }) => Promise<CapabilityDescriptor[]>
     observe: (input: {
+      transportRequestId?: CapabilityTransportRequestId
       workspaceId?: string
       request: CapabilityObserveRequest
     }) => Promise<CapabilityObservation>
@@ -686,11 +694,13 @@ export type SciForgeApi = {
       request: CapabilityResourceBindRequest
     }) => Promise<CapabilityResourceHandle>
     invoke: (input: {
+      transportRequestId?: CapabilityTransportRequestId
       workspaceId?: string
       workspaceLocator?: WorkspaceLocator
       request: CapabilityInvocationRequest
       approval?: { mode: 'confirmation' }
     }) => Promise<CapabilityInvocationResult>
+    cancel: (transportRequestId: CapabilityTransportRequestId) => Promise<boolean>
     events: (input?: {
       workspaceId?: string
       query?: CapabilityEventQuery
@@ -702,6 +712,20 @@ export type SciForgeApi = {
       subscriptionId: string
       event: CapabilityResourceChangeEvent
     }) => void) => () => void
+  }
+  fileTransfers: {
+    pickUploadSource: (input: {
+      ownerId: string
+      request: DomainRendererPickUploadSourceInput
+      transportRequestId?: CapabilityTransportRequestId
+    }) => Promise<DomainRendererUploadSelection>
+    pickDownloadDestination: (input: {
+      ownerId: string
+      request: DomainRendererPickDownloadDestinationInput
+      transportRequestId?: CapabilityTransportRequestId
+    }) => Promise<DomainRendererDownloadSelection>
+    cancel: (transportRequestId: CapabilityTransportRequestId) => Promise<boolean>
+    settle: (transportRequestId: CapabilityTransportRequestId) => Promise<boolean>
   }
   /** Optional until the BioGym service PR is installed. */
   biogym?: {

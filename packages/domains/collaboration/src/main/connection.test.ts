@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 import {
   TEST_IDS,
@@ -16,6 +17,7 @@ import type {
 import type { DomainPackageJsonValue } from '@sciforge/domain-sdk/contract'
 import type { DurableCloudOutbox } from './outbox.js'
 import {
+  CloudProtocolError,
   HttpCollaborationCloudClient,
   type CollaborationCloudClient
 } from './cloud-client.js'
@@ -380,11 +382,13 @@ test('registration refreshes the participant revision and primary Agent with the
   const deviceCredential = 'd'.repeat(32)
   const secrets = new Map([['user-credential', userCredential]])
   const credentialUse: Array<Readonly<{ type: string; value?: string }>> = []
+  const registrationIdempotencyKeys: string[] = []
   const cloudClient = collaborationLifecycleClient({
     execute: async (request, credential) => {
       credentialUse.push({ type: request.type, ...(credential ? { value: credential.value } : {}) })
       if (request.type === 'endpoint.catalog.get') return endpointCatalogResponse(request.requestId)
       if (request.type === 'agent.register') {
+        registrationIdempotencyKeys.push(request.idempotencyKey)
         return {
           protocolVersion: '1.0',
           type: 'agent.registered',
@@ -442,12 +446,150 @@ test('registration refreshes the participant revision and primary Agent with the
   assert.deepEqual(credentialUse.filter(({ type }) => type === 'agent.register'), [
     { type: 'agent.register', value: userCredential }
   ])
+  assert.deepEqual(registrationIdempotencyKeys, [
+    `idem_agent.register.${createHash('sha256')
+      .update(JSON.stringify({
+        installationId: TEST_IDS.installationId,
+        ownerUserId: userPrincipalFixture.userId,
+        displayName: 'Desktop',
+        nodeType: 'desktop',
+        capabilities: []
+      }))
+      .digest('hex')
+      .slice(0, 48)}`
+  ])
   assert.deepEqual(credentialUse.filter(({ type }) => type === 'participant.get'), [
     { type: 'participant.get', value: userCredential }
   ])
   assert.deepEqual(credentialUse.filter(({ type }) => type === 'agent.heartbeat'), [
     { type: 'agent.heartbeat', value: deviceCredential }
   ])
+  await connection.dispose()
+})
+
+test('registration recovers an existing installation by rotating its one-time device credential', async () => {
+  const store = new CollaborationLocalStore(new MemoryBackend({
+    schemaVersion: 1,
+    revision: 1,
+    lastInboxSequence: 0,
+    user: userPrincipalFixture,
+    participant: participantProfileFixture,
+    endpoints: [humanEndpointBindingFixture],
+    endpointLocators: [],
+    agents: [agentNodeFixture],
+    projections: [],
+    projects: [],
+    tasks: [],
+    taskRuns: [],
+    queue: [],
+    receipts: [],
+    outbox: [],
+    diagnostics: []
+  }))
+  await store.open()
+  const userCredential = 'u'.repeat(32)
+  const staleDeviceCredential = 's'.repeat(32)
+  const rotatedDeviceCredential = 'r'.repeat(32)
+  const secrets = new Map([
+    ['user-credential', userCredential],
+    ['device-credential', staleDeviceCredential]
+  ])
+  const rotatedAgent = {
+    ...agentNodeFixture,
+    credentialVersion: agentNodeFixture.credentialVersion + 1,
+    revision: agentNodeFixture.revision + 1,
+    updatedAt: TEST_LATER_TIMESTAMP
+  }
+  const requestTypes: string[] = []
+  const heartbeatCredentials: string[] = []
+  let participantReads = 0
+  const cloudClient = collaborationLifecycleClient({
+    execute: async (request, credential) => {
+      requestTypes.push(request.type)
+      if (request.type === 'endpoint.catalog.get') return endpointCatalogResponse(request.requestId)
+      if (request.type === 'agent.register') {
+        assert.equal(credential?.value, userCredential)
+        throw new CloudProtocolError(
+          'The one-time Agent credential was already returned.',
+          'idempotency_conflict'
+        )
+      }
+      if (request.type === 'participant.get') {
+        participantReads += 1
+        assert.equal(credential?.value, userCredential)
+        return {
+          protocolVersion: '1.0',
+          type: 'participant.snapshot',
+          requestId: request.requestId,
+          user: userPrincipalFixture,
+          participant: participantProfileFixture,
+          humanEndpoints: [humanEndpointBindingFixture],
+          agents: [participantReads === 1 ? agentNodeFixture : rotatedAgent]
+        }
+      }
+      if (request.type === 'agent.rotate_credential') {
+        assert.equal(credential?.value, userCredential)
+        assert.equal(request.agentId, agentNodeFixture.agentId)
+        assert.equal(request.expectedRevision, agentNodeFixture.revision)
+        return {
+          protocolVersion: '1.0',
+          type: 'agent.credential_rotated',
+          requestId: request.requestId,
+          agent: rotatedAgent,
+          deviceCredential: rotatedDeviceCredential
+        }
+      }
+      assert.equal(request.type, 'agent.heartbeat')
+      assert.ok(credential)
+      assert.ok(
+        credential.value === staleDeviceCredential
+        || credential.value === rotatedDeviceCredential
+      )
+      heartbeatCredentials.push(credential.value)
+      const heartbeatAgent = credential.value === staleDeviceCredential
+        ? agentNodeFixture
+        : rotatedAgent
+      return {
+        protocolVersion: '1.0',
+        type: 'rest.entity',
+        requestId: request.requestId,
+        entity: {
+          ...heartbeatAgent,
+          connectionStatus: 'online',
+          revision: heartbeatAgent.revision + 1
+        }
+      }
+    }
+  })
+  const connection = new CollaborationConnection({
+    store,
+    settings: new CollaborationSettingsService(settingsHost()),
+    packageSecrets: secretStore(secrets),
+    outbox: lifecycleOutbox(),
+    createCloudClient: () => cloudClient,
+    inboxHandler: { handle: async () => undefined }
+  })
+  await connection.configure('https://collaboration.example.test')
+  await connection.connect()
+
+  const agent = await connection.registerAgent({
+    displayName: 'Desktop',
+    nodeType: 'desktop',
+    capabilities: []
+  })
+
+  assert.equal(agent.agentId, agentNodeFixture.agentId)
+  assert.equal(secrets.get('device-credential'), rotatedDeviceCredential)
+  assert.deepEqual(requestTypes, [
+    'endpoint.catalog.get',
+    'agent.heartbeat',
+    'agent.register',
+    'participant.get',
+    'agent.rotate_credential',
+    'participant.get',
+    'agent.heartbeat'
+  ])
+  assert.deepEqual(heartbeatCredentials, [staleDeviceCredential, rotatedDeviceCredential])
   await connection.dispose()
 })
 

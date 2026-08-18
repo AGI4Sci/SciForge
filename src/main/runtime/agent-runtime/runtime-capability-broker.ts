@@ -26,6 +26,10 @@ import type { RuntimeToolDefinition } from './runtime-tool-contract'
 export type RuntimeCapabilityBrokerOptions = {
   broker: CapabilityAgentBroker
   managedTools: RuntimeMcpToolGateway
+  maxManagedInvocations?: number
+  assertPrincipalLease?: (
+    context: CapabilityAgentToolRequestContext
+  ) => void | Promise<void>
   isToolAvailable?: (
     context: CapabilityAgentToolRequestContext,
     tool: RuntimeToolDefinition
@@ -40,6 +44,7 @@ type ManagedOperation = {
 type ManagedInvocation = {
   fingerprint: string
   promise: Promise<CapabilityInvocationResult>
+  settled: boolean
 }
 
 /**
@@ -52,14 +57,20 @@ type ManagedInvocation = {
 export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
   readonly #broker: CapabilityAgentBroker
   readonly #managedTools: RuntimeMcpToolGateway
+  readonly #assertPrincipalLease: NonNullable<
+    RuntimeCapabilityBrokerOptions['assertPrincipalLease']
+  >
   readonly #isToolAvailable: NonNullable<RuntimeCapabilityBrokerOptions['isToolAvailable']>
   readonly #operationsByActionId = new Map<string, ManagedOperation>()
   readonly #invocations = new Map<string, ManagedInvocation>()
+  readonly #maxManagedInvocations: number
 
   constructor(options: RuntimeCapabilityBrokerOptions) {
     this.#broker = options.broker
     this.#managedTools = options.managedTools
+    this.#assertPrincipalLease = options.assertPrincipalLease ?? (() => undefined)
     this.#isToolAvailable = options.isToolAvailable ?? (() => true)
+    this.#maxManagedInvocations = Math.max(1, options.maxManagedInvocations ?? 2_000)
   }
 
   async discover(
@@ -68,6 +79,8 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
     options: { context?: CapabilityAgentToolRequestContext } = {}
   ): Promise<CapabilityDescriptor[]> {
     if (query?.providerFamily === 'managed-mcp') {
+      if (!options.context) return []
+      await this.#assertPrincipalLease(options.context)
       return this.#managedDescriptors(caller, query, options.context)
     }
     return this.#broker.discover(caller, query)
@@ -92,6 +105,7 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
       failureClass: 'invalid_arguments',
       retryable: false
     })
+    await this.#assertPrincipalLease(context)
     if (!caller.workspaceId) throw new RuntimeToolError('Managed tools require a workspace.', {
       code: 'workspace_required',
       failureClass: 'invalid_arguments',
@@ -106,6 +120,7 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
       })
     }
     authorizeManagedApproval(caller, operation.descriptor, request)
+    await this.#assertPrincipalLease(context)
     const invocationKey = managedInvocationKey(caller, request, operation.descriptor)
     const fingerprint = managedInvocationFingerprint(request)
     const existing = invocationKey ? this.#invocations.get(invocationKey) : undefined
@@ -120,20 +135,35 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
       return { ...await existing.promise, replayed: true }
     }
 
+    if (invocationKey) {
+      this.#reserveInvocationCapacity()
+    }
     const execution = this.#invokeManaged(operation, caller, request, context, options.signal)
     if (invocationKey) {
-      this.#invocations.set(invocationKey, { fingerprint, promise: execution })
-      while (this.#invocations.size > 2_000) {
-        const oldest = this.#invocations.keys().next().value
-        if (oldest === undefined) break
-        this.#invocations.delete(oldest)
-      }
+      const entry: ManagedInvocation = { fingerprint, promise: execution, settled: false }
+      this.#invocations.set(invocationKey, entry)
+      const markSettled = (): void => { entry.settled = true }
+      void execution.then(markSettled, markSettled)
     }
     return execution
   }
 
   abortTurn(identity: AgentRuntimeToolTurnIdentity, reason = 'user_stop'): number {
     return this.#managedTools.abortRequestsForTurn(identity, reason)
+  }
+
+  #reserveInvocationCapacity(): void {
+    if (this.#invocations.size < this.#maxManagedInvocations) return
+    for (const [key, invocation] of this.#invocations) {
+      if (!invocation.settled) continue
+      this.#invocations.delete(key)
+      if (this.#invocations.size < this.#maxManagedInvocations) return
+    }
+    throw new RuntimeToolError('The managed invocation journal is full of pending writes.', {
+      code: 'idempotency_capacity_exceeded',
+      failureClass: 'resource_exhausted',
+      retryable: true
+    })
   }
 
   async #invokeManaged(
@@ -197,11 +227,14 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
     context: CapabilityAgentToolRequestContext | undefined
   ): Promise<CapabilityDescriptor[]> {
     if (query?.providerFamily !== 'managed-mcp' || !context || !caller.workspaceId) return []
+    await this.#assertPrincipalLease(context)
     const tools = await this.#managedTools.tools(query.capabilityId ? undefined : query.text)
+    await this.#assertPrincipalLease(context)
     const available = [] as RuntimeToolDefinition[]
     for (const tool of tools) {
       if (managedToolWithinBrokerScope(context, tool) &&
           await this.#isToolAvailable(context, tool)) available.push(tool)
+      await this.#assertPrincipalLease(context)
     }
     const descriptors = available.map((tool) => {
       const descriptor = descriptorForManagedTool(tool)

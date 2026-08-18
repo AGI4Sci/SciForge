@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 import { workspaceLocatorSchema } from '@sciforge/domain-sdk/workspace-host'
 
 export const CAPABILITY_BROKER_CONTRACT_VERSION = 1
@@ -66,6 +67,8 @@ export const capabilityDescriptorSchema = z.object({
   effect: capabilityEffectSchema,
   approval: capabilityApprovalModeSchema,
   concurrency: capabilityConcurrencySchema,
+  /** Trusted declaration that this UI action may replace the Host Principal. */
+  principalTransition: z.literal('host-authority').optional(),
   inputSchema: capabilityJsonValueSchema,
   outputSchema: capabilityJsonValueSchema,
   tags: z.array(z.string().trim().min(1).max(64)).max(32).default([])
@@ -103,6 +106,36 @@ export const capabilityDescriptorSchema = z.object({
   }
   if (descriptor.concurrency.revision === 'optimistic' && descriptor.scope !== 'resource') {
     context.addIssue({ code: 'custom', path: ['concurrency', 'revision'], message: 'Optimistic revisions require resource scope.' })
+  }
+  if (descriptor.principalTransition === 'host-authority') {
+    if (descriptor.audiences.length !== 1 || descriptor.audiences[0] !== 'ui') {
+      context.addIssue({
+        code: 'custom',
+        path: ['audiences'],
+        message: 'Host Principal transitions must be UI-only.'
+      })
+    }
+    if (descriptor.scope !== 'global') {
+      context.addIssue({
+        code: 'custom',
+        path: ['scope'],
+        message: 'Host Principal transitions must use global scope.'
+      })
+    }
+    if (descriptor.effect === 'read') {
+      context.addIssue({
+        code: 'custom',
+        path: ['effect'],
+        message: 'Host Principal transitions must be mutations.'
+      })
+    }
+    if (descriptor.resourceKinds.length > 0 || (descriptor.producedResourceKinds?.length ?? 0) > 0) {
+      context.addIssue({
+        code: 'custom',
+        path: ['resourceKinds'],
+        message: 'Host Principal transitions cannot consume or produce Broker resources.'
+      })
+    }
   }
   if (
     descriptor.audiences.includes('agent')
@@ -173,10 +206,17 @@ export const capabilityCallerContextSchema = z.object({
   approvals: z.array(capabilityApprovalGrantSchema).max(64).default([])
 }).strict()
 export type CapabilityCallerContext = z.infer<typeof capabilityCallerContextSchema> & Readonly<{
+  /** Host-captured Principal authority; intentionally absent from the public raw schema. */
+  principal?: PrincipalSnapshot
+  /** Host-captured signed-in or signed-out Principal context revision. */
+  principalContextVersion?: number
   /** Host-issued package authority; this is intentionally absent from the public raw schema. */
   capabilityGrants?: readonly string[]
 }>
 export type CapabilityCallerContextInput = z.input<typeof capabilityCallerContextSchema>
+
+export const capabilityTransportRequestIdSchema = z.string().uuid()
+export type CapabilityTransportRequestId = z.infer<typeof capabilityTransportRequestIdSchema>
 
 export const capabilityResourceHandleSchema = z.object({
   token: z.string().regex(/^cap_[A-Za-z0-9_-]{20,}$/),

@@ -39,6 +39,8 @@ manifest 的 `kind` 明确选择一种执行模型：
 
 主进程只静态导入 `./main`，渲染进程只静态导入 `./renderer`。已经编入 main/renderer bundle 的领域代码不再以 TypeScript 源码形式作为第二套 release runtime 打包。生成器按 `packageName` 稳定排序，只为 manifest 声明的进程生成入口；定义、实现和生成结果漂移时构建失败。
 
+可信 package 默认使用 `"composition": "production"`。只服务于开发或合同测试的 fixture 必须显式声明 `"composition": "development-only"`；生成器仍验证并测试该 package，但会从生产 definition 与各进程静态 composition 中统一排除，Host 不维护领域特例。
+
 可信 package 可以在 Electron 进程中运行，是因为它已经通过 SciForge 源码审查和构建链，而不是因为 manifest 写了一个“trusted”字段。运行期下载的包永远不能切换到这条 privileged 路径。
 
 ## Sandboxed runtime package

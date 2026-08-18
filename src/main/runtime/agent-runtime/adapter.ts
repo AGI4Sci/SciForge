@@ -25,6 +25,10 @@ import type {
 import type { WorkspaceHostPlacement } from '../../../shared/workspace-host-state'
 import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 import type { AgentRuntimeBrokerScope } from './agent-tool-surface'
+import type {
+  PrincipalContextSnapshot,
+  PrincipalSnapshot
+} from '@sciforge/domain-sdk/principal'
 
 export type AgentRuntimeAdapterContext = {
   settings: AppSettingsV1
@@ -32,6 +36,10 @@ export type AgentRuntimeAdapterContext = {
   turnGovernanceSnapshot?: AgentRuntimeTurnGovernanceSnapshot
   /** @internal Host durability acknowledgement required before startTurn resolves. */
   onTurnAccepted?: (handle: AgentRuntimeTurnHandle) => Promise<void>
+  /** @internal Host-captured turn attribution. Never populated from provider payloads. */
+  principal?: PrincipalSnapshot
+  /** @internal Exact Host authorization lease, including signed-out revisions. */
+  principalContext?: PrincipalContextSnapshot
 }
 
 /** Adapter-owned exact identity persisted before provider launch. */

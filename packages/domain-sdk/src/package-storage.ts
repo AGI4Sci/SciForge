@@ -4,6 +4,7 @@ import {
   domainPackageJsonValueSchema,
   type DomainPackageJsonValue
 } from './contract.js'
+import { principalAssuranceSchema } from './principal.js'
 
 export const domainMainPackageSettingsSnapshotSchema = z.object({
   revision: z.number().int().nonnegative().safe(),
@@ -44,6 +45,95 @@ export type DomainMainPackageSecretKey = z.infer<
   typeof domainMainPackageSecretKeySchema
 >
 
+export const domainMainProviderCredentialBindingSchema = z.object({
+  providerInstanceRef: z.string()
+    .min(3)
+    .max(256)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._-]+$/u),
+  connectionId: z.string()
+    .min(1)
+    .max(256)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u)
+}).strict().readonly()
+
+export type DomainMainProviderCredentialBinding = z.infer<
+  typeof domainMainProviderCredentialBindingSchema
+>
+
+export const domainMainProviderCredentialAccessSchema = z.object({
+  binding: domainMainProviderCredentialBindingSchema,
+  acceptedPrincipalAssurances: z.array(principalAssuranceSchema)
+    .min(1)
+    .max(principalAssuranceSchema.options.length)
+    .readonly()
+}).strict().superRefine((access, context) => {
+  if (new Set(access.acceptedPrincipalAssurances).size !==
+    access.acceptedPrincipalAssurances.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['acceptedPrincipalAssurances'],
+      message: 'Accepted Principal assurances must be unique.'
+    })
+  }
+}).readonly()
+
+export type DomainMainProviderCredentialAccess = z.infer<
+  typeof domainMainProviderCredentialAccessSchema
+>
+
+export const domainMainProviderCredentialStatusSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('absent') }).strict().readonly(),
+  z.object({
+    state: z.literal('available'),
+    recordVersion: z.literal(1)
+  }).strict().readonly()
+])
+
+export type DomainMainProviderCredentialStatus = z.infer<
+  typeof domainMainProviderCredentialStatusSchema
+>
+
+export type DomainMainProviderCredentialErrorCode =
+  | 'principal_unavailable'
+  | 'principal_device_mismatch'
+  | 'principal_assurance_insufficient'
+  | 'credential_unavailable'
+  | 'credential_binding_mismatch'
+  | 'secure_storage_unavailable'
+  | 'secure_storage_insecure'
+  | 'secure_storage_corrupt'
+  | 'secure_storage_undecryptable'
+
+export class DomainMainProviderCredentialError extends Error {
+  readonly code: DomainMainProviderCredentialErrorCode
+
+  constructor(code: DomainMainProviderCredentialErrorCode, message: string) {
+    super(message.slice(0, 256))
+    this.name = 'DomainMainProviderCredentialError'
+    this.code = code
+  }
+}
+
+/**
+ * Bounded provider-credential use on top of the package's canonical encrypted
+ * secret store. Owner, node, and current Principal are supplied by Host
+ * composition; package input names only its local provider binding.
+ */
+export type DomainMainProviderCredentialStoreHost = Readonly<{
+  status: (
+    access: DomainMainProviderCredentialAccess
+  ) => Promise<DomainMainProviderCredentialStatus>
+  replace: (
+    access: DomainMainProviderCredentialAccess,
+    secret: string
+  ) => Promise<void>
+  use: <T>(
+    access: DomainMainProviderCredentialAccess,
+    operation: (secret: string) => T | Promise<T>
+  ) => Promise<T>
+  remove: (access: DomainMainProviderCredentialAccess) => Promise<void>
+}>
+
 /**
  * Package-scoped secret storage available only in the trusted main process.
  *
@@ -56,6 +146,8 @@ export type DomainMainPackageSecretStoreHost = Readonly<{
   read: (key: DomainMainPackageSecretKey) => Promise<string | null>
   write: (key: DomainMainPackageSecretKey, value: string) => Promise<void>
   remove: (key: DomainMainPackageSecretKey) => Promise<void>
+  /** Introduced in Host API 1.4; absent hosts fail closed for provider enrollment. */
+  providerCredentials?: DomainMainProviderCredentialStoreHost
 }>
 
 /** Exact owner-scoped storage pair minted by generated main composition. */

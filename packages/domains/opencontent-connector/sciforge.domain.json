@@ -1,0 +1,91 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-opencontent-connector",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
+  "module": {
+    "id": "sciforge.opencontent-connector",
+    "displayName": "OpenContent Connector",
+    "version": "1.0.0",
+    "hostApi": {
+      "minimum": "1.4.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 280
+  },
+  "contributionContracts": {
+    "opencontent-connector.workbench-right-panel": {
+      "location": "workbench.right-panel",
+      "title": "OpenContent Connection"
+    },
+    "opencontent-connector.workbench-toolbar-action": {
+      "location": "workbench.topbar",
+      "commandId": "opencontent-connector.open-connection",
+      "label": "OpenContent Connection"
+    },
+    "opencontent-connector.provider-instance": {
+      "location": "main.provider-instance-directory-entry",
+      "contractVersion": "1.0.0",
+      "providerInstanceRef": "opencontent-default",
+      "providerKind": "opencontent",
+      "displayName": "OpenContent"
+    },
+    "opencontent-connector.content-space-service": {
+      "location": "main.internal-service-descriptor",
+      "serviceId": "opencontent.content-space",
+      "contractVersion": "1.0.0",
+      "allowedConsumerModuleIds": [
+        "sciforge.opencontent-content-space-provider"
+      ]
+    }
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        {
+          "id": "opencontent-connector.capabilities",
+          "kind": "main.capability-factory",
+          "priority": 280
+        },
+        {
+          "id": "opencontent-connector.provider-instance",
+          "kind": "main.extension",
+          "version": "1.0.0",
+          "priority": 280
+        },
+        {
+          "id": "opencontent-connector.content-space-service",
+          "kind": "main.extension",
+          "version": "1.0.0",
+          "priority": 280
+        }
+      ]
+    },
+    {
+      "process": "renderer",
+      "export": "./renderer",
+      "contributions": [
+        {
+          "id": "opencontent-connector.workbench-right-panel",
+          "kind": "renderer.workbench-right-panel",
+          "priority": 280
+        },
+        {
+          "id": "opencontent-connector.open-connection",
+          "kind": "renderer.command",
+          "priority": 280
+        },
+        {
+          "id": "opencontent-connector.workbench-toolbar-action",
+          "kind": "renderer.workbench-toolbar-action",
+          "priority": 280
+        }
+      ]
+    }
+  ]
+}

@@ -1,4 +1,6 @@
 import { DOMAIN_PACKAGE_CONTRACT_VERSION } from '@sciforge/domain-sdk'
+import { installedMainDomainContributions } from '@sciforge/domain-sdk/main'
+import { installedDomainPackages } from '../../shared/installed-domain-packages'
 import type { AppCapabilityDependencies } from '../capabilities/app-registry'
 import {
   CONTROLLED_PROCESS_CAPABILITY_CONTRIBUTION_FACTORY,
@@ -18,6 +20,7 @@ import {
   MAIN_CAPABILITY_FACTORY_CONTRIBUTION_KIND,
   composeMainCapabilityRegistry
 } from './main-contributions'
+import { HostInternalServiceRegistry } from './internal-services'
 
 const CORE_MAIN_DOMAIN_ENTRIES: readonly MainDomainModuleDefinition[] = Object.freeze([
   coreCapabilityEntry({
@@ -54,11 +57,21 @@ const CORE_MAIN_DOMAIN_ENTRIES: readonly MainDomainModuleDefinition[] = Object.f
   })
 ])
 
-export function createApplicationDomainCatalog(host: InstalledMainDomainHost): DomainModuleCatalog {
+export function createApplicationDomainCatalog(
+  host: Omit<InstalledMainDomainHost, 'internalServicesFor'>
+): DomainModuleCatalog {
   const catalog = new DomainModuleCatalog()
+  const internalServices = new HostInternalServiceRegistry(
+    installedMainDomainContributions(installedDomainPackages)
+  )
+  const installedEntries = createInstalledMainDomainEntries({
+    ...host,
+    internalServicesFor: (owner) => internalServices.forOwner(owner)
+  })
+  internalServices.assertComplete()
   catalog.registerBatch([
     ...CORE_MAIN_DOMAIN_ENTRIES,
-    ...createInstalledMainDomainEntries(host)
+    ...installedEntries
   ])
   return catalog
 }

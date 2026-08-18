@@ -78,6 +78,43 @@ describe('preload agentRuntime bridge', () => {
     expect(api.biologyRoom).toBeUndefined()
   })
 
+  it('keeps file-transfer paths in main and exposes only cancellable opaque picker requests', async () => {
+    const api = exposedApi as {
+      fileTransfers: {
+        pickUploadSource(input: unknown): Promise<unknown>
+        pickDownloadDestination(input: unknown): Promise<unknown>
+        cancel(transportRequestId: string): Promise<unknown>
+        settle(transportRequestId: string): Promise<unknown>
+      }
+    }
+    const transportRequestId = '123e4567-e89b-42d3-a456-426614174000'
+    await api.fileTransfers.pickUploadSource({
+      ownerId: 'sciforge.content-space',
+      request: { title: 'Upload', maxBytes: 1_024 },
+      transportRequestId
+    })
+    await api.fileTransfers.pickDownloadDestination({
+      ownerId: 'sciforge.content-space',
+      request: { title: 'Download', suggestedName: 'paper.pdf' },
+      transportRequestId
+    })
+    await api.fileTransfers.cancel(transportRequestId)
+    await api.fileTransfers.settle(transportRequestId)
+
+    expect(invoke).toHaveBeenCalledWith('fileTransfer:pick-upload-source', {
+      ownerId: 'sciforge.content-space',
+      request: { title: 'Upload', maxBytes: 1_024 },
+      transportRequestId
+    })
+    expect(invoke).toHaveBeenCalledWith('fileTransfer:pick-download-destination', {
+      ownerId: 'sciforge.content-space',
+      request: { title: 'Download', suggestedName: 'paper.pdf' },
+      transportRequestId
+    })
+    expect(invoke).toHaveBeenCalledWith('fileTransfer:cancel', { transportRequestId })
+    expect(invoke).toHaveBeenCalledWith('fileTransfer:settle', { transportRequestId })
+  })
+
   it('exposes attached-session-only Remote Workspace IPC', async () => {
     const api = exposedApi as {
       remoteWorkspace: {
@@ -248,8 +285,10 @@ describe('preload agentRuntime bridge', () => {
       unwatchWorkspaceFile(watchId: string): Promise<unknown>
       onWorkspaceFileChanged(handler: (payload: unknown) => void): () => void
       capabilities: {
+        observe(input: unknown): Promise<unknown>
         bind(input: unknown): Promise<unknown>
         invoke(input: unknown): Promise<unknown>
+        cancel(transportRequestId: string): Promise<unknown>
         resourceContentUrl(access: unknown): string | null
       }
       workspacePreview?: unknown
@@ -263,6 +302,9 @@ describe('preload agentRuntime bridge', () => {
     invoke.mockImplementation(async (channel: string, payload?: unknown) => {
       if (channel === 'file:watch-workspace') return { watchId: 'watch-1' }
       if (channel === 'file:unwatch-workspace') return true
+      if (channel === 'capability:observe' || channel === 'capability:invoke') {
+        return { contractVersion: 1, ok: true, payload: { ok: true } }
+      }
       return undefined
     })
 
@@ -273,8 +315,11 @@ describe('preload agentRuntime bridge', () => {
       workspaceId: '/tmp/workspace',
       request: { resourceRef: 'res_abcdefghijklmnopqrstuvwxyz' }
     }
+    const observeRequest = { request: { resource } }
+    await api.capabilities.observe(observeRequest)
     await api.capabilities.bind(bindRequest)
     await api.capabilities.invoke(capabilityRequest)
+    await api.capabilities.cancel('123e4567-e89b-42d3-a456-426614174000')
     await api.watchWorkspaceFile({ path: 'protein.pdb', workspaceRoot: '/tmp/workspace' })
     await api.unwatchWorkspaceFile('watch-1')
     const assetSourceUrl = api.capabilities.resourceContentUrl({
@@ -287,8 +332,18 @@ describe('preload agentRuntime bridge', () => {
     wrapped?.({}, { ok: true, watchId: 'watch-1' })
     unsubscribe()
 
+    expect(invoke).toHaveBeenCalledWith('capability:observe', {
+      ...observeRequest,
+      transportRequestId: expect.any(String)
+    })
     expect(invoke).toHaveBeenCalledWith('capability:bind', bindRequest)
-    expect(invoke).toHaveBeenCalledWith('capability:invoke', capabilityRequest)
+    expect(invoke).toHaveBeenCalledWith('capability:invoke', {
+      ...capabilityRequest,
+      transportRequestId: expect.any(String)
+    })
+    expect(invoke).toHaveBeenCalledWith('capability:cancel', {
+      transportRequestId: '123e4567-e89b-42d3-a456-426614174000'
+    })
     expect(invoke).toHaveBeenCalledWith('file:watch-workspace', {
       path: 'protein.pdb',
       workspaceRoot: '/tmp/workspace'
@@ -303,6 +358,51 @@ describe('preload agentRuntime bridge', () => {
     expect(removeListener).toHaveBeenCalledWith('file:workspace-changed', wrapped)
     expect(api.workspacePreview).toBeUndefined()
     expect(api.biologyRoom).toBeUndefined()
+  })
+
+  it('unwraps typed capability errors without an Electron message prefix', async () => {
+    const api = exposedApi as {
+      capabilities: {
+        invoke(input: unknown): Promise<unknown>
+        observe(input: unknown): Promise<unknown>
+      }
+    }
+    const envelope = {
+      contractVersion: 1,
+      ok: false,
+      error: {
+        code: 'outcome_unknown',
+        message: 'The mutation outcome is unknown.',
+        category: 'failed',
+        retryable: false,
+        details: { expected: 'revision-2' }
+      }
+    }
+    invoke.mockResolvedValue(envelope)
+
+    await expect(api.capabilities.invoke({
+      request: {
+        actionId: 'content-space.upload-new',
+        invocationId: 'upload-1',
+        input: {}
+      }
+    })).rejects.toMatchObject({
+      name: 'CapabilityTransportError',
+      message: 'The mutation outcome is unknown.',
+      code: 'outcome_unknown',
+      category: 'failed',
+      retryable: false,
+      details: { expected: 'revision-2' }
+    })
+    await expect(api.capabilities.observe({
+      request: {
+        resource: {
+          token: 'cap_abcdefghijklmnopqrst',
+          semanticRevision: '1',
+          expiresAt: '2026-08-17T00:00:00.000Z'
+        }
+      }
+    })).rejects.toMatchObject({ code: 'outcome_unknown', retryable: false })
   })
 
   it('exposes speech-to-text transcription IPC', async () => {

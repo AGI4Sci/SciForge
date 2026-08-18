@@ -1,5 +1,9 @@
 import type { ExecutionReceipt } from '@sciforge/execution-governance'
 import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
+import type {
+  PrincipalContextSnapshot,
+  PrincipalSnapshot
+} from '@sciforge/domain-sdk/principal'
 
 export type AgentRuntimeId = 'sciforge' | 'codex' | 'claude'
 
@@ -1077,6 +1081,10 @@ export type AgentRuntimeItem = {
   detailArtifact?: AgentRuntimeToolArtifactRef
   meta?: Record<string, unknown>
   createdAt?: string
+  /** Host-captured immutable attribution for the turn that produced this item. */
+  principal?: PrincipalSnapshot
+  /** Exact Host authorization lease; absent only for legacy unknown attribution. */
+  principalContext?: PrincipalContextSnapshot
 }
 
 export type AgentRuntimeInputOption = {
@@ -1259,6 +1267,10 @@ export type AgentRuntimeBaseEvent = {
   itemId?: string
   seq?: number
   createdAt?: string
+  /** Host-captured immutable attribution for this exact turn. */
+  principal?: PrincipalSnapshot
+  /** Exact Host authorization lease; absent only for legacy unknown attribution. */
+  principalContext?: PrincipalContextSnapshot
 }
 
 export type AgentRuntimeExecutionReceipt = ExecutionReceipt

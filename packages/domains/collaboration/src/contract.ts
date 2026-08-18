@@ -38,6 +38,8 @@ export const collaborationConnectionViewSchema = z.object({
   configured: z.boolean(),
   baseUrl: z.url().max(2_048).optional(),
   state: z.enum(['unconfigured', 'disconnected', 'connecting', 'connected', 'recovering', 'error']),
+  deviceCredentialAvailable: z.boolean().optional(),
+  localAgentId: idSchema.optional(),
   lastConnectedAt: isoDateSchema.optional(),
   lastInboxSequence: z.number().int().nonnegative(),
   pendingOutboxCount: z.number().int().nonnegative(),

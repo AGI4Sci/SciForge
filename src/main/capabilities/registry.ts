@@ -23,7 +23,8 @@ export type CapabilityResourceObservation = {
 }
 
 export type CapabilityResourceObserver = (
-  caller: CapabilityCallerContext
+  caller: CapabilityCallerContext,
+  context: Readonly<{ signal?: AbortSignal }>
 ) => CapabilityResourceObservation | Promise<CapabilityResourceObservation>
 
 export type CapabilityResourceRegistration = {
@@ -40,6 +41,8 @@ export type CapabilityResourceRegistration = {
     describeActionId: string
     readRangeActionId: string
   }
+  /** Retire provider state after every issued handle expires and task retention reaches zero. */
+  retireAfterLastHandleExpires?: boolean
   expiresInMs?: number
 }
 
@@ -54,10 +57,21 @@ export type ResolvedCapabilityResource = {
 
 export type CapabilityHandlerContext = {
   caller: CapabilityCallerContext
+  /** Broker-validated identity for this invocation, never supplied by a handler. */
+  invocationId?: string
+  /** Reauthorizes the captured Host Principal against the live Principal lease. */
+  assertPrincipalCurrent: () => void
   resource?: ResolvedCapabilityResource
   issueResource: (registration: CapabilityResourceRegistration) => CapabilityResourceHandle
   signal?: AbortSignal
 }
+
+export type IssuedCapabilityResource = Readonly<{
+  resource: CapabilityResourceHandle
+  resourceRef: string
+  /** Host-private rollback/cleanup hook for the exact issued resource state. */
+  retire: (options: Readonly<{ deferWhileRetained: boolean }>) => Promise<void>
+}>
 
 export type CapabilityHandlerResult<Output> = {
   output: Output
@@ -154,6 +168,7 @@ export function defineCapability<
     effect: options.effect,
     approval: options.approval,
     concurrency: options.concurrency,
+    ...(options.principalTransition ? { principalTransition: options.principalTransition } : {}),
     inputSchema: schemaToWireValue(options.inputSchema, `${options.id} input`),
     outputSchema: schemaToWireValue(options.outputSchema, `${options.id} output`),
     tags: options.tags ?? []

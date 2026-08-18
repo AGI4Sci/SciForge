@@ -3,6 +3,8 @@ import { describe, it } from 'node:test'
 import { z } from 'zod'
 
 import {
+  domainMainProviderCredentialAccessSchema,
+  domainMainProviderCredentialBindingSchema,
   domainMainPackageSecretKeySchema,
   domainMainPackageSettingsSnapshotSchema,
   type DomainMainPackageSecretStoreHost,
@@ -63,5 +65,44 @@ describe('package-owned storage contracts', () => {
     assert.equal(await secrets.read(key), null)
     assert.throws(() => domainMainPackageSecretKeySchema.parse('../other-package'), z.ZodError)
     assert.equal('list' in secrets, false)
+  })
+
+  it('keeps provider credential input limited to a non-secret local binding', () => {
+    assert.deepEqual(domainMainProviderCredentialBindingSchema.parse({
+      providerInstanceRef: 'opencontent.demo',
+      connectionId: 'connection-a'
+    }), {
+      providerInstanceRef: 'opencontent.demo',
+      connectionId: 'connection-a'
+    })
+    assert.throws(() => domainMainProviderCredentialBindingSchema.parse({
+      providerInstanceRef: 'opencontent.demo',
+      connectionId: 'connection-a',
+      principalId: 'caller-must-not-supply-this'
+    }), z.ZodError)
+    assert.throws(() => domainMainProviderCredentialBindingSchema.parse({
+      providerInstanceRef: 'https://caller.invalid',
+      connectionId: 'connection-a'
+    }), z.ZodError)
+    assert.deepEqual(domainMainProviderCredentialAccessSchema.parse({
+      binding: {
+        providerInstanceRef: 'opencontent.demo',
+        connectionId: 'connection-a'
+      },
+      acceptedPrincipalAssurances: ['local-selection']
+    }), {
+      binding: {
+        providerInstanceRef: 'opencontent.demo',
+        connectionId: 'connection-a'
+      },
+      acceptedPrincipalAssurances: ['local-selection']
+    })
+    assert.throws(() => domainMainProviderCredentialAccessSchema.parse({
+      binding: {
+        providerInstanceRef: 'opencontent.demo',
+        connectionId: 'connection-a'
+      },
+      acceptedPrincipalAssurances: []
+    }), z.ZodError)
   })
 })

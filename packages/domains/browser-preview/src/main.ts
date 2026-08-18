@@ -1,5 +1,6 @@
 import type { DomainMainHost } from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
+import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 import type { z } from 'zod'
 import {
   BROWSER_PREVIEW_CAPABILITY_IDS,
@@ -51,8 +52,13 @@ type BrowserCapabilityOptions = Readonly<{
   ) => Promise<BrowserCapabilityHandlerResult> | BrowserCapabilityHandlerResult
 }>
 
+type BrowserCapabilityCaller = BrowserPreviewCaller & Readonly<{
+  principal?: PrincipalSnapshot
+  principalContextVersion?: number
+}>
+
 type BrowserCapabilityHandlerContext = Readonly<{
-  caller: BrowserPreviewCaller
+  caller: BrowserCapabilityCaller
   resource?: Readonly<{
     resourceId: string
     resourceKind: string
@@ -65,14 +71,31 @@ type BrowserCapabilityHandlerContext = Readonly<{
     workspaceId?: string
     audiences: readonly ('ui' | 'agent' | 'system')[]
     semanticRevision: string
-    observe: (caller: BrowserPreviewCaller) => Promise<{
-      state: unknown
-      semanticRevision: string
-      operationIds: string[]
-    }>
+    observe: BrowserResourceObserver
   }>) => unknown
   signal?: AbortSignal
 }>
+
+type BrowserResourceObserver = (caller: BrowserCapabilityCaller) => Promise<{
+  state: unknown
+  semanticRevision: string
+  operationIds: string[]
+}>
+
+type BrowserResourceBinding = {
+  observe: BrowserResourceObserver
+  pendingReservations: number
+  registered: boolean
+}
+
+type BrowserResourceBindingReservation = Readonly<{
+  binding: BrowserResourceBinding
+  assertCurrent: () => void
+  commit: () => void
+  rollback: () => void
+}>
+
+const MAX_BROWSER_RESOURCE_BINDINGS = 128
 
 type BrowserCapabilityHandlerResult = Readonly<{
   output: unknown
@@ -93,6 +116,7 @@ export type BrowserCapabilityFactory<CapabilityDefinition = unknown> = Readonly<
     allowedDirectTransports: readonly []
   }>
   createDefinitions: () => readonly CapabilityDefinition[]
+  dispose: () => void
 }>
 
 export function createDomainMainEntry(
@@ -105,17 +129,19 @@ export function createDomainMainEntry(
     })
     return service
   }
+  const capabilityFactory = createBrowserCapabilityFactory({
+    defineCapability: host.defineCapability as (
+      options: BrowserCapabilityOptions
+    ) => unknown,
+    getService
+  })
   return {
     definition: domainPackageDefinition,
     contributions: [{
       ...BROWSER_PREVIEW_CAPABILITY_FACTORY_CONTRIBUTION,
-      value: createBrowserCapabilityFactory({
-        defineCapability: host.defineCapability as (
-          options: BrowserCapabilityOptions
-        ) => unknown,
-        getService
-      }),
+      value: capabilityFactory,
       onDispose: () => {
+        capabilityFactory.dispose()
         const closing = service
         service = undefined
         void closing?.close()
@@ -133,8 +159,86 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
       id !== BROWSER_PREVIEW_CAPABILITY_IDS.open &&
       id !== BROWSER_PREVIEW_CAPABILITY_IDS.close
     )
+  const bindings = new Map<string, BrowserResourceBinding>()
+  let lifecycleEpoch = 0
 
-  const requireSessionId = (context: BrowserCapabilityHandlerContext): string => {
+  const reserveBinding = (
+    caller: BrowserCapabilityCaller,
+    resourceId: string,
+    surfaceId: string
+  ): BrowserResourceBindingReservation => {
+    const reservationEpoch = lifecycleEpoch
+    const key = JSON.stringify([
+      caller.workspaceId ?? null,
+      BROWSER_PREVIEW_RESOURCE_KIND,
+      resourceId,
+      caller.principalContextVersion ?? caller.principal?.identityVersion ?? 0,
+      caller.principal
+        ? [
+            caller.principal.authority,
+            caller.principal.subject,
+            caller.principal.assurance,
+            caller.principal.deviceId,
+            caller.principal.identityVersion
+          ]
+        : null
+    ])
+    let binding = bindings.get(key)
+    if (!binding) {
+      if (bindings.size >= MAX_BROWSER_RESOURCE_BINDINGS) {
+        throw new Error('Browser Preview resource capacity is exhausted.')
+      }
+      binding = {
+        observe: async (observerCaller) => {
+          if (reservationEpoch !== lifecycleEpoch) {
+            throw new Error('Browser Preview resource binding is retired.')
+          }
+          // The contribution can be disposed and reactivated with a replacement
+          // service. Resolve it at observation time instead of pinning the service
+          // that happened to handle the first open call.
+          const service = options.getService()
+          return {
+            state: browserPageStateSchema.parse(
+              await service.snapshot(surfaceId, observerCaller)
+            ),
+            semanticRevision: service.revision(surfaceId),
+            operationIds
+          }
+        },
+        pendingReservations: 0,
+        registered: false
+      }
+      bindings.set(key, binding)
+    }
+    binding.pendingReservations += 1
+    let settled = false
+    const settle = (registered: boolean): void => {
+      if (settled) return
+      settled = true
+      if (reservationEpoch !== lifecycleEpoch) return
+      binding!.pendingReservations -= 1
+      if (registered) binding!.registered = true
+      if (
+        !binding!.registered &&
+        binding!.pendingReservations === 0 &&
+        bindings.get(key) === binding
+      ) {
+        bindings.delete(key)
+      }
+    }
+    return Object.freeze({
+      binding,
+      assertCurrent: () => {
+        if (reservationEpoch !== lifecycleEpoch) {
+          throw new Error('Browser Preview resource binding lifecycle changed.')
+        }
+      },
+      commit: () => settle(true),
+      rollback: () => settle(false)
+    })
+  }
+
+  const requireSurfaceId = (context: BrowserCapabilityHandlerContext): string => {
     const resourceId = context.resource?.resourceId
     if (!resourceId?.startsWith('browser-page:')) {
       throw new Error('Browser page resource is unavailable.')
@@ -144,14 +248,14 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
 
   const result = async (
     context: BrowserCapabilityHandlerContext,
-    action: (service: BrowserPreviewService, sessionId: string) => Promise<unknown>
+    action: (service: BrowserPreviewService, surfaceId: string) => Promise<unknown>
   ): Promise<BrowserCapabilityHandlerResult> => {
-    const sessionId = requireSessionId(context)
+    const surfaceId = requireSurfaceId(context)
     const service = options.getService()
     return {
-      output: await action(service, sessionId),
+      output: await action(service, surfaceId),
       changed: true,
-      semanticRevision: service.revision(sessionId)
+      semanticRevision: service.revision(surfaceId)
     }
   }
 
@@ -190,28 +294,35 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
         inputSchema: browserOpenInputSchema,
         outputSchema: browserOpenOutputSchema,
         handler: async (input, context) => {
-          const service = options.getService()
-          const semanticRevision = await service.open(input, context.caller)
-          const resource = context.issueResource({
-            resourceId: `browser-page:${input.surfaceId}`,
-            resourceKind: BROWSER_PREVIEW_RESOURCE_KIND,
-            ...(context.caller.workspaceId ? { workspaceId: context.caller.workspaceId } : {}),
-            audiences: ['ui', 'agent'],
-            semanticRevision,
-            observe: async (caller) => ({
-              state: browserPageStateSchema.parse(
-                await service.snapshot(input.surfaceId, caller)
-              ),
-              semanticRevision: service.revision(input.surfaceId),
-              operationIds
+          const resourceId = `browser-page:${input.surfaceId}`
+          const reservation = reserveBinding(
+            context.caller,
+            resourceId,
+            input.surfaceId
+          )
+          try {
+            const service = options.getService()
+            const semanticRevision = await service.open(input, context.caller)
+            reservation.assertCurrent()
+            const resource = context.issueResource({
+              resourceId,
+              resourceKind: BROWSER_PREVIEW_RESOURCE_KIND,
+              ...(context.caller.workspaceId ? { workspaceId: context.caller.workspaceId } : {}),
+              audiences: ['ui', 'agent'],
+              semanticRevision,
+              observe: reservation.binding.observe
             })
-          })
-          return {
-            output: browserOpenOutputSchema.parse({
-              resource,
-              sessionId: input.sessionId,
-              surfaceId: input.surfaceId
-            })
+            reservation.commit()
+            return {
+              output: browserOpenOutputSchema.parse({
+                resource,
+                sessionId: input.sessionId,
+                surfaceId: input.surfaceId
+              })
+            }
+          } catch (error) {
+            reservation.rollback()
+            throw error
           }
         }
       }),
@@ -225,8 +336,8 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
         inputSchema: browserEmptyInputSchema,
         outputSchema: browserCloseOutputSchema,
         handler: async (_input, context) => {
-          const sessionId = requireSessionId(context)
-          await options.getService().closeSession(sessionId, context.caller)
+          const surfaceId = requireSurfaceId(context)
+          await options.getService().closeSession(surfaceId, context.caller)
           return {
             output: { closed: true },
             changed: true,
@@ -244,9 +355,9 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
         inputSchema: browserEmptyInputSchema,
         outputSchema: browserPageStateSchema,
         handler: async (_input, context) => {
-          const sessionId = requireSessionId(context)
+          const surfaceId = requireSurfaceId(context)
           return {
-            output: await options.getService().snapshot(sessionId, context.caller)
+            output: await options.getService().snapshot(surfaceId, context.caller)
           }
         }
       })),
@@ -362,6 +473,10 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
           (service, id) => service.press(id, input, context.caller)
         )
       }))
-    ]
+    ],
+    dispose: () => {
+      lifecycleEpoch += 1
+      bindings.clear()
+    }
   })
 }

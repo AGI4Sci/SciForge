@@ -1,0 +1,30 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-opencontent-content-space-provider",
+  "publisher": { "id": "sciforge", "displayName": "SciForge" },
+  "module": {
+    "id": "sciforge.opencontent-content-space-provider",
+    "displayName": "OpenContent Content Space Provider",
+    "version": "1.0.0",
+    "hostApi": { "minimum": "1.4.0", "maximumExclusive": "2.0.0" },
+    "priority": 270
+  },
+  "contributionContracts": {
+    "opencontent-content-space.provider-factory": {
+      "location": "main.content-space-provider-factory",
+      "contractVersion": "1.0.0",
+      "providerKind": "opencontent"
+    }
+  },
+  "entrypoints": [{
+    "process": "main",
+    "export": "./main",
+    "contributions": [{
+      "id": "opencontent-content-space.provider-factory",
+      "kind": "main.extension",
+      "version": "1.0.0",
+      "priority": 270
+    }]
+  }]
+}
