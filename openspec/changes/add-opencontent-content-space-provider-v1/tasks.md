@@ -11,6 +11,8 @@
 - [x] 2.2 Map paginated folder/file entries and typed unauthorized/unavailable/malformed/rate outcomes without exposing DTOs, Tokens, endpoints, or numeric internal handles.
 - [x] 2.3 Bind every result to the exact Provider Instance, current Principal-owned connection, explicit target, cancellation state, and trusted development profile.
 - [x] 2.4 Enforce Personal Session Human-authorized roots and prepare the generic descendant-scope input required by Change 2 Project Tasks; callers cannot pass a connection.
+- [x] 2.5 Add provider-neutral external personal/Team library discovery vocabulary and generic native-before-unrelated-managed discovery guidance without a Host OpenContent switch.
+- [x] 2.6 Resolve Personal Session root authorization from Provider Instance + scope + Human-visible label against the live paginated container listing; reject raw identities, zero matches, and ambiguity before resource issuance.
 
 ## 3. Write and Workspace Transfer Path
 
@@ -26,3 +28,4 @@
 - [x] 4.3 Test unauthorized, missing binding, reauthentication, wrong Principal, scope escape, unsafe Workspace path, cancellation, size bounds, token leakage, and adapter removal.
 - [x] 4.4 Run package tests/typecheck, Content Space regression, generator freshness, governance/boundaries, changed-file lint, and source/packaged smoke.
 - [x] 4.5 Keep production, ProjectContentSpaceBinding, ACL/member operations, automatic sync, Shared Documents, and ArtifactReference issuance blocked.
+- [x] 4.6 Add registry and authorization regressions for natural-language discovery, pagination, wrong scope, missing/duplicate labels, raw identity rejection, and opaque caller/Principal/Workspace-bound descendants.

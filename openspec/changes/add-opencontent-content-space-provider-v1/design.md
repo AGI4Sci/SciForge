@@ -23,9 +23,11 @@ Content Space already owns references, capabilities, confirmation policy, servic
 
 ### Keep one service path with audience-specific Broker admission
 
-Both audiences converge on the same Content Space service, pinned Provider, and Connector facade. Human UI capabilities remain global only for the current renderer Principal. Agent content capabilities are resource-scoped: the Agent must first request a confirmed `authorize-agent-root` operation for an exact personal or Team root currently returned by `listContainers`. The Broker returns only an opaque, caller/Principal/Workspace-bound resource; listing a directory issues descendant resources, and later Agent operations derive their target from those resources instead of accepting raw parent/file references. Writes retain a separate confirmation for every create, upload, and download. The adapter receives no caller-selected connection and can neither widen the current execution authorization nor choose an account.
+Both audiences converge on the same Content Space service, pinned Provider, and Connector facade. Human UI capabilities remain global only for the current renderer Principal. Agent content capabilities are resource-scoped: the Agent first requests a confirmed `authorize-agent-root` operation with an installed Provider Instance reference, `personal | shared` scope, and the Human-visible library label from the request. It does not submit a folder reference. After confirmation, Content Space paginates the current `listContainers` result, canonicalizes labels only for equality, and proceeds only when exactly one item matches both label and scope. The Broker returns only an opaque, caller/Principal/Workspace-bound resource; listing a directory issues descendant resources, and later Agent operations derive their target from those resources instead of accepting raw parent/file references. Writes retain a separate confirmation for every create, upload, and download. The adapter receives no caller-selected connection and can neither widen the current execution authorization nor choose an account.
 
 Personal Session authorization contains an explicit personal or Team library root approved by the Human and expires with its bounded Broker resources. The Agent cannot call the Human global browse/write actions. Project Task authorization, once Change 2 exists, will disable ad-hoc root authorization and issue only the current Project Content Directory resource. Descendants arise only from listing an already-authorized directory, so a raw sibling GUID cannot widen scope; OpenContent ACL then independently authorizes the account.
+
+Native discovery uses provider-neutral external-content, personal-library, Team-library, folder, upload, and download vocabulary. The generic discovery tool tells the runtime to try native adapters before replacing a named service with a familiar managed tool. Provider display names still come from installed Provider Instance contributions; Content Space and Host runtime code contain no OpenContent-name switch. A natural-language query may therefore include `OpenContent` as an unmatched brand token while the remaining provider-neutral intent tokens select the correct native capability.
 
 ### Keep Workspace bytes behind Host one-shot grants
 
@@ -42,6 +44,7 @@ Create-folder/upload-new send exact names. Existing names return typed conflict;
 ## Risks / Trade-offs
 
 - A Team name is display-only and may change; stable folder identity anchors the reference.
+- Canonically equal Team labels may be ambiguous; authorization denies and requires Human disambiguation rather than selecting by order.
 - Folder ancestry checks may require provider metadata calls. Failure or ambiguity denies access rather than assuming containment.
 - A shared demo instance cannot prove production isolation. The trusted profile is intentionally development-only.
 - The current 16 MiB upload limit is lower than OpenContent's chunking capacity; raising it is a later contract change after two-stage transfer evidence.

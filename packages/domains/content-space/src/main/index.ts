@@ -250,13 +250,18 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       Readonly<{
         audiences?: ContentSpaceCapabilityOptions['audiences']
         scope?: ContentSpaceCapabilityOptions['scope']
+        tags?: ContentSpaceCapabilityOptions['tags']
       }>
   ): CapabilityDefinition => options.defineCapability({
     ...input,
     version: '1.0.0',
     audiences: input.audiences ?? ['ui', 'agent', 'system'],
     scope: input.scope ?? 'global',
-    tags: ['content-space', 'provider-neutral']
+    tags: Object.freeze(Array.from(new Set([
+      'content-space',
+      'provider-neutral',
+      ...(input.tags ?? [])
+    ])))
   })
 
   type AgentResourceRecord = Readonly<{
@@ -268,28 +273,57 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
     workspaceId?: string
   }>
   const agentResources = new Map<string, AgentResourceRecord>()
-  const assertSelectableAgentRoot = async (
-    root: ContentContainerReference,
+  const resolveSelectableAgentRoot = async (
+    selection: Readonly<{
+      providerInstanceRef: string
+      scope: 'personal' | 'shared'
+      label: string
+    }>,
     context: ContentSpaceCapabilityContext
-  ): Promise<void> => {
+  ): Promise<ContentContainerReference> => {
     let cursor: string | undefined
     const seen = new Set<string>()
+    const matches: ContentContainerReference[] = []
+    const requestedLabel = canonicalLibraryLabel(selection.label)
     for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
       const page = await options.getService().listContainers({
-        providerInstanceRef: root.providerInstanceRef,
+        providerInstanceRef: selection.providerInstanceRef,
         page: { limit: CONTENT_SPACE_LIMITS.maxPageItems, ...(cursor ? { cursor } : {}) }
       }, call(context))
-      if (page.items.some((item) => (
-        item.reference.providerInstanceRef === root.providerInstanceRef &&
-        item.reference.containerId === root.containerId
-      ))) return
-      if (!page.nextCursor || seen.has(page.nextCursor)) break
+      for (const item of page.items) {
+        if (
+          item.reference.providerInstanceRef === selection.providerInstanceRef &&
+          item.scope === selection.scope &&
+          canonicalLibraryLabel(item.label) === requestedLabel
+        ) {
+          matches.push(item.reference)
+          if (matches.length > 1) {
+            throw operationError(
+              'invalid_target',
+              'Multiple accessible Content Space roots match that library label and scope.'
+            )
+          }
+        }
+      }
+      if (!page.nextCursor) {
+        if (matches.length === 1) return matches[0]!
+        throw operationError(
+          'invalid_target',
+          'No accessible Content Space root matches that library label and scope.'
+        )
+      }
+      if (seen.has(page.nextCursor)) {
+        throw operationError(
+          'provider_unavailable',
+          'Content Space root discovery returned a cyclic page cursor.'
+        )
+      }
       seen.add(page.nextCursor)
       cursor = page.nextCursor
     }
     throw operationError(
-      'unauthorized',
-      'The selected Agent root is not an accessible personal or Team library root.'
+      'provider_unavailable',
+      'Content Space root discovery exceeded the bounded page limit.'
     )
   }
   const requireAgentResource = (
@@ -396,6 +430,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         effect: 'read',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'none' },
+        tags: ['external-content', 'provider', 'personal-library', 'team-library', 'browse'],
         inputSchema: zEmptyObject,
         outputSchema: contentSpaceProviderInstanceListResultSchema,
         handler: async (_input, context) => capabilityResult(() =>
@@ -534,21 +569,32 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot,
         title: 'Authorize Agent Content Space Root',
-        description: 'Confirms one exact Content Space directory as the bounded root for this Agent context.',
+        description: 'Confirms one Human-named personal or Team library as the bounded root for this Agent context.',
         audiences: ['agent'],
         effect: 'external-write',
         approval: 'confirmation',
         concurrency: { revision: 'none', idempotency: 'required' },
+        tags: [
+          'external-content',
+          'personal-library',
+          'team-library',
+          'folder',
+          'file',
+          'create',
+          'upload',
+          'download',
+          'authorize'
+        ],
         producedResourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
         inputSchema: contentSpaceAuthorizeAgentRootInputSchema,
         outputSchema: contentSpaceAgentRootAuthorizationResultSchema,
-        handler: async ({ root }, context) => capabilityResult(async () => {
-          await assertSelectableAgentRoot(root, context)
+        handler: async (selection, context) => capabilityResult(async () => {
+          const root = await resolveSelectableAgentRoot(selection, context)
           const observation = await options.getService().observeEntry(root, call(context))
           if (observation.entry.kind !== 'container') {
             throw operationError('invalid_target', 'The authorized Agent root must be a directory.')
           }
-          return Object.freeze({ root, resource: issueAgentResource(context, root, root) })
+          return Object.freeze({ resource: issueAgentResource(context, root, root) })
         })
       }),
       define({
@@ -792,6 +838,10 @@ function sanitizeContentSpaceError(error: ContentSpaceError): ContentSpaceError 
     message: SAFE_ERROR_MESSAGES[error.code],
     retry: error.retry
   })
+}
+
+function canonicalLibraryLabel(label: string): string {
+  return label.normalize('NFKC').toLocaleLowerCase('und')
 }
 
 function operationError(

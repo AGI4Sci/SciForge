@@ -59,7 +59,7 @@ The state `poc_only`, `blocked_by_contract`, or `production_ready` for one opera
 _Avoid_: environment flag as production approval, partial means complete
 
 **Agent Content Space Scope**:
-The Content Space authority available to an Agent execution context. A Personal Session starts only after Human confirmation of one currently enumerable personal or Team root; Host issues a bounded caller/Principal/Workspace-bound Broker resource, and descendants arise only by listing an authorized directory. A Project Task uses only its Project Content Directory and descendants even when the executing owner's Provider ACL is broader.
+The Content Space authority available to an Agent execution context. A Personal Session supplies an installed Provider Instance, `personal | shared` scope, and Human-visible library label for confirmation; after confirmation, Host resolves exactly one match from the complete current container listing and rejects raw Provider folder identities, missing labels, and ambiguous labels. Host then issues only a bounded caller/Principal/Workspace-bound Broker resource, and descendants arise only by listing an authorized directory. A Project Task uses only its Project Content Directory and descendants even when the executing owner's Provider ACL is broader.
 _Avoid_: all resources visible to the Token, task-supplied connection, Project-wide Provider account
 
 **Workspace Content Transfer**:

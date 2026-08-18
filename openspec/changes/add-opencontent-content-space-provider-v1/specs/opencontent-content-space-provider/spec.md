@@ -26,14 +26,31 @@ The bound account's personal root SHALL map to one `ContentContainerSummary` wit
 
 Renderer and Agent callers SHALL converge on the same Content Space service → pinned Provider path. Human operations SHALL use Human-only global capabilities and Host-selected file handles. Agent content operations SHALL use Agent-only Broker resource capabilities after a confirmed root authorization; an Agent SHALL NOT invoke the Human global content capabilities. The adapter SHALL use only the executing node owner's current Principal-bound connection. Callers SHALL NOT supply a connection, external account, endpoint, coordinator/admin credential, or alternate Provider.
 
+Provider-neutral discovery metadata SHALL make external personal/Team library browse, folder, upload, and download intents discoverable as native Content Space operations even when the prompt also contains an installed Provider's display name. Generic runtime guidance SHALL search the native capability family before substituting an unrelated managed Provider; the Host SHALL NOT hard-code an OpenContent switch or expose Provider credentials to discovery.
+
 #### Scenario: Requester supplies an account hint
 
 - **WHEN** a Task, prompt, portable reference, or capability payload attempts to select an OpenContent account
 - **THEN** the hint SHALL be rejected or ignored as invalid contract input before provider access
 
+#### Scenario: Prompt names an installed content Provider and Team library
+
+- **WHEN** a Personal Session asks to browse or upload to a named external Team library
+- **THEN** native discovery SHALL return the provider-neutral root-authorization operation without requiring a Provider-specific Agent tool or managed-storage fallback
+
 ### Requirement: Agent resource scope is explicit and descendant-bounded
 
-A Personal Session Agent SHALL first obtain Human confirmation for one exact personal or Team root that the bound account can currently enumerate. Host SHALL issue a bounded opaque resource tied to the exact Agent caller, Principal, and Workspace context. Children SHALL become reachable only when listing an already-authorized directory issues descendant resources; raw references SHALL NOT widen scope. A Project Task Agent, after Change 2 provides a binding, SHALL not use ad-hoc root authorization and SHALL access only the current Project Content Directory and descendants. Scope checks and OpenContent ACL SHALL both pass; Project membership SHALL never substitute for Provider permission.
+A Personal Session Agent SHALL first obtain Human confirmation for one exact personal or Team root that the bound account can currently enumerate. The authorization request SHALL contain only the selected Provider Instance, provider-neutral scope, and Human-visible library label; it SHALL NOT accept a Provider folder ID/GUID. After confirmation, Host SHALL enumerate that Provider Instance through the canonical Content Space service and SHALL authorize only one exact canonical-label-and-scope match. Zero or multiple matches SHALL fail without issuing a resource. Host SHALL issue a bounded opaque resource tied to the exact Agent caller, Principal, and Workspace context. Children SHALL become reachable only when listing an already-authorized directory issues descendant resources; raw references SHALL NOT widen scope. A Project Task Agent, after Change 2 provides a binding, SHALL not use ad-hoc root authorization and SHALL access only the current Project Content Directory and descendants. Scope checks and OpenContent ACL SHALL both pass; Project membership SHALL never substitute for Provider permission.
+
+#### Scenario: Human names one currently enumerable Team root
+
+- **WHEN** the request selects a Provider Instance, `shared` scope, and a Team label that has exactly one canonical match in the current bound account's paginated container listing
+- **THEN** confirmation SHALL authorize that exact stable root and return only its caller-bound Broker resource authority
+
+#### Scenario: Team label is missing or ambiguous
+
+- **WHEN** the current listing contains zero or multiple canonical matches for the requested label and scope
+- **THEN** Content Space SHALL reject the selection and SHALL NOT guess, probe a raw identity, or issue any Agent resource
 
 #### Scenario: Bound account can access a sibling Team directory
 

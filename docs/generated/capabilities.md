@@ -20271,7 +20271,7 @@ Uploads one confirmed Workspace-relative file beneath the exact Agent directory.
 
 ## `content-space.authorize-agent-root`
 
-Confirms one exact Content Space directory as the bounded root for this Agent context.
+Confirms one Human-named personal or Team library as the bounded root for this Agent context.
 
 - Version: `1.0.0`
 - Audiences: agent
@@ -20292,33 +20292,30 @@ Confirms one exact Content Space directory as the bounded root for this Agent co
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
     "properties": {
-      "root": {
-        "additionalProperties": false,
-        "properties": {
-          "containerId": {
-            "maxLength": 256,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
-            "type": "string"
-          },
-          "providerInstanceRef": {
-            "maxLength": 256,
-            "minLength": 3,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-            "type": "string"
-          }
-        },
-        "readOnly": true,
-        "required": [
-          "providerInstanceRef",
-          "containerId"
+      "label": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "providerInstanceRef": {
+        "maxLength": 256,
+        "minLength": 3,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+        "type": "string"
+      },
+      "scope": {
+        "enum": [
+          "personal",
+          "shared"
         ],
-        "type": "object"
+        "type": "string"
       }
     },
     "readOnly": true,
     "required": [
-      "root"
+      "providerInstanceRef",
+      "scope",
+      "label"
     ],
     "type": "object"
   },
@@ -20360,34 +20357,10 @@ Confirms one exact Content Space directory as the bounded root for this Agent co
                   "expiresAt"
                 ],
                 "type": "object"
-              },
-              "root": {
-                "additionalProperties": false,
-                "properties": {
-                  "containerId": {
-                    "maxLength": 256,
-                    "minLength": 1,
-                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
-                    "type": "string"
-                  },
-                  "providerInstanceRef": {
-                    "maxLength": 256,
-                    "minLength": 3,
-                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                    "type": "string"
-                  }
-                },
-                "readOnly": true,
-                "required": [
-                  "providerInstanceRef",
-                  "containerId"
-                ],
-                "type": "object"
               }
             },
             "readOnly": true,
             "required": [
-              "root",
               "resource"
             ],
             "type": "object"
@@ -20471,7 +20444,16 @@ Confirms one exact Content Space directory as the bounded root for this Agent co
   "resourceKinds": [],
   "tags": [
     "content-space",
-    "provider-neutral"
+    "provider-neutral",
+    "external-content",
+    "personal-library",
+    "team-library",
+    "folder",
+    "file",
+    "create",
+    "upload",
+    "download",
+    "authorize"
   ],
   "title": "Authorize Agent Content Space Root"
 }
@@ -21891,7 +21873,12 @@ Lists explicit trusted Provider Instances supported by Content Space.
   "resourceKinds": [],
   "tags": [
     "content-space",
-    "provider-neutral"
+    "provider-neutral",
+    "external-content",
+    "provider",
+    "personal-library",
+    "team-library",
+    "browse"
   ],
   "title": "List Content Space Provider Instances"
 }

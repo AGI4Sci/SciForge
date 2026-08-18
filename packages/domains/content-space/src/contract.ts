@@ -447,10 +447,11 @@ export const contentSpaceDownloadInputSchema = z.object({
   destinationHandle: domainFileTransferHandleSchema
 }).strict().readonly()
 export const contentSpaceAuthorizeAgentRootInputSchema = z.object({
-  root: contentContainerReferenceSchema
+  providerInstanceRef: providerInstanceRefSchema,
+  scope: z.enum(['personal', 'shared']),
+  label: z.string().trim().min(1).max(CONTENT_SPACE_LIMITS.maxLabelCharacters)
 }).strict().readonly()
 export const contentSpaceAgentRootAuthorizationSchema = z.object({
-  root: contentContainerReferenceSchema,
   resource: domainCapabilityResourceHandleSchema
 }).strict().readonly()
 export const contentSpaceAgentListEntriesInputSchema = z.object({

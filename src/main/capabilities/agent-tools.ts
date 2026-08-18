@@ -248,7 +248,7 @@ type CallerCache = {
 const toolDefinitions = Object.freeze([
   defineTool(
     CAPABILITY_AGENT_TOOL_NAMES.discover,
-    'Discover current SciForge operations with an exact capabilityId or unordered text tokens. Scope, accepted/produced resource kinds, and provider family are independent filters. Native results are bounded by default; set providerFamily=managed-mcp explicitly to search managed tools. Results use opaque references; request one operation with includeSchema=true for its compact input shape.',
+    'Discover current SciForge operations with an exact capabilityId or unordered text tokens. Scope, accepted/produced resource kinds, and provider family are independent filters. When a user names an external or provider-backed service, search native operations first with the user\'s action and library terms before considering an unrelated managed tool; set providerFamily=managed-mcp only when the user explicitly selected that managed provider or native discovery is unsuitable. Results use opaque references; request one operation with includeSchema=true for its compact input shape.',
     agentDiscoverRequestSchema
   ),
   defineTool(

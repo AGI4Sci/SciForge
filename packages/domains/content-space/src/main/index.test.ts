@@ -65,12 +65,16 @@ type CapabilityContext = Readonly<{
 
 type CapabilityDefinition = Readonly<{
   id: string
+  title: string
+  description: string
   audiences: readonly ('ui' | 'agent' | 'system')[]
   scope: 'global' | 'resource'
   resourceKinds?: readonly string[]
+  tags: readonly string[]
   effect: 'read' | 'external-write'
   approval: 'none' | 'confirmation'
   concurrency: Readonly<{ revision: 'none'; idempotency: 'none' | 'required' }>
+  inputSchema: Readonly<{ safeParse(value: unknown): Readonly<{ success: boolean }> }>
   handler(input: unknown, context: CapabilityContext): Promise<Readonly<{
     output: ContentSpaceResult<unknown>
   }>>
@@ -297,7 +301,9 @@ describe('Content Space main composition', () => {
       definitions,
       CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot
     ).handler({
-      root: { providerInstanceRef: PROVIDER_INSTANCE_REF, containerId: 'root' }
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      scope: 'personal',
+      label: 'Root'
     }, capabilityContext(undefined, 'agent', {
       workspaceId: '/workspace',
       issueResource: (value) => {
@@ -337,7 +343,9 @@ describe('Content Space main composition', () => {
     )
     let registration: any
     await definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot).handler({
-      root: { providerInstanceRef: PROVIDER_INSTANCE_REF, containerId: 'root' }
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      scope: 'personal',
+      label: 'Root'
     }, capabilityContext(undefined, 'agent', {
       callerId: 'agent:thread-1',
       workspaceId: '/workspace-a',
@@ -398,6 +406,162 @@ describe('Content Space main composition', () => {
       resource: validResource
     }))).resolves.toMatchObject({ output: { ok: true } })
     expect(listEntries).toHaveBeenCalledTimes(1)
+  })
+
+  it('resolves a Human-named Agent root from the complete live container listing', async () => {
+    const listContainers = vi.fn(async ({ context, page }:
+      Parameters<ContentSpaceProvider['listContainers']>[0]) => page.cursor
+      ? {
+          providerInstanceRef: context.providerInstanceRef,
+          items: [{
+            reference: {
+              providerInstanceRef: context.providerInstanceRef,
+              containerId: 'team-root'
+            },
+            scope: 'shared' as const,
+            label: 'SciForge Test'
+          }]
+        }
+      : {
+          providerInstanceRef: context.providerInstanceRef,
+          items: [{
+            reference: {
+              providerInstanceRef: context.providerInstanceRef,
+              containerId: 'personal-root'
+            },
+            scope: 'personal' as const,
+            label: 'Personal library'
+          }],
+          nextCursor: 'team-page'
+        })
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture({ listContainers })))
+    )
+    const authorize = definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot)
+    const issueResource = vi.fn(() => ({
+      token: `cap_${'c'.repeat(32)}`,
+      semanticRevision: 'live:authorized-root',
+      expiresAt: '2026-08-17T17:00:00.000Z'
+    }))
+
+    const result = await authorize.handler({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      scope: 'shared',
+      label: 'sciforge test'
+    }, capabilityContext(undefined, 'agent', {
+      workspaceId: '/workspace',
+      issueResource
+    }))
+
+    expect(result.output).toMatchObject({
+      ok: true,
+      value: { resource: { token: expect.stringMatching(/^cap_/u) } }
+    })
+    expect(JSON.stringify(result.output)).not.toContain('team-root')
+    expect(listContainers).toHaveBeenCalledTimes(2)
+    expect(issueResource).toHaveBeenCalledWith(expect.objectContaining({
+      resourceKind: CONTENT_CONTAINER_RESOURCE_KIND,
+      workspaceId: '/workspace'
+    }))
+  })
+
+  it.each([
+    {
+      name: 'wrong scope',
+      items: [{
+        reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, containerId: 'team-root' },
+        scope: 'shared' as const,
+        label: 'SciForge Test'
+      }],
+      selection: { scope: 'personal' as const, label: 'SciForge Test' }
+    },
+    {
+      name: 'missing label',
+      items: [{
+        reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, containerId: 'team-root' },
+        scope: 'shared' as const,
+        label: 'SciForge Test'
+      }],
+      selection: { scope: 'shared' as const, label: 'Unknown Team' }
+    },
+    {
+      name: 'ambiguous canonical label',
+      items: [
+        {
+          reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, containerId: 'team-root-a' },
+          scope: 'shared' as const,
+          label: 'SciForge Test'
+        },
+        {
+          reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, containerId: 'team-root-b' },
+          scope: 'shared' as const,
+          label: 'sciforge test'
+        }
+      ],
+      selection: { scope: 'shared' as const, label: 'SCIFORGE TEST' }
+    }
+  ])('does not issue an Agent root for $name', async ({ items, selection }) => {
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture({
+        listContainers: async ({ context }) => ({
+          providerInstanceRef: context.providerInstanceRef,
+          items
+        })
+      })))
+    )
+    const authorize = definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot)
+    const issueResource = vi.fn()
+
+    await expect(authorize.handler({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      ...selection
+    }, capabilityContext(undefined, 'agent', { issueResource }))).resolves.toMatchObject({
+      output: { ok: false, error: { code: 'invalid_target' } }
+    })
+    expect(issueResource).not.toHaveBeenCalled()
+  })
+
+  it('does not authorize from an incomplete cyclic container listing', async () => {
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture({
+        listContainers: async ({ context }) => ({
+          providerInstanceRef: context.providerInstanceRef,
+          items: [],
+          nextCursor: 'repeated-page'
+        })
+      })))
+    )
+    const authorize = definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot)
+    const issueResource = vi.fn()
+
+    await expect(authorize.handler({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      scope: 'shared',
+      label: 'SciForge Test'
+    }, capabilityContext(undefined, 'agent', { issueResource }))).resolves.toMatchObject({
+      output: { ok: false, error: { code: 'provider_unavailable' } }
+    })
+    expect(issueResource).not.toHaveBeenCalled()
+  })
+
+  it('rejects raw Provider identities at the Agent root authorization schema', async () => {
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture()))
+    )
+    const authorize = definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot)
+
+    expect(authorize.inputSchema.safeParse({
+      root: { providerInstanceRef: PROVIDER_INSTANCE_REF, containerId: 'raw-folder-guid' }
+    }).success).toBe(false)
+    expect(authorize.inputSchema.safeParse({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      scope: 'personal',
+      label: 'Root'
+    }).success).toBe(true)
   })
 })
 
