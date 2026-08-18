@@ -122,6 +122,68 @@ test('projection.updated fails closed for an unknown projection or changed secur
   assert.equal(store.snapshot().projections[0]?.projection.revision, 1)
 })
 
+test('startup transcript reconciliation preserves an existing receipt when historical text changes', async () => {
+  const store = await projectionStore()
+  const deliveries: Array<{ command: unknown; idempotencyKey: string }> = []
+  const coordinator = new ProjectionCoordinator({
+    store,
+    agentExecution: {
+      run: async () => { throw new Error('Desktop transcript mirroring must not execute an Agent turn.') }
+    },
+    cloudOutbox: {
+      enqueueProjectionDelivery: async (command, idempotencyKey) => {
+        deliveries.push({ command, idempotencyKey })
+      }
+    },
+    localAgentId: () => TEST_IDS.agentId
+  })
+  const original = {
+    runtimeId: 'codex',
+    threadId: 'fixed-thread-1',
+    turnId: 'turn-existing',
+    itemId: 'assistant-existing',
+    kind: 'assistant-message' as const,
+    text: 'original delivered reply',
+    occurredAt: TEST_LATER_TIMESTAMP
+  }
+
+  await coordinator.mirrorDesktopEvent(original)
+  assert.equal(deliveries.length, 1)
+  assert.equal(store.snapshot().queue.length, 1)
+  await store.transact((draft) => {
+    draft.queue[0]!.state = 'completed'
+    draft.queue[0]!.updatedAt = TEST_LATER_TIMESTAMP
+    draft.queue[0]!.completedAt = TEST_LATER_TIMESTAMP
+    draft.receipts[0]!.status = 'delivered'
+    draft.receipts[0]!.updatedAt = TEST_LATER_TIMESTAMP
+  })
+  assert.equal(store.snapshot().receipts[0]?.status, 'delivered')
+
+  await coordinator.reconcileCanonicalTurn({
+    runtimeId: original.runtimeId,
+    threadId: original.threadId,
+    turnId: original.turnId,
+    messages: [{
+      itemId: original.itemId,
+      turnId: original.turnId,
+      kind: original.kind,
+      text: 'historical runtime projection changed after delivery',
+      occurredAt: TEST_LATER_TIMESTAMP
+    }]
+  })
+
+  assert.equal(deliveries.length, 1)
+  assert.equal(store.snapshot().queue.length, 1)
+  assert.equal(store.snapshot().queue[0]?.text, original.text)
+  await assert.rejects(
+    coordinator.mirrorDesktopEvent({
+      ...original,
+      text: 'a live event reused the same identity with different content'
+    }),
+    /identity collision/u
+  )
+})
+
 const NOOP_OUTBOX: ProjectionCloudOutbox = {
   enqueueProjectionDelivery: async () => undefined
 }

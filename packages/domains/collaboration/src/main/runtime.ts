@@ -523,7 +523,7 @@ export class CollaborationRuntime {
       threadId: projection.threadId
     })
     for (const turn of thread.turns) {
-      await this.requireProjections().mirrorCanonicalTurn({
+      await this.requireProjections().reconcileCanonicalTurn({
         runtimeId: projection.runtimeId,
         threadId: projection.threadId,
         turnId: turn.id,
