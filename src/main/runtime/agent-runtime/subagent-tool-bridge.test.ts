@@ -74,6 +74,71 @@ function childId(response: Awaited<ReturnType<ReturnType<typeof bridgeWith>['cal
 }
 
 describe('AgentRuntime subagent tool bridge', () => {
+  it('binds the captured parent Principal to each exact child turn until terminal settlement', async () => {
+    const bound = new Map<string, unknown>()
+    const released: string[] = []
+    const principalContext = Object.freeze({ identityVersion: 7, principal: null })
+    const adapter = completedAdapter('codex')
+    adapter.spawn = vi.fn(async (_context, input) => {
+      const label = input.label ?? 'child'
+      const threadRef = {
+        runtime: 'codex',
+        threadId: `${label}-thread`,
+        turnId: `${label}-turn`
+      }
+      await input.onSpawned(threadRef)
+      expect(bound.get(`${threadRef.threadId}:${threadRef.turnId}`)).toEqual(principalContext)
+      return { summary: `${label} complete`, threadRef }
+    })
+    const bridge = createAgentRuntimeSubagentToolBridge({
+      storeFactory: () => new InMemoryMultiAgentStore(),
+      resolveBinding: async () => ({
+        adapter,
+        context: context(),
+        enabled: true,
+        maxParallel: 4
+      }),
+      principalForParentTurn: () => principalContext,
+      bindChildTurnPrincipal: (_runtimeId, threadRef, captured) => {
+        const key = `${threadRef.threadId}:${threadRef.turnId}`
+        bound.set(key, captured)
+        return () => {
+          bound.delete(key)
+          released.push(key)
+        }
+      }
+    })
+
+    const started = await bridge.callTool({
+      requestId: 'principal-batch',
+      runtimeId: 'codex',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn',
+      tool: AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME,
+      arguments: {
+        tasks: [
+          { label: 'alpha', prompt: 'Alpha task' },
+          { label: 'beta', prompt: 'Beta task' }
+        ]
+      }
+    })
+    const childIds = (started.structuredContent as {
+      children: Array<{ childId?: string }>
+    }).children.flatMap((result) => result.childId ? [result.childId] : [])
+    expect(childIds).toHaveLength(2)
+    await Promise.all(childIds.map((id) => bridge.callTool({
+      requestId: `wait-${id}`,
+      runtimeId: 'codex',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn',
+      tool: AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME,
+      arguments: { childId: id, timeoutMs: 1_000 }
+    })))
+
+    expect(bound.size).toBe(0)
+    expect(released.sort()).toEqual(['alpha-thread:alpha-turn', 'beta-thread:beta-turn'])
+  })
+
   it('owns one provider-neutral tool contract', () => {
     const bridge = bridgeWith(completedAdapter('codex'))
     expect(bridge.dynamicTools().map((tool) => tool.name)).toEqual([

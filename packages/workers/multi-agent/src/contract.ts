@@ -280,6 +280,8 @@ export type MultiAgentExecutorInput = {
   filePathPolicy?: Record<string, unknown>
   maxToolCalls?: number
   resumeThreadRef?: MultiAgentChildThreadRef
+  /** Transient Host-owned data passed only to the executor; never persisted or exposed. */
+  executorContext?: unknown
   signal: AbortSignal
   registerLifecycleControl(control: MultiAgentLifecycleControl): void
   setThreadRef(threadRef: MultiAgentChildThreadRef): Promise<void>

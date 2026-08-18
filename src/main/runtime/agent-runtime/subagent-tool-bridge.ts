@@ -17,6 +17,7 @@ import type {
   AgentRuntimeSubagentAdapter,
   AgentRuntimeSubagentThreadRef
 } from './adapter'
+import type { PrincipalContextSnapshot } from '@sciforge/domain-sdk/principal'
 import {
   AgentRuntimeToolError,
   type AgentRuntimeToolSurface
@@ -45,6 +46,16 @@ export type AgentRuntimeSubagentBinding = {
 
 export type AgentRuntimeSubagentToolBridgeOptions = {
   resolveBinding(runtimeId: AgentRuntimeId, parentThreadId: string): Promise<AgentRuntimeSubagentBinding>
+  principalForParentTurn?: (
+    runtimeId: AgentRuntimeId,
+    parentThreadId: string,
+    parentTurnId: string
+  ) => PrincipalContextSnapshot
+  bindChildTurnPrincipal?: (
+    runtimeId: AgentRuntimeId,
+    threadRef: AgentRuntimeSubagentThreadRef,
+    principalContext: PrincipalContextSnapshot
+  ) => () => void
   storeRoot?: string
   storeFactory?: (runtimeId: AgentRuntimeId) => MultiAgentStore
   onChildEvent?: (
@@ -98,6 +109,7 @@ export class AgentRuntimeSubagentToolBridge {
   private readonly childThreadIds = new Map<AgentRuntimeId, Set<string>>()
   private readonly childIdsByThreadId = new Map<AgentRuntimeId, Map<string, string>>()
   private readonly activeChildrenByTurn = new Map<string, Set<string>>()
+  private readonly childPrincipalFinalizers = new Map<string, () => void>()
 
   constructor(private readonly options: AgentRuntimeSubagentToolBridgeOptions) {}
 
@@ -333,7 +345,18 @@ export class AgentRuntimeSubagentToolBridge {
     }
     if (toolName === AGENT_RUNTIME_SUBAGENT_RESUME_TOOL_NAME) {
       if (!request.turnId) return failedMultiAgentResponse('subagent_resume requires turnId.')
-      return this.resumeTool(entry.runtime, request.threadId, request.turnId, request.arguments)
+      const principalContext = this.options.principalForParentTurn?.(
+        runtimeId,
+        request.threadId,
+        request.turnId
+      )
+      return this.resumeTool(
+        entry.runtime,
+        request.threadId,
+        request.turnId,
+        request.arguments,
+        principalContext
+      )
     }
     if (toolName === AGENT_RUNTIME_SUBAGENT_DELETE_TOOL_NAME) {
       return this.deleteTool(entry.runtime, binding, request.threadId, request.arguments)
@@ -358,18 +381,24 @@ export class AgentRuntimeSubagentToolBridge {
       )
     }
     if (!request.turnId) return failedMultiAgentResponse('delegate_task requires turnId.')
+    const principalContext = this.options.principalForParentTurn?.(
+      runtimeId,
+      request.threadId,
+      request.turnId
+    )
     return this.executeToolCall(entry.runtime, runtimeId, {
       ...request,
       threadId: request.threadId,
       turnId: request.turnId
-    }, input)
+    }, input, principalContext)
   }
 
   private async executeToolCall(
     runtime: MultiAgentRuntime,
     runtimeId: AgentRuntimeId,
     request: RuntimeToolCallRequest & { threadId: string; turnId: string },
-    input: DelegatedTaskBatch
+    input: DelegatedTaskBatch,
+    principalContext?: PrincipalContextSnapshot
   ): Promise<RuntimeToolCallResponse> {
 
     const active = {
@@ -402,6 +431,7 @@ export class AgentRuntimeSubagentToolBridge {
             ),
             deadlineMs: task.deadlineMs,
             maxToolCalls: task.maxToolCalls,
+            executorContext: principalContext,
             signal: active.controller.signal
           })
           this.trackActiveChild(runtimeId, record)
@@ -481,7 +511,8 @@ export class AgentRuntimeSubagentToolBridge {
     runtime: MultiAgentRuntime,
     parentThreadId: string,
     parentTurnId: string,
-    value: unknown
+    value: unknown,
+    principalContext?: PrincipalContextSnapshot
   ): Promise<RuntimeToolCallResponse> {
     const childId = requiredStringArgument(value, 'childId')
     if (!childId) return failedMultiAgentResponse('subagent_resume requires childId.')
@@ -490,6 +521,7 @@ export class AgentRuntimeSubagentToolBridge {
       parentThreadId,
       parentTurnId,
       childId,
+      executorContext: principalContext,
       ...(prompt ? { prompt } : {})
     })
     return {
@@ -571,6 +603,10 @@ export class AgentRuntimeSubagentToolBridge {
         ))
       }).catch(() => undefined)
     }
+    for (const finalizePrincipal of this.childPrincipalFinalizers.values()) {
+      finalizePrincipal()
+    }
+    this.childPrincipalFinalizers.clear()
   }
 
   private runtimeFor(runtimeId: AgentRuntimeId, binding: AgentRuntimeSubagentBinding): RuntimeEntry {
@@ -617,6 +653,9 @@ export class AgentRuntimeSubagentToolBridge {
     input: MultiAgentExecutorInput
   ): Promise<MultiAgentExecutorResult> {
     const binding = await this.options.resolveBinding(runtimeId, input.parentThreadId)
+    const principalContext = isPrincipalContextSnapshot(input.executorContext)
+      ? input.executorContext
+      : undefined
     const target = {
       childId: input.childId,
       parentThreadId: input.parentThreadId,
@@ -650,6 +689,16 @@ export class AgentRuntimeSubagentToolBridge {
       signal: input.signal,
       appendTranscript: input.appendTranscript,
       onSpawned: async (threadRef: AgentRuntimeSubagentThreadRef) => {
+        if (principalContext && this.options.bindChildTurnPrincipal) {
+          const principalKey = childPrincipalKey(runtimeId, input.childId)
+          if (this.childPrincipalFinalizers.has(principalKey)) {
+            throw new Error(`Subagent ${input.childId} already has an active Principal binding.`)
+          }
+          this.childPrincipalFinalizers.set(
+            principalKey,
+            this.options.bindChildTurnPrincipal(runtimeId, threadRef, principalContext)
+          )
+        }
         await input.setThreadRef(threadRef)
         if (threadRef.threadId) {
           const threadIds = this.childThreadIds.get(runtimeId) ?? new Set<string>()
@@ -675,7 +724,16 @@ export class AgentRuntimeSubagentToolBridge {
     record: MultiAgentChildRunRecord
   ): Promise<void> {
     this.trackActiveChild(runtimeId, record)
-    await this.options.onChildEvent?.(runtimeId, event, record)
+    try {
+      await this.options.onChildEvent?.(runtimeId, event, record)
+    } finally {
+      if (record.status === 'completed' || record.status === 'failed' || record.status === 'aborted') {
+        const principalKey = childPrincipalKey(runtimeId, record.id)
+        const finalizePrincipal = this.childPrincipalFinalizers.get(principalKey)
+        this.childPrincipalFinalizers.delete(principalKey)
+        finalizePrincipal?.()
+      }
+    }
   }
 
   private trackActiveChild(runtimeId: AgentRuntimeId, record: MultiAgentChildRunRecord): void {
@@ -695,6 +753,18 @@ export class AgentRuntimeSubagentToolBridge {
       if (childIds?.size === 0) this.childIdsByThreadId.delete(runtimeId)
     }
   }
+}
+
+function isPrincipalContextSnapshot(value: unknown): value is PrincipalContextSnapshot {
+  if (!value || typeof value !== 'object') return false
+  const context = value as { identityVersion?: unknown; principal?: unknown }
+  return Number.isInteger(context.identityVersion) && (
+    context.principal === null || typeof context.principal === 'object'
+  )
+}
+
+function childPrincipalKey(runtimeId: AgentRuntimeId, childId: string): string {
+  return `${runtimeId}\u0000${childId}`
 }
 
 export function agentRuntimeChildFromMultiAgentRecord(

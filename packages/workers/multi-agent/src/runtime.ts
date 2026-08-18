@@ -59,6 +59,8 @@ export type RunChildInput = {
   filePathPolicy?: Record<string, unknown>
   maxToolCalls?: number
   resumeThreadRef?: MultiAgentChildThreadRef
+  /** Transient Host-owned data passed only to the executor; never persisted or exposed. */
+  executorContext?: unknown
   signal?: AbortSignal
 }
 
@@ -67,6 +69,8 @@ export type ResumeChildInput = {
   parentTurnId: string
   childId: string
   prompt?: string
+  /** Transient Host-owned data passed only to the executor; never persisted or exposed. */
+  executorContext?: unknown
   signal?: AbortSignal
 }
 
@@ -267,6 +271,7 @@ export class MultiAgentRuntime {
           filePathPolicy: normalized.filePathPolicy,
           maxToolCalls: normalized.maxToolCalls,
           resumeThreadRef: normalized.resumeThreadRef,
+          executorContext: normalized.executorContext,
           signal: boundary.signal,
           registerLifecycleControl: (control) => {
             if (!boundary.signal.aborted) {
@@ -446,6 +451,7 @@ export class MultiAgentRuntime {
       workspace: reserved.workspace,
       model: reserved.model,
       resumeThreadRef: reserved.threadRef,
+      executorContext: input.executorContext,
       signal: input.signal
     })
     const execution = this.executeReservedChild(queued, normalized, input.signal, (record) => {
@@ -800,7 +806,8 @@ function normalizeRunChildInput(input: RunChildInput): NormalizedRunChildInput {
     bashCommandPolicy: input.bashCommandPolicy,
     filePathPolicy: input.filePathPolicy,
     maxToolCalls: normalizePositiveInteger(input.maxToolCalls),
-    resumeThreadRef: input.resumeThreadRef
+    resumeThreadRef: input.resumeThreadRef,
+    executorContext: input.executorContext
   }
 }
 

@@ -511,6 +511,11 @@ describe('AgentRuntimeHost', () => {
     const subagents: NonNullable<AgentRuntimeAdapter['subagents']> = {
       spawn: vi.fn(async (_context, input) => {
         await input.onSpawned({ runtime: 'claude', threadId: 'child-thread', turnId: 'child-turn' })
+        expect(host.principalForToolRequest({
+          runtimeId: 'claude',
+          threadId: 'child-thread',
+          turnId: 'child-turn'
+        })).toEqual({ identityVersion: 0, principal: null })
         return {
           summary: 'child complete',
           threadRef: { runtime: 'claude', threadId: 'child-thread', turnId: 'child-turn' }
@@ -535,16 +540,16 @@ describe('AgentRuntimeHost', () => {
     host.subscribeTurnLifecycle((event) => { lifecycle.push(event) })
     const tools = host.subagentTools()
     expect(tools?.tools().map((tool) => tool.name)).toContain('delegate_task')
-    const started = await tools!.call({
+    const parentIdentity = {
+      runtimeId: 'claude' as const,
+      threadId: 'parent-thread',
+      turnId: 'parent-turn'
+    }
+    const started = await host.withHostToolRequestPrincipalLease(parentIdentity, () => tools!.call({
       name: 'delegate_task',
       arguments: { prompt: 'Run a focused review.' },
-      context: {
-        requestId: 'spawn-1',
-        runtimeId: 'claude',
-        threadId: 'parent-thread',
-        turnId: 'parent-turn'
-      }
-    })
+      context: { requestId: 'spawn-1', ...parentIdentity }
+    }))
     const childId = (started.value as { childId: string }).childId
     await expect(tools!.call({
       name: 'subagent_wait',
@@ -580,6 +585,78 @@ describe('AgentRuntimeHost', () => {
     })
   })
 
+  it('keeps an exact child Principal lease after the parent tool lease ends', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-runtime-child-principal-'))
+    let childAttached!: () => void
+    let finishChild!: () => void
+    const attached = new Promise<void>((resolve) => { childAttached = resolve })
+    const finish = new Promise<void>((resolve) => { finishChild = resolve })
+    const adapter = fakeAdapter('codex', {
+      id: 'principal-parent-thread',
+      runtimeId: 'codex',
+      title: 'Parent',
+      updatedAt: '2026-08-18T00:00:00.000Z'
+    })
+    adapter.subagents = {
+      spawn: vi.fn(async (_context, input) => {
+        const threadRef = {
+          runtime: 'codex',
+          threadId: 'principal-child-thread',
+          turnId: 'principal-child-turn'
+        }
+        await input.onSpawned(threadRef)
+        childAttached()
+        await finish
+        return { summary: 'done', threadRef }
+      }),
+      resume: vi.fn(async () => { throw new Error('unexpected resume') }),
+      inspect: vi.fn(async () => ({ state: 'active' as const, observedAt: new Date().toISOString() })),
+      message: vi.fn(async () => ({ established: true })),
+      cancel: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined)
+    }
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter],
+      subagentStoreRoot: root,
+      getPrincipalContext: () => ({ identityVersion: 9, principal: null })
+    })
+    const parentIdentity = {
+      runtimeId: 'codex' as const,
+      threadId: 'principal-parent-thread',
+      turnId: 'principal-parent-turn'
+    }
+    const started = await host.withHostToolRequestPrincipalLease(parentIdentity, () => (
+      host.subagentTools()!.call({
+        name: 'delegate_task',
+        arguments: { prompt: 'Wait for the parent lease to finish.' },
+        context: { requestId: 'child-principal-after-parent', ...parentIdentity }
+      })
+    ))
+    const childId = (started.value as { childId: string }).childId
+    await attached
+
+    expect(() => host.principalForToolRequest(parentIdentity)).toThrow('no Host Principal binding')
+    expect(host.principalForToolRequest({
+      runtimeId: 'codex',
+      threadId: 'principal-child-thread',
+      turnId: 'principal-child-turn'
+    })).toEqual({ identityVersion: 9, principal: null })
+
+    finishChild()
+    await expect(host.subagentTools()!.call({
+      name: 'subagent_wait',
+      arguments: { childId, timeoutMs: 1_000 },
+      context: { requestId: 'wait-child-principal-after-parent', ...parentIdentity }
+    })).resolves.toMatchObject({ value: { status: 'completed', terminal: true } })
+    expect(host.principalForToolRequest({
+      runtimeId: 'codex',
+      threadId: 'principal-child-thread',
+      turnId: 'principal-child-turn'
+    })).toEqual({ identityVersion: 9, principal: null })
+    host.dispose()
+  })
+
   it('runs host-owned Codex delegation through the real synthetic child publisher', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agent-runtime-codex-delegation-'))
     evidenceQueueRoots.push(root)
@@ -604,6 +681,11 @@ describe('AgentRuntimeHost', () => {
         turnId: 'child-turn'
       }
       await input.onSpawned(threadRef)
+      expect(host.principalForToolRequest({
+        runtimeId: 'codex',
+        threadId: 'child-thread',
+        turnId: 'child-turn'
+      })).toEqual({ identityVersion: 0, principal: null })
       return { summary: 'Codex child completed', threadRef }
     })
     adapter.subagents = {
@@ -629,16 +711,16 @@ describe('AgentRuntimeHost', () => {
     })[Symbol.asyncIterator]()
     const firstSubscribedEvent = subscription.next()
 
-    const started = await tools.call({
+    const parentIdentity = {
+      runtimeId: 'codex' as const,
+      threadId: 'parent-thread',
+      turnId: 'parent-turn'
+    }
+    const started = await host.withHostToolRequestPrincipalLease(parentIdentity, () => tools.call({
       name: 'delegate_task',
       arguments: { prompt: 'Read one paper.' },
-      context: {
-        requestId: 'spawn-codex-1',
-        runtimeId: 'codex',
-        threadId: 'parent-thread',
-        turnId: 'parent-turn'
-      }
-    })
+      context: { requestId: 'spawn-codex-1', ...parentIdentity }
+    }))
     const childId = (started.value as { childId: string }).childId
     await expect(tools.call({
       name: 'subagent_wait',

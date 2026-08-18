@@ -6,6 +6,7 @@ import { InMemoryMultiAgentStore } from './store.js'
 
 test('runtime persists queued/running/completed records through an injected executor', async () => {
   const store = new InMemoryMultiAgentStore()
+  const executorContext = Object.freeze({ lease: 'host-only' })
   const events: MultiAgentChildEvent[] = []
   const usageRecords: unknown[] = []
   const runtime = new MultiAgentRuntime({
@@ -25,6 +26,7 @@ test('runtime persists queued/running/completed records through an injected exec
       assert.deepEqual(input.bashCommandPolicy, { allowPatterns: ['^python3 '] })
       assert.deepEqual(input.filePathPolicy, { allowPaths: ['/workspace'] })
       assert.equal(input.maxToolCalls, 12)
+      assert.equal(input.executorContext, executorContext)
       assert.equal(input.signal.aborted, false)
       await input.appendTranscript({
         id: 'tool-1',
@@ -53,7 +55,8 @@ test('runtime persists queued/running/completed records through an injected exec
     strictAllowedToolNames: true,
     bashCommandPolicy: { allowPatterns: ['^python3 '] },
     filePathPolicy: { allowPaths: ['/workspace'] },
-    maxToolCalls: 12
+    maxToolCalls: 12,
+    executorContext
   })
 
   assert.equal(record.status, 'completed')
@@ -61,6 +64,7 @@ test('runtime persists queued/running/completed records through an injected exec
   assert.deepEqual(record.usage, { promptTokens: 2, completionTokens: 3, totalTokens: 5 })
   assert.deepEqual(record.transcript.map((entry) => entry.id), ['child-1-prompt', 'tool-1', 'assistant-1'])
   assert.equal(record.threadRef?.threadId, 'child-thread-1')
+  assert.equal('executorContext' in record, false)
   assert.deepEqual(events.map((event) => event.status), ['queued', 'running', 'completed'])
   assert.equal(usageRecords.length, 1)
 
@@ -663,6 +667,7 @@ test('runtime inspects, messages, and explicitly cancels a running child through
 
 test('runtime resumes an interrupted child with the same identity and provider thread', async () => {
   let execution = 0
+  const resumedExecutorContext = Object.freeze({ lease: 'resume-host-only' })
   const runtime = new MultiAgentRuntime({
     store: new InMemoryMultiAgentStore(),
     idGenerator: () => 'child-resumable',
@@ -679,6 +684,7 @@ test('runtime resumes an interrupted child with the same identity and provider t
       }
       assert.equal(input.resumeThreadRef?.threadId, 'provider-child-thread')
       assert.equal(input.prompt, 'Continue the interrupted review.')
+      assert.equal(input.executorContext, resumedExecutorContext)
       return {
         summary: 'Resumed work completed.',
         threadRef: { runtime: 'codex', threadId: 'provider-child-thread', turnId: 'turn-2' }
@@ -697,7 +703,8 @@ test('runtime resumes an interrupted child with the same identity and provider t
     parentThreadId: 'thread-1',
     parentTurnId: 'turn-2',
     childId: started.id,
-    prompt: 'Continue the interrupted review.'
+    prompt: 'Continue the interrupted review.',
+    executorContext: resumedExecutorContext
   })
   assert.equal(resumed.id, started.id)
   assert.equal(resumed.status, 'running')

@@ -321,6 +321,23 @@ export class AgentRuntimeHost {
               maxParallel: settings.maxParallel
             }
           },
+          principalForParentTurn: (runtimeId, parentThreadId, parentTurnId) => (
+            this.principalForToolRequest({
+              runtimeId,
+              threadId: parentThreadId,
+              turnId: parentTurnId
+            })
+          ),
+          bindChildTurnPrincipal: (runtimeId, threadRef, principalContext) => {
+            const threadId = threadRef.threadId.trim()
+            const turnId = threadRef.turnId?.trim()
+            if (!threadId || !turnId) {
+              throw new Error('Persistent child Principal binding requires exact threadId and turnId.')
+            }
+            this.rememberTurnPrincipal(runtimeId, threadId, turnId, principalContext)
+            const key = turnGovernanceKey(runtimeId, threadId, turnId)
+            return () => this.markTurnPrincipalTerminal(key)
+          },
           onChildEvent: async (runtimeId, event, record) => {
             const { adapter, context } = await this.resolveRequiredRuntime(runtimeId, event.parentThreadId)
             await this.publishSyntheticEvent(adapter, context, {
