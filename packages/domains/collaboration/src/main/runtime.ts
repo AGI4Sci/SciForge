@@ -279,12 +279,21 @@ export class CollaborationRuntime {
       tasks: state.tasks.filter((task) => task.projectId === project.projectId).map(mapTaskView)
     }))
     const connectionState = connection.state()
+    const deviceCredentialAvailable = await this.options.packageSecrets.has('device-credential')
+    const localAgent = configured.settings
+      ? state.agents.find((agent) => (
+          agent.installationId === configured.settings!.installationId
+          && agent.lifecycleStatus === 'active'
+        ))
+      : undefined
     return {
       revision: state.revision,
       connection: {
         configured: configured.settings !== null,
         ...(configured.settings ? { baseUrl: configured.settings.baseUrl } : {}),
         state: configured.settings ? connectionState.state : 'unconfigured',
+        deviceCredentialAvailable,
+        ...(localAgent ? { localAgentId: localAgent.agentId } : {}),
         ...(connectionState.lastConnectedAt ? { lastConnectedAt: connectionState.lastConnectedAt } : {}),
         lastInboxSequence: state.lastInboxSequence,
         pendingOutboxCount: state.outbox.filter((entry) => (
@@ -478,7 +487,7 @@ export class CollaborationRuntime {
       return
     }
     if (input.scope === 'outbox') {
-      this.requireOutbox().retry(input.id)
+      await this.requireOutbox().retry(input.id)
       return
     }
     if (input.scope === 'projection') {
@@ -514,7 +523,7 @@ export class CollaborationRuntime {
       threadId: projection.threadId
     })
     for (const turn of thread.turns) {
-      await this.requireProjections().mirrorCanonicalTurn({
+      await this.requireProjections().reconcileCanonicalTurn({
         runtimeId: projection.runtimeId,
         threadId: projection.threadId,
         turnId: turn.id,

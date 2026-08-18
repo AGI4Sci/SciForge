@@ -258,7 +258,7 @@ export class ProjectionCoordinator {
       throw new Error('Ambiguous local Session projection binding.')
     }
     const projection = matching[0]!
-    const receiptKey = `desktop:${event.runtimeId}:${event.threadId}:${event.itemId}`
+    const receiptKey = desktopReceiptKey(event)
     const localItemId = transcriptLocalItemId(event)
     const hash = sha256(event.text)
     const queued = await this.options.store.transact((draft) => {
@@ -319,6 +319,26 @@ export class ProjectionCoordinator {
     } catch (error) {
       await this.failDelivery(queued.item.queueItemId, error)
     }
+  }
+
+  async reconcileCanonicalTurn(input: Readonly<{
+    runtimeId: string
+    threadId: string
+    turnId: string
+    messages: readonly DomainAgentTranscriptMessage[]
+  }>): Promise<void> {
+    const existingReceipts = new Set(
+      this.options.store.snapshot().receipts.map((receipt) => receipt.receiptKey)
+    )
+    const missingMessages = input.messages.filter((message) => !existingReceipts.has(
+      desktopReceiptKey({
+        runtimeId: input.runtimeId,
+        threadId: input.threadId,
+        itemId: message.itemId
+      })
+    ))
+    if (missingMessages.length === 0) return
+    await this.mirrorCanonicalTurn({ ...input, messages: missingMessages })
   }
 
   async mirrorCanonicalTurn(input: Readonly<{
@@ -624,6 +644,10 @@ function transcriptLocalItemId(event: DesktopTranscriptEvent): string {
     event.threadId,
     event.itemId
   ])).slice(0, 48)}`
+}
+
+function desktopReceiptKey(event: Pick<DesktopTranscriptEvent, 'runtimeId' | 'threadId' | 'itemId'>): string {
+  return `desktop:${event.runtimeId}:${event.threadId}:${event.itemId}`
 }
 
 function localOpaqueId(prefix: string): string {
