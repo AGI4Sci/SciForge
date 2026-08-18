@@ -659,7 +659,7 @@ function MessageTurn({
 
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      {turn.user ? <MessageBubble block={turn.user} /> : null}
+      {turn.user ? <MessageBubble block={turn.user} threadId={threadId} /> : null}
 
       {hasProcess ? (
         <div className="flex flex-col gap-1 pb-2">
@@ -707,6 +707,7 @@ function MessageTurn({
         <MessageBubble
           key={block.id}
           block={block}
+          threadId={threadId}
           markdownImages={block.kind === 'assistant' ? turnArtifactImages : undefined}
           onOpenImageArtifactInVisualReview={onOpenImageArtifactInVisualReview}
         />
@@ -715,6 +716,7 @@ function MessageTurn({
       {showLiveAssistant ? (
         <MessageBubble
           block={{ kind: 'assistant', id: 'live-assistant', text: liveContent }}
+          threadId={threadId}
           markdownImages={turnArtifactImages}
           onOpenImageArtifactInVisualReview={onOpenImageArtifactInVisualReview}
         />

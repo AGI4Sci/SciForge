@@ -4,6 +4,7 @@ import {
   MultiAgentChildRunAggregate,
   MultiAgentChildRunRecord,
   MultiAgentChildThreadRef,
+  type MultiAgentBrokerScope,
   type MultiAgentChildStatus,
   type MultiAgentDiagnostics,
   MultiAgentRuntimeConfig,
@@ -52,11 +53,15 @@ export type RunChildInput = {
   workspace?: string
   model?: string
   allowedToolNames?: readonly string[]
+  brokerScope?: MultiAgentBrokerScope
+  deadlineMs?: number
   strictAllowedToolNames?: boolean
   bashCommandPolicy?: Record<string, unknown>
   filePathPolicy?: Record<string, unknown>
   maxToolCalls?: number
   resumeThreadRef?: MultiAgentChildThreadRef
+  /** Transient Host-owned data passed only to the executor; never persisted or exposed. */
+  executorContext?: unknown
   signal?: AbortSignal
 }
 
@@ -65,6 +70,8 @@ export type ResumeChildInput = {
   parentTurnId: string
   childId: string
   prompt?: string
+  /** Transient Host-owned data passed only to the executor; never persisted or exposed. */
+  executorContext?: unknown
   signal?: AbortSignal
 }
 
@@ -98,9 +105,16 @@ export class MultiAgentRuntime {
   private readonly boundariesByChildId = new Map<string, ReturnType<typeof createExecutionBoundary>>()
   private startGate: Promise<void> = Promise.resolve()
   private eventSeq = 0
+  private disposed = false
+  private readonly terminalDeliveries = new Map<string, Promise<void>>()
+  private readonly terminalRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly terminalRetryAttempts = new Map<string, number>()
 
   constructor(private readonly options: MultiAgentRuntimeOptions) {
     this.config = MultiAgentRuntimeConfig.parse(options.config ?? {})
+    queueMicrotask(() => {
+      void this.recoverPendingTerminalEvents().catch(() => undefined)
+    })
   }
 
   async runChild(input: RunChildInput): Promise<MultiAgentChildRunRecord> {
@@ -195,6 +209,13 @@ export class MultiAgentRuntime {
       prompt: normalized.prompt,
       workspace: normalized.workspace,
       model: normalized.model,
+      allowedToolNames: normalized.allowedToolNames,
+      brokerScope: normalized.brokerScope,
+      deadlineMs: normalized.deadlineMs,
+      strictAllowedToolNames: normalized.strictAllowedToolNames,
+      bashCommandPolicy: normalized.bashCommandPolicy,
+      filePathPolicy: normalized.filePathPolicy,
+      maxToolCalls: normalized.maxToolCalls,
       status: 'queued',
       usage: EMPTY_MULTI_AGENT_USAGE,
       transcript: [{
@@ -230,7 +251,7 @@ export class MultiAgentRuntime {
     const id = initialRecord.id
     let record = initialRecord
 
-    const boundary = createExecutionBoundary(parentSignal)
+    const boundary = createExecutionBoundary(parentSignal, normalized.deadlineMs)
     this.boundariesByChildId.set(id, boundary)
     let acceptingTranscript = true
     let lifecycleControl: MultiAgentLifecycleControl | undefined
@@ -258,11 +279,14 @@ export class MultiAgentRuntime {
           workspace: normalized.workspace,
           model: normalized.model,
           allowedToolNames: normalized.allowedToolNames,
+          brokerScope: normalized.brokerScope,
+          deadlineMs: normalized.deadlineMs,
           strictAllowedToolNames: normalized.strictAllowedToolNames,
           bashCommandPolicy: normalized.bashCommandPolicy,
           filePathPolicy: normalized.filePathPolicy,
           maxToolCalls: normalized.maxToolCalls,
           resumeThreadRef: normalized.resumeThreadRef,
+          executorContext: normalized.executorContext,
           signal: boundary.signal,
           registerLifecycleControl: (control) => {
             if (!boundary.signal.aborted) {
@@ -404,7 +428,13 @@ export class MultiAgentRuntime {
 
     const resumePrompt = input.prompt?.trim() || 'Continue from where you were interrupted and finish the original task.'
     const resumedAt = this.now()
-    const { error: _error, finishedAt: _finishedAt, ...resumable } = reserved
+    const {
+      error: _error,
+      finishedAt: _finishedAt,
+      terminalEventDeliveredAt: _terminalEventDeliveredAt,
+      ...resumable
+    } = reserved
+    this.clearTerminalRetry(reserved.parentThreadId, childId)
     const queued = MultiAgentChildRunRecord.parse({
       ...resumable,
       parentTurnId,
@@ -441,7 +471,15 @@ export class MultiAgentRuntime {
       prompt: resumePrompt,
       workspace: reserved.workspace,
       model: reserved.model,
+      allowedToolNames: reserved.allowedToolNames,
+      brokerScope: reserved.brokerScope,
+      deadlineMs: reserved.deadlineMs,
+      strictAllowedToolNames: reserved.strictAllowedToolNames,
+      bashCommandPolicy: reserved.bashCommandPolicy,
+      filePathPolicy: reserved.filePathPolicy,
+      maxToolCalls: reserved.maxToolCalls,
       resumeThreadRef: reserved.threadRef,
+      executorContext: input.executorContext,
       signal: input.signal
     })
     const execution = this.executeReservedChild(queued, normalized, input.signal, (record) => {
@@ -534,11 +572,38 @@ export class MultiAgentRuntime {
     return waited?.record ?? record
   }
 
+  suspendChildExecutionDeadline(childId: string, token: string): boolean {
+    const boundary = this.boundariesByChildId.get(childId)
+    if (!boundary) return false
+    return boundary.suspend(token)
+  }
+
+  resumeChildExecutionDeadline(childId: string, token: string): boolean {
+    const boundary = this.boundariesByChildId.get(childId)
+    if (!boundary) return false
+    return boundary.resume(token)
+  }
+
   async deleteChild(parentThreadId: string, childId: string): Promise<MultiAgentChildRunRecord | null> {
     const cancelled = await this.cancelChild(parentThreadId, childId)
     if (!cancelled) return null
+    if (isTerminalChildStatus(cancelled.status) && this.options.events?.onChildTerminal) {
+      const persisted = await this.options.store.get(parentThreadId, childId)
+      if (persisted && !persisted.terminalEventDeliveredAt) {
+        await this.deliverTerminalEvent(persisted)
+        const delivered = await this.options.store.get(parentThreadId, childId)
+        if (delivered && !delivered.terminalEventDeliveredAt) {
+          throw new MultiAgentRuntimeError(createMultiAgentError(
+            'invalid_input',
+            `multi-agent child ${childId} cannot be deleted while terminal lifecycle delivery is pending`,
+            { retryable: true }
+          ))
+        }
+      }
+    }
     const removed = await this.options.store.delete(parentThreadId, childId)
     if (!removed) return null
+    this.clearTerminalRetry(parentThreadId, childId)
     try {
       await this.options.events?.onChildEvent?.({
         type: 'child_event',
@@ -574,6 +639,8 @@ export class MultiAgentRuntime {
       contractVersion: MULTI_AGENT_CONTRACT_VERSION,
       config: this.config,
       active: this.active,
+      activeLifecycleControls: this.lifecycleControlsByChildId.size,
+      activeBoundaries: this.boundariesByChildId.size,
       childRuns,
       statusCounts: countStatuses(childRuns),
       usage: sumUsage(childRuns),
@@ -619,6 +686,13 @@ export class MultiAgentRuntime {
       }
       return recovered
     })
+  }
+
+  dispose(): void {
+    this.disposed = true
+    for (const timer of this.terminalRetryTimers.values()) clearTimeout(timer)
+    this.terminalRetryTimers.clear()
+    this.terminalRetryAttempts.clear()
   }
 
   private assertCanStart(): void {
@@ -672,6 +746,7 @@ export class MultiAgentRuntime {
 
   private async persistAndEmit(record: MultiAgentChildRunRecord): Promise<void> {
     await this.options.store.upsert(record)
+    if (isTerminalChildStatus(record.status)) await this.deliverTerminalEvent(record)
     try {
       await this.options.events?.onChildEvent?.({
         type: 'child_event',
@@ -689,6 +764,83 @@ export class MultiAgentRuntime {
     } catch {
       // Child events are refresh notifications. The persisted child record is the
       // canonical state, so a notification transport failure must not abort work.
+    }
+  }
+
+  private async recoverPendingTerminalEvents(): Promise<void> {
+    if (this.disposed || !this.options.events?.onChildTerminal) return
+    const records = await this.options.store.list()
+    await Promise.all(records
+      .filter((record) => isTerminalChildStatus(record.status) && !record.terminalEventDeliveredAt)
+      .map((record) => this.deliverTerminalEvent(record)))
+  }
+
+  private async deliverTerminalEvent(record: MultiAgentChildRunRecord): Promise<void> {
+    const sink = this.options.events?.onChildTerminal
+    if (!sink || this.disposed || record.terminalEventDeliveredAt) return
+    const key = terminalDeliveryKey(record.parentThreadId, record.id, record.attempt)
+    const active = this.terminalDeliveries.get(key)
+    if (active) return active
+    const delivery = this.attemptTerminalDelivery(record, sink, key)
+    this.terminalDeliveries.set(key, delivery)
+    try {
+      await delivery
+    } finally {
+      if (this.terminalDeliveries.get(key) === delivery) this.terminalDeliveries.delete(key)
+    }
+  }
+
+  private async attemptTerminalDelivery(
+    record: MultiAgentChildRunRecord,
+    sink: NonNullable<MultiAgentEventSink['onChildTerminal']>,
+    key: string
+  ): Promise<void> {
+    try {
+      await sink(record)
+      const latest = await this.options.store.get(record.parentThreadId, record.id)
+      if (!latest || latest.attempt !== record.attempt || !isTerminalChildStatus(latest.status)) return
+      if (!latest.terminalEventDeliveredAt) {
+        await this.options.store.upsert(MultiAgentChildRunRecord.parse({
+          ...latest,
+          terminalEventDeliveredAt: this.now()
+        }))
+      }
+      this.clearTerminalRetry(record.parentThreadId, record.id, key)
+    } catch {
+      this.scheduleTerminalRetry(record, key)
+    }
+  }
+
+  private scheduleTerminalRetry(record: MultiAgentChildRunRecord, key: string): void {
+    if (this.disposed || this.terminalRetryTimers.has(key)) return
+    const attempt = (this.terminalRetryAttempts.get(key) ?? 0) + 1
+    this.terminalRetryAttempts.set(key, attempt)
+    const delayMs = Math.min(250 * (2 ** Math.min(attempt - 1, 7)), 30_000)
+    const timer = setTimeout(() => {
+      this.terminalRetryTimers.delete(key)
+      void this.options.store.get(record.parentThreadId, record.id).then((latest) => {
+        if (!latest || latest.attempt !== record.attempt ||
+            !isTerminalChildStatus(latest.status) || latest.terminalEventDeliveredAt) {
+          this.terminalRetryAttempts.delete(key)
+          return
+        }
+        return this.deliverTerminalEvent(latest)
+      }).catch(() => this.scheduleTerminalRetry(record, key))
+    }, delayMs)
+    ;(timer as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.()
+    this.terminalRetryTimers.set(key, timer)
+  }
+
+  private clearTerminalRetry(parentThreadId: string, childId: string, knownKey?: string): void {
+    const prefix = `${parentThreadId}\u0000${childId}\u0000`
+    const keys = knownKey
+      ? [knownKey]
+      : [...this.terminalRetryTimers.keys()].filter((key) => key.startsWith(prefix))
+    for (const key of keys) {
+      const timer = this.terminalRetryTimers.get(key)
+      if (timer) clearTimeout(timer)
+      this.terminalRetryTimers.delete(key)
+      this.terminalRetryAttempts.delete(key)
     }
   }
 
@@ -776,11 +928,14 @@ function normalizeRunChildInput(input: RunChildInput): NormalizedRunChildInput {
     workspace: trimOptional(input.workspace),
     model: trimOptional(input.model),
     allowedToolNames: normalizeAllowedToolNames(input.allowedToolNames),
+    brokerScope: normalizeBrokerScope(input.brokerScope),
+    deadlineMs: normalizeDeadlineMs(input.deadlineMs),
     strictAllowedToolNames: input.strictAllowedToolNames === true,
     bashCommandPolicy: input.bashCommandPolicy,
     filePathPolicy: input.filePathPolicy,
     maxToolCalls: normalizePositiveInteger(input.maxToolCalls),
-    resumeThreadRef: input.resumeThreadRef
+    resumeThreadRef: input.resumeThreadRef,
+    executorContext: input.executorContext
   }
 }
 
@@ -788,6 +943,23 @@ function normalizePositiveInteger(value: number | undefined): number | undefined
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
   const normalized = Math.trunc(value)
   return normalized > 0 ? normalized : undefined
+}
+
+function normalizeDeadlineMs(value: number | undefined): number | undefined {
+  const normalized = normalizePositiveInteger(value)
+  return normalized === undefined ? undefined : Math.min(normalized, 600_000)
+}
+
+function normalizeBrokerScope(
+  value: RunChildInput['brokerScope']
+): RunChildInput['brokerScope'] {
+  if (!value || value.providerFamily !== 'managed-mcp') return undefined
+  const packageName = value.packageName?.trim()
+  return Object.freeze({ providerFamily: 'managed-mcp' as const, ...(packageName ? { packageName } : {}) })
+}
+
+function terminalDeliveryKey(parentThreadId: string, childId: string, attempt: number): string {
+  return `${parentThreadId}\u0000${childId}\u0000${attempt}`
 }
 
 function normalizeWaitTimeoutMs(value: number | undefined): number {
@@ -1107,8 +1279,12 @@ function objectRecord(value: unknown): Record<string, unknown> {
     : {}
 }
 
-function createExecutionBoundary(parentSignal: AbortSignal | undefined) {
+function createExecutionBoundary(parentSignal: AbortSignal | undefined, deadlineMs: number | undefined) {
   const controller = new AbortController()
+  const suspensionTokens = new Set<string>()
+  let remainingMs = deadlineMs
+  let activeSince = deadlineMs === undefined ? undefined : Date.now()
+  let deadlineHandle: ReturnType<typeof setTimeout> | undefined
   let resolveParentAbort!: () => void
   const parentAborted = new Promise<void>((resolve) => {
     resolveParentAbort = resolve
@@ -1119,13 +1295,49 @@ function createExecutionBoundary(parentSignal: AbortSignal | undefined) {
   }
   if (parentSignal?.aborted) abortFromParent()
   else parentSignal?.addEventListener('abort', abortFromParent, { once: true })
+
+  const abortFromDeadline = () => {
+    if (!controller.signal.aborted) controller.abort(abortError('multi-agent child execution deadline exceeded'))
+    resolveParentAbort()
+  }
+  const stopDeadlineClock = () => {
+    if (remainingMs === undefined || activeSince === undefined) return
+    remainingMs = Math.max(0, remainingMs - Math.max(0, Date.now() - activeSince))
+    activeSince = undefined
+    if (deadlineHandle !== undefined) clearTimeout(deadlineHandle)
+    deadlineHandle = undefined
+  }
+  const startDeadlineClock = () => {
+    if (remainingMs === undefined || controller.signal.aborted || suspensionTokens.size > 0) return
+    if (remainingMs <= 0) {
+      abortFromDeadline()
+      return
+    }
+    activeSince = Date.now()
+    deadlineHandle = setTimeout(abortFromDeadline, remainingMs)
+  }
+  startDeadlineClock()
   return {
     signal: controller.signal,
     parentAborted,
+    suspend(token: string) {
+      if (!token || controller.signal.aborted || suspensionTokens.has(token)) return false
+      if (suspensionTokens.size === 0) stopDeadlineClock()
+      suspensionTokens.add(token)
+      return true
+    },
+    resume(token: string) {
+      if (!suspensionTokens.delete(token)) return false
+      if (suspensionTokens.size > 0) return true
+      startDeadlineClock()
+      return true
+    },
     abort(reason?: unknown) {
       if (!controller.signal.aborted) controller.abort(reason)
     },
     dispose() {
+      if (deadlineHandle !== undefined) clearTimeout(deadlineHandle)
+      suspensionTokens.clear()
       parentSignal?.removeEventListener('abort', abortFromParent)
     }
   }

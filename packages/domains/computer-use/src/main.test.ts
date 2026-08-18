@@ -56,6 +56,26 @@ describe('Computer Use domain lifecycle', () => {
     expect(JSON.parse(String(request.body))).toEqual({
       runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1', reason: 'turn_completed'
     })
+    await listener?.({
+      kind: 'after-persistent-child-turn', state: 'cancelled', runtimeId: 'codex',
+      threadId: 'child-thread', turnId: 'child-turn', childId: 'child-1',
+      parentThreadId: 'parent-thread', parentTurnId: 'parent-turn',
+      occurredAt: '2026-08-16T00:00:01.000Z'
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const childRequest = fetchMock.mock.calls[1]?.[1] as RequestInit
+    expect(JSON.parse(String(childRequest.body))).toEqual({
+      runtimeId: 'codex', threadId: 'child-thread', turnId: 'child-turn', reason: 'turn_cancelled'
+    })
+    fetchMock.mockRejectedValueOnce(new Error('cleanup unavailable'))
+    await expect(listener?.({
+      kind: 'after-persistent-child-turn', state: 'completed', runtimeId: 'codex',
+      threadId: 'retry-child-thread', turnId: 'retry-child-turn', childId: 'child-2',
+      parentThreadId: 'parent-thread', parentTurnId: 'parent-turn',
+      occurredAt: '2026-08-16T00:00:02.000Z'
+    })).rejects.toThrow('cleanup unavailable')
+    fetchMock.mockRejectedValueOnce(new Error('ordinary turn cleanup unavailable'))
+    await expect(listener?.(event)).resolves.toBeUndefined()
     await dispose?.()
     expect(unsubscribe).toHaveBeenCalledOnce()
   })

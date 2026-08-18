@@ -13,6 +13,7 @@ import type {
 
 export type RuntimeMcpServerConfig = {
   id: string
+  packageName?: string
   command: string
   args?: string[]
   env?: Record<string, string>
@@ -216,6 +217,7 @@ export class RuntimeMcpToolGateway {
         type: 'function',
         namespace: state.namespace,
         providerId: state.config.id,
+        ...(state.config.packageName ? { providerPackageName: state.config.packageName } : {}),
         providerToolName: tool.originalName,
         name: tool.catalogName,
         description: tool.description || tool.title || `MCP tool ${tool.originalName}`,

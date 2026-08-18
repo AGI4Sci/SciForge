@@ -97,6 +97,98 @@ describe.skipIf(!edge)('test-owned single CDP target', () => {
       await new Promise<void>((resolve) => app.close(() => resolve()))
     }
   }, 30_000)
+
+  it.each([2, 4, 8])('executes %i independent BrowserContext targets with overlapping action requests', async (count) => {
+    const app = createServer((_request, response) => {
+      const body = Buffer.from(`<!doctype html><title>Context Target</title>
+        <label>Editor<input aria-label="Editor"></label>
+        <button onclick="document.querySelector('output').textContent=document.querySelector('input').value">Commit</button>
+        <output></output>`)
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-length': String(body.length) })
+      response.end(body)
+    })
+    await new Promise<void>((resolve) => app.listen(0, '127.0.0.1', resolve))
+    const address = app.address()
+    if (!address || typeof address === 'string') throw new Error('test server did not listen')
+    const cdpPort = await freePort()
+    const browser = await chromium.launch({
+      executablePath: edge,
+      headless: true,
+      args: [`--remote-debugging-port=${cdpPort}`]
+    })
+    const contexts = await Promise.all(Array.from(
+      { length: count },
+      () => browser.newContext({ viewport: { width: 800, height: 600 } })
+    ))
+    const pages = await Promise.all(contexts.map(async (context, index) => {
+      const page = await context.newPage()
+      await page.goto(`http://127.0.0.1:${address.port}/?context=${index}`)
+      await page.evaluate((title) => { document.title = title }, `Context Target ${index}`)
+      return page
+    }))
+    const adapter = await startComputerUseCdpAdapter({
+      driver: createPlaywrightCdpDriver([`http://127.0.0.1:${cdpPort}`])
+    })
+    const call = async (path: string, body?: Record<string, unknown>) => {
+      const response = await fetch(`${adapter.url}/v1/${path}`, {
+        method: body ? 'POST' : 'GET',
+        headers: { Authorization: `Bearer ${adapter.token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+        ...(body ? { body: JSON.stringify(body) } : {})
+      })
+      const payload = await response.json() as { ok: boolean; data: Record<string, any> }
+      expect(payload.ok).toBe(true)
+      return payload.data
+    }
+    try {
+      const listed = await call('targets')
+      const targets = Array.from({ length: count }, (_, index) =>
+        (listed.targets as Array<Record<string, any>>)
+          .find((candidate) => candidate.metadata?.title === `Context Target ${index}`))
+      expect(targets.every(Boolean)).toBe(true)
+      const handles = await Promise.all(targets.map((target, index) =>
+        call('handles/open', { target, requestId: `context-open-${count}-${index}` })))
+      const observations = await Promise.all(handles.map((handle) =>
+        call('observe', { handleId: handle.handleId })))
+      await Promise.all(observations.map((observed, index) => {
+        const editor = observed.metadata.semanticTree.find((node: Record<string, any>) => node.name === 'Editor')
+        return call('action', {
+          handleId: handles[index].handleId,
+          expectedRevision: observed.revision,
+          action: { action: 'click', coordinate: toPixels(editor.center) }
+        })
+      }))
+      const beforeType = await Promise.all(handles.map((handle) => call('observe', { handleId: handle.handleId })))
+      const spans = await Promise.all(beforeType.map(async (observed, index) => {
+        const startedNs = process.hrtime.bigint()
+        const result = await call('action', {
+          handleId: handles[index].handleId,
+          expectedRevision: observed.revision,
+          action: { action: 'type', text: `child-${index}-${'x'.repeat(128)}` }
+        })
+        return { startedNs, finishedNs: process.hrtime.bigint(), result }
+      }))
+      expect(spans.every((span) => span.result.verification.status === 'verified')).toBe(true)
+      expect(spans.reduce((end, span) => span.finishedNs < end ? span.finishedNs : end, spans[0].finishedNs))
+        .toBeGreaterThan(spans.reduce((start, span) => span.startedNs > start ? span.startedNs : start, spans[0].startedNs))
+      await Promise.all(handles.map(async (handle, index) => {
+        const observed = await call('observe', { handleId: handle.handleId })
+        const commit = observed.metadata.semanticTree.find((node: Record<string, any>) => node.name === 'Commit')
+        await call('action', {
+          handleId: handle.handleId,
+          expectedRevision: observed.revision,
+          action: { action: 'click', coordinate: toPixels(commit.center) }
+        })
+        expect(await pages[index].locator('output').textContent()).toBe(`child-${index}-${'x'.repeat(128)}`)
+        await call('handles/close', { handleId: handle.handleId, reason: 'test_complete' })
+      }))
+      expect((await call('capabilities')).activeHandleCount).toBe(0)
+    } finally {
+      await adapter.close()
+      await Promise.all(contexts.map((context) => context.close()))
+      await browser.close()
+      await new Promise<void>((resolve) => app.close(() => resolve()))
+    }
+  }, 60_000)
 })
 
 async function freePort(): Promise<number> {

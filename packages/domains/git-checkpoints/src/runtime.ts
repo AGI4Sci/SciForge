@@ -52,6 +52,7 @@ export class GitCheckpointRuntime {
     })
     const disposeTurns = context.turnEvents.subscribe(async (event) => {
       if (!enabled || context.signal.aborted) return
+      if (event.kind === 'after-persistent-child-turn') return
       if (!shouldCaptureEvent(event)) return
       const key = eventKey(event)
       if (this.#seen.has(key)) return
@@ -110,6 +111,7 @@ export class GitCheckpointRuntime {
 }
 
 function shouldCaptureEvent(event: DomainMainTurnLifecycleEvent): boolean {
+  if (event.kind === 'after-persistent-child-turn') return false
   if (!event.runtimeId.trim() || !event.threadId.trim() || !event.workspaceRoot?.trim()) {
     return false
   }
@@ -120,6 +122,9 @@ function shouldCaptureEvent(event: DomainMainTurnLifecycleEvent): boolean {
 }
 
 function eventKey(event: DomainMainTurnLifecycleEvent): string {
+  if (event.kind === 'after-persistent-child-turn') {
+    return [event.kind, event.runtimeId, event.threadId, event.turnId, event.occurredAt].join('\u0000')
+  }
   const turnId = event.kind === 'after-turn' && event.state !== 'rejected'
     ? event.turnId
     : ''

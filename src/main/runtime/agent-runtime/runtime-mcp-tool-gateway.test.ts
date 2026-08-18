@@ -97,6 +97,7 @@ describe('runtime MCP tool gateway', () => {
     const bridge = createRuntimeMcpToolGateway({
       servers: [{
         id: 'gui_owl_computer_use',
+        packageName: '@sciforge/domain-computer-use',
         command: '/bin/computer-use-mcp',
         enabledTools: ['computer_use']
       }],
@@ -130,6 +131,7 @@ describe('runtime MCP tool gateway', () => {
         type: 'function',
         namespace: 'mcp_gui_owl_computer_use',
         providerId: 'gui_owl_computer_use',
+        providerPackageName: '@sciforge/domain-computer-use',
         providerToolName: 'computer_use',
         name: 'computer_use',
         description: 'Shared host UI control.',

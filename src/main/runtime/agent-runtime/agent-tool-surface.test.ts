@@ -7,7 +7,8 @@ import {
   filterAgentRuntimeToolSurface,
   nativeAgentToolExecutionMetadata,
   nativeVisualResourceIdentity,
-  normalizeNativeVisualToolError
+  normalizeNativeVisualToolError,
+  scopeAgentRuntimeToolSurface
 } from './agent-tool-surface'
 
 describe('filterAgentRuntimeToolSurface', () => {
@@ -74,6 +75,40 @@ describe('filterAgentRuntimeToolSurface', () => {
     deferred.assertPrincipalLease?.(context)
 
     expect(verified).toEqual(['first', 'first', 'second', 'first'])
+  })
+})
+
+describe('scopeAgentRuntimeToolSurface', () => {
+  it('injects broker scope, enforces the allowlist, and stops at maxToolCalls', async () => {
+    const contexts: unknown[] = []
+    const source = {
+      tools: () => [
+        { type: 'function' as const, name: 'sciforge_discover', description: 'discover', inputSchema: {} },
+        { type: 'function' as const, name: 'shell', description: 'shell', inputSchema: {} }
+      ],
+      call: async (request: { name: string; context: unknown }) => {
+        contexts.push(request.context)
+        return { tool: request.name, value: {} }
+      }
+    }
+    const scoped = scopeAgentRuntimeToolSurface(source as never, {
+      allowedTools: ['sciforge_discover'],
+      brokerScope: { providerFamily: 'managed-mcp', packageName: '@sciforge/domain-computer-use' },
+      maxToolCalls: 1
+    })
+    expect(scoped.tools().map((tool) => tool.name)).toEqual(['sciforge_discover'])
+    await scoped.call({
+      name: 'sciforge_discover', arguments: {},
+      context: { requestId: 'one', runtimeId: 'codex' }
+    })
+    expect(contexts).toEqual([expect.objectContaining({
+      allowedToolNames: ['sciforge_discover'],
+      brokerScope: { providerFamily: 'managed-mcp', packageName: '@sciforge/domain-computer-use' }
+    })])
+    expect(() => scoped.call({
+      name: 'sciforge_discover', arguments: {},
+      context: { requestId: 'two', runtimeId: 'codex' }
+    })).toThrow(/tool-call budget/)
   })
 })
 

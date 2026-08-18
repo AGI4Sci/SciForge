@@ -332,14 +332,19 @@ function managedGuiMcpServers(settings: AppSettingsV1) {
   })
   const contributed = domainModuleCatalog
     ? listMainRuntimeMcpServerContributions(domainModuleCatalog)
-      .map((contribution) => contribution.createConfig(settings))
+      .map((contribution) => {
+        const config = contribution.value.createConfig(settings)
+        return config
+          ? {
+              ...config,
+              packageName: contribution.packageName,
+              args: config.args ? [...config.args] : undefined,
+              env: config.env ? { ...config.env } : undefined,
+              enabledTools: config.enabledTools ? [...config.enabledTools] : undefined
+            }
+          : null
+      })
       .filter((config): config is NonNullable<typeof config> => config !== null)
-      .map((config) => ({
-        ...config,
-        args: config.args ? [...config.args] : undefined,
-        env: config.env ? { ...config.env } : undefined,
-        enabledTools: config.enabledTools ? [...config.enabledTools] : undefined
-      }))
     : []
   const combined = [...builtIn, ...contributed]
   const ids = new Set<string>()
@@ -353,10 +358,10 @@ function managedGuiMcpServers(settings: AppSettingsV1) {
 async function runtimeMayUseManagedTool(runtimeId: string, tool: RuntimeToolDefinition): Promise<boolean> {
   const contribution = domainModuleCatalog
     ? listMainRuntimeMcpServerContributions(domainModuleCatalog)
-      .find((candidate) => candidate.serverId === tool.providerId)
+      .find((candidate) => candidate.value.serverId === tool.providerId)
     : undefined
-  return contribution?.isRuntimeEnabled
-    ? contribution.isRuntimeEnabled(await store.load(), runtimeId)
+  return contribution?.value.isRuntimeEnabled
+    ? contribution.value.isRuntimeEnabled(await store.load(), runtimeId)
     : true
 }
 

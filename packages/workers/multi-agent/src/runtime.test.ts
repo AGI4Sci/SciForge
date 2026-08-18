@@ -6,6 +6,7 @@ import { InMemoryMultiAgentStore } from './store.js'
 
 test('runtime persists queued/running/completed records through an injected executor', async () => {
   const store = new InMemoryMultiAgentStore()
+  const executorContext = Object.freeze({ lease: 'host-only' })
   const events: MultiAgentChildEvent[] = []
   const usageRecords: unknown[] = []
   const runtime = new MultiAgentRuntime({
@@ -25,6 +26,7 @@ test('runtime persists queued/running/completed records through an injected exec
       assert.deepEqual(input.bashCommandPolicy, { allowPatterns: ['^python3 '] })
       assert.deepEqual(input.filePathPolicy, { allowPaths: ['/workspace'] })
       assert.equal(input.maxToolCalls, 12)
+      assert.equal(input.executorContext, executorContext)
       assert.equal(input.signal.aborted, false)
       await input.appendTranscript({
         id: 'tool-1',
@@ -53,7 +55,8 @@ test('runtime persists queued/running/completed records through an injected exec
     strictAllowedToolNames: true,
     bashCommandPolicy: { allowPatterns: ['^python3 '] },
     filePathPolicy: { allowPaths: ['/workspace'] },
-    maxToolCalls: 12
+    maxToolCalls: 12,
+    executorContext
   })
 
   assert.equal(record.status, 'completed')
@@ -61,6 +64,7 @@ test('runtime persists queued/running/completed records through an injected exec
   assert.deepEqual(record.usage, { promptTokens: 2, completionTokens: 3, totalTokens: 5 })
   assert.deepEqual(record.transcript.map((entry) => entry.id), ['child-1-prompt', 'tool-1', 'assistant-1'])
   assert.equal(record.threadRef?.threadId, 'child-thread-1')
+  assert.equal('executorContext' in record, false)
   assert.deepEqual(events.map((event) => event.status), ['queued', 'running', 'completed'])
   assert.equal(usageRecords.length, 1)
 
@@ -663,6 +667,7 @@ test('runtime inspects, messages, and explicitly cancels a running child through
 
 test('runtime resumes an interrupted child with the same identity and provider thread', async () => {
   let execution = 0
+  const resumedExecutorContext = Object.freeze({ lease: 'resume-host-only' })
   const runtime = new MultiAgentRuntime({
     store: new InMemoryMultiAgentStore(),
     idGenerator: () => 'child-resumable',
@@ -679,6 +684,17 @@ test('runtime resumes an interrupted child with the same identity and provider t
       }
       assert.equal(input.resumeThreadRef?.threadId, 'provider-child-thread')
       assert.equal(input.prompt, 'Continue the interrupted review.')
+      assert.equal(input.executorContext, resumedExecutorContext)
+      assert.deepEqual(input.allowedToolNames, ['sciforge_discover', 'sciforge_invoke'])
+      assert.deepEqual(input.brokerScope, {
+        providerFamily: 'managed-mcp',
+        packageName: '@sciforge/domain-computer-use'
+      })
+      assert.equal(input.deadlineMs, 10_000)
+      assert.equal(input.strictAllowedToolNames, true)
+      assert.deepEqual(input.bashCommandPolicy, { allowPatterns: ['^python3 '] })
+      assert.deepEqual(input.filePathPolicy, { allowPaths: ['/workspace'] })
+      assert.equal(input.maxToolCalls, 12)
       return {
         summary: 'Resumed work completed.',
         threadRef: { runtime: 'codex', threadId: 'provider-child-thread', turnId: 'turn-2' }
@@ -689,15 +705,30 @@ test('runtime resumes an interrupted child with the same identity and provider t
   const started = await runtime.startChild({
     parentThreadId: 'thread-1',
     parentTurnId: 'turn-1',
-    prompt: 'Review the paper.'
+    prompt: 'Review the paper.',
+    allowedToolNames: ['sciforge_discover', 'sciforge_invoke'],
+    brokerScope: {
+      providerFamily: 'managed-mcp',
+      packageName: '@sciforge/domain-computer-use'
+    },
+    deadlineMs: 10_000,
+    strictAllowedToolNames: true,
+    bashCommandPolicy: { allowPatterns: ['^python3 '] },
+    filePathPolicy: { allowPaths: ['/workspace'] },
+    maxToolCalls: 12
   })
   assert.equal((await runtime.cancelChild('thread-1', started.id))?.status, 'aborted')
+  assert.deepEqual((await runtime.child('thread-1', started.id))?.brokerScope, {
+    providerFamily: 'managed-mcp',
+    packageName: '@sciforge/domain-computer-use'
+  })
 
   const resumed = await runtime.resumeChild({
     parentThreadId: 'thread-1',
     parentTurnId: 'turn-2',
     childId: started.id,
-    prompt: 'Continue the interrupted review.'
+    prompt: 'Continue the interrupted review.',
+    executorContext: resumedExecutorContext
   })
   assert.equal(resumed.id, started.id)
   assert.equal(resumed.status, 'running')
@@ -707,6 +738,96 @@ test('runtime resumes an interrupted child with the same identity and provider t
   assert.equal(completed?.record.status, 'completed')
   assert.equal(completed?.record.threadRef?.turnId, 'turn-2')
   assert.equal(completed?.record.summary, 'Resumed work completed.')
+})
+
+test('runtime retries durable terminal delivery independently of refresh failures', async () => {
+  const store = new InMemoryMultiAgentStore()
+  let terminalAttempts = 0
+  const runtime = new MultiAgentRuntime({
+    store,
+    idGenerator: () => 'child-terminal-retry',
+    executor: async () => ({ summary: 'Done.' }),
+    events: {
+      onChildEvent: async () => { throw new Error('refresh transport unavailable') },
+      onChildTerminal: async () => {
+        terminalAttempts += 1
+        if (terminalAttempts === 1) throw new Error('terminal consumer unavailable')
+      }
+    }
+  })
+
+  const completed = await runtime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-1',
+    prompt: 'Deliver terminal lifecycle reliably.'
+  })
+  assert.equal(completed.status, 'completed')
+  await waitUntil(() => terminalAttempts >= 2)
+  assert.ok((await store.get('thread-1', completed.id))?.terminalEventDeliveredAt)
+  runtime.dispose()
+})
+
+test('runtime recovers pending terminal delivery when a new process starts', async () => {
+  const store = new InMemoryMultiAgentStore()
+  await store.upsert(MultiAgentChildRunRecord.parse({
+    id: 'child-pending-terminal',
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-1',
+    prompt: 'Already finished.',
+    status: 'completed',
+    transcript: [],
+    createdAt: '2026-08-18T00:00:00.000Z',
+    updatedAt: '2026-08-18T00:00:01.000Z',
+    finishedAt: '2026-08-18T00:00:01.000Z'
+  }))
+  let delivered = 0
+  const runtime = new MultiAgentRuntime({
+    store,
+    executor: async () => ({ summary: 'unused' }),
+    events: { onChildTerminal: async () => { delivered += 1 } }
+  })
+
+  await waitUntil(() => delivered === 1)
+  assert.ok((await store.get('thread-1', 'child-pending-terminal'))?.terminalEventDeliveredAt)
+  runtime.dispose()
+})
+
+test('runtime protects pending terminal delivery and never redelivers it for delete refreshes', async () => {
+  const store = new InMemoryMultiAgentStore()
+  const operations: Array<string | undefined> = []
+  let terminalCalls = 0
+  let terminalAvailable = false
+  const runtime = new MultiAgentRuntime({
+    store,
+    idGenerator: () => 'child-delete-after-terminal',
+    executor: async () => ({ summary: 'Done.' }),
+    events: {
+      onChildEvent: (event) => { operations.push(event.operation) },
+      onChildTerminal: async () => {
+        terminalCalls += 1
+        if (!terminalAvailable) throw new Error('terminal consumer unavailable')
+      }
+    }
+  })
+  const completed = await runtime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-1',
+    prompt: 'Delete only after terminal delivery.'
+  })
+
+  await assert.rejects(
+    runtime.deleteChild('thread-1', completed.id),
+    /terminal lifecycle delivery is pending/
+  )
+  assert.ok(await runtime.child('thread-1', completed.id))
+  terminalAvailable = true
+  await runtime.deleteChild('thread-1', completed.id)
+  const callsAfterDelete = terminalCalls
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  assert.equal(terminalCalls, callsAfterDelete)
+  assert.equal(await runtime.child('thread-1', completed.id), null)
+  assert.equal(operations.at(-1), 'delete')
+  runtime.dispose()
 })
 
 test('runtime permanently deletes a child and publishes a delete refresh event', async () => {
@@ -765,6 +886,97 @@ test('parent abort uses lifecycle termination control', async () => {
   assert.deepEqual(terminationReasons, ['parent_abort'])
 })
 
+test('execution deadline aborts the provider child and releases all active controls', async () => {
+  let observedSignal: AbortSignal | undefined
+  const runtime = new MultiAgentRuntime({
+    store: new InMemoryMultiAgentStore(),
+    executor: async (input) => {
+      observedSignal = input.signal
+      input.registerLifecycleControl({
+        sendMessage: async () => ({ established: true }),
+        inspect: async () => ({ state: 'active', observedAt: new Date().toISOString() }),
+        terminate: async () => undefined
+      })
+      await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
+      throw input.signal.reason
+    }
+  })
+  const record = await runtime.runChild({
+    parentThreadId: 'parent',
+    parentTurnId: 'turn',
+    prompt: 'bounded work',
+    deadlineMs: 5
+  })
+  assert.equal(observedSignal?.aborted, true)
+  assert.equal(record.status, 'aborted')
+  assert.equal((await runtime.diagnostics()).active, 0)
+  assert.equal((await runtime.diagnostics()).activeLifecycleControls, 0)
+  assert.equal((await runtime.diagnostics()).activeBoundaries, 0)
+})
+
+test('execution deadline excludes independently tokenized external interaction waits', async () => {
+  const entered = deferred<void>()
+  let observedSignal: AbortSignal | undefined
+  const runtime = new MultiAgentRuntime({
+    store: new InMemoryMultiAgentStore(),
+    idGenerator: () => 'child-suspended-deadline',
+    executor: async (input) => {
+      observedSignal = input.signal
+      entered.resolve()
+      return waitForAbort(input.signal)
+    }
+  })
+
+  const running = runtime.runChild({
+    parentThreadId: 'parent',
+    parentTurnId: 'turn',
+    prompt: 'wait for external interaction',
+    deadlineMs: 40
+  })
+  await entered.promise
+  assert.equal(runtime.suspendChildExecutionDeadline('child-suspended-deadline', 'approval-a'), true)
+  assert.equal(runtime.suspendChildExecutionDeadline('child-suspended-deadline', 'approval-b'), true)
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  assert.equal(observedSignal?.aborted, false)
+
+  assert.equal(runtime.resumeChildExecutionDeadline('child-suspended-deadline', 'approval-a'), true)
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  assert.equal(observedSignal?.aborted, false)
+  assert.equal(runtime.resumeChildExecutionDeadline('child-suspended-deadline', 'approval-b'), true)
+
+  const record = await running
+  assert.equal(record.status, 'aborted')
+  assert.equal((await runtime.diagnostics()).activeBoundaries, 0)
+})
+
+test('parent abort remains immediate while the execution deadline is suspended', async () => {
+  const parent = new AbortController()
+  const entered = deferred<void>()
+  const runtime = new MultiAgentRuntime({
+    store: new InMemoryMultiAgentStore(),
+    idGenerator: () => 'child-parent-abort-suspended',
+    executor: async (input) => {
+      entered.resolve()
+      return waitForAbort(input.signal)
+    }
+  })
+
+  const running = runtime.runChild({
+    parentThreadId: 'parent',
+    parentTurnId: 'turn',
+    prompt: 'wait for parent abort',
+    deadlineMs: 10_000,
+    signal: parent.signal
+  })
+  await entered.promise
+  assert.equal(runtime.suspendChildExecutionDeadline('child-parent-abort-suspended', 'approval'), true)
+  parent.abort(new Error('parent stopped'))
+
+  const record = await running
+  assert.equal(record.status, 'aborted')
+  assert.equal((await runtime.diagnostics()).activeBoundaries, 0)
+})
+
 function clock(): () => string {
   let tick = 0
   return () => `2026-06-27T00:00:${String(tick++).padStart(2, '0')}.000Z`
@@ -789,4 +1001,12 @@ async function waitForAbort(signal: AbortSignal): Promise<never> {
   if (signal.aborted) throw new Error('aborted')
   await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
   throw new Error('aborted')
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for condition.')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
 }

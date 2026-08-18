@@ -698,7 +698,7 @@ export class AgentRuntimeProvider implements AgentProvider {
   private readonly threadRuntimes = new Map<string, AgentRuntimeId>()
   private readonly threadWorkspaceLocators = new Map<string, WorkspaceLocator>()
   private readonly threadSummaries = new Map<string, NormalizedThread>()
-  private readonly approvalThreads = new Map<string, InteractionRequestRef>()
+  private readonly approvalThreads = new Map<string, Map<string, InteractionRequestRef>>()
   private readonly userInputThreads = new Map<string, InteractionRequestRef>()
 
   get id(): AgentRuntimeId {
@@ -1139,18 +1139,29 @@ export class AgentRuntimeProvider implements AgentProvider {
   async submitApprovalDecision(
     approvalId: string,
     decision: 'allow' | 'deny',
-    _remember?: boolean
+    _remember?: boolean,
+    threadId?: string
   ): Promise<void> {
-    const request = this.approvalThreads.get(approvalId)
+    const requests = this.approvalThreads.get(approvalId)
+    const ownerThreadId = threadId?.trim()
+    const request = ownerThreadId
+      ? requests?.get(ownerThreadId)
+      : requests?.size === 1
+        ? requests.values().next().value
+        : undefined
     if (!request) throw unresolvedInteraction('approval', approvalId)
     const workspaceLocator = this.workspaceLocatorForThread(request.threadId)
-    await agentRuntimeClient.resolveApproval({
-      runtimeId: request.runtimeId,
-      threadId: request.threadId,
-      approvalId: request.requestId ?? approvalId,
-      decision: decision === 'allow' ? 'allowed' : 'denied',
-      ...(workspaceLocator ? { workspaceLocator } : {})
-    })
+    try {
+      await agentRuntimeClient.resolveApproval({
+        runtimeId: request.runtimeId,
+        threadId: request.threadId,
+        approvalId: request.requestId ?? approvalId,
+        decision: decision === 'allow' ? 'allowed' : 'denied',
+        ...(workspaceLocator ? { workspaceLocator } : {})
+      })
+    } finally {
+      this.forgetApprovalRequest(request)
+    }
   }
 
   async submitUserInputResponse(requestId: string, answers: UserInputAnswer[]): Promise<void> {
@@ -1268,11 +1279,15 @@ export class AgentRuntimeProvider implements AgentProvider {
           stringMeta(item.meta, 'approvalId') ??
           item.id
         const ref = { threadId, runtimeId, requestId }
-        this.rememberInteractionAliases(this.approvalThreads, ref, [
-          item.id,
-          stringMeta(item.meta, 'approvalId'),
-          requestId
-        ])
+        if (item.status === 'pending') {
+          this.rememberApprovalAliases(ref, [
+            item.id,
+            stringMeta(item.meta, 'approvalId'),
+            requestId
+          ])
+        } else {
+          this.forgetApprovalRequest(ref)
+        }
       }
       if (item.kind === 'user_input') {
         const requestId =
@@ -1299,11 +1314,48 @@ export class AgentRuntimeProvider implements AgentProvider {
     }
   }
 
+  private rememberApprovalAliases(
+    ref: InteractionRequestRef,
+    aliases: Array<string | undefined>
+  ): void {
+    for (const alias of aliases) {
+      if (!alias) continue
+      let requests = this.approvalThreads.get(alias)
+      if (!requests) {
+        requests = new Map()
+        this.approvalThreads.set(alias, requests)
+      }
+      requests.set(ref.threadId, ref)
+    }
+  }
+
+  private forgetApprovalRequest(ref: InteractionRequestRef): void {
+    for (const [alias, requests] of this.approvalThreads) {
+      const current = requests.get(ref.threadId)
+      if (
+        current?.runtimeId !== ref.runtimeId ||
+        current.requestId !== ref.requestId
+      ) continue
+      requests.delete(ref.threadId)
+      if (requests.size === 0) this.approvalThreads.delete(alias)
+    }
+  }
+
+  private forgetApprovalAliases(threadId: string, aliases: Array<string | undefined>): void {
+    const requests = new Map<string, InteractionRequestRef>()
+    for (const alias of aliases) {
+      if (!alias) continue
+      const request = this.approvalThreads.get(alias)?.get(threadId)
+      if (request) requests.set(`${request.runtimeId}\u0000${request.requestId}`, request)
+    }
+    for (const request of requests.values()) this.forgetApprovalRequest(request)
+  }
+
   private rememberInteractionEvent(threadId: string, event: AgentRuntimeEvent, fallbackRuntimeId: AgentRuntimeId): void {
     const runtimeId = event.runtimeId ?? fallbackRuntimeId
     switch (event.kind) {
       case 'approval_requested':
-        this.rememberInteractionAliases(this.approvalThreads, {
+        this.rememberApprovalAliases({
           threadId,
           runtimeId,
           requestId: requestIdMeta(event.meta, 'codexRequestId') ?? event.approvalId
@@ -1312,6 +1364,9 @@ export class AgentRuntimeProvider implements AgentProvider {
           event.approvalId,
           requestIdMeta(event.meta, 'codexRequestId')
         ])
+        return
+      case 'approval_resolved':
+        this.forgetApprovalAliases(threadId, [event.itemId, event.approvalId])
         return
       case 'user_input_requested':
         this.rememberInteractionAliases(this.userInputThreads, {

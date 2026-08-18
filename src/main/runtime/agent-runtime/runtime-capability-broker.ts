@@ -111,6 +111,7 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
       failureClass: 'invalid_arguments',
       retryable: false
     })
+    assertManagedToolWithinBrokerScope(context, operation.tool)
     if (!await this.#isToolAvailable(context, operation.tool)) {
       throw new RuntimeToolError('The managed operation is unavailable for this runtime.', {
         code: 'operation_unavailable',
@@ -231,7 +232,8 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
     await this.#assertPrincipalLease(context)
     const available = [] as RuntimeToolDefinition[]
     for (const tool of tools) {
-      if (await this.#isToolAvailable(context, tool)) available.push(tool)
+      if (managedToolWithinBrokerScope(context, tool) &&
+          await this.#isToolAvailable(context, tool)) available.push(tool)
       await this.#assertPrincipalLease(context)
     }
     const descriptors = available.map((tool) => {
@@ -274,7 +276,11 @@ function descriptorForManagedTool(tool: RuntimeToolDefinition): CapabilityDescri
     },
     inputSchema: jsonValue(tool.inputSchema),
     outputSchema: {},
-    tags: ['managed-mcp', `tool-${slug(tool.name).slice(0, 55)}`]
+    tags: [
+      'managed-mcp',
+      ...(tool.providerPackageName ? [`package-${slug(tool.providerPackageName).slice(0, 55)}`] : []),
+      `tool-${slug(tool.name).slice(0, 55)}`
+    ]
   })
 }
 
@@ -283,6 +289,28 @@ function managedToolActionId(tool: RuntimeToolDefinition): string {
   const base = slug(tool.providerToolName ?? tool.name).slice(0, 120)
   const digest = createHash('sha256').update(identity).digest('hex').slice(0, 12)
   return `managed-mcp.${base}.${digest}`
+}
+
+function managedToolWithinBrokerScope(
+  context: CapabilityAgentToolRequestContext,
+  tool: RuntimeToolDefinition
+): boolean {
+  const scope = context.brokerScope
+  if (!scope) return true
+  if (scope.providerFamily !== 'managed-mcp') return false
+  return !scope.packageName || tool.providerPackageName === scope.packageName
+}
+
+function assertManagedToolWithinBrokerScope(
+  context: CapabilityAgentToolRequestContext,
+  tool: RuntimeToolDefinition
+): void {
+  if (managedToolWithinBrokerScope(context, tool)) return
+  throw new RuntimeToolError('The managed operation is outside the delegated broker scope.', {
+    code: 'broker_scope_denied',
+    failureClass: 'permission_denied',
+    retryable: false
+  })
 }
 
 function authorizeManagedApproval(

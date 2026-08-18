@@ -1758,6 +1758,124 @@ describe('AgentRuntimeProvider', () => {
     })
   })
 
+  it('keeps identical approval aliases isolated by persistent child thread ownership', async () => {
+    const resolveApproval = vi.fn(async () => undefined)
+    vi.stubGlobal('window', {
+      sciforge: {
+        getSettings: vi.fn(async () => settings('codex')),
+        setSettings: vi.fn(),
+        agentRuntime: {
+          ...pagedThreadBridge(async ({ threadId }) => ({
+            id: threadId,
+            runtimeId: 'codex',
+            title: threadId,
+            updatedAt: '2026-08-16T00:00:00.000Z',
+            latestSeq: 1,
+            items: [{
+              id: 'shared-approval',
+              kind: 'approval',
+              summary: `Approve ${threadId}`,
+              status: 'pending',
+              meta: { approvalId: 'shared-approval' }
+            }]
+          })),
+          resolveApproval
+        }
+      }
+    })
+
+    const provider = new AgentRuntimeProvider()
+    provider.rememberThreadRuntime('child-a', 'codex')
+    provider.rememberThreadRuntime('child-b', 'codex')
+    await provider.getRecentThreadView('child-a')
+    await provider.getRecentThreadView('child-b')
+
+    await expect(provider.submitApprovalDecision?.(
+      'shared-approval',
+      'allow',
+      false,
+      'child-a'
+    )).resolves.toBeUndefined()
+    await expect(provider.submitApprovalDecision?.(
+      'shared-approval',
+      'deny',
+      false,
+      'child-b'
+    )).resolves.toBeUndefined()
+    await expect(provider.submitApprovalDecision?.(
+      'shared-approval',
+      'allow'
+    )).rejects.toThrow('neutral thread mapping')
+
+    expect(resolveApproval).toHaveBeenNthCalledWith(1, {
+      runtimeId: 'codex',
+      threadId: 'child-a',
+      approvalId: 'shared-approval',
+      decision: 'allowed'
+    })
+    expect(resolveApproval).toHaveBeenNthCalledWith(2, {
+      runtimeId: 'codex',
+      threadId: 'child-b',
+      approvalId: 'shared-approval',
+      decision: 'denied'
+    })
+  })
+
+  it('settles four same-alias child approvals exactly once and releases every alias owner', async () => {
+    const resolveApproval = vi.fn(async ({ threadId }: { threadId: string }) => {
+      if (threadId === 'child-c') throw new Error('approval transport failed')
+    })
+    vi.stubGlobal('window', {
+      sciforge: {
+        getSettings: vi.fn(async () => settings('codex')),
+        setSettings: vi.fn(),
+        agentRuntime: {
+          ...pagedThreadBridge(async ({ threadId }) => ({
+            id: threadId,
+            runtimeId: 'codex',
+            title: threadId,
+            updatedAt: '2026-08-16T00:00:00.000Z',
+            latestSeq: 1,
+            items: [{
+              id: 'shared-provider-tool',
+              kind: 'approval',
+              summary: `Approve ${threadId}`,
+              status: 'pending',
+              meta: { approvalId: 'shared-provider-tool' }
+            }]
+          })),
+          resolveApproval
+        }
+      }
+    })
+
+    const provider = new AgentRuntimeProvider()
+    const children = ['child-a', 'child-b', 'child-c', 'child-d']
+    for (const child of children) {
+      provider.rememberThreadRuntime(child, 'codex')
+      await provider.getRecentThreadView(child)
+    }
+
+    await expect(provider.submitApprovalDecision?.('shared-provider-tool', 'allow')).rejects.toThrow(
+      'neutral thread mapping'
+    )
+    await expect(provider.submitApprovalDecision?.('shared-provider-tool', 'allow', false, 'child-a'))
+      .resolves.toBeUndefined()
+    await expect(provider.submitApprovalDecision?.('shared-provider-tool', 'deny', false, 'child-b'))
+      .resolves.toBeUndefined()
+    await expect(provider.submitApprovalDecision?.('shared-provider-tool', 'allow', false, 'child-c'))
+      .rejects.toThrow('approval transport failed')
+    await expect(provider.submitApprovalDecision?.('shared-provider-tool', 'allow', false, 'child-d'))
+      .resolves.toBeUndefined()
+
+    for (const child of children) {
+      await expect(provider.submitApprovalDecision?.('shared-provider-tool', 'allow', false, child))
+        .rejects.toThrow('neutral thread mapping')
+    }
+    expect(resolveApproval).toHaveBeenCalledTimes(4)
+    expect((provider as unknown as { approvalThreads: Map<string, unknown> }).approvalThreads.size).toBe(0)
+  })
+
   it('resolves interaction requests through the runtime that produced them', async () => {
     let activeRuntime: AgentRuntimeId = 'codex'
     const resolveApproval = vi.fn(async () => undefined)

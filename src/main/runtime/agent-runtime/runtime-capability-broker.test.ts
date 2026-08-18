@@ -198,6 +198,44 @@ describe('RuntimeCapabilityBroker', () => {
     expect(betaCall).not.toHaveBeenCalled()
   })
 
+  it('filters managed discovery by generic package scope', async () => {
+    const gateway = createRuntimeMcpToolGateway({
+      servers: [
+        { id: 'computer-server', packageName: '@sciforge/domain-computer-use', command: '/bin/computer' },
+        { id: 'other-server', packageName: '@sciforge/domain-other', command: '/bin/other' }
+      ],
+      clientFactory: async (server) => ({
+        listTools: vi.fn(async () => ({ tools: [{
+          name: 'operate',
+          description: `${server.packageName} operation`,
+          annotations: { readOnlyHint: true }
+        }] })),
+        callTool: vi.fn(async () => ({ content: [] })),
+        close: vi.fn(async () => undefined)
+      })
+    })
+    const surface = createCapabilityAgentToolSurface({
+      broker: createRuntimeCapabilityBroker({ broker: emptyBroker(), managedTools: gateway }),
+      resolveCaller: (context) => ({
+        audience: 'agent', callerId: `${context.runtimeId}:${context.threadId}`,
+        workspaceId: context.workspaceId
+      })
+    })
+    const result = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { providerFamily: 'managed-mcp' },
+      context: {
+        requestId: 'scoped', runtimeId: 'codex', threadId: 'child',
+        workspaceId: '/tmp/workspace',
+        brokerScope: { providerFamily: 'managed-mcp', packageName: '@sciforge/domain-computer-use' }
+      }
+    })
+    expect(result.value).toEqual([expect.objectContaining({
+      description: '@sciforge/domain-computer-use operation',
+      tags: expect.arrayContaining(['package-sciforge-domain-computer-use'])
+    })])
+  })
+
   it('enforces runtime availability and preserves structured failures', async () => {
     const callTool = vi.fn(async () => ({
       content: [{ type: 'text', text: 'stale resource' }],

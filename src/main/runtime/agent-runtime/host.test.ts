@@ -510,13 +510,20 @@ describe('AgentRuntimeHost', () => {
     })
     const subagents: NonNullable<AgentRuntimeAdapter['subagents']> = {
       spawn: vi.fn(async (_context, input) => {
+        await input.onThreadBound({ runtime: 'claude', threadId: 'child-thread' })
         await input.onSpawned({ runtime: 'claude', threadId: 'child-thread', turnId: 'child-turn' })
+        expect(host.principalForToolRequest({
+          runtimeId: 'claude',
+          threadId: 'child-thread',
+          turnId: 'child-turn'
+        })).toEqual({ identityVersion: 0, principal: null })
         return {
           summary: 'child complete',
           threadRef: { runtime: 'claude', threadId: 'child-thread', turnId: 'child-turn' }
         }
       }),
       resume: vi.fn(async (_context, input) => {
+        await input.onThreadBound({ runtime: 'claude', threadId: input.threadRef.threadId })
         await input.onSpawned({ runtime: 'claude', threadId: input.threadRef.threadId, turnId: 'resumed-turn' })
         return { summary: 'child resumed', threadRef: input.threadRef }
       }),
@@ -526,23 +533,26 @@ describe('AgentRuntimeHost', () => {
       delete: vi.fn(async () => undefined)
     }
     adapter.subagents = subagents
+    vi.mocked(adapter.publishSyntheticEvent!).mockRejectedValue(new Error('renderer refresh unavailable'))
     const host = createAgentRuntimeHost({
       settings: async () => settings('claude'),
       adapters: [adapter],
       subagentStoreRoot: root
     })
+    const lifecycle: Array<import('@sciforge/domain-sdk/host').DomainMainTurnLifecycleEvent> = []
+    host.subscribeTurnLifecycle((event) => { lifecycle.push(event) })
     const tools = host.subagentTools()
     expect(tools?.tools().map((tool) => tool.name)).toContain('delegate_task')
-    const started = await tools!.call({
+    const parentIdentity = {
+      runtimeId: 'claude' as const,
+      threadId: 'parent-thread',
+      turnId: 'parent-turn'
+    }
+    const started = await host.withHostToolRequestPrincipalLease(parentIdentity, () => tools!.call({
       name: 'delegate_task',
       arguments: { prompt: 'Run a focused review.' },
-      context: {
-        requestId: 'spawn-1',
-        runtimeId: 'claude',
-        threadId: 'parent-thread',
-        turnId: 'parent-turn'
-      }
-    })
+      context: { requestId: 'spawn-1', ...parentIdentity }
+    }))
     const childId = (started.value as { childId: string }).childId
     await expect(tools!.call({
       name: 'subagent_wait',
@@ -565,6 +575,101 @@ describe('AgentRuntimeHost', () => {
         child: expect.objectContaining({ runtimeId: 'claude', summary: 'child complete' })
       })
     )
+    expect(lifecycle).toContainEqual({
+      kind: 'after-persistent-child-turn',
+      state: 'completed',
+      runtimeId: 'claude',
+      threadId: 'child-thread',
+      turnId: 'child-turn',
+      childId,
+      parentThreadId: 'parent-thread',
+      parentTurnId: 'parent-turn',
+      occurredAt: expect.any(String)
+    })
+    await expect(tools!.call({
+      name: 'subagent_delete',
+      arguments: { childId },
+      context: {
+        requestId: 'delete-1',
+        runtimeId: 'claude',
+        threadId: 'parent-thread',
+        turnId: 'parent-turn'
+      }
+    })).resolves.toMatchObject({ value: { deleted: true } })
+    expect(lifecycle.filter((event) => event.kind === 'after-persistent-child-turn')).toHaveLength(1)
+  })
+
+  it('keeps an exact child Principal lease after the parent tool lease ends', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-runtime-child-principal-'))
+    let childAttached!: () => void
+    let finishChild!: () => void
+    const attached = new Promise<void>((resolve) => { childAttached = resolve })
+    const finish = new Promise<void>((resolve) => { finishChild = resolve })
+    const adapter = fakeAdapter('codex', {
+      id: 'principal-parent-thread',
+      runtimeId: 'codex',
+      title: 'Parent',
+      updatedAt: '2026-08-18T00:00:00.000Z'
+    })
+    adapter.subagents = {
+      spawn: vi.fn(async (_context, input) => {
+        const threadRef = {
+          runtime: 'codex',
+          threadId: 'principal-child-thread',
+          turnId: 'principal-child-turn'
+        }
+        await input.onThreadBound({ runtime: 'codex', threadId: threadRef.threadId })
+        await input.onSpawned(threadRef)
+        childAttached()
+        await finish
+        return { summary: 'done', threadRef }
+      }),
+      resume: vi.fn(async () => { throw new Error('unexpected resume') }),
+      inspect: vi.fn(async () => ({ state: 'active' as const, observedAt: new Date().toISOString() })),
+      message: vi.fn(async () => ({ established: true })),
+      cancel: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined)
+    }
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter],
+      subagentStoreRoot: root,
+      getPrincipalContext: () => ({ identityVersion: 9, principal: null })
+    })
+    const parentIdentity = {
+      runtimeId: 'codex' as const,
+      threadId: 'principal-parent-thread',
+      turnId: 'principal-parent-turn'
+    }
+    const started = await host.withHostToolRequestPrincipalLease(parentIdentity, () => (
+      host.subagentTools()!.call({
+        name: 'delegate_task',
+        arguments: { prompt: 'Wait for the parent lease to finish.' },
+        context: { requestId: 'child-principal-after-parent', ...parentIdentity }
+      })
+    ))
+    const childId = (started.value as { childId: string }).childId
+    await attached
+
+    expect(() => host.principalForToolRequest(parentIdentity)).toThrow('no Host Principal binding')
+    expect(host.principalForToolRequest({
+      runtimeId: 'codex',
+      threadId: 'principal-child-thread',
+      turnId: 'principal-child-turn'
+    })).toEqual({ identityVersion: 9, principal: null })
+
+    finishChild()
+    await expect(host.subagentTools()!.call({
+      name: 'subagent_wait',
+      arguments: { childId, timeoutMs: 1_000 },
+      context: { requestId: 'wait-child-principal-after-parent', ...parentIdentity }
+    })).resolves.toMatchObject({ value: { status: 'completed', terminal: true } })
+    expect(host.principalForToolRequest({
+      runtimeId: 'codex',
+      threadId: 'principal-child-thread',
+      turnId: 'principal-child-turn'
+    })).toEqual({ identityVersion: 9, principal: null })
+    host.dispose()
   })
 
   it('runs host-owned Codex delegation through the real synthetic child publisher', async () => {
@@ -590,7 +695,13 @@ describe('AgentRuntimeHost', () => {
         threadId: 'child-thread',
         turnId: 'child-turn'
       }
+      await input.onThreadBound({ runtime: 'codex', threadId: threadRef.threadId })
       await input.onSpawned(threadRef)
+      expect(host.principalForToolRequest({
+        runtimeId: 'codex',
+        threadId: 'child-thread',
+        turnId: 'child-turn'
+      })).toEqual({ identityVersion: 0, principal: null })
       return { summary: 'Codex child completed', threadRef }
     })
     adapter.subagents = {
@@ -616,16 +727,16 @@ describe('AgentRuntimeHost', () => {
     })[Symbol.asyncIterator]()
     const firstSubscribedEvent = subscription.next()
 
-    const started = await tools.call({
+    const parentIdentity = {
+      runtimeId: 'codex' as const,
+      threadId: 'parent-thread',
+      turnId: 'parent-turn'
+    }
+    const started = await host.withHostToolRequestPrincipalLease(parentIdentity, () => tools.call({
       name: 'delegate_task',
       arguments: { prompt: 'Read one paper.' },
-      context: {
-        requestId: 'spawn-codex-1',
-        runtimeId: 'codex',
-        threadId: 'parent-thread',
-        turnId: 'parent-turn'
-      }
-    })
+      context: { requestId: 'spawn-codex-1', ...parentIdentity }
+    }))
     const childId = (started.value as { childId: string }).childId
     await expect(tools.call({
       name: 'subagent_wait',
@@ -792,6 +903,62 @@ describe('AgentRuntimeHost', () => {
     host.dispose()
   })
 
+  it('suspends and resumes the exact persistent-child execution deadline around approval wait', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-child-approval-deadline-'))
+    const thread = {
+      id: 'parent-thread',
+      runtimeId: 'codex' as const,
+      title: 'Parent',
+      updatedAt: '2026-08-16T00:00:00.000Z'
+    }
+    const adapter = fakeAdapter('codex', thread)
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter],
+      subagentStoreRoot: root
+    })
+    const internals = host as unknown as {
+      subagentToolBridge: {
+        suspendChildExecutionDeadline(runtimeId: AgentRuntimeId, threadId: string, token: string): boolean
+        resumeChildExecutionDeadline(runtimeId: AgentRuntimeId, threadId: string, token: string): boolean
+      }
+    }
+    const suspend = vi.spyOn(internals.subagentToolBridge, 'suspendChildExecutionDeadline')
+    const resume = vi.spyOn(internals.subagentToolBridge, 'resumeChildExecutionDeadline')
+
+    const decision = host.requestCapabilityApproval({
+      context: {
+        requestId: 'child-call',
+        runtimeId: 'codex',
+        threadId: 'persistent-child-thread',
+        turnId: 'persistent-child-turn',
+        callId: 'child-call'
+      },
+      actionId: 'generic.package.write',
+      invocationId: 'agent_inv_generic_child_approval',
+      mode: 'confirmation',
+      title: 'Approve generic action',
+      description: 'Exercises the host-owned external interaction wait.',
+      effect: 'external-write',
+      input: { value: 'generic' }
+    })
+    const approvalId = suspend.mock.calls[0]![2]
+    expect(approvalId).toMatch(/^capability-approval-/u)
+    expect(suspend).toHaveBeenCalledWith('codex', 'persistent-child-thread', approvalId)
+
+    await host.resolveApproval({
+      runtimeId: 'codex',
+      threadId: 'persistent-child-thread',
+      approvalId,
+      decision: 'allowed'
+    })
+    await expect(decision).resolves.toBe('allowed')
+    expect(resume).toHaveBeenCalledWith('codex', 'persistent-child-thread', approvalId)
+
+    host.dispose()
+    await rm(root, { recursive: true, force: true })
+  })
+
   it('cancels pending capability confirmations on abort, terminal turns, and disposal', async () => {
     const thread = {
       id: 'claude-thread',
@@ -877,6 +1044,261 @@ describe('AgentRuntimeHost', () => {
     await expect(request('turn-overflow', 'overflow-call')).resolves.toBe('cancelled')
     host.dispose()
     await expect(Promise.all(disposed)).resolves.toEqual(Array.from({ length: 64 }, () => 'cancelled'))
+  })
+
+  it('keeps a child approval pending when an unrelated parent turn completes', async () => {
+    const thread = {
+      id: 'parent-thread',
+      runtimeId: 'claude' as const,
+      title: 'Parent',
+      updatedAt: '2026-08-16T00:00:00.000Z'
+    }
+    const adapter = fakeAdapter('claude', thread)
+    adapter.subscribeEvents = vi.fn(async function* (_context, input) {
+      if (input.threadId === 'parent-thread') {
+        yield {
+          kind: 'turn_lifecycle',
+          runtimeId: 'claude',
+          threadId: 'parent-thread',
+          turnId: 'parent-turn',
+          state: 'completed'
+        } satisfies AgentRuntimeEvent
+      }
+      await new Promise<void>((resolve) => input.signal?.addEventListener('abort', () => resolve(), { once: true }))
+    })
+    const host = createAgentRuntimeHost({ settings: async () => settings('claude'), adapters: [adapter] })
+    const request = (threadId: string, turnId: string, callId: string) => host.requestCapabilityApproval({
+      context: {
+        requestId: callId,
+        runtimeId: 'claude',
+        threadId,
+        turnId,
+        callId
+      },
+      actionId: 'generic.package.write',
+      invocationId: `agent_inv_${callId.padEnd(20, 'x')}`,
+      mode: 'confirmation',
+      title: 'Approve generic action',
+      description: 'Exercises thread-scoped approval ownership.',
+      effect: 'external-write',
+      input: { callId }
+    })
+
+    const parentDecision = request('parent-thread', 'parent-turn', 'parent-call')
+    const childDecision = request('child-thread', 'child-turn', 'child-call')
+    const childAbort = new AbortController()
+    const childEvents = host.subscribeEvents({
+      runtimeId: 'claude',
+      threadId: 'child-thread',
+      signal: childAbort.signal
+    })[Symbol.asyncIterator]()
+    const childRequested = await childEvents.next()
+    expect(childRequested.value).toMatchObject({
+      kind: 'approval_requested',
+      threadId: 'child-thread',
+      turnId: 'child-turn'
+    })
+    const childApprovalId = (childRequested.value as Extract<AgentRuntimeEvent, {
+      kind: 'approval_requested'
+    }>).approvalId
+
+    const parentAbort = new AbortController()
+    const parentEvents = host.subscribeEvents({
+      runtimeId: 'claude',
+      threadId: 'parent-thread',
+      signal: parentAbort.signal
+    })[Symbol.asyncIterator]()
+    while (true) {
+      const next = await parentEvents.next()
+      if (next.done || (next.value.kind === 'turn_lifecycle' && next.value.state === 'completed')) break
+    }
+    await expect(parentDecision).resolves.toBe('cancelled')
+
+    await host.resolveApproval({
+      runtimeId: 'claude',
+      threadId: 'child-thread',
+      approvalId: childApprovalId,
+      decision: 'allowed'
+    })
+    await expect(childDecision).resolves.toBe('allowed')
+
+    parentAbort.abort()
+    childAbort.abort()
+    await Promise.all([parentEvents.return?.(), childEvents.return?.()])
+    host.dispose()
+  })
+
+  it('isolates four same-action child approvals and releases resolver subscriptions at terminal state', async () => {
+    const thread = {
+      id: 'parent-thread',
+      runtimeId: 'claude' as const,
+      title: 'Parent',
+      updatedAt: '2026-08-16T00:00:00.000Z'
+    }
+    const adapter = fakeAdapter('claude', thread)
+    const host = createAgentRuntimeHost({ settings: async () => settings('claude'), adapters: [adapter] })
+    const children = ['child-a', 'child-b', 'child-c', 'child-d']
+    const decisions = new Map(children.map((child) => [child, host.requestCapabilityApproval({
+      context: {
+        requestId: `${child}-call`,
+        runtimeId: 'claude',
+        threadId: child,
+        turnId: `${child}-turn`,
+        callId: `${child}-call`
+      },
+      actionId: 'generic.package.write',
+      invocationId: `agent_inv_${child.padEnd(20, 'x')}`,
+      mode: 'confirmation',
+      title: 'Approve generic action',
+      description: 'Exercises exact persistent-child approval ownership.',
+      effect: 'external-write',
+      input: { child }
+    })]))
+    const subscriptions = children.map((child) => {
+      const abort = new AbortController()
+      const events = host.subscribeEvents({
+        runtimeId: 'claude',
+        threadId: child,
+        signal: abort.signal
+      })[Symbol.asyncIterator]()
+      return { child, abort, events }
+    })
+    const approvalIds = new Map<string, string>()
+    for (const subscription of subscriptions) {
+      const requested = await subscription.events.next()
+      expect(requested.value).toMatchObject({
+        kind: 'approval_requested',
+        threadId: subscription.child,
+        toolName: 'generic.package.write'
+      })
+      approvalIds.set(subscription.child, (requested.value as Extract<AgentRuntimeEvent, {
+        kind: 'approval_requested'
+      }>).approvalId)
+    }
+
+    await expect(host.resolveApproval({
+      runtimeId: 'claude',
+      threadId: 'child-b',
+      approvalId: approvalIds.get('child-a')!,
+      decision: 'allowed'
+    })).rejects.toThrow('does not belong')
+    await host.resolveApproval({
+      runtimeId: 'claude',
+      threadId: 'child-a',
+      approvalId: approvalIds.get('child-a')!,
+      decision: 'allowed'
+    })
+    await host.resolveApproval({
+      runtimeId: 'claude',
+      threadId: 'child-b',
+      approvalId: approvalIds.get('child-b')!,
+      decision: 'denied'
+    })
+    expect(host.cancelCapabilityApprovalTurn({
+      runtimeId: 'claude',
+      threadId: 'child-c',
+      turnId: 'child-c-turn'
+    }, 'child terminal')).toBe(1)
+    await host.resolveApproval({
+      runtimeId: 'claude',
+      threadId: 'child-d',
+      approvalId: approvalIds.get('child-d')!,
+      decision: 'allowed'
+    })
+
+    await expect(decisions.get('child-a')).resolves.toBe('allowed')
+    await expect(decisions.get('child-b')).resolves.toBe('denied')
+    await expect(decisions.get('child-c')).resolves.toBe('cancelled')
+    await expect(decisions.get('child-d')).resolves.toBe('allowed')
+    for (const child of children) {
+      await expect(host.resolveApproval({
+        runtimeId: 'claude',
+        threadId: child,
+        approvalId: approvalIds.get(child)!,
+        decision: 'allowed'
+      })).rejects.toThrow('no longer pending')
+    }
+
+    for (const subscription of subscriptions) {
+      subscription.abort.abort()
+      await subscription.events.return?.()
+    }
+    const internals = host as unknown as {
+      capabilityApprovals: Map<string, { resolve?: unknown }>
+      capabilityApprovalSubscribers: Map<string, unknown>
+    }
+    expect([...internals.capabilityApprovals.values()].filter((record) => record.resolve)).toHaveLength(0)
+    expect(internals.capabilityApprovalSubscribers.size).toBe(0)
+    host.dispose()
+  })
+
+  it('includes a pending capability approval in the latest thread page for late UI attachment', async () => {
+    const thread = {
+      id: 'persistent-child-thread',
+      runtimeId: 'codex' as const,
+      title: 'Persistent child',
+      updatedAt: '2026-08-17T00:00:00.000Z'
+    }
+    const adapter = fakeAdapter('codex', thread)
+    adapter.readThreadPage = vi.fn(async (_context, input) => ({
+      runtimeId: 'codex' as const,
+      threadId: thread.id,
+      latestSeq: 27,
+      turns: [{
+        id: 'child-turn',
+        threadId: thread.id,
+        status: 'in_progress' as const,
+        items: [{
+          id: 'call-bind',
+          turnId: 'child-turn',
+          kind: 'tool' as const,
+          summary: 'sciforge_invoke',
+          status: 'running' as const
+        }]
+      }],
+      nextCursor: input.cursor ? null : 'older-page'
+    }))
+    const host = createAgentRuntimeHost({ settings: async () => settings('codex'), adapters: [adapter] })
+    const decision = host.requestCapabilityApproval({
+      context: {
+        requestId: 'call-bind',
+        runtimeId: 'codex',
+        threadId: thread.id,
+        turnId: 'child-turn',
+        callId: 'call-bind'
+      },
+      actionId: 'generic.package.bind',
+      invocationId: 'agent_inv_late_attach_child',
+      mode: 'confirmation',
+      title: 'Approve generic bind',
+      description: 'Exercises late renderer attachment to a persistent child.',
+      effect: 'destructive',
+      input: { target: 'generic-target' }
+    })
+
+    const latest = await host.readThreadPage({ runtimeId: 'codex', threadId: thread.id, limit: 20 })
+    expect(latest.turns[0]?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'approval',
+        turnId: 'child-turn',
+        status: 'pending',
+        meta: expect.objectContaining({
+          approvalId: expect.stringMatching(/^capability-approval-/u),
+          toolName: 'generic.package.bind'
+        })
+      })
+    ]))
+
+    const older = await host.readThreadPage({
+      runtimeId: 'codex',
+      threadId: thread.id,
+      cursor: 'older-page',
+      limit: 20
+    })
+    expect(older.turns[0]?.items?.some((item) => item.kind === 'approval')).toBe(false)
+
+    host.dispose()
+    await expect(decision).resolves.toBe('cancelled')
   })
 
   it('returns an empty list when the active runtime is healthy and an inactive runtime is unavailable', async () => {

@@ -21,6 +21,15 @@ export type AgentRuntimeToolCallContext = Readonly<{
   turnId?: string
   callId?: string
   workspaceId?: string
+  /** Host-only least-privilege filter for broker-backed tools. */
+  brokerScope?: AgentRuntimeBrokerScope
+  /** Parent execution allowlist used to prevent delegated privilege expansion. */
+  allowedToolNames?: readonly string[]
+}>
+
+export type AgentRuntimeBrokerScope = Readonly<{
+  providerFamily: 'managed-mcp'
+  packageName?: string
 }>
 
 export type AgentRuntimeToolCall = Readonly<{
@@ -700,6 +709,40 @@ export function filterAgentRuntimeToolSurface(
       return surface.call(request, options)
     },
     abortTurn: (identity, reason) => surface.abortTurn?.(identity, reason) ?? 0
+  }
+}
+
+/** Applies one child-execution policy to publication, dispatch, and broker context. */
+export function scopeAgentRuntimeToolSurface(
+  surface: AgentRuntimeToolSurface,
+  policy: Readonly<{
+    allowedTools?: readonly string[]
+    brokerScope?: AgentRuntimeBrokerScope
+    maxToolCalls?: number
+  }>
+): AgentRuntimeToolSurface {
+  const filtered = filterAgentRuntimeToolSurface(surface, policy.allowedTools)
+  const maxToolCalls = policy.maxToolCalls === undefined
+    ? undefined
+    : Math.max(1, Math.trunc(policy.maxToolCalls))
+  let toolCalls = 0
+  return {
+    tools: () => filtered.tools(),
+    call: (request, options) => {
+      if (maxToolCalls !== undefined && toolCalls >= maxToolCalls) {
+        throw new Error(`AgentRuntime child exceeded its ${maxToolCalls} tool-call budget.`)
+      }
+      toolCalls += 1
+      return filtered.call({
+        ...request,
+        context: {
+          ...request.context,
+          ...(policy.allowedTools ? { allowedToolNames: policy.allowedTools } : {}),
+          ...(policy.brokerScope ? { brokerScope: policy.brokerScope } : {})
+        }
+      }, options)
+    },
+    abortTurn: (identity, reason) => filtered.abortTurn?.(identity, reason) ?? 0
   }
 }
 

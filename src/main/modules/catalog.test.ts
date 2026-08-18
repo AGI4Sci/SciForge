@@ -1,4 +1,5 @@
 import { DOMAIN_PACKAGE_CONTRACT_VERSION, type TrustedDomainPackageDefinitionInput } from '@sciforge/domain-sdk'
+import { MAIN_RUNTIME_MCP_SERVER_CONTRIBUTION_KIND } from '@sciforge/domain-sdk/host'
 import { describe, expect, it, vi } from 'vitest'
 import {
   DomainModuleCatalog,
@@ -6,6 +7,7 @@ import {
   type DomainContributionRuntimeGuard,
   type MainDomainModuleDefinition
 } from './catalog'
+import { listMainRuntimeMcpServerContributions } from './runtime-mcp-contributions'
 
 const isString: DomainContributionRuntimeGuard<string> = (value): value is string => typeof value === 'string'
 const acceptsUnknown: DomainContributionRuntimeGuard<unknown> = (_value): _value is unknown => true
@@ -70,6 +72,25 @@ function errorCode(callback: () => unknown): string | undefined {
 }
 
 describe('DomainModuleCatalog', () => {
+  it('retains canonical package ownership on runtime MCP contributions', () => {
+    const catalog = new DomainModuleCatalog()
+    catalog.registerModule(moduleDefinition('sciforge.computer-use', [{
+      id: 'computer-use.runtime-mcp-server',
+      kind: MAIN_RUNTIME_MCP_SERVER_CONTRIBUTION_KIND,
+      value: {
+        serverId: 'gui_owl_computer_use',
+        createConfig: () => ({ id: 'gui_owl_computer_use', command: '/bin/computer-use' })
+      }
+    }]))
+
+    expect(listMainRuntimeMcpServerContributions(catalog)).toEqual([
+      expect.objectContaining({
+        packageName: '@fixture/computer-use',
+        value: expect.objectContaining({ serverId: 'gui_owl_computer_use' })
+      })
+    ])
+  })
+
   it('accepts an inclusive minimum and exclusive maximum host API range', () => {
     const minimumHost = new DomainModuleCatalog({ hostApiVersion: '1.0.0' })
     minimumHost.registerModule(moduleDefinition('sciforge.minimum'))
