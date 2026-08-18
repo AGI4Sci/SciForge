@@ -476,7 +476,7 @@ test('registration recovers an existing installation by rotating its one-time de
     participant: participantProfileFixture,
     endpoints: [humanEndpointBindingFixture],
     endpointLocators: [],
-    agents: [],
+    agents: [agentNodeFixture],
     projections: [],
     projects: [],
     tasks: [],
@@ -501,6 +501,7 @@ test('registration recovers an existing installation by rotating its one-time de
     updatedAt: TEST_LATER_TIMESTAMP
   }
   const requestTypes: string[] = []
+  const heartbeatCredentials: string[] = []
   let participantReads = 0
   const cloudClient = collaborationLifecycleClient({
     execute: async (request, credential) => {
@@ -539,15 +540,23 @@ test('registration recovers an existing installation by rotating its one-time de
         }
       }
       assert.equal(request.type, 'agent.heartbeat')
-      assert.equal(credential?.value, rotatedDeviceCredential)
+      assert.ok(credential)
+      assert.ok(
+        credential.value === staleDeviceCredential
+        || credential.value === rotatedDeviceCredential
+      )
+      heartbeatCredentials.push(credential.value)
+      const heartbeatAgent = credential.value === staleDeviceCredential
+        ? agentNodeFixture
+        : rotatedAgent
       return {
         protocolVersion: '1.0',
         type: 'rest.entity',
         requestId: request.requestId,
         entity: {
-          ...rotatedAgent,
+          ...heartbeatAgent,
           connectionStatus: 'online',
-          revision: rotatedAgent.revision + 1
+          revision: heartbeatAgent.revision + 1
         }
       }
     }
@@ -561,6 +570,7 @@ test('registration recovers an existing installation by rotating its one-time de
     inboxHandler: { handle: async () => undefined }
   })
   await connection.configure('https://collaboration.example.test')
+  await connection.connect()
 
   const agent = await connection.registerAgent({
     displayName: 'Desktop',
@@ -572,12 +582,14 @@ test('registration recovers an existing installation by rotating its one-time de
   assert.equal(secrets.get('device-credential'), rotatedDeviceCredential)
   assert.deepEqual(requestTypes, [
     'endpoint.catalog.get',
+    'agent.heartbeat',
     'agent.register',
     'participant.get',
     'agent.rotate_credential',
     'participant.get',
     'agent.heartbeat'
   ])
+  assert.deepEqual(heartbeatCredentials, [staleDeviceCredential, rotatedDeviceCredential])
   await connection.dispose()
 })
 

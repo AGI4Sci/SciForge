@@ -321,6 +321,10 @@ export class CollaborationConnection {
         && agent.lifecycleStatus === 'active'
       ))
       if (existing) {
+        // Credential rotation revokes the credential captured by the active
+        // polling loops. Stop them before rotating so connect() below starts a
+        // single replacement connection with the newly persisted credential.
+        await this.disconnect()
         response = await this.requireClient().execute(restRequestSchema.parse({
           protocolVersion: '1.0',
           requestId: collaborationRequestId(),
