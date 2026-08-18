@@ -1,5 +1,5 @@
 import { constants as fsConstants } from 'node:fs'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import {
   access,
@@ -19,7 +19,32 @@ import { pathToFileURL } from 'node:url'
 
 const TEMPORARY_DIRECTORY_PREFIX = 'sciforge-electron-domain-smoke-'
 const DEFAULT_TIMEOUT_MS = 45_000
-const REQUIRED_CAPABILITY_IDS = Object.freeze([
+export const IDENTITY_SMOKE_CAPABILITY_IDS = Object.freeze([
+  'identity.local.inspect',
+  'identity.local.list-accounts',
+  'identity.local.create-account',
+  'identity.local.select-account',
+  'identity.local.rename-account',
+  'identity.local.exit-account',
+  'identity.local.dismiss-first-prompt',
+  'identity.local.backup-and-reset'
+])
+export const CONTENT_SPACE_SMOKE_CAPABILITY_IDS = Object.freeze([
+  'content-space.list-provider-instances',
+  'content-space.describe-capabilities',
+  'content-space.list-containers',
+  'content-space.list-entries',
+  'content-space.observe-entry',
+  'content-space.create-folder',
+  'content-space.upload-new',
+  'content-space.download',
+  'content-space.resolve-portal-target',
+  'content-space.open-portal-target',
+  'content-space.observe-immutable-version'
+])
+export const REQUIRED_CAPABILITY_IDS = Object.freeze([
+  ...IDENTITY_SMOKE_CAPABILITY_IDS,
+  ...CONTENT_SPACE_SMOKE_CAPABILITY_IDS,
   'browser-preview.open',
   'browser-preview.read',
   'browser-preview.navigate',
@@ -73,6 +98,15 @@ const PROCESS_FAILURE_PATTERNS = Object.freeze([
   /render-process-gone/iu,
   /did-fail-load/iu
 ])
+
+export function createIdentitySmokeInvocationId(createUuid = randomUUID) {
+  const uuid = createUuid()
+  if (typeof uuid !== 'string' ||
+    !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu.test(uuid)) {
+    throw new Error('Identity smoke invocation UUID is invalid.')
+  }
+  return `electron-smoke-identity-create-${uuid}`
+}
 
 export async function createSourceSmokeConfiguration(repositoryRoot) {
   const root = resolve(repositoryRoot)
@@ -259,6 +293,7 @@ export async function runElectronDomainSmoke({
       )
       phase = 'capability workflow'
       const result = await window.evaluate(smokeRendererWorkflow, {
+        identityInvocationId: createIdentitySmokeInvocationId(),
         requiredCapabilityIds: REQUIRED_CAPABILITY_IDS,
         workspaceDirectory
       })
@@ -345,7 +380,11 @@ export function parseSmokeCliOptions(argv) {
   return options
 }
 
-async function smokeRendererWorkflow({ requiredCapabilityIds, workspaceDirectory }) {
+async function smokeRendererWorkflow({
+  identityInvocationId,
+  requiredCapabilityIds,
+  workspaceDirectory
+}) {
   const api = globalThis.sciforge
   if (!api) throw new Error('Preload did not expose window.sciforge.')
   if (Object.prototype.hasOwnProperty.call(api, 'paperRadar')) {
@@ -357,6 +396,52 @@ async function smokeRendererWorkflow({ requiredCapabilityIds, workspaceDirectory
     requiredCapabilityIds
   })
   if (readiness.status !== 'ready') throw new Error(readiness.message)
+
+  const identityAccount = await api.capabilities.invoke({
+    request: {
+      actionId: 'identity.local.create-account',
+      invocationId: identityInvocationId,
+      input: { username: 'electron_smoke' }
+    }
+  })
+  if (identityAccount.actionId !== 'identity.local.create-account' ||
+    identityAccount.output?.status !== 'available' ||
+    identityAccount.output.currentAccount?.username !== 'electron_smoke') {
+    throw new Error('Identity did not create and select the isolated smoke account.')
+  }
+
+  const contentSpaceProviders = await api.capabilities.invoke({
+    request: { actionId: 'content-space.list-provider-instances', input: {} }
+  })
+  const matchingProviderInstances = contentSpaceProviders.output?.ok
+    ? contentSpaceProviders.output.value?.items?.filter(({ providerInstanceRef }) =>
+        providerInstanceRef === 'sciforge-content-space-local'
+      )
+    : undefined
+  if (contentSpaceProviders.actionId !== 'content-space.list-provider-instances' ||
+    matchingProviderInstances?.length !== 1) {
+    throw new Error('Content Space did not resolve the local mock Provider Instance exactly once.')
+  }
+
+  const contentSpaceContainers = await api.capabilities.invoke({
+    request: {
+      actionId: 'content-space.list-containers',
+      input: {
+        providerInstanceRef: 'sciforge-content-space-local',
+        page: { limit: 1 }
+      }
+    }
+  })
+  const matchingRootContainers = contentSpaceContainers.output?.ok
+    ? contentSpaceContainers.output.value?.items?.filter(({ reference }) =>
+        reference?.providerInstanceRef === 'sciforge-content-space-local' &&
+        reference.containerId === 'mock_root'
+      )
+    : undefined
+  if (contentSpaceContainers.actionId !== 'content-space.list-containers' ||
+    matchingRootContainers?.length !== 1) {
+    throw new Error('Content Space did not resolve the local mock root container exactly once.')
+  }
 
   const paperRadarStatus = await api.capabilities.invoke({
     request: { actionId: 'paper-radar.status', input: {} }
@@ -548,6 +633,12 @@ async function smokeRendererWorkflow({ requiredCapabilityIds, workspaceDirectory
     version: await api.getAppVersion(),
     readiness: readiness.status,
     capabilityCount: readiness.availableCapabilityIds.length,
+    identityActionId: identityAccount.actionId,
+    identityAccountUsername: identityAccount.output.currentAccount.username,
+    contentSpaceProviderActionId: contentSpaceProviders.actionId,
+    contentSpaceProviderInstanceRef: matchingProviderInstances[0].providerInstanceRef,
+    contentSpaceContainerActionId: contentSpaceContainers.actionId,
+    contentSpaceRootContainerId: matchingRootContainers[0].reference.containerId,
     datasetLoopCreated: true,
     datasetLoopWorkflowCount: builtWorkflowIds.length,
     paperRadarActionId: paperRadarStatus.actionId,
@@ -592,9 +683,21 @@ async function readMainProcessDiagnostics(electronApp) {
   ])
 }
 
-function validateSmokeResult(result, { expectedRendererUrl }) {
+export function validateSmokeResult(result, { expectedRendererUrl }) {
   if (!result || typeof result !== 'object') throw new Error('Electron smoke returned no renderer result.')
   if (result.readiness !== 'ready') throw new Error(`Capability readiness was ${String(result.readiness)}.`)
+  if (result.identityActionId !== 'identity.local.create-account' ||
+    result.identityAccountUsername !== 'electron_smoke') {
+    throw new Error('Identity account creation did not establish the isolated smoke Principal.')
+  }
+  if (result.contentSpaceProviderActionId !== 'content-space.list-provider-instances' ||
+    result.contentSpaceProviderInstanceRef !== 'sciforge-content-space-local') {
+    throw new Error('Content Space Provider Instance selection did not resolve the local mock exactly.')
+  }
+  if (result.contentSpaceContainerActionId !== 'content-space.list-containers' ||
+    result.contentSpaceRootContainerId !== 'mock_root') {
+    throw new Error('Content Space root container did not resolve the local mock root exactly.')
+  }
   if (result.paperRadarActionId !== 'paper-radar.status') throw new Error('Paper Radar status action mismatch.')
   if (result.workspacePreviewActionId !== 'workspace-preview.list') throw new Error('Workspace Preview list action mismatch.')
   if (result.workspacePreviewPluginId !== 'markdown') throw new Error('Workspace Preview did not select Markdown.')

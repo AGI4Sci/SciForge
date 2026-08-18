@@ -34,7 +34,7 @@ test('sorts packages by packageName and omits undeclared process imports', async
   assert.doesNotMatch(generated['src/main/modules/installed-domain-main.ts'], /a-renderer-only/)
   assert.match(
     generated['src/main/modules/installed-domain-main.ts'],
-    /const \{ capabilityInvokerFor, packageStorageFor, \.\.\.sharedHost \} = host/
+    /capabilityInvokerFor,\n {4}packageStorageFor,\n {4}fileTransfersFor,\n {4}externalNavigationFor,\n {4}portableResourcesFor,\n {4}internalServicesFor,\n {4}\.\.\.sharedHost/
   )
   assert.match(
     generated['src/main/modules/installed-domain-main.ts'],
@@ -42,7 +42,7 @@ test('sorts packages by packageName and omits undeclared process imports', async
   )
   assert.match(
     generated['src/main/modules/installed-domain-main.ts'],
-    /return \{\n {6}\.\.\.sharedHost,\n {6}capabilities: capabilityInvokerFor\(owner\),\n {6}packageSettings: packageStorage\.settings,\n {6}packageSecrets: packageStorage\.secrets,/
+    /return \{\n {6}\.\.\.sharedHost,\n {6}capabilities: capabilityInvokerFor\(owner\),\n {6}packageSettings: packageStorage\.settings,\n {6}packageSecrets: packageStorage\.secrets,\n {6}\.\.\.\(fileTransfersFor \? \{ fileTransfers: fileTransfersFor\(owner\) \} : \{\}\),\n {6}\.\.\.\(externalNavigationFor \? \{ externalNavigation: externalNavigationFor\(owner\) \} : \{\}\),\n {6}\.\.\.\(portableResourcesFor \? \{ portableResources: portableResourcesFor\(owner\) \} : \{\}\),\n {6}\.\.\.\(internalServicesFor \? \{ internalServices: internalServicesFor\(owner\) \} : \{\}\),/
   )
   assert.doesNotMatch(
     generated['src/main/modules/installed-domain-main.ts'],
@@ -54,9 +54,48 @@ test('sorts packages by packageName and omits undeclared process imports', async
     generated['src/renderer/src/domain-modules/installed-domain-renderer.ts'],
     /remoteWorkspace\.attach\(input\)/
   )
+  assert.match(
+    generated['src/renderer/src/domain-modules/installed-domain-renderer.ts'],
+    /createDomainRendererEntry0\(domainHostFor\("@fixture\/a-renderer-only"\)\)/
+  )
+  assert.match(
+    generated['src/renderer/src/domain-modules/installed-domain-renderer.ts'],
+    /fileTransfers: rendererFileTransferHostFor\(ownerId\)/
+  )
   assert.doesNotMatch(
     generated['packages/workers/workspace-host/src/generated/installed-domain-workspace-server.ts'],
     /@fixture/
+  )
+})
+
+test('validates development fixtures without projecting them into production', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  await createFixture(root, 'production', {
+    packageName: '@fixture/production',
+    process: 'main'
+  })
+  await createFixture(root, 'development-only', {
+    packageName: '@fixture/development-only',
+    process: 'main',
+    composition: 'development-only'
+  })
+
+  const packages = await discoverDomainPackages(root, {
+    parseDefinition: (definition) => definition
+  })
+  const generated = renderGeneratedDomainPackageFiles(packages)
+
+  assert.deepEqual(packages.map(({ packageName }) => packageName), [
+    '@fixture/development-only',
+    '@fixture/production'
+  ])
+  for (const content of Object.values(generated)) {
+    assert.doesNotMatch(content, /@fixture\/development-only/)
+  }
+  assert.match(
+    generated['src/main/modules/installed-domain-main.ts'],
+    /@fixture\/production\/main/
   )
 })
 
@@ -438,6 +477,7 @@ async function createFixture(root, directoryName, options) {
   const manifest = {
     contractVersion: 1,
     kind: 'trusted-compile-time',
+    ...(options.composition ? { composition: options.composition } : {}),
     packageName: options.packageName,
     module: {
       id: `fixture.${directoryName}`,

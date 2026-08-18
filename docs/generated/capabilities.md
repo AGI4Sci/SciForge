@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **208**
+Registered actions: **236**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -70,6 +70,23 @@ Registered actions: **208**
 | `collaboration.status.read` | 1.0.0 | ui | read | none | global |
 | `collaboration.sync.retry` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.task.list` | 1.0.0 | ui | read | none | global |
+| `content-space.agent-create-folder` | 1.0.0 | agent | external-write | confirmation | resource |
+| `content-space.agent-download` | 1.0.0 | agent | external-write | confirmation | resource |
+| `content-space.agent-list-entries` | 1.0.0 | agent | read | none | resource |
+| `content-space.agent-upload-new` | 1.0.0 | agent | external-write | confirmation | resource |
+| `content-space.authorize-agent-root` | 1.0.0 | agent | external-write | confirmation | global |
+| `content-space.create-folder` | 1.0.0 | ui | external-write | confirmation | global |
+| `content-space.describe-capabilities` | 1.0.0 | ui, agent, system | read | none | global |
+| `content-space.download` | 1.0.0 | ui | external-write | confirmation | global |
+| `content-space.list-agent-root-candidates` | 1.0.0 | agent | read | none | global |
+| `content-space.list-containers` | 1.0.0 | ui | read | none | global |
+| `content-space.list-entries` | 1.0.0 | ui | read | none | global |
+| `content-space.list-provider-instances` | 1.0.0 | ui, agent, system | read | none | global |
+| `content-space.observe-entry` | 1.0.0 | ui | read | none | global |
+| `content-space.observe-immutable-version` | 1.0.0 | ui | read | none | global |
+| `content-space.open-portal-target` | 1.0.0 | ui | external-write | confirmation | global |
+| `content-space.resolve-portal-target` | 1.0.0 | ui | read | none | global |
+| `content-space.upload-new` | 1.0.0 | ui | external-write | confirmation | global |
 | `controlled-process.create` | 1.0.0 | ui | external-write | none | workspace |
 | `controlled-process.dispose` | 1.0.0 | ui | external-write | none | resource |
 | `controlled-process.read` | 1.0.0 | ui | read | none | resource |
@@ -126,6 +143,17 @@ Registered actions: **208**
 | `git-checkpoints.list` | 1.0.0 | ui, agent, system | read | none | workspace |
 | `git-checkpoints.preview` | 1.0.0 | ui, agent, system | read | none | workspace |
 | `git-checkpoints.restore` | 1.0.0 | ui, agent | destructive | confirmation | workspace |
+| `identity.local.backup-and-reset` | 1.0.0 | ui | destructive | confirmation | global |
+| `identity.local.create-account` | 1.0.0 | ui | external-write | none | global |
+| `identity.local.dismiss-first-prompt` | 1.0.0 | ui | external-write | none | global |
+| `identity.local.exit-account` | 1.0.0 | ui | external-write | none | global |
+| `identity.local.inspect` | 1.0.0 | ui | read | none | global |
+| `identity.local.list-accounts` | 1.0.0 | ui | read | none | global |
+| `identity.local.rename-account` | 1.0.0 | ui | external-write | none | global |
+| `identity.local.select-account` | 1.0.0 | ui | external-write | none | global |
+| `opencontent.connection.bind` | 1.0.0 | ui | external-write | none | global |
+| `opencontent.connection.status` | 1.0.0 | ui | read | none | global |
+| `opencontent.connection.unbind` | 1.0.0 | ui | external-write | none | global |
 | `paper-radar.digest` | 1.0.0 | ui, agent, system | read | none | global |
 | `paper-radar.profiles.list` | 1.0.0 | ui, agent, system | read | none | global |
 | `paper-radar.profiles.save` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
@@ -19355,6 +19383,4073 @@ Reads local canonical cloud Task projections and restart reconciliation state.
 }
 ```
 
+## `content-space.agent-create-folder`
+
+Creates one folder beneath the exact authorized Agent directory. Before operating inside it, re-list this parent and use the exact new child Broker resource.
+
+- Version: `1.0.0`
+- Audiences: agent
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "name"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "invocationId": {
+                "maxLength": 128,
+                "minLength": 16,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "name": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "parent": {
+                "additionalProperties": false,
+                "properties": {
+                  "containerId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "providerInstanceRef",
+                  "containerId"
+                ],
+                "type": "object"
+              },
+              "reference": {
+                "additionalProperties": false,
+                "properties": {
+                  "containerId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "providerInstanceRef",
+                  "containerId"
+                ],
+                "type": "object"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "invocationId",
+              "parent",
+              "name",
+              "reference"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [
+    "content-space.container"
+  ],
+  "tags": [
+    "content-space",
+    "provider-neutral"
+  ],
+  "title": "Create Folder in Authorized Agent Content Space"
+}
+```
+
+## `content-space.agent-download`
+
+Downloads one authorized file to a confirmed new Workspace-relative destination.
+
+- Version: `1.0.0`
+- Audiences: agent
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceRelativePath": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "workspaceRelativePath"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "bytesWritten": {
+                "maximum": 1073741824,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "digest": {
+                "additionalProperties": false,
+                "properties": {
+                  "algorithm": {
+                    "const": "sha256",
+                    "type": "string"
+                  },
+                  "value": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "algorithm",
+                  "value"
+                ],
+                "type": "object"
+              },
+              "invocationId": {
+                "maxLength": 128,
+                "minLength": 16,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "reference": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fileId": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                        "type": "string"
+                      },
+                      "providerInstanceRef": {
+                        "maxLength": 256,
+                        "minLength": 3,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "providerInstanceRef",
+                      "fileId"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "digest": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "algorithm": {
+                            "const": "sha256",
+                            "type": "string"
+                          },
+                          "value": {
+                            "pattern": "^[a-f0-9]{64}$",
+                            "type": "string"
+                          }
+                        },
+                        "readOnly": true,
+                        "required": [
+                          "algorithm",
+                          "value"
+                        ],
+                        "type": "object"
+                      },
+                      "fileId": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                        "type": "string"
+                      },
+                      "immutableVersionId": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                        "type": "string"
+                      },
+                      "providerInstanceRef": {
+                        "maxLength": 256,
+                        "minLength": 3,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "providerInstanceRef",
+                      "fileId",
+                      "immutableVersionId"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "invocationId",
+              "reference",
+              "bytesWritten"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [
+    "content-space.file"
+  ],
+  "tags": [
+    "content-space",
+    "provider-neutral"
+  ],
+  "title": "Download Authorized Content Space File to Workspace"
+}
+```
+
+## `content-space.agent-list-entries`
+
+Lists direct children beneath one Human-authorized Agent directory scope. Use each returned Broker resource, never its descriptive Provider reference, as authority for child operations.
+
+- Version: `1.0.0`
+- Audiences: agent
+- Effect: `read`
+- Approval: none
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "page": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "limit"
+        ],
+        "type": "object"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "page"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "entry": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "kind": {
+                              "const": "container",
+                              "type": "string"
+                            },
+                            "label": {
+                              "maxLength": 256,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "reference": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "containerId": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                                  "type": "string"
+                                },
+                                "providerInstanceRef": {
+                                  "maxLength": 256,
+                                  "minLength": 3,
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                  "type": "string"
+                                }
+                              },
+                              "readOnly": true,
+                              "required": [
+                                "providerInstanceRef",
+                                "containerId"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "readOnly": true,
+                          "required": [
+                            "kind",
+                            "reference",
+                            "label"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "kind": {
+                              "const": "file",
+                              "type": "string"
+                            },
+                            "label": {
+                              "maxLength": 256,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "modifiedAt": {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            "reference": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "fileId": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                                  "type": "string"
+                                },
+                                "providerInstanceRef": {
+                                  "maxLength": 256,
+                                  "minLength": 3,
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                  "type": "string"
+                                }
+                              },
+                              "readOnly": true,
+                              "required": [
+                                "providerInstanceRef",
+                                "fileId"
+                              ],
+                              "type": "object"
+                            },
+                            "size": {
+                              "maximum": 1073741824,
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "readOnly": true,
+                          "required": [
+                            "kind",
+                            "reference",
+                            "label",
+                            "size"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "resource": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "expiresAt": {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "semanticRevision": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "token": {
+                          "maxLength": 4096,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "token",
+                        "semanticRevision",
+                        "expiresAt"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "readOnly": true,
+                  "required": [
+                    "entry",
+                    "resource"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 200,
+                "readOnly": true,
+                "type": "array"
+              },
+              "nextCursor": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "parent": {
+                "additionalProperties": false,
+                "properties": {
+                  "containerId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "providerInstanceRef",
+                  "containerId"
+                ],
+                "type": "object"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "parent",
+              "items"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "producedResourceKinds": [
+    "content-space.container",
+    "content-space.file"
+  ],
+  "resourceKinds": [
+    "content-space.container"
+  ],
+  "tags": [
+    "content-space",
+    "provider-neutral"
+  ],
+  "title": "List Authorized Agent Content Space Entries"
+}
+```
+
+## `content-space.agent-upload-new`
+
+Uploads one confirmed Workspace-relative file beneath the exact Agent directory.
+
+- Version: `1.0.0`
+- Audiences: agent
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "workspaceRelativePath": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "name",
+      "workspaceRelativePath"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "invocationId": {
+                "maxLength": 128,
+                "minLength": 16,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "name": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "parent": {
+                "additionalProperties": false,
+                "properties": {
+                  "containerId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "providerInstanceRef",
+                  "containerId"
+                ],
+                "type": "object"
+              },
+              "reference": {
+                "additionalProperties": false,
+                "properties": {
+                  "fileId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "providerInstanceRef",
+                  "fileId"
+                ],
+                "type": "object"
+              },
+              "sourceSize": {
+                "maximum": 16777216,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "invocationId",
+              "parent",
+              "name",
+              "sourceSize",
+              "reference"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [
+    "content-space.container"
+  ],
+  "tags": [
+    "content-space",
+    "provider-neutral"
+  ],
+  "title": "Upload Workspace File to Authorized Content Space"
+}
+```
+
+## `content-space.authorize-agent-root`
+
+After Provider Instance and optional candidate-label discovery, confirms one exact Human-visible personal or Team library label and re-enumerates live state to establish the bounded root for this Agent context.
+
+- Version: `1.0.0`
+- Audiences: agent
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "label": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "providerInstanceRef": {
+        "maxLength": 256,
+        "minLength": 3,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+        "type": "string"
+      },
+      "scope": {
+        "enum": [
+          "personal",
+          "shared"
+        ],
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "providerInstanceRef",
+      "scope",
+      "label"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "resource": {
+                "additionalProperties": false,
+                "properties": {
+                  "expiresAt": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "semanticRevision": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "token": {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "token",
+                  "semanticRevision",
+                  "expiresAt"
+                ],
+                "type": "object"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "resource"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "producedResourceKinds": [
+    "content-space.container"
+  ],
+  "resourceKinds": [],
+  "tags": [
+    "content-space",
+    "provider-neutral",
+    "external-content",
+    "personal-library",
+    "team-library",
+    "folder",
+    "file",
+    "create",
+    "upload",
+    "download",
+    "authorize"
+  ],
+  "title": "Authorize Agent Content Space Root"
+}
+```
+
+## `content-space.create-folder`
+
+Creates one new folder without overwrite at an explicit parent.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "parent": {
+        "additionalProperties": false,
+        "properties": {
+          "containerId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "type": "string"
+          },
+          "providerInstanceRef": {
+            "maxLength": 256,
+            "minLength": 3,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "providerInstanceRef",
+          "containerId"
+        ],
+        "type": "object"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "parent",
+      "name"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "invocationId": {
+                "maxLength": 128,
+                "minLength": 16,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "name": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "parent": {
+                "additionalProperties": false,
+                "properties": {
+                  "containerId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "providerInstanceRef",
+                  "containerId"
+                ],
+                "type": "object"
+              },
+              "reference": {
+                "additionalProperties": false,
+                "properties": {
+                  "containerId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "providerInstanceRef",
+                  "containerId"
+                ],
+                "type": "object"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "invocationId",
+              "parent",
+              "name",
+              "reference"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "content-space",
+    "provider-neutral"
+  ],
+  "title": "Create Content Space Folder"
+}
+```
+
+## `content-space.describe-capabilities`
+
+Reads operation readiness for one pinned Provider Instance.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "providerInstanceRef": {
+        "maxLength": 256,
+        "minLength": 3,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "providerInstanceRef"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "operation": {
+                      "enum": [
+                        "list-containers",
+                        "list-entries",
+                        "observe-entry",
+                        "create-folder",
+                        "upload-new",
+                        "download",
+                        "portal-target",
+                        "observe-immutable-version"
+                      ],
+                      "type": "string"
+                    },
+                    "readiness": {
+                      "enum": [
+                        "poc_only",
+                        "blocked_by_contract",
+                        "production_ready"
+                      ],
+                      "type": "string"
+                    },
+                    "reasonCode": {
+                      "enum": [
+                        "available",
+                        "verification_profile_required",
+                        "provider_contract_missing",
+                        "instance_policy_blocked",
+                        "resource_capability_missing",
+                        "platform_gate_blocked",
+                        "audience_policy_blocked"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "readOnly": true,
+                  "required": [
+                    "operation",
+                    "readiness",
+                    "reasonCode"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "readOnly": true,
+                "type": "array"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "items"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "content-space",
+    "provider-neutral"
+  ],
+  "title": "Describe Content Space Capabilities"
+}
+```
+
+## `content-space.download`
+
+Downloads bytes only to a Host-owned no-overwrite destination.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "destinationHandle": {
+        "pattern": "^xfer_[A-Za-z0-9_-]{32}$",
+        "type": "string"
+      },
+      "reference": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "fileId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "type": "string"
+              },
+              "providerInstanceRef": {
+                "maxLength": 256,
+                "minLength": 3,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "providerInstanceRef",
+              "fileId"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "digest": {
+                "additionalProperties": false,
+                "properties": {
+                  "algorithm": {
+                    "const": "sha256",
+                    "type": "string"
+                  },
+                  "value": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "algorithm",
+                  "value"
+                ],
+                "type": "object"
+              },
+              "fileId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "type": "string"
+              },
+              "immutableVersionId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "type": "string"
+              },
+              "providerInstanceRef": {
+                "maxLength": 256,
+                "minLength": 3,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "providerInstanceRef",
+              "fileId",
+              "immutableVersionId"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "reference",
+      "destinationHandle"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "bytesWritten": {
+                "maximum": 1073741824,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "digest": {
+                "additionalProperties": false,
+                "properties": {
+                  "algorithm": {
+                    "const": "sha256",
+                    "type": "string"
+                  },
+                  "value": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "algorithm",
+                  "value"
+                ],
+                "type": "object"
+              },
+              "invocationId": {
+                "maxLength": 128,
+                "minLength": 16,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "reference": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fileId": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                        "type": "string"
+                      },
+                      "providerInstanceRef": {
+                        "maxLength": 256,
+                        "minLength": 3,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "providerInstanceRef",
+                      "fileId"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "digest": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "algorithm": {
+                            "const": "sha256",
+                            "type": "string"
+                          },
+                          "value": {
+                            "pattern": "^[a-f0-9]{64}$",
+                            "type": "string"
+                          }
+                        },
+                        "readOnly": true,
+                        "required": [
+                          "algorithm",
+                          "value"
+                        ],
+                        "type": "object"
+                      },
+                      "fileId": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                        "type": "string"
+                      },
+                      "immutableVersionId": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                        "type": "string"
+                      },
+                      "providerInstanceRef": {
+                        "maxLength": 256,
+                        "minLength": 3,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "providerInstanceRef",
+                      "fileId",
+                      "immutableVersionId"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "invocationId",
+              "reference",
+              "bytesWritten"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "content-space",
+    "provider-neutral"
+  ],
+  "title": "Download Content Space File"
+}
+```
+
+## `content-space.list-agent-root-candidates`
+
+After listing Provider Instances, lists one bounded page of Human-visible personal or Team library labels for Agent root selection. Follow nextCursor before concluding the set; output is selection data only and never authority or a Provider resource identity.
+
+- Version: `1.0.0`
+- Audiences: agent
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "page": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "limit"
+        ],
+        "type": "object"
+      },
+      "providerInstanceRef": {
+        "maxLength": 256,
+        "minLength": 3,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+        "type": "string"
+      },
+      "scope": {
+        "enum": [
+          "personal",
+          "shared"
+        ],
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "providerInstanceRef",
+      "scope",
+      "page"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "libraryLabel": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "readOnly": true,
+                  "required": [
+                    "libraryLabel"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 200,
+                "readOnly": true,
+                "type": "array"
+              },
+              "nextCursor": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "providerInstanceRef": {
+                "maxLength": 256,
+                "minLength": 3,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                "type": "string"
+              },
+              "scope": {
+                "enum": [
+                  "personal",
+                  "shared"
+                ],
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "providerInstanceRef",
+              "scope",
+              "items"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "content-space",
+    "provider-neutral",
+    "external-content",
+    "provider",
+    "personal-library",
+    "team-library",
+    "root-selection",
+    "browse",
+    "folder",
+    "create",
+    "upload",
+    "download",
+    "authorize"
+  ],
+  "title": "List Agent Content Space Root Candidates"
+}
+```
+
+## `content-space.list-containers`
+
+Lists one bounded container page from an explicit Provider Instance.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "page": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "limit"
+        ],
+        "type": "object"
+      },
+      "providerInstanceRef": {
+        "maxLength": 256,
+        "minLength": 3,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "providerInstanceRef",
+      "page"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "label": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "reference": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "containerId": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                          "type": "string"
+                        },
+                        "providerInstanceRef": {
+                          "maxLength": 256,
+                          "minLength": 3,
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                          "type": "string"
+                        }
+                      },
+                      "readOnly": true,
+                      "required": [
+                        "providerInstanceRef",
+                        "containerId"
+                      ],
+                      "type": "object"
+                    },
+                    "scope": {
+                      "enum": [
+                        "personal",
+                        "shared"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "readOnly": true,
+                  "required": [
+                    "reference",
+                    "scope",
+                    "label"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 200,
+                "readOnly": true,
+                "type": "array"
+              },
+              "nextCursor": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "providerInstanceRef": {
+                "maxLength": 256,
+                "minLength": 3,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "providerInstanceRef",
+              "items"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "content-space",
+    "provider-neutral"
+  ],
+  "title": "List Content Space Containers"
+}
+```
+
+## `content-space.list-entries`
+
+Lists one bounded page of direct children for an explicit container.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "page": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "limit"
+        ],
+        "type": "object"
+      },
+      "parent": {
+        "additionalProperties": false,
+        "properties": {
+          "containerId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "type": "string"
+          },
+          "providerInstanceRef": {
+            "maxLength": 256,
+            "minLength": 3,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "providerInstanceRef",
+          "containerId"
+        ],
+        "type": "object"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "parent",
+      "page"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "container",
+                          "type": "string"
+                        },
+                        "label": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "reference": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "containerId": {
+                              "maxLength": 256,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                              "type": "string"
+                            },
+                            "providerInstanceRef": {
+                              "maxLength": 256,
+                              "minLength": 3,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                              "type": "string"
+                            }
+                          },
+                          "readOnly": true,
+                          "required": [
+                            "providerInstanceRef",
+                            "containerId"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "readOnly": true,
+                      "required": [
+                        "kind",
+                        "reference",
+                        "label"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "file",
+                          "type": "string"
+                        },
+                        "label": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "modifiedAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
+                        },
+                        "reference": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fileId": {
+                              "maxLength": 256,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                              "type": "string"
+                            },
+                            "providerInstanceRef": {
+                              "maxLength": 256,
+                              "minLength": 3,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                              "type": "string"
+                            }
+                          },
+                          "readOnly": true,
+                          "required": [
+                            "providerInstanceRef",
+                            "fileId"
+                          ],
+                          "type": "object"
+                        },
+                        "size": {
+                          "maximum": 1073741824,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "readOnly": true,
+                      "required": [
+                        "kind",
+                        "reference",
+                        "label",
+                        "size"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "maxItems": 200,
+                "readOnly": true,
+                "type": "array"
+              },
+              "nextCursor": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "parent": {
+                "additionalProperties": false,
+                "properties": {
+                  "containerId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "providerInstanceRef",
+                  "containerId"
+                ],
+                "type": "object"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "parent",
+              "items"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "content-space",
+    "provider-neutral"
+  ],
+  "title": "List Content Space Entries"
+}
+```
+
+## `content-space.list-provider-instances`
+
+First lists explicit trusted Provider Instances; use its returned providerInstanceRef before listing or authorizing an external personal or Team library root.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "label": {
+                      "maxLength": 160,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "providerInstanceRef": {
+                      "maxLength": 256,
+                      "minLength": 3,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                      "type": "string"
+                    }
+                  },
+                  "readOnly": true,
+                  "required": [
+                    "providerInstanceRef",
+                    "label"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 64,
+                "readOnly": true,
+                "type": "array"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "items"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "content-space",
+    "provider-neutral",
+    "external-content",
+    "provider",
+    "provider-instance",
+    "personal-library",
+    "team-library",
+    "root-selection",
+    "browse",
+    "folder",
+    "create",
+    "upload",
+    "download",
+    "authorize"
+  ],
+  "title": "List Content Space Provider Instances"
+}
+```
+
+## `content-space.observe-entry`
+
+Reads provider-neutral metadata for an exact Content Space reference.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "reference": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "containerId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "type": "string"
+              },
+              "providerInstanceRef": {
+                "maxLength": 256,
+                "minLength": 3,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "providerInstanceRef",
+              "containerId"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "fileId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "type": "string"
+              },
+              "providerInstanceRef": {
+                "maxLength": 256,
+                "minLength": 3,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "providerInstanceRef",
+              "fileId"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "digest": {
+                "additionalProperties": false,
+                "properties": {
+                  "algorithm": {
+                    "const": "sha256",
+                    "type": "string"
+                  },
+                  "value": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "algorithm",
+                  "value"
+                ],
+                "type": "object"
+              },
+              "fileId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "type": "string"
+              },
+              "immutableVersionId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "type": "string"
+              },
+              "providerInstanceRef": {
+                "maxLength": 256,
+                "minLength": 3,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "providerInstanceRef",
+              "fileId",
+              "immutableVersionId"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "reference"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "capabilities": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "operation": {
+                      "enum": [
+                        "list-containers",
+                        "list-entries",
+                        "observe-entry",
+                        "create-folder",
+                        "upload-new",
+                        "download",
+                        "portal-target",
+                        "observe-immutable-version"
+                      ],
+                      "type": "string"
+                    },
+                    "readiness": {
+                      "enum": [
+                        "poc_only",
+                        "blocked_by_contract",
+                        "production_ready"
+                      ],
+                      "type": "string"
+                    },
+                    "reasonCode": {
+                      "enum": [
+                        "available",
+                        "verification_profile_required",
+                        "provider_contract_missing",
+                        "instance_policy_blocked",
+                        "resource_capability_missing",
+                        "platform_gate_blocked",
+                        "audience_policy_blocked"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "readOnly": true,
+                  "required": [
+                    "operation",
+                    "readiness",
+                    "reasonCode"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "readOnly": true,
+                "type": "array"
+              },
+              "entry": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "container",
+                        "type": "string"
+                      },
+                      "label": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "reference": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "containerId": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                            "type": "string"
+                          },
+                          "providerInstanceRef": {
+                            "maxLength": 256,
+                            "minLength": 3,
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                            "type": "string"
+                          }
+                        },
+                        "readOnly": true,
+                        "required": [
+                          "providerInstanceRef",
+                          "containerId"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "kind",
+                      "reference",
+                      "label"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "file",
+                        "type": "string"
+                      },
+                      "label": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "modifiedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "reference": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "fileId": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                            "type": "string"
+                          },
+                          "providerInstanceRef": {
+                            "maxLength": 256,
+                            "minLength": 3,
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                            "type": "string"
+                          }
+                        },
+                        "readOnly": true,
+                        "required": [
+                          "providerInstanceRef",
+                          "fileId"
+                        ],
+                        "type": "object"
+                      },
+                      "size": {
+                        "maximum": 1073741824,
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "kind",
+                      "reference",
+                      "label",
+                      "size"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "entry",
+              "capabilities"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "content-space",
+    "provider-neutral"
+  ],
+  "title": "Observe Content Space Entry"
+}
+```
+
+## `content-space.observe-immutable-version`
+
+Issues an ArtifactReference only from exact Provider proof.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "reference": {
+        "additionalProperties": false,
+        "properties": {
+          "fileId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "type": "string"
+          },
+          "providerInstanceRef": {
+            "maxLength": 256,
+            "minLength": 3,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "providerInstanceRef",
+          "fileId"
+        ],
+        "type": "object"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "reference"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "proven": {
+                    "const": false,
+                    "type": "boolean"
+                  },
+                  "reasonCode": {
+                    "enum": [
+                      "available",
+                      "verification_profile_required",
+                      "provider_contract_missing",
+                      "instance_policy_blocked",
+                      "resource_capability_missing",
+                      "platform_gate_blocked",
+                      "audience_policy_blocked"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "proven",
+                  "reasonCode"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "artifact": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "digest": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "algorithm": {
+                            "const": "sha256",
+                            "type": "string"
+                          },
+                          "value": {
+                            "pattern": "^[a-f0-9]{64}$",
+                            "type": "string"
+                          }
+                        },
+                        "readOnly": true,
+                        "required": [
+                          "algorithm",
+                          "value"
+                        ],
+                        "type": "object"
+                      },
+                      "fileId": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                        "type": "string"
+                      },
+                      "immutableVersionId": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                        "type": "string"
+                      },
+                      "providerInstanceRef": {
+                        "maxLength": 256,
+                        "minLength": 3,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "providerInstanceRef",
+                      "fileId",
+                      "immutableVersionId"
+                    ],
+                    "type": "object"
+                  },
+                  "proven": {
+                    "const": true,
+                    "type": "boolean"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "proven",
+                  "artifact"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "content-space",
+    "provider-neutral"
+  ],
+  "title": "Observe Immutable Content Version"
+}
+```
+
+## `content-space.open-portal-target`
+
+Opens one short-lived Host-validated target in the system browser.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "handle": {
+        "pattern": "^portal_[A-Za-z0-9_-]{32}$",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "handle"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "opened": {
+                "const": true,
+                "type": "boolean"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "opened"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "content-space",
+    "provider-neutral"
+  ],
+  "title": "Open Content Space Portal Target"
+}
+```
+
+## `content-space.resolve-portal-target`
+
+Converts a bounded HTTPS Provider target into a Host-owned handle.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "reference": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "containerId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "type": "string"
+              },
+              "providerInstanceRef": {
+                "maxLength": 256,
+                "minLength": 3,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "providerInstanceRef",
+              "containerId"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "fileId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "type": "string"
+              },
+              "providerInstanceRef": {
+                "maxLength": 256,
+                "minLength": 3,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "providerInstanceRef",
+              "fileId"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "digest": {
+                "additionalProperties": false,
+                "properties": {
+                  "algorithm": {
+                    "const": "sha256",
+                    "type": "string"
+                  },
+                  "value": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "algorithm",
+                  "value"
+                ],
+                "type": "object"
+              },
+              "fileId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "type": "string"
+              },
+              "immutableVersionId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "type": "string"
+              },
+              "providerInstanceRef": {
+                "maxLength": 256,
+                "minLength": 3,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "providerInstanceRef",
+              "fileId",
+              "immutableVersionId"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "reference"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "expiresAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "handle": {
+                "pattern": "^portal_[A-Za-z0-9_-]{32}$",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "handle",
+              "expiresAt"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "content-space",
+    "provider-neutral"
+  ],
+  "title": "Resolve Content Space Portal Target"
+}
+```
+
+## `content-space.upload-new`
+
+Uploads one bounded Host-selected file without overwrite.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "parent": {
+        "additionalProperties": false,
+        "properties": {
+          "containerId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "type": "string"
+          },
+          "providerInstanceRef": {
+            "maxLength": 256,
+            "minLength": 3,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "providerInstanceRef",
+          "containerId"
+        ],
+        "type": "object"
+      },
+      "sourceHandle": {
+        "pattern": "^xfer_[A-Za-z0-9_-]{32}$",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "parent",
+      "name",
+      "sourceHandle"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "invocationId": {
+                "maxLength": 128,
+                "minLength": 16,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "name": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "parent": {
+                "additionalProperties": false,
+                "properties": {
+                  "containerId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "providerInstanceRef",
+                  "containerId"
+                ],
+                "type": "object"
+              },
+              "reference": {
+                "additionalProperties": false,
+                "properties": {
+                  "fileId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "providerInstanceRef",
+                  "fileId"
+                ],
+                "type": "object"
+              },
+              "sourceSize": {
+                "maximum": 16777216,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "invocationId",
+              "parent",
+              "name",
+              "sourceSize",
+              "reference"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "content-space",
+    "provider-neutral"
+  ],
+  "title": "Upload New Content Space File"
+}
+```
+
 ## `controlled-process.create`
 
 Starts a host-controlled system shell inside the active workspace.
@@ -33363,6 +37458,1316 @@ Captures a rescue checkpoint, then restores the selected checkpoint.
     "checkpoint"
   ],
   "title": "Restore Git checkpoint"
+}
+```
+
+## `identity.local.backup-and-reset`
+
+Backs up an unavailable Identity database before establishing a fresh one.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `destructive`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "secondConfirmation": {
+        "const": "RESET LOCAL IDENTITY",
+        "type": "string"
+      }
+    },
+    "required": [
+      "secondConfirmation"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "backupPath": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "state": {
+        "additionalProperties": false,
+        "properties": {
+          "accountCount": {
+            "maximum": 1024,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "currentAccount": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "createdAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "updatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "userId": {
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                    "type": "string"
+                  },
+                  "username": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "userId",
+                  "username",
+                  "createdAt",
+                  "updatedAt"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "firstPromptDismissed": {
+            "type": "boolean"
+          },
+          "identityVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "const": "available",
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "status",
+          "identityVersion",
+          "currentAccount",
+          "accountCount",
+          "firstPromptDismissed"
+        ],
+        "type": "object"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "state",
+      "backupPath"
+    ],
+    "type": "object"
+  },
+  "principalTransition": "host-authority",
+  "resourceKinds": [],
+  "tags": [
+    "identity-access",
+    "local-account"
+  ],
+  "title": "Back Up and Reset Local Identity"
+}
+```
+
+## `identity.local.create-account`
+
+Creates and selects a display-only Local Account on this installation.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "username": {
+        "maxLength": 512,
+        "type": "string"
+      }
+    },
+    "required": [
+      "username"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "accountCount": {
+        "maximum": 1024,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "currentAccount": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "createdAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "updatedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "userId": {
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                "type": "string"
+              },
+              "username": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "userId",
+              "username",
+              "createdAt",
+              "updatedAt"
+            ],
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "firstPromptDismissed": {
+        "type": "boolean"
+      },
+      "identityVersion": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "status": {
+        "const": "available",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "status",
+      "identityVersion",
+      "currentAccount",
+      "accountCount",
+      "firstPromptDismissed"
+    ],
+    "type": "object"
+  },
+  "principalTransition": "host-authority",
+  "resourceKinds": [],
+  "tags": [
+    "identity-access",
+    "local-account"
+  ],
+  "title": "Create Local Account"
+}
+```
+
+## `identity.local.dismiss-first-prompt`
+
+Persists dismissal of the optional Local Account first-run prompt.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "accountCount": {
+        "maximum": 1024,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "currentAccount": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "createdAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "updatedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "userId": {
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                "type": "string"
+              },
+              "username": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "userId",
+              "username",
+              "createdAt",
+              "updatedAt"
+            ],
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "firstPromptDismissed": {
+        "type": "boolean"
+      },
+      "identityVersion": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "status": {
+        "const": "available",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "status",
+      "identityVersion",
+      "currentAccount",
+      "accountCount",
+      "firstPromptDismissed"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "identity-access",
+    "local-account"
+  ],
+  "title": "Dismiss Local Account Prompt"
+}
+```
+
+## `identity.local.exit-account`
+
+Clears Local Account selection without changing installation-local data.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "accountCount": {
+        "maximum": 1024,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "currentAccount": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "createdAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "updatedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "userId": {
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                "type": "string"
+              },
+              "username": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "userId",
+              "username",
+              "createdAt",
+              "updatedAt"
+            ],
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "firstPromptDismissed": {
+        "type": "boolean"
+      },
+      "identityVersion": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "status": {
+        "const": "available",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "status",
+      "identityVersion",
+      "currentAccount",
+      "accountCount",
+      "firstPromptDismissed"
+    ],
+    "type": "object"
+  },
+  "principalTransition": "host-authority",
+  "resourceKinds": [],
+  "tags": [
+    "identity-access",
+    "local-account"
+  ],
+  "title": "Exit Local Account"
+}
+```
+
+## `identity.local.inspect`
+
+Reads the current installation-local account selection state.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "accountCount": {
+            "maximum": 1024,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "currentAccount": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "createdAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "updatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "userId": {
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                    "type": "string"
+                  },
+                  "username": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "userId",
+                  "username",
+                  "createdAt",
+                  "updatedAt"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "firstPromptDismissed": {
+            "type": "boolean"
+          },
+          "identityVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "const": "available",
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "status",
+          "identityVersion",
+          "currentAccount",
+          "accountCount",
+          "firstPromptDismissed"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "enum": [
+              "open-failed",
+              "integrity-failed",
+              "migration-failed"
+            ],
+            "type": "string"
+          },
+          "recoveryAvailable": {
+            "type": "boolean"
+          },
+          "status": {
+            "const": "unavailable",
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "status",
+          "reason",
+          "recoveryAvailable"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "identity-access",
+    "local-account"
+  ],
+  "title": "Inspect Local Identity"
+}
+```
+
+## `identity.local.list-accounts`
+
+Lists display-only Local Accounts stored in this installation.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "accounts": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "createdAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "userId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "username": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "readOnly": true,
+          "required": [
+            "userId",
+            "username",
+            "createdAt",
+            "updatedAt"
+          ],
+          "type": "object"
+        },
+        "maxItems": 1024,
+        "type": "array"
+      },
+      "state": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "accountCount": {
+                "maximum": 1024,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "currentAccount": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "updatedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "userId": {
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                        "type": "string"
+                      },
+                      "username": {
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "userId",
+                      "username",
+                      "createdAt",
+                      "updatedAt"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "firstPromptDismissed": {
+                "type": "boolean"
+              },
+              "identityVersion": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "const": "available",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "status",
+              "identityVersion",
+              "currentAccount",
+              "accountCount",
+              "firstPromptDismissed"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "enum": [
+                  "open-failed",
+                  "integrity-failed",
+                  "migration-failed"
+                ],
+                "type": "string"
+              },
+              "recoveryAvailable": {
+                "type": "boolean"
+              },
+              "status": {
+                "const": "unavailable",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "status",
+              "reason",
+              "recoveryAvailable"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "state",
+      "accounts"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "identity-access",
+    "local-account"
+  ],
+  "title": "List Local Accounts"
+}
+```
+
+## `identity.local.rename-account`
+
+Changes a Local Account display name without changing its user ID.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "userId": {
+        "format": "uuid",
+        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+        "type": "string"
+      },
+      "username": {
+        "maxLength": 512,
+        "type": "string"
+      }
+    },
+    "required": [
+      "userId",
+      "username"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "accountCount": {
+        "maximum": 1024,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "currentAccount": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "createdAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "updatedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "userId": {
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                "type": "string"
+              },
+              "username": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "userId",
+              "username",
+              "createdAt",
+              "updatedAt"
+            ],
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "firstPromptDismissed": {
+        "type": "boolean"
+      },
+      "identityVersion": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "status": {
+        "const": "available",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "status",
+      "identityVersion",
+      "currentAccount",
+      "accountCount",
+      "firstPromptDismissed"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "identity-access",
+    "local-account"
+  ],
+  "title": "Rename Local Account"
+}
+```
+
+## `identity.local.select-account`
+
+Selects an existing display-only Local Account on this installation.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "userId": {
+        "format": "uuid",
+        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "userId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "accountCount": {
+        "maximum": 1024,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "currentAccount": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "createdAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "updatedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "userId": {
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                "type": "string"
+              },
+              "username": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "userId",
+              "username",
+              "createdAt",
+              "updatedAt"
+            ],
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "firstPromptDismissed": {
+        "type": "boolean"
+      },
+      "identityVersion": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "status": {
+        "const": "available",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "status",
+      "identityVersion",
+      "currentAccount",
+      "accountCount",
+      "firstPromptDismissed"
+    ],
+    "type": "object"
+  },
+  "principalTransition": "host-authority",
+  "resourceKinds": [],
+  "tags": [
+    "identity-access",
+    "local-account"
+  ],
+  "title": "Select Local Account"
+}
+```
+
+## `opencontent.connection.bind`
+
+Validates and binds one existing OpenContent account to the current Local Account.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "password": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
+      "username": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "username",
+      "password"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "const": "disconnected",
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "externalAccount": {
+            "additionalProperties": false,
+            "properties": {
+              "account": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "identityId": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "name": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "id",
+              "identityId",
+              "account",
+              "name"
+            ],
+            "type": "object"
+          },
+          "providerInstanceRef": {
+            "maxLength": 256,
+            "minLength": 3,
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "connected",
+              "reauthentication_required"
+            ],
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "state",
+          "providerInstanceRef",
+          "externalAccount"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "opencontent",
+    "provider-connection",
+    "sensitive-input"
+  ],
+  "title": "Bind Existing OpenContent Account"
+}
+```
+
+## `opencontent.connection.status`
+
+Reads the current Local Account connection status for OpenContent.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "readOnly": true,
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "const": "disconnected",
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "externalAccount": {
+            "additionalProperties": false,
+            "properties": {
+              "account": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "identityId": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "name": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "id",
+              "identityId",
+              "account",
+              "name"
+            ],
+            "type": "object"
+          },
+          "providerInstanceRef": {
+            "maxLength": 256,
+            "minLength": 3,
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "connected",
+              "reauthentication_required"
+            ],
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "state",
+          "providerInstanceRef",
+          "externalAccount"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "opencontent",
+    "provider-connection"
+  ],
+  "title": "Inspect OpenContent Connection"
+}
+```
+
+## `opencontent.connection.unbind`
+
+Removes this node-local OpenContent credential and connection metadata.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "readOnly": true,
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "remoteRevocation": {
+        "const": "unsupported",
+        "type": "string"
+      },
+      "state": {
+        "const": "disconnected",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "state",
+      "remoteRevocation"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "opencontent",
+    "provider-connection"
+  ],
+  "title": "Unbind OpenContent Account"
 }
 ```
 
@@ -85236,11 +90641,14 @@ Releases an open Workspace Preview session.
 | Browser Preview | browserPreview: |  |
 | Change Inspector |  |  |
 | Collaboration |  |  |
+| Content Space |  |  |
 | Controlled Process |  |  |
 | Create Loop |  |  |
 | Dataset API |  |  |
 | Evidence DAG | evidenceDag: |  |
 | Git Checkpoints |  |  |
+| Identity and Access |  |  |
+| OpenContent Connection |  |  |
 | Paper Radar | paperRadar: |  |
 | Project DAG | projectDag: |  |
 | Remote SSH |  |  |

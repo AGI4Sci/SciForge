@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
   AgentRuntimeToolError,
+  composeAgentRuntimeToolSurfaces,
+  createDeferredAgentRuntimeToolSurface,
   filterAgentRuntimeToolSurface,
   nativeAgentToolExecutionMetadata,
   nativeVisualResourceIdentity,
@@ -29,6 +31,49 @@ describe('filterAgentRuntimeToolSurface', () => {
       context: { requestId: 'request', runtimeId: 'codex' }
     })).toThrow(/not allowed/)
     expect(calls).toEqual([])
+  })
+
+  it('preserves synchronous Principal lease verification through filtered, composed, and deferred wrappers', () => {
+    const verified: string[] = []
+    const context = {
+      requestId: 'request',
+      runtimeId: 'codex',
+      threadId: 'thread',
+      turnId: 'turn'
+    }
+    const first = {
+      tools: () => [{
+        type: 'function' as const,
+        name: 'first_tool',
+        description: 'first',
+        inputSchema: {}
+      }],
+      assertPrincipalLease: () => verified.push('first'),
+      call: async () => ({ tool: 'first_tool', value: {} })
+    }
+    const second = {
+      tools: () => [{
+        type: 'function' as const,
+        name: 'second_tool',
+        description: 'second',
+        inputSchema: {}
+      }],
+      assertPrincipalLease: () => verified.push('second'),
+      call: async () => ({ tool: 'second_tool', value: {} })
+    }
+
+    filterAgentRuntimeToolSurface(first as never, ['first_tool'])
+      .assertPrincipalLease?.(context)
+    composeAgentRuntimeToolSurfaces([first, second] as never)
+      .assertPrincipalLease?.(context)
+
+    let resolved: typeof first | undefined
+    const deferred = createDeferredAgentRuntimeToolSurface(() => resolved as never)
+    expect(() => deferred.assertPrincipalLease?.(context)).toThrow(/not initialized/)
+    resolved = first
+    deferred.assertPrincipalLease?.(context)
+
+    expect(verified).toEqual(['first', 'first', 'second', 'first'])
   })
 })
 

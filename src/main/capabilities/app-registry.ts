@@ -18,7 +18,10 @@ import {
 } from '@sciforge/domain-sdk/controlled-process'
 import { WORKSPACE_PREVIEW_RESOURCE_KIND } from '@sciforge/domain-sdk/workspace-preview'
 import { workspaceLocatorSchema } from '@sciforge/domain-sdk/workspace-host'
-import { capabilityJsonValueSchema } from '../../shared/capability-broker'
+import {
+  capabilityJsonValueSchema,
+  type CapabilityCallerContext
+} from '../../shared/capability-broker'
 import { SURFACE_RESOURCE_KIND } from '../../shared/visible-context'
 import {
   workspacePreviewAnnotationDeleteInputSchema,
@@ -55,6 +58,11 @@ import {
   defineAppCapabilityContribution
 } from './app-contributions/composition'
 import { defineCapability, type CapabilityResourceRegistration } from './registry'
+import {
+  principalContextBindingKey,
+  StableResourceBindingRegistry,
+  type StableResourceBindingReservation
+} from './stable-resource-bindings'
 
 export { WORKSPACE_PREVIEW_RESOURCE_KIND } from '@sciforge/domain-sdk/workspace-preview'
 
@@ -78,6 +86,8 @@ export const APP_CAPABILITY_IDS = {
   workspacePreviewRelease: 'workspace-preview.release',
   surfaceCurrent: 'surface.current'
 } as const
+
+const MAX_APP_RESOURCE_REGISTRATION_BINDINGS = 512
 
 type ControlledProcessCapabilityService = {
   create(input: ControlledProcessCreateInput): Promise<ControlledProcessCreateResult>
@@ -391,50 +401,79 @@ function workspacePreviewOperations(
   ]
 }
 
-function workspacePreviewResource(
-  dependencies: AppCapabilityDependencies,
-  sessionId: string,
-  workspaceId: string
-): CapabilityResourceRegistration {
-  const initial = dependencies.workspacePreviewHost.getSession(sessionId)
-  if (!initial) throw new Error('Workspace Preview session was not found.')
-  return {
-    resourceId: sessionId,
-    resourceKind: WORKSPACE_PREVIEW_RESOURCE_KIND,
-    workspaceId,
-    audiences: ['ui', 'agent', 'system'],
-    semanticRevision: workspacePreviewRevision(initial),
-    contentTransport: {
-      describeActionId: APP_CAPABILITY_IDS.workspacePreviewDescribeAsset,
-      readRangeActionId: APP_CAPABILITY_IDS.workspacePreviewReadRange
-    },
-    dispose: async () => {
-      await dependencies.workspacePreviewHost.releaseSession(sessionId)
-    },
-    observe: async (caller) => {
-      const session = dependencies.workspacePreviewHost.getSession(sessionId)
-      if (!session) throw new Error('Workspace Preview session was not found.')
-      const result = await dependencies.workspacePreviewHost.observe(sessionId)
-      if (!result.ok) throw new Error(result.message)
-      const manifest = dependencies.workspacePreviewHost.listPlugins()
-        .find((candidate) => candidate.id === session.pluginId)
-      return {
-        semanticRevision: workspacePreviewRevision(session),
-        state: capabilityJsonValueSchema.parse({
-          documentAnnotations: result.observation.documentAnnotations ?? null,
-          session,
-          observation: result.observation
-        }),
-        operationIds: workspacePreviewOperations(
-          result.observation,
-          manifest?.capabilities.edit === true,
-          manifest?.capabilities.annotations === true,
-          Boolean(manifest?.capabilities.export?.length),
-          caller.audience
-        )
-      }
+type AppResourceRegistrationBinding = Pick<CapabilityResourceRegistration, 'observe' | 'dispose'>
+
+function createWorkspacePreviewResourceFactory(dependencies: AppCapabilityDependencies) {
+  const bindings = new StableResourceBindingRegistry<AppResourceRegistrationBinding>(
+    MAX_APP_RESOURCE_REGISTRATION_BINDINGS,
+    'Workspace Preview'
+  )
+  return Object.freeze({
+    reserve: () => bindings.reserve(),
+    create: (
+      reservation: StableResourceBindingReservation<AppResourceRegistrationBinding>,
+      sessionId: string,
+      workspaceId: string,
+      caller: CapabilityCallerContext
+    ) => {
+      const initial = dependencies.workspacePreviewHost.getSession(sessionId)
+      if (!initial) throw new Error('Workspace Preview session was not found.')
+      const key = JSON.stringify([
+        workspaceId,
+        sessionId,
+        principalContextBindingKey(caller)
+      ])
+      const committed = reservation.commit(key, () => {
+        let created: AppResourceRegistrationBinding
+        created = {
+          dispose: async () => {
+            await dependencies.workspacePreviewHost.releaseSession(sessionId)
+            bindings.deleteExact(key, created)
+          },
+          observe: async (observerCaller) => {
+            const session = dependencies.workspacePreviewHost.getSession(sessionId)
+            if (!session) throw new Error('Workspace Preview session was not found.')
+            const result = await dependencies.workspacePreviewHost.observe(sessionId)
+            if (!result.ok) throw new Error(result.message)
+            const manifest = dependencies.workspacePreviewHost.listPlugins()
+              .find((candidate) => candidate.id === session.pluginId)
+            return {
+              semanticRevision: workspacePreviewRevision(session),
+              state: capabilityJsonValueSchema.parse({
+                documentAnnotations: result.observation.documentAnnotations ?? null,
+                session,
+                observation: result.observation
+              }),
+              operationIds: workspacePreviewOperations(
+                result.observation,
+                manifest?.capabilities.edit === true,
+                manifest?.capabilities.annotations === true,
+                Boolean(manifest?.capabilities.export?.length),
+                observerCaller.audience
+              )
+            }
+          }
+        }
+        return created
+      })
+      return Object.freeze({
+        registration: {
+          resourceId: sessionId,
+          resourceKind: WORKSPACE_PREVIEW_RESOURCE_KIND,
+          workspaceId,
+          audiences: ['ui', 'agent', 'system'],
+          semanticRevision: workspacePreviewRevision(initial),
+          contentTransport: {
+            describeActionId: APP_CAPABILITY_IDS.workspacePreviewDescribeAsset,
+            readRangeActionId: APP_CAPABILITY_IDS.workspacePreviewReadRange
+          },
+          observe: committed.binding.observe,
+          dispose: committed.binding.dispose,
+          retireAfterLastHandleExpires: true
+        } satisfies CapabilityResourceRegistration
+      })
     }
-  }
+  })
 }
 
 function requireWorkspacePreviewSession(
@@ -453,29 +492,57 @@ function resourceSessionId(resource: { resourceId: string } | undefined): string
 
 type CurrentSurface = Awaited<ReturnType<VisibleContextService['currentSurface']>>
 
-function surfaceResource(
-  service: Pick<VisibleContextService, 'currentSurface'>,
+function createSurfaceResourceFactory(
+  service: Pick<VisibleContextService, 'currentSurface'>
+): (
   current: CurrentSurface,
-  callerId?: string
-): CapabilityResourceRegistration {
-  return {
-    resourceId: current.resourceId,
-    resourceKind: SURFACE_RESOURCE_KIND,
-    ...(current.workspaceId ? { workspaceId: current.workspaceId } : {}),
-    audiences: ['ui', 'agent', 'system'],
-    semanticRevision: current.semanticRevision,
-    layoutRevision: current.layoutRevision,
-    observe: async () => {
-      const latest = await service.currentSurface(callerId)
-      if (latest.resourceId !== current.resourceId) {
-        throw new Error('The visible SciForge surface is no longer available.')
+  caller: CapabilityCallerContext
+) => CapabilityResourceRegistration {
+  const bindings = new StableResourceBindingRegistry<AppResourceRegistrationBinding>(
+    MAX_APP_RESOURCE_REGISTRATION_BINDINGS,
+    'current Surface'
+  )
+  return (current, caller) => {
+    const key = JSON.stringify([
+      current.workspaceId ?? null,
+      current.resourceId,
+      principalContextBindingKey(caller)
+    ])
+    const reservation = bindings.reserve(key)
+    const committed = reservation.commit(key, () => {
+      const resourceId = current.resourceId
+      let created: AppResourceRegistrationBinding
+      created = {
+        observe: async (observerCaller) => {
+          const latest = await service.currentSurface(
+            observerCaller.audience === 'agent' ? observerCaller.callerId : undefined
+          )
+          if (latest.resourceId !== resourceId) {
+            throw new Error('The visible SciForge surface is no longer available.')
+          }
+          return {
+            semanticRevision: latest.semanticRevision,
+            layoutRevision: latest.layoutRevision,
+            state: latest.state,
+            operationIds: []
+          }
+        },
+        dispose: () => {
+          bindings.deleteExact(key, created)
+        }
       }
-      return {
-        semanticRevision: latest.semanticRevision,
-        layoutRevision: latest.layoutRevision,
-        state: latest.state,
-        operationIds: []
-      }
+      return created
+    })
+    return {
+      resourceId: current.resourceId,
+      resourceKind: SURFACE_RESOURCE_KIND,
+      ...(current.workspaceId ? { workspaceId: current.workspaceId } : {}),
+      audiences: ['ui', 'agent', 'system'],
+      semanticRevision: current.semanticRevision,
+      layoutRevision: current.layoutRevision,
+      observe: committed.binding.observe,
+      dispose: committed.binding.dispose,
+      retireAfterLastHandleExpires: true
     }
   }
 }
@@ -484,6 +551,7 @@ function surfaceCapabilities(
   service: Pick<VisibleContextService, 'currentSurface'> | undefined
 ) {
   if (!service) return []
+  const surfaceResource = createSurfaceResourceFactory(service)
   return [defineCapability({
     id: APP_CAPABILITY_IDS.surfaceCurrent,
     version: '2.0.0',
@@ -500,7 +568,7 @@ function surfaceCapabilities(
     handler: async (_, context) => {
       const callerId = context.caller.audience === 'agent' ? context.caller.callerId : undefined
       const current = await service.currentSurface(callerId)
-      const surface = context.issueResource(surfaceResource(service, current, callerId))
+      const surface = context.issueResource(surfaceResource(current, context.caller))
       return {
         output: capabilityJsonValueSchema.parse({
           surface,
@@ -512,6 +580,7 @@ function surfaceCapabilities(
 }
 
 function workspacePreviewCapabilities(dependencies: AppCapabilityDependencies) {
+  const workspacePreviewResource = createWorkspacePreviewResourceFactory(dependencies)
   return [
     defineCapability({
       id: APP_CAPABILITY_IDS.workspacePreviewList,
@@ -543,14 +612,27 @@ function workspacePreviewCapabilities(dependencies: AppCapabilityDependencies) {
       inputSchema: workspacePreviewOpenWireSchema,
       outputSchema: capabilityOutputSchema,
       handler: async (input, context) => {
-        const result = await dependencies.workspacePreviewHost.open(workspacePreviewOpenPayloadSchema.parse(input))
-        if (!result.ok) return { output: capabilityJsonValueSchema.parse(result) }
-        const resource = context.issueResource(workspacePreviewResource(
-          dependencies,
-          result.session.id,
-          context.caller.workspaceId ?? result.session.workspaceRoot
-        ))
-        return { output: capabilityJsonValueSchema.parse({ ...result, resource }) }
+        const reservation = workspacePreviewResource.reserve()
+        try {
+          const result = await dependencies.workspacePreviewHost.open(
+            workspacePreviewOpenPayloadSchema.parse(input)
+          )
+          if (!result.ok) {
+            reservation.release()
+            return { output: capabilityJsonValueSchema.parse(result) }
+          }
+          const prepared = workspacePreviewResource.create(
+            reservation,
+            result.session.id,
+            context.caller.workspaceId ?? result.session.workspaceRoot,
+            context.caller
+          )
+          const resource = context.issueResource(prepared.registration)
+          return { output: capabilityJsonValueSchema.parse({ ...result, resource }) }
+        } catch (error) {
+          reservation.release()
+          throw error
+        }
       }
     }),
     defineCapability({

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { describe, expect, it, vi } from 'vitest'
+import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 import type {
   CapabilityAudience,
   CapabilityCallerContextInput,
@@ -24,6 +25,20 @@ const ui: CapabilityCallerContextInput = {
   audience: 'ui',
   callerId: 'window-1',
   workspaceId: 'workspace-1'
+}
+
+const principalA: PrincipalSnapshot = {
+  authority: 'sciforge.identity-access',
+  subject: 'person-a',
+  assurance: 'local-selection',
+  deviceId: 'installation-1',
+  identityVersion: 1
+}
+
+const principalB: PrincipalSnapshot = {
+  ...principalA,
+  subject: 'person-b',
+  identityVersion: 2
 }
 
 function expectBrokerCode(error: unknown, code: string): boolean {
@@ -83,6 +98,7 @@ function issueDocument(
     layoutRevision?: string
     audiences?: CapabilityAudience[]
     dispose?: () => void | Promise<void>
+    retireAfterLastHandleExpires?: boolean
   } = {}
 ): CapabilityResourceHandle {
   const semanticRevision = options.semanticRevision ?? '1'
@@ -95,6 +111,7 @@ function issueDocument(
     layoutRevision: options.layoutRevision,
     expiresInMs: options.expiresInMs,
     dispose: options.dispose,
+    retireAfterLastHandleExpires: options.retireAfterLastHandleExpires,
     observe: async () => ({
       state: { title: 'Paper', annotationCount: 0 },
       semanticRevision,
@@ -165,6 +182,54 @@ describe('CapabilityRegistry', () => {
       outputSchema: z.object({ ok: z.boolean() }).strict(),
       handler: async () => ({ output: { ok: true } })
     })).toThrow(/Optimistic revisions require resource scope/)
+
+    expect(() => defineCapability({
+      id: 'identity.unsafe-transition',
+      version: '1',
+      title: 'Unsafe Principal transition',
+      description: 'Attempts to expose a Principal transition outside trusted UI.',
+      audiences: ['agent'],
+      scope: 'workspace',
+      effect: 'external-write',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      principalTransition: 'host-authority',
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async () => ({ output: { ok: true } })
+    })).toThrow(/Principal transitions/)
+  })
+
+  it('enforces each Host Principal transition descriptor constraint independently', () => {
+    const base = {
+      id: 'identity.transition-constraint',
+      version: '1',
+      title: 'Principal transition constraint',
+      description: 'Exercises one Host Principal transition descriptor constraint.',
+      audiences: ['ui'] as CapabilityAudience[],
+      scope: 'global' as const,
+      effect: 'external-write' as const,
+      approval: 'none' as const,
+      concurrency: { revision: 'none' as const, idempotency: 'required' as const },
+      principalTransition: 'host-authority' as const,
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async () => ({ output: { ok: true } })
+    }
+
+    expect(() => defineCapability({ ...base, audiences: ['agent'] }))
+      .toThrow(/Principal transitions/)
+    expect(() => defineCapability({ ...base, scope: 'workspace' }))
+      .toThrow(/Principal transitions/)
+    expect(() => defineCapability({
+      ...base,
+      effect: 'read',
+      concurrency: { revision: 'none', idempotency: 'none' }
+    })).toThrow(/Principal transitions/)
+    expect(() => defineCapability({
+      ...base,
+      producedResourceKinds: ['identity-resource']
+    })).toThrow(/Principal transitions/)
   })
 
   it('discovers by exact ID and ranked unordered tokens with independent bounded filters', () => {
@@ -230,6 +295,934 @@ describe('CapabilityRegistry', () => {
 })
 
 describe('CapabilityBroker', () => {
+  it('injects only Host Principal authority and scopes idempotency to its exact lease', async () => {
+    let currentPrincipal: PrincipalSnapshot | null = principalA
+    const handler = vi.fn(async (_input: Record<string, never>, context) => ({
+      output: {
+        subject: context.caller.principal?.subject ?? 'anonymous',
+        invocationId: context.invocationId ?? 'missing'
+      }
+    }))
+    const capability = defineCapability({
+      id: 'principal.verify-write',
+      version: '1',
+      title: 'Verify Principal write',
+      description: 'Verifies trusted Principal attribution and invocation identity.',
+      audiences: ['ui'],
+      scope: 'workspace',
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ subject: z.string(), invocationId: z.string() }).strict(),
+      handler
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([capability]), {
+      resolveCurrentPrincipal: () => currentPrincipal
+    })
+    const request = {
+      actionId: 'principal.verify-write',
+      invocationId: 'same-invocation',
+      input: {}
+    }
+
+    expect(() => broker.discover({
+      ...ui,
+      principal: principalB
+    } as never)).toThrow(expect.objectContaining({ code: 'invalid_caller' }))
+
+    await expect(broker.invoke(ui, request)).resolves.toMatchObject({
+      output: { subject: 'person-a', invocationId: 'same-invocation' },
+      replayed: false
+    })
+    currentPrincipal = principalB
+    await expect(broker.invoke(ui, request)).resolves.toMatchObject({
+      output: { subject: 'person-b', invocationId: 'same-invocation' },
+      replayed: false
+    })
+    currentPrincipal = principalA
+    await expect(broker.invoke(ui, request)).resolves.toMatchObject({ replayed: true })
+    expect(handler).toHaveBeenCalledTimes(2)
+  })
+
+  it('scopes ordinary idempotency to the canonical workspace locator', async () => {
+    const handler = vi.fn(async (_input: Record<string, never>, context) => ({
+      output: { hostSessionId: context.caller.workspaceLocator?.hostSessionId ?? 'local' }
+    }))
+    const capability = defineCapability({
+      id: 'workspace-locator.verify-write',
+      version: '1',
+      title: 'Verify workspace locator write',
+      description: 'Keeps remote workspace placements in the idempotency scope.',
+      audiences: ['agent'],
+      scope: 'workspace',
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ hostSessionId: z.string() }).strict(),
+      handler
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([capability]))
+    const request = {
+      actionId: capability.descriptor.id,
+      invocationId: 'same-workspace-id-different-locator',
+      input: {}
+    }
+    const remoteCaller = (hostSessionId: string): CapabilityCallerContextInput => ({
+      ...agent,
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId,
+        path: '/remote/workspace'
+      }
+    })
+
+    await expect(broker.invoke(remoteCaller('host-session-1'), request))
+      .resolves.toMatchObject({ output: { hostSessionId: 'host-session-1' }, replayed: false })
+    await expect(broker.invoke(remoteCaller('host-session-2'), request))
+      .resolves.toMatchObject({ output: { hostSessionId: 'host-session-2' }, replayed: false })
+    await expect(broker.invoke(remoteCaller('host-session-1'), request))
+      .resolves.toMatchObject({ output: { hostSessionId: 'host-session-1' }, replayed: true })
+    expect(handler).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports outcome_unknown when Principal changes while awaiting a settled mutation replay', async () => {
+    let currentPrincipal: PrincipalSnapshot | null = principalA
+    const handler = vi.fn(async () => ({ output: { ok: true as const }, changed: false }))
+    const publish = defineCapability({
+      id: 'external.replay-principal-barrier',
+      version: '1',
+      title: 'Publish replay barrier',
+      description: 'Exercises final Principal validation for a settled mutation replay.',
+      audiences: ['ui'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.literal(true) }).strict(),
+      handler
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([publish]), {
+      resolveCurrentPrincipal: () => currentPrincipal
+    })
+    const request = {
+      actionId: publish.descriptor.id,
+      invocationId: 'settled-mutation-replay-principal-switch',
+      input: {}
+    }
+    await expect(broker.invoke(ui, request)).resolves.toMatchObject({ replayed: false })
+
+    const replay = broker.invoke(ui, request)
+    currentPrincipal = principalB
+    await expect(replay)
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'outcome_unknown'))
+    expect(handler).toHaveBeenCalledOnce()
+  })
+
+  it('atomically issues handle and resource reference under one Principal-bound resource', async () => {
+    let currentPrincipal: PrincipalSnapshot | null = principalA
+    const dispose = vi.fn(async () => undefined)
+    const broker = new CapabilityBroker(new CapabilityRegistry([readCapability()]), {
+      resolveCurrentPrincipal: () => currentPrincipal
+    })
+    const issued = broker.issueResource(ui, {
+      resourceId: 'principal-owned-document',
+      resourceKind: 'document',
+      workspaceId: ui.workspaceId,
+      audiences: ['ui', 'agent'],
+      semanticRevision: '1',
+      observe: async () => ({
+        state: { title: 'Principal document' },
+        semanticRevision: '1',
+        operationIds: ['document.read-section']
+      }),
+      dispose
+    })
+
+    await expect(broker.observe(ui, { resource: issued.resource })).resolves.toMatchObject({
+      resourceRef: issued.resourceRef,
+      semanticRevision: '1'
+    })
+    currentPrincipal = principalB
+    await expect(broker.observe(ui, { resource: issued.resource }))
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'resource_scope_mismatch'))
+    expect(() => broker.bindResourceRef(ui, issued.resourceRef))
+      .toThrow(expect.objectContaining({ code: 'resource_scope_mismatch' }))
+    expect(() => broker.describeResourceRef(ui, issued.resourceRef))
+      .toThrow(expect.objectContaining({ code: 'resource_scope_mismatch' }))
+    currentPrincipal = principalA
+    expect(broker.bindResourceRef(agent, issued.resourceRef)).toMatchObject({
+      semanticRevision: '1'
+    })
+    await issued.retire({ deferWhileRetained: false })
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(() => broker.describeResourceRef(ui, issued.resourceRef))
+      .toThrow(expect.objectContaining({ code: 'resource_ref_retired' }))
+  })
+
+  it('gives long-running handlers a Host-only live Principal reauthorization closure', async () => {
+    let currentPrincipal: PrincipalSnapshot | null = principalA
+    let release: (() => void) | undefined
+    let started: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const handlerStarted = new Promise<void>((resolve) => { started = resolve })
+    const capability = defineCapability({
+      id: 'principal.long-operation',
+      version: '1',
+      title: 'Long Principal operation',
+      description: 'Reauthorizes after a provider operation.',
+      audiences: ['ui'],
+      scope: 'workspace',
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.literal(true) }).strict(),
+      handler: async (_input, context) => {
+        started?.()
+        await gate
+        context.assertPrincipalCurrent()
+        return { output: { ok: true as const } }
+      }
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([capability]), {
+      resolveCurrentPrincipal: () => currentPrincipal
+    })
+
+    const invocation = broker.invoke(ui, {
+      actionId: capability.descriptor.id,
+      invocationId: 'principal-long-operation',
+      input: {}
+    })
+    await handlerStarted
+    currentPrincipal = principalB
+    release?.()
+
+    await expect(invocation)
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'principal_changed'))
+  })
+
+  it('revalidates the Principal after observation cleanup yields and before delivering state', async () => {
+    let currentPrincipal: PrincipalSnapshot | null = principalA
+    let principalReads = 0
+    let scheduleSwitch = false
+    const broker = new CapabilityBroker(new CapabilityRegistry(), {
+      resolveCurrentPrincipal: () => {
+        principalReads += 1
+        if (scheduleSwitch && principalReads === 3) {
+          queueMicrotask(() => { currentPrincipal = principalB })
+        }
+        return currentPrincipal
+      }
+    })
+    const issued = broker.issueResource(ui, {
+      resourceId: 'principal-observation-delivery-barrier',
+      resourceKind: 'document',
+      workspaceId: ui.workspaceId,
+      semanticRevision: '1',
+      observe: async () => ({
+        state: { title: 'Principal A state must not reach B' },
+        semanticRevision: '1'
+      })
+    })
+    principalReads = 0
+    scheduleSwitch = true
+
+    await expect(broker.observe(ui, { resource: issued.resource }))
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'principal_changed'))
+    expect(currentPrincipal).toEqual(principalB)
+  })
+
+  it('revalidates the Principal after invocation cleanup and never redispatches a committed retirement', async () => {
+    let currentPrincipal: PrincipalSnapshot | null = principalA
+    let releaseDispose: (() => void) | undefined
+    let markDisposeStarted: (() => void) | undefined
+    const disposeGate = new Promise<void>((resolve) => { releaseDispose = resolve })
+    const disposeStarted = new Promise<void>((resolve) => { markDisposeStarted = resolve })
+    const dispose = vi.fn(async () => {
+      markDisposeStarted?.()
+      await disposeGate
+    })
+    const createdDispose = vi.fn(async () => undefined)
+    let issuedDuringHandler: CapabilityResourceHandle | undefined
+    const handler = vi.fn(async (_input: Record<string, never>, context) => {
+      issuedDuringHandler = context.issueResource({
+        resourceId: 'principal-delivery-undisclosed-resource',
+        resourceKind: 'transactional-resource',
+        workspaceId: context.caller.workspaceId,
+        semanticRevision: '1',
+        observe: async () => ({ state: {}, semanticRevision: '1' }),
+        dispose: createdDispose
+      })
+      return {
+        output: { retired: true as const },
+        changed: false,
+        retireResource: true as const
+      }
+    })
+    const retire = defineCapability({
+      id: 'principal.retire-at-delivery-barrier',
+      version: '1',
+      title: 'Retire at Principal delivery barrier',
+      description: 'Commits retirement while final delivery remains Principal-bound.',
+      audiences: ['ui'],
+      scope: 'resource',
+      resourceKinds: ['document'],
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ retired: z.literal(true) }).strict(),
+      handler
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([retire]), {
+      resolveCurrentPrincipal: () => currentPrincipal
+    })
+    const issued = broker.issueResource(ui, {
+      resourceId: 'principal-invocation-delivery-barrier',
+      resourceKind: 'document',
+      workspaceId: ui.workspaceId,
+      semanticRevision: '1',
+      observe: async () => ({ state: {}, semanticRevision: '1' }),
+      dispose
+    })
+    const request = {
+      actionId: retire.descriptor.id,
+      invocationId: 'principal-retire-delivery-barrier-1',
+      resource: issued.resource,
+      input: {}
+    }
+
+    const invocation = broker.invoke(ui, request)
+    await disposeStarted
+    currentPrincipal = principalB
+    releaseDispose?.()
+    await expect(invocation)
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'outcome_unknown'))
+
+    currentPrincipal = principalA
+    await expect(broker.observe(ui, { resource: issuedDuringHandler! }))
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'invalid_resource_handle'))
+    await expect(broker.invoke(ui, request))
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'invalid_resource_handle'))
+    expect(handler).toHaveBeenCalledOnce()
+    expect(dispose).toHaveBeenCalledOnce()
+    expect(createdDispose).toHaveBeenCalledOnce()
+  })
+
+  it('fails closed after an unnoticed Principal switch but preserves an acknowledged typed unknown', async () => {
+    let currentPrincipal: PrincipalSnapshot | null = principalA
+    let releaseForgotten: (() => void) | undefined
+    let startedForgotten: (() => void) | undefined
+    const forgottenGate = new Promise<void>((resolve) => { releaseForgotten = resolve })
+    const forgottenStarted = new Promise<void>((resolve) => { startedForgotten = resolve })
+    const forgotReauthorization = defineCapability({
+      id: 'principal.forgot-reauthorization',
+      version: '1',
+      title: 'Forgot Principal reauthorization',
+      description: 'Returns after a long operation without checking the live Principal.',
+      audiences: ['ui'],
+      scope: 'workspace',
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ outcome: z.literal('success') }).strict(),
+      handler: async () => {
+        startedForgotten?.()
+        await forgottenGate
+        return { output: { outcome: 'success' as const } }
+      }
+    })
+    const broker = new CapabilityBroker(
+      new CapabilityRegistry([forgotReauthorization]),
+      { resolveCurrentPrincipal: () => currentPrincipal }
+    )
+    const forgotten = broker.invoke(ui, {
+      actionId: forgotReauthorization.descriptor.id,
+      invocationId: 'forgotten-principal-check',
+      input: {}
+    })
+    await forgottenStarted
+    currentPrincipal = principalB
+    releaseForgotten?.()
+    await expect(forgotten)
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'principal_changed'))
+
+    currentPrincipal = principalA
+    let releaseAcknowledged: (() => void) | undefined
+    let startedAcknowledged: (() => void) | undefined
+    const acknowledgedGate = new Promise<void>((resolve) => { releaseAcknowledged = resolve })
+    const acknowledgedStarted = new Promise<void>((resolve) => { startedAcknowledged = resolve })
+    const acknowledgeUnknown = defineCapability({
+      id: 'principal.acknowledge-unknown',
+      version: '1',
+      title: 'Acknowledge unknown result',
+      description: 'Maps a post-dispatch Principal switch to a typed unknown result.',
+      audiences: ['ui'],
+      scope: 'workspace',
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ outcome: z.literal('outcome_unknown') }).strict(),
+      handler: async (_input, context) => {
+        startedAcknowledged?.()
+        await acknowledgedGate
+        try {
+          context.assertPrincipalCurrent()
+        } catch (error) {
+          if (!(error instanceof CapabilityBrokerError) || error.code !== 'principal_changed') {
+            throw error
+          }
+          return { output: { outcome: 'outcome_unknown' as const }, changed: false }
+        }
+        throw new Error('Expected the Principal lease to change.')
+      }
+    })
+    broker.registry.register(acknowledgeUnknown)
+    const acknowledged = broker.invoke(ui, {
+      actionId: acknowledgeUnknown.descriptor.id,
+      invocationId: 'acknowledged-principal-check',
+      input: {}
+    })
+    await acknowledgedStarted
+    currentPrincipal = principalB
+    releaseAcknowledged?.()
+    await expect(acknowledged).resolves.toMatchObject({
+      output: { outcome: 'outcome_unknown' },
+      changed: false
+    })
+  })
+
+  it('allows declared Host Principal transitions and replays them exactly once across leases', async () => {
+    let currentPrincipal: PrincipalSnapshot | null = null
+    let principalContextVersion = 0
+    const handler = vi.fn(async (
+      input: { target: 'a' | 'b' | 'none' },
+      context: { assertPrincipalCurrent(): void }
+    ) => {
+      currentPrincipal = input.target === 'none'
+        ? null
+        : input.target === 'a'
+          ? principalA
+          : principalB
+      principalContextVersion = currentPrincipal?.identityVersion ?? principalContextVersion + 1
+      try {
+        context.assertPrincipalCurrent()
+      } catch (error) {
+        if (
+          typeof error !== 'object' ||
+          error === null ||
+          !('code' in error) ||
+          error.code !== 'principal_changed'
+        ) throw error
+      }
+      return { output: { subject: currentPrincipal?.subject ?? null } }
+    })
+    const transition = defineCapability({
+      id: 'identity.transition-principal',
+      version: '1',
+      title: 'Transition Host Principal',
+      description: 'Changes the current Host Principal through trusted UI.',
+      audiences: ['ui'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      principalTransition: 'host-authority',
+      inputSchema: z.object({ target: z.enum(['a', 'b', 'none']) }).strict(),
+      outputSchema: z.object({ subject: z.string().nullable() }).strict(),
+      handler
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([transition]), {
+      resolveCurrentPrincipalContext: () => ({
+        identityVersion: principalContextVersion,
+        principal: currentPrincipal
+      })
+    })
+
+    const created = await broker.invoke(ui, {
+      actionId: transition.descriptor.id,
+      invocationId: 'principal-transition-create',
+      input: { target: 'a' }
+    })
+    expect(created).toMatchObject({ output: { subject: 'person-a' }, replayed: false })
+    expect(currentPrincipal).toEqual(principalA)
+
+    await expect(broker.invoke(ui, {
+      actionId: transition.descriptor.id,
+      invocationId: 'principal-transition-create',
+      input: { target: 'a' }
+    })).resolves.toMatchObject({ output: { subject: 'person-a' }, replayed: true })
+    await expect(broker.invoke({
+      ...ui,
+      workspaceId: 'other-workspace',
+      workspaceLocator: {
+        contractVersion: 1,
+        hostSessionId: 'other-host-session',
+        path: '/other-workspace'
+      }
+    }, {
+      actionId: transition.descriptor.id,
+      invocationId: 'principal-transition-create',
+      input: { target: 'a' }
+    })).resolves.toMatchObject({ output: { subject: 'person-a' }, replayed: true })
+    expect(handler).toHaveBeenCalledTimes(1)
+    await expect(broker.invoke(ui, {
+      actionId: transition.descriptor.id,
+      invocationId: 'principal-transition-create',
+      input: { target: 'b' }
+    })).rejects.toSatisfy((error) => expectBrokerCode(error, 'idempotency_conflict'))
+
+    await expect(broker.invoke(ui, {
+      actionId: transition.descriptor.id,
+      invocationId: 'principal-transition-select',
+      input: { target: 'b' }
+    })).resolves.toMatchObject({ output: { subject: 'person-b' } })
+    expect(currentPrincipal).toEqual(principalB)
+    await expect(broker.invoke(ui, {
+      actionId: transition.descriptor.id,
+      invocationId: 'principal-transition-create',
+      input: { target: 'a' }
+    })).rejects.toSatisfy((error) => expectBrokerCode(error, 'idempotency_post_state_mismatch'))
+    await expect(broker.invoke(ui, {
+      actionId: transition.descriptor.id,
+      invocationId: 'principal-transition-exit',
+      input: { target: 'none' }
+    })).resolves.toMatchObject({ output: { subject: null } })
+    expect(currentPrincipal).toBeNull()
+    expect(handler).toHaveBeenCalledTimes(3)
+
+    await expect(broker.invoke(ui, {
+      actionId: transition.descriptor.id,
+      invocationId: 'principal-transition-exit',
+      input: { target: 'none' }
+    })).resolves.toMatchObject({ output: { subject: null }, replayed: true })
+    principalContextVersion += 1
+    await expect(broker.invoke(ui, {
+      actionId: transition.descriptor.id,
+      invocationId: 'principal-transition-exit',
+      input: { target: 'none' }
+    })).rejects.toSatisfy((error) => expectBrokerCode(error, 'idempotency_post_state_mismatch'))
+    expect(handler).toHaveBeenCalledTimes(3)
+  })
+
+  it('rejects rebinding one live resource identity to different provider callbacks', () => {
+    const broker = new CapabilityBroker(new CapabilityRegistry([readCapability()]))
+    const registration = {
+      resourceId: 'stable-document',
+      resourceKind: 'document',
+      semanticRevision: '1',
+      observe: async () => ({
+        state: { title: 'Stable document' },
+        semanticRevision: '1'
+      })
+    }
+    const issued = broker.issueResource(ui, registration)
+
+    expect(() => broker.issueResource(ui, {
+      ...registration,
+      observe: async () => ({
+        state: { title: 'Forged replacement' },
+        semanticRevision: '1'
+      })
+    })).toThrow(expect.objectContaining({ code: 'resource_registration_conflict' }))
+    expect(broker.describeResourceRef(ui, issued.resourceRef)).toMatchObject({
+      resourceId: 'stable-document',
+      semanticRevision: '1'
+    })
+  })
+
+  it('rejects handle issue and bind while provider retirement is in flight', async () => {
+    let releaseDispose: (() => void) | undefined
+    const disposeGate = new Promise<void>((resolve) => { releaseDispose = resolve })
+    const observe = async () => ({ state: {}, semanticRevision: '1' })
+    const dispose = vi.fn(() => disposeGate)
+    const registration = {
+      resourceId: 'retiring-document',
+      resourceKind: 'document',
+      semanticRevision: '1',
+      observe,
+      dispose
+    }
+    const broker = new CapabilityBroker(new CapabilityRegistry())
+    const issued = broker.issueResource(ui, registration)
+    const retirement = issued.retire({ deferWhileRetained: false })
+
+    expect(() => broker.bindResourceRef(ui, issued.resourceRef))
+      .toThrow(expect.objectContaining({ code: 'resource_retiring' }))
+    expect(() => broker.issueResource(ui, registration))
+      .toThrow(expect.objectContaining({ code: 'resource_retiring' }))
+    expect(() => broker.describeResourceRef(ui, issued.resourceRef))
+      .toThrow(expect.objectContaining({ code: 'resource_retiring' }))
+    await expect(broker.observe(ui, { resource: issued.resource }))
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'resource_retiring'))
+    await vi.waitFor(() => expect(dispose).toHaveBeenCalledTimes(1))
+
+    releaseDispose?.()
+    await retirement
+    expect(() => broker.describeResourceRef(ui, issued.resourceRef))
+      .toThrow(expect.objectContaining({ code: 'resource_ref_retired' }))
+  })
+
+  it('blocks new resource use but waits for an active provider invocation before disposal', async () => {
+    let releaseHandler: (() => void) | undefined
+    let markStarted: (() => void) | undefined
+    const handlerGate = new Promise<void>((resolve) => { releaseHandler = resolve })
+    const handlerStarted = new Promise<void>((resolve) => { markStarted = resolve })
+    const handler = vi.fn(async (input: { section: string }) => {
+      markStarted?.()
+      await handlerGate
+      return { output: { text: `read:${input.section}` } }
+    })
+    const dispose = vi.fn(async () => undefined)
+    const broker = new CapabilityBroker(new CapabilityRegistry([readCapability(handler)]))
+    const issued = broker.issueResource(agent, {
+      resourceId: 'active-provider-invocation',
+      resourceKind: 'document',
+      workspaceId: agent.workspaceId,
+      semanticRevision: '1',
+      dispose,
+      observe: async () => ({ state: {}, semanticRevision: '1' })
+    })
+    const invocation = broker.invoke(agent, {
+      actionId: 'document.read-section',
+      resource: issued.resource,
+      input: { section: 'methods' }
+    })
+    await handlerStarted
+
+    const retirement = issued.retire({ deferWhileRetained: false })
+    expect(dispose).not.toHaveBeenCalled()
+    await expect(broker.observe(agent, { resource: issued.resource }))
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'resource_retiring'))
+    releaseHandler?.()
+    await Promise.all([invocation, retirement])
+    expect(dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('retires opt-in resources only after the last refreshed handle expires', async () => {
+    vi.useFakeTimers()
+    try {
+      let now = new Date('2026-08-16T00:00:00.000Z')
+      const dispose = vi.fn(async () => undefined)
+      const observe = async () => ({ state: {}, semanticRevision: '1' })
+      const broker = new CapabilityBroker(new CapabilityRegistry(), {
+        now: () => now,
+        handleTtlMs: 1_000
+      })
+      const issued = broker.issueResource(ui, {
+        resourceId: 'expiring-portable',
+        resourceKind: 'portable',
+        semanticRevision: '1',
+        observe,
+        dispose,
+        retireAfterLastHandleExpires: true
+      })
+
+      now = new Date('2026-08-16T00:00:00.500Z')
+      const refreshed = broker.bindResourceRef(ui, issued.resourceRef)
+      now = new Date('2026-08-16T00:00:01.000Z')
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(dispose).not.toHaveBeenCalled()
+      expect(broker.describeResourceRef(ui, issued.resourceRef)).toMatchObject({
+        resourceId: 'expiring-portable'
+      })
+
+      now = new Date('2026-08-16T00:00:01.500Z')
+      await vi.advanceTimersByTimeAsync(500)
+      expect(dispose).toHaveBeenCalledTimes(1)
+      expect(() => broker.describeResourceRef(ui, issued.resourceRef))
+        .toThrow(expect.objectContaining({ code: 'resource_ref_retired' }))
+      expect(refreshed.expiresAt).toBe('2026-08-16T00:00:01.500Z')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('defers expiry retirement while retained and joins concurrent retirement requests', async () => {
+    vi.useFakeTimers()
+    try {
+      let now = new Date('2026-08-16T00:00:00.000Z')
+      let releaseDispose: (() => void) | undefined
+      const disposeGate = new Promise<void>((resolve) => { releaseDispose = resolve })
+      const dispose = vi.fn(() => disposeGate)
+      const broker = new CapabilityBroker(new CapabilityRegistry(), {
+        now: () => now,
+        handleTtlMs: 1_000
+      })
+      const issued = broker.issueResource(ui, {
+        resourceId: 'retained-portable',
+        resourceKind: 'portable',
+        semanticRevision: '1',
+        observe: async () => ({ state: {}, semanticRevision: '1' }),
+        dispose,
+        retireAfterLastHandleExpires: true
+      })
+      const releaseRetention = broker.retainResourceRefs(ui, [issued.resourceRef])
+
+      now = new Date('2026-08-16T00:00:01.000Z')
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(dispose).not.toHaveBeenCalled()
+      const rebound = broker.bindResourceRef(ui, issued.resourceRef)
+      expect(rebound.expiresAt).toBe('2026-08-16T00:00:02.000Z')
+      await releaseRetention()
+      expect(dispose).not.toHaveBeenCalled()
+
+      now = new Date('2026-08-16T00:00:02.000Z')
+      await vi.advanceTimersByTimeAsync(1_000)
+      await vi.waitFor(() => expect(dispose).toHaveBeenCalledTimes(1))
+      const explicitRetirement = issued.retire({ deferWhileRetained: false })
+      releaseDispose?.()
+      await explicitRetirement
+      expect(dispose).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('pins provider observation across handle expiry and retires after the provider settles', async () => {
+    vi.useFakeTimers()
+    try {
+      let now = new Date('2026-08-16T00:00:00.000Z')
+      let releaseObserve: (() => void) | undefined
+      let markStarted: (() => void) | undefined
+      const observeGate = new Promise<void>((resolve) => { releaseObserve = resolve })
+      const observeStarted = new Promise<void>((resolve) => { markStarted = resolve })
+      const dispose = vi.fn(async () => undefined)
+      const broker = new CapabilityBroker(new CapabilityRegistry(), {
+        now: () => now,
+        handleTtlMs: 1_000
+      })
+      const issued = broker.issueResource(ui, {
+        resourceId: 'observed-across-expiry',
+        resourceKind: 'portable',
+        semanticRevision: '1',
+        retireAfterLastHandleExpires: true,
+        dispose,
+        observe: async () => {
+          markStarted?.()
+          await observeGate
+          throw new Error('provider observation failed after expiry')
+        }
+      })
+
+      const observation = broker.observe(ui, { resource: issued.resource })
+      await observeStarted
+      now = new Date('2026-08-16T00:00:01.000Z')
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(dispose).not.toHaveBeenCalled()
+      releaseObserve?.()
+      await expect(observation)
+        .rejects.toSatisfy((error) => expectBrokerCode(error, 'observation_failed'))
+      expect(dispose).toHaveBeenCalledTimes(1)
+      expect(() => broker.describeResourceRef(ui, issued.resourceRef))
+        .toThrow(expect.objectContaining({ code: 'resource_ref_retired' }))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not mint an undisclosed handle before advertised observation operations validate', async () => {
+    vi.useFakeTimers()
+    try {
+      let now = new Date('2026-08-16T00:00:00.000Z')
+      const dispose = vi.fn(async () => undefined)
+      const broker = new CapabilityBroker(new CapabilityRegistry(), {
+        now: () => now,
+        handleTtlMs: 10_000
+      })
+      const issued = broker.issueResource(ui, {
+        resourceId: 'invalid-observation-operation',
+        resourceKind: 'portable',
+        semanticRevision: '1',
+        expiresInMs: 100,
+        retireAfterLastHandleExpires: true,
+        dispose,
+        observe: async () => ({
+          state: {},
+          semanticRevision: '1',
+          operationIds: ['unregistered.observation-operation']
+        })
+      })
+
+      await expect(broker.observe(ui, { resource: issued.resource }))
+        .rejects.toSatisfy((error) => expectBrokerCode(error, 'unregistered_operation'))
+      now = new Date('2026-08-16T00:00:00.100Z')
+      await vi.advanceTimersByTimeAsync(100)
+      expect(dispose).toHaveBeenCalledOnce()
+      expect(() => broker.describeResourceRef(ui, issued.resourceRef))
+        .toThrow(expect.objectContaining({ code: 'resource_ref_retired' }))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('forwards one observation signal and maps pre-dispatch or provider abort canonically', async () => {
+    let observedSignal: AbortSignal | undefined
+    const observe = vi.fn(async (
+      _caller: unknown,
+      options: { signal?: AbortSignal }
+    ) => {
+      observedSignal = options.signal
+      await new Promise<void>((_resolve, reject) => {
+        options.signal?.addEventListener(
+          'abort',
+          () => reject(options.signal?.reason ?? new Error('aborted')),
+          { once: true }
+        )
+      })
+      return { state: {}, semanticRevision: '1' }
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry())
+    const issued = broker.issueResource(ui, {
+      resourceId: 'abortable-observation',
+      resourceKind: 'portable',
+      semanticRevision: '1',
+      observe
+    })
+
+    const beforeDispatch = new AbortController()
+    beforeDispatch.abort(new Error('cancelled before dispatch'))
+    await expect(broker.observe(ui, { resource: issued.resource }, {
+      signal: beforeDispatch.signal
+    })).rejects.toSatisfy((error) => expectBrokerCode(error, 'invocation_cancelled'))
+    expect(observe).not.toHaveBeenCalled()
+
+    const duringDispatch = new AbortController()
+    const pending = broker.observe(ui, { resource: issued.resource }, {
+      signal: duringDispatch.signal
+    })
+    await vi.waitFor(() => expect(observe).toHaveBeenCalledOnce())
+    expect(observedSignal).toBe(duringDispatch.signal)
+    duringDispatch.abort(new Error('cancelled during dispatch'))
+    await expect(pending)
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'invocation_cancelled'))
+  })
+
+  it('pins provider invocation across handle expiry and disposes only after dispatch completes', async () => {
+    vi.useFakeTimers()
+    try {
+      let now = new Date('2026-08-16T00:00:00.000Z')
+      let releaseHandler: (() => void) | undefined
+      let markStarted: (() => void) | undefined
+      const handlerGate = new Promise<void>((resolve) => { releaseHandler = resolve })
+      const handlerStarted = new Promise<void>((resolve) => { markStarted = resolve })
+      const handler = vi.fn(async (input: { section: string }) => {
+        markStarted?.()
+        await handlerGate
+        return { output: { text: `read:${input.section}` } }
+      })
+      const dispose = vi.fn(async () => undefined)
+      const broker = new CapabilityBroker(new CapabilityRegistry([readCapability(handler)]), {
+        now: () => now,
+        handleTtlMs: 1_000
+      })
+      const handle = issueDocument(broker, agent, {
+        dispose,
+        retireAfterLastHandleExpires: true
+      })
+
+      const invocation = broker.invoke(agent, {
+        actionId: 'document.read-section',
+        resource: handle,
+        input: { section: 'abstract' }
+      })
+      await handlerStarted
+      now = new Date('2026-08-16T00:00:01.000Z')
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(dispose).not.toHaveBeenCalled()
+      releaseHandler?.()
+      await expect(invocation).resolves.toMatchObject({ output: { text: 'read:abstract' } })
+      expect(dispose).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps disposal failures poisoned and retries cleanup without restoring liveness', async () => {
+    vi.useFakeTimers()
+    try {
+      let now = new Date('2026-08-16T00:00:00.000Z')
+      const dispose = vi.fn()
+        .mockRejectedValueOnce(new Error('first disposal failed'))
+        .mockResolvedValue(undefined)
+      const broker = new CapabilityBroker(new CapabilityRegistry(), {
+        now: () => now,
+        handleTtlMs: 1_000
+      })
+      const issued = broker.issueResource(ui, {
+        resourceId: 'poisoned-retirement',
+        resourceKind: 'portable',
+        semanticRevision: '1',
+        retireAfterLastHandleExpires: true,
+        dispose,
+        observe: async () => ({ state: {}, semanticRevision: '1' })
+      })
+
+      now = new Date('2026-08-16T00:00:01.000Z')
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(dispose).toHaveBeenCalledTimes(1)
+      expect(() => broker.bindResourceRef(ui, issued.resourceRef))
+        .toThrow(expect.objectContaining({ code: 'resource_retiring' }))
+      expect(() => broker.describeResourceRef(ui, issued.resourceRef))
+        .toThrow(expect.objectContaining({ code: 'resource_retiring' }))
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(dispose).toHaveBeenCalledTimes(2)
+      expect(() => broker.describeResourceRef(ui, issued.resourceRef))
+        .toThrow(expect.objectContaining({ code: 'resource_ref_retired' }))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('revalidates Principal authority before delivering resource subscriptions', async () => {
+    let currentPrincipal: PrincipalSnapshot | null = principalA
+    let releaseHandler: (() => void) | undefined
+    let markStarted: (() => void) | undefined
+    const handlerGate = new Promise<void>((resolve) => { releaseHandler = resolve })
+    const handlerStarted = new Promise<void>((resolve) => { markStarted = resolve })
+    const handler = vi.fn(async (_input: { text: string }, context) => {
+      markStarted?.()
+      await handlerGate
+      return {
+        output: { saved: 'done' },
+        changed: true,
+        semanticRevision: `${Number(context.resource?.semanticRevision ?? '0') + 1}`
+      }
+    })
+    const broker = new CapabilityBroker(
+      new CapabilityRegistry([mutationCapability(handler)]),
+      { resolveCurrentPrincipal: () => currentPrincipal }
+    )
+    const handle = issueDocument(broker, agent, { audiences: ['ui', 'agent'] })
+    const events: unknown[] = []
+    const unsubscribe = broker.subscribe(ui, (event) => events.push(event))
+    const invocation = broker.invoke(agent, {
+      actionId: 'document.annotation-upsert',
+      invocationId: 'principal-switch-in-flight',
+      resource: handle,
+      expectedRevision: '1',
+      input: { text: 'change' }
+    })
+
+    await handlerStarted
+    currentPrincipal = principalB
+    releaseHandler?.()
+    await expect(invocation)
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'outcome_unknown'))
+
+    expect(events).toEqual([])
+    expect(broker.listEvents(ui)).toEqual([])
+    currentPrincipal = principalA
+    expect(broker.listEvents(ui)).toEqual([])
+    unsubscribe()
+  })
+
   it('validates caller audience, approval, input, and provider output before returning', async () => {
     const destructive = defineCapability({
       id: 'external.publish-result',
@@ -402,7 +1395,7 @@ describe('CapabilityBroker', () => {
       semanticRevision: `${Number(context.resource?.semanticRevision ?? '0') + 1}`
     }))
     const broker = new CapabilityBroker(new CapabilityRegistry([mutationCapability(handler)]))
-    const handle = issueDocument(broker)
+    const handle = issueDocument(broker, agent, { audiences: ['ui', 'agent'] })
     const events: unknown[] = []
     const unsubscribe = broker.subscribe(ui, (event) => events.push(event))
     const request: CapabilityInvocationRequest = {
@@ -517,6 +1510,7 @@ describe('CapabilityBroker', () => {
     const handle = issueDocument(broker, agent, { audiences: ['ui', 'agent'], dispose })
     const observed = await broker.observe(agent, { resource: handle })
     const releaseTaskBinding = broker.retainResourceRefs(agent, [observed.resourceRef])
+    const releaseSecondTaskBinding = broker.retainResourceRefs(agent, [observed.resourceRef])
 
     await broker.invoke(ui, {
       actionId: 'document.release',
@@ -527,14 +1521,74 @@ describe('CapabilityBroker', () => {
 
     expect(dispose).not.toHaveBeenCalled()
     expect(broker.describeResourceRef(agent, observed.resourceRef)).toMatchObject({
-      resourceRef: observed.resourceRef,
-      resourceKind: 'document'
+      resourceId: 'internal/path/paper.pdf',
+      resourceRef: observed.resourceRef
     })
+    const rebound = broker.bindResourceRef(agent, observed.resourceRef)
+    expect(rebound).toMatchObject({
+      semanticRevision: '1'
+    })
+    await expect(broker.observe(agent, { resource: rebound }))
+      .resolves.toMatchObject({ resourceRef: observed.resourceRef })
+    expect(() => broker.issueResource(agent, {
+      resourceId: 'internal/path/paper.pdf',
+      resourceKind: 'document',
+      workspaceId: agent.workspaceId,
+      audiences: ['ui', 'agent'],
+      semanticRevision: '1',
+      observe: async () => ({ state: { forged: true }, semanticRevision: '1' }),
+      dispose
+    })).toThrow(expect.objectContaining({ code: 'resource_registration_conflict' }))
 
     await releaseTaskBinding()
+    expect(dispose).not.toHaveBeenCalled()
+    expect(broker.describeResourceRef(agent, observed.resourceRef)).toMatchObject({
+      resourceRef: observed.resourceRef
+    })
+    await releaseSecondTaskBinding()
     expect(dispose).toHaveBeenCalledOnce()
     expect(() => broker.bindResourceRef(agent, observed.resourceRef))
       .toThrow(expect.objectContaining({ code: 'resource_ref_retired' }))
+  })
+
+  it('fails and journals a self-retiring invocation when provider disposal fails', async () => {
+    const handler = vi.fn(async () => ({
+      output: { released: true },
+      changed: false,
+      retireResource: true as const
+    }))
+    const release = defineCapability({
+      id: 'document.release-failing-provider',
+      version: '1',
+      title: 'Release document with failing provider',
+      description: 'Propagates provider disposal failure after releasing the invocation pin.',
+      audiences: ['agent'],
+      scope: 'resource',
+      resourceKinds: ['document'],
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ released: z.boolean() }).strict(),
+      handler
+    })
+    const dispose = vi.fn(async () => { throw new Error('provider disposal failed') })
+    const broker = new CapabilityBroker(new CapabilityRegistry([release]))
+    const handle = issueDocument(broker, agent, { dispose })
+    const request = {
+      actionId: release.descriptor.id,
+      invocationId: 'release-failing-provider-1',
+      resource: handle,
+      input: {}
+    }
+
+    await expect(broker.invoke(agent, request))
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'resource_disposal_failed'))
+    await expect(broker.invoke(agent, request))
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'resource_retiring'))
+    expect(handler).toHaveBeenCalledOnce()
+    expect(dispose).toHaveBeenCalledOnce()
+    expect(broker.listAuditRecords().every((record) => record.status !== 'success')).toBe(true)
   })
 
   it('deduplicates concurrent retries and rejects invocation ID reuse with different input', async () => {
@@ -565,6 +1619,80 @@ describe('CapabilityBroker', () => {
       ...request,
       input: { text: 'different' }
     })).rejects.toSatisfy((error) => expectBrokerCode(error, 'idempotency_conflict'))
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it('preserves idempotency for sensitive input without exposing it in the audit journal', async () => {
+    const handler = vi.fn(async (input: { password: string }) => ({
+      output: { accepted: input.password.length > 0 }
+    }))
+    const capability = defineCapability({
+      id: 'provider-connection.bind',
+      version: '1',
+      title: 'Bind provider connection',
+      description: 'Validates a provider credential without retaining it in broker journals.',
+      audiences: ['ui'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      tags: ['sensitive-input'],
+      inputSchema: z.object({ password: z.string().min(1) }).strict(),
+      outputSchema: z.object({ accepted: z.boolean() }).strict(),
+      handler
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([capability]))
+    const request = {
+      actionId: capability.descriptor.id,
+      invocationId: 'bind-sensitive-1',
+      input: { password: 'fixture-secret-never-journal' }
+    }
+
+    await expect(broker.invoke(ui, request)).resolves.toMatchObject({ replayed: false })
+    await expect(broker.invoke(ui, request)).resolves.toMatchObject({ replayed: true })
+    await expect(broker.invoke(ui, {
+      ...request,
+      input: { password: 'different-fixture-secret' }
+    })).rejects.toSatisfy((error) => expectBrokerCode(error, 'idempotency_conflict'))
+    expect(handler).toHaveBeenCalledOnce()
+    expect(JSON.stringify(broker.listAuditRecords())).not.toContain('fixture-secret')
+  })
+
+  it('never evicts pending idempotency work or redispatches a failed write', async () => {
+    let release: (() => void) | undefined
+    let markStarted: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const started = new Promise<void>((resolve) => { markStarted = resolve })
+    const handler = vi.fn(async (input: { text: string }) => {
+      markStarted?.()
+      await gate
+      if (input.text === 'fails-after-dispatch') throw new Error('transport outcome unknown')
+      return { output: { saved: input.text }, changed: true, semanticRevision: '2' }
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([mutationCapability(handler)]), {
+      maxIdempotencyEntries: 1
+    })
+    const handle = issueDocument(broker)
+    const pendingRequest: CapabilityInvocationRequest = {
+      actionId: 'document.annotation-upsert',
+      invocationId: 'pending-oldest',
+      resource: handle,
+      expectedRevision: '1',
+      input: { text: 'fails-after-dispatch' }
+    }
+    const pending = broker.invoke(agent, pendingRequest)
+    await started
+    const joined = broker.invoke(agent, pendingRequest)
+    await expect(broker.invoke(agent, {
+      ...pendingRequest,
+      invocationId: 'capacity-overflow',
+      input: { text: 'must-not-dispatch' }
+    })).rejects.toSatisfy((error) => expectBrokerCode(error, 'idempotency_capacity_exceeded'))
+    release?.()
+    await expect(pending).rejects.toSatisfy((error) => expectBrokerCode(error, 'handler_failed'))
+    await expect(joined).rejects.toSatisfy((error) => expectBrokerCode(error, 'handler_failed'))
+    await expect(broker.invoke(agent, pendingRequest))
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'handler_failed'))
     expect(handler).toHaveBeenCalledTimes(1)
   })
 
@@ -665,5 +1793,278 @@ describe('CapabilityBroker', () => {
       expectedRevision: 'revision-1',
       input: {}
     })).rejects.toSatisfy((error) => expectBrokerCode(error, 'idempotency_conflict'))
+  })
+
+  it('rolls back handler-issued resources when dispatch throws', async () => {
+    const dispose = vi.fn(async () => undefined)
+    let issued: CapabilityResourceHandle | undefined
+    const handler = vi.fn(async (_input: Record<string, never>, context) => {
+      issued = context.issueResource({
+        resourceId: 'transactional-context-resource',
+        resourceKind: 'transactional-resource',
+        workspaceId: context.caller.workspaceId,
+        semanticRevision: '1',
+        observe: async () => ({ state: {}, semanticRevision: '1' }),
+        dispose
+      })
+      throw new Error('provider failed after issuance')
+    })
+    const capability = defineCapability({
+      id: 'transactional-resource.throw',
+      version: '1',
+      title: 'Issue then throw',
+      description: 'Exercises invocation-scoped resource rollback.',
+      audiences: ['agent'],
+      scope: 'workspace',
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([capability]))
+    const request = {
+      actionId: capability.descriptor.id,
+      invocationId: 'transactional-throw-1',
+      input: {}
+    }
+
+    await expect(broker.invoke(agent, request))
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'handler_failed'))
+    expect(dispose).toHaveBeenCalledOnce()
+    await expect(broker.observe(agent, { resource: issued! }))
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'invalid_resource_handle'))
+    await expect(broker.invoke(agent, request))
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'handler_failed'))
+    expect(handler).toHaveBeenCalledOnce()
+    expect(dispose).toHaveBeenCalledOnce()
+  })
+
+  it('removes only the new handle when a failed invocation reuses a live resource', async () => {
+    const observe = vi.fn(async () => ({ state: { live: true }, semanticRevision: '1' }))
+    const dispose = vi.fn(async () => undefined)
+    const registration = {
+      resourceId: 'shared-transactional-resource',
+      resourceKind: 'transactional-resource',
+      workspaceId: agent.workspaceId,
+      semanticRevision: '1',
+      observe,
+      dispose
+    }
+    let broker!: CapabilityBroker
+    let issuedDuringFailure: ReturnType<CapabilityBroker['issueResource']> | undefined
+    const capability = defineCapability({
+      id: 'transactional-resource.invalid-output',
+      version: '1',
+      title: 'Issue invalid output',
+      description: 'Reuses a live resource before returning an invalid output.',
+      audiences: ['agent'],
+      scope: 'workspace',
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async (_input, context) => {
+        issuedDuringFailure = broker.issueResource(context.caller, registration)
+        return { output: { ok: 'not-a-boolean' } as never }
+      }
+    })
+    broker = new CapabilityBroker(new CapabilityRegistry([capability]))
+    const preexisting = broker.issueResource(agent, registration)
+
+    await expect(broker.invoke(agent, {
+      actionId: capability.descriptor.id,
+      invocationId: 'transactional-invalid-output-1',
+      input: {}
+    })).rejects.toSatisfy((error) => expectBrokerCode(error, 'invalid_output'))
+
+    expect(dispose).not.toHaveBeenCalled()
+    await expect(broker.observe(agent, { resource: preexisting.resource }))
+      .resolves.toMatchObject({ state: { live: true } })
+    await expect(broker.observe(agent, { resource: issuedDuringFailure!.resource }))
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'invalid_resource_handle'))
+  })
+
+  it('keeps a shared provisional resource when a concurrent adopter commits before its creator rolls back', async () => {
+    let releaseCreator: (() => void) | undefined
+    let markCreatorIssued: (() => void) | undefined
+    const creatorGate = new Promise<void>((resolve) => { releaseCreator = resolve })
+    const creatorIssued = new Promise<void>((resolve) => { markCreatorIssued = resolve })
+    const observe = vi.fn(async () => ({ state: { adopted: true }, semanticRevision: '1' }))
+    const dispose = vi.fn(async () => undefined)
+    const registration = {
+      resourceId: 'concurrent-adoption-resource',
+      resourceKind: 'transactional-resource',
+      workspaceId: agent.workspaceId,
+      semanticRevision: '1',
+      observe,
+      dispose
+    }
+    let broker!: CapabilityBroker
+    let adoptedHandle: CapabilityResourceHandle | undefined
+    const capability = defineCapability({
+      id: 'transactional-resource.concurrent-adoption',
+      version: '1',
+      title: 'Concurrently adopt a resource',
+      description: 'Keeps a resource that another invocation commits before creator rollback.',
+      audiences: ['agent'],
+      scope: 'workspace',
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({ role: z.enum(['creator', 'adopter']) }).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async (input, context) => {
+        const issued = broker.issueResource(context.caller, registration)
+        if (input.role === 'creator') {
+          markCreatorIssued?.()
+          await creatorGate
+          throw new Error('creator failed after concurrent adoption')
+        }
+        adoptedHandle = issued.resource
+        return { output: { ok: true } }
+      }
+    })
+    broker = new CapabilityBroker(new CapabilityRegistry([capability]))
+
+    const creatorTask = broker.invoke(agent, {
+      actionId: capability.descriptor.id,
+      invocationId: 'concurrent-adoption-creator',
+      input: { role: 'creator' }
+    })
+    const creatorFailure = expect(creatorTask)
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'handler_failed'))
+    await creatorIssued
+    await expect(broker.invoke(agent, {
+      actionId: capability.descriptor.id,
+      invocationId: 'concurrent-adoption-success',
+      input: { role: 'adopter' }
+    })).resolves.toMatchObject({ output: { ok: true } })
+    releaseCreator?.()
+    await creatorFailure
+
+    expect(dispose).not.toHaveBeenCalled()
+    await expect(broker.observe(agent, { resource: adoptedHandle! }))
+      .resolves.toMatchObject({ state: { adopted: true } })
+  })
+
+  it('retires a shared provisional resource exactly once after every concurrent adopter rolls back', async () => {
+    let releaseCreator: (() => void) | undefined
+    let releaseAdopter: (() => void) | undefined
+    let markCreatorIssued: (() => void) | undefined
+    let markAdopterIssued: (() => void) | undefined
+    const creatorGate = new Promise<void>((resolve) => { releaseCreator = resolve })
+    const adopterGate = new Promise<void>((resolve) => { releaseAdopter = resolve })
+    const creatorIssued = new Promise<void>((resolve) => { markCreatorIssued = resolve })
+    const adopterIssued = new Promise<void>((resolve) => { markAdopterIssued = resolve })
+    const dispose = vi.fn(async () => undefined)
+    const registration = {
+      resourceId: 'concurrent-rollback-resource',
+      resourceKind: 'transactional-resource',
+      workspaceId: agent.workspaceId,
+      semanticRevision: '1',
+      observe: async () => ({ state: {}, semanticRevision: '1' }),
+      dispose
+    }
+    const issuedHandles: CapabilityResourceHandle[] = []
+    let broker!: CapabilityBroker
+    const capability = defineCapability({
+      id: 'transactional-resource.concurrent-rollback',
+      version: '1',
+      title: 'Concurrently roll back a resource',
+      description: 'Retires only after all provisional resource adopters fail.',
+      audiences: ['agent'],
+      scope: 'workspace',
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({ role: z.enum(['creator', 'adopter']) }).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async (input, context) => {
+        issuedHandles.push(broker.issueResource(context.caller, registration).resource)
+        if (input.role === 'creator') {
+          markCreatorIssued?.()
+          await creatorGate
+        } else {
+          markAdopterIssued?.()
+          await adopterGate
+        }
+        throw new Error(`${input.role} failed after issuance`)
+      }
+    })
+    broker = new CapabilityBroker(new CapabilityRegistry([capability]))
+
+    const creatorTask = broker.invoke(agent, {
+      actionId: capability.descriptor.id,
+      invocationId: 'concurrent-rollback-creator',
+      input: { role: 'creator' }
+    })
+    const creatorFailure = expect(creatorTask)
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'handler_failed'))
+    await creatorIssued
+    const adopterTask = broker.invoke(agent, {
+      actionId: capability.descriptor.id,
+      invocationId: 'concurrent-rollback-adopter',
+      input: { role: 'adopter' }
+    })
+    const adopterFailure = expect(adopterTask)
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'handler_failed'))
+    await adopterIssued
+
+    releaseCreator?.()
+    await creatorFailure
+    expect(dispose).not.toHaveBeenCalled()
+    releaseAdopter?.()
+    await adopterFailure
+    expect(dispose).toHaveBeenCalledOnce()
+    for (const handle of issuedHandles) {
+      await expect(broker.observe(agent, { resource: handle }))
+        .rejects.toSatisfy((error) => expectBrokerCode(error, 'invalid_resource_handle'))
+    }
+  })
+
+  it('rolls back resources when Principal changes after issuance', async () => {
+    let currentPrincipal: PrincipalSnapshot | null = principalA
+    const dispose = vi.fn(async () => undefined)
+    let issued: CapabilityResourceHandle | undefined
+    const capability = defineCapability({
+      id: 'transactional-resource.principal-switch',
+      version: '1',
+      title: 'Issue before Principal switch',
+      description: 'Exercises post-handler Principal reauthorization rollback.',
+      audiences: ['agent'],
+      scope: 'workspace',
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async (_input, context) => {
+        issued = context.issueResource({
+          resourceId: 'principal-switched-transactional-resource',
+          resourceKind: 'transactional-resource',
+          workspaceId: context.caller.workspaceId,
+          semanticRevision: '1',
+          observe: async () => ({ state: {}, semanticRevision: '1' }),
+          dispose
+        })
+        currentPrincipal = principalB
+        return { output: { ok: true } }
+      }
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([capability]), {
+      resolveCurrentPrincipal: () => currentPrincipal
+    })
+
+    await expect(broker.invoke(agent, {
+      actionId: capability.descriptor.id,
+      invocationId: 'transactional-principal-switch-1',
+      input: {}
+    })).rejects.toSatisfy((error) => expectBrokerCode(error, 'principal_changed'))
+    expect(dispose).toHaveBeenCalledOnce()
+    await expect(broker.observe(agent, { resource: issued! }))
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'invalid_resource_handle'))
   })
 })

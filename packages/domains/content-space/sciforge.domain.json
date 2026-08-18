@@ -1,0 +1,140 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-content-space",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
+  "module": {
+    "id": "sciforge.content-space",
+    "displayName": "Content Space",
+    "version": "1.0.0",
+    "hostApi": {
+      "minimum": "1.3.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 300
+  },
+  "contributionContracts": {
+    "content-space.container-reference-codec": {
+      "location": "main.portable-resource-codec",
+      "contractVersion": "1.0.0",
+      "kind": "content-space.container-reference",
+      "resourceKind": "content-space.container",
+      "resolverId": "content-space.provider-instance-authority"
+    },
+    "content-space.file-reference-codec": {
+      "location": "main.portable-resource-codec",
+      "contractVersion": "1.0.0",
+      "kind": "content-space.file-reference",
+      "resourceKind": "content-space.file",
+      "resolverId": "content-space.provider-instance-authority"
+    },
+    "content-space.artifact-reference-codec": {
+      "location": "main.portable-resource-codec",
+      "contractVersion": "1.0.0",
+      "kind": "content-space.artifact-reference",
+      "resourceKind": "content-space.artifact",
+      "resolverId": "content-space.provider-instance-authority"
+    },
+    "content-space.provider-instance-authority": {
+      "location": "main.portable-authority-resolver",
+      "contractVersion": "1.0.0",
+      "resolverId": "content-space.provider-instance-authority",
+      "kinds": [
+        "content-space.artifact-reference",
+        "content-space.container-reference",
+        "content-space.file-reference"
+      ]
+    },
+    "content-space.workbench-right-panel": {
+      "location": "workbench.right-panel",
+      "title": "Content Space"
+    },
+    "content-space.workbench-toolbar-action": {
+      "location": "workbench.topbar",
+      "commandId": "content-space.open",
+      "label": "Content Space"
+    },
+    "content-space.resource-navigation": {
+      "resourceKinds": [
+        "content-space.artifact",
+        "content-space.container",
+        "content-space.file"
+      ],
+      "target": {
+        "surface": "right-panel",
+        "contributionId": "content-space.workbench-right-panel"
+      }
+    }
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        {
+          "id": "content-space.capabilities",
+          "kind": "main.capability-factory",
+          "priority": 300
+        },
+        {
+          "id": "content-space.runtime-lifecycle",
+          "kind": "main.runtime-lifecycle",
+          "priority": 300
+        },
+        {
+          "id": "content-space.container-reference-codec",
+          "kind": "main.extension",
+          "version": "1.0.0",
+          "priority": 300
+        },
+        {
+          "id": "content-space.file-reference-codec",
+          "kind": "main.extension",
+          "version": "1.0.0",
+          "priority": 300
+        },
+        {
+          "id": "content-space.artifact-reference-codec",
+          "kind": "main.extension",
+          "version": "1.0.0",
+          "priority": 300
+        },
+        {
+          "id": "content-space.provider-instance-authority",
+          "kind": "main.extension",
+          "version": "1.0.0",
+          "priority": 300
+        }
+      ]
+    },
+    {
+      "process": "renderer",
+      "export": "./renderer",
+      "contributions": [
+        {
+          "id": "content-space.workbench-right-panel",
+          "kind": "renderer.workbench-right-panel",
+          "priority": 300
+        },
+        {
+          "id": "content-space.open",
+          "kind": "renderer.command",
+          "priority": 300
+        },
+        {
+          "id": "content-space.workbench-toolbar-action",
+          "kind": "renderer.workbench-toolbar-action",
+          "priority": 300
+        },
+        {
+          "id": "content-space.resource-navigation",
+          "kind": "renderer.resource-navigation",
+          "priority": 300
+        }
+      ]
+    }
+  ]
+}

@@ -121,6 +121,11 @@ workspace-server installed-entry helper binds declarations to runtime values. Pa
 `kind:id`; missing, extra, duplicate, or mismatched entries fail before contributions are exposed.
 There is deliberately no cross-process runtime bundle and no dynamic package loader.
 
+Trusted packages default to `"composition": "production"`. A package that exists solely as a
+development or contract-test fixture must declare `"composition": "development-only"`; discovery
+still validates and tests that package, while generated production definition and process
+compositions omit it generically.
+
 ## Renderer contributions
 
 `@sciforge/domain-sdk/renderer-contributions` is the public boundary for package-owned Workbench

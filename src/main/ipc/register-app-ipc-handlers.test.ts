@@ -228,6 +228,216 @@ describe('registerAppIpcHandlers', () => {
     expect(handlers.has('drawio:local-url')).toBe(false)
   })
 
+  it('keeps issued picker grants cancellable until renderer settlement and sender teardown', async () => {
+    const uploadSignals: AbortSignal[] = []
+    const registerUpload = vi.fn(async (input: { signal?: AbortSignal }) => {
+      if (input.signal) uploadSignals.push(input.signal)
+      return {
+        cancelled: false as const,
+        handle: `xfer_${'a'.repeat(32)}`,
+        name: 'paper.pdf',
+        size: 42
+      }
+    })
+    const revokeCaller = vi.fn(async () => undefined)
+    showOpenDialog
+      .mockResolvedValueOnce({ canceled: false, filePaths: ['/tmp/paper.pdf'] })
+      .mockResolvedValueOnce({ canceled: false, filePaths: ['/tmp/paper.pdf'] })
+      .mockResolvedValueOnce({ canceled: false, filePaths: ['/tmp/paper.pdf'] })
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    registerAppIpcHandlers(registerOptions({
+      fileTransfers: {
+        isInstalledRendererOwner: () => true,
+        registerUpload,
+        registerDownload: vi.fn(),
+        revokeCaller
+      } as never
+    }))
+    const sender = createSender(41)
+    const request = (transportRequestId: string) => ({
+      ownerId: 'sciforge.content-space',
+      request: { title: 'Upload', maxBytes: 1_024 },
+      transportRequestId
+    })
+    const firstRequestId = '123e4567-e89b-42d3-a456-426614174041'
+    await expect(handlers.get('fileTransfer:pick-upload-source')?.(
+      { sender },
+      request(firstRequestId)
+    )).resolves.toMatchObject({ cancelled: false, name: 'paper.pdf' })
+    expect(uploadSignals[0]?.aborted).toBe(false)
+
+    await expect(handlers.get('fileTransfer:cancel')?.(
+      { sender },
+      { transportRequestId: firstRequestId }
+    )).resolves.toBe(true)
+    expect(uploadSignals[0]?.aborted).toBe(true)
+    await expect(handlers.get('fileTransfer:settle')?.(
+      { sender },
+      { transportRequestId: firstRequestId }
+    )).resolves.toBe(false)
+
+    const secondRequestId = '123e4567-e89b-42d3-a456-426614174042'
+    await handlers.get('fileTransfer:pick-upload-source')?.(
+      { sender },
+      request(secondRequestId)
+    )
+    expect(uploadSignals[1]?.aborted).toBe(false)
+    const foreignSender = createSender(99)
+    await expect(handlers.get('fileTransfer:settle')?.(
+      { sender: foreignSender },
+      { transportRequestId: secondRequestId }
+    )).resolves.toBe(false)
+    await handlers.get('fileTransfer:cancel')?.(
+      { sender: foreignSender },
+      { transportRequestId: secondRequestId }
+    )
+    expect(uploadSignals[1]?.aborted).toBe(false)
+    await expect(handlers.get('fileTransfer:pick-upload-source')?.(
+      { sender },
+      request(secondRequestId)
+    )).rejects.toThrow('already active')
+    expect(registerUpload).toHaveBeenCalledTimes(2)
+    await expect(handlers.get('fileTransfer:settle')?.(
+      { sender },
+      { transportRequestId: secondRequestId }
+    )).resolves.toBe(true)
+    await handlers.get('fileTransfer:cancel')?.(
+      { sender },
+      { transportRequestId: secondRequestId }
+    )
+    expect(uploadSignals[1]?.aborted).toBe(false)
+
+    const thirdRequestId = '123e4567-e89b-42d3-a456-426614174045'
+    await handlers.get('fileTransfer:pick-upload-source')?.(
+      { sender },
+      request(thirdRequestId)
+    )
+    expect(uploadSignals[2]?.aborted).toBe(false)
+    sender.destroy()
+    expect(uploadSignals[2]?.aborted).toBe(true)
+    expect(revokeCaller).toHaveBeenCalledOnce()
+    expect(revokeCaller).toHaveBeenCalledWith('window:41')
+  })
+
+  it('rejects destroyed file-picker senders before dialog or grant registration', async () => {
+    const registerUpload = vi.fn()
+    const registerDownload = vi.fn()
+    const revokeCaller = vi.fn(async () => undefined)
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    registerAppIpcHandlers(registerOptions({
+      fileTransfers: {
+        isInstalledRendererOwner: () => true,
+        registerUpload,
+        registerDownload,
+        revokeCaller
+      } as never
+    }))
+    const alreadyDestroyed = createSender(42)
+    alreadyDestroyed.isDestroyed.mockReturnValue(true)
+    await expect(handlers.get('fileTransfer:pick-upload-source')?.(
+      { sender: alreadyDestroyed },
+      {
+        ownerId: 'sciforge.content-space',
+        request: { title: 'Upload', maxBytes: 1_024 },
+        transportRequestId: '123e4567-e89b-42d3-a456-426614174043'
+      }
+    )).rejects.toThrow('destroyed renderer')
+
+    const raced = createSender(43)
+    let checks = 0
+    raced.isDestroyed.mockImplementation(() => {
+      checks += 1
+      if (checks === 2) raced.destroy()
+      return checks >= 2
+    })
+    await expect(handlers.get('fileTransfer:pick-download-destination')?.(
+      { sender: raced },
+      {
+        ownerId: 'sciforge.content-space',
+        request: { title: 'Download', suggestedName: 'paper.pdf' },
+        transportRequestId: '123e4567-e89b-42d3-a456-426614174044'
+      }
+    )).rejects.toThrow('destroyed before dispatch')
+
+    expect(showOpenDialog).not.toHaveBeenCalled()
+    expect(showSaveDialog).not.toHaveBeenCalled()
+    expect(registerUpload).not.toHaveBeenCalled()
+    expect(registerDownload).not.toHaveBeenCalled()
+    expect(revokeCaller.mock.calls).toEqual([
+      ['window:42'],
+      ['window:43']
+    ])
+  })
+
+  it('aborts file-picker grants when the renderer closes during dialog or registration', async () => {
+    let resolveDialog: ((value: { canceled: false; filePaths: string[] }) => void) | undefined
+    let resolveRegistration: ((value: {
+      cancelled: false
+      handle: string
+      name: string
+      size: number
+    }) => void) | undefined
+    showOpenDialog
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveDialog = resolve }))
+      .mockResolvedValueOnce({ canceled: false, filePaths: ['/tmp/paper.pdf'] })
+    let registrationSignal: AbortSignal | undefined
+    const registerUpload = vi.fn((input: { signal?: AbortSignal }) => {
+      registrationSignal = input.signal
+      return new Promise<{
+        cancelled: false
+        handle: string
+        name: string
+        size: number
+      }>((resolve) => { resolveRegistration = resolve })
+    })
+    const revokeCaller = vi.fn(async () => undefined)
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    registerAppIpcHandlers(registerOptions({
+      fileTransfers: {
+        isInstalledRendererOwner: () => true,
+        registerUpload,
+        registerDownload: vi.fn(),
+        revokeCaller
+      } as never
+    }))
+    const request = (transportRequestId: string) => ({
+      ownerId: 'sciforge.content-space',
+      request: { title: 'Upload', maxBytes: 1_024 },
+      transportRequestId
+    })
+
+    const dialogSender = createSender(44)
+    const duringDialog = handlers.get('fileTransfer:pick-upload-source')?.(
+      { sender: dialogSender },
+      request('123e4567-e89b-42d3-a456-426614174046')
+    )
+    await vi.waitFor(() => expect(showOpenDialog).toHaveBeenCalledTimes(1))
+    dialogSender.destroy()
+    resolveDialog?.({ canceled: false, filePaths: ['/tmp/paper.pdf'] })
+    await expect(duringDialog).rejects.toMatchObject({ name: 'AbortError' })
+    expect(registerUpload).not.toHaveBeenCalled()
+
+    const registrationSender = createSender(45)
+    const duringRegistration = handlers.get('fileTransfer:pick-upload-source')?.(
+      { sender: registrationSender },
+      request('123e4567-e89b-42d3-a456-426614174047')
+    )
+    await vi.waitFor(() => expect(registerUpload).toHaveBeenCalledOnce())
+    registrationSender.destroy()
+    expect(registrationSignal?.aborted).toBe(true)
+    resolveRegistration?.({
+      cancelled: false,
+      handle: `xfer_${'c'.repeat(32)}`,
+      name: 'paper.pdf',
+      size: 42
+    })
+    await expect(duringRegistration).rejects.toMatchObject({ name: 'AbortError' })
+    expect(revokeCaller.mock.calls).toEqual([
+      ['window:44'],
+      ['window:45']
+    ])
+  })
+
   it('returns one runtime-neutral model access status', async () => {
     const getModelAccessStatus = vi.fn(async () => ({
       setupRequired: false,

@@ -192,6 +192,8 @@ function buildEntry() {
 function context(options: Readonly<{
   audience?: 'ui' | 'agent' | 'system'
   workspaceId?: string
+  principal?: RemoteSshCapabilityHandlerContext['caller']['principal']
+  principalContextVersion?: number
   resource?: RemoteSshCapabilityHandlerContext['resource']
   signal?: AbortSignal
   issueResource?: (registration: RemoteSshCapabilityResourceRegistration) => unknown
@@ -199,7 +201,11 @@ function context(options: Readonly<{
   return {
     caller: {
       audience: options.audience ?? 'agent',
-      ...(options.workspaceId === undefined ? {} : { workspaceId: options.workspaceId })
+      ...(options.workspaceId === undefined ? {} : { workspaceId: options.workspaceId }),
+      ...(options.principal === undefined ? {} : { principal: options.principal }),
+      ...(options.principalContextVersion === undefined
+        ? {}
+        : { principalContextVersion: options.principalContextVersion })
     },
     ...(options.resource === undefined ? {} : { resource: options.resource }),
     issueResource: options.issueResource ?? (() => ({
@@ -208,6 +214,64 @@ function context(options: Readonly<{
       expiresAt: '2026-07-23T00:00:00.000Z'
     })),
     ...(options.signal === undefined ? {} : { signal: options.signal })
+  }
+}
+
+function strictResourceIssuer() {
+  const live = new Map<string, RemoteSshCapabilityResourceRegistration>()
+  const issuedKeys = new Map<RemoteSshCapabilityResourceRegistration, string>()
+  const issued: RemoteSshCapabilityResourceRegistration[] = []
+  const registrationKey = (
+    registration: RemoteSshCapabilityResourceRegistration,
+    caller: RemoteSshCapabilityHandlerContext['caller']
+  ) =>
+    JSON.stringify([
+      registration.workspaceId,
+      registration.resourceKind,
+      registration.resourceId,
+      [...registration.audiences].sort(),
+      caller.principalContextVersion ?? caller.principal?.identityVersion ?? 0,
+      caller.principal
+        ? [
+            caller.principal.authority,
+            caller.principal.subject,
+            caller.principal.assurance,
+            caller.principal.deviceId,
+            caller.principal.identityVersion
+          ]
+        : null
+    ])
+  const issueResourceFor = (caller: RemoteSshCapabilityHandlerContext['caller']) =>
+    (registration: RemoteSshCapabilityResourceRegistration) => {
+      const key = registrationKey(registration, caller)
+      const existing = live.get(key)
+      if (existing && (
+        existing.observe !== registration.observe ||
+        existing.dispose !== registration.dispose
+      )) {
+        throw new Error('resource_registration_conflict')
+      }
+      live.set(key, registration)
+      issuedKeys.set(registration, key)
+      issued.push(registration)
+      return {
+        token: `cap_${issued.length.toString().padStart(20, '0')}`,
+        semanticRevision: registration.semanticRevision,
+        expiresAt: now
+      }
+    }
+  return {
+    issued,
+    issueResource: issueResourceFor({ audience: 'agent' }),
+    issueResourceFor,
+    async retire(registration: RemoteSshCapabilityResourceRegistration) {
+      const key = issuedKeys.get(registration)
+      if (!key) throw new Error('resource_unavailable')
+      const existing = live.get(key)
+      if (!existing) throw new Error('resource_unavailable')
+      live.delete(key)
+      await existing.dispose()
+    }
   }
 }
 
@@ -396,6 +460,160 @@ describe('Remote SSH main domain entry', () => {
       REMOTE_SSH_CAPABILITY_IDS.listTargetCatalog
     ).handler({}, context({ audience: 'ui' }))
     expect(catalog.output).toMatchObject({ targets: [{ sshAlias: target.sshAlias }] })
+  })
+
+  it('keeps one Broker registration callback per canonical target identity', async () => {
+    const harness = buildEntry()
+    const list = definition(harness.definitions, REMOTE_SSH_CAPABILITY_IDS.listTargets)
+    const issuer = strictResourceIssuer()
+
+    await list.handler({}, context({
+      workspaceId: '/workspace',
+      issueResource: issuer.issueResource
+    }))
+    await list.handler({}, context({
+      workspaceId: '/workspace',
+      issueResource: issuer.issueResource
+    }))
+
+    expect(issuer.issued).toHaveLength(2)
+    expect(issuer.issued[1]!.observe).toBe(issuer.issued[0]!.observe)
+    expect(issuer.issued[1]!.dispose).toBe(issuer.issued[0]!.dispose)
+    expect(issuer.issued.every((registration) =>
+      registration.retireAfterLastHandleExpires
+    )).toBe(true)
+
+    await list.handler({}, context({
+      workspaceId: '/workspace-2',
+      issueResource: issuer.issueResource
+    }))
+    expect(issuer.issued[2]!.observe).not.toBe(issuer.issued[0]!.observe)
+
+    vi.mocked(harness.services[0]!.listTargets).mockResolvedValue([{
+      ...target,
+      id: 'gpu-02'
+    }])
+    await list.handler({}, context({
+      workspaceId: '/workspace',
+      issueResource: issuer.issueResource
+    }))
+    expect(issuer.issued[3]!.observe).not.toBe(issuer.issued[0]!.observe)
+
+    const original = issuer.issued[0]!
+    await issuer.retire(issuer.issued[1]!)
+    vi.mocked(harness.services[0]!.listTargets).mockResolvedValue([target])
+    await list.handler({}, context({
+      workspaceId: '/workspace',
+      issueResource: issuer.issueResource
+    }))
+    const replacement = issuer.issued[4]!
+    expect(replacement.observe).not.toBe(original.observe)
+    expect(replacement.dispose).not.toBe(original.dispose)
+
+    original.dispose()
+    await list.handler({}, context({
+      workspaceId: '/workspace',
+      issueResource: issuer.issueResource
+    }))
+    expect(issuer.issued[5]!.observe).toBe(replacement.observe)
+    expect(issuer.issued[5]!.dispose).toBe(replacement.dispose)
+
+    harness.entry.contributions[0]!.onDispose?.()
+    let afterContributionDispose: RemoteSshCapabilityResourceRegistration | undefined
+    await list.handler({}, context({
+      workspaceId: '/workspace',
+      issueResource: (registration) => {
+        afterContributionDispose = registration
+        return {
+          token: 'cap_12345678901234567890',
+          semanticRevision: registration.semanticRevision,
+          expiresAt: now
+        }
+      }
+    }))
+    expect(afterContributionDispose!.observe).not.toBe(replacement.observe)
+    expect(afterContributionDispose!.dispose).not.toBe(replacement.dispose)
+  })
+
+  it('bounds live target registration bindings and reclaims disposed capacity', async () => {
+    const harness = buildEntry()
+    const list = definition(harness.definitions, REMOTE_SSH_CAPABILITY_IDS.listTargets)
+    let first: RemoteSshCapabilityResourceRegistration | undefined
+    const issueResource = (registration: RemoteSshCapabilityResourceRegistration) => {
+      first ??= registration
+      return {
+        token: 'cap_12345678901234567890',
+        semanticRevision: registration.semanticRevision,
+        expiresAt: now
+      }
+    }
+
+    for (let index = 0; index < 512; index += 1) {
+      await list.handler({}, context({
+        workspaceId: `/workspace-${index}`,
+        issueResource
+      }))
+    }
+    await expect(list.handler({}, context({
+      workspaceId: '/workspace-over-capacity',
+      issueResource
+    }))).rejects.toThrow('Remote SSH target resource binding capacity was exceeded.')
+    expect(harness.services[0]!.listTargets).toHaveBeenCalledTimes(512)
+
+    first!.dispose()
+    await expect(list.handler({}, context({
+      workspaceId: '/workspace-after-dispose',
+      issueResource
+    }))).resolves.toBeDefined()
+  })
+
+  it('isolates bindings by exact Principal lease and retiring A leaves B stable', async () => {
+    const harness = buildEntry()
+    const list = definition(harness.definitions, REMOTE_SSH_CAPABILITY_IDS.listTargets)
+    const issuer = strictResourceIssuer()
+    const callerA = {
+      audience: 'agent',
+      workspaceId: '/workspace',
+      principalContextVersion: 1,
+      principal: {
+        authority: 'local',
+        subject: 'user-a',
+        assurance: 'local-selection',
+        deviceId: 'device-a',
+        identityVersion: 1
+      }
+    } as const
+    const callerB = {
+      audience: 'agent',
+      workspaceId: '/workspace',
+      principalContextVersion: 2,
+      principal: {
+        authority: 'local',
+        subject: 'user-b',
+        assurance: 'local-selection',
+        deviceId: 'device-a',
+        identityVersion: 2
+      }
+    } as const
+
+    await list.handler({}, context({
+      ...callerA,
+      issueResource: issuer.issueResourceFor(callerA)
+    }))
+    await list.handler({}, context({
+      ...callerB,
+      issueResource: issuer.issueResourceFor(callerB)
+    }))
+    expect(issuer.issued[1]!.observe).not.toBe(issuer.issued[0]!.observe)
+    expect(issuer.issued[1]!.dispose).not.toBe(issuer.issued[0]!.dispose)
+
+    await issuer.retire(issuer.issued[0]!)
+    await list.handler({}, context({
+      ...callerB,
+      issueResource: issuer.issueResourceFor(callerB)
+    }))
+    expect(issuer.issued[2]!.observe).toBe(issuer.issued[1]!.observe)
+    expect(issuer.issued[2]!.dispose).toBe(issuer.issued[1]!.dispose)
   })
 
   it('derives workspace and target scope from Broker context and forwards cancellation', async () => {

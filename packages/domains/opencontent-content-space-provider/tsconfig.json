@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM"],
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "composite": false,
+    "declaration": false,
+    "noEmit": true,
+    "paths": {
+      "@sciforge/domain-sdk": ["../../domain-sdk/src/index.ts"],
+      "@sciforge/domain-sdk/*": ["../../domain-sdk/src/*"],
+      "@sciforge/domain-content-space/*": ["../content-space/src/*"],
+      "@sciforge/domain-opencontent-connector/*": ["../opencontent-connector/src/*"]
+    },
+    "types": ["node"],
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*.ts"]
+}

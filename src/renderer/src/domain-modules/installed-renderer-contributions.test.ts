@@ -177,8 +177,10 @@ describe('installed renderer contributions', () => {
       commandId: contribution.commandId,
       label: contribution.label
     }))).toEqual(expectedToolbarActions)
-    const expectedEnglish = installedMessages('en')
-    const expectedChinese = installedMessages('zh')
+    const expectedEnglish = installedMessages('en', 'common')
+    const expectedChinese = installedMessages('zh', 'common')
+    const expectedIdentityEnglish = installedMessages('en', 'identity')
+    const expectedIdentityChinese = installedMessages('zh', 'identity')
     expect(translations.bundle('en', 'common')).toMatchObject({
       coreTitle: 'Core',
       ...expectedEnglish
@@ -187,6 +189,8 @@ describe('installed renderer contributions', () => {
       coreTitle: '核心',
       ...expectedChinese
     })
+    expect(translations.bundle('en', 'identity')).toEqual(expectedIdentityEnglish)
+    expect(translations.bundle('zh', 'identity')).toEqual(expectedIdentityChinese)
 
     runtime.dispose()
     runtime.dispose()
@@ -201,6 +205,8 @@ describe('installed renderer contributions', () => {
     expect(runtime.toolbarActions.list()).toEqual([])
     expect(translations.bundle('en', 'common')).toEqual({ coreTitle: 'Core' })
     expect(translations.bundle('zh', 'common')).toEqual({ coreTitle: '核心' })
+    expect(translations.bundle('en', 'identity')).toEqual({})
+    expect(translations.bundle('zh', 'identity')).toEqual({})
   })
 
   it('performs no host registration when any validated contribution value is invalid', () => {
@@ -375,14 +381,18 @@ describe('installed renderer contributions', () => {
 
   it('rolls back earlier renderer registrations when host activation fails', () => {
     const translations = new MemoryTranslationHost({}, 'zh')
+    const firstTranslation = installedRendererDomainEntrySet.contributions.find(
+      ({ declaration }) => declaration.kind === RENDERER_I18N_RESOURCE_CONTRIBUTION_KIND
+    )?.value as RendererI18nResourceContribution | undefined
+    if (!firstTranslation) throw new Error('Expected an installed translation contribution.')
 
     expect(() => createInstalledRendererContributions({ translations }))
       .toThrow('translation activation failed')
     expect(translations.bundle('en', 'common')).toEqual({})
     expect(translations.bundle('zh', 'common')).toEqual({})
     expect(translations.mutations).toEqual([
-      'add:en:common',
-      'remove:en:common'
+      `add:en:${firstTranslation.namespace}`,
+      `remove:en:${firstTranslation.namespace}`
     ])
   })
 
@@ -419,7 +429,7 @@ describe('installed renderer contributions', () => {
   })
 })
 
-function installedMessages(language: string): Record<string, string> {
+function installedMessages(language: string, namespace: string): Record<string, string> {
   return Object.assign(
     {},
     ...installedRendererDomainEntrySet.contributions
@@ -428,7 +438,9 @@ function installedMessages(language: string): Record<string, string> {
       )
       .map(({ value }) => {
         const contribution = value as RendererI18nResourceContribution
-        return contribution.resources[language] ?? {}
+        return contribution.namespace === namespace
+          ? contribution.resources[language] ?? {}
+          : {}
       })
   )
 }

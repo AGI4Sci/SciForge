@@ -14,6 +14,7 @@ import { isLocalHttpBodyTooLargeError, readIncomingMessageBody } from './local-h
 import { mainPerformanceMonitor } from './performance-monitor'
 
 const DEFAULT_DEV_BROWSER_BRIDGE_PORT = 5174
+const DEFAULT_DEV_BROWSER_RENDERER_PORT = '5173'
 const DEFAULT_MAX_INVOKE_BODY_BYTES = 24 * 1024 * 1024
 const DEFAULT_MAX_SURFACE_CAPTURE_BODY_BYTES = 48 * 1024 * 1024
 const MAX_SURFACE_CAPTURE_PNG_BYTES = 32 * 1024 * 1024
@@ -58,6 +59,7 @@ export const DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS = [
   'agentRuntime:usage',
   'app:version',
   'capability:bind',
+  'capability:cancel',
   'capability:readiness',
   'capability:discover',
   'capability:events',
@@ -96,6 +98,10 @@ export const DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS = [
   'file:unwatch-workspace',
   'file:watch-workspace',
   'file:write-workspace',
+  'fileTransfer:cancel',
+  'fileTransfer:pick-download-destination',
+  'fileTransfer:pick-upload-source',
+  'fileTransfer:settle',
   'git:branches',
   'git:create-and-switch-branch',
   'git:switch-branch',
@@ -197,7 +203,6 @@ type StartDevBrowserBridgeServerOptions = {
   maxSurfaceCaptureBodyBytes?: number
   surfaceCaptureTimeoutMs?: number
   allowedChannels?: readonly string[]
-  allowAllChannels?: boolean
   instanceId?: string
 }
 
@@ -302,14 +307,35 @@ class DevBrowserBridgeClient extends EventEmitter implements AppBridgeSender {
 }
 
 function isAllowedOrigin(origin: string | undefined): boolean {
-  if (!origin) return true
+  if (origin === undefined) return true
+  if (!origin) return false
   try {
     const url = new URL(origin)
-    return url.protocol === 'http:' &&
+    return url.origin === origin &&
+      url.protocol === 'http:' &&
+      !url.username &&
+      !url.password &&
+      url.port === DEFAULT_DEV_BROWSER_RENDERER_PORT &&
       (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1' || url.hostname === '[::1]')
   } catch {
     return false
   }
+}
+
+function hasExactDevInstanceCredential(
+  request: IncomingMessage,
+  requestUrl: URL,
+  expectedInstanceId: string
+): boolean {
+  const headerValue = request.headers['x-sciforge-dev-instance']
+  if (Array.isArray(headerValue)) return false
+  const queryValues = requestUrl.searchParams.getAll('devInstanceId')
+  if (queryValues.length > 1) return false
+  const queryValue = queryValues[0]
+  if (headerValue !== undefined && queryValue !== undefined) {
+    return headerValue === expectedInstanceId && queryValue === expectedInstanceId
+  }
+  return (headerValue ?? queryValue) === expectedInstanceId
 }
 
 function applyCors(request: IncomingMessage, response: ServerResponse): boolean {
@@ -559,20 +585,24 @@ export async function startDevBrowserBridgeServer(
 
     const requestUrl = new URL(request.url ?? '/', `http://${host}:${port}`)
     if (request.method === 'GET' && requestUrl.pathname === '/health') {
-      writeJson(response, 200, instanceId ? { ok: true, instanceId } : { ok: true })
+      writeJson(response, 200, { ok: true })
       return
     }
 
     if (instanceId) {
-      const suppliedInstanceId = request.headers['x-sciforge-dev-instance']
-        ?? requestUrl.searchParams.get('devInstanceId')
-      if (suppliedInstanceId !== instanceId) {
+      if (!hasExactDevInstanceCredential(request, requestUrl, instanceId)) {
         writeJson(response, 409, {
           ok: false,
           message: 'The renderer and Electron main belong to different development instances. Reload the current dev endpoint.'
         })
         return
       }
+    } else if (!request.headers.origin) {
+      // Vite-proxied resource elements can omit Origin, but production dev
+      // startup always supplies an instance credential for those requests.
+      // An origin-less privileged request without that credential is denied.
+      writeJson(response, 403, { ok: false, message: 'A trusted local Origin is required.' })
+      return
     }
 
     if (request.method === 'GET' && requestUrl.pathname === '/events') {
@@ -716,7 +746,7 @@ export async function startDevBrowserBridgeServer(
           channel = body.channel
           mainPerformanceMonitor.count('main.devBridge.http.invoke')
           mainPerformanceMonitor.count(`main.devBridge.http.invoke.${body.channel}`)
-          if (!options.allowAllChannels && !allowedChannels.has(body.channel)) {
+          if (!allowedChannels.has(body.channel)) {
             writeJson(response, 403, {
               ok: false,
               message: `Dev browser bridge channel is not allowed: ${body.channel}`

@@ -9,6 +9,10 @@ import type {
   DomainMainAfterTurnEvent,
   DomainTurnArtifactEvent
 } from '@sciforge/domain-sdk/host'
+import type {
+  PrincipalContextSnapshot,
+  PrincipalSnapshot
+} from '@sciforge/domain-sdk/principal'
 
 import { TurnArtifactHandoffService } from './turn-artifact-handoff-service'
 import {
@@ -23,6 +27,37 @@ import {
 
 const roots: string[] = []
 
+const HOST_PRINCIPAL: PrincipalSnapshot = Object.freeze({
+  authority: 'identity-access.local',
+  subject: 'user-a',
+  assurance: 'local-selection',
+  deviceId: 'device-a',
+  identityVersion: 7
+})
+
+const FORGED_PRINCIPAL: PrincipalSnapshot = Object.freeze({
+  authority: 'forged.provider',
+  subject: 'attacker',
+  assurance: 'cloud-authenticated',
+  deviceId: 'untrusted-device',
+  identityVersion: 99
+})
+
+const SIGNED_OUT_CONTEXT: PrincipalContextSnapshot = Object.freeze({
+  identityVersion: 11,
+  principal: null
+})
+
+const HOST_PRINCIPAL_CONTEXT: PrincipalContextSnapshot = Object.freeze({
+  identityVersion: HOST_PRINCIPAL.identityVersion,
+  principal: HOST_PRINCIPAL
+})
+
+const FORGED_PRINCIPAL_CONTEXT: PrincipalContextSnapshot = Object.freeze({
+  identityVersion: FORGED_PRINCIPAL.identityVersion,
+  principal: FORGED_PRINCIPAL
+})
+
 afterEach(async () => {
   for (const root of roots.splice(0)) {
     await rm(root, { recursive: true, force: true })
@@ -30,6 +65,560 @@ afterEach(async () => {
 })
 
 describe('TurnArtifactHandoffService', () => {
+  it('preserves the signed-out Principal context version at durable start', async () => {
+    const root = await temporaryRoot()
+    const outbox = new TurnArtifactOutbox(root)
+
+    const start = await outbox.registerStart({
+      ...startDraft(),
+      principal: null,
+      principalContext: SIGNED_OUT_CONTEXT
+    } as TurnArtifactStartDraft)
+
+    assert.deepEqual(
+      (start as TurnArtifactStart & { principalContext?: PrincipalContextSnapshot }).principalContext,
+      SIGNED_OUT_CONTEXT
+    )
+  })
+
+  it('carries the exact signed-out Principal context through materialization and restart', async () => {
+    const root = await temporaryRoot()
+    const first = new TurnArtifactOutbox(root)
+    const accepted = await acceptTurn(first, {
+      turnId: 'turn-signed-out-context',
+      principal: null,
+      principalContext: SIGNED_OUT_CONTEXT
+    })
+    await first.enqueueIntent(accepted.intent)
+    const key = turnArtifactIntentKey(accepted.intent)
+    const untrusted = {
+      ...event(accepted.intent, 'signed-out-context'),
+      principal: FORGED_PRINCIPAL,
+      principalContext: FORGED_PRINCIPAL_CONTEXT
+    } as unknown as DomainTurnArtifactEvent
+
+    const materialized = await first.markMaterialized(key, untrusted)
+    assert.deepEqual(materialized.intent.principalContext, SIGNED_OUT_CONTEXT)
+    assert.deepEqual(materialized.event.principalContext, SIGNED_OUT_CONTEXT)
+    assert.deepEqual(
+      first.readyLifecycleSettlements()[0]?.event.principalContext,
+      SIGNED_OUT_CONTEXT
+    )
+    assert.deepEqual(
+      first.durableTurnBoundarySnapshot().owners[0]?.principalContext,
+      SIGNED_OUT_CONTEXT
+    )
+
+    const recovered = new TurnArtifactOutbox(root)
+    await recovered.load()
+    const replay = recovered.record(key)
+    assert.deepEqual(replay?.intent.principalContext, SIGNED_OUT_CONTEXT)
+    assert.deepEqual(
+      replay?.stage === 'pending_fanout' ? replay.event.principalContext : undefined,
+      SIGNED_OUT_CONTEXT
+    )
+    assert.deepEqual(
+      recovered.readyLifecycleSettlements()[0]?.event.principalContext,
+      SIGNED_OUT_CONTEXT
+    )
+  })
+
+  it('rejects a signed-out ABA context collision for the same accepted turn', async () => {
+    const root = await temporaryRoot()
+    const outbox = new TurnArtifactOutbox(root)
+    const accepted = await acceptTurn(outbox, {
+      turnId: 'turn-signed-out-aba',
+      principal: null,
+      principalContext: SIGNED_OUT_CONTEXT
+    })
+    await outbox.enqueueIntent(accepted.intent)
+
+    await assert.rejects(
+      outbox.enqueueIntent({
+        ...accepted.intent,
+        principalContext: Object.freeze({
+          identityVersion: SIGNED_OUT_CONTEXT.identityVersion + 2,
+          principal: null
+        })
+      }),
+      /intent key collision/
+    )
+  })
+
+  it('retains signed-out context in receipts and rejects an ABA replay after restart', async () => {
+    const root = await temporaryRoot()
+    const first = new TurnArtifactOutbox(root)
+    const accepted = await acceptTurn(first, {
+      turnId: 'turn-signed-out-receipt',
+      principal: null,
+      principalContext: SIGNED_OUT_CONTEXT
+    })
+    const key = turnArtifactIntentKey(accepted.intent)
+    await first.enqueueIntent(accepted.intent)
+    await first.markMaterialized(key, event(accepted.intent, 'receipt-context'))
+    await first.markDelivered(key)
+    const lifecycle = first.readyLifecycleSettlements()[0]
+    assert.ok(lifecycle)
+    await first.markLifecycleSettlementDelivered(lifecycle.key)
+
+    const persisted = JSON.parse(await readFile(first.path, 'utf8')) as {
+      receipts: Array<{
+        principalContext?: unknown
+        principalContextDigest?: unknown
+      }>
+      lifecycleReceipts: Array<{ event: DomainMainAfterTurnEvent }>
+    }
+    assert.deepEqual(persisted.receipts[0]?.principalContext, SIGNED_OUT_CONTEXT)
+    assert.match(String(persisted.receipts[0]?.principalContextDigest), /^[a-f0-9]{64}$/)
+    assert.deepEqual(
+      persisted.lifecycleReceipts[0]?.event.principalContext,
+      SIGNED_OUT_CONTEXT
+    )
+
+    const recovered = new TurnArtifactOutbox(root)
+    await recovered.load()
+    assert.deepEqual(
+      recovered.durableTurnBoundarySnapshot().owners[0]?.principalContext,
+      SIGNED_OUT_CONTEXT
+    )
+    await assert.rejects(
+      recovered.enqueueIntent({
+        ...accepted.intent,
+        principalContext: Object.freeze({
+          identityVersion: SIGNED_OUT_CONTEXT.identityVersion + 2,
+          principal: null
+        })
+      }),
+      /intent key collision/
+    )
+  })
+
+  it('does not let a completed intent replace the accepted watch Principal context', async () => {
+    const root = await temporaryRoot()
+    const outbox = new TurnArtifactOutbox(root)
+    const accepted = await acceptTurn(outbox, {
+      turnId: 'turn-watch-context-forgery',
+      principal: null,
+      principalContext: SIGNED_OUT_CONTEXT
+    })
+
+    await assert.rejects(
+      outbox.enqueueIntent({
+        ...accepted.intent,
+        principalContext: Object.freeze({
+          identityVersion: SIGNED_OUT_CONTEXT.identityVersion + 2,
+          principal: null
+        })
+      }),
+      /watch does not match completed intent/
+    )
+    assert.deepEqual(
+      outbox.pendingWatches()[0]?.principalContext,
+      SIGNED_OUT_CONTEXT
+    )
+  })
+
+  it('rejects reuse of a directive under a different signed-out context version', async () => {
+    const root = await temporaryRoot()
+    const outbox = new TurnArtifactOutbox(root)
+    await outbox.registerStart(startDraft({
+      principal: null,
+      principalContext: SIGNED_OUT_CONTEXT
+    }))
+
+    await assert.rejects(
+      outbox.registerStart(startDraft({
+        principal: null,
+        principalContext: Object.freeze({
+          identityVersion: SIGNED_OUT_CONTEXT.identityVersion + 2,
+          principal: null
+        })
+      })),
+      /start key collision/
+    )
+  })
+
+  it('rejects a signed-in Principal with an explicit null context', async () => {
+    const root = await temporaryRoot()
+    const outbox = new TurnArtifactOutbox(root)
+
+    await assert.rejects(
+      outbox.registerStart({
+        ...startDraft({
+          principal: HOST_PRINCIPAL,
+          principalContext: HOST_PRINCIPAL_CONTEXT
+        }),
+        principalContext: null
+      }),
+      /signed-in Principal requires an exact context/
+    )
+
+    const accepted = await acceptTurn(outbox, {
+      turnId: 'turn-v5-explicit-null',
+      clientDirectiveId: 'directive-v5-explicit-null',
+      principal: HOST_PRINCIPAL,
+      principalContext: HOST_PRINCIPAL_CONTEXT
+    })
+    const persisted = JSON.parse(await readFile(outbox.path, 'utf8')) as {
+      watches: Array<Record<string, unknown>>
+    }
+    persisted.watches[0]!.principalContext = null
+    await writeFile(outbox.path, `${JSON.stringify(persisted, null, 2)}\n`, 'utf8')
+
+    const recovered = new TurnArtifactOutbox(root)
+    await assert.rejects(
+      recovered.load(),
+      /signed-in Principal requires an exact context/
+    )
+    assert.deepEqual(accepted.intent.principalContext, HOST_PRINCIPAL_CONTEXT)
+  })
+
+  it('rejects an explicit null Principal context in a compact receipt', async () => {
+    const root = await temporaryRoot()
+    const first = new TurnArtifactOutbox(root)
+    const accepted = await acceptTurn(first, {
+      turnId: 'turn-null-receipt-context',
+      principal: HOST_PRINCIPAL,
+      principalContext: HOST_PRINCIPAL_CONTEXT
+    })
+    const key = turnArtifactIntentKey(accepted.intent)
+    await first.enqueueIntent(accepted.intent)
+    await first.markMaterialized(key, event(accepted.intent, 'null-receipt-context'))
+    await first.markDelivered(key)
+    const persisted = JSON.parse(await readFile(first.path, 'utf8')) as {
+      receipts: Array<Record<string, unknown>>
+    }
+    persisted.receipts[0]!.principalContext = null
+    await writeFile(first.path, `${JSON.stringify(persisted, null, 2)}\n`, 'utf8')
+
+    const recovered = new TurnArtifactOutbox(root)
+    await assert.rejects(
+      recovered.load(),
+      /receipt Principal context is invalid/
+    )
+  })
+
+  it('rejects conflicting boundary Principal contexts before restart replay', async () => {
+    const root = await temporaryRoot()
+    const first = new TurnArtifactOutbox(root)
+    const accepted = await acceptTurn(first, {
+      turnId: 'turn-restart-context-collision',
+      principal: null,
+      principalContext: SIGNED_OUT_CONTEXT
+    })
+    await first.enqueueIntent(accepted.intent)
+    const persisted = JSON.parse(await readFile(first.path, 'utf8')) as {
+      lifecycleSettlements: Array<{ event: Record<string, unknown> }>
+    }
+    persisted.lifecycleSettlements[0]!.event.principalContext = {
+      identityVersion: SIGNED_OUT_CONTEXT.identityVersion + 2,
+      principal: null
+    }
+    await writeFile(first.path, `${JSON.stringify(persisted, null, 2)}\n`, 'utf8')
+
+    const recovered = new TurnArtifactOutbox(root)
+    await assert.rejects(
+      recovered.load(),
+      /boundary Principal attribution collision/
+    )
+    assert.equal(recovered.readyLifecycleSettlements().length, 0)
+  })
+
+  it('durably preserves the Host turn principal and overwrites materializer claims', async () => {
+    const root = await temporaryRoot()
+    const first = new TurnArtifactOutbox(root)
+    const draft = {
+      ...startDraft(),
+      principal: HOST_PRINCIPAL,
+      principalContext: HOST_PRINCIPAL_CONTEXT
+    } as TurnArtifactStartDraft
+    const start = await first.registerStart(draft)
+    const watch = {
+      ...start,
+      turnId: 'turn-principal',
+      bindingSource: 'provider-accepted' as const
+    }
+    await first.bindStart(start, watch)
+    const intent = intentFor(start, watch.turnId)
+    const key = turnArtifactIntentKey(intent)
+    await first.enqueueIntent(intent)
+
+    const untrusted = {
+      ...event(intent, 'provider-materialized'),
+      principal: FORGED_PRINCIPAL,
+      principalContext: FORGED_PRINCIPAL_CONTEXT,
+      artifacts: [{ id: 'assistant-1', kind: 'assistant_message', principal: FORGED_PRINCIPAL }]
+    } as unknown as DomainTurnArtifactEvent
+    const materialized = await first.markMaterialized(key, untrusted)
+
+    assert.deepEqual(materialized.intent.principal, HOST_PRINCIPAL)
+    assert.deepEqual(materialized.intent.principalContext, HOST_PRINCIPAL_CONTEXT)
+    assert.deepEqual(materialized.event.principal, HOST_PRINCIPAL)
+    assert.deepEqual(materialized.event.principalContext, HOST_PRINCIPAL_CONTEXT)
+    assert.deepEqual(
+      (materialized.event.artifacts[0] as { principal?: PrincipalSnapshot }).principal,
+      HOST_PRINCIPAL
+    )
+    assert.deepEqual(first.readyLifecycleSettlements()[0]?.event.principal, HOST_PRINCIPAL)
+    assert.deepEqual(
+      first.readyLifecycleSettlements()[0]?.event.principalContext,
+      HOST_PRINCIPAL_CONTEXT
+    )
+    assert.deepEqual(
+      first.durableTurnBoundarySnapshot().owners[0]?.principal,
+      HOST_PRINCIPAL
+    )
+    assert.deepEqual(
+      first.durableTurnBoundarySnapshot().owners[0]?.principalContext,
+      HOST_PRINCIPAL_CONTEXT
+    )
+
+    const recovered = new TurnArtifactOutbox(root)
+    await recovered.load()
+    const replay = recovered.record(key)
+    assert.equal(replay?.stage, 'pending_fanout')
+    assert.deepEqual(replay?.intent.principal, HOST_PRINCIPAL)
+    assert.deepEqual(replay?.intent.principalContext, HOST_PRINCIPAL_CONTEXT)
+    assert.deepEqual(
+      replay?.stage === 'pending_fanout' ? replay.event.principal : undefined,
+      HOST_PRINCIPAL
+    )
+    assert.deepEqual(
+      replay?.stage === 'pending_fanout' ? replay.event.principalContext : undefined,
+      HOST_PRINCIPAL_CONTEXT
+    )
+    assert.deepEqual(
+      recovered.readyLifecycleSettlements()[0]?.event.principal,
+      HOST_PRINCIPAL
+    )
+    assert.deepEqual(
+      recovered.readyLifecycleSettlements()[0]?.event.principalContext,
+      HOST_PRINCIPAL_CONTEXT
+    )
+    await assert.rejects(
+      recovered.enqueueIntent({
+        ...intent,
+        principal: FORGED_PRINCIPAL,
+        principalContext: FORGED_PRINCIPAL_CONTEXT
+      }),
+      /intent key collision/
+    )
+  })
+
+  it('migrates a prior V5 signed-in Principal projection to its exact context', async () => {
+    const root = await temporaryRoot()
+    const first = new TurnArtifactOutbox(root)
+    await acceptTurn(first, {
+      turnId: 'turn-v5-principal-context',
+      principal: HOST_PRINCIPAL,
+      principalContext: HOST_PRINCIPAL_CONTEXT
+    })
+    const persisted = JSON.parse(await readFile(first.path, 'utf8')) as {
+      version: number
+      watches: Array<Record<string, unknown>>
+    }
+    assert.equal(persisted.version, 5)
+    for (const watch of persisted.watches) delete watch.principalContext
+    await writeFile(first.path, `${JSON.stringify(persisted, null, 2)}\n`, 'utf8')
+
+    const recovered = new TurnArtifactOutbox(root)
+    await recovered.load()
+    assert.deepEqual(
+      recovered.pendingWatches()[0]?.principalContext,
+      HOST_PRINCIPAL_CONTEXT
+    )
+    const migrated = JSON.parse(await readFile(recovered.path, 'utf8')) as {
+      version: number
+      watches: Array<{ principalContext?: unknown }>
+    }
+    assert.equal(migrated.version, 5)
+    assert.deepEqual(migrated.watches[0]?.principalContext, HOST_PRINCIPAL_CONTEXT)
+  })
+
+  it('migrates prior V5 signed-in receipts without changing their intent proof', async () => {
+    const root = await temporaryRoot()
+    const first = new TurnArtifactOutbox(root)
+    const accepted = await acceptTurn(first, {
+      turnId: 'turn-v5-principal-receipt',
+      principal: HOST_PRINCIPAL,
+      principalContext: HOST_PRINCIPAL_CONTEXT
+    })
+    const key = turnArtifactIntentKey(accepted.intent)
+    await first.enqueueIntent(accepted.intent)
+    await first.markMaterialized(key, event(accepted.intent, 'v5-principal-receipt'))
+    await first.markDelivered(key)
+    const lifecycle = first.readyLifecycleSettlements()[0]
+    assert.ok(lifecycle)
+    await first.markLifecycleSettlementDelivered(lifecycle.key)
+
+    const persisted = JSON.parse(await readFile(first.path, 'utf8')) as {
+      version: number
+      receipts: Array<Record<string, unknown>>
+      lifecycleReceipts: Array<{ event: Record<string, unknown> }>
+    }
+    assert.equal(persisted.version, 5)
+    for (const receipt of persisted.receipts) {
+      delete receipt.principalContext
+      delete receipt.principalContextDigest
+    }
+    for (const receipt of persisted.lifecycleReceipts) {
+      delete receipt.event.principalContext
+    }
+    await writeFile(first.path, `${JSON.stringify(persisted, null, 2)}\n`, 'utf8')
+
+    const recovered = new TurnArtifactOutbox(root)
+    await recovered.load()
+    assert.deepEqual(
+      recovered.durableTurnBoundarySnapshot().owners[0]?.principalContext,
+      HOST_PRINCIPAL_CONTEXT
+    )
+    assert.equal(await recovered.enqueueIntent(accepted.intent), undefined)
+
+    const migrated = JSON.parse(await readFile(recovered.path, 'utf8')) as {
+      version: number
+      receipts: Array<{
+        principalContext?: unknown
+        principalContextDigest?: unknown
+      }>
+      lifecycleReceipts: Array<{ event: { principalContext?: unknown } }>
+    }
+    assert.equal(migrated.version, 5)
+    assert.deepEqual(migrated.receipts[0]?.principalContext, HOST_PRINCIPAL_CONTEXT)
+    assert.match(String(migrated.receipts[0]?.principalContextDigest), /^[a-f0-9]{64}$/)
+    assert.deepEqual(
+      migrated.lifecycleReceipts[0]?.event.principalContext,
+      HOST_PRINCIPAL_CONTEXT
+    )
+  })
+
+  it('migrates a prior V5 signed-out projection to unknown without inventing a version', async () => {
+    const root = await temporaryRoot()
+    const first = new TurnArtifactOutbox(root)
+    await acceptTurn(first, { turnId: 'turn-v5-signed-out-unknown' })
+    const persisted = JSON.parse(await readFile(first.path, 'utf8')) as {
+      version: number
+      watches: Array<Record<string, unknown>>
+    }
+    for (const watch of persisted.watches) delete watch.principalContext
+    await writeFile(first.path, `${JSON.stringify(persisted, null, 2)}\n`, 'utf8')
+
+    const recovered = new TurnArtifactOutbox(root)
+    await recovered.load()
+    assert.equal(recovered.pendingWatches()[0]?.principal, null)
+    assert.equal(recovered.pendingWatches()[0]?.principalContext, null)
+
+    const migrated = JSON.parse(await readFile(recovered.path, 'utf8')) as {
+      version: number
+      watches: Array<{ principalContext?: unknown }>
+    }
+    assert.equal(migrated.version, 5)
+    assert.equal(migrated.watches[0]?.principalContext, null)
+  })
+
+  it('keeps V4 watches recoverable without rebinding their unknown Principal', async () => {
+    const root = await temporaryRoot()
+    const first = new TurnArtifactOutbox(root)
+    await acceptTurn(first, { turnId: 'turn-v4-principal' })
+    const persisted = JSON.parse(await readFile(first.path, 'utf8')) as {
+      version: number
+      watches: Array<Record<string, unknown>>
+    }
+    persisted.version = 4
+    for (const watch of persisted.watches) {
+      delete watch.principal
+      delete watch.principalContext
+    }
+    await writeFile(first.path, `${JSON.stringify(persisted, null, 2)}\n`, 'utf8')
+
+    const recovered = new TurnArtifactOutbox(root)
+    await recovered.load()
+    assert.equal(recovered.pendingWatches()[0]?.principal, null)
+    assert.equal(recovered.pendingWatches()[0]?.principalContext, null)
+
+    const migrated = JSON.parse(await readFile(recovered.path, 'utf8')) as {
+      version: number
+      watches: Array<{ principal?: unknown; principalContext?: unknown }>
+    }
+    assert.equal(migrated.version, 5)
+    assert.equal(migrated.watches[0]?.principal, null)
+    assert.equal(migrated.watches[0]?.principalContext, null)
+
+    const legacyWatch = recovered.pendingWatches()[0]
+    assert.ok(legacyWatch)
+    const completed = {
+      ...legacyWatch,
+      sequence: 7,
+      occurredAt: '2026-08-05T00:00:00.000Z'
+    } satisfies TurnArtifactIntent
+    await recovered.enqueueIntent(completed)
+    assert.equal(recovered.record(turnArtifactIntentKey(completed))?.intent.principalContext, null)
+  })
+
+  it('removes forged Principal claims from a signed-out turn artifact', async () => {
+    const root = await temporaryRoot()
+    const outbox = new TurnArtifactOutbox(root)
+    const { intent } = await acceptTurn(outbox, { turnId: 'turn-signed-out' })
+    const key = turnArtifactIntentKey(intent)
+    await outbox.enqueueIntent(intent)
+    const untrusted = {
+      ...event(intent, 'signed-out'),
+      principal: FORGED_PRINCIPAL,
+      artifacts: [{ id: 'assistant-signed-out', principal: FORGED_PRINCIPAL }]
+    } as unknown as DomainTurnArtifactEvent
+
+    const materialized = await outbox.markMaterialized(key, untrusted)
+    assert.equal(materialized.intent.principal, null)
+    assert.equal(materialized.event.principal, undefined)
+    assert.equal(
+      (materialized.event.artifacts[0] as { principal?: PrincipalSnapshot }).principal,
+      undefined
+    )
+  })
+
+  it('binds rejected lifecycle settlement to the durable start Principal', async () => {
+    const root = await temporaryRoot()
+    const outbox = new TurnArtifactOutbox(root)
+    const start = await outbox.registerStart({
+      ...startDraft(),
+      principal: HOST_PRINCIPAL,
+      principalContext: HOST_PRINCIPAL_CONTEXT
+    })
+    const forgedSettlement = {
+      ...lifecycleFor(start, undefined, undefined, 'rejected'),
+      principal: FORGED_PRINCIPAL,
+      principalContext: FORGED_PRINCIPAL_CONTEXT
+    }
+
+    await outbox.rejectStart(start, forgedSettlement)
+    assert.deepEqual(
+      outbox.readyLifecycleSettlements()[0]?.event.principal,
+      HOST_PRINCIPAL
+    )
+    assert.deepEqual(
+      outbox.readyLifecycleSettlements()[0]?.event.principalContext,
+      HOST_PRINCIPAL_CONTEXT
+    )
+    assert.deepEqual(
+      outbox.durableTurnBoundarySnapshot().owners[0]?.principal,
+      HOST_PRINCIPAL
+    )
+    assert.deepEqual(
+      outbox.durableTurnBoundarySnapshot().owners[0]?.principalContext,
+      HOST_PRINCIPAL_CONTEXT
+    )
+
+    const recovered = new TurnArtifactOutbox(root)
+    await recovered.load()
+    assert.deepEqual(
+      recovered.readyLifecycleSettlements()[0]?.event.principal,
+      HOST_PRINCIPAL
+    )
+    assert.deepEqual(
+      recovered.readyLifecycleSettlements()[0]?.event.principalContext,
+      HOST_PRINCIPAL_CONTEXT
+    )
+  })
+
   it('deduplicates repeated lifecycle intents before one materialization and owner-only fan-out', async () => {
     const root = await temporaryRoot()
     const outbox = new TurnArtifactOutbox(root)
@@ -748,6 +1337,8 @@ async function acceptTurn(
     clientDirectiveId?: string
     inputDigest?: string
     workspaceRoot?: string
+    principal?: PrincipalSnapshot | null
+    principalContext?: PrincipalContextSnapshot
   }> = {}
 ): Promise<Readonly<{
   start: TurnArtifactStart
@@ -778,12 +1369,22 @@ function startDraft(overrides: Readonly<{
   clientDirectiveId?: string
   inputDigest?: string
   workspaceRoot?: string
+  principal?: PrincipalSnapshot | null
+  principalContext?: PrincipalContextSnapshot
 }> = {}): TurnArtifactStartDraft {
+  const principal = Object.prototype.hasOwnProperty.call(overrides, 'principal')
+    ? overrides.principal ?? null
+    : null
+  const principalContext = overrides.principalContext ?? (
+    principal ? Object.freeze({ identityVersion: principal.identityVersion, principal }) : SIGNED_OUT_CONTEXT
+  )
   return {
     runtimeId: overrides.runtimeId ?? 'codex',
     threadId: overrides.threadId ?? 'thread-1',
     clientDirectiveId: overrides.clientDirectiveId ?? 'directive-1',
     inputDigest: overrides.inputDigest ?? 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    principal,
+    principalContext,
     ...(Object.prototype.hasOwnProperty.call(overrides, 'workspaceRoot')
       ? (overrides.workspaceRoot ? { workspaceRoot: overrides.workspaceRoot } : {})
       : { workspaceRoot: '/workspace' })
@@ -821,6 +1422,8 @@ function lifecycleFor(
     threadId: start.threadId,
     ...(turnId ? { turnId } : {}),
     clientDirectiveId: start.clientDirectiveId,
+    ...(start.principal ? { principal: start.principal } : {}),
+    ...(start.principalContext ? { principalContext: start.principalContext } : {}),
     ...(start.workspaceRoot ? { workspaceRoot: start.workspaceRoot } : {}),
     settlementSource: 'runtime',
     occurredAt
@@ -845,7 +1448,8 @@ function event(value: TurnArtifactReplayIntent, marker: string): DomainTurnArtif
     ...(value.sequence === undefined ? {} : { sequence: value.sequence }),
     ...(value.workspaceRoot ? { workspaceRoot: value.workspaceRoot } : {}),
     occurredAt: value.occurredAt,
-    artifacts: [{ marker }]
+    artifacts: [{ marker }],
+    ...(value.principal ? { principal: value.principal } : {})
   }
 }
 

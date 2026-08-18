@@ -53,7 +53,17 @@ export function createNonSecretPackageStorageForTest(): (
         write: async () => {
           throw new Error('Secret writes are unavailable in this non-secret test host.')
         },
-        remove: async () => undefined
+        remove: async () => undefined,
+        providerCredentials: Object.freeze({
+          status: async () => Object.freeze({ state: 'absent' as const }),
+          replace: async () => {
+            throw new Error('Provider credential writes are unavailable in this test host.')
+          },
+          use: async () => {
+            throw new Error('Provider credentials are unavailable in this test host.')
+          },
+          remove: async () => undefined
+        })
       })
     })
   }

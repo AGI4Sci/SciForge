@@ -12,7 +12,11 @@ import {
   VERSION_CONTROL_STATUS_ACTION_ID,
   VERSION_CONTROL_WORKSPACE_RESOURCE_KIND
 } from '@sciforge/domain-sdk/version-control'
-import { CapabilityBroker, CapabilityBrokerError } from './broker'
+import {
+  CapabilityBroker,
+  CapabilityBrokerError,
+  type CapabilityBrokerOptions
+} from './broker'
 import { CapabilityRegistry } from './registry'
 import {
   VERSION_CONTROL_CAPABILITY_CONTRIBUTION_FACTORY,
@@ -34,13 +38,27 @@ const uiCaller = {
   workspaceId: '/workspace'
 }
 
+const principalA = {
+  authority: 'sciforge.identity-access',
+  subject: 'person-a',
+  assurance: 'local-selection' as const,
+  deviceId: 'installation-1',
+  identityVersion: 1
+}
+
+const principalB = {
+  ...principalA,
+  subject: 'person-b',
+  identityVersion: 2
+}
+
 function expectBrokerCode(error: unknown, code: string): boolean {
   expect(error).toBeInstanceOf(CapabilityBrokerError)
   expect((error as CapabilityBrokerError).code).toBe(code)
   return true
 }
 
-function createHarness() {
+function createHarness(options: CapabilityBrokerOptions = {}) {
   const session = {
     resourceId: 'version-control-session-1',
     ownerId: uiCaller.callerId,
@@ -122,7 +140,7 @@ function createHarness() {
   const definitions = VERSION_CONTROL_CAPABILITY_CONTRIBUTION_FACTORY.createDefinitions({
     versionControlWorkspaceService: service
   })
-  const broker = new CapabilityBroker(new CapabilityRegistry(definitions))
+  const broker = new CapabilityBroker(new CapabilityRegistry(definitions), options)
   return {
     broker,
     service,
@@ -192,6 +210,95 @@ describe('version-control capability provider', () => {
     }, { resource })).rejects.toSatisfy((error) =>
       expectBrokerCode(error, 'resource_scope_mismatch')
     )
+  })
+
+  it('reuses one stable provider registration when the same owner reopens a workspace', async () => {
+    const { broker, service, setRevision } = createHarness()
+    const first = await openWorkspace(broker)
+    setRevision('revision-2')
+    const second = await openWorkspace(broker)
+
+    expect(first.token).not.toBe(second.token)
+    expect(second.semanticRevision).toBe('revision-2')
+    await expect(broker.observe(uiCaller, { resource: first }))
+      .resolves.toMatchObject({ semanticRevision: 'revision-2' })
+    await expect(broker.observe(uiCaller, { resource: second }))
+      .resolves.toMatchObject({ semanticRevision: 'revision-2' })
+    expect(service.open).toHaveBeenCalledTimes(2)
+  })
+
+  it('fails closed when one canonical owner workspace changes provider session identity', async () => {
+    const { broker, service } = createHarness()
+    await openWorkspace(broker)
+    vi.mocked(service.open).mockResolvedValueOnce({
+      resourceId: 'replacement-version-control-session',
+      ownerId: uiCaller.callerId,
+      ownerAudience: uiCaller.audience,
+      workspaceId: uiCaller.workspaceId,
+      workspaceRoot: uiCaller.workspaceId,
+      repositoryRoot: uiCaller.workspaceId
+    })
+
+    await expect(openWorkspace(broker)).rejects.toMatchObject({ code: 'handler_failed' })
+    expect(service.status).toHaveBeenCalledOnce()
+  })
+
+  it('binds stable registrations to the exact Principal context lease', async () => {
+    let principalContext = { identityVersion: 1, principal: principalA }
+    const { broker } = createHarness({
+      resolveCurrentPrincipalContext: () => principalContext
+    })
+    const first = await openWorkspace(broker)
+
+    principalContext = { identityVersion: 2, principal: principalB }
+    const second = await openWorkspace(broker)
+    expect(second.token).not.toBe(first.token)
+
+    principalContext = { identityVersion: 1, principal: principalA }
+    await expect(broker.observe(uiCaller, { resource: first })).resolves.toBeTruthy()
+    principalContext = { identityVersion: 2, principal: principalB }
+    await expect(broker.observe(uiCaller, { resource: second })).resolves.toBeTruthy()
+  })
+
+  it('accounts a provider session before status and rejects new allocation at capacity', async () => {
+    const { broker, service } = createHarness()
+    vi.mocked(service.status).mockRejectedValueOnce(new Error('status unavailable'))
+    await expect(broker.invoke({ ...uiCaller, workspaceId: '/workspace-0' }, {
+      actionId: VERSION_CONTROL_OPEN_WORKSPACE_ACTION_ID,
+      input: { workspaceRoot: '/workspace-0' }
+    })).rejects.toMatchObject({ code: 'handler_failed' })
+
+    for (let index = 1; index < 512; index += 1) {
+      const workspaceId = `/workspace-${index}`
+      await broker.invoke({ ...uiCaller, workspaceId }, {
+        actionId: VERSION_CONTROL_OPEN_WORKSPACE_ACTION_ID,
+        input: { workspaceRoot: workspaceId }
+      })
+    }
+
+    await expect(broker.invoke({ ...uiCaller, workspaceId: '/workspace-0' }, {
+      actionId: VERSION_CONTROL_OPEN_WORKSPACE_ACTION_ID,
+      input: { workspaceRoot: '/workspace-0' }
+    })).resolves.toBeTruthy()
+    expect(service.open).toHaveBeenCalledTimes(513)
+
+    await expect(broker.invoke({ ...uiCaller, workspaceId: '/workspace-over-capacity' }, {
+      actionId: VERSION_CONTROL_OPEN_WORKSPACE_ACTION_ID,
+      input: { workspaceRoot: '/workspace-over-capacity' }
+    })).rejects.toMatchObject({ code: 'handler_failed' })
+    expect(service.open).toHaveBeenCalledTimes(513)
+  })
+
+  it('keeps the process-lifetime workspace binding stable after a handle expires', async () => {
+    vi.useFakeTimers()
+    try {
+      const { broker } = createHarness({ handleTtlMs: 5 })
+      await openWorkspace(broker)
+      await vi.advanceTimersByTimeAsync(6)
+      await expect(openWorkspace(broker)).resolves.toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('passes remote placement into open and advertises only remote host operations', async () => {

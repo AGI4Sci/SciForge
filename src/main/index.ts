@@ -13,6 +13,7 @@ import {
   shell,
   Tray,
   webContents,
+  type IpcMainInvokeEvent,
   type WebContents
 } from 'electron'
 import { existsSync } from 'node:fs'
@@ -50,6 +51,7 @@ import {
   type AppSettingsV1
 } from '../shared/app-settings'
 import type { GuiUpdateState } from '../shared/gui-update'
+import { installedDomainPackages } from '../shared/installed-domain-packages'
 import { fetchUpstreamModelIds } from './upstream-models'
 import { isTrustedRendererUrl } from './renderer-trust'
 import { codingPlanCredentialStateForAdapter, getModelAccessStatus } from './model-access-status'
@@ -140,6 +142,18 @@ import { WorkspacePreviewHost, WorkspacePreviewPlacementRouter } from './service
 import { CapabilityBroker } from './capabilities/broker'
 import { WORKSPACE_PREVIEW_RESOURCE_KIND, type AppCapabilityDependencies } from './capabilities/app-registry'
 import { registerCapabilityIpc } from './capabilities/ipc'
+import { HostPrincipalContext } from './principal-context'
+import {
+  samePrincipalContextSnapshot,
+  samePrincipalSnapshot
+} from '@sciforge/domain-sdk/principal'
+import { DomainFileTransferError } from '@sciforge/domain-sdk/file-transfer'
+import { HostFileTransferService } from './modules/file-transfer'
+import { HostExternalNavigationService } from './modules/external-navigation'
+import {
+  createPortableResourceReferenceService,
+  type PortableResourceReferenceService
+} from './modules/portable-resource-references'
 import { createDomainExtensionsApi, loadOfficialExtensionKeyring, SignedExtensionStore } from './extensions'
 import {
   DomainModuleCatalog,
@@ -149,6 +163,7 @@ import {
   createMainActionGuardEvaluator,
   createMainSystemCapabilityInvokerFactory,
   listMainArtifactConsumers,
+  listMainExtensionContributions,
   listMainMcpTrustedInvocationMetadataContributions,
   listMainRuntimeMcpServerContributions,
   listMainVisualSourceContributions,
@@ -159,9 +174,11 @@ import type { AgentRuntimeThreadListInput, AgentRuntimeThreadStatusInput } from 
 import {
   createCapabilityAgentToolSurface,
   capabilityAgentCallerId,
+  CapabilityAgentToolError,
   type CapabilityAgentToolSurface
 } from './capabilities/agent-tools'
 import { installElectronDomainNativeVisualSmoke } from './electron-domain-smoke'
+import { installProviderCredentialAcceptance } from './provider-credential-acceptance'
 import { VisualSourceRegistry } from './runtime/agent-runtime/visual-source-registry'
 import {
   installCapabilityResourceContentProtocol,
@@ -171,7 +188,11 @@ import { startDevBrowserBridgeServer, type DevBrowserBridgeServer } from './dev-
 import { CodexRuntimeService } from './runtime/codex'
 import { APP_USER_MODEL_ID } from '../shared/app-brand'
 import { mainPerformanceMonitor } from './performance-monitor'
-import { createDomainPackageStorageFactory } from './domain-package-storage'
+import {
+  createDomainPackageStorageFactory,
+  createPlatformPackageEncryption
+} from './domain-package-storage'
+import { ManagedSecretRedactionRegistry } from './managed-secret-redaction'
 import {
   projectDomainAgentTurnMessages,
   subscribeDomainAgentTranscriptMessages
@@ -369,6 +390,10 @@ let claudeCodeRuntime: ClaudeCodeRuntimeService | null = null
 let codeNavigationService: LspCodeNavigationService | null = null
 let domainModuleCatalog: DomainModuleCatalog | null = null
 let mainRuntimeContributions: ActivatedMainRuntimeContributions | null = null
+let hostFileTransfersForShutdown: HostFileTransferService | null = null
+let hostExternalNavigationForShutdown: HostExternalNavigationService | null = null
+let portableResourceReferencesForShutdown: PortableResourceReferenceService | null = null
+let portablePrincipalSubscriptionForShutdown: (() => void) | null = null
 let workspaceHostSessionManagerForShutdown: WorkspaceHostSessionManager | null = null
 let workspaceEgressServiceForShutdown: WorkspaceEgressService | null = null
 let managedRuntimesStoppedForQuit = false
@@ -656,11 +681,33 @@ async function stopManagedRuntimes(): Promise<void> {
       agentRuntimeHostForShutdown = null
       await claudeCodeRuntime?.stop()
       await codexRuntime?.stop()
+      portablePrincipalSubscriptionForShutdown?.()
+      portablePrincipalSubscriptionForShutdown = null
+      const portableReferences = portableResourceReferencesForShutdown
+      portableResourceReferencesForShutdown = null
+      await portableReferences?.dispose().catch((error) => {
+        logWarn('portable-resources', 'Failed to retire portable resource references.', error)
+      })
+      // Portable registrations can delegate their disposal to the owning
+      // provider runtime. Retire them while domain runtime contributions are
+      // still alive, after all invocation producers have stopped.
       const runtimeContributions = mainRuntimeContributions
       mainRuntimeContributions = null
       await runtimeContributions?.dispose().catch((error) => {
         logWarn('domain-runtime', 'Failed to dispose domain runtime contributions.', error)
       })
+      const fileTransfers = hostFileTransfersForShutdown
+      hostFileTransfersForShutdown = null
+      await fileTransfers?.dispose().catch((error) => {
+        logWarn('file-transfer', 'Failed to dispose Host file-transfer grants.', error)
+      })
+      const externalNavigation = hostExternalNavigationForShutdown
+      hostExternalNavigationForShutdown = null
+      try {
+        externalNavigation?.dispose()
+      } catch (error) {
+        logWarn('external-navigation', 'Failed to dispose Host external targets.', error)
+      }
       const workspaceHostSessions = workspaceHostSessionManagerForShutdown
       workspaceHostSessionManagerForShutdown = null
       await workspaceHostSessions?.dispose().catch((error) => {
@@ -969,6 +1016,10 @@ app
     traceStartup('settings load:start')
     const initial = await store.load()
     traceStartup('settings load:done')
+    const hostDeviceId = initial.installationId?.trim()
+    if (!hostDeviceId) {
+      throw new Error('Application settings did not provide a stable Host installation identity.')
+    }
     appBehavior = initial.appBehavior
     syncLoginItemSettings(initial)
     syncTray(initial)
@@ -984,16 +1035,22 @@ app
       console.error('[schedule-mcp] failed to sync config on startup:', error)
     })
     logDir = resolveLogDirectory()
+    const traceSensitiveSettings = new CurrentTraceSensitiveSettings(initial)
+    const managedSecretRedaction = new ManagedSecretRedactionRegistry()
+    const currentSensitiveValues = () => [
+      ...traceSensitiveSettings.values(),
+      ...managedSecretRedaction.values()
+    ]
     configureLogger({
       dir: logDir,
       enabled: initial.log.enabled,
-      retentionDays: initial.log.retentionDays
+      retentionDays: initial.log.retentionDays,
+      sensitiveValues: currentSensitiveValues
     })
     traceStartup('logger configured')
-    const traceSensitiveSettings = new CurrentTraceSensitiveSettings(initial)
     const fullTraceStore = new LocalTraceStore({
       userDataDirectory: app.getPath('userData'),
-      sensitiveValues: traceSensitiveSettings.values
+      sensitiveValues: currentSensitiveValues
     })
     await fullTraceStore.initialize()
     const agentTraceRecorder = new AgentRuntimeTraceRecorder(fullTraceStore)
@@ -1044,18 +1101,45 @@ app
         }
       }
     })
+    let principalContextForDomainServices: HostPrincipalContext | null = null
+    let capabilityBrokerForDomainServices: CapabilityBroker | null = null
+    let portableResourceReferences: PortableResourceReferenceService | null = null
     const domainPackageStorage = createDomainPackageStorageFactory({
       userDataDir: app.getPath('userData'),
-      encryption: safeStorage
+      encryption: createPlatformPackageEncryption({ safeStorage }),
+      getDeviceId: () => hostDeviceId,
+      currentPrincipal: () => principalContextForDomainServices?.current(),
+      secretRedaction: managedSecretRedaction
     })
+    const isPrincipalCurrentForDomainServices = (principal: Parameters<
+      typeof samePrincipalSnapshot
+    >[0]): boolean => samePrincipalSnapshot(
+      principalContextForDomainServices?.current(),
+      principal
+    )
+    const hostFileTransfers = new HostFileTransferService({
+      isPrincipalCurrent: isPrincipalCurrentForDomainServices,
+      reportCleanupError: (error) => {
+        logWarn('file-transfer', 'Failed to clean up a Host file-transfer grant.', error)
+      }
+    })
+    const hostExternalNavigation = new HostExternalNavigationService({
+      isPrincipalCurrent: isPrincipalCurrentForDomainServices,
+      openExternal: async (url) => {
+        await shell.openExternal(url)
+      }
+    })
+    hostFileTransfersForShutdown = hostFileTransfers
+    hostExternalNavigationForShutdown = hostExternalNavigation
     const catalog = createApplicationDomainCatalog({
       getUserDataDir: () => app.getPath('userData'),
+      getDeviceId: () => hostDeviceId,
       getAppRoot: () => app.getAppPath(),
       getExecutablePath: () => process.execPath,
       isPackaged: () => app.isPackaged,
       textSanitizer: {
         sanitizeText: (value) => sanitizeTraceTextChunks([value], {
-          sensitiveValues: traceSensitiveSettings.values()
+          sensitiveValues: currentSensitiveValues()
         })[0] ?? ''
       },
       openPath: async (targetPath) => {
@@ -1087,6 +1171,28 @@ app
         })
       },
       packageStorageFor: (owner) => domainPackageStorage.forOwner(owner),
+      fileTransfersFor: (owner) => hostFileTransfers.forOwner(
+        owner.moduleId,
+        () => capabilityBrokerForDomainServices?.currentInvocation()
+      ),
+      externalNavigationFor: (owner) => hostExternalNavigation.forOwner(
+        owner.moduleId,
+        () => capabilityBrokerForDomainServices?.currentInvocation()
+      ),
+      portableResourcesFor: (owner) => Object.freeze({
+        materialize: (reference, options) => {
+          if (!portableResourceReferences) {
+            throw new Error('Portable resource references are not ready.')
+          }
+          return portableResourceReferences.forOwner(owner).materialize(reference, options)
+        },
+        export: (input, options) => {
+          if (!portableResourceReferences) {
+            throw new Error('Portable resource references are not ready.')
+          }
+          return portableResourceReferences.forOwner(owner).export(input, options)
+        }
+      }),
       visualCapture: registeredTargetVisualCapture
     })
     const workspaceEgressService = new WorkspaceEgressService({
@@ -1187,9 +1293,32 @@ app
       visibleContextService,
       versionControlWorkspaceService: versionControlPlacement
     }
+    const principalContext = new HostPrincipalContext(catalog)
+    principalContextForDomainServices = principalContext
     const capabilityBroker = new CapabilityBroker(
-      createApplicationCapabilityRegistry(catalog, appCapabilityDependencies)
+      createApplicationCapabilityRegistry(catalog, appCapabilityDependencies),
+      { resolveCurrentPrincipalContext: () => principalContext.snapshot() }
     )
+    installProviderCredentialAcceptance(domainPackageStorage)
+    capabilityBrokerForDomainServices = capabilityBroker
+    portableResourceReferences = createPortableResourceReferenceService(
+      capabilityBroker,
+      Object.freeze({ list: () => listMainExtensionContributions(catalog) }),
+      () => principalContext.current(),
+      {
+        reportCleanupError: (error) => {
+          logWarn('portable-resources', 'Failed to clean up a portable resource reference.', error)
+        }
+      }
+    )
+    portableResourceReferencesForShutdown = portableResourceReferences
+    portablePrincipalSubscriptionForShutdown = principalContext.subscribe((snapshot) => {
+      void portableResourceReferences?.revokeStalePrincipals(
+        snapshot.principal ?? undefined
+      ).catch((error) => {
+        logWarn('portable-resources', 'Failed to retire stale Principal resources.', error)
+      })
+    }) ?? null
     capabilityBrokerForVisibleContext = capabilityBroker
     domainSystemCapabilityInvokers = createMainSystemCapabilityInvokerFactory(capabilityBroker)
     const visualSourceRegistry = new VisualSourceRegistry([
@@ -1245,9 +1374,53 @@ app
       servers: managedGuiMcpServers(initial),
       trustedInvocationMetadata: listMainMcpTrustedInvocationMetadataContributions(catalog)
     })
+    const agentRuntimeHostRef: { current: AgentRuntimeHost | null } = {
+      current: null
+    }
+    const assertAgentPrincipalLease = (context: {
+      runtimeId: string
+      threadId?: string
+      turnId?: string
+    }): ReturnType<AgentRuntimeHost['principalForToolRequest']> => {
+      if (!context.threadId || !context.turnId) {
+        throw new CapabilityAgentToolError(
+          'missing_invocation_context',
+          'Agent capability requests require an exact runtime, thread, and turn identity.'
+        )
+      }
+      const runtimeHost = agentRuntimeHostRef.current
+      if (!runtimeHost) {
+        throw new CapabilityAgentToolError(
+          'principal_changed',
+          'The Host cannot verify the Agent turn Principal lease.'
+        )
+      }
+      let capturedPrincipal: ReturnType<AgentRuntimeHost['principalForToolRequest']>
+      try {
+        capturedPrincipal = runtimeHost.principalForToolRequest({
+          runtimeId: context.runtimeId,
+          threadId: context.threadId,
+          turnId: context.turnId
+        })
+      } catch (error) {
+        throw new CapabilityAgentToolError(
+          'principal_changed',
+          'The Agent turn Principal lease is unknown or no longer available.',
+          { details: { reason: error instanceof Error ? error.message : String(error) } }
+        )
+      }
+      if (!samePrincipalContextSnapshot(capturedPrincipal, principalContext.snapshot())) {
+        throw new CapabilityAgentToolError(
+          'principal_changed',
+          'The current Principal no longer matches the Agent turn Principal lease.'
+        )
+      }
+      return capturedPrincipal
+    }
     const runtimeCapabilityBroker = createRuntimeCapabilityBroker({
       broker: capabilityBroker,
       managedTools: runtimeMcpToolGateway,
+      assertPrincipalLease: (context) => { assertAgentPrincipalLease(context) },
       isToolAvailable: (context, tool) => runtimeMayUseManagedTool(context.runtimeId, tool)
     })
     const agentVisualRuntime = new AgentVisualRuntime({
@@ -1277,12 +1450,10 @@ app
         )
       }
     })
-    const agentRuntimeHostRef: { current: AgentRuntimeHost | null } = {
-      current: null
-    }
     capabilityAgentTools = createCapabilityAgentToolSurface({
       broker: runtimeCapabilityBroker,
       visualRuntime: agentVisualRuntime,
+      assertPrincipalLease: assertAgentPrincipalLease,
       resolveCaller: (context) => ({
         audience: 'agent',
         callerId: capabilityAgentCallerId(context),
@@ -1298,11 +1469,26 @@ app
       capabilityAgentTools,
       createDeferredAgentRuntimeToolSurface(() => agentRuntimeHostForShutdown?.subagentTools())
     ])
-    installElectronDomainNativeVisualSmoke(capabilityAgentTools)
+    const isTrustedMainRendererIpcSender = (event: IpcMainInvokeEvent): boolean => {
+      const window = mainWindow
+      if (!window || window.isDestroyed()) return false
+      const contents = window.webContents
+      const frame = event.senderFrame
+      const expected = devServerHintUrl()
+        ?? pathToFileURL(join(__dirname, '../renderer/index.html')).toString()
+      return event.sender === contents
+        && frame === contents.mainFrame
+        && isTrustedRendererUrl(frame?.url ?? '', expected)
+    }
     const capabilityIpcRegistration = registerCapabilityIpc({
       broker: capabilityBroker,
+      isTrustedIpcSender: isTrustedMainRendererIpcSender,
       onCallerDestroyed: (callerId) => {
         void workspacePlacement.disposeOwner(callerId)
+        void hostFileTransfers.revokeCaller(callerId).catch((error) => {
+          logWarn('file-transfer', 'Failed to revoke file-transfer grants for a closed renderer.', error)
+        })
+        hostExternalNavigation.revokeCaller(callerId)
       }
     })
     const artifactConsumers = listMainArtifactConsumers(catalog)
@@ -1350,6 +1536,7 @@ app
     turnArtifactHandoffForShutdown = turnArtifactHandoff
     const agentRuntimeHost = createAgentRuntimeHost({
       settings: async () => store.load(),
+      getPrincipalContext: () => principalContext.snapshot(),
       nativeVisualToolsAvailable: () => Boolean(capabilityAgentTools),
       subagentStoreRoot: join(app.getPath('userData'), 'agent-runtime', 'subagents'),
       turnArtifacts: turnArtifactHandoff,
@@ -1379,6 +1566,11 @@ app
     })
     agentRuntimeHostRef.current = agentRuntimeHost
     agentRuntimeHostForShutdown = agentRuntimeHost
+    installElectronDomainNativeVisualSmoke(
+      capabilityAgentTools,
+      (identity, operation) =>
+        agentRuntimeHost.withHostToolRequestPrincipalLease(identity, operation)
+    )
     mainRuntimeContributions = await activateMainRuntimeContributions(catalog, {
       userDataDir: app.getPath('userData'),
       appRoot: app.isPackaged ? join(process.resourcesPath, 'app.asar.unpacked') : app.getAppPath(),
@@ -1609,19 +1801,43 @@ app
       actionGuardEvaluator,
       extensions: domainExtensionsApi,
       getMainWindow: () => mainWindow,
-      isTrustedIpcSender: (event) => {
-        const window = mainWindow
-        if (!window || window.isDestroyed()) return false
-        const contents = window.webContents
-        const frame = event.senderFrame
-        const expected = devServerHintUrl() ?? pathToFileURL(join(__dirname, '../renderer/index.html')).toString()
-        return (
-          event.sender === contents && frame === contents.mainFrame && isTrustedRendererUrl(frame?.url ?? '', expected)
-        )
-      },
+      isTrustedIpcSender: isTrustedMainRendererIpcSender,
       applySettingsPatch,
       getModelAccessStatus: readModelAccessStatus,
       traces: fullTraceStore,
+      fileTransfers: {
+        isInstalledRendererOwner: (ownerId) => installedDomainPackages.definitions.some(
+          (definition) => definition.module.id === ownerId &&
+            definition.entrypoints.some((entrypoint) => entrypoint.process === 'renderer')
+        ),
+        registerUpload: (input) => {
+          const principal = principalContext.current()
+          if (!principal) {
+            throw new DomainFileTransferError(
+              'principal_changed',
+              'A current Principal is required to select an upload source.'
+            )
+          }
+          return hostFileTransfers.registerUpload({
+            ...input,
+            caller: { callerId: input.callerId, principal }
+          })
+        },
+        registerDownload: (input) => {
+          const principal = principalContext.current()
+          if (!principal) {
+            throw new DomainFileTransferError(
+              'principal_changed',
+              'A current Principal is required to select a download destination.'
+            )
+          }
+          return hostFileTransfers.registerDownload({
+            ...input,
+            caller: { callerId: input.callerId, principal }
+          })
+        },
+        revokeCaller: (callerId) => hostFileTransfers.revokeCaller(callerId)
+      },
       agentRuntime: agentRuntimeHost,
       remoteWorkspace: remoteWorkspaceController,
       workspacePlacement,
@@ -1642,7 +1858,12 @@ app
       getPptMasterMcpLaunchConfig
     })
 
-    if (!app.isPackaged && process.env.SCIFORGE_DEV_BROWSER_BRIDGE !== '0') {
+    const devBrowserBridgeInstanceId = process.env.SCIFORGE_DEV_INSTANCE_ID?.trim()
+    if (
+      !app.isPackaged &&
+      process.env.SCIFORGE_DEV_BROWSER_BRIDGE !== '0' &&
+      devBrowserBridgeInstanceId
+    ) {
       void startDevBrowserBridgeServer({
         dispatcher: {
           invoke: (channel, payload, sender) =>
@@ -1651,8 +1872,7 @@ app
               : appBridgeDispatcher.invoke(channel, payload, sender)
         },
         resourceContent: capabilityIpcRegistration.resourceContent,
-        allowAllChannels: true,
-        instanceId: process.env.SCIFORGE_DEV_INSTANCE_ID
+        instanceId: devBrowserBridgeInstanceId
       })
         .then((server) => {
           devBrowserBridgeServer = server

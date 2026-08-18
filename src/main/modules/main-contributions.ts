@@ -1,9 +1,13 @@
+import {
+  MAIN_PRINCIPAL_PROVIDER_CONTRIBUTION_KIND,
+  isDomainMainPrincipalProvider
+} from '@sciforge/domain-sdk/principal'
 import type { AppCapabilityDependencies } from '../capabilities/app-registry'
 import {
   type AppCapabilityContributionFactory,
   type AppCapabilityDomainPolicy
 } from '../capabilities/app-contributions/composition'
-import { CapabilityRegistry } from '../capabilities/registry'
+import { CapabilityRegistrationError, CapabilityRegistry } from '../capabilities/registry'
 import {
   DomainModuleCatalog,
   type DomainContributionRuntimeGuard
@@ -27,10 +31,28 @@ export function composeMainCapabilityRegistry(
   const factories = catalog.listContributions(
     MAIN_CAPABILITY_FACTORY_CONTRIBUTION_KIND,
     isAppCapabilityContributionFactory
-  ).map((contribution) => contribution.value)
-  return new CapabilityRegistry(
-    factories.flatMap((factory) => factory.createDefinitions(dependencies))
   )
+  const principalProviders = catalog.listContributions(
+    MAIN_PRINCIPAL_PROVIDER_CONTRIBUTION_KIND,
+    isDomainMainPrincipalProvider
+  )
+  const definitions = factories.flatMap((contribution) => {
+    const ownedDefinitions = contribution.value.createDefinitions(dependencies)
+    if (
+      ownedDefinitions.some(({ descriptor }) => descriptor.principalTransition === 'host-authority') &&
+      (
+        principalProviders.length !== 1 ||
+        principalProviders[0]?.owner.moduleId !== contribution.owner.moduleId
+      )
+    ) {
+      throw new CapabilityRegistrationError(
+        'unauthorized_principal_transition',
+        `Capability factory ${contribution.owner.moduleId} declares a Host Principal transition without owning a Principal provider.`
+      )
+    }
+    return ownedDefinitions
+  })
+  return new CapabilityRegistry(definitions)
 }
 
 export function listMainCapabilityDomainPolicies(
