@@ -130,6 +130,22 @@ test('parses the bounded Codex fileChange detail shape and ignores opaque meta p
   assert.equal(extracted.manifest.untrackedOperations[0]?.kind, 'editor-change')
 })
 
+test('accepts canonical file breakpoint item IDs for paths with spaces and non-ASCII characters', () => {
+  const path = 'AI Scientist/时空可组合性/读书报告.md'
+  const extracted = extractCheckpointFromTurn(event([{
+    kind: 'tool',
+    itemId: 'codex-file-change-international-path',
+    toolKind: 'file_change',
+    status: 'success',
+    summary: 'File changes',
+    detail: JSON.stringify([{ path, kind: 'update' }])
+  }]), recording, workspaceRoot, new Map())
+
+  assert.equal(extracted.manifest.breakpoints.some((item) => (
+    item.code === 'editor-change-untracked' && item.itemId === `file:${path}`
+  )), true)
+})
+
 test('retains diff fallback and fails closed for excessive or outside-workspace declarations', () => {
   const extracted = extractCheckpointFromTurn(event([{
     kind: 'tool',

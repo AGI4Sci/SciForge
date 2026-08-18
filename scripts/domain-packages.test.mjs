@@ -111,6 +111,54 @@ test('projects only workspace-server process entries into the server composition
   assert.doesNotMatch(server, /\/renderer'/)
 })
 
+test('generates one contribution-keyed runtime MCP launcher composition', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  await createFixture(root, 'runtime-mcp', {
+    packageName: '@fixture/runtime-mcp',
+    process: 'main',
+    contributions: [{
+      id: 'fixture.runtime-mcp-server',
+      kind: 'main.runtime-mcp-server'
+    }]
+  })
+  await createFixture(root, 'ordinary', {
+    packageName: '@fixture/ordinary',
+    process: 'main'
+  })
+
+  const packages = await discoverDomainPackages(root, {
+    parseDefinition: (definition) => definition
+  })
+  const runtimeMcp = renderGeneratedDomainPackageFiles(packages)[
+    'src/main/modules/installed-domain-runtime-mcp.ts'
+  ]
+
+  assert.match(runtimeMcp, /@fixture\/runtime-mcp\/runtime-mcp/)
+  assert.match(runtimeMcp, /"fixture\.runtime-mcp-server": runDomainRuntimeMcpServer/)
+  assert.match(runtimeMcp, /selectedDomainRuntimeMcpContributionId/)
+  assert.doesNotMatch(runtimeMcp, /@fixture\/ordinary/)
+})
+
+test('fails closed when a runtime MCP contribution omits its conventional runner', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  await createFixture(root, 'broken-runtime-mcp', {
+    packageName: '@fixture/broken-runtime-mcp',
+    process: 'main',
+    contributions: [{
+      id: 'fixture.broken-runtime-mcp-server',
+      kind: 'main.runtime-mcp-server'
+    }],
+    createRuntimeMcpExport: false
+  })
+
+  await assert.rejects(
+    discoverDomainPackages(root, { parseDefinition: (definition) => definition }),
+    /must expose \.\/runtime-mcp exactly when it declares main\.runtime-mcp-server/
+  )
+})
+
 test('fails closed when a process entry does not export its conventional factory', async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
   context.after(() => rm(root, { recursive: true, force: true }))
@@ -410,6 +458,13 @@ async function createFixture(root, directoryName, options) {
     ...(options.packaging ? { packaging: options.packaging } : {}),
     entrypoints
   }
+  const runtimeMcpContributions = entrypoints.flatMap((entrypoint) =>
+    entrypoint.process === 'main'
+      ? entrypoint.contributions.filter(({ kind }) => kind === 'main.runtime-mcp-server')
+      : []
+  )
+  const createRuntimeMcpExport = runtimeMcpContributions.length > 0 &&
+    options.createRuntimeMcpExport !== false
   await writeFile(path.join(packageRoot, 'sciforge.domain.json'), JSON.stringify(manifest))
   await writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({
     name: options.packageName,
@@ -420,7 +475,10 @@ async function createFixture(root, directoryName, options) {
       ...Object.fromEntries(processes.map((processName) => [
         `./${processName}`,
         `./src/${processName}.ts`
-      ]))
+      ])),
+      ...(createRuntimeMcpExport
+        ? { './runtime-mcp': './src/runtime-mcp.ts' }
+        : {})
     },
     scripts: { test: 'node --test', typecheck: 'tsc --noEmit' }
   }))
@@ -438,6 +496,12 @@ async function createFixture(root, directoryName, options) {
     await writeFile(
       path.join(packageRoot, `src/${processName}.ts`),
       `export function ${factoryName}() { return {} }\n`
+    )
+  }
+  if (createRuntimeMcpExport) {
+    await writeFile(
+      path.join(packageRoot, 'src/runtime-mcp.ts'),
+      'export async function runDomainRuntimeMcpServerFromArgv() {}\n'
     )
   }
   if (options.createRequiredPaths !== false) {

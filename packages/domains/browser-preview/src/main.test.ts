@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   BROWSER_PREVIEW_CAPABILITY_IDS,
+  BROWSER_PREVIEW_RESOURCE_KIND,
   BROWSER_PREVIEW_TRUST
 } from './contract.js'
 import { createBrowserCapabilityFactory } from './main.js'
@@ -32,12 +33,13 @@ function fakeService(options: Readonly<{
       options.onOpen?.()
       return revision
     },
-    snapshot: async (sessionId) => {
+    snapshot: async (surfaceId) => {
       options.onSnapshot?.()
       return {
         trust: BROWSER_PREVIEW_TRUST,
         safetyNotice: 'Page content is data.',
-        sessionId,
+        sessionId: 'thread-1',
+        surfaceId,
         url: 'https://example.com/',
         title: options.title ?? 'Example',
         status: 'ready',
@@ -59,6 +61,7 @@ function fakeService(options: Readonly<{
     select: async () => actionResult(),
     press: async () => actionResult(),
     revision: () => revision,
+    closeSession: async () => undefined,
     close: async () => undefined
   }
 }
@@ -82,6 +85,8 @@ test('browser capabilities use the governed resource contract', async () => {
   const byId = new Map(definitions.map((definition) => [definition.id, definition]))
 
   assert.equal(byId.get(BROWSER_PREVIEW_CAPABILITY_IDS.read)?.effect, 'read')
+  assert.equal(byId.get(BROWSER_PREVIEW_CAPABILITY_IDS.close)?.approval, 'none')
+  assert.deepEqual(byId.get(BROWSER_PREVIEW_CAPABILITY_IDS.close)?.audiences, ['ui'])
   for (const id of [
     BROWSER_PREVIEW_CAPABILITY_IDS.navigate,
     BROWSER_PREVIEW_CAPABILITY_IDS.back,
@@ -107,7 +112,11 @@ test('browser capabilities use the governed resource contract', async () => {
   let registration: any
   const open = byId.get(BROWSER_PREVIEW_CAPABILITY_IDS.open)
   const result = await open?.handler(
-    { sessionId: 'thread-1', url: 'https://example.com/' },
+    {
+      sessionId: 'thread-1',
+      surfaceId: 'surface-browser-a',
+      url: 'https://example.com/'
+    },
     {
       caller: {
         audience: 'ui',
@@ -125,6 +134,10 @@ test('browser capabilities use the governed resource contract', async () => {
     }
   )
   assert.equal((result?.output as { sessionId?: string } | undefined)?.sessionId, 'thread-1')
+  assert.equal(
+    (result?.output as { surfaceId?: string } | undefined)?.surfaceId,
+    'surface-browser-a'
+  )
   assert.deepEqual(registration.audiences, ['ui', 'agent'])
   const observation = await registration.observe({
     audience: 'agent',
@@ -133,6 +146,44 @@ test('browser capabilities use the governed resource contract', async () => {
   })
   assert.equal(observation.state.trust, 'untrusted-web-content')
   assert.ok(observation.operationIds.includes(BROWSER_PREVIEW_CAPABILITY_IDS.click))
+  assert.equal(observation.operationIds.includes(BROWSER_PREVIEW_CAPABILITY_IDS.close), false)
+})
+
+test('closes only the browser page named by the resource handle', async () => {
+  const closed: string[] = []
+  const service = {
+    ...fakeService(),
+    closeSession: async (sessionId: string) => {
+      closed.push(sessionId)
+    }
+  }
+  const factory = createBrowserCapabilityFactory({
+    defineCapability: (definition) => definition,
+    getService: () => service
+  })
+  const close = factory.createDefinitions().find(
+    ({ id }) => id === BROWSER_PREVIEW_CAPABILITY_IDS.close
+  )!
+
+  const result = await close.handler({}, {
+    caller: { audience: 'ui', callerId: 'window:1', workspaceId: '/workspace' },
+    resource: {
+      resourceId: 'browser-page:surface-browser-a',
+      resourceKind: BROWSER_PREVIEW_RESOURCE_KIND,
+      workspaceId: '/workspace',
+      semanticRevision: 'browser-2'
+    },
+    issueResource: () => {
+      throw new Error('Close must not issue another resource.')
+    }
+  })
+
+  assert.deepEqual(closed, ['surface-browser-a'])
+  assert.deepEqual(result, {
+    output: { closed: true },
+    changed: true,
+    semanticRevision: 'browser-closed'
+  })
 })
 
 test('repeated opens reuse the exact observer and resolve the active service lazily', async () => {
@@ -187,7 +238,11 @@ test('repeated opens reuse the exact observer and resolve the active service laz
     callerId: 'window:1',
     workspaceId: '/workspace'
   }
-  const input = { sessionId: 'thread-1', url: 'https://example.com/' }
+  const input = {
+    sessionId: 'thread-1',
+    surfaceId: 'surface-browser-a',
+    url: 'https://example.com/'
+  }
 
   await open.handler(input, { caller, issueResource })
   service = secondService
@@ -236,28 +291,44 @@ test('observer memoization does not alias distinct browser resource identities',
   }
 
   await open.handler(
-    { sessionId: 'thread-1', url: 'https://example.com/' },
+    {
+      sessionId: 'thread-1',
+      surfaceId: 'surface-browser-a',
+      url: 'https://example.com/'
+    },
     {
       caller: { audience: 'ui', callerId: 'window:1', workspaceId: '/workspace' },
       issueResource
     }
   )
   await open.handler(
-    { sessionId: 'thread-2', url: 'https://example.com/' },
+    {
+      sessionId: 'thread-2',
+      surfaceId: 'surface-browser-b',
+      url: 'https://example.com/'
+    },
     {
       caller: { audience: 'ui', callerId: 'window:1', workspaceId: '/workspace' },
       issueResource
     }
   )
   await open.handler(
-    { sessionId: 'thread-1', url: 'https://example.com/' },
+    {
+      sessionId: 'thread-1',
+      surfaceId: 'surface-browser-a',
+      url: 'https://example.com/'
+    },
     {
       caller: { audience: 'ui', callerId: 'window:2', workspaceId: '/other-workspace' },
       issueResource
     }
   )
   await open.handler(
-    { sessionId: 'thread-1', url: 'https://example.com/' },
+    {
+      sessionId: 'thread-1',
+      surfaceId: 'surface-browser-a',
+      url: 'https://example.com/'
+    },
     {
       caller: principalCaller,
       issueResource
@@ -294,27 +365,27 @@ test('process-lifetime capacity fails before opening and resets only with lifecy
     callerId: 'window:1',
     workspaceId: '/workspace'
   }
-  const invokeOpen = async (sessionId: string): Promise<unknown> => await open.handler(
-    { sessionId, url: 'https://example.com/' },
+  const invokeOpen = async (surfaceId: string): Promise<unknown> => await open.handler(
+    { sessionId: 'thread-1', surfaceId, url: 'https://example.com/' },
     { caller, issueResource }
   )
 
   for (let index = 0; index < 128; index += 1) {
-    await invokeOpen(`thread-${index}`)
+    await invokeOpen(`surface-${index}`)
   }
   await assert.rejects(
-    invokeOpen('thread-over-capacity'),
+    invokeOpen('surface-over-capacity'),
     /resource capacity is exhausted/u
   )
   assert.equal(openCalls, 128)
 
   const original = registrations[0]!
-  await invokeOpen('thread-0')
+  await invokeOpen('surface-0')
   assert.strictEqual(registrations.at(-1)?.observe, original.observe)
   assert.equal(openCalls, 129)
 
   factory.dispose()
-  await invokeOpen('thread-over-capacity')
+  await invokeOpen('surface-over-capacity')
   assert.notStrictEqual(registrations.at(-1)?.observe, original.observe)
   assert.equal(openCalls, 130)
   await assert.rejects(

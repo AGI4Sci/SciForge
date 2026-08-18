@@ -9,6 +9,7 @@ export type ManagedGuiMcpLaunchConfig = {
   appPath: string
   execPath: string
   isPackaged: boolean
+  nodeExecPath?: string
 }
 
 export type ManagedGuiMcpDescriptor = {
@@ -51,6 +52,8 @@ export function resolveManagedGuiMcpCommand(
   launch: ManagedGuiMcpLaunchConfig,
   platform: NodeJS.Platform = process.platform
 ): string {
+  const nodeExecPath = launch.nodeExecPath?.trim()
+  if (!launch.isPackaged && nodeExecPath) return nodeExecPath
   return resolveElectronRunAsNodeExecutable(launch.execPath, platform)
 }
 

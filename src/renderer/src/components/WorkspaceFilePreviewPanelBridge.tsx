@@ -29,6 +29,7 @@ import {
   workspacePreviewPresentationStatesEqual,
   type WorkspacePreviewPresentationState
 } from '../workspace-preview/presentation-state'
+import { workspacePreviewVisibleContextComponentId } from '../workspace-preview/visible-context-identity'
 import {
   registerVisibleContextComponent,
   registerVisibleContextVisualTarget
@@ -49,6 +50,7 @@ export type WorkspaceFilePreviewPanelBridgeProps = {
   target: WorkspaceFileTarget | null
   workspaceRoot: string
   sessionId?: string
+  surfaceId: string
   active?: boolean
   className?: string
   annotationQuestionBridge?: DocumentAnnotationQuestionBridge
@@ -132,6 +134,7 @@ export function WorkspaceFilePreviewPanelBridge({
   target,
   workspaceRoot,
   sessionId,
+  surfaceId,
   active = true,
   className,
   annotationQuestionBridge,
@@ -169,6 +172,7 @@ export function WorkspaceFilePreviewPanelBridge({
           route={route}
           workspaceRoot={workspaceRoot}
           sessionId={sessionId}
+          surfaceId={surfaceId}
           active={active}
           annotationQuestionBridge={annotationQuestionBridge}
           onClose={onClose}
@@ -188,6 +192,8 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
   target: WorkspaceFileTarget | null
   route: WorkspaceFilePreviewPanelBridgeRoute
   workspaceRoot: string
+  sessionId?: string
+  surfaceId: string
   updatedAt: string
   presentationState?: WorkspacePreviewPresentationState | null
 }): VisibleContextComponentSnapshot | null {
@@ -258,7 +264,10 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
   }]
 
   return {
-    id: 'right-sidebar.file-preview',
+    id: workspacePreviewVisibleContextComponentId({
+      sessionId: input.sessionId,
+      surfaceId: input.surfaceId
+    }),
     region: 'right-sidebar',
     component: 'workspace-preview',
     title: presentationState?.title || observation?.view.title || fileNameFromPath(path),
@@ -268,6 +277,8 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
     summary,
     resources,
     state: {
+      sessionId: input.sessionId ?? null,
+      surfaceId: input.surfaceId,
       currentPreview: compactCapability
         ? {
             resourceRef: compactCapability.resourceRef,
@@ -333,6 +344,7 @@ function WorkspacePreviewShellBody({
   route,
   workspaceRoot,
   sessionId,
+  surfaceId,
   active,
   annotationQuestionBridge,
   onClose,
@@ -343,6 +355,7 @@ function WorkspacePreviewShellBody({
   route: WorkspaceFilePreviewPanelBridgeRoute
   workspaceRoot: string
   sessionId?: string
+  surfaceId: string
   active: boolean
   annotationQuestionBridge?: DocumentAnnotationQuestionBridge
   onClose: () => void
@@ -380,13 +393,13 @@ function WorkspacePreviewShellBody({
       target,
       route,
       workspaceRoot,
+      sessionId,
+      surfaceId,
       updatedAt: new Date().toISOString(),
       presentationState
     })
-    return component && sessionId
-      ? { ...component, id: `${component.id}:${encodeURIComponent(sessionId)}` }
-      : component
-  }, [active, context, presentationState, route, sessionId, target, workspaceRoot])
+    return component
+  }, [active, context, presentationState, route, sessionId, surfaceId, target, workspaceRoot])
 
   useEffect(() => {
     if (!visibleContextComponent) return undefined
@@ -482,6 +495,7 @@ function WorkspacePreviewShellBody({
       data-route={route.kind}
       data-route-reason={route.reason}
       data-asset-status={context.assetStatus}
+      data-surface-id={surfaceId}
     >
       <div className="absolute right-3 top-3 z-10 flex items-center gap-1">
         <button

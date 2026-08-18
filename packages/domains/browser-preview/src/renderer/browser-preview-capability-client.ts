@@ -8,6 +8,7 @@ import {
   BROWSER_PREVIEW_RESOURCE_KIND,
   browserActionOutputSchema,
   browserClickInputSchema,
+  browserCloseOutputSchema,
   browserEmptyInputSchema,
   browserFillInputSchema,
   browserNavigateInputSchema,
@@ -61,6 +62,12 @@ const contracts = Object.freeze({
     inputSchema: browserClickInputSchema,
     outputSchema: browserActionOutputSchema
   },
+  close: {
+    actionId: BROWSER_PREVIEW_CAPABILITY_IDS.close,
+    effect: 'external-write' as const,
+    inputSchema: browserEmptyInputSchema,
+    outputSchema: browserCloseOutputSchema
+  },
   fill: {
     actionId: BROWSER_PREVIEW_CAPABILITY_IDS.fill,
     effect: 'external-write' as const,
@@ -88,10 +95,15 @@ type MutationOptions = Readonly<{
   expectedRevision: string
   approval: Readonly<{ mode: 'confirmation' }>
 }>
+type ResourceOptions = Readonly<{
+  workspaceId?: string
+  resource: DomainCapabilityResourceHandle
+}>
 
 export type BrowserPreviewCapabilityClient = Readonly<{
   open(input: {
     sessionId: string
+    surfaceId: string
     url: string
     workspaceId?: string
   }): Promise<DomainCapabilityResourceHandle>
@@ -99,6 +111,7 @@ export type BrowserPreviewCapabilityClient = Readonly<{
     resource: DomainCapabilityResourceHandle,
     workspaceId?: string
   ): Promise<Observation>
+  close(options: ResourceOptions): Promise<void>
   navigate(url: string, options: MutationOptions): Promise<BrowserActionOutput>
   back(options: MutationOptions): Promise<BrowserActionOutput>
   forward(options: MutationOptions): Promise<BrowserActionOutput>
@@ -116,7 +129,7 @@ export function createBrowserPreviewCapabilityClient(
     async open(input) {
       const result = await invoker.invoke(
         contracts.open,
-        { sessionId: input.sessionId, url: input.url },
+        { sessionId: input.sessionId, surfaceId: input.surfaceId, url: input.url },
         {
           ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
           approval: { mode: 'confirmation' }
@@ -129,6 +142,9 @@ export function createBrowserPreviewCapabilityClient(
       resource,
       workspaceId ? { workspaceId } : {}
     ),
+    close: async (options) => {
+      await invoker.invoke(contracts.close, {}, options)
+    },
     navigate: (url, options) => invoker.invoke(contracts.navigate, { url }, options),
     back: (options) => invoker.invoke(contracts.back, {}, options),
     forward: (options) => invoker.invoke(contracts.forward, {}, options),

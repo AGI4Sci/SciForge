@@ -16,6 +16,7 @@ import {
   ZoomOut
 } from 'lucide-react'
 import {
+  useId,
   useMemo,
   useRef,
   useState,
@@ -225,6 +226,7 @@ export function VisualReviewSurface({
   const activeTool = controlledActiveTool ?? internalTool
   const comparisonMode = controlledComparisonMode ?? internalComparisonMode
   const stageRef = useRef<HTMLDivElement>(null)
+  const arrowMarkerId = `visual-review-arrowhead-${useId().replaceAll(':', '')}`
 
   const openAnnotations = useMemo(
     () => annotations.filter((annotation) => annotation.status === 'open'),
@@ -423,7 +425,7 @@ export function VisualReviewSurface({
               onPointerCancel={() => setGesture(null)}
             >
               <defs>
-                <marker id="visual-review-arrowhead" markerWidth="0.025" markerHeight="0.025" refX="0.02" refY="0.0125" orient="auto" markerUnits="userSpaceOnUse">
+                <marker id={arrowMarkerId} markerWidth="0.025" markerHeight="0.025" refX="0.02" refY="0.0125" orient="auto" markerUnits="userSpaceOnUse">
                   <path d="M 0 0 L 0.025 0.0125 L 0 0.025 z" fill={ANNOTATION_COLOR} />
                 </marker>
               </defs>
@@ -446,7 +448,7 @@ export function VisualReviewSurface({
                       y1={annotation.geometry.start.y}
                       x2={annotation.geometry.end.x}
                       y2={annotation.geometry.end.y}
-                      markerEnd="url(#visual-review-arrowhead)"
+                      markerEnd={`url(#${arrowMarkerId})`}
                       vectorEffect="non-scaling-stroke"
                     />
                   )}
@@ -466,7 +468,7 @@ export function VisualReviewSurface({
                 <rect className="visual-review-draft" {...normalizedBoxFromPoints(gesture.start, gesture.current)} fill="transparent" vectorEffect="non-scaling-stroke" />
               )}
               {gesture?.tool === 'arrow' && (
-                <line className="visual-review-draft" x1={gesture.start.x} y1={gesture.start.y} x2={gesture.current.x} y2={gesture.current.y} markerEnd="url(#visual-review-arrowhead)" vectorEffect="non-scaling-stroke" />
+                <line className="visual-review-draft" x1={gesture.start.x} y1={gesture.start.y} x2={gesture.current.x} y2={gesture.current.y} markerEnd={`url(#${arrowMarkerId})`} vectorEffect="non-scaling-stroke" />
               )}
               {gesture?.tool === 'freehand' && (
                 <path className="visual-review-draft" d={pointsToSvgPath(gesture.points)} fill="none" vectorEffect="non-scaling-stroke" />

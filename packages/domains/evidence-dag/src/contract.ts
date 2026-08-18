@@ -167,6 +167,7 @@ export const evidenceDagUpdateOutputSchema = z.object({
 export const evidenceDagPriorityInputSchema = z.object({
   runtimeId: runtimeIdSchema,
   threadId: boundedIdSchema,
+  surfaceId: boundedIdSchema,
   visible: z.boolean(),
   workspaceRoot: z.string().trim().min(1).max(4_096).optional()
 }).strict()

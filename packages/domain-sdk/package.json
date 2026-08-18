@@ -16,6 +16,7 @@
     "./main": "./src/main.ts",
     "./package-storage": "./src/package-storage.ts",
     "./node/electron-node-executable": "./src/node/electron-node-executable.ts",
+    "./node/runtime-mcp-launcher": "./src/node/runtime-mcp-launcher.ts",
     "./node/workspace-paths": "./src/node/workspace-paths.ts",
     "./power": "./src/power.ts",
     "./portable-resource-references": "./src/portable-resource-references.ts",

@@ -11,6 +11,7 @@ import type {
   AgentRuntimeToolSessionContext,
   AgentRuntimeToolSurface
 } from '../agent-runtime/agent-tool-surface'
+import { modelVisibleAgentRuntimeToolFailure } from '../agent-runtime/agent-tool-surface'
 
 const DEFAULT_SERVER_NAME = 'sciforge_runtime_tools'
 const DEFAULT_SERVER_VERSION = '1.0.0'
@@ -62,7 +63,7 @@ export function createClaudeCodeAgentToolTransport(
         }, signal ? { signal } : {})
         return successfulToolResult(result.tool, result.value)
       } catch (error) {
-        return failedToolResult(error)
+        return failedToolResult(definition.name, error)
       }
     }
   ))
@@ -159,7 +160,7 @@ function successfulToolResult(toolName: string, value: unknown): CallToolResult 
   }
 }
 
-function failedToolResult(error: unknown): CallToolResult {
+function failedToolResult(toolName: string, error: unknown): CallToolResult {
   const message = error instanceof Error ? error.message : String(error)
   const code = errorCode(error)
   const record = recordValue(error)
@@ -179,7 +180,7 @@ function failedToolResult(error: unknown): CallToolResult {
     ...(typeof record.stateChanged === 'boolean' ? { stateChanged: record.stateChanged } : {})
   }
   return {
-    content: [{ type: 'text', text: `${code}: ${message}` }],
+    content: [{ type: 'text', text: modelVisibleAgentRuntimeToolFailure(toolName, error) }],
     structuredContent: { error: metadata },
     isError: true
   }

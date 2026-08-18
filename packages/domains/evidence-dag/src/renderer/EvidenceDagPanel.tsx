@@ -40,6 +40,7 @@ export type EvidenceDagPanelProps = Readonly<{
   className?: string
   onCollapse: () => void
   session: DomainWorkbenchRightPanelSession
+  surfaceId: string
   activation?: DomainWorkbenchRightPanelActivation
   client: EvidenceDagCapabilityClient
   workspacePreview?: DomainRendererWorkspacePreviewHost
@@ -106,6 +107,7 @@ export function EvidenceDagPanel({
   className = '',
   onCollapse,
   session,
+  surfaceId,
   activation,
   client,
   workspacePreview
@@ -184,16 +186,18 @@ export function EvidenceDagPanel({
     void client.priority({
       runtimeId: target.runtimeId,
       threadId: target.threadId,
+      surfaceId,
       visible: active && document.visibilityState === 'visible'
     }).catch(() => undefined)
     return () => {
       void client.priority({
         runtimeId: target.runtimeId!,
         threadId: target.threadId!,
+        surfaceId,
         visible: false
       }).catch(() => undefined)
     }
-  }, [active, client, target.runtimeId, target.threadId])
+  }, [active, client, surfaceId, target.runtimeId, target.threadId])
 
   useEffect(() => {
     if (!frameUrl) return
@@ -203,6 +207,7 @@ export function EvidenceDagPanel({
         frameWindow: iframeRef.current?.contentWindow ?? null,
         frameUrl,
         sessionId: session.id,
+        surfaceId,
         runtimeId: target.runtimeId,
         threadId: target.threadId,
         committedSnapshotDigest: committedDigest,
@@ -223,6 +228,7 @@ export function EvidenceDagPanel({
     committedDigest,
     frameUrl,
     session.id,
+    surfaceId,
     t,
     target.runtimeId,
     target.threadId,

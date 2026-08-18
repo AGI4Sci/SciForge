@@ -103,7 +103,12 @@ describe('CapabilityAgentToolSurface', () => {
           frame: { type: 'integer' },
           task: { type: 'string' },
           intent: { enum: ['describe', 'ocr', 'locate', 'quality-review'] },
-          capture: { enum: ['snapshot', 'region'] }
+          capture: { enum: ['snapshot', 'region'] },
+          timeoutMs: {
+            type: 'integer',
+            minimum: 30_000,
+            maximum: 600_000
+          }
         }
       })
     expect(surface.tools().find((tool) => tool.name === CAPABILITY_AGENT_TOOL_NAMES.look)?.inputSchema)

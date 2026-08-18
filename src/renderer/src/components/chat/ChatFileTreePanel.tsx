@@ -22,6 +22,7 @@ import {
   Image,
   Loader2,
   PanelRightClose,
+  PanelRightOpen,
   PencilLine,
   Plus,
   RefreshCw,
@@ -71,6 +72,7 @@ type Props = {
   selectedReferences?: ComposerFileReference[]
   className?: string
   onPreviewFile: (reference: AgentRuntimeWorkspaceReference) => void
+  onPreviewFileInNewPane?: (reference: AgentRuntimeWorkspaceReference) => void
   onAddReference: (reference: ComposerFileReference) => void
   onCollapse: () => void
 }
@@ -147,6 +149,7 @@ const ROOT_PATH = ''
 const IGNORED_DIRECTORY_NAMES = new Set(['.git', '.hg', '.svn', 'node_modules'])
 const FILE_TREE_CONTEXT_MENU_WIDTH = 206
 const FILE_TREE_CONTEXT_MENU_HEIGHT = 356
+const FILE_TREE_CONTEXT_MENU_ITEM_HEIGHT = 30
 
 function normalizePath(value: string): string {
   return value.trim().replaceAll('\\', '/').replace(/\/+/g, '/').replace(/\/+$/g, '')
@@ -380,6 +383,7 @@ export function ChatFileTreePanel({
   selectedReferences = [],
   className,
   onPreviewFile,
+  onPreviewFileInNewPane,
   onAddReference,
   onCollapse
 }: Props): ReactElement {
@@ -533,9 +537,12 @@ export function ChatFileTreePanel({
     event.preventDefault()
     event.stopPropagation()
     if (directory) setFocusedDirectoryPath(normalizePath(reference.relativePath))
+    const menuHeight = FILE_TREE_CONTEXT_MENU_HEIGHT + (
+      !directory && onPreviewFileInNewPane ? FILE_TREE_CONTEXT_MENU_ITEM_HEIGHT : 0
+    )
     setContextMenu({
       x: clamp(event.clientX, 8, window.innerWidth - FILE_TREE_CONTEXT_MENU_WIDTH - 8),
-      y: clamp(event.clientY, 8, window.innerHeight - FILE_TREE_CONTEXT_MENU_HEIGHT - 8),
+      y: clamp(event.clientY, 8, window.innerHeight - menuHeight - 8),
       reference,
       directory,
       expanded: expandedDirectory,
@@ -1252,6 +1259,11 @@ export function ChatFileTreePanel({
           onPreview={() => {
             if (contextMenu.reference) onPreviewFile(contextMenu.reference)
           }}
+          onPreviewInNewPane={onPreviewFileInNewPane
+            ? () => {
+                if (contextMenu.reference) onPreviewFileInNewPane(contextMenu.reference)
+              }
+            : undefined}
           onToggleDirectory={() => {
             if (contextMenu.reference) toggleDirectory(contextMenu.reference.relativePath)
           }}
@@ -1324,6 +1336,7 @@ function FileTreeContextMenu({
   onCreateFile,
   onCreateDirectory,
   onPreview,
+  onPreviewInNewPane,
   onToggleDirectory,
   onAddReference,
   onOpenEditor,
@@ -1347,6 +1360,7 @@ function FileTreeContextMenu({
   onCreateFile: () => void
   onCreateDirectory: () => void
   onPreview: () => void
+  onPreviewInNewPane?: () => void
   onToggleDirectory: () => void
   onAddReference: () => void
   onOpenEditor: () => void
@@ -1388,11 +1402,20 @@ function FileTreeContextMenu({
               onClick={() => run(onToggleDirectory)}
             />
           ) : (
-            <FileTreeContextMenuItem
-              icon={<Eye className="h-3.5 w-3.5" strokeWidth={1.8} />}
-              label={t('fileTreePreview')}
-              onClick={() => run(onPreview)}
-            />
+            <>
+              <FileTreeContextMenuItem
+                icon={<Eye className="h-3.5 w-3.5" strokeWidth={1.8} />}
+                label={t('fileTreePreview')}
+                onClick={() => run(onPreview)}
+              />
+              {onPreviewInNewPane ? (
+                <FileTreeContextMenuItem
+                  icon={<PanelRightOpen className="h-3.5 w-3.5" strokeWidth={1.8} />}
+                  label={t('fileTreePreviewInNewRightSidebar')}
+                  onClick={() => run(onPreviewInNewPane)}
+                />
+              ) : null}
+            </>
           )}
           <FileTreeContextMenuItem
             icon={selected

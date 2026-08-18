@@ -254,10 +254,11 @@ type AgentRuntimeCapabilities = {
 child/subagent 工作，并按 runtime 能力使用 multi-agent 链路。`maxParallel` 和
 共享 agent capability settings 共同决定同时运行容量。父 turn 没有额外的 child-run 总量预算；完成一批
 child 后可在同一 turn 继续委派。`AgentRuntimeHost` 是
-`delegate_task`、`subagent_status`、`subagent_wait`、`subagent_send` 和
-`subagent_cancel` 的唯一工具所有者，并使用 `packages/workers/multi-agent` 保存和调度
+`delegate_task`、`subagent_status`、`subagent_wait`、`subagent_send`、
+`subagent_cancel`、`subagent_resume` 和 `subagent_delete` 的唯一工具所有者，并使用
+`packages/workers/multi-agent` 保存和调度
 child run。Codex、Claude Code 以及后续 runtime 适配器只实现统一的
-`spawn/inspect/message/cancel` provider 契约；不得在 runtime 私有目录再注册另一套
+`spawn/resume/inspect/message/cancel/delete` provider 契约；不得在 runtime 私有目录再注册另一套
 delegation 工具或状态机。Provider 原生 child/workflow/subagent 事件仍可解析，但输出
 必须归一为同一 `AgentRuntimeChild` 形状。
 

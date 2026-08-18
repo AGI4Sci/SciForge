@@ -1,5 +1,8 @@
 import type { WorkspaceFileTarget } from '@shared/workspace-file'
-import type { DomainWorkbenchRightPanelActivation } from '@sciforge/domain-sdk/host'
+import type {
+  DomainWorkbenchRightPanelActivation,
+  DomainWorkbenchRightPanelTarget
+} from '@sciforge/domain-sdk/host'
 
 export const WORKSPACE_FILE_PREVIEW_EVENT = 'sciforge:workspace-file-preview'
 
@@ -10,11 +13,12 @@ export type WorkspaceFilePreviewReturnContext = {
   activation?: DomainWorkbenchRightPanelActivation
 }
 
-export type WorkspaceFilePreviewDetail = WorkspaceFileTarget & {
-  sessionId?: string
-  kind?: 'file' | 'directory'
-  returnTo?: WorkspaceFilePreviewReturnContext
-}
+export type WorkspaceFilePreviewDetail = WorkspaceFileTarget &
+  DomainWorkbenchRightPanelTarget & {
+    sessionId?: string
+    kind?: 'file' | 'directory'
+    returnTo?: WorkspaceFilePreviewReturnContext
+  }
 
 export function previewWorkspaceFile(target: WorkspaceFilePreviewDetail): void {
   window.dispatchEvent(

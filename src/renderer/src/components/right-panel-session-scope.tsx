@@ -1,6 +1,7 @@
 import { createContext, useContext, type ReactElement, type ReactNode } from 'react'
 
 const RightPanelSessionContext = createContext<string | null>(null)
+const RightPanelSurfaceContext = createContext<string | null>(null)
 
 export function RightPanelSessionScope({
   sessionId,
@@ -18,4 +19,22 @@ export function RightPanelSessionScope({
 
 export function useRightPanelSessionId(): string | null {
   return useContext(RightPanelSessionContext)
+}
+
+export function RightPanelSurfaceScope({
+  surfaceId,
+  children
+}: {
+  surfaceId: string
+  children: ReactNode
+}): ReactElement {
+  return (
+    <RightPanelSurfaceContext.Provider value={surfaceId}>
+      {children}
+    </RightPanelSurfaceContext.Provider>
+  )
+}
+
+export function useRightPanelSurfaceId(): string | null {
+  return useContext(RightPanelSurfaceContext)
 }

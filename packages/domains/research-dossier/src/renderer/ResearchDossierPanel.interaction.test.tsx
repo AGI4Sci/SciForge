@@ -480,6 +480,7 @@ async function mountPanel(
         session={sessionValue}
         active
         onCollapse={() => undefined}
+        surfaceId="surface-dossier-a"
       />
     )
     await tick()

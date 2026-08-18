@@ -250,22 +250,19 @@ describe('createCodexAgentRuntimeAdapter', () => {
     })
   })
 
-  it('reports shared computer-use MCP capability for Codex', async () => {
+  it('leaves Computer Use discovery to the managed capability broker', async () => {
     const adapter = createCodexAgentRuntimeAdapter({
       isMcpConfigured: () => true,
-      isResearchMcpConfigured: () => false,
-      isComputerUseMcpConfigured: () => true
+      isResearchMcpConfigured: () => false
     } as never)
 
     const caps = await adapter.capabilities({ settings: {} as never })
     expect(caps.tools.mcp).toMatchObject({
-      available: true,
-      toolCount: 1
+      available: true
     })
     expect(caps.tools.computerUse).toMatchObject({
-      available: true,
-      server: 'mcp',
-      toolName: 'computer_use'
+      available: false,
+      reason: 'Computer Use is exposed through the managed capability broker.'
     })
     expect(caps.tools.research).toMatchObject({
       available: false
@@ -274,14 +271,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
     await expect(adapter.auxiliary!({ settings: {} as never }, {
       runtimeId: 'codex',
       operation: 'getToolDiagnostics'
-    })).resolves.toMatchObject({
-      mcpServers: [{
-        id: 'gui_owl_computer_use',
-        status: 'configured',
-        toolCount: 1,
-        tools: ['computer_use']
-      }]
-    })
+    })).resolves.toMatchObject({ mcpServers: [] })
   })
 
   it('surfaces bounded path-safe dynamic MCP unavailable-tool lifecycle diagnostics', async () => {
@@ -1325,6 +1315,18 @@ describe('createCodexAgentRuntimeAdapter', () => {
             status: 'running',
             parentThreadId: 'other-thread',
             threadSource: 'subagent'
+          },
+          {
+            id: 'deleted-native-child',
+            title: 'Deleted child',
+            updatedAt: '2026-06-21T00:00:03.000Z',
+            model: 'gpt-5',
+            mode: 'agent',
+            archived: true,
+            parentThreadId: 'parent-thread',
+            parentTurnId: 'turn-1',
+            relation: 'side' as const,
+            threadSource: 'subagent'
           }
         ]
       })),
@@ -1351,7 +1353,9 @@ describe('createCodexAgentRuntimeAdapter', () => {
       payload: { threadId: 'parent-thread', parentTurnId: 'turn-1' }
     })
 
-    expect(service.listThreads).toHaveBeenCalledWith({ includeArchived: true, includeSide: true })
+    expect(service.listThreads).toHaveBeenCalledWith({ includeSide: true })
+    expect((listed as { children: Array<{ id: string }> }).children.map((child) => child.id))
+      .not.toContain('deleted-native-child')
     expect(listed).toMatchObject({
       runtimeId: 'codex',
       threadId: 'parent-thread',

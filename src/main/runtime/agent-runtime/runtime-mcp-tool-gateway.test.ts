@@ -7,6 +7,56 @@ import {
 } from './runtime-mcp-tool-gateway'
 
 describe('runtime MCP tool gateway', () => {
+  it('injects trusted invocation metadata only for the declared server and tool', async () => {
+    const computerUseCall = vi.fn(async () => ({ content: [] }))
+    const otherCall = vi.fn(async () => ({ content: [] }))
+    const bridge = createRuntimeMcpToolGateway({
+      servers: [
+        { id: 'computer-use', command: '/bin/cua', enabledTools: ['computer_use'] },
+        { id: 'other', command: '/bin/other', enabledTools: ['computer_use'] }
+      ],
+      trustedInvocationMetadata: [{
+        serverId: 'computer-use', tools: ['computer_use'],
+        metadataKey: 'io.sciforge/computer-use-invocation', source: 'trusted-invocation'
+      }],
+      clientFactory: async (server) => fakeMcpClient({
+        tools: [{ name: 'computer_use', inputSchema: { type: 'object' } }],
+        callTool: server.id === 'computer-use' ? computerUseCall : otherCall
+      })
+    })
+    const trustedInvocation = {
+      requestId: 'request-1', runtimeId: 'codex', threadId: 'thread-1',
+      turnId: 'turn-1', actionId: 'managed:computer-use', approval: 'confirmation' as const
+    }
+    await bridge.callTool({
+      requestId: 'request-1', namespace: 'mcp_computer-use', tool: 'computer_use',
+      arguments: { semanticAction: { kind: 'observe' } }, trustedInvocation
+    })
+    await bridge.callTool({
+      requestId: 'request-2', namespace: 'mcp_other', tool: 'computer_use',
+      arguments: { semanticAction: { kind: 'observe' } }, trustedInvocation
+    })
+    expect(computerUseCall).toHaveBeenCalledWith({
+      name: 'computer_use',
+      arguments: { semanticAction: { kind: 'observe' } },
+      _meta: { 'io.sciforge/computer-use-invocation': trustedInvocation }
+    }, expect.any(Object))
+    expect(otherCall).toHaveBeenCalledWith({
+      name: 'computer_use', arguments: { semanticAction: { kind: 'observe' } }
+    }, expect.any(Object))
+  })
+
+  it('rejects duplicate trusted metadata bindings before starting a provider', () => {
+    const binding = {
+      serverId: 'computer-use', tools: ['computer_use'],
+      metadataKey: 'io.sciforge/computer-use-invocation', source: 'trusted-invocation' as const
+    }
+    expect(() => createRuntimeMcpToolGateway({
+      servers: [{ id: 'computer-use', command: '/bin/cua' }],
+      trustedInvocationMetadata: [binding, binding]
+    })).toThrow(/Duplicate trusted invocation metadata key/u)
+  })
+
   it('advertises MCP tools as runtime tool definitions', async () => {
     const client = fakeMcpClient({
       tools: [

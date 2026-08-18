@@ -1,6 +1,5 @@
-import type { PointerEvent as ReactPointerEvent, SetStateAction } from 'react'
+import type { PointerEvent as ReactPointerEvent } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { WorkspaceFileTarget } from '@shared/workspace-file'
 import type {
   DomainRendererWorkbenchSurfaceActivation
 } from '@sciforge/domain-sdk/renderer'
@@ -13,20 +12,24 @@ import {
   writeBrowserStorageItem
 } from '../lib/browser-storage'
 import {
-  type WorkspaceFilePreviewReturnContext
-} from '../lib/workspace-file-preview'
-import type { RightPanelMode } from './chat/WorkbenchTopBar'
-import {
-  SESSION_RIGHT_PANEL_DEFAULT_WIDTH,
-  createSessionRightPanelWorkspace,
-  discardSessionRightPanelResource,
+  SESSION_RIGHT_PANEL_MIN_WIDTH,
+  addSessionRightPanelPane,
+  closeSessionRightPanelPane,
   ensureSessionRightPanelWorkspace,
+  focusSessionRightPanelPane,
+  focusedSessionRightPanelPane,
   moveSessionRightPanelWorkspaceOwner,
-  navigateSessionRightPanelHistory,
+  navigateSessionRightPanelPaneHistory,
+  placeSessionRightPanelPane,
+  rebindSessionRightPanelPane,
+  sessionRightPanelPaneById,
   sessionRightPanelWorkspaceList,
-  toggleSessionRightPanelMode,
-  updateSessionRightPanelWorkspace,
-  type SessionRightPanelWorkspacePatch,
+  setSessionRightPanelPaneWidth,
+  splitSessionRightPanelPane,
+  updateSessionRightPanelPane,
+  type SessionRightPanelPaneBinding,
+  type SessionRightPanelPanePatch,
+  type SessionRightPanelPlacement,
   type SessionRightPanelWorkspaceMap
 } from './session-right-panel-workspaces'
 import {
@@ -41,10 +44,8 @@ const LEFT_PANEL_DEFAULT = 304
 export const CODE_PANEL_PREFERRED = 560
 const LEFT_PANEL_MIN = 280
 const LEFT_PANEL_MAX = 480
-const RIGHT_PANEL_MIN = 300
-const RIGHT_PANEL_MAX = Number.POSITIVE_INFINITY
+export const WORKBENCH_MAIN_SURFACE_MIN_WIDTH = 360
 const SIDEBAR_HARD_MIN = 180
-const MAIN_MIN_WIDTH = 0
 const PANEL_RESIZE_HANDLE_WIDTH = 7
 const BOTTOM_PANEL_HEIGHT_DEFAULT = 360
 const BOTTOM_PANEL_HEIGHT_MIN = 220
@@ -82,82 +83,82 @@ function persistBoolean(key: string, value: boolean): void {
   writeBrowserStorageItem(key, value ? '1' : '0')
 }
 
+export function normalizeRightPanelPaneWidth(width: number): number {
+  return Number.isFinite(width)
+    ? Math.max(SESSION_RIGHT_PANEL_MIN_WIDTH, width)
+    : SESSION_RIGHT_PANEL_MIN_WIDTH
+}
+
+export type RightPanelPaneResizeEdge = 'start' | 'end'
+
+export function rightPanelPaneWidthFromPointerDelta(
+  startWidth: number,
+  deltaX: number,
+  edge: RightPanelPaneResizeEdge
+): number {
+  return normalizeRightPanelPaneWidth(
+    startWidth + (edge === 'start' ? -deltaX : deltaX)
+  )
+}
+
 export function fitWorkbenchWidths(
   containerWidth: number,
   leftWidth: number,
-  rightWidth: number,
-  panels: { leftPanelVisible: boolean; rightPanelVisible: boolean }
-): { left: number; right: number } {
-  const handleWidth =
-    (panels.leftPanelVisible ? PANEL_RESIZE_HANDLE_WIDTH : 0) +
-    (panels.rightPanelVisible ? PANEL_RESIZE_HANDLE_WIDTH : 0)
-  const usableWidth = Math.max(0, containerWidth - handleWidth)
+  rightPaneWidths: readonly number[],
+  panels: { leftPanelVisible: boolean }
+): { left: number; rightDockViewport: number; rightDockContent: number } {
+  const rightPanelVisible = rightPaneWidths.length > 0
+  const rightDockContent = rightPaneWidths.reduce(
+    (total, width) =>
+      total + PANEL_RESIZE_HANDLE_WIDTH + normalizeRightPanelPaneWidth(width),
+    0
+  )
+  const handleWidth = panels.leftPanelVisible ? PANEL_RESIZE_HANDLE_WIDTH : 0
+  const normalizedContainerWidth = Number.isFinite(containerWidth)
+    ? Math.max(0, containerWidth)
+    : 0
+  const usableWidth = Math.max(0, normalizedContainerWidth - handleWidth)
+  const availableSides = Math.max(
+    0,
+    usableWidth - Math.min(WORKBENCH_MAIN_SURFACE_MIN_WIDTH, usableWidth)
+  )
 
   if (!panels.leftPanelVisible) {
-    if (!panels.rightPanelVisible) {
-      return {
-        left: clampWidth(leftWidth, LEFT_PANEL_MIN, LEFT_PANEL_MAX),
-        right: clampWidth(rightWidth, RIGHT_PANEL_MIN, RIGHT_PANEL_MAX)
-      }
-    }
-    const safeContainer = Math.max(usableWidth, MAIN_MIN_WIDTH + SIDEBAR_HARD_MIN)
-    const rightFloor =
-      safeContainer - MAIN_MIN_WIDTH >= RIGHT_PANEL_MIN ? RIGHT_PANEL_MIN : SIDEBAR_HARD_MIN
-    const rightCeil = Math.min(
-      RIGHT_PANEL_MAX,
-      Math.max(rightFloor, safeContainer - MAIN_MIN_WIDTH)
-    )
     return {
       left: clampWidth(leftWidth, LEFT_PANEL_MIN, LEFT_PANEL_MAX),
-      right: clampWidth(rightWidth, rightFloor, rightCeil)
+      rightDockViewport: Math.min(rightDockContent, availableSides),
+      rightDockContent
     }
   }
 
-  const safeContainer = Math.max(
-    usableWidth,
-    MAIN_MIN_WIDTH + SIDEBAR_HARD_MIN + (panels.rightPanelVisible ? SIDEBAR_HARD_MIN : 0)
-  )
-  if (!panels.rightPanelVisible) {
-    const leftFloor =
-      safeContainer - MAIN_MIN_WIDTH >= LEFT_PANEL_MIN ? LEFT_PANEL_MIN : SIDEBAR_HARD_MIN
-    const leftCeil = Math.min(
-      LEFT_PANEL_MAX,
-      Math.max(leftFloor, safeContainer - MAIN_MIN_WIDTH)
-    )
+  if (!rightPanelVisible) {
+    const leftFloor = availableSides >= LEFT_PANEL_MIN
+      ? LEFT_PANEL_MIN
+      : Math.min(SIDEBAR_HARD_MIN, availableSides)
+    const leftCeil = Math.min(LEFT_PANEL_MAX, availableSides)
     return {
-      left: clampWidth(leftWidth, leftFloor, leftCeil),
-      right: clampWidth(rightWidth, RIGHT_PANEL_MIN, RIGHT_PANEL_MAX)
+      left: clampWidth(leftWidth, leftFloor, Math.max(leftFloor, leftCeil)),
+      rightDockViewport: 0,
+      rightDockContent
     }
   }
 
-  const availableSides = Math.max(
-    SIDEBAR_HARD_MIN * 2,
-    safeContainer - MAIN_MIN_WIDTH
-  )
-  const leftFloor =
-    availableSides - SIDEBAR_HARD_MIN >= LEFT_PANEL_MIN ? LEFT_PANEL_MIN : SIDEBAR_HARD_MIN
-  const rightFloor =
-    availableSides - SIDEBAR_HARD_MIN >= RIGHT_PANEL_MIN ? RIGHT_PANEL_MIN : SIDEBAR_HARD_MIN
+  const dockFloor = Math.min(SIDEBAR_HARD_MIN, rightDockContent, availableSides)
+  const leftCapacity = Math.max(0, availableSides - dockFloor)
+  const leftFloor = leftCapacity >= LEFT_PANEL_MIN
+    ? LEFT_PANEL_MIN
+    : Math.min(SIDEBAR_HARD_MIN, leftCapacity)
+  const leftCeil = Math.min(LEFT_PANEL_MAX, leftCapacity)
+  const nextLeft = clampWidth(leftWidth, leftFloor, Math.max(leftFloor, leftCeil))
 
-  let nextLeft = clampWidth(leftWidth, leftFloor, LEFT_PANEL_MAX)
-  let nextRight = clampWidth(rightWidth, rightFloor, RIGHT_PANEL_MAX)
-
-  if (nextLeft + nextRight > availableSides) {
-    const overflow = nextLeft + nextRight - availableSides
-    const rightShrink = Math.min(overflow, nextRight - rightFloor)
-    nextRight -= rightShrink
-    const remaining = overflow - rightShrink
-    if (remaining > 0) {
-      nextLeft = Math.max(leftFloor, nextLeft - remaining)
-    }
+  return {
+    left: nextLeft,
+    rightDockViewport: Math.min(
+      rightDockContent,
+      Math.max(0, availableSides - nextLeft)
+    ),
+    rightDockContent
   }
-
-  const maxLeft = Math.min(LEFT_PANEL_MAX, availableSides - rightFloor)
-  nextLeft = clampWidth(nextLeft, leftFloor, Math.max(leftFloor, maxLeft))
-  const maxRight = Math.min(RIGHT_PANEL_MAX, availableSides - nextLeft)
-  nextRight = clampWidth(nextRight, rightFloor, Math.max(rightFloor, maxRight))
-
-  return { left: nextLeft, right: nextRight }
 }
 
 export function useWorkbenchLayout({
@@ -170,7 +171,7 @@ export function useWorkbenchLayout({
     useState<SessionRightPanelWorkspaceMap>({})
   const rightPanelWorkspaceMapRef = useRef(rightPanelWorkspaceMap)
   rightPanelWorkspaceMapRef.current = rightPanelWorkspaceMap
-  const [leftSidebarWidth, setLeftSidebarWidth] = useState(() =>
+  const [preferredLeftSidebarWidth, setPreferredLeftSidebarWidth] = useState(() =>
     readStoredWidth(LEFT_PANEL_WIDTH_KEY, LEFT_PANEL_DEFAULT)
   )
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(() =>
@@ -181,16 +182,42 @@ export function useWorkbenchLayout({
   const [bottomPanelHeight, setBottomPanelHeight] = useState(() =>
     readStoredWidth(BOTTOM_PANEL_HEIGHT_KEY, BOTTOM_PANEL_HEIGHT_DEFAULT)
   )
+  const [workbenchContainerWidth, setWorkbenchContainerWidth] = useState(() =>
+    typeof window === 'undefined' ? 0 : window.innerWidth
+  )
   const shellRef = useRef<HTMLDivElement | null>(null)
   const disposedSessionIdsRef = useRef(new Set<string>())
   const activeRightPanelWorkspace = normalizedActiveSessionId
-    ? rightPanelWorkspaceMap[normalizedActiveSessionId] ?? createSessionRightPanelWorkspace(normalizedActiveSessionId)
+    ? rightPanelWorkspaceMap[normalizedActiveSessionId] ?? null
     : null
-  const rightPanelMode = activeRightPanelWorkspace?.mode ?? null
-  const filePreviewTarget = activeRightPanelWorkspace?.filePreviewTarget ?? null
-  const filePreviewReturnContext = activeRightPanelWorkspace?.filePreviewReturnContext ?? null
-  const rightSidebarWidth = activeRightPanelWorkspace?.width ?? SESSION_RIGHT_PANEL_DEFAULT_WIDTH
-  const rightPanelVisible = rightPanelMode !== null
+  const focusedRightPanelPane = focusedSessionRightPanelPane(activeRightPanelWorkspace)
+  const focusedRightPanelMode = focusedRightPanelPane?.mode ?? null
+  const focusedFilePreviewTarget = focusedRightPanelPane?.filePreviewTarget ?? null
+  const focusedFilePreviewReturnContext =
+    focusedRightPanelPane?.filePreviewReturnContext ?? null
+  const focusedRightPanelPaneWidth = focusedRightPanelPane?.width ?? null
+  const rightPanelVisible = Boolean(activeRightPanelWorkspace?.panes.length)
+  const rightPanelPaneWidths = useMemo(
+    () => activeRightPanelWorkspace?.panes.map((pane) => pane.width) ?? [],
+    [activeRightPanelWorkspace]
+  )
+  const horizontalLayout = useMemo(
+    () => fitWorkbenchWidths(
+      workbenchContainerWidth,
+      preferredLeftSidebarWidth,
+      rightPanelPaneWidths,
+      { leftPanelVisible: !leftSidebarCollapsed }
+    ),
+    [
+      leftSidebarCollapsed,
+      preferredLeftSidebarWidth,
+      rightPanelPaneWidths,
+      workbenchContainerWidth
+    ]
+  )
+  const leftSidebarWidth = horizontalLayout.left
+  const rightPanelDockViewportWidth = horizontalLayout.rightDockViewport
+  const rightPanelDockContentWidth = horizontalLayout.rightDockContent
   const activeBottomPanelState = normalizedActiveSessionId
     ? bottomPanelBySession[normalizedActiveSessionId]
     : undefined
@@ -245,77 +272,115 @@ export function useWorkbenchLayout({
     })
   }), [])
 
-  const updateRightPanelWorkspace = useCallback((
+  const updateRightPanelPaneForSession = useCallback((
     sessionId: string,
-    patch: SessionRightPanelWorkspacePatch,
+    paneId: string,
+    patch: SessionRightPanelPanePatch,
     options?: { recordHistory?: boolean }
   ): void => {
     if (disposedSessionIdsRef.current.has(sessionId)) return
     setRightPanelWorkspaceMap((current) =>
-      updateSessionRightPanelWorkspace(current, sessionId, patch, options)
+      updateSessionRightPanelPane(current, sessionId, paneId, patch, options)
     )
   }, [])
 
-  const setRightPanelModeForSession = useCallback((sessionId: string, mode: RightPanelMode): void => {
-    updateRightPanelWorkspace(sessionId, { mode })
-  }, [updateRightPanelWorkspace])
-
-  const setRightPanelMode = useCallback((value: SetStateAction<RightPanelMode>): void => {
-    if (!normalizedActiveSessionId || disposedSessionIdsRef.current.has(normalizedActiveSessionId)) return
-    setRightPanelWorkspaceMap((current) => {
-      const ensured = ensureSessionRightPanelWorkspace(current, normalizedActiveSessionId)
-      const mode = typeof value === 'function' ? value(ensured[normalizedActiveSessionId].mode) : value
-      return updateSessionRightPanelWorkspace(ensured, normalizedActiveSessionId, { mode })
-    })
-  }, [normalizedActiveSessionId])
-
-  const setFilePreviewTargetForSession = useCallback((
+  const addRightPanelPaneForSession = useCallback((
     sessionId: string,
-    target: WorkspaceFileTarget | null
+    binding: SessionRightPanelPaneBinding,
+    options?: {
+      afterPaneId?: string | null
+      focus?: boolean
+      width?: number
+    }
   ): void => {
-    updateRightPanelWorkspace(sessionId, { filePreviewTarget: target })
-  }, [updateRightPanelWorkspace])
+    if (disposedSessionIdsRef.current.has(sessionId)) return
+    setRightPanelWorkspaceMap((current) =>
+      addSessionRightPanelPane(current, sessionId, binding, options)
+    )
+  }, [])
 
-  const setFilePreviewTarget = useCallback((target: WorkspaceFileTarget | null): void => {
-    if (normalizedActiveSessionId) setFilePreviewTargetForSession(normalizedActiveSessionId, target)
-  }, [normalizedActiveSessionId, setFilePreviewTargetForSession])
-
-  const setFilePreviewReturnContextForSession = useCallback((
+  const placeRightPanelPaneForSession = useCallback((
     sessionId: string,
-    context: WorkspaceFilePreviewReturnContext | null
+    binding: SessionRightPanelPaneBinding,
+    placement: SessionRightPanelPlacement = 'focused',
+    options?: { recordHistory?: boolean; width?: number }
   ): void => {
-    updateRightPanelWorkspace(sessionId, { filePreviewReturnContext: context })
-  }, [updateRightPanelWorkspace])
+    if (disposedSessionIdsRef.current.has(sessionId)) return
+    setRightPanelWorkspaceMap((current) =>
+      placeSessionRightPanelPane(current, sessionId, binding, placement, options)
+    )
+  }, [])
 
-  const setFilePreviewReturnContext = useCallback((
-    context: WorkspaceFilePreviewReturnContext | null
-  ): void => {
-    if (normalizedActiveSessionId) setFilePreviewReturnContextForSession(normalizedActiveSessionId, context)
-  }, [normalizedActiveSessionId, setFilePreviewReturnContextForSession])
-
-  const setRightSidebarWidthForSession = useCallback((
+  const focusRightPanelPaneForSession = useCallback((
     sessionId: string,
+    paneId: string
+  ): void => {
+    if (disposedSessionIdsRef.current.has(sessionId)) return
+    setRightPanelWorkspaceMap((current) =>
+      focusSessionRightPanelPane(current, sessionId, paneId)
+    )
+  }, [])
+
+  const splitRightPanelPaneForSession = useCallback((
+    sessionId: string,
+    paneId: string
+  ): void => {
+    if (disposedSessionIdsRef.current.has(sessionId)) return
+    setRightPanelWorkspaceMap((current) =>
+      splitSessionRightPanelPane(current, sessionId, paneId)
+    )
+  }, [])
+
+  const closeRightPanelPaneForSession = useCallback((
+    sessionId: string,
+    paneId: string
+  ): void => {
+    if (disposedSessionIdsRef.current.has(sessionId)) return
+    setRightPanelWorkspaceMap((current) =>
+      closeSessionRightPanelPane(current, sessionId, paneId)
+    )
+  }, [])
+
+  const rebindRightPanelPaneForSession = useCallback((
+    sessionId: string,
+    paneId: string,
+    binding: SessionRightPanelPaneBinding,
+    options?: { recordHistory?: boolean }
+  ): void => {
+    if (disposedSessionIdsRef.current.has(sessionId)) return
+    setRightPanelWorkspaceMap((current) =>
+      rebindSessionRightPanelPane(current, sessionId, paneId, binding, options)
+    )
+  }, [])
+
+  const navigateRightPanelPaneHistoryForSession = useCallback((
+    sessionId: string,
+    paneId: string,
+    offset: -1 | 1
+  ): void => {
+    if (disposedSessionIdsRef.current.has(sessionId)) return
+    setRightPanelWorkspaceMap((current) =>
+      navigateSessionRightPanelPaneHistory(current, sessionId, paneId, offset)
+    )
+  }, [])
+
+  const setRightPanelPaneWidthForSession = useCallback((
+    sessionId: string,
+    paneId: string,
     value: number | ((current: number) => number)
   ): void => {
     if (disposedSessionIdsRef.current.has(sessionId)) return
     setRightPanelWorkspaceMap((current) => {
-      const ensured = ensureSessionRightPanelWorkspace(current, sessionId)
-      const width = ensured[sessionId]?.width ?? SESSION_RIGHT_PANEL_DEFAULT_WIDTH
-      return updateSessionRightPanelWorkspace(ensured, sessionId, {
-        width: typeof value === 'function' ? value(width) : value
-      }, { recordHistory: false })
+      const pane = sessionRightPanelPaneById(current[sessionId], paneId)
+      if (!pane) return current
+      const nextWidth = typeof value === 'function' ? value(pane.width) : value
+      return setSessionRightPanelPaneWidth(current, sessionId, paneId, nextWidth)
     })
   }, [])
 
-  const setRightSidebarWidth = useCallback((
-    value: number | ((current: number) => number)
-  ): void => {
-    if (normalizedActiveSessionId) setRightSidebarWidthForSession(normalizedActiveSessionId, value)
-  }, [normalizedActiveSessionId, setRightSidebarWidthForSession])
-
   useEffect(() => {
-    persistWidth(LEFT_PANEL_WIDTH_KEY, leftSidebarWidth)
-  }, [leftSidebarWidth])
+    persistWidth(LEFT_PANEL_WIDTH_KEY, preferredLeftSidebarWidth)
+  }, [preferredLeftSidebarWidth])
 
   useEffect(() => {
     persistBoolean(LEFT_PANEL_COLLAPSED_KEY, leftSidebarCollapsed)
@@ -328,56 +393,25 @@ export function useWorkbenchLayout({
   useLayoutEffect(() => {
     const sync = (): void => {
       const containerWidth = shellRef.current?.clientWidth ?? window.innerWidth
-      const next = fitWorkbenchWidths(
-        containerWidth,
-        leftSidebarWidth,
-        rightSidebarWidth,
-        {
-          leftPanelVisible: !leftSidebarCollapsed,
-          rightPanelVisible
-        }
+      setWorkbenchContainerWidth((current) =>
+        current === containerWidth ? current : containerWidth
       )
-      if (next.left !== leftSidebarWidth) setLeftSidebarWidth(next.left)
-      if (next.right !== rightSidebarWidth) setRightSidebarWidth(next.right)
     }
     sync()
+    const observer = typeof ResizeObserver === 'undefined' || !shellRef.current
+      ? null
+      : new ResizeObserver(sync)
+    if (shellRef.current) observer?.observe(shellRef.current)
     window.addEventListener('resize', sync)
-    return () => window.removeEventListener('resize', sync)
-  }, [leftSidebarCollapsed, leftSidebarWidth, rightPanelVisible, rightSidebarWidth, setRightSidebarWidth])
-
-  const toggleRightPanelMode = (nextMode: Exclude<RightPanelMode, null>): void => {
-    if (!normalizedActiveSessionId || disposedSessionIdsRef.current.has(normalizedActiveSessionId)) return
-    setRightPanelWorkspaceMap((current) => toggleSessionRightPanelMode(current, normalizedActiveSessionId, nextMode))
-  }
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', sync)
+    }
+  }, [])
 
   const toggleLeftSidebar = (): void => {
     setLeftSidebarCollapsed((current) => !current)
   }
-
-  const navigateRightPanelHistory = useCallback((offset: -1 | 1): void => {
-    if (!normalizedActiveSessionId || disposedSessionIdsRef.current.has(normalizedActiveSessionId)) return
-    setRightPanelWorkspaceMap((current) =>
-      navigateSessionRightPanelHistory(current, normalizedActiveSessionId, offset)
-    )
-  }, [normalizedActiveSessionId])
-
-  const discardRightPanelResourceForSession = useCallback((
-    sessionId: string,
-    mode: 'file',
-    resourceId: string
-  ): void => {
-    if (disposedSessionIdsRef.current.has(sessionId)) return
-    setRightPanelWorkspaceMap((current) =>
-      discardSessionRightPanelResource(current, sessionId, mode, resourceId)
-    )
-  }, [])
-
-  const discardRightPanelResource = useCallback((
-    mode: 'file',
-    resourceId: string
-  ): void => {
-    if (normalizedActiveSessionId) discardRightPanelResourceForSession(normalizedActiveSessionId, mode, resourceId)
-  }, [normalizedActiveSessionId, discardRightPanelResourceForSession])
 
   const beginLeftResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (leftSidebarCollapsed || event.button !== 0) return
@@ -385,7 +419,6 @@ export function useWorkbenchLayout({
     event.stopPropagation()
     const startX = event.clientX
     const startLeft = leftSidebarWidth
-    const startRight = rightSidebarWidth
     const target = event.currentTarget
     const pointerId = event.pointerId
     try {
@@ -404,14 +437,10 @@ export function useWorkbenchLayout({
       const next = fitWorkbenchWidths(
         containerWidth,
         startLeft + delta,
-        startRight,
-        {
-          leftPanelVisible: true,
-          rightPanelVisible
-        }
+        rightPanelPaneWidths,
+        { leftPanelVisible: true }
       )
-      setLeftSidebarWidth(next.left)
-      if (next.right !== rightSidebarWidth) setRightSidebarWidth(next.right)
+      setPreferredLeftSidebarWidth(next.left)
     }
 
     const onUp = (): void => {
@@ -432,13 +461,21 @@ export function useWorkbenchLayout({
     window.addEventListener('pointercancel', onUp)
   }
 
-  const beginRightResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (event.button !== 0 || !rightPanelVisible) return
+  const beginRightPanelPaneResize = useCallback((
+    sessionId: string,
+    paneId: string,
+    event: ReactPointerEvent<HTMLDivElement>,
+    edge: RightPanelPaneResizeEdge = 'start'
+  ): void => {
+    const pane = sessionRightPanelPaneById(
+      rightPanelWorkspaceMapRef.current[sessionId],
+      paneId
+    )
+    if (event.button !== 0 || !pane || disposedSessionIdsRef.current.has(sessionId)) return
     event.preventDefault()
     event.stopPropagation()
     const startX = event.clientX
-    const startLeft = leftSidebarWidth
-    const startRight = rightSidebarWidth
+    const startWidth = pane.width
     const target = event.currentTarget
     const pointerId = event.pointerId
     try {
@@ -452,19 +489,12 @@ export function useWorkbenchLayout({
     document.body.style.userSelect = 'none'
 
     const onMove = (moveEvent: PointerEvent): void => {
-      const containerWidth = shellRef.current?.clientWidth ?? window.innerWidth
       const delta = moveEvent.clientX - startX
-      const next = fitWorkbenchWidths(
-        containerWidth,
-        startLeft,
-        startRight - delta,
-        {
-          leftPanelVisible: !leftSidebarCollapsed,
-          rightPanelVisible: true
-        }
+      setRightPanelPaneWidthForSession(
+        sessionId,
+        paneId,
+        rightPanelPaneWidthFromPointerDelta(startWidth, delta, edge)
       )
-      if (next.left !== leftSidebarWidth) setLeftSidebarWidth(next.left)
-      setRightSidebarWidth(next.right)
     }
 
     const onUp = (): void => {
@@ -483,7 +513,7 @@ export function useWorkbenchLayout({
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
     window.addEventListener('pointercancel', onUp)
-  }
+  }, [setRightPanelPaneWidthForSession])
 
   const beginBottomPanelResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (event.button !== 0 || !bottomPanelContributionId) return
@@ -564,44 +594,43 @@ export function useWorkbenchLayout({
     })
   }, [normalizedActiveSessionId])
 
-  const activeHistory = activeRightPanelWorkspace?.history ?? { entries: [], index: -1 }
+  const focusedHistory = focusedRightPanelPane?.history ?? { entries: [], index: -1 }
 
   return {
+    activeRightPanelWorkspace,
+    addRightPanelPaneForSession,
     beginLeftResize,
-    beginRightResize,
+    beginRightPanelPaneResize,
     beginBottomPanelResize,
     bottomPanelActivation,
     bottomPanelContributionId,
     bottomPanelHeight,
+    canNavigateFocusedRightPanelBack: focusedHistory.index > 0,
+    canNavigateFocusedRightPanelForward:
+      focusedHistory.index >= 0 &&
+      focusedHistory.index < focusedHistory.entries.length - 1,
     closeBottomPanel,
-    discardRightPanelResource,
-    discardRightPanelResourceForSession,
-    filePreviewReturnContext,
-    filePreviewTarget,
+    closeRightPanelPaneForSession,
+    focusedFilePreviewReturnContext,
+    focusedFilePreviewTarget,
+    focusedRightPanelMode,
+    focusedRightPanelPane,
+    focusedRightPanelPaneWidth,
+    focusRightPanelPaneForSession,
     leftSidebarCollapsed,
     leftSidebarWidth,
-    canNavigateRightPanelBack: activeHistory.index > 0,
-    canNavigateRightPanelForward:
-      activeHistory.index >= 0 &&
-      activeHistory.index < activeHistory.entries.length - 1,
-    navigateRightPanelBack: () => navigateRightPanelHistory(-1),
-    navigateRightPanelForward: () => navigateRightPanelHistory(1),
-    rightPanelMode,
+    navigateRightPanelPaneHistoryForSession,
+    placeRightPanelPaneForSession,
+    rebindRightPanelPaneForSession,
+    rightPanelDockContentWidth,
+    rightPanelDockViewportWidth,
     rightPanelWorkspaces,
     rightPanelVisible,
-    rightSidebarWidth,
-    setFilePreviewTarget,
-    setFilePreviewTargetForSession,
-    setFilePreviewReturnContext,
-    setFilePreviewReturnContextForSession,
-    setRightPanelMode,
-    setRightPanelModeForSession,
-    setRightSidebarWidth,
-    setRightSidebarWidthForSession,
+    setRightPanelPaneWidthForSession,
     shellRef,
     openBottomPanelForSession,
+    splitRightPanelPaneForSession,
     toggleLeftSidebar,
-    toggleRightPanelMode,
-    updateRightPanelWorkspace
+    updateRightPanelPaneForSession
   }
 }

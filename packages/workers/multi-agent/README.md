@@ -4,7 +4,7 @@ Shared child-run contract, file store, and supervised runtime for SciForge Agent
 
 The package does not call model providers and does not store provider credentials.
 `AgentRuntimeHost` injects a `ChildRunExecutor` backed by the selected adapter's
-provider-neutral `spawn/inspect/message/cancel` contract. Provider protocol and
+provider-neutral `spawn/resume/inspect/message/cancel/delete` contract. Provider protocol and
 credentials remain inside that adapter.
 
 Hosts that expose delegation to a model should provide one batch-capable
@@ -22,7 +22,11 @@ completion deadline. Callers receive a stable child ID immediately and can
 inspect liveness, wait for a bounded observation window, send guidance, or
 explicitly cancel the child. An observation timeout or a failed liveness probe
 never changes the child to a terminal state. Parent cancellation uses the same
-canonical termination control.
+canonical termination control. Failed or aborted children can resume with the
+same stable child ID and provider thread context; each continuation increments
+the persisted attempt counter. Permanent deletion first settles active work,
+then removes both provider and canonical store state and emits a delete refresh
+event so historical lifecycle events cannot repopulate the child sidebar.
 
 The child-run store is the canonical lifecycle state. `child_event` callbacks
 are best-effort refresh notifications, so notification delivery failures never

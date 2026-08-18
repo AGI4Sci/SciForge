@@ -3,7 +3,11 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentRuntimeChild } from '@shared/agent-runtime-contract'
 import type { SideConversation } from '../../store/chat-store-types'
-import { ChildAgentsPanelView, sessionChildAgentsOwner } from './ChildAgentsPanel'
+import {
+  ChildAgentsPanelView,
+  childAgentsPanelContextStateKey,
+  sessionChildAgentsOwner
+} from './ChildAgentsPanel'
 
 const labels: Record<string, string> = {
   sidebarChildren: 'Children',
@@ -176,6 +180,23 @@ describe('sessionChildAgentsOwner', () => {
       activeThreadId: null,
       activeRuntimeId: undefined
     })
+  })
+})
+
+describe('childAgentsPanelContextStateKey', () => {
+  it('isolates duplicate child-agent panes owned by the same Session', () => {
+    const first = childAgentsPanelContextStateKey({
+      activeThreadId: 'session-1',
+      surfaceId: 'pane-a'
+    })
+    const second = childAgentsPanelContextStateKey({
+      activeThreadId: 'session-1',
+      surfaceId: 'pane-b'
+    })
+
+    expect(first).not.toBe(second)
+    expect(first).toContain('pane-a')
+    expect(second).toContain('pane-b')
   })
 })
 

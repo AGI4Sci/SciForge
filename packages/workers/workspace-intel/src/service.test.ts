@@ -237,11 +237,11 @@ test('fails closed when successful visual evidence is missing a grounded artifac
       code: 'visual_evidence_grounding_missing',
       message: 'Visual evidence is missing a grounded claim for an input artifact.',
       retryable: false,
-      suggestedFix: 'Stop retrying this result because the returned visual evidence could not be verified.',
+      suggestedFix: 'The sciforge_look arguments were accepted, but the returned claim was not grounded to an input artifact. Parameter changes cannot make this result valid; report error code visual_evidence_grounding_missing at stage evidence_validation and obtain new source evidence before another look.',
       failureClass: 'evidence_unverified',
       recovery: {
         action: 'stop',
-        instruction: 'Stop retrying this result because the returned visual evidence could not be verified.'
+        instruction: 'The sciforge_look arguments were accepted, but the returned claim was not grounded to an input artifact. Parameter changes cannot make this result valid; report error code visual_evidence_grounding_missing at stage evidence_validation and obtain new source evidence before another look.'
       },
       providerStage: 'evidence_validation'
     }

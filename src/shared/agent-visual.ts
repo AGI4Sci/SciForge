@@ -2,6 +2,10 @@ import { z } from 'zod'
 
 const opaqueRefSuffixPattern = '[A-Za-z0-9_-]{20,}'
 
+export const AGENT_VISUAL_LOOK_DEFAULT_TIMEOUT_MS = 180_000
+export const AGENT_VISUAL_LOOK_MIN_TIMEOUT_MS = 30_000
+export const AGENT_VISUAL_LOOK_MAX_TIMEOUT_MS = 600_000
+
 export const agentVisualSourceRefSchema = z.string()
   .regex(new RegExp(`^(?:res|artifact|snapshot)_${opaqueRefSuffixPattern}$`, 'u'))
 
@@ -37,7 +41,16 @@ export const agentVisualLookInputSchema = z.object({
   frame: z.number().int().positive().max(1_000_000).optional(),
   task: z.string().trim().min(1).max(16_000),
   intent: z.enum(['describe', 'ocr', 'locate', 'quality-review']).optional(),
-  capture: z.enum(['snapshot', 'region']).optional()
+  capture: z.enum(['snapshot', 'region']).optional(),
+  timeoutMs: z.number()
+    .int()
+    .min(AGENT_VISUAL_LOOK_MIN_TIMEOUT_MS)
+    .max(AGENT_VISUAL_LOOK_MAX_TIMEOUT_MS)
+    .optional()
+    .describe(
+      `End-to-end visual inspection budget in milliseconds. Defaults to ${AGENT_VISUAL_LOOK_DEFAULT_TIMEOUT_MS}. ` +
+      'When a retryable timeout returns a suggested timeoutMs, retry the same source and task once with that exact value.'
+    )
 }).strict().superRefine((input, context) => {
   if (input.frame && !input.sourceRef) {
     context.addIssue({

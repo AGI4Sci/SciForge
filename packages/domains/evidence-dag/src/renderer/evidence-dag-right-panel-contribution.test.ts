@@ -51,7 +51,9 @@ test('contributes the package-owned Evidence panel and translations', () => {
   const rendered = panel.render({
     active: true,
     className: 'panel',
+    focused: true,
     onCollapse: () => undefined,
+    surfaceId: 'surface-evidence-a',
     session: { id: 'thread-1', runtimeId: 'codex' },
     activation: {
       revision: 3,
@@ -60,6 +62,8 @@ test('contributes the package-owned Evidence panel and translations', () => {
   })
   const props = (rendered as ReactElement<Record<string, unknown>>).props
   assert.equal(props.className, 'panel')
+  assert.equal(props.focused, true)
+  assert.equal(props.surfaceId, 'surface-evidence-a')
   assert.deepEqual(props.activation, {
     contributionId: 'evidence-dag.workbench-right-panel',
     revision: 3,

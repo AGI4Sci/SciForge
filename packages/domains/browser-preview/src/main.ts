@@ -7,6 +7,7 @@ import {
   BROWSER_PREVIEW_RESOURCE_KIND,
   browserActionOutputSchema,
   browserClickInputSchema,
+  browserCloseOutputSchema,
   browserEmptyInputSchema,
   browserFillInputSchema,
   browserNavigateInputSchema,
@@ -154,14 +155,17 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
   getService: () => BrowserPreviewService
 }>): BrowserCapabilityFactory<CapabilityDefinition> {
   const operationIds = Object.values(BROWSER_PREVIEW_CAPABILITY_IDS)
-    .filter((id) => id !== BROWSER_PREVIEW_CAPABILITY_IDS.open)
+    .filter((id) =>
+      id !== BROWSER_PREVIEW_CAPABILITY_IDS.open &&
+      id !== BROWSER_PREVIEW_CAPABILITY_IDS.close
+    )
   const bindings = new Map<string, BrowserResourceBinding>()
   let lifecycleEpoch = 0
 
   const reserveBinding = (
     caller: BrowserCapabilityCaller,
     resourceId: string,
-    sessionId: string
+    surfaceId: string
   ): BrowserResourceBindingReservation => {
     const reservationEpoch = lifecycleEpoch
     const key = JSON.stringify([
@@ -195,9 +199,9 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
           const service = options.getService()
           return {
             state: browserPageStateSchema.parse(
-              await service.snapshot(sessionId, observerCaller)
+              await service.snapshot(surfaceId, observerCaller)
             ),
-            semanticRevision: service.revision(sessionId),
+            semanticRevision: service.revision(surfaceId),
             operationIds
           }
         },
@@ -234,7 +238,7 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
     })
   }
 
-  const requireSessionId = (context: BrowserCapabilityHandlerContext): string => {
+  const requireSurfaceId = (context: BrowserCapabilityHandlerContext): string => {
     const resourceId = context.resource?.resourceId
     if (!resourceId?.startsWith('browser-page:')) {
       throw new Error('Browser page resource is unavailable.')
@@ -244,23 +248,24 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
 
   const result = async (
     context: BrowserCapabilityHandlerContext,
-    action: (service: BrowserPreviewService, sessionId: string) => Promise<unknown>
+    action: (service: BrowserPreviewService, surfaceId: string) => Promise<unknown>
   ): Promise<BrowserCapabilityHandlerResult> => {
-    const sessionId = requireSessionId(context)
+    const surfaceId = requireSurfaceId(context)
     const service = options.getService()
     return {
-      output: await action(service, sessionId),
+      output: await action(service, surfaceId),
       changed: true,
-      semanticRevision: service.revision(sessionId)
+      semanticRevision: service.revision(surfaceId)
     }
   }
 
   const resourceCapability = (
-    input: Omit<BrowserCapabilityOptions, 'version' | 'audiences' | 'scope' | 'resourceKinds' | 'tags'>
+    input: Omit<BrowserCapabilityOptions, 'version' | 'audiences' | 'scope' | 'resourceKinds' | 'tags'>,
+    audiences: BrowserCapabilityOptions['audiences'] = ['ui', 'agent']
   ): BrowserCapabilityOptions => ({
     ...input,
     version: '1.0.0',
-    audiences: ['ui', 'agent'],
+    audiences,
     scope: 'resource',
     resourceKinds: [BROWSER_PREVIEW_RESOURCE_KIND],
     tags: ['browser', 'playwright', 'web-page']
@@ -289,11 +294,11 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
         inputSchema: browserOpenInputSchema,
         outputSchema: browserOpenOutputSchema,
         handler: async (input, context) => {
-          const resourceId = `browser-page:${input.sessionId}`
+          const resourceId = `browser-page:${input.surfaceId}`
           const reservation = reserveBinding(
             context.caller,
             resourceId,
-            input.sessionId
+            input.surfaceId
           )
           try {
             const service = options.getService()
@@ -311,7 +316,8 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
             return {
               output: browserOpenOutputSchema.parse({
                 resource,
-                sessionId: input.sessionId
+                sessionId: input.sessionId,
+                surfaceId: input.surfaceId
               })
             }
           } catch (error) {
@@ -320,6 +326,25 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
           }
         }
       }),
+      options.defineCapability(resourceCapability({
+        id: BROWSER_PREVIEW_CAPABILITY_IDS.close,
+        title: 'Close browser page',
+        description: 'Closes exactly one pane-owned Playwright browser page and profile.',
+        effect: 'external-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: browserEmptyInputSchema,
+        outputSchema: browserCloseOutputSchema,
+        handler: async (_input, context) => {
+          const surfaceId = requireSurfaceId(context)
+          await options.getService().closeSession(surfaceId, context.caller)
+          return {
+            output: { closed: true },
+            changed: true,
+            semanticRevision: 'browser-closed'
+          }
+        }
+      }, ['ui'])),
       options.defineCapability(resourceCapability({
         id: BROWSER_PREVIEW_CAPABILITY_IDS.read,
         title: 'Read browser page',
@@ -330,9 +355,9 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
         inputSchema: browserEmptyInputSchema,
         outputSchema: browserPageStateSchema,
         handler: async (_input, context) => {
-          const sessionId = requireSessionId(context)
+          const surfaceId = requireSurfaceId(context)
           return {
-            output: await options.getService().snapshot(sessionId, context.caller)
+            output: await options.getService().snapshot(surfaceId, context.caller)
           }
         }
       })),

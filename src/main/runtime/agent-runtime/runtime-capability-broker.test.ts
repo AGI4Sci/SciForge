@@ -46,6 +46,10 @@ describe('RuntimeCapabilityBroker', () => {
         command: '/bin/image-generation',
         enabledTools: ['visual.render']
       }],
+      trustedInvocationMetadata: [{
+        serverId: 'image-generation', tools: ['visual.render'],
+        metadataKey: 'fixture/trusted-invocation', source: 'trusted-invocation'
+      }],
       clientFactory: async () => client
     })
     const broker = createRuntimeCapabilityBroker({
@@ -127,6 +131,13 @@ describe('RuntimeCapabilityBroker', () => {
       arguments: {
         workspaceRoot: '/tmp/workspace',
         recipe: { scene: 'cells' }
+      },
+      _meta: {
+        'fixture/trusted-invocation': expect.objectContaining({
+          requestId: 'request-1', runtimeId: 'future-runtime',
+          threadId: 'thread-1', turnId: 'turn-1', callId: 'call-1',
+          actionId: expect.any(String)
+        })
       }
     }, expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 }))
   })
@@ -316,6 +327,77 @@ describe('RuntimeCapabilityBroker', () => {
     release?.()
     await expect(Promise.all([first, joined])).resolves.toHaveLength(2)
     expect(callTool).toHaveBeenCalledOnce()
+  })
+
+  it('retains rejected managed invocations so terminal failures cannot execute again', async () => {
+    const callTool = vi.fn(async () => ({
+      content: [{ type: 'text', text: 'action outcome is unknown' }],
+      isError: true,
+      structuredContent: {
+        error: {
+          code: 'ACTION_OUTCOME_UNKNOWN',
+          failureClass: 'unknown_outcome',
+          retryable: false
+        }
+      }
+    }))
+    const gateway = createRuntimeMcpToolGateway({
+      servers: [{ id: 'computer-use', command: '/bin/computer-use' }],
+      clientFactory: async () => ({
+        listTools: vi.fn(async () => ({ tools: [{
+          name: 'computer_use',
+          description: 'Mutate one bound CDP target.',
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: false,
+            idempotentHint: false,
+            openWorldHint: false
+          }
+        }] })),
+        callTool,
+        close: vi.fn(async () => undefined)
+      })
+    })
+    const broker = createRuntimeCapabilityBroker({ broker: emptyBroker(), managedTools: gateway })
+    const caller = {
+      audience: 'agent' as const,
+      callerId: 'codex:thread-1',
+      workspaceId: '/tmp/workspace',
+      approvals: []
+    }
+    const context = {
+      requestId: 'transport-1',
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      callId: 'call-1',
+      workspaceId: '/tmp/workspace'
+    }
+    const [operation] = await broker.discover(
+      caller, { providerFamily: 'managed-mcp' }, { context }
+    )
+    expect(operation).toBeDefined()
+    const request = {
+      actionId: operation!.id,
+      invocationId: 'invocation-1',
+      input: { sessionId: 'session-1' }
+    }
+
+    await expect(broker.invoke(caller, request, { context })).rejects.toMatchObject({
+      code: 'ACTION_OUTCOME_UNKNOWN',
+      retryable: false
+    })
+    await expect(broker.invoke(caller, request, {
+      context: { ...context, requestId: 'transport-2' }
+    })).rejects.toMatchObject({
+      code: 'ACTION_OUTCOME_UNKNOWN',
+      retryable: false
+    })
+    await expect(broker.invoke(caller, {
+      ...request,
+      input: { sessionId: 'different-session' }
+    }, { context })).rejects.toMatchObject({ code: 'idempotency_conflict' })
+    expect(callTool).toHaveBeenCalledTimes(1)
   })
 })
 

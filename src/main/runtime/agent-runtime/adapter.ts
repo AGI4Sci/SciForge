@@ -212,15 +212,28 @@ export type AgentRuntimeSubagentCancelInput = AgentRuntimeSubagentTarget & {
   signal: AbortSignal
 }
 
+export type AgentRuntimeSubagentResumeInput = AgentRuntimeSubagentSpawnInput & {
+  threadRef: AgentRuntimeSubagentThreadRef
+}
+
+export type AgentRuntimeSubagentDeleteInput = AgentRuntimeSubagentTarget & {
+  threadRef?: AgentRuntimeSubagentThreadRef
+  signal: AbortSignal
+}
+
 /**
  * Provider-owned child execution controls. AgentRuntime owns orchestration,
  * persistence, tool publication, and parent/child accounting; adapters only
- * translate these four operations to their provider protocol.
+ * translate these lifecycle operations to their provider protocol.
  */
 export type AgentRuntimeSubagentAdapter = {
   spawn(
     context: AgentRuntimeAdapterContext,
     input: AgentRuntimeSubagentSpawnInput
+  ): Promise<AgentRuntimeSubagentResult>
+  resume(
+    context: AgentRuntimeAdapterContext,
+    input: AgentRuntimeSubagentResumeInput
   ): Promise<AgentRuntimeSubagentResult>
   inspect(
     context: AgentRuntimeAdapterContext,
@@ -233,6 +246,10 @@ export type AgentRuntimeSubagentAdapter = {
   cancel(
     context: AgentRuntimeAdapterContext,
     input: AgentRuntimeSubagentCancelInput
+  ): Promise<void>
+  delete(
+    context: AgentRuntimeAdapterContext,
+    input: AgentRuntimeSubagentDeleteInput
   ): Promise<void>
 }
 

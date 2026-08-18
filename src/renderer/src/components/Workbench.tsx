@@ -2,7 +2,7 @@ import type { ReactElement, SetStateAction } from 'react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
-import { ArrowLeft, ArrowRight, CircleAlert, Eye } from 'lucide-react'
+import { ArrowLeft, CircleAlert, Eye } from 'lucide-react'
 import type {
   DomainWorkbenchOpenRightPanelInput,
   DomainWorkbenchOpenSurfaceInput,
@@ -36,7 +36,11 @@ import { useChatStore } from '../store/chat-store'
 import { selectFocusedAgentSurface } from '../store/chat-store-focus-actions'
 import { hasPendingRuntimeWork } from '../store/chat-store-runtime-helpers'
 import { Sidebar } from './chat/Sidebar'
-import { WorkbenchTopBar, type RightPanelMode } from './chat/WorkbenchTopBar'
+import {
+  RIGHT_PANEL_MODES,
+  WorkbenchTopBar,
+  type RightPanelMode
+} from './chat/WorkbenchTopBar'
 import { MessageTimeline } from './chat/MessageTimeline'
 import {
   FloatingComposer,
@@ -57,7 +61,6 @@ import {
 import { AgentFocusNavigation } from './chat/AgentFocusNavigation'
 import { FocusedAgentWorkbench } from './chat/FocusedAgentWorkbench'
 import { useChildAgentAttention } from './chat/use-child-agent-attention'
-import type { FileTreeInitialDirectory } from './chat/ChatFileTreePanel'
 import { RemoteWorkspaceSelector } from './chat/RemoteWorkspaceSelector'
 import { SessionHeader } from './SessionHeader'
 import {
@@ -95,10 +98,18 @@ import {
 } from './workbench-layout'
 import {
   SESSION_RIGHT_PANEL_DEFAULT_WIDTH,
+  type SessionRightPanelPane,
+  type SessionRightPanelPaneBinding,
+  type SessionRightPanelPlacement,
   type SessionRightPanelWorkspace
 } from './session-right-panel-workspaces'
 import { draftSessionRightPanelId } from '../lib/session-right-panel-owner'
 import { SessionRightPanelStack } from './SessionRightPanelStack'
+import { forgetRightPanelContextStateForSurface } from './right-panel-context-state'
+import {
+  SessionRightPanelDock,
+  type SessionRightPanelPaneRenderContext
+} from './SessionRightPanelDock'
 import { useWorkbenchPlanController } from './workbench-plan-controller'
 import { prepareImageAttachmentUpload } from '../lib/image-attachment-upload'
 import { isChatAttachmentUploadEnabled } from '../lib/attachment-upload-availability'
@@ -129,6 +140,7 @@ import {
   registerVisibleContextVisualTarget,
   setVisibleContextShell
 } from '../lib/visible-context'
+import { workspacePreviewVisibleContextComponentId } from '../workspace-preview/visible-context-identity'
 import {
   subscribeSessionRightPanelDisposals,
   subscribeSessionRightPanelRekeys
@@ -196,6 +208,8 @@ function rightPanelVisibleContextResourceKind(mode: Exclude<RightPanelMode, null
 export type RightPanelVisibleContextInput = {
   mode: Exclude<RightPanelMode, null>
   sessionId: string
+  surfaceId: string
+  focused: boolean
   width: number
   workspaceRoot?: string
   filePreviewTarget?: { path: string; workspaceRoot?: string } | null
@@ -206,8 +220,15 @@ export type RightPanelVisibleContextInput = {
   updatedAt?: string
 }
 
+export function rightPanelVisibleContextComponentId(input: {
+  sessionId: string
+  surfaceId: string
+}): string {
+  return `right-sidebar:session:${encodeURIComponent(input.sessionId)}:surface:${encodeURIComponent(input.surfaceId)}`
+}
+
 /**
- * Builds the single, mode-independent directory entry for the visible right panel.
+ * Builds one mode-independent directory entry for a visible right-panel pane.
  * Mode-specific panels may publish richer observations, but this component always
  * identifies which session owns the panel and which resource is currently selected.
  */
@@ -219,8 +240,9 @@ export function buildRightPanelVisibleContextComponent(
   const baseResource = {
     kind: rightPanelVisibleContextResourceKind(input.mode),
     title,
-    summary: `${title} state owned by session ${input.sessionId}.`,
+    summary: `${title} state owned by pane ${input.surfaceId} in session ${input.sessionId}.`,
     sessionId: input.sessionId,
+    surfaceId: input.surfaceId,
     ...(workspaceRoot ? { workspaceRoot } : {})
   }
   let currentResource: Record<string, unknown> = baseResource
@@ -234,7 +256,10 @@ export function buildRightPanelVisibleContextComponent(
           title: fileTitle,
           summary: `Canonical workspace preview for ${fileTitle}.`,
           path: input.filePreviewTarget.path,
-          canonicalComponentId: 'right-sidebar.file-preview'
+          canonicalComponentId: workspacePreviewVisibleContextComponentId({
+            sessionId: input.sessionId,
+            surfaceId: input.surfaceId
+          })
         }
       }
       break
@@ -254,21 +279,96 @@ export function buildRightPanelVisibleContextComponent(
   }
 
   return {
-    id: 'right-sidebar',
+    id: rightPanelVisibleContextComponentId(input),
     region: 'right-sidebar',
     component: 'right-panel',
     title,
     visible: true,
     priority: 10,
     updatedAt: input.updatedAt ?? new Date().toISOString(),
-    summary: `Right sidebar for session ${input.sessionId} is showing the ${title} panel.`,
+    summary: `Right sidebar pane ${input.surfaceId} for session ${input.sessionId} is showing the ${title} panel.`,
     state: {
       mode: input.mode,
       sessionId: input.sessionId,
+      surfaceId: input.surfaceId,
+      focused: input.focused,
       width: input.width,
       currentResource
     }
   }
+}
+
+export type ResolvedRightPanelLaunchTarget =
+  | Readonly<{ kind: 'exact'; paneId: string }>
+  | Readonly<{ kind: 'placement'; placement: SessionRightPanelPlacement }>
+
+/** Resolves every external right-panel launch through the same Host-owned policy. */
+export function resolveRightPanelLaunchTarget(
+  workspace: SessionRightPanelWorkspace | null | undefined,
+  input: Readonly<{ placement?: string; surfaceId?: string }>
+): ResolvedRightPanelLaunchTarget | null {
+  const surfaceId = input.surfaceId?.trim() || null
+  const placement = input.placement?.trim() || null
+  if (surfaceId && placement) return null
+  if (surfaceId) {
+    return workspace?.panes.some((pane) => pane.paneId === surfaceId)
+      ? { kind: 'exact', paneId: surfaceId }
+      : null
+  }
+  if (placement && placement !== 'focused' && placement !== 'new') return null
+  return {
+    kind: 'placement',
+    placement: placement === 'new' ? 'new' : 'focused'
+  }
+}
+
+function RightPanelVisibleContextRegistration({
+  active,
+  mode,
+  sessionId,
+  surfaceId,
+  focused,
+  width,
+  workspaceRoot,
+  filePreviewTarget,
+  childAgentCount,
+  childAgentRunningCount,
+  planId,
+  sddDraftId,
+  updatedAt
+}: RightPanelVisibleContextInput & { active: boolean }): null {
+  useEffect(() => {
+    if (!active) return undefined
+    return registerVisibleContextComponent(buildRightPanelVisibleContextComponent({
+      mode,
+      sessionId,
+      surfaceId,
+      focused,
+      width,
+      workspaceRoot,
+      filePreviewTarget,
+      childAgentCount,
+      childAgentRunningCount,
+      planId,
+      sddDraftId,
+      updatedAt
+    }))
+  }, [
+    active,
+    childAgentCount,
+    childAgentRunningCount,
+    filePreviewTarget,
+    focused,
+    mode,
+    planId,
+    sddDraftId,
+    sessionId,
+    surfaceId,
+    updatedAt,
+    width,
+    workspaceRoot
+  ])
+  return null
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -560,11 +660,12 @@ function base64ToFile(dataBase64: string, name: string, mimeType: string): File 
 }
 
 type SessionRightPanelRenderer = (
-  workspace: SessionRightPanelWorkspace,
-  active: boolean
+  pane: SessionRightPanelPane,
+  context: SessionRightPanelPaneRenderContext
 ) => ReactElement | null
 
 type SessionRightPanelRenderSnapshot = {
+  sessionId: string
   thread: NormalizedThread | null
   blocks: ChatBlock[]
   workspaceRoot: string
@@ -906,39 +1007,84 @@ export function Workbench(): ReactElement {
     [agentFocusLineage, sideConversations]
   )
   const {
+    addRightPanelPaneForSession,
     beginBottomPanelResize,
     beginLeftResize,
-    beginRightResize,
+    beginRightPanelPaneResize,
     bottomPanelActivation,
     bottomPanelContributionId,
     bottomPanelHeight,
     closeBottomPanel,
-    discardRightPanelResource,
-    canNavigateRightPanelBack,
-    canNavigateRightPanelForward,
-    filePreviewReturnContext,
-    filePreviewTarget,
+    closeRightPanelPaneForSession: closeRightPanelPaneStateForSession,
+    focusedRightPanelMode,
+    focusedRightPanelPane,
+    focusRightPanelPaneForSession,
     leftSidebarCollapsed,
     leftSidebarWidth,
-    navigateRightPanelBack,
-    navigateRightPanelForward,
-    rightPanelMode,
+    navigateRightPanelPaneHistoryForSession,
+    placeRightPanelPaneForSession,
+    rebindRightPanelPaneForSession,
+    rightPanelDockViewportWidth,
     rightPanelWorkspaces,
     rightPanelVisible,
-    rightSidebarWidth,
-    setFilePreviewTarget,
-    setFilePreviewReturnContext,
-    setRightPanelMode,
-    setRightSidebarWidth,
-    setRightSidebarWidthForSession,
+    setRightPanelPaneWidthForSession,
     shellRef,
     openBottomPanelForSession,
+    splitRightPanelPaneForSession,
     toggleLeftSidebar,
-    toggleRightPanelMode,
-    updateRightPanelWorkspace,
+    updateRightPanelPaneForSession,
   } = useWorkbenchLayout({
     activeSessionId: rightPanelOwnerId
   })
+  const closeRightPanelPaneForSession = useCallback((
+    sessionId: string,
+    paneId: string
+  ): void => {
+    const paneExists = rightPanelWorkspaces
+      .find((workspace) => workspace.sessionId === sessionId)
+      ?.panes.some((pane) => pane.paneId === paneId)
+    if (!paneExists) return
+    forgetRightPanelContextStateForSurface(sessionId, paneId)
+    closeRightPanelPaneStateForSession(sessionId, paneId)
+  }, [closeRightPanelPaneStateForSession, rightPanelWorkspaces])
+  const pendingFocusedRightPanelWidthRef = useRef<number | null>(null)
+  const setFocusedRightPanelMode = useCallback((
+    value: SetStateAction<RightPanelMode>
+  ): void => {
+    if (!rightPanelOwnerId) return
+    const mode = typeof value === 'function' ? value(focusedRightPanelMode) : value
+    if (!mode) {
+      if (focusedRightPanelPane) {
+        closeRightPanelPaneForSession(rightPanelOwnerId, focusedRightPanelPane.paneId)
+      }
+      pendingFocusedRightPanelWidthRef.current = null
+      return
+    }
+    const pendingWidth = pendingFocusedRightPanelWidthRef.current
+    pendingFocusedRightPanelWidthRef.current = null
+    placeRightPanelPaneForSession(
+      rightPanelOwnerId,
+      { mode },
+      'focused',
+      pendingWidth === null ? undefined : { width: pendingWidth }
+    )
+  }, [
+    closeRightPanelPaneForSession,
+    focusedRightPanelMode,
+    focusedRightPanelPane,
+    placeRightPanelPaneForSession,
+    rightPanelOwnerId
+  ])
+  const setFocusedRightPanelPaneWidth = useCallback((
+    value: SetStateAction<number>
+  ): void => {
+    if (!rightPanelOwnerId || !focusedRightPanelPane) {
+      const fallback = pendingFocusedRightPanelWidthRef.current ?? SESSION_RIGHT_PANEL_DEFAULT_WIDTH
+      pendingFocusedRightPanelWidthRef.current = typeof value === 'function' ? value(fallback) : value
+      return
+    }
+    setRightPanelPaneWidthForSession(rightPanelOwnerId, focusedRightPanelPane.paneId, value)
+  }, [focusedRightPanelPane, rightPanelOwnerId, setRightPanelPaneWidthForSession])
   const activeBottomPanel = installedRendererContributions.bottomPanels.resolve(
     bottomPanelContributionId
   )
@@ -967,23 +1113,17 @@ export function Workbench(): ReactElement {
             contributionId: activeBottomPanel.id
           }
         }
-      : installedRendererContributions.rightPanels.resolve(rightPanelMode)
+      : installedRendererContributions.rightPanels.resolve(focusedRightPanelMode)
         ? {
             activeSurface: {
               kind: 'right-panel' as const,
               contributionId:
-                installedRendererContributions.rightPanels.resolve(rightPanelMode)!.id
+                installedRendererContributions.rightPanels.resolve(focusedRightPanelMode)!.id
             }
           }
         : {})
   }
   const sessionRightPanelSnapshotsRef = useRef(new Map<string, SessionRightPanelRenderSnapshot>())
-  const setFileTreeWorkspaceOverride = useCallback((value: string | null): void => {
-    if (rightPanelOwnerId) updateRightPanelWorkspace(rightPanelOwnerId, { fileTreeWorkspaceOverride: value })
-  }, [rightPanelOwnerId, updateRightPanelWorkspace])
-  const setChildPanelFocusRequest = useCallback((request: { childId: string | null; key: number }): void => {
-    if (activeThreadId) updateRightPanelWorkspace(activeThreadId, { childPanelFocusRequest: request })
-  }, [activeThreadId, updateRightPanelWorkspace])
 
   const openChildInFocus = useCallback(async (child: AgentRuntimeChild): Promise<boolean> => {
     const threadId = child.openAsThreadRef?.threadId?.trim()
@@ -1019,7 +1159,7 @@ export function Workbench(): ReactElement {
   const openPrimaryChildAttention = useCallback(async (): Promise<void> => {
     const target = childAgentAttention.summary.primaryTarget
     if (!target) {
-      setRightPanelMode('child-agents')
+      setFocusedRightPanelMode('child-agents')
       return
     }
     const lineage = target.path.map((node, index) => ({
@@ -1052,27 +1192,25 @@ export function Workbench(): ReactElement {
         focusAgentThread({ threadId: parent.threadId, title: parent.label, lineage })
       }
     }
-    setChildPanelFocusRequest({ childId: target.threadId ? null : target.childId, key: Date.now() })
-    setRightPanelMode('child-agents')
+    if (activeThreadId) {
+      placeRightPanelPaneForSession(activeThreadId, {
+        mode: 'child-agents',
+        childPanelFocusRequest: {
+          childId: target.threadId ? null : target.childId,
+          key: Date.now()
+        }
+      }, 'focused')
+    }
   }, [
     activeThread?.model,
     attachSideConversation,
     childAgentAttention.summary.primaryTarget,
     composerModel,
     focusAgentThread,
-    setChildPanelFocusRequest,
-    setRightPanelMode
+    activeThreadId,
+    placeRightPanelPaneForSession,
+    setFocusedRightPanelMode
   ])
-  const setFileTreeInitialDirectory = useCallback((
-    value: SetStateAction<FileTreeInitialDirectory | null>
-  ): void => {
-    if (!rightPanelOwnerId) return
-    const current = rightPanelWorkspaces.find((workspace) => workspace.sessionId === rightPanelOwnerId)
-      ?.fileTreeInitialDirectory ?? null
-    updateRightPanelWorkspace(rightPanelOwnerId, {
-      fileTreeInitialDirectory: typeof value === 'function' ? value(current) : value
-    })
-  }, [rightPanelOwnerId, rightPanelWorkspaces, updateRightPanelWorkspace])
   const {
     activeGuiPlan,
     buildGuiPlan,
@@ -1090,8 +1228,15 @@ export function Workbench(): ReactElement {
     sendMessage,
     setError,
     setMode,
-    setRightPanelMode,
-    setRightSidebarWidth,
+    openPlanRightPanel: () => {
+      if (!activeThreadId) return
+      placeRightPanelPaneForSession(
+        activeThreadId,
+        { mode: 'plan' },
+        'focused',
+        { width: CODE_PANEL_PREFERRED }
+      )
+    },
     t,
     workspaceRoot,
     onPlanBuildStarted: async (plan) => {
@@ -1139,32 +1284,6 @@ export function Workbench(): ReactElement {
       unregisterComponent()
     }
   }, [])
-
-  useEffect(() => {
-    if (!rightPanelMode || !rightPanelOwnerId) return undefined
-    return registerVisibleContextComponent(buildRightPanelVisibleContextComponent({
-      mode: rightPanelMode,
-      sessionId: rightPanelOwnerId,
-      width: rightSidebarWidth,
-      workspaceRoot,
-      filePreviewTarget: rightPanelMode === 'file' ? filePreviewTarget : null,
-      childAgentCount,
-      childAgentRunningCount,
-      planId: activeGuiPlan?.id,
-      sddDraftId: activeSddDraft?.id
-    }))
-  }, [
-    activeGuiPlan?.id,
-    activeSddDraft?.id,
-    childAgentCount,
-    childAgentRunningCount,
-    filePreviewTarget,
-    rightPanelMode,
-    rightPanelOwnerId,
-    rightPanelWorkspaces,
-    rightSidebarWidth,
-    workspaceRoot
-  ])
 
   useEffect(() => {
     const runDesktopShortcut = (command: DesktopCommand): void => {
@@ -1262,10 +1381,19 @@ export function Workbench(): ReactElement {
   }, [input])
 
   useEffect(() => {
-    if (rightPanelMode === 'plan' && !activeGuiPlan) {
-      setRightPanelMode(null)
-    }
-  }, [activeGuiPlan, rightPanelMode, setRightPanelMode])
+    if (activeGuiPlan || !rightPanelOwnerId) return
+    const workspace = rightPanelWorkspaces.find(
+      (candidate) => candidate.sessionId === rightPanelOwnerId
+    )
+    workspace?.panes
+      .filter((pane) => pane.mode === 'plan')
+      .forEach((pane) => closeRightPanelPaneForSession(rightPanelOwnerId, pane.paneId))
+  }, [
+    activeGuiPlan,
+    closeRightPanelPaneForSession,
+    rightPanelOwnerId,
+    rightPanelWorkspaces
+  ])
 
   useEffect(() => {
     const openDomainRightPanel = (event: Event): void => {
@@ -1276,21 +1404,44 @@ export function Workbench(): ReactElement {
       if (detail.activation && detail.activation.contributionId !== contributionId) return
       const registered = installedRendererContributions.rightPanels.resolve(contributionId)
       if (!registered) return
-      setRightSidebarWidthForSession(
-        sessionId,
-        (width) => Math.max(width, CODE_PANEL_PREFERRED)
+      const workspace = rightPanelWorkspaces.find(
+        (candidate) => candidate.sessionId === sessionId
       )
-      updateRightPanelWorkspace(sessionId, {
+      const target = resolveRightPanelLaunchTarget(workspace, detail)
+      if (!target) return
+      const binding: SessionRightPanelPaneBinding = {
         mode: registered.id,
         panelActivation: detail.activation ?? null
-      })
+      }
+      if (target.kind === 'exact') {
+        const pane = workspace?.panes.find((candidate) => candidate.paneId === target.paneId)
+        if (!pane) return
+        setRightPanelPaneWidthForSession(
+          sessionId,
+          pane.paneId,
+          (width) => Math.max(width, CODE_PANEL_PREFERRED)
+        )
+        rebindRightPanelPaneForSession(sessionId, pane.paneId, binding)
+        return
+      }
+      placeRightPanelPaneForSession(
+        sessionId,
+        binding,
+        target.placement,
+        { width: CODE_PANEL_PREFERRED }
+      )
     }
     window.addEventListener(DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT, openDomainRightPanel)
     return () => window.removeEventListener(
       DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT,
       openDomainRightPanel
     )
-  }, [setRightSidebarWidthForSession, updateRightPanelWorkspace])
+  }, [
+    placeRightPanelPaneForSession,
+    rebindRightPanelPaneForSession,
+    rightPanelWorkspaces,
+    setRightPanelPaneWidthForSession
+  ])
 
   useEffect(() => {
     const openDomainBottomPanel = (event: Event): void => {
@@ -1377,26 +1528,34 @@ export function Workbench(): ReactElement {
   useEffect(() => {
     if (activeTodoItemCount === 0) {
       autoOpenedTodoKeyRef.current = ''
-      if (rightPanelMode === 'todo') setRightPanelMode(null)
+      if (rightPanelOwnerId) {
+        rightPanelWorkspaces
+          .find((workspace) => workspace.sessionId === rightPanelOwnerId)
+          ?.panes.filter((pane) => pane.mode === 'todo')
+          .forEach((pane) => closeRightPanelPaneForSession(rightPanelOwnerId, pane.paneId))
+      }
       return
     }
     if (route !== 'chat') return
-    if (rightPanelMode === 'todo') {
+    if (focusedRightPanelMode === 'todo') {
       autoOpenedTodoKeyRef.current = activeTodoAutoOpenKey
       return
     }
-    if (rightPanelMode !== null) return
+    if (focusedRightPanelMode !== null) return
     if (autoOpenedTodoKeyRef.current === activeTodoAutoOpenKey) return
     autoOpenedTodoKeyRef.current = activeTodoAutoOpenKey
-    setRightSidebarWidth((width) => Math.max(width, 360))
-    setRightPanelMode('todo')
+    setFocusedRightPanelPaneWidth((width) => Math.max(width, 360))
+    setFocusedRightPanelMode('todo')
   }, [
     activeTodoAutoOpenKey,
     activeTodoItemCount,
-    rightPanelMode,
+    closeRightPanelPaneForSession,
+    focusedRightPanelMode,
+    rightPanelOwnerId,
+    rightPanelWorkspaces,
     route,
-    setRightPanelMode,
-    setRightSidebarWidth
+    setFocusedRightPanelMode,
+    setFocusedRightPanelPaneWidth
   ])
 
   useEffect(() => {
@@ -1512,25 +1671,29 @@ export function Workbench(): ReactElement {
   }
 
   const previewWorkspaceReference = (reference: AgentRuntimeWorkspaceReference): void => {
-    if (reference.kind === 'directory') return
-    setFilePreviewReturnContext(null)
-    setFilePreviewTarget({
-      path: reference.relativePath,
-      workspaceRoot: reference.workspaceRoot || activeWorkspaceReferenceRoot || workspaceRoot
-    })
-    setRightPanelMode('file')
+    if (reference.kind === 'directory' || !rightPanelOwnerId) return
+    placeRightPanelPaneForSession(rightPanelOwnerId, {
+      mode: 'file',
+      filePreviewReturnContext: null,
+      filePreviewTarget: {
+        path: reference.relativePath,
+        workspaceRoot: reference.workspaceRoot || activeWorkspaceReferenceRoot || workspaceRoot
+      }
+    }, 'focused')
   }
 
   const previewComposerFileReference = (reference: ComposerFileReference): void => {
     if (reference.kind === 'directory') return
     const path = reference.relativePath || reference.path
-    if (!path) return
-    setFilePreviewReturnContext(null)
-    setFilePreviewTarget({
-      path,
-      workspaceRoot: reference.workspaceRoot || activeWorkspaceReferenceRoot || workspaceRoot
-    })
-    setRightPanelMode('file')
+    if (!path || !rightPanelOwnerId) return
+    placeRightPanelPaneForSession(rightPanelOwnerId, {
+      mode: 'file',
+      filePreviewReturnContext: null,
+      filePreviewTarget: {
+        path,
+        workspaceRoot: reference.workspaceRoot || activeWorkspaceReferenceRoot || workspaceRoot
+      }
+    }, 'focused')
   }
 
   const openFileTreeDirectory = useCallback((target: { workspaceRoot: string; path: string }): void => {
@@ -1541,22 +1704,23 @@ export function Workbench(): ReactElement {
     const hasKnownWorkspaceGroup = workspaceReferenceGroups.some(
       (group) => normalizeWorkspaceRoot(group.workspaceRoot) === nextWorkspaceRoot
     )
-    setFileTreeWorkspaceOverride(hasKnownWorkspaceGroup ? null : nextWorkspaceRoot)
-    setFileTreeInitialDirectory((current) => ({
-      workspaceRoot: nextWorkspaceRoot,
-      path: nextPath,
-      nonce: (current?.nonce ?? 0) + 1
-    }))
-    setFilePreviewReturnContext(null)
-    setFilePreviewTarget(null)
-    setRightPanelMode('file')
+    if (!rightPanelOwnerId) return
+    placeRightPanelPaneForSession(rightPanelOwnerId, {
+      mode: 'file',
+      fileTreeWorkspaceOverride: hasKnownWorkspaceGroup ? null : nextWorkspaceRoot,
+      fileTreeInitialDirectory: {
+        workspaceRoot: nextWorkspaceRoot,
+        path: nextPath,
+        nonce: (focusedRightPanelPane?.fileTreeInitialDirectory?.nonce ?? 0) + 1
+      },
+      filePreviewReturnContext: null,
+      filePreviewTarget: null
+    }, 'focused')
   }, [
     activeWorkspaceReferenceRoot,
-    setFilePreviewReturnContext,
-    setFilePreviewTarget,
-    setFileTreeInitialDirectory,
-    setFileTreeWorkspaceOverride,
-    setRightPanelMode,
+    focusedRightPanelPane?.fileTreeInitialDirectory?.nonce,
+    placeRightPanelPaneForSession,
+    rightPanelOwnerId,
     workspaceReferenceGroups,
     workspaceRoot
   ])
@@ -1571,8 +1735,14 @@ export function Workbench(): ReactElement {
       const ownerWorkspaceRoot = normalizeWorkspaceRoot(
         detail.workspaceRoot || ownerThread?.workspace || workspaceRoot
       )
+      const ownerWorkspace = rightPanelWorkspaces.find(
+        (candidate) => candidate.sessionId === ownerSessionId
+      )
+      const target = resolveRightPanelLaunchTarget(ownerWorkspace, detail)
+      if (!target) return
       if (detail.kind === 'directory') {
-        updateRightPanelWorkspace(ownerSessionId, {
+        const binding: SessionRightPanelPaneBinding = {
+          mode: 'file',
           fileTreeWorkspaceOverride: ownerWorkspaceRoot || null,
           fileTreeInitialDirectory: {
             workspaceRoot: ownerWorkspaceRoot,
@@ -1580,45 +1750,95 @@ export function Workbench(): ReactElement {
             nonce: Date.now()
           },
           filePreviewReturnContext: null,
-          filePreviewTarget: null,
-          width: Math.max(
-            rightPanelWorkspaces.find((candidate) => candidate.sessionId === ownerSessionId)?.width ?? SESSION_RIGHT_PANEL_DEFAULT_WIDTH,
-            CODE_PANEL_PREFERRED
-          ),
-          mode: 'file'
-        })
+          filePreviewTarget: null
+        }
+        if (target.kind === 'exact') {
+          const exactPane = ownerWorkspace?.panes.find(
+            (pane) => pane.paneId === target.paneId
+          )
+          if (!exactPane) return
+          setRightPanelPaneWidthForSession(
+            ownerSessionId,
+            exactPane.paneId,
+            (width) => Math.max(width, CODE_PANEL_PREFERRED)
+          )
+          rebindRightPanelPaneForSession(ownerSessionId, exactPane.paneId, binding)
+          return
+        }
+        placeRightPanelPaneForSession(
+          ownerSessionId,
+          binding,
+          target.placement,
+          { width: CODE_PANEL_PREFERRED }
+        )
         return
       }
       const {
         sessionId: _sessionId,
         kind: _kind,
         returnTo: _returnTo,
+        placement: _placement,
+        surfaceId: _surfaceId,
         ...fileTarget
       } = detail
-      updateRightPanelWorkspace(ownerSessionId, {
+      const binding: SessionRightPanelPaneBinding = {
+        mode: 'file',
         filePreviewTarget: {
           ...fileTarget,
           workspaceRoot: ownerWorkspaceRoot
         },
-        filePreviewReturnContext: detail.returnTo ?? null,
-        width: Math.max(
-          rightPanelWorkspaces.find((candidate) => candidate.sessionId === ownerSessionId)?.width ?? SESSION_RIGHT_PANEL_DEFAULT_WIDTH,
-          CODE_PANEL_PREFERRED
-        ),
-        mode: 'file'
-      })
+        filePreviewReturnContext: detail.returnTo ?? null
+      }
+      if (target.kind === 'exact') {
+        const exactPane = ownerWorkspace?.panes.find(
+          (pane) => pane.paneId === target.paneId
+        )
+        if (!exactPane) return
+        setRightPanelPaneWidthForSession(
+          ownerSessionId,
+          exactPane.paneId,
+          (width) => Math.max(width, CODE_PANEL_PREFERRED)
+        )
+        rebindRightPanelPaneForSession(ownerSessionId, exactPane.paneId, binding)
+        return
+      }
+      placeRightPanelPaneForSession(
+        ownerSessionId,
+        binding,
+        target.placement,
+        { width: CODE_PANEL_PREFERRED }
+      )
     }
 
     window.addEventListener(WORKSPACE_FILE_PREVIEW_EVENT, onPreviewWorkspaceFile)
     return () => window.removeEventListener(WORKSPACE_FILE_PREVIEW_EVENT, onPreviewWorkspaceFile)
-  }, [rightPanelOwnerId, rightPanelWorkspaces, threads, updateRightPanelWorkspace, workspaceRoot])
+  }, [
+    placeRightPanelPaneForSession,
+    rebindRightPanelPaneForSession,
+    rightPanelOwnerId,
+    rightPanelWorkspaces,
+    setRightPanelPaneWidthForSession,
+    threads,
+    workspaceRoot
+  ])
 
   const toggleTopBarRightPanelMode = (mode: Exclude<RightPanelMode, null>): void => {
-    if (mode === 'file') setFileTreeWorkspaceOverride(null)
-    if (installedRendererContributions.rightPanels.resolve(mode)) {
-      setRightSidebarWidth((width) => Math.max(width, CODE_PANEL_PREFERRED))
+    if (!rightPanelOwnerId) return
+    if (focusedRightPanelMode === mode && focusedRightPanelPane) {
+      closeRightPanelPaneForSession(rightPanelOwnerId, focusedRightPanelPane.paneId)
+      return
     }
-    toggleRightPanelMode(mode)
+    placeRightPanelPaneForSession(
+      rightPanelOwnerId,
+      {
+        mode,
+        ...(mode === 'file' ? { fileTreeWorkspaceOverride: null } : {})
+      },
+      'focused',
+      installedRendererContributions.rightPanels.resolve(mode)
+        ? { width: CODE_PANEL_PREFERRED }
+        : undefined
+    )
   }
 
   const removeComposerFileReference = (relativePath: string, referenceWorkspaceRoot?: string): void => {
@@ -1911,13 +2131,12 @@ export function Workbench(): ReactElement {
           lastSavedContent: options.lastSavedContent,
           saveStatus: options.saveStatus
         })
-        const workspaceWidth = rightPanelWorkspaces.find(
-          (workspace) => workspace.sessionId === ownerSessionId
-        )?.width ?? 420
-        updateRightPanelWorkspace(ownerSessionId, {
-          mode: 'sdd-ai',
-          width: Math.max(workspaceWidth, 420)
-        })
+        placeRightPanelPaneForSession(
+          ownerSessionId,
+          { mode: 'sdd-ai' },
+          'focused',
+          { width: 420 }
+        )
       } else {
         return false
       }
@@ -1927,7 +2146,7 @@ export function Workbench(): ReactElement {
         lastSavedContent: options.lastSavedContent,
         saveStatus: options.saveStatus
       })
-      setRightPanelMode(null)
+      setFocusedRightPanelMode(null)
     }
     return true
   }
@@ -1940,19 +2159,26 @@ export function Workbench(): ReactElement {
     if (session) void saveSddDraftToDisk(ownerSessionId)
     useSddDraftStore.getState().removeSession(ownerSessionId)
     delete sddUpgradeTargetsRef.current[ownerSessionId]
-    if (options.closeAssistant && rightPanelMode === 'sdd-ai') setRightPanelMode(null)
+    if (options.closeAssistant) {
+      const workspace = rightPanelWorkspaces.find(
+        (candidate) => candidate.sessionId === ownerSessionId
+      )
+      workspace?.panes
+        .filter((pane) => pane.mode === 'sdd-ai')
+        .forEach((pane) => closeRightPanelPaneForSession(ownerSessionId, pane.paneId))
+    }
   }
 
   const toggleSddAssistantPanel = async (): Promise<void> => {
-    if (rightPanelMode === 'sdd-ai') {
-      setRightPanelMode(null)
+    if (focusedRightPanelMode === 'sdd-ai') {
+      setFocusedRightPanelMode(null)
       return
     }
     if (!activeThreadId) return
     const session = selectSddDraftSession(useSddDraftStore.getState(), activeThreadId)
     if (!session) return
-    setRightSidebarWidth((width) => Math.max(width, 420))
-    setRightPanelMode('sdd-ai')
+    setFocusedRightPanelPaneWidth((width) => Math.max(width, 420))
+    setFocusedRightPanelMode('sdd-ai')
   }
 
   const sddDraftFromRegisteredThread = (threadId: string): SddDraft | null => {
@@ -2422,16 +2648,16 @@ export function Workbench(): ReactElement {
   const createSessionRightPanelRenderer = (
     snapshot: SessionRightPanelRenderSnapshot
   ): SessionRightPanelRenderer => (
-    workspace,
-    active
+    pane,
+    { active, focused }
   ) => {
-    const ownerSessionId = workspace.sessionId
-    const workspaceMode = workspace.mode
+    const ownerSessionId = snapshot.sessionId
+    const paneMode = pane.mode
     const installedRightPanel = installedRightPanels.find(
-      ({ id }) => id === workspaceMode
+      ({ id }) => id === paneMode
     )?.contribution
-    const ownerFilePreviewTarget = workspace.filePreviewTarget
-    const ownerFilePreviewReturnContext = workspace.filePreviewReturnContext
+    const ownerFilePreviewTarget = pane.filePreviewTarget
+    const ownerFilePreviewReturnContext = pane.filePreviewReturnContext
     const ownerThread = threads.find((thread) => thread.id === ownerSessionId) ?? snapshot.thread
     const ownerWorkspaceRoot = ownerThread?.workspace || snapshot.workspaceRoot
     const ownerStatus = ownerThread?.status?.toLowerCase()
@@ -2442,41 +2668,60 @@ export function Workbench(): ReactElement {
         ownerStatus === 'busy' ||
         ownerStatus === 'queued'
     const closeOwnerRightPanel = (): void => {
-      updateRightPanelWorkspace(ownerSessionId, {
-        mode: null,
-        filePreviewTarget: null,
-        filePreviewReturnContext: null
-      })
+      closeRightPanelPaneForSession(ownerSessionId, pane.paneId)
     }
     const closeOwnerFilePreview = (): void => {
       if (ownerFilePreviewReturnContext?.kind === 'domain-right-panel') {
         const registered = installedRightPanels.find(
           ({ id }) => id === ownerFilePreviewReturnContext.contributionId
         )
-        updateRightPanelWorkspace(ownerSessionId, {
-          filePreviewTarget: null,
-          filePreviewReturnContext: null,
-          mode: registered?.id ?? null,
-          panelActivation: registered ? ownerFilePreviewReturnContext.activation ?? null : null
+        if (!registered) {
+          closeOwnerRightPanel()
+          return
+        }
+        rebindRightPanelPaneForSession(ownerSessionId, pane.paneId, {
+          mode: registered.id,
+          panelActivation: ownerFilePreviewReturnContext.activation ?? null
         })
         return
       }
-      updateRightPanelWorkspace(ownerSessionId, { filePreviewTarget: null })
+      updateRightPanelPaneForSession(ownerSessionId, pane.paneId, {
+        filePreviewTarget: null,
+        filePreviewReturnContext: null
+      })
     }
     const previewOwnerWorkspaceReference = (reference: AgentRuntimeWorkspaceReference): void => {
       if (reference.kind === 'directory') return
-      updateRightPanelWorkspace(ownerSessionId, {
+      rebindRightPanelPaneForSession(ownerSessionId, pane.paneId, {
+        mode: 'file',
         filePreviewReturnContext: null,
         filePreviewTarget: {
           path: reference.relativePath,
           workspaceRoot: reference.workspaceRoot || ownerWorkspaceRoot
-        },
-        mode: 'file'
+        }
+      })
+    }
+    const previewOwnerWorkspaceReferenceInNewPane = (
+      reference: AgentRuntimeWorkspaceReference
+    ): void => {
+      if (reference.kind === 'directory') return
+      addRightPanelPaneForSession(ownerSessionId, {
+        mode: 'file',
+        filePreviewReturnContext: null,
+        filePreviewTarget: {
+          path: reference.relativePath,
+          workspaceRoot: reference.workspaceRoot || ownerWorkspaceRoot
+        }
+      }, {
+        afterPaneId: pane.paneId,
+        focus: true,
+        width: Math.max(pane.width, CODE_PANEL_PREFERRED)
       })
     }
     const openOwnerFileTreeDirectory = (target: { workspaceRoot: string; path: string }): void => {
       const nextWorkspaceRoot = normalizeWorkspaceRoot(target.workspaceRoot || ownerWorkspaceRoot)
-      updateRightPanelWorkspace(ownerSessionId, {
+      rebindRightPanelPaneForSession(ownerSessionId, pane.paneId, {
+        mode: 'file',
         fileTreeWorkspaceOverride: nextWorkspaceRoot || null,
         fileTreeInitialDirectory: {
           workspaceRoot: nextWorkspaceRoot,
@@ -2484,61 +2729,47 @@ export function Workbench(): ReactElement {
           nonce: Date.now()
         },
         filePreviewReturnContext: null,
-        filePreviewTarget: null,
-        mode: 'file'
+        filePreviewTarget: null
       })
     }
-    const ownerFileTreeWorkspaceRoot = workspace.fileTreeWorkspaceOverride || ownerWorkspaceRoot
-    const ownerFileTreeWorkspaceGroups = workspace.fileTreeWorkspaceOverride
+    const ownerFileTreeWorkspaceRoot = pane.fileTreeWorkspaceOverride || ownerWorkspaceRoot
+    const ownerFileTreeWorkspaceGroups = pane.fileTreeWorkspaceOverride
       ? [{
-          id: `workspace:${workspace.fileTreeWorkspaceOverride}`,
+          id: `workspace:${pane.fileTreeWorkspaceOverride}`,
           label: t('rightPanelFiles'),
-          workspaceRoot: workspace.fileTreeWorkspaceOverride,
+          workspaceRoot: pane.fileTreeWorkspaceOverride,
           kind: 'worktree' as const
         }]
       : snapshot.workspaceReferenceGroups
     return (
-        <div className="flex h-full min-h-0 flex-col bg-ds-sidebar">
-          <div
-            className="ds-no-drag flex h-9 shrink-0 items-center gap-1 border-b border-ds-border bg-ds-sidebar px-2"
-            data-right-panel-history-navigation
-          >
-            <button
-              type="button"
-              onClick={navigateRightPanelBack}
-              disabled={!canNavigateRightPanelBack}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-default disabled:opacity-30"
-              aria-label={t('rightPanelBack')}
-              title={t('rightPanelBack')}
-            >
-              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              onClick={navigateRightPanelForward}
-              disabled={!canNavigateRightPanelForward}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-default disabled:opacity-30"
-              aria-label={t('rightPanelForward')}
-              title={t('rightPanelForward')}
-            >
-              <ArrowRight className="h-4 w-4" aria-hidden="true" />
-            </button>
-            <span className="ml-1 min-w-0 truncate text-[11.5px] font-medium text-ds-faint">
-              {workspaceMode ? t(rightPanelVisibleContextTitle(workspaceMode)) : ''}
-            </span>
-          </div>
-          <div className="min-h-0 flex-1">
-            <Suspense fallback={<div className="h-full w-full bg-ds-sidebar" />}>
-            {workspaceMode === 'file' ? (
+      <div className="flex h-full min-h-0 flex-col bg-ds-sidebar">
+        <RightPanelVisibleContextRegistration
+          active={active}
+          mode={paneMode}
+          sessionId={ownerSessionId}
+          surfaceId={pane.paneId}
+          focused={focused}
+          width={pane.width}
+          workspaceRoot={ownerWorkspaceRoot}
+          filePreviewTarget={paneMode === 'file' ? ownerFilePreviewTarget : null}
+          childAgentCount={childAgentCount}
+          childAgentRunningCount={childAgentRunningCount}
+          planId={activeGuiPlan?.id}
+          sddDraftId={activeSddDraft?.id}
+        />
+        <div className="min-h-0 flex-1">
+          <Suspense fallback={<div className="h-full w-full bg-ds-sidebar" />}>
+            {paneMode === 'file' ? (
               <div className="relative h-full max-h-full w-full overflow-hidden">
                 <ChatFileTreePanel
                   workspaceRoot={ownerFileTreeWorkspaceRoot}
                   workspaceGroups={ownerFileTreeWorkspaceGroups}
                   selectedPath={ownerFilePreviewTarget?.path}
-                  initialDirectory={workspace.fileTreeInitialDirectory}
+                  initialDirectory={pane.fileTreeInitialDirectory}
                   selectedReferences={snapshot.composerFileReferences}
                   className={`h-full max-h-full w-full ${ownerFilePreviewTarget ? 'hidden' : ''}`}
                   onPreviewFile={previewOwnerWorkspaceReference}
+                  onPreviewFileInNewPane={previewOwnerWorkspaceReferenceInNewPane}
                   onAddReference={addComposerFileReference}
                   onCollapse={closeOwnerRightPanel}
                 />
@@ -2568,15 +2799,15 @@ export function Workbench(): ReactElement {
                           target={ownerFilePreviewTarget}
                           workspaceRoot={ownerFilePreviewTarget.workspaceRoot || ownerFileTreeWorkspaceRoot}
                           sessionId={ownerSessionId}
+                          surfaceId={pane.paneId}
                           active={active}
                           className="h-full max-h-full w-full"
                           annotationQuestionBridge={annotationQuestionBridge}
                           onClose={closeOwnerFilePreview}
                           onOpenDirectory={openOwnerFileTreeDirectory}
                           onOpenFile={(nextTarget) => {
-                            updateRightPanelWorkspace(ownerSessionId, {
-                              filePreviewTarget: nextTarget,
-                              mode: 'file'
+                            updateRightPanelPaneForSession(ownerSessionId, pane.paneId, {
+                              filePreviewTarget: nextTarget
                             })
                           }}
                         />
@@ -2585,7 +2816,7 @@ export function Workbench(): ReactElement {
                   </Suspense>
                 ) : null}
               </div>
-            ) : workspaceMode === 'sdd-ai' ? (
+            ) : paneMode === 'sdd-ai' ? (
               <SessionSddAssistantPanel
                 ownerSessionId={ownerSessionId}
                 title={t('sddAssistant')}
@@ -2615,33 +2846,47 @@ export function Workbench(): ReactElement {
                         saveStatus: current.saveStatus
                       }
                     )
-                    updateRightPanelWorkspace(newSessionId, { mode: 'sdd-ai', width: 420 })
+                    placeRightPanelPaneForSession(
+                      newSessionId,
+                      { mode: 'sdd-ai' },
+                      'focused',
+                      { width: 420 }
+                    )
                   })
                 }}
                 onCollapse={closeOwnerRightPanel}
                 className="h-full max-h-full w-full"
               />
-            ) : workspaceMode === 'child-agents' ? (
+            ) : paneMode === 'child-agents' ? (
               <SessionChildAgentsPanel
                 sessionId={ownerSessionId}
                 thread={ownerThread ?? null}
                 busy={ownerBusy}
-                focusChildId={workspace.childPanelFocusRequest.childId}
-                focusChildRequestKey={workspace.childPanelFocusRequest.key}
+                focusChildId={pane.childPanelFocusRequest.childId}
+                focusChildRequestKey={pane.childPanelFocusRequest.key}
                 onOpenChildInFocus={(child) => { void openChildInFocus(child) }}
                 className="h-full max-h-full w-full"
                 onCollapse={closeOwnerRightPanel}
               />
-            ) : workspaceMode === 'todo' ? (
+            ) : paneMode === 'todo' ? (
               <TodoPanel
                 threadId={ownerSessionId}
                 className="h-full max-h-full w-full"
                 onCollapse={closeOwnerRightPanel}
-                onOpenPlan={openGuiPlanPanel}
+                onOpenPlan={() => {
+                  setRightPanelPaneWidthForSession(
+                    ownerSessionId,
+                    pane.paneId,
+                    (width) => Math.max(width, CODE_PANEL_PREFERRED)
+                  )
+                  rebindRightPanelPaneForSession(ownerSessionId, pane.paneId, { mode: 'plan' })
+                }}
               />
             ) : installedRightPanel ? (
               installedRightPanel.render({
                 active,
+                focused,
+                surfaceId: pane.paneId,
                 className: 'h-full max-h-full w-full',
                 onCollapse: closeOwnerRightPanel,
                 session: {
@@ -2649,11 +2894,11 @@ export function Workbench(): ReactElement {
                   ...(ownerThread?.runtimeId ? { runtimeId: ownerThread.runtimeId } : {}),
                   ...(ownerWorkspaceRoot ? { workspaceRoot: ownerWorkspaceRoot } : {})
                 },
-                ...(workspace.panelActivation?.contributionId === installedRightPanel.id
-                  ? { activation: workspace.panelActivation }
+                ...(pane.panelActivation?.contributionId === installedRightPanel.id
+                  ? { activation: pane.panelActivation }
                   : {})
               })
-            ) : workspaceMode === 'plan' ? (
+            ) : paneMode === 'plan' ? (
               <PlanPanel
                 workspaceRoot={ownerWorkspaceRoot}
                 ownerSessionId={ownerSessionId}
@@ -2666,75 +2911,122 @@ export function Workbench(): ReactElement {
                 onReplanChanged={(changedIds) => void replanChangedRequirements(changedIds)}
               />
             ) : null}
-            </Suspense>
-          </div>
+          </Suspense>
         </div>
+      </div>
     )
   }
 
   const sessionRightPanelRenderers = new Map<string, SessionRightPanelRenderer>()
   for (const workspace of rightPanelWorkspaces) {
     const active = workspace.sessionId === rightPanelOwnerId
-    const previousSnapshot = sessionRightPanelSnapshotsRef.current.get(workspace.instanceKey)
     const liveThread = threads.find((thread) => thread.id === workspace.sessionId) ?? null
-    const ownerBlocks = active
-      ? blocks
-      : threadBlocksById[workspace.sessionId] ?? previousSnapshot?.blocks ?? []
-    const snapshot: SessionRightPanelRenderSnapshot = {
-      thread: liveThread ?? (active ? activeThread : previousSnapshot?.thread ?? null),
-      blocks: ownerBlocks,
-      workspaceRoot: active
-        ? workspaceRoot
-        : liveThread?.workspace || previousSnapshot?.workspaceRoot || '',
-      workspaceReferenceGroups: active
-        ? workspaceReferenceGroups
-        : previousSnapshot?.workspaceReferenceGroups ?? [],
-      composerFileReferences: active
-        ? composerFileReferences
-        : previousSnapshot?.composerFileReferences ?? []
+    for (const pane of workspace.panes) {
+      const previousSnapshot = sessionRightPanelSnapshotsRef.current.get(pane.instanceKey)
+      const ownerBlocks = active
+        ? blocks
+        : threadBlocksById[workspace.sessionId] ?? previousSnapshot?.blocks ?? []
+      const snapshot: SessionRightPanelRenderSnapshot = {
+        sessionId: workspace.sessionId,
+        thread: liveThread ?? (active ? activeThread : previousSnapshot?.thread ?? null),
+        blocks: ownerBlocks,
+        workspaceRoot: active
+          ? workspaceRoot
+          : liveThread?.workspace || previousSnapshot?.workspaceRoot || '',
+        workspaceReferenceGroups: active
+          ? workspaceReferenceGroups
+          : previousSnapshot?.workspaceReferenceGroups ?? [],
+        composerFileReferences: active
+          ? composerFileReferences
+          : previousSnapshot?.composerFileReferences ?? []
+      }
+      sessionRightPanelSnapshotsRef.current.set(pane.instanceKey, snapshot)
+      sessionRightPanelRenderers.set(
+        pane.instanceKey,
+        createSessionRightPanelRenderer(snapshot)
+      )
     }
-    sessionRightPanelSnapshotsRef.current.set(workspace.instanceKey, snapshot)
-    sessionRightPanelRenderers.set(
-      workspace.instanceKey,
-      createSessionRightPanelRenderer(snapshot)
-    )
   }
-  const residentInstanceKeys = new Set(rightPanelWorkspaces.map((workspace) => workspace.instanceKey))
+  const residentInstanceKeys = new Set(
+    rightPanelWorkspaces.flatMap((workspace) =>
+      workspace.panes.map((pane) => pane.instanceKey)
+    )
+  )
   for (const instanceKey of sessionRightPanelSnapshotsRef.current.keys()) {
     if (!residentInstanceKeys.has(instanceKey)) {
       sessionRightPanelSnapshotsRef.current.delete(instanceKey)
     }
   }
 
+  const rightPanelBindings = [
+    ...RIGHT_PANEL_MODES.map((mode) => ({
+      id: mode,
+      label: t(rightPanelVisibleContextTitle(mode)),
+      ...(mode === 'plan' && !activeGuiPlan ? { disabled: true } : {}),
+      ...(mode === 'sdd-ai' && !activeSddDraft ? { disabled: true } : {})
+    })),
+    ...installedRightPanels.map(({ id, contribution }) => ({
+      id,
+      label: t(contribution.title)
+    }))
+  ]
+
   const renderRightPanel = (): ReactElement | null => {
-    const hasResidentPanel = rightPanelWorkspaces.some((workspace) => workspace.mode !== null)
+    const hasResidentPanel = rightPanelWorkspaces.some((workspace) => workspace.panes.length > 0)
     if (!hasResidentPanel) return null
     return (
-      <>
-        {rightPanelVisible ? (
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            className="ds-workbench-divider ds-no-drag relative z-20 shrink-0 cursor-col-resize"
-            onPointerDown={beginRightResize}
-          />
-        ) : null}
-        <div
-          className={rightPanelVisible
-            ? 'h-full min-h-0 shrink-0 bg-ds-sidebar'
-            : 'pointer-events-none fixed h-0 w-0 overflow-hidden invisible'}
-          style={rightPanelVisible ? { width: rightSidebarWidth } : undefined}
-          aria-hidden={!rightPanelVisible}
-        >
-          <SessionRightPanelStack
-            activeSessionId={rightPanelVisible ? rightPanelOwnerId : null}
-            workspaces={rightPanelWorkspaces}
-            renderWorkspace={(workspace, active) =>
-              sessionRightPanelRenderers.get(workspace.instanceKey)?.(workspace, active) ?? null
-            }
-          />
-        </div>
-      </>
+      <div
+        className={rightPanelVisible
+          ? 'h-full min-h-0 shrink-0 bg-ds-sidebar'
+          : 'pointer-events-none fixed h-0 w-0 overflow-hidden invisible'}
+        style={rightPanelVisible ? { width: rightPanelDockViewportWidth } : undefined}
+        aria-hidden={!rightPanelVisible}
+      >
+        <SessionRightPanelStack
+          activeSessionId={rightPanelVisible ? rightPanelOwnerId : null}
+          workspaces={rightPanelWorkspaces}
+          renderWorkspace={(workspace, active) => (
+            <SessionRightPanelDock
+              workspace={workspace}
+              active={active}
+              bindings={rightPanelBindings}
+              labels={{
+                dock: t('rightPanelDock'),
+                pane: ({ index, bindingLabel, focused }) =>
+                  t('rightPanelPane', {
+                    index: index + 1,
+                    label: bindingLabel,
+                    focused: focused ? t('rightPanelPaneFocusedSuffix') : ''
+                  }),
+                back: t('rightPanelBack'),
+                forward: t('rightPanelForward'),
+                binding: t('rightPanelBinding'),
+                split: t('rightPanelSplit'),
+                close: t('close'),
+                resize: t('rightPanelResize')
+              }}
+              onFocusPane={focusRightPanelPaneForSession}
+              onNavigatePane={navigateRightPanelPaneHistoryForSession}
+              onRebindPane={(sessionId, paneId, mode) => {
+                rebindRightPanelPaneForSession(sessionId, paneId, { mode })
+                if (installedRendererContributions.rightPanels.resolve(mode)) {
+                  setRightPanelPaneWidthForSession(
+                    sessionId,
+                    paneId,
+                    (width) => Math.max(width, CODE_PANEL_PREFERRED)
+                  )
+                }
+              }}
+              onSplitPane={splitRightPanelPaneForSession}
+              onClosePane={closeRightPanelPaneForSession}
+              onBeginResizePane={beginRightPanelPaneResize}
+              renderPane={(pane, context) =>
+                sessionRightPanelRenderers.get(pane.instanceKey)?.(pane, context) ?? null
+              }
+            />
+          )}
+        />
+      </div>
     )
   }
 
@@ -2841,7 +3133,7 @@ export function Workbench(): ReactElement {
             <SddDraftEditorView
               ownerSessionId={activeSddSession!.ownerSessionId}
               leftSidebarCollapsed={leftSidebarCollapsed}
-              assistantOpen={rightPanelMode === 'sdd-ai'}
+              assistantOpen={focusedRightPanelMode === 'sdd-ai'}
               onToggleLeftSidebar={toggleLeftSidebar}
               onToggleAssistant={() => void toggleSddAssistantPanel()}
               onNext={() => void handleSddNextStep()}
@@ -2876,8 +3168,8 @@ export function Workbench(): ReactElement {
                     </span>
                   ) : null}
                   <WorkbenchTopBar
-                    rightPanelMode={rightPanelMode}
-                    onToggleRightPanelMode={toggleTopBarRightPanelMode}
+                    focusedRightPanelMode={focusedRightPanelMode}
+                    onToggleFocusedRightPanelMode={toggleTopBarRightPanelMode}
                     workspaceRoot={activeWorkspaceReferenceRoot}
                     planPanelEnabled={Boolean(activeGuiPlan)}
                     toolbarActions={installedToolbarActions}
@@ -2900,7 +3192,7 @@ export function Workbench(): ReactElement {
                       childAgentAttention.summary.counts.waitingUserInput +
                       childAgentAttention.summary.counts.waitingApproval
                     }
-                    childAgentsOpen={rightPanelMode === 'child-agents'}
+                    childAgentsOpen={focusedRightPanelMode === 'child-agents'}
                     sideChatEnabled={Boolean(activeThreadId) && sideConversationsSupported}
                     onOpenChildAgents={() => toggleTopBarRightPanelMode('child-agents')}
                     onOpenSideChat={
@@ -3082,7 +3374,9 @@ export function Workbench(): ReactElement {
           </div>
 
           {route === 'chat' && !activeSddDraft ? (
-            <SideConversationPanel rightOffset={rightPanelVisible ? rightSidebarWidth + 24 : 24} />
+            <SideConversationPanel
+              rightOffset={rightPanelVisible ? rightPanelDockViewportWidth + 24 : 24}
+            />
           ) : null}
 
           {renderRightPanel()}

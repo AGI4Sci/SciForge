@@ -49,6 +49,7 @@ export type ProjectDagPanelProps = Readonly<{
   className?: string
   onCollapse: () => void
   session: DomainWorkbenchRightPanelSession
+  surfaceId: string
   activation?: DomainWorkbenchRightPanelActivation
   client: ProjectDagCapabilityClient
   workspacePreview?: DomainRendererWorkspacePreviewHost
@@ -120,6 +121,7 @@ export function ProjectDagPanel({
   className = '',
   onCollapse,
   session,
+  surfaceId,
   activation,
   client,
   workspacePreview,
@@ -223,6 +225,7 @@ export function ProjectDagPanel({
         frameWindow: iframeRef.current?.contentWindow ?? null,
         frameUrl,
         sessionId: session.id,
+        surfaceId,
         target: projectTarget(target),
         committedSnapshotDigest: committedDigest,
         activationRevision: activation?.revision,
@@ -242,6 +245,7 @@ export function ProjectDagPanel({
     committedDigest,
     frameUrl,
     session.id,
+    surfaceId,
     t,
     target,
     workspacePreview
@@ -319,6 +323,7 @@ export function ProjectDagPanel({
     workbench.openRightPanel({
       contributionId,
       sessionId: session.id,
+      surfaceId,
       activation: nextActivation
     })
   }

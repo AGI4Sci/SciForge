@@ -27,14 +27,15 @@ import type {
   DomainMainPackageSettingsHost
 } from './package-storage.js'
 import type { TrustedDomainProcessEntryInput } from './process-entry.js'
-import type {
-  DomainCapabilityResourceHandle,
-  DomainRendererSessionResource,
-  DomainRendererWorkbenchSendMessageInput,
-  DomainRendererWorkbenchSendMessageResult,
-  DomainRendererWorkbenchSurfaceActivation,
-  DomainRendererWorkspaceFilePickerRequest,
-  DomainRendererWorkspacePickResult
+import {
+  domainWorkbenchRightPanelPlacementSchema,
+  type DomainCapabilityResourceHandle,
+  type DomainRendererSessionResource,
+  type DomainRendererWorkbenchSendMessageInput,
+  type DomainRendererWorkbenchSendMessageResult,
+  type DomainRendererWorkbenchSurfaceActivation,
+  type DomainRendererWorkspaceFilePickerRequest,
+  type DomainRendererWorkspacePickResult
 } from './renderer-contributions.js'
 import type { DomainWorkflowExecutionReceiptProvider } from './workflow-template.js'
 import type { DomainMainVisualCaptureHost } from './visual-capture.js'
@@ -56,6 +57,33 @@ export const MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND = 'main.runtime-lifecycle'
 export const MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND =
   'main.artifact-consumer' as const
 export const MAIN_ACTION_GUARD_CONTRIBUTION_KIND = 'main.action-guard' as const
+export const MAIN_RUNTIME_MCP_SERVER_CONTRIBUTION_KIND =
+  'main.runtime-mcp-server' as const
+export const MAIN_MCP_TRUSTED_INVOCATION_METADATA_CONTRIBUTION_KIND =
+  'main.mcp-trusted-invocation-metadata' as const
+
+export type DomainRuntimeMcpServerConfig = Readonly<{
+  id: string
+  command: string
+  args?: readonly string[]
+  env?: Readonly<Record<string, string>>
+  timeoutMs?: number
+  enabledTools?: readonly string[]
+  disabled?: boolean
+}>
+
+export type DomainMainRuntimeMcpServerContribution = Readonly<{
+  serverId: string
+  createConfig: (settings: unknown) => DomainRuntimeMcpServerConfig | null
+  isRuntimeEnabled?: (settings: unknown, runtimeId: string) => boolean
+}>
+
+export type DomainMcpTrustedInvocationMetadataContribution = Readonly<{
+  serverId: string
+  tools: readonly string[]
+  metadataKey: string
+  source: 'trusted-invocation'
+}>
 export const MAIN_EXTENSION_CONTRIBUTION_KIND = 'main.extension' as const
 export const MAIN_INTERNAL_SERVICE_DESCRIPTOR_LOCATION =
   'main.internal-service-descriptor' as const
@@ -648,6 +676,26 @@ export function isDomainMainActionGuard(
     new Set(actions).size === actions.length
 }
 
+export function isDomainMainRuntimeMcpServerContribution(
+  value: unknown
+): value is DomainMainRuntimeMcpServerContribution {
+  if (!isRecord(value)) return false
+  return typeof value.serverId === 'string' && Boolean(value.serverId.trim()) &&
+    typeof value.createConfig === 'function' &&
+    (value.isRuntimeEnabled === undefined || typeof value.isRuntimeEnabled === 'function')
+}
+
+export function isDomainMcpTrustedInvocationMetadataContribution(
+  value: unknown
+): value is DomainMcpTrustedInvocationMetadataContribution {
+  if (!isRecord(value) || value.source !== 'trusted-invocation') return false
+  if (typeof value.serverId !== 'string' || !value.serverId.trim()) return false
+  if (typeof value.metadataKey !== 'string' || !value.metadataKey.trim()) return false
+  return Array.isArray(value.tools) && value.tools.length > 0 &&
+    value.tools.every((tool) => typeof tool === 'string' && Boolean(tool.trim())) &&
+    new Set(value.tools).size === value.tools.length
+}
+
 export type DomainWorkbenchRightPanelSession = Readonly<{
   id: string
   runtimeId?: string
@@ -661,19 +709,50 @@ export type DomainWorkbenchRightPanelActivation = Readonly<{
   payload: DomainPackageJsonValue
 }>
 
+export type DomainWorkbenchRightPanelPlacement = z.infer<
+  typeof domainWorkbenchRightPanelPlacementSchema
+>
+
+/**
+ * Host-owned routing for a right-panel request.
+ *
+ * A package may omit placement (or request `focused`), explicitly request a
+ * `new` pane, or echo a `surfaceId` received from its render context to target
+ * that exact mounted pane. Packages must not create surface identities.
+ */
+export type DomainWorkbenchRightPanelTarget =
+  | Readonly<{
+      placement?: 'focused'
+      surfaceId?: never
+    }>
+  | Readonly<{
+      placement: 'new'
+      surfaceId?: never
+    }>
+  | Readonly<{
+      placement?: never
+      surfaceId: string
+    }>
+
 export type DomainWorkbenchRightPanelRenderContext = Readonly<{
+  /** True only while the Session is foreground and this pane intersects the Dock viewport. */
   active: boolean
+  /** Keyboard and command-routing focus within the owning Session dock. */
+  focused: boolean
+  /** Stable opaque Host identity that nested requests may echo, but never create. */
+  surfaceId: string
   className: string
   onCollapse: () => void
   session: DomainWorkbenchRightPanelSession
   activation?: DomainWorkbenchRightPanelActivation
 }>
 
-export type DomainWorkbenchOpenRightPanelInput = Readonly<{
-  contributionId: string
-  sessionId: string
-  activation?: DomainWorkbenchRightPanelActivation
-}>
+export type DomainWorkbenchOpenRightPanelInput =
+  Readonly<{
+    contributionId: string
+    sessionId: string
+    activation?: DomainWorkbenchRightPanelActivation
+  }> & DomainWorkbenchRightPanelTarget
 
 /**
  * Exact, domain-neutral resource identity used to request a renderer-owned
@@ -689,10 +768,11 @@ export type DomainWorkbenchExactResource = Readonly<{
   }>
 }>
 
-export type DomainWorkbenchOpenResourceInput = Readonly<{
-  sessionId: string
-  resource: DomainWorkbenchExactResource
-}>
+export type DomainWorkbenchOpenResourceInput =
+  Readonly<{
+    sessionId: string
+    resource: DomainWorkbenchExactResource
+  }> & DomainWorkbenchRightPanelTarget
 
 export type DomainWorkbenchOpenSurfaceInput = Readonly<{
   contributionId: string
@@ -705,26 +785,27 @@ export type DomainWorkbenchToggleGlobalOverlayInput =
     open?: boolean
   }>
 
-export type DomainWorkspacePreviewTarget = Readonly<{
-  path: string
-  sessionId: string
-  workspaceRoot?: string
-  mimeType?: string
-  kind?: 'file' | 'directory'
-  line?: number
-  column?: number
-  selection?: DomainPackageJsonValue
-  anchor?: DomainPackageJsonValue
-  integrity?: Readonly<{
-    algorithm: 'sha256'
-    expectedDigest: string
-  }>
-  returnTo?: Readonly<{
-    contributionId: string
-    label?: string
-    activation?: DomainWorkbenchRightPanelActivation
-  }>
-}>
+export type DomainWorkspacePreviewTarget =
+  Readonly<{
+    path: string
+    sessionId: string
+    workspaceRoot?: string
+    mimeType?: string
+    kind?: 'file' | 'directory'
+    line?: number
+    column?: number
+    selection?: DomainPackageJsonValue
+    anchor?: DomainPackageJsonValue
+    integrity?: Readonly<{
+      algorithm: 'sha256'
+      expectedDigest: string
+    }>
+    returnTo?: Readonly<{
+      contributionId: string
+      label?: string
+      activation?: DomainWorkbenchRightPanelActivation
+    }>
+  }> & DomainWorkbenchRightPanelTarget
 
 export type DomainRendererWorkspacePreviewHost = Readonly<{
   open: (target: DomainWorkspacePreviewTarget) => void
@@ -790,6 +871,12 @@ export type DomainMainHost = Readonly<{
   getUserDataDir: () => string
   /** Stable opaque Host installation identity; introduced in Host API 1.3. */
   getDeviceId?: () => string
+  /** Application root used to resolve trusted bundled process entries. */
+  getAppRoot?: () => string
+  /** Executable used to launch trusted bundled Node process entries. */
+  getExecutablePath?: () => string
+  /** Whether the current application is running from a packaged build. */
+  isPackaged?: () => boolean
   defineCapability: (options: unknown) => unknown
   /** Owner-scoped non-secret settings; introduced in Host API 1.2. */
   packageSettings?: DomainMainPackageSettingsHost

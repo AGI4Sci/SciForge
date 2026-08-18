@@ -2,6 +2,7 @@ export type RightPanelContextStateKeyInput = {
   mode: string
   workspaceRoot?: string | null
   threadId?: string | null
+  surfaceId: string | null | undefined
   resourceId?: string | null
 }
 
@@ -30,17 +31,46 @@ type StoredState = object
 
 const DEFAULT_CONTEXT_STATE_LIMIT = 120
 
-function normalizedPart(value: string | null | undefined): string {
-  return encodeURIComponent(value?.trim() || '-')
+type RightPanelContextStateKeyPayload = {
+  mode: string
+  workspaceRoot: string | null
+  threadId: string | null
+  surfaceId: string | null
+  resourceId: string | null
+}
+
+const RIGHT_PANEL_CONTEXT_STATE_KEY_VERSION = 1
+const RIGHT_PANEL_CONTEXT_STATE_KEY_PREFIX = `right-panel-context:v${RIGHT_PANEL_CONTEXT_STATE_KEY_VERSION}:`
+
+function normalizedPart(value: string | null | undefined): string | null {
+  return value?.trim() || null
 }
 
 export function rightPanelContextStateKey(input: RightPanelContextStateKeyInput): string {
-  return [
-    normalizedPart(input.mode),
-    normalizedPart(input.workspaceRoot),
-    normalizedPart(input.threadId),
-    normalizedPart(input.resourceId)
-  ].join('|')
+  const payload: RightPanelContextStateKeyPayload = {
+    mode: normalizedPart(input.mode) ?? '-',
+    workspaceRoot: normalizedPart(input.workspaceRoot),
+    threadId: normalizedPart(input.threadId),
+    surfaceId: normalizedPart(input.surfaceId),
+    resourceId: normalizedPart(input.resourceId)
+  }
+  return `${RIGHT_PANEL_CONTEXT_STATE_KEY_PREFIX}${JSON.stringify(payload)}`
+}
+
+function parseRightPanelContextStateKey(key: string): RightPanelContextStateKeyPayload | null {
+  if (!key.startsWith(RIGHT_PANEL_CONTEXT_STATE_KEY_PREFIX)) return null
+  try {
+    const parsed = JSON.parse(key.slice(RIGHT_PANEL_CONTEXT_STATE_KEY_PREFIX.length)) as unknown
+    if (!parsed || typeof parsed !== 'object') return null
+    const payload = parsed as Partial<Record<keyof RightPanelContextStateKeyPayload, unknown>>
+    if (typeof payload.mode !== 'string') return null
+    for (const field of ['workspaceRoot', 'threadId', 'surfaceId', 'resourceId'] as const) {
+      if (payload[field] !== null && typeof payload[field] !== 'string') return null
+    }
+    return payload as RightPanelContextStateKeyPayload
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -85,9 +115,26 @@ export class RightPanelContextStateMemory {
 
   forgetThread(threadId: string | null | undefined): void {
     const normalizedThread = normalizedPart(threadId)
-    if (normalizedThread === '-') return
+    if (!normalizedThread) return
     for (const key of this.states.keys()) {
-      if (key.split('|')[2] === normalizedThread) this.states.delete(key)
+      if (parseRightPanelContextStateKey(key)?.threadId === normalizedThread) {
+        this.states.delete(key)
+      }
+    }
+  }
+
+  forgetSurface(
+    threadId: string | null | undefined,
+    surfaceId: string | null | undefined
+  ): void {
+    const normalizedThread = normalizedPart(threadId)
+    const normalizedSurface = normalizedPart(surfaceId)
+    if (!normalizedThread || !normalizedSurface) return
+    for (const key of this.states.keys()) {
+      const payload = parseRightPanelContextStateKey(key)
+      if (payload?.threadId === normalizedThread && payload.surfaceId === normalizedSurface) {
+        this.states.delete(key)
+      }
     }
   }
 
@@ -97,13 +144,16 @@ export class RightPanelContextStateMemory {
   ): void {
     const previousThread = normalizedPart(previousThreadId)
     const nextThread = normalizedPart(nextThreadId)
-    if (previousThread === '-' || nextThread === '-' || previousThread === nextThread) return
+    if (!previousThread || !nextThread || previousThread === nextThread) return
     for (const [key, value] of [...this.states.entries()]) {
-      const parts = key.split('|')
-      if (parts[2] !== previousThread) continue
-      parts[2] = nextThread
+      const payload = parseRightPanelContextStateKey(key)
+      if (payload?.threadId !== previousThread) continue
+      const nextKey = rightPanelContextStateKey({
+        ...payload,
+        threadId: nextThread
+      })
       this.states.delete(key)
-      this.states.set(parts.join('|'), value)
+      this.states.set(nextKey, value)
     }
     this.evictOverflow()
   }
@@ -143,6 +193,13 @@ export function rememberRightPanelContextState<T extends StoredState>(
 
 export function forgetRightPanelContextStateForSession(sessionId: string): void {
   rightPanelContextStateMemory.forgetThread(sessionId)
+}
+
+export function forgetRightPanelContextStateForSurface(
+  sessionId: string,
+  surfaceId: string
+): void {
+  rightPanelContextStateMemory.forgetSurface(sessionId, surfaceId)
 }
 
 export function moveRightPanelContextStateOwner(

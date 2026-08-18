@@ -12,23 +12,24 @@ import { createDomainMainEntry as createDomainMainEntry2 } from '@sciforge/domai
 import { createDomainMainEntry as createDomainMainEntry3 } from '@sciforge/domain-browser-preview/main'
 import { createDomainMainEntry as createDomainMainEntry4 } from '@sciforge/domain-change-inspector/main'
 import { createDomainMainEntry as createDomainMainEntry5 } from '@sciforge/domain-collaboration/main'
-import { createDomainMainEntry as createDomainMainEntry6 } from '@sciforge/domain-content-space/main'
-import { createDomainMainEntry as createDomainMainEntry7 } from '@sciforge/domain-content-space-mock-provider/main'
-import { createDomainMainEntry as createDomainMainEntry8 } from '@sciforge/domain-create-loop/main'
-import { createDomainMainEntry as createDomainMainEntry9 } from '@sciforge/domain-dataset-api/main'
-import { createDomainMainEntry as createDomainMainEntry10 } from '@sciforge/domain-evidence-dag/main'
-import { createDomainMainEntry as createDomainMainEntry11 } from '@sciforge/domain-git-checkpoints/main'
-import { createDomainMainEntry as createDomainMainEntry12 } from '@sciforge/domain-identity-access/main'
-import { createDomainMainEntry as createDomainMainEntry13 } from '@sciforge/domain-life-science-preview/main'
-import { createDomainMainEntry as createDomainMainEntry14 } from '@sciforge/domain-opencontent-connector/main'
-import { createDomainMainEntry as createDomainMainEntry15 } from '@sciforge/domain-opencontent-content-space-provider/main'
-import { createDomainMainEntry as createDomainMainEntry16 } from '@sciforge/domain-paper-radar/main'
-import { createDomainMainEntry as createDomainMainEntry17 } from '@sciforge/domain-project-dag/main'
-import { createDomainMainEntry as createDomainMainEntry18 } from '@sciforge/domain-remote-ssh/main'
-import { createDomainMainEntry as createDomainMainEntry19 } from '@sciforge/domain-research-checkpoints/main'
-import { createDomainMainEntry as createDomainMainEntry20 } from '@sciforge/domain-scientific-compute/main'
-import { createDomainMainEntry as createDomainMainEntry21 } from '@sciforge/domain-scientific-plotting/main'
-import { createDomainMainEntry as createDomainMainEntry22 } from '@sciforge/domain-visual-review/main'
+import { createDomainMainEntry as createDomainMainEntry6 } from '@sciforge/domain-computer-use/main'
+import { createDomainMainEntry as createDomainMainEntry7 } from '@sciforge/domain-content-space/main'
+import { createDomainMainEntry as createDomainMainEntry8 } from '@sciforge/domain-content-space-mock-provider/main'
+import { createDomainMainEntry as createDomainMainEntry9 } from '@sciforge/domain-create-loop/main'
+import { createDomainMainEntry as createDomainMainEntry10 } from '@sciforge/domain-dataset-api/main'
+import { createDomainMainEntry as createDomainMainEntry11 } from '@sciforge/domain-evidence-dag/main'
+import { createDomainMainEntry as createDomainMainEntry12 } from '@sciforge/domain-git-checkpoints/main'
+import { createDomainMainEntry as createDomainMainEntry13 } from '@sciforge/domain-identity-access/main'
+import { createDomainMainEntry as createDomainMainEntry14 } from '@sciforge/domain-life-science-preview/main'
+import { createDomainMainEntry as createDomainMainEntry15 } from '@sciforge/domain-opencontent-connector/main'
+import { createDomainMainEntry as createDomainMainEntry16 } from '@sciforge/domain-opencontent-content-space-provider/main'
+import { createDomainMainEntry as createDomainMainEntry17 } from '@sciforge/domain-paper-radar/main'
+import { createDomainMainEntry as createDomainMainEntry18 } from '@sciforge/domain-project-dag/main'
+import { createDomainMainEntry as createDomainMainEntry19 } from '@sciforge/domain-remote-ssh/main'
+import { createDomainMainEntry as createDomainMainEntry20 } from '@sciforge/domain-research-checkpoints/main'
+import { createDomainMainEntry as createDomainMainEntry21 } from '@sciforge/domain-scientific-compute/main'
+import { createDomainMainEntry as createDomainMainEntry22 } from '@sciforge/domain-scientific-plotting/main'
+import { createDomainMainEntry as createDomainMainEntry23 } from '@sciforge/domain-visual-review/main'
 import type { z } from 'zod'
 import { installedDomainPackages } from '../../shared/installed-domain-packages'
 import { defineCapability, type DefineCapabilityOptions } from '../capabilities/registry'
@@ -95,23 +96,24 @@ export function createInstalledMainDomainEntries(host: InstalledMainDomainHost) 
       createDomainMainEntry3(domainHostFor("@sciforge/domain-browser-preview")),
       createDomainMainEntry4(domainHostFor("@sciforge/domain-change-inspector")),
       createDomainMainEntry5(domainHostFor("@sciforge/domain-collaboration")),
-      createDomainMainEntry6(domainHostFor("@sciforge/domain-content-space")),
-      createDomainMainEntry7(domainHostFor("@sciforge/domain-content-space-mock-provider")),
-      createDomainMainEntry8(domainHostFor("@sciforge/domain-create-loop")),
-      createDomainMainEntry9(domainHostFor("@sciforge/domain-dataset-api")),
-      createDomainMainEntry10(domainHostFor("@sciforge/domain-evidence-dag")),
-      createDomainMainEntry11(domainHostFor("@sciforge/domain-git-checkpoints")),
-      createDomainMainEntry12(domainHostFor("@sciforge/domain-identity-access")),
-      createDomainMainEntry13(domainHostFor("@sciforge/domain-life-science-preview")),
-      createDomainMainEntry14(domainHostFor("@sciforge/domain-opencontent-connector")),
-      createDomainMainEntry15(domainHostFor("@sciforge/domain-opencontent-content-space-provider")),
-      createDomainMainEntry16(domainHostFor("@sciforge/domain-paper-radar")),
-      createDomainMainEntry17(domainHostFor("@sciforge/domain-project-dag")),
-      createDomainMainEntry18(domainHostFor("@sciforge/domain-remote-ssh")),
-      createDomainMainEntry19(domainHostFor("@sciforge/domain-research-checkpoints")),
-      createDomainMainEntry20(domainHostFor("@sciforge/domain-scientific-compute")),
-      createDomainMainEntry21(domainHostFor("@sciforge/domain-scientific-plotting")),
-      createDomainMainEntry22(domainHostFor("@sciforge/domain-visual-review"))
+      createDomainMainEntry6(domainHostFor("@sciforge/domain-computer-use")),
+      createDomainMainEntry7(domainHostFor("@sciforge/domain-content-space")),
+      createDomainMainEntry8(domainHostFor("@sciforge/domain-content-space-mock-provider")),
+      createDomainMainEntry9(domainHostFor("@sciforge/domain-create-loop")),
+      createDomainMainEntry10(domainHostFor("@sciforge/domain-dataset-api")),
+      createDomainMainEntry11(domainHostFor("@sciforge/domain-evidence-dag")),
+      createDomainMainEntry12(domainHostFor("@sciforge/domain-git-checkpoints")),
+      createDomainMainEntry13(domainHostFor("@sciforge/domain-identity-access")),
+      createDomainMainEntry14(domainHostFor("@sciforge/domain-life-science-preview")),
+      createDomainMainEntry15(domainHostFor("@sciforge/domain-opencontent-connector")),
+      createDomainMainEntry16(domainHostFor("@sciforge/domain-opencontent-content-space-provider")),
+      createDomainMainEntry17(domainHostFor("@sciforge/domain-paper-radar")),
+      createDomainMainEntry18(domainHostFor("@sciforge/domain-project-dag")),
+      createDomainMainEntry19(domainHostFor("@sciforge/domain-remote-ssh")),
+      createDomainMainEntry20(domainHostFor("@sciforge/domain-research-checkpoints")),
+      createDomainMainEntry21(domainHostFor("@sciforge/domain-scientific-compute")),
+      createDomainMainEntry22(domainHostFor("@sciforge/domain-scientific-plotting")),
+      createDomainMainEntry23(domainHostFor("@sciforge/domain-visual-review"))
     ]
   ).entries
 }

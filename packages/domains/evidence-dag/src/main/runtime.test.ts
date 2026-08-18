@@ -9,7 +9,8 @@ import type { DomainMainRuntimeLifecycleContext } from '@sciforge/domain-sdk/hos
 import {
   EvidenceDagRuntime,
   evidenceDagWatermarkCovers,
-  evidenceDagWorkspaceRoot
+  evidenceDagWorkspaceRoot,
+  updateEvidenceDagVisibleSurfaces
 } from './runtime.js'
 import type { EvidenceDagSidecarPort } from './sidecar.js'
 
@@ -51,6 +52,39 @@ test('requires one unambiguous workspace scope for an update', () => {
     () => evidenceDagWorkspaceRoot(undefined, undefined),
     /requires a workspace root/
   )
+})
+
+test('keeps a thread prioritized until its last visible surface closes', () => {
+  const visibleSurfacesByThread = new Map<string, Set<string>>()
+
+  assert.equal(updateEvidenceDagVisibleSurfaces(
+    visibleSurfacesByThread,
+    'codex',
+    'thread-1',
+    'surface-a',
+    true
+  ), true)
+  assert.equal(updateEvidenceDagVisibleSurfaces(
+    visibleSurfacesByThread,
+    'codex',
+    'thread-1',
+    'surface-b',
+    true
+  ), true)
+  assert.equal(updateEvidenceDagVisibleSurfaces(
+    visibleSurfacesByThread,
+    'codex',
+    'thread-1',
+    'surface-a',
+    false
+  ), true)
+  assert.equal(updateEvidenceDagVisibleSurfaces(
+    visibleSurfacesByThread,
+    'codex',
+    'thread-1',
+    'surface-b',
+    false
+  ), false)
 })
 
 test('ensures the sidecar immediately before a background queue submission', async () => {

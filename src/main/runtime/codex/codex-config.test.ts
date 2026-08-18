@@ -146,11 +146,12 @@ describe('codex config launch helpers', () => {
     })).resolves.toBe(join(newerBin, 'codex'))
   })
 
-  it('finds the Windows cmd shim when Explorer provides Path instead of PATH', async () => {
+  it('skips the extensionless Windows npm shim and resolves its cmd wrapper', async () => {
     const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-windows-'))
     const npmBin = join(home, 'AppData', 'Roaming', 'npm')
     const command = join(npmBin, 'codex.cmd')
     await mkdir(npmBin, { recursive: true })
+    await writeFile(join(npmBin, 'codex'), '#!/usr/bin/env node\n', 'utf8')
     await writeFile(command, '@echo off\r\n', 'utf8')
 
     await expect(resolveCodexCommand('codex', {
@@ -163,6 +164,23 @@ describe('codex config launch helpers', () => {
       getLoginShellPath: async () => {
         throw new Error('must not inspect a Unix shell on Windows')
       }
+    })).resolves.toBe(command)
+  })
+
+  it('resolves an explicitly configured Windows cmd wrapper outside Explorer Path', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-windows-explicit-'))
+    const npmBin = join(home, 'AppData', 'Roaming', 'npm')
+    const command = join(npmBin, 'codex.cmd')
+    await mkdir(npmBin, { recursive: true })
+    await writeFile(command, '@echo off\r\n', 'utf8')
+
+    await expect(resolveCodexCommand('codex.cmd', {
+      env: {
+        Path: 'C:\\Windows\\System32',
+        APPDATA: join(home, 'AppData', 'Roaming')
+      },
+      homeDir: home,
+      platform: 'win32'
     })).resolves.toBe(command)
   })
 
@@ -444,8 +462,13 @@ describe('codex config launch helpers', () => {
     })
 
     const config = await readFile(join(codexHome, 'config.toml'), 'utf8')
-    expect(config.indexOf(`model_provider = "${CODEX_PLAN_GATEWAY_PROVIDER_ID}"`))
-      .toBeLessThan(config.indexOf('[features]'))
+    const provider = `model_provider = "${CODEX_PLAN_GATEWAY_PROVIDER_ID}"`
+    const providerIndex = config.indexOf(provider)
+    const featuresIndex = config.indexOf('[features]')
+
+    expect(providerIndex).toBeGreaterThanOrEqual(0)
+    expect(featuresIndex).toBeGreaterThanOrEqual(0)
+    expect(providerIndex).toBeLessThan(featuresIndex)
   })
 
   it('drops Codex runtime-only profile args before launching app-server', async () => {

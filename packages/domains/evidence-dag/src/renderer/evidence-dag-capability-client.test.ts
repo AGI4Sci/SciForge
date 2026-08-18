@@ -55,6 +55,7 @@ test('invokes only the package-owned Evidence DAG capability contracts', async (
   await client.priority({
     runtimeId: 'codex',
     threadId: 'thread-1',
+    surfaceId: 'surface-evidence-a',
     visible: true
   })
   await client.resolvePreview({

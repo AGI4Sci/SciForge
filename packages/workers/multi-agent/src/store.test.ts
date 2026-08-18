@@ -44,6 +44,9 @@ test('file store persists child runs and filters by parent thread, turn, and sta
     assert.equal(child?.id, 'child-a')
     assert.equal((await store.findByRequest('thread-1', 'turn-1', 'request-a'))?.id, 'child-a')
     assert.equal(await store.findByRequest('thread-1', 'turn-2', 'request-a'), null)
+    assert.equal(await store.delete('thread-1', 'child-b'), true)
+    assert.equal(await store.get('thread-1', 'child-b'), null)
+    assert.equal(await store.delete('thread-1', 'child-b'), false)
 
     const page = await store.readTranscript('thread-1', 'child-a', { offset: 1, limit: 1 })
     assert.equal(page?.total, 2)
@@ -51,7 +54,7 @@ test('file store persists child runs and filters by parent thread, turn, and sta
 
     await writeFile(join(rootDir, 'corrupt.json'), '{bad json', 'utf8')
     const diagnostics = await store.diagnostics()
-    assert.equal(diagnostics.records, 3)
+    assert.equal(diagnostics.records, 2)
     assert.equal(diagnostics.invalidRecords, 1)
     assert.equal(diagnostics.issues[0]?.code, 'store_read_failed')
   } finally {

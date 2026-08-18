@@ -1,4 +1,4 @@
-import { createElement } from 'react'
+import { createElement, Fragment } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -118,6 +118,28 @@ describe('VisualReviewSurface', () => {
     expect(markup).toContain('1 条待处理')
     expect(markup).toContain('生成修改版')
     expect(markup).not.toContain('iframe')
+  })
+
+  it('uses distinct SVG marker identities for duplicate mounted surfaces', () => {
+    const arrowAnnotations: VisualReviewAnnotation[] = [{
+      id: 'arrow-1',
+      kind: 'arrow',
+      geometry: { start: { x: 0.1, y: 0.1 }, end: { x: 0.8, y: 0.8 } },
+      comment: 'Move this direction.',
+      status: 'open'
+    }]
+    const markup = renderToStaticMarkup(createElement(Fragment, null,
+      createElement(VisualReviewSurface, { source, annotations: arrowAnnotations }),
+      createElement(VisualReviewSurface, { source, annotations: arrowAnnotations })
+    ))
+    const markerIds = [...markup.matchAll(/<marker id="([^"]+)"/gu)]
+      .map((match) => match[1])
+
+    expect(markerIds).toHaveLength(2)
+    expect(new Set(markerIds).size).toBe(2)
+    for (const markerId of markerIds) {
+      expect(markup).toContain(`marker-end="url(#${markerId})"`)
+    }
   })
 
   it('renders the package-owned image style recognition control', () => {

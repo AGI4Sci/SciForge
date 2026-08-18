@@ -112,6 +112,50 @@ describe('ResourceNavigationContributionRegistry', () => {
     })).toBeNull()
   })
 
+  it('propagates new and exact Host targets through the canonical resource resolver', () => {
+    const panels = new WorkbenchRightPanelContributionRegistry()
+    registerPanel(panels, 'fixture.panel', 'fixture.owner')
+    const registry = new ResourceNavigationContributionRegistry(panels)
+    registry.register({
+      id: 'fixture.navigator',
+      ownerId: 'fixture.owner',
+      contract: {
+        resourceKinds: ['artifact-version'],
+        target: { surface: 'right-panel', contributionId: 'fixture.panel' }
+      },
+      value: { resolve: () => ({}) }
+    })
+    const resource = {
+      resourceKind: 'artifact-version',
+      resourceId: 'artifact-version:figure:2'
+    }
+
+    expect(resolveResourceNavigation(registry, {
+      sessionId: 'session-1',
+      placement: 'new',
+      resource
+    })).toEqual({
+      contributionId: 'fixture.panel',
+      sessionId: 'session-1',
+      placement: 'new'
+    })
+    expect(resolveResourceNavigation(registry, {
+      sessionId: 'session-1',
+      surfaceId: 'right-panel-surface-2',
+      resource
+    })).toEqual({
+      contributionId: 'fixture.panel',
+      sessionId: 'session-1',
+      surfaceId: 'right-panel-surface-2'
+    })
+    expect(resolveResourceNavigation(registry, {
+      sessionId: 'session-1',
+      placement: 'new',
+      surfaceId: 'right-panel-surface-2',
+      resource
+    } as never)).toBeNull()
+  })
+
   it('rejects missing and cross-owner target panels', () => {
     const missingPanels = new WorkbenchRightPanelContributionRegistry()
     const missingRegistry = new ResourceNavigationContributionRegistry(missingPanels)

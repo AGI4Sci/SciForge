@@ -18,7 +18,10 @@ import {
   WritePdfViewer
 } from '../components/write/WritePdfViewer'
 import { rightPanelContextStateKey } from '../components/right-panel-context-state'
-import { useRightPanelSessionId } from '../components/right-panel-session-scope'
+import {
+  useRightPanelSessionId,
+  useRightPanelSurfaceId
+} from '../components/right-panel-session-scope'
 import type { WorkspacePreviewAssetTransportClient } from './host'
 import {
   createDocumentWorkspacePreviewAnnotationOperation
@@ -256,6 +259,7 @@ export function PdfWorkspaceViewer({
 }: PdfWorkspaceViewerProps): ReactElement {
   const { t } = useTranslation()
   const rightPanelSessionId = useRightPanelSessionId()
+  const rightPanelSurfaceId = useRightPanelSurfaceId()
   const resolvedAsset = asset ?? transport?.descriptor ?? null
   const resolvedModel = useMemo(() => model ?? buildPdfWorkspaceViewerModel({
     observation,
@@ -404,6 +408,7 @@ export function PdfWorkspaceViewer({
                 mode: 'file-pdf',
                 workspaceRoot: observation?.file.workspaceRoot,
                 threadId: rightPanelSessionId,
+                surfaceId: rightPanelSurfaceId,
                 resourceId: resolvePdfFilePath(observation, resolvedAsset)
               })}
               initialPage={initialPage}

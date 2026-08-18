@@ -34,7 +34,9 @@ test('renderer installs provenance panel, command, toolbar, and translations', (
   const rendered = panel.render({
     active: true,
     className: 'plot-panel',
+    focused: true,
     onCollapse: () => undefined,
+    surfaceId: 'surface-plot-a',
     session: { id: 'session-1', workspaceRoot: '/workspace' },
     activation: {
       revision: 2,
@@ -44,6 +46,13 @@ test('renderer installs provenance panel, command, toolbar, and translations', (
   assert.equal(rendered.props.workspaceRoot, '/workspace')
   assert.equal(rendered.props.preferredManifestVersionId, 'artifact-version:manifest-v2')
   assert.equal(typeof rendered.props.onOpenArtifactHistory, 'function')
+  ;(rendered.props.onOpenArtifactHistory as () => void)()
+  assert.deepEqual(opened, [{
+    contributionId: 'artifact-versions.workbench-right-panel',
+    sessionId: 'session-1',
+    surfaceId: 'surface-plot-a'
+  }])
+  opened.length = 0
 
   const command = entry.contributions.find(
     ({ id }) => id === SCIENTIFIC_PLOTTING_RENDERER_COMMAND_CONTRIBUTION.id

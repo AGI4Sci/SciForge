@@ -173,7 +173,9 @@ describe('Visual Review renderer entry', () => {
     const rendered = panel.render({
       active: true,
       className: 'panel',
+      focused: true,
       onCollapse: vi.fn(),
+      surfaceId: 'surface-visual-a',
       session: {
         id: 'session-1',
         workspaceRoot: '/workspace'
@@ -204,7 +206,9 @@ describe('Visual Review renderer entry', () => {
     expect(() => panel.render({
       active: true,
       className: 'panel',
+      focused: true,
       onCollapse: vi.fn(),
+      surfaceId: 'surface-visual-a',
       session: {
         id: 'session-1',
         workspaceRoot: '/workspace'

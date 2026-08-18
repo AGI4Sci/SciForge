@@ -54,7 +54,9 @@ test('creates declared Workbench and translation values without host side effect
   const rendered = panel.render({
     active: true,
     className: 'panel',
+    focused: true,
     onCollapse: () => undefined,
+    surfaceId: 'surface-paper-a',
     session: { id: 'session-paper' }
   })
   const props = (rendered as ReactElement<Record<string, unknown>>).props

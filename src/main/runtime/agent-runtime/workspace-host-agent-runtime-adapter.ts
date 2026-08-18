@@ -462,9 +462,11 @@ export function createPlacementAwareAgentRuntimeAdapter(
       ? {
           subagents: {
             spawn: (context, input) => requireSubagentAdapter(selected(context)).spawn(context, input),
+            resume: (context, input) => requireSubagentAdapter(selected(context)).resume(context, input),
             inspect: (context, input) => requireSubagentAdapter(selected(context)).inspect(context, input),
             message: (context, input) => requireSubagentAdapter(selected(context)).message(context, input),
-            cancel: (context, input) => requireSubagentAdapter(selected(context)).cancel(context, input)
+            cancel: (context, input) => requireSubagentAdapter(selected(context)).cancel(context, input),
+            delete: (context, input) => requireSubagentAdapter(selected(context)).delete(context, input)
           }
         }
       : {}),

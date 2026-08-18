@@ -128,6 +128,53 @@ export type AgentRuntimeToolRecovery = Readonly<{
   instruction: string
 }>
 
+/**
+ * Produces the canonical model-visible failure payload for every in-process
+ * runtime tool transport. Keep this deliberately limited to the stable error
+ * contract: provider response bodies and other untrusted diagnostics must not
+ * be reflected back into the model context.
+ */
+export function modelVisibleAgentRuntimeToolFailure(
+  toolName: string,
+  error: unknown
+): string {
+  const record = error && typeof error === 'object'
+    ? error as Record<string, unknown>
+    : {}
+  const recoveryRecord = record.recovery && typeof record.recovery === 'object'
+    ? record.recovery as Record<string, unknown>
+    : {}
+  const message = error instanceof Error ? error.message : String(error)
+  const code = optionalString(record.code) ?? 'runtime_tool_error'
+  const failureClass = optionalString(record.failureClass)
+  const providerStage = optionalString(record.providerStage)
+  const resourceIdentity = optionalString(record.resourceIdentity)
+  const recoveryAction = optionalString(recoveryRecord.action)
+  const recoveryInstruction = optionalString(recoveryRecord.instruction)
+    ?? optionalString(record.recoveryGuidance)
+
+  return JSON.stringify({
+    tool: toolName,
+    status: 'failed',
+    error: {
+      code,
+      message,
+      ...(failureClass ? { failureClass } : {}),
+      ...(typeof record.retryable === 'boolean' ? { retryable: record.retryable } : {}),
+      ...(providerStage ? { providerStage } : {}),
+      ...(resourceIdentity ? { resourceIdentity } : {}),
+      ...(recoveryAction || recoveryInstruction
+        ? {
+            recovery: {
+              ...(recoveryAction ? { action: recoveryAction } : {}),
+              ...(recoveryInstruction ? { instruction: recoveryInstruction } : {})
+            }
+          }
+        : {})
+    }
+  }, null, 2)
+}
+
 export type NativeVisualToolErrorCode =
   | 'visual_invalid_arguments'
   | 'visual_invalid_result'
@@ -142,6 +189,7 @@ export type NativeVisualToolErrorCode =
   | 'visual_snapshot_stale'
   | 'visual_target_stale'
   | 'visual_inspection_unavailable'
+  | 'visual_inspection_timeout'
   | 'visual_inspection_invalid'
   | 'visual_inspection_unverified'
   | 'visual_evidence_attestation_missing'

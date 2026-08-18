@@ -58,6 +58,7 @@ test('rejects stale snapshots before invoking the trusted resolver', async () =>
     frameWindow: current.window,
     frameUrl: 'http://127.0.0.1:9000/',
     sessionId: 'session-1',
+    surfaceId: 'surface-project-a',
     target: {
       workspaceRoot: '/workspace/lab',
       projectRoot: '/workspace/lab'
@@ -98,6 +99,7 @@ test('opens a trusted Project evidence target through the host facade', async ()
     frameWindow: current.window,
     frameUrl: 'http://127.0.0.1:9000/',
     sessionId: 'session-1',
+    surfaceId: 'surface-project-a',
     target: {
       workspaceRoot: '/workspace/lab',
       projectRoot: '/workspace/lab',
@@ -124,6 +126,7 @@ test('opens a trusted Project evidence target through the host facade', async ()
 
   assert.equal(result.status, 'opened')
   assert.equal(opened.length, 1)
+  assert.equal(opened[0]?.surfaceId, 'surface-project-a')
   assert.deepEqual(opened[0]?.returnTo?.activation, {
     contributionId: 'project-dag.workbench-right-panel',
     revision: 6,

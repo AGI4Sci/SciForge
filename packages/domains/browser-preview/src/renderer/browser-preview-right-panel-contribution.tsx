@@ -50,12 +50,14 @@ export function createBrowserPreviewRightPanelContribution(
   const client = createBrowserPreviewCapabilityClient(host.capabilityInvoker)
   const visibleContext = host.visibleContext
   return Object.freeze({
-    render: ({ active, className, onCollapse, session }) => (
+    render: ({ active, className, focused, onCollapse, session, surfaceId }) => (
       <BrowserPreviewPanel
         active={active}
         className={className}
+        focused={focused}
         onCollapse={onCollapse}
         sessionId={session.id}
+        surfaceId={surfaceId}
         workspaceRoot={session.workspaceRoot ?? ''}
         client={client}
         visibleContext={visibleContext}

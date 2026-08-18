@@ -52,7 +52,7 @@ export function createScientificPlottingRightPanelContribution(
 ): ScientificPlottingRightPanelContribution {
   const client = createScientificPlottingCapabilityClient(host.capabilityInvoker)
   return Object.freeze({
-    render: ({ activation, className, onCollapse, session }) => {
+    render: ({ activation, className, onCollapse, session, surfaceId }) => {
       const parsedActivation = scientificPlottingActivationSchema.safeParse(activation?.payload)
       return (
         <ScientificPlottingProvenancePanel
@@ -67,7 +67,8 @@ export function createScientificPlottingRightPanelContribution(
             ? {
                 onOpenArtifactHistory: () => host.workbench?.openRightPanel({
                   contributionId: ARTIFACT_VERSIONS_RENDERER_RIGHT_PANEL_CONTRIBUTION.id,
-                  sessionId: session.id
+                  sessionId: session.id,
+                  surfaceId
                 })
               }
             : {})}

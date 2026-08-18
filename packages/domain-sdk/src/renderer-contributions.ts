@@ -30,6 +30,8 @@ export const WORKBENCH_BOTTOM_PANEL_LOCATION = 'workbench.bottom-panel' as const
 export const WORKBENCH_GLOBAL_OVERLAY_LOCATION = 'workbench.global-overlay' as const
 export const COMPOSER_CONTEXT_LOCATION = 'composer.context' as const
 
+export const domainWorkbenchRightPanelPlacementSchema = z.enum(['focused', 'new'])
+
 export const domainRendererExtensionContractSchema = z.object({
   location: z.string().trim().min(1).max(192)
 }).passthrough()
@@ -109,7 +111,7 @@ export const domainRendererWorkspacePickResultSchema = z.object({
   })
 })
 
-export const domainWorkbenchOpenResourceInputSchema = z.object({
+const domainWorkbenchOpenResourceInputFields = {
   sessionId: z.string().trim().min(1).max(256),
   resource: z.object({
     resourceKind: z.string().trim().min(1).max(192),
@@ -120,7 +122,24 @@ export const domainWorkbenchOpenResourceInputSchema = z.object({
         .regex(/^sha256:[0-9a-f]{64}$/u)
     }).strict().optional()
   }).strict()
-}).strict()
+} as const
+
+export const domainWorkbenchOpenResourceInputSchema: z.ZodType<
+  DomainWorkbenchOpenResourceInput
+> = z.union([
+  z.object({
+    ...domainWorkbenchOpenResourceInputFields,
+    placement: z.literal('focused').optional()
+  }).strict(),
+  z.object({
+    ...domainWorkbenchOpenResourceInputFields,
+    placement: z.literal('new')
+  }).strict(),
+  z.object({
+    ...domainWorkbenchOpenResourceInputFields,
+    surfaceId: z.string().min(1).max(512)
+  }).strict()
+])
 
 export type DomainCapabilityResourceHandle = z.infer<
   typeof domainCapabilityResourceHandleSchema
@@ -285,6 +304,7 @@ export type DomainRendererWorkbenchSurfaceActivation = Readonly<{
 }>
 
 type DomainRendererWorkbenchSurfaceRenderContext = Readonly<{
+  /** Foreground viewport visibility; mounted offscreen surfaces remain inactive. */
   active: boolean
   className: string
   session: DomainRendererWorkbenchSession
@@ -293,6 +313,10 @@ type DomainRendererWorkbenchSurfaceRenderContext = Readonly<{
 
 export type DomainRendererWorkbenchRightPanelRenderContext =
   DomainRendererWorkbenchSurfaceRenderContext & Readonly<{
+    /** Keyboard and command-routing focus within the owning Session dock. */
+    focused: boolean
+    /** Stable opaque Host identity that nested requests may echo, but never create. */
+    surfaceId: string
     onCollapse: () => void
   }>
 

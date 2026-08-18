@@ -18,7 +18,7 @@ import {
 } from 'electron'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { JsonSettingsStore, devServerHintUrl } from './settings-store'
@@ -130,12 +130,8 @@ import type { ScientificPlottingMcpLaunchConfig } from './scientific-plotting-mc
 import type { BgcDiscoveryMcpLaunchConfig } from './bgc-discovery-mcp-config'
 import { type ImageGenerationMcpLaunchConfig } from './image-generation-mcp-config'
 import type { PptMasterMcpLaunchConfig } from './ppt-master-mcp-config'
-import {
-  GUI_COMPUTER_USE_MCP_SERVER_NAME,
-  isComputerUseMcpConfigured,
-  type ComputerUseMcpLaunchConfig
-} from './computer-use-mcp-config'
 import { buildManagedGuiMcpServers } from './gui-mcp-registry'
+import type { ManagedGuiMcpLaunchConfig } from './managed-gui-mcp-config'
 import { migrateLegacyKunGlobalConfig } from './legacy-kun-global-config-migration'
 import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
 import { ControlledProcessService } from './processes/controlled-process-service'
@@ -168,6 +164,8 @@ import {
   createMainSystemCapabilityInvokerFactory,
   listMainArtifactConsumers,
   listMainExtensionContributions,
+  listMainMcpTrustedInvocationMetadataContributions,
+  listMainRuntimeMcpServerContributions,
   listMainVisualSourceContributions,
   listMainWorkspacePreviewPluginContributions,
   type ActivatedMainRuntimeContributions
@@ -244,98 +242,70 @@ function resolvePreloadPath(): string {
   return join(__dirname, '../preload/index.mjs')
 }
 
-function getScheduleMcpLaunchConfig(): ScheduleMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
-}
-
-function getResearchSearchMcpLaunchConfig(): ResearchSearchMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
-}
-
-function getWorkspaceIntelMcpLaunchConfig(): WorkspaceIntelMcpLaunchConfig {
+function getManagedGuiMcpLaunchConfig(): ManagedGuiMcpLaunchConfig {
+  const nodeExecPath = app.isPackaged
+    ? undefined
+    : [process.env.npm_node_execpath, process.env.NODE]
+        .map((candidate) => candidate?.trim())
+        .find((candidate): candidate is string =>
+          Boolean(candidate && isAbsolute(candidate) && existsSync(candidate))
+        )
   return {
     appPath: app.getAppPath(),
     execPath: process.execPath,
     isPackaged: app.isPackaged,
+    ...(nodeExecPath ? { nodeExecPath } : {})
+  }
+}
+
+function getScheduleMcpLaunchConfig(): ScheduleMcpLaunchConfig {
+  return getManagedGuiMcpLaunchConfig()
+}
+
+function getResearchSearchMcpLaunchConfig(): ResearchSearchMcpLaunchConfig {
+  return getManagedGuiMcpLaunchConfig()
+}
+
+function getWorkspaceIntelMcpLaunchConfig(): WorkspaceIntelMcpLaunchConfig {
+  return {
+    ...getManagedGuiMcpLaunchConfig(),
     visibleContextPath: visibleContextSnapshotPath(app.getPath('userData'))
   }
 }
 
 function getWriteAssistMcpLaunchConfig(): WriteAssistMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
+  return getManagedGuiMcpLaunchConfig()
 }
 
 function getRuntimeInspectorMcpLaunchConfig(): RuntimeInspectorMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
+  return getManagedGuiMcpLaunchConfig()
 }
 
 function getScientificSkillsMcpLaunchConfig(): ScientificSkillsMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
+  return getManagedGuiMcpLaunchConfig()
 }
 
 function getScientificPlottingMcpLaunchConfig(): ScientificPlottingMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
+  return getManagedGuiMcpLaunchConfig()
 }
 
 function getBgcDiscoveryMcpLaunchConfig(): BgcDiscoveryMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
+  return getManagedGuiMcpLaunchConfig()
 }
 
 function getImageGenerationMcpLaunchConfig(): ImageGenerationMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
+  return getManagedGuiMcpLaunchConfig()
 }
 
 function getPptMasterMcpLaunchConfig(): PptMasterMcpLaunchConfig {
   return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged,
+    ...getManagedGuiMcpLaunchConfig(),
     homeDir: app.getPath('home')
   }
 }
 
-function getComputerUseMcpLaunchConfig(): ComputerUseMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
-}
-
 function managedGuiMcpServers(settings: AppSettingsV1) {
-  return buildManagedGuiMcpServers({
+  const builtIn = buildManagedGuiMcpServers({
     settings,
     scheduleMcp: { settings, launch: getScheduleMcpLaunchConfig() },
     researchMcp: { launch: getResearchSearchMcpLaunchConfig() },
@@ -358,15 +328,36 @@ function managedGuiMcpServers(settings: AppSettingsV1) {
       settings,
       launch: getImageGenerationMcpLaunchConfig()
     },
-    pptMasterMcp: { settings, launch: getPptMasterMcpLaunchConfig() },
-    computerUseMcp: { settings, launch: getComputerUseMcpLaunchConfig() }
+    pptMasterMcp: { settings, launch: getPptMasterMcpLaunchConfig() }
   })
+  const contributed = domainModuleCatalog
+    ? listMainRuntimeMcpServerContributions(domainModuleCatalog)
+      .map((contribution) => contribution.createConfig(settings))
+      .filter((config): config is NonNullable<typeof config> => config !== null)
+      .map((config) => ({
+        ...config,
+        args: config.args ? [...config.args] : undefined,
+        env: config.env ? { ...config.env } : undefined,
+        enabledTools: config.enabledTools ? [...config.enabledTools] : undefined
+      }))
+    : []
+  const combined = [...builtIn, ...contributed]
+  const ids = new Set<string>()
+  for (const server of combined) {
+    if (ids.has(server.id)) throw new Error(`Duplicate managed MCP server id: ${server.id}`)
+    ids.add(server.id)
+  }
+  return combined
 }
 
 async function runtimeMayUseManagedTool(runtimeId: string, tool: RuntimeToolDefinition): Promise<boolean> {
-  if (tool.providerId !== GUI_COMPUTER_USE_MCP_SERVER_NAME) return true
-  if (runtimeId !== 'codex' && runtimeId !== 'claude') return false
-  return isComputerUseMcpConfigured(await store.load(), runtimeId)
+  const contribution = domainModuleCatalog
+    ? listMainRuntimeMcpServerContributions(domainModuleCatalog)
+      .find((candidate) => candidate.serverId === tool.providerId)
+    : undefined
+  return contribution?.isRuntimeEnabled
+    ? contribution.isRuntimeEnabled(await store.load(), runtimeId)
+    : true
 }
 
 traceStartup('main module evaluated')
@@ -591,11 +582,7 @@ function getCodexRuntime(): CodexRuntimeService {
       : join(process.cwd(), '.codex-runtime', 'codex-home'),
     standardCodexAuthPath: join(homedir(), '.codex', 'auth.json'),
     planGateway: { baseUrl: PLAN_GATEWAY_BASE_URL },
-    preToolUseHookLaunch: {
-      appPath: app.getAppPath(),
-      execPath: process.execPath,
-      isPackaged: app.isPackaged
-    },
+    preToolUseHookLaunch: getManagedGuiMcpLaunchConfig(),
     capabilityAgentTools: agentRuntimeTools
   })
   return codexRuntime
@@ -1147,6 +1134,9 @@ app
     const catalog = createApplicationDomainCatalog({
       getUserDataDir: () => app.getPath('userData'),
       getDeviceId: () => hostDeviceId,
+      getAppRoot: () => app.getAppPath(),
+      getExecutablePath: () => process.execPath,
+      isPackaged: () => app.isPackaged,
       textSanitizer: {
         sanitizeText: (value) => sanitizeTraceTextChunks([value], {
           sensitiveValues: currentSensitiveValues()
@@ -1381,7 +1371,8 @@ app
     ])
     domainModuleCatalog = catalog
     runtimeMcpToolGateway = createRuntimeMcpToolGateway({
-      servers: managedGuiMcpServers(initial)
+      servers: managedGuiMcpServers(initial),
+      trustedInvocationMetadata: listMainMcpTrustedInvocationMetadataContributions(catalog)
     })
     const agentRuntimeHostRef: { current: AgentRuntimeHost | null } = {
       current: null

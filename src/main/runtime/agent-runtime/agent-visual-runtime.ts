@@ -193,7 +193,10 @@ export class AgentVisualRuntime {
 
     const inspector = await this.options.visualInspector()
     if (!inspector) throw new Error('Visual understanding is unavailable.')
-    const inspection = await inspector(visualInspectionRequest(input, frame.path, frame.mimeType))
+    const inspection = await inspector(
+      visualInspectionRequest(input, frame.path, frame.mimeType),
+      { signal: context.signal }
+    )
     throwIfAborted(context.signal)
     if (inspection.status !== 'inspected') {
       throw new AgentRuntimeToolError(
@@ -582,6 +585,7 @@ function visualInspectionRequest(
   return {
     task: input.task,
     artifacts: [{ id: 'source', imagePath, mimeType }],
+    ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
     ...(input.intent
       ? {
           outputIntent: {
