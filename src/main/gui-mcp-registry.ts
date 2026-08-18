@@ -9,16 +9,6 @@ import {
   type ScheduleMcpLaunchConfig
 } from './schedule-mcp-config'
 import {
-  buildComputerUseMcpArgs,
-  computerUseMcpEnabledTools,
-  computerUseMcpEnv,
-  COMPUTER_USE_MCP_TIMEOUT_MS,
-  GUI_COMPUTER_USE_MCP_SERVER_NAME,
-  isComputerUseMcpConfigured,
-  resolveComputerUseMcpCommand,
-  type ComputerUseMcpLaunchConfig
-} from './computer-use-mcp-config'
-import {
   buildResearchSearchMcpArgs,
   GUI_RESEARCH_MCP_SERVER_NAME,
   RESEARCH_SEARCH_MCP_TIMEOUT_MS,
@@ -149,10 +139,6 @@ export type GuiMcpRegistryInput = {
   pptMasterMcp?: {
     settings?: AppSettingsV1
     launch: PptMasterMcpLaunchConfig
-  }
-  computerUseMcp?: {
-    settings?: AppSettingsV1
-    launch: ComputerUseMcpLaunchConfig
   }
 }
 
@@ -287,24 +273,6 @@ function managedRuntimeServerConfigs(
       pptMasterSettings.workspaceRoot
     )
     servers.push(runtimeServerConfigFromJson(GUI_PPT_MASTER_MCP_SERVER_NAME, config, GUI_PPT_MASTER_MCP_TIMEOUT_MS, pptMasterMcpEnabledTools()))
-  }
-  const computerUseSettings = input.computerUseMcp?.settings ?? settings
-  if (
-    input.computerUseMcp
-    && computerUseSettings
-    && (
-      isComputerUseMcpConfigured(computerUseSettings, 'codex')
-      || isComputerUseMcpConfigured(computerUseSettings, 'claude')
-    )
-  ) {
-    servers.push({
-      id: GUI_COMPUTER_USE_MCP_SERVER_NAME,
-      command: resolveComputerUseMcpCommand(input.computerUseMcp.launch),
-      args: buildComputerUseMcpArgs(input.computerUseMcp.launch),
-      env: computerUseMcpEnv(),
-      timeoutMs: COMPUTER_USE_MCP_TIMEOUT_MS,
-      enabledTools: computerUseMcpEnabledTools()
-    })
   }
   return servers
 }

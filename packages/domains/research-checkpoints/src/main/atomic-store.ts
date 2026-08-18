@@ -41,7 +41,10 @@ export async function writeJsonAtomic(path: string, value: unknown): Promise<voi
 }
 
 function isUnsupportedDirectorySync(error: unknown): boolean {
-  return isNodeError(error) && ['EINVAL', 'ENOTSUP', 'EISDIR'].includes(error.code ?? '')
+  return isNodeError(error) && (
+    ['EINVAL', 'ENOTSUP', 'EISDIR'].includes(error.code ?? '') ||
+    (process.platform === 'win32' && error.code === 'EPERM')
+  )
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

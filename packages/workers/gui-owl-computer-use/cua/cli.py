@@ -1,9 +1,7 @@
 """Local entry point for the GUI-Owl computer-use worker.
 
-Supports two transports (per the worker convention: stdio MCP or HTTP sidecar):
-
-    python -m cua.cli --stdio     # MCP stdio server (for agent runtimes / Kun / Codex)
-    python -m cua.cli --http      # HTTP ServiceResult sidecar on CUA_PORT (default)
+Runs the local HTTP control service. The managed MCP boundary is owned by the
+Computer Use domain package, not by a second Python MCP implementation.
 
 Reads `.env` (next to this package's folder) if present, so secrets/config stay
 out of code. CLI flags are only the transport switch; everything else is env
@@ -42,21 +40,21 @@ def _load_dotenv() -> None:
 def main(argv: list[str] | None = None) -> int:
     _load_dotenv()
     argv = list(sys.argv[1:] if argv is None else argv)
-    mode = "http"
     for a in argv:
-        if a in ("--stdio", "--mcp"):
-            mode = "stdio"
-        elif a == "--http":
-            mode = "http"
-        elif a in ("-h", "--help"):
+        if a in ("-h", "--help"):
             print(__doc__)
             return 0
-
-    if mode == "stdio":
-        from .mcp_server import main as serve
-    else:
-        from .server import main as serve
-    serve()
+        if a != "--http":
+            raise SystemExit("only the HTTP control service is supported")
+    from .server import main as serve
+    from .service import SERVICE
+    try:
+        serve()
+    finally:
+        # The server owns normal cleanup. This second, idempotent call covers
+        # failures during server construction/import and retries quarantined
+        # cleanup once before the worker process exits.
+        SERVICE.shutdown()
     return 0
 
 
