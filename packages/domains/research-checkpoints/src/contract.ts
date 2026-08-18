@@ -30,6 +30,11 @@ export const RESEARCH_CHECKPOINT_CAPABILITY_IDS = Object.freeze({
 } as const)
 
 const identifierSchema = z.string().trim().regex(/^[A-Za-z0-9._:@/-]{1,512}$/)
+// Runtime item IDs are opaque correlation values. File breakpoints use the
+// canonical `file:<workspace-relative path>` form, so constraining them to the
+// narrower package-identifier alphabet rejects valid paths containing spaces
+// or non-ASCII characters.
+const itemIdSchema = z.string().trim().min(1).max(8_197)
 const runtimeIdSchema = z.string().trim().min(1).max(128)
 const threadIdSchema = z.string().trim().min(1).max(512)
 const turnIdSchema = z.string().trim().min(1).max(512)
@@ -61,7 +66,7 @@ export const researchCheckpointBreakpointV1Schema = z.object({
   code: z.string().trim().regex(/^[a-z][a-z0-9._-]{0,127}$/),
   blocking: z.boolean(),
   message: z.string().trim().min(1).max(4_000),
-  itemId: identifierSchema.optional(),
+  itemId: itemIdSchema.optional(),
   detail: domainPackageJsonValueSchema.optional()
 }).strict()
 
@@ -114,7 +119,7 @@ export const researchCheckpointGitRefV1Schema = z.object({
 
 export const researchCheckpointUntrackedOperationV1Schema = z.object({
   kind: z.enum(['terminal', 'ambient-command', 'editor-change', 'unknown']),
-  itemId: identifierSchema.optional(),
+  itemId: itemIdSchema.optional(),
   summary: z.string().trim().min(1).max(4_000).optional()
 }).strict()
 

@@ -38,7 +38,7 @@ describe('Codex PreToolUse hook definition', () => {
       "'/tmp/Sci'\\''Forge App/out/main/codex-pre-tool-use-governance-node-entry.js'"
     )
     expect(definition.command).toContain(
-      '|| printf'
+      '|| { status=$?; printf'
     )
     expect(definition.command).toContain(
       '"permissionDecision":"deny"'
@@ -50,6 +50,21 @@ describe('Codex PreToolUse hook definition', () => {
     expect(definition.commandWindows).toContain(
       '|| echo {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
     )
+  })
+
+  it('uses the stable development Node runtime instead of the replaceable Electron dist', () => {
+    const definition = createCodexPreToolUseHookDefinition({
+      codexHome: '/tmp/codex-home',
+      launch: {
+        appPath: '/tmp/sciforge-app',
+        execPath: '/tmp/sciforge-app/node_modules/electron/dist/Electron',
+        nodeExecPath: '/opt/homebrew/bin/node',
+        isPackaged: false
+      }
+    })
+
+    expect(definition.command).toContain("ELECTRON_RUN_AS_NODE=1 '/opt/homebrew/bin/node'")
+    expect(definition.command).not.toContain('node_modules/electron/dist/Electron')
   })
 
   it('serializes one matcher-free synchronous PreToolUse command for every tool', () => {
@@ -182,7 +197,7 @@ process.stdout.write(JSON.stringify({
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
         permissionDecisionReason: expect.stringContaining(
-          'native_visual_governance_unavailable'
+          'native_visual_governance_unavailable: SciForge hook launcher failed with shell status 127'
         )
       }
     })

@@ -51,7 +51,9 @@ test('contributes the package-owned Project panel and translations', () => {
   const rendered = panel.render({
     active: true,
     className: 'panel',
+    focused: true,
     onCollapse: () => undefined,
+    surfaceId: 'surface-project-a',
     session: { id: 'session-1', workspaceRoot: '/workspace/lab' },
     activation: {
       revision: 4,
@@ -60,6 +62,7 @@ test('contributes the package-owned Project panel and translations', () => {
   })
   const props = (rendered as ReactElement<Record<string, unknown>>).props
   assert.equal(props.className, 'panel')
+  assert.equal(props.surfaceId, 'surface-project-a')
   assert.deepEqual(props.activation, {
     contributionId: 'project-dag.workbench-right-panel',
     revision: 4,

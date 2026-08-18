@@ -11,7 +11,9 @@ import type {
 import {
   AGENT_RUNTIME_SUBAGENT_CANCEL_TOOL_NAME,
   AGENT_RUNTIME_SUBAGENT_DIAGNOSTICS_TOOL_NAME,
+  AGENT_RUNTIME_SUBAGENT_DELETE_TOOL_NAME,
   AGENT_RUNTIME_SUBAGENT_MESSAGE_TOOL_NAME,
+  AGENT_RUNTIME_SUBAGENT_RESUME_TOOL_NAME,
   AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME,
   AGENT_RUNTIME_SUBAGENT_STATUS_TOOL_NAME,
   AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME,
@@ -52,9 +54,17 @@ function completedAdapter(runtime: AgentRuntimeId): AgentRuntimeSubagentAdapter 
         threadRef: { runtime, threadId: `${runtime}-child-thread`, turnId: `${runtime}-child-turn` }
       }
     }),
+    resume: vi.fn(async (_context, input) => {
+      await input.onSpawned({ runtime, threadId: input.threadRef.threadId, turnId: `${runtime}-resumed-turn` })
+      return {
+        summary: `${runtime}: ${input.prompt}`,
+        threadRef: { runtime, threadId: input.threadRef.threadId, turnId: `${runtime}-resumed-turn` }
+      }
+    }),
     inspect: vi.fn(async () => ({ state: 'active' as const, observedAt: '2026-08-02T00:00:00.000Z' })),
     message: vi.fn(async () => ({ established: true })),
-    cancel: vi.fn(async () => undefined)
+    cancel: vi.fn(async () => undefined),
+    delete: vi.fn(async () => undefined)
   }
 }
 
@@ -72,7 +82,9 @@ describe('AgentRuntime subagent tool bridge', () => {
       AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME,
       AGENT_RUNTIME_SUBAGENT_MESSAGE_TOOL_NAME,
       AGENT_RUNTIME_SUBAGENT_CANCEL_TOOL_NAME,
-      AGENT_RUNTIME_SUBAGENT_DIAGNOSTICS_TOOL_NAME
+      AGENT_RUNTIME_SUBAGENT_DIAGNOSTICS_TOOL_NAME,
+      AGENT_RUNTIME_SUBAGENT_RESUME_TOOL_NAME,
+      AGENT_RUNTIME_SUBAGENT_DELETE_TOOL_NAME
     ])
     expect(bridge.canHandle({
       requestId: 'legacy',
@@ -208,9 +220,11 @@ describe('AgentRuntime subagent tool bridge', () => {
         error.name = 'AbortError'
         throw error
       }),
+      resume: vi.fn(async () => { throw new Error('unexpected resume') }),
       inspect: vi.fn(async () => ({ state: 'active' as const, observedAt: new Date().toISOString() })),
       message: vi.fn(async () => ({ established: true })),
-      cancel: vi.fn(async () => undefined)
+      cancel: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined)
     }
     const bridge = bridgeWith(adapter, { maxParallel: 8 })
     const started = await bridge.callTool({
@@ -314,9 +328,11 @@ describe('AgentRuntime subagent tool bridge', () => {
         error.name = 'AbortError'
         throw error
       }),
+      resume: vi.fn(async () => ({ summary: 'resumed' })),
       inspect: vi.fn(async () => ({ state: 'active' as const, observedAt: '2026-08-02T00:00:00.000Z' })),
       message: vi.fn(async () => ({ established: true })),
-      cancel: vi.fn(async () => undefined)
+      cancel: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined)
     }
     const bridge = bridgeWith(adapter)
     const started = await bridge.callTool({
@@ -350,9 +366,36 @@ describe('AgentRuntime subagent tool bridge', () => {
       tool: AGENT_RUNTIME_SUBAGENT_CANCEL_TOOL_NAME,
       arguments: { childId: id }
     })).resolves.toMatchObject({ success: true, structuredContent: { status: 'aborted' } })
+    await expect(bridge.callTool({
+      requestId: 'resume',
+      runtimeId: 'claude',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn-2',
+      tool: AGENT_RUNTIME_SUBAGENT_RESUME_TOOL_NAME,
+      arguments: { childId: id, prompt: 'Continue the task.' }
+    })).resolves.toMatchObject({ success: true, structuredContent: { status: 'running', resumed: true, attempt: 2 } })
+    await expect(bridge.callTool({
+      requestId: 'resume-wait',
+      runtimeId: 'claude',
+      threadId: 'parent-thread',
+      tool: AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME,
+      arguments: { childId: id, timeoutMs: 1_000 }
+    })).resolves.toMatchObject({ success: true, structuredContent: { status: 'completed' } })
+    await expect(bridge.callTool({
+      requestId: 'delete',
+      runtimeId: 'claude',
+      threadId: 'parent-thread',
+      tool: AGENT_RUNTIME_SUBAGENT_DELETE_TOOL_NAME,
+      arguments: { childId: id }
+    })).resolves.toMatchObject({ success: true, structuredContent: { deleted: true } })
     expect(adapter.inspect).toHaveBeenCalledOnce()
     expect(adapter.message).toHaveBeenCalledWith(context(), expect.objectContaining({ message: 'send a progress update' }))
     expect(adapter.cancel).toHaveBeenCalledOnce()
+    expect(adapter.resume).toHaveBeenCalledWith(context(), expect.objectContaining({
+      threadRef: expect.objectContaining({ threadId: 'child-thread' }),
+      prompt: 'Continue the task.'
+    }))
+    expect(adapter.delete).toHaveBeenCalledOnce()
   })
 
   it('publishes runtime-neutral child records with the selected runtime identity', async () => {
@@ -477,9 +520,11 @@ describe('AgentRuntime subagent tool bridge', () => {
         await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
         throw input.signal.reason
       }),
+      resume: vi.fn(async () => { throw new Error('unexpected resume') }),
       inspect: vi.fn(async () => ({ state: 'active' as const, observedAt: '2026-08-02T00:00:00.000Z' })),
       message: vi.fn(async () => ({ established: true })),
-      cancel: vi.fn(async () => undefined)
+      cancel: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined)
     }
     const bridge = bridgeWith(adapter)
     const started = await bridge.callTool({

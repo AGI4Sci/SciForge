@@ -47,7 +47,14 @@ def main(argv: list[str] | None = None) -> int:
         if a != "--http":
             raise SystemExit("only the HTTP control service is supported")
     from .server import main as serve
-    serve()
+    from .service import SERVICE
+    try:
+        serve()
+    finally:
+        # The server owns normal cleanup. This second, idempotent call covers
+        # failures during server construction/import and retries quarantined
+        # cleanup once before the worker process exits.
+        SERVICE.shutdown()
     return 0
 
 

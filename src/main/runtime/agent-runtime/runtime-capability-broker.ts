@@ -128,9 +128,6 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
         if (oldest === undefined) break
         this.#invocations.delete(oldest)
       }
-      void execution.catch(() => {
-        if (this.#invocations.get(invocationKey)?.promise === execution) this.#invocations.delete(invocationKey)
-      })
     }
     return execution
   }

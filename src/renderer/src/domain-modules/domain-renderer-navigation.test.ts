@@ -18,11 +18,11 @@ describe('domain renderer navigation host', () => {
   it('routes workspace previews and right-panel activations through generic events', () => {
     const targetWindow = new EventTarget()
     vi.stubGlobal('window', targetWindow)
-    let preview: DomainWorkspacePreviewTarget | undefined
+    const previews: DomainWorkspacePreviewTarget[] = []
     const panels: DomainWorkbenchOpenRightPanelInput[] = []
     let bottomPanel: DomainWorkbenchOpenSurfaceInput | undefined
     targetWindow.addEventListener(WORKSPACE_FILE_PREVIEW_EVENT, (event) => {
-      preview = (event as CustomEvent<DomainWorkspacePreviewTarget>).detail
+      previews.push((event as CustomEvent<DomainWorkspacePreviewTarget>).detail)
     })
     targetWindow.addEventListener(DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT, (event) => {
       panels.push((event as CustomEvent<DomainWorkbenchOpenRightPanelInput>).detail)
@@ -39,11 +39,17 @@ describe('domain renderer navigation host', () => {
     domainRendererNavigationHost.workspacePreview.open({
       path: 'paper.pdf',
       sessionId: 'session-1',
+      placement: 'new',
       workspaceRoot: '/workspace',
       returnTo: {
         contributionId: 'fixture.panel',
         activation
       }
+    })
+    domainRendererNavigationHost.workspacePreview.open({
+      path: 'figure.png',
+      sessionId: 'session-1',
+      surfaceId: 'pane:figure'
     })
     domainRendererNavigationHost.workbench.openRightPanel({
       contributionId: 'fixture.panel',
@@ -94,14 +100,20 @@ describe('domain renderer navigation host', () => {
       activation
     })
 
-    expect(preview).toMatchObject({
+    expect(previews[0]).toMatchObject({
       path: 'paper.pdf',
       sessionId: 'session-1',
+      placement: 'new',
       returnTo: {
         kind: 'domain-right-panel',
         contributionId: 'fixture.panel',
         activation
       }
+    })
+    expect(previews[1]).toEqual({
+      path: 'figure.png',
+      sessionId: 'session-1',
+      surfaceId: 'pane:figure'
     })
     expect(panels[0]).toEqual({
       contributionId: 'fixture.panel',

@@ -167,7 +167,7 @@ test('research artifact domains resolve every public export from independent tar
       join(artifact.root, 'sciforge.domain.json'),
       'utf8'
     ))
-    assert.equal(sdkPackage.version, '0.2.0')
+    assert.equal(sdkPackage.version, '0.2.1')
     assert.equal(artifactPackage.version, '1.1.0')
     assert.equal(artifactManifest.module.version, '1.1.0')
     assert.equal(artifactPackage.dependencies['@sciforge/domain-sdk'], '^0.2.0')

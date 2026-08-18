@@ -56,7 +56,9 @@ describe('Remote SSH right-panel contribution', () => {
     const rendered = panel.render({
       active: true,
       className: 'panel',
+      focused: true,
       onCollapse: () => undefined,
+      surfaceId: 'surface-remote-a',
       session: {
         id: 'session-remote',
         workspaceRoot: '/workspace'

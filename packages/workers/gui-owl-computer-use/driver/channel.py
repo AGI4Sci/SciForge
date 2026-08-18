@@ -99,6 +99,7 @@ class SessionInputChannel:
         self._close_lock = threading.Lock()
         self._cancel_lock = threading.Lock()
         self._backend_cancel_sent = False
+        self._action_dispatched = False
         self._state = threading.Condition()
         self._closing = False
         self._in_flight = 0
@@ -130,11 +131,15 @@ class SessionInputChannel:
             if self._close_reason in {"server_stop", "session_closed"}:
                 raise ChannelError("CANCEL_PENDING", "request was stopped during cleanup")
             raise ChannelError("CLEANUP_INCOMPLETE", "channel is already closed")
-        if self.cancelled:
-            raise ChannelError("CANCEL_PENDING", "request cancellation was requested")
         if self.deadline is not None and time.time() >= self.deadline:
             self.cancellation.set()
+            if self._action_dispatched:
+                raise self._action_outcome_unknown("request deadline expired after action dispatch")
             raise ChannelError("TIMEOUT", "request deadline expired")
+        if self.cancelled:
+            if self._action_dispatched:
+                raise self._action_outcome_unknown("request was cancelled after action dispatch")
+            raise ChannelError("CANCEL_PENDING", "request cancellation was requested")
 
     def observe(self) -> Observation:
         # Observation can own a native handle and overlay state just like an
@@ -183,36 +188,46 @@ class SessionInputChannel:
                 self._state.notify_all()
             raise
         receipt: ActionReceipt | None = None
+        deadline_timer: threading.Timer | None = None
         try:
+            # Crossing this boundary means a timeout, cancellation, transport
+            # loss, or unexpected verification failure can no longer prove the
+            # action had no side effect. Keep that fact for subsequent
+            # expectation/readback operations in this request too.
+            self._action_dispatched = True
+            deadline_timer = self._arm_action_deadline()
             receipt = self.backend.perform(self.handle, action, expected_revision)
+            self._raise_if_action_interrupted(receipt)
             if receipt.target_id != self.target.target_id:
-                raise ChannelError("TARGET_LOST", "backend receipt belongs to a different target")
+                raise self._action_outcome_unknown(
+                    "backend receipt belongs to a different target",
+                    receipt=receipt,
+                    backend_code="TARGET_LOST",
+                )
             try:
                 self.registry.transition_request(self.request_id, RequestState.VERIFYING)
             except RegistryError as error:
                 if error.code != "INVALID_STATE_TRANSITION" or not self.cancelled:
                     raise
             evidence = self.backend.verify(self.handle, action, receipt, before)
+            self._raise_if_action_interrupted(receipt)
             if evidence.target_id != self.target.target_id:
-                raise ChannelError("TARGET_LOST", "verification belongs to a different target")
+                raise self._action_outcome_unknown(
+                    "verification belongs to a different target",
+                    receipt=receipt,
+                    backend_code="TARGET_LOST",
+                )
             self.last_verification = evidence.status
             if not self.cancelled:
                 self.registry.transition_request(self.request_id, RequestState.RUNNING)
+            self._raise_if_action_interrupted(receipt)
             if evidence.status is Verification.FAILED:
                 raise ChannelError(
                     "ACTION_UNVERIFIED",
                     "backend verification reported failure",
                     details=dict(evidence.details),
                 )
-            if self.cancelled:
-                raise ChannelError(
-                    "CANCEL_PENDING",
-                    "request was cancelled after the action reached a safe point",
-                    details={
-                        "committed": receipt.committed,
-                        "mayHaveTakenEffect": receipt.may_have_taken_effect,
-                    },
-                )
+            self._raise_if_action_interrupted(receipt)
             return ActionOutcome(
                 action_id=receipt.action_id or action_id,
                 target_id=receipt.target_id,
@@ -222,17 +237,20 @@ class SessionInputChannel:
                 evidence={**dict(receipt.backend_evidence), **dict(evidence.details)},
             )
         except BackendOperationError as error:
-            if error.may_have_taken_effect:
+            interrupted = self._action_interruption_reason()
+            if error.may_have_taken_effect or receipt is not None or interrupted is not None:
                 # A more specific transport/target code must never weaken the
                 # unknown-outcome contract after dispatch may have occurred.
                 # Callers must inspect state before any retry.
-                raise ChannelError(
-                    "ACTION_OUTCOME_UNKNOWN",
-                    "backend action may have taken effect but its outcome is unknown",
-                    details={"backendCode": error.code},
+                raise self._action_outcome_unknown(
+                    interrupted or "backend action may have taken effect but its outcome is unknown",
+                    receipt=receipt,
+                    backend_code=error.code,
                 ) from error
             raise ChannelError(error.code or "ACTION_UNSUPPORTED", str(error)) from error
         finally:
+            if deadline_timer is not None:
+                deadline_timer.cancel()
             try:
                 self.registry.finish_action(self.lease.lease_id)
             except RegistryError as error:
@@ -243,6 +261,55 @@ class SessionInputChannel:
                 with self._state:
                     self._in_flight -= 1
                     self._state.notify_all()
+
+    def _arm_action_deadline(self) -> threading.Timer | None:
+        remaining = self.remaining_seconds
+        if remaining is None:
+            return None
+        timer = threading.Timer(remaining, self._cancel_for_deadline)
+        timer.daemon = True
+        timer.start()
+        return timer
+
+    def _cancel_for_deadline(self) -> None:
+        """Best-effort propagation of the request deadline to the backend."""
+        try:
+            self.request_cancel("deadline_expired")
+        except Exception:
+            # The operation is still classified as unknown when control
+            # returns. Cleanup remains responsible for retrying cancellation
+            # or quarantining the handle.
+            self.cancellation.set()
+
+    def _action_interruption_reason(self) -> str | None:
+        if self.deadline is not None and time.time() >= self.deadline:
+            self.cancellation.set()
+            return "request deadline expired after action dispatch"
+        if self.cancelled:
+            return "request was cancelled after action dispatch"
+        return None
+
+    def _raise_if_action_interrupted(self, receipt: ActionReceipt | None = None) -> None:
+        reason = self._action_interruption_reason()
+        if reason is not None:
+            raise self._action_outcome_unknown(reason, receipt=receipt)
+
+    def _action_outcome_unknown(
+        self,
+        message: str,
+        *,
+        receipt: ActionReceipt | None = None,
+        backend_code: str | None = None,
+    ) -> ChannelError:
+        details: dict[str, Any] = {"mayHaveTakenEffect": True}
+        if receipt is not None:
+            details.update({
+                "actionId": receipt.action_id,
+                "committed": receipt.committed,
+            })
+        if backend_code:
+            details["backendCode"] = backend_code
+        return ChannelError("ACTION_OUTCOME_UNKNOWN", message, details=details)
 
     def wait(self, seconds: float) -> None:
         end = time.monotonic() + max(0.0, min(float(seconds), 30.0))

@@ -6,6 +6,7 @@ import {
   BROWSER_PREVIEW_RESOURCE_KIND,
   browserActionOutputSchema,
   browserClickInputSchema,
+  browserCloseOutputSchema,
   browserEmptyInputSchema,
   browserFillInputSchema,
   browserNavigateInputSchema,
@@ -128,7 +129,10 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
   getService: () => BrowserPreviewService
 }>): BrowserCapabilityFactory<CapabilityDefinition> {
   const operationIds = Object.values(BROWSER_PREVIEW_CAPABILITY_IDS)
-    .filter((id) => id !== BROWSER_PREVIEW_CAPABILITY_IDS.open)
+    .filter((id) =>
+      id !== BROWSER_PREVIEW_CAPABILITY_IDS.open &&
+      id !== BROWSER_PREVIEW_CAPABILITY_IDS.close
+    )
 
   const requireSessionId = (context: BrowserCapabilityHandlerContext): string => {
     const resourceId = context.resource?.resourceId
@@ -152,11 +156,12 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
   }
 
   const resourceCapability = (
-    input: Omit<BrowserCapabilityOptions, 'version' | 'audiences' | 'scope' | 'resourceKinds' | 'tags'>
+    input: Omit<BrowserCapabilityOptions, 'version' | 'audiences' | 'scope' | 'resourceKinds' | 'tags'>,
+    audiences: BrowserCapabilityOptions['audiences'] = ['ui', 'agent']
   ): BrowserCapabilityOptions => ({
     ...input,
     version: '1.0.0',
-    audiences: ['ui', 'agent'],
+    audiences,
     scope: 'resource',
     resourceKinds: [BROWSER_PREVIEW_RESOURCE_KIND],
     tags: ['browser', 'playwright', 'web-page']
@@ -188,27 +193,47 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
           const service = options.getService()
           const semanticRevision = await service.open(input, context.caller)
           const resource = context.issueResource({
-            resourceId: `browser-page:${input.sessionId}`,
+            resourceId: `browser-page:${input.surfaceId}`,
             resourceKind: BROWSER_PREVIEW_RESOURCE_KIND,
             ...(context.caller.workspaceId ? { workspaceId: context.caller.workspaceId } : {}),
             audiences: ['ui', 'agent'],
             semanticRevision,
             observe: async (caller) => ({
               state: browserPageStateSchema.parse(
-                await service.snapshot(input.sessionId, caller)
+                await service.snapshot(input.surfaceId, caller)
               ),
-              semanticRevision: service.revision(input.sessionId),
+              semanticRevision: service.revision(input.surfaceId),
               operationIds
             })
           })
           return {
             output: browserOpenOutputSchema.parse({
               resource,
-              sessionId: input.sessionId
+              sessionId: input.sessionId,
+              surfaceId: input.surfaceId
             })
           }
         }
       }),
+      options.defineCapability(resourceCapability({
+        id: BROWSER_PREVIEW_CAPABILITY_IDS.close,
+        title: 'Close browser page',
+        description: 'Closes exactly one pane-owned Playwright browser page and profile.',
+        effect: 'external-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: browserEmptyInputSchema,
+        outputSchema: browserCloseOutputSchema,
+        handler: async (_input, context) => {
+          const sessionId = requireSessionId(context)
+          await options.getService().closeSession(sessionId, context.caller)
+          return {
+            output: { closed: true },
+            changed: true,
+            semanticRevision: 'browser-closed'
+          }
+        }
+      }, ['ui'])),
       options.defineCapability(resourceCapability({
         id: BROWSER_PREVIEW_CAPABILITY_IDS.read,
         title: 'Read browser page',

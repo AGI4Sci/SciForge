@@ -14,7 +14,8 @@ import {
 } from '../../../../packages/workers/multi-agent/src'
 import type {
   AgentRuntimeAdapterContext,
-  AgentRuntimeSubagentAdapter
+  AgentRuntimeSubagentAdapter,
+  AgentRuntimeSubagentThreadRef
 } from './adapter'
 import {
   AgentRuntimeToolError,
@@ -32,6 +33,8 @@ export const AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME = 'subagent_wait'
 export const AGENT_RUNTIME_SUBAGENT_MESSAGE_TOOL_NAME = 'subagent_send'
 export const AGENT_RUNTIME_SUBAGENT_CANCEL_TOOL_NAME = 'subagent_cancel'
 export const AGENT_RUNTIME_SUBAGENT_DIAGNOSTICS_TOOL_NAME = 'subagent_diagnostics'
+export const AGENT_RUNTIME_SUBAGENT_RESUME_TOOL_NAME = 'subagent_resume'
+export const AGENT_RUNTIME_SUBAGENT_DELETE_TOOL_NAME = 'subagent_delete'
 
 export type AgentRuntimeSubagentBinding = {
   adapter: AgentRuntimeSubagentAdapter
@@ -129,7 +132,16 @@ export class AgentRuntimeSubagentToolBridge {
             {
               code: response.errorCode ?? 'subagent_operation_failed',
               ...(response.failureClass ? { failureClass: response.failureClass } : {}),
-              ...(response.retryable !== undefined ? { retryable: response.retryable } : {})
+              ...(response.retryable !== undefined ? { retryable: response.retryable } : {}),
+              ...(response.recoveryGuidance
+                ? {
+                    recovery: {
+                      action: 'follow_guidance',
+                      instruction: response.recoveryGuidance
+                    }
+                  }
+                : {}),
+              ...(response.providerStage ? { providerStage: response.providerStage } : {})
             }
           )
         }
@@ -262,6 +274,24 @@ export class AgentRuntimeSubagentToolBridge {
         properties: {},
         additionalProperties: false
       }
+    }, {
+      type: 'function',
+      name: AGENT_RUNTIME_SUBAGENT_RESUME_TOOL_NAME,
+      description: 'Resume a failed or interrupted child agent in its existing provider thread and context.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          childId: { type: 'string', description: 'Interrupted child agent ID.' },
+          prompt: { type: 'string', description: 'Optional continuation guidance for the resumed child.' }
+        },
+        required: ['childId'],
+        additionalProperties: false
+      }
+    }, {
+      type: 'function',
+      name: AGENT_RUNTIME_SUBAGENT_DELETE_TOOL_NAME,
+      description: 'Permanently remove a child agent from lifecycle storage and the child-agent sidebar. Running children are cancelled first.',
+      inputSchema: childIdInputSchema()
     }]
   }
 
@@ -272,7 +302,9 @@ export class AgentRuntimeSubagentToolBridge {
       name === AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME ||
       name === AGENT_RUNTIME_SUBAGENT_MESSAGE_TOOL_NAME ||
       name === AGENT_RUNTIME_SUBAGENT_CANCEL_TOOL_NAME ||
-      name === AGENT_RUNTIME_SUBAGENT_DIAGNOSTICS_TOOL_NAME
+      name === AGENT_RUNTIME_SUBAGENT_DIAGNOSTICS_TOOL_NAME ||
+      name === AGENT_RUNTIME_SUBAGENT_RESUME_TOOL_NAME ||
+      name === AGENT_RUNTIME_SUBAGENT_DELETE_TOOL_NAME
   }
 
   async callTool(
@@ -298,6 +330,13 @@ export class AgentRuntimeSubagentToolBridge {
     if (toolName === AGENT_RUNTIME_SUBAGENT_CANCEL_TOOL_NAME) return this.cancelTool(entry.runtime, request.threadId, request.arguments)
     if (toolName === AGENT_RUNTIME_SUBAGENT_DIAGNOSTICS_TOOL_NAME) {
       return this.diagnosticsTool(entry.runtime, runtimeId, request.threadId)
+    }
+    if (toolName === AGENT_RUNTIME_SUBAGENT_RESUME_TOOL_NAME) {
+      if (!request.turnId) return failedMultiAgentResponse('subagent_resume requires turnId.')
+      return this.resumeTool(entry.runtime, request.threadId, request.turnId, request.arguments)
+    }
+    if (toolName === AGENT_RUNTIME_SUBAGENT_DELETE_TOOL_NAME) {
+      return this.deleteTool(entry.runtime, binding, request.threadId, request.arguments)
     }
     const input = parseDelegateTaskArguments(request.arguments)
     if (input.tasks.length === 0) {
@@ -438,6 +477,53 @@ export class AgentRuntimeSubagentToolBridge {
     }
   }
 
+  private async resumeTool(
+    runtime: MultiAgentRuntime,
+    parentThreadId: string,
+    parentTurnId: string,
+    value: unknown
+  ): Promise<RuntimeToolCallResponse> {
+    const childId = requiredStringArgument(value, 'childId')
+    if (!childId) return failedMultiAgentResponse('subagent_resume requires childId.')
+    const prompt = requiredStringArgument(value, 'prompt')
+    const record = await runtime.resumeChild({
+      parentThreadId,
+      parentTurnId,
+      childId,
+      ...(prompt ? { prompt } : {})
+    })
+    return {
+      ...childObservationResponse(record, { resumed: true, attempt: record.attempt }),
+      success: true
+    }
+  }
+
+  private async deleteTool(
+    runtime: MultiAgentRuntime,
+    binding: AgentRuntimeSubagentBinding,
+    parentThreadId: string,
+    value: unknown
+  ): Promise<RuntimeToolCallResponse> {
+    const childId = requiredStringArgument(value, 'childId')
+    if (!childId) return failedMultiAgentResponse('subagent_delete requires childId.')
+    const record = await runtime.cancelChild(parentThreadId, childId)
+    if (!record) return failedMultiAgentResponse(`Subagent ${childId} was not found.`)
+    await binding.adapter.delete(binding.context, {
+      childId,
+      parentThreadId,
+      parentTurnId: record.parentTurnId,
+      ...(record.threadRef ? { threadRef: record.threadRef } : {}),
+      signal: new AbortController().signal
+    })
+    const deleted = await runtime.deleteChild(parentThreadId, childId)
+    if (!deleted) return failedMultiAgentResponse(`Subagent ${childId} was not found.`)
+    return {
+      success: true,
+      contentItems: [{ type: 'inputText', text: `Subagent ${childId} was deleted.` }],
+      structuredContent: { childId, deleted: true }
+    }
+  }
+
   abortRequestsForTurn(runtimeId: AgentRuntimeId, threadId: string, turnId: string): number {
     let aborted = 0
     for (const request of this.activeRequests) {
@@ -501,7 +587,7 @@ export class AgentRuntimeSubagentToolBridge {
         : new InMemoryMultiAgentStore()),
       executor: (input) => this.executeAdapterChild(runtimeId, input),
       events: {
-        onChildEvent: (event) => this.handleChildEvent(runtimeId, event)
+        onChildEvent: (event, record) => this.handleChildEvent(runtimeId, event, record)
       }
     })
     const entry: RuntimeEntry = { runtime, maxParallel, ready: Promise.resolve() }
@@ -552,7 +638,7 @@ export class AgentRuntimeSubagentToolBridge {
         signal: request.signal
       })
     })
-    return binding.adapter.spawn(binding.context, {
+    const adapterInput = {
       ...target,
       ...(input.label ? { label: input.label } : {}),
       prompt: input.prompt,
@@ -563,7 +649,7 @@ export class AgentRuntimeSubagentToolBridge {
       ...(input.maxToolCalls ? { maxToolCalls: input.maxToolCalls } : {}),
       signal: input.signal,
       appendTranscript: input.appendTranscript,
-      onSpawned: async (threadRef) => {
+      onSpawned: async (threadRef: AgentRuntimeSubagentThreadRef) => {
         await input.setThreadRef(threadRef)
         if (threadRef.threadId) {
           const threadIds = this.childThreadIds.get(runtimeId) ?? new Set<string>()
@@ -574,16 +660,20 @@ export class AgentRuntimeSubagentToolBridge {
           this.childIdsByThreadId.set(runtimeId, childIds)
         }
       }
-    })
+    }
+    return input.resumeThreadRef
+      ? binding.adapter.resume(binding.context, {
+          ...adapterInput,
+          threadRef: input.resumeThreadRef
+        })
+      : binding.adapter.spawn(binding.context, adapterInput)
   }
 
   private async handleChildEvent(
     runtimeId: AgentRuntimeId,
-    event: MultiAgentChildEvent
+    event: MultiAgentChildEvent,
+    record: MultiAgentChildRunRecord
   ): Promise<void> {
-    const runtime = this.runtimes.get(runtimeId)?.runtime
-    const record = await runtime?.child(event.parentThreadId, event.childId)
-    if (!record) return
     this.trackActiveChild(runtimeId, record)
     await this.options.onChildEvent?.(runtimeId, event, record)
   }
@@ -647,6 +737,8 @@ export function agentRuntimeChildFromMultiAgentRecord(
     ...(record.finishedAt ? { completedAt: record.finishedAt } : {}),
     metadata: {
       source: `${runtimeId}.agent-runtime.spawn`,
+      lifecycleOperation: event?.operation ?? 'upsert',
+      attempt: record.attempt,
       ...(record.threadRef?.turnId ? { childTurnId: record.threadRef.turnId } : {}),
       ...(event?.seq !== undefined ? { childSeq: event.seq } : {}),
       ...(record.error ? { error: record.error } : {})

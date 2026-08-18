@@ -24,6 +24,7 @@ export type ReadChildTranscriptOptions = {
 
 export interface MultiAgentStore {
   upsert(record: MultiAgentChildRunRecord): Promise<void>
+  delete(parentThreadId: string, childId: string): Promise<boolean>
   list(options?: ListChildRunsOptions): Promise<MultiAgentChildRunRecord[]>
   get(parentThreadId: string, childId: string): Promise<MultiAgentChildRunRecord | null>
   findByRequest(
@@ -59,6 +60,14 @@ export class FileMultiAgentStore implements MultiAgentStore {
     } finally {
       if (this.pendingWrites.get(parsed.id) === write) this.pendingWrites.delete(parsed.id)
     }
+  }
+
+  async delete(parentThreadId: string, childId: string): Promise<boolean> {
+    const existing = await this.get(parentThreadId, childId)
+    if (!existing) return false
+    await (this.pendingWrites.get(childId) ?? Promise.resolve()).catch(() => undefined)
+    await rm(this.recordPath(childId), { force: true })
+    return true
   }
 
   private async writeRecord(record: MultiAgentChildRunRecord): Promise<void> {
@@ -166,6 +175,12 @@ export class InMemoryMultiAgentStore implements MultiAgentStore {
   async upsert(record: MultiAgentChildRunRecord): Promise<void> {
     const parsed = MultiAgentChildRunRecord.parse(record)
     this.records.set(parsed.id, parsed)
+  }
+
+  async delete(parentThreadId: string, childId: string): Promise<boolean> {
+    const existing = this.records.get(childId)
+    if (!existing || existing.parentThreadId !== parentThreadId) return false
+    return this.records.delete(childId)
   }
 
   async list(options: ListChildRunsOptions = {}): Promise<MultiAgentChildRunRecord[]> {

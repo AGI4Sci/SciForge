@@ -39,6 +39,7 @@ class InvocationIdentity:
     call_id: str
     invocation_id: str
     tool: str
+    argument_digest: str = ""
 
 
 class InvocationProofVerifier:
@@ -137,6 +138,7 @@ class InvocationProofVerifier:
             call_id=proof["callId"],
             invocation_id=proof["invocationId"],
             tool=proof["tool"],
+            argument_digest=proof["argumentDigest"],
         )
 
     def _prune(self, now_ms: int) -> None:

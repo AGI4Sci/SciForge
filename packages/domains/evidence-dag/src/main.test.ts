@@ -370,6 +370,7 @@ test('keeps system access read-only and never reports a changed global resource'
   assert.equal('changed' in await priority.handler({
     runtimeId: 'codex',
     threadId: 'thread-1',
+    surfaceId: 'surface-evidence-a',
     visible: true
   }, { caller: { workspaceId: '/workspace' } }), false)
   const exported = await exportProducts.handler({

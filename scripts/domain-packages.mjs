@@ -11,6 +11,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const GENERATED_PATHS = Object.freeze({
   definitions: 'src/shared/installed-domain-packages.ts',
   main: 'src/main/modules/installed-domain-main.ts',
+  runtimeMcp: 'src/main/modules/installed-domain-runtime-mcp.ts',
   renderer: 'src/renderer/src/domain-modules/installed-domain-renderer.ts',
   workspaceServer:
     'packages/workers/workspace-host/src/generated/installed-domain-workspace-server.ts'
@@ -20,6 +21,9 @@ const IMPLICIT_BUNDLED_RUNTIME_PATHS = new Set([
   'package.json',
   'sciforge.domain.json'
 ])
+const MAIN_RUNTIME_MCP_SERVER_CONTRIBUTION_KIND = 'main.runtime-mcp-server'
+const DOMAIN_RUNTIME_MCP_EXPORT = './runtime-mcp'
+const DOMAIN_RUNTIME_MCP_RUNNER_EXPORT = 'runDomainRuntimeMcpServerFromArgv'
 
 export async function discoverDomainPackages(
   root,
@@ -64,6 +68,15 @@ export async function discoverDomainPackages(
       throw new Error(`Duplicate trusted domain package name: ${candidate.packageName}`)
     }
     names.add(candidate.packageName)
+  }
+  const runtimeMcpContributionIds = new Set()
+  for (const candidate of discovered) {
+    for (const contribution of runtimeMcpServerContributions(candidate.definition)) {
+      if (runtimeMcpContributionIds.has(contribution.id)) {
+        throw new Error(`Duplicate domain runtime MCP contribution ID: ${contribution.id}`)
+      }
+      runtimeMcpContributionIds.add(contribution.id)
+    }
   }
   validateRuntimeDependencyGraph(discovered)
   return Object.freeze(discovered)
@@ -116,11 +129,24 @@ export function renderGeneratedDomainPackageFiles(packages) {
   return Object.freeze({
     [GENERATED_PATHS.definitions]: renderDefinitions(packages),
     [GENERATED_PATHS.main]: renderMain(packages.filter(hasEntrypoint('main'))),
+    [GENERATED_PATHS.runtimeMcp]: renderRuntimeMcp(packages.filter(hasRuntimeMcpServer)),
     [GENERATED_PATHS.renderer]: renderRenderer(packages.filter(hasEntrypoint('renderer'))),
     [GENERATED_PATHS.workspaceServer]: renderWorkspaceServer(
       packages.filter(hasEntrypoint('workspace-server'))
     )
   })
+}
+
+function renderRuntimeMcp(packages) {
+  const imports = packages.map((candidate, index) =>
+    `import { ${DOMAIN_RUNTIME_MCP_RUNNER_EXPORT} as runDomainRuntimeMcpServer${index} } from '${candidate.packageName}/runtime-mcp'`
+  )
+  const launchers = packages.flatMap((candidate, packageIndex) =>
+    runtimeMcpServerContributions(candidate.definition).map((contribution) =>
+      `  ${JSON.stringify(contribution.id)}: runDomainRuntimeMcpServer${packageIndex}`
+    )
+  )
+  return `${GENERATED_HEADER}import type { DomainRuntimeMcpServerLauncher } from '@sciforge/domain-sdk/node/runtime-mcp-launcher'\nimport { selectedDomainRuntimeMcpContributionId } from '@sciforge/domain-sdk/node/runtime-mcp-launcher'\n${imports.join('\n')}${imports.length > 0 ? '\n' : ''}\nconst installedDomainRuntimeMcpServerLaunchers: Readonly<Record<string, DomainRuntimeMcpServerLauncher>> = Object.freeze({\n${launchers.join(',\n')}\n})\n\nexport async function runInstalledDomainRuntimeMcpServerFromArgv(\n  argv: string[]\n): Promise<boolean> {\n  const contributionId = selectedDomainRuntimeMcpContributionId(argv)\n  if (contributionId === null) return false\n  const launcher = installedDomainRuntimeMcpServerLaunchers[contributionId]\n  if (!launcher) {\n    throw new Error(\`Installed domain runtime MCP contribution is unavailable: \${contributionId}\`)\n  }\n  await launcher(argv)\n  return true\n}\n`
 }
 
 export async function generateDomainPackageFiles(root, { check = false } = {}) {
@@ -192,6 +218,20 @@ function hasEntrypoint(processName) {
   )
 }
 
+function hasRuntimeMcpServer(candidate) {
+  return runtimeMcpServerContributions(candidate.definition).length > 0
+}
+
+function runtimeMcpServerContributions(definition) {
+  return definition.entrypoints.flatMap((entrypoint) =>
+    entrypoint.process === 'main'
+      ? entrypoint.contributions.filter((contribution) =>
+          contribution.kind === MAIN_RUNTIME_MCP_SERVER_CONTRIBUTION_KIND
+        )
+      : []
+  )
+}
+
 async function validatePackageLayout({ packageRoot, definition, packageJson }) {
   if (packageJson.name !== definition.packageName) {
     throw new Error(
@@ -240,6 +280,22 @@ async function validatePackageLayout({ packageRoot, definition, packageJson }) {
             : 'createDomainWorkspaceServerEntry'
       )
     }
+  }
+  const runtimeMcpContributions = runtimeMcpServerContributions(definition)
+  const exportsRuntimeMcp = Object.hasOwn(packageJson.exports, DOMAIN_RUNTIME_MCP_EXPORT)
+  if ((runtimeMcpContributions.length > 0) !== exportsRuntimeMcp) {
+    throw new Error(
+      `Domain package ${definition.packageName} must expose ${DOMAIN_RUNTIME_MCP_EXPORT} exactly when it declares ${MAIN_RUNTIME_MCP_SERVER_CONTRIBUTION_KIND}.`
+    )
+  }
+  if (runtimeMcpContributions.length > 0) {
+    await validateNamedExport(
+      packageRoot,
+      definition.packageName,
+      packageJson.exports,
+      DOMAIN_RUNTIME_MCP_EXPORT,
+      DOMAIN_RUNTIME_MCP_RUNNER_EXPORT
+    )
   }
   if (!isRecord(packageJson.scripts) || typeof packageJson.scripts.test !== 'string' ||
     typeof packageJson.scripts.typecheck !== 'string') {

@@ -30,6 +30,7 @@ vi.mock('../components/write/WritePdfViewer', () => ({
     onOpenAnnotations?: unknown
     onToggleAnnotations?: unknown
     onPresentationStateChange?: unknown
+    viewStateKey?: string
   }) => createElement('div', {
     'data-write-pdf-viewer': 'true',
     'data-file-path': props.filePath,
@@ -49,6 +50,7 @@ vi.mock('../components/write/WritePdfViewer', () => ({
     'data-has-open-annotations': props.onOpenAnnotations ? 'true' : 'false',
     'data-has-toggle-annotations': props.onToggleAnnotations ? 'true' : 'false',
     'data-has-presentation-state-change': props.onPresentationStateChange ? 'true' : 'false',
+    'data-view-state-key': props.viewStateKey,
     ...(props.sourceUrl ? { 'data-source-url': props.sourceUrl } : {})
   })
 }))
@@ -59,6 +61,10 @@ import {
   loadPdfWorkspacePreviewData,
   pdfWorkspaceDocumentRevisionKey
 } from './PdfWorkspaceViewer'
+import {
+  RightPanelSessionScope,
+  RightPanelSurfaceScope
+} from '../components/right-panel-session-scope'
 
 function createPdfObservation(
   overrides: Partial<WorkspaceObservation> = {}
@@ -173,6 +179,37 @@ function createPdfTransportClient(input: {
 }
 
 describe('PdfWorkspaceViewer', () => {
+  it('qualifies duplicate PDF view memory by the owning pane surface', () => {
+    const renderPane = (surfaceId: string): string => renderToStaticMarkup(
+      createElement(RightPanelSessionScope, {
+        sessionId: 'session-1',
+        children: createElement(RightPanelSurfaceScope, {
+          surfaceId,
+          children: createElement(PdfWorkspaceViewer, {
+            observation: createPdfObservation(),
+            asset: createPdfAssetDescriptor(),
+            previewState: {
+              kind: 'ready',
+              title: 'PDF ready',
+              message: 'ready',
+              data: Uint8Array.from([0x25, 0x50, 0x44, 0x46]),
+              mimeType: 'application/pdf'
+            }
+          })
+        })
+      })
+    )
+
+    const first = renderPane('pane-a')
+    const second = renderPane('pane-b')
+
+    expect(first).toContain('data-view-state-key=')
+    expect(first).toContain('pane-a')
+    expect(first).not.toContain('pane-b')
+    expect(second).toContain('pane-b')
+    expect(second).not.toContain('pane-a')
+  })
+
   it('keeps a stable document revision across observation and transport object refreshes', () => {
     const observation = createPdfObservation()
     const asset = createPdfAssetDescriptor()

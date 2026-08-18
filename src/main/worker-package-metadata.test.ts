@@ -28,7 +28,14 @@ type RootPackageJson = {
   scripts?: Record<string, string>
 }
 
-const allowedSideEffects = new Set(['none', 'filesystem', 'network', 'host-ui', 'process'])
+const allowedSideEffects = new Set([
+  'none',
+  'filesystem',
+  'network',
+  'host-ui',
+  'process',
+  'target-scoped-browser'
+])
 const workerRoot = join(process.cwd(), 'packages', 'workers')
 const rootPackageJsonPath = join(process.cwd(), 'package.json')
 const releaseWorkerManifestPath = join(process.cwd(), 'scripts', 'release-worker-manifest.cjs')

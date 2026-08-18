@@ -52,6 +52,7 @@ test('ignores untrusted origins and rejects stale committed snapshots', async ()
     frameWindow: current.window,
     frameUrl: 'http://127.0.0.1:8000/',
     sessionId: 'thread-1',
+    surfaceId: 'surface-evidence-a',
     runtimeId: 'codex',
     threadId: 'thread-1',
     committedSnapshotDigest: snapshotDigest,
@@ -102,6 +103,7 @@ test('opens only the resolved workspace target and preserves return activation',
     frameWindow: current.window,
     frameUrl: 'http://127.0.0.1:8000/',
     sessionId: 'thread-1',
+    surfaceId: 'surface-evidence-a',
     runtimeId: 'codex',
     threadId: 'thread-1',
     committedSnapshotDigest: snapshotDigest,
@@ -125,6 +127,7 @@ test('opens only the resolved workspace target and preserves return activation',
 
   assert.equal(result.status, 'opened')
   assert.equal(opened.length, 1)
+  assert.equal(opened[0]?.surfaceId, 'surface-evidence-a')
   assert.deepEqual(opened[0]?.integrity, {
     algorithm: 'sha256',
     expectedDigest: contentDigest

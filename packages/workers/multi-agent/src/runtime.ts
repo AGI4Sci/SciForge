@@ -58,6 +58,15 @@ export type RunChildInput = {
   bashCommandPolicy?: Record<string, unknown>
   filePathPolicy?: Record<string, unknown>
   maxToolCalls?: number
+  resumeThreadRef?: MultiAgentChildThreadRef
+  signal?: AbortSignal
+}
+
+export type ResumeChildInput = {
+  parentThreadId: string
+  parentTurnId: string
+  childId: string
+  prompt?: string
   signal?: AbortSignal
 }
 
@@ -176,10 +185,6 @@ export class MultiAgentRuntime {
       return normalizeRuntimeView(reservation.replayed, this.activeChildIds)
     }
 
-    const executor = this.options.executor
-    if (!executor) {
-      throw new MultiAgentRuntimeError(createMultiAgentError('executor_missing', 'multi-agent executor is not configured'))
-    }
     const id = reservation.id
     observer.onReserved(id)
     const createdAt = this.now()
@@ -211,7 +216,23 @@ export class MultiAgentRuntime {
       throw error
     }
 
-    const boundary = createExecutionBoundary(input.signal, normalized.deadlineMs)
+    return this.executeReservedChild(record, normalized, input.signal, observer.onStarted)
+  }
+
+  private async executeReservedChild(
+    initialRecord: MultiAgentChildRunRecord,
+    normalized: NormalizedRunChildInput,
+    parentSignal: AbortSignal | undefined,
+    onStarted: (record: MultiAgentChildRunRecord) => void
+  ): Promise<MultiAgentChildRunRecord> {
+    const executor = this.options.executor
+    if (!executor) {
+      throw new MultiAgentRuntimeError(createMultiAgentError('executor_missing', 'multi-agent executor is not configured'))
+    }
+    const id = initialRecord.id
+    let record = initialRecord
+
+    const boundary = createExecutionBoundary(parentSignal, normalized.deadlineMs)
     this.boundariesByChildId.set(id, boundary)
     let acceptingTranscript = true
     let lifecycleControl: MultiAgentLifecycleControl | undefined
@@ -224,7 +245,7 @@ export class MultiAgentRuntime {
         updatedAt: startedAt
       })
       await this.persistAndEmit(record)
-      observer.onStarted(record)
+      onStarted(record)
       if (boundary.signal.aborted) {
         throw new MultiAgentRuntimeError(createMultiAgentError('child_aborted', 'multi-agent child run was aborted'))
       }
@@ -245,6 +266,7 @@ export class MultiAgentRuntime {
           bashCommandPolicy: normalized.bashCommandPolicy,
           filePathPolicy: normalized.filePathPolicy,
           maxToolCalls: normalized.maxToolCalls,
+          resumeThreadRef: normalized.resumeThreadRef,
           signal: boundary.signal,
           registerLifecycleControl: (control) => {
             if (!boundary.signal.aborted) {
@@ -303,7 +325,7 @@ export class MultiAgentRuntime {
           finishedAt,
           maxEntries: this.config.maxTranscriptEntries
         }),
-        threadRef: result.threadRef,
+        threadRef: result.threadRef ?? record.threadRef,
         updatedAt: finishedAt,
         finishedAt
       })
@@ -345,6 +367,98 @@ export class MultiAgentRuntime {
       this.active -= 1
       this.activeChildIds.delete(id)
     }
+  }
+
+  async resumeChild(input: ResumeChildInput): Promise<MultiAgentChildRunRecord> {
+    const parentThreadId = input.parentThreadId.trim()
+    const parentTurnId = input.parentTurnId.trim()
+    const childId = input.childId.trim()
+    if (!parentThreadId || !parentTurnId || !childId) {
+      throw new MultiAgentRuntimeError(createMultiAgentError(
+        'invalid_input',
+        'parentThreadId, parentTurnId, and childId are required to resume a child'
+      ))
+    }
+
+    const reserved = await this.withStartGate(async () => {
+      const existing = await this.options.store.get(parentThreadId, childId)
+      if (!existing) {
+        throw new MultiAgentRuntimeError(createMultiAgentError(
+          'child_not_found',
+          `multi-agent child ${childId} was not found`
+        ))
+      }
+      if (existing.status !== 'aborted' && existing.status !== 'failed') {
+        throw new MultiAgentRuntimeError(createMultiAgentError(
+          'invalid_input',
+          `multi-agent child ${childId} can only resume from failed or aborted status`
+        ))
+      }
+      if (!existing.threadRef) {
+        throw new MultiAgentRuntimeError(createMultiAgentError(
+          'invalid_input',
+          `multi-agent child ${childId} has no provider thread to resume`
+        ))
+      }
+      this.assertCanStart()
+      this.active += 1
+      this.activeChildIds.add(childId)
+      return existing
+    })
+
+    const resumePrompt = input.prompt?.trim() || 'Continue from where you were interrupted and finish the original task.'
+    const resumedAt = this.now()
+    const { error: _error, finishedAt: _finishedAt, ...resumable } = reserved
+    const queued = MultiAgentChildRunRecord.parse({
+      ...resumable,
+      parentTurnId,
+      attempt: reserved.attempt + 1,
+      status: 'queued',
+      transcript: trimTranscript([...reserved.transcript, {
+        id: `${childId}-resume-${reserved.attempt + 1}`,
+        kind: 'user_message',
+        text: resumePrompt,
+        createdAt: resumedAt,
+        metadata: { resumed: true, attempt: reserved.attempt + 1 }
+      }], this.config.maxTranscriptEntries),
+      updatedAt: resumedAt
+    })
+    try {
+      await this.persistAndEmit(queued)
+    } catch (error) {
+      this.active -= 1
+      this.activeChildIds.delete(childId)
+      throw error
+    }
+
+    let resolveStarted!: (record: MultiAgentChildRunRecord) => void
+    let rejectStarted!: (error: unknown) => void
+    let startedSettled = false
+    const started = new Promise<MultiAgentChildRunRecord>((resolve, reject) => {
+      resolveStarted = resolve
+      rejectStarted = reject
+    })
+    const normalized = normalizeRunChildInput({
+      parentThreadId,
+      parentTurnId,
+      label: reserved.label,
+      prompt: resumePrompt,
+      workspace: reserved.workspace,
+      model: reserved.model,
+      resumeThreadRef: reserved.threadRef,
+      signal: input.signal
+    })
+    const execution = this.executeReservedChild(queued, normalized, input.signal, (record) => {
+      startedSettled = true
+      resolveStarted(record)
+    })
+    this.executionsByChildId.set(childId, execution)
+    void execution.then((record) => {
+      if (!startedSettled) resolveStarted(record)
+    }, (error) => {
+      if (!startedSettled) rejectStarted(error)
+    })
+    return started
   }
 
   async child(parentThreadId: string, childId: string): Promise<MultiAgentChildRunRecord | null> {
@@ -434,6 +548,31 @@ export class MultiAgentRuntime {
     const boundary = this.boundariesByChildId.get(childId)
     if (!boundary) return false
     return boundary.resume(token)
+  }
+
+  async deleteChild(parentThreadId: string, childId: string): Promise<MultiAgentChildRunRecord | null> {
+    const cancelled = await this.cancelChild(parentThreadId, childId)
+    if (!cancelled) return null
+    const removed = await this.options.store.delete(parentThreadId, childId)
+    if (!removed) return null
+    try {
+      await this.options.events?.onChildEvent?.({
+        type: 'child_event',
+        operation: 'delete',
+        seq: ++this.eventSeq,
+        childId: cancelled.id,
+        parentThreadId: cancelled.parentThreadId,
+        parentTurnId: cancelled.parentTurnId,
+        status: cancelled.status,
+        label: cancelled.label,
+        summary: cancelled.summary,
+        error: cancelled.error,
+        createdAt: this.now()
+      }, cancelled)
+    } catch {
+      // The durable record is already deleted. This event only refreshes views.
+    }
+    return cancelled
   }
 
   async transcript(
@@ -554,6 +693,7 @@ export class MultiAgentRuntime {
     try {
       await this.options.events?.onChildEvent?.({
         type: 'child_event',
+        operation: 'upsert',
         seq: ++this.eventSeq,
         childId: record.id,
         parentThreadId: record.parentThreadId,
@@ -563,7 +703,7 @@ export class MultiAgentRuntime {
         summary: record.summary,
         error: record.error,
         createdAt: record.updatedAt
-      })
+      }, record)
     } catch {
       // Child events are refresh notifications. The persisted child record is the
       // canonical state, so a notification transport failure must not abort work.
@@ -633,7 +773,9 @@ export function aggregateChildRuns(records: readonly MultiAgentChildRunRecord[])
     .sort((a, b) => b.runs - a.runs || b.totalTokens - a.totalTokens || a.key.localeCompare(b.key))
 }
 
-function normalizeRunChildInput(input: RunChildInput): Required<Pick<RunChildInput, 'parentThreadId' | 'parentTurnId' | 'prompt'>> & Omit<RunChildInput, 'parentThreadId' | 'parentTurnId' | 'prompt' | 'signal'> {
+type NormalizedRunChildInput = Required<Pick<RunChildInput, 'parentThreadId' | 'parentTurnId' | 'prompt'>> & Omit<RunChildInput, 'parentThreadId' | 'parentTurnId' | 'prompt' | 'signal'>
+
+function normalizeRunChildInput(input: RunChildInput): NormalizedRunChildInput {
   const parentThreadId = input.parentThreadId.trim()
   const parentTurnId = input.parentTurnId.trim()
   const prompt = input.prompt.trim()
@@ -657,7 +799,8 @@ function normalizeRunChildInput(input: RunChildInput): Required<Pick<RunChildInp
     strictAllowedToolNames: input.strictAllowedToolNames === true,
     bashCommandPolicy: input.bashCommandPolicy,
     filePathPolicy: input.filePathPolicy,
-    maxToolCalls: normalizePositiveInteger(input.maxToolCalls)
+    maxToolCalls: normalizePositiveInteger(input.maxToolCalls),
+    resumeThreadRef: input.resumeThreadRef
   }
 }
 

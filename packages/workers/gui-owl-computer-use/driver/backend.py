@@ -24,6 +24,7 @@ class BackendOpenContext:
     settle_s: float
     show_overlay: bool
     cancellation: threading.Event
+    deadline: float | None = None
     screenshot_provider: Any | None = field(default=None, repr=False)
     preparation: "BackendPreparation | None" = field(default=None, repr=False)
 

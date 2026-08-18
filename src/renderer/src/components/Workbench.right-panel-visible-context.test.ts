@@ -12,20 +12,25 @@ describe('Workbench right-panel visible context', () => {
       const component = buildRightPanelVisibleContextComponent({
         mode,
         sessionId: 'session-a',
+        surfaceId: 'pane-a',
+        focused: true,
         width: 420,
         workspaceRoot: '/workspace/a',
         updatedAt: UPDATED_AT
       })
 
-      expect(component.id).toBe('right-sidebar')
+      expect(component.id).toBe('right-sidebar:session:session-a:surface:pane-a')
       expect(component.region).toBe('right-sidebar')
       expect(component.component).toBe('right-panel')
       expect(component.state).toMatchObject({
         mode,
         sessionId: 'session-a',
+        surfaceId: 'pane-a',
+        focused: true,
         width: 420,
         currentResource: {
           sessionId: 'session-a',
+          surfaceId: 'pane-a',
           workspaceRoot: '/workspace/a'
         }
       })
@@ -49,6 +54,8 @@ describe('Workbench right-panel visible context', () => {
       const component = buildRightPanelVisibleContextComponent({
         mode: 'fixture.right-panel',
         sessionId: 'session-a',
+        surfaceId: 'pane-a',
+        focused: true,
         width: 420,
         workspaceRoot: '/workspace/a',
         updatedAt: UPDATED_AT
@@ -69,6 +76,8 @@ describe('Workbench right-panel visible context', () => {
     const file = buildRightPanelVisibleContextComponent({
       mode: 'file',
       sessionId: 'session-a',
+      surfaceId: 'pane-file',
+      focused: false,
       width: 420,
       workspaceRoot: '/workspace/a',
       filePreviewTarget: {
@@ -80,6 +89,8 @@ describe('Workbench right-panel visible context', () => {
     const changes = buildRightPanelVisibleContextComponent({
       mode: 'changes',
       sessionId: 'session-a',
+      surfaceId: 'pane-changes',
+      focused: true,
       width: 500,
       workspaceRoot: '/workspace/a',
       updatedAt: UPDATED_AT
@@ -103,6 +114,8 @@ describe('Workbench right-panel visible context', () => {
     const first = buildRightPanelVisibleContextComponent({
       mode: 'todo',
       sessionId: 'session-a',
+      surfaceId: 'pane-a',
+      focused: true,
       width: 360,
       workspaceRoot: '/workspace/a',
       updatedAt: UPDATED_AT
@@ -110,6 +123,8 @@ describe('Workbench right-panel visible context', () => {
     const second = buildRightPanelVisibleContextComponent({
       mode: 'todo',
       sessionId: 'session-b',
+      surfaceId: 'pane-b',
+      focused: true,
       width: 640,
       workspaceRoot: '/workspace/b',
       updatedAt: UPDATED_AT
@@ -131,6 +146,8 @@ describe('Workbench right-panel visible context', () => {
     const component = buildRightPanelVisibleContextComponent({
       mode: 'file',
       sessionId: 'session-a',
+      surfaceId: 'pane-file',
+      focused: true,
       width: 480,
       workspaceRoot: '/workspace/a',
       filePreviewTarget: {
@@ -148,7 +165,32 @@ describe('Workbench right-panel visible context', () => {
       sessionId: 'session-a',
       workspaceRoot: '/workspace/a',
       path: 'papers/current.pdf',
-      canonicalComponentId: 'right-sidebar.file-preview'
+      canonicalComponentId: 'right-sidebar.file-preview:session:session-a:surface:pane-file'
     })
+  })
+
+  it('isolates duplicate panes by Session and Host surface identity', () => {
+    const first = buildRightPanelVisibleContextComponent({
+      mode: 'file',
+      sessionId: 'session/a',
+      surfaceId: 'pane:1',
+      focused: false,
+      width: 420,
+      updatedAt: UPDATED_AT
+    })
+    const second = buildRightPanelVisibleContextComponent({
+      mode: 'file',
+      sessionId: 'session/a',
+      surfaceId: 'pane:2',
+      focused: true,
+      width: 480,
+      updatedAt: UPDATED_AT
+    })
+
+    expect(first.id).toBe('right-sidebar:session:session%2Fa:surface:pane%3A1')
+    expect(second.id).toBe('right-sidebar:session:session%2Fa:surface:pane%3A2')
+    expect(first.id).not.toBe(second.id)
+    expect(first.state).toMatchObject({ surfaceId: 'pane:1', focused: false })
+    expect(second.state).toMatchObject({ surfaceId: 'pane:2', focused: true })
   })
 })

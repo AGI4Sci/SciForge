@@ -644,6 +644,7 @@ const bundledPackageTargets = Object.freeze([
 const nonBundledPackageDirs = NON_BUNDLED_PACKAGE_IDS.map(packageDir)
 const packagedExecutableNodeEntryRequiredPaths = [
   'out/main/codex-pre-tool-use-governance-node-entry.js',
+  'out/main/domain-runtime-mcp-node-entry.js',
   ...runtimeEntries.flatMap((entry) => entry.executableNodeEntryPaths || [])
 ]
 const runtimeRequiredPathExports = Object.fromEntries(

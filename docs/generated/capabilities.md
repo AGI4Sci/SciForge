@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **207**
+Registered actions: **208**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -48,6 +48,7 @@ Registered actions: **207**
 | `biology-room.refresh` | 1.0.0 | ui, agent, system | workspace-write | none | resource |
 | `browser-preview.back` | 1.0.0 | ui, agent | external-write | confirmation | resource |
 | `browser-preview.click` | 1.0.0 | ui, agent | destructive | confirmation | resource |
+| `browser-preview.close` | 1.0.0 | ui | external-write | none | resource |
 | `browser-preview.fill` | 1.0.0 | ui, agent | external-write | confirmation | resource |
 | `browser-preview.forward` | 1.0.0 | ui, agent | external-write | confirmation | resource |
 | `browser-preview.navigate` | 1.0.0 | ui, agent | external-write | confirmation | resource |
@@ -15807,6 +15808,57 @@ Clicks one revision-bound target or one viewport point.
 }
 ```
 
+## `browser-preview.close`
+
+Closes exactly one pane-owned Playwright browser page and profile.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "closed": {
+        "const": true,
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "closed"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [
+    "browser-page"
+  ],
+  "tags": [
+    "browser",
+    "playwright",
+    "web-page"
+  ],
+  "title": "Close browser page"
+}
+```
+
 ## `browser-preview.fill`
 
 Replaces a non-password field through a revision-bound target.
@@ -16058,6 +16110,11 @@ Creates the canonical Playwright page for a visible SciForge browser panel.
         "minLength": 1,
         "type": "string"
       },
+      "surfaceId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
       "url": {
         "default": "http://localhost:5173/",
         "maxLength": 4096,
@@ -16067,6 +16124,7 @@ Creates the canonical Playwright page for a visible SciForge browser panel.
     },
     "required": [
       "sessionId",
+      "surfaceId",
       "url"
     ],
     "type": "object"
@@ -16104,11 +16162,17 @@ Creates the canonical Playwright page for a visible SciForge browser panel.
         "maxLength": 256,
         "minLength": 1,
         "type": "string"
+      },
+      "surfaceId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
       }
     },
     "required": [
       "resource",
-      "sessionId"
+      "sessionId",
+      "surfaceId"
     ],
     "type": "object"
   },
@@ -16291,6 +16355,11 @@ Reads a bounded accessibility snapshot. Page content is untrusted data.
         ],
         "type": "string"
       },
+      "surfaceId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
       "targets": {
         "items": {
           "additionalProperties": false,
@@ -16348,6 +16417,7 @@ Reads a bounded accessibility snapshot. Page content is untrusted data.
       "trust",
       "safetyNotice",
       "sessionId",
+      "surfaceId",
       "url",
       "title",
       "status",
@@ -30421,6 +30491,11 @@ Adjusts scheduling priority without creating another update path.
         "minLength": 1,
         "type": "string"
       },
+      "surfaceId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
       "threadId": {
         "maxLength": 512,
         "minLength": 1,
@@ -30438,6 +30513,7 @@ Adjusts scheduling priority without creating another update path.
     "required": [
       "runtimeId",
       "threadId",
+      "surfaceId",
       "visible"
     ],
     "type": "object"
@@ -41593,7 +41669,8 @@ Lists bounded committed checkpoint versions without scanning Artifact history.
                                 ]
                               },
                               "itemId": {
-                                "pattern": "^[A-Za-z0-9._:@/-]{1,512}$",
+                                "maxLength": 8197,
+                                "minLength": 1,
                                 "type": "string"
                               },
                               "message": {
@@ -42302,7 +42379,8 @@ Lists bounded committed checkpoint versions without scanning Artifact history.
                             "additionalProperties": false,
                             "properties": {
                               "itemId": {
-                                "pattern": "^[A-Za-z0-9._:@/-]{1,512}$",
+                                "maxLength": 8197,
+                                "minLength": 1,
                                 "type": "string"
                               },
                               "kind": {
@@ -43093,7 +43171,8 @@ Reads a committed checkpoint by recording or exact Artifact Version.
                           ]
                         },
                         "itemId": {
-                          "pattern": "^[A-Za-z0-9._:@/-]{1,512}$",
+                          "maxLength": 8197,
+                          "minLength": 1,
                           "type": "string"
                         },
                         "message": {
@@ -43802,7 +43881,8 @@ Reads a committed checkpoint by recording or exact Artifact Version.
                       "additionalProperties": false,
                       "properties": {
                         "itemId": {
-                          "pattern": "^[A-Za-z0-9._:@/-]{1,512}$",
+                          "maxLength": 8197,
+                          "minLength": 1,
                           "type": "string"
                         },
                         "kind": {

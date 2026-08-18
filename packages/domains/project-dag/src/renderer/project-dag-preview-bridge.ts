@@ -117,6 +117,7 @@ export async function handleProjectDagPreviewMessage(input: Readonly<{
   frameWindow: WindowProxy | null
   frameUrl: string
   sessionId: string
+  surfaceId: string
   target: ProjectDagTarget
   committedSnapshotDigest?: string
   activationRevision?: number
@@ -212,6 +213,7 @@ export async function handleProjectDagPreviewMessage(input: Readonly<{
   const target: DomainWorkspacePreviewTarget = {
     path: data.path,
     sessionId: input.sessionId,
+    surfaceId: input.surfaceId,
     workspaceRoot: data.workspaceRoot,
     ...(anchor ? { anchor } : {}),
     ...(anchor?.kind === 'text'

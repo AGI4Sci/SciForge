@@ -63,6 +63,7 @@ test('builds an integrity-bound preview with an exact dossier return target', ()
     previewRef,
     recordDigest: `sha256:${'c'.repeat(64)}`,
     sessionId: 'session-1',
+    surfaceId: 'surface-dossier-a',
     workspaceRoot: '/workspace/lab',
     target: { kind: 'compute-run', runId: 'compute-run:plot-2' },
     page: 'reproduction',
@@ -71,6 +72,7 @@ test('builds an integrity-bound preview with an exact dossier return target', ()
   }), {
     path: '.sciforge/research-dossier/previews/figure.png',
     sessionId: 'session-1',
+    surfaceId: 'surface-dossier-a',
     workspaceRoot: '/workspace/lab',
     mimeType: 'image/svg+xml',
     kind: 'file',

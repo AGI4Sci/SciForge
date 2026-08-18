@@ -511,9 +511,14 @@ describe('AgentRuntimeHost', () => {
           threadRef: { runtime: 'claude', threadId: 'child-thread', turnId: 'child-turn' }
         }
       }),
+      resume: vi.fn(async (_context, input) => {
+        await input.onSpawned({ runtime: 'claude', threadId: input.threadRef.threadId, turnId: 'resumed-turn' })
+        return { summary: 'child resumed', threadRef: input.threadRef }
+      }),
       inspect: vi.fn(async () => ({ state: 'active' as const, observedAt: '2026-08-02T00:00:00.000Z' })),
       message: vi.fn(async () => ({ established: true })),
-      cancel: vi.fn(async () => undefined)
+      cancel: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined)
     }
     adapter.subagents = subagents
     const host = createAgentRuntimeHost({
@@ -598,9 +603,11 @@ describe('AgentRuntimeHost', () => {
     })
     adapter.subagents = {
       spawn,
+      resume: vi.fn(async (_context, input) => ({ summary: 'resumed', threadRef: input.threadRef })),
       inspect: vi.fn(async () => ({ state: 'missing' as const, observedAt: '2026-08-02T00:00:00.000Z' })),
       message: vi.fn(async () => ({ established: false })),
-      cancel: vi.fn(async () => undefined)
+      cancel: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined)
     }
     const host = createAgentRuntimeHost({
       settings: async () => settings('codex'),

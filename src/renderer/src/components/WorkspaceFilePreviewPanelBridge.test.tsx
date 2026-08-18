@@ -17,6 +17,9 @@ import {
   resolveWorkspacePreviewWorkspaceLocator,
   workspacePreviewVisualContentType
 } from './WorkspaceFilePreviewPanelBridge'
+import { workspacePreviewVisibleContextComponentId } from '../workspace-preview/visible-context-identity'
+
+const TEST_SURFACE_ID = 'right-panel-pane-test'
 
 const workspacePreviewMock = vi.hoisted(() => {
   const editSummary = {
@@ -567,6 +570,21 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     expect(workspacePreviewVisualContentType({ modality: 'canvas' })).toBe('canvas')
   })
 
+  it('qualifies preview component identities by Session and surface', () => {
+    const first = workspacePreviewVisibleContextComponentId({
+      sessionId: 'session/1',
+      surfaceId: 'pane:a'
+    })
+    const second = workspacePreviewVisibleContextComponentId({
+      sessionId: 'session/1',
+      surfaceId: 'pane:b'
+    })
+
+    expect(first).toBe('right-sidebar.file-preview:session:session%2F1:surface:pane%3Aa')
+    expect(second).toBe('right-sidebar.file-preview:session:session%2F1:surface:pane%3Ab')
+    expect(first).not.toBe(second)
+  })
+
   afterEach(() => {
     workspacePreviewMock.latestTabularProps = null
     workspacePreviewMock.latestTextProps = null
@@ -682,46 +700,55 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     const unregisteredHtml = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
       target: { path: 'legacy.xls', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
+      surfaceId: TEST_SURFACE_ID,
       onClose: vi.fn()
     }))
     const markdownHtml = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
       target: { path: 'notes.md', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
+      surfaceId: TEST_SURFACE_ID,
       onClose: vi.fn()
     }))
     const molecularHtml = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
       target: { path: 'protein.pdb', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
+      surfaceId: TEST_SURFACE_ID,
       onClose: vi.fn()
     }))
     const tabularHtml = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
       target: { path: 'table.csv', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
+      surfaceId: TEST_SURFACE_ID,
       onClose: vi.fn()
     }))
     const workbookHtml = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
       target: { path: 'workbook.xlsx', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
+      surfaceId: TEST_SURFACE_ID,
       onClose: vi.fn()
     }))
     const textHtml = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
       target: { path: 'notes.txt', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
+      surfaceId: TEST_SURFACE_ID,
       onClose: vi.fn()
     }))
     const deckHtml = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
       target: { path: 'slides.pptx', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
+      surfaceId: TEST_SURFACE_ID,
       onClose: vi.fn()
     }))
     const deferredHtml = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
       target: { path: 'mesh.vtk', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
+      surfaceId: TEST_SURFACE_ID,
       onClose: vi.fn()
     }))
     const sequenceHtml = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
       target: { path: 'reads.fasta', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
+      surfaceId: TEST_SURFACE_ID,
       onClose: vi.fn()
     }))
 
@@ -730,6 +757,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     expect(unregisteredHtml).not.toContain('data-mock-legacy-preview-panel="true"')
     expect(markdownHtml).toContain('data-mock-workspace-preview-shell="true"')
     expect(markdownHtml).toContain('data-shell-class-name="ds-no-drag"')
+    expect(markdownHtml).toContain('data-surface-id="right-panel-pane-test"')
     expect(markdownHtml).toContain('data-route-reason="registered-plugin"')
     expect(molecularHtml).toContain('data-mock-workspace-preview-shell="true"')
     expect(molecularHtml).toContain('data-route-reason="registered-plugin"')
@@ -761,11 +789,13 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
         integrity: { algorithm: 'sha256', expectedDigest }
       },
       workspaceRoot: '/workspace/lab',
+      surfaceId: TEST_SURFACE_ID,
       onClose: vi.fn()
     }))
     const ordinaryHtml = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
       target: { path: 'notes.txt', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
+      surfaceId: TEST_SURFACE_ID,
       onClose: vi.fn()
     }))
 
@@ -784,6 +814,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
         integrity: { algorithm: 'sha256', expectedDigest: `sha256:${'a'.repeat(64)}` }
       },
       workspaceRoot: '/workspace/lab',
+      surfaceId: TEST_SURFACE_ID,
       onClose: vi.fn()
     }))
 
@@ -797,6 +828,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     const initialHtml = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
       target: { path: 'table.csv', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
+      surfaceId: TEST_SURFACE_ID,
       onClose: vi.fn()
     }))
     expect(initialHtml).not.toContain('data-workspace-preview-edit-summary')
@@ -816,6 +848,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     const summaryHtml = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
       target: { path: 'table.csv', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
+      surfaceId: TEST_SURFACE_ID,
       onClose: vi.fn()
     }))
     expect(summaryHtml).toContain('data-workspace-preview-edit-summary')
@@ -829,6 +862,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
       target: { path: 'slides.pptx', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
+      surfaceId: TEST_SURFACE_ID,
       onClose: vi.fn()
     }))
 
@@ -849,6 +883,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
       target: { path: 'ligand.sdf', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
+      surfaceId: TEST_SURFACE_ID,
       onClose: vi.fn()
     }))
 
@@ -874,6 +909,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
       target: { path: 'reads.fastq', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
+      surfaceId: TEST_SURFACE_ID,
       onClose: vi.fn()
     }))
 
@@ -1026,6 +1062,8 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
         modality: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.molecular')
       },
       workspaceRoot: '/workspace/lab',
+      sessionId: 'chat-session-1',
+      surfaceId: 'pane:preview-1',
       updatedAt: '2026-07-08T00:00:01.000Z',
       presentationState: {
         schemaVersion: 1,
@@ -1046,11 +1084,13 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     })
 
     expect(component).toMatchObject({
-      id: 'right-sidebar.file-preview',
+      id: 'right-sidebar.file-preview:session:chat-session-1:surface:pane%3Apreview-1',
       component: 'workspace-preview',
       title: 'protein.pdb',
       summary: 'Workspace preview observation for Molecular file protein.pdb. Current position: Page 2 of 12. Selection: Page 2; 17 selected characters.',
       state: {
+        sessionId: 'chat-session-1',
+        surfaceId: 'pane:preview-1',
         currentPreview: {
           resourceRef: 'res_abcdefghijklmnopqrstuvwxyz',
           operationRefs: ['workspace-preview.apply-edit']

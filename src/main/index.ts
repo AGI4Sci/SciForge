@@ -17,7 +17,7 @@ import {
 } from 'electron'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { JsonSettingsStore, devServerHintUrl } from './settings-store'
@@ -129,6 +129,7 @@ import type { BgcDiscoveryMcpLaunchConfig } from './bgc-discovery-mcp-config'
 import { type ImageGenerationMcpLaunchConfig } from './image-generation-mcp-config'
 import type { PptMasterMcpLaunchConfig } from './ppt-master-mcp-config'
 import { buildManagedGuiMcpServers } from './gui-mcp-registry'
+import type { ManagedGuiMcpLaunchConfig } from './managed-gui-mcp-config'
 import { migrateLegacyKunGlobalConfig } from './legacy-kun-global-config-migration'
 import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
 import { ControlledProcessService } from './processes/controlled-process-service'
@@ -220,84 +221,64 @@ function resolvePreloadPath(): string {
   return join(__dirname, '../preload/index.mjs')
 }
 
-function getScheduleMcpLaunchConfig(): ScheduleMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
-}
-
-function getResearchSearchMcpLaunchConfig(): ResearchSearchMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
-}
-
-function getWorkspaceIntelMcpLaunchConfig(): WorkspaceIntelMcpLaunchConfig {
+function getManagedGuiMcpLaunchConfig(): ManagedGuiMcpLaunchConfig {
+  const nodeExecPath = app.isPackaged
+    ? undefined
+    : [process.env.npm_node_execpath, process.env.NODE]
+        .map((candidate) => candidate?.trim())
+        .find((candidate): candidate is string =>
+          Boolean(candidate && isAbsolute(candidate) && existsSync(candidate))
+        )
   return {
     appPath: app.getAppPath(),
     execPath: process.execPath,
     isPackaged: app.isPackaged,
+    ...(nodeExecPath ? { nodeExecPath } : {})
+  }
+}
+
+function getScheduleMcpLaunchConfig(): ScheduleMcpLaunchConfig {
+  return getManagedGuiMcpLaunchConfig()
+}
+
+function getResearchSearchMcpLaunchConfig(): ResearchSearchMcpLaunchConfig {
+  return getManagedGuiMcpLaunchConfig()
+}
+
+function getWorkspaceIntelMcpLaunchConfig(): WorkspaceIntelMcpLaunchConfig {
+  return {
+    ...getManagedGuiMcpLaunchConfig(),
     visibleContextPath: visibleContextSnapshotPath(app.getPath('userData'))
   }
 }
 
 function getWriteAssistMcpLaunchConfig(): WriteAssistMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
+  return getManagedGuiMcpLaunchConfig()
 }
 
 function getRuntimeInspectorMcpLaunchConfig(): RuntimeInspectorMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
+  return getManagedGuiMcpLaunchConfig()
 }
 
 function getScientificSkillsMcpLaunchConfig(): ScientificSkillsMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
+  return getManagedGuiMcpLaunchConfig()
 }
 
 function getScientificPlottingMcpLaunchConfig(): ScientificPlottingMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
+  return getManagedGuiMcpLaunchConfig()
 }
 
 function getBgcDiscoveryMcpLaunchConfig(): BgcDiscoveryMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
+  return getManagedGuiMcpLaunchConfig()
 }
 
 function getImageGenerationMcpLaunchConfig(): ImageGenerationMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
-  }
+  return getManagedGuiMcpLaunchConfig()
 }
 
 function getPptMasterMcpLaunchConfig(): PptMasterMcpLaunchConfig {
   return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged,
+    ...getManagedGuiMcpLaunchConfig(),
     homeDir: app.getPath('home')
   }
 }
@@ -576,11 +557,7 @@ function getCodexRuntime(): CodexRuntimeService {
       : join(process.cwd(), '.codex-runtime', 'codex-home'),
     standardCodexAuthPath: join(homedir(), '.codex', 'auth.json'),
     planGateway: { baseUrl: PLAN_GATEWAY_BASE_URL },
-    preToolUseHookLaunch: {
-      appPath: app.getAppPath(),
-      execPath: process.execPath,
-      isPackaged: app.isPackaged
-    },
+    preToolUseHookLaunch: getManagedGuiMcpLaunchConfig(),
     capabilityAgentTools: agentRuntimeTools
   })
   return codexRuntime

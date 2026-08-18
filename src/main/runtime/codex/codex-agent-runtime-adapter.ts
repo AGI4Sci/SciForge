@@ -55,9 +55,11 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
     transport: 'jsonrpc_stdio',
     subagents: {
       spawn: (_context, input) => service.spawnSubagent(input),
+      resume: (_context, input) => service.resumeSubagent(input),
       inspect: (_context, input) => service.inspectSubagent(input),
       message: (_context, input) => service.messageSubagent(input),
-      cancel: (_context, input) => service.cancelSubagent(input)
+      cancel: (_context, input) => service.cancelSubagent(input),
+      delete: (_context, input) => service.deleteSubagent(input)
     },
 
     async connect() {
@@ -863,7 +865,7 @@ async function codexChildrenFromThreadEvents(
   const [storedChildren, threadsResult] = await Promise.all([
     service.listStoredThreadChildren(threadId),
     typeof service.listThreads === 'function'
-      ? service.listThreads({ includeArchived: true, includeSide: true })
+      ? service.listThreads({ includeSide: true })
       : Promise.resolve(null)
   ])
   if (threadsResult?.ok) {
@@ -902,6 +904,7 @@ function childFromCodexThread(
   thread: CodexNormalizedThread,
   parentThreadId: string
 ): AgentRuntimeChild | null {
+  if (thread.archived === true) return null
   if (thread.id === parentThreadId) return null
   if (thread.parentThreadId !== parentThreadId) return null
   const threadSource = normalizedCodexChildSource(thread.threadSource)

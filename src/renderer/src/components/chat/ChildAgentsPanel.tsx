@@ -51,6 +51,7 @@ import {
   rememberRightPanelContextState,
   rightPanelContextStateKey
 } from '../right-panel-context-state'
+import { useRightPanelSurfaceId } from '../right-panel-session-scope'
 
 export type ChildAgentTFunction = (k: string, opts?: Record<string, unknown>) => string
 
@@ -111,6 +112,17 @@ export function sessionChildAgentsOwner(
     activeThreadId: sessionId.trim() || null,
     activeRuntimeId: thread?.runtimeId
   }
+}
+
+export function childAgentsPanelContextStateKey(input: {
+  activeThreadId: string | null
+  surfaceId: string | null
+}): string {
+  return rightPanelContextStateKey({
+    mode: 'child-agents',
+    threadId: input.activeThreadId,
+    surfaceId: input.surfaceId
+  })
 }
 
 export type ChildAgentNavigationCrumb = {
@@ -1761,6 +1773,7 @@ export function ChildAgentsPanel({
   className = ''
 }: ChildAgentsPanelProps): ReactElement {
   const { t } = useTranslation('common')
+  const rightPanelSurfaceId = useRightPanelSurfaceId()
   const sideData = useChatStore(
     useShallow((s) => ({
       sideConversations: s.sideConversations,
@@ -1817,9 +1830,9 @@ export function ChildAgentsPanel({
   const selectedTranscriptKey = selectedChild
     ? `${currentParentThreadId ?? ''}:${selectedChild.runtimeId}:${selectedChild.id}:${selectedChild.parentTurnId ?? ''}:${selectedChild.updatedAt ?? ''}:${transcriptRefKey(selectedChild.transcriptRef)}`
     : ''
-  const contextStateKey = rightPanelContextStateKey({
-    mode: 'child-agents',
-    threadId: activeThreadId
+  const contextStateKey = childAgentsPanelContextStateKey({
+    activeThreadId,
+    surfaceId: rightPanelSurfaceId
   })
 
   useEffect(() => {

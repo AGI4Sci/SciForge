@@ -1315,6 +1315,18 @@ describe('createCodexAgentRuntimeAdapter', () => {
             status: 'running',
             parentThreadId: 'other-thread',
             threadSource: 'subagent'
+          },
+          {
+            id: 'deleted-native-child',
+            title: 'Deleted child',
+            updatedAt: '2026-06-21T00:00:03.000Z',
+            model: 'gpt-5',
+            mode: 'agent',
+            archived: true,
+            parentThreadId: 'parent-thread',
+            parentTurnId: 'turn-1',
+            relation: 'side' as const,
+            threadSource: 'subagent'
           }
         ]
       })),
@@ -1341,7 +1353,9 @@ describe('createCodexAgentRuntimeAdapter', () => {
       payload: { threadId: 'parent-thread', parentTurnId: 'turn-1' }
     })
 
-    expect(service.listThreads).toHaveBeenCalledWith({ includeArchived: true, includeSide: true })
+    expect(service.listThreads).toHaveBeenCalledWith({ includeSide: true })
+    expect((listed as { children: Array<{ id: string }> }).children.map((child) => child.id))
+      .not.toContain('deleted-native-child')
     expect(listed).toMatchObject({
       runtimeId: 'codex',
       threadId: 'parent-thread',

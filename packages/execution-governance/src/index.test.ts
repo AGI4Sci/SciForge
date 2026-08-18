@@ -114,6 +114,43 @@ describe('ExecutionGovernorCore', () => {
     })
   })
 
+  it('allows one visual timeout retry with the exact expanded end-to-end deadline', () => {
+    const governor = new ExecutionGovernorCore()
+    const stableIdentity = {
+      objective: 'inspect-current-surface',
+      resourceIdentity: 'surface:thread-1'
+    }
+    const first = attempt('sciforge_look', {
+      sourceRef: 'source_token_a',
+      task: 'Inspect the current visual surface.',
+      timeoutMs: 180_000
+    }, stableIdentity)
+    const retry = attempt('sciforge_look', {
+      sourceRef: 'source_token_a',
+      task: 'Inspect the current visual surface.',
+      timeoutMs: 270_000
+    }, stableIdentity)
+
+    expect(governor.inspectAttempt(first).action).toBe('allow')
+    const timeoutDecision = governor.recordReceipt(first.callId, {
+      status: 'error',
+      outcome: 'retryable_error',
+      retryable: true,
+      errorCode: 'visual_inspection_timeout',
+      failureClass: 'timeout',
+      recoveryGuidance: 'Retry sciforge_look once with the same source and task using timeoutMs=270000.',
+      providerStage: 'model_router_deadline'
+    }).decision
+
+    expect(timeoutDecision).toMatchObject({
+      action: 'steer',
+      code: 'semantic_failure_retry'
+    })
+    expect(timeoutDecision.guidance).toContain('visual_inspection_timeout')
+    expect(timeoutDecision.guidance).toContain('timeoutMs=270000')
+    expect(governor.inspectAttempt(retry).action).toBe('allow')
+  })
+
   it('opens a circuit and steers once for a non-retryable semantic failure', () => {
     const governor = new ExecutionGovernorCore()
     const metadata = {

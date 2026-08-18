@@ -68,6 +68,8 @@ describe('WorkbenchRightPanelContributionRegistry', () => {
 
     const context = {
       active: true,
+      focused: true,
+      surfaceId: 'right-panel-pane:fixture',
       className: 'h-full',
       onCollapse: () => undefined,
       session: {

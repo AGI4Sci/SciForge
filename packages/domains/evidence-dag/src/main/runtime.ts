@@ -108,6 +108,7 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
   private readonly scientificPlottingProvenance: ScientificPlottingProvenanceConsumer
   private readonly artifactVersionCommit: (workspaceRoot: string) => ArtifactVersionCommitPortV1
   private readonly artifactVersionRead: (workspaceRoot: string) => ArtifactVersionReadPortV1
+  private readonly visibleSurfacesByThread = new Map<string, Set<string>>()
 
   constructor(options: Readonly<{
     userDataDir: string
@@ -369,7 +370,14 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
       threadId: input.threadId
     })
     evidenceDagWorkspaceRoot(input.workspaceRoot, thread.workspaceRoot)
-    await this.queue.prioritize(input.runtimeId, input.threadId, input.visible)
+    const visible = updateEvidenceDagVisibleSurfaces(
+      this.visibleSurfacesByThread,
+      input.runtimeId,
+      input.threadId,
+      input.surfaceId,
+      input.visible
+    )
+    await this.queue.prioritize(input.runtimeId, input.threadId, visible)
     return evidenceDagPriorityOutputSchema.parse(
       await this.status(input.runtimeId, input.threadId)
     )
@@ -487,6 +495,7 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
     await this.scientificPlottingProvenance.close()
     await this.artifactVersionLifecycle.close()
     this.context = undefined
+    this.visibleSurfacesByThread.clear()
     await Promise.all([this.queue.close(), this.sidecar.stop()])
   }
 
@@ -630,6 +639,25 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
       trace
     }
   }
+}
+
+export function updateEvidenceDagVisibleSurfaces(
+  visibleSurfacesByThread: Map<string, Set<string>>,
+  runtimeId: string,
+  threadId: string,
+  surfaceId: string,
+  visible: boolean
+): boolean {
+  const threadKey = JSON.stringify([runtimeId, threadId])
+  const surfaceIds = visibleSurfacesByThread.get(threadKey) ?? new Set<string>()
+  if (visible) {
+    surfaceIds.add(surfaceId)
+    visibleSurfacesByThread.set(threadKey, surfaceIds)
+  } else {
+    surfaceIds.delete(surfaceId)
+    if (surfaceIds.size === 0) visibleSurfacesByThread.delete(threadKey)
+  }
+  return surfaceIds.size > 0
 }
 
 export function parseEvidenceDagActivation(value: unknown) {

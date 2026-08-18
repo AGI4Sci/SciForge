@@ -199,7 +199,7 @@ async function findExecutableCommand(
 ): Promise<string | null> {
   for (const directory of new Set(directories)) {
     const names = platform === 'win32'
-      ? [command, `${command}.exe`, `${command}.cmd`, `${command}.bat`]
+      ? windowsCommandNames(command)
       : [command]
     for (const name of names) {
       const candidate = join(directory, name)
@@ -207,6 +207,12 @@ async function findExecutableCommand(
     }
   }
   return null
+}
+
+function windowsCommandNames(command: string): string[] {
+  if (/\.(?:exe|cmd|bat)$/i.test(command)) return [command]
+  // npm also creates an extensionless Unix shim that Windows cannot launch.
+  return [`${command}.exe`, `${command}.cmd`, `${command}.bat`]
 }
 
 const LOGIN_SHELL_PATH_START = '\u001e'
@@ -618,8 +624,8 @@ function codexConfigToml(
       'model_reasoning_summary = "detailed"',
       'model_supports_reasoning_summaries = true',
       '',
-      ...hookConfig,
-      createCodexPlanRuntimeConfig(modelAccess.baseUrl)
+      createCodexPlanRuntimeConfig(modelAccess.baseUrl),
+      ...hookConfig
     ].join('\n')
   }
   return [

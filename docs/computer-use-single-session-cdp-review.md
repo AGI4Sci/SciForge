@@ -23,6 +23,7 @@ flowchart LR
 ```
 
 The Host discovers the domain through generated composition and generic domain contributions. It does not contain a Computer Use domain-ID branch.
+Domains that contribute a runtime MCP server expose the standard `./runtime-mcp` runner. Generated composition selects that runner by contribution ID through one shared `domain-runtime-mcp-node-entry`, so adding or removing a domain does not require a feature-specific Electron build entry.
 
 ## 4. Five-tool contract
 
@@ -52,13 +53,15 @@ The domain contributes the managed MCP configuration and the exact mutation tool
 
 Executed actions produce an action result and bounded readback. Expectations are evaluated against the post-action state. Navigation and asynchronous page updates use deadline- and cancellation-aware bounded polling. Success is reported only when the requested verification matches.
 
+The absolute request deadline is also propagated to the Python-to-CDP action timeout. Once an action crosses the dispatch boundary, deadline or cancellation produces `ACTION_OUTCOME_UNKNOWN` with `mayHaveTakenEffect=true`; it is never weakened to a retryable timeout.
+
 ## 9. Unknown outcome and no replay
 
-If transport is lost after dispatch, the service cannot safely infer whether the page committed the write. It returns `ACTION_OUTCOME_UNKNOWN`. A mutation is forwarded once and is never replayed automatically; the caller must observe before deciding what to do next.
+If transport is lost after dispatch, the service cannot safely infer whether the page committed the write. It returns non-retryable `ACTION_OUTCOME_UNKNOWN`. Stable request IDs and service-lifetime invocation ledgers in both the MCP process and Worker retain successful, failed, and unknown terminal results. A new proof or transport request ID for the same trusted invocation therefore returns the retained result instead of forwarding the mutation again; changed input fails with an idempotency conflict.
 
 ## 10. Cleanup and reclaim
 
-Explicit release closes the session with a terminal reason. Turn termination and application/runtime shutdown reclaim forgotten sessions. Cleanup failures remain visible and quarantined for later reclaim instead of being reported as successful cleanup.
+Explicit release closes the session with a terminal reason. Turn termination and application/runtime shutdown reclaim forgotten sessions. The HTTP service routes normal exit, `SIGINT`, and `SIGTERM` through the same idempotent shutdown path. Cleanup failures remain visible and quarantined for later reclaim instead of being reported as successful cleanup.
 
 ## 11. Breaking change: instruction-only Computer Use
 
@@ -78,13 +81,15 @@ The accepted run proved:
 
 ## 13. Test matrix
 
-- Computer Use Python worker: `23 passed` for the PR1 deep-test baseline.
-- Computer Use domain: `10 passed` and typecheck passed for the PR1 deep-test baseline.
-- Test-owned headless Edge integration: `1 passed`.
+- Computer Use Python worker: `38 passed`.
+- Computer Use domain: `17 passed`, with the Windows Edge integration skipped on non-Windows hosts; typecheck passed.
+- Domain SDK: `97 passed`; generated domain composition is current for 21 packages.
+- Root Vitest regression: `2991 passed`.
+- All installed domain package tests and typechecks passed.
 - Repeated resource baseline: 20 rounds repeated five times, for 100 clean rounds.
-- Directed coverage includes stale revision, generation mismatch, target lost/busy, owner mismatch, invalid schemas, pre-dispatch timeout/cancel, post-dispatch unknown/no-replay, cleanup quarantine/reclaim, turn-terminal reclaim, and shutdown reclaim.
+- Directed coverage includes stale revision, generation mismatch, target lost/busy, owner mismatch, invalid schemas, pre-dispatch timeout/cancel, post-dispatch deadline/cancel/transport unknown, service-lifetime no-replay, delayed readback without a deadline, cleanup quarantine/reclaim, turn-terminal reclaim, and signal-driven shutdown reclaim.
 - Node/Web and affected package typechecks passed.
-- Electron main, preload, and renderer production builds passed.
+- Electron main, preload, and renderer production builds passed and produced the shared domain runtime MCP entry.
 - Generated composition was current for 21 packages; capability governance passed for 207 actions.
 - Ruff F/E9 and `git diff --check` passed.
 

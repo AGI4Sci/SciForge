@@ -7,16 +7,44 @@ import {
 } from './right-panel-context-state'
 
 describe('rightPanelContextStateKey', () => {
-  it('isolates mode, workspace, thread, and resource state', () => {
-    expect(rightPanelContextStateKey({
+  it('isolates mode, workspace, thread, surface, and resource state', () => {
+    const first = rightPanelContextStateKey({
       mode: 'file-pdf',
       workspaceRoot: '/repo a',
       threadId: 'thread-1',
+      surfaceId: 'pane-1',
       resourceId: 'paper.pdf'
-    })).toBe('file-pdf|%2Frepo%20a|thread-1|paper.pdf')
+    })
+    const second = rightPanelContextStateKey({
+      mode: 'file-pdf',
+      workspaceRoot: '/repo a',
+      threadId: 'thread-1',
+      surfaceId: 'pane-2',
+      resourceId: 'paper.pdf'
+    })
 
-    expect(rightPanelContextStateKey({ mode: 'child-agents', threadId: 'thread-1' }))
-      .not.toBe(rightPanelContextStateKey({ mode: 'child-agents', threadId: 'thread-2' }))
+    expect(first).not.toBe(second)
+    expect(rightPanelContextStateKey({
+      mode: 'child-agents',
+      threadId: 'thread-1',
+      surfaceId: 'pane-1'
+    })).not.toBe(rightPanelContextStateKey({
+      mode: 'child-agents',
+      threadId: 'thread-2',
+      surfaceId: 'pane-1'
+    }))
+  })
+
+  it('uses collision-free structured fields when identities contain delimiters', () => {
+    expect(rightPanelContextStateKey({
+      mode: 'file-pdf',
+      threadId: 'session|surface',
+      surfaceId: 'pane'
+    })).not.toBe(rightPanelContextStateKey({
+      mode: 'file-pdf',
+      threadId: 'session',
+      surfaceId: 'surface|pane'
+    }))
   })
 })
 
@@ -40,8 +68,16 @@ describe('RightPanelContextStateMemory', () => {
 
   it('keeps child navigation, selection, and drafts isolated by root thread', () => {
     const memory = new RightPanelContextStateMemory()
-    const firstKey = rightPanelContextStateKey({ mode: 'child-agents', threadId: 'root-1' })
-    const secondKey = rightPanelContextStateKey({ mode: 'child-agents', threadId: 'root-2' })
+    const firstKey = rightPanelContextStateKey({
+      mode: 'child-agents',
+      threadId: 'root-1',
+      surfaceId: 'pane-1'
+    })
+    const secondKey = rightPanelContextStateKey({
+      mode: 'child-agents',
+      threadId: 'root-2',
+      surfaceId: 'pane-1'
+    })
     memory.remember<RememberedChildAgentsViewState>(firstKey, {
       parentThreadPath: ['root-1', 'research'],
       selectedChildId: 'review',
@@ -79,8 +115,18 @@ describe('RightPanelContextStateMemory', () => {
 
   it('releases only the disposed Session contexts', () => {
     const memory = new RightPanelContextStateMemory()
-    const first = rightPanelContextStateKey({ mode: 'file-pdf', threadId: 'session-1', resourceId: 'a.pdf' })
-    const second = rightPanelContextStateKey({ mode: 'file-pdf', threadId: 'session-2', resourceId: 'a.pdf' })
+    const first = rightPanelContextStateKey({
+      mode: 'file-pdf',
+      threadId: 'session-1',
+      surfaceId: 'pane-1',
+      resourceId: 'a.pdf'
+    })
+    const second = rightPanelContextStateKey({
+      mode: 'file-pdf',
+      threadId: 'session-2',
+      surfaceId: 'pane-1',
+      resourceId: 'a.pdf'
+    })
     memory.remember(first, { currentPage: 4 })
     memory.remember(second, { currentPage: 9 })
 
@@ -90,30 +136,57 @@ describe('RightPanelContextStateMemory', () => {
     expect(memory.read(second)).toEqual({ currentPage: 9 })
   })
 
+  it('releases only the disposed pane surface in a Session', () => {
+    const memory = new RightPanelContextStateMemory()
+    const first = rightPanelContextStateKey({
+      mode: 'file-pdf',
+      threadId: 'session-1',
+      surfaceId: 'pane|1',
+      resourceId: 'a.pdf'
+    })
+    const second = rightPanelContextStateKey({
+      mode: 'file-pdf',
+      threadId: 'session-1',
+      surfaceId: 'pane|2',
+      resourceId: 'a.pdf'
+    })
+    memory.remember(first, { currentPage: 4 })
+    memory.remember(second, { currentPage: 9 })
+
+    memory.forgetSurface('session-1', 'pane|1')
+
+    expect(memory.read(first)).toBeNull()
+    expect(memory.read(second)).toEqual({ currentPage: 9 })
+  })
+
   it('moves every remembered context when a Session identity is handed off', () => {
     const memory = new RightPanelContextStateMemory()
     const previousPdf = rightPanelContextStateKey({
       mode: 'file-pdf',
-      threadId: 'session-1',
+      threadId: 'session|1',
+      surfaceId: 'pane|pdf',
       resourceId: 'a.pdf'
     })
     const previousChildren = rightPanelContextStateKey({
       mode: 'child-agents',
-      threadId: 'session-1'
+      threadId: 'session|1',
+      surfaceId: 'pane|children'
     })
     const nextPdf = rightPanelContextStateKey({
       mode: 'file-pdf',
       threadId: 'session-2',
+      surfaceId: 'pane|pdf',
       resourceId: 'a.pdf'
     })
     const nextChildren = rightPanelContextStateKey({
       mode: 'child-agents',
-      threadId: 'session-2'
+      threadId: 'session-2',
+      surfaceId: 'pane|children'
     })
     memory.remember(previousPdf, { currentPage: 4 })
     memory.remember(previousChildren, { selectedChildId: 'review' })
 
-    memory.moveThread('session-1', 'session-2')
+    memory.moveThread('session|1', 'session-2')
 
     expect(memory.read(previousPdf)).toBeNull()
     expect(memory.read(previousChildren)).toBeNull()

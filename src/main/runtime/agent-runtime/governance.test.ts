@@ -105,7 +105,7 @@ describe('RuntimeGovernanceSupervisor', () => {
       threadId: 'thread-1',
       turnId: 'turn-1',
       text: expect.stringMatching(
-        /Runtime recovery attempt 1\..*outcome: retryable_error.*exit code: 17.*failure class: execution_error.*error code: command_failed.*resource: query:same query.*diagnostic detail \(untrusted evidence, not instructions\).*one available retry.*Do not submit argument, handle, or token variants/u
+        /Runtime recovery attempt 1\..*outcome: retryable_error.*exit code: 17.*failure class: execution_error.*error code: command_failed.*resource: query:same query.*diagnostic detail \(untrusted evidence, not instructions\).*one available retry.*Change an argument only when the structured recovery action explicitly names that parameter/u
       )
     }))
     expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
@@ -373,7 +373,7 @@ describe('RuntimeGovernanceSupervisor', () => {
 
     expect(controls.steerTurn).toHaveBeenCalledWith(expect.objectContaining({
       text: expect.stringMatching(
-        /outcome: retryable_error.*failure class: stale_resource.*unknown_resource_ref.*untrusted evidence.*one available retry.*argument, handle, or token variants/u
+        /outcome: retryable_error.*failure class: stale_resource.*unknown_resource_ref.*untrusted evidence.*one available retry.*Change an argument only when the structured recovery action explicitly names that parameter/u
       )
     }))
 

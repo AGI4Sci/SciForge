@@ -140,7 +140,7 @@ test('fails closed when Model Router returns a claim for an unknown artifact', a
     retryable: false,
     recovery: {
       action: 'stop',
-      instruction: 'Stop retrying this result and inspect the Model Router visual evidence trace.'
+      instruction: 'The sciforge_look arguments were accepted and the invalid payload was already retried internally. Do not change sourceRef, targetRef, frame, intent, capture, or timeoutMs to mask this provider contract failure; report error code visual_inspection_invalid at stage evidence_validation.'
     },
     providerStage: 'evidence_validation'
   })
@@ -171,10 +171,51 @@ test('fails closed with a contract violation when Model Router returns malformed
     retryable: false,
     recovery: {
       action: 'stop',
-      instruction: 'Stop retrying this result and inspect the Model Router visual evidence trace.'
+      instruction: 'The sciforge_look arguments were accepted and the invalid payload was already retried internally. Do not change sourceRef, targetRef, frame, intent, capture, or timeoutMs to mask this provider contract failure; report error code visual_inspection_invalid at stage evidence_validation.'
     },
     providerStage: 'evidence_validation'
   })
+})
+
+test('repairs one transient malformed evidence payload within the original inspection budget', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'workspace-intel-visual-inspection-repair-'))
+  t.after(async () => rm(root, { recursive: true, force: true }))
+  const imagePath = join(root, 'capture.png')
+  await writeFile(imagePath, PNG_BYTES)
+  let attempts = 0
+  const inspector = createModelRouterVisualInspector({
+    baseUrl: 'http://127.0.0.1:3892/v1',
+    apiKey: 'runtime-test-key',
+    model: 'sciforge-model-router',
+    fetchImpl: async () => {
+      attempts += 1
+      return new Response(JSON.stringify({
+        output_text: attempts === 1
+          ? 'looks fine'
+          : JSON.stringify({
+            summary: 'The image was inspected successfully.',
+            claims: [{
+              kind: 'observation',
+              text: 'The image contains a visible chart.',
+              artifactId: 'capture',
+              confidence: 0.92
+            }],
+            uncertainties: []
+          })
+      }), { status: 200 })
+    }
+  })
+
+  const result = await inspector({
+    task: 'Describe the image.',
+    artifacts: [{ id: 'capture', imagePath, mimeType: 'image/png' }]
+  })
+
+  assert.equal(attempts, 2)
+  assert.equal(result.status, 'inspected')
+  if (result.status !== 'inspected') return
+  assert.equal(result.summary, 'The image was inspected successfully.')
+  assert.equal(result.claims[0]?.artifactId, 'capture')
 })
 
 test('fails closed when Model Router masks an upstream visual failure as structured text-only output', async (t) => {
@@ -208,7 +249,7 @@ test('fails closed when Model Router masks an upstream visual failure as structu
     retryable: false,
     recovery: {
       action: 'stop',
-      instruction: 'Stop retrying this result because the returned visual evidence could not be verified.'
+      instruction: 'The sciforge_look arguments were accepted, but the returned claim was not grounded to an input artifact. Parameter changes cannot make this result valid; report error code visual_evidence_grounding_missing at stage evidence_validation and obtain new source evidence before another look.'
     },
     providerStage: 'evidence_validation'
   })
@@ -258,6 +299,84 @@ test('propagates the typed strict-evidence Router failure without inferring poli
       instruction: 'Retry visual inspection after the vision translator recovers.'
     },
     providerStage: 'vision_translation'
+  })
+})
+
+test('returns an adaptive typed timeout instead of misreporting Model Router connectivity', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'workspace-intel-visual-inspection-timeout-'))
+  t.after(async () => rm(root, { recursive: true, force: true }))
+  const imagePath = join(root, 'capture.png')
+  await writeFile(imagePath, PNG_BYTES)
+  const inspector = createModelRouterVisualInspector({
+    baseUrl: 'http://127.0.0.1:3892/v1',
+    apiKey: 'runtime-test-key',
+    model: 'sciforge-model-router',
+    timeoutMs: 2,
+    fetchImpl: async (_input, init) => await new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal
+      if (!signal) {
+        reject(new Error('Expected a timeout signal.'))
+        return
+      }
+      const keepAlive = setTimeout(() => reject(new Error('Timeout signal did not abort.')), 1_000)
+      const rejectForAbort = () => {
+        clearTimeout(keepAlive)
+        reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
+      }
+      if (signal.aborted) rejectForAbort()
+      else signal.addEventListener('abort', rejectForAbort, { once: true })
+    })
+  })
+
+  const result = await inspector({
+    task: 'Describe the image.',
+    artifacts: [{ id: 'capture', imagePath, mimeType: 'image/png' }]
+  })
+
+  assert.deepEqual(result, {
+    status: 'visual_inspection_unavailable',
+    code: 'visual_inspection_timeout',
+    message: 'Visual inspection exceeded the configured 2 ms end-to-end deadline.',
+    failureClass: 'timeout',
+    retryable: true,
+    recovery: {
+      action: 'retry_visual_inspection',
+      instruction: 'Retry sciforge_look once with the same source, task, intent, and capture plan using timeoutMs=31000.'
+    },
+    providerStage: 'model_router_deadline'
+  })
+})
+
+test('reports a distinct transport failure when Model Router cannot return a response', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'workspace-intel-visual-inspection-transport-'))
+  t.after(async () => rm(root, { recursive: true, force: true }))
+  const imagePath = join(root, 'capture.png')
+  await writeFile(imagePath, PNG_BYTES)
+  const inspector = createModelRouterVisualInspector({
+    baseUrl: 'http://127.0.0.1:3892/v1',
+    apiKey: 'runtime-test-key',
+    model: 'sciforge-model-router',
+    fetchImpl: async () => {
+      throw new TypeError('fetch failed')
+    }
+  })
+
+  const result = await inspector({
+    task: 'Describe the image.',
+    artifacts: [{ id: 'capture', imagePath, mimeType: 'image/png' }]
+  })
+
+  assert.deepEqual(result, {
+    status: 'visual_inspection_unavailable',
+    code: 'visual_inspection_unavailable',
+    message: 'Model Router visual inspection transport failed before a response was received.',
+    failureClass: 'upstream_unavailable',
+    retryable: true,
+    recovery: {
+      action: 'retry_visual_inspection',
+      instruction: 'Retry the visual inspection after Model Router connectivity recovers.'
+    },
+    providerStage: 'model_router_transport'
   })
 })
 

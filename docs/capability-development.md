@@ -145,6 +145,10 @@ npm test
   签发的不透明 region reference。工作区文件必须先通过 canonical Workspace Preview
   operation 获得 resource reference，再交给 `sciforge_look`；`sciforge_look` 不接受文件
   路径。最终持久化 artifact 必须再次视觉检查，并由输出格式自己的 validator 校验引用。
+- `sciforge_look.timeoutMs` 是唯一公开的端到端视觉超时预算，默认 180 秒，范围
+  30–600 秒。超时必须返回 typed deadline failure 和一次重试建议值；重试保持 source、
+  task、intent 与 capture plan 不变，只扩大该预算。Router 在期限内返回的阶段错误必须
+  原样传回 agent。
 - 禁止公开 token、原始坐标或目标路径协调式 GUI 工具。授权且可用的 owned
   `VisualSource` 能满足请求时，也禁止用 shell 截图或窗口脚本建立旁路。
 - 文档批注的 list/update/resolve/delete 是 Workspace Preview provider 的独立 operations。

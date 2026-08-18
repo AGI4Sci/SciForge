@@ -16,8 +16,8 @@ describe('WorkbenchTopBar toolbar contributions', () => {
 
   it('does not invent a Paper Radar entry without a registered toolbar action', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: null,
-      onToggleRightPanelMode: vi.fn()
+      focusedRightPanelMode: null,
+      onToggleFocusedRightPanelMode: vi.fn()
     }))
 
     expect(html).not.toContain('Paper Radar')
@@ -25,8 +25,8 @@ describe('WorkbenchTopBar toolbar contributions', () => {
 
   it('renders and marks a registered toolbar action from its metadata', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: 'paper',
-      onToggleRightPanelMode: vi.fn(),
+      focusedRightPanelMode: null,
+      onToggleFocusedRightPanelMode: vi.fn(),
       toolbarActions: installedRendererContributions.toolbarActions.list(),
       toolbarCommandInvocation: {
         activeSurface: {
@@ -47,8 +47,8 @@ describe('WorkbenchTopBar toolbar contributions', () => {
     const registered = installedRendererContributions.toolbarActions.list()[0]!
     const isAvailable = vi.fn(() => false)
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: null,
-      onToggleRightPanelMode: vi.fn(),
+      focusedRightPanelMode: null,
+      onToggleFocusedRightPanelMode: vi.fn(),
       workspaceRoot: '/workspace/lab',
       toolbarCommandInvocation: { workspaceRoot: '/workspace/lab' },
       toolbarActions: [{
@@ -69,8 +69,8 @@ describe('WorkbenchTopBar toolbar contributions', () => {
 
   it('shows Evidence DAG as a right panel item', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: 'evidence-dag',
-      onToggleRightPanelMode: vi.fn(),
+      focusedRightPanelMode: 'evidence-dag',
+      onToggleFocusedRightPanelMode: vi.fn(),
       toolbarActions: installedRendererContributions.toolbarActions.list(),
       toolbarCommandInvocation: {
         activeSurface: {
@@ -87,8 +87,8 @@ describe('WorkbenchTopBar toolbar contributions', () => {
 
   it('shows Project DAG as a right panel item', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: 'project-dag',
-      onToggleRightPanelMode: vi.fn(),
+      focusedRightPanelMode: 'project-dag',
+      onToggleFocusedRightPanelMode: vi.fn(),
       toolbarActions: installedRendererContributions.toolbarActions.list(),
       toolbarCommandInvocation: {
         activeSurface: {
@@ -105,8 +105,8 @@ describe('WorkbenchTopBar toolbar contributions', () => {
 
   it('shows Create Loop only through its registered toolbar contribution', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: 'create-loop.workbench-right-panel',
-      onToggleRightPanelMode: vi.fn(),
+      focusedRightPanelMode: 'create-loop.workbench-right-panel',
+      onToggleFocusedRightPanelMode: vi.fn(),
       toolbarActions: installedRendererContributions.toolbarActions.list(),
       toolbarCommandInvocation: {
         sessionId: 'thread-1',
@@ -125,8 +125,8 @@ describe('WorkbenchTopBar toolbar contributions', () => {
 
   it('keeps right-panel controls reachable in narrow workbench widths', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: 'workflow',
-      onToggleRightPanelMode: vi.fn()
+      focusedRightPanelMode: 'workflow',
+      onToggleFocusedRightPanelMode: vi.fn()
     }))
 
     expect(html).toContain('chat-workbench-topbar')
@@ -134,10 +134,36 @@ describe('WorkbenchTopBar toolbar contributions', () => {
     expect(html).toContain('overflow-x-auto')
   })
 
+  it('marks core panel controls from the focused pane when focus changes between open panes', () => {
+    const fileFocusedHtml = renderToStaticMarkup(createElement(WorkbenchTopBar, {
+      focusedRightPanelMode: 'file',
+      onToggleFocusedRightPanelMode: vi.fn(),
+      planPanelEnabled: true
+    }))
+    const planFocusedHtml = renderToStaticMarkup(createElement(WorkbenchTopBar, {
+      focusedRightPanelMode: 'plan',
+      onToggleFocusedRightPanelMode: vi.fn(),
+      planPanelEnabled: true
+    }))
+
+    expect(fileFocusedHtml).toMatch(
+      /<button(?=[^>]*aria-label="Files")(?=[^>]*aria-pressed="true")[^>]*>/
+    )
+    expect(fileFocusedHtml).toMatch(
+      /<button(?=[^>]*aria-label="Plan")(?=[^>]*aria-pressed="false")[^>]*>/
+    )
+    expect(planFocusedHtml).toMatch(
+      /<button(?=[^>]*aria-label="Files")(?=[^>]*aria-pressed="false")[^>]*>/
+    )
+    expect(planFocusedHtml).toMatch(
+      /<button(?=[^>]*aria-label="Plan")(?=[^>]*aria-pressed="true")[^>]*>/
+    )
+  })
+
   it('renders separate controls for opening the workspace and choosing the default editor', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: null,
-      onToggleRightPanelMode: vi.fn(),
+      focusedRightPanelMode: null,
+      onToggleFocusedRightPanelMode: vi.fn(),
       workspaceRoot: '/workspace/sciforge'
     }))
 
@@ -147,8 +173,8 @@ describe('WorkbenchTopBar toolbar contributions', () => {
 
   it('does not expose manual Todo or environment info controls', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: null,
-      onToggleRightPanelMode: vi.fn(),
+      focusedRightPanelMode: null,
+      onToggleFocusedRightPanelMode: vi.fn(),
       workspaceRoot: '/workspace/sciforge'
     }))
 
@@ -158,8 +184,8 @@ describe('WorkbenchTopBar toolbar contributions', () => {
 
   it('hides the child agent status button until children exist', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: null,
-      onToggleRightPanelMode: vi.fn(),
+      focusedRightPanelMode: null,
+      onToggleFocusedRightPanelMode: vi.fn(),
       childAgentCount: 0,
       onOpenChildAgents: vi.fn()
     }))
@@ -169,8 +195,8 @@ describe('WorkbenchTopBar toolbar contributions', () => {
 
   it('shows the child agent status button with count and active state', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: 'child-agents',
-      onToggleRightPanelMode: vi.fn(),
+      focusedRightPanelMode: 'child-agents',
+      onToggleFocusedRightPanelMode: vi.fn(),
       childAgentCount: 2,
       childAgentRunningCount: 1,
       childAgentsOpen: true,
@@ -185,8 +211,8 @@ describe('WorkbenchTopBar toolbar contributions', () => {
 
   it('shows the exact child count instead of clamping counts above nine', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: null,
-      onToggleRightPanelMode: vi.fn(),
+      focusedRightPanelMode: null,
+      onToggleFocusedRightPanelMode: vi.fn(),
       childAgentCount: 27,
       onOpenChildAgents: vi.fn()
     }))
@@ -197,8 +223,8 @@ describe('WorkbenchTopBar toolbar contributions', () => {
 
   it('marks deep child interactions that need the user', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: 'file',
-      onToggleRightPanelMode: vi.fn(),
+      focusedRightPanelMode: 'file',
+      onToggleFocusedRightPanelMode: vi.fn(),
       childAgentCount: 3,
       childAgentAttentionCount: 1,
       onOpenChildAgents: vi.fn()
@@ -210,8 +236,8 @@ describe('WorkbenchTopBar toolbar contributions', () => {
 
   it('hides the side chat entry when the side conversation gate is unavailable', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: null,
-      onToggleRightPanelMode: vi.fn(),
+      focusedRightPanelMode: null,
+      onToggleFocusedRightPanelMode: vi.fn(),
       sideChatEnabled: false,
       onOpenSideChat: vi.fn()
     }))
@@ -221,8 +247,8 @@ describe('WorkbenchTopBar toolbar contributions', () => {
 
   it('shows the side chat entry when side conversations are available', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: null,
-      onToggleRightPanelMode: vi.fn(),
+      focusedRightPanelMode: null,
+      onToggleFocusedRightPanelMode: vi.fn(),
       sideChatEnabled: true,
       sideChatCount: 2,
       onOpenSideChat: vi.fn()

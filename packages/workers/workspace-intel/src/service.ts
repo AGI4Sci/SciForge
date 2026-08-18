@@ -1341,7 +1341,7 @@ function serviceError(
 }
 
 function unverifiedVisualEvidenceError(message: string): WorkspaceIntelServiceError {
-  const instruction = 'Stop retrying this result because the returned visual evidence could not be verified.'
+  const instruction = 'The sciforge_look arguments were accepted, but the returned claim was not grounded to an input artifact. Parameter changes cannot make this result valid; report error code visual_evidence_grounding_missing at stage evidence_validation and obtain new source evidence before another look.'
   return serviceError(
     'visual_evidence_grounding_missing',
     message,

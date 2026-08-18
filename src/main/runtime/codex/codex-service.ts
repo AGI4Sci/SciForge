@@ -93,14 +93,17 @@ import {
 } from './codex-config'
 import {
   filterAgentRuntimeToolSurface,
+  modelVisibleAgentRuntimeToolFailure,
   nativeAgentToolExecutionMetadata,
   scopeAgentRuntimeToolSurface,
   type AgentRuntimeToolSurface
 } from '../agent-runtime/agent-tool-surface'
 import type {
   AgentRuntimeSubagentCancelInput,
+  AgentRuntimeSubagentDeleteInput,
   AgentRuntimeSubagentInspectInput,
   AgentRuntimeSubagentMessageInput,
+  AgentRuntimeSubagentResumeInput,
   AgentRuntimeSubagentResult,
   AgentRuntimeSubagentSpawnInput,
   AgentRuntimeSubagentTranscriptEntry,
@@ -251,7 +254,7 @@ const CODEX_SUBAGENT_DEVELOPER_INSTRUCTIONS = [
   'Use it when parallel investigation or independent implementation subtasks materially help the user request.',
   'When two or more independent subtasks are ready, put them in one `delegate_task` tasks array so they start concurrently; do not wait for separate delegation calls one by one.',
   'Give each child a concise label and a self-contained prompt; do not use it for trivial work or as a substitute for doing the main task.',
-  '`delegate_task` returns child IDs immediately. Use `subagent_wait` to observe progress, `subagent_status` to inspect liveness, `subagent_send` to ask for progress or provide guidance, and `subagent_cancel` only for an explicit cancellation decision.',
+  '`delegate_task` returns child IDs immediately. Use `subagent_wait` to observe progress, `subagent_status` to inspect liveness, `subagent_send` to ask for progress or provide guidance, `subagent_cancel` only for an explicit cancellation decision, `subagent_resume` to continue an interrupted child in its existing context, and `subagent_delete` to permanently remove a child.',
   'A wait timeout or one missing liveness probe is not child failure. Continue monitoring; only terminal child status is final.'
 ].join('\n')
 const CODEX_THREAD_FALLBACK_TITLE = 'Codex thread'
@@ -1638,7 +1641,7 @@ export class CodexRuntimeService {
         contentItems: [
           {
             type: 'inputText',
-            text: `Runtime tool ${name} failed: ${error instanceof Error ? error.message : String(error)}`
+            text: modelVisibleAgentRuntimeToolFailure(name, error)
           }
         ],
         success: false,
@@ -1868,6 +1871,63 @@ export class CodexRuntimeService {
     }
     const childGuiThreadId = storedChild?.guiThreadId ?? childThread.id
     const childCodexThreadId = storedChild?.codexThreadId ?? childThread.id
+    return this.runCodexSubagentTurn(input, {
+      settings,
+      client,
+      workspace,
+      childGuiThreadId,
+      childCodexThreadId,
+      scopedAgentTools,
+      rollbackNewThreadOnStartupFailure: true
+    })
+  }
+
+  async resumeSubagent(input: AgentRuntimeSubagentResumeInput): Promise<AgentRuntimeSubagentResult> {
+    const settings = await this.options.settings()
+    const { client } = await this.ensureModelUseClient(settings)
+    if (input.signal.aborted) throw new Error('Codex child turn was aborted before resume.')
+    this.resolveParentCodexTurnGovernance({
+      threadId: input.parentThreadId,
+      turnId: input.parentTurnId
+    })
+    const storedChild = await this.findStoredThread(input.threadRef.threadId)
+    if (!storedChild) throw new Error('Codex child thread was not found for resume.')
+    if (storedChild.archived) {
+      const restored = await this.archiveThread(storedChild.guiThreadId, false)
+      if (!restored.ok) throw new Error(restored.message)
+    }
+    const workspace = resolveCodexWorkspace(settings, input.workspace || storedChild.workspace)
+    const scopedAgentTools = this.options.capabilityAgentTools
+      ? scopeAgentRuntimeToolSurface(this.options.capabilityAgentTools, {
+          allowedTools: input.allowedTools,
+          brokerScope: input.brokerScope,
+          maxToolCalls: input.maxToolCalls
+        })
+      : undefined
+    return this.runCodexSubagentTurn(input, {
+      settings,
+      client,
+      workspace,
+      childGuiThreadId: storedChild.guiThreadId,
+      childCodexThreadId: storedChild.codexThreadId,
+      scopedAgentTools,
+      rollbackNewThreadOnStartupFailure: false
+    })
+  }
+
+  private async runCodexSubagentTurn(
+    input: AgentRuntimeSubagentSpawnInput,
+    context: {
+      settings: AppSettingsV1
+      client: CodexAppServerJsonRpcClient
+      workspace: string
+      childGuiThreadId: string
+      childCodexThreadId: string
+      scopedAgentTools?: AgentRuntimeToolSurface
+      rollbackNewThreadOnStartupFailure: boolean
+    }
+  ): Promise<AgentRuntimeSubagentResult> {
+    const { settings, client, workspace, childGuiThreadId, childCodexThreadId, scopedAgentTools } = context
     if (scopedAgentTools) {
       this.scopedAgentToolsByThread.set(childGuiThreadId, scopedAgentTools)
       this.scopedAgentToolsByThread.set(childCodexThreadId, scopedAgentTools)
@@ -1953,7 +2013,7 @@ export class CodexRuntimeService {
         turnId: childTurnId
       })
       await input.appendTranscript({
-        id: `${input.childId}-thread-start`,
+        id: `${input.childId}-${childTurnId}-thread-start`,
         kind: 'event',
         summary: 'Codex child thread started',
         text: `Thread: ${childGuiThreadId}`,
@@ -1981,7 +2041,7 @@ export class CodexRuntimeService {
         }
       }
     } catch (error) {
-      if (!startupCommitted) {
+      if (!startupCommitted && context.rollbackNewThreadOnStartupFailure) {
         const cleanupErrors: unknown[] = []
         if (childTurnId) {
           try {
@@ -2036,6 +2096,14 @@ export class CodexRuntimeService {
 
   async cancelSubagent(input: AgentRuntimeSubagentCancelInput): Promise<void> {
     await this.activeSubagents.get(input.childId)?.terminate(input.signal)
+  }
+
+  async deleteSubagent(input: AgentRuntimeSubagentDeleteInput): Promise<void> {
+    await this.activeSubagents.get(input.childId)?.terminate(input.signal)
+    const threadId = input.threadRef?.threadId
+    if (!threadId) return
+    const deleted = await this.deleteThread(threadId)
+    if (!deleted.ok) throw new Error(deleted.message)
   }
 
   private async waitForCodexChildTurn(input: {
@@ -2552,6 +2620,10 @@ export class CodexRuntimeService {
     })) ?? []) {
       const child = stored.event.child
       if (!child) continue
+      if (child.metadata?.lifecycleOperation === 'delete') {
+        index.delete(child.id)
+        continue
+      }
       index.set(child.id, mergeStoredCodexChild(index.get(child.id), child))
     }
     return index
@@ -2562,6 +2634,10 @@ export class CodexRuntimeService {
     const pendingIndex = this.childSummaryIndexes.get(threadId)
     if (!child || !pendingIndex) return
     const index = await pendingIndex
+    if (child.metadata?.lifecycleOperation === 'delete') {
+      index.delete(child.id)
+      return
+    }
     index.set(child.id, mergeStoredCodexChild(index.get(child.id), child))
   }
 
