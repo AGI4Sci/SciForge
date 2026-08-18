@@ -68,7 +68,7 @@ describe('Workspace Host artifact manifest', () => {
       elf.set([0x7f, 0x45, 0x4c, 0x46, 2, 1])
       elf.writeUInt16LE(0x3e, 18)
       await writeFile(join(packageDirectory, 'bin/node'), elf)
-      await chmod(join(packageDirectory, 'bin/node'), 0o755)
+      await chmod(join(packageDirectory, 'bin/node'), 0o600)
 
       const files = await stageWorkspaceHostNodeRuntime(
         packageDirectory,
@@ -81,13 +81,15 @@ describe('Workspace Host artifact manifest', () => {
         path: 'runtime/LICENSE',
         executable: false
       }])
-      assert.equal(
-        (await statMode(join(
-          artifactDirectory,
-          WORKSPACE_HOST_ARTIFACT_NODE_EXECUTABLE
-        ))),
-        0o700
-      )
+      if (process.platform !== 'win32') {
+        assert.equal(
+          (await statMode(join(
+            artifactDirectory,
+            WORKSPACE_HOST_ARTIFACT_NODE_EXECUTABLE
+          ))),
+          0o700
+        )
+      }
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -119,9 +121,9 @@ describe('Workspace Host artifact manifest', () => {
       )
       await writeFile(join(vendorDirectory, 'codex-path/rg'), 'rg')
       await writeFile(join(vendorDirectory, 'codex-package.json'), '{}')
-      await chmod(join(vendorDirectory, 'bin/codex'), 0o755)
-      await chmod(join(vendorDirectory, 'bin/codex-code-mode-host'), 0o755)
-      await chmod(join(vendorDirectory, 'codex-path/rg'), 0o755)
+      await chmod(join(vendorDirectory, 'bin/codex'), 0o600)
+      await chmod(join(vendorDirectory, 'bin/codex-code-mode-host'), 0o600)
+      await chmod(join(vendorDirectory, 'codex-path/rg'), 0o600)
       await mkdir(artifactDirectory, { recursive: true })
       await writeFile(
         join(artifactDirectory, WORKSPACE_HOST_ARTIFACT_ENTRYPOINT),

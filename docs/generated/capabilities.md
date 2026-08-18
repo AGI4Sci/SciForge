@@ -16869,6 +16869,9 @@ Stores a non-secret HTTPS service location and loads its provider-neutral catalo
           "configured": {
             "type": "boolean"
           },
+          "deviceCredentialAvailable": {
+            "type": "boolean"
+          },
           "lastConnectedAt": {
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -16882,6 +16885,11 @@ Stores a non-secret HTTPS service location and loads its provider-neutral catalo
             "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
+          },
+          "localAgentId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
           },
           "pendingOutboxCount": {
             "maximum": 9007199254740991,
@@ -16978,6 +16986,9 @@ Connects, disconnects, or explicitly recovers the Agent device connection.
           "configured": {
             "type": "boolean"
           },
+          "deviceCredentialAvailable": {
+            "type": "boolean"
+          },
           "lastConnectedAt": {
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -16991,6 +17002,11 @@ Connects, disconnects, or explicitly recovers the Agent device connection.
             "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
+          },
+          "localAgentId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
           },
           "pendingOutboxCount": {
             "maximum": 9007199254740991,
@@ -18348,6 +18364,9 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
           "configured": {
             "type": "boolean"
           },
+          "deviceCredentialAvailable": {
+            "type": "boolean"
+          },
           "lastConnectedAt": {
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -18361,6 +18380,11 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
             "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
+          },
+          "localAgentId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
           },
           "pendingOutboxCount": {
             "maximum": 9007199254740991,
@@ -19124,6 +19148,9 @@ Explicitly reconciles durable connection, inbox, outbox, projection, or Task sta
           "configured": {
             "type": "boolean"
           },
+          "deviceCredentialAvailable": {
+            "type": "boolean"
+          },
           "lastConnectedAt": {
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -19137,6 +19164,11 @@ Explicitly reconciles durable connection, inbox, outbox, projection, or Task sta
             "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
+          },
+          "localAgentId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
           },
           "pendingOutboxCount": {
             "maximum": 9007199254740991,

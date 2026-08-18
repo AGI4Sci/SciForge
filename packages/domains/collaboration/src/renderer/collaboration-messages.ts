@@ -133,6 +133,7 @@ export const collaborationI18nResourceContribution = Object.freeze({
       collaborationAgentDisplayNamePlaceholder: '这台 SciForge 显示的名称',
       collaborationAgentMissing: '尚未注册 Agent',
       collaborationRegisterAgent: '注册这台 SciForge',
+      collaborationRecoverAgentCredential: '恢复本机设备凭据',
       collaborationPrimaryAgent: '主要 Agent',
       collaborationSetPrimary: '设为主要 Agent',
       collaborationOwner: '执行所有者',

@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest'
 
 import { DefaultCollaborationProviderRuntime } from './provider-runtime.js'
 import { ProviderRuntimeStore } from './provider-runtime-store.js'
+import { CollaborationServiceError } from './errors.js'
 
 const LOCATOR = {
   type: 'provider_locator' as const,
@@ -83,6 +84,32 @@ describe('provider runtime', () => {
     expect(claim).toEqual({ status: 'claimed', claimEventId: 'event-crashed-original' })
     expect(queries.find((sql) => sql.includes('UPDATE sciforge_collaboration.provider_event_claims')))
       .toContain('(event_id=$3 OR dedupe_key=$6)')
+  })
+
+  it('checkpoints the newer cursor of an already-processed duplicate without reopening its claim', async () => {
+    const queries: Array<{ sql: string; values?: readonly unknown[] }> = []
+    const pool = {
+      query: async (sql: string, values?: readonly unknown[]) => {
+        queries.push({ sql, values })
+        return { rows: [], rowCount: 1 }
+      },
+      connect: async () => { throw new Error('Processed duplicate checkpoint does not need a transaction.') },
+      end: async () => undefined
+    }
+    const store = new ProviderRuntimeStore(pool, () => new Date('2026-08-15T00:00:00.000Z'))
+
+    await store.checkpointProcessedEvent({
+      provider: 'fake',
+      realmId: 'realm-1',
+      eventId: 'event-replayed-new',
+      eventCursor: 'cursor-replayed-new'
+    })
+
+    expect(queries).toHaveLength(1)
+    expect(queries[0]?.sql).toContain('INSERT INTO sciforge_collaboration.provider_event_cursors')
+    expect(queries[0]?.values).toEqual([
+      'fake', 'realm-1', 'cursor-replayed-new', 'event-replayed-new', '2026-08-15T00:00:00.000Z'
+    ])
   })
 
   it('releases an interrupted claim and replays the event before checkpointing later work', async () => {
@@ -280,6 +307,114 @@ describe('provider runtime', () => {
     expect(ledger.completedEvents).toEqual(['event-ordered-1', 'event-ordered-2'])
   })
 
+  it('does not execute the same processed provider event twice', async () => {
+    const event = messageEvent('event-duplicate-1', 'cursor-duplicate-1', 'remote-duplicate-1')
+    const replay = messageEvent('event-duplicate-1', 'cursor-duplicate-2', 'remote-duplicate-1')
+    const provider = new FakeProvider([event, replay])
+    const ledger = new FakeRuntimeStore()
+    let accepted = 0
+    const runtime = new DefaultCollaborationProviderRuntime({
+      providers: [provider],
+      store: ledger,
+      repository: emptyRepository(),
+      authentication: {
+        resolveProviderIdentity: async () => ({ kind: 'human_endpoint', actorKey: 'endpoint:hep_1:revision:1',
+          userId: 'usr_1', humanEndpointId: 'hep_1', assurance: 'verified' })
+      },
+      service: {
+        ...emptyService(),
+        acceptPersonalProviderMessage: async () => {
+          accepted += 1
+          return {}
+        }
+      }
+    })
+
+    await runtime.start()
+    await waitUntil(() => provider.yieldedEventIds.length === 2, 1_500)
+    await runtime.stop()
+
+    expect(accepted).toBe(1)
+    expect(ledger.completedEvents).toEqual(['event-duplicate-1'])
+    expect(ledger.cursor).toBe('cursor-duplicate-2')
+  })
+
+  it('replays a checkpoint failure with the same identity while the canonical transaction stays idempotent', async () => {
+    const event = messageEvent('event-checkpoint-1', 'cursor-checkpoint-1', 'remote-checkpoint-1')
+    const provider = new FakeProvider(event)
+    const ledger = new FakeRuntimeStore()
+    ledger.completeFailures = 1
+    let attempts = 0
+    let businessCommits = 0
+    const committed = new Set<string>()
+    const runtime = new DefaultCollaborationProviderRuntime({
+      providers: [provider],
+      store: ledger,
+      repository: emptyRepository(),
+      authentication: {
+        resolveProviderIdentity: async () => ({ kind: 'human_endpoint', actorKey: 'endpoint:hep_1:revision:1',
+          userId: 'usr_1', humanEndpointId: 'hep_1', assurance: 'verified' })
+      },
+      service: {
+        ...emptyService(),
+        acceptPersonalProviderMessage: async (_actor, input) => {
+          attempts += 1
+          if (!committed.has(input.providerEventId)) {
+            committed.add(input.providerEventId)
+            businessCommits += 1
+          }
+          return {}
+        }
+      }
+    })
+
+    await runtime.start()
+    await waitUntil(() => ledger.cursor === 'cursor-checkpoint-1', 3_000)
+    await runtime.stop()
+
+    expect(attempts).toBe(2)
+    expect(businessCommits).toBe(1)
+    expect(ledger.releases).toBe(1)
+    expect(ledger.completedEvents).toEqual(['event-checkpoint-1'])
+  })
+
+  it('checkpoints a terminal rejected event, continues later work, and exposes the stale degraded diagnostic', async () => {
+    const rejected = messageEvent('event-rejected-1', 'cursor-rejected-1', 'remote-rejected-1')
+    const acceptedEvent = messageEvent('event-after-rejected-1', 'cursor-after-rejected-1', 'remote-after-rejected-1')
+    const provider = new FakeProvider([rejected, acceptedEvent])
+    const ledger = new FakeRuntimeStore()
+    const accepted: string[] = []
+    const runtime = new DefaultCollaborationProviderRuntime({
+      providers: [provider],
+      store: ledger,
+      repository: emptyRepository(),
+      authentication: {
+        resolveProviderIdentity: async () => ({ kind: 'human_endpoint', actorKey: 'endpoint:hep_1:revision:1',
+          userId: 'usr_1', humanEndpointId: 'hep_1', assurance: 'verified' })
+      },
+      service: {
+        ...emptyService(),
+        acceptPersonalProviderMessage: async (_actor, input) => {
+          if (input.providerEventId === rejected.eventId) {
+            throw new CollaborationServiceError('validation_failed', 'terminal test rejection')
+          }
+          accepted.push(input.providerEventId)
+          return {}
+        }
+      }
+    })
+
+    await runtime.start()
+    await waitUntil(() => ledger.cursor === 'cursor-after-rejected-1', 1_500)
+    await runtime.stop()
+
+    expect(accepted).toEqual(['event-after-rejected-1'])
+    expect(ledger.completedEvents).toEqual(['event-rejected-1', 'event-after-rejected-1'])
+    expect(ledger.diagnostics).toHaveLength(1)
+    expect(ledger.diagnostics[0]).toMatchObject({ status: 'degraded' })
+    expect(provider.diagnoseCalls).toBe(0)
+  })
+
   it('retries endpoint outbox in sequence, acks only durable outcomes, and does not resend after restart', async () => {
     const retryableFailure: ProviderSendResult = {
       protocolVersion: CURRENT_PROTOCOL_VERSION,
@@ -467,6 +602,7 @@ class FakeProvider implements HumanEndpointProvider {
   private readonly eventsToYield: ProviderEvent[]
 
   readonly sendRequests: ProviderSendRequest[] = []
+  diagnoseCalls = 0
 
   constructor(event: ProviderEvent | ProviderEvent[], private readonly sendResults: ProviderSendResult[] = []) {
     this.eventsToYield = Array.isArray(event) ? event : [event]
@@ -509,7 +645,17 @@ class FakeProvider implements HumanEndpointProvider {
   }
   async listLocators(): Promise<never> { throw new Error('not used') }
   async updateLocator(): Promise<never> { throw new Error('not used') }
-  async diagnose(): Promise<never> { throw new Error('not used') }
+  async diagnose(): Promise<ProviderDiagnostic> {
+    this.diagnoseCalls += 1
+    return {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      type: 'provider.diagnostic',
+      provider: 'fake',
+      status: 'healthy',
+      checkedAt: '2026-08-15T00:00:00.000Z',
+      safeSummary: 'Fake provider is healthy.'
+    }
+  }
 }
 
 class FakeRuntimeStore {
@@ -517,6 +663,7 @@ class FakeRuntimeStore {
   releases = 0
   completedEvents: string[] = []
   diagnostics: ProviderDiagnostic[] = []
+  completeFailures = 0
   private readonly claimStates = new Map<string, 'available' | 'claimed' | 'processed'>()
   private initialInProgressConsumed = false
   private readonly deliveries = new Map<string, {
@@ -551,9 +698,16 @@ class FakeRuntimeStore {
   async claimEvent(): Promise<'claimed' | 'duplicate'> { return 'claimed' }
   async readCursor(): Promise<string | undefined> { return this.cursor }
   async completeEvent(input: { eventId: string; eventCursor: string }): Promise<void> {
+    if (this.completeFailures > 0) {
+      this.completeFailures -= 1
+      throw new Error('simulated checkpoint failure')
+    }
     this.claimStates.set(input.eventId, 'processed')
     this.cursor = input.eventCursor
     this.completedEvents.push(input.eventId)
+  }
+  async checkpointProcessedEvent(input: { eventCursor: string }): Promise<void> {
+    this.cursor = input.eventCursor
   }
   async releaseEvent(input: { eventId: string }): Promise<void> {
     this.claimStates.set(input.eventId, 'available')

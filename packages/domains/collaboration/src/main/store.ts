@@ -327,7 +327,9 @@ export class CollaborationLocalStore {
 }
 
 function isUnsupportedDirectorySync(error: unknown): boolean {
-  return isNodeError(error) && ['EINVAL', 'ENOTSUP', 'EISDIR'].includes(error.code ?? '')
+  if (!isNodeError(error)) return false
+  if (['EINVAL', 'ENOTSUP', 'EISDIR'].includes(error.code ?? '')) return true
+  return process.platform === 'win32' && error.code === 'EPERM'
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

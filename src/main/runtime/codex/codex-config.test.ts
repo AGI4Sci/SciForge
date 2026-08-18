@@ -184,6 +184,32 @@ describe('codex config launch helpers', () => {
     })).resolves.toBe(command)
   })
 
+  it('prefers and materializes a native Windows app executable over an extensionless companion', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-windows-native-'))
+    const bin = join(
+      home,
+      'Program Files',
+      'WindowsApps',
+      'OpenAI.Codex_26.810.7004.0_x64__test',
+      'app',
+      'resources'
+    )
+    const nativeCommand = join(bin, 'codex.exe')
+    await mkdir(bin, { recursive: true })
+    await writeFile(join(bin, 'codex'), 'platform-neutral binary', 'utf8')
+    await writeFile(nativeCommand, 'native Windows binary', 'utf8')
+
+    await expect(resolveCodexCommand('codex', {
+      env: { PATH: bin },
+      homeDir: home,
+      platform: 'win32'
+    })).resolves.toBe(join(home, '.sciforge', 'codex-runtime', 'codex.exe'))
+    await expect(readFile(
+      join(home, '.sciforge', 'codex-runtime', 'codex.exe'),
+      'utf8'
+    )).resolves.toBe('native Windows binary')
+  })
+
   it('materializes the runtime bundled with the Windows Codex app', async () => {
     const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-msix-'))
     const programFiles = join(home, 'Program Files')

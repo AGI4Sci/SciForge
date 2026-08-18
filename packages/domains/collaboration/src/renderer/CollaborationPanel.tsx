@@ -386,6 +386,12 @@ export function CollaborationPanel({
   const primaryAgent = participant?.agents.find(({ agentId }) =>
     agentId === participant.primaryAgentId
   )
+  const localAgent = participant?.agents.find(({ agentId }) =>
+    agentId === snapshot?.connection.localAgentId
+  )
+  const credentialRecoveryAgent = snapshot?.connection.deviceCredentialAvailable === false
+    ? localAgent
+    : undefined
   const primaryEndpoint = participant?.endpoints.find(({ humanEndpointId }) =>
     humanEndpointId === participant.primaryHumanEndpointId
   )
@@ -533,6 +539,15 @@ export function CollaborationPanel({
                 const input = buildAgentRegistrationInput(agentDisplayName)
                 if (!input) return
                 void runAction('agent-register', () => client.registerAgent(input))
+              }}
+              credentialRecoveryAgent={credentialRecoveryAgent}
+              onRecoverAgentCredential={() => {
+                if (!credentialRecoveryAgent) return
+                void runAction('agent-credential-recover', () => client.registerAgent({
+                  displayName: credentialRecoveryAgent.displayName,
+                  nodeType: credentialRecoveryAgent.nodeType,
+                  capabilities: credentialRecoveryAgent.capabilities
+                }))
               }}
               onSelectPrimary={(agentId) => {
                 if (!participant) return
@@ -816,6 +831,8 @@ type ParticipantSectionProps = Readonly<{
   onAgentDisplayNameChange: (value: string) => void
   onStartPairing: () => void
   onRegisterAgent: () => void
+  credentialRecoveryAgent?: AgentView
+  onRecoverAgentCredential: () => void
   onSelectPrimary: (agentId: string) => void
 }>
 
@@ -834,6 +851,8 @@ export function ParticipantSection({
   onAgentDisplayNameChange,
   onStartPairing,
   onRegisterAgent,
+  credentialRecoveryAgent,
+  onRecoverAgentCredential,
   onSelectPrimary
 }: ParticipantSectionProps): ReactElement {
   const { t } = useTranslation('common')
@@ -953,6 +972,21 @@ export function ParticipantSection({
                   onSelectPrimary={() => onSelectPrimary(agent.agentId)}
                 />
               ))}
+              {credentialRecoveryAgent ? (
+                <button
+                  type="button"
+                  className={PRIMARY_BUTTON}
+                  data-collaboration-agent-credential-recover="true"
+                  disabled={
+                    !participant.endpoints.some(({ status }) => status === 'active') ||
+                    busyKey !== null
+                  }
+                  onClick={onRecoverAgentCredential}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  {t('collaborationRecoverAgentCredential')}
+                </button>
+              ) : null}
             </div>
           ) : (
             <div className="space-y-2">

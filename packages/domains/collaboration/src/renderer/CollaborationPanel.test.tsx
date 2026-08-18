@@ -75,6 +75,8 @@ test('renders phone endpoint and owned Agents as one Participant card', () => {
       onAgentDisplayNameChange={NOOP}
       onStartPairing={NOOP}
       onRegisterAgent={NOOP}
+      credentialRecoveryAgent={undefined}
+      onRecoverAgentCredential={NOOP}
       onSelectPrimary={NOOP}
     />
   )
@@ -120,6 +122,8 @@ test('allows Agent registration after phone verification without any Project', (
       onAgentDisplayNameChange={NOOP}
       onStartPairing={NOOP}
       onRegisterAgent={NOOP}
+      credentialRecoveryAgent={undefined}
+      onRecoverAgentCredential={NOOP}
       onSelectPrimary={NOOP}
     />
   )
@@ -129,6 +133,45 @@ test('allows Agent registration after phone verification without any Project', (
   assert.match(html, /value="Laptop A"/u)
   assert.doesNotMatch(html, /disabled=""[^>]*>[^<]*collaborationRegisterAgent/u)
   assert.doesNotMatch(html, /projectId/u)
+})
+
+test('offers credential recovery only for the identified local Agent', () => {
+  const fixture = statusFixture()
+  const snapshot = collaborationStatusSnapshotSchema.parse({
+    ...fixture,
+    connection: {
+      ...fixture.connection,
+      state: 'disconnected',
+      deviceCredentialAvailable: false,
+      localAgentId: 'agent-a'
+    }
+  })
+  const localAgent = snapshot.participant?.agents.find(({ agentId }) => agentId === 'agent-a')
+  const html = renderToStaticMarkup(
+    <ParticipantSection
+      participant={snapshot.participant}
+      providerOptions={snapshot.providerOptions}
+      selectedProviderKey="provider.fixture"
+      locator={{}}
+      participantDisplayName="Researcher A"
+      agentDisplayName=""
+      pairing={null}
+      busyKey={null}
+      onProviderChange={NOOP}
+      onLocatorChange={NOOP}
+      onParticipantDisplayNameChange={NOOP}
+      onAgentDisplayNameChange={NOOP}
+      onStartPairing={NOOP}
+      onRegisterAgent={NOOP}
+      credentialRecoveryAgent={localAgent}
+      onRecoverAgentCredential={NOOP}
+      onSelectPrimary={NOOP}
+    />
+  )
+
+  assert.match(html, /data-collaboration-agent-credential-recover="true"/u)
+  assert.match(html, /collaborationRecoverAgentCredential/u)
+  assert.doesNotMatch(html, /data-collaboration-agent-name="true"/u)
 })
 
 test('renders controlled first-binding inputs and builds typed commands without browser dialogs', () => {
@@ -149,6 +192,8 @@ test('renders controlled first-binding inputs and builds typed commands without 
       onAgentDisplayNameChange={NOOP}
       onStartPairing={NOOP}
       onRegisterAgent={NOOP}
+      credentialRecoveryAgent={undefined}
+      onRecoverAgentCredential={NOOP}
       onSelectPrimary={NOOP}
     />
   )

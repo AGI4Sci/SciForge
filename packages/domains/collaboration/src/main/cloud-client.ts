@@ -82,7 +82,9 @@ export class HttpCollaborationCloudClient implements CollaborationCloudClient {
       afterSequence: input.afterSequence,
       limit: input.limit ?? 100
     }), input.credential)
-    if (response.type === 'rest.error') throw new CloudProtocolError(response.error.message)
+    if (response.type === 'rest.error') {
+      throw new CloudProtocolError(response.error.message, response.error.code)
+    }
     if (response.type !== 'rest.inbox_page') {
       throw new CloudProtocolError(`Expected rest.inbox_page, received ${response.type}.`)
     }
@@ -183,7 +185,7 @@ export class HttpCollaborationCloudClient implements CollaborationCloudClient {
       if (!response.ok) {
         const parsed = restResponseSchema.safeParse(value)
         if (parsed.success && parsed.data.type === 'rest.error') {
-          throw new CloudProtocolError(parsed.data.error.message)
+          throw new CloudProtocolError(parsed.data.error.message, parsed.data.error.code)
         }
         throw new CloudProtocolError(`Cloud request failed with HTTP ${response.status}.`)
       }
@@ -201,7 +203,7 @@ function idempotencyKey(value: unknown): string | undefined {
 }
 
 export class CloudProtocolError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly code?: string) {
     super(message)
     this.name = 'CloudProtocolError'
   }
@@ -213,7 +215,9 @@ export function collaborationRequestId(): `req_${string}` {
 
 export function validateCloudRestResponse(response: RestResponse): RestResponse {
   const parsed = restResponseSchema.parse(response)
-  if (parsed.type === 'rest.error') throw new CloudProtocolError(parsed.error.message)
+  if (parsed.type === 'rest.error') {
+    throw new CloudProtocolError(parsed.error.message, parsed.error.code)
+  }
   return parsed
 }
 
