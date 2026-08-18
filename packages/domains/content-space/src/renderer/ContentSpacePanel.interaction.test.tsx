@@ -67,6 +67,16 @@ afterEach(async () => {
 })
 
 describe('ContentSpacePanel', () => {
+  it('keeps its plugin-owned sidebar layout when the Host supplies sizing classes', async () => {
+    const mounted = await mountPanel(panelClient(), { className: 'host-right-panel-size' })
+    const panel = mounted.container.querySelector('[data-content-space-panel]')
+
+    expect(panel).toBeInstanceOf(HTMLElement)
+    expect(panel?.classList.contains('content-space-panel')).toBe(true)
+    expect(panel?.classList.contains('host-right-panel-size')).toBe(true)
+    expect(panel?.getAttribute('aria-busy')).toBe('false')
+  })
+
   it('discovers Provider Instances without silently selecting a default Provider', async () => {
     const describeCapabilities = vi.fn(panelClient().describeCapabilities)
     const listContainers = vi.fn(panelClient().listContainers)
@@ -120,6 +130,9 @@ describe('ContentSpacePanel', () => {
       '[aria-label="Content Space Provider readiness"]'
     )
     expect(readiness?.textContent).toContain('list-containers: ready (development)')
+    expect(readiness?.closest('details')?.open).toBe(false)
+    expect(readiness?.closest('details')?.querySelector('summary')?.textContent)
+      .toContain('2 of 2 operations available')
     expect(buttonContainingText(mounted.container, 'Development library').disabled).toBe(false)
   })
 

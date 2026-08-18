@@ -5,6 +5,26 @@ import {
   useState,
   type FormEvent
 } from 'react'
+import {
+  AlertCircle,
+  ArrowLeft,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Download,
+  ExternalLink,
+  File,
+  Folder,
+  FolderPlus,
+  HardDrive,
+  Info,
+  Library,
+  LoaderCircle,
+  Upload,
+  UserRound,
+  UsersRound,
+  X
+} from 'lucide-react'
 
 import type {
   DomainRendererFileTransferHost,
@@ -29,6 +49,8 @@ import {
   type ContentSpaceTransferProgress
 } from '../contract.js'
 import type { ContentSpaceCapabilityClient } from './capability-client.js'
+
+import './ContentSpacePanel.css'
 
 const PAGE_SIZE = 50
 const transferPickerCancelled = Symbol('content-space-transfer-picker-cancelled')
@@ -589,151 +611,246 @@ export function ContentSpacePanel({
 
   const selectedArtifact = selectedFile ? exactArtifactFor(artifact, selectedFile) : undefined
   const displayedCapabilities = selectedFile ? fileCapabilities : navigationCapabilities
+  const readyCapabilityCount = displayedCapabilities.filter((state) =>
+    state.readiness !== 'blocked_by_contract'
+  ).length
+  const developmentCapabilityCount = displayedCapabilities.filter((state) =>
+    state.readiness === 'poc_only'
+  ).length
 
   return (
-    <section className={className ?? 'flex h-full min-h-0 flex-col bg-white text-slate-900'}>
-      <header className="flex items-center gap-2 border-b border-slate-200 px-3 py-2">
-        <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">Content Space</h2>
+    <section
+      className={mergeClassNames('content-space-panel', className)}
+      data-content-space-panel
+      aria-busy={busy}
+    >
+      <header className="content-space-header">
+        <span className="content-space-brand-mark" aria-hidden>
+          <Library size={17} strokeWidth={1.75} />
+        </span>
+        <span className="content-space-heading">
+          <h2>Content Space</h2>
+          <span>Browse connected libraries</span>
+        </span>
+        <span className="content-space-header-actions">
         {busy && (
-          <button type="button" onClick={cancelMutation}
-            className="rounded border border-slate-300 px-2 py-1 text-xs">
+          <button type="button" onClick={cancelMutation} className="content-space-cancel-button">
+            <X size={13} strokeWidth={1.9} aria-hidden />
             Cancel
           </button>
         )}
         {onCollapse && (
           <button type="button" onClick={onCollapse} aria-label="Collapse Content Space"
-            className="rounded px-2 py-1 text-xs text-slate-500 hover:bg-slate-100">×</button>
+            className="content-space-icon-button">
+            <X size={15} strokeWidth={1.8} aria-hidden />
+          </button>
         )}
+        </span>
       </header>
 
-      <div className="border-b border-slate-200 p-3">
-        <label className="block text-xs font-medium text-slate-600" htmlFor="content-space-provider">
-          Provider Instance
-        </label>
-        <select id="content-space-provider" value={providerInstanceRef}
-          onChange={(event) => selectProvider(event.target.value)} disabled={busy}
-          className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm">
-          <option value="">Select a Provider Instance…</option>
-          {providers.map((provider) => (
-            <option key={provider.providerInstanceRef} value={provider.providerInstanceRef}>
-              {provider.label}
-            </option>
-          ))}
-        </select>
-        {providerInstanceRef && displayedCapabilities.length > 0 && (
-          <ul aria-label="Content Space Provider readiness"
-            className="mt-2 grid grid-cols-2 gap-x-2 text-[11px] text-slate-500">
-            {displayedCapabilities.map((state) => (
-              <li key={state.operation}>
-                {state.operation}: {state.readiness === 'production_ready'
-                  ? 'ready'
-                  : state.readiness === 'poc_only'
-                    ? 'ready (development)'
-                    : 'unavailable'}
-              </li>
+      <div className="content-space-provider-section">
+        <div className="content-space-section-label">
+          <label htmlFor="content-space-provider">Provider Instance</label>
+          <span>Connected source</span>
+        </div>
+        <div className="content-space-select-wrap">
+          <HardDrive size={16} strokeWidth={1.75} aria-hidden />
+          <select id="content-space-provider" value={providerInstanceRef}
+            onChange={(event) => selectProvider(event.target.value)} disabled={busy}>
+            <option value="">Select a Provider Instance…</option>
+            {providers.map((provider) => (
+              <option key={provider.providerInstanceRef} value={provider.providerInstanceRef}>
+                {provider.label}
+              </option>
             ))}
-          </ul>
+          </select>
+          <ChevronDown className="content-space-select-chevron" size={15} strokeWidth={1.8}
+            aria-hidden />
+        </div>
+        {providerInstanceRef && displayedCapabilities.length > 0 && (
+          <details className="content-space-readiness">
+            <summary>
+              <span className={developmentCapabilityCount > 0
+                ? 'content-space-status-dot is-development'
+                : 'content-space-status-dot is-ready'} aria-hidden />
+              <span className="content-space-readiness-summary">
+                {readyCapabilityCount} of {displayedCapabilities.length} operations available
+              </span>
+              {developmentCapabilityCount > 0 && (
+                <span className="content-space-readiness-profile">Development</span>
+              )}
+              <ChevronDown className="content-space-readiness-chevron" size={14}
+                strokeWidth={1.8} aria-hidden />
+            </summary>
+            <ul aria-label="Content Space Provider readiness">
+              {displayedCapabilities.map((state) => (
+                <li key={state.operation} data-operation={state.operation}
+                  data-readiness={state.readiness}>
+                  <span className="content-space-capability-name">{state.operation}: </span>
+                  <span className={`content-space-capability-state is-${state.readiness}`}>
+                    {readinessLabel(state)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </details>
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+      <div className="content-space-scroll-region">
         {error && (
-          <div role="alert" className="mb-3 rounded border border-red-200 bg-red-50 p-2 text-xs text-red-800">
-            {error.message} <span className="font-mono">({error.code})</span>
+          <div role="alert" className="content-space-message is-error">
+            <AlertCircle size={15} strokeWidth={1.8} aria-hidden />
+            <span>{error.message} <code>({error.code})</code></span>
           </div>
         )}
-        {status && <p className="mb-3 text-xs text-slate-500">{status}</p>}
+        {status && (
+          <p className="content-space-message" role="status" aria-live="polite">
+            {status.endsWith('…')
+              ? <LoaderCircle className="content-space-spinner" size={15} strokeWidth={1.8}
+                  aria-hidden />
+              : status === 'Done.'
+                ? <CheckCircle2 size={15} strokeWidth={1.8} aria-hidden />
+                : <Info size={15} strokeWidth={1.8} aria-hidden />}
+            <span>{status}</span>
+          </p>
+        )}
         {transferProgress && (
           <p role="status" aria-live="polite" data-content-space-transfer-progress
             data-operation={transferProgress.snapshot.operation}
             data-phase={transferProgress.snapshot.phase}
-            className="mb-3 text-xs text-slate-600">
-            {transferProgressLabel(transferProgress.snapshot)}
+            className={`content-space-message is-transfer is-${transferProgress.snapshot.phase}`}>
+            {transferProgress.snapshot.phase === 'succeeded'
+              ? <CheckCircle2 size={15} strokeWidth={1.8} aria-hidden />
+              : transferProgress.snapshot.phase === 'failed'
+                ? <AlertCircle size={15} strokeWidth={1.8} aria-hidden />
+                : <LoaderCircle className={transferProgress.snapshot.phase === 'cancelled'
+                  ? undefined
+                  : 'content-space-spinner'} size={15} strokeWidth={1.8} aria-hidden />}
+            <span>{transferProgressLabel(transferProgress.snapshot)}</span>
           </p>
         )}
 
         {!parent ? (
-          <div className="space-y-2">
-            {containers.map((container) => (
-              <button type="button" key={container.reference.containerId}
-                onClick={() => openContainer(container.reference)}
-                disabled={busy || !isOperationReady(navigationCapabilities, 'list-entries')}
-                className="flex w-full items-center rounded border border-slate-200 px-3 py-2 text-left text-sm hover:bg-slate-50">
-                <span className="mr-2" aria-hidden>▣</span>{container.label}
-                <span className="ml-2 text-[10px] uppercase text-muted-foreground">
-                  {container.scope === 'personal' ? 'Personal' : 'Shared'}
-                </span>
-              </button>
-            ))}
+          <div className="content-space-libraries">
+            {containers.length > 0 && (
+              <div className="content-space-list-heading">
+                <span>Libraries</span>
+                <span>{containers.length}</span>
+              </div>
+            )}
+            <div className="content-space-library-stack">
+              {containers.length > 0 && <span className="content-space-library-rail" aria-hidden />}
+              {containers.map((container) => (
+                <button type="button" key={container.reference.containerId}
+                  onClick={() => openContainer(container.reference)}
+                  disabled={busy || !isOperationReady(navigationCapabilities, 'list-entries')}
+                  className="content-space-library-row">
+                  <span className="content-space-library-node" aria-hidden />
+                  <span className="content-space-library-icon" data-scope={container.scope}
+                    aria-hidden>
+                    {container.scope === 'personal'
+                      ? <UserRound size={16} strokeWidth={1.75} />
+                      : <UsersRound size={16} strokeWidth={1.75} />}
+                  </span>
+                  <span className="content-space-library-copy">
+                    <span>{container.label}</span>
+                    <span className="content-space-scope-pill">
+                      {container.scope === 'personal' ? 'Personal' : 'Shared'}
+                    </span>
+                  </span>
+                  <ChevronRight className="content-space-row-chevron" size={16} strokeWidth={1.8}
+                    aria-hidden />
+                </button>
+              ))}
+            </div>
             {containerCursor && (
               <button type="button" onClick={() => void loadContainers(
                 providerInstanceRef, containerCursor, true
               )} disabled={busy || !isOperationReady(navigationCapabilities, 'list-containers')}
-                className="w-full rounded border border-slate-300 py-1.5 text-xs">
+                className="content-space-secondary-button is-full-width">
+                <ChevronDown size={14} strokeWidth={1.8} aria-hidden />
                 Load more spaces
               </button>
             )}
           </div>
         ) : (
-          <div>
-            <div className="mb-3 flex items-center gap-2">
+          <div className="content-space-folder-view">
+            <div className="content-space-folder-heading">
               <button type="button" onClick={returnToSpaces}
-                className="rounded border border-slate-300 px-2 py-1 text-xs">Spaces</button>
-              <span className="min-w-0 flex-1 truncate font-mono text-xs text-slate-500">
-                {parent.containerId}
+                className="content-space-back-button">
+                <ArrowLeft size={14} strokeWidth={1.8} aria-hidden />
+                Libraries
+              </button>
+              <span className="content-space-folder-identity">
+                <span>Current folder</span>
+                <code>{parent.containerId}</code>
               </span>
+            </div>
+
+            <div className="content-space-folder-actions">
               <button type="button" onClick={() => setShowCreateFolder((value) => !value)}
+                aria-pressed={showCreateFolder}
                 disabled={busy || !isOperationReady(navigationCapabilities, 'create-folder')}
-                className="rounded border border-slate-300 px-2 py-1 text-xs">
+                className="content-space-secondary-button">
+                <FolderPlus size={14} strokeWidth={1.8} aria-hidden />
                 New folder
               </button>
               <button type="button" onClick={uploadNew}
                 disabled={busy || !fileTransfers ||
                   !isOperationReady(navigationCapabilities, 'upload-new')}
-                className="rounded bg-slate-900 px-2 py-1 text-xs text-white disabled:opacity-40">
+                className="content-space-primary-button">
+                <Upload size={14} strokeWidth={1.8} aria-hidden />
                 Upload new
               </button>
             </div>
 
             {showCreateFolder && (
-              <form onSubmit={createFolder} className="mb-3 flex gap-2">
+              <form onSubmit={createFolder} className="content-space-create-form">
                 <input value={folderName} maxLength={CONTENT_SPACE_LIMITS.maxEntryNameCharacters}
                   onChange={(event) => setFolderName(event.target.value)} autoFocus
-                  placeholder="Folder name" className="min-w-0 flex-1 rounded border border-slate-300 px-2 py-1 text-sm" />
+                  placeholder="Folder name" />
                 <button type="submit" disabled={busy || !folderName.trim() ||
                   !isOperationReady(navigationCapabilities, 'create-folder')}
-                  className="rounded bg-slate-900 px-3 py-1 text-xs text-white disabled:opacity-40">
+                  className="content-space-primary-button">
                   Create
                 </button>
               </form>
             )}
 
-            <div className="space-y-1">
+            <div className="content-space-entry-list">
               {entries.map((entry) => entry.kind === 'container' ? (
                 <button type="button" key={`container:${entry.reference.containerId}`}
                   onClick={() => openContainer(entry.reference)}
                   disabled={busy || !isOperationReady(navigationCapabilities, 'list-entries')}
-                  className="flex w-full rounded px-2 py-2 text-left text-sm hover:bg-slate-100">
-                  <span className="mr-2" aria-hidden>▣</span>{entry.label}
+                  className="content-space-entry-row">
+                  <span className="content-space-entry-icon" aria-hidden>
+                    <Folder size={16} strokeWidth={1.75} />
+                  </span>
+                  <span className="content-space-entry-name">{entry.label}</span>
+                  <ChevronRight className="content-space-row-chevron" size={15} strokeWidth={1.8}
+                    aria-hidden />
                 </button>
               ) : (
                 <button type="button" key={`file:${entry.reference.fileId}`}
                   onClick={() => {
                     selectFile(entry)
                   }} disabled={busy}
-                  className={`flex w-full items-center rounded px-2 py-2 text-left text-sm hover:bg-slate-100 ${
-                    selectedFile?.reference.fileId === entry.reference.fileId ? 'bg-slate-100' : ''
-                  }`}>
-                  <span className="mr-2" aria-hidden>□</span>
-                  <span className="min-w-0 flex-1 truncate">{entry.label}</span>
-                  <span className="ml-2 text-xs text-slate-400">{entry.size} B</span>
+                  aria-pressed={selectedFile?.reference.fileId === entry.reference.fileId}
+                  className="content-space-entry-row">
+                  <span className="content-space-entry-icon is-file" aria-hidden>
+                    <File size={16} strokeWidth={1.75} />
+                  </span>
+                  <span className="content-space-entry-name">{entry.label}</span>
+                  <span className="content-space-entry-size">{entry.size} B</span>
                 </button>
               ))}
             </div>
             {entryCursor && (
               <button type="button" onClick={() => void loadEntries(parent, entryCursor, true)}
                 disabled={busy || !isOperationReady(navigationCapabilities, 'list-entries')}
-                className="mt-2 w-full rounded border border-slate-300 py-1.5 text-xs">
+                className="content-space-secondary-button is-full-width">
+                <ChevronDown size={14} strokeWidth={1.8} aria-hidden />
                 Load more entries
               </button>
             )}
@@ -742,30 +859,38 @@ export function ContentSpacePanel({
       </div>
 
       {selectedFile && (
-        <footer className="border-t border-slate-200 p-3">
-          <p className="truncate text-sm font-medium">{selectedFile.label}</p>
+        <footer className="content-space-file-footer">
+          <div className="content-space-selected-file">
+            <span className="content-space-entry-icon is-file" aria-hidden>
+              <File size={16} strokeWidth={1.75} />
+            </span>
+            <span>
+              <strong>{selectedFile.label}</strong>
           {selectedArtifact && (
-            <p className="mt-1 truncate font-mono text-[11px] text-emerald-700">
-              Immutable: {selectedArtifact.immutableVersionId}
-            </p>
+                <code>Immutable · {selectedArtifact.immutableVersionId}</code>
           )}
-          <div className="mt-2 flex flex-wrap gap-2">
+            </span>
+          </div>
+          <div className="content-space-file-actions">
             {!parent && (
               <button type="button" onClick={returnToSpaces} disabled={busy}
-                className="rounded border border-slate-300 px-2 py-1 text-xs">
-                Spaces
+                className="content-space-secondary-button">
+                <ArrowLeft size={14} strokeWidth={1.8} aria-hidden />
+                Libraries
               </button>
             )}
             <button type="button" disabled={busy || !fileTransfers ||
               !isOperationReady(fileCapabilities, 'download')}
               onClick={() => download(selectedFile)}
-              className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-40">
+              className="content-space-secondary-button">
+              <Download size={14} strokeWidth={1.8} aria-hidden />
               Download
             </button>
             <button type="button"
               disabled={busy || !isOperationReady(fileCapabilities, 'observe-immutable-version')}
               onClick={() => observeImmutable(selectedFile.reference)}
-              className="rounded border border-slate-300 px-2 py-1 text-xs">
+              className="content-space-secondary-button">
+              <CheckCircle2 size={14} strokeWidth={1.8} aria-hidden />
               Verify immutable
             </button>
             <button type="button" disabled={busy ||
@@ -773,7 +898,8 @@ export function ContentSpacePanel({
               onClick={() => openPortal(
                 selectedArtifact ?? selectedFile.reference
               )}
-              className="rounded border border-slate-300 px-2 py-1 text-xs">
+              className="content-space-secondary-button">
+              <ExternalLink size={14} strokeWidth={1.8} aria-hidden />
               Open Provider portal
             </button>
           </div>
@@ -781,6 +907,16 @@ export function ContentSpacePanel({
       )}
     </section>
   )
+}
+
+function mergeClassNames(...values: Array<string | undefined>): string {
+  return values.filter(Boolean).join(' ')
+}
+
+function readinessLabel(state: ContentSpaceCapabilityState): string {
+  if (state.readiness === 'production_ready') return 'ready'
+  if (state.readiness === 'poc_only') return 'ready (development)'
+  return 'unavailable'
 }
 
 function unwrap<Value>(result: ContentSpaceResult<Value>): Value {
