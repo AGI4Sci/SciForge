@@ -146,12 +146,27 @@ describe('codex config launch helpers', () => {
     })).resolves.toBe(join(newerBin, 'codex'))
   })
 
-  it('finds the Windows cmd shim when Explorer provides Path instead of PATH', async () => {
+  it('finds the native Windows npm runtime instead of its shell shims', async () => {
     const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-windows-'))
     const npmBin = join(home, 'AppData', 'Roaming', 'npm')
-    const command = join(npmBin, 'codex.cmd')
+    const command = join(
+      npmBin,
+      'node_modules',
+      '@openai',
+      'codex',
+      'node_modules',
+      '@openai',
+      'codex-win32-x64',
+      'vendor',
+      'x86_64-pc-windows-msvc',
+      'bin',
+      'codex.exe'
+    )
     await mkdir(npmBin, { recursive: true })
-    await writeFile(command, '@echo off\r\n', 'utf8')
+    await writeFile(join(npmBin, 'codex'), '#!/usr/bin/env node\n', 'utf8')
+    await writeFile(join(npmBin, 'codex.cmd'), '@echo off\r\n', 'utf8')
+    await mkdir(join(command, '..'), { recursive: true })
+    await writeFile(command, 'native-codex-runtime', 'utf8')
 
     await expect(resolveCodexCommand('codex', {
       env: {

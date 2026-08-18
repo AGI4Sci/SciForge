@@ -178,6 +178,8 @@ export async function resolveCodexCommand(
   }
 
   if (platform === 'win32') {
+    const npmRuntime = await resolveNpmWindowsCodex(command, searchDirs, isExecutable)
+    if (npmRuntime) return npmRuntime
     const packaged = await resolvePackagedWindowsCodex(command, env, homeDir, isExecutable)
     if (packaged) return packaged
   }
@@ -199,11 +201,36 @@ async function findExecutableCommand(
 ): Promise<string | null> {
   for (const directory of new Set(directories)) {
     const names = platform === 'win32'
-      ? [command, `${command}.exe`, `${command}.cmd`, `${command}.bat`]
+      ? [/\.exe$/i.test(command) ? command : `${command}.exe`]
       : [command]
     for (const name of names) {
       const candidate = join(directory, name)
       if (await isExecutable(candidate)) return candidate
+    }
+  }
+  return null
+}
+
+async function resolveNpmWindowsCodex(
+  command: string,
+  directories: readonly string[],
+  isExecutable: (path: string) => Promise<boolean>
+): Promise<string | null> {
+  if (!/^codex(?:\.exe)?$/i.test(command)) return null
+  const cohorts = [
+    ['codex-win32-x64', 'x86_64-pc-windows-msvc'],
+    ['codex-win32-arm64', 'aarch64-pc-windows-msvc']
+  ] as const
+  for (const directory of new Set(directories)) {
+    for (const [packageName, target] of cohorts) {
+      const packageRoots = [
+        join(directory, 'node_modules', '@openai', 'codex', 'node_modules', '@openai', packageName),
+        join(directory, 'node_modules', '@openai', packageName)
+      ]
+      for (const packageRoot of packageRoots) {
+        const executable = join(packageRoot, 'vendor', target, 'bin', 'codex.exe')
+        if (await isExecutable(executable)) return executable
+      }
     }
   }
   return null
