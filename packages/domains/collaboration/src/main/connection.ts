@@ -18,7 +18,7 @@ import type {
   CollaborationProviderOption
 } from '../contract.js'
 import type { CollaborationCloudClient } from './cloud-client.js'
-import { collaborationRequestId } from './cloud-client.js'
+import { CloudProtocolError, collaborationRequestId } from './cloud-client.js'
 import { DurableCloudOutbox } from './outbox.js'
 import { CollaborationSettingsService } from './settings.js'
 import { CollaborationLocalStore } from './store.js'
@@ -290,19 +290,54 @@ export class CollaborationConnection {
     const credential = await this.requireUserCredential()
     const state = this.options.store.snapshot()
     if (!state.user) throw new Error('Verify a human endpoint before registering this Agent.')
-    const response = await this.requireClient().execute(restRequestSchema.parse({
-      protocolVersion: '1.0',
-      requestId: collaborationRequestId(),
-      type: 'agent.register',
-      idempotencyKey: `idem_agent.register.${digest(settings.installationId).slice(0, 48)}`,
-      ownerUserId: state.user.userId,
+    const registrationIntent = {
       installationId: settings.installationId,
-      displayName: input.displayName,
+      ownerUserId: state.user.userId,
+      displayName: input.displayName.trim(),
       nodeType: input.nodeType,
-      capabilities: input.capabilities
-    }), credential)
+      capabilities: [...input.capabilities].sort()
+    }
+    let response
+    let recoverExisting = false
+    try {
+      response = await this.requireClient().execute(restRequestSchema.parse({
+        protocolVersion: '1.0',
+        requestId: collaborationRequestId(),
+        type: 'agent.register',
+        idempotencyKey: `idem_agent.register.${digest(JSON.stringify(registrationIntent)).slice(0, 48)}`,
+        ...registrationIntent
+      }), credential)
+      recoverExisting = response.type === 'rest.error'
+        && response.error.code === 'idempotency_conflict'
+    } catch (error) {
+      if (!(error instanceof CloudProtocolError) || error.code !== 'idempotency_conflict') throw error
+      recoverExisting = true
+    }
+    if (recoverExisting) {
+      const snapshot = await this.refreshParticipant(state.user.userId)
+      const existing = snapshot.agents.find((agent) => (
+        agent.installationId === settings.installationId
+        && agent.ownerUserId === state.user!.userId
+        && agent.lifecycleStatus === 'active'
+      ))
+      if (existing) {
+        response = await this.requireClient().execute(restRequestSchema.parse({
+          protocolVersion: '1.0',
+          requestId: collaborationRequestId(),
+          type: 'agent.rotate_credential',
+          idempotencyKey: `idem_agent.rotate_credential.${digest([
+            existing.agentId,
+            String(existing.revision),
+            String(this.now().getTime())
+          ].join('\u0000')).slice(0, 48)}`,
+          agentId: existing.agentId,
+          expectedRevision: existing.revision
+        }), credential)
+      }
+    }
+    if (!response) throw new Error('Agent registration recovery could not find this installation.')
     if (response.type === 'rest.error') throw new Error(response.error.message)
-    if (response.type !== 'agent.registered') {
+    if (response.type !== 'agent.registered' && response.type !== 'agent.credential_rotated') {
       throw new Error(`Agent registration returned unexpected ${response.type}.`)
     }
     await this.options.packageSecrets.write(DEVICE_CREDENTIAL_KEY, response.deviceCredential)

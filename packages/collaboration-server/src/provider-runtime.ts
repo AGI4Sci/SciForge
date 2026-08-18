@@ -53,6 +53,7 @@ type ProviderRuntimePersistence = Pick<ProviderRuntimeStore,
   | 'claimEvent'
   | 'beginEvent'
   | 'completeEvent'
+  | 'checkpointProcessedEvent'
   | 'releaseEvent'
   | 'readCursor'
   | 'resolveTarget'
@@ -209,7 +210,15 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
       eventCursor: event.eventCursor,
       dedupeKey: eventDedupeKey(event)
     })
-    if (claim.status === 'processed') return
+    if (claim.status === 'processed') {
+      await this.store.checkpointProcessedEvent({
+        provider: event.provider,
+        realmId,
+        eventId: event.eventId,
+        eventCursor: event.eventCursor
+      })
+      return
+    }
     if (claim.status === 'in_progress') {
       throw new CollaborationServiceError('resource_offline', 'Provider event is already being handled by another runtime.', {
         retryable: true

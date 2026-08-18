@@ -70,11 +70,11 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
     if (!('idempotencyKey' in parsed)) {
       throw new Error('Durable cloud outbox accepts idempotent write commands only.')
     }
-    const bodyHash = sha256(canonicalJson(parsed))
+    const bodyHash = idempotentCommandHash(parsed)
     await this.options.store.transact((draft) => {
       const existing = draft.outbox.find((entry) => entry.idempotencyKey === parsed.idempotencyKey)
       if (existing) {
-        if (sha256(canonicalJson(existing.body)) !== bodyHash) {
+        if (idempotentCommandHash(existing.body) !== bodyHash) {
           throw new Error('Outbox idempotency key was reused for a different command.')
         }
         return
@@ -94,8 +94,8 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
     this.schedule()
   }
 
-  retry(id?: string): void {
-    void this.options.store.transact((draft) => {
+  async retry(id?: string): Promise<void> {
+    await this.options.store.transact((draft) => {
       const candidates = draft.outbox.filter((entry) => (
         entry.state === 'failed' && (!id || entry.outboxId === id || entry.idempotencyKey === id)
       ))
@@ -105,7 +105,8 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
         entry.error = undefined
         entry.updatedAt = now
       }
-    }).then(() => this.schedule())
+    })
+    this.schedule()
   }
 
   private schedule(): void {
@@ -220,6 +221,12 @@ function sortJson(value: unknown): unknown {
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex')
+}
+
+function idempotentCommandHash(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return sha256(canonicalJson(value))
+  const { requestId: _requestId, ...command } = value as Record<string, unknown>
+  return sha256(canonicalJson(command))
 }
 
 function safeError(error: unknown, sanitizeText?: (value: string) => string): string {

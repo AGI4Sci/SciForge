@@ -168,6 +168,27 @@ export class ProviderRuntimeStore {
     }
   }
 
+  async checkpointProcessedEvent(input: Readonly<{
+    provider: string
+    realmId: string
+    eventId: string
+    eventCursor: string
+  }>): Promise<void> {
+    const checkpointed = await this.pool.query(
+      `INSERT INTO sciforge_collaboration.provider_event_cursors
+       (provider,realm_id,event_cursor,event_id,updated_at)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (provider) DO UPDATE
+       SET realm_id=EXCLUDED.realm_id,event_cursor=EXCLUDED.event_cursor,
+           event_id=EXCLUDED.event_id,updated_at=EXCLUDED.updated_at
+       WHERE sciforge_collaboration.provider_event_cursors.realm_id=EXCLUDED.realm_id`,
+      [input.provider, input.realmId, input.eventCursor, input.eventId, this.timestamp()]
+    )
+    if ((checkpointed.rowCount ?? 0) !== 1) {
+      throw new CollaborationServiceError('identity_conflict', 'A provider runtime may manage only one realm per installed provider.')
+    }
+  }
+
   async releaseEvent(input: Readonly<{
     provider: string
     realmId: string

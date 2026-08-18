@@ -50,6 +50,14 @@ export const WORKSPACE_HOST_CODEX_EXECUTABLE = 'codex/bin/codex' as const
 export const WORKSPACE_HOST_CODEX_LICENSE = 'codex/LICENSE' as const
 export const WORKSPACE_HOST_CODEX_VERSION_OUTPUT = 'codex-cli 0.146.0' as const
 
+const WORKSPACE_HOST_CODEX_EXECUTABLE_VENDOR_PATHS = new Set([
+  'bin/codex',
+  'bin/codex-code-mode-host',
+  'codex-path/rg',
+  'codex-resources/bwrap',
+  'codex-resources/zsh/bin/zsh'
+])
+
 const WORKSPACE_HOST_CODEX_VENDOR_COHORT =
   'vendor/x86_64-unknown-linux-musl' as const
 const WORKSPACE_HOST_CODEX_PACKAGE_METADATA = [
@@ -94,12 +102,14 @@ export async function stageWorkspaceHostNodeRuntime(
     copyArtifactFile(
       nodeSource,
       artifactDirectory,
-      WORKSPACE_HOST_ARTIFACT_NODE_EXECUTABLE
+      WORKSPACE_HOST_ARTIFACT_NODE_EXECUTABLE,
+      true
     ),
     copyArtifactFile(
       resolve(packageRoot, 'LICENSE'),
       artifactDirectory,
-      WORKSPACE_HOST_ARTIFACT_NODE_LICENSE
+      WORKSPACE_HOST_ARTIFACT_NODE_LICENSE,
+      false
     )
   ])
   if (!files[0]?.executable) {
@@ -127,7 +137,7 @@ export async function requireWorkspaceHostBundledCodexExecutable(
   artifactDirectory: string
 ): Promise<string> {
   const executable = resolveWorkspaceHostBundledCodexExecutable(artifactDirectory)
-  await access(executable, constants.X_OK).catch((cause) => {
+  await assertArtifactExecutable(executable).catch((cause) => {
     throw new Error(
       `Bundled Codex executable is unavailable or not executable: ` +
       `${WORKSPACE_HOST_CODEX_EXECUTABLE}.`,
@@ -170,7 +180,7 @@ export async function buildWorkspaceHostArtifactManifest(
       throw new Error(`Workspace Host artifact entry is not a file: ${file.path}`)
     }
     if (file.executable) {
-      await access(absolutePath, constants.X_OK).catch((cause) => {
+      await assertArtifactExecutable(absolutePath).catch((cause) => {
         throw new Error(
           `Workspace Host artifact executable is not runnable: ${file.path}`,
           { cause }
@@ -235,12 +245,18 @@ export async function stageWorkspaceHostCodexCohort(
       WORKSPACE_HOST_CODEX_COHORT_DIRECTORY,
       metadataPath
     )
-    staged.push(await copyArtifactFile(sourcePath, artifactDirectory, artifactPath))
+    staged.push(await copyArtifactFile(
+      sourcePath,
+      artifactDirectory,
+      artifactPath,
+      false
+    ))
   }
   staged.push(await copyArtifactFile(
     licensePath,
     artifactDirectory,
-    WORKSPACE_HOST_CODEX_LICENSE
+    WORKSPACE_HOST_CODEX_LICENSE,
+    false
   ))
 
   const vendorRoot = resolve(packageRoot, WORKSPACE_HOST_CODEX_VENDOR_COHORT)
@@ -252,7 +268,8 @@ export async function stageWorkspaceHostCodexCohort(
     staged.push(await copyArtifactFile(
       resolve(vendorRoot, relativePath),
       artifactDirectory,
-      posix.join(WORKSPACE_HOST_CODEX_COHORT_DIRECTORY, relativePath)
+      posix.join(WORKSPACE_HOST_CODEX_COHORT_DIRECTORY, relativePath),
+      WORKSPACE_HOST_CODEX_EXECUTABLE_VENDOR_PATHS.has(relativePath)
     ))
   }
 
@@ -284,7 +301,7 @@ export async function verifyWorkspaceHostArtifact(
       throw new Error(`Workspace Host artifact digest mismatch: ${file.path}`)
     }
     if (file.executable) {
-      await access(resolve(descriptor.directory, file.path), constants.X_OK)
+      await assertArtifactExecutable(resolve(descriptor.directory, file.path))
         .catch((cause) => {
           throw new Error(
             `Workspace Host artifact executable is not runnable: ${file.path}`,
@@ -324,7 +341,8 @@ async function collectRegularFiles(directory: string): Promise<string[]> {
 async function copyArtifactFile(
   sourcePath: string,
   artifactDirectory: string,
-  artifactPath: string
+  artifactPath: string,
+  executable = false
 ): Promise<WorkspaceHostArtifactInputFile> {
   assertArtifactRelativePath(artifactPath)
   const sourceInfo = await lstat(sourcePath)
@@ -334,9 +352,14 @@ async function copyArtifactFile(
   const destinationPath = resolve(artifactDirectory, artifactPath)
   await mkdir(dirname(destinationPath), { recursive: true, mode: 0o700 })
   await copyFile(sourcePath, destinationPath)
-  const executable = (sourceInfo.mode & 0o111) !== 0
   await chmod(destinationPath, executable ? 0o700 : 0o600)
   return { path: artifactPath, executable }
+}
+
+async function assertArtifactExecutable(path: string): Promise<void> {
+  // The artifact targets Linux, but NTFS does not retain Unix executable bits.
+  // Remote deployment applies the manifest's explicit mode before launching it.
+  await access(path, process.platform === 'win32' ? constants.F_OK : constants.X_OK)
 }
 
 async function assertLinuxX64Elf(path: string): Promise<void> {
