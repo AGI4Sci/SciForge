@@ -510,6 +510,7 @@ describe('AgentRuntimeHost', () => {
     })
     const subagents: NonNullable<AgentRuntimeAdapter['subagents']> = {
       spawn: vi.fn(async (_context, input) => {
+        await input.onThreadBound({ runtime: 'claude', threadId: 'child-thread' })
         await input.onSpawned({ runtime: 'claude', threadId: 'child-thread', turnId: 'child-turn' })
         expect(host.principalForToolRequest({
           runtimeId: 'claude',
@@ -522,6 +523,7 @@ describe('AgentRuntimeHost', () => {
         }
       }),
       resume: vi.fn(async (_context, input) => {
+        await input.onThreadBound({ runtime: 'claude', threadId: input.threadRef.threadId })
         await input.onSpawned({ runtime: 'claude', threadId: input.threadRef.threadId, turnId: 'resumed-turn' })
         return { summary: 'child resumed', threadRef: input.threadRef }
       }),
@@ -531,6 +533,7 @@ describe('AgentRuntimeHost', () => {
       delete: vi.fn(async () => undefined)
     }
     adapter.subagents = subagents
+    vi.mocked(adapter.publishSyntheticEvent!).mockRejectedValue(new Error('renderer refresh unavailable'))
     const host = createAgentRuntimeHost({
       settings: async () => settings('claude'),
       adapters: [adapter],
@@ -583,6 +586,17 @@ describe('AgentRuntimeHost', () => {
       parentTurnId: 'parent-turn',
       occurredAt: expect.any(String)
     })
+    await expect(tools!.call({
+      name: 'subagent_delete',
+      arguments: { childId },
+      context: {
+        requestId: 'delete-1',
+        runtimeId: 'claude',
+        threadId: 'parent-thread',
+        turnId: 'parent-turn'
+      }
+    })).resolves.toMatchObject({ value: { deleted: true } })
+    expect(lifecycle.filter((event) => event.kind === 'after-persistent-child-turn')).toHaveLength(1)
   })
 
   it('keeps an exact child Principal lease after the parent tool lease ends', async () => {
@@ -604,6 +618,7 @@ describe('AgentRuntimeHost', () => {
           threadId: 'principal-child-thread',
           turnId: 'principal-child-turn'
         }
+        await input.onThreadBound({ runtime: 'codex', threadId: threadRef.threadId })
         await input.onSpawned(threadRef)
         childAttached()
         await finish
@@ -680,6 +695,7 @@ describe('AgentRuntimeHost', () => {
         threadId: 'child-thread',
         turnId: 'child-turn'
       }
+      await input.onThreadBound({ runtime: 'codex', threadId: threadRef.threadId })
       await input.onSpawned(threadRef)
       expect(host.principalForToolRequest({
         runtimeId: 'codex',

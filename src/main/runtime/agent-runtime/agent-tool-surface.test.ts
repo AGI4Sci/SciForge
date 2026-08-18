@@ -93,7 +93,7 @@ describe('scopeAgentRuntimeToolSurface', () => {
     }
     const scoped = scopeAgentRuntimeToolSurface(source as never, {
       allowedTools: ['sciforge_discover'],
-      brokerScope: { providerFamily: 'managed-mcp', packageId: 'computer-use' },
+      brokerScope: { providerFamily: 'managed-mcp', packageName: '@sciforge/domain-computer-use' },
       maxToolCalls: 1
     })
     expect(scoped.tools().map((tool) => tool.name)).toEqual(['sciforge_discover'])
@@ -103,7 +103,7 @@ describe('scopeAgentRuntimeToolSurface', () => {
     })
     expect(contexts).toEqual([expect.objectContaining({
       allowedToolNames: ['sciforge_discover'],
-      brokerScope: { providerFamily: 'managed-mcp', packageId: 'computer-use' }
+      brokerScope: { providerFamily: 'managed-mcp', packageName: '@sciforge/domain-computer-use' }
     })])
     expect(() => scoped.call({
       name: 'sciforge_discover', arguments: {},

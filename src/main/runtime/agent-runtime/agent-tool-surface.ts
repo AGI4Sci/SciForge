@@ -29,7 +29,7 @@ export type AgentRuntimeToolCallContext = Readonly<{
 
 export type AgentRuntimeBrokerScope = Readonly<{
   providerFamily: 'managed-mcp'
-  packageId?: string
+  packageName?: string
 }>
 
 export type AgentRuntimeToolCall = Readonly<{

@@ -278,7 +278,7 @@ function descriptorForManagedTool(tool: RuntimeToolDefinition): CapabilityDescri
     outputSchema: {},
     tags: [
       'managed-mcp',
-      ...(tool.providerPackageId ? [`package-${slug(tool.providerPackageId).slice(0, 55)}`] : []),
+      ...(tool.providerPackageName ? [`package-${slug(tool.providerPackageName).slice(0, 55)}`] : []),
       `tool-${slug(tool.name).slice(0, 55)}`
     ]
   })
@@ -298,7 +298,7 @@ function managedToolWithinBrokerScope(
   const scope = context.brokerScope
   if (!scope) return true
   if (scope.providerFamily !== 'managed-mcp') return false
-  return !scope.packageId || tool.providerPackageId === scope.packageId
+  return !scope.packageName || tool.providerPackageName === scope.packageName
 }
 
 function assertManagedToolWithinBrokerScope(

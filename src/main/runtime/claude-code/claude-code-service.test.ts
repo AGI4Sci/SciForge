@@ -420,6 +420,9 @@ describe('ClaudeCodeRuntimeService', () => {
       claudeAgentSdk: sdk
     })
     const spawned = vi.fn()
+    const threadBound = vi.fn(async () => {
+      expect(calls).toHaveLength(0)
+    })
     const completion = service.spawnSubagent({
       childId: 'claude-child-1',
       parentThreadId: 'parent-thread',
@@ -427,6 +430,7 @@ describe('ClaudeCodeRuntimeService', () => {
       prompt: 'Review the repository.',
       signal: new AbortController().signal,
       appendTranscript: vi.fn(async () => undefined),
+      onThreadBound: threadBound,
       onSpawned: spawned
     })
     await vi.waitFor(() => expect(spawned).toHaveBeenCalledWith({
@@ -434,6 +438,10 @@ describe('ClaudeCodeRuntimeService', () => {
       threadId: expect.any(String),
       turnId: expect.any(String)
     }))
+    expect(threadBound).toHaveBeenCalledWith({
+      runtime: 'claude',
+      threadId: expect.any(String)
+    })
     await expect(service.inspectSubagent({
       childId: 'claude-child-1',
       parentThreadId: 'parent-thread',
@@ -471,6 +479,9 @@ describe('ClaudeCodeRuntimeService', () => {
     })).resolves.toMatchObject({ state: 'missing' })
 
     const resumedSpawned = vi.fn()
+    const resumedThreadBound = vi.fn(async () => {
+      expect(calls).toHaveLength(1)
+    })
     const resumed = await service.resumeSubagent({
       childId: 'claude-child-1',
       parentThreadId: 'parent-thread',
@@ -479,10 +490,15 @@ describe('ClaudeCodeRuntimeService', () => {
       threadRef: completed.threadRef!,
       signal: new AbortController().signal,
       appendTranscript: vi.fn(async () => undefined),
+      onThreadBound: resumedThreadBound,
       onSpawned: resumedSpawned
     })
     expect(resumed.threadRef?.threadId).toBe(completed.threadRef?.threadId)
     expect(resumedSpawned).toHaveBeenCalledOnce()
+    expect(resumedThreadBound).toHaveBeenCalledWith({
+      runtime: 'claude',
+      threadId: completed.threadRef?.threadId
+    })
     expect(calls).toHaveLength(2)
 
     await service.deleteSubagent({
@@ -519,6 +535,7 @@ describe('ClaudeCodeRuntimeService', () => {
       prompt: 'This child must be rolled back.',
       signal: new AbortController().signal,
       appendTranscript: vi.fn(async () => undefined),
+      onThreadBound: vi.fn(),
       onSpawned: vi.fn()
     })).rejects.toThrow('turn startup failed')
     expect(rollback).toHaveBeenCalledOnce()
@@ -551,6 +568,7 @@ describe('ClaudeCodeRuntimeService', () => {
       prompt: 'This child startup fails.',
       signal: new AbortController().signal,
       appendTranscript: vi.fn(async () => undefined),
+      onThreadBound: vi.fn(),
       onSpawned: vi.fn()
     })).rejects.toSatisfy((error: unknown) =>
       error instanceof AggregateError &&
@@ -583,6 +601,7 @@ describe('ClaudeCodeRuntimeService', () => {
       threadRef: { runtime: 'claude', threadId: 'existing-claude-thread' },
       signal: new AbortController().signal,
       appendTranscript: vi.fn(async () => undefined),
+      onThreadBound: vi.fn(),
       onSpawned: vi.fn()
     })).rejects.toThrow('resume startup failed')
     expect(rollback).not.toHaveBeenCalled()

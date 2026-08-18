@@ -31,6 +31,7 @@ function bridgeWith(
   options: {
     maxParallel?: number
     onChildEvent?: AgentRuntimeSubagentToolBridgeOptions['onChildEvent']
+    onChildTerminal?: AgentRuntimeSubagentToolBridgeOptions['onChildTerminal']
   } = {}
 ) {
   return createAgentRuntimeSubagentToolBridge({
@@ -41,13 +42,15 @@ function bridgeWith(
       enabled: true,
       maxParallel: options.maxParallel ?? 2
     }),
-    onChildEvent: options.onChildEvent
+    onChildEvent: options.onChildEvent,
+    onChildTerminal: options.onChildTerminal
   })
 }
 
 function completedAdapter(runtime: AgentRuntimeId): AgentRuntimeSubagentAdapter {
   return {
     spawn: vi.fn(async (_context, input) => {
+      await input.onThreadBound({ runtime, threadId: `${runtime}-child-thread` })
       await input.onSpawned({ runtime, threadId: `${runtime}-child-thread`, turnId: `${runtime}-child-turn` })
       return {
         summary: `${runtime}: ${input.prompt}`,
@@ -55,6 +58,7 @@ function completedAdapter(runtime: AgentRuntimeId): AgentRuntimeSubagentAdapter 
       }
     }),
     resume: vi.fn(async (_context, input) => {
+      await input.onThreadBound({ runtime, threadId: input.threadRef.threadId })
       await input.onSpawned({ runtime, threadId: input.threadRef.threadId, turnId: `${runtime}-resumed-turn` })
       return {
         summary: `${runtime}: ${input.prompt}`,
@@ -333,12 +337,12 @@ describe('AgentRuntime subagent tool bridge', () => {
       tool: AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME,
       delegationContext: {
         allowedToolNames: ['sciforge_discover', 'sciforge_invoke'],
-        brokerScope: { providerFamily: 'managed-mcp', packageId: 'computer-use' }
+        brokerScope: { providerFamily: 'managed-mcp', packageName: '@sciforge/domain-computer-use' }
       },
       arguments: {
         prompt: 'use one managed package',
         allowedToolNames: ['sciforge_discover', 'sciforge_invoke', 'shell'],
-        brokerScope: { providerFamily: 'managed-mcp', packageId: 'computer-use' },
+        brokerScope: { providerFamily: 'managed-mcp', packageName: '@sciforge/domain-computer-use' },
         deadlineMs: 30_000,
         maxToolCalls: 32
       }
@@ -346,7 +350,7 @@ describe('AgentRuntime subagent tool bridge', () => {
 
     expect(adapter.spawn).toHaveBeenCalledWith(context(), expect.objectContaining({
       allowedTools: ['sciforge_discover', 'sciforge_invoke'],
-      brokerScope: { providerFamily: 'managed-mcp', packageId: 'computer-use' },
+      brokerScope: { providerFamily: 'managed-mcp', packageName: '@sciforge/domain-computer-use' },
       maxToolCalls: 32
     }))
   })
@@ -406,7 +410,23 @@ describe('AgentRuntime subagent tool bridge', () => {
       threadId: 'parent-thread',
       turnId: 'parent-turn',
       tool: AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME,
-      arguments: { prompt: 'keep working' }
+      delegationContext: {
+        allowedToolNames: ['sciforge_discover', 'sciforge_invoke'],
+        brokerScope: {
+          providerFamily: 'managed-mcp',
+          packageName: '@sciforge/domain-computer-use'
+        }
+      },
+      arguments: {
+        prompt: 'keep working',
+        allowedToolNames: ['sciforge_discover', 'sciforge_invoke', 'shell'],
+        brokerScope: {
+          providerFamily: 'managed-mcp',
+          packageName: '@sciforge/domain-computer-use'
+        },
+        deadlineMs: 30_000,
+        maxToolCalls: 32
+      }
     })
     await ready
     const id = childId(started)
@@ -458,7 +478,13 @@ describe('AgentRuntime subagent tool bridge', () => {
     expect(adapter.cancel).toHaveBeenCalledOnce()
     expect(adapter.resume).toHaveBeenCalledWith(context(), expect.objectContaining({
       threadRef: expect.objectContaining({ threadId: 'child-thread' }),
-      prompt: 'Continue the task.'
+      prompt: 'Continue the task.',
+      allowedTools: ['sciforge_discover', 'sciforge_invoke'],
+      brokerScope: {
+        providerFamily: 'managed-mcp',
+        packageName: '@sciforge/domain-computer-use'
+      },
+      maxToolCalls: 32
     }))
     expect(adapter.delete).toHaveBeenCalledOnce()
   })
@@ -487,6 +513,41 @@ describe('AgentRuntime subagent tool bridge', () => {
       parentThreadId: 'parent-thread',
       openAsThreadRef: { runtimeId: 'claude', threadId: 'claude-child-thread' }
     })
+  })
+
+  it('delivers one terminal lifecycle when a completed child is later deleted', async () => {
+    const terminal = vi.fn()
+    const refresh = vi.fn()
+    const bridge = bridgeWith(completedAdapter('codex'), {
+      onChildEvent: refresh,
+      onChildTerminal: terminal
+    })
+    const started = await bridge.callTool({
+      requestId: 'terminal-once',
+      runtimeId: 'codex',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn',
+      tool: AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME,
+      arguments: { prompt: 'complete once' }
+    })
+    const id = childId(started)
+    await bridge.callTool({
+      requestId: 'terminal-once-wait',
+      runtimeId: 'codex',
+      threadId: 'parent-thread',
+      tool: AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME,
+      arguments: { childId: id, timeoutMs: 1_000 }
+    })
+    await bridge.callTool({
+      requestId: 'terminal-once-delete',
+      runtimeId: 'codex',
+      threadId: 'parent-thread',
+      tool: AGENT_RUNTIME_SUBAGENT_DELETE_TOOL_NAME,
+      arguments: { childId: id }
+    })
+
+    expect(terminal).toHaveBeenCalledOnce()
+    expect(refresh.mock.calls.map(([, event]) => event.operation)).toContain('delete')
   })
 
   it('recovers persisted stale children before spawning and isolates refresh failures', async () => {
@@ -570,18 +631,25 @@ describe('AgentRuntime subagent tool bridge', () => {
   })
 
   it('suspends only the exact persistent child deadline during external interaction', async () => {
-    let resolveSpawned!: () => void
-    const spawned = new Promise<void>((resolve) => { resolveSpawned = resolve })
+    let resolveThreadBound!: () => void
+    const threadBound = new Promise<void>((resolve) => { resolveThreadBound = resolve })
+    let continueStartup!: () => void
+    const startupMayContinue = new Promise<void>((resolve) => { continueStartup = resolve })
     let childSignal: AbortSignal | undefined
     const adapter: AgentRuntimeSubagentAdapter = {
       spawn: vi.fn(async (_context, input) => {
         childSignal = input.signal
+        await input.onThreadBound({
+          runtime: 'codex',
+          threadId: 'codex-waiting-child'
+        })
+        resolveThreadBound()
+        await startupMayContinue
         await input.onSpawned({
           runtime: 'codex',
           threadId: 'codex-waiting-child',
           turnId: 'codex-waiting-turn'
         })
-        resolveSpawned()
         await new Promise<void>((resolve) => input.signal.addEventListener('abort', () => resolve(), { once: true }))
         throw input.signal.reason
       }),
@@ -600,13 +668,14 @@ describe('AgentRuntime subagent tool bridge', () => {
       tool: AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME,
       arguments: { prompt: 'wait for approval', deadlineMs: 40 }
     })
-    await spawned
+    await threadBound
 
     expect(bridge.suspendChildExecutionDeadline('codex', 'codex-waiting-child', 'approval-1')).toBe(true)
     expect(bridge.suspendChildExecutionDeadline('codex', 'unrelated-child', 'approval-2')).toBe(false)
     await new Promise((resolve) => setTimeout(resolve, 80))
     expect(childSignal?.aborted).toBe(false)
     expect(bridge.resumeChildExecutionDeadline('codex', 'codex-waiting-child', 'approval-1')).toBe(true)
+    continueStartup()
 
     const waited = await bridge.callTool({
       requestId: 'wait-for-deadline',

@@ -2952,6 +2952,9 @@ describe('CodexRuntimeService compatibility operations', () => {
     })
 
     const spawned = vi.fn()
+    const threadBound = vi.fn(async () => {
+      expect(queued.client.startTurn).toHaveBeenCalledTimes(1)
+    })
     const controller = new AbortController()
     const completion = service.spawnSubagent({
       childId: 'child-1',
@@ -2961,6 +2964,7 @@ describe('CodexRuntimeService compatibility operations', () => {
       prompt: 'Review the repository.',
       signal: controller.signal,
       appendTranscript: vi.fn(async () => undefined),
+      onThreadBound: threadBound,
       onSpawned: spawned
     })
     await vi.waitFor(() =>
@@ -2970,6 +2974,10 @@ describe('CodexRuntimeService compatibility operations', () => {
         turnId: 'child-turn'
       })
     )
+    expect(threadBound).toHaveBeenCalledWith({
+      runtime: 'codex',
+      threadId: expect.any(String)
+    })
     await expect(
       service.inspectSubagent({
         childId: 'child-1',
@@ -3021,6 +3029,9 @@ describe('CodexRuntimeService compatibility operations', () => {
     ).resolves.toMatchObject({ state: 'missing' })
 
     const resumedSpawned = vi.fn()
+    const resumedThreadBound = vi.fn(async () => {
+      expect(queued.client.startTurn).toHaveBeenCalledTimes(2)
+    })
     const resumedCompletion = service.resumeSubagent({
       childId: 'child-1',
       parentThreadId: 'parent-thread',
@@ -3033,6 +3044,7 @@ describe('CodexRuntimeService compatibility operations', () => {
       },
       signal: new AbortController().signal,
       appendTranscript: vi.fn(async () => undefined),
+      onThreadBound: resumedThreadBound,
       onSpawned: resumedSpawned
     })
     await vi.waitFor(() => expect(resumedSpawned).toHaveBeenCalledWith({
@@ -3040,6 +3052,10 @@ describe('CodexRuntimeService compatibility operations', () => {
       threadId: 'child-codex-thread',
       turnId: 'child-resumed-turn'
     }))
+    expect(resumedThreadBound).toHaveBeenCalledWith({
+      runtime: 'codex',
+      threadId: 'child-codex-thread'
+    })
     queued.push({
       type: 'event',
       channel: CODEX_MAIN_IPC_CHANNELS.event,

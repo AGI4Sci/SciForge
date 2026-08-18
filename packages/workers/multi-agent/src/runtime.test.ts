@@ -685,6 +685,16 @@ test('runtime resumes an interrupted child with the same identity and provider t
       assert.equal(input.resumeThreadRef?.threadId, 'provider-child-thread')
       assert.equal(input.prompt, 'Continue the interrupted review.')
       assert.equal(input.executorContext, resumedExecutorContext)
+      assert.deepEqual(input.allowedToolNames, ['sciforge_discover', 'sciforge_invoke'])
+      assert.deepEqual(input.brokerScope, {
+        providerFamily: 'managed-mcp',
+        packageName: '@sciforge/domain-computer-use'
+      })
+      assert.equal(input.deadlineMs, 10_000)
+      assert.equal(input.strictAllowedToolNames, true)
+      assert.deepEqual(input.bashCommandPolicy, { allowPatterns: ['^python3 '] })
+      assert.deepEqual(input.filePathPolicy, { allowPaths: ['/workspace'] })
+      assert.equal(input.maxToolCalls, 12)
       return {
         summary: 'Resumed work completed.',
         threadRef: { runtime: 'codex', threadId: 'provider-child-thread', turnId: 'turn-2' }
@@ -695,9 +705,23 @@ test('runtime resumes an interrupted child with the same identity and provider t
   const started = await runtime.startChild({
     parentThreadId: 'thread-1',
     parentTurnId: 'turn-1',
-    prompt: 'Review the paper.'
+    prompt: 'Review the paper.',
+    allowedToolNames: ['sciforge_discover', 'sciforge_invoke'],
+    brokerScope: {
+      providerFamily: 'managed-mcp',
+      packageName: '@sciforge/domain-computer-use'
+    },
+    deadlineMs: 10_000,
+    strictAllowedToolNames: true,
+    bashCommandPolicy: { allowPatterns: ['^python3 '] },
+    filePathPolicy: { allowPaths: ['/workspace'] },
+    maxToolCalls: 12
   })
   assert.equal((await runtime.cancelChild('thread-1', started.id))?.status, 'aborted')
+  assert.deepEqual((await runtime.child('thread-1', started.id))?.brokerScope, {
+    providerFamily: 'managed-mcp',
+    packageName: '@sciforge/domain-computer-use'
+  })
 
   const resumed = await runtime.resumeChild({
     parentThreadId: 'thread-1',
@@ -714,6 +738,96 @@ test('runtime resumes an interrupted child with the same identity and provider t
   assert.equal(completed?.record.status, 'completed')
   assert.equal(completed?.record.threadRef?.turnId, 'turn-2')
   assert.equal(completed?.record.summary, 'Resumed work completed.')
+})
+
+test('runtime retries durable terminal delivery independently of refresh failures', async () => {
+  const store = new InMemoryMultiAgentStore()
+  let terminalAttempts = 0
+  const runtime = new MultiAgentRuntime({
+    store,
+    idGenerator: () => 'child-terminal-retry',
+    executor: async () => ({ summary: 'Done.' }),
+    events: {
+      onChildEvent: async () => { throw new Error('refresh transport unavailable') },
+      onChildTerminal: async () => {
+        terminalAttempts += 1
+        if (terminalAttempts === 1) throw new Error('terminal consumer unavailable')
+      }
+    }
+  })
+
+  const completed = await runtime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-1',
+    prompt: 'Deliver terminal lifecycle reliably.'
+  })
+  assert.equal(completed.status, 'completed')
+  await waitUntil(() => terminalAttempts >= 2)
+  assert.ok((await store.get('thread-1', completed.id))?.terminalEventDeliveredAt)
+  runtime.dispose()
+})
+
+test('runtime recovers pending terminal delivery when a new process starts', async () => {
+  const store = new InMemoryMultiAgentStore()
+  await store.upsert(MultiAgentChildRunRecord.parse({
+    id: 'child-pending-terminal',
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-1',
+    prompt: 'Already finished.',
+    status: 'completed',
+    transcript: [],
+    createdAt: '2026-08-18T00:00:00.000Z',
+    updatedAt: '2026-08-18T00:00:01.000Z',
+    finishedAt: '2026-08-18T00:00:01.000Z'
+  }))
+  let delivered = 0
+  const runtime = new MultiAgentRuntime({
+    store,
+    executor: async () => ({ summary: 'unused' }),
+    events: { onChildTerminal: async () => { delivered += 1 } }
+  })
+
+  await waitUntil(() => delivered === 1)
+  assert.ok((await store.get('thread-1', 'child-pending-terminal'))?.terminalEventDeliveredAt)
+  runtime.dispose()
+})
+
+test('runtime protects pending terminal delivery and never redelivers it for delete refreshes', async () => {
+  const store = new InMemoryMultiAgentStore()
+  const operations: Array<string | undefined> = []
+  let terminalCalls = 0
+  let terminalAvailable = false
+  const runtime = new MultiAgentRuntime({
+    store,
+    idGenerator: () => 'child-delete-after-terminal',
+    executor: async () => ({ summary: 'Done.' }),
+    events: {
+      onChildEvent: (event) => { operations.push(event.operation) },
+      onChildTerminal: async () => {
+        terminalCalls += 1
+        if (!terminalAvailable) throw new Error('terminal consumer unavailable')
+      }
+    }
+  })
+  const completed = await runtime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-1',
+    prompt: 'Delete only after terminal delivery.'
+  })
+
+  await assert.rejects(
+    runtime.deleteChild('thread-1', completed.id),
+    /terminal lifecycle delivery is pending/
+  )
+  assert.ok(await runtime.child('thread-1', completed.id))
+  terminalAvailable = true
+  await runtime.deleteChild('thread-1', completed.id)
+  const callsAfterDelete = terminalCalls
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  assert.equal(terminalCalls, callsAfterDelete)
+  assert.equal(await runtime.child('thread-1', completed.id), null)
+  assert.equal(operations.at(-1), 'delete')
+  runtime.dispose()
 })
 
 test('runtime permanently deletes a child and publishes a delete refresh event', async () => {
@@ -887,4 +1001,12 @@ async function waitForAbort(signal: AbortSignal): Promise<never> {
   if (signal.aborted) throw new Error('aborted')
   await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
   throw new Error('aborted')
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for condition.')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
 }

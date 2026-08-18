@@ -2020,6 +2020,10 @@ export class CodexRuntimeService {
       return pending
     }
     try {
+      await input.onThreadBound({
+        runtime: 'codex',
+        threadId: childGuiThreadId
+      })
       const modelAccess = codexModelAccessThreadParams(settings)
       preparedGovernance = await this.prepareCodexTurnGovernance({
         sessionId: childCodexThreadId,

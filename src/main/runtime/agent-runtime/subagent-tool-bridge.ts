@@ -63,6 +63,10 @@ export type AgentRuntimeSubagentToolBridgeOptions = {
     event: MultiAgentChildEvent,
     record: MultiAgentChildRunRecord
   ) => Promise<void> | void
+  onChildTerminal?: (
+    runtimeId: AgentRuntimeId,
+    record: MultiAgentChildRunRecord
+  ) => Promise<void> | void
 }
 
 type ActiveRequest = {
@@ -84,7 +88,7 @@ type DelegatedTaskInput = {
   workspace?: string
   model?: string
   allowedToolNames?: string[]
-  brokerScope?: Readonly<{ providerFamily: 'managed-mcp'; packageId?: string }>
+  brokerScope?: Readonly<{ providerFamily: 'managed-mcp'; packageName?: string }>
   deadlineMs?: number
   maxToolCalls?: number
 }
@@ -192,7 +196,7 @@ export class AgentRuntimeSubagentToolBridge {
         type: 'object',
         properties: {
           providerFamily: { type: 'string', enum: ['managed-mcp'] },
-          packageId: { type: 'string' }
+          packageName: { type: 'string' }
         },
         required: ['providerFamily'],
         additionalProperties: false
@@ -601,7 +605,7 @@ export class AgentRuntimeSubagentToolBridge {
         await Promise.all(running.map((record) =>
           runtime.cancelChild(record.parentThreadId, record.id)
         ))
-      }).catch(() => undefined)
+      }).catch(() => undefined).finally(() => runtime.dispose())
     }
     for (const finalizePrincipal of this.childPrincipalFinalizers.values()) {
       finalizePrincipal()
@@ -623,7 +627,8 @@ export class AgentRuntimeSubagentToolBridge {
         : new InMemoryMultiAgentStore()),
       executor: (input) => this.executeAdapterChild(runtimeId, input),
       events: {
-        onChildEvent: (event, record) => this.handleChildEvent(runtimeId, event, record)
+        onChildEvent: (event, record) => this.handleChildEvent(runtimeId, event, record),
+        onChildTerminal: (record) => this.handleChildTerminal(runtimeId, record)
       }
     })
     const entry: RuntimeEntry = { runtime, maxParallel, ready: Promise.resolve() }
@@ -677,6 +682,16 @@ export class AgentRuntimeSubagentToolBridge {
         signal: request.signal
       })
     })
+    const bindThreadIdentity = (threadRef: AgentRuntimeSubagentThreadRef): void => {
+      if (threadRef.threadId) {
+        const threadIds = this.childThreadIds.get(runtimeId) ?? new Set<string>()
+        threadIds.add(threadRef.threadId)
+        this.childThreadIds.set(runtimeId, threadIds)
+        const childIds = this.childIdsByThreadId.get(runtimeId) ?? new Map<string, string>()
+        childIds.set(threadRef.threadId, input.childId)
+        this.childIdsByThreadId.set(runtimeId, childIds)
+      }
+    }
     const adapterInput = {
       ...target,
       ...(input.label ? { label: input.label } : {}),
@@ -688,6 +703,7 @@ export class AgentRuntimeSubagentToolBridge {
       ...(input.maxToolCalls ? { maxToolCalls: input.maxToolCalls } : {}),
       signal: input.signal,
       appendTranscript: input.appendTranscript,
+      onThreadBound: bindThreadIdentity,
       onSpawned: async (threadRef: AgentRuntimeSubagentThreadRef) => {
         if (principalContext && this.options.bindChildTurnPrincipal) {
           const principalKey = childPrincipalKey(runtimeId, input.childId)
@@ -699,23 +715,18 @@ export class AgentRuntimeSubagentToolBridge {
             this.options.bindChildTurnPrincipal(runtimeId, threadRef, principalContext)
           )
         }
+        bindThreadIdentity(threadRef)
         await input.setThreadRef(threadRef)
-        if (threadRef.threadId) {
-          const threadIds = this.childThreadIds.get(runtimeId) ?? new Set<string>()
-          threadIds.add(threadRef.threadId)
-          this.childThreadIds.set(runtimeId, threadIds)
-          const childIds = this.childIdsByThreadId.get(runtimeId) ?? new Map<string, string>()
-          childIds.set(threadRef.threadId, input.childId)
-          this.childIdsByThreadId.set(runtimeId, childIds)
-        }
       }
     }
-    return input.resumeThreadRef
-      ? binding.adapter.resume(binding.context, {
-          ...adapterInput,
-          threadRef: input.resumeThreadRef
-        })
-      : binding.adapter.spawn(binding.context, adapterInput)
+    if (input.resumeThreadRef) {
+      bindThreadIdentity(input.resumeThreadRef)
+      return binding.adapter.resume(binding.context, {
+        ...adapterInput,
+        threadRef: input.resumeThreadRef
+      })
+    }
+    return binding.adapter.spawn(binding.context, adapterInput)
   }
 
   private async handleChildEvent(
@@ -724,15 +735,20 @@ export class AgentRuntimeSubagentToolBridge {
     record: MultiAgentChildRunRecord
   ): Promise<void> {
     this.trackActiveChild(runtimeId, record)
+    await this.options.onChildEvent?.(runtimeId, event, record)
+  }
+
+  private async handleChildTerminal(
+    runtimeId: AgentRuntimeId,
+    record: MultiAgentChildRunRecord
+  ): Promise<void> {
     try {
-      await this.options.onChildEvent?.(runtimeId, event, record)
+      await this.options.onChildTerminal?.(runtimeId, record)
     } finally {
-      if (record.status === 'completed' || record.status === 'failed' || record.status === 'aborted') {
-        const principalKey = childPrincipalKey(runtimeId, record.id)
-        const finalizePrincipal = this.childPrincipalFinalizers.get(principalKey)
-        this.childPrincipalFinalizers.delete(principalKey)
-        finalizePrincipal?.()
-      }
+      const principalKey = childPrincipalKey(runtimeId, record.id)
+      const finalizePrincipal = this.childPrincipalFinalizers.get(principalKey)
+      this.childPrincipalFinalizers.delete(principalKey)
+      finalizePrincipal?.()
     }
   }
 
@@ -984,8 +1000,8 @@ function stringArray(value: unknown): string[] | undefined {
 function delegatedBrokerScope(value: unknown): DelegatedTaskInput['brokerScope'] | undefined {
   const record = recordArguments(value)
   if (record.providerFamily !== 'managed-mcp') return undefined
-  const packageId = firstString(record.packageId)
-  return Object.freeze({ providerFamily: 'managed-mcp', ...(packageId ? { packageId } : {}) })
+  const packageName = firstString(record.packageName)
+  return Object.freeze({ providerFamily: 'managed-mcp', ...(packageName ? { packageName } : {}) })
 }
 
 function boundedInteger(value: unknown, minimum: number, maximum: number): number | undefined {
@@ -1011,12 +1027,12 @@ function narrowBrokerScope(
   if (!parent) return requested
   if (!requested) return parent
   if (parent.providerFamily !== requested.providerFamily ||
-      (parent.packageId && requested.packageId && parent.packageId !== requested.packageId)) {
+      (parent.packageName && requested.packageName && parent.packageName !== requested.packageName)) {
     throw new Error('Delegated broker scope cannot exceed or conflict with the parent scope.')
   }
   return Object.freeze({
     providerFamily: parent.providerFamily,
-    packageId: parent.packageId ?? requested.packageId
+    packageName: parent.packageName ?? requested.packageName
   })
 }
 

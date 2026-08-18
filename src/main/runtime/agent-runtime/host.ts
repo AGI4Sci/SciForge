@@ -347,10 +347,9 @@ export class AgentRuntimeHost {
               turnId: event.parentTurnId,
               child: agentRuntimeChildFromMultiAgentRecord(runtimeId, record, event)
             })
-            if (
-              (record.status === 'completed' || record.status === 'failed' || record.status === 'aborted') &&
-              record.threadRef?.threadId && record.threadRef.turnId
-            ) {
+          },
+          onChildTerminal: async (runtimeId, record) => {
+            if (record.threadRef?.threadId && record.threadRef.turnId) {
               await this.publishTurnLifecycle(Object.freeze({
                 kind: 'after-persistent-child-turn',
                 state: record.status === 'completed'

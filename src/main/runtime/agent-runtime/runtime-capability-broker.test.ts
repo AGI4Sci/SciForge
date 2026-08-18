@@ -201,13 +201,13 @@ describe('RuntimeCapabilityBroker', () => {
   it('filters managed discovery by generic package scope', async () => {
     const gateway = createRuntimeMcpToolGateway({
       servers: [
-        { id: 'computer-server', packageId: 'computer-use', command: '/bin/computer' },
-        { id: 'other-server', packageId: 'other-package', command: '/bin/other' }
+        { id: 'computer-server', packageName: '@sciforge/domain-computer-use', command: '/bin/computer' },
+        { id: 'other-server', packageName: '@sciforge/domain-other', command: '/bin/other' }
       ],
       clientFactory: async (server) => ({
         listTools: vi.fn(async () => ({ tools: [{
           name: 'operate',
-          description: `${server.packageId} operation`,
+          description: `${server.packageName} operation`,
           annotations: { readOnlyHint: true }
         }] })),
         callTool: vi.fn(async () => ({ content: [] })),
@@ -227,12 +227,12 @@ describe('RuntimeCapabilityBroker', () => {
       context: {
         requestId: 'scoped', runtimeId: 'codex', threadId: 'child',
         workspaceId: '/tmp/workspace',
-        brokerScope: { providerFamily: 'managed-mcp', packageId: 'computer-use' }
+        brokerScope: { providerFamily: 'managed-mcp', packageName: '@sciforge/domain-computer-use' }
       }
     })
     expect(result.value).toEqual([expect.objectContaining({
-      description: 'computer-use operation',
-      tags: expect.arrayContaining(['package-computer-use'])
+      description: '@sciforge/domain-computer-use operation',
+      tags: expect.arrayContaining(['package-sciforge-domain-computer-use'])
     })])
   })
 

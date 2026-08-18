@@ -85,6 +85,14 @@ export const MultiAgentChildThreadRef = z
   .strict()
 export type MultiAgentChildThreadRef = z.infer<typeof MultiAgentChildThreadRef>
 
+export const MultiAgentBrokerScope = z
+  .object({
+    providerFamily: z.literal('managed-mcp'),
+    packageName: z.string().min(1).optional()
+  })
+  .strict()
+export type MultiAgentBrokerScope = z.infer<typeof MultiAgentBrokerScope>
+
 export const MultiAgentChildRunRecord = z
   .object({
     contractVersion: z.literal(MULTI_AGENT_CONTRACT_VERSION).default(MULTI_AGENT_CONTRACT_VERSION),
@@ -96,6 +104,13 @@ export const MultiAgentChildRunRecord = z
     prompt: z.string().min(1),
     workspace: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
+    allowedToolNames: z.array(z.string().min(1)).optional(),
+    brokerScope: MultiAgentBrokerScope.optional(),
+    deadlineMs: z.number().int().positive().optional(),
+    strictAllowedToolNames: z.boolean().optional(),
+    bashCommandPolicy: z.record(z.string(), z.unknown()).optional(),
+    filePathPolicy: z.record(z.string(), z.unknown()).optional(),
+    maxToolCalls: z.number().int().positive().optional(),
     attempt: z.number().int().positive().default(1),
     status: MultiAgentChildStatus,
     summary: z.string().optional(),
@@ -106,7 +121,8 @@ export const MultiAgentChildRunRecord = z
     createdAt: z.string().min(1),
     updatedAt: z.string().min(1),
     startedAt: z.string().min(1).optional(),
-    finishedAt: z.string().min(1).optional()
+    finishedAt: z.string().min(1).optional(),
+    terminalEventDeliveredAt: z.string().min(1).optional()
   })
   .strict()
 export type MultiAgentChildRunRecord = z.infer<typeof MultiAgentChildRunRecord>
@@ -273,7 +289,7 @@ export type MultiAgentExecutorInput = {
   workspace?: string
   model?: string
   allowedToolNames?: readonly string[]
-  brokerScope?: Readonly<{ providerFamily: 'managed-mcp'; packageId?: string }>
+  brokerScope?: MultiAgentBrokerScope
   deadlineMs?: number
   strictAllowedToolNames?: boolean
   bashCommandPolicy?: Record<string, unknown>
@@ -309,6 +325,7 @@ export type MultiAgentEventSink = {
     event: MultiAgentChildEvent,
     record: MultiAgentChildRunRecord
   ) => void | Promise<void>
+  onChildTerminal?: (record: MultiAgentChildRunRecord) => void | Promise<void>
 }
 
 export type MultiAgentUsageSnapshot = MultiAgentUsage

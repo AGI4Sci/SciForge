@@ -400,7 +400,7 @@ export class ClaudeCodeRuntimeService {
     workspace?: string
     reasoningEffort?: string
     allowedTools?: string[]
-    brokerScope?: Readonly<{ providerFamily: 'managed-mcp'; packageId?: string }>
+    brokerScope?: Readonly<{ providerFamily: 'managed-mcp'; packageName?: string }>
     maxToolCalls?: number
     ownedVisualToolsAvailable?: boolean
     nativeVisualProofChainPending?: boolean
@@ -624,6 +624,7 @@ export class ClaudeCodeRuntimeService {
     threadId: string,
     onStartupCommitted?: () => void
   ): Promise<AgentRuntimeSubagentResult> {
+    await input.onThreadBound({ runtime: 'claude', threadId })
     const turnResult = await this.startTurn({
       threadId,
       text: input.prompt,

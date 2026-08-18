@@ -6,17 +6,17 @@ import {
   type DomainMcpTrustedInvocationMetadataContribution,
   type DomainMainRuntimeMcpServerContribution
 } from '@sciforge/domain-sdk/host'
-import type { DomainModuleCatalog } from './catalog'
+import type { DomainModuleCatalog, RegisteredMainDomainContribution } from './catalog'
 
 export function listMainRuntimeMcpServerContributions(
   catalog: DomainModuleCatalog
-): readonly DomainMainRuntimeMcpServerContribution[] {
-  const values = catalog.listContributions(
+): readonly RegisteredMainDomainContribution<DomainMainRuntimeMcpServerContribution>[] {
+  const contributions = catalog.listContributions(
     MAIN_RUNTIME_MCP_SERVER_CONTRIBUTION_KIND,
     isDomainMainRuntimeMcpServerContribution
-  ).map(({ value }) => value)
-  assertUnique(values.map((value) => value.serverId), 'runtime MCP server id')
-  return Object.freeze(values)
+  )
+  assertUnique(contributions.map(({ value }) => value.serverId), 'runtime MCP server id')
+  return contributions
 }
 
 export function listMainMcpTrustedInvocationMetadataContributions(

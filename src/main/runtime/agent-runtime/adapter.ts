@@ -199,6 +199,7 @@ export type AgentRuntimeSubagentSpawnInput = AgentRuntimeSubagentTarget & {
   maxToolCalls?: number
   signal: AbortSignal
   appendTranscript(entry: AgentRuntimeSubagentTranscriptEntry): Promise<void>
+  onThreadBound(threadRef: AgentRuntimeSubagentThreadRef): void | Promise<void>
   onSpawned(threadRef: AgentRuntimeSubagentThreadRef): void | Promise<void>
 }
 
