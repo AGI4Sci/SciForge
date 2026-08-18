@@ -1279,6 +1279,94 @@ describe('AgentRuntimeHost', () => {
     expect(dispatched?.displayText).toBe(userText)
   })
 
+  it('allows global native provider discovery when the visible Content Space panel has no resource', async () => {
+    const adapter = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    const snapshot = {
+      schemaVersion: 3 as const,
+      windowId: 'electron:1',
+      revision: 26,
+      publishedAt: '2026-08-18T06:28:16.000Z',
+      freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
+      activeThreadId: 'codex-thread',
+      workspaceRoot: '/tmp/workspace',
+      route: 'chat',
+      components: [{
+        id: 'right-sidebar',
+        region: 'right-sidebar',
+        component: 'right-panel',
+        title: 'Content Space',
+        visible: true,
+        updatedAt: '2026-08-18T06:28:16.000Z',
+        summary: 'The current Content Space panel.',
+        state: {
+          currentResource: {
+            kind: 'content-space.workbench-right-panel',
+            sessionId: 'codex-thread',
+            summary: 'Content Space state owned by session codex-thread.',
+            title: 'Content Space',
+            workspaceRoot: '/tmp/workspace'
+          },
+          mode: 'content-space.workbench-right-panel',
+          sessionId: 'codex-thread',
+          width: 560
+        },
+        resources: []
+      }]
+    }
+    const visibleContext = {
+      bindSurface: vi.fn(async () => snapshot)
+    }
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter],
+      services: { visibleContext: visibleContext as never }
+    })
+    const userText = 'Create a folder in an OpenContent Team library and upload the Markdown report.'
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      visibleContextSurfaceId: 'electron:1',
+      text: userText,
+      displayText: userText
+    })
+
+    const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
+    expect(dispatched?.text).toContain('"title": "Content Space"')
+    expect(dispatched?.text).toContain('"resourceRef": []')
+    expect(dispatched?.text).toContain(
+      'When the user explicitly requests an external Provider operation, `sciforge_discover` may search matching global native operations even when no current component resourceRef exists.'
+    )
+    expect(dispatched?.text).toContain(
+      'This includes authorization operations that establish the initial Broker resource.'
+    )
+    expect(dispatched?.text).toContain(
+      'A missing component resourceRef blocks only observation or operations that depend on that current UI resource; it does not block discovery of global native operations that are independent of the current UI resource.'
+    )
+    expect(dispatched?.text).not.toContain(
+      'Use `sciforge_discover` only for the broker `surface.current` route'
+    )
+    expect(dispatched?.text).toContain(
+      'Do not infer raw Provider resource identities, including folder IDs or GUIDs'
+    )
+    expect(dispatched?.text).toContain(
+      'if a required value is unavailable, ask for it rather than guessing'
+    )
+    expect(dispatched?.text).toContain(
+      'When a discovered authorization operation requires a Human-visible selector that the user did not supply, first use a matching global read-only native operation, when available, to enumerate Broker-safe candidate labels.'
+    )
+    expect(dispatched?.text).toContain(
+      'Do not substitute a Provider Instance display label for a Provider resource label.'
+    )
+    expect(dispatched?.text).toContain(userText)
+    expect(dispatched?.displayText).toBe(userText)
+  })
+
   it('claims the prepared question-time surface instead of rebinding the later UI surface', async () => {
     const adapter = fakeAdapter('codex', {
       id: 'codex-thread',

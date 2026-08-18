@@ -39,6 +39,7 @@ export const CONTENT_SPACE_PORTABLE_EXPORT_CONSUMER_MODULE_IDS = Object.freeze([
 
 export const CONTENT_SPACE_CAPABILITY_IDS = Object.freeze({
   listProviderInstances: 'content-space.list-provider-instances',
+  listAgentRootCandidates: 'content-space.list-agent-root-candidates',
   describeCapabilities: 'content-space.describe-capabilities',
   listContainers: 'content-space.list-containers',
   listEntries: 'content-space.list-entries',
@@ -418,6 +419,21 @@ export const contentSpaceProviderInstanceListSchema = z.object({
 export const contentSpaceProviderInstanceInputSchema = z.object({
   providerInstanceRef: providerInstanceRefSchema
 }).strict().readonly()
+export const contentSpaceListAgentRootCandidatesInputSchema = z.object({
+  providerInstanceRef: providerInstanceRefSchema,
+  scope: z.enum(['personal', 'shared']),
+  page: contentSpacePageRequestSchema
+}).strict().readonly()
+export const contentSpaceAgentRootCandidateSchema = z.object({
+  libraryLabel: z.string().trim().min(1).max(CONTENT_SPACE_LIMITS.maxLabelCharacters)
+}).strict().readonly()
+export const contentSpaceAgentRootCandidatePageSchema = z.object({
+  providerInstanceRef: providerInstanceRefSchema,
+  scope: z.enum(['personal', 'shared']),
+  items: z.array(contentSpaceAgentRootCandidateSchema)
+    .max(CONTENT_SPACE_LIMITS.maxPageItems).readonly(),
+  nextCursor: z.string().trim().min(1).max(256).optional()
+}).strict().readonly()
 export const contentSpaceCapabilityListSchema = z.object({
   items: contentSpaceCapabilityStateListSchema
 }).strict().readonly()
@@ -491,6 +507,9 @@ export const contentSpaceObserveImmutableVersionInputSchema = z.object({
 
 export const contentSpaceProviderInstanceListResultSchema = contentSpaceResultSchema(
   contentSpaceProviderInstanceListSchema
+)
+export const contentSpaceAgentRootCandidatePageResultSchema = contentSpaceResultSchema(
+  contentSpaceAgentRootCandidatePageSchema
 )
 export const contentSpaceCapabilityListResultSchema = contentSpaceResultSchema(
   contentSpaceCapabilityListSchema

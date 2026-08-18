@@ -1,6 +1,6 @@
 # Content Space
 
-> Current-state audit: 2026-08-17. Provider-neutral Content Space V1, portable codecs/resolution, Principal-aware routing, mock Provider, and UI are implemented. OpenContent Change 1 may admit only its reviewed development profile while production remains blocked.
+> Current-state audit: 2026-08-18. Provider-neutral Content Space V1, portable codecs/resolution, Principal-aware routing, mock Provider, and UI are implemented. OpenContent Change 1 may admit only its reviewed development profile while production remains blocked.
 
 Content Space is the SciForge bounded context for provider-hosted directories, ordinary files, and fixed provider-backed artifacts. It is separate from live collaborative documents and from the SciForge Workspace filesystem.
 
@@ -58,8 +58,12 @@ _Avoid_: authoritative provider metadata, ACL hint
 The state `poc_only`, `blocked_by_contract`, or `production_ready` for one operation. PoC-only execution requires a trusted instance/root/account/operation/audience policy and cannot be promoted by Agent, renderer, remote Task, portable input, or untrusted configuration.
 _Avoid_: environment flag as production approval, partial means complete
 
+**Agent Root Candidate**:
+A bounded, non-authorizing projection of one trusted Provider Instance, `personal | shared` scope, Human-visible `libraryLabel`, and optional opaque page cursor. It lets a Personal Session ask the Human to select an exact root without exposing or accepting a Provider folder identity, and it never substitutes for confirmed root authorization.
+_Avoid_: Content Container Reference, Provider Instance display label, folder ID/GUID, Team ID, authorization cache
+
 **Agent Content Space Scope**:
-The Content Space authority available to an Agent execution context. A Personal Session supplies an installed Provider Instance, `personal | shared` scope, and Human-visible library label for confirmation; after confirmation, Host resolves exactly one match from the complete current container listing and rejects raw Provider folder identities, missing labels, and ambiguous labels. Host then issues only a bounded caller/Principal/Workspace-bound Broker resource, and descendants arise only by listing an authorized directory. A Project Task uses only its Project Content Directory and descendants even when the executing owner's Provider ACL is broader.
+The Content Space authority available to an Agent execution context. A Personal Session obtains an installed Provider Instance from native Broker discovery and supplies `personal | shared` scope. If the Human has not supplied an exact library label, the Agent may page through label-only Agent Root Candidates; zero or multiple distinct choices require Human clarification and are never guessed, while canonically duplicate labels remain unavailable until the Provider-side ambiguity is resolved. Root authorization remains separately confirmed and resolves exactly one live match from the complete current container listing while rejecting raw Provider folder identities. Host then issues only a bounded caller/Principal/Workspace-bound Broker resource, and descendants arise only by listing an authorized directory. A Project Task uses only its Project Content Directory and descendants even when the executing owner's Provider ACL is broader.
 _Avoid_: all resources visible to the Token, task-supplied connection, Project-wide Provider account
 
 **Workspace Content Transfer**:

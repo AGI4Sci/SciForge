@@ -75,6 +75,7 @@ type CapabilityDefinition = Readonly<{
   approval: 'none' | 'confirmation'
   concurrency: Readonly<{ revision: 'none'; idempotency: 'none' | 'required' }>
   inputSchema: Readonly<{ safeParse(value: unknown): Readonly<{ success: boolean }> }>
+  outputSchema: Readonly<{ safeParse(value: unknown): Readonly<{ success: boolean }> }>
   handler(input: unknown, context: CapabilityContext): Promise<Readonly<{
     output: ContentSpaceResult<unknown>
   }>>
@@ -466,6 +467,368 @@ describe('Content Space main composition', () => {
     }))
   })
 
+  it('derives the Provider Instance from discovery and pages scope-filtered Agent root labels without identities', async () => {
+    const listContainers = vi.fn(async ({ context, page }:
+      Parameters<ContentSpaceProvider['listContainers']>[0]) => page.cursor
+      ? {
+          providerInstanceRef: context.providerInstanceRef,
+          items: [{
+            reference: {
+              providerInstanceRef: context.providerInstanceRef,
+              containerId: 'team-folder-guid'
+            },
+            scope: 'shared' as const,
+            label: 'SciForge Research'
+          }]
+        }
+      : {
+          providerInstanceRef: context.providerInstanceRef,
+          items: [{
+            reference: {
+              providerInstanceRef: context.providerInstanceRef,
+              containerId: 'personal-folder-guid'
+            },
+            scope: 'personal' as const,
+            label: 'Personal library'
+          }],
+          nextCursor: 'team-page'
+        })
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture({ listContainers })))
+    )
+    const providers = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.listProviderInstances
+    ).handler({}, capabilityContext(undefined, 'agent'))
+    const providerInstanceRef = successValue<{
+      items: Array<{ providerInstanceRef: string; label: string }>
+    }>(providers.output).items[0]?.providerInstanceRef
+    expect(providerInstanceRef).toBe(PROVIDER_INSTANCE_REF)
+
+    const listCandidates = definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.listAgentRootCandidates
+    )
+
+    const first = await listCandidates.handler({
+      providerInstanceRef,
+      scope: 'shared',
+      page: { limit: 20 }
+    }, capabilityContext(undefined, 'agent'))
+    const second = await listCandidates.handler({
+      providerInstanceRef,
+      scope: 'shared',
+      page: { cursor: 'team-page', limit: 20 }
+    }, capabilityContext(undefined, 'agent'))
+
+    expect(first.output).toEqual(contentSpaceSuccess({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      scope: 'shared',
+      items: [],
+      nextCursor: 'team-page'
+    }))
+    expect(second.output).toEqual(contentSpaceSuccess({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      scope: 'shared',
+      items: [{ libraryLabel: 'SciForge Research' }]
+    }))
+    expect(JSON.stringify([first.output, second.output])).not.toContain('folder-guid')
+    expect(JSON.stringify([first.output, second.output])).not.toMatch(
+      /containerId|folderId|folderGuid|teamId|reference/iu
+    )
+    expect(listCandidates).toMatchObject({
+      audiences: ['agent'],
+      scope: 'global',
+      effect: 'read',
+      approval: 'none'
+    })
+    expect(listCandidates.inputSchema.safeParse({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      scope: 'shared',
+      page: { limit: 20 },
+      folderGuid: 'raw-team-folder-guid'
+    }).success).toBe(false)
+    expect(listCandidates.outputSchema.safeParse(contentSpaceSuccess({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      scope: 'shared',
+      items: [{
+        libraryLabel: 'SciForge Research',
+        reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, containerId: 'raw-team-root' }
+      }]
+    })).success).toBe(false)
+    expect(listContainers.mock.calls.map(([input]) => input.page.cursor)).toEqual([
+      undefined,
+      'team-page'
+    ])
+  })
+
+  it.each([
+    {
+      name: 'the listed Team label becomes stale',
+      liveTeamItems: []
+    },
+    {
+      name: 'the listed Team label becomes canonically ambiguous',
+      liveTeamItems: [{
+        reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, containerId: 'live-team-a' },
+        scope: 'shared' as const,
+        label: 'SciForge Research'
+      }, {
+        reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, containerId: 'live-team-b' },
+        scope: 'shared' as const,
+        label: 'sciforge research'
+      }]
+    }
+  ])('freshly re-enumerates authorization when $name', async ({ liveTeamItems }) => {
+    let phase: 'candidate' | 'authorization' = 'candidate'
+    const listContainers = vi.fn(async ({ context, page }:
+      Parameters<ContentSpaceProvider['listContainers']>[0]) => page.cursor
+      ? {
+          providerInstanceRef: context.providerInstanceRef,
+          items: phase === 'candidate'
+            ? [{
+                reference: {
+                  providerInstanceRef: context.providerInstanceRef,
+                  containerId: 'candidate-team-root'
+                },
+                scope: 'shared' as const,
+                label: 'SciForge Research'
+              }]
+            : liveTeamItems
+        }
+      : {
+          providerInstanceRef: context.providerInstanceRef,
+          items: [{
+            reference: {
+              providerInstanceRef: context.providerInstanceRef,
+              containerId: 'personal-root'
+            },
+            scope: 'personal' as const,
+            label: 'Personal library'
+          }],
+          nextCursor: 'team-page'
+        })
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture({ listContainers })))
+    )
+    const providers = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.listProviderInstances
+    ).handler({}, capabilityContext(undefined, 'agent'))
+    const providerInstanceRef = successValue<{
+      items: Array<{ providerInstanceRef: string }>
+    }>(providers.output).items[0]?.providerInstanceRef
+    const listCandidates = definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.listAgentRootCandidates
+    )
+    const first = await listCandidates.handler({
+      providerInstanceRef,
+      scope: 'shared',
+      page: { limit: 20 }
+    }, capabilityContext(undefined, 'agent'))
+    const second = await listCandidates.handler({
+      providerInstanceRef,
+      scope: 'shared',
+      page: { cursor: successValue<{ nextCursor?: string }>(first.output).nextCursor, limit: 20 }
+    }, capabilityContext(undefined, 'agent'))
+    const libraryLabel = successValue<{
+      items: Array<{ libraryLabel: string }>
+    }>(second.output).items[0]?.libraryLabel
+    expect(libraryLabel).toBe('SciForge Research')
+
+    phase = 'authorization'
+    const issueResource = vi.fn()
+    const authorized = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot
+    ).handler({
+      providerInstanceRef,
+      scope: 'shared',
+      label: libraryLabel
+    }, capabilityContext(undefined, 'agent', { issueResource }))
+
+    expect(authorized.output).toMatchObject({
+      ok: false,
+      error: { code: 'invalid_target' }
+    })
+    expect(issueResource).not.toHaveBeenCalled()
+    expect(listContainers.mock.calls.map(([input]) => input.page.cursor)).toEqual([
+      undefined,
+      'team-page',
+      undefined,
+      'team-page'
+    ])
+  })
+
+  it('creates, re-lists the exact child resource, and uploads without using the create receipt as authority', async () => {
+    const root = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      containerId: 'team-root'
+    })
+    const child = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      containerId: 'reports-folder'
+    })
+    let created = false
+    const createFolder = vi.fn(async ({ context, parent, name }:
+      Parameters<ContentSpaceProvider['createFolder']>[0]) => {
+      created = true
+      return {
+        invocationId: context.invocationId,
+        parent,
+        name,
+        reference: child
+      }
+    })
+    const listEntries = vi.fn(async ({ parent }:
+      Parameters<ContentSpaceProvider['listEntries']>[0]) => ({
+      parent,
+      items: created
+        ? [{ kind: 'container' as const, reference: child, label: 'Reports' }]
+        : []
+    }))
+    const uploadNewFile = vi.fn(async ({ context, parent, name, source }:
+      Parameters<ContentSpaceProvider['uploadNewFile']>[0]) => ({
+      invocationId: context.invocationId,
+      parent,
+      name,
+      sourceSize: source.size,
+      reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'report-file' }
+    }))
+    const close = vi.fn(async () => undefined)
+    const openWorkspaceUploadSource = vi.fn(async () => Object.freeze({
+      name: 'report.md',
+      size: 6,
+      read: async () => new TextEncoder().encode('report'),
+      close
+    }))
+    const host = mainHost({
+      fileTransfers: {
+        openUploadSource: vi.fn(async () => { throw new Error('UI handle path was used') }),
+        openDownloadDestination: vi.fn(async () => { throw new Error('unused') }),
+        openWorkspaceUploadSource,
+        openWorkspaceDownloadDestination: vi.fn(async () => { throw new Error('unused') })
+      }
+    })
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(host).contributions,
+      contributionHost(providerContributions(() => providerFixture({
+        listContainers: async ({ context }) => ({
+          providerInstanceRef: context.providerInstanceRef,
+          items: [{ reference: root, scope: 'shared', label: 'SciForge Research' }]
+        }),
+        createFolder,
+        listEntries,
+        uploadNewFile
+      })))
+    )
+    const providers = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.listProviderInstances
+    ).handler({}, capabilityContext(undefined, 'agent'))
+    const providerInstanceRef = successValue<{
+      items: Array<{ providerInstanceRef: string }>
+    }>(providers.output).items[0]?.providerInstanceRef
+    let rootRegistration: any
+    const authorized = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot
+    ).handler({
+      providerInstanceRef,
+      scope: 'shared',
+      label: 'SciForge Research'
+    }, capabilityContext(undefined, 'agent', {
+      callerId: 'agent:content-flow',
+      workspaceId: '/workspace',
+      issueResource: (registration) => {
+        rootRegistration = registration
+        return {
+          token: `cap_${'r'.repeat(32)}`,
+          semanticRevision: 'live:root',
+          expiresAt: '2026-08-17T17:00:00.000Z'
+        }
+      }
+    }))
+    expect(authorized.output).toMatchObject({ ok: true })
+    const rootResource = Object.freeze({
+      resourceId: rootRegistration.resourceId as string,
+      resourceKind: CONTENT_CONTAINER_RESOURCE_KIND,
+      workspaceId: '/workspace'
+    })
+
+    const createdFolder = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentCreateFolder
+    ).handler({ name: 'Reports' }, capabilityContext(undefined, 'agent', {
+      callerId: 'agent:content-flow',
+      workspaceId: '/workspace',
+      resource: rootResource
+    }))
+    expect(createdFolder.output).toMatchObject({
+      ok: true,
+      value: { reference: child }
+    })
+    expect(createFolder).toHaveBeenCalledWith(expect.objectContaining({ parent: root, name: 'Reports' }))
+
+    let childRegistration: any
+    const listed = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentListEntries
+    ).handler({ page: { limit: 20 } }, capabilityContext(undefined, 'agent', {
+      callerId: 'agent:content-flow',
+      workspaceId: '/workspace',
+      resource: rootResource,
+      issueResource: (registration) => {
+        childRegistration = registration
+        return {
+          token: `cap_${'c'.repeat(32)}`,
+          semanticRevision: 'live:child',
+          expiresAt: '2026-08-17T17:00:00.000Z'
+        }
+      }
+    }))
+    expect(listed.output).toMatchObject({
+      ok: true,
+      value: {
+        items: [{
+          entry: { kind: 'container', label: 'Reports' },
+          resource: { token: expect.stringMatching(/^cap_/u) }
+        }]
+      }
+    })
+    expect(childRegistration).toMatchObject({ resourceKind: CONTENT_CONTAINER_RESOURCE_KIND })
+
+    const uploaded = await definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.agentUploadNew
+    ).handler({
+      name: 'report.md',
+      workspaceRelativePath: 'reports/report.md'
+    }, capabilityContext(undefined, 'agent', {
+      callerId: 'agent:content-flow',
+      workspaceId: '/workspace',
+      resource: {
+        resourceId: childRegistration.resourceId,
+        resourceKind: CONTENT_CONTAINER_RESOURCE_KIND,
+        workspaceId: '/workspace'
+      }
+    }))
+
+    expect(uploaded.output).toMatchObject({ ok: true, value: { parent: child } })
+    expect(uploadNewFile).toHaveBeenCalledWith(expect.objectContaining({
+      parent: child,
+      name: 'report.md'
+    }))
+    expect(uploadNewFile).not.toHaveBeenCalledWith(expect.objectContaining({ parent: root }))
+    expect(openWorkspaceUploadSource).toHaveBeenCalledWith(expect.objectContaining({
+      relativePath: 'reports/report.md'
+    }))
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
   it.each([
     {
       name: 'wrong scope',
@@ -547,21 +910,129 @@ describe('Content Space main composition', () => {
     expect(issueResource).not.toHaveBeenCalled()
   })
 
-  it('rejects raw Provider identities at the Agent root authorization schema', async () => {
+  it('rejects raw parent, reference, and Provider identities from every Agent operation schema', async () => {
     const definitions = await activateDefinitions(
       createDomainMainEntry(mainHost()).contributions,
       contributionHost(providerContributions(() => providerFixture()))
     )
+    const candidates = definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.listAgentRootCandidates
+    )
     const authorize = definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot)
+    const listEntries = definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.agentListEntries)
+    const createFolder = definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.agentCreateFolder)
+    const uploadNew = definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.agentUploadNew)
+    const download = definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.agentDownload)
+    const rawIdentityFields = [{
+      parent: { providerInstanceRef: PROVIDER_INSTANCE_REF, containerId: 'raw-parent-guid' }
+    }, {
+      reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, containerId: 'raw-reference-guid' }
+    }, {
+      root: { providerInstanceRef: PROVIDER_INSTANCE_REF, containerId: 'raw-root-guid' }
+    }, {
+      containerId: 'raw-container-guid'
+    }, {
+      fileId: 'raw-file-guid'
+    }, {
+      resourceId: 'raw-provider-resource-id'
+    }, {
+      resourceRef: `res_${'x'.repeat(26)}`
+    }, {
+      folderId: 42
+    }, {
+      folderGuid: 'raw-folder-guid'
+    }, {
+      teamId: 9
+    }]
+    const schemas = [{
+      capability: candidates,
+      valid: {
+        providerInstanceRef: PROVIDER_INSTANCE_REF,
+        scope: 'shared',
+        page: { limit: 20 }
+      }
+    }, {
+      capability: authorize,
+      valid: {
+        providerInstanceRef: PROVIDER_INSTANCE_REF,
+        scope: 'personal',
+        label: 'Root'
+      }
+    }, {
+      capability: listEntries,
+      valid: { page: { limit: 20 } }
+    }, {
+      capability: createFolder,
+      valid: { name: 'Reports' }
+    }, {
+      capability: uploadNew,
+      valid: { name: 'report.md', workspaceRelativePath: 'reports/report.md' }
+    }, {
+      capability: download,
+      valid: { workspaceRelativePath: 'downloads/report.md' }
+    }]
 
-    expect(authorize.inputSchema.safeParse({
-      root: { providerInstanceRef: PROVIDER_INSTANCE_REF, containerId: 'raw-folder-guid' }
+    for (const { capability, valid } of schemas) {
+      expect(capability.inputSchema.safeParse(valid).success).toBe(true)
+      for (const rawIdentity of rawIdentityFields) {
+        expect(capability.inputSchema.safeParse({ ...valid, ...rawIdentity }).success).toBe(false)
+      }
+    }
+    expect(candidates.inputSchema.safeParse({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      scope: 'shared',
+      page: { limit: 20 },
+      label: 'OpenContent'
     }).success).toBe(false)
     expect(authorize.inputSchema.safeParse({
       providerInstanceRef: PROVIDER_INSTANCE_REF,
       scope: 'personal',
       label: 'Root'
     }).success).toBe(true)
+
+    const rawContainerReference = Object.freeze({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      containerId: 'raw-container-guid'
+    })
+    const agentCapabilitiesAcceptingRawReferences = definitions
+      .filter(({ audiences }) => audiences.includes('agent'))
+      .filter(({ inputSchema }) =>
+        inputSchema.safeParse({ reference: FILE }).success ||
+        inputSchema.safeParse({ reference: rawContainerReference }).success
+      )
+      .map(({ id }) => id)
+    expect(agentCapabilitiesAcceptingRawReferences).toEqual([])
+  })
+
+  it('keeps Human portal and immutable-reference operations out of the Agent audience', async () => {
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost(providerContributions(() => providerFixture()))
+    )
+    const humanGlobalIds = [
+      CONTENT_SPACE_CAPABILITY_IDS.observeImmutableVersion,
+      CONTENT_SPACE_CAPABILITY_IDS.resolvePortalTarget,
+      CONTENT_SPACE_CAPABILITY_IDS.openPortalTarget
+    ]
+    for (const id of humanGlobalIds) {
+      expect(definition(definitions, id)).toMatchObject({
+        audiences: ['ui'],
+        scope: 'global'
+      })
+    }
+
+    const agentGlobalAllowlist = new Set<string>([
+      CONTENT_SPACE_CAPABILITY_IDS.listProviderInstances,
+      CONTENT_SPACE_CAPABILITY_IDS.listAgentRootCandidates,
+      CONTENT_SPACE_CAPABILITY_IDS.describeCapabilities,
+      CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot
+    ])
+    const unexpectedAgentGlobalIds = definitions
+      .filter(({ audiences, scope }) => audiences.includes('agent') && scope === 'global')
+      .map(({ id }) => id)
+      .filter((id) => !agentGlobalAllowlist.has(id))
+    expect(unexpectedAgentGlobalIds).toEqual([])
   })
 })
 
@@ -597,6 +1068,11 @@ function definition(
   const found = definitions.find((candidate) => candidate.id === id)
   if (!found) throw new Error(`Missing capability ${id}`)
   return found
+}
+
+function successValue<Value>(result: ContentSpaceResult<unknown>): Value {
+  if (!result.ok) throw new Error(`Expected Content Space success, received ${result.error.code}`)
+  return result.value as Value
 }
 
 function capabilityContext(

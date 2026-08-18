@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **234**
+Registered actions: **235**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -77,13 +77,14 @@ Registered actions: **234**
 | `content-space.create-folder` | 1.0.0 | ui | external-write | confirmation | global |
 | `content-space.describe-capabilities` | 1.0.0 | ui, agent, system | read | none | global |
 | `content-space.download` | 1.0.0 | ui | external-write | confirmation | global |
+| `content-space.list-agent-root-candidates` | 1.0.0 | agent | read | none | global |
 | `content-space.list-containers` | 1.0.0 | ui | read | none | global |
 | `content-space.list-entries` | 1.0.0 | ui | read | none | global |
 | `content-space.list-provider-instances` | 1.0.0 | ui, agent, system | read | none | global |
 | `content-space.observe-entry` | 1.0.0 | ui | read | none | global |
-| `content-space.observe-immutable-version` | 1.0.0 | ui, agent, system | read | none | global |
-| `content-space.open-portal-target` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
-| `content-space.resolve-portal-target` | 1.0.0 | ui, agent, system | read | none | global |
+| `content-space.observe-immutable-version` | 1.0.0 | ui | read | none | global |
+| `content-space.open-portal-target` | 1.0.0 | ui | external-write | confirmation | global |
+| `content-space.resolve-portal-target` | 1.0.0 | ui | read | none | global |
 | `content-space.upload-new` | 1.0.0 | ui | external-write | confirmation | global |
 | `controlled-process.create` | 1.0.0 | ui | external-write | none | workspace |
 | `controlled-process.dispose` | 1.0.0 | ui | external-write | none | resource |
@@ -19282,7 +19283,7 @@ Reads local canonical cloud Task projections and restart reconciliation state.
 
 ## `content-space.agent-create-folder`
 
-Creates one folder beneath the exact authorized Agent directory.
+Creates one folder beneath the exact authorized Agent directory. Before operating inside it, re-list this parent and use the exact new child Broker resource.
 
 - Version: `1.0.0`
 - Audiences: agent
@@ -19728,7 +19729,7 @@ Downloads one authorized file to a confirmed new Workspace-relative destination.
 
 ## `content-space.agent-list-entries`
 
-Lists direct children beneath one Human-authorized Agent directory scope.
+Lists direct children beneath one Human-authorized Agent directory scope. Use each returned Broker resource, never its descriptive Provider reference, as authority for child operations.
 
 - Version: `1.0.0`
 - Audiences: agent
@@ -20271,7 +20272,7 @@ Uploads one confirmed Workspace-relative file beneath the exact Agent directory.
 
 ## `content-space.authorize-agent-root`
 
-Confirms one Human-named personal or Team library as the bounded root for this Agent context.
+After Provider Instance and optional candidate-label discovery, confirms one exact Human-visible personal or Team library label and re-enumerates live state to establish the bounded root for this Agent context.
 
 - Version: `1.0.0`
 - Audiences: agent
@@ -21189,6 +21190,224 @@ Downloads bytes only to a Host-owned no-overwrite destination.
 }
 ```
 
+## `content-space.list-agent-root-candidates`
+
+After listing Provider Instances, lists one bounded page of Human-visible personal or Team library labels for Agent root selection. Follow nextCursor before concluding the set; output is selection data only and never authority or a Provider resource identity.
+
+- Version: `1.0.0`
+- Audiences: agent
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "page": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "limit"
+        ],
+        "type": "object"
+      },
+      "providerInstanceRef": {
+        "maxLength": 256,
+        "minLength": 3,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+        "type": "string"
+      },
+      "scope": {
+        "enum": [
+          "personal",
+          "shared"
+        ],
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "providerInstanceRef",
+      "scope",
+      "page"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "value": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "libraryLabel": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "readOnly": true,
+                  "required": [
+                    "libraryLabel"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 200,
+                "readOnly": true,
+                "type": "array"
+              },
+              "nextCursor": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "providerInstanceRef": {
+                "maxLength": 256,
+                "minLength": 3,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                "type": "string"
+              },
+              "scope": {
+                "enum": [
+                  "personal",
+                  "shared"
+                ],
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "providerInstanceRef",
+              "scope",
+              "items"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "value"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_input",
+                  "invalid_reference",
+                  "invalid_target",
+                  "composition_not_ready",
+                  "invalid_contribution",
+                  "incompatible_contract_version",
+                  "unknown_provider_instance",
+                  "missing_provider",
+                  "provider_unavailable",
+                  "rate_limited",
+                  "provider_contract_violation",
+                  "unauthorized",
+                  "blocked_by_contract",
+                  "bounds_exceeded",
+                  "conflict",
+                  "outcome_unknown",
+                  "cancelled",
+                  "source_unavailable",
+                  "destination_unavailable",
+                  "unsafe_portal_target",
+                  "immutable_version_unproven"
+                ],
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "after-human-action",
+                  "safe-with-same-invocation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retry"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "content-space",
+    "provider-neutral",
+    "external-content",
+    "provider",
+    "personal-library",
+    "team-library",
+    "root-selection",
+    "browse",
+    "folder",
+    "create",
+    "upload",
+    "download",
+    "authorize"
+  ],
+  "title": "List Agent Content Space Root Candidates"
+}
+```
+
 ## `content-space.list-containers`
 
 Lists one bounded container page from an explicit Provider Instance.
@@ -21727,7 +21946,7 @@ Lists one bounded page of direct children for an explicit container.
 
 ## `content-space.list-provider-instances`
 
-Lists explicit trusted Provider Instances supported by Content Space.
+First lists explicit trusted Provider Instances; use its returned providerInstanceRef before listing or authorizing an external personal or Team library root.
 
 - Version: `1.0.0`
 - Audiences: ui, agent, system
@@ -21876,9 +22095,16 @@ Lists explicit trusted Provider Instances supported by Content Space.
     "provider-neutral",
     "external-content",
     "provider",
+    "provider-instance",
     "personal-library",
     "team-library",
-    "browse"
+    "root-selection",
+    "browse",
+    "folder",
+    "create",
+    "upload",
+    "download",
+    "authorize"
   ],
   "title": "List Content Space Provider Instances"
 }
@@ -22274,7 +22500,7 @@ Reads provider-neutral metadata for an exact Content Space reference.
 Issues an ArtifactReference only from exact Provider proof.
 
 - Version: `1.0.0`
-- Audiences: ui, agent, system
+- Audiences: ui
 - Effect: `read`
 - Approval: none
 - Scope: global
@@ -22514,7 +22740,7 @@ Issues an ArtifactReference only from exact Provider proof.
 Opens one short-lived Host-validated target in the system browser.
 
 - Version: `1.0.0`
-- Audiences: ui, agent, system
+- Audiences: ui
 - Effect: `external-write`
 - Approval: confirmation
 - Scope: global
@@ -22654,7 +22880,7 @@ Opens one short-lived Host-validated target in the system browser.
 Converts a bounded HTTPS Provider target into a Host-owned handle.
 
 - Version: `1.0.0`
-- Audiences: ui, agent, system
+- Audiences: ui
 - Effect: `read`
 - Approval: none
 - Scope: global

@@ -317,6 +317,102 @@ describe('OpenContent client enrollment', () => {
     })
   })
 
+  it('creates a folder from a public parent GUID while keeping numeric Provider identities internal', async () => {
+    const publicInput = Object.freeze({
+      parentFolderGuid: 'team-folder-guid',
+      name: 'self-evolve'
+    })
+    const requestedPaths: string[] = []
+    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input))
+      requestedPaths.push(url.pathname)
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderByGuidOrId')) {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          token: 'fixture-token-value',
+          folderId: publicInput.parentFolderGuid
+        })
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: {
+            id: 2213,
+            folderGuid: publicInput.parentFolderGuid,
+            name: 'SciForge Research',
+            permission: 7
+          }
+        })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+        expect(body).toMatchObject({
+          token: 'fixture-token-value',
+          fid: publicInput.parentFolderGuid,
+          noCalcPerm: false
+        })
+        expect(decodeURIComponent(String(body.argsXml))).toContain('<PageNum>1</PageNum>')
+        expect(decodeURIComponent(String(body.argsXml))).toContain('<PageSize>100</PageSize>')
+        return jsonResponse(emptyFolderChildren(publicInput.parentFolderGuid, 2213, 1, 100))
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/TemplateCreate/CreateFolder')) {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+        expect(body).toEqual({
+          token: 'fixture-token-value',
+          name: publicInput.name,
+          remark: '',
+          code: '',
+          parentFolderId: '2213'
+        })
+        expect(JSON.stringify(body)).not.toContain(publicInput.parentFolderGuid)
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: { id: 3317, name: publicInput.name }
+        })
+      }
+      if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderInfoById')) {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          token: 'fixture-token-value',
+          folderId: 3317
+        })
+        return jsonResponse({
+          result: 0,
+          msg: '',
+          data: {
+            id: 3317,
+            folderGuid: 'created-folder-guid',
+            parentFolderId: 2213,
+            folderType: 2,
+            teamId: 19,
+            permission: 7,
+            childFolderCount: 0,
+            childFileCount: 0
+          }
+        })
+      }
+      throw new Error(`Unexpected request ${url}`)
+    })
+    const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
+
+    expect(Object.keys(publicInput).sort()).toEqual(['name', 'parentFolderGuid'])
+    const result = await client.createFolder({
+      token: 'fixture-token-value',
+      ...publicInput,
+      signal: new AbortController().signal
+    })
+
+    expect(result).toEqual({ folderGuid: 'created-folder-guid' })
+    expect(result).not.toHaveProperty('id')
+    expect(result).not.toHaveProperty('parentFolderId')
+    expect(JSON.stringify(result)).not.toContain('2213')
+    expect(JSON.stringify(result)).not.toContain('3317')
+    expect(requestedPaths).toEqual([
+      '/flatsdk/api/services/DocList/GetFolderByGuidOrId',
+      '/flatsdk/api/services/DocList/GetFolderChildren',
+      '/flatsdk/api/services/TemplateCreate/CreateFolder',
+      '/flatsdk/api/services/DocList/GetFolderInfoById'
+    ])
+  })
+
   it('uploads new bytes through main-site creation and bounded region transfer', async () => {
     const bytes = new TextEncoder().encode('fixture upload bytes')
     const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {

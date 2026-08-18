@@ -38,6 +38,7 @@ import {
   contentContainerReferenceCodec,
   contentFileReferenceCodec,
   contentSpaceCapabilityListResultSchema,
+  contentSpaceAgentRootCandidatePageResultSchema,
   contentSpaceAgentCreateFolderInputSchema,
   contentSpaceAgentDownloadInputSchema,
   contentSpaceAgentEntryPageResultSchema,
@@ -52,6 +53,7 @@ import {
   contentSpaceEntryPageResultSchema,
   contentSpaceFailure,
   contentSpaceListContainersInputSchema,
+  contentSpaceListAgentRootCandidatesInputSchema,
   contentSpaceListEntriesInputSchema,
   contentSpaceObserveEntryInputSchema,
   contentSpaceObserveImmutableVersionInputSchema,
@@ -426,16 +428,67 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.listProviderInstances,
         title: 'List Content Space Provider Instances',
-        description: 'Lists explicit trusted Provider Instances supported by Content Space.',
+        description: 'First lists explicit trusted Provider Instances; use its returned providerInstanceRef before listing or authorizing an external personal or Team library root.',
         effect: 'read',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'none' },
-        tags: ['external-content', 'provider', 'personal-library', 'team-library', 'browse'],
+        tags: [
+          'external-content',
+          'provider',
+          'provider-instance',
+          'personal-library',
+          'team-library',
+          'root-selection',
+          'browse',
+          'folder',
+          'create',
+          'upload',
+          'download',
+          'authorize'
+        ],
         inputSchema: zEmptyObject,
         outputSchema: contentSpaceProviderInstanceListResultSchema,
         handler: async (_input, context) => capabilityResult(() =>
           options.getService().listProviderInstances(call(context))
         )
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.listAgentRootCandidates,
+        title: 'List Agent Content Space Root Candidates',
+        description: 'After listing Provider Instances, lists one bounded page of Human-visible personal or Team library labels for Agent root selection. Follow nextCursor before concluding the set; output is selection data only and never authority or a Provider resource identity.',
+        audiences: ['agent'],
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        tags: [
+          'external-content',
+          'provider',
+          'personal-library',
+          'team-library',
+          'root-selection',
+          'browse',
+          'folder',
+          'create',
+          'upload',
+          'download',
+          'authorize'
+        ],
+        inputSchema: contentSpaceListAgentRootCandidatesInputSchema,
+        outputSchema: contentSpaceAgentRootCandidatePageResultSchema,
+        handler: async ({ providerInstanceRef, scope, page }, context) => capabilityResult(async () => {
+          const listed = await options.getService().listContainers({
+            providerInstanceRef,
+            page
+          }, call(context))
+          return Object.freeze({
+            providerInstanceRef,
+            scope,
+            items: Object.freeze(listed.items
+              .filter((item) => item.scope === scope)
+              .map((item) => Object.freeze({ libraryLabel: item.label }))),
+            ...(listed.nextCursor ? { nextCursor: listed.nextCursor } : {})
+          })
+        })
       }),
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.describeCapabilities,
@@ -569,7 +622,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot,
         title: 'Authorize Agent Content Space Root',
-        description: 'Confirms one Human-named personal or Team library as the bounded root for this Agent context.',
+        description: 'After Provider Instance and optional candidate-label discovery, confirms one exact Human-visible personal or Team library label and re-enumerates live state to establish the bounded root for this Agent context.',
         audiences: ['agent'],
         effect: 'external-write',
         approval: 'confirmation',
@@ -600,7 +653,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.agentListEntries,
         title: 'List Authorized Agent Content Space Entries',
-        description: 'Lists direct children beneath one Human-authorized Agent directory scope.',
+        description: 'Lists direct children beneath one Human-authorized Agent directory scope. Use each returned Broker resource, never its descriptive Provider reference, as authority for child operations.',
         audiences: ['agent'],
         scope: 'resource',
         resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
@@ -627,7 +680,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.agentCreateFolder,
         title: 'Create Folder in Authorized Agent Content Space',
-        description: 'Creates one folder beneath the exact authorized Agent directory.',
+        description: 'Creates one folder beneath the exact authorized Agent directory. Before operating inside it, re-list this parent and use the exact new child Broker resource.',
         audiences: ['agent'],
         scope: 'resource',
         resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
@@ -710,6 +763,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         id: CONTENT_SPACE_CAPABILITY_IDS.observeImmutableVersion,
         title: 'Observe Immutable Content Version',
         description: 'Issues an ArtifactReference only from exact Provider proof.',
+        audiences: ['ui'],
         effect: 'read',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'none' },
@@ -723,6 +777,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         id: CONTENT_SPACE_CAPABILITY_IDS.resolvePortalTarget,
         title: 'Resolve Content Space Portal Target',
         description: 'Converts a bounded HTTPS Provider target into a Host-owned handle.',
+        audiences: ['ui'],
         effect: 'read',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'none' },
@@ -757,6 +812,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         id: CONTENT_SPACE_CAPABILITY_IDS.openPortalTarget,
         title: 'Open Content Space Portal Target',
         description: 'Opens one short-lived Host-validated target in the system browser.',
+        audiences: ['ui'],
         effect: 'external-write',
         approval: 'confirmation',
         concurrency: { revision: 'none', idempotency: 'required' },
