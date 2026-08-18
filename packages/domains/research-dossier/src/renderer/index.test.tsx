@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { History, LibraryBig } from 'lucide-react'
+import type { ReactElement } from 'react'
 
 import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
@@ -10,7 +11,8 @@ import {
 import {
   createDomainRendererEntry,
   createResearchDossierCommand,
-  createResearchDossierResourceNavigationContribution
+  createResearchDossierResourceNavigationContribution,
+  type ResearchDossierRightPanelContribution
 } from './index.js'
 
 test('resolves exact generic resources to package-owned dossier activation', () => {
@@ -83,6 +85,19 @@ test('one distinct toolbar action opens the session-owned dossier panel', async 
   }])
 
   const entry = createDomainRendererEntry(host)
+  const panel = entry.contributions.find(
+    ({ id }) => id === RESEARCH_DOSSIER_RENDERER_RIGHT_PANEL_CONTRIBUTION.id
+  )?.value as ResearchDossierRightPanelContribution
+  const rendered = panel.render({
+    active: true,
+    className: 'dossier-panel',
+    focused: false,
+    onCollapse: () => undefined,
+    session: { id: 'session-1', workspaceRoot: '/workspace/lab' },
+    surfaceId: 'surface-dossier-a'
+  }) as ReactElement<Record<string, unknown>>
+  assert.equal(rendered.props.surfaceId, 'surface-dossier-a')
+
   const toolbar = entry.contributions.find(
     ({ id }) => id === RESEARCH_DOSSIER_RENDERER_TOOLBAR_ACTION_CONTRIBUTION.id
   )

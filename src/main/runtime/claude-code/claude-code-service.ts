@@ -51,8 +51,10 @@ import {
 } from '../agent-runtime/agent-tool-surface'
 import type {
   AgentRuntimeSubagentCancelInput,
+  AgentRuntimeSubagentDeleteInput,
   AgentRuntimeSubagentInspectInput,
   AgentRuntimeSubagentMessageInput,
+  AgentRuntimeSubagentResumeInput,
   AgentRuntimeSubagentResult,
   AgentRuntimeSubagentSpawnInput,
   AgentRuntimeSubagentTranscriptEntry,
@@ -597,8 +599,19 @@ export class ClaudeCodeRuntimeService {
       title: input.label || firstLineTitle(input.prompt)
     })
     if (!threadResult.ok) throw new Error(threadResult.message)
+    return this.runClaudeSubagentTurn(input, threadResult.thread.id)
+  }
+
+  async resumeSubagent(input: AgentRuntimeSubagentResumeInput): Promise<AgentRuntimeSubagentResult> {
+    return this.runClaudeSubagentTurn(input, input.threadRef.threadId)
+  }
+
+  private async runClaudeSubagentTurn(
+    input: AgentRuntimeSubagentSpawnInput,
+    threadId: string
+  ): Promise<AgentRuntimeSubagentResult> {
     const turnResult = await this.startTurn({
-      threadId: threadResult.thread.id,
+      threadId,
       text: input.prompt,
       displayText: input.prompt,
       workspace: input.workspace,
@@ -619,7 +632,7 @@ export class ClaudeCodeRuntimeService {
       turnId: active.turnId
     })
     await input.appendTranscript({
-      id: `${input.childId}-thread-start`,
+      id: `${input.childId}-${active.turnId}-thread-start`,
       kind: 'event',
       summary: 'Claude child thread started',
       text: `Thread: ${active.threadId}`,
@@ -721,6 +734,18 @@ export class ClaudeCodeRuntimeService {
     if (!active) return
     const result = await this.interruptTurn(active.threadId, active.turnId)
     if (!result.ok) throw new Error(result.message)
+  }
+
+  async deleteSubagent(input: AgentRuntimeSubagentDeleteInput): Promise<void> {
+    const active = this.activeSubagents.get(input.childId)
+    if (active) {
+      const interrupted = await this.interruptTurn(active.threadId, active.turnId)
+      if (!interrupted.ok) throw new Error(interrupted.message)
+    }
+    const threadId = input.threadRef?.threadId
+    if (!threadId) return
+    const deleted = await this.deleteThread(threadId)
+    if (!deleted.ok) throw new Error(deleted.message)
   }
 
   updateTurnGovernanceSnapshot(input: AgentRuntimeTurnGovernanceSnapshotInput): void {
@@ -1971,6 +1996,10 @@ export class ClaudeCodeRuntimeService {
     const child = normalizeClaudeChild(event.child, event.threadId)
     if (!child) return
     const key = childStateKey(child.parentThreadId, child.id)
+    if (child.metadata?.lifecycleOperation === 'delete') {
+      this.childState.delete(key)
+      return
+    }
     this.childState.set(key, mergeChild(this.childState.get(key), child))
   }
 

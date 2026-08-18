@@ -28,7 +28,8 @@ const REQUIRED_LOOK_INPUT_FIELDS = [
   'intent',
   'sourceRef',
   'targetRef',
-  'task'
+  'task',
+  'timeoutMs'
 ]
 const REMOVED_AGENT_PATHS = [
   'annotation.sidecar.read',
@@ -354,7 +355,7 @@ async function loadApplicationCapabilityModel() {
     lookSchema?.additionalProperties !== false
   ) {
     throw new GovernanceError(
-      'sciforge_look must expose only sourceRef, targetRef, frame, task, intent, and the typed capture plan with strict additional-property rejection. Workspace files enter through the canonical preview resourceRef pipeline.'
+      'sciforge_look must expose only sourceRef, targetRef, frame, task, intent, timeoutMs, and the typed capture plan with strict additional-property rejection. Workspace files enter through the canonical preview resourceRef pipeline.'
     )
   }
   return { descriptors, migratedDomains }

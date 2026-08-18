@@ -20,7 +20,7 @@ export function SessionRightPanelStack({
 }: Props): ReactElement {
   return (
     <div className="relative h-full min-h-0 w-full overflow-hidden" data-session-right-panel-stack>
-      {workspaces.filter((workspace) => workspace.mode !== null).map((workspace) => {
+      {workspaces.filter((workspace) => workspace.panes.length > 0).map((workspace) => {
         const active = workspace.sessionId === activeSessionId
         return (
           <section
@@ -29,7 +29,8 @@ export function SessionRightPanelStack({
             aria-hidden={!active}
             inert={!active}
             data-session-right-panel-workspace={workspace.sessionId}
-            data-right-panel-mode={workspace.mode ?? undefined}
+            data-right-panel-pane-count={workspace.panes.length}
+            data-right-panel-focused-pane-id={workspace.focusedPaneId ?? undefined}
             data-active={active ? 'true' : 'false'}
           >
             <RightPanelSessionScope sessionId={workspace.sessionId}>

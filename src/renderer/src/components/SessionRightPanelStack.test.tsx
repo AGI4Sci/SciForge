@@ -5,15 +5,24 @@ import { describe, expect, it } from 'vitest'
 import { RIGHT_PANEL_MODES, type RightPanelMode } from './chat/WorkbenchTopBar'
 import { SessionRightPanelStack } from './SessionRightPanelStack'
 import {
+  createSessionRightPanelPane,
   createSessionRightPanelWorkspace,
   type SessionRightPanelWorkspace
 } from './session-right-panel-workspaces'
 
 function workspace(
   sessionId: string,
-  mode: RightPanelMode
+  modes: readonly Exclude<RightPanelMode, null>[]
 ): SessionRightPanelWorkspace {
-  return { ...createSessionRightPanelWorkspace(sessionId), mode }
+  const panes = modes.map((mode, index) => ({
+    ...createSessionRightPanelPane({ mode }),
+    paneId: `${sessionId}-pane-${index + 1}`
+  }))
+  return {
+    ...createSessionRightPanelWorkspace(sessionId),
+    panes,
+    focusedPaneId: panes[panes.length - 1]?.paneId ?? null
+  }
 }
 
 function renderStack(
@@ -26,7 +35,7 @@ function renderStack(
     renderWorkspace: (entry, active) => createElement('div', {
       'data-rendered-session': entry.sessionId,
       'data-rendered-active': active ? 'true' : 'false'
-    }, entry.mode)
+    }, entry.panes.map((pane) => pane.mode).join(','))
   }))
 }
 
@@ -42,8 +51,8 @@ describe('SessionRightPanelStack', () => {
   it('keeps resident surfaces mounted and only switches foreground semantics', () => {
     const [firstMode, secondMode] = RIGHT_PANEL_MODES
     const workspaces = [
-      workspace('session-1', firstMode),
-      workspace('session-2', secondMode)
+      workspace('session-1', [firstMode, secondMode]),
+      workspace('session-2', [secondMode])
     ]
 
     const firstFocused = renderStack(workspaces, 'session-1')
@@ -51,12 +60,14 @@ describe('SessionRightPanelStack', () => {
     const secondInactive = surfaceTag(firstFocused, 'session-2')
 
     expect(firstFocused.match(/data-session-right-panel-workspace=/g)).toHaveLength(2)
-    expect(firstActive).toContain(`data-right-panel-mode="${firstMode}"`)
+    expect(firstActive).toContain('data-right-panel-pane-count="2"')
+    expect(firstActive).toContain('data-right-panel-focused-pane-id="session-1-pane-2"')
     expect(firstActive).toContain('data-active="true"')
     expect(firstActive).toContain('aria-hidden="false"')
     expect(firstActive).not.toContain(' inert=""')
     expect(firstActive).not.toContain('invisible')
-    expect(secondInactive).toContain(`data-right-panel-mode="${secondMode}"`)
+    expect(secondInactive).toContain('data-right-panel-pane-count="1"')
+    expect(secondInactive).toContain('data-right-panel-focused-pane-id="session-2-pane-1"')
     expect(secondInactive).toContain('data-active="false"')
     expect(secondInactive).toContain('aria-hidden="true"')
     expect(secondInactive).toContain('inert=""')
@@ -81,17 +92,18 @@ describe('SessionRightPanelStack', () => {
     expect(secondFocused).toContain('data-rendered-session="session-2" data-rendered-active="true"')
   })
 
-  it('omits only closed workspaces whose mode is null', () => {
+  it('omits only closed workspaces whose pane collection is empty', () => {
     const [openMode] = RIGHT_PANEL_MODES
     const markup = renderStack([
-      workspace('closed-session', null),
-      workspace('open-session', openMode)
+      workspace('closed-session', []),
+      workspace('open-session', [openMode])
     ], 'open-session')
 
     expect(markup).not.toContain('data-session-right-panel-workspace="closed-session"')
     expect(markup).not.toContain('data-rendered-session="closed-session"')
     expect(markup).toContain('data-session-right-panel-workspace="open-session"')
-    expect(markup).toContain(`data-right-panel-mode="${openMode}"`)
+    expect(markup).toContain('data-right-panel-pane-count="1"')
+    expect(markup).toContain('data-right-panel-focused-pane-id="open-session-pane-1"')
     expect(markup).toContain('data-rendered-session="open-session"')
   })
 })

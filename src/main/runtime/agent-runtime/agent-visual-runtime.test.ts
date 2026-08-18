@@ -300,8 +300,13 @@ describe('AgentVisualRuntime', () => {
 
     const looked = await runtime.look({
       targetRef: `target_${'t'.repeat(24)}`,
-      task: 'Locate the method overview.'
+      task: 'Locate the method overview.',
+      timeoutMs: 270_000
     }, context)
+    expect(inspector).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 270_000 }),
+      { signal: context.signal }
+    )
     expect(captureFrame).toHaveBeenCalledWith('bound-surface', {
       targetRef: `target_${'t'.repeat(24)}`
     })
@@ -498,6 +503,21 @@ describe('AgentVisualRuntime', () => {
   })
 
   it.each([
+    {
+      name: 'adaptive end-to-end deadline',
+      failure: {
+        status: 'visual_inspection_unavailable',
+        message: 'Visual inspection exceeded the configured 180000 ms end-to-end deadline.',
+        code: 'visual_inspection_timeout',
+        failureClass: 'timeout',
+        retryable: true,
+        providerStage: 'model_router_deadline',
+        recovery: {
+          action: 'retry_visual_inspection',
+          instruction: 'Retry sciforge_look once with timeoutMs=270000.'
+        }
+      }
+    },
     {
       name: 'transient provider unavailability',
       failure: {
@@ -808,7 +828,7 @@ describe('AgentVisualRuntime', () => {
         imagePath: join(canonicalFrameDirectory, `frame-${digest}.png`),
         mimeType: 'image/png'
       }]
-    }))
+    }), { signal: context.signal })
     expect(looked.proof.sourceRef).toBe(sourceRef)
 
     const captured = await runtime.capture({

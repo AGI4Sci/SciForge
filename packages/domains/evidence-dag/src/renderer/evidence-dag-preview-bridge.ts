@@ -99,6 +99,7 @@ export async function handleEvidenceDagPreviewMessage(input: Readonly<{
   frameWindow: WindowProxy | null
   frameUrl: string
   sessionId: string
+  surfaceId: string
   runtimeId?: string
   threadId?: string
   committedSnapshotDigest?: string
@@ -193,6 +194,7 @@ export async function handleEvidenceDagPreviewMessage(input: Readonly<{
   const target: DomainWorkspacePreviewTarget = {
     path: resolved.path,
     sessionId: input.sessionId,
+    surfaceId: input.surfaceId,
     workspaceRoot: resolved.workspaceRoot,
     ...(anchor ? { anchor } : {}),
     ...(anchor?.kind === 'text'

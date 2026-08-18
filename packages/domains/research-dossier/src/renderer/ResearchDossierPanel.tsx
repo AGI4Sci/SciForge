@@ -180,6 +180,7 @@ export type ResearchDossierPanelProps = Readonly<{
   active: boolean
   className?: string
   onCollapse: () => void
+  surfaceId: string
   workbench?: DomainRendererWorkbenchHost
   workspacePreview?: DomainRendererWorkspacePreviewHost
 }>
@@ -191,6 +192,7 @@ export function ResearchDossierPanel({
   active,
   className = '',
   onCollapse,
+  surfaceId,
   workbench,
   workspacePreview
 }: ResearchDossierPanelProps): ReactElement {
@@ -532,6 +534,7 @@ export function ResearchDossierPanel({
     workbench.openRightPanel({
       contributionId: 'research-dossier.workbench-right-panel',
       sessionId: session.id,
+      surfaceId,
       activation: moveResearchDossierActivationToPage(
         parsedActivation.value,
         page,
@@ -545,6 +548,7 @@ export function ResearchDossierPanel({
     workbench.openRightPanel({
       contributionId: 'research-dossier.workbench-right-panel',
       sessionId: session.id,
+      surfaceId,
       activation: createResearchDossierActivation({
         kind: 'artifact-version',
         versionId: ref.versionId
@@ -582,6 +586,7 @@ export function ResearchDossierPanel({
         previewRef: ref,
         recordDigest: exactRecordDigest(state.record),
         sessionId: session.id,
+        surfaceId,
         workspaceRoot: session.workspaceRoot,
         target: parsedActivation.value.target,
         page: parsedActivation.value.page,

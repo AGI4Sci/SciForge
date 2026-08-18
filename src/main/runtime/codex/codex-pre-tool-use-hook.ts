@@ -47,8 +47,11 @@ export function createCodexPreToolUseHookDefinition(options: {
     options.launch,
     CODEX_PRE_TOOL_USE_NODE_ENTRY
   )
-  const emergencyDenyJson = JSON.stringify(codexPreToolUseFailureClosedOutput(
-    'SciForge hook launcher could not start.'
+  const emergencyDenyFormat = JSON.stringify(codexPreToolUseFailureClosedOutput(
+    'SciForge hook launcher failed with shell status %s before the supervisor returned a response.'
+  ))
+  const emergencyDenyWindowsJson = JSON.stringify(codexPreToolUseFailureClosedOutput(
+    'SciForge hook launcher command failed before the supervisor returned a response.'
   ))
   return {
     sourcePath: join(options.codexHome, 'hooks.json'),
@@ -60,12 +63,12 @@ export function createCodexPreToolUseHookDefinition(options: {
         shellQuote(entry)
       ].join(' '),
       '||',
-      `printf '%s\\n' ${shellQuote(emergencyDenyJson)}`
+      `{ status=$?; printf ${shellQuote(`${emergencyDenyFormat}\n`)} "$status"; }`
     ].join(' '),
     commandWindows: [
       `(set "ELECTRON_RUN_AS_NODE=1"&& ${windowsQuote(executable)} ${windowsQuote(entry)})`,
       '||',
-      `echo ${emergencyDenyJson}`
+      `echo ${emergencyDenyWindowsJson}`
     ].join(' ')
   }
 }

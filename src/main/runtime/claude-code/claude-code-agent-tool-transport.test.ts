@@ -139,7 +139,25 @@ describe('Claude Code agent tool transport', () => {
     })
 
     await expect(handler?.({}, {})).resolves.toEqual({
-      content: [{ type: 'text', text: 'unknown_resource_ref: The resource reference expired.' }],
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          tool: CAPABILITY_AGENT_TOOL_NAMES.observe,
+          status: 'failed',
+          error: {
+            code: 'unknown_resource_ref',
+            message: 'The resource reference expired.',
+            failureClass: 'stale_resource',
+            retryable: false,
+            providerStage: 'evidence_validation',
+            resourceIdentity: 'resource:expired',
+            recovery: {
+              action: 'reobserve',
+              instruction: 'Observe the current resource before invoking another operation.'
+            }
+          }
+        }, null, 2)
+      }],
       structuredContent: {
         error: {
           code: 'unknown_resource_ref',

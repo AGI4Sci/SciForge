@@ -176,3 +176,6 @@
   dynamically, requiring a linked capture, final artifact inspection, and
   durable publication marker; region capture additionally requires
   `intent=locate`.
+- [x] 10.5 Give `sciforge_look` one bounded adaptive end-to-end `timeoutMs`,
+  return deadline failures distinctly from Router transport failures, and
+  provide the exact larger timeout for the single governed retry.

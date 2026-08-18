@@ -376,6 +376,18 @@ describe('Codex child summary index', () => {
         summary: 'Done'
       })
     ])
+    await service.publishSyntheticEvent({
+      runtimeId: 'codex',
+      threadId: 'parent-thread',
+      kind: 'child_event',
+      child: {
+        ...child,
+        status: 'completed',
+        metadata: { lifecycleOperation: 'delete' },
+        updatedAt: '2026-08-09T00:00:02.000Z'
+      }
+    })
+    await expect(service.listStoredThreadChildren('parent-thread')).resolves.toEqual([])
     expect(readSpy).toHaveBeenCalledTimes(1)
   })
 })
@@ -2615,7 +2627,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     expect(ordinaryResult).not.toHaveProperty('completionReceipts')
   })
 
-  it('preserves structured native visual recovery metadata in Codex tool receipts', async () => {
+  it('preserves the adaptive visual timeout through Codex tool receipts', async () => {
     const storageRoot = await tempRoot()
     const client = controllableClient()
     const broadcast = captureBroadcastEvents()
@@ -2630,15 +2642,15 @@ describe('CodexRuntimeService compatibility operations', () => {
         }
       ],
       call: async () => {
-        throw Object.assign(new Error('The bound surface is hidden.'), {
-          code: 'visual_layout_owner_changed',
-          failureClass: 'layout_unavailable',
-          retryable: false,
-          providerStage: 'visual_surface_binding',
+        throw Object.assign(new Error('Visual inspection exceeded the configured 180000 ms end-to-end deadline.'), {
+          code: 'visual_inspection_timeout',
+          failureClass: 'timeout',
+          retryable: true,
+          providerStage: 'model_router_deadline',
           resourceIdentity: 'visual:current',
           recovery: {
-            action: 'restore_bound_surface',
-            instruction: 'Restore the task-bound surface before starting a new visual call.'
+            action: 'retry_visual_inspection',
+            instruction: 'Retry sciforge_look once with the same source and task using timeoutMs=270000.'
           }
         })
       }
@@ -2668,11 +2680,15 @@ describe('CodexRuntimeService compatibility operations', () => {
       })
     ).resolves.toMatchObject({
       success: false,
-      errorCode: 'visual_layout_owner_changed',
-      failureClass: 'layout_unavailable',
-      retryable: false,
-      recoveryGuidance: 'Restore the task-bound surface before starting a new visual call.',
-      providerStage: 'visual_surface_binding',
+      contentItems: [{
+        type: 'inputText',
+        text: expect.stringContaining('timeoutMs=270000')
+      }],
+      errorCode: 'visual_inspection_timeout',
+      failureClass: 'timeout',
+      retryable: true,
+      recoveryGuidance: 'Retry sciforge_look once with the same source and task using timeoutMs=270000.',
+      providerStage: 'model_router_deadline',
       resourceIdentity: 'visual:current'
     })
     expect(broadcast).toHaveBeenCalledWith(
@@ -2680,10 +2696,10 @@ describe('CodexRuntimeService compatibility operations', () => {
         tool: expect.objectContaining({
           status: 'error',
           meta: expect.objectContaining({
-            errorCode: 'visual_layout_owner_changed',
-            retryable: false,
-            recoveryGuidance: 'Restore the task-bound surface before starting a new visual call.',
-            providerStage: 'visual_surface_binding'
+            errorCode: 'visual_inspection_timeout',
+            retryable: true,
+            recoveryGuidance: 'Retry sciforge_look once with the same source and task using timeoutMs=270000.',
+            providerStage: 'model_router_deadline'
           })
         })
       })
@@ -2699,6 +2715,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     vi.mocked(queued.client.startTurn)
       .mockResolvedValueOnce({ turn: { id: 'parent-turn' } })
       .mockResolvedValueOnce({ turn: { id: 'child-turn' } })
+      .mockResolvedValueOnce({ turn: { id: 'child-resumed-turn' } })
     const service = new CodexRuntimeService({
       settings: async () => settings(),
       storageRoot,
@@ -2778,6 +2795,52 @@ describe('CodexRuntimeService compatibility operations', () => {
         signal: new AbortController().signal
       })
     ).resolves.toMatchObject({ state: 'missing' })
+
+    const resumedSpawned = vi.fn()
+    const resumedCompletion = service.resumeSubagent({
+      childId: 'child-1',
+      parentThreadId: 'parent-thread',
+      parentTurnId: 'parent-turn',
+      prompt: 'Continue the interrupted review.',
+      threadRef: {
+        runtime: 'codex',
+        threadId: 'child-codex-thread',
+        turnId: 'child-turn'
+      },
+      signal: new AbortController().signal,
+      appendTranscript: vi.fn(async () => undefined),
+      onSpawned: resumedSpawned
+    })
+    await vi.waitFor(() => expect(resumedSpawned).toHaveBeenCalledWith({
+      runtime: 'codex',
+      threadId: 'child-codex-thread',
+      turnId: 'child-resumed-turn'
+    }))
+    queued.push({
+      type: 'event',
+      channel: CODEX_MAIN_IPC_CHANNELS.event,
+      payload: {
+        method: 'turn/completed',
+        params: { threadId: 'child-codex-thread', turnId: 'child-resumed-turn' }
+      }
+    })
+    await expect(resumedCompletion).resolves.toMatchObject({
+      threadRef: {
+        runtime: 'codex',
+        threadId: 'child-codex-thread',
+        turnId: 'child-resumed-turn'
+      }
+    })
+    await service.deleteSubagent({
+      childId: 'child-1',
+      parentThreadId: 'parent-thread',
+      parentTurnId: 'parent-turn',
+      threadRef: { runtime: 'codex', threadId: 'child-codex-thread' },
+      signal: new AbortController().signal
+    })
+    expect(queued.client.request).toHaveBeenCalledWith('thread/archive', {
+      threadId: 'child-codex-thread'
+    })
     queued.close()
   })
 

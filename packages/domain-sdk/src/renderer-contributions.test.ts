@@ -29,7 +29,8 @@ import {
   isDomainRendererWorkbenchSurfaceValue,
   isDomainRendererWorkbenchToolbarActionValue,
   type DomainRendererCommandHandler,
-  type DomainRendererCommandInvocation
+  type DomainRendererCommandInvocation,
+  type DomainRendererWorkbenchRightPanelRenderContext
 } from './renderer-contributions.js'
 
 describe('renderer extension contribution contracts', () => {
@@ -190,6 +191,21 @@ describe('renderer extension contribution contracts', () => {
     }), false)
   })
 
+  it('keeps mounted offscreen right-panel renderers viewport-inactive', () => {
+    const offscreenPane: DomainRendererWorkbenchRightPanelRenderContext = {
+      active: false,
+      focused: false,
+      surfaceId: 'right-panel-surface-2',
+      className: 'h-full',
+      session: { id: 'session-1' },
+      onCollapse: () => undefined
+    }
+
+    assert.equal(offscreenPane.active, false)
+    assert.equal(offscreenPane.focused, false)
+    assert.equal(offscreenPane.surfaceId, 'right-panel-surface-2')
+  })
+
   it('keeps exact-resource navigation generic and rejects ambiguous contracts', () => {
     assert.deepEqual(domainRendererResourceNavigationContractSchema.parse({
       resourceKinds: ['artifact-version', 'compute-run'],
@@ -220,6 +236,7 @@ describe('renderer extension contribution contracts', () => {
     }), z.ZodError)
     assert.deepEqual(domainWorkbenchOpenResourceInputSchema.parse({
       sessionId: ' session-1 ',
+      placement: 'new',
       resource: {
         resourceKind: ' artifact-version ',
         resourceId: ' artifact-version:figure:2 ',
@@ -230,6 +247,7 @@ describe('renderer extension contribution contracts', () => {
       }
     }), {
       sessionId: 'session-1',
+      placement: 'new',
       resource: {
         resourceKind: 'artifact-version',
         resourceId: 'artifact-version:figure:2',
@@ -239,6 +257,30 @@ describe('renderer extension contribution contracts', () => {
         }
       }
     })
+    assert.deepEqual(domainWorkbenchOpenResourceInputSchema.parse({
+      sessionId: 'session-1',
+      surfaceId: 'right-panel-surface-2',
+      resource: {
+        resourceKind: 'artifact-version',
+        resourceId: 'artifact-version:figure:2'
+      }
+    }), {
+      sessionId: 'session-1',
+      surfaceId: 'right-panel-surface-2',
+      resource: {
+        resourceKind: 'artifact-version',
+        resourceId: 'artifact-version:figure:2'
+      }
+    })
+    assert.throws(() => domainWorkbenchOpenResourceInputSchema.parse({
+      sessionId: 'session-1',
+      placement: 'new',
+      surfaceId: 'right-panel-surface-2',
+      resource: {
+        resourceKind: 'artifact-version',
+        resourceId: 'artifact-version:figure:2'
+      }
+    }), z.ZodError)
     assert.throws(() => domainWorkbenchOpenResourceInputSchema.parse({
       sessionId: 'session-1',
       resource: {

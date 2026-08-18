@@ -111,9 +111,15 @@ export function resolveResourceNavigation(
     const target = registered.contribution.resolve(parsed.data)
     if (!target) return null
     const contributionId = registered.contribution.target.contributionId
+    const rightPanelTarget = 'surfaceId' in parsed.data
+      ? { surfaceId: parsed.data.surfaceId }
+      : parsed.data.placement
+        ? { placement: parsed.data.placement }
+        : {}
     return Object.freeze({
       contributionId,
       sessionId: parsed.data.sessionId,
+      ...rightPanelTarget,
       ...(target.activation
         ? {
             activation: Object.freeze({

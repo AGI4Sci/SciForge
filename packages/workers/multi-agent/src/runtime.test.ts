@@ -661,6 +661,75 @@ test('runtime inspects, messages, and explicitly cancels a running child through
   assert.deepEqual(terminationReasons, ['parent_cancel'])
 })
 
+test('runtime resumes an interrupted child with the same identity and provider thread', async () => {
+  let execution = 0
+  const runtime = new MultiAgentRuntime({
+    store: new InMemoryMultiAgentStore(),
+    idGenerator: () => 'child-resumable',
+    executor: async (input) => {
+      execution += 1
+      if (execution === 1) {
+        await input.setThreadRef({ runtime: 'codex', threadId: 'provider-child-thread', turnId: 'turn-1' })
+        input.registerLifecycleControl({
+          sendMessage: async () => ({ established: true }),
+          inspect: async () => ({ state: 'active', observedAt: new Date().toISOString() }),
+          terminate: async () => undefined
+        })
+        return waitForAbort(input.signal)
+      }
+      assert.equal(input.resumeThreadRef?.threadId, 'provider-child-thread')
+      assert.equal(input.prompt, 'Continue the interrupted review.')
+      return {
+        summary: 'Resumed work completed.',
+        threadRef: { runtime: 'codex', threadId: 'provider-child-thread', turnId: 'turn-2' }
+      }
+    }
+  })
+
+  const started = await runtime.startChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-1',
+    prompt: 'Review the paper.'
+  })
+  assert.equal((await runtime.cancelChild('thread-1', started.id))?.status, 'aborted')
+
+  const resumed = await runtime.resumeChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-2',
+    childId: started.id,
+    prompt: 'Continue the interrupted review.'
+  })
+  assert.equal(resumed.id, started.id)
+  assert.equal(resumed.status, 'running')
+  assert.equal(resumed.attempt, 2)
+
+  const completed = await runtime.waitForChild('thread-1', started.id, { timeoutMs: 50 })
+  assert.equal(completed?.record.status, 'completed')
+  assert.equal(completed?.record.threadRef?.turnId, 'turn-2')
+  assert.equal(completed?.record.summary, 'Resumed work completed.')
+})
+
+test('runtime permanently deletes a child and publishes a delete refresh event', async () => {
+  const events: Array<{ operation?: string; childId: string }> = []
+  const runtime = new MultiAgentRuntime({
+    store: new InMemoryMultiAgentStore(),
+    idGenerator: () => 'child-delete',
+    executor: async () => ({ summary: 'Done.' }),
+    events: {
+      onChildEvent: (event) => { events.push(event) }
+    }
+  })
+  const completed = await runtime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-1',
+    prompt: 'Disposable task.'
+  })
+
+  assert.equal((await runtime.deleteChild('thread-1', completed.id))?.id, completed.id)
+  assert.equal(await runtime.child('thread-1', completed.id), null)
+  assert.equal(events.at(-1)?.operation, 'delete')
+})
+
 test('parent abort uses lifecycle termination control', async () => {
   const parent = new AbortController()
   const entered = deferred<void>()

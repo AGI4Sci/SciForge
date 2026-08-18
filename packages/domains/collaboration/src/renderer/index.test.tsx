@@ -39,7 +39,9 @@ test('renderer entry owns panel, command, toolbar, and translations', () => {
   const rendered = panel.render({
     active: true,
     className: 'fixture-panel',
+    focused: true,
     onCollapse: () => undefined,
+    surfaceId: 'surface-collaboration-a',
     session: { id: 'thread-1', runtimeId: 'codex' }
   }) as ReactElement<Record<string, unknown>>
   assert.equal(rendered.props.className, 'fixture-panel')

@@ -169,8 +169,15 @@ type LookInput = {
   task: string
   intent?: 'describe' | 'ocr' | 'locate' | 'quality-review'
   capture?: 'snapshot' | 'region'
+  timeoutMs?: number
 }
 ```
+
+`timeoutMs` is the single bounded end-to-end inspection budget. It defaults to
+180 seconds and accepts 30–600 seconds. A typed deadline failure reports the
+budget that expired and an exact larger value for the one governed retry, so
+the agent can adapt latency without changing the source, task, or capture plan.
+Provider-stage failures returned before that deadline remain unchanged.
 
 An existing workspace file must first be opened through the canonical Workspace
 Preview operation. The returned `resourceRef` is the only file-to-visual handoff

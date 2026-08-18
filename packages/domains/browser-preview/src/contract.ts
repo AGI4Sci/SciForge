@@ -6,6 +6,7 @@ export const DEFAULT_BROWSER_PREVIEW_URL = 'http://localhost:5173/'
 
 export const BROWSER_PREVIEW_CAPABILITY_IDS = Object.freeze({
   open: 'browser-preview.open',
+  close: 'browser-preview.close',
   read: 'browser-preview.read',
   navigate: 'browser-preview.navigate',
   back: 'browser-preview.back',
@@ -25,12 +26,18 @@ export const browserCapabilityResourceHandleSchema = z.object({
 
 export const browserOpenInputSchema = z.object({
   sessionId: z.string().trim().min(1).max(256),
+  surfaceId: z.string().trim().min(1).max(256),
   url: z.string().trim().min(1).max(4096).default(DEFAULT_BROWSER_PREVIEW_URL)
 }).strict()
 
 export const browserOpenOutputSchema = z.object({
   resource: browserCapabilityResourceHandleSchema,
-  sessionId: z.string().trim().min(1).max(256)
+  sessionId: z.string().trim().min(1).max(256),
+  surfaceId: z.string().trim().min(1).max(256)
+}).strict()
+
+export const browserCloseOutputSchema = z.object({
+  closed: z.literal(true)
 }).strict()
 
 export const browserEmptyInputSchema = z.object({}).strict()
@@ -76,6 +83,7 @@ export const browserPageStateSchema = z.object({
   trust: z.literal(BROWSER_PREVIEW_TRUST),
   safetyNotice: z.string().min(1).max(1000),
   sessionId: z.string().min(1).max(256),
+  surfaceId: z.string().min(1).max(256),
   url: z.string().max(4096),
   title: z.string().max(1024),
   status: z.enum(['starting', 'ready', 'loading', 'error', 'closed']),

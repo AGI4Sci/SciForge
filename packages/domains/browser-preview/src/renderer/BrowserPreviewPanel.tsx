@@ -34,16 +34,20 @@ export function BrowserPreviewPanel({
   active,
   className = '',
   client,
+  focused,
   onCollapse,
   sessionId,
+  surfaceId,
   visibleContext,
   workspaceRoot
 }: Readonly<{
   active: boolean
   className?: string
   client: BrowserPreviewCapabilityClient
+  focused: boolean
   onCollapse: () => void
   sessionId: string
+  surfaceId: string
   visibleContext: DomainRendererVisibleContextHost
   workspaceRoot: string
 }>): ReactElement {
@@ -82,10 +86,17 @@ export function BrowserPreviewPanel({
     resourceRef.current = null
     void client.open({
       sessionId,
+      surfaceId,
       url: DEFAULT_BROWSER_PREVIEW_URL,
       ...(workspaceRoot ? { workspaceId: workspaceRoot } : {})
-    }).then((resource) => {
-      if (cancelled) return
+    }).then(async (resource) => {
+      if (cancelled) {
+        await client.close({
+          resource,
+          ...(workspaceRoot ? { workspaceId: workspaceRoot } : {})
+        }).catch(() => undefined)
+        return
+      }
       resourceRef.current = resource
       return observe()
     }).catch((cause) => {
@@ -96,9 +107,16 @@ export function BrowserPreviewPanel({
     })
     return () => {
       cancelled = true
+      const resource = resourceRef.current
       resourceRef.current = null
+      if (resource) {
+        void client.close({
+          resource,
+          ...(workspaceRoot ? { workspaceId: workspaceRoot } : {})
+        }).catch(() => undefined)
+      }
     }
-  }, [client, observe, sessionId, workspaceRoot])
+  }, [client, observe, sessionId, surfaceId, workspaceRoot])
 
   useEffect(() => {
     if (!active) return undefined
@@ -111,7 +129,7 @@ export function BrowserPreviewPanel({
 
   useEffect(() => {
     if (!active || !observation) return undefined
-    const componentId = `browser-preview.${sessionId}`
+    const componentId = browserPreviewComponentId(sessionId, surfaceId)
     const unregisterComponent = visibleContext.registerComponent({
       id: componentId,
       region: 'right-sidebar',
@@ -131,11 +149,13 @@ export function BrowserPreviewPanel({
         },
         metadata: {
           trust: observation.state.trust,
-          sessionId
+          sessionId,
+          surfaceId
         }
       }],
       state: {
         sessionId,
+        surfaceId,
         url: observation.state.url,
         title: observation.state.title,
         status: observation.state.status,
@@ -151,7 +171,7 @@ export function BrowserPreviewPanel({
         id: 'browser.viewport',
         kind: 'component',
         contentType: 'text/html',
-        active: true,
+        active: focused,
         redact: true,
         metadata: {
           reason: 'Browser visuals are read through the masked Playwright page resource.'
@@ -163,7 +183,7 @@ export function BrowserPreviewPanel({
       unregisterTarget()
       unregisterComponent()
     }
-  }, [active, observation, sessionId, t, visibleContext])
+  }, [active, focused, observation, sessionId, surfaceId, t, visibleContext])
 
   const mutationOptions = useCallback(() => {
     const resource = resourceRef.current
@@ -301,6 +321,13 @@ export function BrowserPreviewPanel({
       ) : null}
     </section>
   )
+}
+
+export function browserPreviewComponentId(
+  sessionId: string,
+  surfaceId: string
+): string {
+  return `browser-preview:session:${encodeURIComponent(sessionId)}:surface:${encodeURIComponent(surfaceId)}`
 }
 
 function messageFrom(error: unknown): string {

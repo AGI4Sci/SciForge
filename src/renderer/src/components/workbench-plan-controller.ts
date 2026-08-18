@@ -7,7 +7,6 @@ import { buildPlanBuildPrompt, buildRefinePlanPrompt } from '../plan/plan-prompt
 import { buildSddVerifyPrompt } from '../sdd/sdd-verify-prompt'
 import { sddDraftRelativePathForPlanPath, sddDraftTraceRelativePath } from '@shared/sdd'
 import { buildSddTraceSnapshot, parseSddRequirementBlocks } from '@shared/sdd-trace'
-import { CODE_PANEL_PREFERRED } from './workbench-layout'
 import {
   createGuiPlanArtifact,
   guiPlanMatchesContext,
@@ -22,7 +21,6 @@ import {
   planFeatureNameFromRequest
 } from '../plan/plan-path'
 import { extractPlanMetadataFromBlock } from '../plan/plan-tool'
-import type { RightPanelMode } from './chat/WorkbenchTopBar'
 import type { GuiPlanMessageContext, SendMessageOverrides } from '../store/chat-store-types'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
 
@@ -54,8 +52,7 @@ type WorkbenchPlanControllerOptions = {
   sendMessage: ChatState['sendMessage']
   setError: ChatState['setError']
   setMode: Dispatch<SetStateAction<'plan' | 'agent'>>
-  setRightPanelMode: Dispatch<SetStateAction<RightPanelMode>>
-  setRightSidebarWidth: Dispatch<SetStateAction<number>>
+  openPlanRightPanel: () => void
   t: (key: string) => string
   workspaceRoot: string
   onPlanBuildStarted?: (plan: GuiPlanArtifact) => void | Promise<void>
@@ -170,8 +167,7 @@ export function useWorkbenchPlanController({
   sendMessage,
   setError,
   setMode,
-  setRightPanelMode,
-  setRightSidebarWidth,
+  openPlanRightPanel,
   t,
   workspaceRoot,
   onPlanBuildStarted
@@ -191,9 +187,8 @@ export function useWorkbenchPlanController({
 
   const openGuiPlanPanel = useCallback((): void => {
     if (!ownerSessionId) return
-    setRightSidebarWidth((width) => Math.max(width, CODE_PANEL_PREFERRED))
-    setRightPanelMode('plan')
-  }, [ownerSessionId, setRightPanelMode, setRightSidebarWidth])
+    openPlanRightPanel()
+  }, [openPlanRightPanel, ownerSessionId])
 
   const savePlanContentToDisk = async (
     owner: string,

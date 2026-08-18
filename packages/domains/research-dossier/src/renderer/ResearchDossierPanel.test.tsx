@@ -285,6 +285,7 @@ test('shows only target-applicable dossier pages before the exact owner load', (
       activation={activation}
       active
       onCollapse={() => undefined}
+      surfaceId="surface-dossier-a"
     />
   )
   assert.match(html, /researchDossierOverview/u)

@@ -10,6 +10,7 @@ import {
   createDomainRendererEntry,
   type BrowserPreviewRightPanelContribution
 } from './browser-preview-right-panel-contribution'
+import { browserPreviewComponentId } from './BrowserPreviewPanel'
 
 test('publishes Browser Preview metadata in the manifest contract and only render at runtime', () => {
   const visibleContext = {
@@ -47,12 +48,31 @@ test('publishes Browser Preview metadata in the manifest contract and only rende
   const rendered = panel.render({
     active: true,
     className: 'panel',
+    focused: true,
     onCollapse: () => undefined,
+    surfaceId: 'surface-browser-a',
     session: { id: 'session-browser', workspaceRoot: '/workspace' }
   })
   const props = (rendered as ReactElement<Record<string, unknown>>).props
   assert.equal(props.className, 'panel')
+  assert.equal(props.focused, true)
   assert.equal(props.sessionId, 'session-browser')
+  assert.equal(props.surfaceId, 'surface-browser-a')
   assert.equal(props.workspaceRoot, '/workspace')
   assert.equal(props.visibleContext, visibleContext)
+})
+
+test('qualifies visible-context component identity by Session and surface', () => {
+  assert.notEqual(
+    browserPreviewComponentId('session-browser', 'surface-a'),
+    browserPreviewComponentId('session-browser', 'surface-b')
+  )
+  assert.notEqual(
+    browserPreviewComponentId('session-a', 'surface-browser'),
+    browserPreviewComponentId('session-b', 'surface-browser')
+  )
+  assert.notEqual(
+    browserPreviewComponentId('session', 'pane.with.dots'),
+    browserPreviewComponentId('session.pane', 'with.dots')
+  )
 })

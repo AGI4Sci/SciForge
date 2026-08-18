@@ -11,7 +11,9 @@ export const GUI_QUALITY_REVIEW_TASK = [
   'State actionable corrections as recommendation claims and do not infer unsupported content.'
 ].join(' ')
 
-const DEFAULT_VISUAL_INSPECTION_TIMEOUT_MS = 90_000
+export const DEFAULT_VISUAL_INSPECTION_TIMEOUT_MS = 180_000
+export const MAX_VISUAL_INSPECTION_TIMEOUT_MS = 600_000
+const MIN_VISUAL_INSPECTION_TIMEOUT_MS = 1
 const MAX_VISUAL_ARTIFACTS = 8
 
 export type VisualArtifactMimeType = 'image/png' | 'image/jpeg' | 'image/webp'
@@ -45,6 +47,7 @@ export type VisualInspectionRequest = {
   artifacts: VisualInspectionArtifact[]
   truthLocks?: string[]
   outputIntent?: VisualOutputIntent
+  timeoutMs?: number
 }
 
 export type VisualArtifactEvidence = {
@@ -79,6 +82,7 @@ export type VisualInspectionEvidence = {
 
 export type VisualInspectionFailureCode =
   | 'visual_inspection_unavailable'
+  | 'visual_inspection_timeout'
   | 'vision_evidence_unavailable'
   | 'visual_evidence_synthesis_unavailable'
   | 'visual_inspection_invalid'
@@ -86,6 +90,7 @@ export type VisualInspectionFailureCode =
 
 export type VisualInspectionFailureClass =
   | 'upstream_unavailable'
+  | 'timeout'
   | 'capability_unavailable'
   | 'contract_violation'
   | 'evidence_unverified'
@@ -108,7 +113,14 @@ export type VisualInspectionFailure = {
 
 export type VisualInspectionResult = VisualInspectionEvidence | VisualInspectionFailure
 
-export type VisualInspector = (request: VisualInspectionRequest) => Promise<VisualInspectionResult>
+export type VisualInspectorOptions = {
+  signal?: AbortSignal
+}
+
+export type VisualInspector = (
+  request: VisualInspectionRequest,
+  options?: VisualInspectorOptions
+) => Promise<VisualInspectionResult>
 
 export type ModelRouterVisualInspectorOptions = {
   baseUrl: string
@@ -125,11 +137,13 @@ export function createModelRouterVisualInspector(
   const baseUrl = normalizedLocalModelRouterBaseUrl(options.baseUrl)
   const apiKey = options.apiKey.trim()
   const model = options.model.trim()
-  const timeoutMs = Math.max(1_000, options.timeoutMs ?? DEFAULT_VISUAL_INSPECTION_TIMEOUT_MS)
+  const defaultTimeoutMs = boundedVisualInspectionTimeoutMs(
+    options.timeoutMs ?? DEFAULT_VISUAL_INSPECTION_TIMEOUT_MS
+  )
   const fetchImpl = options.fetchImpl ?? fetch
   const now = options.now ?? (() => new Date())
 
-  return async (request) => {
+  return async (request, inspectionOptions = {}) => {
     if (!baseUrl || !apiKey || !model) {
       return {
         status: 'visual_inspection_unavailable',
@@ -150,7 +164,7 @@ export function createModelRouterVisualInspector(
       return {
         status: 'visual_inspection_invalid',
         code: 'visual_inspection_invalid',
-        message: 'Visual inspection requires a task and between 1 and 8 valid image artifacts.',
+        message: `Visual inspection requires a task, between 1 and 8 valid image artifacts, and an integer timeoutMs between ${MIN_VISUAL_INSPECTION_TIMEOUT_MS} and ${MAX_VISUAL_INSPECTION_TIMEOUT_MS} when provided.`,
         failureClass: 'invalid_arguments',
         retryable: false,
         recovery: {
@@ -199,76 +213,109 @@ export function createModelRouterVisualInspector(
       outputIntent: normalized.outputIntent
     }
     const requestSha256 = sha256(stableJson(requestDescriptor))
+    const timeoutMs = boundedVisualInspectionTimeoutMs(normalized.timeoutMs ?? defaultTimeoutMs)
+    const timeoutSignal = AbortSignal.timeout(timeoutMs)
+    const signal = inspectionOptions.signal
+      ? AbortSignal.any([inspectionOptions.signal, timeoutSignal])
+      : timeoutSignal
+    const requestBody = JSON.stringify({
+      model,
+      input: [{
+        role: 'user',
+        content: [
+          {
+            type: 'input_text',
+            text: visualInspectionInstruction(requestDescriptor)
+          },
+          ...loadedArtifacts.flatMap((artifact) => [
+            {
+              type: 'input_text',
+              text: `Artifact ${JSON.stringify(artifact.id)} follows.`
+            },
+            {
+              type: 'input_image',
+              image_url: `data:${artifact.mimeType};base64,${artifact.bytes.toString('base64')}`,
+              mime_type: artifact.mimeType
+            }
+          ])
+        ]
+      }]
+    })
     try {
-      const response = await fetchImpl(`${baseUrl}/responses`, {
-        method: 'POST',
-        headers: {
-          accept: 'application/json',
-          authorization: `Bearer ${apiKey}`,
-          'content-type': 'application/json',
-          'x-sciforge-model-router-evidence-policy': 'required'
-        },
-        body: JSON.stringify({
+      for (let evidenceAttempt = 0; evidenceAttempt < 2; evidenceAttempt += 1) {
+        const response = await fetchImpl(`${baseUrl}/responses`, {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            authorization: `Bearer ${apiKey}`,
+            'content-type': 'application/json',
+            'x-sciforge-model-router-evidence-policy': 'required'
+          },
+          body: requestBody,
+          signal
+        })
+        const raw = await response.text()
+        if (!response.ok) {
+          return parseModelRouterFailure(raw, response.status)
+        }
+        const payload = tryParseJsonRecord(raw)
+        if (!payload) {
+          if (evidenceAttempt === 0) continue
+          return invalidEvidenceFailure()
+        }
+        const observationText = responseOutputText(payload)
+        const parsedObservation = parseVisualEvidence(
+          observationText,
+          new Set(artifactEvidence.map(({ id }) => id))
+        )
+        if (!parsedObservation.ok) {
+          if (parsedObservation.reason === 'invalid_payload' && evidenceAttempt === 0) continue
+          return parsedObservation.reason === 'grounding_missing'
+            ? groundingFailure()
+            : invalidEvidenceFailure()
+        }
+        const observation = parsedObservation.evidence
+        const inspectedAt = now().toISOString()
+        const evidenceSha256 = sha256(stableJson(observation))
+        return {
+          status: 'inspected',
+          provider: 'model-router',
           model,
-          input: [{
-            role: 'user',
-            content: [
-              {
-                type: 'input_text',
-                text: visualInspectionInstruction(requestDescriptor)
-              },
-              ...loadedArtifacts.flatMap((artifact) => [
-                {
-                  type: 'input_text',
-                  text: `Artifact ${JSON.stringify(artifact.id)} follows.`
-                },
-                {
-                  type: 'input_image',
-                  image_url: `data:${artifact.mimeType};base64,${artifact.bytes.toString('base64')}`,
-                  mime_type: artifact.mimeType
-                }
-              ])
-            ]
-          }]
-        }),
-        signal: AbortSignal.timeout(timeoutMs)
-      })
-      const raw = await response.text()
-      if (!response.ok) {
-        return parseModelRouterFailure(raw, response.status)
+          inspectedAt,
+          task: normalized.task,
+          artifacts: artifactEvidence,
+          requestSha256,
+          evidenceSha256,
+          attestation: `sha256:${sha256(`${requestSha256}\0${evidenceSha256}`)}`,
+          ...observation
+        }
       }
-      const payload = tryParseJsonRecord(raw)
-      if (!payload) return invalidEvidenceFailure()
-      const observationText = responseOutputText(payload)
-      const parsedObservation = parseVisualEvidence(
-        observationText,
-        new Set(artifactEvidence.map(({ id }) => id))
-      )
-      if (!parsedObservation.ok) {
-        return parsedObservation.reason === 'grounding_missing'
-          ? groundingFailure()
-          : invalidEvidenceFailure()
+      return invalidEvidenceFailure()
+    } catch (error) {
+      if (inspectionOptions.signal?.aborted) {
+        throw inspectionOptions.signal.reason ?? error
       }
-      const observation = parsedObservation.evidence
-      const inspectedAt = now().toISOString()
-      const evidenceSha256 = sha256(stableJson(observation))
-      return {
-        status: 'inspected',
-        provider: 'model-router',
-        model,
-        inspectedAt,
-        task: normalized.task,
-        artifacts: artifactEvidence,
-        requestSha256,
-        evidenceSha256,
-        attestation: `sha256:${sha256(`${requestSha256}\0${evidenceSha256}`)}`,
-        ...observation
+      if (timeoutSignal.aborted) {
+        const suggestedTimeoutMs = nextVisualInspectionTimeoutMs(timeoutMs)
+        return {
+          status: 'visual_inspection_unavailable',
+          code: 'visual_inspection_timeout',
+          message: `Visual inspection exceeded the configured ${timeoutMs} ms end-to-end deadline.`,
+          failureClass: 'timeout',
+          retryable: true,
+          recovery: {
+            action: 'retry_visual_inspection',
+            instruction: suggestedTimeoutMs > timeoutMs
+              ? `Retry sciforge_look once with the same source, task, intent, and capture plan using timeoutMs=${suggestedTimeoutMs}.`
+              : `Retry sciforge_look once with the same source, task, intent, and capture plan using timeoutMs=${timeoutMs}; the maximum visual timeout is already in use.`
+          },
+          providerStage: 'model_router_deadline'
+        }
       }
-    } catch {
       return {
         status: 'visual_inspection_unavailable',
         code: 'visual_inspection_unavailable',
-        message: 'Model Router visual inspection could not be reached.',
+        message: 'Model Router visual inspection transport failed before a response was received.',
         failureClass: 'upstream_unavailable',
         retryable: true,
         recovery: {
@@ -323,6 +370,10 @@ export function modelRouterVisualInspectorFromEnv(
 function normalizeRequest(request: VisualInspectionRequest): VisualInspectionRequest | null {
   const task = request.task.trim().slice(0, 16_000)
   if (!task || request.artifacts.length < 1 || request.artifacts.length > MAX_VISUAL_ARTIFACTS) return null
+  const timeoutMs = request.timeoutMs === undefined
+    ? undefined
+    : normalizedVisualInspectionTimeoutMs(request.timeoutMs)
+  if (request.timeoutMs !== undefined && timeoutMs === null) return null
   const artifactIds = new Set<string>()
   const artifacts: VisualInspectionArtifact[] = []
   for (const artifact of request.artifacts) {
@@ -353,11 +404,38 @@ function normalizeRequest(request: VisualInspectionRequest): VisualInspectionReq
   return {
     task,
     artifacts,
+    ...(typeof timeoutMs === 'number' ? { timeoutMs } : {}),
     ...(request.truthLocks?.length
       ? { truthLocks: request.truthLocks.map((lock) => lock.trim().slice(0, 1_000)).filter(Boolean).slice(0, 64) }
       : {}),
     ...(request.outputIntent ? { outputIntent: request.outputIntent } : {})
   }
+}
+
+function normalizedVisualInspectionTimeoutMs(value: number): number | null {
+  if (
+    !Number.isInteger(value) ||
+    value < MIN_VISUAL_INSPECTION_TIMEOUT_MS ||
+    value > MAX_VISUAL_INSPECTION_TIMEOUT_MS
+  ) {
+    return null
+  }
+  return value
+}
+
+function boundedVisualInspectionTimeoutMs(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_VISUAL_INSPECTION_TIMEOUT_MS
+  return Math.min(
+    MAX_VISUAL_INSPECTION_TIMEOUT_MS,
+    Math.max(MIN_VISUAL_INSPECTION_TIMEOUT_MS, Math.floor(value))
+  )
+}
+
+function nextVisualInspectionTimeoutMs(timeoutMs: number): number {
+  return Math.min(
+    MAX_VISUAL_INSPECTION_TIMEOUT_MS,
+    Math.ceil(Math.max(timeoutMs + 30_000, timeoutMs * 1.5) / 1_000) * 1_000
+  )
 }
 
 function visualInspectionInstruction(request: {
@@ -512,6 +590,9 @@ function typedFailureCode(
   code: string,
   failureClass: VisualInspectionFailureClass
 ): VisualInspectionFailureCode {
+  if (code === 'visual_inspection_timeout' || failureClass === 'timeout') {
+    return 'visual_inspection_timeout'
+  }
   if (code === 'vision_evidence_unavailable' || code === 'visual_evidence_synthesis_unavailable') {
     return code
   }
@@ -575,7 +656,7 @@ function invalidEvidenceFailure(): VisualInspectionFailure {
     retryable: false,
     recovery: {
       action: 'stop',
-      instruction: 'Stop retrying this result and inspect the Model Router visual evidence trace.'
+      instruction: 'The sciforge_look arguments were accepted and the invalid payload was already retried internally. Do not change sourceRef, targetRef, frame, intent, capture, or timeoutMs to mask this provider contract failure; report error code visual_inspection_invalid at stage evidence_validation.'
     },
     providerStage: 'evidence_validation'
   }
@@ -590,7 +671,7 @@ function groundingFailure(): VisualInspectionFailure {
     retryable: false,
     recovery: {
       action: 'stop',
-      instruction: 'Stop retrying this result because the returned visual evidence could not be verified.'
+      instruction: 'The sciforge_look arguments were accepted, but the returned claim was not grounded to an input artifact. Parameter changes cannot make this result valid; report error code visual_evidence_grounding_missing at stage evidence_validation and obtain new source evidence before another look.'
     },
     providerStage: 'evidence_validation'
   }
@@ -639,6 +720,7 @@ function isClaimKind(value: string): value is VisualEvidenceClaim['kind'] {
 
 function isVisualInspectionFailureClass(value: string): value is VisualInspectionFailureClass {
   return value === 'upstream_unavailable' ||
+    value === 'timeout' ||
     value === 'capability_unavailable' ||
     value === 'contract_violation' ||
     value === 'evidence_unverified' ||

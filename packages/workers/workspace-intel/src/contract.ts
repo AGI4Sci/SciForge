@@ -40,6 +40,7 @@ export type WorkspaceIntelErrorCode =
   | 'invalid_request'
   | 'skill_not_found'
   | 'visual_inspection_unavailable'
+  | 'visual_inspection_timeout'
   | 'vision_evidence_unavailable'
   | 'visual_evidence_synthesis_unavailable'
   | 'visual_inspection_invalid'

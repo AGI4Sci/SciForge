@@ -214,6 +214,7 @@ export function researchDossierPreviewTarget(input: Readonly<{
   previewRef: ArtifactVersionRefV1
   recordDigest: string
   sessionId: string
+  surfaceId: string
   workspaceRoot: string
   target: ResearchDossierTargetV1
   page: ResearchDossierPage
@@ -223,6 +224,7 @@ export function researchDossierPreviewTarget(input: Readonly<{
   return {
     path: input.destinationPath,
     sessionId: input.sessionId,
+    surfaceId: input.surfaceId,
     workspaceRoot: input.workspaceRoot,
     ...(input.previewRef.mediaType ? { mimeType: input.previewRef.mediaType } : {}),
     kind: 'file',

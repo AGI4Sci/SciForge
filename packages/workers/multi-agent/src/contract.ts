@@ -96,6 +96,7 @@ export const MultiAgentChildRunRecord = z
     prompt: z.string().min(1),
     workspace: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
+    attempt: z.number().int().positive().default(1),
     status: MultiAgentChildStatus,
     summary: z.string().optional(),
     error: MultiAgentErrorInfo.optional(),
@@ -274,6 +275,7 @@ export type MultiAgentExecutorInput = {
   bashCommandPolicy?: Record<string, unknown>
   filePathPolicy?: Record<string, unknown>
   maxToolCalls?: number
+  resumeThreadRef?: MultiAgentChildThreadRef
   signal: AbortSignal
   registerLifecycleControl(control: MultiAgentLifecycleControl): void
   setThreadRef(threadRef: MultiAgentChildThreadRef): Promise<void>
@@ -284,6 +286,7 @@ export type MultiAgentExecutor = (input: MultiAgentExecutorInput) => Promise<Mul
 
 export type MultiAgentChildEvent = {
   type: 'child_event'
+  operation?: 'upsert' | 'delete'
   seq: number
   childId: string
   parentThreadId: string
@@ -296,7 +299,10 @@ export type MultiAgentChildEvent = {
 }
 
 export type MultiAgentEventSink = {
-  onChildEvent?: (event: MultiAgentChildEvent) => void | Promise<void>
+  onChildEvent?: (
+    event: MultiAgentChildEvent,
+    record: MultiAgentChildRunRecord
+  ) => void | Promise<void>
 }
 
 export type MultiAgentUsageSnapshot = MultiAgentUsage

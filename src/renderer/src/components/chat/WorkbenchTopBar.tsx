@@ -45,9 +45,9 @@ export type ContributedRightPanelMode = string & {
 }
 export type RightPanelMode = CoreRightPanelMode | ContributedRightPanelMode | null
 
-type Props = {
-  rightPanelMode: RightPanelMode
-  onToggleRightPanelMode: (mode: Exclude<RightPanelMode, null>) => void
+export type WorkbenchTopBarProps = {
+  focusedRightPanelMode: RightPanelMode
+  onToggleFocusedRightPanelMode: (mode: Exclude<RightPanelMode, null>) => void
   workspaceRoot?: string
   planPanelEnabled?: boolean
   toolbarActions?: readonly RegisteredWorkbenchToolbarActionContribution[]
@@ -66,8 +66,8 @@ type Props = {
 }
 
 export function WorkbenchTopBar({
-  rightPanelMode,
-  onToggleRightPanelMode,
+  focusedRightPanelMode,
+  onToggleFocusedRightPanelMode,
   workspaceRoot = '',
   planPanelEnabled = false,
   toolbarActions = [],
@@ -83,7 +83,7 @@ export function WorkbenchTopBar({
   childAgentAttentionCount = 0,
   childAgentsOpen = false,
   onOpenChildAgents
-}: Props): ReactElement {
+}: WorkbenchTopBarProps): ReactElement {
   const { t } = useTranslation(['common', 'settings'])
   const [editors, setEditors] = useState<EditorInfo[]>([])
   const [selectedEditorId, setSelectedEditorId] = useState(() => readPreferredEditorId() ?? '')
@@ -563,13 +563,13 @@ export function WorkbenchTopBar({
       />
 
       {items.map((item) => {
-        const active = rightPanelMode === item.mode
+        const active = focusedRightPanelMode === item.mode
         const Icon = item.icon
         return (
           <button
             key={item.mode}
             type="button"
-            onClick={() => onToggleRightPanelMode(item.mode)}
+            onClick={() => onToggleFocusedRightPanelMode(item.mode)}
             className={`rounded-full border px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] ${
               active
                 ? 'border-ds-border-strong bg-white/70 text-ds-ink dark:bg-white/10'

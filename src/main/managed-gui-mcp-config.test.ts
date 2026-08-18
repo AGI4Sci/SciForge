@@ -60,6 +60,20 @@ describe('managed GUI MCP config helpers', () => {
     }, 'linux')).toBe('/opt/SciForge/sciforge')
   })
 
+  it('uses a stable Node executable in development and ignores it when packaged', () => {
+    expect(resolveManagedGuiMcpCommand({
+      ...launch,
+      nodeExecPath: '/opt/homebrew/bin/node'
+    }, 'darwin')).toBe('/opt/homebrew/bin/node')
+    expect(resolveManagedGuiMcpCommand({
+      ...launch,
+      isPackaged: true,
+      nodeExecPath: '/opt/homebrew/bin/node'
+    }, 'darwin')).toBe(
+      '/Applications/SciForge.app/Contents/Frameworks/SciForge Helper.app/Contents/MacOS/SciForge Helper'
+    )
+  })
+
   it('uses current ~/.sciforge/mcp.json by default without reading legacy ~/.kun/mcp.json', async () => {
     const currentDir = join(homedir(), '.sciforge')
     const legacyDir = join(homedir(), '.kun')

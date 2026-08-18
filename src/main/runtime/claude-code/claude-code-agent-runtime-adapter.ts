@@ -70,9 +70,11 @@ export function createClaudeCodeAgentRuntimeAdapter(
     transport: 'cli_process',
     subagents: {
       spawn: (_context, input) => service.spawnSubagent(input),
+      resume: (_context, input) => service.resumeSubagent(input),
       inspect: (_context, input) => service.inspectSubagent(input),
       message: (_context, input) => service.messageSubagent(input),
-      cancel: (_context, input) => service.cancelSubagent(input)
+      cancel: (_context, input) => service.cancelSubagent(input),
+      delete: (_context, input) => service.deleteSubagent(input)
     },
 
     async connect() {
