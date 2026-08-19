@@ -262,9 +262,9 @@ function shouldShowAnnotationThread(
   displayMode: WritePdfAnnotationDisplayMode | undefined,
   activeThreadId: string | null
 ): boolean {
-  if (displayMode === 'all') return true
-  if (!activeThreadId) return true
-  return thread.id === activeThreadId
+  if (displayMode === 'all' || displayMode === undefined) return true
+  if (displayMode === 'current') return activeThreadId === thread.id
+  return false
 }
 
 function anchorsForThread(sidecar: PdfAnnotationSidecar, thread: PdfAnnotationThread): PdfAnnotationSidecar['anchors'] {

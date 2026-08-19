@@ -1,5 +1,6 @@
 import {
   useEffect,
+  memo,
   useMemo,
   useState,
   type CSSProperties,
@@ -290,7 +291,7 @@ function questionStatusLabel(status: PdfQuestionDisplayStatus, t: (key: string) 
   return t(`writePdfAnnotationQuestionStatus_${status}`)
 }
 
-export function WritePdfAnnotationsPanel({
+function WritePdfAnnotationsPanelComponent({
   sidecar,
   documentKind = 'pdf',
   selectedThreadId = null,
@@ -899,9 +900,10 @@ export function WritePdfAnnotationsPanel({
               return (
                 <li
                   key={summary.thread.id}
-                  className={`min-w-0 overflow-hidden rounded-lg border bg-ds-card shadow-sm transition ${
+                  className={`min-w-0 overflow-hidden rounded-lg border bg-ds-card shadow-sm transition [contain-intrinsic-size:auto_260px] [content-visibility:auto] ${
                     selected ? 'border-accent/45 ring-1 ring-accent/20' : 'border-ds-border-muted hover:border-ds-border'
                   }`}
+                  data-document-annotation-thread={summary.thread.id}
                   onPointerEnter={() => onHoverThread?.(summary.thread.id, summary)}
                   onPointerLeave={() => onHoverThread?.(null)}
                   onFocusCapture={() => onHoverThread?.(summary.thread.id, summary)}
@@ -1287,3 +1289,5 @@ export function WritePdfAnnotationsPanel({
     </aside>
   )
 }
+
+export const WritePdfAnnotationsPanel = memo(WritePdfAnnotationsPanelComponent)

@@ -72,6 +72,21 @@ const DOCUMENT_PANEL_MIN_WIDTH = 320
 const ANNOTATION_PANEL_RESIZE_HANDLE_WIDTH = 7
 const ANNOTATION_PANEL_KEYBOARD_RESIZE_STEP = 24
 
+export function resolveDocumentAnnotationOverlayState(input: {
+  displayMode: WritePdfAnnotationDisplayMode
+  selectedThreadId?: string | null
+  hoveredThreadId?: string | null
+}): {
+  activeThreadId: string | null
+  overlayThreadId: string | null
+} {
+  const activeThreadId = input.selectedThreadId?.trim() || input.hoveredThreadId?.trim() || null
+  return {
+    activeThreadId,
+    overlayThreadId: input.displayMode === 'current' ? activeThreadId : null
+  }
+}
+
 function readStoredAnnotationPanelWidth(): number {
   const raw = readBrowserStorageItem(ANNOTATION_PANEL_WIDTH_KEY)
   if (raw == null) return ANNOTATION_PANEL_DEFAULT_WIDTH
@@ -203,6 +218,8 @@ export function DocumentAnnotationPanelController({
   const [annotationPanelWidth, setAnnotationPanelWidth] = useState(readStoredAnnotationPanelWidth)
   const importInputRef = useRef<HTMLInputElement | null>(null)
   const controllerRef = useRef<HTMLDivElement | null>(null)
+  const loadSidecarRef = useRef<(() => Promise<boolean>) | null>(null)
+  const attemptedTurnPersistenceKeysRef = useRef(new Set<string>())
   const sessionId = context.state.session?.id ?? null
   const path = observation?.file.path ?? context.state.session?.path ?? ''
   const operationIds = context.state.capability?.operations.map((operation) => operation.id) ?? []
@@ -255,6 +272,10 @@ export function DocumentAnnotationPanelController({
   }, [canReadSidecar, context.host, sessionId])
 
   useEffect(() => {
+    loadSidecarRef.current = loadSidecar
+  }, [loadSidecar])
+
+  useEffect(() => {
     setSidecar(null)
     setSelectedThreadId(null)
     setNavigationRequest(null)
@@ -263,8 +284,12 @@ export function DocumentAnnotationPanelController({
     setPdfReviewNotice(null)
     setAnnotationNotice(null)
     setPanelOpen(false)
-    if (canReadSidecar) void loadSidecar()
-  }, [canReadSidecar, loadSidecar, path])
+    if (canReadSidecar) void loadSidecarRef.current?.()
+  }, [canReadSidecar, path, sessionId])
+
+  useEffect(() => {
+    attemptedTurnPersistenceKeysRef.current.clear()
+  }, [path, sessionId])
 
   useEffect(() => {
     writeBrowserStorageItem(
@@ -291,15 +316,19 @@ export function DocumentAnnotationPanelController({
     return () => observer.disconnect()
   }, [])
 
-  const activeThreadId = selectedThreadId ?? hoveredThreadId
+  const { activeThreadId, overlayThreadId } = resolveDocumentAnnotationOverlayState({
+    displayMode,
+    selectedThreadId,
+    hoveredThreadId
+  })
   const pdfAnnotationOverlays = useMemo(() => createPdfAnnotationOverlaysFromSidecar(sidecar, {
     displayMode,
-    activeThreadId
-  }), [activeThreadId, displayMode, sidecar])
+    activeThreadId: overlayThreadId
+  }), [displayMode, overlayThreadId, sidecar])
   const textAnnotationOverlays = useMemo(() => createTextAnnotationOverlaysFromSidecar(sidecar, {
     displayMode,
-    activeThreadId
-  }), [activeThreadId, displayMode, sidecar])
+    activeThreadId: overlayThreadId
+  }), [displayMode, overlayThreadId, sidecar])
   const jumpToRect = navigationRequest?.pageRect ?? null
 
   const clearPdfReviewNotice = useCallback((): void => {
@@ -319,6 +348,10 @@ export function DocumentAnnotationPanelController({
     setPanelOpen(true)
     if (!sidecar && canReadSidecar) void loadSidecar()
   }, [canReadSidecar, clearPdfReviewNotice, loadSidecar, rememberPdfReviewSelection, sidecar])
+
+  const openTextPanel = useCallback((): void => {
+    openPanel()
+  }, [openPanel])
 
   const togglePanel = useCallback((): void => {
     setPanelOpen((open) => {
@@ -533,7 +566,12 @@ export function DocumentAnnotationPanelController({
             turn
           })
           if (operation) {
-            changed = await mutateAnnotationOperation(operation) || changed
+            const persistenceKey = documentAnnotationPersistenceOperationKey(operation)
+            if (attemptedTurnPersistenceKeysRef.current.has(persistenceKey)) continue
+            attemptedTurnPersistenceKeysRef.current.add(persistenceKey)
+            const persisted = await mutateAnnotationOperation(operation)
+            if (!persisted) attemptedTurnPersistenceKeysRef.current.delete(persistenceKey)
+            changed = persisted || changed
           }
         }
       }
@@ -580,6 +618,15 @@ export function DocumentAnnotationPanelController({
       body
     }))
   }, [applyAnnotationOperation, path, sidecar])
+
+  const hoverThread = useCallback((threadId: string | null): void => {
+    setHoveredThreadId((current) => current === threadId ? current : threadId)
+  }, [])
+
+  const closePanel = useCallback((): void => {
+    setHoveredThreadId(null)
+    setPanelOpen(false)
+  }, [])
 
   const generatePdfReview = useCallback(async (input: {
     scope: 'document' | 'selection'
@@ -807,7 +854,7 @@ export function DocumentAnnotationPanelController({
             navigationRequest,
             onApplyEdit: applyPreviewOperation,
             onAnnotationSelect: selectThread,
-            onOpenAnnotations: openPanel
+            onOpenAnnotations: openTextPanel
           },
           sidecar,
           panelOpen
@@ -844,14 +891,12 @@ export function DocumentAnnotationPanelController({
               className="h-full w-full"
               onAnnotationDisplayModeChange={setDisplayMode}
               onLocateThread={locateThread}
-              onHoverThread={(threadId) => setHoveredThreadId(threadId)}
-              onResolveThread={(threadId: string, _summary: PdfAnnotationThreadSummary) => resolveThread(threadId)}
-              onReopenThread={(threadId: string, _summary: PdfAnnotationThreadSummary) => reopenThread(threadId)}
-              onDeleteThread={(threadId: string, _summary: PdfAnnotationThreadSummary) => deleteThread(threadId)}
-              onEditAnnotation={(annotationId: string, body: string) => editAnnotation(annotationId, body)}
-              onAskQuestion={questionBridge ? (threadId, question, summary, options) => {
-                void askQuestion(threadId, question, summary, options)
-              } : undefined}
+              onHoverThread={hoverThread}
+              onResolveThread={resolveThread}
+              onReopenThread={reopenThread}
+              onDeleteThread={deleteThread}
+              onEditAnnotation={editAnnotation}
+              onAskQuestion={questionBridge ? askQuestion : undefined}
               questionReplies={questionReplies}
               pdfReviewAvailable={canGeneratePdfReview}
               pdfReviewHasSelection={pdfReviewHasSelection}
@@ -861,12 +906,12 @@ export function DocumentAnnotationPanelController({
               pdfReviewNotice={pdfReviewNotice}
               notice={annotationNotice}
               onClearPdfReviewNotice={clearPdfReviewNotice}
-              onGeneratePdfReview={(input) => void generatePdfReview(input)}
-              onImproveAnnotation={canImprovePdfReview ? (threadId, summary) => void improvePdfReviewAnnotation(threadId, summary) : undefined}
-              onExportPackage={documentKind === 'pdf' ? () => void exportPackage() : undefined}
+              onGeneratePdfReview={generatePdfReview}
+              onImproveAnnotation={canImprovePdfReview ? improvePdfReviewAnnotation : undefined}
+              onExportPackage={documentKind === 'pdf' ? exportPackage : undefined}
               onImportPackage={canImportSidecar ? importPackage : undefined}
-              onReloadSidecar={() => void loadSidecar()}
-              onCollapse={() => setPanelOpen(false)}
+              onReloadSidecar={loadSidecar}
+              onCollapse={closePanel}
             />
           </div>
         </>
@@ -1042,7 +1087,7 @@ function createTurnPersistenceOperation(input: {
   threadId: string
   sideThreadId: string
   turn: AnnotationQuestionTurn
-}): WorkspacePreviewEditOperation | null {
+}): Extract<WorkspacePreviewEditOperation, { kind: 'annotation.upsert' }> | null {
   const thread = input.sidecar.threads.find((candidate) => candidate.id === input.threadId)
   if (!thread) return null
   const existing = findPersistedQuestionTurn(input.sidecar.annotations, input.threadId, input.sideThreadId, input.turn)
@@ -1058,7 +1103,11 @@ function createTurnPersistenceOperation(input: {
   return {
     kind: 'annotation.upsert',
     path: input.path,
-    annotationId: existing?.id ?? `annotation-${input.turn.kind}-${input.turn.blockId}`,
+    annotationId: existing?.id ?? documentAnnotationTurnId({
+      threadId: input.threadId,
+      kind: input.turn.kind,
+      sourceMessageId: input.turn.sourceMessageId
+    }),
     annotationKind: input.turn.kind,
     body: input.turn.text,
     target: {
@@ -1075,6 +1124,47 @@ function createTurnPersistenceOperation(input: {
       }
     }
   }
+}
+
+export function documentAnnotationTurnId(input: {
+  threadId: string
+  kind: 'question' | 'answer'
+  sourceMessageId: string
+}): string {
+  const identity = `${input.threadId}:${input.sourceMessageId}`
+  const readableIdentity = identity
+    .replace(/[^a-zA-Z0-9._-]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+    .slice(-180)
+  return [
+    'annotation',
+    input.kind,
+    hashDocumentAnnotationIdentity(identity),
+    readableIdentity
+  ].filter(Boolean).join('-').slice(0, 256)
+}
+
+export function documentAnnotationPersistenceOperationKey(
+  operation: Extract<WorkspacePreviewEditOperation, { kind: 'annotation.upsert' }>
+): string {
+  return [
+    operation.path,
+    operation.annotationId,
+    operation.annotationKind,
+    operation.target?.threadId ?? '',
+    operation.target?.annotation?.sourceMessageId ?? '',
+    operation.body.length,
+    hashDocumentAnnotationIdentity(operation.body)
+  ].join('\u0000')
+}
+
+function hashDocumentAnnotationIdentity(value: string): string {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(36)
 }
 
 function findPersistedQuestionTurn(
