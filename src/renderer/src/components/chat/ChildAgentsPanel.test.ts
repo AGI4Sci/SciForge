@@ -4,17 +4,31 @@ import { describe, expect, it, vi } from 'vitest'
 import type { AgentRuntimeChild } from '@shared/agent-runtime-contract'
 import type { SideConversation } from '../../store/chat-store-types'
 import {
+  CHILD_AGENT_HISTORY_PAGE_SIZE,
   ChildAgentsPanelView,
+  childAgentAttemptGroups,
+  childAgentGroupBuckets,
   childAgentsPanelContextStateKey,
+  mergeChildAgentPages,
   sessionChildAgentsOwner
 } from './ChildAgentsPanel'
 
 const labels: Record<string, string> = {
   sidebarChildren: 'Children',
   sidebarChildrenActive: 'Active',
-  sidebarChildrenFilterAll: 'Show all child agents',
   sidebarChildrenFilterActive: 'Show active child agents',
+  sidebarChildrenRecent: 'Recent',
+  sidebarChildrenHistory: 'History',
+  sidebarChildrenFilterRecent: 'Show child agents from the current turn',
+  sidebarChildrenFilterHistory: 'Show child agents from earlier turns',
+  sidebarChildrenCurrentTurn: 'Current turn · {{turnId}}',
+  sidebarChildrenHistoryTurns: 'Earlier child-agent turns',
+  sidebarChildrenHistoryTurn: 'Turn · {{turnId}}',
+  sidebarChildrenLoadMore: 'Load more history',
+  sidebarChildrenLoadingMore: 'Loading more history',
   sidebarChildrenActiveEmpty: 'No child agents are active right now.',
+  sidebarChildrenRecentEmpty: 'No completed child agents in the current turn.',
+  sidebarChildrenHistoryCollapsed: 'Expand an earlier turn to view its child agents.',
   sidebarChildrenLoading: 'Loading children',
   sidebarChildrenLoadError: 'Unable to load children',
   sidebarChildrenNoThread: 'No active thread.',
@@ -579,7 +593,7 @@ describe('ChildAgentsPanelView', () => {
     expect(html.match(/role="tab"/g)).toHaveLength(2)
   })
 
-  it('renders the child and active counts as list filter buttons', () => {
+  it('renders Active, Recent, and History as bounded list navigation', () => {
     const html = renderView({
       children: [
         child({ id: 'running-child', name: 'running-child', status: 'running' }),
@@ -587,8 +601,9 @@ describe('ChildAgentsPanelView', () => {
       ]
     })
 
-    expect(html).toContain('aria-label="Show all child agents"')
     expect(html).toContain('aria-label="Show active child agents"')
+    expect(html).toContain('aria-label="Show child agents from the current turn"')
+    expect(html).toContain('aria-label="Show child agents from earlier turns"')
     expect(html).toContain('aria-pressed="true"')
   })
 
@@ -688,7 +703,7 @@ describe('ChildAgentsPanelView', () => {
     expect(html).toContain('clone-repo')
     expect(html).toContain('aria-current="page"')
     expect(html).toContain('View child agents')
-    expect(html).not.toContain('grid-cols-3')
+    expect(html).toContain('grid-cols-3')
   })
 
   it('offers a clear action to promote the selected child into the focus workspace', () => {
@@ -704,7 +719,7 @@ describe('ChildAgentsPanelView', () => {
     expect(html).toContain('title="Open in focus workspace"')
   })
 
-  it('defaults to running, then queued, then most recently updated children', () => {
+  it('keeps Active children first while showing current-turn Recent children', () => {
     const html = renderView({
       selectedChildId: 'child-research',
       children: [
@@ -731,5 +746,62 @@ describe('ChildAgentsPanelView', () => {
 
     expect(html.indexOf('running-child')).toBeLessThan(html.indexOf('queued-child'))
     expect(html.indexOf('queued-child')).toBeLessThan(html.indexOf('completed-recent'))
+  })
+
+  it('partitions active, current-turn, and historical groups without duplication', () => {
+    const groups = childAgentAttemptGroups([
+      child({ id: 'active', status: 'running', parentTurnId: 'turn-current' }),
+      child({ id: 'recent', name: 'recent', prompt: 'recent', status: 'completed', parentTurnId: 'turn-current' }),
+      child({ id: 'old-a', name: 'old-a', prompt: 'old-a', status: 'failed', parentTurnId: 'turn-old' }),
+      child({ id: 'old-b', name: 'old-b', prompt: 'old-b', status: 'completed', parentTurnId: 'turn-old' })
+    ])
+    const buckets = childAgentGroupBuckets(groups, 'turn-current')
+
+    expect(buckets.active.map((group) => group.primary.id)).toEqual(['active'])
+    expect(buckets.recent.map((group) => group.primary.id)).toEqual(['recent'])
+    expect(buckets.history).toHaveLength(1)
+    expect(buckets.history[0]?.turnId).toBe('turn-old')
+    expect(buckets.history[0]?.groups.map((group) => group.primary.id)).toEqual(['old-a', 'old-b'])
+  })
+
+  it('keeps historical turns collapsed and exposes stable cursor pagination', () => {
+    const onLoadMore = vi.fn()
+    const html = renderView({
+      currentTurnId: 'turn-current',
+      children: [
+        child({ id: 'active-child', name: 'active-child', status: 'running', parentTurnId: 'turn-current' }),
+        child({ id: 'historical-child', name: 'historical-child', status: 'completed', parentTurnId: 'turn-old' })
+      ],
+      nextCursor: 'cursor-1',
+      onLoadMore
+    })
+
+    expect(html).toContain('Earlier child-agent turns')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).toContain('Load more history')
+    expect(html).toContain('active-child')
+    expect(html).not.toContain('historical-child')
+    expect(html.match(/role="tab"/g)).toHaveLength(1)
+  })
+
+  it('deduplicates active records repeated by cursor pages and bounds a rendered page to 40', () => {
+    const firstPage = Array.from({ length: CHILD_AGENT_HISTORY_PAGE_SIZE }, (_, index) => child({
+      id: `child-${index}`,
+      name: `child-${index}`,
+      prompt: `task-${index}`,
+      status: 'completed',
+      parentTurnId: 'turn-current',
+      updatedAt: `2026-08-19T00:00:${String(index).padStart(2, '0')}.000Z`
+    }))
+    const merged = mergeChildAgentPages([
+      firstPage,
+      [child({ id: 'active-repeat', status: 'running' }), child({ id: 'child-0', status: 'completed' })],
+      [child({ id: 'active-repeat', status: 'running' })]
+    ])
+    const html = renderView({ currentTurnId: 'turn-current', children: firstPage })
+
+    expect(merged.filter((entry) => entry.id === 'active-repeat')).toHaveLength(1)
+    expect(merged.filter((entry) => entry.id === 'child-0')).toHaveLength(1)
+    expect(html.match(/role="tab"/g)).toHaveLength(CHILD_AGENT_HISTORY_PAGE_SIZE)
   })
 })
