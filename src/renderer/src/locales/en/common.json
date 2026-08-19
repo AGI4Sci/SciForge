@@ -535,6 +535,7 @@
   "rightPanelPaneFocusedSuffix": " (focused)",
   "rightPanelBinding": "Right sidebar panel",
   "rightPanelSplit": "Split into a new right sidebar",
+  "rightPanelNewPane": "New pane",
   "rightPanelResize": "Resize right sidebar",
   "workspaceFilesTitle": "Workspace files",
   "workspaceReferenceRefresh": "Refresh files",
