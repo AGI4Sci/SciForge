@@ -71,6 +71,8 @@
     "domain-packages:typecheck": "node ./scripts/domain-packages.mjs --run typecheck",
     "extension-package:test": "node --test ./scripts/extension-package.test.mjs",
     "test:electron-smoke-support": "node --test ./scripts/electron-domain-smoke-support.test.mjs ./scripts/native-runtime-dependencies.test.mjs",
+    "test:e2e-product-stack": "node --test ./scripts/e2e/product-stack-supervisor.test.mjs",
+    "e2e:product-stack": "node ./scripts/e2e/product-stack-supervisor.mjs",
     "smoke:electron:source": "node ./scripts/electron-domain-smoke.mjs",
     "smoke:electron:packaged": "node ./scripts/electron-domain-packaged-smoke.mjs",
     "smoke:electron:packaged:build": "npm run dist:dir && npm run smoke:electron:packaged",
