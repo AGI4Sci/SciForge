@@ -52,7 +52,7 @@
     "build:full-trace": "npm --workspace @sciforge/full-trace run build",
     "build:multi-agent": "npm --workspace @sciforge/multi-agent run build",
     "build:collaboration-dependencies": "npm --workspace @sciforge/collaboration-contracts run build && npm --workspace @sciforge/collaboration-provider-zulip run build",
-    "build:agent-support": "npm run build:execution-governance && npm run build:full-trace && npm run build:multi-agent && npm run build:workspace-host",
+    "build:agent-support": "npm run build:execution-governance && npm run build:full-trace && npm run build:multi-agent && npm run build:workspace-host && npm run build:collaboration-dependencies",
     "build:workspace-host": "npm --workspace @sciforge/workspace-host run build:artifact",
     "domain-sdk:test": "npm --workspace @sciforge/domain-sdk run test",
     "domain-sdk:typecheck": "npm --workspace @sciforge/domain-sdk run typecheck",
