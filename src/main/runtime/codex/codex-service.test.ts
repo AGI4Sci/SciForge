@@ -352,7 +352,7 @@ describe('Codex child summary index', () => {
       child
     })
     const eventStore = (service as unknown as { eventStore: CodexEventStore }).eventStore
-    const readSpy = vi.spyOn(eventStore, 'read')
+    const readSpy = vi.spyOn(eventStore, 'readLatestChildren')
 
     await expect(service.listStoredThreadChildren('parent-thread')).resolves.toEqual([child])
     await expect(service.listStoredThreadChildren('parent-thread')).resolves.toEqual([child])

@@ -1,4 +1,9 @@
 import type { CodexThreadEventPayload } from './codex-runtime-api'
+import {
+  isAgentRuntimeChildActive,
+  type AgentRuntimeChild
+} from '../../../shared/agent-runtime-contract'
+import { AGENT_RUNTIME_RECENT_CHILD_LIMIT } from '../agent-runtime/bounded-child-history'
 import { AppDataJsonlStore } from '../../services/app-data-store'
 import {
   decodeToolArtifactRef,
@@ -115,6 +120,49 @@ export class CodexEventStore {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
     return content
+  }
+
+  async findLatestChild(threadId: string, childId: string): Promise<AgentRuntimeChild | null> {
+    const normalizedThreadId = threadId.trim()
+    const normalizedChildId = childId.trim()
+    if (!normalizedThreadId || !normalizedChildId) return null
+    let child: AgentRuntimeChild | null = null
+    try {
+      await this.jsonlForThread(normalizedThreadId).readLinesReverse((line) => {
+        const stored = parseStoredEvent(line.trim())
+        if (stored?.threadId !== normalizedThreadId || stored.event.child?.id !== normalizedChildId) return
+        child = stored.event.child.metadata?.lifecycleOperation === 'delete' ? null : stored.event.child
+        return false
+      })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    return child
+  }
+
+  async readLatestChildren(
+    threadId: string,
+    terminalLimit = AGENT_RUNTIME_RECENT_CHILD_LIMIT
+  ): Promise<AgentRuntimeChild[]> {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return []
+    const seen = new Set<string>()
+    const active: AgentRuntimeChild[] = []
+    const terminal: AgentRuntimeChild[] = []
+    try {
+      await this.jsonlForThread(normalizedThreadId).readLinesReverse((line) => {
+        const stored = parseStoredEvent(line.trim())
+        const child = stored?.threadId === normalizedThreadId ? stored.event.child : undefined
+        if (!child || seen.has(child.id)) return
+        seen.add(child.id)
+        if (child.metadata?.lifecycleOperation === 'delete') return
+        if (isAgentRuntimeChildActive(child)) active.push(child)
+        else if (terminal.length < terminalLimit) terminal.push(child)
+      })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    return [...active, ...terminal]
   }
 
   async latestSeq(threadId: string): Promise<number> {

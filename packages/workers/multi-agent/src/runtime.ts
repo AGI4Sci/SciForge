@@ -500,6 +500,10 @@ export class MultiAgentRuntime {
     return record ? normalizeRuntimeView(record, this.activeChildIds) : null
   }
 
+  async childByThreadId(threadId: string): Promise<MultiAgentChildRunRecord | null> {
+    return this.options.store.findByThreadId(threadId)
+  }
+
   async waitForChild(
     parentThreadId: string,
     childId: string,
@@ -633,8 +637,20 @@ export class MultiAgentRuntime {
   }
 
   async diagnostics(parentThreadId?: string): Promise<MultiAgentDiagnostics> {
-    const childRuns = (await this.options.store.list(parentThreadId ? { parentThreadId } : {}))
+    const [page, storage] = await Promise.all([
+      this.options.store.listPage(parentThreadId ? { parentThreadId } : {}),
+      this.options.store.diagnostics()
+    ])
+    const childRuns = page.records
       .map((record) => normalizeRuntimeView(record, this.activeChildIds))
+    const statusCounts = { ...storage.statusCounts }
+    for (let index = 0; index < page.records.length; index += 1) {
+      const persisted = page.records[index]!
+      const normalized = childRuns[index]!
+      if (persisted.status === normalized.status) continue
+      statusCounts[persisted.status] = Math.max(0, statusCounts[persisted.status] - 1)
+      statusCounts[normalized.status] += 1
+    }
     return {
       contractVersion: MULTI_AGENT_CONTRACT_VERSION,
       config: this.config,
@@ -642,10 +658,12 @@ export class MultiAgentRuntime {
       activeLifecycleControls: this.lifecycleControlsByChildId.size,
       activeBoundaries: this.boundariesByChildId.size,
       childRuns,
-      statusCounts: countStatuses(childRuns),
-      usage: sumUsage(childRuns),
+      childRunsNextCursor: page.nextCursor,
+      childRunsTruncated: page.historyTruncated,
+      statusCounts,
+      usage: storage.usage,
       aggregates: aggregateChildRuns(childRuns),
-      storage: await this.options.store.diagnostics()
+      storage
     }
   }
 
@@ -1100,18 +1118,6 @@ function isTerminalChildStatus(status: MultiAgentChildStatus): boolean {
   return status === 'completed' || status === 'failed' || status === 'aborted'
 }
 
-function countStatuses(records: readonly MultiAgentChildRunRecord[]): Record<MultiAgentChildStatus, number> {
-  const counts: Record<MultiAgentChildStatus, number> = {
-    queued: 0,
-    running: 0,
-    completed: 0,
-    failed: 0,
-    aborted: 0
-  }
-  for (const record of records) counts[record.status] += 1
-  return counts
-}
-
 function normalizeRuntimeView(
   record: MultiAgentChildRunRecord,
   activeChildIds: ReadonlySet<string>
@@ -1129,37 +1135,6 @@ function normalizeRuntimeView(
     ),
     finishedAt: record.finishedAt ?? record.updatedAt
   })
-}
-
-function sumUsage(records: readonly MultiAgentChildRunRecord[]): MultiAgentUsageType {
-  const usage: MultiAgentUsageType = { ...EMPTY_MULTI_AGENT_USAGE }
-  for (const record of records) {
-    usage.promptTokens += record.usage.promptTokens
-    usage.completionTokens += record.usage.completionTokens
-    usage.totalTokens += record.usage.totalTokens
-    usage.cachedTokens = sumOptional(usage.cachedTokens, record.usage.cachedTokens)
-    usage.cacheHitTokens = sumOptional(usage.cacheHitTokens, record.usage.cacheHitTokens)
-    usage.cacheMissTokens = sumOptional(usage.cacheMissTokens, record.usage.cacheMissTokens)
-    usage.costUsd = sumOptional(usage.costUsd, record.usage.costUsd)
-    usage.costCny = sumOptional(usage.costCny, record.usage.costCny)
-    usage.cacheSavingsUsd = sumOptional(usage.cacheSavingsUsd, record.usage.cacheSavingsUsd)
-    usage.cacheSavingsCny = sumOptional(usage.cacheSavingsCny, record.usage.cacheSavingsCny)
-    usage.tokenEconomySavingsTokens = sumOptional(
-      usage.tokenEconomySavingsTokens,
-      record.usage.tokenEconomySavingsTokens
-    )
-    usage.tokenEconomySavingsUsd = sumOptional(usage.tokenEconomySavingsUsd, record.usage.tokenEconomySavingsUsd)
-    usage.tokenEconomySavingsCny = sumOptional(usage.tokenEconomySavingsCny, record.usage.tokenEconomySavingsCny)
-  }
-  if (usage.cacheHitTokens !== undefined && usage.cachedTokens && usage.cachedTokens > 0) {
-    usage.cacheHitRate = usage.cacheHitTokens / usage.cachedTokens
-  }
-  return MultiAgentUsage.parse(usage)
-}
-
-function sumOptional(current: number | undefined, next: number | undefined): number | undefined {
-  if (next === undefined) return current
-  return (current ?? 0) + next
 }
 
 function trimOptional(value: string | undefined): string | undefined {

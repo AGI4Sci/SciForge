@@ -127,6 +127,15 @@ export const MultiAgentChildRunRecord = z
   .strict()
 export type MultiAgentChildRunRecord = z.infer<typeof MultiAgentChildRunRecord>
 
+export const MultiAgentChildRunPage = z
+  .object({
+    records: z.array(MultiAgentChildRunRecord),
+    nextCursor: z.string().min(1).nullable(),
+    historyTruncated: z.boolean()
+  })
+  .strict()
+export type MultiAgentChildRunPage = z.infer<typeof MultiAgentChildRunPage>
+
 export const MultiAgentRuntimeConfig = z
   .object({
     enabled: z.boolean().default(true),
@@ -200,7 +209,16 @@ export const MultiAgentStoreDiagnostics = z
     rootDir: z.string().min(1).optional(),
     records: z.number().int().nonnegative(),
     invalidRecords: z.number().int().nonnegative(),
-    issues: z.array(MultiAgentStoreIssue).default([])
+    issues: z.array(MultiAgentStoreIssue).default([]),
+    scans: z.number().int().nonnegative().default(0),
+    statusCounts: z.object({
+      queued: z.number().int().nonnegative(),
+      running: z.number().int().nonnegative(),
+      completed: z.number().int().nonnegative(),
+      failed: z.number().int().nonnegative(),
+      aborted: z.number().int().nonnegative()
+    }).strict(),
+    usage: MultiAgentUsage
   })
   .strict()
 export type MultiAgentStoreDiagnostics = z.infer<typeof MultiAgentStoreDiagnostics>
@@ -224,6 +242,8 @@ export const MultiAgentDiagnostics = z
     activeLifecycleControls: z.number().int().nonnegative(),
     activeBoundaries: z.number().int().nonnegative(),
     childRuns: z.array(MultiAgentChildRunRecord),
+    childRunsNextCursor: z.string().min(1).nullable(),
+    childRunsTruncated: z.boolean(),
     statusCounts: MultiAgentStatusCounts,
     usage: MultiAgentUsage,
     aggregates: z.array(MultiAgentChildRunAggregate),

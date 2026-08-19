@@ -23,7 +23,6 @@ import type {
 import {
   createAgentRuntimeCapabilityMatrix,
   createDefaultAgentRuntimeCapabilities,
-  filterAgentRuntimeThreadChildren,
   projectAgentRuntimeThreadSummary
 } from '../../../shared/agent-runtime-contract'
 import {
@@ -37,6 +36,7 @@ import {
   boundAgentRuntimeEventForDelivery,
   externalizeToolDetails
 } from '../agent-runtime/jsonl-thread-page'
+import { BoundedAgentRuntimeChildHistory } from '../agent-runtime/bounded-child-history'
 import {
   EXECUTION_INTEGRITY_POLICY_METADATA_KEY,
   EXECUTION_INTEGRITY_POLICY_VERSION,
@@ -298,6 +298,7 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
             threadId,
             parentTurnId: stringValue(payload.parentTurnId) || stringValue(payload.turnId),
             activeOnly: payload.activeOnly === true,
+            cursor: stringValue(payload.cursor),
             limit: numberValue(payload.limit)
           })
         }
@@ -768,26 +769,26 @@ function mapCodexBlock(
 
 async function listCodexThreadChildren(
   service: CodexRuntimeService,
-  input: { threadId: string; parentTurnId?: string; activeOnly?: boolean; limit?: number }
+  input: { threadId: string; parentTurnId?: string; activeOnly?: boolean; cursor?: string; limit?: number }
 ): Promise<AgentRuntimeListThreadChildrenResponse> {
   const children = await codexChildrenFromThreadEvents(service, input.threadId)
-  const filtered = filterAgentRuntimeThreadChildren(children, {
-    runtimeId: 'codex',
-    parentThreadId: input.threadId,
-    ...(input.parentTurnId ? { parentTurnId: input.parentTurnId } : {}),
-    ...(input.activeOnly ? { activeOnly: true } : {})
-  })
-  const limited = typeof input.limit === 'number' && input.limit > 0
-    ? filtered.slice(0, Math.floor(input.limit))
-    : filtered
-  return {
+  const history = new BoundedAgentRuntimeChildHistory()
+  for (const child of children) history.upsert(child)
+  const page = history.page({
     runtimeId: 'codex',
     threadId: input.threadId,
     ...(input.parentTurnId ? { parentTurnId: input.parentTurnId } : {}),
-    children: limited,
+    ...(input.activeOnly ? { activeOnly: true } : {}),
+    ...(input.cursor ? { cursor: input.cursor } : {}),
+    ...(input.limit ? { limit: input.limit } : {})
+  })
+  return {
+    ...page,
     metadata: {
+      ...page.metadata,
       source: 'codex-app-server-events',
-      totalChildren: filtered.length
+      totalChildren: children.length,
+      retainedChildren: children.length
     }
   }
 }
@@ -802,11 +803,11 @@ async function readCodexChildTranscript(
     limit?: number
   }
 ): Promise<AgentRuntimeReadChildTranscriptResponse> {
-  const children = await listCodexThreadChildren(service, {
-    threadId: input.parentThreadId,
-    ...(input.parentTurnId ? { parentTurnId: input.parentTurnId } : {})
-  })
-  const child = children.children.find((candidate) => candidate.id === input.childId)
+  const exactChild = typeof service.findStoredThreadChild === 'function'
+    ? await service.findStoredThreadChild(input.parentThreadId, input.childId)
+    : null
+  const child = exactChild ??
+    (await codexChildrenFromThreadEvents(service, input.parentThreadId)).find((candidate) => candidate.id === input.childId)
   if (!child) {
     return degradedCodexChildTranscript(input, null, 'Codex child was not found on the parent thread.')
   }
@@ -865,7 +866,7 @@ async function codexChildrenFromThreadEvents(
   const [storedChildren, threadsResult] = await Promise.all([
     service.listStoredThreadChildren(threadId),
     typeof service.listThreads === 'function'
-      ? service.listThreads({ includeSide: true })
+      ? service.listThreads({ includeSide: true, limit: 200 })
       : Promise.resolve(null)
   ])
   if (threadsResult?.ok) {

@@ -59,6 +59,10 @@ import {
   truncateAgentRuntimeSummaryText
 } from '../../../shared/agent-runtime-contract'
 import {
+  BoundedAgentRuntimeChildHistory,
+  touchBoundedThreadCache
+} from '../agent-runtime/bounded-child-history'
+import {
   createCodexAppServerClient,
   type CodexAppServerAccount,
   type CodexAppServerAccountLoginCompletedNotification,
@@ -307,7 +311,7 @@ export class CodexRuntimeService {
   private readonly firstActivityTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly modelDeltaDedupeByTurn = new Map<string, CodexModelDeltaDedupeState>()
   private readonly eventSubscribers = new Set<CodexRuntimeEventSubscriber>()
-  private readonly childSummaryIndexes = new Map<string, Promise<Map<string, AgentRuntimeChild>>>()
+  private readonly childSummaryIndexes = new Map<string, Promise<BoundedAgentRuntimeChildHistory>>()
   private readonly pendingToolItemsByTurn = new Map<string, Set<string>>()
   private readonly terminalToolItemsByTurn = new Map<string, Set<string>>()
   private readonly toolExecutionIdentityByCall = new Map<string, CodexToolExecutionIdentity>()
@@ -735,9 +739,15 @@ export class CodexRuntimeService {
     let index = this.childSummaryIndexes.get(guiThreadId)
     if (!index) {
       index = this.loadChildSummaryIndex(guiThreadId)
-      this.childSummaryIndexes.set(guiThreadId, index)
     }
-    return [...(await index).values()]
+    touchBoundedThreadCache(this.childSummaryIndexes, guiThreadId, index)
+    return (await index).values()
+  }
+
+  async findStoredThreadChild(threadId: string, childId: string): Promise<AgentRuntimeChild | null> {
+    if (!this.eventStore) return null
+    const stored = await this.findStoredThread(threadId)
+    return this.eventStore.findLatestChild(stored?.guiThreadId ?? threadId, childId)
   }
 
   async publishSyntheticEvent(event: AgentRuntimeEvent): Promise<CodexThreadEventPayload> {
@@ -2680,18 +2690,10 @@ export class CodexRuntimeService {
     return stored
   }
 
-  private async loadChildSummaryIndex(threadId: string): Promise<Map<string, AgentRuntimeChild>> {
-    const index = new Map<string, AgentRuntimeChild>()
-    for (const stored of (await this.eventStore?.read(threadId, {
-      includeAll: true
-    })) ?? []) {
-      const child = stored.event.child
-      if (!child) continue
-      if (child.metadata?.lifecycleOperation === 'delete') {
-        index.delete(child.id)
-        continue
-      }
-      index.set(child.id, mergeStoredCodexChild(index.get(child.id), child))
+  private async loadChildSummaryIndex(threadId: string): Promise<BoundedAgentRuntimeChildHistory> {
+    const index = new BoundedAgentRuntimeChildHistory()
+    for (const child of (await this.eventStore?.readLatestChildren(threadId)) ?? []) {
+      index.upsert(mergeStoredCodexChild(index.get(child.id) ?? undefined, child))
     }
     return index
   }
@@ -2705,7 +2707,7 @@ export class CodexRuntimeService {
       index.delete(child.id)
       return
     }
-    index.set(child.id, mergeStoredCodexChild(index.get(child.id), child))
+    index.upsert(mergeStoredCodexChild(index.get(child.id) ?? undefined, child))
   }
 
   private async publishClientEvent(event: CodexThreadEventPayload): Promise<CodexThreadEventPayload> {

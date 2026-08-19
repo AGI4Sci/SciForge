@@ -105,6 +105,30 @@ test('runtime keeps executing when child refresh notifications fail', async () =
   assert.equal((await store.get('thread-1', record.id))?.status, 'completed')
 })
 
+test('runtime diagnostics stay bounded at 1000 historical children while exact terminal operations remain accurate', async () => {
+  const store = new InMemoryMultiAgentStore()
+  for (let index = 0; index < 1_000; index += 1) {
+    await store.upsert(MultiAgentChildRunRecord.parse({
+      id: `history-${String(index).padStart(4, '0')}`,
+      parentThreadId: 'history-parent',
+      parentTurnId: `turn-${Math.floor(index / 4)}`,
+      prompt: `Historical task ${index}`,
+      status: 'completed',
+      createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+      updatedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString()
+    }))
+  }
+  const runtime = new MultiAgentRuntime({ store, executor: async () => ({}) })
+  const diagnostics = await runtime.diagnostics('history-parent')
+  assert.equal(diagnostics.childRuns.length, 40)
+  assert.equal(diagnostics.childRunsTruncated, true)
+  assert.equal(diagnostics.statusCounts.completed, 1_000)
+  assert.equal(diagnostics.storage.records, 1_000)
+  assert.equal(diagnostics.storage.scans, 0)
+  assert.equal((await runtime.child('history-parent', 'history-0000'))?.id, 'history-0000')
+  assert.equal((await runtime.cancelChild('history-parent', 'history-0000'))?.status, 'completed')
+})
+
 test('runtime merges streamed transcript updates by entry id', async () => {
   const store = new InMemoryMultiAgentStore()
   const runtime = new MultiAgentRuntime({
