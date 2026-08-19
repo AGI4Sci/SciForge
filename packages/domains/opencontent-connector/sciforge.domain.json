@@ -17,19 +17,10 @@
     "priority": 280
   },
   "contributionContracts": {
-    "opencontent-connector.workbench-right-panel": {
-      "location": "workbench.right-panel",
-      "title": "OpenContent Connection"
-    },
-    "opencontent-connector.workbench-toolbar-action": {
-      "location": "workbench.topbar",
-      "commandId": "opencontent-connector.open-connection",
-      "label": "OpenContent Connection"
-    },
     "opencontent-connector.provider-instance": {
       "location": "main.provider-instance-directory-entry",
       "contractVersion": "1.0.0",
-      "providerInstanceRef": "opencontent-default",
+      "providerInstanceRef": "opencontent-edoc2-demo",
       "providerKind": "opencontent",
       "displayName": "OpenContent"
     },
@@ -62,27 +53,6 @@
           "id": "opencontent-connector.content-space-service",
           "kind": "main.extension",
           "version": "1.0.0",
-          "priority": 280
-        }
-      ]
-    },
-    {
-      "process": "renderer",
-      "export": "./renderer",
-      "contributions": [
-        {
-          "id": "opencontent-connector.workbench-right-panel",
-          "kind": "renderer.workbench-right-panel",
-          "priority": 280
-        },
-        {
-          "id": "opencontent-connector.open-connection",
-          "kind": "renderer.command",
-          "priority": 280
-        },
-        {
-          "id": "opencontent-connector.workbench-toolbar-action",
-          "kind": "renderer.workbench-toolbar-action",
           "priority": 280
         }
       ]

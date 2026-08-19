@@ -22098,11 +22098,18 @@ First lists explicit trusted Provider Instances; use its returned providerInstan
                       "minLength": 3,
                       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
                       "type": "string"
+                    },
+                    "providerKind": {
+                      "maxLength": 96,
+                      "minLength": 3,
+                      "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+                      "type": "string"
                     }
                   },
                   "readOnly": true,
                   "required": [
                     "providerInstanceRef",
+                    "providerKind",
                     "label"
                   ],
                   "type": "object"
@@ -38506,6 +38513,11 @@ Validates and binds one existing OpenContent account to the current Local Accoun
         "minLength": 1,
         "type": "string"
       },
+      "providerInstanceRef": {
+        "maxLength": 256,
+        "minLength": 3,
+        "type": "string"
+      },
       "username": {
         "maxLength": 256,
         "minLength": 1,
@@ -38514,6 +38526,7 @@ Validates and binds one existing OpenContent account to the current Local Accoun
     },
     "readOnly": true,
     "required": [
+      "providerInstanceRef",
       "username",
       "password"
     ],
@@ -38525,71 +38538,242 @@ Validates and binds one existing OpenContent account to the current Local Accoun
       {
         "additionalProperties": false,
         "properties": {
-          "state": {
-            "const": "disconnected",
+          "outcome": {
+            "const": "success",
             "type": "string"
+          },
+          "status": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "state": {
+                    "const": "disconnected",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "externalAccount": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "account": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "id": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "identityId": {
+                        "maximum": 9007199254740991,
+                        "minimum": -9007199254740991,
+                        "type": "integer"
+                      },
+                      "name": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "id",
+                      "identityId",
+                      "account",
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "connected",
+                      "reauthentication_required"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "state",
+                  "providerInstanceRef",
+                  "externalAccount"
+                ],
+                "type": "object"
+              }
+            ]
           }
         },
         "readOnly": true,
         "required": [
-          "state"
+          "outcome",
+          "status"
         ],
         "type": "object"
       },
       {
         "additionalProperties": false,
         "properties": {
-          "externalAccount": {
-            "additionalProperties": false,
-            "properties": {
-              "account": {
-                "maxLength": 256,
-                "minLength": 1,
-                "type": "string"
+          "error": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "select_provider",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "invalid_provider_instance",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
               },
-              "id": {
-                "maxLength": 256,
-                "minLength": 1,
-                "type": "string"
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "check_credentials",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "invalid_credentials",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
               },
-              "identityId": {
-                "maximum": 9007199254740991,
-                "minimum": -9007199254740991,
-                "type": "integer"
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "retry",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "provider_unavailable",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
               },
-              "name": {
-                "maxLength": 256,
-                "minLength": 1,
-                "type": "string"
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "retry_later",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "rate_limited",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "contact_support",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "provider_contract_violation",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "repair_secure_storage",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "secure_storage_unavailable",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "none",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "cancelled",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
               }
-            },
-            "readOnly": true,
-            "required": [
-              "id",
-              "identityId",
-              "account",
-              "name"
-            ],
-            "type": "object"
+            ]
           },
-          "providerInstanceRef": {
-            "maxLength": 256,
-            "minLength": 3,
-            "type": "string"
-          },
-          "state": {
-            "enum": [
-              "connected",
-              "reauthentication_required"
-            ],
+          "outcome": {
+            "const": "error",
             "type": "string"
           }
         },
         "readOnly": true,
         "required": [
-          "state",
-          "providerInstanceRef",
-          "externalAccount"
+          "outcome",
+          "error"
         ],
         "type": "object"
       }
@@ -38627,8 +38811,17 @@ Reads the current Local Account connection status for OpenContent.
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
-    "properties": {},
+    "properties": {
+      "providerInstanceRef": {
+        "maxLength": 256,
+        "minLength": 3,
+        "type": "string"
+      }
+    },
     "readOnly": true,
+    "required": [
+      "providerInstanceRef"
+    ],
     "type": "object"
   },
   "outputSchema": {
@@ -38637,71 +38830,242 @@ Reads the current Local Account connection status for OpenContent.
       {
         "additionalProperties": false,
         "properties": {
-          "state": {
-            "const": "disconnected",
+          "outcome": {
+            "const": "success",
             "type": "string"
+          },
+          "status": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "state": {
+                    "const": "disconnected",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "externalAccount": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "account": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "id": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "identityId": {
+                        "maximum": 9007199254740991,
+                        "minimum": -9007199254740991,
+                        "type": "integer"
+                      },
+                      "name": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "id",
+                      "identityId",
+                      "account",
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "connected",
+                      "reauthentication_required"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "state",
+                  "providerInstanceRef",
+                  "externalAccount"
+                ],
+                "type": "object"
+              }
+            ]
           }
         },
         "readOnly": true,
         "required": [
-          "state"
+          "outcome",
+          "status"
         ],
         "type": "object"
       },
       {
         "additionalProperties": false,
         "properties": {
-          "externalAccount": {
-            "additionalProperties": false,
-            "properties": {
-              "account": {
-                "maxLength": 256,
-                "minLength": 1,
-                "type": "string"
+          "error": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "select_provider",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "invalid_provider_instance",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
               },
-              "id": {
-                "maxLength": 256,
-                "minLength": 1,
-                "type": "string"
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "check_credentials",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "invalid_credentials",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
               },
-              "identityId": {
-                "maximum": 9007199254740991,
-                "minimum": -9007199254740991,
-                "type": "integer"
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "retry",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "provider_unavailable",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
               },
-              "name": {
-                "maxLength": 256,
-                "minLength": 1,
-                "type": "string"
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "retry_later",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "rate_limited",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "contact_support",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "provider_contract_violation",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "repair_secure_storage",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "secure_storage_unavailable",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "none",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "cancelled",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
               }
-            },
-            "readOnly": true,
-            "required": [
-              "id",
-              "identityId",
-              "account",
-              "name"
-            ],
-            "type": "object"
+            ]
           },
-          "providerInstanceRef": {
-            "maxLength": 256,
-            "minLength": 3,
-            "type": "string"
-          },
-          "state": {
-            "enum": [
-              "connected",
-              "reauthentication_required"
-            ],
+          "outcome": {
+            "const": "error",
             "type": "string"
           }
         },
         "readOnly": true,
         "required": [
-          "state",
-          "providerInstanceRef",
-          "externalAccount"
+          "outcome",
+          "error"
         ],
         "type": "object"
       }
@@ -38738,29 +39102,199 @@ Removes this node-local OpenContent credential and connection metadata.
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
-    "properties": {},
-    "readOnly": true,
-    "type": "object"
-  },
-  "outputSchema": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
     "properties": {
-      "remoteRevocation": {
-        "const": "unsupported",
-        "type": "string"
-      },
-      "state": {
-        "const": "disconnected",
+      "providerInstanceRef": {
+        "maxLength": 256,
+        "minLength": 3,
         "type": "string"
       }
     },
     "readOnly": true,
     "required": [
-      "state",
-      "remoteRevocation"
+      "providerInstanceRef"
     ],
     "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "outcome": {
+            "const": "success",
+            "type": "string"
+          },
+          "remoteRevocation": {
+            "const": "unsupported",
+            "type": "string"
+          },
+          "state": {
+            "const": "disconnected",
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "outcome",
+          "state",
+          "remoteRevocation"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "select_provider",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "invalid_provider_instance",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "check_credentials",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "invalid_credentials",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "retry",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "provider_unavailable",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "retry_later",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "rate_limited",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "contact_support",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "provider_contract_violation",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "repair_secure_storage",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "secure_storage_unavailable",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "none",
+                    "type": "string"
+                  },
+                  "code": {
+                    "const": "cancelled",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "code",
+                  "action"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "outcome": {
+            "const": "error",
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "outcome",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
   },
   "resourceKinds": [],
   "tags": [

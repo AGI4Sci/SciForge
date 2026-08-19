@@ -5,6 +5,27 @@ import { parsePortableResourceReference } from '@sciforge/domain-sdk/portable-re
 import * as contract from './contract.js'
 
 describe('Content Space public contract', () => {
+  it('projects the bounded Provider Kind needed for renderer-owned enrollment matching', () => {
+    expect(contract.contentSpaceProviderInstanceSummarySchema.parse({
+      providerInstanceRef: 'provider-instance-a',
+      providerKind: 'fixture.content-space',
+      label: 'Fixture Content Space'
+    })).toEqual({
+      providerInstanceRef: 'provider-instance-a',
+      providerKind: 'fixture.content-space',
+      label: 'Fixture Content Space'
+    })
+    expect(() => contract.contentSpaceProviderInstanceSummarySchema.parse({
+      providerInstanceRef: 'provider-instance-a',
+      label: 'Fixture Content Space'
+    })).toThrow()
+    expect(() => contract.contentSpaceProviderInstanceSummarySchema.parse({
+      providerInstanceRef: 'provider-instance-a',
+      providerKind: 'InvalidKind',
+      label: 'Fixture Content Space'
+    })).toThrow()
+  })
+
   it('round-trips only bounded provider-neutral portable identities', () => {
     const container = {
       providerInstanceRef: 'provider-instance-a',

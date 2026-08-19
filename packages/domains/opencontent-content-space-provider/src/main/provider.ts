@@ -7,6 +7,7 @@ import {
   type ContentSpaceProvider
 } from '@sciforge/domain-content-space/contract'
 import {
+  OPENCONTENT_PROVIDER_INSTANCE_REF,
   OpenContentConnectorError,
   type OpenContentContentSpaceFacade
 } from '@sciforge/domain-opencontent-connector/contract'
@@ -27,6 +28,7 @@ export function createOpenContentContentSpaceProvider(input: Readonly<{
   facade: OpenContentContentSpaceFacade
 }>): ContentSpaceProvider {
   const providerInstanceRef = input.providerInstanceRef
+  assertInstance(providerInstanceRef, OPENCONTENT_PROVIDER_INSTANCE_REF)
   const blocked = (): never => {
     throw new ContentSpaceOperationError({
       code: 'blocked_by_contract',
@@ -69,6 +71,7 @@ export function createOpenContentContentSpaceProvider(input: Readonly<{
       try {
         const result = await input.facade.listRootFolders({
           principal: context.principal,
+          providerInstanceRef: context.providerInstanceRef,
           teamPage: teamPage ?? 1,
           teamPageSize: Math.min(page.limit, 100),
           includePersonal: teamPage === undefined,
@@ -108,6 +111,7 @@ export function createOpenContentContentSpaceProvider(input: Readonly<{
       try {
         const result = await input.facade.listFolderEntries({
           principal: context.principal,
+          providerInstanceRef: context.providerInstanceRef,
           parentFolderGuid: parent.containerId,
           page: providerPage,
           pageSize: page.limit,
@@ -147,11 +151,13 @@ export function createOpenContentContentSpaceProvider(input: Readonly<{
     },
     observeEntry: async ({ context, reference }) => {
       assertInstance(context.providerInstanceRef, providerInstanceRef)
+      assertInstance(reference.providerInstanceRef, providerInstanceRef)
       try {
         const container = 'containerId' in reference
         const observed = await input.facade.observeEntry(container
           ? {
               principal: context.principal,
+              providerInstanceRef: context.providerInstanceRef,
               kind: 'container',
               resourceGuid: reference.containerId,
               signal: context.signal,
@@ -159,6 +165,7 @@ export function createOpenContentContentSpaceProvider(input: Readonly<{
             }
           : {
               principal: context.principal,
+              providerInstanceRef: context.providerInstanceRef,
               kind: 'file',
               resourceGuid: reference.fileId,
               signal: context.signal,
@@ -203,9 +210,12 @@ export function createOpenContentContentSpaceProvider(input: Readonly<{
       }
     },
     createFolder: async ({ context, parent, name }) => {
+      assertInstance(context.providerInstanceRef, providerInstanceRef)
+      assertInstance(parent.providerInstanceRef, providerInstanceRef)
       try {
         const created = await input.facade.createFolder({
           principal: context.principal,
+          providerInstanceRef: context.providerInstanceRef,
           parentFolderGuid: parent.containerId,
           name,
           signal: context.signal,
@@ -225,9 +235,12 @@ export function createOpenContentContentSpaceProvider(input: Readonly<{
       }
     },
     uploadNewFile: async ({ context, parent, name, source }) => {
+      assertInstance(context.providerInstanceRef, providerInstanceRef)
+      assertInstance(parent.providerInstanceRef, providerInstanceRef)
       try {
         const uploaded = await input.facade.uploadNewFile({
           principal: context.principal,
+          providerInstanceRef: context.providerInstanceRef,
           parentFolderGuid: parent.containerId,
           name,
           size: source.size,
@@ -250,9 +263,12 @@ export function createOpenContentContentSpaceProvider(input: Readonly<{
       }
     },
     downloadFile: async ({ context, reference, destination }) => {
+      assertInstance(context.providerInstanceRef, providerInstanceRef)
+      assertInstance(reference.providerInstanceRef, providerInstanceRef)
       try {
         const downloaded = await input.facade.downloadFile({
           principal: context.principal,
+          providerInstanceRef: context.providerInstanceRef,
           fileGuid: reference.fileId,
           write: destination.write,
           signal: context.signal,

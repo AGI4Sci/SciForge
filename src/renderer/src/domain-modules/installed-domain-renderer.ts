@@ -13,7 +13,7 @@ import { createDomainRendererEntry as createDomainRendererEntry8 } from '@scifor
 import { createDomainRendererEntry as createDomainRendererEntry9 } from '@sciforge/domain-git-checkpoints/renderer'
 import { createDomainRendererEntry as createDomainRendererEntry10 } from '@sciforge/domain-identity-access/renderer'
 import { createDomainRendererEntry as createDomainRendererEntry11 } from '@sciforge/domain-life-science-preview/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry12 } from '@sciforge/domain-opencontent-connector/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry12 } from '@sciforge/domain-opencontent-content-space-provider/renderer'
 import { createDomainRendererEntry as createDomainRendererEntry13 } from '@sciforge/domain-paper-radar/renderer'
 import { createDomainRendererEntry as createDomainRendererEntry14 } from '@sciforge/domain-project-dag/renderer'
 import { createDomainRendererEntry as createDomainRendererEntry15 } from '@sciforge/domain-remote-ssh/renderer'
@@ -89,7 +89,7 @@ export const installedRendererDomainEntrySet = defineInstalledRendererDomainEntr
     createDomainRendererEntry9(domainHostFor("@sciforge/domain-git-checkpoints")),
     createDomainRendererEntry10(domainHostFor("@sciforge/domain-identity-access")),
     createDomainRendererEntry11(domainHostFor("@sciforge/domain-life-science-preview")),
-    createDomainRendererEntry12(domainHostFor("@sciforge/domain-opencontent-connector")),
+    createDomainRendererEntry12(domainHostFor("@sciforge/domain-opencontent-content-space-provider")),
     createDomainRendererEntry13(domainHostFor("@sciforge/domain-paper-radar")),
     createDomainRendererEntry14(domainHostFor("@sciforge/domain-project-dag")),
     createDomainRendererEntry15(domainHostFor("@sciforge/domain-remote-ssh")),

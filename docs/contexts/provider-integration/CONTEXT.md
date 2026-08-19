@@ -58,6 +58,10 @@ _Avoid_: Provider Connection, Token in public/caller-controlled URL, shared inte
 A Human-only interaction that proves control of an existing External Account and creates or replaces the current Principal's node-local Provider Connection. Enrollment UI belongs to the Provider Integration Package while credential use and network transport remain main-process only.
 _Avoid_: SciForge login, provider account creation, Content Space operation, Agent-supplied credential
 
+**Provider Enrollment View**:
+A Provider Integration-owned Human interface mounted only after a concrete Provider Instance is selected inside the consuming domain's surface. Its placement does not transfer credential or connection ownership to that domain.
+_Avoid_: plugin configuration, standalone Provider panel, Content Space-owned credential form
+
 **Provider Connection Authority**:
 The rule that every Provider operation uses the executing node owner's current Provider Connection. A remote requester, Task, portable reference, Agent prompt, or runtime argument can never nominate, transfer, or borrow another connection.
 _Avoid_: caller-selected account, Project credential, Coordinator credential, administrator fallback

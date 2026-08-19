@@ -1,6 +1,7 @@
 import type { DomainMainHost } from '@sciforge/domain-sdk/host'
 import { defineDomainMainInternalServiceDescriptor } from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
+import { DomainMainProviderCredentialError } from '@sciforge/domain-sdk/package-storage'
 import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 import type { z } from 'zod'
 import {
@@ -12,11 +13,13 @@ import {
   OPENCONTENT_CONTENT_SPACE_SERVICE_ID,
   OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION,
   OPENCONTENT_CONNECTION_CAPABILITY_IDS,
-  OPENCONTENT_DEFAULT_INSTANCE_REF,
+  OPENCONTENT_PROVIDER_INSTANCE_REF,
   OPENCONTENT_PROVIDER_KIND,
+  OpenContentConnectorError,
   openContentBindInputSchema,
+  openContentConnectionTargetInputSchema,
+  openContentConnectionResultSchema,
   openContentConnectionStatusSchema,
-  openContentEmptyInputSchema,
   openContentUnbindOutputSchema,
   type OpenContentContentSpaceFacade
 } from '../contract.js'
@@ -33,13 +36,16 @@ import {
   createOpenContentConnectionService,
   type OpenContentConnectionService
 } from './connection-service.js'
-import {
-  createOpenContentClient,
-  createUnavailableOpenContentClient
-} from './opencontent-client.js'
+import { createOpenContentClient } from './opencontent-client.js'
 
-export const OPENCONTENT_BASE_URL_ENVIRONMENT_VARIABLE = 'SCIFORGE_OPENCONTENT_BASE_URL'
 const OPENCONTENT_ADAPTER_MODULE_ID = 'sciforge.opencontent-content-space-provider'
+
+export const OPENCONTENT_EDOC2_TEST1_VERIFICATION_PROFILE = Object.freeze({
+  id: 'edoc2-test1-verification' as const,
+  providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+  displayName: 'OpenContent' as const,
+  origin: 'https://test1.edoc2.com' as const
+})
 
 const internalServiceDescriptor = defineDomainMainInternalServiceDescriptor({
   location: 'main.internal-service-descriptor',
@@ -50,9 +56,9 @@ const internalServiceDescriptor = defineDomainMainInternalServiceDescriptor({
 
 const instance = defineProviderInstanceDirectoryEntry({
   contractVersion: PROVIDER_FACTORY_CONTRACT_VERSION,
-  providerInstanceRef: OPENCONTENT_DEFAULT_INSTANCE_REF,
+  providerInstanceRef: OPENCONTENT_EDOC2_TEST1_VERIFICATION_PROFILE.providerInstanceRef,
   providerKind: OPENCONTENT_PROVIDER_KIND,
-  displayName: 'OpenContent'
+  displayName: OPENCONTENT_EDOC2_TEST1_VERIFICATION_PROFILE.displayName
 })
 
 type OpenContentCapabilityContext = Readonly<{
@@ -103,7 +109,6 @@ type OpenContentMainContribution =
 export function createDomainMainEntry(
   host: DomainMainHost,
   options: Readonly<{
-    environment?: Readonly<Record<string, string | undefined>>
     fetch?: typeof fetch
   }> = {}
 ): TrustedDomainProcessEntryInput<OpenContentMainContribution> {
@@ -113,15 +118,12 @@ export function createDomainMainEntry(
   if (!host.internalServices) {
     throw new Error('OpenContent Connector requires Host internal-service mediation.')
   }
-  const baseUrl = resolveOpenContentBaseUrl(options.environment ?? process.env)
-  const client = baseUrl === null
-    ? createUnavailableOpenContentClient()
-    : createOpenContentClient({
-        baseUrl,
-        ...(options.fetch ? { fetch: options.fetch } : {})
-      })
+  const client = createOpenContentClient({
+    baseUrl: OPENCONTENT_EDOC2_TEST1_VERIFICATION_PROFILE.origin,
+    ...(options.fetch ? { fetch: options.fetch } : {})
+  })
   const connections = createOpenContentConnectionService({
-    providerInstanceRef: OPENCONTENT_DEFAULT_INSTANCE_REF,
+    providerInstanceRef: OPENCONTENT_EDOC2_TEST1_VERIFICATION_PROFILE.providerInstanceRef,
     settings: host.packageSettings,
     credentials: host.packageSecrets.providerCredentials,
     client
@@ -129,6 +131,7 @@ export function createDomainMainEntry(
   const facade: OpenContentContentSpaceFacade = Object.freeze({
     listRootFolders: (input) => connections.useCurrentToken({
       principal: input.principal,
+      providerInstanceRef: input.providerInstanceRef,
       assertPrincipalCurrent: input.assertPrincipalCurrent,
       signal: input.signal
     }, (token) => client.listRootFolders({
@@ -141,6 +144,7 @@ export function createDomainMainEntry(
     })),
     listFolderEntries: (input) => connections.useCurrentToken({
       principal: input.principal,
+      providerInstanceRef: input.providerInstanceRef,
       assertPrincipalCurrent: input.assertPrincipalCurrent,
       signal: input.signal
     }, (token) => client.listFolderEntries({
@@ -152,6 +156,7 @@ export function createDomainMainEntry(
     })),
     observeEntry: (input) => connections.useCurrentToken({
       principal: input.principal,
+      providerInstanceRef: input.providerInstanceRef,
       assertPrincipalCurrent: input.assertPrincipalCurrent,
       signal: input.signal
     }, (token) => client.observeEntry({
@@ -162,6 +167,7 @@ export function createDomainMainEntry(
     })),
     createFolder: (input) => connections.useCurrentToken({
       principal: input.principal,
+      providerInstanceRef: input.providerInstanceRef,
       assertPrincipalCurrent: input.assertPrincipalCurrent,
       signal: input.signal
     }, (token) => client.createFolder({
@@ -172,6 +178,7 @@ export function createDomainMainEntry(
     })),
     uploadNewFile: (input) => connections.useCurrentToken({
       principal: input.principal,
+      providerInstanceRef: input.providerInstanceRef,
       assertPrincipalCurrent: input.assertPrincipalCurrent,
       signal: input.signal
     }, (token) => client.uploadNewFile({
@@ -184,6 +191,7 @@ export function createDomainMainEntry(
     })),
     downloadFile: (input) => connections.useCurrentToken({
       principal: input.principal,
+      providerInstanceRef: input.providerInstanceRef,
       assertPrincipalCurrent: input.assertPrincipalCurrent,
       signal: input.signal
     }, (token) => client.downloadFile({
@@ -225,13 +233,6 @@ export function createDomainMainEntry(
   }
 }
 
-export function resolveOpenContentBaseUrl(
-  environment: Readonly<Record<string, string | undefined>>
-): string | null {
-  const configured = environment[OPENCONTENT_BASE_URL_ENVIRONMENT_VARIABLE]?.trim()
-  return configured ? configured : null
-}
-
 export function createOpenContentCapabilityFactory<CapabilityDefinition>(options: Readonly<{
   defineCapability(options: OpenContentCapabilityOptions): CapabilityDefinition
   connections: OpenContentConnectionService
@@ -261,11 +262,21 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'none' },
         tags: ['opencontent', 'provider-connection'],
-        inputSchema: openContentEmptyInputSchema,
-        outputSchema: openContentConnectionStatusSchema,
-        handler: async (_input, context) => ({
-          output: await options.connections.status(requireLocalAccount(context))
-        })
+        inputSchema: openContentConnectionTargetInputSchema,
+        outputSchema: openContentConnectionResultSchema,
+        handler: async (input, context) => {
+          const principal = requireLocalAccount(context)
+          const targetError = validateSelectedProviderInstance(input.providerInstanceRef)
+          if (targetError) return { output: targetError }
+          return {
+            output: await connectionCapabilityResult(() => options.connections.status({
+              principal,
+              providerInstanceRef: input.providerInstanceRef,
+              signal: context.signal,
+              assertPrincipalCurrent: context.assertPrincipalCurrent
+            }))
+          }
+        }
       }),
       define({
         id: OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind,
@@ -276,16 +287,22 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
         concurrency: { revision: 'none', idempotency: 'required' },
         tags: ['opencontent', 'provider-connection', 'sensitive-input'],
         inputSchema: openContentBindInputSchema,
-        outputSchema: openContentConnectionStatusSchema,
-        handler: async (input, context) => ({
-          output: await options.connections.bindExistingAccount({
-            principal: requireLocalAccount(context),
-            username: input.username,
-            password: input.password,
-            signal: context.signal,
-            assertPrincipalCurrent: context.assertPrincipalCurrent
-          })
-        })
+        outputSchema: openContentConnectionResultSchema,
+        handler: async (input, context) => {
+          const principal = requireLocalAccount(context)
+          const targetError = validateSelectedProviderInstance(input.providerInstanceRef)
+          if (targetError) return { output: targetError }
+          return {
+            output: await connectionCapabilityResult(() => options.connections.bindExistingAccount({
+              principal,
+              providerInstanceRef: input.providerInstanceRef,
+              username: input.username,
+              password: input.password,
+              signal: context.signal,
+              assertPrincipalCurrent: context.assertPrincipalCurrent
+            }))
+          }
+        }
       }),
       define({
         id: OPENCONTENT_CONNECTION_CAPABILITY_IDS.unbind,
@@ -295,14 +312,20 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'required' },
         tags: ['opencontent', 'provider-connection'],
-        inputSchema: openContentEmptyInputSchema,
+        inputSchema: openContentConnectionTargetInputSchema,
         outputSchema: openContentUnbindOutputSchema,
-        handler: async (_input, context) => ({
-          output: await options.connections.unbind({
-            principal: requireLocalAccount(context),
-            assertPrincipalCurrent: context.assertPrincipalCurrent
-          })
-        })
+        handler: async (input, context) => {
+          const principal = requireLocalAccount(context)
+          const targetError = validateSelectedProviderInstance(input.providerInstanceRef)
+          if (targetError) return { output: targetError }
+          return {
+            output: await unbindCapabilityResult(() => options.connections.unbind({
+              principal,
+              providerInstanceRef: input.providerInstanceRef,
+              assertPrincipalCurrent: context.assertPrincipalCurrent
+            }))
+          }
+        }
       })
     ]
   })
@@ -314,4 +337,71 @@ function requireLocalAccount(context: OpenContentCapabilityContext): PrincipalSn
   }
   context.assertPrincipalCurrent()
   return context.caller.principal
+}
+
+function validateSelectedProviderInstance(providerInstanceRef: string) {
+  if (providerInstanceRef === OPENCONTENT_PROVIDER_INSTANCE_REF) return undefined
+  return Object.freeze({
+    outcome: 'error' as const,
+    error: Object.freeze({
+      code: 'invalid_provider_instance' as const,
+      action: 'select_provider' as const
+    })
+  })
+}
+
+async function connectionCapabilityResult(
+  operation: () => Promise<import('../contract.js').OpenContentConnectionStatus>
+) {
+  try {
+    return Object.freeze({
+      outcome: 'success' as const,
+      status: await operation()
+    })
+  } catch (error) {
+    const publicError = toPublicEnrollmentError(error)
+    if (!publicError) throw error
+    return Object.freeze({ outcome: 'error' as const, error: publicError })
+  }
+}
+
+async function unbindCapabilityResult(operation: () => Promise<Readonly<{
+  state: 'disconnected'
+  remoteRevocation: 'unsupported'
+}>>) {
+  try {
+    return Object.freeze({ outcome: 'success' as const, ...await operation() })
+  } catch (error) {
+    const publicError = toPublicEnrollmentError(error)
+    if (!publicError) throw error
+    return Object.freeze({ outcome: 'error' as const, error: publicError })
+  }
+}
+
+function toPublicEnrollmentError(error: unknown) {
+  if (error instanceof OpenContentConnectorError) {
+    const mapped = {
+      unauthorized: { code: 'invalid_credentials', action: 'check_credentials' },
+      reauthentication_required: { code: 'invalid_credentials', action: 'check_credentials' },
+      provider_unavailable: { code: 'provider_unavailable', action: 'retry' },
+      rate_limited: { code: 'rate_limited', action: 'retry_later' },
+      provider_contract_violation: {
+        code: 'provider_contract_violation',
+        action: 'contact_support'
+      },
+      cancelled: { code: 'cancelled', action: 'none' }
+    } as const
+    const result = error.code in mapped
+      ? mapped[error.code as keyof typeof mapped]
+      : undefined
+    return result ? Object.freeze(result) : undefined
+  }
+  if (error instanceof DomainMainProviderCredentialError &&
+    error.code.startsWith('secure_storage_')) {
+    return Object.freeze({
+      code: 'secure_storage_unavailable' as const,
+      action: 'repair_secure_storage' as const
+    })
+  }
+  return undefined
 }

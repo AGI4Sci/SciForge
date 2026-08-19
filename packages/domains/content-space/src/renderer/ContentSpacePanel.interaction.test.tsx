@@ -20,6 +20,10 @@ import {
 } from '../contract.js'
 import { ContentSpacePanel, type ContentSpacePanelProps } from './ContentSpacePanel.js'
 import type { ContentSpaceCapabilityClient } from './capability-client.js'
+import {
+  CONTENT_SPACE_PROVIDER_ENROLLMENT_VIEW_CONTRACT_VERSION,
+  type ContentSpaceProviderEnrollmentView
+} from './provider-enrollment-view.js'
 
 type Deferred<Value> = Readonly<{
   promise: Promise<Value>
@@ -97,6 +101,129 @@ describe('ContentSpacePanel', () => {
     expect(mounted.container.textContent).toContain('Select a Provider Instance.')
   })
 
+  it('renders Provider-owned enrollment in Content Space and gates discovery until access is ready', async () => {
+    const describeCapabilities = vi.fn(panelClient().describeCapabilities)
+    const listContainers = vi.fn(panelClient().listContainers)
+    const readAccessState = vi.fn(async () => ({
+      status: 'human_action_required' as const
+    }))
+    const view = enrollmentView('mock-one', readAccessState)
+    const mounted = await mountPanel(panelClient({
+      describeCapabilities,
+      listContainers
+    }), { enrollmentViews: [view] })
+
+    await selectProvider(mounted.container, providerOne)
+
+    expect(readAccessState).toHaveBeenCalledWith({
+      providerInstanceRef: providerOne,
+      signal: expect.any(AbortSignal)
+    })
+    expect(mounted.container.querySelector('[data-fixture-enrollment]')?.textContent)
+      .toContain('human_action_required')
+    expect(describeCapabilities).not.toHaveBeenCalled()
+    expect(listContainers).not.toHaveBeenCalled()
+  })
+
+  it('checks Provider-owned access before describing or listing an enrolled Provider', async () => {
+    const events: string[] = []
+    const readAccessState = vi.fn(async () => {
+      events.push('access')
+      return { status: 'ready' as const }
+    })
+    const describeCapabilities = vi.fn(async () => {
+      events.push('describe')
+      return ok({ items: readyCapabilities('list-containers', 'list-entries') })
+    })
+    const listContainers = vi.fn(async () => {
+      events.push('list')
+      return ok({ providerInstanceRef: providerOne, items: [] })
+    })
+    const mounted = await mountPanel(panelClient({
+      describeCapabilities,
+      listContainers
+    }), { enrollmentViews: [enrollmentView('mock-one', readAccessState)] })
+
+    await selectProvider(mounted.container, providerOne)
+    await settleReact()
+
+    expect(events).toEqual(['access', 'describe', 'list'])
+  })
+
+  it('clears Provider content and aborts stale reads when enrollment access changes', async () => {
+    const pendingContainers = deferred<Awaited<ReturnType<
+      ContentSpaceCapabilityClient['listContainers']
+    >>>()
+    let listSignal: AbortSignal | undefined
+    let accessChecks = 0
+    const readAccessState = vi.fn(async () => ({
+      status: ++accessChecks === 1 ? 'ready' as const : 'human_action_required' as const
+    }))
+    const listContainers = vi.fn((
+      _input: Parameters<ContentSpaceCapabilityClient['listContainers']>[0],
+      options?: Parameters<ContentSpaceCapabilityClient['listContainers']>[1]
+    ) => {
+      listSignal = options?.signal
+      return pendingContainers.promise
+    })
+    const mounted = await mountPanel(panelClient({ listContainers }), {
+      enrollmentViews: [enrollmentView('mock-one', readAccessState)]
+    })
+
+    await selectProvider(mounted.container, providerOne)
+    expect(listSignal?.aborted).toBe(false)
+
+    await click(buttonByText(mounted.container, 'Refresh fixture access'))
+
+    expect(listSignal?.aborted).toBe(true)
+    expect(mounted.container.querySelector('[data-fixture-enrollment]')?.textContent)
+      .toContain('human_action_required')
+    pendingContainers.resolve(ok({
+      providerInstanceRef: providerOne,
+      items: [{ reference: rootReference, scope: 'personal', label: 'Stale library' }]
+    }))
+    await settleReact()
+    expect(mounted.container.textContent).not.toContain('Stale library')
+  })
+
+  it('aborts a stale enrollment check when the selected Provider changes', async () => {
+    const firstAccess = deferred<{ status: 'ready' }>()
+    let accessSignal: AbortSignal | undefined
+    let staleAccessChanged: (() => void) | undefined
+    const readAccessState = vi.fn((context: { signal: AbortSignal }) => {
+      accessSignal = context.signal
+      return firstAccess.promise
+    })
+    const view: ContentSpaceProviderEnrollmentView = Object.freeze({
+      ...enrollmentView('mock-one', readAccessState),
+      render: ({ onAccessChanged }) => {
+        staleAccessChanged = onAccessChanged
+        return <div data-fixture-enrollment />
+      }
+    })
+    const describeCapabilities = vi.fn(panelClient().describeCapabilities)
+    const mounted = await mountPanel(panelClient({ describeCapabilities }), {
+      enrollmentViews: [view]
+    })
+
+    await selectProvider(mounted.container, providerOne)
+    expect(accessSignal?.aborted).toBe(false)
+    await selectProvider(mounted.container, providerTwo)
+    expect(accessSignal?.aborted).toBe(true)
+    await act(async () => {
+      staleAccessChanged?.()
+      await tick()
+    })
+
+    firstAccess.resolve({ status: 'ready' })
+    await settleReact()
+    expect(describeCapabilities).toHaveBeenCalledTimes(1)
+    expect(describeCapabilities).toHaveBeenCalledWith(
+      providerTwo,
+      { signal: expect.any(AbortSignal) }
+    )
+  })
+
   it('admits trusted development-profile operations without presenting them as production-ready', async () => {
     const mounted = await mountPanel(panelClient({
       describeCapabilities: async () => ok({
@@ -136,41 +263,155 @@ describe('ContentSpacePanel', () => {
     expect(buttonContainingText(mounted.container, 'Development library').disabled).toBe(false)
   })
 
-  it('finishes independent Provider discovery while opening an initial resource', async () => {
+  it('discovers and gates the Provider before observing an initial resource', async () => {
     const discovered = deferred<Awaited<ReturnType<
       ContentSpaceCapabilityClient['listProviderInstances']
     >>>()
     const listProviderInstances = vi.fn(() => discovered.promise)
+    const observeResource = vi.fn(async () => ({
+      reference: fileReference,
+      entry: fileEntry,
+      capabilities: fileCapabilities
+    }))
+    const readAccessState = vi.fn(async () => ({
+      status: 'human_action_required' as const
+    }))
     const mounted = await mountPanel(panelClient({
       listProviderInstances,
-      observeResource: async () => ({
-        reference: fileReference,
-        entry: fileEntry,
-        capabilities: fileCapabilities
-      })
+      observeResource
     }), {
       initialResource: sessionResource(
         CONTENT_FILE_RESOURCE_KIND,
         'portable-file-id',
         'portable-file-token'
-      )
+      ),
+      enrollmentViews: [enrollmentView('mock-one', readAccessState)]
     })
 
-    expect(mounted.container.textContent).toContain('paper.pdf')
+    expect(readAccessState).not.toHaveBeenCalled()
+    expect(observeResource).not.toHaveBeenCalled()
 
     discovered.resolve(ok({
       items: [
-        { providerInstanceRef: providerOne, label: 'Mock One' },
-        { providerInstanceRef: providerTwo, label: 'Mock Two' }
+        { providerInstanceRef: providerOne, providerKind: 'mock-one', label: 'Mock One' }
       ]
     }))
     await settleReact()
 
     expect(listProviderInstances).toHaveBeenCalledOnce()
-    expect([...providerSelect(mounted.container).options].map(({ value }) => value))
-      .toContain(providerTwo)
+    expect(readAccessState).toHaveBeenCalledWith({
+      providerInstanceRef: providerOne,
+      signal: expect.any(AbortSignal)
+    })
+    expect(observeResource).not.toHaveBeenCalled()
+    expect(providerSelect(mounted.container).value).toBe(providerOne)
+    expect(mounted.container.querySelector('[data-fixture-enrollment]')?.textContent)
+      .toContain('human_action_required')
+    expect(mounted.container.textContent).not.toContain('paper.pdf')
+  })
+
+  it('observes an initial resource only after its discovered Provider is ready', async () => {
+    const events: string[] = []
+    const listProviderInstances = vi.fn(async () => {
+      events.push('discovery')
+      return ok({
+        items: [{
+          providerInstanceRef: providerOne,
+          providerKind: 'mock-one',
+          label: 'Mock One'
+        }]
+      })
+    })
+    const readAccessState = vi.fn(async () => {
+      events.push('access')
+      return { status: 'ready' as const }
+    })
+    const observeResource = vi.fn(async () => {
+      events.push('observe')
+      return {
+        reference: fileReference,
+        entry: fileEntry,
+        capabilities: fileCapabilities
+      }
+    })
+    const describeCapabilities = vi.fn(panelClient().describeCapabilities)
+    const listContainers = vi.fn(panelClient().listContainers)
+    const mounted = await mountPanel(panelClient({
+      listProviderInstances,
+      describeCapabilities,
+      listContainers,
+      observeResource
+    }), {
+      initialResource: sessionResource(
+        CONTENT_FILE_RESOURCE_KIND,
+        'portable-file-id',
+        'portable-file-token'
+      ),
+      enrollmentViews: [enrollmentView('mock-one', readAccessState)]
+    })
+
+    expect(events).toEqual(['discovery', 'access', 'observe'])
+    expect(describeCapabilities).not.toHaveBeenCalled()
+    expect(listContainers).not.toHaveBeenCalled()
     expect(providerSelect(mounted.container).value).toBe(providerOne)
     expect(mounted.container.textContent).toContain('paper.pdf')
+  })
+
+  it('requires a source choice for ambiguous deep links and aborts a stale access check', async () => {
+    const firstAccess = deferred<{ status: 'ready' }>()
+    let firstAccessSignal: AbortSignal | undefined
+    const readFirstAccess = vi.fn((context: { signal: AbortSignal }) => {
+      firstAccessSignal = context.signal
+      return firstAccess.promise
+    })
+    const readSecondAccess = vi.fn(async () => ({ status: 'ready' as const }))
+    const observeResource = vi.fn(async () => ({
+      reference: secondRootReference,
+      entry: {
+        kind: 'container' as const,
+        reference: secondRootReference,
+        label: 'Second root'
+      },
+      capabilities: []
+    }))
+    const describeCapabilities = vi.fn(panelClient().describeCapabilities)
+    const listContainers = vi.fn(panelClient().listContainers)
+    const mounted = await mountPanel(panelClient({
+      describeCapabilities,
+      listContainers,
+      observeResource
+    }), {
+      initialResource: sessionResource(
+        CONTENT_CONTAINER_RESOURCE_KIND,
+        'portable-container-id',
+        'portable-container-token'
+      ),
+      enrollmentViews: [
+        enrollmentView('mock-one', readFirstAccess),
+        enrollmentView('mock-two', readSecondAccess)
+      ]
+    })
+
+    expect(providerSelect(mounted.container).value).toBe('')
+    expect(mounted.container.textContent)
+      .toContain('Choose the content source for this resource.')
+    expect(observeResource).not.toHaveBeenCalled()
+
+    await selectProvider(mounted.container, providerOne)
+    expect(firstAccessSignal?.aborted).toBe(false)
+    expect(observeResource).not.toHaveBeenCalled()
+
+    await selectProvider(mounted.container, providerTwo)
+    expect(firstAccessSignal?.aborted).toBe(true)
+    expect(readSecondAccess).toHaveBeenCalledOnce()
+    expect(observeResource).toHaveBeenCalledOnce()
+    expect(describeCapabilities).not.toHaveBeenCalled()
+    expect(listContainers).not.toHaveBeenCalled()
+
+    firstAccess.resolve({ status: 'ready' })
+    await settleReact()
+    expect(observeResource).toHaveBeenCalledOnce()
+    expect(providerSelect(mounted.container).value).toBe(providerTwo)
   })
 
   it('keeps container navigation capabilities separate from selected-file capabilities', async () => {
@@ -465,7 +706,16 @@ describe('ContentSpacePanel', () => {
         capabilities: []
       })
     })
-    const resourceMounted = await mountPanel(panelClient({ observeResource }), {
+    const resourceMounted = await mountPanel(panelClient({
+      listProviderInstances: async () => ok({
+        items: [{
+          providerInstanceRef: providerOne,
+          providerKind: 'mock-one',
+          label: 'Mock One'
+        }]
+      }),
+      observeResource
+    }), {
       initialResource: sessionResource(
         CONTENT_CONTAINER_RESOURCE_KIND,
         'portable-a',
@@ -509,7 +759,17 @@ async function mountContainerPanel(
   client: ContentSpaceCapabilityClient,
   transfers: DomainRendererFileTransferHost
 ): Promise<MountedPanel> {
-  return mountPanel(client, {
+  const singleProviderClient: ContentSpaceCapabilityClient = Object.freeze({
+    ...client,
+    listProviderInstances: async () => ok({
+      items: [{
+        providerInstanceRef: providerOne,
+        providerKind: 'mock-one',
+        label: 'Mock One'
+      }]
+    })
+  })
+  return mountPanel(singleProviderClient, {
     fileTransfers: transfers,
     initialResource: sessionResource(
       CONTENT_CONTAINER_RESOURCE_KIND,
@@ -559,8 +819,8 @@ function panelClient(
   return {
     listProviderInstances: async () => ok({
       items: [
-        { providerInstanceRef: providerOne, label: 'Mock One' },
-        { providerInstanceRef: providerTwo, label: 'Mock Two' }
+        { providerInstanceRef: providerOne, providerKind: 'mock-one', label: 'Mock One' },
+        { providerInstanceRef: providerTwo, providerKind: 'mock-two', label: 'Mock Two' }
       ]
     }),
     describeCapabilities: async () => ok({
@@ -649,6 +909,23 @@ function readyCapabilities(
     readiness: 'production_ready' as const,
     reasonCode: 'available' as const
   }))
+}
+
+function enrollmentView(
+  providerKind: string,
+  readAccessState: ContentSpaceProviderEnrollmentView['readAccessState']
+): ContentSpaceProviderEnrollmentView {
+  return Object.freeze({
+    contractVersion: CONTENT_SPACE_PROVIDER_ENROLLMENT_VIEW_CONTRACT_VERSION,
+    providerKind,
+    readAccessState,
+    render: ({ accessState, onAccessChanged }) => (
+      <div data-fixture-enrollment>
+        <span>{accessState.status}</span>
+        <button type="button" onClick={onAccessChanged}>Refresh fixture access</button>
+      </div>
+    )
+  })
 }
 
 function sessionResource(

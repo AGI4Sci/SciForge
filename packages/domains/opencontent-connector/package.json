@@ -10,7 +10,7 @@
     "./definition": "./src/definition.ts",
     "./main": "./src/main/index.ts",
     "./main/client": "./src/main/opencontent-client.ts",
-    "./renderer": "./src/renderer/index.tsx"
+    "./renderer/enrollment": "./src/renderer/enrollment-renderer.ts"
   },
   "files": [
     "src",

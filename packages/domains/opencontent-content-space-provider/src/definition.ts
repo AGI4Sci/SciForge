@@ -15,3 +15,11 @@ export const OPENCONTENT_CONTENT_SPACE_FACTORY_CONTRIBUTION = domainPackageDefin
   )!
 export const OPENCONTENT_CONTENT_SPACE_FACTORY_CONTRACT = domainPackageDefinition
   .contributionContracts[OPENCONTENT_CONTENT_SPACE_FACTORY_CONTRIBUTION.id]!
+
+export const OPENCONTENT_CONTENT_SPACE_ENROLLMENT_CONTRIBUTION = domainPackageDefinition
+  .entrypoints.find((entrypoint) => entrypoint.process === 'renderer')!
+  .contributions.find((contribution) =>
+    contribution.id === 'opencontent-content-space.provider-enrollment'
+  )!
+export const OPENCONTENT_CONTENT_SPACE_ENROLLMENT_CONTRACT = domainPackageDefinition
+  .contributionContracts[OPENCONTENT_CONTENT_SPACE_ENROLLMENT_CONTRIBUTION.id]!

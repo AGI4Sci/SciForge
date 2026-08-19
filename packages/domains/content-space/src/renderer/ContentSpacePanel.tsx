@@ -49,12 +49,18 @@ import {
   type ContentSpaceTransferProgress
 } from '../contract.js'
 import type { ContentSpaceCapabilityClient } from './capability-client.js'
+import {
+  parseContentSpaceProviderAccessState,
+  type ContentSpaceProviderAccessState,
+  type ContentSpaceProviderEnrollmentView
+} from './provider-enrollment-view.js'
 
 import './ContentSpacePanel.css'
 
 const PAGE_SIZE = 50
 const transferPickerCancelled = Symbol('content-space-transfer-picker-cancelled')
 const immutableProofUnavailable = Symbol('content-space-immutable-proof-unavailable')
+const EMPTY_ENROLLMENT_VIEWS: readonly ContentSpaceProviderEnrollmentView[] = Object.freeze([])
 
 export type ContentSpacePanelProps = Readonly<{
   client: ContentSpaceCapabilityClient
@@ -62,6 +68,7 @@ export type ContentSpacePanelProps = Readonly<{
   className?: string
   onCollapse?: () => void
   initialResource?: DomainRendererSessionResource
+  enrollmentViews?: readonly ContentSpaceProviderEnrollmentView[]
 }>
 
 export function ContentSpacePanel({
@@ -69,13 +76,16 @@ export function ContentSpacePanel({
   fileTransfers,
   className,
   onCollapse,
-  initialResource
+  initialResource,
+  enrollmentViews = EMPTY_ENROLLMENT_VIEWS
 }: ContentSpacePanelProps) {
   const [providers, setProviders] = useState<readonly Readonly<{
     providerInstanceRef: string
+    providerKind: string
     label: string
   }>[]>([])
   const [providerInstanceRef, setProviderInstanceRef] = useState('')
+  const [providerDiscoveryReady, setProviderDiscoveryReady] = useState(false)
   const [navigationCapabilities, setNavigationCapabilities] = useState<
     readonly ContentSpaceCapabilityState[]
   >([])
@@ -96,12 +106,17 @@ export function ContentSpacePanel({
   const [status, setStatus] = useState('Loading Content Space…')
   const [error, setError] = useState<ContentSpaceError>()
   const [busy, setBusy] = useState(false)
+  const [providerAccess, setProviderAccess] = useState<Readonly<{
+    providerInstanceRef: string
+    state: ContentSpaceProviderAccessState
+  }>>()
   const [transferProgress, setTransferProgress] = useState<Readonly<{
     epoch: number
     snapshot: ContentSpaceTransferProgress
   }>>()
   const requestEpoch = useRef(0)
   const mutationEpoch = useRef(0)
+  const selectedProviderRef = useRef('')
   const activeDiscovery = useRef<AbortController | undefined>(undefined)
   const activeRead = useRef<AbortController | undefined>(undefined)
   const activeMutation = useRef<AbortController | undefined>(undefined)
@@ -122,6 +137,27 @@ export function ContentSpacePanel({
     mutationEpoch.current += 1
     setTransferProgress(undefined)
     setBusy(false)
+  }, [])
+
+  const clearProviderContent = useCallback(() => {
+    activeRead.current?.abort()
+    activeRead.current = undefined
+    requestEpoch.current += 1
+    containerPagination.current = newPaginationLedger()
+    entryPagination.current = newPaginationLedger()
+    setNavigationCapabilities([])
+    setFileCapabilities([])
+    setParent(undefined)
+    setEntries([])
+    setSelectedFile(undefined)
+    setArtifact(undefined)
+    setContainers([])
+    setContainerCursor(undefined)
+    setEntryCursor(undefined)
+    setFolderName('')
+    setShowCreateFolder(false)
+    setTransferProgress(undefined)
+    setError(undefined)
   }, [])
 
   const loadContainers = useCallback(async (
@@ -248,39 +284,15 @@ export function ContentSpacePanel({
     }
   }, [beginRead, client])
 
-  useEffect(() => {
-    const controller = new AbortController()
-    activeDiscovery.current = controller
-    void client.listProviderInstances({ signal: controller.signal }).then((result) => {
-      if (controller.signal.aborted) return
-      const list = unwrap(result).items
-      setProviders(list)
-      setStatus((current) => current === 'Loading Content Space…'
-        ? (list.length > 0
-          ? 'Select a Provider Instance.'
-          : 'No Content Space Provider is installed.')
-        : current)
-    }).catch((caught) => {
-      if (controller.signal.aborted) return
-      setError(errorFrom(caught))
-      setStatus('')
-    })
-    return () => {
-      controller.abort()
-      if (activeDiscovery.current === controller) activeDiscovery.current = undefined
-    }
-  }, [client])
-
-  useEffect(() => () => {
-    activeDiscovery.current?.abort()
-    activeRead.current?.abort()
-    activeMutation.current?.abort()
-  }, [])
-
-  useEffect(() => {
-    if (!initialResource) return
-    if (![CONTENT_CONTAINER_RESOURCE_KIND, CONTENT_FILE_RESOURCE_KIND, ARTIFACT_RESOURCE_KIND]
-      .includes(initialResource.kind as typeof CONTENT_CONTAINER_RESOURCE_KIND)) return
+  const openInitialResource = useCallback((
+    resource: DomainRendererSessionResource & Readonly<{
+      kind:
+        | typeof CONTENT_CONTAINER_RESOURCE_KIND
+        | typeof CONTENT_FILE_RESOURCE_KIND
+        | typeof ARTIFACT_RESOURCE_KIND
+    }>,
+    expectedProviderInstanceRef?: string
+  ) => {
     const { controller, epoch } = beginRead()
     supersedeMutation()
     setParent(undefined)
@@ -293,14 +305,17 @@ export function ContentSpacePanel({
     setStatus('Opening Content Space resource…')
     setError(undefined)
     void client.observeResource({
-      resourceKind: initialResource.kind as
-        | typeof CONTENT_CONTAINER_RESOURCE_KIND
-        | typeof CONTENT_FILE_RESOURCE_KIND
-        | typeof ARTIFACT_RESOURCE_KIND,
-      resource: initialResource.resource
+      resourceKind: resource.kind,
+      resource: resource.resource
     }, { signal: controller.signal }).then((observed) => {
       if (controller.signal.aborted || epoch !== requestEpoch.current || !observed) return
       const reference = observed.reference
+      if (expectedProviderInstanceRef &&
+        reference.providerInstanceRef !== expectedProviderInstanceRef) {
+        setStatus('This resource does not belong to the selected content source.')
+        return
+      }
+      selectedProviderRef.current = reference.providerInstanceRef
       setProviderInstanceRef(reference.providerInstanceRef)
       if ('containerId' in reference) {
         setNavigationCapabilities(observed.capabilities)
@@ -328,27 +343,153 @@ export function ContentSpacePanel({
         setStatus('')
       }
     })
-    return () => controller.abort()
-  }, [beginRead, client, initialResource, loadEntries, supersedeMutation])
+  }, [beginRead, client, loadEntries, supersedeMutation])
+
+  const checkProviderAccess = useCallback(async (
+    targetProviderInstanceRef: string,
+    enrollmentView: ContentSpaceProviderEnrollmentView,
+    onReady: () => void
+  ) => {
+    const { controller, epoch } = beginRead()
+    setProviderAccess(Object.freeze({
+      providerInstanceRef: targetProviderInstanceRef,
+      state: Object.freeze({ status: 'checking' as const })
+    }))
+    setStatus('Checking source access…')
+    setError(undefined)
+    try {
+      const state = parseContentSpaceProviderAccessState(
+        await enrollmentView.readAccessState({
+          providerInstanceRef: targetProviderInstanceRef,
+          signal: controller.signal
+        })
+      )
+      if (controller.signal.aborted || epoch !== requestEpoch.current) return
+      setProviderAccess(Object.freeze({
+        providerInstanceRef: targetProviderInstanceRef,
+        state
+      }))
+      if (state.status === 'ready') onReady()
+      else setStatus('')
+    } catch {
+      if (controller.signal.aborted || epoch !== requestEpoch.current) return
+      setProviderAccess(Object.freeze({
+        providerInstanceRef: targetProviderInstanceRef,
+        state: Object.freeze({ status: 'unavailable' as const })
+      }))
+      setStatus('')
+    }
+  }, [beginRead])
+
+  const activateProvider = useCallback((
+    next: string,
+    resource?: DomainRendererSessionResource & Readonly<{
+      kind:
+        | typeof CONTENT_CONTAINER_RESOURCE_KIND
+        | typeof CONTENT_FILE_RESOURCE_KIND
+        | typeof ARTIFACT_RESOURCE_KIND
+    }>
+  ) => {
+    supersedeMutation()
+    clearProviderContent()
+    selectedProviderRef.current = next
+    setProviderInstanceRef(next)
+    setProviderAccess(undefined)
+    if (!next) {
+      setStatus(resource
+        ? 'Choose the content source for this resource.'
+        : 'Select a Provider Instance.')
+      return
+    }
+    const provider = providers.find((candidate) =>
+      candidate.providerInstanceRef === next
+    )
+    if (!provider) {
+      setStatus('The selected Provider is no longer installed.')
+      return
+    }
+    const matchingViews = enrollmentViews.filter((view) =>
+      view.providerKind === provider.providerKind
+    )
+    if (matchingViews.length > 1) {
+      setProviderAccess(Object.freeze({
+        providerInstanceRef: next,
+        state: Object.freeze({ status: 'unavailable' as const })
+      }))
+      setStatus('Provider access configuration is unavailable.')
+      return
+    }
+    const continueAfterAccess = () => {
+      if (resource) openInitialResource(resource, next)
+      else void loadProvider(next)
+    }
+    const enrollmentView = matchingViews[0]
+    if (enrollmentView) {
+      void checkProviderAccess(next, enrollmentView, continueAfterAccess)
+    } else {
+      continueAfterAccess()
+    }
+  }, [
+    checkProviderAccess,
+    clearProviderContent,
+    enrollmentViews,
+    loadProvider,
+    openInitialResource,
+    providers,
+    supersedeMutation
+  ])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    activeDiscovery.current = controller
+    setProviderDiscoveryReady(false)
+    setProviders([])
+    void client.listProviderInstances({ signal: controller.signal }).then((result) => {
+      if (controller.signal.aborted) return
+      const list = unwrap(result).items
+      setProviders(list)
+      setProviderDiscoveryReady(true)
+      setStatus((current) => current === 'Loading Content Space…'
+        ? (list.length > 0
+          ? 'Select a Provider Instance.'
+          : 'No Content Space Provider is installed.')
+        : current)
+    }).catch((caught) => {
+      if (controller.signal.aborted) return
+      setError(errorFrom(caught))
+      setStatus('')
+    })
+    return () => {
+      controller.abort()
+      if (activeDiscovery.current === controller) activeDiscovery.current = undefined
+    }
+  }, [client])
+
+  useEffect(() => () => {
+    activeDiscovery.current?.abort()
+    activeRead.current?.abort()
+    activeMutation.current?.abort()
+  }, [])
+
+  useEffect(() => {
+    if (!providerDiscoveryReady || !isContentSpaceInitialResource(initialResource)) return
+    if (providers.length === 0) {
+      activateProvider('', initialResource)
+      setStatus('No Content Space Provider is installed.')
+      return
+    }
+    if (providers.length === 1) {
+      activateProvider(providers[0]!.providerInstanceRef, initialResource)
+      return
+    }
+    activateProvider('', initialResource)
+  }, [activateProvider, initialResource, providerDiscoveryReady, providers])
 
   const selectProvider = (next: string) => {
-    supersedeMutation()
-    setProviderInstanceRef(next)
-    setNavigationCapabilities([])
-    setFileCapabilities([])
-    setParent(undefined)
-    setEntries([])
-    setSelectedFile(undefined)
-    setArtifact(undefined)
-    setContainers([])
-    setContainerCursor(undefined)
-    setEntryCursor(undefined)
-    if (next) {
-      void loadProvider(next)
-    } else {
-      activeRead.current?.abort()
-      setStatus('Select a Provider Instance.')
-    }
+    activateProvider(
+      next,
+      isContentSpaceInitialResource(initialResource) ? initialResource : undefined
+    )
   }
 
   const openContainer = (reference: ContentContainerReference) => {
@@ -609,6 +750,27 @@ export function ContentSpacePanel({
     ))
   }
 
+  const selectedProvider = providers.find((provider) =>
+    provider.providerInstanceRef === providerInstanceRef
+  )
+  const selectedEnrollmentViews = selectedProvider
+    ? enrollmentViews.filter((view) => view.providerKind === selectedProvider.providerKind)
+    : []
+  const selectedEnrollmentView = selectedEnrollmentViews.length === 1
+    ? selectedEnrollmentViews[0]
+    : undefined
+  const selectedAccessState = providerAccess?.providerInstanceRef === providerInstanceRef
+    ? providerAccess.state
+    : undefined
+  const refreshProviderAccess = () => {
+    if (!providerInstanceRef || !selectedEnrollmentView) return
+    if (selectedProviderRef.current !== providerInstanceRef) return
+    activateProvider(
+      providerInstanceRef,
+      isContentSpaceInitialResource(initialResource) ? initialResource : undefined
+    )
+  }
+
   const selectedArtifact = selectedFile ? exactArtifactFor(artifact, selectedFile) : undefined
   const displayedCapabilities = selectedFile ? fileCapabilities : navigationCapabilities
   const readyCapabilityCount = displayedCapabilities.filter((state) =>
@@ -630,7 +792,7 @@ export function ContentSpacePanel({
         </span>
         <span className="content-space-heading">
           <h2>Content Space</h2>
-          <span>Browse connected libraries</span>
+          <span>Choose a source and browse its libraries</span>
         </span>
         <span className="content-space-header-actions">
         {busy && (
@@ -649,55 +811,79 @@ export function ContentSpacePanel({
       </header>
 
       <div className="content-space-provider-section">
-        <div className="content-space-section-label">
-          <label htmlFor="content-space-provider">Provider Instance</label>
-          <span>Connected source</span>
-        </div>
-        <div className="content-space-select-wrap">
-          <HardDrive size={16} strokeWidth={1.75} aria-hidden />
-          <select id="content-space-provider" value={providerInstanceRef}
-            onChange={(event) => selectProvider(event.target.value)} disabled={busy}>
-            <option value="">Select a Provider Instance…</option>
-            {providers.map((provider) => (
-              <option key={provider.providerInstanceRef} value={provider.providerInstanceRef}>
-                {provider.label}
-              </option>
-            ))}
-          </select>
-          <ChevronDown className="content-space-select-chevron" size={15} strokeWidth={1.8}
-            aria-hidden />
-        </div>
-        {providerInstanceRef && displayedCapabilities.length > 0 && (
-          <details className="content-space-readiness">
-            <summary>
-              <span className={developmentCapabilityCount > 0
-                ? 'content-space-status-dot is-development'
-                : 'content-space-status-dot is-ready'} aria-hidden />
-              <span className="content-space-readiness-summary">
-                {readyCapabilityCount} of {displayedCapabilities.length} operations available
-              </span>
-              {developmentCapabilityCount > 0 && (
-                <span className="content-space-readiness-profile">Development</span>
-              )}
-              <ChevronDown className="content-space-readiness-chevron" size={14}
-                strokeWidth={1.8} aria-hidden />
-            </summary>
-            <ul aria-label="Content Space Provider readiness">
-              {displayedCapabilities.map((state) => (
-                <li key={state.operation} data-operation={state.operation}
-                  data-readiness={state.readiness}>
-                  <span className="content-space-capability-name">{state.operation}: </span>
-                  <span className={`content-space-capability-state is-${state.readiness}`}>
-                    {readinessLabel(state)}
-                  </span>
-                </li>
+        <div className="content-space-source-stack">
+          <div className="content-space-section-label">
+            <label htmlFor="content-space-provider">Content source</label>
+            <span aria-live="polite">{providerInstanceRef
+              ? selectedEnrollmentView && selectedAccessState
+                ? providerAccessLabel(selectedAccessState)
+                : 'Source selected'
+              : 'Choose a source'}</span>
+          </div>
+          <div className="content-space-select-wrap">
+            <HardDrive size={16} strokeWidth={1.75} aria-hidden />
+            <select id="content-space-provider" value={providerInstanceRef}
+              onChange={(event) => selectProvider(event.target.value)} disabled={busy}>
+              <option value="">Choose a content source…</option>
+              {providers.map((provider) => (
+                <option key={provider.providerInstanceRef} value={provider.providerInstanceRef}>
+                  {provider.label}
+                </option>
               ))}
-            </ul>
-          </details>
-        )}
+            </select>
+            <ChevronDown className="content-space-select-chevron" size={15} strokeWidth={1.8}
+              aria-hidden />
+          </div>
+          {providerInstanceRef && displayedCapabilities.length > 0 && (
+            <details className="content-space-readiness">
+              <summary>
+                <span className={developmentCapabilityCount > 0
+                  ? 'content-space-status-dot is-development'
+                  : 'content-space-status-dot is-ready'} aria-hidden />
+                <span className="content-space-readiness-summary">
+                  Provider details · {readyCapabilityCount} of {displayedCapabilities.length} operations available
+                </span>
+                {developmentCapabilityCount > 0 && (
+                  <span className="content-space-readiness-profile">Development</span>
+                )}
+                <ChevronDown className="content-space-readiness-chevron" size={14}
+                  strokeWidth={1.8} aria-hidden />
+              </summary>
+              <ul aria-label="Content Space Provider readiness">
+                {displayedCapabilities.map((state) => (
+                  <li key={state.operation} data-operation={state.operation}
+                    data-readiness={state.readiness}>
+                    <span className="content-space-capability-name">{state.operation}: </span>
+                    <span className={`content-space-capability-state is-${state.readiness}`}>
+                      {readinessLabel(state)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
       </div>
 
       <div className="content-space-scroll-region">
+        {selectedEnrollmentView && selectedAccessState && (
+          <div
+            className="content-space-provider-enrollment"
+            data-content-space-provider-enrollment
+            data-access-status={selectedAccessState.status}
+          >
+            <span className="content-space-source-line" aria-hidden>
+              <span className="content-space-source-node" />
+            </span>
+            <div className="content-space-provider-enrollment-content">
+              {selectedEnrollmentView.render({
+                providerInstanceRef,
+                accessState: selectedAccessState,
+                onAccessChanged: refreshProviderAccess
+              })}
+            </div>
+          </div>
+        )}
         {error && (
           <div role="alert" className="content-space-message is-error">
             <AlertCircle size={15} strokeWidth={1.8} aria-hidden />
@@ -913,10 +1099,32 @@ function mergeClassNames(...values: Array<string | undefined>): string {
   return values.filter(Boolean).join(' ')
 }
 
+type ContentSpaceInitialResource = DomainRendererSessionResource & Readonly<{
+  kind:
+    | typeof CONTENT_CONTAINER_RESOURCE_KIND
+    | typeof CONTENT_FILE_RESOURCE_KIND
+    | typeof ARTIFACT_RESOURCE_KIND
+}>
+
+function isContentSpaceInitialResource(
+  resource: DomainRendererSessionResource | undefined
+): resource is ContentSpaceInitialResource {
+  return resource?.kind === CONTENT_CONTAINER_RESOURCE_KIND ||
+    resource?.kind === CONTENT_FILE_RESOURCE_KIND ||
+    resource?.kind === ARTIFACT_RESOURCE_KIND
+}
+
 function readinessLabel(state: ContentSpaceCapabilityState): string {
   if (state.readiness === 'production_ready') return 'ready'
   if (state.readiness === 'poc_only') return 'ready (development)'
   return 'unavailable'
+}
+
+function providerAccessLabel(state: ContentSpaceProviderAccessState): string {
+  if (state.status === 'checking') return 'Checking…'
+  if (state.status === 'ready') return 'Connected'
+  if (state.status === 'human_action_required') return 'Needs connection'
+  return 'Temporarily unavailable'
 }
 
 function unwrap<Value>(result: ContentSpaceResult<Value>): Value {
