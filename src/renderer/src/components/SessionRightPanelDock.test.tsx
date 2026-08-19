@@ -11,8 +11,10 @@ import {
 import {
   createSessionRightPanelPane,
   createSessionRightPanelWorkspace,
+  splitSessionRightPanelPane,
   type SessionRightPanelPane,
-  type SessionRightPanelWorkspace
+  type SessionRightPanelWorkspace,
+  type SessionRightPanelWorkspaceMap
 } from './session-right-panel-workspaces'
 import {
   useRightPanelSurfaceId
@@ -83,6 +85,7 @@ const labels: SessionRightPanelDockLabels = {
   binding: 'Pane binding',
   resize: 'Resize pane',
   split: 'Open a copy in a new pane',
+  splitAction: 'New pane',
   close: 'Close pane'
 }
 
@@ -305,6 +308,7 @@ describe('SessionRightPanelDock', () => {
 
     expect(button(labels.back).disabled).toBe(false)
     expect(button(labels.forward).disabled).toBe(false)
+    expect(button(labels.split).textContent).toContain(labels.splitAction)
     await act(async () => button(labels.back).click())
     await act(async () => button(labels.forward).click())
     await act(async () => button(labels.split).click())
@@ -340,6 +344,46 @@ describe('SessionRightPanelDock', () => {
       paneElements[1].dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
     })
     expect(handlers.onFocusPane).toHaveBeenCalledWith('session-1', 'pane-2')
+  })
+
+  it('creates and focuses an adjacent pane through the visible new-pane action', async () => {
+    const initialWorkspace = workspace([pane('pane-1', 'file', 360)])
+
+    function StatefulDock() {
+      const [workspaceMap, setWorkspaceMap] = useState<SessionRightPanelWorkspaceMap>({
+        [initialWorkspace.sessionId]: initialWorkspace
+      })
+      const currentWorkspace = workspaceMap[initialWorkspace.sessionId]
+      return createElement(SessionRightPanelDock, {
+        workspace: currentWorkspace,
+        active: true,
+        bindings,
+        labels,
+        ...callbacks(),
+        onSplitPane: (sessionId: string, paneId: string) => {
+          setWorkspaceMap((current) => splitSessionRightPanelPane(current, sessionId, paneId))
+        },
+        renderPane: (entry: SessionRightPanelPane) =>
+          createElement('div', { 'data-rendered-pane': entry.paneId })
+      })
+    }
+
+    root = createRoot(container as HTMLDivElement)
+    await act(async () => root?.render(createElement(StatefulDock)))
+    const newPaneButton = container?.querySelector<HTMLButtonElement>(
+      `button[aria-label="${labels.split}"]`
+    )
+    if (!newPaneButton) throw new Error('Missing visible new-pane action.')
+
+    await act(async () => newPaneButton.click())
+
+    const panes = Array.from(
+      container?.querySelectorAll<HTMLElement>('[data-session-right-panel-pane]') ?? []
+    )
+    expect(panes).toHaveLength(2)
+    expect(panes[0].dataset.sessionRightPanelPane).toBe('pane-1')
+    expect(panes[1].dataset.focused).toBe('true')
+    expect(panes[1].dataset.rightPanelMode).toBe('file')
   })
 
   it('keeps inactive resident panes rendered without activating any context', async () => {

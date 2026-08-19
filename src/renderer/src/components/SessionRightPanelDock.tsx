@@ -34,6 +34,7 @@ export type SessionRightPanelDockLabels = Readonly<{
   binding: string
   resize: string
   split: string
+  splitAction: string
   close: string
 }>
 
@@ -202,12 +203,13 @@ function PaneSurface({
           </select>
           <button
             type="button"
-            className={chromeButtonClass}
+            className="inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-md px-2 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
             aria-label={labels.split}
             title={labels.split}
             onClick={() => onSplitPane(workspace.sessionId, pane.paneId)}
           >
             <PanelRightOpen className="h-4 w-4" aria-hidden="true" />
+            <span>{labels.splitAction}</span>
           </button>
           <button
             type="button"
