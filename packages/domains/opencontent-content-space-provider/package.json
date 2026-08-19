@@ -7,7 +7,8 @@
   "description": "OpenContent adapter for the provider-neutral SciForge Content Space contract.",
   "exports": {
     "./definition": "./src/definition.ts",
-    "./main": "./src/main/index.ts"
+    "./main": "./src/main/index.ts",
+    "./renderer": "./src/renderer/index.tsx"
   },
   "files": ["src", "sciforge.domain.json", "package.json", "README.md"],
   "scripts": {
@@ -17,10 +18,12 @@
   "dependencies": {
     "@sciforge/domain-content-space": "1.0.0",
     "@sciforge/domain-opencontent-connector": "1.0.0",
-    "@sciforge/domain-sdk": "^0.2.1"
+    "@sciforge/domain-sdk": "^0.2.1",
+    "react": "^19.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/react": "^19.0.10",
     "typescript": "^5.8.2",
     "vitest": "^4.1.7"
   }

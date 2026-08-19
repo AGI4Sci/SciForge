@@ -3,39 +3,75 @@ import type { DomainRendererCapabilityInvoker } from '@sciforge/domain-sdk/host'
 import {
   OPENCONTENT_CONNECTION_CAPABILITY_IDS,
   openContentBindInputSchema,
-  openContentConnectionStatusSchema,
-  openContentEmptyInputSchema,
+  openContentConnectionResultSchema,
+  openContentConnectionTargetInputSchema,
   openContentUnbindOutputSchema,
-  type OpenContentConnectionStatus
+  type OpenContentConnectionResult,
+  type OpenContentUnbindResult
 } from '../contract.js'
 
+export type { OpenContentUnbindResult } from '../contract.js'
+
+export type OpenContentConnectionRequestOptions = Readonly<{
+  signal?: AbortSignal
+}>
+
 export type OpenContentConnectionRendererClient = Readonly<{
-  status(): Promise<OpenContentConnectionStatus>
-  bind(username: string, password: string): Promise<OpenContentConnectionStatus>
-  unbind(): Promise<Readonly<{ state: 'disconnected'; remoteRevocation: 'unsupported' }>>
+  status(
+    providerInstanceRef: string,
+    options?: OpenContentConnectionRequestOptions
+  ): Promise<OpenContentConnectionResult>
+  bind(
+    providerInstanceRef: string,
+    username: string,
+    password: string,
+    options?: OpenContentConnectionRequestOptions
+  ): Promise<OpenContentConnectionResult>
+  unbind(
+    providerInstanceRef: string,
+    options?: OpenContentConnectionRequestOptions
+  ): Promise<OpenContentUnbindResult>
 }>
 
 export function createOpenContentConnectionRendererClient(
   invoker: DomainRendererCapabilityInvoker
 ): OpenContentConnectionRendererClient {
   return Object.freeze({
-    status: () => invoker.invoke({
-      actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.status,
-      effect: 'read',
-      inputSchema: openContentEmptyInputSchema,
-      outputSchema: openContentConnectionStatusSchema
-    }, {}),
-    bind: (username, password) => invoker.invoke({
-      actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind,
-      effect: 'external-write',
-      inputSchema: openContentBindInputSchema,
-      outputSchema: openContentConnectionStatusSchema
-    }, { username, password }),
-    unbind: () => invoker.invoke({
-      actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.unbind,
-      effect: 'external-write',
-      inputSchema: openContentEmptyInputSchema,
-      outputSchema: openContentUnbindOutputSchema
-    }, {})
+    status: (providerInstanceRef, options) => {
+      const contract = {
+        actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.status,
+        effect: 'read' as const,
+        inputSchema: openContentConnectionTargetInputSchema,
+        outputSchema: openContentConnectionResultSchema
+      }
+      const input = { providerInstanceRef }
+      return options?.signal
+        ? invoker.invoke(contract, input, { signal: options.signal })
+        : invoker.invoke(contract, input)
+    },
+    bind: (providerInstanceRef, username, password, options) => {
+      const contract = {
+        actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind,
+        effect: 'external-write' as const,
+        inputSchema: openContentBindInputSchema,
+        outputSchema: openContentConnectionResultSchema
+      }
+      const input = { providerInstanceRef, username, password }
+      return options?.signal
+        ? invoker.invoke(contract, input, { signal: options.signal })
+        : invoker.invoke(contract, input)
+    },
+    unbind: (providerInstanceRef, options) => {
+      const contract = {
+        actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.unbind,
+        effect: 'external-write' as const,
+        inputSchema: openContentConnectionTargetInputSchema,
+        outputSchema: openContentUnbindOutputSchema
+      }
+      const input = { providerInstanceRef }
+      return options?.signal
+        ? invoker.invoke(contract, input, { signal: options.signal })
+        : invoker.invoke(contract, input)
+    }
   })
 }

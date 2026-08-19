@@ -15,16 +15,33 @@
       "location": "main.content-space-provider-factory",
       "contractVersion": "1.0.0",
       "providerKind": "opencontent"
+    },
+    "opencontent-content-space.provider-enrollment": {
+      "location": "content-space.provider-enrollment-view",
+      "contractVersion": "1.0.0",
+      "providerKind": "opencontent"
     }
   },
-  "entrypoints": [{
-    "process": "main",
-    "export": "./main",
-    "contributions": [{
-      "id": "opencontent-content-space.provider-factory",
-      "kind": "main.extension",
-      "version": "1.0.0",
-      "priority": 270
-    }]
-  }]
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [{
+        "id": "opencontent-content-space.provider-factory",
+        "kind": "main.extension",
+        "version": "1.0.0",
+        "priority": 270
+      }]
+    },
+    {
+      "process": "renderer",
+      "export": "./renderer",
+      "contributions": [{
+        "id": "opencontent-content-space.provider-enrollment",
+        "kind": "renderer.extension",
+        "version": "1.0.0",
+        "priority": 270
+      }]
+    }
+  ]
 }

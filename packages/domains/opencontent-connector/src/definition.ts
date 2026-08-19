@@ -35,28 +35,7 @@ export const OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRACT =
     OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRIBUTION.id
   ]!
 
-export const OPENCONTENT_RENDERER_RIGHT_PANEL_CONTRIBUTION = contributionFor(
-  'renderer',
-  'renderer.workbench-right-panel'
-)
-export const OPENCONTENT_RENDERER_COMMAND_CONTRIBUTION = contributionFor(
-  'renderer',
-  'renderer.command'
-)
-export const OPENCONTENT_RENDERER_TOOLBAR_ACTION_CONTRIBUTION = contributionFor(
-  'renderer',
-  'renderer.workbench-toolbar-action'
-)
-export const OPENCONTENT_RENDERER_RIGHT_PANEL_CONTRACT =
-  domainPackageDefinition.contributionContracts[
-    OPENCONTENT_RENDERER_RIGHT_PANEL_CONTRIBUTION.id
-  ]!
-export const OPENCONTENT_RENDERER_TOOLBAR_ACTION_CONTRACT =
-  domainPackageDefinition.contributionContracts[
-    OPENCONTENT_RENDERER_TOOLBAR_ACTION_CONTRIBUTION.id
-  ]!
-
-function contributionFor(process: 'main' | 'renderer', kind: string, id?: string) {
+function contributionFor(process: 'main', kind: string, id?: string) {
   const contribution = domainPackageDefinition.entrypoints
     .find((entrypoint) => entrypoint.process === process)
     ?.contributions.find((candidate) => candidate.kind === kind && (!id || candidate.id === id))

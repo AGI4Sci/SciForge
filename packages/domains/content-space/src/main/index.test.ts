@@ -103,7 +103,11 @@ describe('Content Space main composition', () => {
     const list = definition(definitions, CONTENT_SPACE_CAPABILITY_IDS.listProviderInstances)
     const result = await list.handler({}, capabilityContext())
     expect(result.output).toEqual(contentSpaceSuccess({
-      items: [{ providerInstanceRef: PROVIDER_INSTANCE_REF, label: 'Fixture Content Space' }]
+      items: [{
+        providerInstanceRef: PROVIDER_INSTANCE_REF,
+        providerKind: 'fixture-content-space',
+        label: 'Fixture Content Space'
+      }]
     }))
     expect(createProvider).not.toHaveBeenCalled()
   })

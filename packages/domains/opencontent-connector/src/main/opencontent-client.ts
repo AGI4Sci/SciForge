@@ -788,22 +788,6 @@ export function createOpenContentClient(options: Readonly<{
   })
 }
 
-export function createUnavailableOpenContentClient(): OpenContentClient {
-  const unavailable = async (): Promise<never> => {
-    throw connectorError('provider_unavailable')
-  }
-  return Object.freeze({
-    authenticateExistingAccount: unavailable,
-    isTokenValid: unavailable,
-    listRootFolders: unavailable,
-    listFolderEntries: unavailable,
-    observeEntry: unavailable,
-    createFolder: unavailable,
-    uploadNewFile: unavailable,
-    downloadFile: unavailable
-  })
-}
-
 const enrollmentInputSchema = z.object({
   username: z.string().trim().min(1).max(256),
   password: z.string().min(1).max(4096),
