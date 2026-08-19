@@ -1353,7 +1353,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
       payload: { threadId: 'parent-thread', parentTurnId: 'turn-1' }
     })
 
-    expect(service.listThreads).toHaveBeenCalledWith({ includeSide: true })
+    expect(service.listThreads).toHaveBeenCalledWith({ includeSide: true, limit: 200 })
     expect((listed as { children: Array<{ id: string }> }).children.map((child) => child.id))
       .not.toContain('deleted-native-child')
     expect(listed).toMatchObject({

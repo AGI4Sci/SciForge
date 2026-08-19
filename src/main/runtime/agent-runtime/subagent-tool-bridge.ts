@@ -36,6 +36,7 @@ export const AGENT_RUNTIME_SUBAGENT_CANCEL_TOOL_NAME = 'subagent_cancel'
 export const AGENT_RUNTIME_SUBAGENT_DIAGNOSTICS_TOOL_NAME = 'subagent_diagnostics'
 export const AGENT_RUNTIME_SUBAGENT_RESUME_TOOL_NAME = 'subagent_resume'
 export const AGENT_RUNTIME_SUBAGENT_DELETE_TOOL_NAME = 'subagent_delete'
+const RECENT_CHILD_THREAD_IDENTITY_LIMIT = 200
 
 export type AgentRuntimeSubagentBinding = {
   adapter: AgentRuntimeSubagentAdapter
@@ -643,13 +644,9 @@ export class AgentRuntimeSubagentToolBridge {
     threadId: string
   ): Promise<boolean> {
     if (this.childThreadIds.get(runtimeId)?.has(threadId)) return true
-    const record = (await runtime.diagnostics()).childRuns.find((child) =>
-      child.threadRef?.threadId === threadId
-    )
+    const record = await runtime.childByThreadId(threadId)
     if (!record) return false
-    const threadIds = this.childThreadIds.get(runtimeId) ?? new Set<string>()
-    threadIds.add(threadId)
-    this.childThreadIds.set(runtimeId, threadIds)
+    this.rememberChildThreadId(runtimeId, threadId)
     return true
   }
 
@@ -684,9 +681,7 @@ export class AgentRuntimeSubagentToolBridge {
     })
     const bindThreadIdentity = (threadRef: AgentRuntimeSubagentThreadRef): void => {
       if (threadRef.threadId) {
-        const threadIds = this.childThreadIds.get(runtimeId) ?? new Set<string>()
-        threadIds.add(threadRef.threadId)
-        this.childThreadIds.set(runtimeId, threadIds)
+        this.rememberChildThreadId(runtimeId, threadRef.threadId)
         const childIds = this.childIdsByThreadId.get(runtimeId) ?? new Map<string, string>()
         childIds.set(threadRef.threadId, input.childId)
         this.childIdsByThreadId.set(runtimeId, childIds)
@@ -768,6 +763,18 @@ export class AgentRuntimeSubagentToolBridge {
       childIds?.delete(threadId)
       if (childIds?.size === 0) this.childIdsByThreadId.delete(runtimeId)
     }
+  }
+
+  private rememberChildThreadId(runtimeId: AgentRuntimeId, threadId: string): void {
+    const threadIds = this.childThreadIds.get(runtimeId) ?? new Set<string>()
+    threadIds.delete(threadId)
+    threadIds.add(threadId)
+    while (threadIds.size > RECENT_CHILD_THREAD_IDENTITY_LIMIT) {
+      const oldest = threadIds.values().next().value
+      if (oldest === undefined) break
+      threadIds.delete(oldest)
+    }
+    this.childThreadIds.set(runtimeId, threadIds)
   }
 }
 

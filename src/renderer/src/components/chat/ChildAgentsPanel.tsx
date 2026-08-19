@@ -19,7 +19,8 @@ import type {
   AgentRuntimeChild,
   AgentRuntimeChildStatus,
   AgentRuntimeChildTranscript,
-  AgentRuntimeChildTranscriptEntry
+  AgentRuntimeChildTranscriptEntry,
+  AgentRuntimeListThreadChildrenResponse
 } from '@shared/agent-runtime-contract'
 import type { AgentRuntimeId } from '@shared/app-settings'
 import type {
@@ -64,7 +65,11 @@ export type ChildAgentTranscriptState =
 export type ThreadChildrenState = {
   children: AgentRuntimeChild[]
   loading: boolean
+  loadingMore: boolean
   error: string | null
+  nextCursor: string | null
+  historyTruncated: boolean
+  loadMore: () => void
 }
 
 type UseThreadChildrenInput = {
@@ -81,6 +86,10 @@ export type ChildAgentsPanelProps = {
   children: AgentRuntimeChild[]
   loading: boolean
   error: string | null
+  loadingMore?: boolean
+  nextCursor?: string | null
+  historyTruncated?: boolean
+  onLoadMore?: () => void
   focusChildId?: string | null
   focusChildRequestKey?: number
   onOpenChildInFocus?: (child: AgentRuntimeChild) => void
@@ -158,6 +167,11 @@ export type ChildAgentsPanelViewProps = {
   selectedChildId: string | null
   loading: boolean
   error: string | null
+  currentTurnId?: string
+  loadingMore?: boolean
+  nextCursor?: string | null
+  historyTruncated?: boolean
+  onLoadMore?: () => void
   selectedSide: SideConversation | null
   sideLoading: boolean
   runtimeConnection: RuntimeConnectionStatus
@@ -405,14 +419,103 @@ export function childAgentAttemptGroups(
   return groups.sort((a, b) => compareChildAgents(a.primary, b.primary))
 }
 
-export type ChildAgentListFilter = 'all' | 'active'
+export type ChildAgentListFilter = 'recent' | 'history'
+
+export type ChildAgentHistorySection = {
+  turnId: string
+  groups: ChildAgentAttemptGroup[]
+}
+
+export type ChildAgentGroupBuckets = {
+  active: ChildAgentAttemptGroup[]
+  recent: ChildAgentAttemptGroup[]
+  history: ChildAgentHistorySection[]
+  recentTurnId: string | null
+}
+
+function groupTurnId(group: ChildAgentAttemptGroup | undefined): string {
+  if (!group) return ''
+  return group.primary.parentTurnId?.trim() || ''
+}
+
+/**
+ * Split the bounded runtime page without duplicating a logical retry group.
+ * Active work is always its own first bucket. Terminal work from the current
+ * turn is recent; older turns remain grouped so the view can keep them folded.
+ */
+export function childAgentGroupBuckets(
+  groups: readonly ChildAgentAttemptGroup[],
+  currentTurnId?: string
+): ChildAgentGroupBuckets {
+  const active = groups.filter((group) => group.attempts.some(isActiveChildAttempt))
+  const terminal = groups.filter((group) => !group.attempts.some(isActiveChildAttempt))
+  const requestedTurnId = currentTurnId?.trim() || ''
+  const recentTurnId = requestedTurnId || groupTurnId(terminal[0] ?? active[0]) || null
+  const recent = terminal.filter((group) => {
+    const turnId = groupTurnId(group)
+    return recentTurnId ? turnId === recentTurnId || !turnId : !turnId
+  })
+  const historyByTurn = new Map<string, ChildAgentAttemptGroup[]>()
+  for (const group of terminal) {
+    if (recent.includes(group)) continue
+    const turnId = groupTurnId(group) || 'unknown'
+    historyByTurn.set(turnId, [...(historyByTurn.get(turnId) ?? []), group])
+  }
+  const history = [...historyByTurn.entries()].map(([turnId, sectionGroups]) => ({
+    turnId,
+    groups: sectionGroups
+  }))
+  return { active, recent, history, recentTurnId }
+}
 
 export function filterChildAgentAttemptGroups(
   groups: readonly ChildAgentAttemptGroup[],
-  filter: ChildAgentListFilter
+  filter: ChildAgentListFilter,
+  currentTurnId?: string
 ): ChildAgentAttemptGroup[] {
-  if (filter === 'all') return [...groups]
-  return groups.filter((group) => group.attempts.some(isActiveChildAttempt))
+  const buckets = childAgentGroupBuckets(groups, currentTurnId)
+  if (filter === 'recent') return buckets.recent
+  return buckets.history.flatMap((section) => section.groups)
+}
+
+export const CHILD_AGENT_HISTORY_PAGE_SIZE = 40
+
+type ChildAgentPage = {
+  children: AgentRuntimeChild[]
+  nextCursor: string | null
+  historyTruncated: boolean
+}
+
+export async function reloadChildAgentPageWindow(
+  loadPage: (options: { cursor?: string; limit: number }) => Promise<AgentRuntimeListThreadChildrenResponse>,
+  pageCount: number
+): Promise<AgentRuntimeListThreadChildrenResponse[]> {
+  const pages: AgentRuntimeListThreadChildrenResponse[] = []
+  let cursor: string | null = null
+  const boundedPageCount = Math.max(1, Math.floor(pageCount))
+  for (let index = 0; index < boundedPageCount; index += 1) {
+    const page = await loadPage({
+      ...(cursor ? { cursor } : {}),
+      limit: CHILD_AGENT_HISTORY_PAGE_SIZE
+    })
+    pages.push(page)
+    cursor = page.nextCursor ?? null
+    if (!cursor) break
+  }
+  return pages
+}
+
+/** Merge cursor pages while replacing repeated active summaries with the newest copy. */
+export function mergeChildAgentPages(
+  pages: readonly (readonly AgentRuntimeChild[])[]
+): AgentRuntimeChild[] {
+  const merged = new Map<string, AgentRuntimeChild>()
+  for (const page of pages) {
+    for (const child of page) {
+      if (!merged.has(child.id)) merged.set(child.id, child)
+    }
+  }
+  return [...merged.values()]
 }
 
 /**
@@ -1294,6 +1397,11 @@ export function ChildAgentsPanelView({
   selectedChildId,
   loading,
   error,
+  currentTurnId,
+  loadingMore = false,
+  nextCursor = null,
+  historyTruncated = false,
+  onLoadMore,
   selectedSide,
   sideLoading,
   runtimeConnection,
@@ -1326,9 +1434,21 @@ export function ChildAgentsPanelView({
 }: ChildAgentsPanelViewProps): ReactElement {
   const directChildren = sortChildAgents(filterDirectChildAgents(children, activeThreadId, activeRuntimeId))
   const attemptGroups = childAgentAttemptGroups(directChildren)
-  const [listFilter, setListFilter] = useState<ChildAgentListFilter>('all')
-  const visibleAttemptGroups = filterChildAgentAttemptGroups(attemptGroups, listFilter)
+  const buckets = childAgentGroupBuckets(attemptGroups, currentTurnId)
+  const [listFilter, setListFilter] = useState<ChildAgentListFilter>('recent')
+  const [expandedHistoryTurns, setExpandedHistoryTurns] = useState<Set<string>>(() => new Set())
+  const visibleTerminalGroups = listFilter === 'history'
+    ? buckets.history
+        .filter((section) => expandedHistoryTurns.has(section.turnId))
+        .flatMap((section) => section.groups)
+    : filterChildAgentAttemptGroups(attemptGroups, listFilter, currentTurnId)
+  const visibleAttemptGroups = [...buckets.active, ...visibleTerminalGroups]
   const [expandedAttemptGroups, setExpandedAttemptGroups] = useState<Set<string>>(() => new Set())
+  useEffect(() => {
+    setListFilter('recent')
+    setExpandedHistoryTurns(new Set())
+    setExpandedAttemptGroups(new Set())
+  }, [activeThreadId])
   const isAttemptGroupExpanded = (group: ChildAgentAttemptGroup): boolean =>
     expandedAttemptGroups.has(group.key) || (
       Boolean(selectedChildId) &&
@@ -1347,7 +1467,12 @@ export function ChildAgentsPanelView({
   const runningCount = attemptGroups.filter((group) => group.attempts.some(isActiveChildAttempt)).length
   const selectListFilter = (nextFilter: ChildAgentListFilter): void => {
     setListFilter(nextFilter)
-    const nextGroups = filterChildAgentAttemptGroups(attemptGroups, nextFilter)
+    const nextTerminalGroups = nextFilter === 'history'
+      ? buckets.history
+          .filter((section) => expandedHistoryTurns.has(section.turnId))
+          .flatMap((section) => section.groups)
+      : filterChildAgentAttemptGroups(attemptGroups, nextFilter, currentTurnId)
+    const nextGroups = [...buckets.active, ...nextTerminalGroups]
     const selectionStillVisible = nextGroups.some((group) =>
       group.attempts.some((child) => child.id === selectedChildId)
     )
@@ -1396,20 +1521,31 @@ export function ChildAgentsPanelView({
           </div>
           {loading ? <Loader2 className="h-4 w-4 animate-spin text-ds-faint" strokeWidth={2} /> : null}
         </div>
-        <div className="grid grid-cols-2 gap-2 px-4 pb-3">
-          <ChildAgentStat
-            label={t('sidebarChildren')}
-            value={attemptGroups.length}
-            active={listFilter === 'all'}
-            title={t('sidebarChildrenFilterAll')}
-            onClick={() => selectListFilter('all')}
-          />
+        <div className="grid grid-cols-3 gap-2 px-4 pb-3">
           <ChildAgentStat
             label={t('sidebarChildrenActive')}
             value={runningCount}
-            active={listFilter === 'active'}
+            active={Boolean(selectedChild && buckets.active.some((group) =>
+              group.attempts.some((child) => child.id === selectedChild.id)
+            ))}
             title={t('sidebarChildrenFilterActive')}
-            onClick={() => selectListFilter('active')}
+            onClick={() => {
+              if (buckets.active[0]) onSelectChild(buckets.active[0].primary.id)
+            }}
+          />
+          <ChildAgentStat
+            label={t('sidebarChildrenRecent')}
+            value={buckets.recent.length}
+            active={listFilter === 'recent'}
+            title={t('sidebarChildrenFilterRecent')}
+            onClick={() => selectListFilter('recent')}
+          />
+          <ChildAgentStat
+            label={t('sidebarChildrenHistory')}
+            value={buckets.history.reduce((count, section) => count + section.groups.length, 0)}
+            active={listFilter === 'history'}
+            title={t('sidebarChildrenFilterHistory')}
+            onClick={() => selectListFilter('history')}
           />
         </div>
         {navigationPath.length > 0 ? (
@@ -1447,6 +1583,43 @@ export function ChildAgentsPanelView({
               )
             })}
           </nav>
+        ) : null}
+        {listFilter === 'recent' && buckets.recentTurnId ? (
+          <div className="px-4 pb-2 text-[11px] font-medium text-ds-faint">
+            {t('sidebarChildrenCurrentTurn', { turnId: childIdFragment(buckets.recentTurnId) })}
+          </div>
+        ) : null}
+        {listFilter === 'history' && buckets.history.length > 0 ? (
+          <div className="space-y-1 px-4 pb-2" aria-label={t('sidebarChildrenHistoryTurns')}>
+            {buckets.history.map((section) => {
+              const expanded = expandedHistoryTurns.has(section.turnId)
+              return (
+                <button
+                  key={section.turnId}
+                  type="button"
+                  aria-expanded={expanded}
+                  onClick={() => {
+                    setExpandedHistoryTurns((current) => {
+                      const next = new Set(current)
+                      if (expanded) next.delete(section.turnId)
+                      else next.add(section.turnId)
+                      return next
+                    })
+                    if (!expanded && section.groups[0]) onSelectChild(section.groups[0].primary.id)
+                  }}
+                  className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                >
+                  {expanded
+                    ? <ChevronDown className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
+                    : <ChevronRight className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />}
+                  <span className="min-w-0 flex-1 truncate">
+                    {t('sidebarChildrenHistoryTurn', { turnId: childIdFragment(section.turnId) })}
+                  </span>
+                  <span className="text-ds-faint">{section.groups.length}</span>
+                </button>
+              )
+            })}
+          </div>
         ) : null}
         {visibleAttemptGroups.length > 0 ? (
           <div
@@ -1526,6 +1699,24 @@ export function ChildAgentsPanelView({
             })}
           </div>
         ) : null}
+        {listFilter === 'history' && nextCursor && onLoadMore ? (
+          <div className="px-4 pb-3">
+            <button
+              type="button"
+              disabled={loadingMore}
+              onClick={onLoadMore}
+              className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-ds-border-muted bg-ds-card/72 px-3 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
+            >
+              {loadingMore ? <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={2} /> : null}
+              {loadingMore ? t('sidebarChildrenLoadingMore') : t('sidebarChildrenLoadMore')}
+            </button>
+          </div>
+        ) : null}
+        {listFilter === 'history' && !nextCursor && historyTruncated ? (
+          <div className="px-4 pb-3 text-[11px] leading-4 text-ds-faint" role="status">
+            {t('sidebarChildrenHistoryTruncated')}
+          </div>
+        ) : null}
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -1544,7 +1735,12 @@ export function ChildAgentsPanelView({
           </div>
         ) : visibleAttemptGroups.length === 0 ? (
           <div className="h-full px-3 py-3">
-            <ChildAgentsEmpty icon={<Clock3 className="h-6 w-6" strokeWidth={1.6} />} title={t('sidebarChildrenActiveEmpty')} />
+            <ChildAgentsEmpty
+              icon={<Clock3 className="h-6 w-6" strokeWidth={1.6} />}
+              title={listFilter === 'recent'
+                ? t('sidebarChildrenRecentEmpty')
+                : t('sidebarChildrenHistoryCollapsed')}
+            />
           </div>
         ) : selectedChild ? (
           <div className="flex min-h-0 flex-1 flex-col">
@@ -1667,17 +1863,47 @@ export function useThreadChildren({
 }: UseThreadChildrenInput): ThreadChildrenState {
   const [children, setChildren] = useState<AgentRuntimeChild[]>([])
   const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const [historyTruncated, setHistoryTruncated] = useState(false)
+  const pagesRef = useRef<ChildAgentPage[]>([])
+  const generationRef = useRef(0)
+  const ownerKeyRef = useRef<string | null>(null)
+  const loadMoreInFlightRef = useRef(false)
+  const refreshInFlightRef = useRef<object | null>(null)
 
   useEffect(() => {
     let cancelled = false
     let interval: ReturnType<typeof window.setInterval> | null = null
 
     if (!activeThreadId || !runtimeReady) {
+      generationRef.current += 1
+      ownerKeyRef.current = null
+      pagesRef.current = []
+      loadMoreInFlightRef.current = false
+      refreshInFlightRef.current = null
       setChildren([])
       setLoading(false)
+      setLoadingMore(false)
       setError(null)
+      setNextCursor(null)
+      setHistoryTruncated(false)
       return undefined
+    }
+
+    const generation = generationRef.current + 1
+    generationRef.current = generation
+    loadMoreInFlightRef.current = false
+    refreshInFlightRef.current = null
+    setLoadingMore(false)
+    const ownerKey = `${activeRuntimeId ?? ''}\u0000${activeThreadId}`
+    if (ownerKeyRef.current !== ownerKey) {
+      ownerKeyRef.current = ownerKey
+      pagesRef.current = []
+      setChildren([])
+      setNextCursor(null)
+      setHistoryTruncated(false)
     }
 
     const provider = getProvider()
@@ -1692,15 +1918,30 @@ export function useThreadChildren({
         }
         return
       }
+      if (refreshInFlightRef.current || loadMoreInFlightRef.current) return
+      const refreshRequest = {}
+      refreshInFlightRef.current = refreshRequest
       if (showLoading) setLoading(true)
       try {
-        const response = await provider.listThreadChildren(activeThreadId, { limit: 80 })
+        const responses = await reloadChildAgentPageWindow(
+          (options) => provider.listThreadChildren!(activeThreadId, options),
+          Math.max(1, pagesRef.current.length)
+        )
         if (cancelled) return
-        setChildren(filterDirectChildAgents(response.children ?? [], activeThreadId, activeRuntimeId))
-        setError(response.degraded && response.reason ? response.reason : null)
+        pagesRef.current = responses.map((response) => ({
+          children: filterDirectChildAgents(response.children ?? [], activeThreadId, activeRuntimeId),
+          nextCursor: response.nextCursor ?? null,
+          historyTruncated: response.metadata?.historyTruncated === true
+        }))
+        setChildren(mergeChildAgentPages(pagesRef.current.map((page) => page.children)))
+        setNextCursor(pagesRef.current.at(-1)?.nextCursor ?? null)
+        setHistoryTruncated(pagesRef.current.at(-1)?.historyTruncated === true)
+        const response = responses.at(-1)
+        setError(response?.degraded && response.reason ? response.reason : null)
       } catch (err) {
         if (!cancelled) setError(messageFromError(err))
       } finally {
+        if (refreshInFlightRef.current === refreshRequest) refreshInFlightRef.current = null
         if (!cancelled) setLoading(false)
       }
     }
@@ -1717,7 +1958,42 @@ export function useThreadChildren({
     }
   }, [activeThreadId, activeRuntimeId, busy, childRefreshKey, runtimeReady])
 
-  return { children, loading, error }
+  const loadMore = (): void => {
+    const cursor = pagesRef.current.at(-1)?.nextCursor
+    if (!activeThreadId || !runtimeReady || !cursor || loadMoreInFlightRef.current || refreshInFlightRef.current) return
+    const provider = getProvider()
+    if (typeof provider.listThreadChildren !== 'function') return
+    const generation = generationRef.current
+    loadMoreInFlightRef.current = true
+    setLoadingMore(true)
+    void provider.listThreadChildren(activeThreadId, {
+      cursor,
+      limit: CHILD_AGENT_HISTORY_PAGE_SIZE
+    }).then((response) => {
+      if (generationRef.current !== generation) return
+      pagesRef.current = [
+        ...pagesRef.current,
+        {
+          children: filterDirectChildAgents(response.children ?? [], activeThreadId, activeRuntimeId),
+          nextCursor: response.nextCursor ?? null,
+          historyTruncated: response.metadata?.historyTruncated === true
+        }
+      ]
+      setChildren(mergeChildAgentPages(pagesRef.current.map((page) => page.children)))
+      setNextCursor(response.nextCursor ?? null)
+      setHistoryTruncated(response.metadata?.historyTruncated === true)
+      setError(response.degraded && response.reason ? response.reason : null)
+    }).catch((err: unknown) => {
+      if (generationRef.current === generation) setError(messageFromError(err))
+    }).finally(() => {
+      if (generationRef.current === generation) {
+        loadMoreInFlightRef.current = false
+        setLoadingMore(false)
+      }
+    })
+  }
+
+  return { children, loading, loadingMore, error, nextCursor, historyTruncated, loadMore }
 }
 
 export function SessionChildAgentsPanel({
@@ -1751,6 +2027,10 @@ export function SessionChildAgentsPanel({
       children={childrenState.children}
       loading={childrenState.loading}
       error={childrenState.error}
+      loadingMore={childrenState.loadingMore}
+      nextCursor={childrenState.nextCursor}
+      historyTruncated={childrenState.historyTruncated}
+      onLoadMore={childrenState.loadMore}
       focusChildId={focusChildId}
       focusChildRequestKey={focusChildRequestKey}
       onOpenChildInFocus={onOpenChildInFocus}
@@ -1766,6 +2046,10 @@ export function ChildAgentsPanel({
   children,
   loading,
   error,
+  loadingMore = false,
+  nextCursor = null,
+  historyTruncated = false,
+  onLoadMore,
   focusChildId = null,
   focusChildRequestKey = 0,
   onOpenChildInFocus,
@@ -1812,6 +2096,12 @@ export function ChildAgentsPanel({
   const visibleChildren = navigationPath.length > 0 ? nestedChildrenState.children : children
   const visibleLoading = navigationPath.length > 0 ? nestedChildrenState.loading : loading
   const visibleError = navigationPath.length > 0 ? nestedChildrenState.error : error
+  const visibleLoadingMore = navigationPath.length > 0 ? nestedChildrenState.loadingMore : loadingMore
+  const visibleNextCursor = navigationPath.length > 0 ? nestedChildrenState.nextCursor : nextCursor
+  const visibleHistoryTruncated = navigationPath.length > 0
+    ? nestedChildrenState.historyTruncated
+    : historyTruncated
+  const loadMoreVisibleChildren = navigationPath.length > 0 ? nestedChildrenState.loadMore : onLoadMore
   const directChildren = useMemo(
     () => sortChildAgents(filterDirectChildAgents(visibleChildren, currentParentThreadId, currentRuntimeId)),
     [currentParentThreadId, currentRuntimeId, visibleChildren]
@@ -2039,6 +2329,11 @@ export function ChildAgentsPanel({
       selectedChildId={selectedChildId}
       loading={visibleLoading}
       error={visibleError}
+      currentTurnId={navigationPath.length === 0 ? activeThread?.latestTurnId : undefined}
+      loadingMore={visibleLoadingMore}
+      nextCursor={visibleNextCursor}
+      historyTruncated={visibleHistoryTruncated}
+      onLoadMore={loadMoreVisibleChildren}
       selectedSide={selectedSide}
       sideLoading={Boolean(selectedChildThreadId && attachingThreadId === selectedChildThreadId && !selectedSide)}
       runtimeConnection={sideData.runtimeConnection}

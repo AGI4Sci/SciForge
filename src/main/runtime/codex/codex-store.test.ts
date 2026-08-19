@@ -178,6 +178,45 @@ describe('CodexThreadStore', () => {
 })
 
 describe('CodexEventStore', () => {
+  it('keeps exact durable child lookup independent from bounded summary pages', async () => {
+    const rootDir = await tempRoot()
+    const store = new CodexEventStore({ rootDir })
+    const child = {
+      id: 'child-exact', runtimeId: 'codex' as const, parentThreadId: 'parent', kind: 'agent' as const,
+      status: 'running' as const, updatedAt: '2026-08-19T00:00:00.000Z'
+    }
+    await store.append('parent', { threadId: 'parent', child })
+    await store.append('parent', {
+      threadId: 'parent',
+      child: { ...child, status: 'completed', summary: 'done', updatedAt: '2026-08-19T00:00:01.000Z' }
+    })
+    await expect(store.findLatestChild('parent', 'child-exact')).resolves.toMatchObject({
+      id: 'child-exact', status: 'completed', summary: 'done'
+    })
+    await store.append('parent', {
+      threadId: 'parent',
+      child: { ...child, status: 'completed', metadata: { lifecycleOperation: 'delete' } }
+    })
+    await expect(store.findLatestChild('parent', 'child-exact')).resolves.toBeNull()
+  })
+
+  it('streams a bounded latest-child window while retaining exact access to older audit history', async () => {
+    const rootDir = await tempRoot()
+    const store = new CodexEventStore({ rootDir })
+    await Promise.all(Array.from({ length: 400 }, (_, index) => store.append('parent-scale', {
+      threadId: 'parent-scale',
+      child: {
+        id: `child-${index}`, runtimeId: 'codex', parentThreadId: 'parent-scale', kind: 'agent',
+        status: 'completed', updatedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString()
+      }
+    })))
+    const latest = await store.readLatestChildren('parent-scale')
+    expect(latest).toHaveLength(200)
+    expect(latest.map((child) => child.id)).toContain('child-399')
+    expect(latest.map((child) => child.id)).not.toContain('child-0')
+    await expect(store.findLatestChild('parent-scale', 'child-0')).resolves.toMatchObject({ id: 'child-0' })
+  })
+
   it('appends normalized events with GUI-owned seq values', async () => {
     const rootDir = await tempRoot()
     const store = new CodexEventStore({

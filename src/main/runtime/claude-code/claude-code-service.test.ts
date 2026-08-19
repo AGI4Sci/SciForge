@@ -361,9 +361,9 @@ describe('Claude child summary index', () => {
       child
     })
     const eventStore = (service as unknown as {
-      eventStore: { read(threadId: string, options: { includeAll: boolean }): Promise<unknown[]> }
+      eventStore: { readLatestChildren(threadId: string): Promise<unknown[]> }
     }).eventStore
-    const readSpy = vi.spyOn(eventStore, 'read')
+    const readSpy = vi.spyOn(eventStore, 'readLatestChildren')
 
     await expect(service.listThreadChildren({ threadId: 'parent-thread' })).resolves.toMatchObject({
       children: [child]

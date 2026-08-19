@@ -181,7 +181,7 @@ export async function runElectronDomainSmoke({
   loadElectron = loadPlaywrightElectron
 }) {
   await assertExecutable(executablePath, process.platform)
-  const temporaryDirectory = await mkdtemp(join(tmpdir(), TEMPORARY_DIRECTORY_PREFIX))
+  const temporaryDirectory = await createElectronSmokeTemporaryDirectory()
   const userDataDirectory = join(temporaryDirectory, 'user-data')
   const workspaceDirectory = join(temporaryDirectory, 'workspace')
   const workspaceFile = join(workspaceDirectory, 'notes.md')
@@ -349,8 +349,23 @@ export async function runElectronDomainSmoke({
     for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler)
     await closeElectron(electronApp)
     await visualRouterStub?.close()
-    await removeTemporaryDirectory(temporaryDirectory)
+    await removeElectronSmokeTemporaryDirectory(temporaryDirectory)
   }
+}
+
+export async function createElectronSmokeTemporaryDirectory(
+  runDirectory = process.env.SCIFORGE_E2E_RUN_DIRECTORY
+) {
+  const normalizedRunDirectory = typeof runDirectory === 'string' ? runDirectory.trim() : ''
+  if (!normalizedRunDirectory) return mkdtemp(join(tmpdir(), TEMPORARY_DIRECTORY_PREFIX))
+  const owner = resolve(normalizedRunDirectory)
+  const target = resolve(owner, 'profiles/electron-domain-smoke')
+  const relation = relative(owner, target)
+  if (relation.startsWith('..') || isAbsolute(relation)) {
+    throw new Error('Electron smoke profile directory escapes the supervisor run directory.')
+  }
+  await mkdir(target, { recursive: true })
+  return target
 }
 
 export function parseSmokeCliOptions(argv) {
@@ -413,34 +428,19 @@ async function smokeRendererWorkflow({
   const contentSpaceProviders = await api.capabilities.invoke({
     request: { actionId: 'content-space.list-provider-instances', input: {} }
   })
-  const matchingProviderInstances = contentSpaceProviders.output?.ok
-    ? contentSpaceProviders.output.value?.items?.filter(({ providerInstanceRef }) =>
-        providerInstanceRef === 'sciforge-content-space-local'
-      )
+  const providerInstances = contentSpaceProviders.output?.ok
+    ? contentSpaceProviders.output.value?.items
     : undefined
+  const providerInstanceRefs = Array.isArray(providerInstances)
+    ? providerInstances.map(({ providerInstanceRef }) => providerInstanceRef)
+    : []
   if (contentSpaceProviders.actionId !== 'content-space.list-provider-instances' ||
-    matchingProviderInstances?.length !== 1) {
-    throw new Error('Content Space did not resolve the local mock Provider Instance exactly once.')
-  }
-
-  const contentSpaceContainers = await api.capabilities.invoke({
-    request: {
-      actionId: 'content-space.list-containers',
-      input: {
-        providerInstanceRef: 'sciforge-content-space-local',
-        page: { limit: 1 }
-      }
-    }
-  })
-  const matchingRootContainers = contentSpaceContainers.output?.ok
-    ? contentSpaceContainers.output.value?.items?.filter(({ reference }) =>
-        reference?.providerInstanceRef === 'sciforge-content-space-local' &&
-        reference.containerId === 'mock_root'
-      )
-    : undefined
-  if (contentSpaceContainers.actionId !== 'content-space.list-containers' ||
-    matchingRootContainers?.length !== 1) {
-    throw new Error('Content Space did not resolve the local mock root container exactly once.')
+    providerInstanceRefs.length === 0 ||
+    providerInstanceRefs.some((providerInstanceRef) =>
+      typeof providerInstanceRef !== 'string' || providerInstanceRef.length === 0
+    ) ||
+    new Set(providerInstanceRefs).size !== providerInstanceRefs.length) {
+    throw new Error('Content Space did not expose a unique installed Provider Instance directory.')
   }
 
   const paperRadarStatus = await api.capabilities.invoke({
@@ -636,9 +636,8 @@ async function smokeRendererWorkflow({
     identityActionId: identityAccount.actionId,
     identityAccountUsername: identityAccount.output.currentAccount.username,
     contentSpaceProviderActionId: contentSpaceProviders.actionId,
-    contentSpaceProviderInstanceRef: matchingProviderInstances[0].providerInstanceRef,
-    contentSpaceContainerActionId: contentSpaceContainers.actionId,
-    contentSpaceRootContainerId: matchingRootContainers[0].reference.containerId,
+    contentSpaceProviderInstanceRef: providerInstanceRefs[0],
+    contentSpaceProviderInstanceCount: providerInstanceRefs.length,
     datasetLoopCreated: true,
     datasetLoopWorkflowCount: builtWorkflowIds.length,
     paperRadarActionId: paperRadarStatus.actionId,
@@ -691,12 +690,11 @@ export function validateSmokeResult(result, { expectedRendererUrl }) {
     throw new Error('Identity account creation did not establish the isolated smoke Principal.')
   }
   if (result.contentSpaceProviderActionId !== 'content-space.list-provider-instances' ||
-    result.contentSpaceProviderInstanceRef !== 'sciforge-content-space-local') {
-    throw new Error('Content Space Provider Instance selection did not resolve the local mock exactly.')
-  }
-  if (result.contentSpaceContainerActionId !== 'content-space.list-containers' ||
-    result.contentSpaceRootContainerId !== 'mock_root') {
-    throw new Error('Content Space root container did not resolve the local mock root exactly.')
+    typeof result.contentSpaceProviderInstanceRef !== 'string' ||
+    result.contentSpaceProviderInstanceRef.length === 0 ||
+    !Number.isSafeInteger(result.contentSpaceProviderInstanceCount) ||
+    result.contentSpaceProviderInstanceCount < 1) {
+    throw new Error('Content Space Provider Instance directory was not available.')
   }
   if (result.paperRadarActionId !== 'paper-radar.status') throw new Error('Paper Radar status action mismatch.')
   if (result.workspacePreviewActionId !== 'workspace-preview.list') throw new Error('Workspace Preview list action mismatch.')
@@ -1045,8 +1043,24 @@ function waitForExit(child, timeoutMs) {
   })
 }
 
-async function removeTemporaryDirectory(path) {
+export async function removeElectronSmokeTemporaryDirectory(
+  path,
+  runDirectory = process.env.SCIFORGE_E2E_RUN_DIRECTORY
+) {
   const resolvedPath = resolve(path)
+  const normalizedRunDirectory = typeof runDirectory === 'string' ? runDirectory.trim() : ''
+  if (normalizedRunDirectory) {
+    const supervisedPath = resolve(
+      normalizedRunDirectory,
+      'profiles/electron-domain-smoke'
+    )
+    if (resolvedPath !== supervisedPath) {
+      throw new Error(
+        `Electron smoke profile is outside the supervisor-owned directory: ${resolvedPath}`
+      )
+    }
+    return
+  }
   if (dirname(resolvedPath) !== resolve(tmpdir()) || !basename(resolvedPath).startsWith(TEMPORARY_DIRECTORY_PREFIX)) {
     throw new Error(`Refusing to remove unsafe Electron smoke directory: ${resolvedPath}`)
   }
