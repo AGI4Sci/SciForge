@@ -10,6 +10,7 @@ import {
   childAgentGroupBuckets,
   childAgentsPanelContextStateKey,
   mergeChildAgentPages,
+  reloadChildAgentPageWindow,
   sessionChildAgentsOwner
 } from './ChildAgentsPanel'
 
@@ -29,6 +30,7 @@ const labels: Record<string, string> = {
   sidebarChildrenActiveEmpty: 'No child agents are active right now.',
   sidebarChildrenRecentEmpty: 'No completed child agents in the current turn.',
   sidebarChildrenHistoryCollapsed: 'Expand an earlier turn to view its child agents.',
+  sidebarChildrenHistoryTruncated: 'Only the most recent 200 completed children are listed.',
   sidebarChildrenLoading: 'Loading children',
   sidebarChildrenLoadError: 'Unable to load children',
   sidebarChildrenNoThread: 'No active thread.',
@@ -764,7 +766,7 @@ describe('ChildAgentsPanelView', () => {
     expect(buckets.history[0]?.groups.map((group) => group.primary.id)).toEqual(['old-a', 'old-b'])
   })
 
-  it('keeps historical turns collapsed and exposes stable cursor pagination', () => {
+  it('defaults to Recent while keeping Active visible and historical groups folded', () => {
     const onLoadMore = vi.fn()
     const html = renderView({
       currentTurnId: 'turn-current',
@@ -776,11 +778,11 @@ describe('ChildAgentsPanelView', () => {
       onLoadMore
     })
 
-    expect(html).toContain('Earlier child-agent turns')
-    expect(html).toContain('aria-expanded="false"')
-    expect(html).toContain('Load more history')
+    expect(html).toContain('Current turn · turn-current')
+    expect(html).toContain('Show child agents from earlier turns')
     expect(html).toContain('active-child')
     expect(html).not.toContain('historical-child')
+    expect(html).not.toContain('Load more history')
     expect(html.match(/role="tab"/g)).toHaveLength(1)
   })
 
@@ -803,5 +805,31 @@ describe('ChildAgentsPanelView', () => {
     expect(merged.filter((entry) => entry.id === 'active-repeat')).toHaveLength(1)
     expect(merged.filter((entry) => entry.id === 'child-0')).toHaveLength(1)
     expect(html.match(/role="tab"/g)).toHaveLength(CHILD_AGENT_HISTORY_PAGE_SIZE)
+  })
+
+  it('rebuilds loaded history pages from the refreshed first-page cursor', async () => {
+    const requestedCursors: Array<string | undefined> = []
+    const pages = await reloadChildAgentPageWindow(async ({ cursor }) => {
+      requestedCursors.push(cursor)
+      if (!cursor) {
+        return {
+          runtimeId: 'codex',
+          threadId: 'thread-main',
+          children: [child({ id: 'new-child', status: 'completed' })],
+          nextCursor: 'refreshed-boundary'
+        }
+      }
+      return {
+        runtimeId: 'codex',
+        threadId: 'thread-main',
+        children: [child({ id: 'boundary-child', status: 'completed' })]
+      }
+    }, 2)
+
+    expect(requestedCursors).toEqual([undefined, 'refreshed-boundary'])
+    expect(pages.flatMap((page) => page.children).map((entry) => entry.id)).toEqual([
+      'new-child',
+      'boundary-child'
+    ])
   })
 })

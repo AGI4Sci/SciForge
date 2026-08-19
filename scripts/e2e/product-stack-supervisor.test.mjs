@@ -1,15 +1,19 @@
 import assert from 'node:assert/strict'
+import { spawn as nodeSpawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import {
   ProductStackSupervisor,
   ProductStackSupervisorError,
   collectDescendantProcessIdentities,
   commandFingerprint,
+  forceStopProcessTree,
+  inspectProcessIdentity,
   normalizeProductStackConfig,
   sameProcessIdentity
 } from './product-stack-supervisor.mjs'
@@ -41,11 +45,13 @@ function harness(root, options = {}) {
   let nextPid = 7000
   const identities = new Map()
   const children = []
+  const spawnCalls = []
   const forceStopped = []
   const descendants = new Map()
   const cancelledDeadlines = []
   const occupiedPorts = new Set(options.occupiedPorts ?? [])
-  const spawn = (command, args) => {
+  const spawn = (command, args, spawnOptions) => {
+    spawnCalls.push({ command, args, options: spawnOptions })
     const child = fakeChild(nextPid++, options.exitOnTerm !== false)
     identities.set(child.pid, {
       pid: child.pid,
@@ -62,16 +68,18 @@ function harness(root, options = {}) {
   }
   return {
     children,
+    spawnCalls,
     forceStopped,
     cancelledDeadlines,
     supervisor(config) {
       return new ProductStackSupervisor(config, {
         cwd: root,
-        platform: 'win32',
+        platform: options.platform ?? 'win32',
         randomId: () => '00000000-0000-4000-8000-000000000001',
         spawn,
         inspectProcess: async (pid) => identities.get(pid) ?? null,
         listDescendants: async (pid) => descendants.get(pid) ?? [],
+        listProcessGroup: async (pid) => descendants.get(pid) ?? [],
         forceStop: async (identity) => {
           forceStopped.push(identity.pid)
           identities.delete(identity.pid)
@@ -117,6 +125,17 @@ test('config keeps commands generic and profiles confined to the run directory',
   assert.throws(
     () => normalizeProductStackConfig({ ...base, profileDirectories: ['../escape'] }, { cwd: root }),
     /run-directory-relative/u
+  )
+})
+
+test('config supports a bounded self-launching E2E task without an artificial root', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-product-supervisor-task-only-'))
+  const normalized = normalizeProductStackConfig(await config(root, { roots: [] }), { cwd: root })
+  assert.equal(normalized.roots.length, 0)
+  assert.equal(normalized.task?.role, 'driver')
+  assert.throws(
+    () => normalizeProductStackConfig({ stateRoot: join(root, 'state'), roots: [] }, { cwd: root }),
+    /at least one root process or one bounded task/u
   )
 })
 
@@ -232,6 +251,31 @@ test('preflight refuses a live root from an incomplete previous run', async () =
   })
 })
 
+test('preflight also refuses a live task from an incomplete previous run', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-product-supervisor-live-task-'))
+  const runtime = harness(root)
+  const previous = join(root, 'state', 'previous')
+  await mkdir(previous, { recursive: true })
+  const identity = {
+    pid: 8124,
+    createdAt: 'created-8124',
+    executablePath: 'c:/fake/node',
+    commandLineHash: 'same-task'
+  }
+  runtime.identities.set(identity.pid, identity)
+  await writeFile(join(previous, 'manifest.json'), JSON.stringify({
+    version: 1,
+    runId: 'previous-task',
+    roots: [],
+    task: { role: 'driver', pid: identity.pid, identity },
+    teardown: { completedAt: null }
+  }))
+  await assert.rejects(runtime.supervisor(await config(root)).run(), (error) => {
+    assert.equal(error.code, 'LIVE_PREVIOUS_RUN')
+    return true
+  })
+})
+
 test('an invalid previous manifest fails closed', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sciforge-product-supervisor-invalid-manifest-'))
   const runtime = harness(root)
@@ -258,6 +302,30 @@ test('a product root crash fails the task and still cleans the remaining stack',
   assert.equal(runtime.identities.size, 0)
 })
 
+test('a product root that exits before teardown still has its captured descendants stopped', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-product-supervisor-exited-root-descendant-'))
+  const runtime = harness(root, { holdTask: true })
+  const supervisor = runtime.supervisor(await config(root))
+  const run = supervisor.run()
+  while (runtime.children.length < 2) await new Promise((resolve) => setImmediate(resolve))
+  const rootPid = runtime.children[0].pid
+  const descendant = {
+    pid: 8130,
+    createdAt: 'created-8130',
+    executablePath: 'c:/fake/electron.exe',
+    commandLineHash: 'electron-child'
+  }
+  runtime.identities.set(descendant.pid, descendant)
+  runtime.descendants.set(rootPid, [descendant])
+  runtime.children[0].emit('exit', 17, null)
+  await assert.rejects(run, (error) => {
+    assert.equal(error.code, 'ROOT_EXITED')
+    return true
+  })
+  assert.equal(runtime.identities.size, 0)
+  assert.ok(runtime.forceStopped.includes(descendant.pid))
+})
+
 test('PID reuse is never considered the same owner', () => {
   const expected = { pid: 42, createdAt: 'one', executablePath: 'node', commandLineHash: 'a' }
   assert.equal(sameProcessIdentity({ ...expected, createdAt: 'two' }, expected), false)
@@ -278,3 +346,69 @@ test('signal interruption reaches the canonical finally teardown exactly once', 
   })
   assert.equal(runtime.identities.size, 0)
 })
+
+test('signal interruption does not wait for a root process to honor SIGTERM', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-product-supervisor-interrupt-wakeup-'))
+  const runtime = harness(root, { holdTask: true, exitOnTerm: false })
+  const supervisor = runtime.supervisor(await config(root))
+  const run = supervisor.run()
+  while (runtime.children.length < 2) await new Promise((resolve) => setImmediate(resolve))
+  supervisor.interrupt('SIGINT')
+  await assert.rejects(run, (error) => {
+    assert.equal(error.code, 'INTERRUPTED')
+    return true
+  })
+  assert.equal(runtime.identities.size, 0)
+})
+
+test('POSIX tasks launch in their own process group', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-product-supervisor-posix-group-'))
+  const runtime = harness(root, { platform: 'darwin' })
+  await runtime.supervisor(await config(root, { roots: [] })).run()
+  assert.equal(runtime.spawnCalls.length, 1)
+  assert.equal(runtime.spawnCalls[0]?.options.detached, true)
+})
+
+test('POSIX force stop falls back to the exact PID for a non-group-leader process', {
+  skip: process.platform === 'win32'
+}, async () => {
+  const child = nodeSpawn(process.execPath, ['-e', 'setInterval(() => {}, 1_000)'], { stdio: 'ignore' })
+  await new Promise((resolve, reject) => {
+    child.once('spawn', resolve)
+    child.once('error', reject)
+  })
+  try {
+    const identity = await inspectProcessIdentity(child.pid)
+    assert.ok(identity)
+    await forceStopProcessTree(identity)
+    await waitForChildExit(child, 2_000)
+    assert.notEqual(child.signalCode, null)
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+  }
+})
+
+test('checked-in source Electron smoke config uses the supervisor as its canonical launcher', async () => {
+  const directory = dirname(fileURLToPath(import.meta.url))
+  const input = JSON.parse(await readFile(join(directory, 'electron-domain-source.json'), 'utf8'))
+  const normalized = normalizeProductStackConfig(input, { cwd: directory })
+  assert.equal(normalized.roots.length, 0)
+  assert.equal(normalized.task?.role, 'electron-domain-source')
+  assert.deepEqual(normalized.task?.args, ['scripts/electron-domain-smoke.mjs'])
+  assert.deepEqual(normalized.profileDirectories, ['profiles/electron-domain-smoke'])
+})
+
+async function waitForChildExit(child, timeoutMs) {
+  if (child.exitCode !== null || child.signalCode !== null) return
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.removeListener('exit', onExit)
+      reject(new Error(`Child ${child.pid} did not exit within ${timeoutMs} ms.`))
+    }, timeoutMs)
+    const onExit = () => {
+      clearTimeout(timer)
+      resolve()
+    }
+    child.once('exit', onExit)
+  })
+}

@@ -804,6 +804,7 @@
   "sidebarChildrenActiveEmpty": "No child agents are active right now.",
   "sidebarChildrenRecentEmpty": "No completed child agents in the current turn.",
   "sidebarChildrenHistoryCollapsed": "Expand an earlier turn to view its child agents.",
+  "sidebarChildrenHistoryTruncated": "Only the most recent 200 completed children are listed. Older children remain available by exact child ID.",
   "sidebarChildrenLoading": "Loading children",
   "sidebarChildrenLoadError": "Unable to load children",
   "sidebarChildrenNoThread": "Open a thread to see child agents.",

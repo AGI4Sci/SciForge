@@ -89,5 +89,6 @@ paper/figures/*.component-segmentation.json
 paper/figures/*.framework-components.json
 
 ### Local end-to-end run artifacts
+.e2e-runtime/
 temp/
 .tmp/

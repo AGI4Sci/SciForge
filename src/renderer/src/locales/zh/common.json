@@ -804,6 +804,7 @@
   "sidebarChildrenActiveEmpty": "当前没有活跃的子智能体。",
   "sidebarChildrenRecentEmpty": "当前回合还没有已结束的子智能体。",
   "sidebarChildrenHistoryCollapsed": "展开更早的回合以查看其中的子智能体。",
+  "sidebarChildrenHistoryTruncated": "这里只列出最近 200 个已结束的子智能体；更早记录仍可通过精确 child ID 查询。",
   "sidebarChildrenLoading": "正在加载子智能体",
   "sidebarChildrenLoadError": "暂时无法加载子智能体",
   "sidebarChildrenNoThread": "打开会话后可查看子智能体。",

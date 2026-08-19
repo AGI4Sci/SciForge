@@ -34,15 +34,18 @@ export function normalizeProductStackConfig(input, options = {}) {
   const roots = requiredArray(input.roots, 'roots').map((root, index) => normalizeCommand(root, `roots[${index}]`, cwd, {
     longRunning: true
   }))
-  if (roots.length === 0) {
-    throw new ProductStackSupervisorError('INVALID_CONFIG', 'Product stack config requires at least one root process.')
-  }
   const roles = new Set()
   for (const root of roots) {
     if (roles.has(root.role)) throw new ProductStackSupervisorError('INVALID_CONFIG', `Duplicate root role: ${root.role}.`)
     roles.add(root.role)
   }
   const task = input.task ? normalizeCommand(input.task, 'task', cwd, { longRunning: false }) : null
+  if (roots.length === 0 && !task) {
+    throw new ProductStackSupervisorError(
+      'INVALID_CONFIG',
+      'Product stack config requires at least one root process or one bounded task.'
+    )
+  }
   const ports = [...new Set(requiredArray(input.ports ?? [], 'ports').map(normalizePort))].sort((a, b) => a - b)
   for (const root of roots) {
     if (root.readyPort !== null && !ports.includes(root.readyPort)) ports.push(root.readyPort)
@@ -113,6 +116,8 @@ export class ProductStackSupervisor {
     this.spawn = options.spawn ?? nodeSpawn
     this.inspectProcess = options.inspectProcess ?? ((pid) => inspectProcessIdentity(pid, this.platform))
     this.listDescendants = options.listDescendants ?? ((pid) => listDescendantProcessIdentities(pid, this.platform))
+    this.listProcessGroup = options.listProcessGroup ?? ((processGroupId) =>
+      listProcessGroupIdentities(processGroupId, this.platform))
     this.forceStop = options.forceStop ?? ((identity) => forceStopProcessTree(identity, this.platform))
     this.isPortFree = options.isPortFree ?? isLoopbackPortFree
     this.waitForPort = options.waitForPort ?? waitForLoopbackPort
@@ -123,6 +128,10 @@ export class ProductStackSupervisor {
     this.teardownPromise = null
     this.signalHandlers = new Map()
     this.manifest = null
+    this.interruptOutcome = null
+    this.interruptPromise = new Promise((resolveInterrupt) => {
+      this.resolveInterrupt = resolveInterrupt
+    })
   }
 
   async run() {
@@ -140,6 +149,9 @@ export class ProductStackSupervisor {
         }
       }
       await this.updateManifest({ phase: 'running' })
+      if (this.interruptedBy) {
+        throw new ProductStackSupervisorError('INTERRUPTED', `E2E run was interrupted by ${this.interruptedBy}.`)
+      }
       result = this.config.task ? await this.runTask(this.config.task) : { code: 0, signal: null }
       if (result.code !== 0 || result.signal) {
         throw new ProductStackSupervisorError(
@@ -176,14 +188,24 @@ export class ProductStackSupervisor {
       const path = join(this.config.stateRoot, entry.name, 'manifest.json')
       const manifest = await readPreviousManifest(path)
       if (!manifest || manifest.teardown?.completedAt) continue
-      for (const root of manifest.roots ?? []) {
-        for (const owned of [root, ...(root.descendants ?? [])]) {
+      for (const owner of [manifest.task, ...(manifest.roots ?? [])].filter(Boolean)) {
+        for (const owned of [owner, ...(owner.descendants ?? [])]) {
           const current = await this.inspectProcess(owned.pid)
           if (current && sameProcessIdentity(current, owned.identity)) {
             throw new ProductStackSupervisorError(
               'LIVE_PREVIOUS_RUN',
-              `Previous E2E run ${manifest.runId ?? entry.name} still owns ${root.role} PID ${owned.pid}.`,
-              { manifestPath: path, pid: owned.pid, role: root.role }
+              `Previous E2E run ${manifest.runId ?? entry.name} still owns ${owner.role} PID ${owned.pid}.`,
+              { manifestPath: path, pid: owned.pid, role: owner.role }
+            )
+          }
+        }
+        if (owner.processGroupId) {
+          const groupMembers = await this.listProcessGroup(owner.processGroupId)
+          if (groupMembers.length > 0) {
+            throw new ProductStackSupervisorError(
+              'LIVE_PREVIOUS_RUN',
+              `Previous E2E run ${manifest.runId ?? entry.name} still owns process group ${owner.processGroupId}.`,
+              { manifestPath: path, processGroupId: owner.processGroupId, role: owner.role }
             )
           }
         }
@@ -247,12 +269,14 @@ export class ProductStackSupervisor {
       child.kill('SIGTERM')
       throw new ProductStackSupervisorError('IDENTITY_UNAVAILABLE', `Could not verify ${spec.role} PID ${child.pid}.`)
     }
-    const root = { spec, child, pid: child.pid, identity, exit: earlyExit }
+    const processGroupId = this.platform === 'win32' ? null : child.pid
+    const root = { spec, child, pid: child.pid, identity, exit: earlyExit, processGroupId }
     this.roots.push(root)
     this.manifest.roots.push({
       role: spec.role,
       pid: child.pid,
       identity,
+      processGroupId,
       command: safeCommandSummary(spec),
       startedAt: this.now().toISOString(),
       stoppedAt: null,
@@ -263,8 +287,12 @@ export class ProductStackSupervisor {
     if (spec.readyPort !== null) {
       const ready = await Promise.race([
         this.waitForPort(spec.readyPort, spec.timeoutMs).then(() => ({ kind: 'ready' })),
-        earlyExit.then((exit) => ({ kind: 'exit', exit }))
+        earlyExit.then((exit) => ({ kind: 'exit', exit })),
+        this.interruptPromise
       ])
+      if (ready.kind === 'interrupt') {
+        throw new ProductStackSupervisorError('INTERRUPTED', `E2E run was interrupted by ${ready.signal}.`)
+      }
       if (ready.kind === 'exit') {
         throw new ProductStackSupervisorError(
           'ROOT_EXITED',
@@ -284,6 +312,7 @@ export class ProductStackSupervisor {
         SCIFORGE_E2E_ROLE: spec.role,
         SCIFORGE_E2E_RUN_DIRECTORY: this.manifest.runDirectory
       },
+      detached: this.platform !== 'win32',
       stdio: 'inherit',
       windowsHide: true
     })
@@ -294,11 +323,13 @@ export class ProductStackSupervisor {
       child.kill('SIGTERM')
       throw new ProductStackSupervisorError('IDENTITY_UNAVAILABLE', `Could not verify ${spec.role} PID ${child.pid}.`)
     }
-    this.taskProcess = { spec, child, pid: child.pid, identity, exit: taskExit }
+    const processGroupId = this.platform === 'win32' ? null : child.pid
+    this.taskProcess = { spec, child, pid: child.pid, identity, exit: taskExit, processGroupId }
     this.manifest.task = {
       ...safeCommandSummary(spec),
       pid: child.pid,
       identity,
+      processGroupId,
       startedAt: this.now().toISOString(),
       exit: null,
       descendants: []
@@ -312,15 +343,16 @@ export class ProductStackSupervisor {
       outcome = await Promise.race([
         taskExit,
         timeout.promise.then(() => ({ timedOut: true })),
-        rootExit
+        rootExit,
+        this.interruptPromise
       ])
     } finally {
       timeout.cancel()
     }
+    if (outcome?.kind === 'interrupt') {
+      throw new ProductStackSupervisorError('INTERRUPTED', `E2E run was interrupted by ${outcome.signal}.`)
+    }
     if (outcome?.rootExited) {
-      child.kill('SIGTERM')
-      const current = await this.inspectProcess(child.pid)
-      if (current && sameProcessIdentity(current, identity)) await this.forceStop(identity)
       if (this.interruptedBy) {
         throw new ProductStackSupervisorError('INTERRUPTED', `E2E run was interrupted by ${this.interruptedBy}.`)
       }
@@ -331,9 +363,6 @@ export class ProductStackSupervisor {
       )
     }
     if (outcome?.timedOut) {
-      child.kill('SIGTERM')
-      const current = await this.inspectProcess(child.pid)
-      if (current && sameProcessIdentity(current, identity)) await this.forceStop(identity)
       throw new ProductStackSupervisorError('TASK_TIMEOUT', `${spec.role} timed out after ${spec.timeoutMs} ms.`)
     }
     this.manifest.task.exit = outcome
@@ -343,9 +372,10 @@ export class ProductStackSupervisor {
 
   interrupt(signal) {
     this.interruptedBy ??= signal
-    // Wake the main run path through the already-observed root exit. The one
-    // canonical finally block performs identity-checked, idempotent teardown.
-    for (const root of [...this.roots].reverse()) root.child.kill('SIGTERM')
+    if (!this.interruptOutcome) {
+      this.interruptOutcome = { kind: 'interrupt', signal: this.interruptedBy }
+      this.resolveInterrupt(this.interruptOutcome)
+    }
   }
 
   async teardown(reason) {
@@ -385,28 +415,40 @@ export class ProductStackSupervisor {
       }
     }
     const liveProcesses = []
+    const liveProcessIds = new Set()
+    const noteLiveProcess = (entry) => {
+      if (liveProcessIds.has(entry.pid)) return
+      liveProcessIds.add(entry.pid)
+      liveProcesses.push(entry)
+    }
     if (this.taskProcess) {
       const current = await this.inspectProcess(this.taskProcess.pid)
       if (current && sameProcessIdentity(current, this.taskProcess.identity)) {
-        liveProcesses.push({ role: this.taskProcess.spec.role, pid: this.taskProcess.pid })
+        noteLiveProcess({ role: this.taskProcess.spec.role, pid: this.taskProcess.pid })
       }
     }
     for (const root of this.manifest.roots) {
       const current = await this.inspectProcess(root.pid)
       if (current && sameProcessIdentity(current, root.identity)) {
-        liveProcesses.push({ role: root.role, pid: root.pid })
+        noteLiveProcess({ role: root.role, pid: root.pid })
       }
       for (const descendant of root.descendants ?? []) {
         const owned = await this.inspectProcess(descendant.pid)
         if (owned && sameProcessIdentity(owned, descendant.identity)) {
-          liveProcesses.push({ role: root.role, pid: descendant.pid, descendant: true })
+          noteLiveProcess({ role: root.role, pid: descendant.pid, descendant: true })
         }
       }
     }
     for (const descendant of this.manifest.task?.descendants ?? []) {
       const owned = await this.inspectProcess(descendant.pid)
       if (owned && sameProcessIdentity(owned, descendant.identity)) {
-        liveProcesses.push({ role: this.manifest.task.role, pid: descendant.pid, descendant: true })
+        noteLiveProcess({ role: this.manifest.task.role, pid: descendant.pid, descendant: true })
+      }
+    }
+    for (const owner of [this.manifest.task, ...this.manifest.roots].filter(Boolean)) {
+      if (!owner.processGroupId) continue
+      for (const member of await this.listProcessGroup(owner.processGroupId)) {
+        noteLiveProcess({ role: owner.role, pid: member.pid, processGroup: true })
       }
     }
     const verification = { liveProcesses, occupiedPorts, profilesReleased: occupiedPorts.length === 0 }
@@ -432,9 +474,15 @@ export class ProductStackSupervisor {
   }
 
   async stopManagedProcess(processRecord, manifestRecord) {
-    const { pid, identity, child, exit: exitPromise, spec } = processRecord
+    const { pid, identity, child, exit: exitPromise, spec, processGroupId } = processRecord
+    const descendants = await this.captureOwnedDescendants(pid, processGroupId, manifestRecord)
     const current = await this.inspectProcess(pid)
     if (!current) {
+      await this.stopOwnedDescendants(descendants, spec.role)
+      await this.stopOwnedDescendants(
+        await this.captureOwnedDescendants(pid, processGroupId, manifestRecord),
+        spec.role
+      )
       if (manifestRecord) {
         manifestRecord.stoppedAt = this.now().toISOString()
         manifestRecord.exit = await settledExit(exitPromise)
@@ -449,7 +497,6 @@ export class ProductStackSupervisor {
         { expected: identity, actual: current }
       )
     }
-    const descendants = await this.captureOwnedDescendants(pid, manifestRecord)
     child.kill('SIGTERM')
     const grace = this.createDeadline(this.config.stopGraceMs)
     let exit
@@ -472,6 +519,17 @@ export class ProductStackSupervisor {
       if (beforeForce) await this.forceStop(identity)
     }
     await this.stopOwnedDescendants(descendants, spec.role)
+    await this.stopOwnedDescendants(
+      await this.captureOwnedDescendants(pid, processGroupId, manifestRecord),
+      spec.role
+    )
+    const survivor = await this.inspectProcess(pid)
+    if (survivor && sameProcessIdentity(survivor, identity)) {
+      throw new ProductStackSupervisorError(
+        'PROCESS_STILL_RUNNING',
+        `Owned root PID ${pid} for role ${spec.role} survived teardown.`
+      )
+    }
     if (manifestRecord) {
       manifestRecord.stoppedAt = this.now().toISOString()
       manifestRecord.exit = exit.kind === 'exit' ? exit.value : await settledExit(exitPromise)
@@ -479,10 +537,24 @@ export class ProductStackSupervisor {
     }
   }
 
-  async captureOwnedDescendants(pid, manifestRecord) {
-    const descendants = await this.listDescendants(pid)
+  async captureOwnedDescendants(pid, processGroupId, manifestRecord) {
+    const [treeDescendants, groupMembers] = await Promise.all([
+      this.listDescendants(pid),
+      processGroupId ? this.listProcessGroup(processGroupId) : Promise.resolve([])
+    ])
+    const byPid = new Map()
+    for (const identity of [...treeDescendants, ...groupMembers]) {
+      if (identity.pid !== pid) byPid.set(identity.pid, identity)
+    }
+    const descendants = [...byPid.values()]
     const capturedAt = this.now().toISOString()
-    const records = descendants.map((identity) => ({ pid: identity.pid, identity, capturedAt, stoppedAt: null }))
+    const recordsByPid = new Map((manifestRecord?.descendants ?? []).map((record) => [record.pid, record]))
+    for (const identity of descendants) {
+      if (!recordsByPid.has(identity.pid)) {
+        recordsByPid.set(identity.pid, { pid: identity.pid, identity, capturedAt, stoppedAt: null })
+      }
+    }
+    const records = [...recordsByPid.values()]
     if (manifestRecord) {
       manifestRecord.descendants = records
       await this.writeManifest()
@@ -551,7 +623,27 @@ export async function inspectProcessIdentity(pid, platform = process.platform) {
 export async function listDescendantProcessIdentities(rootPid, platform = process.platform) {
   if (!Number.isSafeInteger(rootPid) || rootPid <= 0) return []
   if (platform === 'win32') return listWindowsDescendantProcessIdentities(rootPid)
-  return listPosixDescendantProcessIdentities(rootPid)
+  return listPosixDescendantProcessIdentities(rootPid, platform)
+}
+
+export async function listProcessGroupIdentities(processGroupId, platform = process.platform) {
+  if (!Number.isSafeInteger(processGroupId) || processGroupId <= 0 || platform === 'win32') return []
+  try {
+    const { stdout } = await execFile('ps', ['-axo', 'pid=,pgid='], { timeout: 10_000 })
+    const pids = stdout.split(/\r?\n/u).flatMap((line) => {
+      const match = line.match(/^\s*(\d+)\s+(\d+)\s*$/u)
+      return match && Number(match[2]) === processGroupId && Number(match[1]) !== processGroupId
+        ? [Number(match[1])]
+        : []
+    })
+    return inspectProcessIds(pids, platform)
+  } catch (error) {
+    throw new ProductStackSupervisorError(
+      'PROCESS_GROUP_INSPECTION_FAILED',
+      `Could not inspect POSIX process group ${processGroupId}.`,
+      { cause: error instanceof Error ? error.message : String(error) }
+    )
+  }
 }
 
 async function listWindowsDescendantProcessIdentities(rootPid) {
@@ -583,21 +675,19 @@ async function listWindowsDescendantProcessIdentities(rootPid) {
   }
 }
 
-async function listPosixDescendantProcessIdentities(rootPid) {
+async function listPosixDescendantProcessIdentities(rootPid, platform) {
   try {
-    const { stdout } = await execFile('ps', ['-axo', 'pid=,ppid=,lstart=,comm=,args='], { timeout: 10_000 })
+    const { stdout } = await execFile('ps', ['-axo', 'pid=,ppid='], { timeout: 10_000 })
     const processes = stdout.split(/\r?\n/u).flatMap((line) => {
-      const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.{24})\s+(\S+)\s+([\s\S]+)$/u)
+      const match = line.match(/^\s*(\d+)\s+(\d+)\s*$/u)
       if (!match) return []
       return [{
         pid: Number(match[1]),
-        parentPid: Number(match[2]),
-        createdAt: match[3].trim(),
-        executablePath: resolveExecutable(match[4]),
-        commandLineHash: hashText(match[5])
+        parentPid: Number(match[2])
       }]
     })
-    return collectDescendantProcessIdentities(processes, rootPid)
+    const descendantPids = collectDescendantProcessIdentities(processes, rootPid).map(({ pid }) => pid)
+    return inspectProcessIds(descendantPids, platform)
   } catch (error) {
     throw new ProductStackSupervisorError(
       'PROCESS_TREE_INSPECTION_FAILED',
@@ -605,6 +695,11 @@ async function listPosixDescendantProcessIdentities(rootPid) {
       { cause: error instanceof Error ? error.message : String(error) }
     )
   }
+}
+
+async function inspectProcessIds(pids, platform) {
+  const identities = await Promise.all(pids.map((pid) => inspectProcessIdentity(pid, platform)))
+  return identities.filter(Boolean)
 }
 
 export function collectDescendantProcessIdentities(processes, rootPid) {
@@ -723,7 +818,13 @@ export async function forceStopProcessTree(identity, platform = process.platform
   try {
     process.kill(-identity.pid, 'SIGKILL')
   } catch (error) {
-    if (error?.code !== 'ESRCH') process.kill(identity.pid, 'SIGKILL')
+    if (error?.code !== 'ESRCH') throw error
+    const fallback = await inspectProcessIdentity(identity.pid, platform)
+    if (!fallback) return
+    if (!sameProcessIdentity(fallback, identity)) {
+      throw new ProductStackSupervisorError('PROCESS_IDENTITY_MISMATCH', `Refusing to stop reused PID ${identity.pid}.`)
+    }
+    process.kill(identity.pid, 'SIGKILL')
   }
 }
 

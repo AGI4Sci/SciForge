@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -7,13 +7,30 @@ import {
   CONTENT_SPACE_SMOKE_CAPABILITY_IDS,
   IDENTITY_SMOKE_CAPABILITY_IDS,
   REQUIRED_CAPABILITY_IDS,
+  createElectronSmokeTemporaryDirectory,
   createIdentitySmokeInvocationId,
   createSourceSmokeConfiguration,
   locatePackagedExecutable,
   makeExecutableForTest,
   parseSmokeCliOptions,
+  removeElectronSmokeTemporaryDirectory,
   validateSmokeResult
 } from './electron-domain-smoke-support.mjs'
+
+test('supervised source smoke keeps its profile inside the owned run directory', async () => {
+  const runDirectory = await mkdtemp(join(tmpdir(), 'sciforge-electron-supervised-run-'))
+  try {
+    const profileDirectory = await createElectronSmokeTemporaryDirectory(runDirectory)
+    assert.equal(
+      profileDirectory,
+      join(resolve(runDirectory), 'profiles/electron-domain-smoke')
+    )
+    await removeElectronSmokeTemporaryDirectory(profileDirectory, runDirectory)
+    await assert.doesNotReject(access(profileDirectory))
+  } finally {
+    await rm(runDirectory, { recursive: true, force: true })
+  }
+})
 
 test('domain smoke requires every Identity and Content Space capability exactly once', () => {
   assert.deepEqual(IDENTITY_SMOKE_CAPABILITY_IDS, [
@@ -58,7 +75,7 @@ test('Identity smoke account creation receives a fresh bounded invocation identi
   assert.match(first, /^[A-Za-z0-9][A-Za-z0-9_-]{15,127}$/u)
 })
 
-test('smoke result requires the selected Identity and exact local Content Space root', () => {
+test('smoke result requires the selected Identity and a composed Content Space Provider', () => {
   const valid = validSmokeResult()
   assert.doesNotThrow(() => validateSmokeResult(valid, { expectedRendererUrl: valid.url }))
   assert.throws(
@@ -68,16 +85,10 @@ test('smoke result requires the selected Identity and exact local Content Space 
     /Identity account/u
   )
   assert.throws(
-    () => validateSmokeResult({ ...valid, contentSpaceProviderInstanceRef: 'another-provider' }, {
+    () => validateSmokeResult({ ...valid, contentSpaceProviderInstanceCount: 0 }, {
       expectedRendererUrl: valid.url
     }),
     /Content Space Provider Instance/u
-  )
-  assert.throws(
-    () => validateSmokeResult({ ...valid, contentSpaceRootContainerId: 'another-root' }, {
-      expectedRendererUrl: valid.url
-    }),
-    /Content Space root container/u
   )
 })
 
@@ -100,9 +111,8 @@ function validSmokeResult() {
     identityActionId: 'identity.local.create-account',
     identityAccountUsername: 'electron_smoke',
     contentSpaceProviderActionId: 'content-space.list-provider-instances',
-    contentSpaceProviderInstanceRef: 'sciforge-content-space-local',
-    contentSpaceContainerActionId: 'content-space.list-containers',
-    contentSpaceRootContainerId: 'mock_root',
+    contentSpaceProviderInstanceRef: 'installed-provider',
+    contentSpaceProviderInstanceCount: 1,
     nativeVisual: {
       toolNames: ['sciforge_look', 'sciforge_capture'],
       cropped: true,
