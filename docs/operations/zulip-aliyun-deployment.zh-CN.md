@@ -458,7 +458,7 @@ Bot 的 API key 只注入云端 provider secret，不再下发到每台桌面。
 1. 安装官方 Zulip App，Server 填 `https://chat.sciforge.cn`；
 2. 使用自己的账号登录并打开管理员指定 channel；
 3. 在桌面“协作”面板开始配对；
-4. 把桌面显示的完整 `sciforge-pair <challengeId> <challengeCode>` 原样发送到指定 Topic；
+4. 在手机 Zulip 中私聊 SciForge Bot，把桌面显示的完整 `/bind SF1...` 命令原样发送；确认 Bot 在同一私聊返回安全的成功或失败结果；
 5. 配对成功后注册本机 Agent，再把当前 Session 分享到个人 Topic。
 
 已删除的旧手机直连 UI、桌面 Bot 凭据和远端上下文切换命令均不是现行路径，不得作为回退或兼容流程

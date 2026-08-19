@@ -325,6 +325,16 @@ export class ProviderRuntimeStore {
     return result.rows.map((row) => String(row.recipient_id))
   }
 
+  async listPendingProviderIdentityIds(limit = 100): Promise<string[]> {
+    const result = await this.pool.query<{ recipient_id: unknown }>(
+      `SELECT recipient_id FROM sciforge_collaboration.inbox_cursors
+        WHERE recipient_kind='provider_identity' AND acked_sequence < next_sequence-1
+        ORDER BY updated_at ASC LIMIT $1`,
+      [limit]
+    )
+    return result.rows.map((row) => String(row.recipient_id))
+  }
+
   private timestamp(): string {
     const value = this.now()
     if (!Number.isFinite(value.valueOf())) throw new TypeError('Provider runtime clock returned an invalid timestamp.')

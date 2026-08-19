@@ -26,6 +26,14 @@ export const providerIdentitySchema = z.object({
 }).strict()
 export type ProviderIdentity = z.infer<typeof providerIdentitySchema>
 
+export const providerDirectRecipientSchema = z.object({
+  type: z.literal('provider_direct_recipient'),
+  provider: providerIdSchema,
+  realmId: providerOpaqueIdSchema,
+  providerUserId: providerOpaqueIdSchema
+}).strict()
+export type ProviderDirectRecipient = z.infer<typeof providerDirectRecipientSchema>
+
 export const providerLocatorSchema = z.object({
   type: z.literal('provider_locator'),
   provider: providerIdSchema,
@@ -129,14 +137,25 @@ export const providerEventSchema = z.discriminatedUnion('type', [
 ])
 export type ProviderEvent = z.infer<typeof providerEventSchema>
 
-export const providerSendRequestSchema = z.discriminatedUnion('type', [
-  z.object({
-    protocolVersion: protocolVersionSchema,
-    type: z.literal('provider.send.message'),
-    locator: providerLocatorSchema,
-    clientMessageId: providerOpaqueIdSchema,
-    text: nonEmptyTextSchema
-  }).strict(),
+const providerLocatorMessageSendRequestSchema = z.object({
+  protocolVersion: protocolVersionSchema,
+  type: z.literal('provider.send.message'),
+  locator: providerLocatorSchema,
+  clientMessageId: providerOpaqueIdSchema,
+  text: nonEmptyTextSchema
+}).strict()
+
+const providerDirectMessageSendRequestSchema = z.object({
+  protocolVersion: protocolVersionSchema,
+  type: z.literal('provider.send.message'),
+  recipient: providerDirectRecipientSchema,
+  clientMessageId: providerOpaqueIdSchema,
+  text: nonEmptyTextSchema
+}).strict()
+
+export const providerSendRequestSchema = z.union([
+  providerLocatorMessageSendRequestSchema,
+  providerDirectMessageSendRequestSchema,
   z.object({
     protocolVersion: protocolVersionSchema,
     type: z.literal('provider.send.status'),
@@ -284,7 +303,8 @@ export const humanEndpointProviderContractSchema = z.object({
     locatorRename: z.boolean(),
     locatorMove: z.boolean(),
     locatorDiscovery: z.boolean(),
-    identityChallenge: z.literal(true)
+    identityChallenge: z.literal(true),
+    directMessages: z.boolean()
   }).strict(),
   onboarding: z.object({
     realmLabel: displayNameSchema,

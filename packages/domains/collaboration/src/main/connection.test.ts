@@ -130,7 +130,8 @@ test('pairing exposes the complete bounded provider command but keeps the poll s
               locatorRename: true,
               locatorMove: true,
               locatorDiscovery: true,
-              identityChallenge: true
+              identityChallenge: true,
+              directMessages: true
             },
             onboarding: {
               realmLabel: 'Realm',
@@ -202,9 +203,9 @@ test('pairing exposes the complete bounded provider command but keeps the poll s
     locator: { realmId: 'research-lab' }
   })
 
-  assert.equal(result.pairingCode, `sciforge-pair ${challengeId} ${challengeCode}`)
-  assert.equal(result.pairingCode.length, 63)
-  assert.match(result.instruction, /zulip.*topic/iu)
+  assert.equal(result.pairingCode, `/bind SF1.${'c'.repeat(32)}.${challengeCode}`)
+  assert.equal(result.pairingCode.length, 55)
+  assert.match(result.instruction, /private message.*zulip.*bot/iu)
   assert.equal(JSON.stringify(result).includes(pollSecret), false)
   assert.equal(secrets.get('pairing-poll')?.includes(pollSecret), true)
   assert.deepEqual(await connection.pollChallenge({ challengeId }), {
@@ -280,7 +281,8 @@ test('first configuration loads the anonymous catalog and sends pairing idempote
             locatorRename: true,
             locatorMove: true,
             locatorDiscovery: true,
-            identityChallenge: true
+            identityChallenge: true,
+            directMessages: true
           },
           onboarding: {
             realmLabel: 'Realm',

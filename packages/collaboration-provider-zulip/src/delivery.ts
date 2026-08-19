@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { ZulipProviderError, isZulipProviderError } from './errors.js'
+import type { ProviderDirectRecipient } from '@sciforge/collaboration-contracts'
 import type { ZulipLocator } from './locator.js'
 
 export type ZulipDeliveryState = 'pending' | 'sent' | 'uncertain' | 'failed'
@@ -7,13 +8,14 @@ export type ZulipDeliveryState = 'pending' | 'sent' | 'uncertain' | 'failed'
 export type ZulipDeliveryRecord = {
   idempotencyKey: string
   contentHash: string
-  locator: ZulipLocator
   state: ZulipDeliveryState
   attempt: number
   createdAt: string
   updatedAt: string
   remoteMessageId?: string
   errorCode?: string
+  locator?: ZulipLocator
+  directRecipient?: ProviderDirectRecipient
 }
 
 export type ZulipDeliveryLedger = {
@@ -75,10 +77,12 @@ export class ZulipDeliveryCoordinator {
 
   async deliver(input: {
     idempotencyKey: string
-    locator: ZulipLocator
     content: string
     send: ZulipSendAttempt
-  }): Promise<ZulipDeliveryResult> {
+  } & (
+    | { locator: ZulipLocator; directRecipient?: never }
+    | { locator?: never; directRecipient: ProviderDirectRecipient }
+  )): Promise<ZulipDeliveryResult> {
     const idempotencyKey = input.idempotencyKey.trim()
     if (!idempotencyKey || idempotencyKey.length > 256) {
       throw new ZulipProviderError('invalid_payload', 'A bounded idempotency key is required.')
@@ -86,8 +90,13 @@ export class ZulipDeliveryCoordinator {
     const contentHash = zulipContentHash(input.content)
     const previous = await this.ledger.get(idempotencyKey)
     if (previous) {
-      if (previous.contentHash !== contentHash) {
-        throw new ZulipProviderError('invalid_payload', 'Idempotency key was reused with different content.')
+      const sameTarget = input.locator === undefined
+        ? previous.locator === undefined && previous.directRecipient !== undefined &&
+          JSON.stringify(previous.directRecipient) === JSON.stringify(input.directRecipient)
+        : previous.directRecipient === undefined && previous.locator !== undefined &&
+          JSON.stringify(previous.locator) === JSON.stringify(input.locator)
+      if (previous.contentHash !== contentHash || !sameTarget) {
+        throw new ZulipProviderError('invalid_payload', 'Idempotency key was reused with different delivery material.')
       }
       if (previous.state === 'sent' && previous.remoteMessageId) {
         return {
@@ -117,10 +126,13 @@ export class ZulipDeliveryCoordinator {
     }
 
     const timestamp = this.now().toISOString()
+    const target = input.locator === undefined
+      ? { directRecipient: input.directRecipient }
+      : { locator: input.locator }
     let record = previous ?? await this.ledger.begin({
       idempotencyKey,
       contentHash,
-      locator: input.locator,
+      ...target,
       state: 'pending',
       attempt: 0,
       createdAt: timestamp,

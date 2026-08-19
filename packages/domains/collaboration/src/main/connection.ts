@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import {
+  encodePairingBindCode,
   restRequestSchema,
   type AgentInboxMessage,
   type AgentNode,
@@ -211,7 +212,10 @@ export class CollaborationConnection {
     if (response.type !== 'pairing.begun') {
       throw new Error(`Pairing begin returned unexpected ${response.type}.`)
     }
-    const pairingCommand = `sciforge-pair ${response.challengeId} ${response.challengeCode}`
+    const pairingCommand = `/bind ${encodePairingBindCode({
+      challengeId: response.challengeId,
+      challengeCode: response.challengeCode
+    })}`
     if (pairingCommand.length > 64) {
       throw new Error('Pairing service returned a command that exceeds the supported display length.')
     }
@@ -227,7 +231,7 @@ export class CollaborationConnection {
       challengeId: response.challengeId,
       pairingCode: pairingCommand,
       expiresAt: response.expiresAt,
-      instruction: `Send this entire command unchanged in ${providerLabel}, in the designated pairing topic or any topic visible to its SciForge integration.`
+      instruction: `Send this entire command unchanged in a private message to the ${providerLabel} Bot.`
     }
   }
 

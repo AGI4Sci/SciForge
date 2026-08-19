@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  decodePairingBindCode,
+  encodePairingBindCode,
   capabilityInputSchema,
   capabilityOutputSchema,
   agentInboxPayloadSchema,
@@ -12,6 +14,7 @@ import {
 import {
   humanEndpointProviderContractSchema,
   providerDiagnosticSchema,
+  providerDirectRecipientSchema,
   providerEventSchema,
   providerSendRequestSchema
 } from './provider.js'
@@ -186,6 +189,34 @@ describe('provider-neutral contract', () => {
       clientMessageId: 'client-message-1',
       text: '最终回复'
     }).success).toBe(true)
+    const directRecipient = providerDirectRecipientSchema.parse({
+      type: 'provider_direct_recipient',
+      provider: 'example-im',
+      realmId: 'realm-1',
+      providerUserId: 'user-42'
+    })
+    expect(providerSendRequestSchema.parse({
+      protocolVersion: '1.0',
+      type: 'provider.send.message',
+      recipient: directRecipient,
+      clientMessageId: 'client-message-direct-1',
+      text: '绑定成功'
+    })).toEqual(expect.objectContaining({ recipient: directRecipient }))
+    expect(providerDirectRecipientSchema.safeParse({
+      type: 'provider_direct_recipient',
+      provider: 'example-im',
+      realmId: 'realm-1',
+      providerUserId: ''
+    }).success).toBe(false)
+  })
+
+  it('round-trips the strict versioned SF1 bind code', () => {
+    const challengeId = `chl_${'a'.repeat(32)}`
+    const challengeCode = 'Abc_123-xYz0'
+    const code = encodePairingBindCode({ challengeId, challengeCode })
+    expect(code).toBe(`SF1.${'a'.repeat(32)}.${challengeCode}`)
+    expect(decodePairingBindCode(code)).toEqual({ challengeId, challengeResponse: challengeCode })
+    expect(() => decodePairingBindCode(`SF2.${'a'.repeat(32)}.${challengeCode}`)).toThrow()
   })
 
   it('requires contract capabilities and strictly redacted diagnostics', () => {
@@ -201,7 +232,8 @@ describe('provider-neutral contract', () => {
         locatorRename: true,
         locatorMove: true,
         locatorDiscovery: true,
-        identityChallenge: true
+        identityChallenge: true,
+        directMessages: false
       },
       onboarding: {
         realmLabel: '组织',
