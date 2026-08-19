@@ -60,13 +60,21 @@ function rawMessage(input: {
   streamId?: number
   streamName?: string
   topic?: string
+  messageType?: 'stream' | 'private'
 }): Record<string, unknown> {
+  const messageType = input.messageType ?? 'stream'
   return {
     id: input.id,
-    type: 'stream',
-    stream_id: input.streamId ?? 12,
-    display_recipient: input.streamName ?? '研究协作',
-    subject: input.topic ?? '蛋白质结构',
+    type: messageType,
+    ...(messageType === 'stream'
+      ? {
+          stream_id: input.streamId ?? 12,
+          display_recipient: input.streamName ?? '研究协作',
+          subject: input.topic ?? '蛋白质结构'
+        }
+      : {
+          display_recipient: [{ id: input.senderId, email: input.senderEmail, full_name: input.senderName }]
+        }),
     content: input.content,
     sender_id: input.senderId,
     sender_email: input.senderEmail,
@@ -876,6 +884,126 @@ describe('ZulipHumanEndpointProvider', () => {
       challengeResponse
     })
     assert.equal(resolverCalls, 0)
+  })
+
+  it('maps a private /bind SF1 command to the authenticated sender without locator resolution', async () => {
+    let resolverCalls = 0
+    const provider = createZulipHumanEndpointProvider({
+      realmUrl: 'https://chat.example.invalid',
+      botEmail: 'service-bot@example.invalid'
+    }, {
+      resolveCredential: async () => ({ apiKey: randomUUID() }),
+      deliveryLedger: new MemoryLedger(),
+      reconcileDelivery: async () => ({ status: 'not_sent' }),
+      resolveLocator: async () => {
+        resolverCalls += 1
+        throw new ZulipProviderError('locator_missing', 'not paired yet')
+      },
+      verifyIdentity: rejectIdentity,
+      now: () => new Date('2026-08-15T00:00:00.000Z'),
+      fetch: async () => json({
+        result: 'success',
+        msg: '',
+        queue_id: 'queue-private-bind',
+        last_event_id: 1,
+        events: [
+          {
+            id: 2,
+            type: 'message',
+            message: rawMessage({
+              id: 810,
+              senderId: 42,
+              senderEmail: 'human@example.invalid',
+              senderName: '研究员甲',
+              content: '帮我做任务',
+              messageType: 'private'
+            })
+          },
+          {
+            id: 3,
+            type: 'message',
+            message: rawMessage({
+              id: 811,
+              senderId: 42,
+              senderEmail: 'human@example.invalid',
+              senderName: '研究员甲',
+              content: `/bind SF1.${'a'.repeat(32)}.Abc_123-xYz0`,
+              messageType: 'private'
+            })
+          }
+        ]
+      })
+    })
+
+    const result = await provider.registerEventQueue()
+
+    assert.equal(resolverCalls, 0)
+    assert.deepEqual(result.events[0], {
+      protocolVersion: '1.0',
+      provider: 'zulip',
+      type: 'provider.challenge.responded',
+      eventId: result.events[0]?.eventId,
+      eventCursor: result.events[0]?.eventCursor,
+      occurredAt: '2026-08-15T00:00:00.000Z',
+      identity: {
+        type: 'provider_identity',
+        provider: 'zulip',
+        realmId: provider.realmId,
+        providerUserId: '42',
+        displayName: '研究员甲'
+      },
+      challengeId: `chl_${'a'.repeat(32)}`,
+      challengeResponse: 'Abc_123-xYz0'
+    })
+  })
+
+  it('sends a provider-neutral direct recipient as a Zulip private message', async () => {
+    const requests: URLSearchParams[] = []
+    const provider = createZulipHumanEndpointProvider({
+      realmUrl: 'https://chat.example.invalid',
+      botEmail: 'service-bot@example.invalid'
+    }, {
+      resolveCredential: async () => ({ apiKey: randomUUID() }),
+      deliveryLedger: new MemoryLedger(),
+      reconcileDelivery: async () => ({ status: 'not_sent' }),
+      resolveLocator,
+      verifyIdentity: rejectIdentity,
+      fetch: async (_input, init) => {
+        requests.push(init?.body instanceof URLSearchParams ? init.body : new URLSearchParams())
+        return json({ result: 'success', msg: '', id: 701 })
+      }
+    })
+    const request = {
+      protocolVersion: '1.0' as const,
+      type: 'provider.send.message' as const,
+      recipient: {
+        type: 'provider_direct_recipient' as const,
+        provider: 'zulip',
+        realmId: provider.realmId,
+        providerUserId: '42'
+      },
+      clientMessageId: 'direct-message-1',
+      text: '绑定成功'
+    }
+
+    const first = await provider.send(request)
+    const duplicate = await provider.send(request)
+    const wrongRealm = await provider.send({
+      ...request,
+      recipient: { ...request.recipient, realmId: 'another-realm' },
+      clientMessageId: 'direct-message-wrong-realm'
+    })
+
+    assert.equal(first.type, 'provider.send.succeeded')
+    assert.equal(duplicate.type, 'provider.send.succeeded')
+    assert.equal(wrongRealm.type, 'provider.send.failed')
+    if (wrongRealm.type !== 'provider.send.failed') throw new Error('Expected a failed direct send result.')
+    assert.equal(wrongRealm.retryable, false)
+    assert.equal(wrongRealm.providerErrorCode, 'invalid_locator')
+    assert.equal(requests.length, 1)
+    assert.equal(requests[0]?.get('type'), 'direct')
+    assert.equal(requests[0]?.get('to'), '[42]')
+    assert.equal(requests[0]?.get('topic'), null)
   })
 
   it('emits a deduplicable HumanAnswer event from a strict bound-topic command', async () => {

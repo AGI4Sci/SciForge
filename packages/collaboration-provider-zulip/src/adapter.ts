@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import {
   CURRENT_PROTOCOL_VERSION,
+  decodePairingBindCode,
   providerDiagnosticSchema,
   providerEventSchema,
   providerLifecycleResultSchema,
@@ -11,6 +12,7 @@ import {
   type HumanEndpointProvider,
   type HumanEndpointProviderContract,
   type ProviderDiagnostic,
+  type ProviderDirectRecipient,
   type ProviderEvent,
   type ProviderLifecycleRequest,
   type ProviderLifecycleResult,
@@ -124,7 +126,8 @@ export const ZULIP_HUMAN_ENDPOINT_PROVIDER_CONTRACT: HumanEndpointProviderContra
     locatorRename: true,
     locatorMove: true,
     locatorDiscovery: true,
-    identityChallenge: true
+    identityChallenge: true,
+    directMessages: true
   },
   onboarding: {
     realmLabel: 'Zulip server URL',
@@ -225,12 +228,23 @@ function assertResolvedLocator(
 }
 
 const PAIRING_COMMAND = /^sciforge-pair (chl_[A-Za-z0-9]{12,64}) ([A-Za-z0-9._~:-]{8,128})$/u
+const BIND_COMMAND = /^\/bind (\S+)$/u
 const HUMAN_ANSWER_COMMAND = /^sciforge-answer (hrq_[A-Za-z0-9]{12,64}) ([1-9][0-9]{0,15}) ([\s\S]+)$/u
 
 function pairingResponse(text: string): { challengeId: string; challengeResponse: string } | null {
   const match = PAIRING_COMMAND.exec(text)
   if (!match) return null
   return { challengeId: match[1]!, challengeResponse: match[2]! }
+}
+
+function bindPairingResponse(text: string): { challengeId: string; challengeResponse: string } | null {
+  const match = BIND_COMMAND.exec(text)
+  if (!match) return null
+  try {
+    return decodePairingBindCode(match[1]!)
+  } catch {
+    return null
+  }
 }
 
 function humanAnswerResponse(text: string): {
@@ -608,6 +622,40 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
     })
   }
 
+  async sendDirectMessage(input: {
+    recipient: ProviderDirectRecipient
+    content: string
+    idempotencyKey: string
+    signal?: AbortSignal
+  }): Promise<{ remoteMessageId: string; duplicate: boolean; reconciled: boolean; attempts: number }> {
+    if (input.recipient.provider !== 'zulip' || input.recipient.realmId !== this.realmId) {
+      throw new ZulipProviderError('invalid_payload', 'The Zulip direct recipient does not belong to this provider instance.')
+    }
+    if (!/^(?:0|[1-9][0-9]*)$/u.test(input.recipient.providerUserId)) {
+      throw new ZulipProviderError('invalid_payload', 'The Zulip direct recipient requires an authenticated numeric user ID.')
+    }
+    const content = boundedOutboundText(input.content)
+    return this.delivery.deliver({
+      idempotencyKey: input.idempotencyKey,
+      directRecipient: input.recipient,
+      content,
+      send: async () => {
+        const response = await this.client.request('api/v1/messages', {
+          method: 'POST',
+          body: new URLSearchParams({
+            type: 'direct',
+            to: `[${input.recipient.providerUserId}]`,
+            content
+          }),
+          schema: zulipSendResponseSchema,
+          retry: 'never',
+          ...(input.signal ? { signal: input.signal } : {})
+        })
+        return { remoteMessageId: stableId(response.id) }
+      }
+    })
+  }
+
   async sendNotification(input: {
     locator: ZulipLocator
     notification: ZulipNotification
@@ -624,7 +672,8 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
   }
 
   async send(request: ProviderSendRequest): Promise<ProviderSendResult> {
-    if (request.locator.provider !== 'zulip' || request.locator.realmId !== this.realmId) {
+    const target = 'recipient' in request ? request.recipient : request.locator
+    if (target.provider !== 'zulip' || target.realmId !== this.realmId) {
       return providerSendResultSchema.parse({
         protocolVersion: CURRENT_PROTOCOL_VERSION,
         type: 'provider.send.failed',
@@ -635,11 +684,17 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
       })
     }
     try {
-      const result = await this.sendMessage({
-        locator: request.locator as ZulipLocator,
-        content: request.text,
-        idempotencyKey: request.clientMessageId
-      })
+      const result = 'recipient' in request
+        ? await this.sendDirectMessage({
+            recipient: request.recipient,
+            content: request.text,
+            idempotencyKey: request.clientMessageId
+          })
+        : await this.sendMessage({
+            locator: request.locator as ZulipLocator,
+            content: request.text,
+            idempotencyKey: request.clientMessageId
+          })
       return providerSendResultSchema.parse({
         protocolVersion: CURRENT_PROTOCOL_VERSION,
         type: 'provider.send.succeeded',
@@ -828,14 +883,11 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
     locatorOverlay?: ZulipLocatorOverlay
   ): Promise<ProviderEvent | null> {
     const message = event.message
-    if (message.type !== 'stream') return null
     const remoteMessageId = stableId(message.id)
     const eventId = stableMessageEventId(this.realmId, remoteMessageId)
     const senderId = stableId(message.sender_id)
-    const streamId = stableId(message.stream_id ?? '')
-    const topic = (message.topic ?? message.subject ?? '').trim()
-    if (!remoteMessageId || !senderId || !streamId || !topic) {
-      throw new ZulipProviderError('invalid_payload', 'Zulip stream message lacks a stable identity or locator.')
+    if (!remoteMessageId || !senderId) {
+      throw new ZulipProviderError('invalid_payload', 'Zulip message lacks a stable identity.')
     }
     const text = boundedText(message.raw_content ?? message.content)
     this.rateLimiter.consume(`${this.realmId}\u0000${senderId}`)
@@ -845,6 +897,32 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
       bot !== null && senderId === bot.providerUserId
     )
     if (isSelfEcho) return null
+    if (message.type === 'private') {
+      const pairing = bindPairingResponse(text)
+      if (!pairing) return null
+      return providerEventSchema.parse({
+        protocolVersion: CURRENT_PROTOCOL_VERSION,
+        provider: 'zulip',
+        type: 'provider.challenge.responded',
+        eventId,
+        eventCursor,
+        occurredAt: canonicalOccurredAt(message, receivedAt),
+        identity: {
+          type: 'provider_identity',
+          provider: 'zulip',
+          realmId: this.realmId,
+          providerUserId: senderId,
+          displayName: message.sender_full_name.trim().slice(0, 200)
+        },
+        challengeId: pairing.challengeId,
+        challengeResponse: pairing.challengeResponse
+      })
+    }
+    const streamId = stableId(message.stream_id ?? '')
+    const topic = (message.topic ?? message.subject ?? '').trim()
+    if (!remoteMessageId || !senderId || !streamId || !topic) {
+      throw new ZulipProviderError('invalid_payload', 'Zulip stream message lacks a stable identity or locator.')
+    }
     const pairing = pairingResponse(text)
     if (pairing) {
       return providerEventSchema.parse({

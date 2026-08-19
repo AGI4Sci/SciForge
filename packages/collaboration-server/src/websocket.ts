@@ -72,7 +72,7 @@ export class CollaborationWebSocketHub implements InboxAvailabilityNotifier {
   }
 
   notifyInboxAvailable(recipient: InboxRecipient, latestSequence: number): void {
-    if (recipient.kind === 'human_endpoint') return
+    if (recipient.kind === 'human_endpoint' || recipient.kind === 'provider_identity') return
     const payload = JSON.stringify({ protocolVersion: '1.0', type: 'inbox.available',
       recipientType: recipient.kind === 'agent' ? 'agent' : 'user', highestSequence: latestSequence })
     for (const client of this.clients.get(recipientKey(recipient)) ?? []) {

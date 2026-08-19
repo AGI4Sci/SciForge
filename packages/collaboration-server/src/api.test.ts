@@ -23,7 +23,8 @@ const providerContract: HumanEndpointProviderContract = {
     locatorRename: true,
     locatorMove: true,
     locatorDiscovery: true,
-    identityChallenge: true
+    identityChallenge: true,
+    directMessages: false
   },
   onboarding: { realmLabel: 'Realm', accountLabel: 'Account', containerLabel: 'Stream', topicLabel: 'Topic' },
   limits: { maxTextLength: 10_000, maxLocatorDisplayLength: 200 }

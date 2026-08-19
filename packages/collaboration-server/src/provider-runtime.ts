@@ -4,6 +4,7 @@ import { isAbsolute, relative, resolve } from 'node:path'
 import {
   CURRENT_PROTOCOL_VERSION,
   providerDiagnosticSchema,
+  providerDirectRecipientSchema,
   providerLocatorSchema,
   providerSendResultSchema,
   type HumanEndpointProvider,
@@ -33,7 +34,7 @@ import type { StoredEndpoint, StoredInboxMessage } from './model.js'
 import type { SqlPool } from './postgres.js'
 import type { CollaborationRepository } from './repository.js'
 import { ProviderRuntimeStore, type ProviderDeliveryState } from './provider-runtime-store.js'
-import { CollaborationService } from './service.js'
+import { CollaborationService, providerIdentityInboxId } from './service.js'
 
 const MAX_PROVIDER_CONFIG_BYTES = 256 * 1024
 const MAX_SECRET_BYTES = 64 * 1024
@@ -62,10 +63,14 @@ type ProviderRuntimePersistence = Pick<ProviderRuntimeStore,
   | 'recordDelivery'
   | 'recordDiagnostic'
   | 'listPendingEndpointIds'
+  | 'listPendingProviderIdentityIds'
 >
 
 type ProviderRuntimeService = Pick<CollaborationService,
   | 'verifyPairingFromProvider'
+  | 'enqueueProviderCommandResult'
+  | 'pullProviderIdentityInbox'
+  | 'ackProviderIdentityInboxMessage'
   | 'acceptPersonalProviderMessage'
   | 'acceptProjectInput'
   | 'answerHumanNeeded'
@@ -305,6 +310,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
     event: Extract<ProviderEvent, { type: 'provider.challenge.responded' }>,
     claimEventId: string
   ): Promise<void> {
+    let result: 'success' | 'invalid_or_expired' | 'identity_conflict'
     try {
       await this.service.verifyPairingFromProvider({
         provider: event.identity.provider,
@@ -316,11 +322,22 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
         providerEventId: claimEventId,
         assurance: this.pairingAssurance[event.provider] ?? 'verified'
       })
+      result = 'success'
     } catch (error) {
-      if (error instanceof CollaborationServiceError &&
-          ['not_found', 'request_expired', 'validation_failed'].includes(error.code)) return
-      throw error
+      if (!(error instanceof CollaborationServiceError)) throw error
+      if (['not_found', 'request_expired', 'validation_failed'].includes(error.code)) {
+        result = 'invalid_or_expired'
+      } else if (['identity_conflict', 'credential_revoked'].includes(error.code)) {
+        result = 'identity_conflict'
+      } else {
+        throw error
+      }
     }
+    await this.service.enqueueProviderCommandResult({
+      identity: event.identity,
+      providerEventId: claimEventId,
+      result
+    })
   }
 
   private async handleHumanAnswerResponded(
@@ -349,6 +366,11 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
           if (signal.aborted) break
           await this.flushEndpoint(endpointId)
         }
+        const directRecipientIds = await this.store.listPendingProviderIdentityIds()
+        for (const recipientId of directRecipientIds) {
+          if (signal.aborted) break
+          await this.flushProviderIdentity(recipientId)
+        }
       } catch (error) {
         if (!signal.aborted) await this.recordRuntimeFailure('gateway', error)
       }
@@ -374,7 +396,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
         })
         continue
       }
-      if (request.locator.provider !== endpoint.provider || request.locator.realmId !== endpoint.realmId) {
+      if (!('locator' in request) || request.locator.provider !== endpoint.provider || request.locator.realmId !== endpoint.realmId) {
         await this.recordRuntimeFailure(endpoint.provider,
           new CollaborationServiceError('permission_denied', 'Outbound locator does not match its verified endpoint realm.'))
         return
@@ -396,6 +418,48 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
       }
       if (result.type === 'provider.send.succeeded' || !result.retryable) {
         await this.ackDeliveredMessage(actor, message)
+        continue
+      }
+      return
+    }
+  }
+
+  private async flushProviderIdentity(recipientId: string): Promise<void> {
+    const page = await this.service.pullProviderIdentityInbox({ recipientId, afterSequence: 0, limit: 100 })
+    for (const message of page.messages.filter((candidate) => candidate.sequence > page.ackedSequence)) {
+      const request = outboundRequest(message, Number.MAX_SAFE_INTEGER)
+      if (!request || !('recipient' in request) || providerIdentityInboxId(request.recipient) !== recipientId) {
+        await this.recordRuntimeFailure('gateway',
+          new CollaborationServiceError('validation_failed', 'Direct provider outbox target is invalid.'))
+        return
+      }
+      const provider = this.providers.get(request.recipient.provider)
+      if (!provider || !provider.contract.capabilities.directMessages) return
+      const prior = await this.store.readDelivery(request.recipient.provider, request.clientMessageId)
+      if (prior && !deliveryAttemptDue(prior, this.timestamp())) {
+        if (prior.terminal) {
+          await this.service.ackProviderIdentityInboxMessage({
+            recipientId,
+            inboxMessageId: message.messageId,
+            sequence: message.sequence
+          })
+          continue
+        }
+        return
+      }
+      const result = prior?.result.type === 'provider.send.succeeded'
+        ? prior.result
+        : providerSendResultSchema.parse(await provider.send(request))
+      const persisted = await this.store.readDelivery(request.recipient.provider, request.clientMessageId)
+      if (!persisted || (prior && persisted.attemptCount === prior.attemptCount && result.type === 'provider.send.failed')) {
+        await this.store.recordDelivery(request.recipient.provider, request.clientMessageId, result)
+      }
+      if (result.type === 'provider.send.succeeded' || !result.retryable) {
+        await this.service.ackProviderIdentityInboxMessage({
+          recipientId,
+          inboxMessageId: message.messageId,
+          sequence: message.sequence
+        })
         continue
       }
       return
@@ -638,6 +702,18 @@ async function providerHttp(request: HumanEndpointProviderHttpRequest): Promise<
 
 function outboundRequest(message: StoredInboxMessage, maxTextLength: number): ProviderSendRequest | undefined {
   const payload = message.payload
+  if (message.messageType === 'provider.command.result.outbound' &&
+      payload.type === 'provider.command.result.outbound' && typeof payload.text === 'string') {
+    const recipient = providerDirectRecipientSchema.safeParse(payload.recipient)
+    if (!recipient.success) return undefined
+    return {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      type: 'provider.send.message',
+      recipient: recipient.data,
+      clientMessageId: message.messageId,
+      text: payload.text
+    }
+  }
   if (message.messageType !== 'projection.message.outbound' &&
       message.messageType !== 'provider.notification.outbound') return undefined
   if ((payload.type !== 'projection.message.outbound' && payload.type !== 'provider.notification.outbound') ||

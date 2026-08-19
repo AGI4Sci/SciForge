@@ -1,4 +1,9 @@
 import { randomBytes } from 'node:crypto'
+import {
+  providerDirectRecipientSchema,
+  type ProviderDirectRecipient,
+  type ProviderIdentity
+} from '@sciforge/collaboration-contracts'
 
 import { actorInboxRecipient, authorize, type AgentActor, type AuthContext, type HumanEndpointActor, type UserActor } from './auth.js'
 import { digestSecret, issueSecret, newId, safeAuditMetadata, stableDigest } from './crypto.js'
@@ -246,6 +251,93 @@ export class CollaborationService {
         resourceKind: 'human_endpoint', resourceId: endpoint.humanEndpointId
       }
     })
+  }
+
+  async enqueueProviderCommandResult(input: {
+    identity: ProviderIdentity
+    providerEventId: string
+    result: 'success' | 'invalid_or_expired' | 'identity_conflict'
+  }): Promise<Record<string, unknown>> {
+    assertText(input.providerEventId, 'providerEventId', 1, 500)
+    const recipient = providerDirectRecipientSchema.parse({
+      type: 'provider_direct_recipient',
+      provider: input.identity.provider,
+      realmId: input.identity.realmId,
+      providerUserId: input.identity.providerUserId
+    })
+    const recipientId = providerIdentityInboxId(recipient)
+    const actor: AuthContext = {
+      kind: 'system',
+      actorKey: `provider-command-result:${recipientId}`
+    }
+    return this.commit(actor, 'provider.command.result', input.providerEventId, {
+      recipient,
+      result: input.result
+    }, async (tx, at) => {
+      const message = await this.appendInbox(tx, { kind: 'provider_identity', id: recipientId },
+        'provider.command.result.outbound', {
+          protocolVersion: '1.0',
+          type: 'provider.command.result.outbound',
+          recipient,
+          result: input.result,
+          text: providerCommandResultText(input.result)
+        }, at)
+      return {
+        response: {
+          protocolVersion: '1.0',
+          type: 'provider.command.result.queued',
+          inboxMessageId: message.messageId
+        },
+        resourceKind: 'provider_identity',
+        resourceId: recipientId
+      }
+    })
+  }
+
+  async pullProviderIdentityInbox(input: {
+    recipientId: string
+    afterSequence: number
+    limit: number
+  }): Promise<{ messages: StoredInboxMessage[]; ackedSequence: number; nextSequence: number }> {
+    assertProviderIdentityInboxId(input.recipientId)
+    const recipient: InboxRecipient = { kind: 'provider_identity', id: input.recipientId }
+    const afterSequence = integer(input.afterSequence, 'afterSequence', 0, Number.MAX_SAFE_INTEGER)
+    const limit = integer(input.limit, 'limit', 1, 200)
+    const [messages, cursor] = await Promise.all([
+      this.repository.pullInbox(recipient, afterSequence, limit, this.timestamp()),
+      this.repository.getInboxCursor(recipient)
+    ])
+    return { messages, ackedSequence: cursor?.ackedSequence ?? 0, nextSequence: cursor?.nextSequence ?? 1 }
+  }
+
+  async ackProviderIdentityInboxMessage(input: {
+    recipientId: string
+    inboxMessageId: string
+    sequence: number
+  }): Promise<{ ackedSequence: number; nextSequence: number }> {
+    assertProviderIdentityInboxId(input.recipientId)
+    integer(input.sequence, 'sequence', 1, Number.MAX_SAFE_INTEGER)
+    const recipient: InboxRecipient = { kind: 'provider_identity', id: input.recipientId }
+    const [message] = await this.repository.pullInbox(recipient, input.sequence - 1, 1, this.timestamp())
+    if (!message || message.sequence !== input.sequence || message.messageId !== input.inboxMessageId) {
+      fail('not_found', 'The provider identity inbox message does not match its recipient and sequence.')
+    }
+    const actor: AuthContext = { kind: 'system', actorKey: `provider-outbox:${input.recipientId}` }
+    const response = await this.commit(actor, 'provider.outbox.ack',
+      `ack:${stableDigest(input.inboxMessageId)}`, input, async (tx, at) => {
+        const cursor = await tx.ackInbox(recipient, input.sequence, at)
+        return {
+          response: {
+            protocolVersion: '1.0',
+            type: 'provider.outbox.acked',
+            ackedSequence: cursor.ackedSequence,
+            nextSequence: cursor.nextSequence
+          },
+          resourceKind: 'provider_identity',
+          resourceId: input.recipientId
+        }
+      })
+    return { ackedSequence: Number(response.ackedSequence), nextSequence: Number(response.nextSequence) }
   }
 
   async redeemPairing(input: { pollSecret: string; idempotencyKey: string }): Promise<Record<string, unknown>> {
@@ -1610,6 +1702,30 @@ function entityResponse<T>(type: string, entity: T): Record<string, unknown> {
 
 function operationReceiptId(actorKey: string, idempotencyKey: string): string {
   return `rcp_${stableDigest({ actorKey, idempotencyKey }).slice(0, 24)}`
+}
+
+export function providerIdentityInboxId(recipient: ProviderDirectRecipient): string {
+  return `pdi_${stableDigest({
+    provider: recipient.provider,
+    realmId: recipient.realmId,
+    providerUserId: recipient.providerUserId
+  })}`
+}
+
+function assertProviderIdentityInboxId(value: string): void {
+  if (!/^pdi_[a-f0-9]{64}$/u.test(value)) {
+    fail('validation_failed', 'A valid provider identity inbox ID is required.')
+  }
+}
+
+function providerCommandResultText(
+  result: 'success' | 'invalid_or_expired' | 'identity_conflict'
+): string {
+  switch (result) {
+    case 'success': return '绑定成功，可以返回 SciForge 继续使用。'
+    case 'invalid_or_expired': return '绑定码无效或已失效，请重新生成。'
+    case 'identity_conflict': return '该聊天身份无法完成绑定，请在 SciForge 中检查当前绑定状态。'
+  }
 }
 
 function responseEntity<T>(response: Record<string, unknown>): T {

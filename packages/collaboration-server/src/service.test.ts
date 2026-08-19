@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { FakeCollaborationRepository, FakeInboxNotifier } from '../../../test-fixtures/collaboration/fake-adapters.mjs'
 import { AuthenticationService, type HumanEndpointActor, type UserActor } from './auth.js'
 import { toInboxMessage } from './contracts.js'
-import { CollaborationService } from './service.js'
+import { CollaborationService, providerIdentityInboxId } from './service.js'
 
 const at = new Date('2026-08-15T02:00:00.000Z')
 const now = () => at
@@ -36,6 +36,49 @@ async function registerAgent(service: CollaborationService, user: UserActor, lab
 }
 
 describe('CollaborationService canonical transactions', () => {
+  it('queues idempotent provider command results without exposing challenge details', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const identity = {
+      type: 'provider_identity' as const,
+      provider: 'zulip',
+      realmId: 'realm-hk',
+      providerUserId: 'provider-direct-user'
+    }
+    const input = { identity, providerEventId: 'provider-event-direct-result-1', result: 'invalid_or_expired' as const }
+
+    await service.enqueueProviderCommandResult(input)
+    await service.enqueueProviderCommandResult(input)
+
+    const recipient = {
+      kind: 'provider_identity' as const,
+      id: providerIdentityInboxId({
+        type: 'provider_direct_recipient',
+        provider: identity.provider,
+        realmId: identity.realmId,
+        providerUserId: identity.providerUserId
+      })
+    }
+    const messages = await repository.pullInbox(recipient, 0, 20, at.toISOString())
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({
+      recipient,
+      messageType: 'provider.command.result.outbound',
+      payload: {
+        type: 'provider.command.result.outbound',
+        result: 'invalid_or_expired',
+        text: '绑定码无效或已失效，请重新生成。',
+        recipient: {
+          type: 'provider_direct_recipient',
+          provider: 'zulip',
+          realmId: 'realm-hk',
+          providerUserId: 'provider-direct-user'
+        }
+      }
+    })
+    expect(JSON.stringify(messages)).not.toContain('challenge')
+  })
+
   it('pairs a provider identity exactly once without persisting plaintext secrets', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })

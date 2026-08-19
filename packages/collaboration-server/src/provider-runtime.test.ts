@@ -9,10 +9,12 @@ import {
   type ProviderSendResult
 } from '@sciforge/collaboration-contracts'
 import { describe, expect, it } from 'vitest'
+import { FakeCollaborationRepository } from '../../../test-fixtures/collaboration/fake-adapters.mjs'
 
 import { DefaultCollaborationProviderRuntime } from './provider-runtime.js'
 import { ProviderRuntimeStore } from './provider-runtime-store.js'
 import { CollaborationServiceError } from './errors.js'
+import { CollaborationService, providerIdentityInboxId } from './service.js'
 
 const LOCATOR = {
   type: 'provider_locator' as const,
@@ -191,6 +193,7 @@ describe('provider runtime', () => {
     const provider = new FakeProvider(event)
     const ledger = new FakeRuntimeStore()
     const verifications: Array<Record<string, unknown>> = []
+    const commandResults: Array<Record<string, unknown>> = []
     const runtime = new DefaultCollaborationProviderRuntime({
       providers: [provider],
       store: ledger,
@@ -202,6 +205,10 @@ describe('provider runtime', () => {
         verifyPairingFromProvider: async (input) => {
           verifications.push(input)
           return { challengeId: input.challengeId }
+        },
+        enqueueProviderCommandResult: async (input) => {
+          commandResults.push(input)
+          return {}
         }
       }
     })
@@ -218,6 +225,122 @@ describe('provider runtime', () => {
       challengeCode: 'pairing-response-1234',
       assurance: 'strong'
     })])
+    expect(commandResults).toEqual([{
+      identity: event.identity,
+      providerEventId: 'event-pairing-1',
+      result: 'success'
+    }])
+  })
+
+  it('emits one safe direct failure result when a duplicate challenge event is invalid', async () => {
+    const event: ProviderEvent = {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      provider: 'fake',
+      type: 'provider.challenge.responded',
+      eventId: 'event-pairing-invalid-1',
+      eventCursor: 'cursor-pairing-invalid-1',
+      occurredAt: '2026-08-15T00:00:00.000Z',
+      identity: {
+        type: 'provider_identity', provider: 'fake', realmId: 'realm-1', providerUserId: 'remote-user-1'
+      },
+      challengeId: 'chl_123456789012',
+      challengeResponse: 'invalid-response-1234'
+    }
+    const provider = new FakeProvider([event, { ...event, eventCursor: 'cursor-pairing-invalid-2' }])
+    const ledger = new FakeRuntimeStore()
+    const commandResults: Array<Record<string, unknown>> = []
+    const runtime = new DefaultCollaborationProviderRuntime({
+      providers: [provider],
+      store: ledger,
+      repository: emptyRepository(),
+      authentication: { resolveProviderIdentity: async () => { throw new Error('not used') } },
+      service: {
+        ...emptyService(),
+        verifyPairingFromProvider: async () => {
+          throw new CollaborationServiceError('not_found', 'sensitive challenge detail')
+        },
+        enqueueProviderCommandResult: async (input) => {
+          commandResults.push(input)
+          return {}
+        }
+      }
+    })
+
+    await runtime.start()
+    await waitUntil(() => ledger.cursor === 'cursor-pairing-invalid-2', 1_500)
+    await runtime.stop()
+
+    expect(commandResults).toEqual([{
+      identity: event.identity,
+      providerEventId: 'event-pairing-invalid-1',
+      result: 'invalid_or_expired'
+    }])
+  })
+
+  it('runs private challenge verification through binding and the durable direct outbox', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now: () => new Date('2026-08-15T00:00:00.000Z') })
+    const begun = await service.beginPairing({
+      provider: 'fake', realmId: 'realm-1', requestedDisplayName: 'Private bind user',
+      idempotencyKey: 'idem_private_bind_begin_1'
+    })
+    const identity = {
+      type: 'provider_identity' as const,
+      provider: 'fake',
+      realmId: 'realm-1',
+      providerUserId: 'remote-private-user'
+    }
+    const event: ProviderEvent = {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      provider: 'fake',
+      type: 'provider.challenge.responded',
+      eventId: 'event-private-bind-e2e-1',
+      eventCursor: 'cursor-private-bind-e2e-1',
+      occurredAt: '2026-08-15T00:00:00.000Z',
+      identity,
+      challengeId: String(begun.challengeId),
+      challengeResponse: String(begun.challengeCode)
+    }
+    const provider = new FakeProvider(event)
+    provider.send = async (request) => {
+      provider.sendRequests.push(request)
+      return {
+        protocolVersion: CURRENT_PROTOCOL_VERSION,
+        type: 'provider.send.succeeded',
+        clientMessageId: request.clientMessageId,
+        providerMessageId: 'remote-private-result-1',
+        sentAt: '2026-08-15T00:00:01.000Z'
+      }
+    }
+    const ledger = new FakeRuntimeStore()
+    const recipientId = providerIdentityInboxId({
+      type: 'provider_direct_recipient',
+      provider: identity.provider,
+      realmId: identity.realmId,
+      providerUserId: identity.providerUserId
+    })
+    ledger.pendingProviderIdentityIds = () => [recipientId]
+    const runtime = new DefaultCollaborationProviderRuntime({
+      providers: [provider], store: ledger, repository, service,
+      authentication: { resolveProviderIdentity: async () => { throw new Error('not used') } },
+      outboxPollMs: 20
+    })
+
+    await runtime.start()
+    await waitUntil(() => provider.sendRequests.length === 1, 1_500)
+    await runtime.stop()
+
+    const endpoint = await repository.getEndpointByProviderIdentity('fake', 'realm-1', 'remote-private-user')
+    expect(endpoint).toMatchObject({ status: 'active', assurance: 'verified' })
+    expect(provider.sendRequests[0]).toMatchObject({
+      type: 'provider.send.message',
+      recipient: {
+        type: 'provider_direct_recipient', provider: 'fake', realmId: 'realm-1', providerUserId: 'remote-private-user'
+      },
+      text: '绑定成功，可以返回 SciForge 继续使用。'
+    })
+    const cursor = await repository.getInboxCursor({ kind: 'provider_identity', id: recipientId })
+    expect(cursor?.ackedSequence).toBe(1)
   })
 
   it('applies a confirmed locator change before checkpointing the provider cursor', async () => {
@@ -503,6 +626,74 @@ describe('provider runtime', () => {
     expect(provider.sendRequests).toHaveLength(sendsAfterDelivery)
   })
 
+  it('retries a direct provider result with a stable client message id and durable ack', async () => {
+    const recipient = {
+      type: 'provider_direct_recipient' as const,
+      provider: 'fake',
+      realmId: 'realm-1',
+      providerUserId: 'remote-user-1'
+    }
+    const recipientId = providerIdentityInboxId(recipient)
+    const retryable: ProviderSendResult = {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      type: 'provider.send.failed',
+      clientMessageId: 'msg-direct-1',
+      retryable: true,
+      providerErrorCode: 'provider_unavailable',
+      safeMessage: 'Temporarily unavailable.'
+    }
+    const succeeded: ProviderSendResult = {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      type: 'provider.send.succeeded',
+      clientMessageId: 'msg-direct-1',
+      providerMessageId: 'remote-direct-1',
+      sentAt: '2026-08-15T00:00:01.000Z'
+    }
+    const provider = new FakeProvider([], [retryable, succeeded])
+    const ledger = new FakeRuntimeStore()
+    let ackedSequence = 0
+    ledger.pendingProviderIdentityIds = () => ackedSequence ? [] : [recipientId]
+    const message = {
+      recipient: { kind: 'provider_identity' as const, id: recipientId },
+      sequence: 1,
+      messageId: 'msg-direct-1',
+      messageType: 'provider.command.result.outbound',
+      payload: {
+        protocolVersion: CURRENT_PROTOCOL_VERSION,
+        type: 'provider.command.result.outbound',
+        recipient,
+        result: 'success',
+        text: '绑定成功'
+      },
+      createdAt: '2026-08-15T00:00:00.000Z',
+      expiresAt: '2026-09-15T00:00:00.000Z'
+    }
+    const runtime = new DefaultCollaborationProviderRuntime({
+      providers: [provider],
+      store: ledger,
+      repository: emptyRepository(),
+      authentication: { resolveProviderIdentity: async () => { throw new Error('not used') } },
+      outboxPollMs: 20,
+      service: {
+        ...emptyService(),
+        pullProviderIdentityInbox: async () => ({ messages: ackedSequence ? [] : [message], ackedSequence, nextSequence: 2 }),
+        ackProviderIdentityInboxMessage: async () => {
+          ackedSequence = 1
+          return { ackedSequence, nextSequence: 2 }
+        }
+      }
+    })
+
+    await runtime.start()
+    await waitUntil(() => ackedSequence === 1, 1_500)
+    await runtime.stop()
+
+    expect(provider.sendRequests).toEqual([
+      expect.objectContaining({ clientMessageId: 'msg-direct-1', recipient }),
+      expect.objectContaining({ clientMessageId: 'msg-direct-1', recipient })
+    ])
+  })
+
   it('bounds a HumanNeeded notification to provider limits without truncating its reply command', async () => {
     const sent: ProviderSendResult = { protocolVersion: CURRENT_PROTOCOL_VERSION,
       type: 'provider.send.succeeded', clientMessageId: 'msg-human-long',
@@ -584,7 +775,8 @@ class FakeProvider implements HumanEndpointProvider {
       locatorRename: false,
       locatorMove: false,
       locatorDiscovery: false,
-      identityChallenge: true as const
+      identityChallenge: true as const,
+      directMessages: true
     },
     onboarding: {
       realmLabel: 'Realm',
@@ -672,6 +864,7 @@ class FakeRuntimeStore {
     terminal: boolean
   }>()
   pendingEndpointIds: () => string[] = () => []
+  pendingProviderIdentityIds: () => string[] = () => []
 
   constructor(
     private readonly initiallyInProgressEventId?: string,
@@ -727,6 +920,7 @@ class FakeRuntimeStore {
   }
   async recordDiagnostic(diagnostic: ProviderDiagnostic) { this.diagnostics.push(diagnostic) }
   async listPendingEndpointIds() { return this.pendingEndpointIds() }
+  async listPendingProviderIdentityIds() { return this.pendingProviderIdentityIds() }
 }
 
 function messageEvent(eventId: string, eventCursor: string, providerMessageId: string): ProviderEvent {
@@ -772,6 +966,9 @@ function emptyRepository() {
 function emptyService() {
   return {
     verifyPairingFromProvider: async () => ({}),
+    enqueueProviderCommandResult: async () => ({}),
+    pullProviderIdentityInbox: async () => ({ messages: [], ackedSequence: 0, nextSequence: 1 }),
+    ackProviderIdentityInboxMessage: async () => ({ ackedSequence: 0, nextSequence: 1 }),
     acceptPersonalProviderMessage: async () => ({}),
     acceptProjectInput: async () => ({}) as never,
     answerHumanNeeded: async () => ({}) as never,

@@ -2,6 +2,7 @@ import { z } from 'zod'
 import {
   agentIdSchema,
   assuranceLevelSchema,
+  challengeIdSchema,
   humanEndpointIdSchema,
   idempotencyKeySchema,
   inboxMessageIdSchema,
@@ -52,6 +53,32 @@ import {
   humanEndpointProviderContractSchema,
   providerLocatorSchema
 } from './provider.js'
+
+export const PAIRING_BIND_CODE_VERSION = 'SF1' as const
+export const pairingBindCodeSchema = z.string().regex(/^SF1\.[a-f0-9]{32}\.[A-Za-z0-9_-]{12}$/u)
+export type PairingBindCode = z.infer<typeof pairingBindCodeSchema>
+
+export function encodePairingBindCode(input: Readonly<{
+  challengeId: string
+  challengeCode: string
+}>): PairingBindCode {
+  challengeIdSchema.parse(input.challengeId)
+  const match = /^chl_([a-f0-9]{32})$/u.exec(input.challengeId)
+  if (!match || !/^[A-Za-z0-9_-]{12}$/u.test(input.challengeCode)) {
+    throw new TypeError('Pairing material cannot be represented by the SF1 bind-code format.')
+  }
+  return pairingBindCodeSchema.parse(`${PAIRING_BIND_CODE_VERSION}.${match[1]}.${input.challengeCode}`)
+}
+
+export function decodePairingBindCode(code: string): Readonly<{
+  challengeId: string
+  challengeResponse: string
+}> {
+  const parsed = pairingBindCodeSchema.parse(code)
+  const [, challengeHex, challengeResponse] = parsed.split('.')
+  const challengeId = challengeIdSchema.parse(`chl_${challengeHex}`)
+  return { challengeId, challengeResponse: challengeResponse! }
+}
 
 export const authenticationContextSchema = z.discriminatedUnion('actorType', [
   z.object({
