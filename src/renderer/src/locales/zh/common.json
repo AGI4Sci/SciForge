@@ -535,6 +535,7 @@
   "rightPanelPaneFocusedSuffix": "（已聚焦）",
   "rightPanelBinding": "右侧栏插件",
   "rightPanelSplit": "拆分到新的右侧栏",
+  "rightPanelNewPane": "新建栏",
   "rightPanelResize": "调整右侧栏宽度",
   "workspaceFilesTitle": "Workspace 文件",
   "workspaceReferenceRefresh": "刷新文件",

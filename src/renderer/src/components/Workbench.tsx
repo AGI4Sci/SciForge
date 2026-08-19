@@ -3002,6 +3002,7 @@ export function Workbench(): ReactElement {
                 forward: t('rightPanelForward'),
                 binding: t('rightPanelBinding'),
                 split: t('rightPanelSplit'),
+                splitAction: t('rightPanelNewPane'),
                 close: t('close'),
                 resize: t('rightPanelResize')
               }}
