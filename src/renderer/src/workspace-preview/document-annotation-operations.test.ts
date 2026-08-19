@@ -349,6 +349,14 @@ describe('document annotation workspace operations', () => {
       displayMode: 'current',
       activeThreadId: 'missing'
     })).toEqual([])
+    expect(createPdfAnnotationOverlaysFromSidecar(sidecar, {
+      displayMode: 'current',
+      activeThreadId: null
+    })).toEqual([])
+    expect(createTextAnnotationOverlaysFromSidecar(sidecar, {
+      displayMode: 'current',
+      activeThreadId: null
+    })).toEqual([])
     const navigationRequest = createDocumentAnnotationNavigationRequest(sidecar, 'thread-1', 'locate-1')
     expect(navigationRequest).toEqual({
       requestId: 'locate-1',

@@ -650,7 +650,7 @@ export function WriteDocxViewer({
                 className={DOCX_ICON_BUTTON_CLASS}
                 title={t('writeDocxAnnotations')}
                 aria-label={t('writeDocxAnnotations')}
-                onClick={onOpenAnnotations}
+                onClick={() => onOpenAnnotations()}
               >
                 <MessageSquare className="h-4 w-4" strokeWidth={1.9} />
               </button>

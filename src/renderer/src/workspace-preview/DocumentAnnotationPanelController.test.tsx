@@ -19,8 +19,11 @@ import type {
 } from './WorkspacePreviewPanelShell'
 import {
   DocumentAnnotationPanelController,
+  documentAnnotationPersistenceOperationKey,
+  documentAnnotationTurnId,
   documentAnnotationSideBlockText,
   fitDocumentAnnotationPanelWidth,
+  resolveDocumentAnnotationOverlayState,
   type DocumentAnnotationPanelRenderInput
 } from './DocumentAnnotationPanelController'
 
@@ -187,6 +190,85 @@ function textEditOperation(): WorkspacePreviewEditOperation {
 }
 
 describe('DocumentAnnotationPanelController', () => {
+  it('creates stable turn annotation ids that remain unique across threads', () => {
+    const first = documentAnnotationTurnId({
+      threadId: 'thread-a',
+      kind: 'answer',
+      sourceMessageId: 'side-a:live_assistant_9'
+    })
+    const second = documentAnnotationTurnId({
+      threadId: 'thread-b',
+      kind: 'answer',
+      sourceMessageId: 'side-b:live_assistant_9'
+    })
+
+    expect(first).toBe(documentAnnotationTurnId({
+      threadId: 'thread-a',
+      kind: 'answer',
+      sourceMessageId: 'side-a:live_assistant_9'
+    }))
+    expect(first).not.toBe(second)
+    expect(first).not.toBe('annotation-answer-live_assistant_9')
+    expect(first.length).toBeLessThanOrEqual(256)
+    expect(second.length).toBeLessThanOrEqual(256)
+  })
+
+  it('keys automatic turn persistence by its complete semantic payload', () => {
+    const operation = {
+      kind: 'annotation.upsert' as const,
+      path: '/workspace/README.md',
+      annotationId: 'annotation-answer-thread-a',
+      annotationKind: 'answer' as const,
+      body: 'answer body',
+      target: {
+        documentKind: 'markdown' as const,
+        threadId: 'thread-a',
+        annotation: {
+          sourceMessageId: 'side-a:live_assistant_9'
+        }
+      }
+    }
+
+    expect(documentAnnotationPersistenceOperationKey(operation)).toBe(
+      documentAnnotationPersistenceOperationKey({ ...operation })
+    )
+    expect(documentAnnotationPersistenceOperationKey({
+      ...operation,
+      body: 'changed answer body'
+    })).not.toBe(documentAnnotationPersistenceOperationKey(operation))
+    expect(documentAnnotationPersistenceOperationKey({
+      ...operation,
+      target: { ...operation.target, threadId: 'thread-b' }
+    })).not.toBe(documentAnnotationPersistenceOperationKey(operation))
+  })
+
+  it('keeps all-mode overlay geometry stable while preserving the selected thread', () => {
+    expect(resolveDocumentAnnotationOverlayState({
+      displayMode: 'all',
+      selectedThreadId: 'selected-thread',
+      hoveredThreadId: 'hovered-thread'
+    })).toEqual({
+      activeThreadId: 'selected-thread',
+      overlayThreadId: null
+    })
+
+    expect(resolveDocumentAnnotationOverlayState({
+      displayMode: 'current',
+      selectedThreadId: 'selected-thread',
+      hoveredThreadId: 'hovered-thread'
+    })).toEqual({
+      activeThreadId: 'selected-thread',
+      overlayThreadId: 'selected-thread'
+    })
+
+    expect(resolveDocumentAnnotationOverlayState({
+      displayMode: 'current'
+    })).toEqual({
+      activeThreadId: null,
+      overlayThreadId: null
+    })
+  })
+
   it('keeps the resizable annotations panel readable without crowding a normal document viewport', () => {
     expect(fitDocumentAnnotationPanelWidth(1_200, 360)).toBe(360)
     expect(fitDocumentAnnotationPanelWidth(1_200, 900)).toBe(720)
@@ -304,6 +386,9 @@ describe('DocumentAnnotationPanelController', () => {
 
     const capturedInput = renderInput as DocumentAnnotationPanelRenderInput | null
     if (!capturedInput) throw new Error('Document render input was not captured.')
+    expect(() => (
+      capturedInput.text.onOpenAnnotations as unknown as (event: unknown) => void
+    )({ type: 'click' })).not.toThrow()
     await capturedInput.text.onApplyEdit(operation)
 
     expect(context.host.updateAnnotation).toHaveBeenCalledWith({

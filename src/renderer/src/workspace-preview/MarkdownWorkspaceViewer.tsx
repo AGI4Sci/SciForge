@@ -560,7 +560,7 @@ export function MarkdownWorkspaceViewer({
               className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-ds-muted transition hover:bg-ds-hover hover:text-ds-text"
               title={t('writeDocxAnnotations')}
               aria-label={t('writeDocxAnnotations')}
-              onClick={onOpenAnnotations}
+              onClick={() => onOpenAnnotations()}
               data-markdown-open-annotations
             >
               <MessageSquare className="h-4 w-4" aria-hidden="true" />
