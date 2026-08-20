@@ -3,20 +3,13 @@ import { generateKeyPairSync } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
-  createOpenContentClient,
-  createUnavailableOpenContentClient
+  createOpenContentClient
 } from './opencontent-client.js'
+import * as openContentClientModule from './opencontent-client.js'
 
 describe('OpenContent client enrollment', () => {
-  it('fails closed without a configured Provider endpoint', async () => {
-    const client = createUnavailableOpenContentClient()
-
-    await expect(client.isTokenValid({ token: 'fixture-token-value' }))
-      .rejects.toMatchObject({ code: 'provider_unavailable' })
-    await expect(client.authenticateExistingAccount({
-      username: 'fixture-user',
-      password: 'fixture-password'
-    })).rejects.toMatchObject({ code: 'provider_unavailable' })
+  it('does not expose an unavailable fallback client beside the pinned profile client', () => {
+    expect(openContentClientModule).not.toHaveProperty('createUnavailableOpenContentClient')
   })
 
   it('maps HTTP throttling to a bounded rate-limited error', async () => {
@@ -172,6 +165,34 @@ describe('OpenContent client enrollment', () => {
       }
     })
     expect(requests).toHaveLength(4)
+  })
+
+  it('classifies an invalid post-login Token as reauthentication required', async () => {
+    const fetch = postLoginValidationTransport({ tokenValid: false })
+    const client = createOpenContentClient({
+      baseUrl: 'https://opencontent.invalid',
+      fetch
+    })
+
+    await expect(client.authenticateExistingAccount({
+      username: 'fixture-user',
+      password: 'fixture-password'
+    })).rejects.toMatchObject({ code: 'reauthentication_required' })
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('classifies a rejected post-login account-info lookup as reauthentication required', async () => {
+    const fetch = postLoginValidationTransport({ tokenValid: true, accountResult: 1 })
+    const client = createOpenContentClient({
+      baseUrl: 'https://opencontent.invalid',
+      fetch
+    })
+
+    await expect(client.authenticateExistingAccount({
+      username: 'fixture-user',
+      password: 'fixture-password'
+    })).rejects.toMatchObject({ code: 'reauthentication_required' })
+    expect(fetch).toHaveBeenCalledTimes(4)
   })
 
   it('fails before credential submission when the RSA-key envelope drifts from the verified contract', async () => {
@@ -600,4 +621,48 @@ function jsonResponse(body: unknown): Response {
     status: 200,
     headers: { 'content-type': 'application/json' }
   })
+}
+
+function postLoginValidationTransport(options: Readonly<{
+  tokenValid: boolean
+  accountResult?: number
+}>) {
+  const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString()
+  return vi.fn(async (input: string | URL | Request) => {
+    const url = new URL(String(input))
+    if (url.pathname === '/inbiz/org/api/auth/GetLoginRsaPublicKey') {
+      return jsonResponse({
+        result: 0,
+        message: null,
+        data: { PublicKey: publicKeyPem, Algorithm: 'RSA', Padding: 'OAEP-SHA256' },
+        totalCount: 0
+      })
+    }
+    if (url.pathname === '/flatsdk/api/services/Auth/UserLogin') {
+      return jsonResponse({
+        result: 0,
+        msg: '',
+        data: 'opaque-token-value-0001',
+        clientId: null
+      })
+    }
+    if (url.pathname === '/flatsdk/api/services/Auth/CheckUserTokenValidity') {
+      return jsonResponse({ result: 0, msg: '', data: options.tokenValid })
+    }
+    if (url.pathname === '/flatsdk/api/services/User/GetUserInfoByToken') {
+      return jsonResponse({
+        result: options.accountResult ?? 0,
+        msg: options.accountResult ? 'account lookup rejected' : '',
+        data: {
+          id: 'external-user-guid',
+          identityId: 42,
+          account: 'fixture-user',
+          name: 'Fixture User',
+          topPersonalFolderId: 2213
+        }
+      })
+    }
+    throw new Error(`Unexpected request ${url.pathname}`)
+  }) as typeof fetch
 }

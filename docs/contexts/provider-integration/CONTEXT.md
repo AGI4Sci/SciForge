@@ -46,6 +46,10 @@ _Avoid_: portable credential, shared administrator session, universal connection
 A named node-local Provider Access Binding used when a Provider requires separate enrollment and credentials. V1 permits at most one active connection for each `(Human Principal, Provider Instance)` on one Agent Host.
 _Avoid_: Provider Instance, mandatory first-party login, portable credential, shared administrator session
 
+**Provider Connection Retirement**:
+The irreversible local invalidation of a Provider Connection whose trusted Provider Instance is no longer installed or admitted. A retired connection never authorizes another Provider Instance; its integration owner remains responsible for deleting the credential while the owning Human Principal is current.
+_Avoid_: Provider Migration, credential reuse, implicit rebinding, abandoned credential
+
 **Provider Connection ID**:
 The node-local identity of one Provider Connection. It never travels in a portable resource reference.
 _Avoid_: Provider Instance Reference, cross-node credential handle
@@ -57,6 +61,10 @@ _Avoid_: Provider Connection, Token in public/caller-controlled URL, shared inte
 **Provider Enrollment**:
 A Human-only interaction that proves control of an existing External Account and creates or replaces the current Principal's node-local Provider Connection. Enrollment UI belongs to the Provider Integration Package while credential use and network transport remain main-process only.
 _Avoid_: SciForge login, provider account creation, Content Space operation, Agent-supplied credential
+
+**Provider Enrollment View**:
+A Provider Integration-owned Human interface mounted only after a concrete Provider Instance is selected inside the consuming domain's surface. Its placement does not transfer credential or connection ownership to that domain.
+_Avoid_: plugin configuration, standalone Provider panel, Content Space-owned credential form
 
 **Provider Connection Authority**:
 The rule that every Provider operation uses the executing node owner's current Provider Connection. A remote requester, Task, portable reference, Agent prompt, or runtime argument can never nominate, transfer, or borrow another connection.

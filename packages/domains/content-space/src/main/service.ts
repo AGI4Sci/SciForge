@@ -100,6 +100,7 @@ export class ContentSpaceService {
     const items = await boundedProviderCall(
       () => this.#catalog.listProviderInstances().map((entry) => ({
         providerInstanceRef: entry.providerInstanceRef,
+        providerKind: entry.providerKind,
         label: entry.displayName
       })),
       signal,

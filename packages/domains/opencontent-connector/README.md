@@ -2,7 +2,13 @@
 
 Owns existing-account enrollment, Principal-bound connection state, secure Token use, pinned OpenContent schemas, and main-process transport. It exposes no Content Space or Shared Documents business semantics.
 
-The connector has no built-in service endpoint. Deployments configure the
-Provider-owned `SCIFORGE_OPENCONTENT_BASE_URL` environment variable with the
-HTTPS OpenContent origin. When it is absent, connection attempts fail closed
-as unavailable and never fall back to a development service.
+The connector ships the reviewed `edoc2-test1-verification` profile as a
+compile-time package asset. That profile permanently binds Provider Instance
+`opencontent-edoc2-demo` to `https://test1.edoc2.com`; callers can select the
+Instance but cannot inject or override its endpoint at runtime. This is a
+development verification profile, not a production endpoint policy.
+
+The removed `opencontent-default` Instance is retired rather than aliased or
+migrated. Its Token is never used for `opencontent-edoc2-demo`; the connector
+retains cleanup metadata until the owning current Principal can delete the old
+credential from secure storage.

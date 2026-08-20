@@ -7,6 +7,7 @@ import {
 import {
   OPENCONTENT_CONTENT_SPACE_SERVICE_ID,
   OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION,
+  OPENCONTENT_PROVIDER_INSTANCE_REF,
   OPENCONTENT_PROVIDER_KIND,
   type OpenContentContentSpaceFacade
 } from '@sciforge/domain-opencontent-connector/contract'
@@ -32,6 +33,9 @@ export function createDomainMainEntry(
     contractVersion: PROVIDER_FACTORY_CONTRACT_VERSION,
     providerKind: OPENCONTENT_PROVIDER_KIND,
     createProvider: ({ instance }) => {
+      if (instance.providerInstanceRef !== OPENCONTENT_PROVIDER_INSTANCE_REF) {
+        throw new Error('The selected OpenContent Provider Instance is not installed.')
+      }
       const facade = host.internalServices!.acquire<OpenContentContentSpaceFacade>(
         OPENCONTENT_CONTENT_SPACE_SERVICE_ID,
         OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION

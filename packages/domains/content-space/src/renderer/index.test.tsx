@@ -1,6 +1,10 @@
+import { createElement, type ReactElement } from 'react'
 import { describe, expect, it } from 'vitest'
 
-import type { DomainRendererSessionResource } from '@sciforge/domain-sdk/host'
+import type {
+  DomainRendererHost,
+  DomainRendererSessionResource
+} from '@sciforge/domain-sdk/host'
 
 import {
   ARTIFACT_RESOURCE_KIND,
@@ -8,11 +12,56 @@ import {
   CONTENT_FILE_RESOURCE_KIND
 } from '../contract.js'
 import {
+  createContentSpaceRightPanelContribution,
   createContentSpaceResourceNavigationContribution,
   findContentSpaceActivationResource
 } from './index.js'
+import {
+  CONTENT_SPACE_PROVIDER_ENROLLMENT_VIEW_CONTRACT_VERSION,
+  CONTENT_SPACE_PROVIDER_ENROLLMENT_VIEW_LOCATION,
+  type ContentSpaceProviderEnrollmentView
+} from './provider-enrollment-view.js'
 
 describe('Content Space renderer activation', () => {
+  it('injects installed Provider enrollment views into the package-owned panel', () => {
+    const enrollmentView: ContentSpaceProviderEnrollmentView = Object.freeze({
+      contractVersion: CONTENT_SPACE_PROVIDER_ENROLLMENT_VIEW_CONTRACT_VERSION,
+      providerKind: 'fixture-content-space',
+      readAccessState: async () => ({ status: 'ready' as const }),
+      render: () => createElement('div')
+    })
+    const host: DomainRendererHost = {
+      ...rendererHost(),
+      contributions: {
+        list: (kind) => kind === 'renderer.extension'
+          ? [{
+              id: 'fixture.enrollment',
+              kind,
+              packageName: '@fixture/provider',
+              owner: { moduleId: 'fixture.provider', moduleVersion: '1.0.0' },
+              contract: {
+                location: CONTENT_SPACE_PROVIDER_ENROLLMENT_VIEW_LOCATION,
+                contractVersion: CONTENT_SPACE_PROVIDER_ENROLLMENT_VIEW_CONTRACT_VERSION,
+                providerKind: 'fixture-content-space'
+              },
+              value: enrollmentView
+            }]
+          : []
+      }
+    }
+
+    const rendered = createContentSpaceRightPanelContribution(host).render({
+      active: true,
+      focused: true,
+      surfaceId: 'content-space-panel',
+      className: 'host-panel',
+      session: { id: 'session-1' },
+      onCollapse: () => undefined
+    }) as ReactElement<{ enrollmentViews?: readonly ContentSpaceProviderEnrollmentView[] }>
+
+    expect(rendered.props.enrollmentViews).toEqual([enrollmentView])
+  })
+
   it('selects exactly one session resource by both resource kind and resource id', () => {
     const container = sessionResource(CONTENT_CONTAINER_RESOURCE_KIND, 'same-id', 'container')
     const file = sessionResource(CONTENT_FILE_RESOURCE_KIND, 'same-id', 'file')
@@ -73,6 +122,16 @@ describe('Content Space renderer activation', () => {
     })).toBeNull()
   })
 })
+
+function rendererHost(): DomainRendererHost {
+  return {
+    capabilityInvoker: {
+      observe: async () => { throw new Error('not used') },
+      invoke: async () => { throw new Error('not used') }
+    },
+    openExternal: () => undefined
+  }
+}
 
 function sessionResource(
   kind: string,

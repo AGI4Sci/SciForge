@@ -20,7 +20,10 @@ import {
   type PortableResourceReferenceEnvelope
 } from '@sciforge/domain-sdk/portable-resource-references'
 import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
-import { providerInstanceRefSchema } from '@sciforge/domain-sdk/provider-composition'
+import {
+  providerInstanceRefSchema,
+  providerKindSchema
+} from '@sciforge/domain-sdk/provider-composition'
 
 export const CONTENT_SPACE_DOMAIN_MODULE_ID = 'sciforge.content-space' as const
 export const CONTENT_SPACE_PROVIDER_CONTRACT_VERSION = '1.0.0' as const
@@ -410,6 +413,7 @@ export type ImmutableVersionObservation = z.infer<typeof immutableVersionObserva
 
 export const contentSpaceProviderInstanceSummarySchema = z.object({
   providerInstanceRef: providerInstanceRefSchema,
+  providerKind: providerKindSchema,
   label: z.string().trim().min(1).max(160)
 }).strict().readonly()
 export const contentSpaceProviderInstanceListSchema = z.object({

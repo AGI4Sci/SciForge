@@ -13,14 +13,18 @@
     "composite": false,
     "declaration": false,
     "noEmit": true,
+    "jsx": "react-jsx",
     "paths": {
       "@sciforge/domain-sdk": ["../../domain-sdk/src/index.ts"],
       "@sciforge/domain-sdk/*": ["../../domain-sdk/src/*"],
       "@sciforge/domain-content-space/*": ["../content-space/src/*"],
+      "@sciforge/domain-opencontent-connector/renderer/enrollment": [
+        "../opencontent-connector/src/renderer/enrollment-renderer.ts"
+      ],
       "@sciforge/domain-opencontent-connector/*": ["../opencontent-connector/src/*"]
     },
-    "types": ["node"],
+    "types": ["node", "react"],
     "resolveJsonModule": true
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

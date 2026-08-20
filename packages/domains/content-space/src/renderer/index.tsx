@@ -29,6 +29,7 @@ import {
   CONTENT_FILE_RESOURCE_KIND
 } from '../contract.js'
 import { createContentSpaceCapabilityClient } from './capability-client.js'
+import { collectContentSpaceProviderEnrollmentViews } from './provider-enrollment-view.js'
 
 const ContentSpacePanel = lazy(() => import('./ContentSpacePanel.js').then((module) => ({
   default: module.ContentSpacePanel
@@ -54,10 +55,12 @@ export function createContentSpaceRightPanelContribution(
         activation?.payload,
         session.resources
       )
+      const enrollmentViews = collectContentSpaceProviderEnrollmentViews(host)
       return (
         <ContentSpacePanel
           client={client}
           fileTransfers={host.fileTransfers}
+          enrollmentViews={enrollmentViews}
           className={className}
           onCollapse={onCollapse}
           initialResource={initialResource}
@@ -161,3 +164,5 @@ const contentSpaceActivationPayloadSchema = z.object({
   ]),
   resourceId: z.string().trim().min(1).max(512)
 }).strict()
+
+export * from './provider-enrollment-view.js'
