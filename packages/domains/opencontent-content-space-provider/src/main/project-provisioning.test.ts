@@ -39,7 +39,6 @@ const intent: ProjectContentSpaceProvisioningIntent = Object.freeze({
   projectLabel: 'Alpha research',
   contentOwnerUserId: 'user-owner',
   contentMemberUserIds: ['user-member-a', 'user-member-b'],
-  coordinatorAgentId: 'agent-coordinator',
   intentRevision: 1,
   idempotencyKey: 'idem_project.alpha.1'
 })

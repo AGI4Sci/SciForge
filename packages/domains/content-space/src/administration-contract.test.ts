@@ -50,7 +50,6 @@ describe('Content Space administration contract', () => {
       projectLabel: 'Alpha research',
       contentOwnerUserId: 'user-owner',
       contentMemberUserIds: ['user-member-a', 'user-member-b'],
-      coordinatorAgentId: 'agent-coordinator',
       intentRevision: 1,
       idempotencyKey: 'idem_project.alpha.1'
     }
@@ -64,6 +63,10 @@ describe('Content Space administration contract', () => {
     expect(() => administration.projectContentSpaceProvisioningIntentSchema.parse({
       ...intent,
       providerConnection: 'connection-local'
+    })).toThrow()
+    expect(() => administration.projectContentSpaceProvisioningIntentSchema.parse({
+      ...intent,
+      coordinatorAgentId: 'agent-coordinator'
     })).toThrow()
   })
 
@@ -249,7 +252,6 @@ describe('Content Space administration contract', () => {
       projectLabel: 'Alpha research',
       contentOwnerUserId: 'user-owner',
       contentMemberUserIds: ['user-member-a'],
-      coordinatorAgentId: 'agent-coordinator',
       intentRevision: 3,
       idempotencyKey: 'idem_project.alpha.3'
     })).resolves.toMatchObject({

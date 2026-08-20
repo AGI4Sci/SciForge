@@ -23,6 +23,7 @@
     "react": "^19.0.0"
   },
   "devDependencies": {
+    "@sciforge/internal-runtime-integrity": "0.1.0",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.10",
     "typescript": "^5.8.2",

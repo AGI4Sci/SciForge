@@ -9,8 +9,7 @@ import {
   defineProviderInstanceDirectoryEntry
 } from '@sciforge/domain-sdk/provider-composition'
 import {
-  assertOpenContentSkillBundledAssetsPresent,
-  type OpenContentSkillBundledAssetLocation
+  assertOpenContentSkillBundledAssetsPresent
 } from '@sciforge/opencontent-skill-runtime/main/bundled-assets'
 import type {
   OpenContentCliProcessPort
@@ -135,7 +134,6 @@ export function createDomainMainEntry(
   options: Readonly<{
     fetch?: typeof fetch
     skillRuntime?: Readonly<{
-      assets?: OpenContentSkillBundledAssetLocation
       processPort?: OpenContentCliProcessPort
       executablePath?: string
       temporaryRoot?: string
@@ -162,10 +160,7 @@ export function createDomainMainEntry(
     baseUrl: OPENCONTENT_EDOC2_TEST1_VERIFICATION_PROFILE.origin,
     ...(options.fetch ? { fetch: options.fetch } : {})
   })
-  const skillAssets = resolveOpenContentSkillRuntimeAssets(
-    host,
-    options.skillRuntime?.assets
-  )
+  const skillAssets = resolveOpenContentSkillRuntimeAssets(host)
   const skillAssetPaths = skillAssets === undefined
     ? undefined
     : assertOpenContentSkillBundledAssetsPresent(skillAssets)

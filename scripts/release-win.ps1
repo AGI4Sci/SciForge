@@ -103,6 +103,12 @@ $ReleaseChannel = Normalize-ReleaseChannel $RequestedChannel
 $ChannelExplicit = $Stable -or $Frontier -or [bool]$Channel
 
 Require-Command 'node'
+$env:SCIFORGE_PUBLIC_RELEASE = '1'
+& node (Join-Path $Root 'scripts\public-release-guard.cjs')
+if ($LASTEXITCODE -ne 0) {
+  Write-Err 'Official public releases must not include internal runtime composition.'
+  exit 1
+}
 Require-Command 'npm'
 Require-Command 'gh'
 

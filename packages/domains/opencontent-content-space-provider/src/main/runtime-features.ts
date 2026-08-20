@@ -55,10 +55,11 @@ const ADAPTER_OWNER = Object.freeze({
 })
 const TEAM_OPERATION_KEYS = new Set(['updateTeamMemberRole', 'transferTeamOwnership'])
 const MAX_TEAM_PAGES = 10_000
-const NON_ATOMIC_DIRECT_NATIVE_OPERATIONS = new Set<
+const NON_ATOMIC_NATIVE_OPERATIONS = new Set<
   (typeof NATIVE_DOCUMENT_OPERATIONS)[number]
 >([
   'update',
+  'edit',
   'insert',
   'undo',
   'redo',
@@ -69,7 +70,7 @@ const NON_ATOMIC_DIRECT_NATIVE_OPERATIONS = new Set<
   'comment-delete'
 ])
 const NATIVE_DOCUMENT_OPERATION_STATES = Object.freeze(
-  NATIVE_DOCUMENT_OPERATIONS.map((operation) => NON_ATOMIC_DIRECT_NATIVE_OPERATIONS.has(operation)
+  NATIVE_DOCUMENT_OPERATIONS.map((operation) => NON_ATOMIC_NATIVE_OPERATIONS.has(operation)
     ? Object.freeze({
         operation,
         readiness: 'blocked_by_contract' as const,
@@ -77,8 +78,8 @@ const NATIVE_DOCUMENT_OPERATION_STATES = Object.freeze(
       })
     : Object.freeze({
         operation,
-        readiness: 'production_ready' as const,
-        reasonCode: 'available' as const
+        readiness: 'poc_only' as const,
+        reasonCode: 'verification_profile_required' as const
       }))
 ) satisfies readonly ContentSpaceNativeDocumentOperationState[]
 const OPENCONTENT_EXTENDED_OPERATIONS = Object.freeze([
@@ -146,16 +147,16 @@ const EXTENDED_OPERATION_STATES = Object.freeze(
       })
     : Object.freeze({
         operation,
-        readiness: 'production_ready' as const,
-        reasonCode: 'available' as const
+        readiness: 'poc_only' as const,
+        reasonCode: 'verification_profile_required' as const
       }))
 ) satisfies readonly ContentSpaceExtendedOperationState[]
 const TEAM_ONLY_EXTENDED_OPERATION_STATES = Object.freeze(
   OPENCONTENT_EXTENDED_OPERATIONS.map((operation) => TEAM_OPERATION_KEYS.has(operation)
     ? Object.freeze({
         operation,
-        readiness: 'production_ready' as const,
-        reasonCode: 'available' as const
+        readiness: 'poc_only' as const,
+        reasonCode: 'verification_profile_required' as const
       })
     : Object.freeze({
         operation,

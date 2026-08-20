@@ -1,15 +1,20 @@
-const { spawnSync } = require('node:child_process')
 const {
   existsSync,
+  lstatSync,
   readFileSync,
   readdirSync,
   realpathSync,
   statSync
 } = require('node:fs')
 const { isAbsolute, join, relative, resolve, sep } = require('node:path')
+const {
+  verifyInstalledInternalOverlaySync,
+  verifyStaticFileInventory
+} = require('@sciforge/internal-runtime-integrity')
 
 const PROJECT_ROOT = resolve(__dirname, '..')
 const PACKAGE_NAME_PATTERN = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/
+const OVERLAY_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/
 
 function parseJson(path) {
   try {
@@ -33,17 +38,47 @@ function requiredString(value, label) {
   return value.trim()
 }
 
+function assertExactKeys(value, expectedKeys, label) {
+  const actual = Object.keys(value).sort()
+  const expected = [...expectedKeys].sort()
+  if (actual.length !== expected.length ||
+      actual.some((key, index) => key !== expected[index])) {
+    throw new Error(`${label} has unexpected or missing fields.`)
+  }
+}
+
 function packageRelativePath(value, label) {
   const normalized = requiredString(value, label)
   const parts = normalized.split('/')
   if (
     normalized.startsWith('/') ||
     normalized.includes('\\') ||
+    normalized.includes('\0') ||
+    /^[A-Za-z]:/.test(normalized) ||
     parts.some((part) => !part || part === '.' || part === '..')
   ) {
     throw new Error(`${label} must be a safe package-relative path.`)
   }
   return normalized
+}
+
+function assertNoSymlinkPath(root, candidate, label) {
+  const candidateRelativePath = relative(root, candidate)
+  if (candidateRelativePath.startsWith('..') || isAbsolute(candidateRelativePath)) {
+    throw new Error(`${label} escapes its containing root.`)
+  }
+  let current = root
+  const rootStats = lstatSync(current)
+  if (rootStats.isSymbolicLink()) {
+    throw new Error(`${label} contains symbolic link ${current}.`)
+  }
+  if (candidateRelativePath === '') return
+  for (const segment of candidateRelativePath.split(sep)) {
+    current = join(current, segment)
+    if (lstatSync(current).isSymbolicLink()) {
+      throw new Error(`${label} contains symbolic link ${current}.`)
+    }
+  }
 }
 
 function projectRelativePath(root, path) {
@@ -76,31 +111,37 @@ function internalPackageManifestPaths(root) {
   return manifests.sort()
 }
 
-function readSmoke(value, assetRoot, label) {
-  if (value === undefined) return undefined
-  const smoke = requiredRecord(value, label)
-  const entrypoint = packageRelativePath(smoke.entrypoint, `${label}.entrypoint`)
-  const args = smoke.args === undefined ? [] : smoke.args
-  if (!Array.isArray(args) || args.some((arg) => typeof arg !== 'string')) {
-    throw new Error(`${label}.args must be an array of strings.`)
+function readInstallationEvidence(root, packageRoot, packageName, internal) {
+  const label = `${packageName} sciforgeInternal.installationEvidence`
+  const value = requiredRecord(internal.installationEvidence, label)
+  assertExactKeys(value, ['overlayId', 'overlayRoot'], label)
+  const overlayId = requiredString(value.overlayId, `${label}.overlayId`)
+  if (!OVERLAY_ID_PATTERN.test(overlayId)) {
+    throw new Error(`${label}.overlayId must be a lowercase filesystem-safe identity.`)
   }
-  const stdoutEquals = requiredString(smoke.stdoutEquals, `${label}.stdoutEquals`)
-  const timeoutMs = smoke.timeoutMs === undefined ? 10_000 : smoke.timeoutMs
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 60_000) {
-    throw new Error(`${label}.timeoutMs must be an integer from 100 through 60000.`)
+  const overlayRoot = packageRelativePath(value.overlayRoot, `${label}.overlayRoot`)
+  if (!overlayRoot.startsWith('internal/')) {
+    throw new Error(`${label}.overlayRoot must remain beneath internal/.`)
   }
-  if (!statSync(join(assetRoot, ...entrypoint.split('/'))).isFile()) {
-    throw new Error(`${label}.entrypoint is not a regular source file.`)
+  const absoluteOverlayRoot = resolve(root, ...overlayRoot.split('/'))
+  if (!existsSync(absoluteOverlayRoot) || !statSync(absoluteOverlayRoot).isDirectory()) {
+    throw new Error(`${label}.overlayRoot is not an installed directory.`)
   }
+  assertRealpathContained(root, absoluteOverlayRoot, `${label}.overlayRoot`)
+  assertRealpathContained(absoluteOverlayRoot, packageRoot, `${label} package`)
+  const receipt = verifyInstalledInternalOverlaySync({
+    overlayId,
+    overlayRoot,
+    targetRoot: root
+  })
   return Object.freeze({
-    entrypoint,
-    args: Object.freeze([...args]),
-    stdoutEquals,
-    timeoutMs
+    overlayId,
+    overlayRoot,
+    receipt
   })
 }
 
-function readAssets(root, packageRoot, packageName, packaging) {
+function readAssets(root, packageRoot, packageName, packaging, installationEvidence) {
   const values = packaging.assets === undefined ? [] : packaging.assets
   if (!Array.isArray(values)) {
     throw new Error(`${packageName} sciforgeInternal.packaging.assets must be an array.`)
@@ -132,24 +173,42 @@ function readAssets(root, packageRoot, packageName, packaging) {
       throw new Error(`${label}.root is not a source directory.`)
     }
     assertRealpathContained(packageRoot, sourceRoot, `${label}.root`)
+    const projectSourceRoot = projectRelativePath(root, sourceRoot)
+    if (!projectSourceRoot.startsWith(`${installationEvidence.overlayRoot}/`)) {
+      throw new Error(`${label}.root escapes its receipted overlay root.`)
+    }
+    const inventoryPrefix = `${projectSourceRoot}/`
+    const inventory = installationEvidence.receipt.inventory
+      .filter((file) => file.path.startsWith(inventoryPrefix))
+      .map((file) => Object.freeze({
+        path: file.path.slice(inventoryPrefix.length),
+        sha256: file.sha256,
+        size: file.size
+      }))
+    if (inventory.length === 0) {
+      throw new Error(`${label}.root has no receipted files.`)
+    }
+    const inventoryPaths = new Set(inventory.map((file) => file.path))
     for (const requiredPath of normalizedRequiredPaths) {
       const requiredSourcePath = join(sourceRoot, ...requiredPath.split('/'))
       if (!statSync(requiredSourcePath).isFile()) {
         throw new Error(`${label} is missing required source path ${requiredPath}.`)
       }
       assertRealpathContained(sourceRoot, requiredSourcePath, `${label} required path ${requiredPath}`)
+      if (!inventoryPaths.has(requiredPath)) {
+        throw new Error(`${label} required path is absent from the trusted receipt: ${requiredPath}.`)
+      }
     }
-    const smoke = asset.smoke === undefined
-      ? undefined
-      : readSmoke(asset.smoke, sourceRoot, `${label}.smoke`)
-    if (smoke && !normalizedRequiredPaths.includes(smoke.entrypoint)) {
-      throw new Error(`${label}.smoke.entrypoint must also be a required path.`)
-    }
+    assertExactKeys(
+      asset,
+      ['packagedResourcesPath', 'requiredPaths', 'root'],
+      label
+    )
     return Object.freeze({
-      sourceRoot: projectRelativePath(root, sourceRoot),
+      sourceRoot: projectSourceRoot,
       packagedResourcesPath,
       requiredPaths: Object.freeze(normalizedRequiredPaths),
-      ...(smoke ? { smoke } : {})
+      inventory: Object.freeze(inventory)
     })
   }))
 }
@@ -181,11 +240,21 @@ function createInternalRuntimeComposition(root = PROJECT_ROOT) {
       ? null
       : requiredRecord(internal.packaging, `${packageName} sciforgeInternal.packaging`)
     if (packaging === null) continue
-    if (packaging.bundleMain !== true && packaging.bundleMain !== false) {
-      throw new Error(`${packageName} sciforgeInternal.packaging.bundleMain must be a boolean.`)
-    }
     const packageRoot = resolve(manifestPath, '..')
-    const assets = readAssets(root, packageRoot, packageName, packaging)
+    assertExactKeys(packaging, ['assets'], `${packageName} sciforgeInternal.packaging`)
+    const installationEvidence = readInstallationEvidence(
+      root,
+      packageRoot,
+      packageName,
+      internal
+    )
+    const assets = readAssets(
+      root,
+      packageRoot,
+      packageName,
+      packaging,
+      installationEvidence
+    )
     for (const asset of assets) {
       if (packagedResourcePaths.has(asset.packagedResourcesPath)) {
         throw new Error(
@@ -194,39 +263,33 @@ function createInternalRuntimeComposition(root = PROJECT_ROOT) {
       }
       packagedResourcePaths.add(asset.packagedResourcesPath)
     }
-    const activation = requiredRecord(internal.activation, `${packageName} sciforgeInternal.activation`)
-    const bundleMain = packaging.bundleMain && activation.process === 'main'
-    const build = manifest.scripts?.build
-    if (typeof build !== 'string' || !build.trim()) {
-      throw new Error(`${packageName} must declare a build script.`)
-    }
     runtimes.push(Object.freeze({
       packageName,
       packageDir: projectRelativePath(root, packageRoot),
-      bundleMain,
+      installationEvidence: Object.freeze({
+        overlayId: installationEvidence.overlayId,
+        overlayRoot: installationEvidence.overlayRoot
+      }),
       assets
     }))
   }
   runtimes.sort((left, right) => left.packageName.localeCompare(right.packageName))
   return Object.freeze({
-    mainBundlePackageNames: Object.freeze(
-      runtimes.filter((runtime) => runtime.bundleMain).map((runtime) => runtime.packageName)
-    ),
-    buildPackageNames: Object.freeze(runtimes.map((runtime) => runtime.packageName)),
     extraResources: Object.freeze(runtimes.flatMap((runtime) => runtime.assets.map((asset) =>
       Object.freeze({ from: asset.sourceRoot, to: asset.packagedResourcesPath })
     ))),
     packagedRuntimes: Object.freeze(runtimes.map((runtime) => Object.freeze({
       packageName: runtime.packageName,
+      packageDir: runtime.packageDir,
+      installationEvidence: runtime.installationEvidence,
       assets: runtime.assets
     })))
   })
 }
 
-function validatePackagedInternalRuntimes(
+function verifyPackagedInternalRuntimes(
   resourcesPath,
-  composition = internalRuntimeComposition,
-  options = {}
+  composition = internalRuntimeComposition
 ) {
   if (composition.packagedRuntimes.length === 0) return
   if (typeof resourcesPath !== 'string' || !isAbsolute(resourcesPath)) {
@@ -235,8 +298,6 @@ function validatePackagedInternalRuntimes(
   if (!existsSync(resourcesPath) || !statSync(resourcesPath).isDirectory()) {
     throw new TypeError('Packaged resourcesPath must be an existing directory.')
   }
-  const runner = options.spawnSync || spawnSync
-  const nodeExecutable = options.nodeExecutable || process.execPath
   for (const runtime of composition.packagedRuntimes) {
     for (const asset of runtime.assets) {
       const packagedRoot = join(
@@ -254,58 +315,18 @@ function validatePackagedInternalRuntimes(
         packagedRoot,
         `${runtime.packageName} packaged resource root ${asset.packagedResourcesPath}`
       )
-      for (const requiredPath of asset.requiredPaths) {
-        const candidate = join(packagedRoot, ...requiredPath.split('/'))
-        if (!existsSync(candidate) || !statSync(candidate).isFile()) {
-          throw new Error(
-            `[after-pack] Missing internal runtime ${runtime.packageName} resource ` +
-            `${asset.packagedResourcesPath}/${requiredPath}: ${candidate}`
-          )
-        }
-        assertRealpathContained(
-          packagedRoot,
-          candidate,
-          `${runtime.packageName} packaged resource ${requiredPath}`
-        )
-      }
-      if (!asset.smoke) continue
-      const entrypoint = join(packagedRoot, ...asset.smoke.entrypoint.split('/'))
-      const result = runner(nodeExecutable, [entrypoint, ...asset.smoke.args], {
-        cwd: packagedRoot,
-        encoding: 'utf8',
-        stdio: 'pipe',
-        timeout: asset.smoke.timeoutMs
+      assertNoSymlinkPath(
+        resourcesPath,
+        packagedRoot,
+        `${runtime.packageName} packaged resource root ${asset.packagedResourcesPath}`
+      )
+      verifyStaticFileInventory({
+        inventory: asset.inventory,
+        label: `[after-pack] Internal runtime ${runtime.packageName} resource ` +
+          asset.packagedResourcesPath,
+        rootPath: packagedRoot,
+        rootPrefix: ''
       })
-      const stdout = String(result.stdout || '').trim()
-      const stderr = String(result.stderr || '').trim()
-      if (result.error || result.status !== 0 || stdout !== asset.smoke.stdoutEquals) {
-        const detail = stderr || stdout || result.error?.message || `exit status ${result.status}`
-        throw new Error(
-          `[after-pack] Internal runtime ${runtime.packageName} smoke failed: ${detail}`
-        )
-      }
-    }
-  }
-}
-
-function buildInternalRuntimes(
-  composition = internalRuntimeComposition,
-  options = {}
-) {
-  const runner = options.spawnSync || spawnSync
-  const projectRoot = options.projectRoot || PROJECT_ROOT
-  const npmExecutable = options.npmExecutable || (
-    process.platform === 'win32' ? 'npm.cmd' : 'npm'
-  )
-  for (const packageName of composition.buildPackageNames) {
-    const result = runner(
-      npmExecutable,
-      ['--workspace', packageName, 'run', 'build'],
-      { cwd: projectRoot, stdio: 'inherit' }
-    )
-    if (result.error || result.status !== 0) {
-      const detail = result.error?.message || `exit status ${result.status}`
-      throw new Error(`Internal runtime ${packageName} build failed: ${detail}`)
     }
   }
 }
@@ -313,15 +334,16 @@ function buildInternalRuntimes(
 const internalRuntimeComposition = createInternalRuntimeComposition()
 
 module.exports = {
-  buildInternalRuntimes,
   createInternalRuntimeComposition,
   internalRuntimeComposition,
-  validatePackagedInternalRuntimes
+  verifyPackagedInternalRuntimes
 }
 
 if (require.main === module) {
-  if (process.argv.length !== 3 || process.argv[2] !== '--build') {
-    throw new Error('Usage: node scripts/internal-runtime-packaging.cjs --build')
+  if (process.argv.length !== 3 || process.argv[2] !== '--verify') {
+    throw new Error('Usage: node scripts/internal-runtime-packaging.cjs --verify')
   }
-  buildInternalRuntimes()
+  process.stdout.write(
+    `[internal-runtime] Statically verified ${internalRuntimeComposition.packagedRuntimes.length} runtime(s).\n`
+  )
 }

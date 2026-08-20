@@ -24,6 +24,7 @@ env:
   NODE_OPTIONS: "--max-old-space-size=6144"
   RELEASE_CHANNEL: stable
   RELEASE_ARTIFACT_PREFIX: SciForge
+  SCIFORGE_PUBLIC_RELEASE: "1"
 
 jobs:
   prepare:
@@ -92,6 +93,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Guard public release composition
+        run: node ./scripts/public-release-guard.cjs
 
       - name: Decode Apple signing credentials
         env:
@@ -173,6 +177,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Guard public release composition
+        run: node ./scripts/public-release-guard.cjs
+
       - name: Build Windows installer
         run: npm run dist:win
 
@@ -216,6 +223,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Guard public release composition
+        run: node ./scripts/public-release-guard.cjs
 
       - name: Build Linux AppImage
         run: npm run dist:linux
@@ -271,6 +281,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Guard public release composition
+        run: node ./scripts/public-release-guard.cjs
 
       - name: Download release artifacts
         uses: actions/download-artifact@v4

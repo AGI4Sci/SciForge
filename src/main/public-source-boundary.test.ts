@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { basename, dirname, extname, join, relative, resolve } from 'node:path'
+import { basename, dirname, extname, join, posix, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
@@ -11,10 +11,9 @@ type BoundaryViolation = Readonly<{
 }>
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+const rootPackagePath = join(repositoryRoot, 'package.json')
 const packageLockPath = join(repositoryRoot, 'package-lock.json')
 const privatePackagePrefix = ['@sciforge', 'internal'].join('-') + '/'
-const openContentAttachmentPackage = `${privatePackagePrefix}opencontent-skill-assets`
-const openContentAttachmentPath = 'internal/opencontent'
 const dependencySections = [
   'dependencies',
   'devDependencies',
@@ -89,6 +88,26 @@ function packageManifestViolations(paths: readonly string[]): BoundaryViolation[
     })
 }
 
+function rootWorkspaceViolations(path: string): BoundaryViolation[] {
+  const manifest = JSON.parse(readFileSync(path, 'utf8')) as { workspaces?: unknown }
+  if (!Array.isArray(manifest.workspaces)) return []
+  return manifest.workspaces
+    .filter((workspace): workspace is string => typeof workspace === 'string')
+    .filter(isInternalRootWorkspace)
+    .map((workspace) => ({
+      file: repositoryPath(path),
+      location: 'workspaces',
+      specifier: workspace
+    }))
+}
+
+function isInternalRootWorkspace(workspace: string): boolean {
+  const normalized = posix.normalize(
+    workspace.replaceAll('\\', '/').replace(/^(?:\.\/)+/u, '')
+  )
+  return normalized === 'internal' || normalized.startsWith('internal/')
+}
+
 function literalModuleSpecifier(node: ts.Node): ts.StringLiteralLike | undefined {
   if (
     (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
@@ -113,6 +132,18 @@ function literalModuleSpecifier(node: ts.Node): ts.StringLiteralLike | undefined
       node.expression.kind === ts.SyntaxKind.ImportKeyword ||
       (ts.isIdentifier(node.expression) && node.expression.text === 'require')
     )
+  ) {
+    return node.arguments[0]
+  }
+  if (
+    ts.isCallExpression(node) &&
+    node.arguments.length === 1 &&
+    ts.isStringLiteralLike(node.arguments[0]) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    node.expression.name.text === 'resolve' &&
+    ts.isCallExpression(node.expression.expression) &&
+    ts.isIdentifier(node.expression.expression.expression) &&
+    node.expression.expression.expression.text === 'createRequire'
   ) {
     return node.arguments[0]
   }
@@ -170,24 +201,32 @@ function packageLockViolations(path: string): BoundaryViolation[] {
       : undefined
     const locations: BoundaryViolation[] = []
 
-    if (normalizedPackagePath.includes(openContentAttachmentPath)) {
+    if (
+      /(?:^|\/)internal\//u.test(normalizedPackagePath) ||
+      normalizedPackagePath.includes(`node_modules/${privatePackagePrefix}`)
+    ) {
       locations.push({
         file: repositoryPath(path),
         location: `packages[${JSON.stringify(packagePath)}]`,
         specifier: packagePath
       })
     }
-    if (packageRecord.name === openContentAttachmentPackage) {
+    if (
+      typeof packageRecord.name === 'string' &&
+      packageRecord.name.startsWith(privatePackagePrefix)
+    ) {
       locations.push({
         file: repositoryPath(path),
         location: `packages[${JSON.stringify(packagePath)}].name`,
-        specifier: openContentAttachmentPackage
+        specifier: packageRecord.name
       })
     }
     if (
-      normalizedPackagePath.includes(openContentAttachmentPackage) ||
-      resolved?.includes(openContentAttachmentPath) ||
-      resolved?.includes(openContentAttachmentPackage)
+      resolved !== undefined &&
+      (
+        /(?:^|[:/])internal\//u.test(resolved) ||
+        resolved.includes(privatePackagePrefix)
+      )
     ) {
       locations.push({
         file: repositoryPath(path),
@@ -213,9 +252,23 @@ function formatViolations(violations: readonly BoundaryViolation[]): string {
 }
 
 describe('public source boundary', () => {
-  it('keeps private internal packages out of public manifests and static imports', () => {
+  it('normalizes portable workspace paths before enforcing the internal boundary', () => {
+    const internalVariants = [
+      'internal',
+      'internal/*',
+      './internal/*',
+      'internal\\*',
+      'packages/../internal/*'
+    ]
+
+    expect(internalVariants.filter(isInternalRootWorkspace)).toEqual(internalVariants)
+    expect(isInternalRootWorkspace('packages/internal-tools')).toBe(false)
+  })
+
+  it('keeps private internal packages out of public workspaces, manifests, and static imports', () => {
     const paths = publicFiles(repositoryRoot)
     const violations = [
+      ...rootWorkspaceViolations(rootPackagePath),
       ...packageManifestViolations(paths),
       ...sourceImportViolations(paths)
     ]
@@ -223,7 +276,15 @@ describe('public source boundary', () => {
     expect(formatViolations(violations)).toBe('')
   }, 15_000)
 
-  it('keeps the group-only OpenContent attachment overlay out of the public package lock', () => {
+  it('keeps every internal overlay out of the public package lock', () => {
     expect(formatViolations(packageLockViolations(packageLockPath))).toBe('')
+
+    const rootManifest = JSON.parse(readFileSync(rootPackagePath, 'utf8')) as {
+      workspaces?: unknown
+    }
+    const packageLock = JSON.parse(readFileSync(packageLockPath, 'utf8')) as {
+      packages?: Record<string, { workspaces?: unknown }>
+    }
+    expect(packageLock.packages?.['']?.workspaces).toEqual(rootManifest.workspaces)
   })
 })

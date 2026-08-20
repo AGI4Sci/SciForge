@@ -31,6 +31,7 @@ const targetPackageDirectories = Object.freeze([
   'packages/domains/research-checkpoints',
   'packages/domains/research-dossier',
   'packages/domains/visual-review',
+  'packages/internal-runtime-integrity',
   'packages/opencontent-skill-runtime'
 ])
 const localDependencyDirectories = Object.freeze([
@@ -212,6 +213,9 @@ test('publishable domain packages resolve every public export from independent t
     const contentMockPackage = contentMock.packageJson
     const identity = installedPackages.get('@sciforge/domain-identity-access')
     const identityPackage = identity.packageJson
+    const internalRuntimeIntegrity = installedPackages.get(
+      '@sciforge/internal-runtime-integrity'
+    ).packageJson
     const openContentRuntimePackage = installedPackages.get(
       '@sciforge/opencontent-skill-runtime'
     )
@@ -286,6 +290,15 @@ test('publishable domain packages resolve every public export from independent t
       openContentRuntime.version
     )
     assert.equal(
+      openContentConnector.dependencies['@sciforge/internal-runtime-integrity'],
+      internalRuntimeIntegrity.version
+    )
+    assert.deepEqual(internalRuntimeIntegrity.exports['.'], {
+      types: './src/index.ts',
+      import: './src/index.ts',
+      require: './index.cjs'
+    })
+    assert.equal(
       openContentProvider.dependencies['@sciforge/opencontent-skill-runtime'],
       openContentRuntime.version
     )
@@ -338,11 +351,15 @@ test('publishable domain packages resolve every public export from independent t
     const entry = join(installation, 'smoke.mts')
     await writeFile(entry, `
       import assert from 'node:assert/strict'
+      import { createRequire } from 'node:module'
       const publicExports = ${JSON.stringify(publicExports)}
       for (const specifier of publicExports) {
         const loaded = await import(specifier)
         assert.equal(typeof loaded, 'object', \`Expected module namespace for \${specifier}\`)
       }
+      const require = createRequire(import.meta.url)
+      const integrity = require('@sciforge/internal-runtime-integrity')
+      assert.equal(typeof integrity.verifyInstalledInternalOverlaySync, 'function')
     `)
     await run(process.execPath, [
       '--import',

@@ -95,7 +95,6 @@ export const projectContentSpaceProvisioningIntentSchema = z.object({
       message: 'Content member users must be unique.'
     })
     .readonly(),
-  coordinatorAgentId: consumerResourceIdSchema,
   intentRevision: z.number().int().positive(),
   idempotencyKey: idempotencyKeySchema
 }).strict().readonly()

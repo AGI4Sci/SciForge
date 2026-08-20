@@ -13,7 +13,8 @@
     "./main": "./src/main/index.ts",
     "./native-document-contract": "./src/native-document-contract.ts",
     "./provider-features": "./src/provider-features.ts",
-    "./renderer": "./src/renderer/index.tsx"
+    "./renderer": "./src/renderer/index.tsx",
+    "./verification-policy": "./src/verification-policy.ts"
   },
   "files": [
     "src",

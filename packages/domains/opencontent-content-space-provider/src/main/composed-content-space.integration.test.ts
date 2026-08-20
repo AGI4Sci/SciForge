@@ -67,7 +67,7 @@ type CapabilityDefinition = Readonly<{
 }>
 
 describe('composed Content Space with the OpenContent Provider adapter', () => {
-  it('persists the binding and keeps personal and Team library reads working after restart', async () => {
+  it('persists the binding while unverified reads fail closed before Provider access', async () => {
     const storage = persistentStorage()
     const transport = deterministicOpenContentTransport()
     const first = await composeRuntime(storage, transport.fetch)
@@ -102,18 +102,11 @@ describe('composed Content Space with the OpenContent Provider adapter', () => {
         'invocation_content_space_personal_0002'
       )
       expect(personal).toEqual({
-        ok: true,
-        value: {
-          providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-          items: [{
-            reference: {
-              providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-              containerId: 'personal-folder-guid'
-            },
-            label: 'Personal library',
-            scope: 'personal'
-          }],
-          nextCursor: 'teams_1'
+        ok: false,
+        error: {
+          code: 'blocked_by_contract',
+          message: 'The selected Provider does not enable this operation.',
+          retry: 'never'
         }
       })
       expectSafePublicOutput({ bound, personal })
@@ -148,17 +141,11 @@ describe('composed Content Space with the OpenContent Provider adapter', () => {
         'invocation_content_space_teams_after_restart_0004'
       )
       expect(teams).toEqual({
-        ok: true,
-        value: {
-          providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-          items: [{
-            reference: {
-              providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-              containerId: 'team-folder-guid'
-            },
-            label: 'SciForge Research',
-            scope: 'shared'
-          }]
+        ok: false,
+        error: {
+          code: 'blocked_by_contract',
+          message: 'The selected Provider does not enable this operation.',
+          retry: 'never'
         }
       })
       expectSafePublicOutput({ status, teams })
@@ -168,13 +155,7 @@ describe('composed Content Space with the OpenContent Provider adapter', () => {
         '/flatsdk/api/services/Auth/UserLogin',
         '/flatsdk/api/services/Auth/CheckUserTokenValidity',
         '/flatsdk/api/services/User/GetUserInfoByToken',
-        '/flatsdk/api/services/Auth/CheckUserTokenValidity',
-        '/flatsdk/api/services/User/GetTopPersonalFolderId',
-        '/flatsdk/api/services/DocList/GetFolderInfoById',
-        '/flatsdk/api/services/Auth/CheckUserTokenValidity',
-        '/flatsdk/api/services/Auth/CheckUserTokenValidity',
-        '/flatsdk/api/services/Team/GetMyTeamList',
-        '/flatsdk/api/services/DocList/GetFolderInfoById'
+        '/flatsdk/api/services/Auth/CheckUserTokenValidity'
       ])
     } finally {
       await second.dispose()

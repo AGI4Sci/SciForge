@@ -1,8 +1,8 @@
-import { createRequire } from 'node:module'
 import { existsSync } from 'node:fs'
 import { dirname, isAbsolute, resolve } from 'node:path'
 
 import type { DomainMainHost } from '@sciforge/domain-sdk/host'
+import { verifyInstalledInternalOverlaySync } from '@sciforge/internal-runtime-integrity'
 import {
   createOpenContentCliRunner,
   type OpenContentCliCommandTransport,
@@ -36,37 +36,18 @@ const TRANSPORT_OWNER = Object.freeze({
 
 const SOURCE_ASSET_PACKAGE_RELATIVE_PATH =
   'internal/opencontent/packages/opencontent-skill-assets' as const
+const SOURCE_OVERLAY_ID = 'opencontent-attachment-assets' as const
+const SOURCE_OVERLAY_ROOT = 'internal/opencontent' as const
+const SOURCE_OVERLAY_VERSION = '1.0.1' as const
 
 export type OpenContentSkillRuntimeSession = Readonly<{
   useSkillRuntime: NonNullable<OpenContentContentSpaceFacade['useSkillRuntime']>
 }>
 
 export function resolveOpenContentSkillRuntimeAssets(
-  host: Pick<DomainMainHost, 'getAppRoot' | 'isPackaged'>,
-  override?: OpenContentSkillBundledAssetLocation
+  host: Pick<DomainMainHost, 'getAppRoot' | 'isPackaged'>
 ): OpenContentSkillBundledAssetLocation | undefined {
-  if (override) return Object.freeze({ ...override })
   if (host.isPackaged?.() !== true) {
-    let assetPackageJson: string | undefined
-    try {
-      assetPackageJson = createRequire(import.meta.url).resolve(
-        '@sciforge-internal/opencontent-skill-assets/package.json'
-      )
-    } catch (error) {
-      if (!isMissingOptionalAssetPackage(error)) throw error
-    }
-    if (assetPackageJson !== undefined) {
-      if (!isAbsolute(assetPackageJson)) throw new Error('Source OpenContent assets are unavailable.')
-      return Object.freeze({
-        mode: 'source',
-        assetRoot: resolve(
-          dirname(assetPackageJson),
-          'assets',
-          OPENCONTENT_SKILL_BUNDLED_ASSET_DESCRIPTOR.version
-        )
-      })
-    }
-
     const appRoot = host.getAppRoot?.()
     if (appRoot === undefined) return undefined
     if (!isAbsolute(appRoot)) {
@@ -74,6 +55,16 @@ export function resolveOpenContentSkillRuntimeAssets(
     }
     const assetPackageRoot = resolve(appRoot, SOURCE_ASSET_PACKAGE_RELATIVE_PATH)
     if (!existsSync(assetPackageRoot)) return undefined
+    const verifiedOverlay = verifyInstalledInternalOverlaySync({
+      targetRoot: appRoot,
+      overlayId: SOURCE_OVERLAY_ID,
+      overlayRoot: SOURCE_OVERLAY_ROOT
+    })
+    if (verifiedOverlay.version !== SOURCE_OVERLAY_VERSION) {
+      throw new Error(
+        `Source OpenContent runtime requires overlay receipt version ${SOURCE_OVERLAY_VERSION}.`
+      )
+    }
     return Object.freeze({
       mode: 'source',
       assetRoot: resolve(
@@ -94,10 +85,6 @@ export function resolveOpenContentSkillRuntimeAssets(
   )
   if (!existsSync(packagedRoot)) return undefined
   return Object.freeze({ mode: 'packaged', resourcesPath })
-}
-
-function isMissingOptionalAssetPackage(error: unknown): boolean {
-  return error instanceof Error && 'code' in error && error.code === 'MODULE_NOT_FOUND'
 }
 
 /**

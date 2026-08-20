@@ -46,7 +46,7 @@ const externalIdentityId = openContentIdentityIdSchema.parse(45)
 const rootGuid = '7031fd44-2a4a-4c3c-9c74-121104b4324a'
 
 describe('OpenContent provider-neutral administration adapter', () => {
-  it('declares the complete MVP administration matrix ready without opening a session', async () => {
+  it('declares ten unverified operations PoC-only and Project provisioning blocked', async () => {
     const useTeamAdministration = vi.fn(async () => {
       throw new Error('Readiness description must not open an OpenContent administration session.')
     }) as unknown as OpenContentContentSpaceFacade['useTeamAdministration'] &
@@ -63,9 +63,18 @@ describe('OpenContent provider-neutral administration adapter', () => {
       .toEqual(CONTENT_SPACE_ADMINISTRATION_OPERATIONS)
     expect(new Set(states.map(({ operation }) => operation)).size).toBe(states.length)
     expect(states).toHaveLength(11)
-    expect(states.every(({ readiness, reasonCode }) => (
-      readiness === 'production_ready' && reasonCode === 'available'
-    ))).toBe(true)
+    expect(states.filter(({ operation }) => operation !== 'provision-project'))
+      .toHaveLength(10)
+    expect(states.filter(({ operation }) => operation !== 'provision-project')
+      .every(({ readiness, reasonCode }) => (
+        readiness === 'poc_only' && reasonCode === 'verification_profile_required'
+      ))).toBe(true)
+    expect(states).toContainEqual({
+      operation: 'provision-project',
+      readiness: 'blocked_by_contract',
+      reasonCode: 'provider_contract_missing'
+    })
+    expect(states.some(({ readiness }) => readiness === 'production_ready')).toBe(false)
     expect(states.some(({ operation }) => operation.includes('delete'))).toBe(false)
     expect(useTeamAdministration).not.toHaveBeenCalled()
 

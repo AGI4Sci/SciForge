@@ -1,6 +1,6 @@
 # OpenContent Skill Capability Matrix
 
-Audit date: 2026-08-20
+Audit date: 2026-08-21
 
 This inventory maps every admitted supplier command to a
 provider-neutral SciForge contract. It is evidence, not runtime configuration and not permission
@@ -28,21 +28,54 @@ CLI argument strings, and arbitrary request payloads are adapter-private transla
 ## Current dispatch readiness
 
 The public contracts enumerate exactly **20 native-document operations** and **54 extended
-operations**. Runtime availability is intentionally different from the inventory status above:
+operations**. OpenContent currently has **zero** `production_ready` / `available` and **zero**
+`live_verified` operations. Runtime availability is intentionally different from the inventory
+status above:
 
-| Installation | `production_ready` / `available` | Blocked or omitted |
+| Installation | `poc_only` / `verification_profile_required` | Blocked, dormant, or omitted |
 |---|---|---|
-| Public checkout, without the private attachment | Provider discovery; the six ordinary file operations (`list-containers`, `list-entries`, `observe-entry`, `create-folder`, `upload-new`, `download`); all ten Team Administration operations; Project Content Directory provisioning; extended `updateTeamMemberRole` and `transferTeamOwnership` | The native-document feature is not registered. The other 52 extended operations are `blocked_by_contract` / `provider_contract_missing`. Portal targets and immutable-version observation remain blocked. |
-| Valid private attachment installed | The same public capabilities; 11 native-document operations, including the canonical `probe` → `plan` → `edit` chain; 53 of 54 extended operations | Nine direct native-document mutations are `blocked_by_contract` because the supplier has no atomic hash compare-and-mutate contract. `updateFileVersion` is the sole blocked extended operation. Portal targets and immutable-version observation remain blocked. |
+| Public checkout, without the private attachment | The six ordinary file operations (`list-containers`, `list-entries`, `observe-entry`, `create-folder`, `upload-new`, `download`); all ten Team Administration operations; extended `updateTeamMemberRole` and `transferTeamOwnership` | The native-document feature is not registered. The other 52 extended operations are `blocked_by_contract` / `provider_contract_missing`. Portal targets and immutable-version observation remain blocked. Provider operation `provision-project` is blocked; the provider-neutral port may compose dormant, but no generic Agent capability exposes it. |
+| Valid private attachment installed | The same public PoC candidates; ten safely contract-shaped native-document operations; 53 of 54 extended operations | Ten hash-bound native-document mutations, including `edit`, are `blocked_by_contract`. `updateFileVersion` is the blocked extended operation. Portal targets and immutable-version observation remain blocked. Project provisioning remains a dormant provider-neutral port. |
 
-The nine blocked direct native-document mutations are `update`, `insert`, `undo`, `redo`,
-`comment-create`, `comment-reply`, `comment-solve`, `comment-reopen`, and `comment-delete`.
-The canonical `edit` operation is not a direct mutation: it consumes the exact probe/plan evidence
-and is admitted only through that preconditioned chain. No operation is currently `live_verified`.
+The ten blocked hash-bound native-document mutations are `update`, `insert`, `edit`, `undo`,
+`redo`, `comment-create`, `comment-reply`, `comment-solve`, `comment-reopen`, and
+`comment-delete`. A probe or plan receipt is useful local evidence but is not a Provider-atomic
+compare-and-mutate precondition.
 
-## Stage 1 acceptance surface
+Provider Instance discovery can enumerate an installed candidate independently of operation
+readiness. It is not an OpenContent business-operation pass and does not promote any row.
 
-Stage 1 is a SciForge Content Space workflow, not a one-to-one supplier CLI inventory. These
+### Trusted verification admission
+
+`poc_only` remains unavailable in the default product composition. A separately reviewed generic
+Content Space verification policy may admit an invocation only when all of these trusted facts
+match exactly:
+
+- exact Provider Instance;
+- exact current Host Principal snapshot (authority, subject, assurance, device, and identity
+  version); Host assurance is not an external OpenContent account class;
+- exact authority (Provider Instance or authorized personal/shared root);
+- exact operation ID and audience;
+- zero upload/download limits and an unexpired validity window no longer than 24 hours.
+
+The Connector currently supplies no attested external account subject or opaque binding revision.
+Until it does, Provider Instance authority can admit only the read-only `list-containers`
+bootstrap; exact Broker-bound content-root authority can admit only read operations; and mutation
+or administration profiles fail composition. Observing an external account or tenant during a
+test does not make it a policy-bound fact.
+
+The policy is supplied by trusted service composition, narrows only that invocation, and leaves
+the Provider declaration as `poc_only`. Caller payloads, renderer state, Agent requests, prompts,
+Tasks, filenames, MIME types, ordinary environment/configuration, attachment presence, or a
+successful sibling operation cannot install, select, or widen it. A verification policy can never
+admit `blocked_by_contract`.
+
+When one operation depends on another gated operation, such as observation before a bounded file
+action, every prerequisite needs its own exact matching profile; one match never widens another.
+
+## Canonical Content Space acceptance surface
+
+The acceptance surface is a SciForge Content Space workflow, not a one-to-one supplier CLI inventory. These
 Host/Broker capabilities are therefore recorded explicitly before the command matrix below.
 
 | Acceptance surface | Canonical SciForge capabilities | Status | Notes |
@@ -51,8 +84,8 @@ Host/Broker capabilities are therefore recorded explicitly before the command ma
 | Personal/shared root selection | `content-space.list-agent-root-candidates` / `content-space.authorize-agent-root` | implemented | Candidate labels are non-authorizing; authorization re-enumerates live state and issues one exact Broker root resource. |
 | Personal-library file loop | `content-space.agent-list-entries` / `content-space.agent-create-folder` / `content-space.agent-upload-new` / `content-space.agent-download` | implemented | Uses the Provider-resolved personal root, bounded pages, no magic numeric folder ID, and no implicit overwrite. |
 | Shared/Team-library file loop | `content-space.agent-list-entries` / `content-space.agent-create-folder` / `content-space.agent-upload-new` / `content-space.agent-download` | implemented | Uses the Team's real root container reference; Team identity and root folder identity remain distinct. |
-| Team administration | `content-space.authorize-provider-administration` plus `content-space.agent-admin-*` | implemented | All ten OpenContent administration operations are `production_ready` / `available` through the public SDK/facade path. The Host issues one scoped grant and gates each exact operation before Provider binding; Team deletion is absent. |
-| Project Content Directory provisioning | `content-space.agent-provision-project` / `ProjectContentSpaceProvisioningPort` | implemented | The operation is `production_ready` / `available` through the public SDK/facade path. Cloud supplies authoritative Project owner/member intent; the Provider creates or reconciles one Team root only after every verified identity binding resolves. Missing bindings return a typed `pending` report before any Team or membership write, never a guessed member. |
+| Team administration | `content-space.authorize-provider-administration` plus `content-space.agent-admin-*` | implemented | All ten operations are PoC-only. The Host issues one scoped grant and gates each exact operation before Provider binding; Team deletion is absent. |
+| Project Content Directory provisioning | `ProjectContentSpaceProvisioningPort` | blocked_by_contract / dormant | No `content-space.agent-provision-project` capability exists. Provider operation `provision-project` is `blocked_by_contract / provider_contract_missing`; a future Project-owning consumer must supply an authoritative Project Content Space Binding and verified identity mappings before it invokes the provider-neutral port. Ordinary Agents cannot author owner or membership intent. |
 | Cloud Task handoff | — | deferred | No Task-specific Content Space port exists. Cloud Collaboration must first own the Project Content Space Binding, typed Task file intents, and exact Task-turn resource injection and retirement. |
 | Immutable artifact proof | `content-space.observe-immutable-version` | blocked_by_contract | OpenContent does not prove immutable retention plus version-specific retrieval. A file identity, version number, or digest cannot by itself authorize an `ArtifactReference`. |
 
@@ -66,7 +99,7 @@ Provider only a managed byte stream.
 |---|---|---|---|
 | `file-search` | `content-space.search-entries` | implemented | Structured scope, metadata and tag predicates; no query-language passthrough. |
 | `file-rag-scope` | `content-space.build-file-scope` | implemented | Bounded file-reference selection, maximum 100. |
-| `file-info` | `content-space.observe-entry` / `content-space.get-entry-info` | implemented | V1 observe exists; richer information contract is Stage 3. |
+| `file-info` | `content-space.observe-entry` / `content-space.get-entry-info` | implemented | The ordinary observation and separately typed richer information contracts remain distinct. |
 | `file-internal-link` | `content-space.resolve-internal-link` | implemented | Adapter returns a bounded HTTPS Provider target; Content Space core owns Host target issuance. |
 | `file-edit` | `content-space.update-entry-properties` | implemented | Typed code, remark and security-level patch. |
 | `sec-level-list` | `content-space.list-security-levels` | implemented | Provider security levels become opaque typed references. |
@@ -77,7 +110,7 @@ Provider only a managed byte stream.
 | `upload` (new file) | `content-space.upload-new` | implemented | Agent supplies a Workspace-relative source; Host opens the bounded managed stream. |
 | `upload` (`fileModel=UPDATE`) | `content-space.update-file-version` | blocked_by_contract | The pinned CLI accepts update bytes but `file-info` exposes only `fileLastVerNumStr`, and `upload` has no atomic expected-version precondition. A preflight followed by upload would be TOCTOU, so no same-file update is advertised until the Provider freezes a real CAS/version contract. `replace-latest` also remains excluded because it overwrites the current version. |
 | `upload` (`masterFileId`) | `content-space.add-attachment` | implemented | Attachment is distinct; Agent supplies a Workspace-relative source and Provider receives only the managed stream. |
-| `upload` (`collab=true`) | — | intentionally_excluded | Stage 3 collaboration is browsing/invitation only; no alternate collaboration writer. |
+| `upload` (`collab=true`) | — | intentionally_excluded | Collaboration capability is browsing/invitation only; no alternate collaboration writer. |
 | `download` (ordinary) | `content-space.download` | implemented | Agent supplies a new Workspace-relative destination; Host owns the no-overwrite destination stream. |
 | `download` (`ispdfdownload=true`) | `content-space.export-file-as-pdf` | implemented | Agent supplies a new Workspace-relative destination; PDF bytes use the Host-owned stream and remain a Workspace write. |
 | `attach-list` | `content-space.list-attachments` | implemented | Typed master/attachment file references. |
@@ -145,8 +178,8 @@ Provider only a managed byte stream.
 | `team-users` | `content-space-administration.listMembers` | implemented | Typed bounded member page. |
 | `team-member-add` | `content-space-administration.addMember` | implemented | Exact content user identity. |
 | `team-member-remove` | `content-space-administration.removeMember` | implemented | Exact content user identity and revision. |
-| role change (Stage 3 extension) | `content-space.update-team-member-role` | implemented | Typed Team Administration delegate maps `manager`, `internal`, and `external` to OpenContent Team identities 2, 3, and 4; no read-only role is admitted. |
-| owner transfer (Stage 3 extension) | `content-space.transfer-team-ownership` | implemented | Typed Team Administration delegate; no per-operation confirmation. |
+| role change (typed delegate) | `content-space.update-team-member-role` | implemented | Typed Team Administration delegate maps `manager`, `internal`, and `external` to OpenContent Team identities 2, 3, and 4; no read-only role is admitted. |
+| owner transfer (typed delegate) | `content-space.transfer-team-ownership` | implemented | Typed Team Administration delegate; no per-operation confirmation. |
 | `team.delete` | — | intentionally_excluded | **not-supported**: no command, contract, fallback, or destructive team lifecycle path. |
 
 ## Collaboration and knowledge browsing
@@ -173,7 +206,7 @@ does not claim a separate DocumentProvider or any live-tenant verification.
 | `docflow-create` | `native-document:create` | implemented | Typed native-document content. |
 | `docflow-update` | `native-document:update` | blocked_by_contract | The request is hash-bound, but the supplier does not atomically compare `baseHash` as part of the mutation. A read preflight would be TOCTOU. |
 | `docflow-insert` | `native-document:insert` | blocked_by_contract | The request is hash-bound, but the supplier does not atomically compare `baseHash` as part of the mutation. A read preflight would be TOCTOU. |
-| `docflow-edit` | `native-document:edit` | implemented | Available only as the canonical `probe` → `plan` → `edit` chain. The exact plan evidence and precondition gate distinguish it from the nine blocked direct hash-bound mutations. |
+| `docflow-edit` | `native-document:edit` | blocked_by_contract | Probe/plan evidence is checked locally, but the Provider does not atomically compare `baseHash` with the mutation. The remaining check/write race keeps dispatch blocked. |
 | `docflow-undo` | `native-document:undo` | blocked_by_contract | The supplier does not atomically compare `baseHash` as part of the mutation; a prior read cannot satisfy the contract. |
 | `docflow-redo` | `native-document:redo` | blocked_by_contract | The supplier does not atomically compare `baseHash` as part of the mutation; a prior read cannot satisfy the contract. |
 | `docflow-image-upload` | `native-document:image-upload` | implemented | Bounded image media types; Agent supplies a Workspace-relative source and Provider receives managed bytes. |
@@ -201,12 +234,77 @@ does not claim a separate DocumentProvider or any live-tenant verification.
 | `oc <METHOD> <url> ...` raw API passthrough | — | intentionally_excluded | No raw/generic provider request capability is admitted. |
 | Undocumented CLI subcommands or bundled scripts | — | intentionally_excluded | Not part of the reviewed command inventory. |
 
-## Initial verification summary
+## Current evidence summary
 
 - `live_verified`: **0**. Live status requires a fresh packaged-app acceptance run through the canonical Broker/domain path.
 - `implemented` records a canonical typed path only; it does not imply `production_ready`, executable PoC policy, Agent eligibility, or live acceptance.
-- Same-file update and the nine direct hash-bound native-document mutations remain `blocked_by_contract` until the Provider exposes an atomic exact-version/hash compare-and-mutate contract. Canonical `probe` → `plan` → `edit` remains available through its own exact plan precondition gate.
+- Same-file update and all ten hash-bound native-document mutations, including `edit`, remain `blocked_by_contract` until the Provider exposes an atomic exact-version/hash compare-and-mutate contract.
 - Immutable-version observation remains blocked, so OpenContent results remain live Content File References or native-document receipts rather than `ArtifactReference` values.
-- Project Content Directory provisioning does not create Task handoff. Cloud Task handoff remains deferred until Cloud Collaboration supplies the binding, typed file intents, and Task-turn resource lifecycle; Content Space exposes no Task port.
-- Stage 3 rows marked `implemented` have a canonical typed adapter and Content Space dispatch path only. A resource grant cannot promote their readiness.
+- The provider-neutral Project provisioning port remains dormant and no generic Agent provisioning capability exists. Cloud Task handoff remains deferred until Cloud Collaboration supplies the binding, typed file intents, and Task-turn resource lifecycle; Content Space exposes no Task port.
+- Extended rows marked `implemented` have a canonical typed adapter and Content Space dispatch path only. A resource grant cannot promote their readiness.
 - Team member role change and owner transfer use the typed Team Administration delegate. Team deletion remains not-supported.
+
+## Evidence required for promotion
+
+Promotion is one reviewed code-and-documentation change per exact operation. Evidence for one row
+does not promote a sibling row, the same operation on another root or Connector binding, or an operation
+reached through another path.
+
+Every promotion record must include:
+
+- the exact SciForge commit, packaged application identity, platform, public Runtime version, and
+  private overlay identity/digest when used;
+- the exact Provider Instance and observed external tenant/account, complete Host Principal
+  snapshot (including assurance), authority/root, operation ID, audience, verification-policy
+  identity, limits, and validity window; the record must state that no Connector-attested external
+  subject/binding revision exists today rather than equating Host assurance with account class;
+- a run through the packaged Broker → Content Space → Provider → Connector path, with the canonical
+  request digest, invocation/receipt identity, timestamp, bounded result, and postcondition;
+- least-privilege authorization and relevant negative evidence, including wrong Principal/root,
+  revocation, collisions, cancellation/deadline, ambiguous outcomes, and no blind retry after a
+  write may have taken effect; and
+- cleanup or retained-test-resource records that contain no credentials, raw endpoint secrets, or
+  supplier payload.
+
+Mock tests, source-only Electron runs, direct SDK/API/CLI probes, package installation, static
+adapter coverage, and historical tenant observations are supporting evidence only. None is a
+packaged canonical-path live pass.
+
+### Atomic same-file CAS and `UPDATE` versus `UPGRADE`
+
+`updateFileVersion` and every hash-bound mutation stay blocked until the Provider freezes and the
+packaged path proves all of the following:
+
+1. one authoritative immutable version/revision/hash value returned by an exact observation;
+2. one mutation request that carries that exact value as an expected-state precondition;
+3. one Provider-side atomic compare-and-mutate transaction, not pre-read followed by upload;
+4. a deterministic stale-precondition conflict with proof that no bytes, document state, metadata,
+   version, or partial side effect changed;
+5. a successful response that identifies the newly committed version/state and can be observed
+   without guessing; and
+6. concurrent two-writer tests that demonstrate one commit and one zero-mutation conflict.
+
+The pinned supplier documentation currently calls the same-file mode `UPGRADE` in one section and
+`UPDATE` in another. Before implementation or promotion, the supplier must freeze the exact wire
+enum, endpoint, request fields, expected-version field and comparison semantics, whether the call
+creates a new version or replaces current state, response version identity, and stable conflict
+error. SciForge must then pin that single contract and reject the other spelling; aliases and
+read-before-write emulation are not accepted.
+
+Native `edit` is subject to the same rule: a local plan receipt, one-time token, probe, `baseHash`
+check, write-time re-read, or post-write digest does not prove atomic Provider comparison.
+
+### Immutable Artifact Reference evidence
+
+`observeImmutableVersion` and `ArtifactReference` issuance stay blocked until OpenContent proves:
+
+- a stable Provider-issued immutable version identity distinct from the mutable latest file;
+- a version-specific read/download operation that accepts that identity directly;
+- byte-for-byte retrieval of the old version after one or more newer versions are committed;
+- a documented retention/deletion policy under which that identity cannot silently resolve to
+  different bytes, plus stable missing/retired behavior; and
+- packaged-path digest verification of the exact retrieved version under the current Principal.
+
+A file ID, latest-version number, response digest, or locally retained bytes is insufficient.
+Artifact references remain non-authorizing and must still resolve through the current Principal's
+Provider connection and authorization.

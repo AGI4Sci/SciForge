@@ -53,6 +53,10 @@ case "$(uname -s)" in
     ;;
 esac
 
+export SCIFORGE_PUBLIC_RELEASE=1
+node "${ROOT}/scripts/public-release-guard.cjs" \
+  || die "Official public releases must not include internal runtime composition."
+
 release_check_prerequisites
 release_acquire_lock
 

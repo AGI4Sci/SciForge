@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 
@@ -8,6 +8,11 @@ import type {
   DomainMainHost,
   DomainMainInternalServiceRegistration
 } from '@sciforge/domain-sdk/host'
+import {
+  canonicalJson,
+  createStaticFileInventory,
+  digestInventory
+} from '@sciforge/internal-runtime-integrity'
 import type {
   OpenContentCliProcessPort
 } from '@sciforge/opencontent-skill-runtime/main/cli-runner'
@@ -38,11 +43,11 @@ const assetFixture = createAssetFixture()
 afterAll(() => assetFixture.dispose())
 
 describe('OpenContent main-only skill runtime session', () => {
-  it('activates a source repository overlay when the private package is not installed', () => {
+  it('prefers the fixed source repository overlay over a shadow private package', () => {
     expect(existsSync(resolve(
       assetFixture.repositoryRoot,
       'node_modules/@sciforge-internal/opencontent-skill-assets'
-    ))).toBe(false)
+    ))).toBe(true)
     const sourceAssets = resolveOpenContentSkillRuntimeAssets({
       getAppRoot: () => assetFixture.repositoryRoot,
       isPackaged: () => false
@@ -72,9 +77,76 @@ describe('OpenContent main-only skill runtime session', () => {
 
   it('leaves the optional source runtime disabled when the repository overlay is absent', () => {
     expect(resolveOpenContentSkillRuntimeAssets({
-      getAppRoot: () => resolve(assetFixture.root, 'repository-without-overlay'),
+      getAppRoot: () => assetFixture.shadowOnlyRepositoryRoot,
       isPackaged: () => false
     })).toBeUndefined()
+  })
+
+  it('fails source resolution closed when the fixed repository overlay is unreceipted', () => {
+    expect(() => resolveOpenContentSkillRuntimeAssets({
+      getAppRoot: () => assetFixture.unreceiptedRepositoryRoot,
+      isPackaged: () => false
+    })).toThrow(/receipt/u)
+  })
+
+  it('fails source resolution closed when a receipted runtime byte changes', () => {
+    const repositoryRoot = mkdtempSync(resolve(tmpdir(), 'sciforge-opencontent-changed-'))
+    try {
+      cpSync(assetFixture.repositoryRoot, repositoryRoot, { recursive: true })
+      writeFileSync(resolve(
+        repositoryRoot,
+        'internal/opencontent/packages/opencontent-skill-assets/assets/',
+        'opencontent-base-1.0.1/cli/bin/oc.js'
+      ), 'module.exports = { changed: true }\n', { mode: 0o644 })
+
+      expect(() => resolveOpenContentSkillRuntimeAssets({
+        getAppRoot: () => repositoryRoot,
+        isPackaged: () => false
+      })).toThrow(/changed file/u)
+    } finally {
+      rmSync(repositoryRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('fails source resolution closed when the overlay gains an unreceipted file', () => {
+    const repositoryRoot = mkdtempSync(resolve(tmpdir(), 'sciforge-opencontent-extra-'))
+    try {
+      cpSync(assetFixture.repositoryRoot, repositoryRoot, { recursive: true })
+      writeFileSync(
+        resolve(repositoryRoot, 'internal/opencontent/unreceipted.txt'),
+        'unreceipted\n',
+        { mode: 0o644 }
+      )
+
+      expect(() => resolveOpenContentSkillRuntimeAssets({
+        getAppRoot: () => repositoryRoot,
+        isPackaged: () => false
+      })).toThrow(/unreceipted file/u)
+    } finally {
+      rmSync(repositoryRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('fails source resolution closed when the receipt version changes', () => {
+    const repositoryRoot = mkdtempSync(resolve(tmpdir(), 'sciforge-opencontent-version-'))
+    try {
+      cpSync(assetFixture.repositoryRoot, repositoryRoot, { recursive: true })
+      writeOverlayReceipt(repositoryRoot, '1.0.2')
+
+      expect(() => resolveOpenContentSkillRuntimeAssets({
+        getAppRoot: () => repositoryRoot,
+        isPackaged: () => false
+      })).toThrow(/requires overlay receipt version 1\.0\.1/u)
+    } finally {
+      rmSync(repositoryRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('requires the Host-injected source repository root to be absolute', () => {
+    expect(() => resolveOpenContentSkillRuntimeAssets({
+      getAppRoot: () => 'relative/repository',
+      isPackaged: () => false
+    })).toThrow(/absolute repository root/u)
   })
 
   it('surfaces an incomplete source overlay to strict asset validation', () => {
@@ -108,15 +180,6 @@ describe('OpenContent main-only skill runtime session', () => {
       mode: 'packaged',
       resourcesPath: assetFixture.resourcesPath
     })
-    const sourceAssets = resolveOpenContentSkillRuntimeAssets({
-      isPackaged: () => false
-    }, {
-      mode: 'source',
-      assetRoot: assetFixture.assetRoot
-    })
-    expect(sourceAssets).toEqual({ mode: 'source', assetRoot: assetFixture.assetRoot })
-    expect(assertOpenContentSkillBundledAssetsPresent(sourceAssets!).cliEntrypoint)
-      .toBe(resolve(assetFixture.assetRoot, 'cli/bin/oc.js'))
     expect(resolveOpenContentSkillRuntimeAssets({
       getAppRoot: () => resolve(assetFixture.root, 'missing-resources', 'app.asar'),
       isPackaged: () => true
@@ -332,6 +395,20 @@ function createAssetFixture() {
     repositoryRoot,
     'internal/opencontent/packages/opencontent-skill-assets/assets/opencontent-base-1.0.1'
   )
+  const repositoryShadowAssetRoot = resolve(
+    repositoryRoot,
+    'node_modules/@sciforge-internal/opencontent-skill-assets/assets/opencontent-base-1.0.1'
+  )
+  const shadowOnlyRepositoryRoot = resolve(root, 'repository-with-shadow-only')
+  const shadowOnlyAssetRoot = resolve(
+    shadowOnlyRepositoryRoot,
+    'node_modules/@sciforge-internal/opencontent-skill-assets/assets/opencontent-base-1.0.1'
+  )
+  const unreceiptedRepositoryRoot = resolve(root, 'unreceipted-repository')
+  const unreceiptedRepositoryAssetRoot = resolve(
+    unreceiptedRepositoryRoot,
+    'internal/opencontent/packages/opencontent-skill-assets/assets/opencontent-base-1.0.1'
+  )
   const incompleteRepositoryRoot = resolve(root, 'incomplete-repository')
   const incompleteRepositoryPackageRoot = resolve(
     incompleteRepositoryRoot,
@@ -354,13 +431,56 @@ function createAssetFixture() {
     'internal/opencontent/packages/opencontent-skill-assets'
   )
   mkdirSync(repositoryOverlayPackageRoot, { recursive: true })
-  writeFileSync(resolve(repositoryOverlayPackageRoot, 'package.json'), JSON.stringify({
+  const privatePackageManifest = JSON.stringify({
     name: '@sciforge-internal/opencontent-skill-assets',
     version: '1.0.1',
-    private: true
-  }), { mode: 0o644 })
-  for (const base of [assetRoot, repositoryOverlayAssetRoot, packagedRoot]) {
+    private: true,
+    sciforgeInternal: {
+      distribution: 'internal-only',
+      activation: { process: 'main' },
+      installationEvidence: {
+        overlayId: 'opencontent-attachment-assets',
+        overlayRoot: 'internal/opencontent'
+      },
+      packaging: {
+        assets: [{
+          root: 'assets/opencontent-base-1.0.1',
+          packagedResourcesPath: 'opencontent/opencontent-base-1.0.1',
+          requiredPaths: [
+            'package.json',
+            'cli/bin/oc.js',
+            'cli/docflow/docflow-node.cjs',
+            'scripts/docflow-probe-compact.cjs',
+            'runtime-patches/cli-auth-retry-single-attempt.v1.json'
+          ]
+        }]
+      }
+    }
+  })
+  writeFileSync(resolve(repositoryOverlayPackageRoot, 'package.json'), privatePackageManifest, {
+    mode: 0o644
+  })
+  writeFileSync(resolve(incompleteRepositoryPackageRoot, 'package.json'), privatePackageManifest, {
+    mode: 0o644
+  })
+  writeOverlayReceipt(incompleteRepositoryRoot)
+  for (const shadowAssetRoot of [repositoryShadowAssetRoot, shadowOnlyAssetRoot]) {
+    const shadowPackageRoot = resolve(shadowAssetRoot, '../..')
+    mkdirSync(shadowPackageRoot, { recursive: true })
+    writeFileSync(resolve(shadowPackageRoot, 'package.json'), privatePackageManifest, {
+      mode: 0o644
+    })
+  }
+  for (const base of [
+    assetRoot,
+    repositoryOverlayAssetRoot,
+    repositoryShadowAssetRoot,
+    shadowOnlyAssetRoot,
+    unreceiptedRepositoryAssetRoot,
+    packagedRoot
+  ]) {
     for (const relativePath of [
+      'package.json',
       'cli/bin/oc.js',
       'cli/docflow/docflow-node.cjs',
       'scripts/docflow-probe-compact.cjs',
@@ -368,15 +488,20 @@ function createAssetFixture() {
     ]) {
       const target = resolve(base, ...relativePath.split('/'))
       mkdirSync(dirname(target), { recursive: true })
-      writeFileSync(target, relativePath.endsWith('.json') ? '{}\n' : 'module.exports = {}\n', {
+      writeFileSync(target, relativePath.endsWith('.json')
+        ? '{"type":"commonjs"}\n'
+        : 'module.exports = {}\n', {
         mode: 0o644
       })
     }
   }
+  writeOverlayReceipt(repositoryRoot)
   return {
     assetRoot,
     repositoryRoot,
     repositoryOverlayAssetRoot,
+    shadowOnlyRepositoryRoot,
+    unreceiptedRepositoryRoot,
     incompleteRepositoryRoot,
     incompleteRepositoryOverlayAssetRoot,
     resourcesPath,
@@ -384,4 +509,30 @@ function createAssetFixture() {
     root,
     dispose: () => rmSync(root, { recursive: true, force: true })
   }
+}
+
+function writeOverlayReceipt(repositoryRoot: string, version = '1.0.1'): void {
+  const overlayId = 'opencontent-attachment-assets'
+  const overlayRoot = 'internal/opencontent'
+  const files = createStaticFileInventory({
+    label: 'OpenContent Connector source fixture',
+    rootPath: resolve(repositoryRoot, overlayRoot),
+    rootPrefix: overlayRoot
+  })
+  const inventorySha256 = digestInventory({ files, overlayId, overlayRoot, version })
+  const receiptPath = resolve(
+    repositoryRoot,
+    `.sciforge/internal-overlays/${overlayId}.json`
+  )
+  mkdirSync(dirname(receiptPath), { recursive: true })
+  writeFileSync(receiptPath, canonicalJson({
+    archiveRoot: `sciforge-internal-overlay-${overlayId}-${version}`,
+    archiveSha256: 'a'.repeat(64),
+    files,
+    inventorySha256,
+    overlayId,
+    overlayRoot,
+    schemaVersion: 2,
+    version
+  }), { mode: 0o644 })
 }

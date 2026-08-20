@@ -74,6 +74,10 @@ done
 
 [[ "$(uname -s)" == "Darwin" ]] || die "release-mac.sh must run on macOS."
 
+export SCIFORGE_PUBLIC_RELEASE=1
+node "${ROOT}/scripts/public-release-guard.cjs" \
+  || die "Official public releases must not include internal runtime composition."
+
 build_mac_arch() {
   local arch="$1"
   local output_dir="$2"

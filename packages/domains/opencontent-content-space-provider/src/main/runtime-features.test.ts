@@ -35,7 +35,7 @@ const memberIdentityId = openContentIdentityIdSchema.parse(84)
 const ownerIdentityId = openContentIdentityIdSchema.parse(91)
 
 describe('OpenContent optional runtime features', () => {
-  it('keeps both public Team governance operations executable without attachment transport', async () => {
+  it('keeps both public Team governance adapters available but declares them PoC-only', async () => {
     let memberUserType: OpenContentTeamUserType = 3
     let currentOwnerIdentityId = currentIdentityId
     const setTeamUserRole = vi.fn<OpenContentBoundTeamAdministration['setTeamUserRole']>(
@@ -85,17 +85,17 @@ describe('OpenContent optional runtime features', () => {
     expect(extended).toBeDefined()
     const states = await extended!.describeOperations(operationContext())
     expect(states).toHaveLength(54)
-    expect(states.filter(({ readiness }) => readiness === 'production_ready'))
+    expect(states.filter(({ readiness }) => readiness === 'poc_only'))
       .toEqual([
         {
           operation: 'updateTeamMemberRole',
-          readiness: 'production_ready',
-          reasonCode: 'available'
+          readiness: 'poc_only',
+          reasonCode: 'verification_profile_required'
         },
         {
           operation: 'transferTeamOwnership',
-          readiness: 'production_ready',
-          reasonCode: 'available'
+          readiness: 'poc_only',
+          reasonCode: 'verification_profile_required'
         }
       ])
     expect(states.filter(({ readiness }) => readiness === 'blocked_by_contract'))

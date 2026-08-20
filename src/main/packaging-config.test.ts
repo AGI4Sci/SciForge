@@ -69,11 +69,10 @@ type RootPackageJson = {
 }
 
 type InternalRuntimeComposition = Readonly<{
-  mainBundlePackageNames: readonly string[]
-  buildPackageNames: readonly string[]
   extraResources: readonly Readonly<{ from: string; to: string }>[]
   packagedRuntimes: readonly Readonly<{
     packageName: string
+    packageDir: string
     assets: readonly Readonly<{
       sourceRoot: string
       packagedResourcesPath: string
@@ -260,24 +259,27 @@ afterEach(() => {
 })
 
 describe('electron-builder release packaging', () => {
-  it('derives removable internal runtime builds and resources from package manifests', () => {
+  it('derives statically verified removable internal resources from package manifests', () => {
     const composition = internalRuntimePackaging.internalRuntimeComposition
 
-    expect(rootPackage.workspaces).toContain('internal/*/packages/*')
-    expect(rootPackage.scripts['build:internal-runtimes']).toBe(
-      'node ./scripts/internal-runtime-packaging.cjs --build'
+    expect(rootPackage.workspaces.some(
+      (workspace) => workspace === 'internal' || workspace.startsWith('internal/')
+    )).toBe(false)
+    expect(rootPackage.scripts['verify:internal-runtimes']).toBe(
+      'node ./scripts/internal-runtime-packaging.cjs --verify'
     )
     expect(rootPackage.scripts.predev).toBeUndefined()
     expect(rootPackage.scripts['build:agent-support']?.match(
-      /npm run build:internal-runtimes/gu
+      /npm run verify:internal-runtimes/gu
     )).toHaveLength(1)
     expect(builderConfig.extraResources).toEqual(expect.arrayContaining(
       [...composition.extraResources]
     ))
     expect(afterPack.INTERNAL_RUNTIME_COMPOSITION).toEqual(composition)
     for (const runtime of composition.packagedRuntimes) {
-      expect(composition.buildPackageNames).toContain(runtime.packageName)
+      expect(() => statSync(join(projectRoot, runtime.packageDir, 'package.json'))).not.toThrow()
       for (const asset of runtime.assets) {
+        expect(isPathInside(asset.sourceRoot, runtime.packageDir)).toBe(true)
         for (const requiredPath of asset.requiredPaths) {
           expect(() => statSync(join(projectRoot, asset.sourceRoot, requiredPath))).not.toThrow()
         }
@@ -285,7 +287,7 @@ describe('electron-builder release packaging', () => {
     }
   })
 
-  it('validates manifest-declared internal runtime files and smokes after packaging', () => {
+  it('validates receipt-derived complete internal runtime inventories after packaging', () => {
     const root = tempRoot()
     const context = createMacPackContext(root)
     const resourcesPath = afterPack._internals.packedResourcesDir(context)
@@ -301,7 +303,7 @@ describe('electron-builder release packaging', () => {
     }
 
     expect(() => {
-      afterPack._internals.validatePackagedInternalRuntimes(context)
+      afterPack._internals.verifyPackagedInternalRuntimes(context)
     }).not.toThrow()
 
     const firstAsset = composition.packagedRuntimes[0]?.assets[0]
@@ -309,8 +311,8 @@ describe('electron-builder release packaging', () => {
     if (!firstAsset || !firstRequiredPath) return
     rmSync(join(resourcesPath, firstAsset.packagedResourcesPath, firstRequiredPath))
     expect(() => {
-      afterPack._internals.validatePackagedInternalRuntimes(context)
-    }).toThrow(/Missing internal runtime/u)
+      afterPack._internals.verifyPackagedInternalRuntimes(context)
+    }).toThrow(/missing file/u)
   })
 
   it('embeds an explicitly configured host-owned extension public keyring', () => {
@@ -833,13 +835,16 @@ describe('root package workspace contracts', () => {
       expect(releaseWorkerManifest.bundledPackageDirs).not.toContain(workspacePreviewWorkerPackageDir)
     }
     expect(rootPackage.workspaces.some((workspace) => workspace.startsWith('plugins/'))).toBe(false)
+    expect(rootPackage.workspaces.some(
+      (workspace) => workspace === 'internal' || workspace.startsWith('internal/')
+    )).toBe(false)
     expect(rootPackage.workspaces).not.toContain('kun')
     expect(rootPackage.workspaces).not.toContain('packages/workers/gui-owl-computer-use')
     expect(rootPackage.scripts).toMatchObject({
       'build:execution-governance': 'npm --workspace @sciforge/execution-governance run build',
       'build:full-trace': 'npm --workspace @sciforge/full-trace run build',
       'build:multi-agent': 'npm --workspace @sciforge/multi-agent run build',
-      'build:agent-support': 'npm run build:execution-governance && npm run build:full-trace && npm run build:multi-agent && npm run build:workspace-host && npm run build:collaboration-dependencies && npm run build:internal-runtimes',
+      'build:agent-support': 'npm run build:execution-governance && npm run build:full-trace && npm run build:multi-agent && npm run build:workspace-host && npm run build:collaboration-dependencies && npm run verify:internal-runtimes',
       'build:workspace-host': 'npm --workspace @sciforge/workspace-host run build:artifact',
       'model-router:start': 'npm --workspace @sciforge/model-router run start',
       'model-router:test': 'npm --workspace @sciforge/model-router run test',

@@ -9,7 +9,6 @@
     "./contract": "./src/contract.ts",
     "./definition": "./src/definition.ts",
     "./main": "./src/main/index.ts",
-    "./main/client": "./src/main/opencontent-client.ts",
     "./team-administration-contract": "./src/team-administration-contract.ts",
     "./renderer/enrollment": "./src/renderer/enrollment-renderer.ts"
   },
@@ -24,8 +23,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@sciforge/opencontent-skill-runtime": "0.1.0",
     "@sciforge/domain-sdk": "^0.2.1",
+    "@sciforge/internal-runtime-integrity": "0.1.0",
+    "@sciforge/opencontent-skill-runtime": "0.1.0",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

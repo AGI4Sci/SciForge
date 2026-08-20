@@ -5,6 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 
 import {
+  discoverMainBundlePackageNames,
   discoverDomainPackages,
   renderGeneratedDomainPackageFiles
 } from './domain-packages.mjs'
@@ -65,6 +66,95 @@ test('sorts packages by packageName and omits undeclared process imports', async
   assert.doesNotMatch(
     generated['packages/workers/workspace-host/src/generated/installed-domain-workspace-server.ts'],
     /@fixture/
+  )
+})
+
+test('generates the main bundle list from public TypeScript workspace dependency closure', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({
+    name: '@fixture/host',
+    workspaces: [
+      'packages/domains/*',
+      'packages/runtimes/compiled-runtime',
+      'packages/runtimes/host-runtime',
+      'packages/runtimes/renderer-runtime',
+      'packages/runtimes/transitive-runtime'
+    ],
+    dependencies: {
+      '@fixture/host-runtime': '1.0.0',
+      '@fixture/non-workspace-runtime': '1.0.0'
+    }
+  }))
+  await createSourcePackage(root, 'host-runtime', '@fixture/host-runtime')
+  await createSourcePackage(root, 'transitive-runtime', '@fixture/transitive-runtime')
+  await createSourcePackage(root, 'compiled-runtime', '@fixture/compiled-runtime', {
+    entrypoint: './dist/index.js',
+    dependencies: { '@fixture/transitive-runtime': '1.0.0' }
+  })
+  await createFixture(root, 'main-domain', {
+    packageName: '@fixture/main-domain',
+    process: 'main',
+    dependencies: { '@fixture/compiled-runtime': '1.0.0' }
+  })
+  await createFixture(root, 'renderer-domain', {
+    packageName: '@fixture/renderer-domain',
+    process: 'renderer',
+    dependencies: { '@fixture/renderer-runtime': '1.0.0' }
+  })
+  await createSourcePackage(root, 'renderer-runtime', '@fixture/renderer-runtime')
+  await createSourcePackage(
+    root,
+    'non-workspace-runtime',
+    '@fixture/non-workspace-runtime'
+  )
+
+  const packages = await discoverDomainPackages(root, {
+    parseDefinition: (definition) => definition
+  })
+  const mainBundlePackageNames = await discoverMainBundlePackageNames(root, packages)
+  const generated = renderGeneratedDomainPackageFiles(packages, { mainBundlePackageNames })[
+    'src/main/modules/installed-main-source-packages.ts'
+  ]
+
+  assert.deepEqual(mainBundlePackageNames, [
+    '@fixture/host-runtime',
+    '@fixture/main-domain',
+    '@fixture/transitive-runtime'
+  ])
+  assert.match(generated, /@fixture\/host-runtime/)
+  assert.match(generated, /@fixture\/main-domain/)
+  assert.match(generated, /@fixture\/transitive-runtime/)
+  assert.doesNotMatch(generated, /@fixture\/compiled-runtime/)
+  assert.doesNotMatch(generated, /@fixture\/non-workspace-runtime/)
+  assert.doesNotMatch(generated, /@fixture\/renderer-runtime/)
+  assert.throws(
+    () => renderGeneratedDomainPackageFiles(packages, {
+      mainBundlePackageNames: ['@fixture/source-runtime.*']
+    }),
+    /Generated main source package name is invalid/
+  )
+
+  await rm(path.join(root, 'packages', 'domains', 'main-domain'), {
+    recursive: true,
+    force: true
+  })
+  const withoutMainDomain = await discoverDomainPackages(root, {
+    parseDefinition: (definition) => definition
+  })
+  assert.deepEqual(
+    await discoverMainBundlePackageNames(root, withoutMainDomain),
+    ['@fixture/host-runtime']
+  )
+
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({
+    name: '@fixture/host',
+    workspaces: ['./internal/*'],
+    dependencies: {}
+  }))
+  await assert.rejects(
+    discoverMainBundlePackageNames(root, withoutMainDomain),
+    /must not target an internal overlay/
   )
 })
 
@@ -512,7 +602,8 @@ async function createFixture(root, directoryName, options) {
         ? { './runtime-mcp': './src/runtime-mcp.ts' }
         : {})
     },
-    scripts: { test: 'node --test', typecheck: 'tsc --noEmit' }
+    scripts: { test: 'node --test', typecheck: 'tsc --noEmit' },
+    dependencies: options.dependencies ?? {}
   }))
   await writeFile(
     path.join(packageRoot, 'src/definition.ts'),
@@ -543,4 +634,18 @@ async function createFixture(root, directoryName, options) {
       await writeFile(target, '')
     }
   }
+}
+
+async function createSourcePackage(root, directoryName, packageName, options = {}) {
+  const packageRoot = path.join(root, 'packages', 'runtimes', directoryName)
+  const entrypoint = options.entrypoint ?? './src/index.ts'
+  await mkdir(path.join(packageRoot, path.dirname(entrypoint)), { recursive: true })
+  await writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({
+    name: packageName,
+    version: '1.0.0',
+    type: 'module',
+    exports: { '.': entrypoint },
+    dependencies: options.dependencies ?? {}
+  }))
+  await writeFile(path.join(packageRoot, entrypoint), 'export const fixture = true\n')
 }

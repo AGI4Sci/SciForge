@@ -1,4 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 
 import { describe, expect, it, vi } from 'vitest'
 
@@ -10,6 +11,15 @@ import * as openContentClientModule from './opencontent-client.js'
 const principalIsCurrent = () => undefined
 
 describe('OpenContent client enrollment', () => {
+  it('keeps the raw client package-private behind the standard main entrypoint', () => {
+    const manifest = JSON.parse(
+      readFileSync(new URL('../../package.json', import.meta.url), 'utf8')
+    ) as Readonly<{ exports?: Readonly<Record<string, unknown>> }>
+
+    expect(manifest.exports?.['./main']).toBe('./src/main/index.ts')
+    expect(manifest.exports).not.toHaveProperty('./main/client')
+  })
+
   it('does not expose an unavailable fallback client beside the pinned profile client', () => {
     expect(openContentClientModule).not.toHaveProperty('createUnavailableOpenContentClient')
   })

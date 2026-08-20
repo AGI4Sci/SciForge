@@ -107,6 +107,14 @@ import {
   type ContentSpaceProviderFeatureTarget
 } from '../provider-features.js'
 import { ContentSpaceProviderCatalog } from './provider-catalog.js'
+import {
+  contentSpaceVerificationPolicyAdmits,
+  defineContentSpaceVerificationPolicy,
+  type ContentSpaceVerificationAuthority,
+  type ContentSpaceVerificationOperation,
+  type ContentSpaceVerificationPolicy,
+  type ContentSpaceVerificationTransferLimits
+} from '../verification-policy.js'
 
 export type ContentSpaceServiceCallContext = Readonly<{
   /** Host-current Principal captured and revalidated at the invoking trust boundary. */
@@ -115,6 +123,11 @@ export type ContentSpaceServiceCallContext = Readonly<{
   assertPrincipalCurrent(): void | Promise<void>
   /** Trusted Broker audience; absent direct/internal calls cannot execute PoC operations. */
   audience?: 'ui' | 'agent' | 'system'
+  /** Broker-owned root and exact issued resource; ordinary caller payloads cannot replace either. */
+  verificationBinding?: Readonly<{
+    root: ContentContainerReference
+    reference: ContentEntryReference
+  }>
   signal?: AbortSignal
 }>
 
@@ -140,12 +153,14 @@ export class ContentSpaceService {
   readonly #featureOperationDeadlineMs: number
   readonly #platform: ContentSpacePlatformGates
   readonly #featureFileTransfers?: DomainMainFileTransferHost
+  readonly #verificationPolicy?: ContentSpaceVerificationPolicy
   readonly #pinned = new Map<string, Promise<ContentSpaceProvider>>()
 
   constructor(input: Readonly<{
     catalog: ContentSpaceProviderCatalog
     platform: ContentSpacePlatformGates
     featureFileTransfers?: DomainMainFileTransferHost
+    verificationPolicy?: ContentSpaceVerificationPolicy
     now?: () => Date
     operationDeadlineMs?: number
     featureOperationDeadlineMs?: number
@@ -153,6 +168,9 @@ export class ContentSpaceService {
     this.#catalog = input.catalog
     this.#platform = Object.freeze({ ...input.platform })
     this.#featureFileTransfers = input.featureFileTransfers
+    this.#verificationPolicy = input.verificationPolicy
+      ? defineContentSpaceVerificationPolicy(input.verificationPolicy)
+      : undefined
     this.#now = input.now ?? (() => new Date())
     this.#operationDeadlineMs = input.operationDeadlineMs ??
       CONTENT_SPACE_LIMITS.operationDeadlineMs
@@ -235,7 +253,14 @@ export class ContentSpaceService {
     const operationState = operationStates.find((candidate) =>
       candidate.operation === request.operation
     )
-    if (!operationState || !operationReady(operationState)) {
+    if (!operationState || !this.#operationAdmitted(
+      operationState,
+      context,
+      call,
+      { family: 'native-document', operation: request.operation },
+      verificationAuthorityForTarget(target),
+      nativeDocumentTransferLimits(request.operation)
+    )) {
       fail(
         'blocked_by_contract',
         `Native-document operation ${request.operation} is unavailable.`
@@ -370,7 +395,14 @@ export class ContentSpaceService {
     const operationState = operationStates.find((candidate) =>
       candidate.operation === input.operation
     )
-    if (!operationState || !operationReady(operationState)) {
+    if (!operationState || !this.#operationAdmitted(
+      operationState,
+      context,
+      call,
+      { family: 'extended', operation: input.operation },
+      verificationAuthorityForTarget(target),
+      extendedOperationTransferLimits(input.operation)
+    )) {
       fail(
         'blocked_by_contract',
         `Extended Content Space operation ${input.operation} is unavailable.`
@@ -463,7 +495,15 @@ export class ContentSpaceService {
         call.assertPrincipalCurrent
       )
     )
-    if (!operationStates.some(operationReady)) {
+    if (!operationStates.some((state) => state.operation !== 'provision-project' &&
+      this.#operationAdmitted(
+        state,
+        context,
+        call,
+        { family: 'administration', operation: state.operation },
+        providerVerificationAuthority(parsedProvider),
+        NO_VERIFICATION_TRANSFERS
+      ))) {
       fail('blocked_by_contract', 'Provider administration has no available Agent operation.')
     }
     return Object.freeze({ providerInstanceRef: parsedProvider })
@@ -502,7 +542,14 @@ export class ContentSpaceService {
     const operationState = operationStates.find((candidate) =>
       candidate.operation === input.operation
     )
-    if (!operationState || !operationReady(operationState)) {
+    if (!operationState || !this.#operationAdmitted(
+      operationState,
+      context,
+      call,
+      { family: 'administration', operation: input.operation },
+      verificationAuthorityForTarget(target),
+      NO_VERIFICATION_TRANSFERS
+    )) {
       fail(
         'blocked_by_contract',
         `Content Space administration operation ${input.operation} is unavailable.`
@@ -558,7 +605,8 @@ export class ContentSpaceService {
     const { provider, context } = await this.#authorizedProvider(
       input.providerInstanceRef,
       'list-containers',
-      call
+      call,
+      providerVerificationAuthority(input.providerInstanceRef)
     )
     const output = parseOutput(contentSpaceContainerPageSchema, await boundedProviderCall(
       () => provider.listContainers({ context, page }),
@@ -587,14 +635,16 @@ export class ContentSpaceService {
     const { provider, context } = await this.#authorizedProvider(
       parent.providerInstanceRef,
       'list-entries',
-      call
+      call,
+      callVerificationAuthority(call, parent)
     )
     await this.#assertResourceReady(
       provider,
       context,
       parent,
       'list-entries',
-      call.assertPrincipalCurrent
+      call,
+      callVerificationAuthority(call, parent)
     )
     const output = parseOutput(contentSpaceEntryPageSchema, await boundedProviderCall(
       () => provider.listEntries({ context, parent, page }),
@@ -628,7 +678,8 @@ export class ContentSpaceService {
     const { provider, context, capabilities } = await this.#authorizedProvider(
       reference.providerInstanceRef,
       'observe-entry',
-      call
+      call,
+      callVerificationAuthority(call, reference)
     )
     if ('immutableVersionId' in reference) {
       await this.#assertArtifactStillProven(
@@ -656,14 +707,16 @@ export class ContentSpaceService {
     const { provider, context } = await this.#authorizedWriteProvider(
       parent.providerInstanceRef,
       'create-folder',
-      call
+      call,
+      callVerificationAuthority(call, parent)
     )
     await this.#assertResourceReady(
       provider,
       context,
       parent,
       'create-folder',
-      call.assertPrincipalCurrent
+      call,
+      callVerificationAuthority(call, parent)
     )
     const receipt = parseWriteOutput(createFolderReceiptSchema, await writeDispatch(() => boundedProviderCall(
       () => provider.createFolder({ context, parent, name }),
@@ -695,14 +748,16 @@ export class ContentSpaceService {
     const { provider, context } = await this.#authorizedWriteProvider(
       parent.providerInstanceRef,
       'upload-new',
-      call
+      call,
+      callVerificationAuthority(call, parent)
     )
     await this.#assertResourceReady(
       provider,
       context,
       parent,
       'upload-new',
-      call.assertPrincipalCurrent
+      call,
+      callVerificationAuthority(call, parent)
     )
     let source: ContentSpaceUploadSource & Readonly<{ close(): Promise<void> }>
     try {
@@ -801,7 +856,8 @@ export class ContentSpaceService {
     const { provider, context } = await this.#authorizedWriteProvider(
       reference.providerInstanceRef,
       'download',
-      call
+      call,
+      callVerificationAuthority(call, reference)
     )
     if ('immutableVersionId' in reference) {
       await this.#assertArtifactStillProven(
@@ -816,7 +872,8 @@ export class ContentSpaceService {
       context,
       reference,
       'download',
-      call.assertPrincipalCurrent
+      call,
+      callVerificationAuthority(call, reference)
     )
     let destination: Awaited<ReturnType<typeof input.openDestination>>
     try {
@@ -955,7 +1012,8 @@ export class ContentSpaceService {
     const { provider, context } = await this.#authorizedProvider(
       reference.providerInstanceRef,
       'portal-target',
-      call
+      call,
+      callVerificationAuthority(call, reference)
     )
     if ('immutableVersionId' in reference) {
       await this.#assertArtifactStillProven(
@@ -970,7 +1028,8 @@ export class ContentSpaceService {
       context,
       reference,
       'portal-target',
-      call.assertPrincipalCurrent
+      call,
+      callVerificationAuthority(call, reference)
     )
     const target = await boundedProviderCall(
       () => provider.resolvePortalTarget({ context, reference }),
@@ -1024,14 +1083,16 @@ export class ContentSpaceService {
     const { provider, context } = await this.#authorizedProvider(
       reference.providerInstanceRef,
       'observe-immutable-version',
-      call
+      call,
+      callVerificationAuthority(call, reference)
     )
     await this.#assertResourceReady(
       provider,
       context,
       reference,
       'observe-immutable-version',
-      call.assertPrincipalCurrent
+      call,
+      callVerificationAuthority(call, reference)
     )
     const observation = parseOutput(
       contentSpaceProviderImmutableVersionObservationSchema,
@@ -1360,7 +1421,11 @@ export class ContentSpaceService {
       context,
       file,
       'observe-immutable-version',
-      assertPrincipalCurrent
+      Object.freeze({
+        reauthorizedPrincipal: context.principal,
+        assertPrincipalCurrent
+      }),
+      contentVerificationAuthority(file)
     )
     const observation = parseOutput(
       contentSpaceProviderImmutableVersionObservationSchema,
@@ -1418,18 +1483,29 @@ export class ContentSpaceService {
     context: ContentSpaceProviderOperationContext,
     reference: ContentEntryReference,
     operation: ContentSpaceOperation,
-    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent']
+    call: ContentSpaceServiceCallContext,
+    authority: ContentSpaceVerificationAuthority
   ): Promise<void> {
-    const observation = await this.#observeBoundEntry(
-      provider,
-      context,
-      reference,
-      assertPrincipalCurrent
+    const observation = parseOutput(
+      contentSpaceEntryObservationSchema,
+      await boundedProviderCall(
+        () => provider.observeEntry({ context, reference }),
+        context.signal,
+        call.assertPrincipalCurrent
+      )
     )
+    assertObservationBinding(reference, observation.entry.reference)
     const state = observation.capabilities.find((candidate) =>
       candidate.operation === operation
     )
-    if (!state || !operationReady(state)) {
+    if (!state || !this.#operationAdmitted(
+      state,
+      context,
+      call,
+      { family: 'ordinary', operation },
+      authority,
+      ordinaryOperationTransferLimits(operation)
+    )) {
       fail('blocked_by_contract', `Content Space resource operation ${operation} is unavailable.`)
     }
   }
@@ -1437,7 +1513,8 @@ export class ContentSpaceService {
   async #authorizedProvider(
     providerInstanceRef: string,
     operation: ContentSpaceOperation,
-    call: ContentSpaceServiceCallContext
+    call: ContentSpaceServiceCallContext,
+    authority: ContentSpaceVerificationAuthority
   ): Promise<Readonly<{
     provider: ContentSpaceProvider
     context: ContentSpaceProviderOperationContext
@@ -1451,23 +1528,55 @@ export class ContentSpaceService {
       context,
       call.assertPrincipalCurrent
     )
-    const capabilities = await this.#describe(
+    const providerCapabilities = await this.#providerCapabilities(
       provider,
       context,
       call.assertPrincipalCurrent
     )
     assertNotCancelled(context.signal)
-    const state = capabilities.find((candidate) => candidate.operation === operation)
-    if (!state || !operationReady(state)) {
+    if ((!this.#platform.fileTransfers &&
+        (operation === 'upload-new' || operation === 'download')) ||
+      (!this.#platform.externalNavigation && operation === 'portal-target')) {
+      fail('blocked_by_contract', `Content Space operation ${operation} is Host-gated.`)
+    }
+    const state = providerCapabilities.find((candidate) => candidate.operation === operation)
+    if (!state || !this.#operationAdmitted(
+      state,
+      context,
+      call,
+      { family: 'ordinary', operation },
+      authority,
+      ordinaryOperationTransferLimits(operation)
+    )) {
       fail('blocked_by_contract', `Content Space operation ${operation} is unavailable.`)
     }
-    return Object.freeze({ provider, context, capabilities })
+    if (operationRequiresObservation(operation)) {
+      const observationState = providerCapabilities.find((candidate) =>
+        candidate.operation === 'observe-entry'
+      )
+      if (!observationState || !this.#operationAdmitted(
+        observationState,
+        context,
+        call,
+        { family: 'ordinary', operation: 'observe-entry' },
+        authority,
+        NO_VERIFICATION_TRANSFERS
+      )) {
+        fail('blocked_by_contract', 'Content Space observation is unavailable.')
+      }
+    }
+    return Object.freeze({
+      provider,
+      context,
+      capabilities: this.#effectiveCapabilities(providerCapabilities, true)
+    })
   }
 
   async #authorizedWriteProvider(
     providerInstanceRef: string,
     operation: ContentSpaceOperation,
-    call: ContentSpaceServiceWriteCallContext
+    call: ContentSpaceServiceWriteCallContext,
+    authority: ContentSpaceVerificationAuthority
   ): Promise<Readonly<{
     provider: ContentSpaceProvider
     context: ContentSpaceProviderWriteContext
@@ -1479,7 +1588,7 @@ export class ContentSpaceService {
     assertNotCancelled(call.signal)
     const result = await this.#authorizedProvider(providerInstanceRef, operation, {
       ...call
-    })
+    }, authority)
     if (!result.context.signal) {
       fail('cancelled', 'The bounded Provider operation signal is unavailable.')
     }
@@ -1499,16 +1608,48 @@ export class ContentSpaceService {
     assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent']
   ) {
     return this.#effectiveCapabilities(
-      parseOutput(
-        contentSpaceCapabilityStateListSchema,
-        await boundedProviderCall(
-          () => provider.describeCapabilities(context),
-          context.signal,
-          assertPrincipalCurrent
-        )
-      ),
+      await this.#providerCapabilities(provider, context, assertPrincipalCurrent),
       true
     )
+  }
+
+  async #providerCapabilities(
+    provider: ContentSpaceProvider,
+    context: ContentSpaceProviderOperationContext,
+    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent']
+  ) {
+    return parseOutput(
+      contentSpaceCapabilityStateListSchema,
+      await boundedProviderCall(
+        () => provider.describeCapabilities(context),
+        context.signal,
+        assertPrincipalCurrent
+      )
+    )
+  }
+
+  #operationAdmitted(
+    state: Readonly<{
+      readiness: 'poc_only' | 'blocked_by_contract' | 'production_ready'
+      reasonCode: ContentSpaceReadinessReason
+    }>,
+    context: ContentSpaceProviderOperationContext,
+    call: ContentSpaceServiceCallContext,
+    operation: ContentSpaceVerificationOperation,
+    authority: ContentSpaceVerificationAuthority,
+    transferLimits: ContentSpaceVerificationTransferLimits
+  ): boolean {
+    if (operationReady(state)) return true
+    return contentSpaceVerificationPolicyAdmits(this.#verificationPolicy, {
+      state,
+      providerInstanceRef: context.providerInstanceRef,
+      principal: context.principal,
+      audience: call.audience,
+      authority,
+      operation,
+      transferLimits,
+      now: this.#now()
+    })
   }
 
   #effectiveCapabilities(
@@ -2265,6 +2406,97 @@ function sameDownloadReference(
   const leftDigest = 'digest' in left ? left.digest?.value : undefined
   const rightDigest = 'digest' in right ? right.digest?.value : undefined
   return leftVersion === rightVersion && leftDigest === rightDigest
+}
+
+const NO_VERIFICATION_TRANSFERS = Object.freeze({
+  maxUploadBytes: 0,
+  maxDownloadBytes: 0
+})
+const UPLOAD_VERIFICATION_LIMITS = Object.freeze({
+  maxUploadBytes: CONTENT_SPACE_LIMITS.maxUploadBytes,
+  maxDownloadBytes: 0
+})
+const DOWNLOAD_VERIFICATION_LIMITS = Object.freeze({
+  maxUploadBytes: 0,
+  maxDownloadBytes: CONTENT_SPACE_LIMITS.maxFileBytes
+})
+
+function providerVerificationAuthority(
+  providerInstanceRef: string
+): ContentSpaceVerificationAuthority {
+  return Object.freeze({ kind: 'provider-instance', providerInstanceRef })
+}
+
+function contentVerificationAuthority(
+  reference: ContentEntryReference
+): ContentSpaceVerificationAuthority {
+  const root = 'containerId' in reference
+    ? Object.freeze({
+        providerInstanceRef: reference.providerInstanceRef,
+        containerId: reference.containerId
+      })
+    : Object.freeze({
+        providerInstanceRef: reference.providerInstanceRef,
+        fileId: reference.fileId
+      })
+  return Object.freeze({ kind: 'content-root', root })
+}
+
+function callVerificationAuthority(
+  call: ContentSpaceServiceCallContext,
+  fallback: ContentEntryReference
+): ContentSpaceVerificationAuthority {
+  const binding = call.verificationBinding
+  if (!binding) return contentVerificationAuthority(fallback)
+  const root = parseInput(contentContainerReferenceSchema, binding.root)
+  const reference = parseInput(zContentEntryReference, binding.reference)
+  if (!sameContentEntryReference(reference, fallback) ||
+    root.providerInstanceRef !== fallback.providerInstanceRef) {
+    fail('unauthorized', 'The Broker verification binding changed Content authority.')
+  }
+  return contentVerificationAuthority(root)
+}
+
+function verificationAuthorityForTarget(
+  target: ContentSpaceProviderFeatureTarget
+): ContentSpaceVerificationAuthority {
+  return target.kind === 'provider-administration'
+    ? providerVerificationAuthority(target.providerInstanceRef)
+    : contentVerificationAuthority(target.root)
+}
+
+function ordinaryOperationTransferLimits(
+  operation: ContentSpaceOperation
+): ContentSpaceVerificationTransferLimits {
+  if (operation === 'upload-new') return UPLOAD_VERIFICATION_LIMITS
+  if (operation === 'download') return DOWNLOAD_VERIFICATION_LIMITS
+  return NO_VERIFICATION_TRANSFERS
+}
+
+function nativeDocumentTransferLimits(
+  operation: NativeDocumentRequest['operation']
+): ContentSpaceVerificationTransferLimits {
+  if (operation === 'image-upload' || operation === 'import') {
+    return UPLOAD_VERIFICATION_LIMITS
+  }
+  if (operation === 'image-download' || operation === 'export') {
+    return DOWNLOAD_VERIFICATION_LIMITS
+  }
+  return NO_VERIFICATION_TRANSFERS
+}
+
+function extendedOperationTransferLimits(
+  operation: ContentSpaceExtendedOperationKey
+): ContentSpaceVerificationTransferLimits {
+  if (operation === 'updateFileVersion' || operation === 'addAttachment') {
+    return UPLOAD_VERIFICATION_LIMITS
+  }
+  if (operation === 'exportFileAsPdf') return DOWNLOAD_VERIFICATION_LIMITS
+  return NO_VERIFICATION_TRANSFERS
+}
+
+function operationRequiresObservation(operation: ContentSpaceOperation): boolean {
+  return operation !== 'list-containers' && operation !== 'observe-entry'
 }
 
 function operationReady(

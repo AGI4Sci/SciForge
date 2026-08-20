@@ -367,8 +367,8 @@ function capabilityState(operation: ContentSpaceOperation, implemented: boolean)
   return implemented
     ? Object.freeze({
         operation,
-        readiness: 'production_ready' as const,
-        reasonCode: 'available' as const
+        readiness: 'poc_only' as const,
+        reasonCode: 'verification_profile_required' as const
       })
     : Object.freeze({
         operation,

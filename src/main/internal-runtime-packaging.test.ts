@@ -11,50 +11,60 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
+type InventoryFile = Readonly<{
+  path: string
+  sha256: string
+  size: number
+}>
+
 type InternalRuntimeComposition = Readonly<{
-  mainBundlePackageNames: readonly string[]
-  buildPackageNames: readonly string[]
   extraResources: readonly Readonly<{ from: string; to: string }>[]
   packagedRuntimes: readonly Readonly<{
     packageName: string
+    packageDir: string
+    installationEvidence: Readonly<{
+      overlayId: string
+      overlayRoot: string
+    }>
     assets: readonly Readonly<{
       sourceRoot: string
       packagedResourcesPath: string
       requiredPaths: readonly string[]
-      smoke?: Readonly<{
-        entrypoint: string
-        args: readonly string[]
-        stdoutEquals: string
-        timeoutMs: number
-      }>
+      inventory: readonly InventoryFile[]
     }>[]
   }>[]
 }>
 
 type InternalRuntimePackaging = Readonly<{
   createInternalRuntimeComposition: (root?: string) => InternalRuntimeComposition
-  validatePackagedInternalRuntimes: (
+  verifyPackagedInternalRuntimes: (
     resourcesPath: string,
     composition?: InternalRuntimeComposition
   ) => void
-  buildInternalRuntimes: (
-    composition: InternalRuntimeComposition,
-    options: Readonly<{
-      npmExecutable: string
-      spawnSync: (
-        executable: string,
-        args: readonly string[],
-        options: Readonly<{ cwd: string; stdio: string }>
-      ) => Readonly<{ status: number; error?: Error }>
-      projectRoot: string
-    }>
-  ) => void
+}>
+
+type InternalOverlayIntegrity = Readonly<{
+  canonicalJson: (value: unknown) => string
+  createStaticFileInventory: (options: Readonly<{
+    label: string
+    rootPath: string
+    rootPrefix: string
+  }>) => readonly InventoryFile[]
+  digestInventory: (manifest: Readonly<{
+    files: readonly InventoryFile[]
+    overlayId: string
+    overlayRoot: string
+    version: string
+  }>) => string
 }>
 
 const require = createRequire(import.meta.url)
 const internalRuntimePackaging = require(
   '../../scripts/internal-runtime-packaging.cjs'
 ) as InternalRuntimePackaging
+const internalOverlayIntegrity = require(
+  '@sciforge/internal-runtime-integrity'
+) as InternalOverlayIntegrity
 const tempRoots: string[] = []
 
 function tempRoot(): string {
@@ -63,44 +73,80 @@ function tempRoot(): string {
   return root
 }
 
-function write(path: string, content: string): void {
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, content, 'utf8')
+function write(filePath: string, content: string): void {
+  mkdirSync(dirname(filePath), { recursive: true })
+  writeFileSync(filePath, content, 'utf8')
 }
 
-function writeRuntimeFixture(root: string, overlay: string, packageDir: string): void {
-  const runtimeRoot = join(root, 'internal', overlay, 'packages', packageDir)
+function writeRuntimeFixture(
+  root: string,
+  overlay: string,
+  packageDir: string,
+  options: Readonly<{ includeEvidence?: boolean; includeSmoke?: boolean }> = {}
+): void {
+  const overlayId = `${overlay}-overlay`
+  const overlayRoot = `internal/${overlay}`
+  const runtimeRoot = join(root, overlayRoot, 'packages', packageDir)
   write(join(runtimeRoot, 'assets/runtime-v1/package.json'), '{"type":"commonjs"}\n')
   write(join(runtimeRoot, 'assets/runtime-v1/bin/runtime.cjs'), 'console.log("1.2.3")\n')
   write(join(runtimeRoot, 'assets/runtime-v1/scripts/helper.cjs'), 'module.exports = {}\n')
+  const asset: Record<string, unknown> = {
+    root: 'assets/runtime-v1',
+    packagedResourcesPath: `internal-runtimes/${packageDir}/runtime-v1`,
+    requiredPaths: [
+      'package.json',
+      'bin/runtime.cjs',
+      'scripts/helper.cjs'
+    ]
+  }
+  if (options.includeSmoke) {
+    asset.smoke = {
+      entrypoint: 'bin/runtime.cjs',
+      args: ['--version'],
+      stdoutEquals: '1.2.3'
+    }
+  }
   write(join(runtimeRoot, 'package.json'), `${JSON.stringify({
     name: `@fixture-internal/${packageDir}`,
     version: '1.0.0',
     private: true,
-    scripts: { build: 'node scripts/build.mjs' },
     sciforgeInternal: {
       distribution: 'internal-only',
-      activation: { process: 'main' },
-      packaging: {
-        bundleMain: true,
-        assets: [{
-          root: 'assets/runtime-v1',
-          packagedResourcesPath: `internal-runtimes/${packageDir}/runtime-v1`,
-          requiredPaths: [
-            'package.json',
-            'bin/runtime.cjs',
-            'scripts/helper.cjs'
-          ],
-          smoke: {
-            entrypoint: 'bin/runtime.cjs',
-            args: ['--version'],
-            stdoutEquals: '1.2.3',
-            timeoutMs: 1_000
-          }
-        }]
-      }
+      ...(options.includeEvidence === false
+        ? {}
+        : { installationEvidence: { overlayId, overlayRoot } }),
+      packaging: { assets: [asset] }
     }
   }, null, 2)}\n`)
+  writeOverlayReceipt(root, overlayId, overlayRoot)
+}
+
+function writeOverlayReceipt(root: string, overlayId: string, overlayRoot: string): void {
+  const version = '1.0.0'
+  const files = internalOverlayIntegrity.createStaticFileInventory({
+    label: 'fixture overlay',
+    rootPath: join(root, overlayRoot),
+    rootPrefix: overlayRoot
+  })
+  const receipt = {
+    archiveRoot: `sciforge-internal-overlay-${overlayId}-${version}`,
+    archiveSha256: 'a'.repeat(64),
+    files,
+    inventorySha256: internalOverlayIntegrity.digestInventory({
+      files,
+      overlayId,
+      overlayRoot,
+      version
+    }),
+    overlayId,
+    overlayRoot,
+    schemaVersion: 2,
+    version
+  }
+  write(
+    join(root, '.sciforge', 'internal-overlays', `${overlayId}.json`),
+    internalOverlayIntegrity.canonicalJson(receipt)
+  )
 }
 
 afterEach(() => {
@@ -111,45 +157,23 @@ afterEach(() => {
 })
 
 describe('manifest-driven internal runtime packaging', () => {
-  it('keeps composition, build, and packaged validation as no-ops without an internal overlay', () => {
+  it('keeps composition and packaged validation as no-ops without an internal overlay', () => {
     const root = tempRoot()
-    const resourcesPath = join(root, 'packaged-resources')
     const composition = internalRuntimePackaging.createInternalRuntimeComposition(root)
-    let buildProcessCount = 0
 
-    expect(composition).toEqual({
-      mainBundlePackageNames: [],
-      buildPackageNames: [],
-      extraResources: [],
-      packagedRuntimes: []
-    })
-    expect(() => internalRuntimePackaging.buildInternalRuntimes(composition, {
-      projectRoot: root,
-      npmExecutable: 'fixture-npm',
-      spawnSync: () => {
-        buildProcessCount += 1
-        return { status: 0 }
-      }
-    })).not.toThrow()
-    expect(buildProcessCount).toBe(0)
-    expect(() => internalRuntimePackaging.validatePackagedInternalRuntimes(
-      resourcesPath,
+    expect(composition).toEqual({ extraResources: [], packagedRuntimes: [] })
+    expect(() => internalRuntimePackaging.verifyPackagedInternalRuntimes(
+      join(root, 'missing-packaged-resources'),
       composition
     )).not.toThrow()
   })
 
-  it('recomposes main bundles, builds, resources, and required paths as packages are added or removed', () => {
+  it('recomposes only receipt-verified package directories and resources', () => {
     const root = tempRoot()
-
     writeRuntimeFixture(root, 'vendor-a', 'runtime-a')
     writeRuntimeFixture(root, 'vendor-b', 'runtime-b')
-    const composition = internalRuntimePackaging.createInternalRuntimeComposition(root)
 
-    expect(composition.mainBundlePackageNames).toEqual([
-      '@fixture-internal/runtime-a',
-      '@fixture-internal/runtime-b'
-    ])
-    expect(composition.buildPackageNames).toEqual(composition.mainBundlePackageNames)
+    const composition = internalRuntimePackaging.createInternalRuntimeComposition(root)
     expect(composition.extraResources).toEqual([
       {
         from: 'internal/vendor-a/packages/runtime-a/assets/runtime-v1',
@@ -162,90 +186,122 @@ describe('manifest-driven internal runtime packaging', () => {
     ])
     expect(composition.packagedRuntimes[0]).toMatchObject({
       packageName: '@fixture-internal/runtime-a',
+      packageDir: 'internal/vendor-a/packages/runtime-a',
+      installationEvidence: {
+        overlayId: 'vendor-a-overlay',
+        overlayRoot: 'internal/vendor-a'
+      },
       assets: [{
         packagedResourcesPath: 'internal-runtimes/runtime-a/runtime-v1',
         requiredPaths: [
           'package.json',
           'bin/runtime.cjs',
           'scripts/helper.cjs'
-        ]
+        ],
+        inventory: expect.arrayContaining([
+          expect.objectContaining({ path: 'bin/runtime.cjs' }),
+          expect.objectContaining({ path: 'package.json' })
+        ])
       }]
     })
 
-    rmSync(join(root, 'internal/vendor-a'), { recursive: true, force: true })
+    rmSync(join(root, 'internal/vendor-a'), { recursive: true })
     expect(
-      internalRuntimePackaging.createInternalRuntimeComposition(root).mainBundlePackageNames
-    ).toEqual(['@fixture-internal/runtime-b'])
-  })
-
-  it('validates required files and executes manifest-declared smokes from packaged resources', () => {
-    const root = tempRoot()
-    const resourcesPath = join(root, 'packaged-resources')
-    writeRuntimeFixture(root, 'vendor-a', 'runtime-a')
-    const composition = internalRuntimePackaging.createInternalRuntimeComposition(root)
-    const [asset] = composition.packagedRuntimes[0]?.assets ?? []
-    if (!asset) throw new Error('Missing fixture asset.')
-    cpSync(
-      join(root, asset.sourceRoot),
-      join(resourcesPath, asset.packagedResourcesPath),
-      { recursive: true }
-    )
-
-    expect(() => internalRuntimePackaging.validatePackagedInternalRuntimes(
-      resourcesPath,
-      composition
-    )).not.toThrow()
-
-    rmSync(join(resourcesPath, asset.packagedResourcesPath, 'scripts/helper.cjs'))
-    expect(() => internalRuntimePackaging.validatePackagedInternalRuntimes(
-      resourcesPath,
-      composition
-    )).toThrow(/scripts\/helper\.cjs/u)
-  })
-
-  it('builds every discovered runtime through its npm workspace name', () => {
-    const root = tempRoot()
-    writeRuntimeFixture(root, 'vendor-a', 'runtime-a')
-    writeRuntimeFixture(root, 'vendor-b', 'runtime-b')
-    const composition = internalRuntimePackaging.createInternalRuntimeComposition(root)
-    const calls: Array<Readonly<{ executable: string; args: readonly string[]; cwd: string }>> = []
-
-    internalRuntimePackaging.buildInternalRuntimes(composition, {
-      projectRoot: root,
-      npmExecutable: 'fixture-npm',
-      spawnSync: (executable, args, options) => {
-        calls.push({ executable, args, cwd: options.cwd })
-        return { status: 0 }
-      }
-    })
-
-    expect(calls).toEqual([
-      {
-        executable: 'fixture-npm',
-        args: ['--workspace', '@fixture-internal/runtime-a', 'run', 'build'],
-        cwd: root
-      },
-      {
-        executable: 'fixture-npm',
-        args: ['--workspace', '@fixture-internal/runtime-b', 'run', 'build'],
-        cwd: root
-      }
+      internalRuntimePackaging.createInternalRuntimeComposition(root).packagedRuntimes
+    ).toEqual([
+      expect.objectContaining({ packageName: '@fixture-internal/runtime-b' })
     ])
   })
 
-  it('rejects a required asset symlink that escapes its package-owned root', () => {
-    const root = tempRoot()
-    writeRuntimeFixture(root, 'vendor-a', 'runtime-a')
+  it('validates complete packaged inventories with SciForge-owned static reads', () => {
+    for (const corruption of [
+      'none',
+      'changed',
+      'missing',
+      'extra',
+      'symlink',
+      'ancestor-symlink'
+    ] as const) {
+      const root = tempRoot()
+      const resourcesPath = join(root, 'packaged-resources')
+      writeRuntimeFixture(root, `vendor-${corruption}`, `runtime-${corruption}`)
+      const composition = internalRuntimePackaging.createInternalRuntimeComposition(root)
+      const asset = composition.packagedRuntimes[0]?.assets[0]
+      if (!asset) throw new Error('Missing fixture asset.')
+      const packagedRoot = join(resourcesPath, asset.packagedResourcesPath)
+      if (corruption === 'ancestor-symlink') {
+        const realParent = join(resourcesPath, 'verified-asset-target')
+        cpSync(join(root, asset.sourceRoot), join(realParent, 'runtime-v1'), {
+          recursive: true
+        })
+        mkdirSync(dirname(dirname(packagedRoot)), { recursive: true })
+        symlinkSync(realParent, dirname(packagedRoot), 'dir')
+      } else {
+        cpSync(join(root, asset.sourceRoot), packagedRoot, { recursive: true })
+      }
+      const helper = join(packagedRoot, 'scripts/helper.cjs')
+      if (corruption === 'changed') write(helper, 'changed\n')
+      if (corruption === 'missing') rmSync(helper)
+      if (corruption === 'extra') write(join(packagedRoot, 'extra.cjs'), 'extra\n')
+      if (corruption === 'symlink') {
+        rmSync(helper)
+        symlinkSync(join(root, asset.sourceRoot, 'scripts/helper.cjs'), helper)
+      }
+
+      const verify = (): void => internalRuntimePackaging.verifyPackagedInternalRuntimes(
+        resourcesPath,
+        composition
+      )
+      if (corruption === 'none') expect(verify).not.toThrow()
+      else expect(verify).toThrow(/changed file|missing file|unreceipted file|symbolic link/u)
+    }
+  })
+
+  it('rejects changed, missing, extra, and unreceipted source overlays before composition', () => {
+    for (const corruption of ['changed', 'missing', 'extra', 'unreceipted'] as const) {
+      const root = tempRoot()
+      writeRuntimeFixture(root, `vendor-${corruption}`, `runtime-${corruption}`)
+      const overlayRoot = join(root, 'internal', `vendor-${corruption}`)
+      const helper = join(
+        overlayRoot,
+        'packages',
+        `runtime-${corruption}`,
+        'assets/runtime-v1/scripts/helper.cjs'
+      )
+      if (corruption === 'changed') write(helper, 'changed\n')
+      if (corruption === 'missing') rmSync(helper)
+      if (corruption === 'extra') write(join(overlayRoot, 'extra.txt'), 'extra\n')
+      if (corruption === 'unreceipted') rmSync(join(root, '.sciforge'), { recursive: true })
+
+      expect(() => internalRuntimePackaging.createInternalRuntimeComposition(root))
+        .toThrow(/changed file|missing file|unreceipted file|receipt is missing/u)
+    }
+  })
+
+  it('rejects missing evidence, executable smoke schema, and escaping source symlinks', () => {
+    const missingEvidenceRoot = tempRoot()
+    writeRuntimeFixture(missingEvidenceRoot, 'vendor-no-evidence', 'runtime-a', {
+      includeEvidence: false
+    })
+    expect(() => internalRuntimePackaging.createInternalRuntimeComposition(missingEvidenceRoot))
+      .toThrow(/installationEvidence must be an object/u)
+
+    const smokeRoot = tempRoot()
+    writeRuntimeFixture(smokeRoot, 'vendor-smoke', 'runtime-a', { includeSmoke: true })
+    expect(() => internalRuntimePackaging.createInternalRuntimeComposition(smokeRoot))
+      .toThrow(/unexpected or missing fields/u)
+
+    const symlinkRoot = tempRoot()
+    writeRuntimeFixture(symlinkRoot, 'vendor-symlink', 'runtime-a')
     const assetRoot = join(
-      root,
-      'internal/vendor-a/packages/runtime-a/assets/runtime-v1'
+      symlinkRoot,
+      'internal/vendor-symlink/packages/runtime-a/assets/runtime-v1'
     )
-    const outside = join(root, 'outside-helper.cjs')
+    const outside = join(symlinkRoot, 'outside-helper.cjs')
     write(outside, 'module.exports = {}\n')
     rmSync(join(assetRoot, 'scripts/helper.cjs'))
     symlinkSync(outside, join(assetRoot, 'scripts/helper.cjs'))
-
-    expect(() => internalRuntimePackaging.createInternalRuntimeComposition(root))
-      .toThrow(/escapes its asset root/u)
+    expect(() => internalRuntimePackaging.createInternalRuntimeComposition(symlinkRoot))
+      .toThrow(/symbolic link/u)
   })
 })

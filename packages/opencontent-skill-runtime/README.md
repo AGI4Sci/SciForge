@@ -23,7 +23,16 @@ repository surface. The optional private
 asset root; application packaging copies that asset root to
 `resources/opencontent/opencontent-base-1.0.1`. The Connector selects source or
 packaged resolution through `./main/bundled-assets`; callers cannot provide an
-executable path.
+executable path. Source resolution uses only the fixed overlay below the
+Host-injected repository root and never searches `node_modules`; packaged
+resolution uses only the fixed Electron resources path and never falls back to
+source. The public runtime is bundled into the Electron main artifact through
+package-owned/generated composition metadata rather than a Host vendor switch.
+Before supplying a source location to this runtime, the Connector validates the
+exact overlay receipt version and complete inventory through the shared public
+`@sciforge/internal-runtime-integrity` implementation. The runtime then applies
+its fixed required-entrypoint and containment checks; it does not duplicate the
+receipt verifier.
 
 `./main/cli-runner` is the canonical supplier transport boundary. It binds the
 fixed asset, current Principal assertion, cancellation/deadline,
@@ -52,8 +61,11 @@ resource targeting, and write orchestration belong exclusively to the
 provider-neutral Content Space Broker/core. This package defines no parallel
 policy, proposal, or apply layer; it accepts only an already-admitted typed
 Provider request and returns typed, bounded delivery. A resource grant is
-necessary but never sufficient: only exact `production_ready`/`available`
-readiness can currently admit dispatch. Once both checks pass, a
+necessary but never sufficient: dispatch additionally requires exact
+`production_ready` / `available`, or a generic trusted Content Space
+verification policy that matches every required fact for one `poc_only`
+invocation. Such a policy lives outside this runtime and can never admit
+`blocked_by_contract`. Once readiness/admission and the resource checks pass, a
 resource-scoped write needs no second confirmation.
 
 Resource targets and grants are validated by the Content core feature before
@@ -68,12 +80,15 @@ Agent eligibility.
 
 Current OpenContent contract blockers remain outside this runtime's authority
 to waive: `updateFileVersion` lacks an exact atomic version CAS; hash-bound
-native-document mutations lack an atomic `baseHash` compare-and-mutate;
+native-document mutations, including `edit`, lack an atomic `baseHash`
+compare-and-mutate;
 `observeImmutableVersion` lacks immutable retention and version-specific
 retrieval proof. A version number or digest cannot turn a live reference into
 an `ArtifactReference`.
 
-This runtime also defines no Cloud Task handoff or Task port. Cloud
-Collaboration must supply the Project Content Space Binding, typed Task file
-intents, and exact Task-turn resource injection and retirement before that
-workflow exists.
+This runtime also defines no generic Agent Project-provisioning capability,
+Cloud Task handoff, or Task port. The provider-neutral Project provisioning SPI
+may remain dormant outside this package while its Provider operation is
+`blocked_by_contract`. Cloud Collaboration must supply the Project Content
+Space Binding, typed Task file intents, and exact Task-turn resource injection
+and retirement before those workflows exist.

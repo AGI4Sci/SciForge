@@ -81,7 +81,6 @@ export const CONTENT_SPACE_CAPABILITY_IDS = Object.freeze({
   agentAdminListMembers: 'content-space.agent-admin-list-members',
   agentAdminAddMember: 'content-space.agent-admin-add-member',
   agentAdminRemoveMember: 'content-space.agent-admin-remove-member',
-  agentProvisionProject: 'content-space.agent-provision-project',
   resolvePortalTarget: 'content-space.resolve-portal-target',
   openPortalTarget: 'content-space.open-portal-target',
   observeImmutableVersion: 'content-space.observe-immutable-version'

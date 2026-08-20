@@ -53,8 +53,12 @@ const OPENCONTENT_ADMINISTRATION_OPERATION_STATES =
   contentSpaceAdministrationOperationStateListSchema.parse(
     CONTENT_SPACE_ADMINISTRATION_OPERATIONS.map((operation) => ({
       operation,
-      readiness: 'production_ready' as const,
-      reasonCode: 'available' as const
+      readiness: operation === 'provision-project'
+        ? 'blocked_by_contract' as const
+        : 'poc_only' as const,
+      reasonCode: operation === 'provision-project'
+        ? 'provider_contract_missing' as const
+        : 'verification_profile_required' as const
     }))
   )
 

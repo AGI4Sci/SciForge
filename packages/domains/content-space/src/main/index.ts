@@ -100,8 +100,6 @@ import {
   contentSpaceAdministrationSpaceSummarySchema,
   contentSpaceAdministrationUnpinSpaceInputSchema,
   contentSpaceAdministrationUpdateSpaceInputSchema,
-  projectContentSpaceProvisioningIntentSchema,
-  projectContentSpaceProvisioningReportSchema,
   type ContentSpaceAdministrationOperation
 } from '../administration-contract.js'
 import {
@@ -124,6 +122,7 @@ import {
 } from '../provider-features.js'
 import { createContentSpacePortableAuthorityResolver } from './portable-authority-resolver.js'
 import { ContentSpaceProviderCatalog } from './provider-catalog.js'
+import { composeContentSpaceVerificationPolicy } from './verification-policy-catalog.js'
 import {
   ContentSpaceService,
   type ContentSpaceServiceCallContext,
@@ -231,6 +230,7 @@ export function createDomainMainEntry(
         throw new Error('Content Space requires complete main extension composition.')
       }
       const catalog = new ContentSpaceProviderCatalog(contributions)
+      const verificationPolicy = composeContentSpaceVerificationPolicy(contributions)
       runtime = Object.freeze({
         catalog,
         service: new ContentSpaceService({
@@ -239,7 +239,8 @@ export function createDomainMainEntry(
             fileTransfers: Boolean(host.fileTransfers),
             externalNavigation: Boolean(host.externalNavigation)
           }),
-          ...(host.fileTransfers ? { featureFileTransfers: host.fileTransfers } : {})
+          ...(host.fileTransfers ? { featureFileTransfers: host.fileTransfers } : {}),
+          ...(verificationPolicy ? { verificationPolicy } : {})
         })
       })
       return () => {
@@ -331,6 +332,10 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
     }
   }>
   const agentResources = new Map<string, AgentResourceRecord>()
+  const verificationBinding = (record: AgentResourceRecord) => Object.freeze({
+    root: record.root,
+    reference: record.reference
+  })
   type AgentAdministrationResourceRecord = Readonly<{
     resourceId: string
     providerInstanceRef: string
@@ -486,6 +491,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
             reauthorizedPrincipal: caller.principal,
             assertPrincipalCurrent,
             audience: 'agent',
+            verificationBinding: verificationBinding(record),
             ...(observationContext.signal ? { signal: observationContext.signal } : {})
           })
           record.revisionState.observedRevision = contentSpaceResourceRevision(
@@ -1061,7 +1067,10 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         handler: async ({ page }, context) => capabilityResult(async () => {
           const record = requireAgentResource(context, 'container')
           const parent = record.reference as ContentContainerReference
-          const listed = await options.getService().listEntries({ parent, page }, call(context))
+          const listed = await options.getService().listEntries(
+            { parent, page },
+            call(context, verificationBinding(record))
+          )
           return Object.freeze({
             parent: listed.parent,
             items: Object.freeze(listed.items.map((entry) => Object.freeze({
@@ -1091,7 +1100,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
             () => options.getService().createFolder({
               parent: record.reference as ContentContainerReference,
               name
-            }, writeCall(context)),
+            }, writeCall(context, verificationBinding(record))),
             (receipt) => {
               record.revisionState.writeInvocationId = receipt.invocationId
               return Object.freeze({
@@ -1131,7 +1140,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
                   signal
                 })
               }
-            }, writeCall(context)),
+            }, writeCall(context, verificationBinding(record))),
             (receipt) => {
               record.revisionState.writeInvocationId = receipt.invocationId
               return Object.freeze({
@@ -1172,7 +1181,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
                   signal
                 })
               }
-            }, writeCall(context)),
+            }, writeCall(context, verificationBinding(record))),
             () => Object.freeze({ changed: false })
           )
         }
@@ -1403,44 +1412,6 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
               const root = parsePortableContentContainerReference(space.root)
               return Object.freeze({
                 space,
-                resource: issueAgentResource(context, root, root)
-              })
-            },
-            () => markAgentResourceWrite(record, context)
-          )
-        }
-      }),
-      define({
-        id: CONTENT_SPACE_CAPABILITY_IDS.agentProvisionProject,
-        title: 'Provision Project Content Space',
-        description: 'Provision or reconcile the Project Team space through the same authorized Provider administration feature.',
-        audiences: ['agent'],
-        scope: 'resource',
-        resourceKinds: [CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND],
-        producedResourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
-        effect: 'external-write',
-        approval: 'none',
-        autonomousWrite: 'resource-authorized',
-        concurrency: { revision: 'none', idempotency: 'required' },
-        inputSchema: projectContentSpaceProvisioningIntentSchema,
-        outputSchema: contentSpaceResultSchema(AGENT_PROJECT_PROVISIONING_RESULT_SCHEMA),
-        handler: async (input, context) => {
-          const record = requireAgentAdministrationResource(context)
-          return capabilityMutationResult(
-            async () => {
-              const report = projectContentSpaceProvisioningReportSchema.parse(
-                await executeAgentAdministration(
-                  administrationTarget(record),
-                  'provision-project',
-                  input,
-                  'external-write',
-                  context
-                )
-              )
-              if (!report.root) return Object.freeze({ report })
-              const root = parsePortableContentContainerReference(report.root)
-              return Object.freeze({
-                report,
                 resource: issueAgentResource(context, root, root)
               })
             },
@@ -1742,7 +1713,10 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
   })
 }
 
-function call(context: ContentSpaceCapabilityContext): ContentSpaceServiceCallContext {
+function call(
+  context: ContentSpaceCapabilityContext,
+  verificationBinding?: ContentSpaceServiceCallContext['verificationBinding']
+): ContentSpaceServiceCallContext {
   if (!context.caller.principal) {
     throw operationError('unauthorized', 'A Host-reauthorized Principal is required.')
   }
@@ -1750,6 +1724,7 @@ function call(context: ContentSpaceCapabilityContext): ContentSpaceServiceCallCo
     reauthorizedPrincipal: context.caller.principal,
     assertPrincipalCurrent: context.assertPrincipalCurrent,
     audience: context.caller.audience,
+    ...(verificationBinding ? { verificationBinding } : {}),
     ...(context.signal ? { signal: context.signal } : {})
   })
 }
@@ -1777,8 +1752,11 @@ function agentResourceRevision(record: Readonly<{
     : `live:sha256:${createHash('sha256').update(observed).digest('hex')}${writeMarker}`
 }
 
-function writeCall(context: ContentSpaceCapabilityContext): ContentSpaceServiceWriteCallContext {
-  const base = call(context)
+function writeCall(
+  context: ContentSpaceCapabilityContext,
+  verificationBinding?: ContentSpaceServiceCallContext['verificationBinding']
+): ContentSpaceServiceWriteCallContext {
+  const base = call(context, verificationBinding)
   if (!context.invocationId || !(context.signal instanceof AbortSignal)) {
     throw operationError(
       'invalid_input',
@@ -2009,7 +1987,6 @@ const administrationRootOpenShape = contentSpaceAdministrationRootOpenResultSche
 const administrationMemberPageShape = contentSpaceAdministrationMemberPageSchema.unwrap().shape
 const administrationRemoveMemberShape = contentSpaceAdministrationRemoveMemberReceiptSchema
   .unwrap().shape
-const projectProvisioningReportShape = projectContentSpaceProvisioningReportSchema.unwrap().shape
 
 const PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA = z.object({
   contractVersion: z.literal(1),
@@ -2051,15 +2028,6 @@ const ADMINISTRATION_REMOVE_MEMBER_WIRE_SCHEMA = z.object({
   revision: administrationRemoveMemberShape.revision
 }).strict().readonly()
 
-const PROJECT_PROVISIONING_REPORT_WIRE_SCHEMA = z.object({
-  projectId: projectProvisioningReportShape.projectId,
-  intentRevision: projectProvisioningReportShape.intentRevision,
-  status: projectProvisioningReportShape.status,
-  root: PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA.optional(),
-  contentOwnerUserId: projectProvisioningReportShape.contentOwnerUserId,
-  members: projectProvisioningReportShape.members
-}).strict().readonly()
-
 const AGENT_ADMINISTRATION_AUTHORIZATION_SCHEMA = z.object({
   providerInstanceRef: providerInstanceInputShape.providerInstanceRef,
   resource: domainCapabilityResourceHandleSchema
@@ -2069,19 +2037,6 @@ const AGENT_ADMINISTRATION_CREATE_SPACE_SCHEMA = z.object({
   space: ADMINISTRATION_SPACE_SUMMARY_WIRE_SCHEMA,
   resource: domainCapabilityResourceHandleSchema
 }).strict().readonly()
-
-const AGENT_PROJECT_PROVISIONING_RESULT_SCHEMA = z.object({
-  report: PROJECT_PROVISIONING_REPORT_WIRE_SCHEMA,
-  resource: domainCapabilityResourceHandleSchema.optional()
-}).strict().superRefine((result, context) => {
-  if (Boolean(result.report.root) !== Boolean(result.resource)) {
-    context.addIssue({
-      code: 'custom',
-      path: ['resource'],
-      message: 'A provisioned Content Space root requires its exact Agent resource.'
-    })
-  }
-}).readonly()
 
 const AGENT_ADMINISTRATION_UPDATE_SPACE_INPUT_SCHEMA = z.object({
   expectedRevision: administrationUpdateShape.expectedRevision,

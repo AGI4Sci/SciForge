@@ -22,6 +22,11 @@ import type {
   DomainMainProviderCredentialStoreHost
 } from '@sciforge/domain-sdk/package-storage'
 import {
+  canonicalJson,
+  createStaticFileInventory,
+  digestInventory
+} from '@sciforge/internal-runtime-integrity'
+import {
   PROVIDER_FACTORY_CONTRACT_VERSION,
   defineProviderInstanceDirectoryEntry
 } from '@sciforge/domain-sdk/provider-composition'
@@ -71,7 +76,6 @@ describe('composed OpenContent runtime features', () => {
     createConnectorMainEntry(connectorHost(internalServices, connectionSettings()), {
       fetch: fetchImplementation,
       skillRuntime: {
-        assets: { mode: 'source', assetRoot: assetFixture.assetRoot },
         processPort: {
           run: vi.fn(async (request) => {
             observedPrivateRequests.push(request)
@@ -225,15 +229,16 @@ describe('composed OpenContent runtime features', () => {
         'comment-reopen',
         'comment-reply',
         'comment-solve',
+        'edit',
         'insert',
         'redo',
         'undo',
         'update'
       ])
-    expect(nativeOperations.filter((state) => state.readiness === 'production_ready'))
-      .toHaveLength(11)
-    expect(nativeOperations.filter((state) => state.readiness === 'production_ready')
-      .every((state) => state.reasonCode === 'available')).toBe(true)
+    expect(nativeOperations.filter((state) => state.readiness === 'poc_only'))
+      .toHaveLength(10)
+    expect(nativeOperations.filter((state) => state.readiness === 'poc_only')
+      .every((state) => state.reasonCode === 'verification_profile_required')).toBe(true)
 
     const extendedOperations = await extended.describeOperations(operationContext)
     expect(extendedOperations).toHaveLength(54)
@@ -245,8 +250,8 @@ describe('composed OpenContent runtime features', () => {
     }])
     expect(extendedOperations.filter((state) => state.operation !== 'updateFileVersion')
       .every((state) => (
-        state.readiness === 'production_ready' &&
-        state.reasonCode === 'available'
+        state.readiness === 'poc_only' &&
+        state.reasonCode === 'verification_profile_required'
       ))).toBe(true)
 
     const administration = await provider.features?.administration?.bind({
@@ -297,7 +302,6 @@ describe('composed OpenContent runtime features', () => {
     createConnectorMainEntry(connectorHost(internalServices, connectionSettings()), {
       fetch: providerFetch(),
       skillRuntime: {
-        assets: { mode: 'source', assetRoot: assetFixture.assetRoot },
         processPort: { run: processRun }
       }
     })
@@ -322,7 +326,6 @@ describe('composed OpenContent runtime features', () => {
     createConnectorMainEntry(connectorHost(internalServices, connectionSettings()), {
       fetch: providerFetch(),
       skillRuntime: {
-        assets: { mode: 'source', assetRoot: assetFixture.assetRoot },
         processPort: { run: processRun }
       }
     })
@@ -358,7 +361,6 @@ describe('composed OpenContent runtime features', () => {
     createConnectorMainEntry(connectorHost(internalServices, connectionSettings()), {
       fetch: governanceFetch.fetch,
       skillRuntime: {
-        assets: { mode: 'source', assetRoot: assetFixture.assetRoot },
         processPort: {
           run: async (request) => {
             processCommands.push(request.invocation.command)
@@ -436,7 +438,11 @@ describe('composed OpenContent runtime features', () => {
 
 function createAssetFixture() {
   const root = mkdtempSync(resolve(tmpdir(), 'sciforge-composed-runtime-assets-'))
-  const assetRoot = resolve(root, 'opencontent-base-1.0.1')
+  const repositoryRoot = resolve(root, 'repository')
+  const assetRoot = resolve(
+    repositoryRoot,
+    'internal/opencontent/packages/opencontent-skill-assets/assets/opencontent-base-1.0.1'
+  )
   for (const relativePath of [
     'cli/bin/oc.js',
     'cli/docflow/docflow-node.cjs',
@@ -449,10 +455,37 @@ function createAssetFixture() {
       mode: 0o644
     })
   }
+  writeOverlayReceipt(repositoryRoot)
   return {
-    assetRoot,
+    repositoryRoot,
     dispose: () => rmSync(root, { recursive: true, force: true })
   }
+}
+
+function writeOverlayReceipt(repositoryRoot: string): void {
+  const overlayId = 'opencontent-attachment-assets'
+  const overlayRoot = 'internal/opencontent'
+  const version = '1.0.1'
+  const files = createStaticFileInventory({
+    label: 'OpenContent Provider composed runtime fixture',
+    rootPath: resolve(repositoryRoot, overlayRoot),
+    rootPrefix: overlayRoot
+  })
+  const receiptPath = resolve(
+    repositoryRoot,
+    `.sciforge/internal-overlays/${overlayId}.json`
+  )
+  mkdirSync(dirname(receiptPath), { recursive: true })
+  writeFileSync(receiptPath, canonicalJson({
+    archiveRoot: `sciforge-internal-overlay-${overlayId}-${version}`,
+    archiveSha256: 'a'.repeat(64),
+    files,
+    inventorySha256: digestInventory({ files, overlayId, overlayRoot, version }),
+    overlayId,
+    overlayRoot,
+    schemaVersion: 2,
+    version
+  }), { mode: 0o644 })
 }
 
 function nativeInput(input: Readonly<{
@@ -657,7 +690,7 @@ function connectorHost(
   })
   return Object.freeze({
     getUserDataDir: () => '/private/tmp/sciforge-opencontent-connector-test',
-    getAppRoot: () => '/Applications/SciForge.app/Contents/Resources/app.asar',
+    getAppRoot: () => assetFixture.repositoryRoot,
     getExecutablePath: () => process.execPath,
     isPackaged: () => false,
     defineCapability: (options: unknown) => options,

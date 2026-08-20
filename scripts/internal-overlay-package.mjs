@@ -9,31 +9,43 @@ import {
   unlink,
   writeFile
 } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import JSZip from 'jszip'
 
+const require = createRequire(import.meta.url)
+const {
+  canonicalJson,
+  createStaticFileInventory,
+  digestInventory,
+  verifyInstalledInternalOverlaySync,
+  verifyStaticFileInventory
+} = require('@sciforge/internal-runtime-integrity')
+
+export {
+  canonicalJson,
+  verifyInstalledInternalOverlaySync,
+  verifyStaticFileInventory
+}
+
 const FIXED_ARCHIVE_DATE = new Date('1980-01-01T00:00:00.000Z')
 const MANIFEST_NAME = 'MANIFEST.json'
-
-export function canonicalJson(value) {
-  return JSON.stringify(canonicalize(value))
-}
 
 export async function packInternalOverlay(options) {
   const sourceDir = path.resolve(requireString(options?.sourceDir, 'sourceDir'))
   const outputFile = path.resolve(requireString(options?.outputFile, 'outputFile'))
   const overlayId = validateIdentity(options?.overlayId, 'overlayId')
   const version = validateVersion(options?.version)
-  const payloadPrefix = normalizePayloadPrefix(options?.payloadPrefix)
+  const overlayRoot = normalizeOverlayRoot(options?.payloadPrefix)
   if (path.extname(outputFile).toLowerCase() !== '.zip') {
     throw new Error('Internal overlay outputFile must end in .zip.')
   }
 
   const sourceFiles = await collectSourceFiles(sourceDir)
   const files = new Map([...sourceFiles].map(([relativePath, content]) => [
-    payloadPrefix === '' ? relativePath : `${payloadPrefix}/${relativePath}`,
+    `${overlayRoot}/${relativePath}`,
     content
   ]))
   if (files.size === 0) {
@@ -47,7 +59,8 @@ export async function packInternalOverlay(options) {
       size: content.length
     })),
     overlayId,
-    schemaVersion: 1,
+    overlayRoot,
+    schemaVersion: 2,
     version
   }
 
@@ -80,6 +93,7 @@ export async function packInternalOverlay(options) {
     fileCount: files.size,
     outputFile,
     overlayId,
+    overlayRoot,
     sha256: archiveSha256,
     sidecarFile: `${outputFile}.sha256`,
     version
@@ -157,6 +171,7 @@ export async function verifyInternalOverlay(options) {
     files: Object.freeze([...payload.keys()]),
     manifest: Object.freeze(manifest),
     overlayId: manifest.overlayId,
+    overlayRoot: manifest.overlayRoot,
     sha256: archiveSha256,
     version: manifest.version
   })
@@ -165,80 +180,115 @@ export async function verifyInternalOverlay(options) {
 export async function installInternalOverlay(options) {
   const targetRoot = path.resolve(requireString(options?.targetRoot, 'targetRoot'))
   await requireDirectory(targetRoot, 'Internal overlay install targetRoot')
-  const verified = await verifyInternalOverlay(options)
-  const receiptPath = getReceiptPath(targetRoot, verified.overlayId)
-  const existingReceipt = await readOptionalFile(receiptPath)
+  if (options?.expectedSha256 === undefined) {
+    throw new Error(
+      'Internal overlay installation requires an explicit trusted expectedSha256.'
+    )
+  }
+  validateSha256(options.expectedSha256, 'expectedSha256')
+  const { archiveBytes } = await readArchive(options)
+  const trustedArchive = { archiveBytes, expectedSha256: options.expectedSha256 }
+  const verified = await verifyInternalOverlay(trustedArchive)
+  const installLockPath = await acquireInstallLock(targetRoot)
+  try {
+    const receiptPath = getReceiptPath(targetRoot, verified.overlayId)
+    const existingReceipt = await readOptionalFile(receiptPath)
 
-  if (existingReceipt !== null) {
-    const receipt = parseAndValidateReceipt(existingReceipt, receiptPath)
-    if (receipt.archiveSha256 !== verified.sha256 ||
-        receipt.overlayId !== verified.overlayId ||
-        receipt.version !== verified.version) {
-      throw new Error(
-        `Internal overlay install conflict: receipt already exists at ${receiptPath}.`
-      )
+    if (existingReceipt !== null) {
+      const receipt = verifyInstalledInternalOverlaySync({
+        overlayId: verified.overlayId,
+        overlayRoot: verified.overlayRoot,
+        targetRoot
+      })
+      if (receipt.archiveSha256 !== verified.sha256 ||
+          receipt.archiveRoot !== verified.archiveRoot ||
+          receipt.overlayId !== verified.overlayId ||
+          receipt.overlayRoot !== verified.overlayRoot ||
+          receipt.version !== verified.version) {
+        throw new Error(
+          `Internal overlay install conflict: receipt already exists at ${receiptPath}.`
+        )
+      }
+      return Object.freeze({
+        changed: false,
+        files: Object.freeze(verified.files),
+        overlayId: verified.overlayId,
+        overlayRoot: verified.overlayRoot,
+        receiptPath,
+        sha256: verified.sha256,
+        status: 'already-installed',
+        version: verified.version
+      })
     }
-    const state = await inspectInstalledFiles(targetRoot, receipt.files)
-    if (state.modified.length > 0 || state.missing.length > 0) {
-      throw new Error(
-        `Internal overlay receipt exists but installed files do not match: ${[
-          ...state.modified,
-          ...state.missing
-        ].join(', ')}.`
-      )
+
+    const payload = await readVerifiedPayload(trustedArchive, verified)
+    await preflightInstall(
+      targetRoot,
+      verified.overlayRoot,
+      verified.manifest.files,
+      receiptPath
+    )
+    const inventorySha256 = digestInventory(verified.manifest)
+    const receipt = {
+      archiveRoot: verified.archiveRoot,
+      archiveSha256: verified.sha256,
+      files: verified.manifest.files,
+      inventorySha256,
+      overlayId: verified.overlayId,
+      overlayRoot: verified.overlayRoot,
+      schemaVersion: 2,
+      version: verified.version
     }
+    const createdFiles = []
+    let createdReceipt = false
+    try {
+      for (const file of verified.manifest.files) {
+        const destination = resolveContainedPath(targetRoot, file.path)
+        const existing = await readOptionalRegularFile(destination, file.path)
+        if (existing !== null) continue
+        await mkdir(path.dirname(destination), { recursive: true })
+        await writeFile(destination, payload.get(file.path), {
+          flag: 'wx',
+          mode: 0o644
+        })
+        createdFiles.push(destination)
+      }
+      await mkdir(path.dirname(receiptPath), { recursive: true })
+      await writeFile(receiptPath, canonicalJson(receipt), {
+        flag: 'wx',
+        mode: 0o600
+      })
+      createdReceipt = true
+      await verifyInstalledInternalOverlay({
+        overlayId: verified.overlayId,
+        overlayRoot: verified.overlayRoot,
+        targetRoot
+      })
+    } catch (error) {
+      if (createdReceipt) {
+        await unlink(receiptPath).catch(() => undefined)
+      }
+      await Promise.all(createdFiles.map((file) => unlink(file).catch(() => undefined)))
+      throw error
+    }
+
     return Object.freeze({
-      changed: false,
+      changed: true,
       files: Object.freeze(verified.files),
       overlayId: verified.overlayId,
+      overlayRoot: verified.overlayRoot,
       receiptPath,
       sha256: verified.sha256,
-      status: 'already-installed',
+      status: 'installed',
       version: verified.version
     })
+  } finally {
+    await unlink(installLockPath)
   }
+}
 
-  const payload = await readVerifiedPayload(options, verified)
-  await preflightInstall(targetRoot, verified.manifest.files, receiptPath)
-  const receipt = {
-    archiveSha256: verified.sha256,
-    files: verified.manifest.files,
-    overlayId: verified.overlayId,
-    schemaVersion: 1,
-    version: verified.version
-  }
-  const createdFiles = []
-  try {
-    for (const file of verified.manifest.files) {
-      const destination = resolveContainedPath(targetRoot, file.path)
-      const existing = await readOptionalRegularFile(destination, file.path)
-      if (existing !== null) continue
-      await mkdir(path.dirname(destination), { recursive: true })
-      await writeFile(destination, payload.get(file.path), {
-        flag: 'wx',
-        mode: 0o644
-      })
-      createdFiles.push(destination)
-    }
-    await mkdir(path.dirname(receiptPath), { recursive: true })
-    await writeFile(receiptPath, canonicalJson(receipt), {
-      flag: 'wx',
-      mode: 0o600
-    })
-  } catch (error) {
-    await Promise.all(createdFiles.map((file) => unlink(file).catch(() => undefined)))
-    throw error
-  }
-
-  return Object.freeze({
-    changed: true,
-    files: Object.freeze(verified.files),
-    overlayId: verified.overlayId,
-    receiptPath,
-    sha256: verified.sha256,
-    status: 'installed',
-    version: verified.version
-  })
+export async function verifyInstalledInternalOverlay(options) {
+  return verifyInstalledInternalOverlaySync(options)
 }
 
 export async function runInternalOverlayCli(argv) {
@@ -275,18 +325,24 @@ export async function runInternalOverlayCli(argv) {
     assertAllowedCliOptions(options, [
       '--archive',
       '--sha256',
-      '--sidecar',
       '--target'
     ])
     return installInternalOverlay({
       archivePath: requireCliOption(options, '--archive'),
-      expectedSha256: options.get('--sha256'),
-      sidecarPath: options.get('--sidecar'),
+      expectedSha256: requireCliOption(options, '--sha256'),
+      targetRoot: requireCliOption(options, '--target')
+    })
+  }
+  if (command === 'verify-installation') {
+    assertAllowedCliOptions(options, ['--id', '--root', '--target'])
+    return verifyInstalledInternalOverlay({
+      overlayId: requireCliOption(options, '--id'),
+      overlayRoot: requireCliOption(options, '--root'),
       targetRoot: requireCliOption(options, '--target')
     })
   }
   throw new Error(
-    'Usage: internal-overlay-package.mjs <pack|verify|install> [options]'
+    'Usage: internal-overlay-package.mjs <pack|verify|install|verify-installation> [options]'
   )
 }
 
@@ -308,7 +364,7 @@ async function readVerifiedPayload(options, verified) {
   return payload
 }
 
-async function preflightInstall(targetRoot, files, receiptPath) {
+async function preflightInstall(targetRoot, overlayRoot, files, receiptPath) {
   await assertSafeDestinationParents(targetRoot, receiptPath)
   for (const file of files) {
     const destination = resolveContainedPath(targetRoot, file.path)
@@ -318,20 +374,41 @@ async function preflightInstall(targetRoot, files, receiptPath) {
       throw new Error(`Internal overlay install conflict at ${file.path}.`)
     }
   }
+  const overlayRootPath = resolveContainedPath(targetRoot, overlayRoot)
+  const stats = await lstat(overlayRootPath).catch(() => null)
+  if (stats !== null) {
+    const existing = createStaticFileInventory({
+      label: 'Internal overlay installation',
+      rootPath: overlayRootPath,
+      rootPrefix: overlayRoot
+    })
+    const declaredPaths = new Set(files.map((file) => file.path))
+    const extra = existing.find((file) => !declaredPaths.has(file.path))?.path
+    if (extra !== undefined) {
+      throw new Error(`Internal overlay install conflict at unreceipted file ${extra}.`)
+    }
+  }
 }
 
-async function inspectInstalledFiles(targetRoot, files) {
-  const missing = []
-  const modified = []
-  const matching = []
-  for (const file of files) {
-    const destination = resolveContainedPath(targetRoot, file.path)
-    const content = await readOptionalRegularFile(destination, file.path)
-    if (content === null) missing.push(file.path)
-    else if (sha256(content) !== file.sha256) modified.push(file.path)
-    else matching.push(file.path)
+async function acquireInstallLock(targetRoot) {
+  const lockPath = resolveContainedPath(
+    targetRoot,
+    '.sciforge/internal-overlays/.install.lock'
+  )
+  await assertSafeDestinationParents(targetRoot, lockPath)
+  await mkdir(path.dirname(lockPath), { recursive: true })
+  await assertSafeDestinationParents(targetRoot, lockPath)
+  try {
+    await writeFile(lockPath, `${process.pid}\n`, { flag: 'wx', mode: 0o600 })
+  } catch (error) {
+    if (error?.code === 'EEXIST') {
+      throw new Error(
+        `Another internal overlay installation is already in progress: ${lockPath}.`
+      )
+    }
+    throw error
   }
-  return { matching, missing, modified }
+  return lockPath
 }
 
 async function assertSafeDestinationParents(targetRoot, destination) {
@@ -366,26 +443,6 @@ async function readOptionalFile(absolutePath) {
     throw new Error(`Internal overlay receipt must be a regular file: ${absolutePath}.`)
   }
   return readFile(absolutePath)
-}
-
-function parseAndValidateReceipt(bytes, receiptPath) {
-  const receipt = parseJson(bytes, receiptPath)
-  if (bytes.toString('utf8') !== canonicalJson(receipt)) {
-    throw new Error(`Internal overlay receipt is not canonical: ${receiptPath}.`)
-  }
-  if (!isPlainObject(receipt) || receipt.schemaVersion !== 1) {
-    throw new Error(`Internal overlay receipt schema is invalid: ${receiptPath}.`)
-  }
-  validateIdentity(receipt.overlayId, 'receipt overlayId')
-  validateVersion(receipt.version)
-  validateSha256(receipt.archiveSha256, 'receipt archiveSha256')
-  validateManifest({
-    files: receipt.files,
-    overlayId: receipt.overlayId,
-    schemaVersion: 1,
-    version: receipt.version
-  })
-  return receipt
 }
 
 function getReceiptPath(targetRoot, overlayId) {
@@ -431,7 +488,7 @@ async function collectSourceFiles(sourceDir) {
       const absolutePath = path.join(absoluteDir, entry.name)
       const stats = await lstat(absolutePath)
       if (stats.isSymbolicLink()) {
-        continue
+        throw new Error(`Internal overlay source contains symbolic link ${relativePath}.`)
       }
       if (stats.isDirectory() && isDisposableDirectory(entry.name)) {
         continue
@@ -456,11 +513,13 @@ async function collectSourceFiles(sourceDir) {
   }
 }
 
-function normalizePayloadPrefix(value) {
-  if (value === undefined || value === '') return ''
-  const prefix = requireString(value, 'payloadPrefix')
-  validatePayloadPath(prefix, { directory: true })
-  return prefix
+function normalizeOverlayRoot(value) {
+  const overlayRoot = requireString(value, 'overlayRoot')
+  validatePayloadPath(overlayRoot, { directory: true })
+  if (!overlayRoot.startsWith('internal/')) {
+    throw new Error('Internal overlay root must remain beneath internal/.')
+  }
+  return overlayRoot
 }
 
 async function readArchive(options) {
@@ -532,10 +591,18 @@ function validateArchiveEntries(archive) {
 }
 
 function validateManifest(manifest) {
-  if (!isPlainObject(manifest) || manifest.schemaVersion !== 1) {
-    throw new Error('Internal overlay manifest schemaVersion must be 1.')
+  if (!isPlainObject(manifest) || manifest.schemaVersion !== 2) {
+    throw new Error('Internal overlay manifest schemaVersion must be 2.')
   }
+  assertExactKeys(manifest, [
+    'files',
+    'overlayId',
+    'overlayRoot',
+    'schemaVersion',
+    'version'
+  ], 'Internal overlay manifest')
   validateIdentity(manifest.overlayId, 'manifest overlayId')
+  const overlayRoot = normalizeOverlayRoot(manifest.overlayRoot)
   validateVersion(manifest.version)
   if (!Array.isArray(manifest.files) || manifest.files.length === 0) {
     throw new Error('Internal overlay manifest files must be a non-empty array.')
@@ -546,7 +613,11 @@ function validateManifest(manifest) {
     if (!isPlainObject(file)) {
       throw new Error('Internal overlay manifest contains an invalid file record.')
     }
+    assertExactKeys(file, ['path', 'sha256', 'size'], 'Internal overlay manifest file')
     validatePayloadPath(file.path)
+    if (!file.path.startsWith(`${overlayRoot}/`)) {
+      throw new Error(`Internal overlay manifest file escapes overlay root: ${file.path}.`)
+    }
     assertNoCaseCollision(file.path, caseFoldedPaths)
     validateSha256(file.sha256, `manifest hash for ${file.path}`)
     if (!Number.isSafeInteger(file.size) || file.size < 0) {
@@ -557,6 +628,14 @@ function validateManifest(manifest) {
   const sorted = [...paths].sort(compareStrings)
   if (!sameStrings(paths, sorted)) {
     throw new Error('Internal overlay manifest files must be canonically sorted.')
+  }
+}
+
+function assertExactKeys(value, expectedKeys, label) {
+  const actual = Object.keys(value).sort(compareStrings)
+  const expected = [...expectedKeys].sort(compareStrings)
+  if (!sameStrings(actual, expected)) {
+    throw new Error(`${label} has unexpected or missing fields.`)
   }
 }
 
@@ -696,18 +775,6 @@ function parseJson(bytes, label) {
   }
 }
 
-function canonicalize(value) {
-  if (Array.isArray(value)) return value.map(canonicalize)
-  if (isPlainObject(value)) {
-    const result = {}
-    for (const key of Object.keys(value).sort(compareStrings)) {
-      result[key] = canonicalize(value[key])
-    }
-    return result
-  }
-  return value
-}
-
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value) &&
     Object.getPrototypeOf(value) === Object.prototype
@@ -815,12 +882,11 @@ const FORBIDDEN_CACHE_FILE_PATTERNS = [
 
 if (process.argv[1] !== undefined &&
     path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try {
-    const result = await runInternalOverlayCli(process.argv.slice(2))
+  runInternalOverlayCli(process.argv.slice(2)).then((result) => {
     process.stdout.write(`${canonicalJson(result)}\n`)
-  } catch (error) {
+  }).catch((error) => {
     const message = error instanceof Error ? error.message : String(error)
     process.stderr.write(`${message}\n`)
     process.exitCode = 1
-  }
+  })
 }

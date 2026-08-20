@@ -49,6 +49,11 @@ import {
   CONTENT_SPACE_CAPABILITY_FACTORY_CONTRIBUTION,
   CONTENT_SPACE_RUNTIME_LIFECYCLE_CONTRIBUTION
 } from '../definition.js'
+import {
+  CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
+  MAIN_CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION,
+  defineContentSpaceVerificationProfileContribution
+} from '../verification-policy.js'
 import * as mainExports from './index.js'
 import { createDomainMainEntry } from './index.js'
 
@@ -148,16 +153,98 @@ describe('Content Space main composition', () => {
     expect(createProvider).not.toHaveBeenCalled()
   })
 
-  it('exposes Project provisioning through the authorized Provider administration resource', async () => {
+  it('keeps Project provisioning SPI dormant without a generic Agent capability', async () => {
     const definitions = await activateDefinitions(
       createDomainMainEntry(mainHost()).contributions,
       contributionHost(providerContributions(() => providerFixture()))
     )
 
-    expect(definitions.map(({ id }) => id)).toContain(
-      CONTENT_SPACE_CAPABILITY_IDS.agentProvisionProject
+    expect(definitions.map(({ id }) => id)).not.toContain(
+      'content-space.agent-provision-project'
     )
     expect(CONTENT_SPACE_ADMINISTRATION_OPERATIONS).toContain('provision-project')
+  })
+
+  it('admits an exact PoC list-containers profile through composed Broker capability routing', async () => {
+    const currentTime = Date.now()
+    const profileContribution = defineContentSpaceVerificationProfileContribution({
+      location: MAIN_CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION,
+      contractVersion: CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
+      profile: Object.freeze({
+        profileId: 'fixture-list-containers',
+        providerInstanceRef: PROVIDER_INSTANCE_REF,
+        principal,
+        audience: 'agent' as const,
+        authority: Object.freeze({
+          kind: 'provider-instance' as const,
+          providerInstanceRef: PROVIDER_INSTANCE_REF
+        }),
+        operation: Object.freeze({
+          family: 'ordinary' as const,
+          operation: 'list-containers' as const
+        }),
+        transferLimits: Object.freeze({ maxUploadBytes: 0, maxDownloadBytes: 0 }),
+        validFrom: new Date(currentTime - 60_000).toISOString(),
+        expiresAt: new Date(currentTime + 60_000).toISOString()
+      })
+    })
+    const listContainers = vi.fn(async () => ({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      items: [{
+        reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, containerId: 'root' },
+        scope: 'personal' as const,
+        label: 'Root'
+      }]
+    }))
+    const provider = providerFixture({
+      describeCapabilities: async () => ([{
+        operation: 'list-containers' as const,
+        readiness: 'poc_only' as const,
+        reasonCode: 'verification_profile_required' as const
+      }]),
+      listContainers
+    })
+    const definitions = await activateDefinitions(
+      createDomainMainEntry(mainHost()).contributions,
+      contributionHost([
+        ...providerContributions(() => provider),
+        contribution(
+          'fixture.verification-profile',
+          profileContribution,
+          profileContribution,
+          CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION
+        )
+      ])
+    )
+
+    const listCandidates = definition(
+      definitions,
+      CONTENT_SPACE_CAPABILITY_IDS.listAgentRootCandidates
+    )
+    const input = {
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      scope: 'personal',
+      page: { limit: 10 }
+    }
+    const result = await listCandidates.handler(input, capabilityContext(undefined, 'agent'))
+
+    expect(result.output).toEqual(contentSpaceSuccess({
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      scope: 'personal',
+      items: [{ libraryLabel: 'Root' }]
+    }))
+    expect(listContainers).toHaveBeenCalledOnce()
+
+    const principalMismatch = await listCandidates.handler(input, capabilityContext(
+      undefined,
+      'agent',
+      { principal: Object.freeze({ ...principal, identityVersion: 2 }) }
+    ))
+    expect(principalMismatch.output).toMatchObject({
+      ok: false,
+      error: { code: 'blocked_by_contract' }
+    })
+    expect(listContainers).toHaveBeenCalledOnce()
   })
 
   it('fails Provider Instance discovery when the Host Principal lease is stale', async () => {
@@ -298,7 +385,6 @@ describe('Content Space main composition', () => {
       CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite,
       CONTENT_SPACE_CAPABILITY_IDS.agentExtendedDestructive,
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace,
-      CONTENT_SPACE_CAPABILITY_IDS.agentProvisionProject,
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminUpdateSpace,
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminPinSpace,
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminUnpinSpace,
@@ -1153,23 +1239,8 @@ describe('Content Space main composition', () => {
       revision: 'revision:2'
     }))
     const administration = administrationPortFixture({ updateSpace })
-    const provisionProjectContentSpace = vi.fn(async () => Object.freeze({
-      projectId: 'project:alpha',
-      intentRevision: 1,
-      status: 'ready' as const,
-      root: portableRoot,
-      contentOwnerUserId: 'user:owner',
-      members: Object.freeze([Object.freeze({
-        contentUserId: 'user:member',
-        status: 'ready' as const
-      })])
-    }))
     const bind = vi.fn(async () => Object.freeze({
-      administration,
-      projectProvisioning: Object.freeze({
-        contractVersion: '1.0.0' as const,
-        provisionProjectContentSpace
-      })
+      administration
     }))
     const describeOperations = vi.fn(() => readyAdministrationStates)
     const definitions = await activateDefinitions(
@@ -1203,53 +1274,6 @@ describe('Content Space main composition', () => {
     })
     expect(bind).not.toHaveBeenCalled()
     expect(describeOperations).toHaveBeenCalledOnce()
-
-    let projectRootRegistration: any
-    const provisioned = await definition(
-      definitions,
-      CONTENT_SPACE_CAPABILITY_IDS.agentProvisionProject
-    ).handler({
-      projectId: 'project:alpha',
-      projectLabel: 'Alpha Project',
-      contentOwnerUserId: 'user:owner',
-      contentMemberUserIds: ['user:member'],
-      coordinatorAgentId: 'agent:coordinator',
-      intentRevision: 1,
-      idempotencyKey: 'idem_project_alpha_0001'
-    }, capabilityContext(undefined, 'agent', {
-      callerId: 'agent:administration',
-      workspaceId: '/workspace',
-      resource: {
-        resourceId: administrationRegistration.resourceId,
-        resourceKind: CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND,
-        workspaceId: '/workspace'
-      },
-      issueResource: (registration) => {
-        projectRootRegistration = registration
-        return resourceHandle('p', registration.semanticRevision)
-      }
-    }))
-    expect(provisioned).toMatchObject({
-      output: {
-        ok: true,
-        value: {
-          report: { projectId: 'project:alpha', status: 'ready', root: portableRoot },
-          resource: { token: expect.stringMatching(/^cap_/u) }
-        }
-      },
-      changed: true,
-      semanticRevision: expect.any(String)
-    })
-    expect(provisionProjectContentSpace).toHaveBeenCalledWith(expect.objectContaining({
-      projectId: 'project:alpha',
-      contentOwnerUserId: 'user:owner',
-      contentMemberUserIds: ['user:member'],
-      coordinatorAgentId: 'agent:coordinator'
-    }))
-    expect(projectRootRegistration).toMatchObject({
-      resourceKind: CONTENT_CONTAINER_RESOURCE_KIND,
-      workspaceId: '/workspace'
-    })
 
     let rootRegistration: any
     const created = await definition(
@@ -1323,7 +1347,7 @@ describe('Content Space main composition', () => {
     }))
   })
 
-  it('issues an Agent Provider-administration scope when Project provisioning alone is ready', async () => {
+  it('does not issue Agent administration authority from dormant Project provisioning', async () => {
     const bind = vi.fn(async () => Object.freeze({
       administration: administrationPortFixture()
     }))
@@ -1350,14 +1374,14 @@ describe('Content Space main composition', () => {
       { issueResource }
     ))
 
-    expect(result.output).toMatchObject({
-      ok: true,
-      value: {
-        providerInstanceRef: PROVIDER_INSTANCE_REF,
-        resource: { token: expect.stringMatching(/^cap_/u) }
-      }
+    expect(result).toMatchObject({
+      output: {
+        ok: false,
+        error: { code: 'blocked_by_contract', retry: 'never' }
+      },
+      changed: false
     })
-    expect(issueResource).toHaveBeenCalledOnce()
+    expect(issueResource).not.toHaveBeenCalled()
     expect(bind).not.toHaveBeenCalled()
   })
 
@@ -2288,14 +2312,15 @@ function providerContributions(
 function contribution(
   id: string,
   contract: DomainPackageJsonValue,
-  value: unknown
+  value: unknown,
+  version: string = PROVIDER_FACTORY_CONTRACT_VERSION
 ): DomainMainContribution {
   return Object.freeze({
     id,
     kind: MAIN_EXTENSION_CONTRIBUTION_KIND,
     packageName: '@fixture/content-space-provider',
     owner: Object.freeze({ moduleId: 'fixture.content-space', moduleVersion: '1.0.0' }),
-    version: PROVIDER_FACTORY_CONTRACT_VERSION,
+    version,
     contract,
     value
   })

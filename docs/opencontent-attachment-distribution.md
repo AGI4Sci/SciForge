@@ -1,5 +1,8 @@
 # OpenContent attachment distribution boundary
 
+团队成员的中文安装、启动和故障处理流程见
+[《SciForge OpenContent 私有附件技能安装与运行手册》](./opencontent-private-attachment-runbook.zh-CN.md)。
+
 SciForge's OpenContent integration is public source. The only non-public material is the supplier
 attachment delivered separately to the team. This boundary applies to source archives, npm
 packages, application bundles, CI artifacts, pull requests, and release uploads.
@@ -35,22 +38,70 @@ artifacts.
 
 ## Runtime behavior with and without the attachment
 
-The public checkout remains useful without the private overlay:
+Installing an attachment changes runtime inventory, not production admission. OpenContent currently
+has zero `live_verified` and zero `production_ready` operations:
 
-- Provider discovery and the six ordinary personal/Team-library file operations remain
-  `production_ready` / `available`;
-- all ten Team Administration operations remain `production_ready` / `available`;
-- Project Content Directory provisioning remains `production_ready` / `available`;
-- Team member-role change and ownership transfer remain `production_ready` / `available` through
-  the public Team Administration path;
+- Provider discovery can enumerate the installed Provider Instance but admits no Provider business
+  operation;
+- the six ordinary personal/Team-library operations and all ten Team Administration operations are
+  `poc_only` / `verification_profile_required`;
+- the public Team member-role and ownership-transfer delegates are also PoC-only;
+- Content Space exposes no generic Agent Project-provisioning capability; the provider-neutral
+  provisioning port is dormant and Provider operation `provision-project` is blocked until a
+  Project-owning consumer supplies an authoritative binding;
 - no Team deletion operation exists.
 
 Installing a valid internal overlay additionally enables the supplier-backed native-document and
-extended-operation runtime. It does not create a second Agent tool, transport, authorization path,
-or Provider contract. The precise readiness matrix is maintained in the
+extended-operation runtime. Ten safely contract-shaped native-document operations and 53 extended
+operations remain PoC-only. Native `edit`, the other nine hash-bound native mutations, and
+`updateFileVersion` remain `blocked_by_contract`; attachment presence cannot admit them. Immutable
+version observation is also blocked, so OpenContent cannot issue an `ArtifactReference`.
+
+A PoC invocation requires a separately reviewed package-owned Content Space profile that matches
+the exact Provider Instance, complete Host Principal snapshot and assurance, authority, operation,
+audience, zero upload/download limits, and validity window of at most 24 hours. Host assurance is
+not an external Provider account class, and the Connector currently supplies no attested external
+account subject or opaque binding revision. Until it does, Provider Instance authority admits only
+the read-only `list-containers` bootstrap, exact Broker-bound content-root authority admits only
+reads, and mutation/administration profiles fail composition. The default composition installs no
+active profile, and caller input, renderer/Agent state, ordinary configuration, or attachment
+presence cannot install or widen one.
+
+The overlay does not create a second Agent tool, transport, authorization path, or Provider
+contract. The precise readiness matrix and live-promotion evidence are maintained in the
 [OpenContent Skill Capability Matrix](./opencontent-skill-capability-matrix.md), and the governing
 architecture decision is [ADR-0030](./adr/0030-activate-provider-native-documents-through-content-space.md).
 
-Before publishing, verify that `internal/opencontent/**` is absent and that no public lockfile,
-tarball, packaged application, or generated artifact contains the internal asset package or
-supplier payload. Do not delete the public OpenContent integration or SDK documentation.
+## Installation and resolution contract
+
+The public root workspace and `package-lock.json` exclude `internal/**`. Install public
+dependencies from the repository root, then verify and install the approved archive with the
+SciForge-owned installer documented in the Chinese runbook. Installation writes only:
+
+- the overlay under `internal/opencontent/**`; and
+- its trusted complete-inventory receipt under `.sciforge/internal-overlays/**`.
+
+Do not run a root `npm install` to create a private workspace link, and do not copy the private
+package into `node_modules`. The source application resolves assets only below the absolute
+Host-injected repository root at
+`internal/opencontent/packages/opencontent-skill-assets/assets/opencontent-base-1.0.1`.
+Source activation itself revalidates the exact overlay identity, root, receipt version, complete
+inventory, and digests through the same public generic integrity implementation used by packaging.
+The packaged application resolves them only from
+`resources/opencontent/opencontent-base-1.0.1`; neither mode falls back to the other or searches
+`node_modules`.
+
+Source activation, build, and packaging validate the complete receipt, containment, required entrypoints, and per-file
+digests with SciForge-owned static code. They reject missing, changed, extra, escaping, or
+unreceipted bytes and do not execute the supplier CLI. Supplier code runs only through the
+Connector-owned main-process transport after normal Broker, Principal, readiness/verification, and
+resource admission.
+
+Official public release entrypoints fail closed when internal runtime composition is non-empty.
+An explicitly internal/local package may include the verified overlay for acceptance, but merely
+installing an overlay must never change an official public release artifact.
+
+Before publishing, use the official public release entrypoint and verify that
+`internal/opencontent/**` is absent and that no public lockfile, tarball, packaged application, or
+generated artifact contains the internal asset package or supplier payload. Do not delete the
+public OpenContent integration or SDK documentation.

@@ -23,7 +23,7 @@ const principal = Object.freeze({
 const assertPrincipalCurrent = () => undefined
 
 describe('OpenContent Content Space Provider', () => {
-  it('declares all administration operations ready without binding or remote execution', async () => {
+  it('declares unverified administration operations PoC-only and Project provisioning blocked', async () => {
     const useTeamAdministration = vi.fn(async () => {
       throw new Error('Administration readiness must not open a remote session.')
     }) as unknown as NonNullable<OpenContentContentSpaceFacade['useTeamAdministration']>
@@ -43,13 +43,21 @@ describe('OpenContent Content Space Provider', () => {
       assertPrincipalCurrent
     })
     expect(administrationStates).toHaveLength(11)
-    expect(administrationStates.every(({ readiness, reasonCode }) => (
-      readiness === 'production_ready' && reasonCode === 'available'
-    ))).toBe(true)
+    expect(administrationStates.filter(({ operation }) => operation !== 'provision-project')
+      .every(({ readiness, reasonCode }) => (
+        readiness === 'poc_only' && reasonCode === 'verification_profile_required'
+      ))).toBe(true)
+    expect(administrationStates).toContainEqual({
+      operation: 'provision-project',
+      readiness: 'blocked_by_contract',
+      reasonCode: 'provider_contract_missing'
+    })
+    expect(administrationStates.some(({ readiness }) => readiness === 'production_ready'))
+      .toBe(false)
     expect(useTeamAdministration).not.toHaveBeenCalled()
   })
 
-  it('keeps ordinary and public Team governance operations ready without attachment assets', async () => {
+  it('keeps ordinary and public Team governance operations PoC-only without attachment assets', async () => {
     const provider = createOpenContentContentSpaceProvider({
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       facade: facadeFixture({})
@@ -58,44 +66,61 @@ describe('OpenContent Content Space Provider', () => {
     expect(provider.features?.nativeDocuments).toBeUndefined()
     const extended = provider.features?.extendedOperations
     expect(extended).toBeDefined()
-    await expect(provider.describeCapabilities({
+    const capabilities = await provider.describeCapabilities({
       principal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       deadlineAt: new Date(Date.now() + 10_000).toISOString(),
       signal: new AbortController().signal,
       assertPrincipalCurrent
-    })).resolves.toEqual(expect.arrayContaining([
+    })
+    expect(capabilities).toHaveLength(8)
+    expect(capabilities).toEqual(expect.arrayContaining([
       {
         operation: 'list-containers',
-        readiness: 'production_ready',
-        reasonCode: 'available'
+        readiness: 'poc_only',
+        reasonCode: 'verification_profile_required'
       },
       {
         operation: 'list-entries',
-        readiness: 'production_ready',
-        reasonCode: 'available'
+        readiness: 'poc_only',
+        reasonCode: 'verification_profile_required'
       },
       {
         operation: 'observe-entry',
-        readiness: 'production_ready',
-        reasonCode: 'available'
+        readiness: 'poc_only',
+        reasonCode: 'verification_profile_required'
       },
       {
         operation: 'create-folder',
-        readiness: 'production_ready',
-        reasonCode: 'available'
+        readiness: 'poc_only',
+        reasonCode: 'verification_profile_required'
       },
       {
         operation: 'upload-new',
-        readiness: 'production_ready',
-        reasonCode: 'available'
+        readiness: 'poc_only',
+        reasonCode: 'verification_profile_required'
       },
       {
         operation: 'download',
-        readiness: 'production_ready',
-        reasonCode: 'available'
+        readiness: 'poc_only',
+        reasonCode: 'verification_profile_required'
       }
     ]))
+    expect(capabilities.filter(({ readiness }) => readiness === 'poc_only')).toHaveLength(6)
+    expect(capabilities.filter(({ readiness }) => readiness === 'blocked_by_contract'))
+      .toEqual([
+        {
+          operation: 'portal-target',
+          readiness: 'blocked_by_contract',
+          reasonCode: 'provider_contract_missing'
+        },
+        {
+          operation: 'observe-immutable-version',
+          readiness: 'blocked_by_contract',
+          reasonCode: 'provider_contract_missing'
+        }
+      ])
+    expect(capabilities.some(({ readiness }) => readiness === 'production_ready')).toBe(false)
 
     const states = await extended!.describeOperations({
       principal,
@@ -105,17 +130,17 @@ describe('OpenContent Content Space Provider', () => {
       assertPrincipalCurrent
     })
     expect(states).toHaveLength(54)
-    expect(states.filter(({ readiness }) => readiness === 'production_ready'))
+    expect(states.filter(({ readiness }) => readiness === 'poc_only'))
       .toEqual([
         {
           operation: 'updateTeamMemberRole',
-          readiness: 'production_ready',
-          reasonCode: 'available'
+          readiness: 'poc_only',
+          reasonCode: 'verification_profile_required'
         },
         {
           operation: 'transferTeamOwnership',
-          readiness: 'production_ready',
-          reasonCode: 'available'
+          readiness: 'poc_only',
+          reasonCode: 'verification_profile_required'
         }
       ])
     expect(states.filter(({ readiness }) => readiness === 'blocked_by_contract'))
@@ -151,9 +176,9 @@ describe('OpenContent Content Space Provider', () => {
     })
     expect(states.filter(({ operation }) => operation !== 'updateFileVersion')
       .every(({ readiness, reasonCode }) =>
-        readiness === 'production_ready' && reasonCode === 'available'))
+        readiness === 'poc_only' && reasonCode === 'verification_profile_required'))
       .toBe(true)
-    expect(states.filter(({ readiness }) => readiness === 'production_ready')).toHaveLength(53)
+    expect(states.filter(({ readiness }) => readiness === 'poc_only')).toHaveLength(53)
 
     const nativeStates = await native!.describeOperations({
       principal,
@@ -172,15 +197,17 @@ describe('OpenContent Content Space Provider', () => {
         'comment-reopen',
         'comment-reply',
         'comment-solve',
+        'edit',
         'insert',
         'redo',
         'undo',
         'update'
       ])
-    expect(nativeStates.filter(({ readiness }) => readiness === 'production_ready'))
-      .toHaveLength(11)
-    expect(nativeStates.filter(({ readiness }) => readiness === 'production_ready')
-      .every(({ reasonCode }) => reasonCode === 'available')).toBe(true)
+    expect(nativeStates.filter(({ readiness }) => readiness === 'poc_only'))
+      .toHaveLength(10)
+    expect(nativeStates.filter(({ readiness }) => readiness === 'poc_only')
+      .every(({ reasonCode }) => reasonCode === 'verification_profile_required')).toBe(true)
+    expect(nativeStates.some(({ readiness }) => readiness === 'production_ready')).toBe(false)
   })
 
   it.each([

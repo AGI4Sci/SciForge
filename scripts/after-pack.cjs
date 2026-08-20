@@ -3,6 +3,7 @@ const { chmodSync, existsSync, readdirSync, rmSync } = require('node:fs')
 const { join } = require('node:path')
 const { pathToFileURL } = require('node:url')
 const internalRuntimePackaging = require('./internal-runtime-packaging.cjs')
+const publicReleaseGuard = require('./public-release-guard.cjs')
 const releaseWorkerManifest = require('./release-worker-manifest.cjs')
 const nativeRuntimeDependencies = require('./native-runtime-dependencies.cjs')
 
@@ -102,11 +103,23 @@ function validatePackagedExecutableNodeEntries(context) {
   }
 }
 
-function validatePackagedInternalRuntimes(context, options = {}) {
-  internalRuntimePackaging.validatePackagedInternalRuntimes(
+function verifyPackagedInternalRuntimes(context) {
+  internalRuntimePackaging.verifyPackagedInternalRuntimes(
     packedResourcesDir(context),
-    internalRuntimePackaging.internalRuntimeComposition,
-    options
+    internalRuntimePackaging.internalRuntimeComposition
+  )
+}
+
+function verifyOfficialPublicReleaseComposition() {
+  const mode = process.env.SCIFORGE_PUBLIC_RELEASE
+  if (mode === undefined) return
+  if (mode !== '1') {
+    throw new Error(
+      '[public-release] SCIFORGE_PUBLIC_RELEASE must be exactly 1 when configured.'
+    )
+  }
+  publicReleaseGuard.assertPublicReleaseCompositionEmpty(
+    internalRuntimePackaging.internalRuntimeComposition
   )
 }
 
@@ -153,12 +166,13 @@ function ensureNodePtyHelpersExecutable(context) {
 }
 
 async function afterPack(context) {
+  verifyOfficialPublicReleaseComposition()
   validateBundledReleaseRuntimes(context)
   pruneUnrelatedNativeRuntimeDependencies(context)
   validateNativeRuntimeDependencies(context)
   verifyBundledMultiAgentContract(context)
   validatePackagedExecutableNodeEntries(context)
-  validatePackagedInternalRuntimes(context)
+  verifyPackagedInternalRuntimes(context)
   ensureNodePtyHelpersExecutable(context)
   maybeAdhocSignMacApp(context)
 }
@@ -182,7 +196,8 @@ exports._internals = {
   validateNativeRuntimeDependencies,
   verifyBundledMultiAgentContract,
   validatePackagedExecutableNodeEntries,
-  validatePackagedInternalRuntimes,
+  verifyOfficialPublicReleaseComposition,
+  verifyPackagedInternalRuntimes,
   ensureNodePtyHelpersExecutable
 }
 exports.default = afterPack

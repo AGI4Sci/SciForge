@@ -15,6 +15,7 @@ const privateWorkerSourceImportPattern = /['"][^'"]*packages\/workers\/[^/'"]+\/
 const generatedDomainCompositionPaths = new Set([
   'src/shared/installed-domain-packages.ts',
   'src/main/modules/installed-domain-main.ts',
+  'src/main/modules/installed-main-source-packages.ts',
   'src/main/modules/installed-domain-runtime-mcp.ts',
   'src/renderer/src/domain-modules/installed-domain-renderer.ts',
   'packages/workers/workspace-host/src/generated/installed-domain-workspace-server.ts'
