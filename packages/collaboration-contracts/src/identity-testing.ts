@@ -12,10 +12,10 @@ import {
   type UserPrincipal
 } from './entities.js'
 import {
+  canonicalEnrollmentBytes,
   collaborationIdentitySnapshotSchema,
   desktopDeviceRegistrationSchema,
   deviceEnrollmentChallengeSchema,
-  deviceEnrollmentProofMessage,
   deviceEnrollmentStartSchema,
   deviceRecordSchema,
   identityAuditEventSchema,
@@ -174,7 +174,7 @@ export class InMemoryCollaborationIdentityAdapter {
     }
     const key = createPublicKey({ key: registration.publicKey, format: 'jwk' })
     const signature = Buffer.from(registration.proof.signature, 'base64url')
-    if (!verify(null, Buffer.from(deviceEnrollmentProofMessage(pending.challenge)), key, signature)) {
+    if (!verify(null, canonicalEnrollmentBytes(pending.challenge), key, signature)) {
       throw new CollaborationIdentityMockError('authentication_required', 'The Device possession proof is invalid.')
     }
     const existing = [...this.devices.values()].find((device) => (

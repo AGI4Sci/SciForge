@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -43,7 +44,7 @@ describe('Identity main contributions', () => {
   })
 
   it('shares one lazy service between capabilities and Principal provider and rejects Agent calls', async () => {
-    const root = mkdtempSync(join('/private/tmp', 'sciforge-identity-main-'))
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-main-'))
     roots.push(root)
     const entry = createDomainMainEntry({
       getUserDataDir: () => root,
@@ -81,7 +82,7 @@ describe('Identity main contributions', () => {
   })
 
   it('acknowledges only committed Host Principal transitions and keeps no-op repeats valid', async () => {
-    const root = mkdtempSync(join('/private/tmp', 'sciforge-identity-transition-'))
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-transition-'))
     roots.push(root)
     const entry = createDomainMainEntry({
       getUserDataDir: () => root,

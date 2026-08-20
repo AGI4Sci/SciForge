@@ -1,4 +1,3 @@
-import { Buffer } from 'node:buffer'
 import { z } from 'zod'
 import {
   agentIdSchema,
@@ -35,15 +34,15 @@ function uniqueStrings(values: readonly string[]): boolean {
 
 function isBase64UrlBytes(value: string, expectedBytes: number | { min: number }): boolean {
   if (!/^[A-Za-z0-9_-]+$/u.test(value) || value.length % 4 === 1) return false
-  try {
-    const decoded = Buffer.from(value, 'base64url')
-    if (decoded.toString('base64url') !== value) return false
-    return typeof expectedBytes === 'number'
-      ? decoded.length === expectedBytes
-      : decoded.length >= expectedBytes.min
-  } catch {
-    return false
-  }
+  const remainder = value.length % 4
+  const finalSextet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+    .indexOf(value.at(-1)!)
+  if ((remainder === 2 && (finalSextet & 0x0f) !== 0) ||
+      (remainder === 3 && (finalSextet & 0x03) !== 0)) return false
+  const decodedLength = Math.floor(value.length * 3 / 4)
+  return typeof expectedBytes === 'number'
+    ? decodedLength === expectedBytes
+    : decodedLength >= expectedBytes.min
 }
 
 export const oidcIdentityIdSchema = opaqueId('oid')
@@ -367,7 +366,7 @@ export const deviceRevokeRequestSchema = z.object({
 }).strict()
 export type DeviceRevokeRequest = z.infer<typeof deviceRevokeRequestSchema>
 
-export type DeviceEnrollmentSigningFacts = Readonly<{
+export type EnrollmentSigningFacts = Readonly<{
   enrollmentId: string
   nonce: string
   userId: string
@@ -375,19 +374,27 @@ export type DeviceEnrollmentSigningFacts = Readonly<{
   expiresAt: string
 }>
 
-export function canonicalDeviceEnrollmentBytes(input: DeviceEnrollmentSigningFacts): Buffer {
+const DEVICE_ENROLLMENT_SIGNING_DOMAIN = 'SCIFORGE-DEVICE-ENROLLMENT-V1'
+
+/**
+ * Returns the exact UTF-8 bytes that a Device signs to prove possession of its
+ * Ed25519 key during enrollment. The final field is not followed by a LF.
+ */
+export function canonicalEnrollmentBytes(input: EnrollmentSigningFacts): Uint8Array {
   const values = [
-    'SCIFORGE-DEVICE-ENROLLMENT-V1',
+    DEVICE_ENROLLMENT_SIGNING_DOMAIN,
     input.enrollmentId,
     input.nonce,
     input.userId,
     input.installationId,
     input.expiresAt
   ]
-  if (values.some((value) => !value || value.includes('\n') || value.includes('\r'))) {
+  if (values.some((value) => (
+    typeof value !== 'string' || value.length === 0 || /[\r\n]/u.test(value)
+  ))) {
     throw new TypeError('Enrollment signing fields must be non-empty strings without line breaks.')
   }
-  return Buffer.from(values.join('\n'), 'utf8')
+  return new TextEncoder().encode(values.join('\n'))
 }
 
 export const deviceAgentLinkSchema = z.object({
@@ -395,18 +402,6 @@ export const deviceAgentLinkSchema = z.object({
   agentId: agentIdSchema
 }).strict()
 export type DeviceAgentLink = z.infer<typeof deviceAgentLinkSchema>
-
-export function deviceEnrollmentProofMessage(challenge: DeviceEnrollmentChallenge): string {
-  const parsed = deviceEnrollmentChallengeSchema.parse(challenge)
-  return [
-    'SCIFORGE-DEVICE-ENROLLMENT-V1',
-    parsed.enrollmentId,
-    parsed.nonce,
-    parsed.userId,
-    parsed.installationId,
-    parsed.expiresAt
-  ].join('\n')
-}
 
 export const identityAuditSourceSchema = z.enum(['oidc', 'desktop', 'system'])
 export const identityAuditActionSchema = z.enum([

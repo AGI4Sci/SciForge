@@ -125,7 +125,11 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
     desktopIdentity: overrides.desktopIdentity ?? {
       getStatus: vi.fn(() => ({ state: 'signed-out' as const })),
       login: vi.fn(async () => ({ ok: true as const, status: { state: 'signed-out' as const } })),
-      logout: vi.fn(() => ({ ok: true as const, status: { state: 'signed-out' as const } }))
+      reauthenticate: vi.fn(async () => ({
+        ok: true as const,
+        status: { state: 'signed-out' as const }
+      })),
+      logout: vi.fn(async () => ({ ok: true as const, status: { state: 'signed-out' as const } }))
     },
     desktopDevice: overrides.desktopDevice ?? {
       getStatus: vi.fn(() => ({ state: 'signed-out' as const })),
@@ -512,16 +516,22 @@ describe('registerAppIpcHandlers', () => {
     const desktopIdentity = {
       getStatus: vi.fn(() => signedOut),
       login: vi.fn(async () => ({ ok: true as const, status: signedIn })),
-      logout: vi.fn(() => ({ ok: true as const, status: signedOut }))
+      reauthenticate: vi.fn(async () => ({ ok: true as const, status: signedIn })),
+      logout: vi.fn(async () => ({ ok: true as const, status: signedOut }))
     }
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
     registerAppIpcHandlers(registerOptions({ desktopIdentity }))
 
     await expect(handlers.get('identity:status')?.({})).resolves.toEqual(signedOut)
     await expect(handlers.get('identity:login')?.({})).resolves.toEqual({ ok: true, status: signedIn })
+    await expect(handlers.get('identity:reauthenticate')?.({})).resolves.toEqual({
+      ok: true,
+      status: signedIn
+    })
     await expect(handlers.get('identity:logout')?.({})).resolves.toEqual({ ok: true, status: signedOut })
     expect(desktopIdentity.getStatus).toHaveBeenCalledOnce()
     expect(desktopIdentity.login).toHaveBeenCalledOnce()
+    expect(desktopIdentity.reauthenticate).toHaveBeenCalledOnce()
     expect(desktopIdentity.logout).toHaveBeenCalledOnce()
   })
 

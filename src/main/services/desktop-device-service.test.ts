@@ -82,7 +82,7 @@ describe('DesktopDeviceService', () => {
     })
 
     const enrolled = await service.ensureRegistered()
-    expect(enrolled.ok).toBe(true)
+    expect(enrolled.ok, enrolled.ok ? undefined : enrolled.message).toBe(true)
     expect(enrolled.status).toMatchObject({ state: 'active' })
     expect(enrolled.devices).toHaveLength(1)
     expect(enrolled.devices[0]).toMatchObject({

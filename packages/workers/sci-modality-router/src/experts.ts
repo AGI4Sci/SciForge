@@ -314,7 +314,7 @@ function looksLikeSmiles(text: string): boolean {
   if (/\s/.test(t) || t.length < 2 || t.length > 600) return false; // SMILES is a single token
   if (!/[A-Za-z]/.test(t)) return false;
   // Bond/branch/ring grammar that sequences never contain.
-  const grammar = /[()\[\]=#@+\-\\/.]|[0-9]/;
+  const grammar = /[-()=#@+\\/.]|\[|\]|[0-9]/;
   const organic = /[BCNOPSFIbcnops]/;
   return grammar.test(t) && organic.test(t);
 }

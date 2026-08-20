@@ -10,7 +10,7 @@ import { chmod, readFile } from 'node:fs/promises'
 import { hostname, release } from 'node:os'
 import { join } from 'node:path'
 import {
-  canonicalDeviceEnrollmentBytes,
+  canonicalEnrollmentBytes,
   ed25519PublicJwkSchema,
   installationIdSchema,
   type Device,
@@ -186,7 +186,7 @@ export class DesktopDeviceService {
       })
       const signature = sign(
         null,
-        canonicalDeviceEnrollmentBytes({
+        canonicalEnrollmentBytes({
           enrollmentId: challenge.enrollmentId,
           nonce: challenge.nonce,
           userId: identity.user.userId,

@@ -6,10 +6,23 @@ on:
       - ".github/workflows/collaboration-ci.yml"
       - "packages/collaboration-*/**"
       - "packages/domains/collaboration/**"
+      - "packages/domains/identity-access/**"
       - "packages/domain-sdk/**"
+      - "infra/keycloak/**"
       - "scripts/collaboration-*.mjs"
       - "scripts/domain-packages.mjs"
+      - "scripts/keycloak-*.mjs"
       - "src/main/domain-*.ts"
+      - "src/main/principal-context*"
+      - "src/main/capabilities/identity-principal-transition.integration.test.ts"
+      - "src/main/ipc/register-app-ipc-handlers*"
+      - "src/main/services/desktop-device-service*"
+      - "src/main/services/desktop-identity-*"
+      - "src/preload/index.ts"
+      - "src/renderer/src/components/chat/DesktopIdentityControl*"
+      - "src/renderer/src/components/chat/WorkbenchTopBar*"
+      - "src/shared/desktop-identity.ts"
+      - "src/shared/sciforge-api.ts"
       - "package.json"
       - "package-lock.json"
   push:
@@ -19,10 +32,23 @@ on:
       - ".github/workflows/collaboration-ci.yml"
       - "packages/collaboration-*/**"
       - "packages/domains/collaboration/**"
+      - "packages/domains/identity-access/**"
       - "packages/domain-sdk/**"
+      - "infra/keycloak/**"
       - "scripts/collaboration-*.mjs"
       - "scripts/domain-packages.mjs"
+      - "scripts/keycloak-*.mjs"
       - "src/main/domain-*.ts"
+      - "src/main/principal-context*"
+      - "src/main/capabilities/identity-principal-transition.integration.test.ts"
+      - "src/main/ipc/register-app-ipc-handlers*"
+      - "src/main/services/desktop-device-service*"
+      - "src/main/services/desktop-identity-*"
+      - "src/preload/index.ts"
+      - "src/renderer/src/components/chat/DesktopIdentityControl*"
+      - "src/renderer/src/components/chat/WorkbenchTopBar*"
+      - "src/shared/desktop-identity.ts"
+      - "src/shared/sciforge-api.ts"
       - "package.json"
       - "package-lock.json"
 
@@ -50,8 +76,33 @@ jobs:
       - name: Check contracts and package boundaries
         run: npm run collaboration:typecheck
 
+      - name: Run full application typecheck
+        run: npm run typecheck
+
+      - name: Run lint
+        run: npm run lint
+
       - name: Run collaboration production-path tests
         run: npm run collaboration:test
+
+      - name: Run identity package tests
+        run: |
+          npm --workspace @sciforge/collaboration-identity test
+          npm --workspace @sciforge/domain-identity-access test
+
+      - name: Run Desktop identity integration tests
+        run: >-
+          npx vitest run
+          src/main/principal-context.test.ts
+          src/main/capabilities/identity-principal-transition.integration.test.ts
+          src/main/ipc/register-app-ipc-handlers.test.ts
+          src/main/services/desktop-identity-service.test.ts
+          src/main/services/desktop-device-service.test.ts
+          src/renderer/src/components/chat/DesktopIdentityControl.test.tsx
+          src/renderer/src/components/chat/WorkbenchTopBar.test.ts
+
+      - name: Verify Keycloak realm contract
+        run: npm run identity:keycloak:check
 
       - name: Verify generated composition and capabilities
         run: npm run capability:check

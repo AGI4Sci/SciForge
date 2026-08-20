@@ -71,35 +71,6 @@ describe('Host Principal context', () => {
     expect(() => inconsistent.current()).toThrow(/inconsistent/u)
   })
 
-  it('uses an application-selected cloud authority instead of a local package provider', () => {
-    const localPrincipal = { ...principal, authority: 'sciforge.identity-access' }
-    const localProvider = {
-      current: () => localPrincipal,
-      snapshot: () => ({ identityVersion: 2, principal: localPrincipal }),
-      subscribe: () => () => undefined
-    }
-    const cloudPrincipal = {
-      ...principal,
-      authority: 'https://login-test.sciforge.cn/realms/SciForge',
-      subject: 'oidc-subject-a',
-      assurance: 'cloud-authenticated' as const
-    }
-    const cloudProvider = {
-      current: () => cloudPrincipal,
-      snapshot: () => ({ identityVersion: 2, principal: cloudPrincipal }),
-      subscribe: () => () => undefined
-    }
-
-    const context = new HostPrincipalContext(catalog([localProvider]), cloudProvider)
-
-    expect(context.current()).toEqual(cloudPrincipal)
-    expect(context.snapshot().principal).toMatchObject({
-      authority: 'https://login-test.sciforge.cn/realms/SciForge',
-      subject: 'oidc-subject-a',
-      assurance: 'cloud-authenticated'
-    })
-  })
-
   it('ignores duplicate and stale notifications and returns the provider disposer', () => {
     let publish: ((snapshot: PrincipalContextSnapshot) => void) | undefined
     const disposeProvider = vi.fn()

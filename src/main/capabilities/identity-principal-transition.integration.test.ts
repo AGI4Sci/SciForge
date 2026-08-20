@@ -5,6 +5,7 @@ import {
   rmSync,
   writeFileSync
 } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -185,7 +186,7 @@ function currentAccountId(output: unknown): string {
 }
 
 function temporaryRoot(prefix: string): string {
-  const root = mkdtempSync(join('/private/tmp', prefix))
+  const root = mkdtempSync(join(tmpdir(), prefix))
   roots.push(root)
   return root
 }

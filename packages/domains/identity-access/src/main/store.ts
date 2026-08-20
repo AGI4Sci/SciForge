@@ -251,6 +251,19 @@ export class IdentityStore {
     return this.state()
   }
 
+  advanceIdentityVersion(): IdentityAvailableState {
+    return this.transaction(() => {
+      const current = this.state()
+      requireNextIdentityVersion(current.identityVersion)
+      this.database.prepare(`
+        UPDATE identity_state
+        SET identity_version = identity_version + 1
+        WHERE singleton_id = 1
+      `).run()
+      return this.state()
+    })
+  }
+
   linkCloudIdentity(input: CloudIdentityLinkInput): IdentityAvailableState {
     const parsedLink = localCloudIdentityLinkSchema.parse({
       cloudUserId: input.cloudUserId,

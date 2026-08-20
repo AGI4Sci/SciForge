@@ -37523,6 +37523,48 @@ Backs up an unavailable Identity database before establishing a fresh one.
               {
                 "additionalProperties": false,
                 "properties": {
+                  "cloudIdentity": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "cloudUserId": {
+                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "deviceId": {
+                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "deviceStatus": {
+                        "enum": [
+                          "active",
+                          "revoked"
+                        ],
+                        "type": "string"
+                      },
+                      "issuer": {
+                        "format": "uri",
+                        "maxLength": 2048,
+                        "type": "string"
+                      },
+                      "oidcIdentityId": {
+                        "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "subject": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "cloudUserId",
+                      "oidcIdentityId",
+                      "issuer",
+                      "subject"
+                    ],
+                    "type": "object"
+                  },
                   "createdAt": {
                     "format": "date-time",
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -37646,6 +37688,48 @@ Creates and selects a display-only Local Account on this installation.
           {
             "additionalProperties": false,
             "properties": {
+              "cloudIdentity": {
+                "additionalProperties": false,
+                "properties": {
+                  "cloudUserId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceStatus": {
+                    "enum": [
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "issuer": {
+                    "format": "uri",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "oidcIdentityId": {
+                    "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "subject": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "cloudUserId",
+                  "oidcIdentityId",
+                  "issuer",
+                  "subject"
+                ],
+                "type": "object"
+              },
               "createdAt": {
                 "format": "date-time",
                 "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -37753,6 +37837,48 @@ Persists dismissal of the optional Local Account first-run prompt.
           {
             "additionalProperties": false,
             "properties": {
+              "cloudIdentity": {
+                "additionalProperties": false,
+                "properties": {
+                  "cloudUserId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceStatus": {
+                    "enum": [
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "issuer": {
+                    "format": "uri",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "oidcIdentityId": {
+                    "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "subject": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "cloudUserId",
+                  "oidcIdentityId",
+                  "issuer",
+                  "subject"
+                ],
+                "type": "object"
+              },
               "createdAt": {
                 "format": "date-time",
                 "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -37859,6 +37985,48 @@ Clears Local Account selection without changing installation-local data.
           {
             "additionalProperties": false,
             "properties": {
+              "cloudIdentity": {
+                "additionalProperties": false,
+                "properties": {
+                  "cloudUserId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceStatus": {
+                    "enum": [
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "issuer": {
+                    "format": "uri",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "oidcIdentityId": {
+                    "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "subject": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "cloudUserId",
+                  "oidcIdentityId",
+                  "issuer",
+                  "subject"
+                ],
+                "type": "object"
+              },
               "createdAt": {
                 "format": "date-time",
                 "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -37968,6 +38136,48 @@ Reads the current installation-local account selection state.
               {
                 "additionalProperties": false,
                 "properties": {
+                  "cloudIdentity": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "cloudUserId": {
+                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "deviceId": {
+                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "deviceStatus": {
+                        "enum": [
+                          "active",
+                          "revoked"
+                        ],
+                        "type": "string"
+                      },
+                      "issuer": {
+                        "format": "uri",
+                        "maxLength": 2048,
+                        "type": "string"
+                      },
+                      "oidcIdentityId": {
+                        "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "subject": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "readOnly": true,
+                    "required": [
+                      "cloudUserId",
+                      "oidcIdentityId",
+                      "issuer",
+                      "subject"
+                    ],
+                    "type": "object"
+                  },
                   "createdAt": {
                     "format": "date-time",
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -38097,6 +38307,48 @@ Lists display-only Local Accounts stored in this installation.
         "items": {
           "additionalProperties": false,
           "properties": {
+            "cloudIdentity": {
+              "additionalProperties": false,
+              "properties": {
+                "cloudUserId": {
+                  "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "deviceId": {
+                  "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "deviceStatus": {
+                  "enum": [
+                    "active",
+                    "revoked"
+                  ],
+                  "type": "string"
+                },
+                "issuer": {
+                  "format": "uri",
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                "oidcIdentityId": {
+                  "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "subject": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "readOnly": true,
+              "required": [
+                "cloudUserId",
+                "oidcIdentityId",
+                "issuer",
+                "subject"
+              ],
+              "type": "object"
+            },
             "createdAt": {
               "format": "date-time",
               "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -38145,6 +38397,48 @@ Lists display-only Local Accounts stored in this installation.
                   {
                     "additionalProperties": false,
                     "properties": {
+                      "cloudIdentity": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "cloudUserId": {
+                            "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          "deviceId": {
+                            "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          "deviceStatus": {
+                            "enum": [
+                              "active",
+                              "revoked"
+                            ],
+                            "type": "string"
+                          },
+                          "issuer": {
+                            "format": "uri",
+                            "maxLength": 2048,
+                            "type": "string"
+                          },
+                          "oidcIdentityId": {
+                            "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          "subject": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "readOnly": true,
+                        "required": [
+                          "cloudUserId",
+                          "oidcIdentityId",
+                          "issuer",
+                          "subject"
+                        ],
+                        "type": "object"
+                      },
                       "createdAt": {
                         "format": "date-time",
                         "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -38302,6 +38596,48 @@ Changes a Local Account display name without changing its user ID.
           {
             "additionalProperties": false,
             "properties": {
+              "cloudIdentity": {
+                "additionalProperties": false,
+                "properties": {
+                  "cloudUserId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceStatus": {
+                    "enum": [
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "issuer": {
+                    "format": "uri",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "oidcIdentityId": {
+                    "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "subject": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "cloudUserId",
+                  "oidcIdentityId",
+                  "issuer",
+                  "subject"
+                ],
+                "type": "object"
+              },
               "createdAt": {
                 "format": "date-time",
                 "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -38417,6 +38753,48 @@ Selects an existing display-only Local Account on this installation.
           {
             "additionalProperties": false,
             "properties": {
+              "cloudIdentity": {
+                "additionalProperties": false,
+                "properties": {
+                  "cloudUserId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "deviceStatus": {
+                    "enum": [
+                      "active",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "issuer": {
+                    "format": "uri",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "oidcIdentityId": {
+                    "pattern": "^oid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "subject": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "cloudUserId",
+                  "oidcIdentityId",
+                  "issuer",
+                  "subject"
+                ],
+                "type": "object"
+              },
               "createdAt": {
                 "format": "date-time",
                 "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",

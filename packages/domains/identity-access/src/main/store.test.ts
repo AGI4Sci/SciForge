@@ -9,6 +9,7 @@ import {
   writeSync
 } from 'node:fs'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import {
@@ -16,6 +17,7 @@ import {
   MAX_LOCAL_ACCOUNTS,
   IdentityValidationError
 } from '../contract.js'
+import { LocalCloudIdentityLinkService } from './cloud-link-service.js'
 import { IdentityService } from './service.js'
 import { IdentityStore, IdentityStoreOpenError } from './store.js'
 
@@ -26,7 +28,7 @@ afterEach(() => {
 })
 
 function temporaryRoot(): string {
-  const root = mkdtempSync(join('/private/tmp', 'sciforge-identity-'))
+  const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-'))
   roots.push(root)
   return root
 }
@@ -208,6 +210,72 @@ describe('IdentityService', () => {
     expect(service.current()).toMatchObject({ subject: created.currentAccount?.userId })
     expect(observed).toHaveLength(1)
     service.close()
+  })
+
+  it('grants cloud authority only to the authenticated User on an ACTIVE cloud Device', () => {
+    const root = temporaryRoot()
+    const service = new IdentityService(root, 'installation-device-1')
+    const links = new LocalCloudIdentityLinkService(root)
+    const snapshots: unknown[] = []
+    service.subscribe((snapshot) => snapshots.push(snapshot))
+
+    const linked = links.linkIdentity({
+      cloudUserId: 'usr_CloudUser000001',
+      oidcIdentityId: 'oid_CloudIdent0001',
+      issuer: 'https://login-test.sciforge.cn/realms/SciForge',
+      subject: 'keycloak-subject-a',
+      displayName: 'Cloud Person'
+    })
+    expect(service.current()).toMatchObject({
+      authority: 'sciforge.identity-access',
+      subject: linked.currentAccount?.userId,
+      assurance: 'local-selection',
+      deviceId: 'installation-device-1'
+    })
+
+    links.setAuthenticatedCloudUser('usr_CloudUser000001')
+    expect(service.current()?.assurance).toBe('local-selection')
+
+    links.linkDevice('usr_CloudUser000001', 'dev_CloudDevice0001', 'active')
+    expect(service.current()).toMatchObject({
+      authority: 'sciforge-cloud',
+      subject: 'usr_CloudUser000001',
+      assurance: 'cloud-authenticated',
+      deviceId: 'dev_CloudDevice0001'
+    })
+
+    links.linkDevice('usr_CloudUser000001', 'dev_CloudDevice0001', 'revoked')
+    expect(service.current()).toMatchObject({
+      authority: 'sciforge.identity-access',
+      subject: linked.currentAccount?.userId,
+      assurance: 'local-selection',
+      deviceId: 'installation-device-1'
+    })
+    expect(snapshots).toContainEqual(expect.objectContaining({
+      principal: expect.objectContaining({ assurance: 'cloud-authenticated' })
+    }))
+    expect(snapshots.at(-1)).toEqual(service.snapshot())
+
+    links.linkDevice('usr_CloudUser000001', 'dev_CloudDevice0001', 'active')
+    expect(service.current()?.assurance).toBe('cloud-authenticated')
+
+    links.setAuthenticatedCloudUser(null)
+    links.close()
+    service.close()
+
+    const restoredService = new IdentityService(root, 'installation-device-1')
+    const restoredLinks = new LocalCloudIdentityLinkService(root)
+    restoredLinks.setAuthenticatedCloudUser('usr_CloudUser000001')
+    expect(restoredService.current()?.assurance).toBe('local-selection')
+
+    restoredLinks.linkDevice('usr_CloudUser000001', 'dev_CloudDevice0001', 'active')
+    expect(restoredService.current()).toMatchObject({
+      assurance: 'cloud-authenticated',
+      deviceId: 'dev_CloudDevice0001'
+    })
+    restoredLinks.setAuthenticatedCloudUser(null)
+    restoredLinks.close()
+    restoredService.close()
   })
 
   it('fails closed on corruption and resets only after a verified backup', () => {

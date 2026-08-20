@@ -191,7 +191,6 @@ import {
   createUnavailableCollaborationIdentityClient,
   resolveDesktopIdentityRuntimeConfig
 } from './services/desktop-identity-runtime-config'
-import { DesktopIdentityPrincipalProvider } from './services/desktop-identity-principal-provider'
 import { DesktopDeviceService } from './services/desktop-device-service'
 import {
   HttpCollaborationIdentityClient,
@@ -1360,10 +1359,6 @@ app
       ...(identityConfigurationError ? { configurationError: identityConfigurationError } : {}),
       openExternal: (url) => shell.openExternal(url)
     })
-    const desktopIdentityPrincipal = new DesktopIdentityPrincipalProvider(
-      desktopIdentity,
-      hostDeviceId
-    )
     const desktopDevice = new DesktopDeviceService({
       identity: desktopIdentity,
       client: collaborationIdentityClient,
@@ -1381,6 +1376,13 @@ app
       }
     })
     const disposeIdentityRendererEvents = desktopIdentity.subscribe((status) => {
+      try {
+        localCloudIdentityLinks?.setAuthenticatedCloudUser(
+          status.state === 'signed-in' ? status.user.userId : null
+        )
+      } catch (error) {
+        console.warn('[sciforge identity] failed to project Desktop login into Principal state:', error)
+      }
       emitDesktopIdentityEvent('identity:status-changed', status)
     })
     const disposeDeviceRendererEvents = desktopDevice.subscribe((status) => {
@@ -1393,7 +1395,6 @@ app
       disposeDeviceRendererEvents()
       disposeIdentityRendererEvents()
       desktopDevice.close()
-      desktopIdentityPrincipal.close()
       desktopIdentity.close()
       localCloudIdentityLinks?.close()
     })
@@ -1403,7 +1404,7 @@ app
       visibleContextService,
       versionControlWorkspaceService: versionControlPlacement
     }
-    const principalContext = new HostPrincipalContext(catalog, desktopIdentityPrincipal)
+    const principalContext = new HostPrincipalContext(catalog)
     principalContextForDomainServices = principalContext
     const capabilityBroker = new CapabilityBroker(
       createApplicationCapabilityRegistry(catalog, appCapabilityDependencies),

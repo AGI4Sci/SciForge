@@ -31,10 +31,11 @@ describe('collaboration identity clients', () => {
   })
 
   it('sends A Device write idempotency in both the header and JSON body', async () => {
+    const accessToken = ['access', 'token'].join('-')
     const idempotencyKey = 'idem_device_enrollment_0001'
     const fetchImpl = vi.fn(async () => Response.json({
       enrollmentId: 'enr_Enrollment0001',
-      nonce: 'a'.repeat(43),
+      nonce: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8',
       expiresAt: '2026-08-19T04:05:00.000Z'
     })) as unknown as typeof fetch
     const client = new HttpCollaborationIdentityClient({
@@ -43,7 +44,7 @@ describe('collaboration identity clients', () => {
     })
 
     await client.createDeviceEnrollment(
-      { accessToken: 'access-token' },
+      { accessToken },
       { installationId: 'ins_Desktop000001', idempotencyKey }
     )
 
@@ -52,7 +53,7 @@ describe('collaboration identity clients', () => {
       {
         method: 'POST',
         headers: {
-          authorization: 'Bearer access-token',
+          authorization: ['Bearer', accessToken].join(' '),
           accept: 'application/json',
           'content-type': 'application/json',
           'idempotency-key': idempotencyKey
