@@ -1,38 +1,41 @@
 import {
   collaborationErrorCodeSchema,
-  currentUserResponseSchema,
-  currentDevicesResponseSchema,
-  desktopDeviceRegistrationSchema,
-  deviceEnrollmentChallengeSchema,
-  deviceEnrollmentStartSchema,
-  deviceRecordSchema,
+  deviceCreateRequestSchema,
+  deviceEnrollmentCreateRequestSchema,
+  deviceEnrollmentCreateResponseSchema,
+  deviceListResponseSchema,
+  deviceResponseSchema,
+  deviceRevokeRequestSchema,
+  meResponseSchema,
   type CollaborationErrorCode,
-  type CurrentUserResponse,
-  type CurrentDevicesResponse,
-  type DesktopDeviceRegistration,
-  type DeviceEnrollmentChallenge,
-  type DeviceEnrollmentStart,
-  type DeviceRecord,
+  type Device,
+  type DeviceCreateRequest,
+  type DeviceEnrollmentCreateRequest,
+  type DeviceEnrollmentCreateResponse,
+  type DeviceListResponse,
+  type DeviceRevokeRequest,
+  type MeResponse,
   type VerifiedOidcClaims
 } from '@sciforge/collaboration-contracts'
 
 export type IdentityAccessContext = Readonly<{
   accessToken: string
+  /** Used only by the in-memory development adapter; HTTP sends only the Bearer token. */
   verifiedClaims?: VerifiedOidcClaims
 }>
 
 export interface CollaborationIdentityClient {
-  getCurrentUser(context: IdentityAccessContext): Promise<CurrentUserResponse>
-  startDeviceEnrollment(
+  getCurrentUser(context: IdentityAccessContext): Promise<MeResponse>
+  createDeviceEnrollment(
     context: IdentityAccessContext,
-    input: DeviceEnrollmentStart
-  ): Promise<DeviceEnrollmentChallenge>
-  registerDevice(
+    input: DeviceEnrollmentCreateRequest
+  ): Promise<DeviceEnrollmentCreateResponse>
+  createDevice(
     context: IdentityAccessContext,
-    input: DesktopDeviceRegistration
-  ): Promise<DeviceRecord>
-  listDevices(context: IdentityAccessContext): Promise<CurrentDevicesResponse>
-  revokeDevice(context: IdentityAccessContext, deviceId: string): Promise<DeviceRecord>
+    input: DeviceCreateRequest
+  ): Promise<Device>
+  listDevices(context: IdentityAccessContext): Promise<DeviceListResponse>
+  revokeDevice(context: IdentityAccessContext, input: DeviceRevokeRequest): Promise<Device>
 }
 
 export class CollaborationIdentityClientError extends Error {
@@ -61,48 +64,64 @@ export class HttpCollaborationIdentityClient implements CollaborationIdentityCli
     this.#fetch = options.fetchImpl ?? fetch
   }
 
-  async getCurrentUser(context: IdentityAccessContext): Promise<CurrentUserResponse> {
+  async getCurrentUser(context: IdentityAccessContext): Promise<MeResponse> {
     const response = await this.#request('GET', '/v1/me', context.accessToken)
-    return currentUserResponseSchema.parse(response)
+    return meResponseSchema.parse(response)
   }
 
-  async startDeviceEnrollment(
+  async createDeviceEnrollment(
     context: IdentityAccessContext,
-    input: DeviceEnrollmentStart
-  ): Promise<DeviceEnrollmentChallenge> {
-    const body = deviceEnrollmentStartSchema.parse(input)
-    const response = await this.#request('POST', '/v1/device-enrollments', context.accessToken, body)
-    return deviceEnrollmentChallengeSchema.parse(response)
+    input: DeviceEnrollmentCreateRequest
+  ): Promise<DeviceEnrollmentCreateResponse> {
+    const body = deviceEnrollmentCreateRequestSchema.parse(input)
+    const response = await this.#request(
+      'POST',
+      '/v1/device-enrollments',
+      context.accessToken,
+      body,
+      body.idempotencyKey
+    )
+    return deviceEnrollmentCreateResponseSchema.parse(response)
   }
 
-  async registerDevice(
+  async createDevice(
     context: IdentityAccessContext,
-    input: DesktopDeviceRegistration
-  ): Promise<DeviceRecord> {
-    const body = desktopDeviceRegistrationSchema.parse(input)
-    const response = await this.#request('POST', '/v1/devices', context.accessToken, body)
-    return deviceRecordSchema.parse(response)
+    input: DeviceCreateRequest
+  ): Promise<Device> {
+    const body = deviceCreateRequestSchema.parse(input)
+    const response = await this.#request(
+      'POST',
+      '/v1/devices',
+      context.accessToken,
+      body,
+      body.idempotencyKey
+    )
+    return deviceResponseSchema.parse(response).device
   }
 
-  async listDevices(context: IdentityAccessContext): Promise<CurrentDevicesResponse> {
+  async listDevices(context: IdentityAccessContext): Promise<DeviceListResponse> {
     const response = await this.#request('GET', '/v1/me/devices', context.accessToken)
-    return currentDevicesResponseSchema.parse(response)
+    return deviceListResponseSchema.parse(response)
   }
 
-  async revokeDevice(context: IdentityAccessContext, deviceId: string): Promise<DeviceRecord> {
+  async revokeDevice(context: IdentityAccessContext, input: DeviceRevokeRequest): Promise<Device> {
+    const body = deviceRevokeRequestSchema.parse(input)
     const response = await this.#request(
       'DELETE',
-      `/v1/me/devices/${encodeURIComponent(deviceId)}`,
-      context.accessToken
+      `/v1/me/devices/${encodeURIComponent(body.deviceId)}`,
+      context.accessToken,
+      body,
+      body.idempotencyKey
     )
-    return deviceRecordSchema.parse(response)
+    return deviceResponseSchema.parse(response).device
   }
 
   async #request(
     method: 'GET' | 'POST' | 'DELETE',
     path: string,
     accessToken: string,
-    requestBody?: unknown
+    requestBody?: unknown,
+    idempotencyKey?: string
   ): Promise<unknown> {
     let response: Response
     try {
@@ -111,7 +130,8 @@ export class HttpCollaborationIdentityClient implements CollaborationIdentityCli
         headers: {
           authorization: `Bearer ${accessToken}`,
           accept: 'application/json',
-          ...(requestBody === undefined ? {} : { 'content-type': 'application/json' })
+          ...(requestBody === undefined ? {} : { 'content-type': 'application/json' }),
+          ...(idempotencyKey === undefined ? {} : { 'idempotency-key': idempotencyKey })
         },
         ...(requestBody === undefined ? {} : { body: JSON.stringify(requestBody) })
       })
@@ -147,6 +167,8 @@ function cloudError(status: number, body: unknown): CollaborationIdentityClientE
   const rawCode = typeof nested.code === 'string' ? nested.code.toLowerCase() : ''
   const parsedCode = collaborationErrorCodeSchema.safeParse(rawCode)
   const codeAliases: Readonly<Record<string, CollaborationErrorCode>> = {
+    validation_failed: 'validation_error',
+    request_expired: 'expired',
     binding_code_expired: 'expired',
     binding_code_used: 'invalid_state_transition',
     identity_already_bound: 'identity_conflict',

@@ -1995,6 +1995,8 @@
   "desktopIdentityLogoutFailed": "SciForge 退出登录失败。",
   "desktopIdentitySignedInAs": "已登录：{{name}}",
   "desktopIdentityAccountMenu": "SciForge 账号",
+  "desktopIdentityReauthenticate": "重新认证",
+  "desktopIdentityReauthenticationFailed": "SciForge 重新认证失败。",
   "desktopIdentityLogout": "退出登录",
   "desktopDeviceConnected": "此 Desktop 已连接",
   "desktopDeviceNotConnected": "此 Desktop 尚未连接",

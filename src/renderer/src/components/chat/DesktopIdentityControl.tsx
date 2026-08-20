@@ -35,14 +35,36 @@ export function DesktopIdentityControl(): ReactElement {
 
   useEffect(() => {
     let cancelled = false
+    let identityEventSeen = false
+    let deviceEventSeen = false
     if (typeof window.sciforge?.identity?.getStatus !== 'function') return
+    const applyIdentityStatus = (next: DesktopIdentityStatus): void => {
+      if (cancelled) return
+      setStatus(next)
+      if (next.state === 'signed-out') {
+        setDeviceStatus({ state: 'signed-out' })
+        setMenuOpen(false)
+      }
+    }
+    const stopIdentity = typeof window.sciforge.identity.onStatusChanged === 'function'
+      ? window.sciforge.identity.onStatusChanged((next) => {
+          identityEventSeen = true
+          applyIdentityStatus(next)
+        })
+      : () => undefined
+    const stopDevice = typeof window.sciforge.identity.onDeviceStatusChanged === 'function'
+      ? window.sciforge.identity.onDeviceStatusChanged((next) => {
+          deviceEventSeen = true
+          if (!cancelled) setDeviceStatus(next)
+        })
+      : () => undefined
     void window.sciforge.identity.getStatus()
       .then((next) => {
-        if (cancelled) return
-        setStatus(next)
+        if (cancelled || identityEventSeen) return
+        applyIdentityStatus(next)
         if (next.state === 'signed-in') {
           void window.sciforge.identity.getDeviceStatus().then((device) => {
-            if (!cancelled) {
+            if (!cancelled && !deviceEventSeen) {
               setDeviceStatus(device)
             }
           }).catch(() => undefined)
@@ -51,6 +73,8 @@ export function DesktopIdentityControl(): ReactElement {
       .catch(() => undefined)
     return () => {
       cancelled = true
+      stopDevice()
+      stopIdentity()
     }
   }, [])
 
@@ -123,6 +147,25 @@ export function DesktopIdentityControl(): ReactElement {
       if (!result.ok) setError(result.error.message)
     } catch (logoutError) {
       setError(logoutError instanceof Error ? logoutError.message : t('desktopIdentityLogoutFailed'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const reauthenticate = async (): Promise<void> => {
+    if (busy || typeof window.sciforge?.identity?.reauthenticate !== 'function') return
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await window.sciforge.identity.reauthenticate()
+      setStatus(result.status)
+      if (!result.ok) setError(result.error.message)
+    } catch (reauthenticationError) {
+      setError(
+        reauthenticationError instanceof Error
+          ? reauthenticationError.message
+          : t('desktopIdentityReauthenticationFailed')
+      )
     } finally {
       setBusy(false)
     }
@@ -247,6 +290,16 @@ export function DesktopIdentityControl(): ReactElement {
           </button>
         )}
       </div>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => void reauthenticate()}
+        disabled={busy}
+        className="mt-2 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
+      >
+        <RefreshCw className={`h-4 w-4 ${busy ? 'animate-spin' : ''}`} strokeWidth={1.8} />
+        <span>{t('desktopIdentityReauthenticate')}</span>
+      </button>
       <button
         type="button"
         role="menuitem"

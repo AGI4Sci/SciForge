@@ -2,40 +2,38 @@ import { createServer } from 'node:http'
 import { webcrypto } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DesktopIdentityService } from './desktop-identity-service'
+import type { StoredDesktopIdentitySession } from './desktop-identity-session-store'
 
 const issuer = 'http://127.0.0.1:8080/realms/SciForge'
 const clientId = 'sciforge-desktop'
 const audience = 'sciforge-cloud-api'
 const identityClient = {
   getCurrentUser: vi.fn(async () => ({
-    protocolVersion: '1.0' as const,
-    requestId: 'req_DesktopLogin0001',
-    type: 'identity.me' as const,
-    user: {
-      schemaVersion: 1 as const,
-      type: 'user_principal' as const,
-      userId: 'usr_CloudUser000001',
-      displayName: 'Nem User',
-      status: 'active' as const,
-      revision: 1,
-      createdAt: '2026-08-18T12:00:00.000Z',
-      updatedAt: '2026-08-18T12:00:00.000Z'
-    },
-    identity: {
-      schemaVersion: 1 as const,
-      type: 'oidc_external_identity' as const,
-      externalIdentityId: 'xid_CloudIdent0001',
-      userId: 'usr_CloudUser000001',
-      issuer,
-      subject: 'keycloak-user-123',
-      emailAtLinkTime: 'nem@example.com',
-      status: 'active' as const,
-      verifiedAt: '2026-08-18T12:00:00.000Z',
-      revision: 1,
-      createdAt: '2026-08-18T12:00:00.000Z',
-      updatedAt: '2026-08-18T12:00:00.000Z'
-    }
+    schemaVersion: 1 as const,
+    type: 'me' as const,
+    userId: 'usr_CloudUser000001',
+    displayName: 'Nem User',
+    status: 'active' as const,
+    oidcIdentityId: 'oid_CloudIdent0001',
+    issuer,
+    revision: 1,
+    createdAt: '2026-08-18T12:00:00.000Z',
+    updatedAt: '2026-08-18T12:00:00.000Z'
   }))
+}
+
+function memorySessionStore(initial: StoredDesktopIdentitySession | null = null) {
+  let stored = initial
+  return {
+    load: vi.fn(async () => stored),
+    save: vi.fn(async (next: StoredDesktopIdentitySession) => {
+      stored = next
+    }),
+    clear: vi.fn(async () => {
+      stored = null
+    }),
+    current: () => stored
+  }
 }
 
 async function unusedPort(): Promise<number> {
@@ -85,6 +83,7 @@ async function createSigner() {
 }
 
 afterEach(() => {
+  vi.clearAllMocks()
   vi.restoreAllMocks()
 })
 
@@ -95,6 +94,7 @@ describe('DesktopIdentityService', () => {
     const redirectUri = `http://127.0.0.1:${port}/oidc/callback`
     let authorizationUrl: URL | null = null
     let now = Date.parse('2026-08-18T12:00:00.000Z')
+    const sessionStore = memorySessionStore()
 
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url = String(input)
@@ -115,7 +115,9 @@ describe('DesktopIdentityService', () => {
           iss: issuer,
           sub: 'keycloak-user-123',
           exp: Math.floor(now / 1000) + 300,
-          iat: Math.floor(now / 1000)
+          iat: Math.floor(now / 1000),
+          nbf: Math.floor(now / 1000),
+          auth_time: Math.floor(now / 1000)
         }
         return Response.json({
           access_token: await signer.sign({
@@ -133,7 +135,8 @@ describe('DesktopIdentityService', () => {
             preferred_username: 'nem',
             email: 'nem@example.com',
             email_verified: true
-          })
+          }),
+          refresh_token: 'refresh-token-initial'
         })
       }
       throw new Error(`Unexpected request: ${url}`)
@@ -144,6 +147,7 @@ describe('DesktopIdentityService', () => {
       clientId,
       audience,
       identityClient,
+      sessionStore,
       redirectUri,
       fetchImpl,
       now: () => now,
@@ -164,7 +168,7 @@ describe('DesktopIdentityService', () => {
         state: 'signed-in',
         user: {
           userId: 'usr_CloudUser000001',
-          externalIdentityId: 'xid_CloudIdent0001',
+          oidcIdentityId: 'oid_CloudIdent0001',
           issuer,
           subject: 'keycloak-user-123',
           displayName: 'Nem User',
@@ -178,13 +182,93 @@ describe('DesktopIdentityService', () => {
     expect(JSON.stringify(result)).not.toContain('access_token')
     expect(service.getAccessToken()).toMatch(/^ey/)
     expect(statusListener).toHaveBeenLastCalledWith(result.status)
+    expect(sessionStore.current()).toEqual({
+      version: 1,
+      issuer,
+      clientId,
+      refreshToken: 'refresh-token-initial',
+      idToken: expect.stringMatching(/^ey/)
+    })
+    expect(JSON.stringify(sessionStore.current())).not.toContain(service.getAccessToken()!)
 
-    now += 5 * 60 * 1000
-    expect(service.getStatus()).toEqual({ state: 'signed-out' })
+    const logout = await service.logout()
+    expect(logout).toEqual({ ok: true, status: { state: 'signed-out' } })
     expect(service.getAccessToken()).toBeNull()
+    expect(sessionStore.clear).toHaveBeenCalledOnce()
     expect(statusListener).toHaveBeenLastCalledWith({ state: 'signed-out' })
-    expect(service.logout()).toEqual({ ok: true, status: { state: 'signed-out' } })
-    expect(statusListener).toHaveBeenLastCalledWith({ state: 'signed-out' })
+    service.close()
+  })
+
+  it('restores a saved refresh session and persists refresh-token rotation without storing the access token', async () => {
+    const signer = await createSigner()
+    const now = Date.parse('2026-08-18T12:00:00.000Z')
+    const sessionStore = memorySessionStore({
+      version: 1,
+      issuer,
+      clientId,
+      refreshToken: 'refresh-token-before-restart'
+    })
+    let issuedAccessToken = ''
+    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/.well-known/openid-configuration')) {
+        return Response.json({
+          issuer,
+          authorization_endpoint: `${issuer}/protocol/openid-connect/auth`,
+          token_endpoint: `${issuer}/protocol/openid-connect/token`,
+          jwks_uri: `${issuer}/protocol/openid-connect/certs`
+        })
+      }
+      if (url.endsWith('/protocol/openid-connect/certs')) {
+        return Response.json({ keys: [signer.publicJwk] })
+      }
+      if (url.endsWith('/protocol/openid-connect/token')) {
+        expect(String(init?.body)).toContain('grant_type=refresh_token')
+        expect(String(init?.body)).toContain('refresh_token=refresh-token-before-restart')
+        const common = {
+          iss: issuer,
+          sub: 'keycloak-user-123',
+          exp: Math.floor(now / 1000) + 300,
+          iat: Math.floor(now / 1000),
+          nbf: Math.floor(now / 1000),
+          auth_time: Math.floor(now / 1000)
+        }
+        issuedAccessToken = await signer.sign({
+          ...common,
+          aud: audience,
+          azp: clientId,
+          preferred_username: 'nem'
+        })
+        return Response.json({
+          access_token: issuedAccessToken,
+          id_token: await signer.sign({ ...common, aud: clientId, name: 'Nem User' }),
+          refresh_token: 'refresh-token-after-restart'
+        })
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    }) as unknown as typeof fetch
+    const service = new DesktopIdentityService({
+      issuer,
+      clientId,
+      audience,
+      identityClient,
+      sessionStore,
+      fetchImpl,
+      now: () => now,
+      openExternal: vi.fn()
+    })
+
+    const result = await service.initialize()
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: { state: 'signed-in', user: { userId: 'usr_CloudUser000001' } }
+    })
+    expect(service.getAccessToken()).toBe(issuedAccessToken)
+    expect(sessionStore.current()).toMatchObject({
+      refreshToken: 'refresh-token-after-restart'
+    })
+    expect(JSON.stringify(sessionStore.current())).not.toContain(issuedAccessToken)
     service.close()
   })
 
@@ -195,6 +279,7 @@ describe('DesktopIdentityService', () => {
       clientId,
       audience,
       identityClient,
+      sessionStore: memorySessionStore(),
       openExternal,
       fetchImpl: vi.fn(async () => {
         throw new Error('offline')
@@ -217,6 +302,7 @@ describe('DesktopIdentityService', () => {
       clientId,
       audience,
       identityClient,
+      sessionStore: memorySessionStore(),
       openExternal: vi.fn()
     })).toThrow('must use HTTPS')
   })

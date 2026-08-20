@@ -1,6 +1,6 @@
 export type DesktopIdentityUser = {
   userId: string
-  externalIdentityId: string
+  oidcIdentityId: string
   issuer: string
   subject: string
   displayName: string
@@ -25,6 +25,10 @@ export type DesktopIdentityErrorCode =
   | 'OIDC_CALLBACK_INVALID'
   | 'OIDC_TOKEN_INVALID'
   | 'OIDC_LOGIN_FAILED'
+  | 'OIDC_SESSION_STORAGE_UNAVAILABLE'
+  | 'OIDC_SESSION_EXPIRED'
+  | 'OIDC_LOGOUT_FAILED'
+  | 'OIDC_REAUTH_USER_MISMATCH'
   | 'SCIFORGE_CLOUD_UNAVAILABLE'
   | 'SCIFORGE_CLOUD_AUTH_FAILED'
   | 'SCIFORGE_CLOUD_RESPONSE_INVALID'

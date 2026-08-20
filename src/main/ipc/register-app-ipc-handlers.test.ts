@@ -502,7 +502,7 @@ describe('registerAppIpcHandlers', () => {
       state: 'signed-in' as const,
       user: {
         userId: 'usr_test0001',
-        externalIdentityId: 'ext_test0001',
+        oidcIdentityId: 'oid_test0001',
         issuer: 'http://127.0.0.1:8080/realms/SciForge',
         subject: 'subject-1',
         displayName: 'Nem'

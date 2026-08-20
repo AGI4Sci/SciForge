@@ -4,23 +4,35 @@ import {
   CollaborationIdentityClientError,
   type CollaborationIdentityClient
 } from '@sciforge/collaboration-identity'
-import type { CurrentUserResponse, VerifiedOidcClaims } from '@sciforge/collaboration-contracts'
+import type { MeResponse, VerifiedOidcClaims } from '@sciforge/collaboration-contracts'
 import type {
   DesktopIdentityActionResult,
   DesktopIdentityErrorCode,
   DesktopIdentityStatus,
   DesktopIdentityUser
 } from '../../shared/desktop-identity'
+import {
+  DesktopIdentitySessionStoreError,
+  type DesktopIdentitySessionStore,
+  type StoredDesktopIdentitySession
+} from './desktop-identity-session-store'
 
 const DEFAULT_REDIRECT_URI = 'http://127.0.0.1:43110/oidc/callback'
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000
+const REFRESH_LEEWAY_MS = 60 * 1000
+const REFRESH_RETRY_MS = 30 * 1000
+const MAX_TIMER_MS = 2_147_483_647
+const CLOCK_TOLERANCE_SECONDS = 60
 
 type DesktopIdentityServiceOptions = {
-  issuer: string
+  issuer: string | null
   clientId: string
   audience: string
   identityClient: Pick<CollaborationIdentityClient, 'getCurrentUser'>
+  sessionStore: DesktopIdentitySessionStore
+  linkAuthenticatedUser?: (user: DesktopIdentityUser) => void | Promise<void>
   openExternal: (url: string) => Promise<unknown>
+  configurationError?: string
   redirectUri?: string
   fetchImpl?: typeof fetch
   now?: () => number
@@ -33,6 +45,8 @@ type OidcDiscovery = {
   authorizationEndpoint: string
   tokenEndpoint: string
   jwksUri: string
+  revocationEndpoint?: string
+  endSessionEndpoint?: string
 }
 
 type JsonWebKeySet = {
@@ -49,7 +63,18 @@ type JwtParts = {
 
 type TokenResponse = {
   accessToken: string
-  idToken: string
+  idToken?: string
+  refreshToken?: string
+}
+
+type VerifiedTokens = {
+  accessClaims: Record<string, unknown>
+  idClaims: Record<string, unknown>
+}
+
+type SessionCredentials = {
+  refreshToken: string
+  idToken?: string
 }
 
 class DesktopIdentityError extends Error {
@@ -126,6 +151,10 @@ function audienceIncludes(claim: unknown, expected: string): boolean {
   return claim === expected || (Array.isArray(claim) && claim.includes(expected))
 }
 
+function numericDate(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null
+}
+
 function assertCommonClaims(
   claims: Record<string, unknown>,
   issuer: string,
@@ -143,6 +172,39 @@ function assertCommonClaims(
   }
   if (typeof claims.exp !== 'number' || claims.exp * 1000 <= now) {
     throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The token has expired.')
+  }
+}
+
+function assertAccessTokenClaims(
+  claims: Record<string, unknown>,
+  issuer: string,
+  audience: string,
+  clientId: string,
+  now: number
+): void {
+  assertCommonClaims(claims, issuer, audience, now)
+  if (claims.azp !== clientId) {
+    throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The access token was issued to another client.')
+  }
+  const issuedAt = numericDate(claims.iat)
+  const notBefore = numericDate(claims.nbf)
+  const authTime = numericDate(claims.auth_time)
+  const expiresAt = numericDate(claims.exp)
+  const nowSeconds = Math.floor(now / 1000)
+  const latestAllowed = nowSeconds + CLOCK_TOLERANCE_SECONDS
+  if (
+    issuedAt === null ||
+    notBefore === null ||
+    authTime === null ||
+    expiresAt === null ||
+    notBefore > latestAllowed ||
+    issuedAt > latestAllowed ||
+    authTime > latestAllowed ||
+    expiresAt <= notBefore ||
+    expiresAt <= issuedAt ||
+    authTime > issuedAt
+  ) {
+    throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The access token time claims are invalid.')
   }
 }
 
@@ -181,7 +243,7 @@ async function verifyJwtSignature(parts: JwtParts, jwks: JsonWebKeySet): Promise
 function statusFromClaims(
   accessClaims: Record<string, unknown>,
   idClaims: Record<string, unknown>,
-  currentUser: CurrentUserResponse
+  currentUser: MeResponse
 ): DesktopIdentityStatus {
   const subject = readString(accessClaims.sub)!
   const username = readString(idClaims.preferred_username) ?? readString(accessClaims.preferred_username)
@@ -189,12 +251,13 @@ function statusFromClaims(
   const displayName =
     readString(idClaims.name) ??
     readString(accessClaims.name) ??
+    currentUser.displayName ??
     username ??
     email ??
     subject
   const user: DesktopIdentityUser = {
-    userId: currentUser.user.userId,
-    externalIdentityId: currentUser.identity.externalIdentityId,
+    userId: currentUser.userId,
+    oidcIdentityId: currentUser.oidcIdentityId,
     issuer: readString(accessClaims.iss)!,
     subject,
     displayName,
@@ -326,22 +389,29 @@ async function startCallbackServer(
 }
 
 export class DesktopIdentityService {
-  private readonly issuer: string
+  private readonly issuer: string | null
   private readonly redirectUri: string
   private readonly fetchImpl: typeof fetch
   private readonly now: () => number
   private status: DesktopIdentityStatus = { state: 'signed-out' }
   private accessToken: string | null = null
+  private credentials: SessionCredentials | null = null
   private loginPromise: Promise<DesktopIdentityActionResult> | null = null
-  private expiryTimer: ReturnType<typeof setTimeout> | null = null
+  private initializePromise: Promise<DesktopIdentityActionResult> | null = null
+  private refreshPromise: Promise<DesktopIdentityActionResult> | null = null
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null
+  private closed = false
   private readonly listeners = new Set<DesktopIdentityStatusListener>()
 
   constructor(private readonly options: DesktopIdentityServiceOptions) {
-    this.issuer = trimIssuer(options.issuer)
+    this.issuer = options.issuer === null ? null : trimIssuer(options.issuer)
     this.redirectUri = options.redirectUri ?? DEFAULT_REDIRECT_URI
     this.fetchImpl = options.fetchImpl ?? fetch
     this.now = options.now ?? Date.now
-    requireTrustedUrl(this.issuer, this.issuer, 'OIDC issuer')
+    if (!this.issuer && !options.configurationError) {
+      throw new DesktopIdentityError('OIDC_CONFIGURATION_ERROR', 'OIDC issuer is required.')
+    }
+    if (this.issuer) requireTrustedUrl(this.issuer, this.issuer, 'OIDC issuer')
     const redirect = new URL(this.redirectUri)
     if (redirect.protocol !== 'http:' || redirect.hostname !== '127.0.0.1') {
       throw new DesktopIdentityError(
@@ -354,6 +424,7 @@ export class DesktopIdentityService {
   getStatus(): DesktopIdentityStatus {
     if (this.status.state === 'signed-in' && Date.parse(this.status.accessTokenExpiresAt) <= this.now()) {
       this.setSession({ state: 'signed-out' }, null)
+      if (this.credentials) void this.refreshSession()
     }
     return this.status
   }
@@ -367,29 +438,117 @@ export class DesktopIdentityService {
     return () => this.listeners.delete(listener)
   }
 
+  initialize(): Promise<DesktopIdentityActionResult> {
+    if (this.initializePromise) return this.initializePromise
+    this.initializePromise = this.restoreSession().finally(() => {
+      this.initializePromise = null
+    })
+    return this.initializePromise
+  }
+
   login(): Promise<DesktopIdentityActionResult> {
+    return this.beginInteractiveLogin(false)
+  }
+
+  reauthenticate(): Promise<DesktopIdentityActionResult> {
+    return this.beginInteractiveLogin(true)
+  }
+
+  async logout(): Promise<DesktopIdentityActionResult> {
+    const credentials = this.credentials
+    this.credentials = null
+    this.setSession({ state: 'signed-out' }, null, true)
+
+    let localFailure: DesktopIdentityError | null = null
+    try {
+      await this.options.sessionStore.clear()
+    } catch (error) {
+      localFailure = this.normalizeError(error)
+    }
+
+    let remoteFailure: DesktopIdentityError | null = null
+    if (credentials && this.issuer) {
+      try {
+        const discovery = await this.readDiscovery()
+        if (discovery.revocationEndpoint) {
+          const response = await this.fetchImpl(discovery.revocationEndpoint, {
+            method: 'POST',
+            headers: { 'content-type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+              client_id: this.options.clientId,
+              token: credentials.refreshToken,
+              token_type_hint: 'refresh_token'
+            })
+          })
+          if (!response.ok) {
+            throw new DesktopIdentityError(
+              'OIDC_LOGOUT_FAILED',
+              `OIDC refresh-token revocation failed with HTTP ${response.status}.`
+            )
+          }
+        }
+        if (discovery.endSessionEndpoint) {
+          const endSession = new URL(discovery.endSessionEndpoint)
+          endSession.searchParams.set('client_id', this.options.clientId)
+          if (credentials.idToken) endSession.searchParams.set('id_token_hint', credentials.idToken)
+          await this.options.openExternal(endSession.toString())
+        }
+      } catch (error) {
+        const normalized = this.normalizeError(error)
+        remoteFailure = new DesktopIdentityError('OIDC_LOGOUT_FAILED', normalized.message)
+      }
+    }
+
+    const failure = localFailure ?? remoteFailure
+    return failure ? this.failure(failure) : { ok: true, status: this.status }
+  }
+
+  close(): void {
+    this.closed = true
+    this.clearRefreshTimer()
+    this.listeners.clear()
+    this.accessToken = null
+    this.credentials = null
+    this.status = { state: 'signed-out' }
+  }
+
+  private beginInteractiveLogin(forceReauthentication: boolean): Promise<DesktopIdentityActionResult> {
     if (this.loginPromise) return this.loginPromise
-    this.loginPromise = this.performLogin().finally(() => {
+    this.loginPromise = this.performLogin(forceReauthentication).finally(() => {
       this.loginPromise = null
     })
     return this.loginPromise
   }
 
-  logout(): DesktopIdentityActionResult {
-    this.setSession({ state: 'signed-out' }, null)
-    return { ok: true, status: this.status }
-  }
-
-  close(): void {
-    this.clearExpiryTimer()
-    this.listeners.clear()
-    this.accessToken = null
-    this.status = { state: 'signed-out' }
-  }
-
-  private async performLogin(): Promise<DesktopIdentityActionResult> {
-    let callbackServer: Awaited<ReturnType<typeof startCallbackServer>> | null = null
+  private async restoreSession(): Promise<DesktopIdentityActionResult> {
     try {
+      this.assertConfigured()
+      const stored = await this.options.sessionStore.load()
+      if (!stored) return { ok: true, status: this.status }
+      if (stored.issuer !== this.issuer || stored.clientId !== this.options.clientId) {
+        await this.options.sessionStore.clear()
+        return { ok: true, status: this.status }
+      }
+      this.credentials = {
+        refreshToken: stored.refreshToken,
+        ...(stored.idToken ? { idToken: stored.idToken } : {})
+      }
+      return await this.refreshSession()
+    } catch (error) {
+      return this.failure(this.normalizeError(error))
+    }
+  }
+
+  private async performLogin(forceReauthentication: boolean): Promise<DesktopIdentityActionResult> {
+    let callbackServer: Awaited<ReturnType<typeof startCallbackServer>> | null = null
+    const expectedUserId = forceReauthentication && this.status.state === 'signed-in'
+      ? this.status.user.userId
+      : null
+    try {
+      this.assertConfigured()
+      if (!forceReauthentication && this.getStatus().state === 'signed-in') {
+        return { ok: true, status: this.status }
+      }
       const discovery = await this.readDiscovery()
       const codeVerifier = base64Url(randomBytes(32))
       const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
@@ -398,45 +557,123 @@ export class DesktopIdentityService {
       callbackServer = await startCallbackServer(this.redirectUri, state)
 
       const authorizationUrl = new URL(discovery.authorizationEndpoint)
-      authorizationUrl.search = new URLSearchParams({
+      const authorizationParameters: Record<string, string> = {
         client_id: this.options.clientId,
         redirect_uri: this.redirectUri,
         response_type: 'code',
-        scope: 'openid profile email',
+        scope: 'openid profile email offline_access',
         code_challenge: codeChallenge,
         code_challenge_method: 'S256',
         state,
         nonce
-      }).toString()
+      }
+      if (forceReauthentication) {
+        authorizationParameters.prompt = 'login'
+        authorizationParameters.max_age = '0'
+      }
+      authorizationUrl.search = new URLSearchParams(authorizationParameters).toString()
       await this.options.openExternal(authorizationUrl.toString())
 
       const tokens = await this.exchangeCode(discovery, await callbackServer.code, codeVerifier)
-      const verified = await this.verifyTokens(discovery, tokens, nonce)
-      const currentUser = await this.options.identityClient.getCurrentUser({
-        accessToken: tokens.accessToken,
-        verifiedClaims: verifiedClaimsFromAccessToken(verified.accessClaims, verified.idClaims)
-      })
-      this.setSession(
-        statusFromClaims(verified.accessClaims, verified.idClaims, currentUser),
-        tokens.accessToken,
-        true
-      )
+      const verified = await this.verifyLoginTokens(discovery, tokens, nonce)
+      const currentUser = await this.readCurrentUser(tokens.accessToken, verified)
+      if (expectedUserId && currentUser.userId !== expectedUserId) {
+        throw new DesktopIdentityError(
+          'OIDC_REAUTH_USER_MISMATCH',
+          'Reauthentication completed for a different SciForge user.'
+        )
+      }
+      await this.activateSession(tokens, verified, currentUser)
       return { ok: true, status: this.status }
     } catch (error) {
       callbackServer?.close()
-      const normalized = this.normalizeError(error)
-      return {
-        ok: false,
-        error: { code: normalized.code, message: normalized.message },
-        status: this.getStatus()
-      }
+      return this.failure(this.normalizeError(error))
     }
   }
 
+  private refreshSession(): Promise<DesktopIdentityActionResult> {
+    if (this.refreshPromise) return this.refreshPromise
+    this.refreshPromise = this.performRefresh().finally(() => {
+      this.refreshPromise = null
+    })
+    return this.refreshPromise
+  }
+
+  private async performRefresh(): Promise<DesktopIdentityActionResult> {
+    const credentials = this.credentials
+    if (!credentials) {
+      return this.failure(new DesktopIdentityError('OIDC_SESSION_EXPIRED', 'The saved login session has expired.'))
+    }
+    try {
+      this.assertConfigured()
+      const discovery = await this.readDiscovery()
+      const tokens = await this.refreshTokens(discovery, credentials.refreshToken)
+      const verified = await this.verifyRefreshedTokens(discovery, tokens)
+      const currentUser = await this.readCurrentUser(tokens.accessToken, verified)
+      await this.activateSession({
+        ...tokens,
+        refreshToken: tokens.refreshToken ?? credentials.refreshToken,
+        idToken: tokens.idToken ?? credentials.idToken
+      }, verified, currentUser)
+      return { ok: true, status: this.status }
+    } catch (error) {
+      const normalized = this.normalizeError(error)
+      if (
+        normalized.code === 'OIDC_PROVIDER_UNAVAILABLE' ||
+        normalized.code === 'SCIFORGE_CLOUD_UNAVAILABLE'
+      ) {
+        this.scheduleRefreshRetry()
+        return this.failure(normalized)
+      }
+      this.credentials = null
+      this.setSession({ state: 'signed-out' }, null)
+      await this.options.sessionStore.clear().catch(() => undefined)
+      return this.failure(normalized)
+    }
+  }
+
+  private async activateSession(
+    tokens: TokenResponse,
+    verified: VerifiedTokens,
+    currentUser: MeResponse
+  ): Promise<void> {
+    if (!tokens.refreshToken) {
+      throw new DesktopIdentityError(
+        'OIDC_LOGIN_FAILED',
+        'The identity provider did not issue a refresh token for the Desktop session.'
+      )
+    }
+    const stored: StoredDesktopIdentitySession = {
+      version: 1,
+      issuer: this.requireIssuer(),
+      clientId: this.options.clientId,
+      refreshToken: tokens.refreshToken,
+      ...(tokens.idToken ? { idToken: tokens.idToken } : {})
+    }
+    const status = statusFromClaims(verified.accessClaims, verified.idClaims, currentUser)
+    if (status.state === 'signed-in') {
+      await this.options.linkAuthenticatedUser?.(status.user)
+    }
+    await this.options.sessionStore.save(stored)
+    this.credentials = {
+      refreshToken: stored.refreshToken,
+      ...(stored.idToken ? { idToken: stored.idToken } : {})
+    }
+    this.setSession(status, tokens.accessToken, true)
+  }
+
+  private async readCurrentUser(accessToken: string, verified: VerifiedTokens): Promise<MeResponse> {
+    return this.options.identityClient.getCurrentUser({
+      accessToken,
+      verifiedClaims: verifiedClaimsFromAccessToken(verified.accessClaims, verified.idClaims)
+    })
+  }
+
   private async readDiscovery(): Promise<OidcDiscovery> {
+    const issuer = this.requireIssuer()
     let response: Response
     try {
-      response = await this.fetchImpl(`${this.issuer}/.well-known/openid-configuration`)
+      response = await this.fetchImpl(`${issuer}/.well-known/openid-configuration`)
     } catch {
       throw new DesktopIdentityError('OIDC_PROVIDER_UNAVAILABLE', 'Cannot reach the SciForge login service.')
     }
@@ -446,8 +683,8 @@ export class DesktopIdentityService {
         `SciForge login discovery failed with HTTP ${response.status}.`
       )
     }
-    const payload = await response.json() as Record<string, unknown>
-    if (payload.issuer !== this.issuer) {
+    const payload = await response.json().catch(() => null) as Record<string, unknown> | null
+    if (!payload || payload.issuer !== issuer) {
       throw new DesktopIdentityError('OIDC_CONFIGURATION_ERROR', 'OIDC discovery returned a different issuer.')
     }
     const authorizationEndpoint = readString(payload.authorization_endpoint)
@@ -456,11 +693,19 @@ export class DesktopIdentityService {
     if (!authorizationEndpoint || !tokenEndpoint || !jwksUri) {
       throw new DesktopIdentityError('OIDC_CONFIGURATION_ERROR', 'OIDC discovery is missing required endpoints.')
     }
+    const revocationEndpoint = readString(payload.revocation_endpoint)
+    const endSessionEndpoint = readString(payload.end_session_endpoint)
     return {
-      issuer: this.issuer,
-      authorizationEndpoint: requireTrustedUrl(authorizationEndpoint, this.issuer, 'Authorization endpoint'),
-      tokenEndpoint: requireTrustedUrl(tokenEndpoint, this.issuer, 'Token endpoint'),
-      jwksUri: requireTrustedUrl(jwksUri, this.issuer, 'JWKS endpoint')
+      issuer,
+      authorizationEndpoint: requireTrustedUrl(authorizationEndpoint, issuer, 'Authorization endpoint'),
+      tokenEndpoint: requireTrustedUrl(tokenEndpoint, issuer, 'Token endpoint'),
+      jwksUri: requireTrustedUrl(jwksUri, issuer, 'JWKS endpoint'),
+      ...(revocationEndpoint
+        ? { revocationEndpoint: requireTrustedUrl(revocationEndpoint, issuer, 'Revocation endpoint') }
+        : {}),
+      ...(endSessionEndpoint
+        ? { endSessionEndpoint: requireTrustedUrl(endSessionEndpoint, issuer, 'End-session endpoint') }
+        : {})
     }
   }
 
@@ -469,56 +714,151 @@ export class DesktopIdentityService {
     code: string,
     codeVerifier: string
   ): Promise<TokenResponse> {
-    const response = await this.fetchImpl(discovery.tokenEndpoint, {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        client_id: this.options.clientId,
-        redirect_uri: this.redirectUri,
-        code,
-        code_verifier: codeVerifier
-      })
-    })
-    const payload = await response.json() as Record<string, unknown>
-    const accessToken = readString(payload.access_token)
-    const idToken = readString(payload.id_token)
-    if (!response.ok || !accessToken || !idToken) {
-      throw new DesktopIdentityError('OIDC_LOGIN_FAILED', 'SciForge could not exchange the login authorization code.')
-    }
-    return { accessToken, idToken }
+    return this.requestTokens(discovery.tokenEndpoint, new URLSearchParams({
+      grant_type: 'authorization_code',
+      client_id: this.options.clientId,
+      redirect_uri: this.redirectUri,
+      code,
+      code_verifier: codeVerifier
+    }), true)
   }
 
-  private async verifyTokens(
+  private async refreshTokens(discovery: OidcDiscovery, refreshToken: string): Promise<TokenResponse> {
+    return this.requestTokens(discovery.tokenEndpoint, new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: this.options.clientId,
+      refresh_token: refreshToken
+    }), false)
+  }
+
+  private async requestTokens(
+    tokenEndpoint: string,
+    body: URLSearchParams,
+    interactive: boolean
+  ): Promise<TokenResponse> {
+    let response: Response
+    try {
+      response = await this.fetchImpl(tokenEndpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body
+      })
+    } catch {
+      throw new DesktopIdentityError('OIDC_PROVIDER_UNAVAILABLE', 'Cannot reach the SciForge login service.')
+    }
+    const payload = await response.json().catch(() => null) as Record<string, unknown> | null
+    const accessToken = readString(payload?.access_token)
+    const idToken = readString(payload?.id_token)
+    const refreshToken = readString(payload?.refresh_token)
+    if (!response.ok || !accessToken || (interactive && (!idToken || !refreshToken))) {
+      if (!interactive && (response.status === 400 || response.status === 401)) {
+        throw new DesktopIdentityError('OIDC_SESSION_EXPIRED', 'The saved login session has expired.')
+      }
+      if (response.status >= 500) {
+        throw new DesktopIdentityError('OIDC_PROVIDER_UNAVAILABLE', 'The SciForge login service is unavailable.')
+      }
+      throw new DesktopIdentityError(
+        'OIDC_LOGIN_FAILED',
+        interactive
+          ? 'SciForge could not exchange the login authorization code.'
+          : 'SciForge could not refresh the Desktop login session.'
+      )
+    }
+    return {
+      accessToken,
+      ...(idToken ? { idToken } : {}),
+      ...(refreshToken ? { refreshToken } : {})
+    }
+  }
+
+  private async verifyLoginTokens(
     discovery: OidcDiscovery,
     tokens: TokenResponse,
     nonce: string
-  ): Promise<{ accessClaims: Record<string, unknown>; idClaims: Record<string, unknown> }> {
-    const jwksResponse = await this.fetchImpl(discovery.jwksUri)
-    if (!jwksResponse.ok) {
-      throw new DesktopIdentityError('OIDC_PROVIDER_UNAVAILABLE', 'SciForge could not load OIDC signing keys.')
+  ): Promise<VerifiedTokens> {
+    if (!tokens.idToken) {
+      throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The login response is missing an ID token.')
     }
-    const jwks = await jwksResponse.json() as JsonWebKeySet
-    if (!Array.isArray(jwks.keys)) {
-      throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The OIDC signing key response is invalid.')
-    }
+    const jwks = await this.readJwks(discovery)
     const accessParts = parseJwt(tokens.accessToken)
     const idParts = parseJwt(tokens.idToken)
     await verifyJwtSignature(accessParts, jwks)
     await verifyJwtSignature(idParts, jwks)
-    assertCommonClaims(accessParts.claims, this.issuer, this.options.audience, this.now())
-    assertCommonClaims(idParts.claims, this.issuer, this.options.clientId, this.now())
-    if (accessParts.claims.azp !== this.options.clientId) {
-      throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The access token was issued to another client.')
-    }
-    if (idParts.claims.nonce !== nonce) {
-      throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The OIDC login nonce does not match.')
+    assertAccessTokenClaims(
+      accessParts.claims,
+      this.requireIssuer(),
+      this.options.audience,
+      this.options.clientId,
+      this.now()
+    )
+    assertCommonClaims(idParts.claims, this.requireIssuer(), this.options.clientId, this.now())
+    if (idParts.claims.nonce !== nonce || idParts.claims.sub !== accessParts.claims.sub) {
+      throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The OIDC login nonce or subject does not match.')
     }
     return { accessClaims: accessParts.claims, idClaims: idParts.claims }
   }
 
+  private async verifyRefreshedTokens(
+    discovery: OidcDiscovery,
+    tokens: TokenResponse
+  ): Promise<VerifiedTokens> {
+    const jwks = await this.readJwks(discovery)
+    const accessParts = parseJwt(tokens.accessToken)
+    await verifyJwtSignature(accessParts, jwks)
+    assertAccessTokenClaims(
+      accessParts.claims,
+      this.requireIssuer(),
+      this.options.audience,
+      this.options.clientId,
+      this.now()
+    )
+    if (!tokens.idToken) return { accessClaims: accessParts.claims, idClaims: {} }
+
+    const idParts = parseJwt(tokens.idToken)
+    await verifyJwtSignature(idParts, jwks)
+    assertCommonClaims(idParts.claims, this.requireIssuer(), this.options.clientId, this.now())
+    if (idParts.claims.sub !== accessParts.claims.sub) {
+      throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The refreshed token subjects do not match.')
+    }
+    return { accessClaims: accessParts.claims, idClaims: idParts.claims }
+  }
+
+  private async readJwks(discovery: OidcDiscovery): Promise<JsonWebKeySet> {
+    let response: Response
+    try {
+      response = await this.fetchImpl(discovery.jwksUri)
+    } catch {
+      throw new DesktopIdentityError('OIDC_PROVIDER_UNAVAILABLE', 'SciForge could not load OIDC signing keys.')
+    }
+    if (!response.ok) {
+      throw new DesktopIdentityError('OIDC_PROVIDER_UNAVAILABLE', 'SciForge could not load OIDC signing keys.')
+    }
+    const jwks = await response.json().catch(() => null) as JsonWebKeySet | null
+    if (!jwks || !Array.isArray(jwks.keys)) {
+      throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The OIDC signing key response is invalid.')
+    }
+    return jwks
+  }
+
+  private assertConfigured(): void {
+    if (this.options.configurationError) {
+      throw new DesktopIdentityError('OIDC_CONFIGURATION_ERROR', this.options.configurationError)
+    }
+    this.requireIssuer()
+  }
+
+  private requireIssuer(): string {
+    if (!this.issuer) {
+      throw new DesktopIdentityError('OIDC_CONFIGURATION_ERROR', 'OIDC issuer is not configured.')
+    }
+    return this.issuer
+  }
+
   private normalizeError(error: unknown): DesktopIdentityError {
     if (error instanceof DesktopIdentityError) return error
+    if (error instanceof DesktopIdentitySessionStoreError) {
+      return new DesktopIdentityError('OIDC_SESSION_STORAGE_UNAVAILABLE', error.message)
+    }
     if (error instanceof CollaborationIdentityClientError) {
       if (error.code === 'authentication_required' || error.code === 'credential_revoked') {
         return new DesktopIdentityError('SCIFORGE_CLOUD_AUTH_FAILED', error.message)
@@ -540,16 +880,25 @@ export class DesktopIdentityService {
     )
   }
 
+  private failure(error: DesktopIdentityError): DesktopIdentityActionResult {
+    return {
+      ok: false,
+      error: { code: error.code, message: error.message },
+      status: this.getStatus()
+    }
+  }
+
   private setSession(
     status: DesktopIdentityStatus,
     accessToken: string | null,
     forcePublish = false
   ): void {
+    if (this.closed) return
     const changed = forcePublish || !sameIdentityStatus(this.status, status)
-    this.clearExpiryTimer()
+    this.clearRefreshTimer()
     this.status = status
     this.accessToken = accessToken
-    if (status.state === 'signed-in') this.scheduleExpiry(status.accessTokenExpiresAt)
+    if (status.state === 'signed-in') this.scheduleRefresh(status.accessTokenExpiresAt)
     if (!changed) return
     for (const listener of this.listeners) {
       try {
@@ -560,27 +909,30 @@ export class DesktopIdentityService {
     }
   }
 
-  private scheduleExpiry(expiresAt: string): void {
+  private scheduleRefresh(expiresAt: string): void {
     const remaining = Date.parse(expiresAt) - this.now()
-    if (remaining <= 0) {
-      this.setSession({ state: 'signed-out' }, null)
-      return
-    }
-    this.expiryTimer = setTimeout(() => {
-      this.expiryTimer = null
-      if (Date.parse(expiresAt) <= this.now()) {
-        this.setSession({ state: 'signed-out' }, null)
-      } else {
-        this.scheduleExpiry(expiresAt)
-      }
-    }, Math.min(remaining, 2_147_483_647))
-    this.expiryTimer.unref?.()
+    const delay = Math.max(0, remaining - REFRESH_LEEWAY_MS)
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null
+      void this.refreshSession()
+    }, Math.min(delay, MAX_TIMER_MS))
+    this.refreshTimer.unref?.()
   }
 
-  private clearExpiryTimer(): void {
-    if (this.expiryTimer === null) return
-    clearTimeout(this.expiryTimer)
-    this.expiryTimer = null
+  private scheduleRefreshRetry(): void {
+    if (!this.credentials || this.closed) return
+    this.clearRefreshTimer()
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null
+      void this.refreshSession()
+    }, REFRESH_RETRY_MS)
+    this.refreshTimer.unref?.()
+  }
+
+  private clearRefreshTimer(): void {
+    if (this.refreshTimer === null) return
+    clearTimeout(this.refreshTimer)
+    this.refreshTimer = null
   }
 }
 

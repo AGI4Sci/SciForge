@@ -50,7 +50,7 @@ function signedIn(subject: string, accessTokenExpiresAt: string): DesktopIdentit
     state: 'signed-in',
     user: {
       userId: 'usr_CloudUser000001',
-      externalIdentityId: 'xid_CloudIdent0001',
+      oidcIdentityId: 'oid_CloudIdent0001',
       issuer: 'https://login-test.sciforge.cn/realms/SciForge',
       subject,
       displayName: 'Cloud Person',

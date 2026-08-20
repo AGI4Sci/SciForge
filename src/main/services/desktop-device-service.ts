@@ -2,6 +2,7 @@ import {
   createHash,
   createPrivateKey,
   generateKeyPairSync,
+  randomUUID,
   sign,
   type JsonWebKey as CryptoJsonWebKey
 } from 'node:crypto'
@@ -9,11 +10,11 @@ import { chmod, readFile } from 'node:fs/promises'
 import { hostname, release } from 'node:os'
 import { join } from 'node:path'
 import {
-  deviceEnrollmentProofMessage,
-  devicePublicKeySchema,
+  canonicalDeviceEnrollmentBytes,
+  ed25519PublicJwkSchema,
   installationIdSchema,
-  type DevicePublicKey,
-  type DeviceRecord
+  type Device,
+  type Ed25519PublicJwk
 } from '@sciforge/collaboration-contracts'
 import type {
   CollaborationIdentityClient,
@@ -46,11 +47,12 @@ type DesktopDeviceServiceOptions = Readonly<{
   osVersion?: string
   displayName?: string
   capabilities?: readonly string[]
+  linkDevice?: (device: Device) => void | Promise<void>
 }>
 
 type StoredDeviceKey = Readonly<{
   version: 1
-  publicKey: DevicePublicKey
+  publicKey: Ed25519PublicJwk
   encryptedPrivateKey: string
 }>
 
@@ -62,9 +64,10 @@ export class DesktopDeviceService {
   readonly #installationId: string
   readonly #keyPath: string
   readonly #encryption: Encryption
-  readonly #platform: DeviceRecord['platform']
+  readonly #platform: Device['platform']
   readonly #displayName: string
   readonly #capabilities: readonly string[]
+  readonly #linkDevice: DesktopDeviceServiceOptions['linkDevice']
   readonly #listeners = new Set<DesktopDeviceStatusListener>()
   readonly #disposeIdentitySubscription: () => void
   #status: DesktopDeviceStatus
@@ -80,6 +83,7 @@ export class DesktopDeviceService {
     this.#platform = devicePlatform(options)
     this.#displayName = options.displayName?.trim() || hostname() || 'SciForge Desktop'
     this.#capabilities = options.capabilities ?? ['agent.execute', 'workspace.read']
+    this.#linkDevice = options.linkDevice
     this.#status = options.identity.getStatus().state === 'signed-in'
       ? { state: 'not-enrolled' }
       : { state: 'signed-out' }
@@ -115,12 +119,11 @@ export class DesktopDeviceService {
       const response = await this.#client.listDevices(context)
       this.#devices = response.devices.map(toSummary)
       const current = response.devices.find((device) => device.installationId === this.#installationId)
+      if (current) await this.#identityLink(current)
       this.#publish(current
         ? current.status === 'revoked'
           ? { state: 'revoked', device: toSummary(current) }
-          : current.status === 'active'
-            ? { state: 'active', device: toSummary(current) }
-            : { state: 'not-enrolled' }
+          : { state: 'active', device: toSummary(current) }
         : { state: 'not-enrolled' })
       return { ok: true, status: this.#status, devices: this.listDevices() as DesktopDeviceSummary[] }
     } catch (error) {
@@ -130,7 +133,10 @@ export class DesktopDeviceService {
 
   async revoke(deviceId: string): Promise<DesktopDeviceActionResult> {
     try {
-      await this.#client.revokeDevice(this.#accessContext(), deviceId)
+      await this.#client.revokeDevice(this.#accessContext(), {
+        deviceId,
+        idempotencyKey: desktopIdempotencyKey('device-revoke')
+      })
       return await this.refresh()
     } catch (error) {
       return this.#failure(error)
@@ -154,10 +160,12 @@ export class DesktopDeviceService {
       this.#devices = listed.devices.map(toSummary)
       const existing = listed.devices.find((device) => device.installationId === this.#installationId)
       if (existing?.status === 'active') {
+        await this.#identityLink(existing)
         this.#publish({ state: 'active', device: toSummary(existing) })
         return { ok: true, status: this.#status, devices: this.listDevices() as DesktopDeviceSummary[] }
       }
       if (existing?.status === 'revoked') {
+        await this.#identityLink(existing)
         this.#publish({ state: 'revoked', device: toSummary(existing) })
         return {
           ok: false,
@@ -167,23 +175,36 @@ export class DesktopDeviceService {
         }
       }
 
+      const identity = this.#identity.getStatus()
+      if (identity.state !== 'signed-in') {
+        throw new Error('The SciForge Cloud user is unavailable during Device enrollment.')
+      }
       const key = await this.#loadOrCreateKey()
-      const challenge = await this.#client.startDeviceEnrollment(context, {
-        installationId: this.#installationId
+      const challenge = await this.#client.createDeviceEnrollment(context, {
+        installationId: this.#installationId,
+        idempotencyKey: desktopIdempotencyKey('device-enrollment')
       })
       const signature = sign(
         null,
-        Buffer.from(deviceEnrollmentProofMessage(challenge)),
+        canonicalDeviceEnrollmentBytes({
+          enrollmentId: challenge.enrollmentId,
+          nonce: challenge.nonce,
+          userId: identity.user.userId,
+          installationId: this.#installationId,
+          expiresAt: challenge.expiresAt
+        }),
         createPrivateKey({ key: key.privateKey, format: 'jwk' })
       ).toString('base64url')
-      const device = await this.#client.registerDevice(context, {
+      const device = await this.#client.createDevice(context, {
         enrollmentId: challenge.enrollmentId,
+        nonce: challenge.nonce,
         installationId: this.#installationId,
         displayName: this.#displayName,
         platform: this.#platform,
-        publicKey: key.publicKey,
-        capabilities: [...this.#capabilities],
-        proof: { alg: 'EdDSA', signature }
+        publicKeyJwk: key.publicKey,
+        capabilitySummary: [...this.#capabilities],
+        signature,
+        idempotencyKey: desktopIdempotencyKey('device-create')
       })
       await this.refresh()
       this.#publish({ state: 'active', device: toSummary(device) })
@@ -199,7 +220,7 @@ export class DesktopDeviceService {
     return { accessToken }
   }
 
-  async #loadOrCreateKey(): Promise<{ publicKey: DevicePublicKey; privateKey: CryptoJsonWebKey }> {
+  async #loadOrCreateKey(): Promise<{ publicKey: Ed25519PublicJwk; privateKey: CryptoJsonWebKey }> {
     if (this.#encryption.state() !== 'available') {
       throw new Error('Secure operating-system storage is unavailable for the Desktop private key.')
     }
@@ -210,7 +231,7 @@ export class DesktopDeviceService {
     if (existing) {
       const stored = JSON.parse(existing) as StoredDeviceKey
       if (stored.version !== 1) throw new Error('The stored Desktop key has an unsupported version.')
-      const publicKey = devicePublicKeySchema.parse(stored.publicKey)
+      const publicKey = ed25519PublicJwkSchema.parse(stored.publicKey)
       const privateKey = JSON.parse(
         this.#encryption.decryptString(Buffer.from(stored.encryptedPrivateKey, 'base64'))
       ) as CryptoJsonWebKey
@@ -224,7 +245,7 @@ export class DesktopDeviceService {
     const exportedPublic = pair.publicKey.export({ format: 'jwk' })
     const privateKey = pair.privateKey.export({ format: 'jwk' })
     const x = String(exportedPublic.x ?? '')
-    const publicKey = devicePublicKeySchema.parse({
+    const publicKey = ed25519PublicJwkSchema.parse({
       kty: 'OKP',
       crv: 'Ed25519',
       alg: 'EdDSA',
@@ -254,6 +275,10 @@ export class DesktopDeviceService {
     return { ok: false, status: this.#status, devices: this.listDevices() as DesktopDeviceSummary[], message }
   }
 
+  async #identityLink(device: Device): Promise<void> {
+    await this.#linkDevice?.(device)
+  }
+
   #publish(status: DesktopDeviceStatus): void {
     this.#status = status
     for (const listener of this.#listeners) {
@@ -272,7 +297,7 @@ export function cloudInstallationId(seed: string): string {
   return `ins_${createHash('sha256').update(seed).digest('hex').slice(0, 32)}`
 }
 
-function devicePlatform(options: DesktopDeviceServiceOptions): DeviceRecord['platform'] {
+function devicePlatform(options: DesktopDeviceServiceOptions): Device['platform'] {
   const platform = options.platform ?? process.platform
   const architecture = options.architecture ?? process.arch
   const os = platform === 'win32' ? 'windows' : platform === 'darwin' ? 'macos' : 'linux'
@@ -281,13 +306,16 @@ function devicePlatform(options: DesktopDeviceServiceOptions): DeviceRecord['pla
   return { os, arch, osVersion, appVersion: options.appVersion }
 }
 
-function toSummary(device: DeviceRecord): DesktopDeviceSummary {
+function toSummary(device: Device): DesktopDeviceSummary {
   return {
     deviceId: device.deviceId,
     displayName: device.displayName,
     status: device.status,
     platform: device.platform,
-    ...(device.activatedAt ? { activatedAt: device.activatedAt } : {}),
     ...(device.revokedAt ? { revokedAt: device.revokedAt } : {})
   }
+}
+
+function desktopIdempotencyKey(operation: string): string {
+  return `idem_desktop_${operation}_${randomUUID()}`
 }

@@ -25,6 +25,8 @@ import {
 } from '../definition.js'
 import { IdentityService } from './service.js'
 
+export { LocalCloudIdentityLinkService } from './cloud-link-service.js'
+
 type IdentityCapabilityEffect = 'read' | 'external-write' | 'destructive'
 type IdentityCapabilityContext = Readonly<{
   caller: Readonly<{ audience: 'ui' | 'agent' | 'system' }>

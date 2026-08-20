@@ -22,7 +22,7 @@ export const compatibleProtocolVersionSchema = versionStringSchema.refine(
   { message: `Protocol version must be compatible with ${CURRENT_PROTOCOL_VERSION}` }
 )
 
-const opaqueSuffix = '[A-Za-z0-9]{12,64}'
+const opaqueSuffix = '[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])'
 
 function opaqueId(prefix: string): z.ZodString {
   return z.string().regex(new RegExp(`^${prefix}_${opaqueSuffix}$`, 'u'))

@@ -292,7 +292,7 @@ export type RegisterAppIpcHandlersOptions = {
   isTrustedIpcSender: (event: IpcMainInvokeEvent) => boolean
   applySettingsPatch: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   getModelAccessStatus: (settings: AppSettingsV1) => Promise<ModelAccessStatus>
-  desktopIdentity: Pick<DesktopIdentityService, 'getStatus' | 'login' | 'logout'>
+  desktopIdentity: Pick<DesktopIdentityService, 'getStatus' | 'login' | 'reauthenticate' | 'logout'>
   desktopDevice: Pick<DesktopDeviceService, 'getStatus' | 'listDevices' | 'ensureRegistered' | 'refresh' | 'revoke'>
   traces?: {
     read: (query?: TraceReadQuery) => Promise<TraceReadResult>
@@ -829,6 +829,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   handleInvoke('modelAccess:status', async () => getModelAccessStatus(await store.load()))
   handleInvoke('identity:status', async () => desktopIdentity.getStatus())
   handleInvoke('identity:login', async () => desktopIdentity.login())
+  handleInvoke('identity:reauthenticate', async () => desktopIdentity.reauthenticate())
   handleInvoke('identity:logout', async () => desktopIdentity.logout())
   handleInvoke('identity:device-status', async () => desktopDevice.getStatus())
   handleInvoke('identity:device-list', async () => desktopDevice.listDevices())

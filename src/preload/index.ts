@@ -43,8 +43,25 @@ const api = {
   identity: {
     getStatus: () => ipcRenderer.invoke('identity:status'),
     login: () => ipcRenderer.invoke('identity:login'),
+    reauthenticate: () => ipcRenderer.invoke('identity:reauthenticate'),
     logout: () => ipcRenderer.invoke('identity:logout'),
+    onStatusChanged: (handler) => {
+      const wrapped = (
+        _: Electron.IpcRendererEvent,
+        status: Parameters<typeof handler>[0]
+      ) => handler(status)
+      ipcRenderer.on('identity:status-changed', wrapped)
+      return () => ipcRenderer.removeListener('identity:status-changed', wrapped)
+    },
     getDeviceStatus: () => ipcRenderer.invoke('identity:device-status'),
+    onDeviceStatusChanged: (handler) => {
+      const wrapped = (
+        _: Electron.IpcRendererEvent,
+        status: Parameters<typeof handler>[0]
+      ) => handler(status)
+      ipcRenderer.on('identity:device-status-changed', wrapped)
+      return () => ipcRenderer.removeListener('identity:device-status-changed', wrapped)
+    },
     listDevices: () => ipcRenderer.invoke('identity:device-list'),
     enrollDevice: () => ipcRenderer.invoke('identity:device-enroll'),
     refreshDevices: () => ipcRenderer.invoke('identity:device-refresh'),

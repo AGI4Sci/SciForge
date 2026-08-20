@@ -608,8 +608,11 @@ export type SciForgeApi = {
   identity: {
     getStatus: () => Promise<DesktopIdentityStatus>
     login: () => Promise<DesktopIdentityActionResult>
+    reauthenticate: () => Promise<DesktopIdentityActionResult>
     logout: () => Promise<DesktopIdentityActionResult>
+    onStatusChanged: (handler: (status: DesktopIdentityStatus) => void) => () => void
     getDeviceStatus: () => Promise<DesktopDeviceStatus>
+    onDeviceStatusChanged: (handler: (status: DesktopDeviceStatus) => void) => () => void
     listDevices: () => Promise<readonly DesktopDeviceSummary[]>
     enrollDevice: () => Promise<DesktopDeviceActionResult>
     refreshDevices: () => Promise<DesktopDeviceActionResult>

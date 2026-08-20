@@ -19,12 +19,12 @@ async function testDirectory(): Promise<string> {
   return directory
 }
 
-function signedInStatus(userId: string, externalIdentityId: string): DesktopIdentityStatus {
+function signedInStatus(userId: string, oidcIdentityId: string): DesktopIdentityStatus {
   return {
     state: 'signed-in',
     user: {
       userId,
-      externalIdentityId,
+      oidcIdentityId,
       issuer: 'https://login.sciforge.example/realms/SciForge',
       subject: 'keycloak-user-001',
       displayName: 'Researcher One',
@@ -51,7 +51,7 @@ describe('DesktopDeviceService', () => {
         displayName: 'Researcher One'
       })
     })
-    const status = signedInStatus(current.user.userId, current.identity.externalIdentityId)
+    const status = signedInStatus(current.userId, current.oidcIdentityId)
     const encryptString = vi.fn((value: string) => (
       Buffer.from(`sealed:${Buffer.from(value).toString('base64')}`)
     ))

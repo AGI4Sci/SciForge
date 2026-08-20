@@ -18,11 +18,25 @@ export const IDENTITY_ACCOUNT_COMMAND_ID = 'identity-access.open-account' as con
 export const IDENTITY_ACCOUNT_OVERLAY_ID = 'identity-access.account-overlay' as const
 export const MAX_LOCAL_ACCOUNTS = 1_024
 
+const cloudOpaqueSuffix = '[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])'
+const cloudOpaqueId = (prefix: string): z.ZodString =>
+  z.string().regex(new RegExp(`^${prefix}_${cloudOpaqueSuffix}$`, 'u'))
+
+export const localCloudIdentityLinkSchema = z.object({
+  cloudUserId: cloudOpaqueId('usr'),
+  oidcIdentityId: cloudOpaqueId('oid'),
+  issuer: z.string().url().max(2_048),
+  subject: z.string().min(1).max(512),
+  deviceId: cloudOpaqueId('dev').optional(),
+  deviceStatus: z.enum(['active', 'revoked']).optional()
+}).strict().readonly()
+
 export const localAccountSchema = z.object({
   userId: z.string().uuid(),
   username: z.string().min(1).max(64),
   createdAt: z.string().datetime({ offset: true }),
-  updatedAt: z.string().datetime({ offset: true })
+  updatedAt: z.string().datetime({ offset: true }),
+  cloudIdentity: localCloudIdentityLinkSchema.optional()
 }).strict().readonly()
 
 export const identityUnavailableReasonSchema = z.enum([
@@ -80,6 +94,7 @@ export const identityBackupAndResetOutputSchema = z.object({
 }).strict().readonly()
 
 export type LocalAccount = z.infer<typeof localAccountSchema>
+export type LocalCloudIdentityLink = z.infer<typeof localCloudIdentityLinkSchema>
 export type IdentityAvailableState = z.infer<typeof identityAvailableStateSchema>
 export type IdentityUnavailableState = z.infer<typeof identityUnavailableStateSchema>
 export type IdentityUiState = z.infer<typeof identityUiStateSchema>

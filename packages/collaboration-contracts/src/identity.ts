@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer'
 import { z } from 'zod'
 import {
   agentIdSchema,
@@ -5,10 +6,13 @@ import {
   displayNameSchema,
   entityMetadataShape,
   humanEndpointIdSchema,
+  idempotencyKeySchema,
   installationIdSchema,
   protocolEnvelopeShape,
   protocolVersionSchema,
   requestIdSchema,
+  revisionSchema,
+  schemaVersionSchema,
   timestampSchema,
   userIdSchema
 } from './core.js'
@@ -19,9 +23,34 @@ import {
   userPrincipalSchema
 } from './entities.js'
 
-const opaqueSuffix = '[A-Za-z0-9]{12,64}'
+const opaqueSuffix = '[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])'
 
-export const externalIdentityIdSchema = z.string().regex(new RegExp(`^xid_${opaqueSuffix}$`, 'u'))
+function opaqueId(prefix: string): z.ZodString {
+  return z.string().regex(new RegExp(`^${prefix}_${opaqueSuffix}$`, 'u'))
+}
+
+function uniqueStrings(values: readonly string[]): boolean {
+  return new Set(values).size === values.length
+}
+
+function isBase64UrlBytes(value: string, expectedBytes: number | { min: number }): boolean {
+  if (!/^[A-Za-z0-9_-]+$/u.test(value) || value.length % 4 === 1) return false
+  try {
+    const decoded = Buffer.from(value, 'base64url')
+    if (decoded.toString('base64url') !== value) return false
+    return typeof expectedBytes === 'number'
+      ? decoded.length === expectedBytes
+      : decoded.length >= expectedBytes.min
+  } catch {
+    return false
+  }
+}
+
+export const oidcIdentityIdSchema = opaqueId('oid')
+export const deviceEnrollmentIdSchema = opaqueId('enr')
+export const externalIdentityIdSchema = opaqueId('xid')
+export type OidcIdentityId = z.infer<typeof oidcIdentityIdSchema>
+export type DeviceEnrollmentId = z.infer<typeof deviceEnrollmentIdSchema>
 export const oidcSubjectSchema = z.string().min(1).max(512)
 export const oidcAudienceSchema = z.string().trim().min(1).max(512)
 export const identityEmailSchema = z.string().trim().email().max(320)
@@ -153,8 +182,8 @@ export const deviceArchitectureSchema = z.enum(['x64', 'arm64'])
 export const devicePlatformSchema = z.object({
   os: deviceOperatingSystemSchema,
   arch: deviceArchitectureSchema,
-  osVersion: z.string().trim().min(1).max(100).optional(),
-  appVersion: z.string().trim().min(1).max(100)
+  osVersion: z.string().trim().min(1).max(200).optional(),
+  appVersion: z.string().trim().min(1).max(200)
 }).strict()
 export type DevicePlatform = z.infer<typeof devicePlatformSchema>
 
@@ -163,14 +192,24 @@ export const devicePublicKeySchema = z.object({
   crv: z.literal('Ed25519'),
   alg: z.literal('EdDSA'),
   use: z.literal('sig'),
-  kid: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/u),
-  x: z.string().regex(/^[A-Za-z0-9_-]{43}$/u)
+  kid: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u),
+  x: z.string().min(1).max(128).refine((value) => isBase64UrlBytes(value, 32), {
+    message: 'Ed25519 public JWK x must be canonical base64url for exactly 32 bytes'
+  })
 }).strict()
 export type DevicePublicKey = z.infer<typeof devicePublicKeySchema>
+export const ed25519PublicJwkSchema = devicePublicKeySchema
+export type Ed25519PublicJwk = DevicePublicKey
 
-const enrollmentIdSchema = z.string().regex(new RegExp(`^enr_${opaqueSuffix}$`, 'u'))
-const enrollmentNonceSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/u)
-const ed25519SignatureSchema = z.string().regex(/^[A-Za-z0-9_-]{86}$/u)
+const enrollmentIdSchema = deviceEnrollmentIdSchema
+export const enrollmentNonceSchema = z.string().min(43).max(512).refine(
+  (value) => isBase64UrlBytes(value, { min: 32 }),
+  { message: 'Device enrollment nonce must be canonical base64url for at least 32 bytes' }
+)
+export const ed25519SignatureSchema = z.string().min(86).max(128).refine(
+  (value) => isBase64UrlBytes(value, 64),
+  { message: 'Ed25519 signature must be canonical base64url for exactly 64 bytes' }
+)
 
 export const deviceEnrollmentStartSchema = z.object({
   installationId: installationIdSchema
@@ -208,7 +247,7 @@ export const desktopDeviceRegistrationSchema = z.object({
 }).strict()
 export type DesktopDeviceRegistration = z.infer<typeof desktopDeviceRegistrationSchema>
 
-export const deviceStatusSchema = z.enum(['pending', 'active', 'revoked'])
+export const legacyDeviceStatusSchema = z.enum(['pending', 'active', 'revoked'])
 export const deviceRecordSchema = z.object({
   ...entityMetadataShape,
   type: z.literal('device'),
@@ -218,7 +257,7 @@ export const deviceRecordSchema = z.object({
   displayName: displayNameSchema,
   platform: devicePlatformSchema,
   publicKey: devicePublicKeySchema,
-  status: deviceStatusSchema,
+  status: legacyDeviceStatusSchema,
   activatedAt: timestampSchema.optional(),
   revokedAt: timestampSchema.optional()
 }).strict().superRefine((device, context) => {
@@ -238,6 +277,118 @@ export const currentDevicesResponseSchema = z.object({
   devices: z.array(deviceRecordSchema).max(100)
 }).strict()
 export type CurrentDevicesResponse = z.infer<typeof currentDevicesResponseSchema>
+
+// A's frozen public identity contract at 028827a8252e25cce2a99aa9e98118bb9022d8e7.
+// These schemas intentionally mirror the REST payloads rather than the legacy
+// protocol envelopes above.
+export const meResponseSchema = z.object({
+  schemaVersion: schemaVersionSchema,
+  type: z.literal('me'),
+  userId: userIdSchema,
+  displayName: displayNameSchema,
+  status: z.literal('active'),
+  oidcIdentityId: oidcIdentityIdSchema,
+  issuer: oidcIssuerSchema,
+  revision: revisionSchema,
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema
+}).strict()
+export type MeResponse = z.infer<typeof meResponseSchema>
+
+export const deviceStatusSchema = z.enum(['active', 'revoked'])
+export const deviceCapabilitySchema = z.string().regex(/^[a-z][a-z0-9_.-]{0,127}$/u)
+
+export const deviceSchema = z.object({
+  ...entityMetadataShape,
+  type: z.literal('device'),
+  deviceId: deviceIdSchema,
+  userId: userIdSchema,
+  installationId: installationIdSchema,
+  displayName: displayNameSchema,
+  platform: devicePlatformSchema,
+  publicKeyJwk: ed25519PublicJwkSchema,
+  capabilitySummary: z.array(deviceCapabilitySchema).max(256)
+    .refine(uniqueStrings, 'Device capability summary values must be unique'),
+  status: deviceStatusSchema,
+  revokedAt: timestampSchema.optional()
+}).strict().superRefine((device, context) => {
+  if ((device.status === 'revoked') !== (device.revokedAt !== undefined)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['revokedAt'],
+      message: 'Revoked Device requires revokedAt exclusively'
+    })
+  }
+})
+export type Device = z.infer<typeof deviceSchema>
+
+export const deviceEnrollmentCreateRequestSchema = z.object({
+  installationId: installationIdSchema,
+  idempotencyKey: idempotencyKeySchema
+}).strict()
+export type DeviceEnrollmentCreateRequest = z.infer<typeof deviceEnrollmentCreateRequestSchema>
+
+export const deviceEnrollmentCreateResponseSchema = z.object({
+  enrollmentId: deviceEnrollmentIdSchema,
+  nonce: enrollmentNonceSchema,
+  expiresAt: timestampSchema
+}).strict()
+export type DeviceEnrollmentCreateResponse = z.infer<typeof deviceEnrollmentCreateResponseSchema>
+
+export const deviceCreateRequestSchema = z.object({
+  enrollmentId: deviceEnrollmentIdSchema,
+  nonce: enrollmentNonceSchema,
+  installationId: installationIdSchema,
+  displayName: displayNameSchema,
+  platform: devicePlatformSchema,
+  publicKeyJwk: ed25519PublicJwkSchema,
+  capabilitySummary: z.array(deviceCapabilitySchema).max(256)
+    .refine(uniqueStrings, 'Device capability summary values must be unique'),
+  signature: ed25519SignatureSchema,
+  idempotencyKey: idempotencyKeySchema
+}).strict()
+export type DeviceCreateRequest = z.infer<typeof deviceCreateRequestSchema>
+
+export const deviceResponseSchema = z.object({ device: deviceSchema }).strict()
+export type DeviceResponse = z.infer<typeof deviceResponseSchema>
+
+export const deviceListResponseSchema = z.object({
+  devices: z.array(deviceSchema).max(1_000)
+    .refine(
+      (devices) => uniqueStrings(devices.map((device) => device.deviceId)),
+      'Device IDs must be unique'
+    )
+}).strict()
+export type DeviceListResponse = z.infer<typeof deviceListResponseSchema>
+
+export const deviceRevokeRequestSchema = z.object({
+  deviceId: deviceIdSchema,
+  idempotencyKey: idempotencyKeySchema
+}).strict()
+export type DeviceRevokeRequest = z.infer<typeof deviceRevokeRequestSchema>
+
+export type DeviceEnrollmentSigningFacts = Readonly<{
+  enrollmentId: string
+  nonce: string
+  userId: string
+  installationId: string
+  expiresAt: string
+}>
+
+export function canonicalDeviceEnrollmentBytes(input: DeviceEnrollmentSigningFacts): Buffer {
+  const values = [
+    'SCIFORGE-DEVICE-ENROLLMENT-V1',
+    input.enrollmentId,
+    input.nonce,
+    input.userId,
+    input.installationId,
+    input.expiresAt
+  ]
+  if (values.some((value) => !value || value.includes('\n') || value.includes('\r'))) {
+    throw new TypeError('Enrollment signing fields must be non-empty strings without line breaks.')
+  }
+  return Buffer.from(values.join('\n'), 'utf8')
+}
 
 export const deviceAgentLinkSchema = z.object({
   deviceId: deviceIdSchema,

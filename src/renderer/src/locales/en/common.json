@@ -1995,6 +1995,8 @@
   "desktopIdentityLogoutFailed": "SciForge sign-out failed.",
   "desktopIdentitySignedInAs": "Signed in as {{name}}",
   "desktopIdentityAccountMenu": "SciForge account",
+  "desktopIdentityReauthenticate": "Reauthenticate",
+  "desktopIdentityReauthenticationFailed": "SciForge reauthentication failed.",
   "desktopIdentityLogout": "Sign out",
   "desktopDeviceConnected": "This Desktop is connected",
   "desktopDeviceNotConnected": "This Desktop is not connected",

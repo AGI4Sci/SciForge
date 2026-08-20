@@ -22,12 +22,44 @@ describe('collaboration identity clients', () => {
     const first = await client.getCurrentUser({ accessToken: 'local-token', verifiedClaims: claims })
     const second = await client.getCurrentUser({ accessToken: 'local-token', verifiedClaims: claims })
 
-    expect(second.user.userId).toBe(first.user.userId)
-    expect(second.identity).toMatchObject({
-      userId: first.user.userId,
+    expect(second.userId).toBe(first.userId)
+    expect(second).toMatchObject({
+      userId: first.userId,
       issuer: claims.issuer,
-      subject: claims.subject
+      status: 'active'
     })
+  })
+
+  it('sends A Device write idempotency in both the header and JSON body', async () => {
+    const idempotencyKey = 'idem_device_enrollment_0001'
+    const fetchImpl = vi.fn(async () => Response.json({
+      enrollmentId: 'enr_Enrollment0001',
+      nonce: 'a'.repeat(43),
+      expiresAt: '2026-08-19T04:05:00.000Z'
+    })) as unknown as typeof fetch
+    const client = new HttpCollaborationIdentityClient({
+      baseUrl: 'https://cloud.example.test',
+      fetchImpl
+    })
+
+    await client.createDeviceEnrollment(
+      { accessToken: 'access-token' },
+      { installationId: 'ins_Desktop000001', idempotencyKey }
+    )
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://cloud.example.test/v1/device-enrollments',
+      {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer access-token',
+          accept: 'application/json',
+          'content-type': 'application/json',
+          'idempotency-key': idempotencyKey
+        },
+        body: JSON.stringify({ installationId: 'ins_Desktop000001', idempotencyKey })
+      }
+    )
   })
 
   it('calls GET /v1/me with the OIDC access token', async () => {
