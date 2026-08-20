@@ -20,6 +20,10 @@
 当前手机端就是官方 Zulip App，不是 SciForge 仓库内开发或打包的自研手机 App；用户无需编译、安装
 仓库中的任何移动端工程。
 
+启用“托管私人 Channel”的组织还可以由管理员为每位用户配置一个私人、受保护历史的 Channel。Channel
+只有该用户与 SciForge Bot；用户在手机中手工创建项目 Topic，再在 Desktop 中分别把每个 Topic 连接到
+不同的固定 Session。普通 Bot 私聊仍只用于 `/bind`，不能控制 Desktop Agent。
+
 ## 版本与发布关系
 
 桌面协作域与云端协作服务的源码可追溯到同一个 `gui` commit，以保证通信契约一致；但桌面安装包与
@@ -78,6 +82,19 @@ Coordinator，不是任何成员的私人 Session，也不会广播唤醒全部 
 
 同一 Zulip 身份不能同时绑定到两个 active User。手机丢失、账号异常或人员变更时，应立即断开本机
 协作连接并联系管理员按端点管理流程撤销绑定；如 Bot 服务凭据也可能泄漏，再由管理员单独轮换。
+
+### 3.1 私人 Channel 与多个固定 Session（启用后）
+
+1. 在协作面板的“托管私人 Channel”中确认状态为 active，隐私、历史、成员、发言和 Topic 检查均通过。
+2. 在手机 Zulip 的该 Channel 中手工创建项目 Topic；SciForge Bot 不会主动创建项目 Topic。
+3. 回到 Desktop 点击“刷新 Topic”，完整 discovery 完成后为每个 Topic 分别选择 Agent runtime 和现有或新 Session。
+4. 在每个 Topic 发一条无敏感内容的测试消息，确认回复回到原 Topic，面板中的 runtimeId/threadId 互不相同。
+5. “检查状态”执行真实只读核验；发现 drifted 时不要自行改权限，联系管理员使用受控的“修复”操作。
+
+Topic 名称可以调整，但不要删除后以同名 Topic 代替原 Topic；路由依据稳定 locator，不是显示名称。私人
+Channel 只隔离普通未授权用户，不是端到端加密。Channel 内所有 Topic 共享同一阅读权限；需要不同成员
+权限的项目必须使用不同私人 Channel。详细管理员流程见
+[每用户私人 Zulip Channel 运维说明](./operations/zulip-private-channel-provisioning.zh-CN.md)。
 
 ## 4. 注册并选择主要 Agent
 

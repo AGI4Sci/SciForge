@@ -447,6 +447,11 @@ free -h
 
 ## 11. Zulip 组织、Bot 与手机
 
+如需启用“每用户私人 Channel + 多 Topic + 固定 Session”，必须使用独立 provisioning 身份，不能给
+Generic Bot 添加成员或 Channel 管理权限。配置、schema v3、staging 验收和生产批准闸门见
+[每用户私人 Zulip Channel 运维说明](./zulip-private-channel-provisioning.zh-CN.md)。该功能与 `/bind`
+身份绑定分离：`/bind` 只确认 Zulip 用户归属，不创建项目 Topic，也不改变普通私聊不能控制 Agent 的边界。
+
 每名真人使用独立 Zulip 账号，不能共用管理员或 Bot 账号。专用 Generic bot 订阅允许协作的 channel；
 Bot 的 API key 只注入云端 provider secret，不再下发到每台桌面。
 
