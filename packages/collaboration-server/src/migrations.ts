@@ -2,10 +2,14 @@ import { readFile } from 'node:fs/promises'
 
 import type { SqlPool } from './postgres.js'
 
-export const COLLABORATION_SCHEMA_VERSION = 2
+export const COLLABORATION_SCHEMA_VERSION = 3
 
 export async function runCollaborationMigrations(pool: SqlPool): Promise<void> {
-  for (const name of ['0001_collaboration_schema.sql', '0002_provider_identity_inbox.sql']) {
+  for (const name of [
+    '0001_collaboration_schema.sql',
+    '0002_provider_identity_inbox.sql',
+    '0003_managed_provider_containers.sql'
+  ]) {
     const sql = await readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8')
     await pool.query(sql)
   }
