@@ -1,0 +1,108 @@
+{
+  "realm": "SciForge",
+  "displayName": "SciForge",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": true,
+  "registrationEmailAsUsername": false,
+  "rememberMe": true,
+  "verifyEmail": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "clients": [
+    {
+      "clientId": "sciforge-desktop",
+      "name": "SciForge Desktop",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://127.0.0.1:43110/oidc/callback"
+      ],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "roles",
+        "profile",
+        "basic",
+        "email"
+      ],
+      "protocolMappers": [
+        {
+          "name": "sciforge-cloud-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "sciforge-cloud-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "lightweight.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "sciforge-web-mobile",
+      "name": "SciForge Web and Mobile",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://127.0.0.1:5173/*"
+      ],
+      "webOrigins": [
+        "http://127.0.0.1:5173"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "roles",
+        "profile",
+        "basic",
+        "email"
+      ],
+      "protocolMappers": [
+        {
+          "name": "sciforge-cloud-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "sciforge-cloud-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "lightweight.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "sciforge-cloud-api",
+      "name": "SciForge Cloud API",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false
+    }
+  ]
+}

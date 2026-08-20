@@ -40,6 +40,16 @@ const api = {
     return () => ipcRenderer.removeListener('settings:changed', wrapped)
   },
   getModelAccessStatus: () => ipcRenderer.invoke('modelAccess:status'),
+  identity: {
+    getStatus: () => ipcRenderer.invoke('identity:status'),
+    login: () => ipcRenderer.invoke('identity:login'),
+    logout: () => ipcRenderer.invoke('identity:logout'),
+    getDeviceStatus: () => ipcRenderer.invoke('identity:device-status'),
+    listDevices: () => ipcRenderer.invoke('identity:device-list'),
+    enrollDevice: () => ipcRenderer.invoke('identity:device-enroll'),
+    refreshDevices: () => ipcRenderer.invoke('identity:device-refresh'),
+    revokeDevice: (deviceId) => ipcRenderer.invoke('identity:device-revoke', { deviceId })
+  },
   fetchUpstreamModels: () => ipcRenderer.invoke('upstream:models'),
   traces: {
     read: (query) => ipcRenderer.invoke('traces:read', query ?? {}),

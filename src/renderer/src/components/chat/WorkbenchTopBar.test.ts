@@ -23,6 +23,16 @@ describe('WorkbenchTopBar toolbar contributions', () => {
     expect(html).not.toContain('Paper Radar')
   })
 
+  it('shows the SciForge Desktop sign-in control', () => {
+    const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
+      focusedRightPanelMode: null,
+      onToggleFocusedRightPanelMode: vi.fn()
+    }))
+
+    expect(html).toContain('aria-label="Sign in"')
+    expect(html).toContain('title="Sign in to SciForge with your browser"')
+  })
+
   it('renders and marks a registered toolbar action from its metadata', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       focusedRightPanelMode: null,

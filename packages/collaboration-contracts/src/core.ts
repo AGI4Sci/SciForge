@@ -30,6 +30,7 @@ function opaqueId(prefix: string): z.ZodString {
 
 export const userIdSchema = opaqueId('usr')
 export const humanEndpointIdSchema = opaqueId('hep')
+export const deviceIdSchema = opaqueId('dev')
 export const agentIdSchema = opaqueId('agt')
 export const participantIdSchema = opaqueId('par')
 export const projectionIdSchema = opaqueId('rsp')
@@ -50,6 +51,7 @@ export const installationIdSchema = opaqueId('ins')
 
 export type UserId = z.infer<typeof userIdSchema>
 export type HumanEndpointId = z.infer<typeof humanEndpointIdSchema>
+export type DeviceId = z.infer<typeof deviceIdSchema>
 export type AgentId = z.infer<typeof agentIdSchema>
 export type ParticipantId = z.infer<typeof participantIdSchema>
 export type ProjectionId = z.infer<typeof projectionIdSchema>

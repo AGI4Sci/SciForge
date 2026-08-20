@@ -1,4 +1,5 @@
 import type { z } from 'zod'
+export * from './identity-testing.js'
 import { redactCredentials } from './core.js'
 import {
   agentNodeSchema,

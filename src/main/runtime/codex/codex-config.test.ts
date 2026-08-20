@@ -454,6 +454,9 @@ describe('codex config launch helpers', () => {
     await expect(readFile(join(codexHome, 'config.toml'), 'utf8')).resolves.toContain(
       '[features]\nhooks = true'
     )
+    const config = await readFile(join(codexHome, 'config.toml'), 'utf8')
+    expect(config.indexOf('model_provider = "sciforge-plan-gateway"'))
+      .toBeLessThan(config.indexOf('[features]'))
     const hooks = JSON.parse(await readFile(join(codexHome, 'hooks.json'), 'utf8'))
     expect(hooks).toEqual({
       hooks: {

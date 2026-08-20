@@ -185,6 +185,11 @@ import {
   registerCapabilityResourceContentScheme
 } from './workspace-preview-asset-protocol'
 import { startDevBrowserBridgeServer, type DevBrowserBridgeServer } from './dev-browser-bridge'
+import { DesktopIdentityService } from './services/desktop-identity-service'
+import { DesktopIdentityPrincipalProvider } from './services/desktop-identity-principal-provider'
+import { DesktopDeviceService } from './services/desktop-device-service'
+import { HttpCollaborationIdentityClient } from '@sciforge/collaboration-identity'
+import { InMemoryCollaborationIdentityClient } from '@sciforge/collaboration-identity/testing'
 import { CodexRuntimeService } from './runtime/codex'
 import { APP_USER_MODEL_ID } from '../shared/app-brand'
 import { mainPerformanceMonitor } from './performance-monitor'
@@ -1292,13 +1297,45 @@ app
     app.once('will-quit', () => {
       void workspacePlacement.disposeAll()
     })
+    const cloudIdentityBaseUrl = process.env.SCIFORGE_CLOUD_BASE_URL?.trim()
+    const collaborationIdentityClient = cloudIdentityBaseUrl
+      ? new HttpCollaborationIdentityClient({ baseUrl: cloudIdentityBaseUrl })
+      : new InMemoryCollaborationIdentityClient()
+    const desktopIdentity = new DesktopIdentityService({
+      issuer:
+        process.env.SCIFORGE_OIDC_ISSUER ??
+        (app.isPackaged
+          ? 'https://login.sciforge.cn/realms/SciForge'
+          : 'http://127.0.0.1:8080/realms/SciForge'),
+      clientId: 'sciforge-desktop',
+      audience: 'sciforge-cloud-api',
+      identityClient: collaborationIdentityClient,
+      openExternal: (url) => shell.openExternal(url)
+    })
+    const desktopIdentityPrincipal = new DesktopIdentityPrincipalProvider(
+      desktopIdentity,
+      hostDeviceId
+    )
+    const desktopDevice = new DesktopDeviceService({
+      identity: desktopIdentity,
+      client: collaborationIdentityClient,
+      installationSeed: hostDeviceId,
+      userDataDir: app.getPath('userData'),
+      encryption: createPlatformPackageEncryption({ safeStorage }),
+      appVersion: app.getVersion()
+    })
+    app.once('will-quit', () => {
+      desktopDevice.close()
+      desktopIdentityPrincipal.close()
+      desktopIdentity.close()
+    })
     const appCapabilityDependencies: AppCapabilityDependencies = {
       controlledProcessService: workspacePlacement,
       workspacePreviewHost,
       visibleContextService,
       versionControlWorkspaceService: versionControlPlacement
     }
-    const principalContext = new HostPrincipalContext(catalog)
+    const principalContext = new HostPrincipalContext(catalog, desktopIdentityPrincipal)
     principalContextForDomainServices = principalContext
     const capabilityBroker = new CapabilityBroker(
       createApplicationCapabilityRegistry(catalog, appCapabilityDependencies),
@@ -1809,6 +1846,8 @@ app
       isTrustedIpcSender: isTrustedMainRendererIpcSender,
       applySettingsPatch,
       getModelAccessStatus: readModelAccessStatus,
+      desktopIdentity,
+      desktopDevice,
       traces: fullTraceStore,
       fileTransfers: {
         isInstalledRendererOwner: (ownerId) => installedDomainPackages.definitions.some(

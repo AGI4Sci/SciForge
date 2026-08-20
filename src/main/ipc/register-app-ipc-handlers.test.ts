@@ -121,7 +121,34 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
     resolveLogDirectory: () => '/tmp/logs',
     logError: vi.fn(),
     workspacePlacement,
-    ...overrides
+    ...overrides,
+    desktopIdentity: overrides.desktopIdentity ?? {
+      getStatus: vi.fn(() => ({ state: 'signed-out' as const })),
+      login: vi.fn(async () => ({ ok: true as const, status: { state: 'signed-out' as const } })),
+      logout: vi.fn(() => ({ ok: true as const, status: { state: 'signed-out' as const } }))
+    },
+    desktopDevice: overrides.desktopDevice ?? {
+      getStatus: vi.fn(() => ({ state: 'signed-out' as const })),
+      listDevices: vi.fn(() => []),
+      ensureRegistered: vi.fn(async () => ({
+        ok: false as const,
+        status: { state: 'signed-out' as const },
+        devices: [],
+        message: 'Sign in before registering this Desktop.'
+      })),
+      refresh: vi.fn(async () => ({
+        ok: false as const,
+        status: { state: 'signed-out' as const },
+        devices: [],
+        message: 'Sign in before refreshing devices.'
+      })),
+      revoke: vi.fn(async () => ({
+        ok: false as const,
+        status: { state: 'signed-out' as const },
+        devices: [],
+        message: 'Sign in before revoking a device.'
+      }))
+    }
   }
 }
 
@@ -467,6 +494,58 @@ describe('registerAppIpcHandlers', () => {
       action: 'Coding Plan access and trace capture are ready.'
     })
     expect(getModelAccessStatus).toHaveBeenCalledWith(expect.objectContaining({ version: 1 }))
+  })
+
+  it('delegates the Desktop identity lifecycle without exposing token storage', async () => {
+    const signedOut = { state: 'signed-out' as const }
+    const signedIn = {
+      state: 'signed-in' as const,
+      user: {
+        userId: 'usr_test0001',
+        externalIdentityId: 'ext_test0001',
+        issuer: 'http://127.0.0.1:8080/realms/SciForge',
+        subject: 'subject-1',
+        displayName: 'Nem'
+      },
+      accessTokenExpiresAt: '2026-08-18T12:05:00.000Z'
+    }
+    const desktopIdentity = {
+      getStatus: vi.fn(() => signedOut),
+      login: vi.fn(async () => ({ ok: true as const, status: signedIn })),
+      logout: vi.fn(() => ({ ok: true as const, status: signedOut }))
+    }
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    registerAppIpcHandlers(registerOptions({ desktopIdentity }))
+
+    await expect(handlers.get('identity:status')?.({})).resolves.toEqual(signedOut)
+    await expect(handlers.get('identity:login')?.({})).resolves.toEqual({ ok: true, status: signedIn })
+    await expect(handlers.get('identity:logout')?.({})).resolves.toEqual({ ok: true, status: signedOut })
+    expect(desktopIdentity.getStatus).toHaveBeenCalledOnce()
+    expect(desktopIdentity.login).toHaveBeenCalledOnce()
+    expect(desktopIdentity.logout).toHaveBeenCalledOnce()
+  })
+
+  it('delegates Device identity actions through validated IPC payloads', async () => {
+    const deviceResult = {
+      ok: true as const,
+      status: { state: 'not-enrolled' as const },
+      devices: []
+    }
+    const desktopDevice = {
+      getStatus: vi.fn(() => ({ state: 'not-enrolled' as const })),
+      listDevices: vi.fn(() => []),
+      ensureRegistered: vi.fn(async () => deviceResult),
+      refresh: vi.fn(async () => deviceResult),
+      revoke: vi.fn(async () => deviceResult)
+    }
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    registerAppIpcHandlers(registerOptions({ desktopDevice }))
+
+    await expect(handlers.get('identity:device-enroll')?.({})).resolves.toEqual(deviceResult)
+    await expect(handlers.get('identity:device-revoke')?.({}, { deviceId: 'dev_Desktop000001' }))
+      .resolves.toEqual(deviceResult)
+
+    expect(desktopDevice.revoke).toHaveBeenCalledWith('dev_Desktop000001')
   })
 
   it('validates durable trace queries and exports through an explicit save destination', async () => {

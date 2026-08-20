@@ -25,7 +25,14 @@ const EMPTY_PRINCIPAL_CONTEXT = definePrincipalContextSnapshot({
 export class HostPrincipalContext {
   readonly #provider: DomainMainPrincipalProvider | undefined
 
-  constructor(catalog: DomainModuleCatalog) {
+  constructor(
+    catalog: DomainModuleCatalog,
+    authoritativeProvider?: DomainMainPrincipalProvider
+  ) {
+    if (authoritativeProvider) {
+      this.#provider = authoritativeProvider
+      return
+    }
     const contributions = catalog.listContributions(
       MAIN_PRINCIPAL_PROVIDER_CONTRIBUTION_KIND,
       isDomainMainPrincipalProvider

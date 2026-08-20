@@ -1986,5 +1986,22 @@
   "datasetResultInvalid": "未通过",
   "datasetResultErrors": "错误数",
   "datasetResultArtifacts": "产物数",
-  "datasetResultPlanStatus": "计划状态"
+  "datasetResultPlanStatus": "计划状态",
+  "desktopIdentityLogin": "登录",
+  "desktopIdentityLoginRetry": "重试登录",
+  "desktopIdentityLoginTitle": "使用浏览器登录 SciForge",
+  "desktopIdentitySigningIn": "正在登录...",
+  "desktopIdentityLoginFailed": "SciForge 登录失败。",
+  "desktopIdentityLogoutFailed": "SciForge 退出登录失败。",
+  "desktopIdentitySignedInAs": "已登录：{{name}}",
+  "desktopIdentityAccountMenu": "SciForge 账号",
+  "desktopIdentityLogout": "退出登录",
+  "desktopDeviceConnected": "此 Desktop 已连接",
+  "desktopDeviceNotConnected": "此 Desktop 尚未连接",
+  "desktopDeviceRegistering": "正在注册此 Desktop...",
+  "desktopDeviceRevoked": "此 Desktop 已撤销",
+  "desktopDeviceRegister": "注册此 Desktop",
+  "desktopDeviceRevoke": "撤销此 Desktop",
+  "desktopDeviceRegistrationFailed": "Desktop 注册失败。",
+  "desktopDeviceRevokeFailed": "Desktop 撤销失败。"
 }
