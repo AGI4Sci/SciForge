@@ -35,4 +35,4 @@
 - [x] 6.2 Build and smoke source Electron with and without an overlay, then build and inspect a packaged application through the canonical runtime path.
 - [x] 6.3 Run full regression, OpenSpec strict validation, domain composition freshness, capability governance, and final diff/secret/private-asset audits.
 - [ ] 6.4 Obtain the OpenContent test tenant, personal/shared roots, least-privilege accounts, and supplier CAS/version contract; run packaged Broker → Content Space → Provider → Connector live acceptance and promote only separately proven operations.
-- [ ] 6.5 Commit the scoped change and push only to the fork branch; do not update or push upstream.
+- [x] 6.5 Commit the scoped change and push only to the fork branch; do not update or push upstream.
