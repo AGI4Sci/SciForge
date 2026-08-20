@@ -23,6 +23,7 @@ test('restart recovery reconciles in-flight projection, outbox, and Task identit
     user: userPrincipalFixture,
     endpoints: [],
     endpointLocators: [],
+    managedContainers: [],
     agents: [agentNodeFixture],
     projections: [{
       projection: remoteSessionProjectionFixture,

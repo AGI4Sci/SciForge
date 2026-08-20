@@ -15,6 +15,7 @@ import {
   ExplicitError,
   InlineConfirmationEditor,
   InlineTextActionEditor,
+  ManagedChannelSection,
   PairingCopyFeedback,
   PairingStatus,
   ParticipantSection,
@@ -311,6 +312,76 @@ test('shows stable Session mapping, explicit owner, sharing, status, and every l
   }
 })
 
+test('renders managed Channel verification and counts only Sessions in the exact Channel', () => {
+  const fixture = statusFixture()
+  const containerLocator = {
+    type: 'provider_managed_container_ref' as const,
+    provider: 'provider.fixture',
+    realmId: 'realm-a',
+    containerId: 'managed-channel-1'
+  }
+  const snapshot = collaborationStatusSnapshotSchema.parse({
+    ...fixture,
+    participant: {
+      ...fixture.participant,
+      userId: 'usr_123456789012',
+      endpoints: fixture.participant.endpoints.map((endpoint) => ({
+        ...endpoint,
+        humanEndpointId: 'hep_123456789012'
+      }))
+    },
+    providerOptions: [{ ...fixture.providerOptions[0], managedContainers: true }],
+    managedContainers: [{
+      type: 'managed_provider_container',
+      schemaVersion: 1,
+      managedContainerId: 'mco_123456789012',
+      ownerUserId: 'usr_123456789012',
+      humanEndpointId: 'hep_123456789012',
+      provider: 'provider.fixture',
+      realmId: 'realm-a',
+      stableKey: 'managed-owner-realm-a',
+      container: containerLocator,
+      displayName: 'sciforge-user-a',
+      policy: {
+        version: 1, visibility: 'private', history: 'protected', membership: 'owner_and_message_bot',
+        memberManagement: 'provisioning_service_only', channelManagement: 'provisioning_service_only',
+        ownerCanSend: true, ownerCanCreateTopics: true, messageBotCanSend: true,
+        messageBotCreatesProjectTopics: false
+      },
+      checks: {
+        private: true, protectedHistory: true, exactMembership: true, ownerCanSend: true,
+        messageBotCanSend: true, ownerCanCreateTopics: true, memberManagementRestricted: true,
+        channelManagementRestricted: true
+      },
+      status: 'active',
+      lastVerifiedAt: '2026-08-20T01:00:00.000Z',
+      safeErrorCode: null,
+      revision: 3,
+      createdAt: '2026-08-20T00:00:00.000Z',
+      updatedAt: '2026-08-20T01:00:00.000Z'
+    }],
+    projections: [{
+      projectionId: 'projection-managed', ownerUserId: 'user-a', agentId: 'agent-a',
+      agentOwnerUserId: 'user-a', humanEndpointId: 'hep_123456789012', runtimeId: 'codex',
+      threadId: 'thread-managed', displayName: 'Project A', remoteDisplay: 'sciforge-user-a / Project A',
+      remoteLocator: { ...containerLocator, type: 'provider_locator', topicId: 'topic-a' },
+      status: 'active', allowUserIds: ['user-a'], revision: 1, queueDepth: 0
+    }, {
+      projectionId: 'projection-other', ownerUserId: 'user-a', agentId: 'agent-a',
+      agentOwnerUserId: 'user-a', humanEndpointId: 'hep_123456789012', runtimeId: 'codex',
+      threadId: 'thread-other', displayName: 'Other', remoteDisplay: 'Other / Topic',
+      remoteLocator: { type: 'provider_locator', provider: 'provider.fixture', realmId: 'realm-a',
+        containerId: 'other-channel', topicId: 'topic-b' },
+      status: 'active', allowUserIds: ['user-a'], revision: 1, queueDepth: 0
+    }]
+  })
+  const html = renderToStaticMarkup(<ManagedChannelSection snapshot={snapshot} busy={false}
+    onEnsure={NOOP} onRefreshStatus={NOOP} onRefreshTopics={NOOP} onReconcile={NOOP} onArchive={NOOP} />)
+  assert.match(html, /collaborationManagedChannelVerified/u)
+  assert.match(html, />1<\/dd>/u)
+  assert.match(html, /collaborationManagedChannelRepair/u)
+})
+
 test('renders Project Coordinator, Task assignee state, ordered queue, and explicit recovery errors', () => {
   const snapshot = collaborationStatusSnapshotSchema.parse(statusFixture())
   const projects = renderToStaticMarkup(
@@ -489,13 +560,15 @@ function statusFixture() {
     providerOptions: [{
       providerKey: 'provider.fixture',
       label: 'Fixture IM',
-      locatorFields: [{
+        locatorFields: [{
         key: 'realm',
         label: 'Realm',
         required: true,
         placeholder: 'https://im.example.com'
-      }]
+        }],
+        managedContainers: false
     }],
+    managedContainers: [],
     participant: {
       userId: 'user-a',
       displayName: 'Researcher A',

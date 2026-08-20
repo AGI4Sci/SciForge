@@ -263,6 +263,8 @@ export class FakeCollaborationRepository {
       agents: new Map(),
       participants: new Map(),
       projections: new Map(),
+      managedContainers: new Map(),
+      managedContainerJobs: new Map(),
       projectEndpointBindings: new Map(),
       projectInputs: new Map(),
       humanRequests: new Map(),
@@ -445,6 +447,64 @@ export class FakeCollaborationRepository {
 
   async updateProjection(projection, expectedRevision) {
     revisionUpdate(this.state.projections, projection.projectionId, projection, expectedRevision)
+  }
+
+  async getManagedContainer(managedContainerId) {
+    return copy(this.state.managedContainers.get(managedContainerId) ?? null)
+  }
+
+  async getManagedContainerForOwner(ownerUserId, provider, realmId) {
+    return copy([...this.state.managedContainers.values()].find((item) => (
+      item.ownerUserId === ownerUserId && item.provider === provider && item.realmId === realmId
+    )) ?? null)
+  }
+
+  async listManagedContainersForOwner(ownerUserId) {
+    return copy([...this.state.managedContainers.values()].filter((item) => item.ownerUserId === ownerUserId))
+  }
+
+  async insertManagedContainer(container) {
+    if (this.state.managedContainers.has(container.managedContainerId)) throw new Error('fake repository duplicate managed container')
+    this.state.managedContainers.set(container.managedContainerId, copy(container))
+  }
+
+  async updateManagedContainer(container, expectedRevision) {
+    revisionUpdate(this.state.managedContainers, container.managedContainerId, container, expectedRevision)
+  }
+
+  async insertManagedContainerJob(job) {
+    if (this.state.managedContainerJobs.has(job.jobId)) throw new Error('fake repository duplicate managed container job')
+    this.state.managedContainerJobs.set(job.jobId, copy(job))
+  }
+
+  async claimManagedContainerJobs(workerId, now, leaseExpiresAt, limit) {
+    const jobs = [...this.state.managedContainerJobs.values()]
+      .filter((job) => ['queued', 'retry_wait', 'running'].includes(job.state) &&
+        job.nextAttemptAt <= now && (job.state !== 'running' || job.leaseExpiresAt <= now))
+      .sort((left, right) => left.nextAttemptAt.localeCompare(right.nextAttemptAt))
+      .slice(0, limit)
+    for (const job of jobs) Object.assign(job, {
+      state: 'running', leaseOwner: workerId, leaseExpiresAt, attemptCount: job.attemptCount + 1, updatedAt: now
+    })
+    return copy(jobs)
+  }
+
+  async completeManagedContainerJob(input) {
+    const job = this.state.managedContainerJobs.get(input.jobId)
+    if (!job || job.state !== 'running' || job.leaseOwner !== input.workerId) throw new Error('fake repository job lease lost')
+    revisionUpdate(this.state.managedContainers, input.container.managedContainerId, input.container, input.expectedContainerRevision)
+    Object.assign(job, { state: 'succeeded', leaseOwner: undefined, leaseExpiresAt: undefined,
+      safeErrorCode: undefined, updatedAt: input.completedAt })
+  }
+
+  async failManagedContainerJob(input) {
+    const job = this.state.managedContainerJobs.get(input.jobId)
+    if (!job || job.state !== 'running' || job.leaseOwner !== input.workerId) throw new Error('fake repository job lease lost')
+    if (input.container) revisionUpdate(this.state.managedContainers, input.container.managedContainerId,
+      input.container, input.expectedContainerRevision)
+    Object.assign(job, { state: input.retryAt ? 'retry_wait' : 'failed',
+      nextAttemptAt: input.retryAt ?? job.nextAttemptAt, leaseOwner: undefined, leaseExpiresAt: undefined,
+      safeErrorCode: input.safeErrorCode, updatedAt: input.failedAt })
   }
 
   async getProjectEndpointBinding(projectId) {

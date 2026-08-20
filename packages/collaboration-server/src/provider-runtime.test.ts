@@ -6,7 +6,9 @@ import {
   type ProviderLifecycleResult,
   type ProviderDiagnostic,
   type ProviderSendRequest,
-  type ProviderSendResult
+  type ProviderSendResult,
+  type ProviderManagedContainerRequest,
+  type ProviderManagedContainerResult
 } from '@sciforge/collaboration-contracts'
 import { describe, expect, it } from 'vitest'
 import { FakeCollaborationRepository } from '../../../test-fixtures/collaboration/fake-adapters.mjs'
@@ -26,6 +28,54 @@ const LOCATOR = {
 }
 
 describe('provider runtime', () => {
+  it('claims and completes a durable managed Channel provisioning job', async () => {
+    const repository = new FakeCollaborationRepository()
+    const at = '2026-08-15T00:00:00.000Z'
+    const policy = { version: 1 as const, visibility: 'private' as const, history: 'protected' as const,
+      membership: 'owner_and_message_bot' as const, memberManagement: 'provisioning_service_only' as const,
+      channelManagement: 'provisioning_service_only' as const, ownerCanSend: true as const,
+      ownerCanCreateTopics: true as const, messageBotCanSend: true as const,
+      messageBotCreatesProjectTopics: false as const }
+    await repository.insertManagedContainer({ managedContainerId: 'mco_123456789012', ownerUserId: 'usr_123456789012',
+      humanEndpointId: 'hep_123456789012', provider: 'fake', realmId: 'realm-1', ownerProviderUserId: '42',
+      stableKey: 'managed-owner-realm', displayName: 'sciforge-user123', policy, status: 'requested',
+      revision: 1, createdAt: at, updatedAt: at })
+    await repository.insertManagedContainerJob({ jobId: 'mcj_123456789012', managedContainerId: 'mco_123456789012',
+      operation: 'ensure', desiredRevision: 1, state: 'queued', attemptCount: 0, nextAttemptAt: at,
+      createdAt: at, updatedAt: at })
+    const provider = new FakeProvider([], [], async () => ({
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      type: 'provider.managed_container.result',
+      container: { type: 'provider_managed_container_ref', provider: 'fake', realmId: 'realm-1', containerId: '123' },
+      displayName: 'sciforge-user123', status: 'active', policyVersion: 1,
+      checks: { private: true, protectedHistory: true, exactMembership: true, ownerCanSend: true,
+        messageBotCanSend: true, ownerCanCreateTopics: true, memberManagementRestricted: true,
+        channelManagementRestricted: true }, safeIssueCodes: [], observedAt: at
+    }))
+    const runtime = new DefaultCollaborationProviderRuntime({
+      providers: [provider], store: new FakeRuntimeStore(), repository,
+      authentication: { resolveProviderIdentity: async () => { throw new Error('not used') } },
+      service: emptyService(), outboxPollMs: 20, now: () => new Date(at)
+    })
+    await runtime.start()
+    await waitUntil(async () => (await repository.getManagedContainer('mco_123456789012'))?.status === 'active', 1_500)
+    await runtime.stop()
+    expect(await repository.getManagedContainer('mco_123456789012')).toMatchObject({
+      externalContainerId: '123', status: 'active', revision: 2
+    })
+    expect(provider.managedContainerRequests).toHaveLength(1)
+
+    await repository.insertManagedContainerJob({
+      jobId: 'mcj_123456789013', managedContainerId: 'mco_123456789012',
+      operation: 'inspect', desiredRevision: 2, state: 'queued', attemptCount: 0, nextAttemptAt: at,
+      createdAt: at, updatedAt: at
+    })
+    await runtime.start()
+    await waitUntil(async () => provider.managedContainerRequests.length === 2, 1_500)
+    await waitUntil(async () => (await repository.getManagedContainer('mco_123456789012'))?.revision === 3, 1_500)
+    await runtime.stop()
+    expect(provider.managedContainerRequests[1]).toMatchObject({ type: 'provider.managed_container.inspect' })
+  })
   it('preserves a provider-neutral safe code without reading credential-bearing error fields', async () => {
     const sensitiveMarker = ['INVALID', 'TEST', 'ONLY', 'CREDENTIAL'].join('_')
     const error = {
@@ -822,7 +872,8 @@ class FakeProvider implements HumanEndpointProvider {
       locatorMove: false,
       locatorDiscovery: false,
       identityChallenge: true as const,
-      directMessages: true
+      directMessages: true,
+      managedContainers: false
     },
     onboarding: {
       realmLabel: 'Realm',
@@ -840,10 +891,18 @@ class FakeProvider implements HumanEndpointProvider {
   private readonly eventsToYield: ProviderEvent[]
 
   readonly sendRequests: ProviderSendRequest[] = []
+  readonly managedContainerRequests: ProviderManagedContainerRequest[] = []
   diagnoseCalls = 0
 
-  constructor(event: ProviderEvent | ProviderEvent[], private readonly sendResults: ProviderSendResult[] = []) {
+  constructor(
+    event: ProviderEvent | ProviderEvent[],
+    private readonly sendResults: ProviderSendResult[] = [],
+    private readonly managedContainerHandler?: (
+      request: ProviderManagedContainerRequest
+    ) => Promise<ProviderManagedContainerResult>
+  ) {
     this.eventsToYield = Array.isArray(event) ? event : [event]
+    this.contract.capabilities.managedContainers = Boolean(managedContainerHandler)
   }
 
   async *events(request: Extract<ProviderLifecycleRequest, { type: 'provider.lifecycle.start' }>): AsyncIterable<ProviderEvent> {
@@ -883,6 +942,11 @@ class FakeProvider implements HumanEndpointProvider {
   }
   async listLocators(): Promise<never> { throw new Error('not used') }
   async updateLocator(): Promise<never> { throw new Error('not used') }
+  async manageContainer(request: ProviderManagedContainerRequest): Promise<ProviderManagedContainerResult> {
+    this.managedContainerRequests.push(request)
+    if (!this.managedContainerHandler) throw new Error('not used')
+    return this.managedContainerHandler(request)
+  }
   async diagnose(): Promise<ProviderDiagnostic> {
     this.diagnoseCalls += 1
     return {
@@ -1025,9 +1089,9 @@ function emptyService() {
   }
 }
 
-async function waitUntil(predicate: () => boolean, timeoutMs: number): Promise<void> {
+async function waitUntil(predicate: () => boolean | Promise<boolean>, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs
-  while (!predicate()) {
+  while (!await predicate()) {
     if (Date.now() >= deadline) throw new Error('Timed out waiting for provider runtime condition.')
     await new Promise((resolve) => setTimeout(resolve, 10))
   }

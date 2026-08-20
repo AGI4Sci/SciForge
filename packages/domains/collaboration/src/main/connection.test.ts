@@ -131,7 +131,8 @@ test('pairing exposes the complete bounded provider command but keeps the poll s
               locatorMove: true,
               locatorDiscovery: true,
               identityChallenge: true,
-              directMessages: true
+              directMessages: true,
+              managedContainers: false
             },
             onboarding: {
               realmLabel: 'Realm',
@@ -282,7 +283,8 @@ test('first configuration loads the anonymous catalog and sends pairing idempote
             locatorMove: true,
             locatorDiscovery: true,
             identityChallenge: true,
-            directMessages: true
+            directMessages: true,
+            managedContainers: false
           },
           onboarding: {
             realmLabel: 'Realm',
@@ -595,7 +597,7 @@ test('registration recovers an existing installation by rotating its one-time de
   await connection.dispose()
 })
 
-test('restart activation repairs a stale participant and endpoint locators while preserving the durable cache path', async () => {
+test('restart activation repairs participant state and atomically follows every locator page', async () => {
   const staleParticipant = {
     ...participantProfileFixture,
     primaryAgentId: null,
@@ -651,7 +653,10 @@ test('restart activation repairs a stale participant and endpoint locators while
           protocolVersion: '1.0',
           type: 'endpoint.locator_page',
           requestId: request.requestId,
-          locators: [chineseProviderLocatorFixture]
+          locators: [request.cursor
+            ? { ...chineseProviderLocatorFixture, topicId: 'topic-second', topicDisplayName: '第二项目' }
+            : chineseProviderLocatorFixture],
+          ...(request.cursor ? {} : { nextCursor: 'NTAw' })
         }
       }
       assert.equal(request.type, 'agent.heartbeat')
@@ -685,10 +690,11 @@ test('restart activation repairs a stale participant and endpoint locators while
 
   assert.equal(store.snapshot().participant?.revision, 2)
   assert.equal(store.snapshot().participant?.primaryAgentId, TEST_IDS.agentId)
-  assert.deepEqual(store.snapshot().endpointLocators, [{
-    humanEndpointId: TEST_IDS.humanEndpointId,
-    locator: chineseProviderLocatorFixture
-  }])
+  assert.deepEqual(store.snapshot().endpointLocators, [
+    { humanEndpointId: TEST_IDS.humanEndpointId, locator: chineseProviderLocatorFixture },
+    { humanEndpointId: TEST_IDS.humanEndpointId,
+      locator: { ...chineseProviderLocatorFixture, topicId: 'topic-second', topicDisplayName: '第二项目' } }
+  ])
   await connection.dispose()
 })
 

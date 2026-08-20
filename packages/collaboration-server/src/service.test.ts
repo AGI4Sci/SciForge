@@ -4,6 +4,7 @@ import { FakeCollaborationRepository, FakeInboxNotifier } from '../../../test-fi
 import { AuthenticationService, type HumanEndpointActor, type UserActor } from './auth.js'
 import { toInboxMessage } from './contracts.js'
 import { CollaborationService, providerIdentityInboxId } from './service.js'
+import { stableDigest } from './crypto.js'
 
 const at = new Date('2026-08-15T02:00:00.000Z')
 const now = () => at
@@ -36,6 +37,57 @@ async function registerAgent(service: CollaborationService, user: UserActor, lab
 }
 
 describe('CollaborationService canonical transactions', () => {
+  it('queues exactly one managed Channel ensure job for an owned active endpoint', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const authentication = new AuthenticationService(repository)
+    const owner = await onboard(service, authentication, 'managed-owner', '42')
+    const policy = { version: 1 as const, visibility: 'private' as const, history: 'protected' as const,
+      membership: 'owner_and_message_bot' as const, memberManagement: 'provisioning_service_only' as const,
+      channelManagement: 'provisioning_service_only' as const, ownerCanSend: true as const,
+      ownerCanCreateTopics: true as const, messageBotCanSend: true as const,
+      messageBotCreatesProjectTopics: false as const }
+    const input = {
+      humanEndpointId: owner.endpointId,
+      displayName: `sciforge-${stableDigest(owner.userId).slice(0, 12)}`,
+      policy,
+      idempotencyKey: 'idem_managed_container_ensure_owner'
+    }
+    const first = await service.ensureManagedContainer(owner.user, input)
+    const second = await service.ensureManagedContainer(owner.user, input)
+    expect(second.managedContainerId).toBe(first.managedContainerId)
+    expect(first).toMatchObject({ ownerUserId: owner.userId, humanEndpointId: owner.endpointId,
+      status: 'requested', revision: 1 })
+    expect(repository.state.managedContainers.size).toBe(1)
+    expect(repository.state.managedContainerJobs.size).toBe(1)
+
+    repository.state.managedContainers.set(first.managedContainerId, {
+      ...first,
+      externalContainerId: '123',
+      status: 'active',
+      revision: 2,
+      updatedAt: at.toISOString()
+    })
+    const replayed = await service.ensureManagedContainer(owner.user, input)
+    expect(replayed).toMatchObject({ status: 'active', revision: 2 })
+
+    const inspected = await service.inspectManagedContainer(owner.user, {
+      managedContainerId: first.managedContainerId,
+      expectedRevision: 2,
+      idempotencyKey: 'idem_managed_container_inspect_owner'
+    })
+    expect(inspected).toMatchObject({ status: 'provisioning', revision: 3 })
+    expect([...repository.state.managedContainerJobs.values()]).toContainEqual(expect.objectContaining({
+      operation: 'inspect', desiredRevision: 3, state: 'queued'
+    }))
+
+    const other = await onboard(service, authentication, 'managed-other', '43')
+    await expect(service.ensureManagedContainer(other.user, {
+      ...input,
+      displayName: `sciforge-${stableDigest(other.userId).slice(0, 12)}`,
+      idempotencyKey: 'idem_managed_container_cross_user'
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+  })
   it('queues idempotent provider command results without exposing challenge details', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })
