@@ -751,6 +751,12 @@ export function ManagedChannelSection({
               </dl>
               {container.safeErrorCode ? <p className="mt-2 text-ds-danger">{container.safeErrorCode}</p> : null}
               <div className="mt-2 flex flex-wrap gap-2">
+                {container.status === 'failed' && !container.container ? (
+                  <button type="button" className={PRIMARY_BUTTON} disabled={busy}
+                    onClick={() => onEnsure(container.humanEndpointId)}>
+                    <RotateCcw className="h-3.5 w-3.5" />{t('collaborationManagedChannelRetry')}
+                  </button>
+                ) : null}
                 <button type="button" className={SECONDARY_BUTTON} disabled={busy}
                   onClick={() => onRefreshTopics(container.humanEndpointId)}>
                   <RefreshCw className="h-3.5 w-3.5" />{t('collaborationManagedChannelRefreshTopics')}

@@ -63,22 +63,50 @@ describe('CollaborationService canonical transactions', () => {
 
     repository.state.managedContainers.set(first.managedContainerId, {
       ...first,
-      externalContainerId: '123',
-      status: 'active',
+      status: 'failed',
+      safeErrorCode: 'invalid_payload',
       revision: 2,
       updatedAt: at.toISOString()
     })
+    const retried = await service.ensureManagedContainer(owner.user, {
+      ...input,
+      idempotencyKey: 'idem_managed_container_retry_owner'
+    })
+    const retryReplay = await service.ensureManagedContainer(owner.user, {
+      ...input,
+      idempotencyKey: 'idem_managed_container_retry_owner'
+    })
+    expect(retried).toMatchObject({
+      managedContainerId: first.managedContainerId,
+      status: 'requested',
+      revision: 3
+    })
+    expect(retried.safeErrorCode).toBeUndefined()
+    expect(retryReplay).toEqual(retried)
+    expect(repository.state.managedContainers.size).toBe(1)
+    expect(repository.state.managedContainerJobs.size).toBe(2)
+    expect([...repository.state.managedContainerJobs.values()]).toContainEqual(expect.objectContaining({
+      operation: 'ensure', desiredRevision: 3, state: 'queued'
+    }))
+
+    repository.state.managedContainers.set(first.managedContainerId, {
+      ...first,
+      externalContainerId: '123',
+      status: 'active',
+      revision: 4,
+      updatedAt: at.toISOString()
+    })
     const replayed = await service.ensureManagedContainer(owner.user, input)
-    expect(replayed).toMatchObject({ status: 'active', revision: 2 })
+    expect(replayed).toMatchObject({ status: 'active', revision: 4 })
 
     const inspected = await service.inspectManagedContainer(owner.user, {
       managedContainerId: first.managedContainerId,
-      expectedRevision: 2,
+      expectedRevision: 4,
       idempotencyKey: 'idem_managed_container_inspect_owner'
     })
-    expect(inspected).toMatchObject({ status: 'provisioning', revision: 3 })
+    expect(inspected).toMatchObject({ status: 'provisioning', revision: 5 })
     expect([...repository.state.managedContainerJobs.values()]).toContainEqual(expect.objectContaining({
-      operation: 'inspect', desiredRevision: 3, state: 'queued'
+      operation: 'inspect', desiredRevision: 5, state: 'queued'
     }))
 
     const other = await onboard(service, authentication, 'managed-other', '43')

@@ -380,6 +380,23 @@ test('renders managed Channel verification and counts only Sessions in the exact
   assert.match(html, /collaborationManagedChannelVerified/u)
   assert.match(html, />1<\/dd>/u)
   assert.match(html, /collaborationManagedChannelRepair/u)
+
+  const failedSnapshot = collaborationStatusSnapshotSchema.parse({
+    ...snapshot,
+    managedContainers: [{
+      ...snapshot.managedContainers[0],
+      container: null,
+      checks: null,
+      status: 'failed',
+      lastVerifiedAt: null,
+      safeErrorCode: 'invalid_payload',
+      revision: 4
+    }]
+  })
+  const failedHtml = renderToStaticMarkup(<ManagedChannelSection snapshot={failedSnapshot} busy={false}
+    onEnsure={NOOP} onRefreshStatus={NOOP} onRefreshTopics={NOOP} onReconcile={NOOP} onArchive={NOOP} />)
+  assert.match(failedHtml, /collaborationManagedChannelRetry/u)
+  assert.doesNotMatch(failedHtml, /collaborationManagedChannelRepair/u)
 })
 
 test('renders Project Coordinator, Task assignee state, ordered queue, and explicit recovery errors', () => {

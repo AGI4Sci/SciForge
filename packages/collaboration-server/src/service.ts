@@ -1613,10 +1613,32 @@ export class CollaborationService {
         fail('permission_denied', 'Managed Channel requires an active endpoint owned by the authenticated user.')
       }
       const existing = await tx.getManagedContainerForOwner(actor.userId, endpoint.provider, endpoint.realmId)
-      if (existing) return {
-        response: entityResponse('managed_container.ensured', existing),
-        resourceKind: 'managed_provider_container',
-        resourceId: existing.managedContainerId
+      if (existing) {
+        if (existing.status === 'failed' && !existing.externalContainerId) {
+          const retried: StoredManagedContainer = {
+            ...existing,
+            status: 'requested',
+            safeErrorCode: undefined,
+            revision: existing.revision + 1,
+            updatedAt: at
+          }
+          await tx.updateManagedContainer(retried, existing.revision)
+          await tx.insertManagedContainerJob({
+            jobId: newId('mcj'), managedContainerId: retried.managedContainerId, operation: 'ensure',
+            desiredRevision: retried.revision, state: 'queued', attemptCount: 0, nextAttemptAt: at,
+            createdAt: at, updatedAt: at
+          })
+          return {
+            response: entityResponse('managed_container.ensure_retried', retried),
+            resourceKind: 'managed_provider_container',
+            resourceId: retried.managedContainerId
+          }
+        }
+        return {
+          response: entityResponse('managed_container.ensured', existing),
+          resourceKind: 'managed_provider_container',
+          resourceId: existing.managedContainerId
+        }
       }
       const managedContainerId = newId('mco')
       const container: StoredManagedContainer = {

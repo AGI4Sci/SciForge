@@ -540,11 +540,17 @@ export class CollaborationRuntime {
         throw new Error('This endpoint Provider does not offer managed Channels.')
       }
       const displayName = managedContainerDisplayName(state.user.userId)
+      const existing = state.managedContainers.find((container) => (
+        container.humanEndpointId === input.humanEndpointId
+      ))
+      const attempt = existing?.status === 'failed' && !existing.container
+        ? `\u0000retry\u0000${existing.revision}`
+        : ''
       response = await connection.executeAsUser(restRequestSchema.parse({
         protocolVersion: '1.0',
         requestId: collaborationRequestId(),
         type: 'managed_container.ensure',
-        idempotencyKey: `idem_managed_container.ensure.${digest(`${state.user.userId}\u0000${input.humanEndpointId}`).slice(0, 48)}`,
+        idempotencyKey: `idem_managed_container.ensure.${digest(`${state.user.userId}\u0000${input.humanEndpointId}${attempt}`).slice(0, 48)}`,
         humanEndpointId: input.humanEndpointId,
         displayName,
         policy: {
