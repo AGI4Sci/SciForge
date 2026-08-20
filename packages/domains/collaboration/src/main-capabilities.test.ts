@@ -63,7 +63,7 @@ test('global collaboration mutations satisfy the production broker contract with
     changeConnection: async () => connection,
     startChallenge: async () => ({
       challengeId: TEST_IDS.challengeId,
-      pairingCode: `sciforge-pair ${TEST_IDS.challengeId} challenge123`,
+      pairingCode: `/bind SF1.${'a'.repeat(32)}.Abc_123-xYz0`,
       expiresAt: '2026-08-15T09:00:00.000Z',
       instruction: 'Send the command.'
     }),

@@ -232,6 +232,52 @@ describe('provider runtime', () => {
     }])
   })
 
+  it('replies safely to a malformed private bind without invoking challenge verification', async () => {
+    const event: ProviderEvent = {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      provider: 'fake',
+      type: 'provider.challenge.invalid',
+      eventId: 'event-pairing-malformed-1',
+      eventCursor: 'cursor-pairing-malformed-1',
+      occurredAt: '2026-08-15T00:00:00.000Z',
+      identity: {
+        type: 'provider_identity', provider: 'fake', realmId: 'realm-1', providerUserId: 'remote-user-1'
+      }
+    }
+    const provider = new FakeProvider(event)
+    const ledger = new FakeRuntimeStore()
+    const commandResults: Array<Record<string, unknown>> = []
+    let verificationCount = 0
+    const runtime = new DefaultCollaborationProviderRuntime({
+      providers: [provider],
+      store: ledger,
+      repository: emptyRepository(),
+      authentication: { resolveProviderIdentity: async () => { throw new Error('not used') } },
+      service: {
+        ...emptyService(),
+        verifyPairingFromProvider: async () => {
+          verificationCount += 1
+          return {}
+        },
+        enqueueProviderCommandResult: async (input) => {
+          commandResults.push(input)
+          return {}
+        }
+      }
+    })
+
+    await runtime.start()
+    await waitUntil(() => ledger.cursor === 'cursor-pairing-malformed-1', 1_500)
+    await runtime.stop()
+
+    expect(verificationCount).toBe(0)
+    expect(commandResults).toEqual([{
+      identity: event.identity,
+      providerEventId: 'event-pairing-malformed-1',
+      result: 'invalid_or_expired'
+    }])
+  })
+
   it('emits one safe direct failure result when a duplicate challenge event is invalid', async () => {
     const event: ProviderEvent = {
       protocolVersion: CURRENT_PROTOCOL_VERSION,

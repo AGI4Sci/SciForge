@@ -4,7 +4,7 @@ Zulip adapter for the provider-neutral SciForge Human Endpoint Provider contract
 It owns Zulip authentication, strict HTTP/event validation, stable topic locators,
 event cursors, delivery reconciliation, retry policy, self-echo suppression,
 topic rename/move operations and external `update_message` reconciliation,
-strict private `/bind SF1...` and legacy Topic pairing/HumanAnswer command recognition,
+strict private `/bind SF1...` pairing and Topic HumanAnswer command recognition,
 provider-neutral direct-message delivery, notification filtering and
 secret-safe diagnostics.
 

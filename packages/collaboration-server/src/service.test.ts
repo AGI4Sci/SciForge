@@ -79,6 +79,43 @@ describe('CollaborationService canonical transactions', () => {
     expect(JSON.stringify(messages)).not.toContain('challenge')
   })
 
+  it('pulls provider command results after the durable ack cursor beyond one page', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const identity = {
+      type: 'provider_identity' as const,
+      provider: 'zulip',
+      realmId: 'realm-hk',
+      providerUserId: 'provider-direct-paged-user'
+    }
+    const recipientId = providerIdentityInboxId({
+      type: 'provider_direct_recipient',
+      provider: identity.provider,
+      realmId: identity.realmId,
+      providerUserId: identity.providerUserId
+    })
+    for (let index = 1; index <= 101; index += 1) {
+      await service.enqueueProviderCommandResult({
+        identity,
+        providerEventId: `provider-event-direct-page-${index}`,
+        result: 'invalid_or_expired'
+      })
+    }
+
+    const firstPage = await service.pullProviderIdentityInbox({ recipientId, limit: 100 })
+    expect(firstPage.messages).toHaveLength(100)
+    const last = firstPage.messages.at(-1)!
+    await service.ackProviderIdentityInboxMessage({
+      recipientId,
+      inboxMessageId: last.messageId,
+      sequence: last.sequence
+    })
+
+    const nextPage = await service.pullProviderIdentityInbox({ recipientId, limit: 100 })
+    expect(nextPage.ackedSequence).toBe(100)
+    expect(nextPage.messages.map((message) => message.sequence)).toEqual([101])
+  })
+
   it('pairs a provider identity exactly once without persisting plaintext secrets', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })

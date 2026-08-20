@@ -296,17 +296,18 @@ export class CollaborationService {
 
   async pullProviderIdentityInbox(input: {
     recipientId: string
-    afterSequence: number
     limit: number
   }): Promise<{ messages: StoredInboxMessage[]; ackedSequence: number; nextSequence: number }> {
     assertProviderIdentityInboxId(input.recipientId)
     const recipient: InboxRecipient = { kind: 'provider_identity', id: input.recipientId }
-    const afterSequence = integer(input.afterSequence, 'afterSequence', 0, Number.MAX_SAFE_INTEGER)
     const limit = integer(input.limit, 'limit', 1, 200)
-    const [messages, cursor] = await Promise.all([
-      this.repository.pullInbox(recipient, afterSequence, limit, this.timestamp()),
-      this.repository.getInboxCursor(recipient)
-    ])
+    const cursor = await this.repository.getInboxCursor(recipient)
+    const messages = await this.repository.pullInbox(
+      recipient,
+      cursor?.ackedSequence ?? 0,
+      limit,
+      this.timestamp()
+    )
     return { messages, ackedSequence: cursor?.ackedSequence ?? 0, nextSequence: cursor?.nextSequence ?? 1 }
   }
 

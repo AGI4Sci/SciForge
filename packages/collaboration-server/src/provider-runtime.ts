@@ -235,6 +235,12 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
         await this.handleMessageCreated(event, claimEventId)
       } else if (event.type === 'provider.challenge.responded') {
         await this.handleChallengeResponded(event, claimEventId)
+      } else if (event.type === 'provider.challenge.invalid') {
+        await this.service.enqueueProviderCommandResult({
+          identity: event.identity,
+          providerEventId: claimEventId,
+          result: 'invalid_or_expired'
+        })
       } else if (event.type === 'provider.human_answer.responded') {
         await this.handleHumanAnswerResponded(event, claimEventId)
       } else if (event.type === 'provider.locator.changed') {
@@ -425,8 +431,8 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
   }
 
   private async flushProviderIdentity(recipientId: string): Promise<void> {
-    const page = await this.service.pullProviderIdentityInbox({ recipientId, afterSequence: 0, limit: 100 })
-    for (const message of page.messages.filter((candidate) => candidate.sequence > page.ackedSequence)) {
+    const page = await this.service.pullProviderIdentityInbox({ recipientId, limit: 100 })
+    for (const message of page.messages) {
       const request = outboundRequest(message, Number.MAX_SAFE_INTEGER)
       if (!request || !('recipient' in request) || providerIdentityInboxId(request.recipient) !== recipientId) {
         await this.recordRuntimeFailure('gateway',
@@ -434,7 +440,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
         return
       }
       const provider = this.providers.get(request.recipient.provider)
-      if (!provider || !provider.contract.capabilities.directMessages) return
+      if (!provider) return
       const prior = await this.store.readDelivery(request.recipient.provider, request.clientMessageId)
       if (prior && !deliveryAttemptDue(prior, this.timestamp())) {
         if (prior.terminal) {
@@ -748,6 +754,7 @@ function eventRealmId(event: ProviderEvent): string | undefined {
     case 'provider.message.deleted':
     case 'provider.message.reaction':
     case 'provider.challenge.responded':
+    case 'provider.challenge.invalid':
     case 'provider.human_answer.responded': return event.identity.realmId
     case 'provider.locator.changed': return event.currentLocator.realmId
     case 'provider.lifecycle.changed': return undefined
@@ -763,6 +770,7 @@ function eventDedupeKey(event: ProviderEvent): string {
     case 'provider.human_answer.responded': return event.providerMessageId
     case 'provider.locator.changed':
     case 'provider.challenge.responded':
+    case 'provider.challenge.invalid':
     case 'provider.lifecycle.changed': return event.eventId
   }
 }

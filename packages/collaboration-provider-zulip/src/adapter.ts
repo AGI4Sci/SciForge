@@ -227,15 +227,9 @@ function assertResolvedLocator(
   return locator
 }
 
-const PAIRING_COMMAND = /^sciforge-pair (chl_[A-Za-z0-9]{12,64}) ([A-Za-z0-9._~:-]{8,128})$/u
 const BIND_COMMAND = /^\/bind (\S+)$/u
+const BIND_COMMAND_PREFIX = /^\/bind(?:\s|$)/u
 const HUMAN_ANSWER_COMMAND = /^sciforge-answer (hrq_[A-Za-z0-9]{12,64}) ([1-9][0-9]{0,15}) ([\s\S]+)$/u
-
-function pairingResponse(text: string): { challengeId: string; challengeResponse: string } | null {
-  const match = PAIRING_COMMAND.exec(text)
-  if (!match) return null
-  return { challengeId: match[1]!, challengeResponse: match[2]! }
-}
 
 function bindPairingResponse(text: string): { challengeId: string; challengeResponse: string } | null {
   const match = BIND_COMMAND.exec(text)
@@ -899,11 +893,11 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
     if (isSelfEcho) return null
     if (message.type === 'private') {
       const pairing = bindPairingResponse(text)
-      if (!pairing) return null
+      if (!pairing && !BIND_COMMAND_PREFIX.test(text)) return null
       return providerEventSchema.parse({
         protocolVersion: CURRENT_PROTOCOL_VERSION,
         provider: 'zulip',
-        type: 'provider.challenge.responded',
+        type: pairing ? 'provider.challenge.responded' : 'provider.challenge.invalid',
         eventId,
         eventCursor,
         occurredAt: canonicalOccurredAt(message, receivedAt),
@@ -914,34 +908,15 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
           providerUserId: senderId,
           displayName: message.sender_full_name.trim().slice(0, 200)
         },
-        challengeId: pairing.challengeId,
-        challengeResponse: pairing.challengeResponse
+        ...(pairing
+          ? { challengeId: pairing.challengeId, challengeResponse: pairing.challengeResponse }
+          : {})
       })
     }
     const streamId = stableId(message.stream_id ?? '')
     const topic = (message.topic ?? message.subject ?? '').trim()
     if (!remoteMessageId || !senderId || !streamId || !topic) {
       throw new ZulipProviderError('invalid_payload', 'Zulip stream message lacks a stable identity or locator.')
-    }
-    const pairing = pairingResponse(text)
-    if (pairing) {
-      return providerEventSchema.parse({
-        protocolVersion: CURRENT_PROTOCOL_VERSION,
-        provider: 'zulip',
-        type: 'provider.challenge.responded',
-        eventId,
-        eventCursor,
-        occurredAt: canonicalOccurredAt(message, receivedAt),
-        identity: {
-          type: 'provider_identity',
-          provider: 'zulip',
-          realmId: this.realmId,
-          providerUserId: senderId,
-          displayName: message.sender_full_name.trim().slice(0, 200)
-        },
-        challengeId: pairing.challengeId,
-        challengeResponse: pairing.challengeResponse
-      })
     }
     const answer = humanAnswerResponse(text)
     if (answer) {

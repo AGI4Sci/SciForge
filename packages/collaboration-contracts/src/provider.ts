@@ -106,6 +106,12 @@ export const providerChallengeRespondedEventSchema = z.object({
   challengeResponse: z.string().min(8).max(512)
 }).strict()
 
+export const providerChallengeInvalidEventSchema = z.object({
+  ...providerEventEnvelopeShape,
+  type: z.literal('provider.challenge.invalid'),
+  identity: providerIdentitySchema
+}).strict()
+
 export const providerHumanAnswerRespondedEventSchema = z.object({
   ...providerEventEnvelopeShape,
   type: z.literal('provider.human_answer.responded'),
@@ -132,6 +138,7 @@ export const providerEventSchema = z.discriminatedUnion('type', [
   providerReactionEventSchema,
   providerLocatorChangedEventSchema,
   providerChallengeRespondedEventSchema,
+  providerChallengeInvalidEventSchema,
   providerHumanAnswerRespondedEventSchema,
   providerLifecycleEventSchema
 ])
@@ -304,7 +311,7 @@ export const humanEndpointProviderContractSchema = z.object({
     locatorMove: z.boolean(),
     locatorDiscovery: z.boolean(),
     identityChallenge: z.literal(true),
-    directMessages: z.boolean()
+    directMessages: z.literal(true)
   }).strict(),
   onboarding: z.object({
     realmLabel: displayNameSchema,

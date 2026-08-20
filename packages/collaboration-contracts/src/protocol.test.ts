@@ -220,9 +220,9 @@ describe('provider-neutral contract', () => {
   })
 
   it('requires contract capabilities and strictly redacted diagnostics', () => {
-    expect(humanEndpointProviderContractSchema.safeParse({
+    const contract = {
       protocolVersion: '1.0',
-      type: 'human_endpoint_provider_contract',
+      type: 'human_endpoint_provider_contract' as const,
       provider: 'example-im',
       displayName: 'Example IM',
       capabilities: {
@@ -233,7 +233,7 @@ describe('provider-neutral contract', () => {
         locatorMove: true,
         locatorDiscovery: true,
         identityChallenge: true,
-        directMessages: false
+        directMessages: true
       },
       onboarding: {
         realmLabel: '组织',
@@ -242,7 +242,12 @@ describe('provider-neutral contract', () => {
         topicLabel: '话题'
       },
       limits: { maxTextLength: 10_000, maxLocatorDisplayLength: 200 }
-    }).success).toBe(true)
+    }
+    expect(humanEndpointProviderContractSchema.safeParse(contract).success).toBe(true)
+    expect(humanEndpointProviderContractSchema.safeParse({
+      ...contract,
+      capabilities: { ...contract.capabilities, directMessages: false }
+    }).success).toBe(false)
     expect(providerDiagnosticSchema.safeParse({
       protocolVersion: '1.0',
       type: 'provider.diagnostic',

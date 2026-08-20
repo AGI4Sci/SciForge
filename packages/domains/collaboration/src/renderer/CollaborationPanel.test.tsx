@@ -229,7 +229,7 @@ test('renders controlled first-binding inputs and builds typed commands without 
 })
 
 test('copies the complete pairing command only through the renderer Clipboard API', async () => {
-  const command = 'sciforge-pair challenge-opaque verification-opaque'
+  const command = `/bind SF1.${'a'.repeat(32)}.Abc_123-xYz0`
   const writes: string[] = []
   assert.equal(await writePairingCommandToClipboard(command, {
     writeText: async (value) => { writes.push(value) }
@@ -248,7 +248,7 @@ test('copies the complete pairing command only through the renderer Clipboard AP
     }} />
   )
   assert.match(pending, /data-collaboration-copy-pairing="true"/u)
-  assert.match(pending, /sciforge-pair challenge-opaque verification-opaque/u)
+  assert.match(pending, /\/bind SF1\./u)
   assert.match(pending, /collaborationCopyPairingInstruction/u)
   assert.match(pending, /collaborationPairingCopyHint/u)
 

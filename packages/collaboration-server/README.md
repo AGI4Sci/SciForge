@@ -154,7 +154,7 @@ curl --fail http://127.0.0.1:8787/readyz
 /bind SF1.<challengeId-material>.<challenge-response>
 ```
 
-在 pending 期间，客户端应对同一次 redeem 轮询保持稳定的 idempotency key；非终态 pending 不缓存为最终 receipt。验证后首次成功 redeem 才返回一次性 user credential 并消费 challenge，同 key 重放只返回脱敏结果，不会再次下发 credential。Bot 的成功或安全失败回复进入 provider-identity durable inbox，并沿用 provider delivery ledger、retry、reconciliation 与 ack，不由命令 parser 旁路发送。兼容期内 Provider 仍接受旧 Topic `sciforge-pair` 命令。Agent device credential 也只返回一次，必须立即写入本地 secret store。
+在 pending 期间，客户端应对同一次 redeem 轮询保持稳定的 idempotency key；非终态 pending 不缓存为最终 receipt。验证后首次成功 redeem 才返回一次性 user credential 并消费 challenge，同 key 重放只返回脱敏结果，不会再次下发 credential。Bot 的成功或安全失败回复进入 provider-identity durable inbox，并沿用 provider delivery ledger、retry、reconciliation 与 ack，不由命令 parser 旁路发送。私聊 `/bind SF1...` 是唯一配对命令入口；公开 Topic 消息不会验证 challenge。Agent device credential 也只返回一次，必须立即写入本地 secret store。
 
 个人 Topic 绑定到固定 projection 与 Agent，顺序 inbox/outbox、receipt 和 provider cursor 都持久化在 PostgreSQL。Topic 整体重命名或移动时，provider adapter 保留稳定 topic identity，云端先排入 revision 更新通知，再继续同一个桌面 Session；歧义、部分移动、冲突或旧 revision 都会 fail closed。
 

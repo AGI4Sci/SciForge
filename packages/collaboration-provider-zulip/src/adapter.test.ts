@@ -830,63 +830,7 @@ describe('ZulipHumanEndpointProvider', () => {
     )
   })
 
-  it('emits a strict pairing response before locator resolution for first-time binding', async () => {
-    const challengeResponse = randomUUID()
-    let resolverCalls = 0
-    const provider = createZulipHumanEndpointProvider({
-      realmUrl: 'https://chat.example.invalid',
-      botEmail: 'service-bot@example.invalid'
-    }, {
-      resolveCredential: async () => ({ apiKey: randomUUID() }),
-      deliveryLedger: new MemoryLedger(),
-      reconcileDelivery: async () => ({ status: 'not_sent' }),
-      resolveLocator: async () => {
-        resolverCalls += 1
-        throw new ZulipProviderError('locator_missing', 'not paired yet')
-      },
-      verifyIdentity: rejectIdentity,
-      now: () => new Date('2026-08-15T00:00:00.000Z'),
-      fetch: async () => json({
-        result: 'success',
-        msg: '',
-        queue_id: 'queue-pairing',
-        last_event_id: 1,
-        events: [{
-          id: 2,
-          type: 'message',
-          message: rawMessage({
-            id: 810,
-            senderId: 42,
-            senderEmail: 'human@example.invalid',
-            senderName: '研究员甲',
-            content: `sciforge-pair chl_abcdefghijkl ${challengeResponse}`
-          })
-        }]
-      })
-    })
-    const result = await provider.registerEventQueue()
-    assert.equal(result.events.length, 1)
-    assert.deepEqual(result.events[0], {
-      protocolVersion: '1.0',
-      provider: 'zulip',
-      type: 'provider.challenge.responded',
-      eventId: result.events[0]?.eventId,
-      eventCursor: result.events[0]?.eventCursor,
-      occurredAt: '2026-08-15T00:00:00.000Z',
-      identity: {
-        type: 'provider_identity',
-        provider: 'zulip',
-        realmId: provider.realmId,
-        providerUserId: '42',
-        displayName: '研究员甲'
-      },
-      challengeId: 'chl_abcdefghijkl',
-      challengeResponse
-    })
-    assert.equal(resolverCalls, 0)
-  })
-
-  it('maps a private /bind SF1 command to the authenticated sender without locator resolution', async () => {
+  it('maps private /bind commands to the authenticated sender without locator resolution', async () => {
     let resolverCalls = 0
     const provider = createZulipHumanEndpointProvider({
       realmUrl: 'https://chat.example.invalid',
@@ -930,6 +874,18 @@ describe('ZulipHumanEndpointProvider', () => {
               content: `/bind SF1.${'a'.repeat(32)}.Abc_123-xYz0`,
               messageType: 'private'
             })
+          },
+          {
+            id: 4,
+            type: 'message',
+            message: rawMessage({
+              id: 812,
+              senderId: 42,
+              senderEmail: 'human@example.invalid',
+              senderName: '研究员甲',
+              content: '/bind malformed-code',
+              messageType: 'private'
+            })
           }
         ]
       })
@@ -938,6 +894,7 @@ describe('ZulipHumanEndpointProvider', () => {
     const result = await provider.registerEventQueue()
 
     assert.equal(resolverCalls, 0)
+    assert.equal(result.events.length, 2)
     assert.deepEqual(result.events[0], {
       protocolVersion: '1.0',
       provider: 'zulip',
@@ -954,6 +911,21 @@ describe('ZulipHumanEndpointProvider', () => {
       },
       challengeId: `chl_${'a'.repeat(32)}`,
       challengeResponse: 'Abc_123-xYz0'
+    })
+    assert.deepEqual(result.events[1], {
+      protocolVersion: '1.0',
+      provider: 'zulip',
+      type: 'provider.challenge.invalid',
+      eventId: result.events[1]?.eventId,
+      eventCursor: result.events[1]?.eventCursor,
+      occurredAt: '2026-08-15T00:00:00.000Z',
+      identity: {
+        type: 'provider_identity',
+        provider: 'zulip',
+        realmId: provider.realmId,
+        providerUserId: '42',
+        displayName: '研究员甲'
+      }
     })
   })
 
@@ -1155,48 +1127,6 @@ describe('ZulipHumanEndpointProvider', () => {
       unboundProvider.registerEventQueue(),
       (error) => error instanceof ZulipProviderError && error.code === 'locator_missing'
     )
-  })
-
-  it('does not let malformed pairing prefixes bypass locator failure', async () => {
-    const malformedMessages = [
-      `SCIFORGE-PAIR chl_abcdefghijkl ${randomUUID()}`,
-      'sciforge-pair chl_abcdefghijkl short'
-    ]
-    for (const [index, content] of malformedMessages.entries()) {
-      const provider = createZulipHumanEndpointProvider({
-        realmUrl: 'https://chat.example.invalid',
-        botEmail: 'service-bot@example.invalid'
-      }, {
-        resolveCredential: async () => ({ apiKey: randomUUID() }),
-        deliveryLedger: new MemoryLedger(),
-        reconcileDelivery: async () => ({ status: 'not_sent' }),
-        resolveLocator: async () => {
-          throw new ZulipProviderError('locator_missing', 'not paired yet')
-        },
-        verifyIdentity: rejectIdentity,
-        fetch: async () => json({
-          result: 'success',
-          msg: '',
-          queue_id: `queue-malformed-${index}`,
-          last_event_id: 1,
-          events: [{
-            id: 2,
-            type: 'message',
-            message: rawMessage({
-              id: 820 + index,
-              senderId: 42,
-              senderEmail: 'human@example.invalid',
-              senderName: '研究员甲',
-              content
-            })
-          }]
-        })
-      })
-      await assert.rejects(
-        provider.registerEventQueue(),
-        (error) => error instanceof ZulipProviderError && error.code === 'locator_missing'
-      )
-    }
   })
 
   it('fails closed when locator resolution is ambiguous', async () => {

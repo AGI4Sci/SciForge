@@ -3,6 +3,7 @@ import { lstat, readFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 
 import {
+  encodePairingBindCode,
   restRequestSchema,
   restResponseSchema,
   webSocketMessageSchema
@@ -25,7 +26,6 @@ export const acceptanceEnvironmentContract = Object.freeze({
     'SCIFORGE_COLLAB_ZULIP_BOT_EMAIL'
   ]),
   optionalCommon: Object.freeze([
-    'SCIFORGE_COLLAB_ZULIP_PAIRING_TOPIC',
     'SCIFORGE_COLLAB_ZULIP_ORIGIN',
     'SCIFORGE_COLLAB_ZULIP_TIMEOUT_MS',
     'SCIFORGE_COLLAB_ZULIP_NEGATIVE_WINDOW_MS'
@@ -173,7 +173,6 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
   const realmUrl = normalizedBaseUrl(environment('SCIFORGE_COLLAB_ZULIP_REALM_URL'), 'ACCEPTANCE_CONFIGURATION_MISSING')
   const stream = required(environment('SCIFORGE_COLLAB_ZULIP_STREAM'))
   const botEmail = required(environment('SCIFORGE_COLLAB_ZULIP_BOT_EMAIL')).toLocaleLowerCase('en-US')
-  const pairingTopic = environment('SCIFORGE_COLLAB_ZULIP_PAIRING_TOPIC')?.trim() || 'SciForge 配对'
   const origin = environment('SCIFORGE_COLLAB_ZULIP_ORIGIN')?.trim()
   const timeoutMs = boundedInteger(environment('SCIFORGE_COLLAB_ZULIP_TIMEOUT_MS'), DEFAULT_TIMEOUT_MS, 5_000, 600_000)
   const negativeWindowMs = boundedInteger(
@@ -252,6 +251,17 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
     const body = await zulipRequest(state, ZULIP_MESSAGES_PATH, {
       method: 'POST',
       form: { type: 'stream', to: stream, topic, content: text }
+    })
+    if ((typeof body.id !== 'number' && typeof body.id !== 'string') || !String(body.id).trim()) {
+      fail('ZULIP_RESPONSE_INVALID')
+    }
+    return String(body.id)
+  }
+
+  async function sendZulipDirectMessage(state, recipientEmail, text) {
+    const body = await zulipRequest(state, ZULIP_MESSAGES_PATH, {
+      method: 'POST',
+      form: { type: 'direct', to: JSON.stringify([recipientEmail]), content: text }
     })
     if ((typeof body.id !== 'number' && typeof body.id !== 'string') || !String(body.id).trim()) {
       fail('ZULIP_RESPONSE_INVALID')
@@ -556,7 +566,11 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
       idempotencyKey: idempotency('pairing_begin')
     })
     if (begun.type !== 'pairing.begun') fail('COLLABORATION_RESPONSE_INVALID')
-    await sendZulipMessage(common, pairingTopic, `sciforge-pair ${begun.challengeId} ${begun.challengeCode}`)
+    await sendZulipDirectMessage(
+      common,
+      botEmail,
+      `/bind ${encodePairingBindCode({ challengeId: begun.challengeId, challengeCode: begun.challengeCode })}`
+    )
     let verified
     const startedAt = Date.now()
     while (Date.now() - startedAt < timeoutMs) {

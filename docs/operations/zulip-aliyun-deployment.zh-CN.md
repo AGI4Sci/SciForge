@@ -378,7 +378,7 @@ runuser --user sciforge_collab -- \
   --command='SELECT max(version) FROM sciforge_collaboration.schema_migrations;'
 ```
 
-当前版本预期分别输出 `success` 和 `1`。迁移失败时保持服务停止，先回滚或修复，不能跳过版本检查
+当前版本预期分别输出 `success` 和 `2`。迁移失败时保持服务停止，先回滚或修复，不能跳过版本检查
 强行启动。服务使用 768 MiB 内存上限、空
 capability set、只读系统目录、受限地址族；provider 出站只通过 HTTPS，数据库只通过本机 socket。
 
