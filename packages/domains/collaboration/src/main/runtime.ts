@@ -543,14 +543,19 @@ export class CollaborationRuntime {
       const existing = state.managedContainers.find((container) => (
         container.humanEndpointId === input.humanEndpointId
       ))
-      const attempt = existing?.status === 'failed' && !existing.container
-        ? `\u0000retry\u0000${existing.revision}`
-        : ''
+      const requestId = collaborationRequestId()
+      const retryToken = existing?.status === 'failed' && !existing.container
+        ? `${existing.revision}\u0000${requestId}`
+        : undefined
       response = await connection.executeAsUser(restRequestSchema.parse({
         protocolVersion: '1.0',
-        requestId: collaborationRequestId(),
+        requestId,
         type: 'managed_container.ensure',
-        idempotencyKey: `idem_managed_container.ensure.${digest(`${state.user.userId}\u0000${input.humanEndpointId}${attempt}`).slice(0, 48)}`,
+        idempotencyKey: managedContainerEnsureIdempotencyKey(
+          state.user.userId,
+          input.humanEndpointId,
+          retryToken
+        ),
         humanEndpointId: input.humanEndpointId,
         displayName,
         policy: {
@@ -787,4 +792,13 @@ export function managedContainerDisplayName(userId: string): string {
   // Collaboration Server stableDigest() JSON-encodes scalar values before
   // hashing. Keep the Desktop request aligned with that server-derived name.
   return `sciforge-${digest(JSON.stringify(userId)).slice(0, 12)}`
+}
+
+export function managedContainerEnsureIdempotencyKey(
+  userId: string,
+  humanEndpointId: string,
+  retryToken?: string
+): string {
+  const attempt = retryToken ? `\u0000retry\u0000${retryToken}` : ''
+  return `idem_managed_container.ensure.${digest(`${userId}\u0000${humanEndpointId}${attempt}`).slice(0, 48)}`
 }

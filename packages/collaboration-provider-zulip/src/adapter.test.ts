@@ -111,7 +111,11 @@ describe('ZulipHumanEndpointProvider', () => {
         ]
       })
       if (url.pathname.endsWith('/api/v1/get_stream_id')) {
-        return json({ result: 'error', msg: 'not found', code: 'STREAM_DOES_NOT_EXIST' }, { status: 400 })
+        return json({
+          result: 'error',
+          msg: 'Invalid channel name',
+          code: 'BAD_REQUEST'
+        }, { status: 400 })
       }
       if (url.pathname.endsWith('/api/v1/channels/create')) return json({ result: 'success', id: 123 })
       if (url.pathname.endsWith('/api/v1/streams/123/members')) {

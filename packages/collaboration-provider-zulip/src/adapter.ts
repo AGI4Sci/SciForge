@@ -582,6 +582,13 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
       return stableId(response.stream_id)
     } catch (error) {
       if (isZulipProviderError(error) && error.code === 'not_found') return undefined
+      // Zulip 12.2 returns 400 BAD_REQUEST from get_stream_id when the
+      // requested private Channel is absent or not visible to this user.
+      // The name is generated and bounded by SciForge; creation remains the
+      // authoritative collision check and will reject an inaccessible name.
+      if (isZulipProviderError(error) && error.code === 'invalid_payload' && error.status === 400) {
+        return undefined
+      }
       throw error
     }
   }
