@@ -558,6 +558,31 @@ export function CollaborationPanel({
               }}
             />
 
+            <ManagedChannelSection
+              snapshot={snapshot}
+              busy={busyKey !== null}
+              onEnsure={(humanEndpointId) => void runAction(
+                `managed-channel-ensure-${humanEndpointId}`,
+                () => client.manageContainer({ action: 'ensure', humanEndpointId })
+              )}
+              onRefreshStatus={() => void runAction(
+                'managed-channel-refresh-status',
+                () => client.manageContainer({ action: 'refresh-status' })
+              )}
+              onRefreshTopics={(humanEndpointId) => void runAction(
+                `managed-channel-refresh-topics-${humanEndpointId}`,
+                () => client.manageContainer({ action: 'refresh-locators', humanEndpointId })
+              )}
+              onReconcile={(managedContainerId, expectedRevision) => void runAction(
+                `managed-channel-reconcile-${managedContainerId}`,
+                () => client.manageContainer({ action: 'reconcile', managedContainerId, expectedRevision })
+              )}
+              onArchive={(managedContainerId, expectedRevision) => void runAction(
+                `managed-channel-archive-${managedContainerId}`,
+                () => client.manageContainer({ action: 'archive', managedContainerId, expectedRevision })
+              )}
+            />
+
             <section className={PANEL_SECTION} data-collaboration-section="projections">
               <SectionTitle icon={<Link2 className="h-4 w-4" />}>
                 {t('collaborationPersonalSessions')}
@@ -653,6 +678,101 @@ export function CollaborationPanel({
         )}
       </div>
     </div>
+  )
+}
+
+export function ManagedChannelSection({
+  snapshot,
+  busy,
+  onEnsure,
+  onRefreshStatus,
+  onRefreshTopics,
+  onReconcile,
+  onArchive
+}: Readonly<{
+  snapshot: CollaborationStatusSnapshot
+  busy: boolean
+  onEnsure: (humanEndpointId: string) => void
+  onRefreshStatus: () => void
+  onRefreshTopics: (humanEndpointId: string) => void
+  onReconcile: (managedContainerId: string, expectedRevision: number) => void
+  onArchive: (managedContainerId: string, expectedRevision: number) => void
+}>): ReactElement | null {
+  const { t } = useTranslation('common')
+  const eligibleEndpoints = snapshot.participant?.endpoints.filter((endpoint) => (
+    endpoint.status === 'active' && snapshot.providerOptions.some((provider) => (
+      provider.providerKey === endpoint.providerKey && provider.managedContainers
+    ))
+  )) ?? []
+  if (eligibleEndpoints.length === 0 && snapshot.managedContainers.length === 0) return null
+  return (
+    <section className={PANEL_SECTION} data-collaboration-section="managed-channels">
+      <SectionTitle icon={<ShieldCheck className="h-4 w-4" />}>
+        {t('collaborationManagedChannel')}
+      </SectionTitle>
+      <p className="mb-3 text-xs text-ds-muted">{t('collaborationManagedChannelTrust')}</p>
+      <div className="mb-3 flex flex-wrap gap-2">
+        {eligibleEndpoints.filter((endpoint) => !snapshot.managedContainers.some((container) => (
+          container.humanEndpointId === endpoint.humanEndpointId
+        ))).map((endpoint) => (
+          <button key={endpoint.humanEndpointId} type="button" className={PRIMARY_BUTTON}
+            disabled={busy} onClick={() => onEnsure(endpoint.humanEndpointId)}>
+            <Plus className="h-3.5 w-3.5" />{t('collaborationManagedChannelCreate')}
+          </button>
+        ))}
+        <button type="button" className={SECONDARY_BUTTON} disabled={busy} onClick={onRefreshStatus}>
+          <RefreshCw className="h-3.5 w-3.5" />{t('collaborationManagedChannelCheck')}
+        </button>
+      </div>
+      <div className="space-y-2">
+        {snapshot.managedContainers.map((container) => {
+          const checks = container.checks
+          return (
+            <div key={container.managedContainerId} className="rounded-md border border-ds-border p-2 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate font-medium">{container.displayName}</span>
+                <span className="text-ds-muted">{container.status}</span>
+              </div>
+              <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-ds-muted">
+                <dt>{t('collaborationManagedChannelPrivacy')}</dt><dd>{checks?.private ? '✓' : '—'}</dd>
+                <dt>{t('collaborationManagedChannelHistory')}</dt><dd>{checks?.protectedHistory ? '✓' : '—'}</dd>
+                <dt>{t('collaborationManagedChannelMembers')}</dt><dd>{checks?.exactMembership ? '✓' : '—'}</dd>
+                <dt>{t('collaborationManagedChannelSend')}</dt><dd>{checks?.ownerCanSend && checks.messageBotCanSend ? '✓' : '—'}</dd>
+                <dt>{t('collaborationManagedChannelTopics')}</dt><dd>{checks?.ownerCanCreateTopics ? '✓' : '—'}</dd>
+                <dt>{t('collaborationManagedChannelSession')}</dt>
+                <dd>{snapshot.projections.filter((projection) => (
+                  projection.humanEndpointId === container.humanEndpointId &&
+                  projection.remoteLocator?.provider === container.container?.provider &&
+                  projection.remoteLocator?.realmId === container.container?.realmId &&
+                  projection.remoteLocator?.containerId === container.container?.containerId
+                )).length}</dd>
+                <dt>{t('collaborationManagedChannelVerified')}</dt>
+                <dd>{container.lastVerifiedAt ? new Date(container.lastVerifiedAt).toLocaleString() : '—'}</dd>
+              </dl>
+              {container.safeErrorCode ? <p className="mt-2 text-ds-danger">{container.safeErrorCode}</p> : null}
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button type="button" className={SECONDARY_BUTTON} disabled={busy}
+                  onClick={() => onRefreshTopics(container.humanEndpointId)}>
+                  <RefreshCw className="h-3.5 w-3.5" />{t('collaborationManagedChannelRefreshTopics')}
+                </button>
+                {container.container && container.status !== 'archived' ? (
+                  <button type="button" className={SECONDARY_BUTTON} disabled={busy}
+                    onClick={() => onReconcile(container.managedContainerId, container.revision)}>
+                    <RotateCcw className="h-3.5 w-3.5" />{t('collaborationManagedChannelRepair')}
+                  </button>
+                ) : null}
+                {container.container && container.status !== 'archived' ? (
+                  <button type="button" className={SECONDARY_BUTTON} disabled={busy}
+                    onClick={() => onArchive(container.managedContainerId, container.revision)}>
+                    <Unlink className="h-3.5 w-3.5" />{t('collaborationManagedChannelArchive')}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </section>
   )
 }
 

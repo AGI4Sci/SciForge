@@ -17,6 +17,8 @@ import {
   collaborationEndpointChallengePollResultSchema,
   collaborationEndpointChallengeStartInputSchema,
   collaborationEndpointChallengeStartResultSchema,
+  collaborationManagedContainerManageInputSchema,
+  collaborationManagedContainerManageResultSchema,
   collaborationPrimaryAgentSelectInputSchema,
   collaborationPrimaryAgentSelectResultSchema,
   collaborationProjectionLinkInputSchema,
@@ -36,6 +38,7 @@ import {
   type CollaborationConnectionConnectInput,
   type CollaborationEndpointChallengePollInput,
   type CollaborationEndpointChallengeStartInput,
+  type CollaborationManagedContainerManageInput,
   type CollaborationPrimaryAgentSelectInput,
   type CollaborationProjectionLinkInput,
   type CollaborationProjectionShareInput,
@@ -393,6 +396,19 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
               collaborationTaskListInputSchema.parse(raw) as CollaborationTaskListInput
             )
           }
+        })
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.managedContainerManage,
+        'Manage private collaboration Channel',
+        'Creates, refreshes, repairs, or archives the authenticated user private Channel through the durable cloud provisioning path.',
+        'external-write',
+        collaborationManagedContainerManageInputSchema,
+        collaborationManagedContainerManageResultSchema,
+        async (raw) => ({
+          output: await options.getRuntime().manageContainer(
+            collaborationManagedContainerManageInputSchema.parse(raw) as CollaborationManagedContainerManageInput
+          )
         })
       )
     ]

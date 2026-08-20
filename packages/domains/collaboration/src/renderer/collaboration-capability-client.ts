@@ -13,6 +13,8 @@ import {
   collaborationEndpointChallengePollResultSchema,
   collaborationEndpointChallengeStartInputSchema,
   collaborationEndpointChallengeStartResultSchema,
+  collaborationManagedContainerManageInputSchema,
+  collaborationManagedContainerManageResultSchema,
   collaborationPrimaryAgentSelectInputSchema,
   collaborationPrimaryAgentSelectResultSchema,
   collaborationProjectionLinkInputSchema,
@@ -32,6 +34,7 @@ import {
   type CollaborationConnectionConnectInput,
   type CollaborationEndpointChallengePollInput,
   type CollaborationEndpointChallengeStartInput,
+  type CollaborationManagedContainerManageInput,
   type CollaborationPrimaryAgentSelectInput,
   type CollaborationProjectionLinkInput,
   type CollaborationProjectionShareInput,
@@ -52,6 +55,7 @@ type ProjectionUpdateResult = z.infer<typeof collaborationProjectionUpdateResult
 type ProjectionShareResult = z.infer<typeof collaborationProjectionShareResultSchema>
 type SynchronizationRetryResult = z.infer<typeof collaborationSynchronizationRetryResultSchema>
 type TaskListResult = z.infer<typeof collaborationTaskListResultSchema>
+type ManagedContainerManageResult = z.infer<typeof collaborationManagedContainerManageResultSchema>
 
 const contracts = Object.freeze({
   statusRead: Object.freeze({
@@ -125,6 +129,12 @@ const contracts = Object.freeze({
     effect: 'read' as const,
     inputSchema: collaborationTaskListInputSchema,
     outputSchema: collaborationTaskListResultSchema
+  }),
+  managedContainerManage: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.managedContainerManage,
+    effect: 'external-write' as const,
+    inputSchema: collaborationManagedContainerManageInputSchema,
+    outputSchema: collaborationManagedContainerManageResultSchema
   })
 })
 
@@ -143,6 +153,7 @@ export type CollaborationRendererClient = Readonly<{
   shareProjection(input: CollaborationProjectionShareInput): Promise<ProjectionShareResult>
   retrySynchronization(input: CollaborationSynchronizationRetryInput): Promise<SynchronizationRetryResult>
   listTasks(input?: CollaborationTaskListInput): Promise<TaskListResult>
+  manageContainer(input: CollaborationManagedContainerManageInput): Promise<ManagedContainerManageResult>
 }>
 
 export function createCollaborationRendererClient(
@@ -183,7 +194,8 @@ export function createCollaborationRendererClient(
       input,
       CONFIRMED
     ),
-    listTasks: (input = {}) => invoker.invoke(contracts.taskList, input)
+    listTasks: (input = {}) => invoker.invoke(contracts.taskList, input),
+    manageContainer: (input) => invoker.invoke(contracts.managedContainerManage, input, CONFIRMED)
   })
 }
 

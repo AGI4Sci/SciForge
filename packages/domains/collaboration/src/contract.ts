@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { providerLocatorSchema } from '@sciforge/collaboration-contracts'
+import { managedProviderContainerSchema, providerLocatorSchema } from '@sciforge/collaboration-contracts'
 
 const idSchema = z.string().trim().min(1).max(256)
 const isoDateSchema = z.iso.datetime({ offset: true })
@@ -18,7 +18,8 @@ export const COLLABORATION_CAPABILITY_IDS = Object.freeze({
   projectionUpdate: 'collaboration.projection.update',
   projectionShare: 'collaboration.projection.share',
   synchronizationRetry: 'collaboration.sync.retry',
-  taskList: 'collaboration.task.list'
+  taskList: 'collaboration.task.list',
+  managedContainerManage: 'collaboration.managed-container.manage'
 } as const)
 
 export const collaborationProviderLocatorFieldSchema = z.object({
@@ -31,7 +32,8 @@ export const collaborationProviderLocatorFieldSchema = z.object({
 export const collaborationProviderOptionSchema = z.object({
   providerKey: idSchema,
   label: displayTextSchema,
-  locatorFields: z.array(collaborationProviderLocatorFieldSchema).max(32)
+  locatorFields: z.array(collaborationProviderLocatorFieldSchema).max(32),
+  managedContainers: z.boolean()
 }).strict()
 
 export const collaborationConnectionViewSchema = z.object({
@@ -113,6 +115,7 @@ export const collaborationProjectionViewSchema = z.object({
   workspaceRoot: z.string().max(4_096).optional(),
   displayName: displayTextSchema,
   remoteDisplay: z.string().max(512).optional(),
+  remoteLocator: providerLocatorSchema.optional(),
   status: z.enum(['linking', 'active', 'paused', 'closed', 'error']),
   allowUserIds: z.array(idSchema).max(256),
   revision: z.number().int().nonnegative(),
@@ -164,6 +167,7 @@ export const collaborationStatusSnapshotSchema = z.object({
   revision: z.number().int().nonnegative(),
   connection: collaborationConnectionViewSchema,
   providerOptions: z.array(collaborationProviderOptionSchema).max(32),
+  managedContainers: z.array(managedProviderContainerSchema).max(64),
   participant: collaborationParticipantViewSchema.optional(),
   projections: z.array(collaborationProjectionViewSchema).max(10_000),
   projects: z.array(collaborationProjectViewSchema).max(10_000),
@@ -320,6 +324,26 @@ export const collaborationTaskListResultSchema = z.object({
   tasks: z.array(collaborationTaskViewSchema).max(100_000)
 }).strict()
 
+export const collaborationManagedContainerManageInputSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('ensure'), humanEndpointId: idSchema }).strict(),
+  z.object({ action: z.literal('refresh-locators'), humanEndpointId: idSchema }).strict(),
+  z.object({ action: z.literal('refresh-status') }).strict(),
+  z.object({
+    action: z.literal('reconcile'),
+    managedContainerId: idSchema,
+    expectedRevision: z.number().int().positive()
+  }).strict(),
+  z.object({
+    action: z.literal('archive'),
+    managedContainerId: idSchema,
+    expectedRevision: z.number().int().positive()
+  }).strict()
+])
+export const collaborationManagedContainerManageResultSchema = z.object({
+  managedContainer: managedProviderContainerSchema.nullable(),
+  locatorCount: z.number().int().nonnegative().optional()
+}).strict()
+
 export type CollaborationStatusSnapshot = z.infer<typeof collaborationStatusSnapshotSchema>
 export type CollaborationProjectionView = z.infer<typeof collaborationProjectionViewSchema>
 export type CollaborationProjectionQueueItemView = z.infer<typeof collaborationProjectionQueueItemViewSchema>
@@ -336,3 +360,4 @@ export type CollaborationProjectionUpdateInput = z.infer<typeof collaborationPro
 export type CollaborationProjectionShareInput = z.infer<typeof collaborationProjectionShareInputSchema>
 export type CollaborationSynchronizationRetryInput = z.infer<typeof collaborationSynchronizationRetryInputSchema>
 export type CollaborationTaskListInput = z.infer<typeof collaborationTaskListInputSchema>
+export type CollaborationManagedContainerManageInput = z.infer<typeof collaborationManagedContainerManageInputSchema>

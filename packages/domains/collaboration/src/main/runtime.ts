@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import {
   restRequestSchema,
   type AgentInboxMessage,
+  type ManagedProviderContainer,
   type Project,
   type RemoteSessionProjection,
   type RestResponse,
@@ -21,6 +22,7 @@ import type {
   CollaborationEndpointChallengePollInput,
   CollaborationEndpointChallengeStartInput,
   CollaborationAgentRegisterInput,
+  CollaborationManagedContainerManageInput,
   CollaborationPrimaryAgentSelectInput,
   CollaborationProjectionLinkInput,
   CollaborationProjectionShareInput,
@@ -302,6 +304,7 @@ export class CollaborationRuntime {
         ...(connectionState.lastError ? { lastError: connectionState.lastError } : {})
       },
       providerOptions: [...connection.providers()],
+      managedContainers: state.managedContainers,
       ...(participant ? { participant } : {}),
       projections,
       projects: projectViews,
@@ -497,6 +500,94 @@ export class CollaborationRuntime {
     if (input.scope === 'task') await this.requireTasks().recover()
   }
 
+  async manageContainer(input: CollaborationManagedContainerManageInput): Promise<Readonly<{
+    managedContainer: ManagedProviderContainer | null
+    locatorCount?: number
+  }>> {
+    const connection = this.requireConnection()
+    if (input.action === 'refresh-locators') {
+      return {
+        managedContainer: null,
+        locatorCount: await connection.refreshEndpointLocators(input.humanEndpointId)
+      }
+    }
+    if (input.action === 'refresh-status') {
+      const containers = await connection.refreshManagedContainers()
+      for (const container of containers) {
+        if (!container.container || container.status === 'archived') continue
+        await connection.executeAsUser(restRequestSchema.parse({
+          protocolVersion: '1.0',
+          requestId: collaborationRequestId(),
+          type: 'managed_container.inspect',
+          idempotencyKey: `idem_managed_container.inspect.${digest(`${container.managedContainerId}\u0000${container.revision}`).slice(0, 48)}`,
+          managedContainerId: container.managedContainerId,
+          expectedRevision: container.revision
+        }))
+      }
+      await connection.refreshManagedContainers()
+      return { managedContainer: null }
+    }
+    const state = this.store.snapshot()
+    let response: RestResponse
+    if (input.action === 'ensure') {
+      if (!state.user) throw new Error('A verified user is required to create a managed Channel.')
+      const provider = state.endpoints.find((endpoint) => (
+        endpoint.humanEndpointId === input.humanEndpointId
+      ))?.identity.provider
+      if (!provider || !connection.providers().some((option) => (
+        option.providerKey === provider && option.managedContainers
+      ))) {
+        throw new Error('This endpoint Provider does not offer managed Channels.')
+      }
+      const displayName = `sciforge-${digest(state.user.userId).slice(0, 12)}`
+      response = await connection.executeAsUser(restRequestSchema.parse({
+        protocolVersion: '1.0',
+        requestId: collaborationRequestId(),
+        type: 'managed_container.ensure',
+        idempotencyKey: `idem_managed_container.ensure.${digest(`${state.user.userId}\u0000${input.humanEndpointId}`).slice(0, 48)}`,
+        humanEndpointId: input.humanEndpointId,
+        displayName,
+        policy: {
+          version: 1,
+          visibility: 'private',
+          history: 'protected',
+          membership: 'owner_and_message_bot',
+          memberManagement: 'provisioning_service_only',
+          channelManagement: 'provisioning_service_only',
+          ownerCanSend: true,
+          ownerCanCreateTopics: true,
+          messageBotCanSend: true,
+          messageBotCreatesProjectTopics: false
+        }
+      }))
+    } else {
+      response = await connection.executeAsUser(restRequestSchema.parse({
+        protocolVersion: '1.0',
+        requestId: collaborationRequestId(),
+        type: input.action === 'reconcile'
+          ? 'managed_container.reconcile'
+          : 'managed_container.archive',
+        idempotencyKey: `idem_managed_container.${input.action}.${digest(`${input.managedContainerId}\u0000${input.expectedRevision}`).slice(0, 48)}`,
+        managedContainerId: input.managedContainerId,
+        expectedRevision: input.expectedRevision
+      }))
+    }
+    if (response.type === 'rest.error') throw new Error(response.error.message)
+    if (response.type !== 'rest.entity' || response.entity.type !== 'managed_provider_container') {
+      throw new Error(`Managed Channel command returned unexpected ${response.type}.`)
+    }
+    const managedContainer = response.entity
+    await this.store.transact((draft) => {
+      draft.managedContainers = [
+        ...draft.managedContainers.filter((item) => (
+          item.managedContainerId !== managedContainer.managedContainerId
+        )),
+        managedContainer
+      ]
+    })
+    return { managedContainer }
+  }
+
   listTasks(input: CollaborationTaskListInput): readonly CollaborationTaskView[] {
     const states = new Set(input.states ?? [])
     return this.store.snapshot().tasks
@@ -590,6 +681,7 @@ export class CollaborationRuntime {
         projection.locator.containerDisplayName,
         projection.locator.topicDisplayName
       ].filter(Boolean).join(' / ') || undefined,
+      remoteLocator: projection.locator,
       status: projection.status,
       allowUserIds: projection.allowedSenderUserIds,
       revision: projection.revision,
