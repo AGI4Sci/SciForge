@@ -539,7 +539,7 @@ export class CollaborationRuntime {
       ))) {
         throw new Error('This endpoint Provider does not offer managed Channels.')
       }
-      const displayName = `sciforge-${digest(state.user.userId).slice(0, 12)}`
+      const displayName = managedContainerDisplayName(state.user.userId)
       response = await connection.executeAsUser(restRequestSchema.parse({
         protocolVersion: '1.0',
         requestId: collaborationRequestId(),
@@ -775,4 +775,10 @@ function replaceById<Value>(
 
 function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex')
+}
+
+export function managedContainerDisplayName(userId: string): string {
+  // Collaboration Server stableDigest() JSON-encodes scalar values before
+  // hashing. Keep the Desktop request aligned with that server-derived name.
+  return `sciforge-${digest(JSON.stringify(userId)).slice(0, 12)}`
 }

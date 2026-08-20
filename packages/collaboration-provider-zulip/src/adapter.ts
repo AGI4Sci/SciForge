@@ -482,7 +482,11 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
           schema: zulipCreateChannelResponseSchema,
           retry: 'never'
         })
-        containerId = stableId(response.stream_id)
+        const createdId = response.id ?? response.stream_id
+        if (createdId === undefined) {
+          throw new ZulipProviderError('invalid_payload', 'Zulip create Channel response lacks an ID.')
+        }
+        containerId = stableId(createdId)
       }
       return this.inspectManagedContainer(containerId, context)
     }
@@ -558,7 +562,6 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
       announce: 'false',
       invite_only: 'true',
       history_public_to_subscribers: 'false',
-      topics_policy: 'disable_empty_topic',
       can_add_subscribers_group: JSON.stringify(provisionerOnly),
       can_remove_subscribers_group: JSON.stringify(provisionerOnly),
       can_administer_channel_group: JSON.stringify(provisionerOnly),
@@ -673,7 +676,6 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
       new_name: displayName,
       is_private: 'true',
       history_public_to_subscribers: 'false',
-      topics_policy: 'disable_empty_topic',
       can_add_subscribers_group: JSON.stringify({ new: provisionerOnly }),
       can_remove_subscribers_group: JSON.stringify({ new: provisionerOnly }),
       can_administer_channel_group: JSON.stringify({ new: provisionerOnly }),

@@ -113,7 +113,7 @@ describe('ZulipHumanEndpointProvider', () => {
       if (url.pathname.endsWith('/api/v1/get_stream_id')) {
         return json({ result: 'error', msg: 'not found', code: 'STREAM_DOES_NOT_EXIST' }, { status: 404 })
       }
-      if (url.pathname.endsWith('/api/v1/channels/create')) return json({ result: 'success', stream_id: 123 })
+      if (url.pathname.endsWith('/api/v1/channels/create')) return json({ result: 'success', id: 123 })
       if (url.pathname.endsWith('/api/v1/streams/123/members')) {
         return json({ result: 'success', subscribers: [42, 99] })
       }
@@ -171,6 +171,7 @@ describe('ZulipHumanEndpointProvider', () => {
     assert.ok(create)
     assert.equal(create.body.get('invite_only'), 'true')
     assert.equal(create.body.get('history_public_to_subscribers'), 'false')
+    assert.equal(create.body.has('topics_policy'), false)
     assert.deepEqual(JSON.parse(create.body.get('subscribers')!), [42, 99])
     assert.equal(mutations.some((entry) => entry.path.endsWith('/api/v1/messages')), false)
   })

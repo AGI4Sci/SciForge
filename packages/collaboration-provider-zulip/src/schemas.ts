@@ -39,7 +39,10 @@ const zulipChannelShape = {
 
 export const zulipCreateChannelResponseSchema = z.object({
   ...successEnvelope,
-  stream_id: numericIdSchema
+  id: numericIdSchema.optional(),
+  stream_id: numericIdSchema.optional()
+}).refine((response) => response.id !== undefined || response.stream_id !== undefined, {
+  message: 'Zulip create Channel response requires an id.'
 })
 
 export const zulipChannelIdResponseSchema = z.object({
