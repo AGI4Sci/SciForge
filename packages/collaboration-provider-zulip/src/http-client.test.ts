@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { describe, it } from 'node:test'
 import { ZulipHttpClient, type ZulipProviderDiagnostic } from './http-client.js'
+import { isZulipProviderError } from './errors.js'
 import { zulipUserResponseSchema } from './schemas.js'
 
 function json(value: unknown, status = 200, headers: HeadersInit = {}): Response {
@@ -68,5 +69,23 @@ describe('ZulipHttpClient', () => {
     const serialized = JSON.stringify(diagnostics)
     assert.doesNotMatch(serialized, /Basic/)
     for (const sentinel of credentialSentinels) assert.equal(serialized.includes(sentinel), false)
+  })
+
+  it('classifies Zulip 400 STREAM_DOES_NOT_EXIST as not found', async () => {
+    const client = new ZulipHttpClient({
+      realmUrl: 'https://chat.example.invalid/zulip',
+      botEmail: 'service-bot@example.invalid',
+      resolveCredential: async () => ({ apiKey: randomUUID() }),
+      fetch: async () => json({
+        result: 'error',
+        msg: 'Channel does not exist',
+        code: 'STREAM_DOES_NOT_EXIST'
+      }, 400)
+    })
+
+    await assert.rejects(client.request('api/v1/get_stream_id', {
+      schema: zulipUserResponseSchema,
+      retry: 'safe'
+    }), (error: unknown) => isZulipProviderError(error) && error.code === 'not_found')
   })
 })
