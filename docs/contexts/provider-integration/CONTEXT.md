@@ -46,6 +46,10 @@ _Avoid_: portable credential, shared administrator session, universal connection
 A named node-local Provider Access Binding used when a Provider requires separate enrollment and credentials. V1 permits at most one active connection for each `(Human Principal, Provider Instance)` on one Agent Host.
 _Avoid_: Provider Instance, mandatory first-party login, portable credential, shared administrator session
 
+**Provider Connection Retirement**:
+The irreversible local invalidation of a Provider Connection whose trusted Provider Instance is no longer installed or admitted. A retired connection never authorizes another Provider Instance; its integration owner remains responsible for deleting the credential while the owning Human Principal is current.
+_Avoid_: Provider Migration, credential reuse, implicit rebinding, abandoned credential
+
 **Provider Connection ID**:
 The node-local identity of one Provider Connection. It never travels in a portable resource reference.
 _Avoid_: Provider Instance Reference, cross-node credential handle
