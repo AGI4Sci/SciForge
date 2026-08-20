@@ -26,9 +26,12 @@ const targetPackageDirectories = Object.freeze([
   'packages/domains/content-space-mock-provider',
   'packages/domains/git-checkpoints',
   'packages/domains/identity-access',
+  'packages/domains/opencontent-connector',
+  'packages/domains/opencontent-content-space-provider',
   'packages/domains/research-checkpoints',
   'packages/domains/research-dossier',
-  'packages/domains/visual-review'
+  'packages/domains/visual-review',
+  'packages/opencontent-skill-runtime'
 ])
 const localDependencyDirectories = Object.freeze([
   'packages/collaboration-contracts',
@@ -111,6 +114,26 @@ function publicExportSpecifiers(packageJson) {
       'string',
       `${packageJson.name} ${subpath} must use one explicit import target`
     )
+    if (typeof target !== 'string') {
+      assert.equal(
+        typeof target,
+        'object',
+        `${packageJson.name} ${subpath} must use an explicit export target`
+      )
+      assert.notEqual(target, null, `${packageJson.name} ${subpath} must not be null`)
+      assert.equal(
+        typeof target.import,
+        'string',
+        `${packageJson.name} ${subpath} must declare one import target`
+      )
+      if ('types' in target) {
+        assert.equal(
+          typeof target.types,
+          'string',
+          `${packageJson.name} ${subpath} types target must be explicit`
+        )
+      }
+    }
     return subpath === '.' ? packageJson.name : `${packageJson.name}${subpath.slice(1)}`
   })
 }
@@ -189,6 +212,15 @@ test('publishable domain packages resolve every public export from independent t
     const contentMockPackage = contentMock.packageJson
     const identity = installedPackages.get('@sciforge/domain-identity-access')
     const identityPackage = identity.packageJson
+    const openContentRuntimePackage = installedPackages.get(
+      '@sciforge/opencontent-skill-runtime'
+    )
+    const openContentRuntime = openContentRuntimePackage.packageJson
+    const openContentConnector = installedPackages.get('@sciforge/domain-opencontent-connector')
+      .packageJson
+    const openContentProvider = installedPackages.get(
+      '@sciforge/domain-opencontent-content-space-provider'
+    ).packageJson
     const checkpointPackage = installedPackages.get(
       '@sciforge/domain-research-checkpoints'
     ).packageJson
@@ -221,16 +253,16 @@ test('publishable domain packages resolve every public export from independent t
     assert.equal(artifactPackage.version, '1.1.0')
     assert.equal(artifactManifest.module.version, '1.1.0')
     assert.equal(artifactPackage.dependencies['@sciforge/domain-sdk'], '^0.2.0')
-    assert.equal(contentPackage.version, '1.0.0')
-    assert.equal(contentManifest.module.version, '1.0.0')
+    assert.equal(contentPackage.version, '1.1.0')
+    assert.equal(contentManifest.module.version, '1.1.0')
     assert.equal(contentManifest.module.hostApi.minimum, '1.3.0')
     assert.equal(contentPackage.dependencies['@sciforge/domain-sdk'], '^0.2.1')
-    assert.equal(contentMockPackage.version, '1.0.0')
-    assert.equal(contentMockManifest.module.version, '1.0.0')
+    assert.equal(contentMockPackage.version, '1.0.1')
+    assert.equal(contentMockManifest.module.version, '1.0.1')
     assert.equal(contentMockManifest.module.hostApi.minimum, '1.3.0')
     assert.equal(
       contentMockPackage.dependencies['@sciforge/domain-content-space'],
-      '1.0.0'
+      '1.1.0'
     )
     assert.equal(contentMockPackage.dependencies['@sciforge/domain-sdk'], '^0.2.1')
     assert.equal(identityPackage.version, '1.1.0')
@@ -245,6 +277,36 @@ test('publishable domain packages resolve every public export from independent t
       '0.1.0'
     )
     assert.equal(identityPackage.dependencies['@sciforge/domain-sdk'], '^0.2.1')
+    assert.equal(
+      openContentRuntime.exports['./main/extended-operation-adapter'].import,
+      './src/extended-operation-adapter.ts'
+    )
+    assert.equal(
+      openContentConnector.dependencies['@sciforge/opencontent-skill-runtime'],
+      openContentRuntime.version
+    )
+    assert.equal(
+      openContentProvider.dependencies['@sciforge/opencontent-skill-runtime'],
+      openContentRuntime.version
+    )
+    for (const packageJson of [
+      openContentRuntime,
+      openContentConnector,
+      openContentProvider
+    ]) {
+      assert.equal(packageJson.private, false)
+      assert.equal(packageJson.license, 'MIT')
+      assert.equal(
+        Object.keys(packageJson.dependencies ?? {}).some((name) =>
+          name.startsWith('@sciforge-internal/')
+        ),
+        false,
+        `${packageJson.name} must not depend on a private attachment package`
+      )
+    }
+    await assert.rejects(lstat(join(openContentRuntimePackage.root, 'assets')), {
+      code: 'ENOENT'
+    })
     assert.equal(
       checkpointPackage.dependencies['@sciforge/domain-artifact-versions'],
       '^1.1.0'

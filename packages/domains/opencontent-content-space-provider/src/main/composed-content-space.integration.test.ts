@@ -67,7 +67,7 @@ type CapabilityDefinition = Readonly<{
 }>
 
 describe('composed Content Space with the OpenContent Provider adapter', () => {
-  it('binds once and keeps personal and Team library reads working after runtime restart', async () => {
+  it('persists the binding and keeps personal and Team library reads working after restart', async () => {
     const storage = persistentStorage()
     const transport = deterministicOpenContentTransport()
     const first = await composeRuntime(storage, transport.fetch)
@@ -92,7 +92,7 @@ describe('composed Content Space with the OpenContent Provider adapter', () => {
         }
       })
 
-      const personal = await invokeContentSpace<ContentSpaceContainerPage>(
+      const personal = await invoke<ContentSpaceResult<ContentSpaceContainerPage>>(
         first.contentDefinitions,
         CONTENT_SPACE_CAPABILITY_IDS.listContainers,
         {
@@ -102,16 +102,19 @@ describe('composed Content Space with the OpenContent Provider adapter', () => {
         'invocation_content_space_personal_0002'
       )
       expect(personal).toEqual({
-        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-        items: [{
-          reference: {
-            providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-            containerId: 'personal-folder-guid'
-          },
-          scope: 'personal',
-          label: 'Personal library'
-        }],
-        nextCursor: 'teams_1'
+        ok: true,
+        value: {
+          providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+          items: [{
+            reference: {
+              providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+              containerId: 'personal-folder-guid'
+            },
+            label: 'Personal library',
+            scope: 'personal'
+          }],
+          nextCursor: 'teams_1'
+        }
       })
       expectSafePublicOutput({ bound, personal })
     } finally {
@@ -120,27 +123,45 @@ describe('composed Content Space with the OpenContent Provider adapter', () => {
 
     const second = await composeRuntime(storage, transport.fetch)
     try {
-      const teams = await invokeContentSpace<ContentSpaceContainerPage>(
+      const status = await invoke(
+        second.connectorDefinitions,
+        OPENCONTENT_CONNECTION_CAPABILITY_IDS.status,
+        { providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF },
+        'invocation_opencontent_status_after_restart_0003'
+      )
+      expect(status).toMatchObject({
+        outcome: 'success',
+        status: {
+          state: 'connected',
+          providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+          externalAccount: { identityId: 42, account: 'fixture-scientist' }
+        }
+      })
+
+      const teams = await invoke<ContentSpaceResult<ContentSpaceContainerPage>>(
         second.contentDefinitions,
         CONTENT_SPACE_CAPABILITY_IDS.listContainers,
         {
           providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
           page: { limit: 20, cursor: 'teams_1' }
         },
-        'invocation_content_space_teams_after_restart_0003'
+        'invocation_content_space_teams_after_restart_0004'
       )
       expect(teams).toEqual({
-        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-        items: [{
-          reference: {
-            providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-            containerId: 'team-folder-guid'
-          },
-          scope: 'shared',
-          label: 'SciForge Research'
-        }]
+        ok: true,
+        value: {
+          providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+          items: [{
+            reference: {
+              providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+              containerId: 'team-folder-guid'
+            },
+            label: 'SciForge Research',
+            scope: 'shared'
+          }]
+        }
       })
-      expectSafePublicOutput(teams)
+      expectSafePublicOutput({ status, teams })
       expect(transport.loginRequests).toHaveLength(1)
       expect(transport.requestedPaths).toEqual([
         '/inbiz/org/api/auth/GetLoginRsaPublicKey',
@@ -150,6 +171,7 @@ describe('composed Content Space with the OpenContent Provider adapter', () => {
         '/flatsdk/api/services/Auth/CheckUserTokenValidity',
         '/flatsdk/api/services/User/GetTopPersonalFolderId',
         '/flatsdk/api/services/DocList/GetFolderInfoById',
+        '/flatsdk/api/services/Auth/CheckUserTokenValidity',
         '/flatsdk/api/services/Auth/CheckUserTokenValidity',
         '/flatsdk/api/services/Team/GetMyTeamList',
         '/flatsdk/api/services/DocList/GetFolderInfoById'
@@ -272,17 +294,6 @@ async function invoke<Value>(
   if (!definition) throw new Error(`Missing capability ${id}.`)
   const { output } = await definition.handler(input, capabilityContext(invocationId))
   return output as Value
-}
-
-async function invokeContentSpace<Value>(
-  definitions: readonly CapabilityDefinition[],
-  id: string,
-  input: unknown,
-  invocationId: string
-): Promise<Value> {
-  const result = await invoke<ContentSpaceResult<Value>>(definitions, id, input, invocationId)
-  if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
-  return result.value
 }
 
 function capabilityDefinitions(

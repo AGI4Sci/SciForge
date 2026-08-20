@@ -18,13 +18,19 @@ import {
   domainPackageDefinition
 } from '../definition.js'
 import { createOpenContentContentSpaceProvider } from './provider.js'
+import type { OpenContentIdentityBindingPort } from './identity-binding.js'
+
+export type { OpenContentIdentityBindingPort } from './identity-binding.js'
 
 type OpenContentAdapterMainContribution = ReturnType<
   typeof defineContentSpaceProviderFactory
 >
 
 export function createDomainMainEntry(
-  host: DomainMainHost
+  host: DomainMainHost,
+  options: Readonly<{
+    identities?: OpenContentIdentityBindingPort
+  }> = {}
 ): TrustedDomainProcessEntryInput<OpenContentAdapterMainContribution> {
   if (!host.internalServices) {
     throw new Error('OpenContent Content Space Provider requires Host service mediation.')
@@ -42,7 +48,8 @@ export function createDomainMainEntry(
       )
       return createOpenContentContentSpaceProvider({
         providerInstanceRef: instance.providerInstanceRef,
-        facade
+        facade,
+        ...(options.identities === undefined ? {} : { identities: options.identities })
       })
     }
   })

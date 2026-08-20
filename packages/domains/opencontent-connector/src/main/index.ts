@@ -8,6 +8,16 @@ import {
   PROVIDER_FACTORY_CONTRACT_VERSION,
   defineProviderInstanceDirectoryEntry
 } from '@sciforge/domain-sdk/provider-composition'
+import {
+  assertOpenContentSkillBundledAssetsPresent,
+  type OpenContentSkillBundledAssetLocation
+} from '@sciforge/opencontent-skill-runtime/main/bundled-assets'
+import type {
+  OpenContentCliProcessPort
+} from '@sciforge/opencontent-skill-runtime/main/cli-runner'
+import {
+  createNodeOpenContentCliProcessPort
+} from '@sciforge/opencontent-skill-runtime/main/node-cli-process-port'
 
 import {
   OPENCONTENT_CONTENT_SPACE_SERVICE_ID,
@@ -33,10 +43,24 @@ import {
   domainPackageDefinition
 } from '../definition.js'
 import {
+  assertOpenContentPrincipalCurrent,
   createOpenContentConnectionService,
   type OpenContentConnectionService
 } from './connection-service.js'
-import { createOpenContentClient } from './opencontent-client.js'
+import { createOpenContentClient, type OpenContentClient } from './opencontent-client.js'
+import {
+  bindOpenContentTeamAdministration,
+  createOpenContentTeamAdministration
+} from './team-administration.js'
+import {
+  openContentIdentityIdSchema,
+  type OpenContentTeamAdministration
+} from '../team-administration-contract.js'
+import {
+  createOpenContentSkillRuntimeSession,
+  resolveOpenContentSkillRuntimeAssets,
+  type OpenContentSkillRuntimeSession
+} from './skill-runtime.js'
 
 const OPENCONTENT_ADAPTER_MODULE_ID = 'sciforge.opencontent-content-space-provider'
 
@@ -110,6 +134,12 @@ export function createDomainMainEntry(
   host: DomainMainHost,
   options: Readonly<{
     fetch?: typeof fetch
+    skillRuntime?: Readonly<{
+      assets?: OpenContentSkillBundledAssetLocation
+      processPort?: OpenContentCliProcessPort
+      executablePath?: string
+      temporaryRoot?: string
+    }>
   }> = {}
 ): TrustedDomainProcessEntryInput<OpenContentMainContribution> {
   if (!host.packageSettings || !host.packageSecrets?.providerCredentials) {
@@ -128,78 +158,40 @@ export function createDomainMainEntry(
     credentials: host.packageSecrets.providerCredentials,
     client
   })
-  const facade: OpenContentContentSpaceFacade = Object.freeze({
-    listRootFolders: (input) => connections.useCurrentToken({
-      principal: input.principal,
-      providerInstanceRef: input.providerInstanceRef,
-      assertPrincipalCurrent: input.assertPrincipalCurrent,
-      signal: input.signal
-    }, (token) => client.listRootFolders({
-      token,
-      teamPage: input.teamPage,
-      teamPageSize: input.teamPageSize,
-      includePersonal: input.includePersonal,
-      includeTeams: input.includeTeams,
-      signal: input.signal
-    })),
-    listFolderEntries: (input) => connections.useCurrentToken({
-      principal: input.principal,
-      providerInstanceRef: input.providerInstanceRef,
-      assertPrincipalCurrent: input.assertPrincipalCurrent,
-      signal: input.signal
-    }, (token) => client.listFolderEntries({
-      token,
-      parentFolderGuid: input.parentFolderGuid,
-      page: input.page,
-      pageSize: input.pageSize,
-      signal: input.signal
-    })),
-    observeEntry: (input) => connections.useCurrentToken({
-      principal: input.principal,
-      providerInstanceRef: input.providerInstanceRef,
-      assertPrincipalCurrent: input.assertPrincipalCurrent,
-      signal: input.signal
-    }, (token) => client.observeEntry({
-      token,
-      kind: input.kind,
-      resourceGuid: input.resourceGuid,
-      signal: input.signal
-    })),
-    createFolder: (input) => connections.useCurrentToken({
-      principal: input.principal,
-      providerInstanceRef: input.providerInstanceRef,
-      assertPrincipalCurrent: input.assertPrincipalCurrent,
-      signal: input.signal
-    }, (token) => client.createFolder({
-      token,
-      parentFolderGuid: input.parentFolderGuid,
-      name: input.name,
-      signal: input.signal
-    })),
-    uploadNewFile: (input) => connections.useCurrentToken({
-      principal: input.principal,
-      providerInstanceRef: input.providerInstanceRef,
-      assertPrincipalCurrent: input.assertPrincipalCurrent,
-      signal: input.signal
-    }, (token) => client.uploadNewFile({
-      token,
-      parentFolderGuid: input.parentFolderGuid,
-      name: input.name,
-      size: input.size,
-      read: input.read,
-      signal: input.signal
-    })),
-    downloadFile: (input) => connections.useCurrentToken({
-      principal: input.principal,
-      providerInstanceRef: input.providerInstanceRef,
-      assertPrincipalCurrent: input.assertPrincipalCurrent,
-      signal: input.signal
-    }, (token) => client.downloadFile({
-      token,
-      fileGuid: input.fileGuid,
-      write: input.write,
-      signal: input.signal
-    }))
+  const teamAdministration = createOpenContentTeamAdministration({
+    baseUrl: OPENCONTENT_EDOC2_TEST1_VERIFICATION_PROFILE.origin,
+    ...(options.fetch ? { fetch: options.fetch } : {})
+  })
+  const skillAssets = resolveOpenContentSkillRuntimeAssets(
+    host,
+    options.skillRuntime?.assets
+  )
+  const skillAssetPaths = skillAssets === undefined
+    ? undefined
+    : assertOpenContentSkillBundledAssetsPresent(skillAssets)
+  const skillRuntime = skillAssets === undefined || skillAssetPaths === undefined
+    ? undefined
+    : createOpenContentSkillRuntimeSession({
+        connections,
+        processPort: options.skillRuntime?.processPort ??
+          createNodeOpenContentCliProcessPort({
+            trustedEntrypoint: skillAssetPaths.cliEntrypoint,
+            executablePath: options.skillRuntime?.executablePath ??
+              host.getExecutablePath?.() ??
+              process.execPath,
+            electronRunAsNode: true,
+            ...(options.skillRuntime?.temporaryRoot === undefined
+              ? {}
+              : { temporaryRoot: options.skillRuntime.temporaryRoot })
+          }),
+        assets: skillAssets,
+        site: OPENCONTENT_EDOC2_TEST1_VERIFICATION_PROFILE.origin
+      })
+  const facade = createOpenContentContentSpaceFacade({
+    client,
+    connections,
+    teamAdministration,
+    ...(skillRuntime ? { skillRuntime } : {})
   })
   host.internalServices.register({
     serviceId: OPENCONTENT_CONTENT_SPACE_SERVICE_ID,
@@ -231,6 +223,137 @@ export function createDomainMainEntry(
       }
     ]
   }
+}
+
+export function createOpenContentContentSpaceFacade(options: Readonly<{
+  client: OpenContentClient
+  connections: OpenContentConnectionService
+  teamAdministration: OpenContentTeamAdministration
+  skillRuntime?: OpenContentSkillRuntimeSession
+}>): OpenContentContentSpaceFacade {
+  return Object.freeze({
+    ...(options.skillRuntime
+      ? { useSkillRuntime: options.skillRuntime.useSkillRuntime }
+      : {}),
+    useTeamAdministration: (input, operation) => {
+      const assertPrincipalCurrent = () =>
+        assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
+      return options.connections.useCurrentSession({
+        principal: input.principal,
+        providerInstanceRef: input.providerInstanceRef,
+        assertPrincipalCurrent,
+        signal: input.signal
+      }, async ({ token, externalIdentityId: rawExternalIdentityId }) => {
+        const externalIdentityId = openContentIdentityIdSchema.safeParse(rawExternalIdentityId)
+        if (!externalIdentityId.success) {
+          throw new OpenContentConnectorError(
+            'provider_contract_violation',
+            'The verified OpenContent identity is invalid.'
+          )
+        }
+        let active = true
+        const assertSessionCurrent = async (): Promise<void> => {
+          if (!active) {
+            throw new OpenContentConnectorError(
+              'unauthorized',
+              'The verified OpenContent Team administration session has expired.'
+            )
+          }
+          await assertPrincipalCurrent()
+        }
+        const administration = bindOpenContentTeamAdministration(
+          options.teamAdministration,
+          token,
+          assertSessionCurrent
+        )
+        try {
+          return await operation(Object.freeze({
+            externalIdentityId: externalIdentityId.data,
+            administration
+          }))
+        } finally {
+          active = false
+        }
+      })
+    },
+    listRootFolders: (input) => options.connections.useCurrentToken({
+      principal: input.principal,
+      providerInstanceRef: input.providerInstanceRef,
+      assertPrincipalCurrent: input.assertPrincipalCurrent,
+      signal: input.signal
+    }, (token) => options.client.listRootFolders({
+      token,
+      teamPage: input.teamPage,
+      teamPageSize: input.teamPageSize,
+      includePersonal: input.includePersonal,
+      includeTeams: input.includeTeams,
+      signal: input.signal,
+      assertPrincipalCurrent: input.assertPrincipalCurrent
+    })),
+    listFolderEntries: (input) => options.connections.useCurrentToken({
+      principal: input.principal,
+      providerInstanceRef: input.providerInstanceRef,
+      assertPrincipalCurrent: input.assertPrincipalCurrent,
+      signal: input.signal
+    }, (token) => options.client.listFolderEntries({
+      token,
+      parentFolderGuid: input.parentFolderGuid,
+      page: input.page,
+      pageSize: input.pageSize,
+      signal: input.signal,
+      assertPrincipalCurrent: input.assertPrincipalCurrent
+    })),
+    observeEntry: (input) => options.connections.useCurrentToken({
+      principal: input.principal,
+      providerInstanceRef: input.providerInstanceRef,
+      assertPrincipalCurrent: input.assertPrincipalCurrent,
+      signal: input.signal
+    }, (token) => options.client.observeEntry({
+      token,
+      kind: input.kind,
+      resourceGuid: input.resourceGuid,
+      signal: input.signal,
+      assertPrincipalCurrent: input.assertPrincipalCurrent
+    })),
+    createFolder: (input) => options.connections.useCurrentToken({
+      principal: input.principal,
+      providerInstanceRef: input.providerInstanceRef,
+      assertPrincipalCurrent: input.assertPrincipalCurrent,
+      signal: input.signal
+    }, (token) => options.client.createFolder({
+      token,
+      parentFolderGuid: input.parentFolderGuid,
+      name: input.name,
+      signal: input.signal,
+      assertPrincipalCurrent: input.assertPrincipalCurrent
+    })),
+    uploadNewFile: (input) => options.connections.useCurrentToken({
+      principal: input.principal,
+      providerInstanceRef: input.providerInstanceRef,
+      assertPrincipalCurrent: input.assertPrincipalCurrent,
+      signal: input.signal
+    }, (token) => options.client.uploadNewFile({
+      token,
+      parentFolderGuid: input.parentFolderGuid,
+      name: input.name,
+      size: input.size,
+      read: input.read,
+      signal: input.signal,
+      assertPrincipalCurrent: input.assertPrincipalCurrent
+    })),
+    downloadFile: (input) => options.connections.useCurrentToken({
+      principal: input.principal,
+      providerInstanceRef: input.providerInstanceRef,
+      assertPrincipalCurrent: input.assertPrincipalCurrent,
+      signal: input.signal
+    }, (token) => options.client.downloadFile({
+      token,
+      fileGuid: input.fileGuid,
+      write: input.write,
+      signal: input.signal,
+      assertPrincipalCurrent: input.assertPrincipalCurrent
+    }))
+  })
 }
 
 export function createOpenContentCapabilityFactory<CapabilityDefinition>(options: Readonly<{

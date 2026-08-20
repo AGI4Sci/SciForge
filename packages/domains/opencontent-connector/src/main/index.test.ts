@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { DomainMainProviderCredentialError } from '@sciforge/domain-sdk/package-storage'
 
 import {
+  OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION,
   OPENCONTENT_CONNECTION_CAPABILITY_IDS,
   OPENCONTENT_PROVIDER_INSTANCE_REF,
   OpenContentConnectorError,
@@ -9,11 +10,21 @@ import {
   openContentUnbindOutputSchema
 } from '../contract.js'
 import {
+  OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRACT,
+  OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRIBUTION
+} from '../definition.js'
+import {
   OPENCONTENT_EDOC2_TEST1_VERIFICATION_PROFILE,
   createOpenContentCapabilityFactory,
+  createOpenContentContentSpaceFacade,
   type OpenContentCapabilityOptions
 } from './index.js'
 import type { OpenContentConnectionService } from './connection-service.js'
+import type { OpenContentClient } from './opencontent-client.js'
+import type {
+  OpenContentBoundTeamAdministration,
+  OpenContentTeamAdministration
+} from '../team-administration-contract.js'
 
 const principal = Object.freeze({
   authority: 'sciforge.local-account',
@@ -24,6 +35,16 @@ const principal = Object.freeze({
 })
 
 describe('OpenContent connection capabilities', () => {
+  it('keeps the v2 internal facade version aligned with its manifest contract', () => {
+    expect(OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION).toBe('2.0.0')
+    expect(OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRACT).toMatchObject({
+      serviceId: 'opencontent.content-space',
+      contractVersion: OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION
+    })
+    expect(OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRIBUTION.version)
+      .toBe(OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION)
+  })
+
   it('ships one stable compile-time verification profile', () => {
     expect(OPENCONTENT_EDOC2_TEST1_VERIFICATION_PROFILE).toEqual({
       id: 'edoc2-test1-verification',
@@ -204,6 +225,98 @@ describe('OpenContent connection capabilities', () => {
   })
 })
 
+describe('OpenContent main-only Content Space facade', () => {
+  it('keeps SDK and Team operations available when private attachment assets are absent', () => {
+    const facade = createOpenContentContentSpaceFacade({
+      client: {} as OpenContentClient,
+      connections: connectionService(),
+      teamAdministration: teamAdministration()
+    })
+
+    expect(facade.useSkillRuntime).toBeUndefined()
+    expect(facade.useTeamAdministration).toBeTypeOf('function')
+    expect(facade.listRootFolders).toBeTypeOf('function')
+    expect(facade.uploadNewFile).toBeTypeOf('function')
+  })
+
+  it('binds Team administration to one verified session without exposing its Token', async () => {
+    const tokenCanary = 'opaque-team-administration-token-0001'
+    const rawAdministration = teamAdministration()
+    const connections = connectionService()
+    vi.mocked(connections.useCurrentSession).mockImplementation(async (_input, operation) => (
+      operation(Object.freeze({ token: tokenCanary, externalIdentityId: 41 }))
+    ))
+    const facade = createOpenContentContentSpaceFacade({
+      client: {} as OpenContentClient,
+      connections,
+      teamAdministration: rawAdministration,
+      skillRuntime: {
+        useSkillRuntime: async (_input, operation) => operation({
+          invoke: async () => {
+            throw new Error('The skill runtime is not used by this test.')
+          }
+        })
+      }
+    })
+
+    let retainedAdministration: OpenContentBoundTeamAdministration | undefined
+    const result = await facade.useTeamAdministration({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      signal: new AbortController().signal,
+      assertPrincipalCurrent: () => undefined
+    }, async (session) => {
+      retainedAdministration = session.administration
+      expect(session.externalIdentityId).toBe(41)
+      expect(session).not.toHaveProperty('token')
+      expect(session.administration).not.toHaveProperty('token')
+      await session.administration.listTeams({ pageNumber: 1, pageSize: 100 })
+      return 'completed' as const
+    })
+
+    expect(result).toBe('completed')
+    expect(rawAdministration.listTeams).toHaveBeenCalledWith({
+      pageNumber: 1,
+      pageSize: 100,
+      token: tokenCanary
+    })
+    await expect(retainedAdministration!.listTeams({ pageNumber: 1, pageSize: 100 }))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+    expect(rawAdministration.listTeams).toHaveBeenCalledOnce()
+  })
+
+  it('passes the live Principal assertion into ordinary invocation-scoped client requests', async () => {
+    const connections = connectionService()
+    vi.mocked(connections.useCurrentToken).mockImplementation(async (_input, operation) => (
+      operation('opaque-content-space-token')
+    ))
+    const listFolderEntries = vi.fn<OpenContentClient['listFolderEntries']>(async (input) => {
+      await input.assertPrincipalCurrent()
+      return { parentFolderGuid: input.parentFolderGuid, entries: [] }
+    })
+    const facade = createOpenContentContentSpaceFacade({
+      client: { listFolderEntries } as unknown as OpenContentClient,
+      connections,
+      teamAdministration: teamAdministration()
+    })
+    const assertPrincipalCurrent = vi.fn(async () => { await Promise.resolve() })
+
+    await expect(facade.listFolderEntries({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      parentFolderGuid: 'folder-guid',
+      page: 1,
+      pageSize: 20,
+      assertPrincipalCurrent
+    })).resolves.toEqual({ parentFolderGuid: 'folder-guid', entries: [] })
+
+    expect(listFolderEntries).toHaveBeenCalledWith(expect.objectContaining({
+      assertPrincipalCurrent
+    }))
+    expect(assertPrincipalCurrent).toHaveBeenCalledOnce()
+  })
+})
+
 function capabilityDefinitions(connections: OpenContentConnectionService) {
   return createOpenContentCapabilityFactory<OpenContentCapabilityOptions>({
     defineCapability: (options) => options,
@@ -225,9 +338,32 @@ function connectionService(): OpenContentConnectionService {
       }
     })),
     useCurrentToken: vi.fn(),
+    useCurrentSession: vi.fn(),
     unbind: vi.fn(async () => ({
       state: 'disconnected' as const,
       remoteRevocation: 'unsupported' as const
     }))
+  }
+}
+
+function teamAdministration(): OpenContentTeamAdministration {
+  return {
+    listTeams: vi.fn(async () => ({
+      pageNumber: 1,
+      pageSize: 100,
+      totalCount: 0,
+      teams: []
+    })),
+    createTeam: vi.fn(async () => undefined),
+    observeTeam: vi.fn(),
+    editTeam: vi.fn(async () => undefined),
+    stickTeam: vi.fn(async () => undefined),
+    unstickTeam: vi.fn(async () => undefined),
+    listTeamUsers: vi.fn(),
+    addTeamUsers: vi.fn(async () => undefined),
+    removeTeamUsers: vi.fn(async () => undefined),
+    resolveTeamRoot: vi.fn(),
+    setTeamUserRole: vi.fn(async () => undefined),
+    transferTeamOwner: vi.fn(async () => undefined)
   }
 }

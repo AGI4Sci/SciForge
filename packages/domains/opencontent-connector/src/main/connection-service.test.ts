@@ -1,3 +1,5 @@
+import { generateKeyPairSync } from 'node:crypto'
+
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -6,7 +8,7 @@ import {
   type DomainMainProviderCredentialStoreHost
 } from '@sciforge/domain-sdk/package-storage'
 
-import type { OpenContentClient } from './opencontent-client.js'
+import { createOpenContentClient, type OpenContentClient } from './opencontent-client.js'
 import { createOpenContentConnectionService } from './connection-service.js'
 import { OPENCONTENT_PROVIDER_INSTANCE_REF } from '../contract.js'
 
@@ -262,7 +264,7 @@ describe('OpenContent connection service', () => {
       principal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
       assertPrincipalCurrent
-    })).rejects.toThrow('Principal changed during cleanup.')
+    })).rejects.toMatchObject({ code: 'unauthorized' })
 
     expect(values.has(
       `${principal.subject}:${OPENCONTENT_PROVIDER_INSTANCE_REF}:connection-retired`
@@ -360,6 +362,66 @@ describe('OpenContent connection service', () => {
     expect(JSON.stringify(persisted.value)).not.toContain('password')
     expect(JSON.stringify(persisted.value)).not.toContain('opaque-token')
     expect(authenticateExistingAccount).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not persist a binding when the Principal changes between enrollment requests', async () => {
+    const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString()
+    let principalCurrent = true
+    const requestedPaths: string[] = []
+    const client = createOpenContentClient({
+      baseUrl: 'https://opencontent.invalid',
+      fetch: vi.fn(async (input: string | URL | Request) => {
+        const url = new URL(String(input))
+        requestedPaths.push(url.pathname)
+        if (url.pathname === '/inbiz/org/api/auth/GetLoginRsaPublicKey') {
+          return jsonResponse({
+            result: 0,
+            message: null,
+            data: { PublicKey: publicKeyPem, Algorithm: 'RSA', Padding: 'OAEP-SHA256' },
+            totalCount: 0
+          })
+        }
+        if (url.pathname === '/flatsdk/api/services/Auth/UserLogin') {
+          principalCurrent = false
+          return jsonResponse({
+            result: 0,
+            msg: '',
+            data: 'opaque-token-value-0001',
+            clientId: null
+          })
+        }
+        throw new Error(`A Principal change must stop request ${url.pathname}`)
+      })
+    })
+    const settings = inMemorySettings()
+    const credentials = inMemoryCredentials()
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings,
+      credentials,
+      client
+    })
+
+    const error = await service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user',
+      password: 'fixture-password',
+      assertPrincipalCurrent: async () => {
+        await Promise.resolve()
+        if (!principalCurrent) throw new Error('sensitive-principal-diagnostic')
+      }
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({ code: 'unauthorized' })
+    expect((error as Error).message).not.toContain('sensitive-principal-diagnostic')
+    expect(requestedPaths).toEqual([
+      '/inbiz/org/api/auth/GetLoginRsaPublicKey',
+      '/flatsdk/api/services/Auth/UserLogin'
+    ])
+    expect(credentials.values).toEqual(new Map())
+    await expect(settings.read()).resolves.toMatchObject({ value: null })
   })
 
   it('keeps a committed rebind successful when stale-credential cleanup fails', async () => {
@@ -545,6 +607,94 @@ describe('OpenContent connection service', () => {
     expect(credentials.values).toEqual(new Map())
   })
 
+  it('exposes one atomic session with the Token and login-readback external identity', async () => {
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings: inMemorySettings(),
+      credentials: inMemoryCredentials(),
+      client: stubClient(),
+      createConnectionId: () => 'connection-current'
+    })
+    await service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-a',
+      password: 'fixture-password',
+      assertPrincipalCurrent: () => undefined
+    })
+
+    const observed = await service.useCurrentSession({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    }, async (session) => ({
+      ...session,
+      frozen: Object.isFrozen(session)
+    }))
+
+    expect(observed).toEqual({
+      token: 'bound-opaque-token',
+      externalIdentityId: 41,
+      frozen: true
+    })
+  })
+
+  it('does not let a rebind replace the account during an active atomic session', async () => {
+    const authenticateExistingAccount = vi.fn<OpenContentClient['authenticateExistingAccount']>()
+      .mockResolvedValueOnce(authenticatedSession('external-user-a', 'fixture-user-a'))
+      .mockResolvedValueOnce(authenticatedSession('external-user-b', 'fixture-user-b'))
+    let connectionSequence = 0
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings: inMemorySettings(),
+      credentials: inMemoryCredentials(),
+      client: stubClient({ authenticateExistingAccount }),
+      createConnectionId: () => `connection-${++connectionSequence}`
+    })
+    await service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-a',
+      password: 'fixture-password-a',
+      assertPrincipalCurrent: () => undefined
+    })
+
+    let enterSession!: () => void
+    const enteredSession = new Promise<void>((resolve) => { enterSession = resolve })
+    let releaseSession!: () => void
+    const sessionReleased = new Promise<void>((resolve) => { releaseSession = resolve })
+    const activeSession = service.useCurrentSession({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    }, async (session) => {
+      enterSession()
+      await sessionReleased
+      return session.externalIdentityId
+    })
+    await enteredSession
+
+    let rebindCompleted = false
+    const rebind = service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-b',
+      password: 'fixture-password-b',
+      assertPrincipalCurrent: () => undefined
+    }).then((status) => {
+      rebindCompleted = true
+      return status
+    })
+    await Promise.resolve()
+    expect(rebindCompleted).toBe(false)
+
+    releaseSession()
+    await expect(activeSession).resolves.toBe(41)
+    await expect(rebind).resolves.toMatchObject({
+      externalAccount: { identityId: 42 }
+    })
+  })
+
   it('returns and persists reauthentication_required when public status finds an invalid Token', async () => {
     const settings = inMemorySettings()
     const credentials = inMemoryCredentials()
@@ -662,6 +812,40 @@ describe('OpenContent connection service', () => {
       assertPrincipalCurrent: () => undefined
     })).resolves.toMatchObject({ state: 'connected' })
   })
+
+  it('removes a newly stored Token if the Principal lease expires before settings commit', async () => {
+    const stored = inMemoryCredentials()
+    let principalCurrent = true
+    const credentials: DomainMainProviderCredentialStoreHost = {
+      ...stored,
+      replace: async (access, secret) => {
+        await stored.replace(access, secret)
+        principalCurrent = false
+      }
+    }
+    const settings = inMemorySettings()
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings,
+      credentials,
+      client: stubClient(),
+      createConnectionId: () => 'connection-principal-expired'
+    })
+
+    await expect(service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-a',
+      password: 'fixture-password',
+      assertPrincipalCurrent: async () => {
+        await Promise.resolve()
+        if (!principalCurrent) throw new Error('Principal changed after Token storage.')
+      }
+    })).rejects.toMatchObject({ code: 'unauthorized' })
+
+    expect(stored.values).toEqual(new Map())
+    await expect(settings.read()).resolves.toMatchObject({ value: null })
+  })
 })
 
 function inMemorySettings(
@@ -751,6 +935,13 @@ function authenticatedSession(id: string, account: string) {
       name: account,
       topPersonalFolderId: id === 'external-user-a' ? '1001' : '1002'
     })
+  })
+}
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'content-type': 'application/json' }
   })
 }
 

@@ -1,0 +1,59 @@
+{
+  "name": "@sciforge/opencontent-skill-runtime",
+  "version": "0.1.0",
+  "private": false,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "description": "Main-only OpenContent Content Space runtime adapters for SciForge.",
+  "exports": {
+    "./main-contract": {
+      "types": "./src/contract.ts",
+      "import": "./src/contract.ts"
+    },
+    "./main/bundled-assets": {
+      "types": "./src/bundled-assets.ts",
+      "import": "./src/bundled-assets.ts"
+    },
+    "./main/cli-runner": {
+      "types": "./src/cli-runner.ts",
+      "import": "./src/cli-runner.ts"
+    },
+    "./main/docflow-native-document-adapter": {
+      "types": "./src/docflow-native-document-adapter.ts",
+      "import": "./src/docflow-native-document-adapter.ts"
+    },
+    "./main/native-document-provider-adapter": {
+      "types": "./src/native-document-provider-adapter.ts",
+      "import": "./src/native-document-provider-adapter.ts"
+    },
+    "./main/extended-operation-adapter": {
+      "types": "./src/extended-operation-adapter.ts",
+      "import": "./src/extended-operation-adapter.ts"
+    },
+    "./main/node-cli-process-port": {
+      "types": "./src/node-cli-process-port.ts",
+      "import": "./src/node-cli-process-port.ts"
+    }
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "vitest run src",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "verify": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@sciforge/domain-content-space": "1.1.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.2",
+    "vitest": "^4.1.7"
+  }
+}

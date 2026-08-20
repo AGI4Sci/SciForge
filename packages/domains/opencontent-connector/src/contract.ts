@@ -1,10 +1,18 @@
 import { z } from 'zod'
 import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
+import type {
+  OpenContentCliCommandTransport
+} from '@sciforge/opencontent-skill-runtime/main-contract'
+
+import type {
+  OpenContentBoundTeamAdministration,
+  OpenContentIdentityId
+} from './team-administration-contract.js'
 
 export const OPENCONTENT_PROVIDER_KIND = 'opencontent' as const
 export const OPENCONTENT_PROVIDER_INSTANCE_REF = 'opencontent-edoc2-demo' as const
 export const OPENCONTENT_CONTENT_SPACE_SERVICE_ID = 'opencontent.content-space' as const
-export const OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION = '1.0.0' as const
+export const OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION = '2.0.0' as const
 
 export const OPENCONTENT_CONNECTION_CAPABILITY_IDS = Object.freeze({
   status: 'opencontent.connection.status',
@@ -124,7 +132,34 @@ export type OpenContentEnrollmentError = z.infer<typeof openContentEnrollmentErr
 export type OpenContentConnectionResult = z.infer<typeof openContentConnectionResultSchema>
 export type OpenContentUnbindResult = z.infer<typeof openContentUnbindOutputSchema>
 
+export type OpenContentSkillRuntimeTransport = OpenContentCliCommandTransport
+
+export type OpenContentSkillRuntimeContext = Readonly<{
+  principal: PrincipalSnapshot
+  providerInstanceRef: string
+  invocationId: string
+  deadlineAt: string
+  signal: AbortSignal
+  assertPrincipalCurrent(): void | Promise<void>
+}>
+
 export type OpenContentContentSpaceFacade = Readonly<{
+  useSkillRuntime?: <T>(
+    input: OpenContentSkillRuntimeContext,
+    operation: (transport: OpenContentSkillRuntimeTransport) => T | Promise<T>
+  ) => Promise<T>
+  useTeamAdministration<T>(
+    input: Readonly<{
+      principal: PrincipalSnapshot
+      providerInstanceRef: string
+      signal?: AbortSignal
+      assertPrincipalCurrent(): void | Promise<void>
+    }>,
+    operation: (session: Readonly<{
+      externalIdentityId: OpenContentIdentityId
+      administration: OpenContentBoundTeamAdministration
+    }>) => T | Promise<T>
+  ): Promise<T>
   listRootFolders(input: Readonly<{
     principal: PrincipalSnapshot
     providerInstanceRef: string
@@ -133,7 +168,7 @@ export type OpenContentContentSpaceFacade = Readonly<{
     includePersonal?: boolean
     includeTeams?: boolean
     signal?: AbortSignal
-    assertPrincipalCurrent(): void
+    assertPrincipalCurrent(): void | Promise<void>
   }>): Promise<Readonly<{
     roots: readonly Readonly<{
       source: 'personal-root' | 'team-root'
@@ -149,7 +184,7 @@ export type OpenContentContentSpaceFacade = Readonly<{
     page: number
     pageSize: number
     signal?: AbortSignal
-    assertPrincipalCurrent(): void
+    assertPrincipalCurrent(): void | Promise<void>
   }>): Promise<Readonly<{
     parentFolderGuid: string
     entries: readonly (
@@ -164,7 +199,7 @@ export type OpenContentContentSpaceFacade = Readonly<{
     kind: 'container' | 'file'
     resourceGuid: string
     signal?: AbortSignal
-    assertPrincipalCurrent(): void
+    assertPrincipalCurrent(): void | Promise<void>
   }>): Promise<
     | Readonly<{ kind: 'container'; folderGuid: string; label: string }>
     | Readonly<{ kind: 'file'; fileGuid: string; label: string; size: number }>
@@ -175,7 +210,7 @@ export type OpenContentContentSpaceFacade = Readonly<{
     parentFolderGuid: string
     name: string
     signal: AbortSignal
-    assertPrincipalCurrent(): void
+    assertPrincipalCurrent(): void | Promise<void>
   }>): Promise<Readonly<{ folderGuid: string }>>
   uploadNewFile(input: Readonly<{
     principal: PrincipalSnapshot
@@ -185,7 +220,7 @@ export type OpenContentContentSpaceFacade = Readonly<{
     size: number
     read(range: Readonly<{ offset: number; length: number }>): Promise<Uint8Array>
     signal: AbortSignal
-    assertPrincipalCurrent(): void
+    assertPrincipalCurrent(): void | Promise<void>
   }>): Promise<Readonly<{ fileGuid: string }>>
   downloadFile(input: Readonly<{
     principal: PrincipalSnapshot
@@ -193,7 +228,7 @@ export type OpenContentContentSpaceFacade = Readonly<{
     fileGuid: string
     write(chunk: Uint8Array): Promise<void>
     signal: AbortSignal
-    assertPrincipalCurrent(): void
+    assertPrincipalCurrent(): void | Promise<void>
   }>): Promise<Readonly<{ bytesWritten: number }>>
 }>
 
