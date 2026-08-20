@@ -1,5 +1,6 @@
 const { existsSync, readFileSync } = require('node:fs')
 const { join } = require('node:path')
+const { internalRuntimeComposition } = require('./scripts/internal-runtime-packaging.cjs')
 const releaseWorkerManifest = require('./scripts/release-worker-manifest.cjs')
 
 function loadLocalReleaseEnv() {
@@ -113,6 +114,7 @@ module.exports = {
     ...releaseWorkerManifest.createBundledFileSets()
   ],
   extraResources: [
+    ...internalRuntimeComposition.extraResources,
     { from: 'LICENSE', to: 'compliance/LICENSE' },
     { from: 'THIRD_PARTY_NOTICES.md', to: 'compliance/THIRD_PARTY_NOTICES.md' },
     { from: 'src/asset/img/README.md', to: 'compliance/ASSET_PROVENANCE.md' },

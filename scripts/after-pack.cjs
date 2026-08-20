@@ -2,6 +2,7 @@ const { execFileSync, spawnSync } = require('node:child_process')
 const { chmodSync, existsSync, readdirSync, rmSync } = require('node:fs')
 const { join } = require('node:path')
 const { pathToFileURL } = require('node:url')
+const internalRuntimePackaging = require('./internal-runtime-packaging.cjs')
 const releaseWorkerManifest = require('./release-worker-manifest.cjs')
 const nativeRuntimeDependencies = require('./native-runtime-dependencies.cjs')
 
@@ -101,6 +102,14 @@ function validatePackagedExecutableNodeEntries(context) {
   }
 }
 
+function validatePackagedInternalRuntimes(context, options = {}) {
+  internalRuntimePackaging.validatePackagedInternalRuntimes(
+    packedResourcesDir(context),
+    internalRuntimePackaging.internalRuntimeComposition,
+    options
+  )
+}
+
 function maybeAdhocSignMacApp(context) {
   if (normalizePlatform(context.electronPlatformName) !== 'darwin') {
     return
@@ -149,6 +158,7 @@ async function afterPack(context) {
   validateNativeRuntimeDependencies(context)
   verifyBundledMultiAgentContract(context)
   validatePackagedExecutableNodeEntries(context)
+  validatePackagedInternalRuntimes(context)
   ensureNodePtyHelpersExecutable(context)
   maybeAdhocSignMacApp(context)
 }
@@ -160,6 +170,8 @@ for (const [exportName, requiredPaths] of Object.entries(
 }
 exports.PACKAGED_EXECUTABLE_NODE_ENTRY_REQUIRED_PATHS =
   PACKAGED_EXECUTABLE_NODE_ENTRY_REQUIRED_PATHS
+exports.INTERNAL_RUNTIME_COMPOSITION =
+  internalRuntimePackaging.internalRuntimeComposition
 exports._internals = {
   appBundlePath,
   packedResourcesDir,
@@ -170,6 +182,7 @@ exports._internals = {
   validateNativeRuntimeDependencies,
   verifyBundledMultiAgentContract,
   validatePackagedExecutableNodeEntries,
+  validatePackagedInternalRuntimes,
   ensureNodePtyHelpersExecutable
 }
 exports.default = afterPack
