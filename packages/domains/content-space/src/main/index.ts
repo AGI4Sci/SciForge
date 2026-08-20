@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 import { z } from 'zod'
 
@@ -6,6 +6,7 @@ import type {
   DomainMainHost,
   DomainMainRuntimeLifecycleContribution
 } from '@sciforge/domain-sdk/host'
+import { domainCapabilityResourceHandleSchema } from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
 import {
   samePrincipalSnapshot,
@@ -30,7 +31,10 @@ import {
 } from '../definition.js'
 import {
   CONTENT_CONTAINER_RESOURCE_KIND,
+  CONTENT_CONTAINER_REFERENCE_KIND,
   CONTENT_FILE_RESOURCE_KIND,
+  CONTENT_SPACE_FEATURE_SELECTION_RESOURCE_KIND,
+  CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND,
   CONTENT_SPACE_CAPABILITY_IDS,
   CONTENT_SPACE_LIMITS,
   ContentSpaceOperationError,
@@ -47,6 +51,7 @@ import {
   contentSpaceAgentUploadNewInputSchema,
   contentSpaceAuthorizeAgentRootInputSchema,
   contentSpaceContainerPageResultSchema,
+  contentContainerReferenceSchema,
   contentSpaceCreateFolderInputSchema,
   contentSpaceDownloadInputSchema,
   contentSpaceEntryObservationResultSchema,
@@ -66,22 +71,63 @@ import {
   contentSpaceProviderInstanceListResultSchema,
   contentSpaceResolvePortalTargetInputSchema,
   contentSpaceSuccess,
+  contentSpaceResultSchema,
   contentSpaceUploadNewInputSchema,
   createFolderResultSchema,
   downloadResultSchema,
   immutableVersionObservationResultSchema,
   uploadNewResultSchema,
+  parsePortableContentContainerReference,
+  toPortableContentContainerReference,
   type ContentSpaceError,
   type ContentContainerReference,
   type ContentEntryReference,
   type ContentFileReference,
   type ContentSpaceResult
 } from '../contract.js'
+import {
+  contentSpaceAdministrationAddMemberInputSchema,
+  contentSpaceAdministrationCreateSpaceInputSchema,
+  contentSpaceAdministrationListMembersInputSchema,
+  contentSpaceAdministrationListSpacesInputSchema,
+  contentSpaceAdministrationMemberPageSchema,
+  contentSpaceAdministrationMemberSummarySchema,
+  contentSpaceAdministrationPinSpaceInputSchema,
+  contentSpaceAdministrationRemoveMemberInputSchema,
+  contentSpaceAdministrationRemoveMemberReceiptSchema,
+  contentSpaceAdministrationRootOpenResultSchema,
+  contentSpaceAdministrationSpacePageSchema,
+  contentSpaceAdministrationSpaceSummarySchema,
+  contentSpaceAdministrationUnpinSpaceInputSchema,
+  contentSpaceAdministrationUpdateSpaceInputSchema,
+  projectContentSpaceProvisioningIntentSchema,
+  projectContentSpaceProvisioningReportSchema,
+  type ContentSpaceAdministrationOperation
+} from '../administration-contract.js'
+import {
+  CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS,
+  contentSpaceAgentExtendedRequestSchema,
+  type ContentSpaceExtendedOperationKey
+} from '../extended-operations-contract.js'
+import {
+  agentNativeDocumentReceiptSchema,
+  agentNativeDocumentRequestSchema
+} from '../native-document-contract.js'
+import {
+  collectContentEntryReferences,
+  extendedOperationAuthority,
+  extendedOperationEffect,
+  nativeDocumentOperationEffect,
+  sameContentEntryReference,
+  type ContentSpaceProviderFeatureEffect,
+  type ContentSpaceProviderFeatureTarget
+} from '../provider-features.js'
 import { createContentSpacePortableAuthorityResolver } from './portable-authority-resolver.js'
 import { ContentSpaceProviderCatalog } from './provider-catalog.js'
 import {
   ContentSpaceService,
   type ContentSpaceServiceCallContext,
+  type ContentSpaceServiceFeatureCallContext,
   type ContentSpaceServiceWriteCallContext
 } from './service.js'
 
@@ -125,8 +171,9 @@ type ContentSpaceCapabilityOptions = Readonly<{
   scope: 'global' | 'resource'
   resourceKinds?: readonly string[]
   producedResourceKinds?: readonly string[]
-  effect: 'read' | 'external-write'
+  effect: 'read' | 'workspace-write' | 'external-write' | 'destructive'
   approval: 'none' | 'confirmation'
+  autonomousWrite?: 'resource-authorized'
   concurrency: Readonly<{
     revision: 'none'
     idempotency: 'none' | 'required'
@@ -137,7 +184,11 @@ type ContentSpaceCapabilityOptions = Readonly<{
   handler(
     input: any,
     context: ContentSpaceCapabilityContext
-  ): Promise<Readonly<{ output: unknown }>>
+  ): Promise<Readonly<{
+    output: unknown
+    changed?: boolean
+    semanticRevision?: string
+  }>>
 }>
 
 type ContentSpaceCapabilityFactory<CapabilityDefinition = unknown> = Readonly<{
@@ -187,7 +238,8 @@ export function createDomainMainEntry(
           platform: Object.freeze({
             fileTransfers: Boolean(host.fileTransfers),
             externalNavigation: Boolean(host.externalNavigation)
-          })
+          }),
+          ...(host.fileTransfers ? { featureFileTransfers: host.fileTransfers } : {})
         })
       })
       return () => {
@@ -273,8 +325,43 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
     callerId: string
     principal: PrincipalSnapshot
     workspaceId?: string
+    revisionState: {
+      observedRevision: string
+      writeInvocationId?: string
+    }
   }>
   const agentResources = new Map<string, AgentResourceRecord>()
+  type AgentAdministrationResourceRecord = Readonly<{
+    resourceId: string
+    providerInstanceRef: string
+    callerId: string
+    principal: PrincipalSnapshot
+    workspaceId?: string
+    revisionState: {
+      observedRevision: string
+      writeInvocationId?: string
+    }
+  }>
+  const agentAdministrationResources = new Map<string, AgentAdministrationResourceRecord>()
+  type AgentFeatureSelectionRecord = Readonly<{
+    resourceId: string
+    root: ContentContainerReference
+    primary: AgentResourceRecord
+    constituents: readonly Readonly<{
+      record: AgentResourceRecord
+      semanticRevision: string
+    }>[]
+    operation: ContentSpaceExtendedOperationKey
+    requestDigest: string
+    callerId: string
+    principal: PrincipalSnapshot
+    workspaceId?: string
+    revisionState: {
+      observedRevision: string
+      writeInvocationId?: string
+    }
+  }>
+  const agentFeatureSelections = new Map<string, AgentFeatureSelectionRecord>()
   const resolveSelectableAgentRoot = async (
     selection: Readonly<{
       providerInstanceRef: string
@@ -357,16 +444,20 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
     if (context.caller.audience !== 'agent' || !context.caller.principal) {
       throw operationError('unauthorized', 'Only a current Agent Principal can receive this scope.')
     }
-    if (agentResources.size >= 2_048) {
+    if (agentResources.size >= MAX_AGENT_RESOURCE_RECORDS) {
       throw operationError('bounds_exceeded', 'The Agent Content Space scope table is full.')
     }
     const resourceId = `content-space-agent-${randomUUID()}`
+    const revisionState = {
+      observedRevision: contentSpaceResourceRevision(reference)
+    }
     const record: AgentResourceRecord = Object.freeze({
       resourceId,
       root,
       reference,
       callerId: context.caller.callerId,
       principal: context.caller.principal,
+      revisionState,
       ...(context.caller.workspaceId ? { workspaceId: context.caller.workspaceId } : {})
     })
     agentResources.set(resourceId, record)
@@ -379,7 +470,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
           : CONTENT_FILE_RESOURCE_KIND,
         ...(record.workspaceId ? { workspaceId: record.workspaceId } : {}),
         audiences: ['agent'],
-        semanticRevision: contentSpaceResourceRevision(reference),
+        semanticRevision: agentResourceRevision(record),
         expiresInMs: 15 * 60_000,
         retireAfterLastHandleExpires: true,
         observe: async (caller, observationContext) => {
@@ -397,13 +488,17 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
             audience: 'agent',
             ...(observationContext.signal ? { signal: observationContext.signal } : {})
           })
+          record.revisionState.observedRevision = contentSpaceResourceRevision(
+            record.reference,
+            observation.entry
+          )
           return Object.freeze({
             state: contentSpacePortableResourceStateSchema.parse({
               reference: record.reference,
               entry: observation.entry,
               capabilities: observation.capabilities
             }),
-            semanticRevision: contentSpaceResourceRevision(record.reference, observation.entry)
+            semanticRevision: agentResourceRevision(record)
           })
         },
         dispose: () => {
@@ -415,6 +510,306 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       throw error
     }
   }
+  const requireAgentFeatureResource = (
+    context: ContentSpaceCapabilityContext
+  ): AgentResourceRecord => {
+    if (context.resource?.resourceKind === CONTENT_CONTAINER_RESOURCE_KIND) {
+      return requireAgentResource(context, 'container')
+    }
+    if (context.resource?.resourceKind === CONTENT_FILE_RESOURCE_KIND) {
+      return requireAgentResource(context, 'file')
+    }
+    throw operationError('unauthorized', 'The Agent Content Space feature scope is unavailable.')
+  }
+  const featureTarget = (
+    record: AgentResourceRecord
+  ): Extract<ContentSpaceProviderFeatureTarget, { kind: 'content' }> => {
+    return Object.freeze({
+      kind: 'content',
+      root: record.root,
+      primary: record.reference,
+      authorized: Object.freeze([record.reference])
+    })
+  }
+  const resolveFeatureSelectionRecords = (
+    primary: AgentResourceRecord,
+    operation: ContentSpaceExtendedOperationKey,
+    request: unknown
+  ): readonly AgentResourceRecord[] => {
+    const authority = extendedOperationAuthority(operation, request)
+    if (authority.kind !== 'entry') {
+      throw operationError(
+        'unauthorized',
+        'Provider-scoped operations require explicit Provider administration authority.'
+      )
+    }
+    if (!sameContentEntryReference(primary.reference, authority.reference)) {
+      throw operationError('invalid_target', 'The feature selection does not match Broker authority.')
+    }
+    const references = collectContentEntryReferences(request)
+    const records = references.map((reference) => {
+      if (sameContentEntryReference(reference, primary.reference)) return primary
+      const match = [...agentResources.values()].find((candidate) =>
+        candidate.callerId === primary.callerId &&
+        candidate.workspaceId === primary.workspaceId &&
+        samePrincipalSnapshot(candidate.principal, primary.principal) &&
+        sameContentEntryReference(candidate.root, primary.root) &&
+        sameContentEntryReference(candidate.reference, reference)
+      )
+      if (!match) {
+        throw operationError(
+          'unauthorized',
+          'Every feature-selection reference requires its own live Broker resource.'
+        )
+      }
+      return match
+    })
+    const uniqueRecords = [...new Map(records.map((record) => [record.resourceId, record])).values()]
+    if (uniqueRecords.length < 2 || !uniqueRecords.includes(primary)) {
+      throw operationError(
+        'invalid_target',
+        'A composite feature selection requires at least two exact Broker resources.'
+      )
+    }
+    return Object.freeze(uniqueRecords)
+  }
+  const issueAgentFeatureSelection = (
+    context: ContentSpaceCapabilityContext,
+    primary: AgentResourceRecord,
+    operation: ContentSpaceExtendedOperationKey,
+    request: unknown,
+    records: readonly AgentResourceRecord[]
+  ) => {
+    if (context.caller.audience !== 'agent' || !context.caller.principal) {
+      throw operationError('unauthorized', 'Only a current Agent Principal can receive this scope.')
+    }
+    if (agentFeatureSelections.size >= MAX_AGENT_RESOURCE_RECORDS) {
+      throw operationError('bounds_exceeded', 'The Agent feature-selection scope table is full.')
+    }
+    const constituents = Object.freeze(records.map((record) => Object.freeze({
+      record,
+      semanticRevision: agentResourceRevision(record)
+    })))
+    const requestDigest = extendedFeatureSelectionDigest({
+      operation,
+      root: primary.root,
+      primary: primary.reference,
+      records: constituents.map(({ record, semanticRevision }) => Object.freeze({
+        reference: record.reference,
+        semanticRevision
+      })),
+      request
+    })
+    const resourceId = `content-space-feature-selection-${randomUUID()}`
+    const record: AgentFeatureSelectionRecord = Object.freeze({
+      resourceId,
+      root: primary.root,
+      primary,
+      constituents,
+      operation,
+      requestDigest,
+      callerId: primary.callerId,
+      principal: primary.principal,
+      revisionState: {
+        observedRevision: `selection:${requestDigest}`
+      },
+      ...(primary.workspaceId ? { workspaceId: primary.workspaceId } : {})
+    })
+    agentFeatureSelections.set(resourceId, record)
+    try {
+      const resource = context.issueResource({
+        resourceId,
+        resourceKind: CONTENT_SPACE_FEATURE_SELECTION_RESOURCE_KIND,
+        ...(record.workspaceId ? { workspaceId: record.workspaceId } : {}),
+        audiences: ['agent'],
+        semanticRevision: agentResourceRevision(record),
+        expiresInMs: AGENT_FEATURE_SELECTION_TTL_MS,
+        retireAfterLastHandleExpires: true,
+        observe: (caller) => {
+          if (caller.audience !== 'agent' || caller.callerId !== record.callerId ||
+            caller.workspaceId !== record.workspaceId || !caller.principal ||
+            !samePrincipalSnapshot(caller.principal, record.principal) ||
+            agentFeatureSelections.get(resourceId) !== record ||
+            record.constituents.some(({ record: candidate, semanticRevision }) =>
+              agentResources.get(candidate.resourceId) !== candidate ||
+              agentResourceRevision(candidate) !== semanticRevision
+            )) {
+            throw operationError('unauthorized', 'The Agent feature selection is no longer current.')
+          }
+          return Object.freeze({
+            state: Object.freeze({
+              operation: record.operation,
+              requestDigest: record.requestDigest,
+              referenceCount: record.constituents.length
+            }),
+            semanticRevision: agentResourceRevision(record)
+          })
+        },
+        dispose: () => {
+          if (agentFeatureSelections.get(resourceId) === record) {
+            agentFeatureSelections.delete(resourceId)
+          }
+        }
+      })
+      return Object.freeze({ operation, requestDigest, resource })
+    } catch (error) {
+      agentFeatureSelections.delete(resourceId)
+      throw error
+    }
+  }
+  const requireAgentFeatureSelection = (
+    context: ContentSpaceCapabilityContext,
+    operation: ContentSpaceExtendedOperationKey,
+    request: unknown
+  ): AgentFeatureSelectionRecord => {
+    const resourceId = context.resource?.resourceId
+    const record = resourceId ? agentFeatureSelections.get(resourceId) : undefined
+    if (context.caller.audience !== 'agent' || !record ||
+      context.resource?.resourceKind !== CONTENT_SPACE_FEATURE_SELECTION_RESOURCE_KIND ||
+      context.resource.workspaceId !== record.workspaceId ||
+      record.callerId !== context.caller.callerId ||
+      record.workspaceId !== context.caller.workspaceId ||
+      !samePrincipalSnapshot(record.principal, context.caller.principal) ||
+      record.constituents.some(({ record: candidate, semanticRevision }) =>
+        agentResources.get(candidate.resourceId) !== candidate ||
+        agentResourceRevision(candidate) !== semanticRevision
+      )) {
+      throw operationError('unauthorized', 'The Agent feature selection is unavailable.')
+    }
+    const requestDigest = extendedFeatureSelectionDigest({
+      operation,
+      root: record.root,
+      primary: record.primary.reference,
+      records: record.constituents.map(({ record: candidate, semanticRevision }) => ({
+        reference: candidate.reference,
+        semanticRevision
+      })),
+      request
+    })
+    if (record.operation !== operation || record.requestDigest !== requestDigest) {
+      throw operationError('invalid_target', 'The Agent feature selection does not match this request.')
+    }
+    return record
+  }
+  const featureSelectionTarget = (
+    record: AgentFeatureSelectionRecord
+  ): Extract<ContentSpaceProviderFeatureTarget, { kind: 'content' }> => Object.freeze({
+    kind: 'content',
+    root: record.root,
+    primary: record.primary.reference,
+    authorized: Object.freeze(record.constituents.map(({ record: candidate }) =>
+      candidate.reference
+    ))
+  })
+  const issueAgentAdministrationResource = (
+    context: ContentSpaceCapabilityContext,
+    providerInstanceRef: string
+  ) => {
+    if (context.caller.audience !== 'agent' || !context.caller.principal) {
+      throw operationError('unauthorized', 'Only a current Agent Principal can receive this scope.')
+    }
+    if (agentAdministrationResources.size >= MAX_AGENT_RESOURCE_RECORDS) {
+      throw operationError('bounds_exceeded', 'The Provider administration scope table is full.')
+    }
+    const resourceId = `content-space-admin-${randomUUID()}`
+    const record: AgentAdministrationResourceRecord = Object.freeze({
+      resourceId,
+      providerInstanceRef,
+      callerId: context.caller.callerId,
+      principal: context.caller.principal,
+      revisionState: {
+        observedRevision: `provider-admin:${createHash('sha256')
+          .update(providerInstanceRef)
+          .digest('hex')}`
+      },
+      ...(context.caller.workspaceId ? { workspaceId: context.caller.workspaceId } : {})
+    })
+    agentAdministrationResources.set(resourceId, record)
+    try {
+      return context.issueResource({
+        resourceId,
+        resourceKind: CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND,
+        ...(record.workspaceId ? { workspaceId: record.workspaceId } : {}),
+        audiences: ['agent'],
+        semanticRevision: agentResourceRevision(record),
+        expiresInMs: 15 * 60_000,
+        retireAfterLastHandleExpires: true,
+        observe: (caller) => {
+          if (caller.audience !== 'agent' || caller.callerId !== record.callerId ||
+            caller.workspaceId !== record.workspaceId || !caller.principal ||
+            !samePrincipalSnapshot(caller.principal, record.principal)) {
+            throw operationError('unauthorized', 'The Provider administration scope changed.')
+          }
+          return Object.freeze({
+            state: Object.freeze({ providerInstanceRef: record.providerInstanceRef }),
+            semanticRevision: agentResourceRevision(record)
+          })
+        },
+        dispose: () => {
+          if (agentAdministrationResources.get(resourceId) === record) {
+            agentAdministrationResources.delete(resourceId)
+          }
+        }
+      })
+    } catch (error) {
+      agentAdministrationResources.delete(resourceId)
+      throw error
+    }
+  }
+  const requireAgentAdministrationResource = (
+    context: ContentSpaceCapabilityContext
+  ): AgentAdministrationResourceRecord => {
+    const resourceId = context.resource?.resourceId
+    const record = resourceId ? agentAdministrationResources.get(resourceId) : undefined
+    if (context.caller.audience !== 'agent' || !record ||
+      context.resource?.resourceKind !== CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND ||
+      context.resource?.workspaceId !== record.workspaceId ||
+      record.callerId !== context.caller.callerId ||
+      record.workspaceId !== context.caller.workspaceId ||
+      !samePrincipalSnapshot(record.principal, context.caller.principal)) {
+      throw operationError('unauthorized', 'The Provider administration scope is unavailable.')
+    }
+    return record
+  }
+  const requireAgentRootAdministrationResource = (
+    context: ContentSpaceCapabilityContext
+  ): AgentResourceRecord => {
+    const record = requireAgentResource(context, 'container')
+    if (!sameContentEntryReference(record.reference, record.root)) {
+      throw operationError('unauthorized', 'Content Space administration requires the exact root.')
+    }
+    return record
+  }
+  const administrationTarget = (
+    record: AgentAdministrationResourceRecord
+  ): Extract<ContentSpaceProviderFeatureTarget, { kind: 'provider-administration' }> =>
+    Object.freeze({
+      kind: 'provider-administration',
+      providerInstanceRef: record.providerInstanceRef
+    })
+  const markAgentResourceWrite = (
+    record: AgentResourceRecord | AgentAdministrationResourceRecord,
+    context: ContentSpaceCapabilityContext
+  ) => {
+    if (!context.invocationId) {
+      throw operationError('invalid_input', 'A Broker-issued invocation identity is required.')
+    }
+    record.revisionState.writeInvocationId = context.invocationId
+    return Object.freeze({
+      changed: true,
+      semanticRevision: agentResourceRevision(record)
+    })
+  }
+  const executeAgentAdministration = (
+    target: ContentSpaceProviderFeatureTarget,
+    operation: ContentSpaceAdministrationOperation,
+    request: unknown,
+    effect: ContentSpaceProviderFeatureEffect,
+    context: ContentSpaceCapabilityContext
+  ) => options.getService().executeAdministration(
+    { target, operation, request },
+    featureCall(context, effect)
+  )
 
   return Object.freeze({
     moduleId: CONTENT_SPACE_DOMAIN_MODULE_ID,
@@ -428,7 +823,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.listProviderInstances,
         title: 'List Content Space Provider Instances',
-        description: 'First lists explicit trusted Provider Instances; use its returned providerInstanceRef before listing or authorizing an external personal or Team library root.',
+        description: 'First lists explicit trusted Provider Instances; use its returned providerInstanceRef before listing or authorizing an external personal or shared library root.',
         effect: 'read',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'none' },
@@ -437,7 +832,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
           'provider',
           'provider-instance',
           'personal-library',
-          'team-library',
+          'shared-library',
           'root-selection',
           'browse',
           'folder',
@@ -455,7 +850,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.listAgentRootCandidates,
         title: 'List Agent Content Space Root Candidates',
-        description: 'After listing Provider Instances, lists one bounded page of Human-visible personal or Team library labels for Agent root selection. Follow nextCursor before concluding the set; output is selection data only and never authority or a Provider resource identity.',
+        description: 'After listing Provider Instances, lists one bounded page of Human-visible personal or shared library labels for Agent root selection. Follow nextCursor before concluding the set; output is selection data only and never authority or a Provider resource identity.',
         audiences: ['agent'],
         effect: 'read',
         approval: 'none',
@@ -464,7 +859,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
           'external-content',
           'provider',
           'personal-library',
-          'team-library',
+          'shared-library',
           'root-selection',
           'browse',
           'folder',
@@ -622,7 +1017,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.authorizeAgentRoot,
         title: 'Authorize Agent Content Space Root',
-        description: 'After Provider Instance and optional candidate-label discovery, confirms one exact Human-visible personal or Team library label and re-enumerates live state to establish the bounded root for this Agent context.',
+        description: 'After Provider Instance and optional candidate-label discovery, confirms one exact Human-visible personal or shared library label and re-enumerates live state to establish the bounded root for this Agent context.',
         audiences: ['agent'],
         effect: 'external-write',
         approval: 'confirmation',
@@ -630,7 +1025,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         tags: [
           'external-content',
           'personal-library',
-          'team-library',
+          'shared-library',
           'folder',
           'file',
           'create',
@@ -685,17 +1080,27 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         scope: 'resource',
         resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
         effect: 'external-write',
-        approval: 'confirmation',
+        approval: 'none',
+        autonomousWrite: 'resource-authorized',
         concurrency: { revision: 'none', idempotency: 'required' },
         inputSchema: contentSpaceAgentCreateFolderInputSchema,
         outputSchema: createFolderResultSchema,
-        handler: async ({ name }, context) => capabilityResult(() => {
+        handler: async ({ name }, context) => {
           const record = requireAgentResource(context, 'container')
-          return options.getService().createFolder({
-            parent: record.reference as ContentContainerReference,
-            name
-          }, writeCall(context))
-        })
+          return capabilityMutationResult(
+            () => options.getService().createFolder({
+              parent: record.reference as ContentContainerReference,
+              name
+            }, writeCall(context)),
+            (receipt) => {
+              record.revisionState.writeInvocationId = receipt.invocationId
+              return Object.freeze({
+                changed: true,
+                semanticRevision: agentResourceRevision(record)
+              })
+            }
+          )
+        }
       }),
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.agentUploadNew,
@@ -705,27 +1110,37 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         scope: 'resource',
         resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
         effect: 'external-write',
-        approval: 'confirmation',
+        approval: 'none',
+        autonomousWrite: 'resource-authorized',
         concurrency: { revision: 'none', idempotency: 'required' },
         inputSchema: contentSpaceAgentUploadNewInputSchema,
         outputSchema: uploadNewResultSchema,
-        handler: async ({ name, workspaceRelativePath }, context) => capabilityResult(() => {
+        handler: async ({ name, workspaceRelativePath }, context) => {
           const record = requireAgentResource(context, 'container')
-          return options.getService().uploadNewFile({
-            parent: record.reference as ContentContainerReference,
-            name,
-            openSource: (signal) => {
-              if (!options.fileTransfers) {
-                throw operationError('source_unavailable', 'Host file transfer is unavailable.')
+          return capabilityMutationResult(
+            () => options.getService().uploadNewFile({
+              parent: record.reference as ContentContainerReference,
+              name,
+              openSource: (signal) => {
+                if (!options.fileTransfers) {
+                  throw operationError('source_unavailable', 'Host file transfer is unavailable.')
+                }
+                return options.fileTransfers.openWorkspaceUploadSource({
+                  relativePath: workspaceRelativePath,
+                  maxBytes: CONTENT_SPACE_LIMITS.maxUploadBytes,
+                  signal
+                })
               }
-              return options.fileTransfers.openWorkspaceUploadSource({
-                relativePath: workspaceRelativePath,
-                maxBytes: CONTENT_SPACE_LIMITS.maxUploadBytes,
-                signal
+            }, writeCall(context)),
+            (receipt) => {
+              record.revisionState.writeInvocationId = receipt.invocationId
+              return Object.freeze({
+                changed: true,
+                semanticRevision: agentResourceRevision(record)
               })
             }
-          }, writeCall(context))
-        })
+          )
+        }
       }),
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.agentDownload,
@@ -734,30 +1149,517 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         audiences: ['agent'],
         scope: 'resource',
         resourceKinds: [CONTENT_FILE_RESOURCE_KIND],
-        effect: 'external-write',
-        approval: 'confirmation',
+        effect: 'workspace-write',
+        approval: 'none',
         concurrency: { revision: 'none', idempotency: 'required' },
         inputSchema: contentSpaceAgentDownloadInputSchema,
         outputSchema: downloadResultSchema,
-        handler: async ({ workspaceRelativePath }, context) => capabilityResult(() => {
+        handler: async ({ workspaceRelativePath }, context) => {
           const record = requireAgentResource(context, 'file')
-          return options.getService().downloadFile({
-            reference: record.reference as ContentFileReference,
-            openDestination: (signal) => {
-              if (!options.fileTransfers) {
-                throw operationError(
-                  'destination_unavailable',
-                  'Host file transfer is unavailable.'
-                )
+          return capabilityMutationResult(
+            () => options.getService().downloadFile({
+              reference: record.reference as ContentFileReference,
+              openDestination: (signal) => {
+                if (!options.fileTransfers) {
+                  throw operationError(
+                    'destination_unavailable',
+                    'Host file transfer is unavailable.'
+                  )
+                }
+                return options.fileTransfers.openWorkspaceDownloadDestination({
+                  relativePath: workspaceRelativePath,
+                  maxBytes: CONTENT_SPACE_LIMITS.maxFileBytes,
+                  signal
+                })
               }
-              return options.fileTransfers.openWorkspaceDownloadDestination({
-                relativePath: workspaceRelativePath,
-                maxBytes: CONTENT_SPACE_LIMITS.maxFileBytes,
-                signal
-              })
-            }
-          }, writeCall(context))
+            }, writeCall(context)),
+            () => Object.freeze({ changed: false })
+          )
+        }
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.authorizeFeatureSelection,
+        title: 'Authorize Agent Content Space Feature Selection',
+        description: 'Creates one short-lived Broker selection for an exact typed multi-resource extended operation. Every referenced Content resource must already have its own live Agent resource.',
+        audiences: ['agent'],
+        scope: 'resource',
+        resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND, CONTENT_FILE_RESOURCE_KIND],
+        producedResourceKinds: [CONTENT_SPACE_FEATURE_SELECTION_RESOURCE_KIND],
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        tags: ['external-content', 'feature-selection', 'authorize'],
+        inputSchema: AGENT_FEATURE_SELECTION_INPUT_SCHEMA,
+        outputSchema: contentSpaceResultSchema(AGENT_FEATURE_SELECTION_AUTHORIZATION_SCHEMA),
+        handler: async ({ operation, request }, context) => capabilityResult(() => {
+          const primary = requireAgentFeatureResource(context)
+          const parsedRequest = parseExtendedFeatureRequest(operation, request)
+          const records = resolveFeatureSelectionRecords(primary, operation, parsedRequest)
+          return issueAgentFeatureSelection(
+            context,
+            primary,
+            operation,
+            parsedRequest,
+            records
+          )
         })
+      }),
+      ...CONTENT_SPACE_PROVIDER_FEATURE_EFFECTS.map((effect) => define({
+        id: NATIVE_DOCUMENT_CAPABILITY_ID_BY_EFFECT[effect],
+        title: `Use Authorized Native Document (${effect})`,
+        description: 'Executes one provider-native document operation against the exact Broker-authorized Content Space file or container. Selecting the Content Space automatically enables this feature when the Provider supports it.',
+        audiences: ['agent'],
+        scope: 'resource',
+        resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND, CONTENT_FILE_RESOURCE_KIND],
+        effect,
+        approval: 'none',
+        ...(effect === 'external-write' || effect === 'destructive'
+          ? { autonomousWrite: 'resource-authorized' as const }
+          : {}),
+        concurrency: {
+          revision: 'none',
+          idempotency: effect === 'read' ? 'none' : 'required'
+        },
+        inputSchema: AGENT_NATIVE_DOCUMENT_INPUT_SCHEMA_BY_EFFECT[effect],
+        outputSchema: contentSpaceResultSchema(agentNativeDocumentReceiptSchema),
+        handler: async ({ request }, context) => {
+          const record = requireAgentFeatureResource(context)
+          return capabilityMutationResult(
+            () => options.getService().executeNativeDocument({
+              target: featureTarget(record),
+              request
+            }, featureCall(context, effect)),
+            (receipt) => {
+              const changed = (effect === 'external-write' || effect === 'destructive') &&
+                receipt.outcome === 'succeeded'
+              if (changed) record.revisionState.writeInvocationId = receipt.invocationId
+              return changed
+                ? Object.freeze({
+                    changed: true,
+                    semanticRevision: agentResourceRevision(record)
+                  })
+                : Object.freeze({ changed: false })
+            }
+          )
+        }
+      })),
+      ...CONTENT_SPACE_PROVIDER_FEATURE_EFFECTS.map((effect) => define({
+        id: EXTENDED_CAPABILITY_ID_BY_EFFECT[effect],
+        title: `Use Authorized Extended Content Space Operation (${effect})`,
+        description: 'Executes one contracted extended operation against the exact Broker-authorized Content Space resource. Provider-scoped operations require a separate explicit Provider administration grant.',
+        audiences: ['agent'],
+        scope: 'resource',
+        resourceKinds: [
+          CONTENT_CONTAINER_RESOURCE_KIND,
+          CONTENT_FILE_RESOURCE_KIND,
+          CONTENT_SPACE_FEATURE_SELECTION_RESOURCE_KIND,
+          CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND
+        ],
+        effect,
+        approval: 'none',
+        ...(effect === 'external-write' || effect === 'destructive'
+          ? { autonomousWrite: 'resource-authorized' as const }
+          : {}),
+        concurrency: {
+          revision: 'none',
+          idempotency: effect === 'read' ? 'none' : 'required'
+        },
+        inputSchema: AGENT_EXTENDED_INPUT_SCHEMA_BY_EFFECT[effect],
+        outputSchema: contentSpaceResultSchema(z.json()),
+        handler: async ({ operation, request }, context) => {
+          let admin: AgentAdministrationResourceRecord | undefined
+          let selection: AgentFeatureSelectionRecord | undefined
+          let content: AgentResourceRecord | undefined
+          return capabilityMutationResult(
+            async () => {
+              const parsedRequest = parseExtendedFeatureRequest(operation, request)
+              admin = context.resource?.resourceKind ===
+                CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND
+                ? requireAgentAdministrationResource(context)
+                : undefined
+              selection = context.resource?.resourceKind ===
+                CONTENT_SPACE_FEATURE_SELECTION_RESOURCE_KIND
+                ? requireAgentFeatureSelection(context, operation, parsedRequest)
+                : undefined
+              content = admin || selection ? undefined : requireAgentFeatureResource(context)
+              const target: ContentSpaceProviderFeatureTarget = admin
+                ? Object.freeze({
+                    kind: 'provider-administration',
+                    providerInstanceRef: admin.providerInstanceRef
+                  })
+                : selection
+                  ? featureSelectionTarget(selection)
+                  : featureTarget(content!)
+              return issueExtendedPortalTarget(
+                operation,
+                await options.getService().executeExtendedOperation({
+                  target,
+                  operation,
+                  request: parsedRequest
+                }, featureCall(context, effect)),
+                options.externalNavigation
+              )
+            },
+            (result) => {
+              const changed = (effect === 'external-write' || effect === 'destructive') &&
+                isSuccessfulExtendedResult(result)
+              const revisionRecord = admin ?? selection ?? content!
+              if (changed) {
+                revisionRecord.revisionState.writeInvocationId = context.invocationId
+                if (selection) {
+                  for (const { record: selected } of selection.constituents) {
+                    selected.revisionState.writeInvocationId = context.invocationId
+                  }
+                }
+              }
+              return changed
+                ? Object.freeze({
+                    changed: true,
+                    semanticRevision: agentResourceRevision(revisionRecord)
+                  })
+                : Object.freeze({ changed: false })
+            }
+          )
+        }
+      })),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration,
+        title: 'Authorize Content Space Provider Administration',
+        description: 'Confirms one Provider administration scope for this Agent and Principal. Subsequent scoped administration writes do not require per-operation confirmation.',
+        audiences: ['agent'],
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        producedResourceKinds: [CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND],
+        inputSchema: contentSpaceProviderInstanceInputSchema,
+        outputSchema: contentSpaceResultSchema(AGENT_ADMINISTRATION_AUTHORIZATION_SCHEMA),
+        handler: async ({ providerInstanceRef }, context) => capabilityMutationResult(
+          async () => {
+            await options.getService().authorizeProviderAdministration(
+              providerInstanceRef,
+              writeCall(context)
+            )
+            return Object.freeze({
+              providerInstanceRef,
+              resource: issueAgentAdministrationResource(context, providerInstanceRef)
+            })
+          },
+          () => Object.freeze({ changed: true })
+        )
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.agentAdminListSpaces,
+        title: 'List Authorized Provider Content Spaces',
+        description: 'Lists personal and Team spaces through the exact authorized Provider administration resource.',
+        audiences: ['agent'],
+        scope: 'resource',
+        resourceKinds: [CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND],
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        inputSchema: contentSpaceAdministrationListSpacesInputSchema,
+        outputSchema: contentSpaceResultSchema(ADMINISTRATION_SPACE_PAGE_WIRE_SCHEMA),
+        handler: async (input, context) => {
+          const record = requireAgentAdministrationResource(context)
+          return capabilityMutationResult(
+            () => executeAgentAdministration(
+              administrationTarget(record),
+              'list-spaces',
+              input,
+              'read',
+              context
+            ),
+            () => Object.freeze({ changed: false })
+          )
+        }
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace,
+        title: 'Create Content Space',
+        description: 'Creates one personal or Team space through the authorized Provider and returns an exact root resource.',
+        audiences: ['agent'],
+        scope: 'resource',
+        resourceKinds: [CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND],
+        producedResourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
+        effect: 'external-write',
+        approval: 'none',
+        autonomousWrite: 'resource-authorized',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: contentSpaceAdministrationCreateSpaceInputSchema,
+        outputSchema: contentSpaceResultSchema(AGENT_ADMINISTRATION_CREATE_SPACE_SCHEMA),
+        handler: async (input, context) => {
+          const record = requireAgentAdministrationResource(context)
+          return capabilityMutationResult(
+            async () => {
+              const space = contentSpaceAdministrationSpaceSummarySchema.parse(
+                await executeAgentAdministration(
+                  administrationTarget(record),
+                  'create-space',
+                  input,
+                  'external-write',
+                  context
+                )
+              )
+              const root = parsePortableContentContainerReference(space.root)
+              return Object.freeze({
+                space,
+                resource: issueAgentResource(context, root, root)
+              })
+            },
+            () => markAgentResourceWrite(record, context)
+          )
+        }
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.agentProvisionProject,
+        title: 'Provision Project Content Space',
+        description: 'Provision or reconcile the Project Team space through the same authorized Provider administration feature.',
+        audiences: ['agent'],
+        scope: 'resource',
+        resourceKinds: [CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND],
+        producedResourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
+        effect: 'external-write',
+        approval: 'none',
+        autonomousWrite: 'resource-authorized',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: projectContentSpaceProvisioningIntentSchema,
+        outputSchema: contentSpaceResultSchema(AGENT_PROJECT_PROVISIONING_RESULT_SCHEMA),
+        handler: async (input, context) => {
+          const record = requireAgentAdministrationResource(context)
+          return capabilityMutationResult(
+            async () => {
+              const report = projectContentSpaceProvisioningReportSchema.parse(
+                await executeAgentAdministration(
+                  administrationTarget(record),
+                  'provision-project',
+                  input,
+                  'external-write',
+                  context
+                )
+              )
+              if (!report.root) return Object.freeze({ report })
+              const root = parsePortableContentContainerReference(report.root)
+              return Object.freeze({
+                report,
+                resource: issueAgentResource(context, root, root)
+              })
+            },
+            () => markAgentResourceWrite(record, context)
+          )
+        }
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.agentAdminObserveSpace,
+        title: 'Observe Authorized Content Space Administration State',
+        description: 'Reads administration state for the exact authorized Content Space root.',
+        audiences: ['agent'],
+        scope: 'resource',
+        resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        inputSchema: zEmptyObject,
+        outputSchema: contentSpaceResultSchema(ADMINISTRATION_SPACE_SUMMARY_WIRE_SCHEMA),
+        handler: async (_input, context) => {
+          const record = requireAgentRootAdministrationResource(context)
+          return capabilityMutationResult(
+            () => executeAgentAdministration(
+              featureTarget(record),
+              'observe-space',
+              { root: toPortableContentContainerReference(record.root) },
+              'read',
+              context
+            ),
+            () => Object.freeze({ changed: false })
+          )
+        }
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.agentAdminUpdateSpace,
+        title: 'Update Authorized Content Space',
+        description: 'Updates the exact authorized root without allowing the request to replace its Provider or root.',
+        audiences: ['agent'],
+        scope: 'resource',
+        resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
+        effect: 'external-write',
+        approval: 'none',
+        autonomousWrite: 'resource-authorized',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: AGENT_ADMINISTRATION_UPDATE_SPACE_INPUT_SCHEMA,
+        outputSchema: contentSpaceResultSchema(ADMINISTRATION_SPACE_SUMMARY_WIRE_SCHEMA),
+        handler: async (input, context) => {
+          const record = requireAgentRootAdministrationResource(context)
+          return capabilityMutationResult(
+            () => executeAgentAdministration(
+              featureTarget(record),
+              'update-space',
+              { root: toPortableContentContainerReference(record.root), ...input },
+              'external-write',
+              context
+            ),
+            () => markAgentResourceWrite(record, context)
+          )
+        }
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.agentAdminPinSpace,
+        title: 'Pin Authorized Content Space',
+        description: 'Pins the exact authorized root through its Provider administration feature.',
+        audiences: ['agent'],
+        scope: 'resource',
+        resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
+        effect: 'external-write',
+        approval: 'none',
+        autonomousWrite: 'resource-authorized',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: AGENT_ADMINISTRATION_ROOT_MUTATION_INPUT_SCHEMA,
+        outputSchema: contentSpaceResultSchema(ADMINISTRATION_SPACE_SUMMARY_WIRE_SCHEMA),
+        handler: async (input, context) => {
+          const record = requireAgentRootAdministrationResource(context)
+          return capabilityMutationResult(
+            () => executeAgentAdministration(
+              featureTarget(record),
+              'pin-space',
+              { root: toPortableContentContainerReference(record.root), ...input },
+              'external-write',
+              context
+            ),
+            () => markAgentResourceWrite(record, context)
+          )
+        }
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.agentAdminUnpinSpace,
+        title: 'Unpin Authorized Content Space',
+        description: 'Unpins the exact authorized root through its Provider administration feature.',
+        audiences: ['agent'],
+        scope: 'resource',
+        resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
+        effect: 'external-write',
+        approval: 'none',
+        autonomousWrite: 'resource-authorized',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: AGENT_ADMINISTRATION_ROOT_MUTATION_INPUT_SCHEMA,
+        outputSchema: contentSpaceResultSchema(ADMINISTRATION_SPACE_SUMMARY_WIRE_SCHEMA),
+        handler: async (input, context) => {
+          const record = requireAgentRootAdministrationResource(context)
+          return capabilityMutationResult(
+            () => executeAgentAdministration(
+              featureTarget(record),
+              'unpin-space',
+              { root: toPortableContentContainerReference(record.root), ...input },
+              'external-write',
+              context
+            ),
+            () => markAgentResourceWrite(record, context)
+          )
+        }
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.agentAdminOpenRoot,
+        title: 'Open Authorized Content Space Root',
+        description: 'Resolves the current administration revision for the exact authorized root.',
+        audiences: ['agent'],
+        scope: 'resource',
+        resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        inputSchema: zEmptyObject,
+        outputSchema: contentSpaceResultSchema(ADMINISTRATION_ROOT_OPEN_WIRE_SCHEMA),
+        handler: async (_input, context) => {
+          const record = requireAgentRootAdministrationResource(context)
+          return capabilityMutationResult(
+            () => executeAgentAdministration(
+              featureTarget(record),
+              'open-root',
+              { root: toPortableContentContainerReference(record.root) },
+              'read',
+              context
+            ),
+            () => Object.freeze({ changed: false })
+          )
+        }
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.agentAdminListMembers,
+        title: 'List Authorized Content Space Members',
+        description: 'Lists members for the exact authorized personal or Team root.',
+        audiences: ['agent'],
+        scope: 'resource',
+        resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        inputSchema: AGENT_ADMINISTRATION_LIST_MEMBERS_INPUT_SCHEMA,
+        outputSchema: contentSpaceResultSchema(ADMINISTRATION_MEMBER_PAGE_WIRE_SCHEMA),
+        handler: async (input, context) => {
+          const record = requireAgentRootAdministrationResource(context)
+          return capabilityMutationResult(
+            () => executeAgentAdministration(
+              featureTarget(record),
+              'list-members',
+              { root: toPortableContentContainerReference(record.root), ...input },
+              'read',
+              context
+            ),
+            () => Object.freeze({ changed: false })
+          )
+        }
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.agentAdminAddMember,
+        title: 'Add Authorized Content Space Member',
+        description: 'Adds one natural-person Content user to the exact authorized root.',
+        audiences: ['agent'],
+        scope: 'resource',
+        resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
+        effect: 'external-write',
+        approval: 'none',
+        autonomousWrite: 'resource-authorized',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: AGENT_ADMINISTRATION_MEMBER_MUTATION_INPUT_SCHEMA,
+        outputSchema: contentSpaceResultSchema(contentSpaceAdministrationMemberSummarySchema),
+        handler: async (input, context) => {
+          const record = requireAgentRootAdministrationResource(context)
+          return capabilityMutationResult(
+            () => executeAgentAdministration(
+              featureTarget(record),
+              'add-member',
+              { root: toPortableContentContainerReference(record.root), ...input },
+              'external-write',
+              context
+            ),
+            () => markAgentResourceWrite(record, context)
+          )
+        }
+      }),
+      define({
+        id: CONTENT_SPACE_CAPABILITY_IDS.agentAdminRemoveMember,
+        title: 'Remove Authorized Content Space Member',
+        description: 'Removes one natural-person Content user from the exact authorized root.',
+        audiences: ['agent'],
+        scope: 'resource',
+        resourceKinds: [CONTENT_CONTAINER_RESOURCE_KIND],
+        effect: 'destructive',
+        approval: 'none',
+        autonomousWrite: 'resource-authorized',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: AGENT_ADMINISTRATION_MEMBER_MUTATION_INPUT_SCHEMA,
+        outputSchema: contentSpaceResultSchema(ADMINISTRATION_REMOVE_MEMBER_WIRE_SCHEMA),
+        handler: async (input, context) => {
+          const record = requireAgentRootAdministrationResource(context)
+          return capabilityMutationResult(
+            () => executeAgentAdministration(
+              featureTarget(record),
+              'remove-member',
+              { root: toPortableContentContainerReference(record.root), ...input },
+              'destructive',
+              context
+            ),
+            () => markAgentResourceWrite(record, context)
+          )
+        }
       }),
       define({
         id: CONTENT_SPACE_CAPABILITY_IDS.observeImmutableVersion,
@@ -857,7 +1759,22 @@ function contentSpaceResourceRevision(
   entry?: Readonly<{ kind: string; modifiedAt?: string }>
 ): string {
   const identity = 'containerId' in reference ? reference.containerId : reference.fileId
-  return entry?.modifiedAt ? `live:${identity}:${entry.modifiedAt}` : `live:${identity}`
+  const revision = entry?.modifiedAt ? `live:${identity}:${entry.modifiedAt}` : `live:${identity}`
+  return revision.length <= 256
+    ? revision
+    : `live:sha256:${createHash('sha256').update(revision).digest('hex')}`
+}
+
+function agentResourceRevision(record: Readonly<{
+  revisionState: Readonly<{ observedRevision: string; writeInvocationId?: string }>
+}>): string {
+  const invocationId = record.revisionState.writeInvocationId
+  if (!invocationId) return record.revisionState.observedRevision
+  const writeMarker = `:write:${createHash('sha256').update(invocationId).digest('hex').slice(0, 32)}`
+  const observed = record.revisionState.observedRevision
+  return observed.length + writeMarker.length <= 256
+    ? `${observed}${writeMarker}`
+    : `live:sha256:${createHash('sha256').update(observed).digest('hex')}${writeMarker}`
 }
 
 function writeCall(context: ContentSpaceCapabilityContext): ContentSpaceServiceWriteCallContext {
@@ -869,6 +1786,17 @@ function writeCall(context: ContentSpaceCapabilityContext): ContentSpaceServiceW
     )
   }
   return Object.freeze({ ...base, invocationId: context.invocationId, signal: context.signal })
+}
+
+function featureCall(
+  context: ContentSpaceCapabilityContext,
+  effect: ContentSpaceProviderFeatureEffect
+): ContentSpaceServiceFeatureCallContext {
+  if (effect !== 'read') return writeCall(context)
+  return Object.freeze({
+    ...call(context),
+    invocationId: `read_${randomUUID().replaceAll('-', '')}`
+  })
 }
 
 async function capabilityResult<Value>(
@@ -888,6 +1816,22 @@ async function capabilityResult<Value>(
   }
 }
 
+async function capabilityMutationResult<Value>(
+  operation: () => Value | Promise<Value>,
+  onSuccess: (value: Value) => Readonly<{
+    changed: boolean
+    semanticRevision?: string
+  }>
+): Promise<Readonly<{
+  output: ContentSpaceResult<Value>
+  changed: boolean
+  semanticRevision?: string
+}>> {
+  const result = await capabilityResult(operation)
+  if (!result.output.ok) return Object.freeze({ ...result, changed: false })
+  return Object.freeze({ ...result, ...onSuccess(result.output.value) })
+}
+
 function sanitizeContentSpaceError(error: ContentSpaceError): ContentSpaceError {
   return Object.freeze({
     code: error.code,
@@ -905,6 +1849,301 @@ function operationError(
   message: string
 ): ContentSpaceOperationError {
   return new ContentSpaceOperationError({ code, message, retry: 'never' })
+}
+
+const CONTENT_SPACE_PROVIDER_FEATURE_EFFECTS = Object.freeze([
+  'read',
+  'workspace-write',
+  'external-write',
+  'destructive'
+] as const satisfies readonly ContentSpaceProviderFeatureEffect[])
+
+const MAX_AGENT_RESOURCE_RECORDS = 2_048
+const AGENT_FEATURE_SELECTION_TTL_MS = 2 * 60_000
+const EXTENDED_OPERATION_KEYS = Object.freeze(
+  Object.keys(CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS) as ContentSpaceExtendedOperationKey[]
+)
+
+const AGENT_FEATURE_SELECTION_INPUT_SCHEMA = agentExtendedOperationsInputSchema(
+  EXTENDED_OPERATION_KEYS
+)
+
+const AGENT_FEATURE_SELECTION_AUTHORIZATION_SCHEMA = z.object({
+  operation: z.enum(EXTENDED_OPERATION_KEYS as [
+    ContentSpaceExtendedOperationKey,
+    ...ContentSpaceExtendedOperationKey[]
+  ]),
+  requestDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+  resource: domainCapabilityResourceHandleSchema
+}).strict().readonly()
+
+function parseExtendedFeatureRequest(
+  operation: ContentSpaceExtendedOperationKey,
+  request: unknown
+): unknown {
+  const parsed = contentSpaceAgentExtendedRequestSchema(operation).safeParse(request)
+  if (!parsed.success) {
+    throw operationError('invalid_input', 'The extended operation request is invalid.')
+  }
+  return parsed.data
+}
+
+function extendedFeatureSelectionDigest(input: Readonly<{
+  operation: ContentSpaceExtendedOperationKey
+  root: ContentContainerReference
+  primary: ContentEntryReference
+  records: readonly Readonly<{
+    reference: ContentEntryReference
+    semanticRevision: string
+  }>[]
+  request: unknown
+}>): string {
+  const references = input.records
+    .map(({ reference, semanticRevision }) => Object.freeze({
+      reference,
+      semanticRevision
+    }))
+    .sort((left, right) => {
+      const leftKey = canonicalJson(left)
+      const rightKey = canonicalJson(right)
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0
+    })
+  return createHash('sha256').update(canonicalJson({
+    domain: 'sciforge.content-space.feature-selection',
+    contractVersion: 1,
+    operation: input.operation,
+    root: input.root,
+    primary: input.primary,
+    references,
+    request: input.request
+  })).digest('hex')
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
+    return JSON.stringify(value)
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    return `{${Object.keys(record).sort().map((key) =>
+      `${JSON.stringify(key)}:${canonicalJson(record[key])}`
+    ).join(',')}}`
+  }
+  throw operationError('invalid_input', 'The extended operation request is not canonical JSON.')
+}
+
+const NATIVE_DOCUMENT_CAPABILITY_ID_BY_EFFECT = Object.freeze({
+  read: CONTENT_SPACE_CAPABILITY_IDS.agentNativeDocumentRead,
+  'workspace-write': CONTENT_SPACE_CAPABILITY_IDS.agentNativeDocumentWorkspaceWrite,
+  'external-write': CONTENT_SPACE_CAPABILITY_IDS.agentNativeDocumentWrite,
+  destructive: CONTENT_SPACE_CAPABILITY_IDS.agentNativeDocumentDestructive
+} satisfies Readonly<Record<
+  ContentSpaceProviderFeatureEffect,
+  string
+>>)
+
+const EXTENDED_CAPABILITY_ID_BY_EFFECT = Object.freeze({
+  read: CONTENT_SPACE_CAPABILITY_IDS.agentExtendedRead,
+  'workspace-write': CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWorkspaceWrite,
+  'external-write': CONTENT_SPACE_CAPABILITY_IDS.agentExtendedWrite,
+  destructive: CONTENT_SPACE_CAPABILITY_IDS.agentExtendedDestructive
+} satisfies Readonly<Record<
+  ContentSpaceProviderFeatureEffect,
+  string
+>>)
+
+function agentNativeDocumentInputSchema(effect: ContentSpaceProviderFeatureEffect) {
+  return z.object({
+    request: agentNativeDocumentRequestSchema.refine(
+      (request) => nativeDocumentOperationEffect(request.operation) === effect,
+      `Native-document operation must have ${effect} effect.`
+    )
+  }).strict().readonly()
+}
+
+const AGENT_NATIVE_DOCUMENT_INPUT_SCHEMA_BY_EFFECT = Object.freeze({
+  read: agentNativeDocumentInputSchema('read'),
+  'workspace-write': agentNativeDocumentInputSchema('workspace-write'),
+  'external-write': agentNativeDocumentInputSchema('external-write'),
+  destructive: agentNativeDocumentInputSchema('destructive')
+})
+
+function agentExtendedInputSchema(effect: ContentSpaceProviderFeatureEffect) {
+  const operations = Object.keys(CONTENT_SPACE_EXTENDED_OPERATION_CONTRACTS)
+    .filter((operation) => extendedOperationEffect(
+      operation as ContentSpaceExtendedOperationKey
+    ) === effect) as ContentSpaceExtendedOperationKey[]
+  if (operations.length < 1) throw new Error(`No extended ${effect} operations are contracted.`)
+  return agentExtendedOperationsInputSchema(operations)
+}
+
+function agentExtendedOperationsInputSchema(
+  operations: readonly ContentSpaceExtendedOperationKey[]
+): z.ZodType {
+  const schemas = operations.map((operation) => z.object({
+    operation: z.literal(operation),
+    request: contentSpaceAgentExtendedRequestSchema(operation)
+  }).strict().readonly())
+  if (schemas.length < 1) throw new Error('At least one extended operation is required.')
+  if (schemas.length === 1) return schemas[0]!
+  return z.union(schemas as unknown as [z.ZodType, z.ZodType, ...z.ZodType[]])
+}
+
+const AGENT_EXTENDED_INPUT_SCHEMA_BY_EFFECT = Object.freeze({
+  read: agentExtendedInputSchema('read'),
+  'workspace-write': agentExtendedInputSchema('workspace-write'),
+  'external-write': agentExtendedInputSchema('external-write'),
+  destructive: agentExtendedInputSchema('destructive')
+})
+
+const providerInstanceInputShape = contentSpaceProviderInstanceInputSchema.unwrap().shape
+const administrationUpdateShape = contentSpaceAdministrationUpdateSpaceInputSchema.unwrap().shape
+const administrationRootMutationShape = contentSpaceAdministrationPinSpaceInputSchema.unwrap().shape
+const administrationListMembersShape = contentSpaceAdministrationListMembersInputSchema.unwrap().shape
+const administrationMemberMutationShape = contentSpaceAdministrationAddMemberInputSchema.unwrap().shape
+const contentContainerReferenceShape = contentContainerReferenceSchema.unwrap().shape
+const administrationSpaceSummaryShape = contentSpaceAdministrationSpaceSummarySchema.unwrap().shape
+const administrationRootOpenShape = contentSpaceAdministrationRootOpenResultSchema.unwrap().shape
+const administrationMemberPageShape = contentSpaceAdministrationMemberPageSchema.unwrap().shape
+const administrationRemoveMemberShape = contentSpaceAdministrationRemoveMemberReceiptSchema
+  .unwrap().shape
+const projectProvisioningReportShape = projectContentSpaceProvisioningReportSchema.unwrap().shape
+
+const PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA = z.object({
+  contractVersion: z.literal(1),
+  kind: z.literal(CONTENT_CONTAINER_REFERENCE_KIND),
+  authority: contentContainerReferenceShape.providerInstanceRef,
+  identity: z.object({
+    containerId: contentContainerReferenceShape.containerId
+  }).strict().readonly()
+}).strict().readonly()
+
+const ADMINISTRATION_SPACE_SUMMARY_WIRE_SCHEMA = z.object({
+  root: PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA,
+  label: administrationSpaceSummaryShape.label,
+  contentOwnerUserId: administrationSpaceSummaryShape.contentOwnerUserId,
+  pinned: administrationSpaceSummaryShape.pinned,
+  revision: administrationSpaceSummaryShape.revision
+}).strict().readonly()
+
+const ADMINISTRATION_SPACE_PAGE_WIRE_SCHEMA = z.object({
+  items: z.array(ADMINISTRATION_SPACE_SUMMARY_WIRE_SCHEMA).max(200).readonly(),
+  nextCursor: z.string().trim().min(1).max(256).optional()
+}).strict().readonly()
+
+const ADMINISTRATION_ROOT_OPEN_WIRE_SCHEMA = z.object({
+  root: PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA,
+  revision: administrationRootOpenShape.revision
+}).strict().readonly()
+
+const ADMINISTRATION_MEMBER_PAGE_WIRE_SCHEMA = z.object({
+  root: PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA,
+  items: administrationMemberPageShape.items,
+  nextCursor: administrationMemberPageShape.nextCursor
+}).strict().readonly()
+
+const ADMINISTRATION_REMOVE_MEMBER_WIRE_SCHEMA = z.object({
+  root: PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA,
+  contentUserId: administrationRemoveMemberShape.contentUserId,
+  removed: administrationRemoveMemberShape.removed,
+  revision: administrationRemoveMemberShape.revision
+}).strict().readonly()
+
+const PROJECT_PROVISIONING_REPORT_WIRE_SCHEMA = z.object({
+  projectId: projectProvisioningReportShape.projectId,
+  intentRevision: projectProvisioningReportShape.intentRevision,
+  status: projectProvisioningReportShape.status,
+  root: PORTABLE_CONTENT_CONTAINER_WIRE_SCHEMA.optional(),
+  contentOwnerUserId: projectProvisioningReportShape.contentOwnerUserId,
+  members: projectProvisioningReportShape.members
+}).strict().readonly()
+
+const AGENT_ADMINISTRATION_AUTHORIZATION_SCHEMA = z.object({
+  providerInstanceRef: providerInstanceInputShape.providerInstanceRef,
+  resource: domainCapabilityResourceHandleSchema
+}).strict().readonly()
+
+const AGENT_ADMINISTRATION_CREATE_SPACE_SCHEMA = z.object({
+  space: ADMINISTRATION_SPACE_SUMMARY_WIRE_SCHEMA,
+  resource: domainCapabilityResourceHandleSchema
+}).strict().readonly()
+
+const AGENT_PROJECT_PROVISIONING_RESULT_SCHEMA = z.object({
+  report: PROJECT_PROVISIONING_REPORT_WIRE_SCHEMA,
+  resource: domainCapabilityResourceHandleSchema.optional()
+}).strict().superRefine((result, context) => {
+  if (Boolean(result.report.root) !== Boolean(result.resource)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['resource'],
+      message: 'A provisioned Content Space root requires its exact Agent resource.'
+    })
+  }
+}).readonly()
+
+const AGENT_ADMINISTRATION_UPDATE_SPACE_INPUT_SCHEMA = z.object({
+  expectedRevision: administrationUpdateShape.expectedRevision,
+  label: administrationUpdateShape.label,
+  idempotencyKey: administrationUpdateShape.idempotencyKey
+}).strict().readonly()
+
+const AGENT_ADMINISTRATION_ROOT_MUTATION_INPUT_SCHEMA = z.object({
+  expectedRevision: administrationRootMutationShape.expectedRevision,
+  idempotencyKey: administrationRootMutationShape.idempotencyKey
+}).strict().readonly()
+
+const AGENT_ADMINISTRATION_LIST_MEMBERS_INPUT_SCHEMA = z.object({
+  page: administrationListMembersShape.page
+}).strict().readonly()
+
+const AGENT_ADMINISTRATION_MEMBER_MUTATION_INPUT_SCHEMA = z.object({
+  contentUserId: administrationMemberMutationShape.contentUserId,
+  expectedRevision: administrationMemberMutationShape.expectedRevision,
+  idempotencyKey: administrationMemberMutationShape.idempotencyKey
+}).strict().readonly()
+
+async function issueExtendedPortalTarget(
+  operation: ContentSpaceExtendedOperationKey,
+  rawResult: unknown,
+  externalNavigation: NonNullable<DomainMainHost['externalNavigation']> | undefined
+): Promise<unknown> {
+  if (operation !== 'resolveInternalLink' &&
+    operation !== 'resolveCollaborationInvitation') return rawResult
+  if (!isRecord(rawResult) || rawResult.ok !== true || !isRecord(rawResult.value) ||
+    !isRecord(rawResult.value.target)) return rawResult
+  if (!externalNavigation) {
+    throw operationError('unsafe_portal_target', 'Safe external navigation is unavailable.')
+  }
+  try {
+    return Object.freeze({
+      ...rawResult,
+      value: Object.freeze({
+        ...rawResult.value,
+        target: externalNavigation.issueTarget({
+          url: rawResult.value.target.url,
+          expiresAt: rawResult.value.target.expiresAt
+        })
+      })
+    })
+  } catch (error) {
+    if (error instanceof DomainExternalNavigationError) {
+      throw operationError(
+        error.code === 'principal_changed' ? 'unauthorized' : 'unsafe_portal_target',
+        'Host navigation rejected the extended portal target.'
+      )
+    }
+    throw error
+  }
+}
+
+function isSuccessfulExtendedResult(value: unknown): boolean {
+  return isRecord(value) && value.ok === true
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 const zEmptyObject = z.object({}).strict()

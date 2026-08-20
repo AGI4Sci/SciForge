@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import {
   link,
@@ -6,10 +7,14 @@ import {
   open,
   readFile,
   readdir,
+  realpath,
+  rename,
   rm,
   symlink,
+  utimes,
   writeFile
 } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -34,7 +39,7 @@ const principalV2 = Object.freeze({ ...principalV1, identityVersion: 2 })
 
 describe('Host-owned file transfers', () => {
   it('snapshots upload bytes and binds the opaque handle to owner, caller, and Principal', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     let currentPrincipal: PrincipalSnapshot | undefined = principalV1
     const service = createService(root, () => currentPrincipal)
     const caller = grantCaller('window:7', principalV1)
@@ -57,6 +62,9 @@ describe('Host-owned file transfers', () => {
         maxBytes: 1024
       })
       expect(source).not.toHaveProperty('path')
+      expect(source.sha256).toBe(
+        createHash('sha256').update('captured bytes').digest('hex')
+      )
       expect(Buffer.from(await source.read({ offset: 0, length: source.size })).toString())
         .toBe('captured bytes')
       await source.close()
@@ -137,7 +145,7 @@ describe('Host-owned file transfers', () => {
   })
 
   it('reauthorizes the live Principal during reads and requires an active invocation', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     let currentPrincipal: PrincipalSnapshot | undefined = principalV1
     const service = createService(root, () => currentPrincipal)
     const caller = grantCaller('window:7', principalV1)
@@ -172,7 +180,7 @@ describe('Host-owned file transfers', () => {
   })
 
   it('publishes a complete download atomically and returns a typed no-overwrite conflict', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const service = createService(root, () => principalV1)
     const caller = grantCaller('window:7', principalV1)
     const invocation = invocationFor(caller)
@@ -212,11 +220,98 @@ describe('Host-owned file transfers', () => {
     }
   })
 
-  it('serializes concurrent writes before commit publishes the destination', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+  it('refuses to publish or clean up a replaced private download file', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const service = createService(root, () => principalV1)
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const destinationPath = join(root, 'download.bin')
+    let replacementPath: string | undefined
+    try {
+      const selection = await service.registerDownload({
+        ownerId: 'domain.content-space', caller, path: destinationPath
+      })
+      const destination = await port.openDownloadDestination({
+        handle: requireDownloadHandle(selection), maxBytes: 1024
+      })
+      await destination.write(new TextEncoder().encode('private bytes'))
+      const partialName = (await readdir(root))
+        .find((name) => name.startsWith('.sciforge-download-'))
+      expect(partialName).toBeDefined()
+      replacementPath = join(root, partialName!)
+      await rm(replacementPath, { force: true })
+      await writeFile(replacementPath, 'attacker replacement')
+
+      await expect(destination.commit())
+        .rejects.toMatchObject({ code: 'destination_unavailable' })
+      await expect(readFile(destinationPath))
+        .rejects.toMatchObject({ code: 'ENOENT' })
+      await expect(readFile(replacementPath, 'utf8'))
+        .resolves.toBe('attacker replacement')
+      await destination.abort()
+
+      await rm(replacementPath, { force: true })
+      replacementPath = undefined
+      await service.sweepExpired()
+      expect((await readdir(root)).some((name) => name.startsWith('.sciforge-download-')))
+        .toBe(false)
+    } finally {
+      if (replacementPath) await rm(replacementPath, { force: true })
+      await service.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('cleans a private download created while cancellation finishes its open', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
+    const controller = new AbortController()
+    let cancelFirstOpen = true
+    const service = new HostFileTransferService({
+      temporaryRoot: root,
+      maxTemporaryBytes: 5,
+      isPrincipalCurrent: (principal) => samePrincipalSnapshot(principal, principalV1),
+      openDownloadTemporaryFile: async (path) => {
+        const file = await open(path, 'wx', 0o600)
+        if (cancelFirstOpen) {
+          cancelFirstOpen = false
+          controller.abort()
+        }
+        return file
+      }
+    })
+    const caller = grantCaller('window:7', principalV1)
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    try {
+      const first = await service.registerDownload({
+        ownerId: 'domain.content-space', caller, path: join(root, 'first.bin')
+      })
+      await expect(port.openDownloadDestination({
+        handle: requireDownloadHandle(first),
+        maxBytes: 5,
+        signal: controller.signal
+      })).rejects.toMatchObject({ code: 'cancelled' })
+      expect((await readdir(root)).some((name) => name.startsWith('.sciforge-download-')))
+        .toBe(false)
+
+      const second = await service.registerDownload({
+        ownerId: 'domain.content-space', caller, path: join(root, 'second.bin')
+      })
+      const reusable = await port.openDownloadDestination({
+        handle: requireDownloadHandle(second),
+        maxBytes: 5
+      })
+      await reusable.abort()
+    } finally {
+      await service.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('serializes concurrent writes before commit publishes the destination', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
+    const service = createService(root, () => principalV1)
+    const caller = grantCaller('window:7', principalV1)
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
     try {
       const destinationPath = join(root, 'ordered.bin')
       const selection = await service.registerDownload({
@@ -239,10 +334,10 @@ describe('Host-owned file transfers', () => {
   })
 
   it('sanitizes low-level destination write failures at the domain boundary', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const service = createService(root, () => principalV1)
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
     const prototype = await fileHandlePrototype(root)
     const write = vi.spyOn(prototype, 'write')
       .mockRejectedValueOnce(new Error(`private Host path: ${root}/partial`))
@@ -272,7 +367,7 @@ describe('Host-owned file transfers', () => {
   })
 
   it('sanitizes low-level close failures at both public transfer boundaries', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const reported: unknown[] = []
     const service = new HostFileTransferService({
       temporaryRoot: root,
@@ -292,7 +387,7 @@ describe('Host-owned file transfers', () => {
       }
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
     const sourcePath = join(root, 'close-source.bin')
     await writeFile(sourcePath, 'bytes')
     try {
@@ -339,8 +434,12 @@ describe('Host-owned file transfers', () => {
     await expectBlockedCommitNotPublished('principal_changed')
   })
 
+  it('does not publish when the exact invocation changes during a blocked file sync', async () => {
+    await expectBlockedCommitNotPublished('invocation_replaced')
+  })
+
   it('preserves a destination published while cancellation races the atomic link', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const entered = deferred()
     const release = deferred()
     const controller = new AbortController()
@@ -354,7 +453,7 @@ describe('Host-owned file transfers', () => {
       }
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
     const destinationPath = join(root, 'link-race.bin')
     try {
       const selection = await service.registerDownload({
@@ -384,7 +483,7 @@ describe('Host-owned file transfers', () => {
   })
 
   it('removes partial destinations after cancellation or Principal change', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     let currentPrincipal: PrincipalSnapshot | undefined = principalV1
     const service = createService(root, () => currentPrincipal)
     const caller = grantCaller('window:7', principalV1)
@@ -428,7 +527,7 @@ describe('Host-owned file transfers', () => {
   })
 
   it('closes the selected source and issues no grant when stat or close fails', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     let failure: 'stat' | 'close' | undefined = 'stat'
     let closeCalls = 0
     const service = new HostFileTransferService({
@@ -460,7 +559,7 @@ describe('Host-owned file transfers', () => {
       }
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
     const sourcePath = join(root, 'selected.bin')
     await writeFile(sourcePath, 'bounded bytes')
     try {
@@ -493,7 +592,7 @@ describe('Host-owned file transfers', () => {
   })
 
   it('fails closed on symlink selection and an in-flight source fingerprint change', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const caller = grantCaller('window:7', principalV1)
     const sourcePath = join(root, 'selected.bin')
     const symlinkPath = join(root, 'selected-link.bin')
@@ -540,8 +639,262 @@ describe('Host-owned file transfers', () => {
     }
   })
 
+  it('rejects replaced or mutated staged upload snapshots and releases their byte budget', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
+    const service = new HostFileTransferService({
+      temporaryRoot: root,
+      isPrincipalCurrent: (principal) => samePrincipalSnapshot(principal, principalV1),
+      maxTemporaryBytes: 5
+    })
+    const caller = grantCaller('window:7', principalV1)
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const sourcePath = join(root, 'selected.bin')
+    await writeFile(sourcePath, '12345')
+    try {
+      const replacedSelection = await service.registerUpload({
+        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+      })
+      const replacedDirectory = (await readdir(root))
+        .find((name) => name.startsWith('sciforge-upload-'))
+      expect(replacedDirectory).toBeDefined()
+      const replacedPath = join(root, replacedDirectory!, 'source.bin')
+      await rm(replacedPath, { force: true })
+      await writeFile(replacedPath, 'abcde')
+
+      await expect(port.openUploadSource({
+        handle: requireUploadHandle(replacedSelection),
+        maxBytes: 5
+      })).rejects.toMatchObject({ code: 'source_changed' })
+      expect((await readdir(root)).some((name) => name.startsWith('sciforge-upload-')))
+        .toBe(false)
+
+      const mutatedSelection = await service.registerUpload({
+        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+      })
+      const mutatedDirectory = (await readdir(root))
+        .find((name) => name.startsWith('sciforge-upload-'))
+      expect(mutatedDirectory).toBeDefined()
+      const mutatedPath = join(root, mutatedDirectory!, 'source.bin')
+      const source = await port.openUploadSource({
+        handle: requireUploadHandle(mutatedSelection),
+        maxBytes: 5
+      })
+      await writeFile(mutatedPath, 'vwxyz')
+      await utimes(mutatedPath, new Date(946_684_800_000), new Date(946_684_800_000))
+
+      await expect(source.read({ offset: 0, length: 5 }))
+        .rejects.toMatchObject({ code: 'source_changed' })
+      await source.close()
+      expect((await readdir(root)).some((name) => name.startsWith('sciforge-upload-')))
+        .toBe(false)
+
+      const reusable = await service.registerUpload({
+        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+      })
+      const reopened = await port.openUploadSource({
+        handle: requireUploadHandle(reusable),
+        maxBytes: 5
+      })
+      await reopened.close()
+    } finally {
+      await service.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('binds the staged snapshot digest to the bytes copied from the selected source', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
+    const service = new HostFileTransferService({
+      temporaryRoot: root,
+      isPrincipalCurrent: (principal) => samePrincipalSnapshot(principal, principalV1),
+      maxTemporaryBytes: 5
+    })
+    const caller = grantCaller('window:7', principalV1)
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const sourcePath = join(root, 'selected.bin')
+    await writeFile(sourcePath, '12345')
+    const prototype = await fileHandlePrototype(root)
+    const originalStat = prototype.stat
+    let mutated = false
+    const stat = vi.spyOn(prototype, 'stat')
+      .mockImplementation(async function (
+        this: TestFileHandlePrototype,
+        options?: Readonly<{ bigint?: boolean }>
+      ) {
+        if (!mutated) {
+          const stagedDirectory = (await readdir(root))
+            .find((name) => name.startsWith('sciforge-upload-'))
+          if (stagedDirectory) {
+            mutated = true
+            const stagedPath = join(root, stagedDirectory, 'source.bin')
+            await writeFile(stagedPath, 'abcde')
+            await utimes(
+              stagedPath,
+              new Date(946_684_800_000),
+              new Date(946_684_800_000)
+            )
+          }
+        }
+        return originalStat.call(this, options)
+      })
+    try {
+      await expect(service.registerUpload({
+        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+      })).rejects.toMatchObject({ code: 'source_changed' })
+      expect(mutated).toBe(true)
+      expect((await readdir(root)).some((name) => name.startsWith('sciforge-upload-')))
+        .toBe(false)
+
+      const reusable = await service.registerUpload({
+        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+      })
+      const source = await port.openUploadSource({
+        handle: requireUploadHandle(reusable),
+        maxBytes: 5
+      })
+      await source.close()
+    } finally {
+      stat.mockRestore()
+      await service.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rechecks the staged fingerprint after every blocked upload read', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
+    const service = new HostFileTransferService({
+      temporaryRoot: root,
+      isPrincipalCurrent: (principal) => samePrincipalSnapshot(principal, principalV1),
+      maxTemporaryBytes: 5
+    })
+    const caller = grantCaller('window:7', principalV1)
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const sourcePath = join(root, 'selected.bin')
+    await writeFile(sourcePath, '12345')
+    const entered = deferred()
+    const release = deferred()
+    let read: Readonly<{ mockRestore: () => void }> | undefined
+    try {
+      const selection = await service.registerUpload({
+        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+      })
+      const stagedDirectory = (await readdir(root))
+        .find((name) => name.startsWith('sciforge-upload-'))
+      expect(stagedDirectory).toBeDefined()
+      const stagedPath = join(root, stagedDirectory!, 'source.bin')
+      const source = await port.openUploadSource({
+        handle: requireUploadHandle(selection),
+        maxBytes: 5
+      })
+      const prototype = await fileHandlePrototype(root)
+      const originalRead = prototype.read
+      read = vi.spyOn(prototype, 'read')
+        .mockImplementationOnce(async function (
+          this: TestFileHandlePrototype,
+          buffer: Uint8Array,
+          offset: number,
+          length: number,
+          position: number
+        ) {
+          const result = await originalRead.call(this, buffer, offset, length, position)
+          entered.resolve()
+          await release.promise
+          return result
+        })
+
+      const pendingRead = source.read({ offset: 0, length: 5 })
+      await entered.promise
+      await writeFile(stagedPath, 'vwxyz')
+      await utimes(stagedPath, new Date(946_684_800_000), new Date(946_684_800_000))
+      release.resolve()
+
+      await expect(pendingRead).rejects.toMatchObject({ code: 'source_changed' })
+      await source.close()
+      read.mockRestore()
+      read = undefined
+      expect((await readdir(root)).some((name) => name.startsWith('sciforge-upload-')))
+        .toBe(false)
+
+      const reusable = await service.registerUpload({
+        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+      })
+      const reopened = await port.openUploadSource({
+        handle: requireUploadHandle(reusable),
+        maxBytes: 5
+      })
+      await reopened.close()
+    } finally {
+      release.resolve()
+      read?.mockRestore()
+      await service.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('retains staged byte reservations when the staging directory identity changes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
+    const service = new HostFileTransferService({
+      temporaryRoot: root,
+      isPrincipalCurrent: (principal) => samePrincipalSnapshot(principal, principalV1),
+      maxTemporaryBytes: 5
+    })
+    const caller = grantCaller('window:7', principalV1)
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const sourcePath = join(root, 'selected.bin')
+    await writeFile(sourcePath, '12345')
+    let stageRelocated = false
+    let stagedDirectoryPath: string | undefined
+    const relocatedDirectory = join(root, 'relocated-stage')
+    try {
+      const selection = await service.registerUpload({
+        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+      })
+      const stagedDirectory = (await readdir(root))
+        .find((name) => name.startsWith('sciforge-upload-'))
+      expect(stagedDirectory).toBeDefined()
+      stagedDirectoryPath = join(root, stagedDirectory!)
+      await rename(stagedDirectoryPath, relocatedDirectory)
+      stageRelocated = true
+      await symlink(
+        relocatedDirectory,
+        stagedDirectoryPath,
+        process.platform === 'win32' ? 'junction' : 'dir'
+      )
+
+      await expect(port.openUploadSource({
+        handle: requireUploadHandle(selection),
+        maxBytes: 5
+      })).rejects.toMatchObject({ code: 'source_changed' })
+      await expect(readFile(join(relocatedDirectory, 'source.bin'), 'utf8'))
+        .resolves.toBe('12345')
+      await expect(service.registerUpload({
+        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+      })).rejects.toMatchObject({ code: 'capacity_exceeded' })
+
+      await rm(stagedDirectoryPath, { recursive: true, force: true })
+      await rename(relocatedDirectory, stagedDirectoryPath)
+      stageRelocated = false
+      await service.sweepExpired()
+      const reusable = await service.registerUpload({
+        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+      })
+      const reopened = await port.openUploadSource({
+        handle: requireUploadHandle(reusable),
+        maxBytes: 5
+      })
+      await reopened.close()
+    } finally {
+      if (stageRelocated && stagedDirectoryPath) {
+        await rm(stagedDirectoryPath, { recursive: true, force: true })
+        await rename(relocatedDirectory, stagedDirectoryPath).catch(() => undefined)
+      }
+      await service.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('waits for a pending registration during dispose and never issues afterward', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const service = createService(root, () => principalV1)
     const caller = grantCaller('window:7', principalV1)
     const sourcePath = join(root, 'selected.bin')
@@ -587,10 +940,10 @@ describe('Host-owned file transfers', () => {
   })
 
   it('revokes pending and active caller leases without poisoning a later caller epoch', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const service = createService(root, () => principalV1)
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
     const sourcePath = join(root, 'selected.bin')
     await writeFile(sourcePath, 'bounded bytes')
     const prototype = await fileHandlePrototype(root)
@@ -646,7 +999,7 @@ describe('Host-owned file transfers', () => {
   })
 
   it('does not issue a download grant when cancellation arrives during parent resolution', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const entered = deferred()
     const release = deferred()
     const service = new HostFileTransferService({
@@ -684,7 +1037,7 @@ describe('Host-owned file transfers', () => {
   })
 
   it('retires an issued upload grant when picker cancellation wins before delivery', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const service = new HostFileTransferService({
       temporaryRoot: root,
       isPrincipalCurrent: (principal) => samePrincipalSnapshot(principal, principalV1),
@@ -692,7 +1045,7 @@ describe('Host-owned file transfers', () => {
       maxTemporaryBytes: 5
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
     const controller = new AbortController()
     const firstPath = join(root, 'first-upload.bin')
     const secondPath = join(root, 'second-upload.bin')
@@ -733,14 +1086,14 @@ describe('Host-owned file transfers', () => {
   })
 
   it('retires an issued download grant when picker cancellation wins before delivery', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const service = new HostFileTransferService({
       temporaryRoot: root,
       isPrincipalCurrent: (principal) => samePrincipalSnapshot(principal, principalV1),
       maxGrants: 1
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
     const controller = new AbortController()
     try {
       const registration = service.registerDownload({
@@ -772,10 +1125,10 @@ describe('Host-owned file transfers', () => {
   })
 
   it('detaches picker cancellation after the exact grant is consumed', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const service = createService(root, () => principalV1)
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
     const sourcePath = join(root, 'consumed-upload.bin')
     const destinationPath = join(root, 'consumed-download.bin')
     await writeFile(sourcePath, 'kept')
@@ -816,14 +1169,14 @@ describe('Host-owned file transfers', () => {
   })
 
   it('bounds aggregate temporary bytes across upload snapshots and partial downloads', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const service = new HostFileTransferService({
       temporaryRoot: root,
       isPrincipalCurrent: (principal) => samePrincipalSnapshot(principal, principalV1),
       maxTemporaryBytes: 5
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
     try {
       const sourcePath = join(root, 'selected.bin')
       await writeFile(sourcePath, '12345')
@@ -852,10 +1205,10 @@ describe('Host-owned file transfers', () => {
   })
 
   it('fails bounded upload and download overflows without leaving partial files', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const service = createService(root, () => principalV1)
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
     try {
       const sourcePath = join(root, 'too-large.bin')
       await writeFile(sourcePath, '12345')
@@ -883,7 +1236,7 @@ describe('Host-owned file transfers', () => {
   })
 
   it('eagerly removes expired upload snapshots and releases their byte budget', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     let now = new Date('2026-08-16T10:00:00.000Z')
     const service = new HostFileTransferService({
       temporaryRoot: root,
@@ -893,7 +1246,7 @@ describe('Host-owned file transfers', () => {
       maxTemporaryBytes: 5
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
     try {
       const fullPath = join(root, 'full.bin')
       const smallPath = join(root, 'small.bin')
@@ -927,7 +1280,7 @@ describe('Host-owned file transfers', () => {
   })
 
   it('bounds grant capacity and expires unused single-use handles', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     let now = new Date('2026-08-16T10:00:00.000Z')
     const service = new HostFileTransferService({
       temporaryRoot: root,
@@ -937,7 +1290,7 @@ describe('Host-owned file transfers', () => {
       maxGrants: 1
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
     try {
       const first = await service.registerDownload({
         ownerId: 'domain.content-space', caller, path: join(root, 'one.bin')
@@ -959,14 +1312,14 @@ describe('Host-owned file transfers', () => {
   })
 
   it('counts active partial transfers against the bounded capacity', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const service = new HostFileTransferService({
       temporaryRoot: root,
       isPrincipalCurrent: (principal) => samePrincipalSnapshot(principal, principalV1),
       maxGrants: 1
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
     try {
       const first = await service.registerDownload({
         ownerId: 'domain.content-space', caller, path: join(root, 'one.bin')
@@ -995,8 +1348,422 @@ describe('Host-owned file transfers', () => {
     }
   })
 
+  it('opens an Agent upload source for an exact Broker-authorized resource write', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
+    const workspace = join(root, 'workspace')
+    const temporary = join(root, 'temporary')
+    await Promise.all([
+      mkdir(workspace, { recursive: true }),
+      mkdir(temporary, { recursive: true })
+    ])
+    await writeFile(join(workspace, 'README.md'), '# delegated upload\n')
+    const service = createService(temporary, () => principalV1)
+    const caller = grantCaller('agent:thread-1', principalV1)
+    const invocation: HostResourceGrantInvocation = Object.freeze({
+      caller: Object.freeze({
+        ...caller,
+        audience: 'agent',
+        workspaceId: workspace
+      }),
+      actionId: 'content-space.agent-upload-new',
+      invocationId: 'content-space-upload-readme-1',
+      effect: 'external-write',
+      approval: 'none',
+      approved: true,
+      scope: 'resource',
+      autonomousWrite: 'resource-authorized',
+      authorizedResource: Object.freeze({
+        resourceRef: 'res_content_space_folder',
+        resourceKind: 'content-space.container',
+        workspaceId: workspace,
+        semanticRevision: '1'
+      })
+    })
+    const port = service.forOwner('domain.content-space', () => invocation)
+    try {
+      const source = await port.openWorkspaceUploadSource({
+        relativePath: 'README.md',
+        maxBytes: 1024
+      })
+      expect(source.sha256).toBe(
+        createHash('sha256').update('# delegated upload\n').digest('hex')
+      )
+      expect(Buffer.from(await source.read({ offset: 0, length: source.size })).toString())
+        .toBe('# delegated upload\n')
+      await source.close()
+    } finally {
+      await service.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('fails a blocked upload read when the exact invocation object is replaced', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
+    const workspace = join(root, 'workspace')
+    const temporary = join(root, 'temporary')
+    await Promise.all([
+      mkdir(workspace, { recursive: true }),
+      mkdir(temporary, { recursive: true })
+    ])
+    await writeFile(join(workspace, 'README.md'), '# exact lease\n')
+    const service = createService(temporary, () => principalV1)
+    const caller = grantCaller('agent:thread-1', principalV1)
+    let invocation = workspaceTransferInvocation(caller, workspace, 'upload-source')
+    const port = service.forOwner('domain.content-space', () => invocation)
+    const entered = deferred()
+    const release = deferred()
+    let read: Readonly<{ mockRestore: () => void }> | undefined
+    try {
+      const source = await port.openWorkspaceUploadSource({
+        relativePath: 'README.md',
+        maxBytes: 1024
+      })
+      const prototype = await fileHandlePrototype(root)
+      const originalRead = prototype.read
+      read = vi.spyOn(prototype, 'read')
+        .mockImplementationOnce(async function (
+          this: TestFileHandlePrototype,
+          buffer: Uint8Array,
+          offset: number,
+          length: number,
+          position: number
+        ) {
+          entered.resolve()
+          await release.promise
+          return originalRead.call(this, buffer, offset, length, position)
+        })
+
+      const pendingRead = source.read({ offset: 0, length: source.size })
+      await entered.promise
+      invocation = workspaceTransferInvocation(caller, workspace, 'upload-source')
+      release.resolve()
+
+      await expect(pendingRead).rejects.toMatchObject({ code: 'grant_unavailable' })
+      await source.close()
+      expect((await readdir(temporary))
+        .some((name) => name.startsWith('sciforge-upload-'))).toBe(false)
+    } finally {
+      release.resolve()
+      read?.mockRestore()
+      await service.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('opens an Agent download destination for an exact Broker-authorized Workspace write', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
+    const workspace = join(root, 'workspace')
+    const temporary = join(root, 'temporary')
+    await Promise.all([
+      mkdir(workspace, { recursive: true }),
+      mkdir(temporary, { recursive: true })
+    ])
+    const service = createService(temporary, () => principalV1)
+    const caller = grantCaller('agent:thread-1', principalV1)
+    const invocation: HostResourceGrantInvocation = Object.freeze({
+      caller: Object.freeze({
+        ...caller,
+        audience: 'agent',
+        workspaceId: workspace
+      }),
+      actionId: 'content-space.agent-download',
+      invocationId: 'content-space-download-readme-1',
+      effect: 'workspace-write',
+      approval: 'none',
+      approved: true,
+      scope: 'resource',
+      authorizedResource: Object.freeze({
+        resourceRef: 'res_content_space_file',
+        resourceKind: 'content-space.file',
+        workspaceId: workspace,
+        semanticRevision: '1'
+      })
+    })
+    const port = service.forOwner('domain.content-space', () => invocation)
+    try {
+      const destination = await port.openWorkspaceDownloadDestination({
+        relativePath: 'README.downloaded.md',
+        maxBytes: 1024
+      })
+      await destination.write(new TextEncoder().encode('# delegated download\n'))
+      await destination.commit()
+      await expect(readFile(join(workspace, 'README.downloaded.md'), 'utf8'))
+        .resolves.toBe('# delegated download\n')
+    } finally {
+      await service.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps an opened destination bound to the exact resource revision lease', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
+    const workspace = join(root, 'workspace')
+    const temporary = join(root, 'temporary')
+    await Promise.all([
+      mkdir(workspace, { recursive: true }),
+      mkdir(temporary, { recursive: true })
+    ])
+    const service = createService(temporary, () => principalV1)
+    const caller = grantCaller('agent:thread-1', principalV1)
+    const template = workspaceTransferInvocation(
+      caller,
+      workspace,
+      'download-destination',
+      '1'
+    )
+    const authorizedResource = { ...template.authorizedResource! }
+    const exactInvocation: HostResourceGrantInvocation = {
+      ...template,
+      caller: { ...template.caller },
+      authorizedResource
+    }
+    let invocation: HostResourceGrantInvocation | undefined = exactInvocation
+    const port = service.forOwner('domain.content-space', () => invocation)
+    const targetPath = join(workspace, 'revision-bound.bin')
+    try {
+      const destination = await port.openWorkspaceDownloadDestination({
+        relativePath: 'revision-bound.bin',
+        maxBytes: 1024
+      })
+      await destination.write(new TextEncoder().encode('revision one'))
+      authorizedResource.semanticRevision = '2'
+
+      await expect(destination.commit())
+        .rejects.toMatchObject({ code: 'grant_unavailable' })
+      await expect(readFile(targetPath)).rejects.toMatchObject({ code: 'ENOENT' })
+      invocation = undefined
+      await destination.abort()
+      expect((await readdir(workspace))
+        .some((name) => name.startsWith('.sciforge-download-'))).toBe(false)
+    } finally {
+      await service.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('fails closed when a Workspace destination parent is swapped for a link', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
+    const workspace = join(root, 'workspace')
+    const selectedParent = join(workspace, 'selected')
+    const outside = join(root, 'outside')
+    const temporary = join(root, 'temporary')
+    await Promise.all([
+      mkdir(selectedParent, { recursive: true }),
+      mkdir(outside, { recursive: true }),
+      mkdir(temporary, { recursive: true })
+    ])
+    const relocatedParent = join(outside, 'relocated-selected')
+    const relocatedTarget = join(relocatedParent, 'escaped.bin')
+    const service = createService(temporary, () => principalV1)
+    const caller = grantCaller('agent:thread-1', principalV1)
+    const invocation = workspaceTransferInvocation(
+      caller,
+      workspace,
+      'download-destination'
+    )
+    const port = service.forOwner('domain.content-space', () => invocation)
+    let parentRelocated = false
+    try {
+      const destination = await port.openWorkspaceDownloadDestination({
+        relativePath: 'selected/escaped.bin',
+        maxBytes: 1024
+      })
+      await destination.write(new TextEncoder().encode('must remain bounded'))
+      await rename(selectedParent, relocatedParent)
+      parentRelocated = true
+      await symlink(
+        relocatedParent,
+        selectedParent,
+        process.platform === 'win32' ? 'junction' : 'dir'
+      )
+
+      await expect(destination.commit())
+        .rejects.toMatchObject({ code: 'destination_unavailable' })
+      await expect(readFile(relocatedTarget)).rejects.toMatchObject({ code: 'ENOENT' })
+      await destination.abort()
+
+      await rm(selectedParent, { recursive: true, force: true })
+      await rename(relocatedParent, selectedParent)
+      parentRelocated = false
+      await service.sweepExpired()
+      expect((await readdir(selectedParent))
+        .some((name) => name.startsWith('.sciforge-download-'))).toBe(false)
+    } finally {
+      if (parentRelocated) {
+        await rm(selectedParent, { recursive: true, force: true })
+        await rename(relocatedParent, selectedParent).catch(() => undefined)
+      }
+      await service.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not re-legitimize a Workspace parent swapped during destination registration', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
+    const workspace = join(root, 'workspace')
+    const selectedParent = join(workspace, 'selected')
+    const outside = join(root, 'outside')
+    const temporary = join(root, 'temporary')
+    await Promise.all([
+      mkdir(selectedParent, { recursive: true }),
+      mkdir(outside, { recursive: true }),
+      mkdir(temporary, { recursive: true })
+    ])
+    const entered = deferred()
+    const release = deferred()
+    const relocatedParent = join(outside, 'relocated-selected')
+    const service = new HostFileTransferService({
+      temporaryRoot: temporary,
+      isPrincipalCurrent: (principal) => samePrincipalSnapshot(principal, principalV1),
+      resolveDownloadParent: async (path) => {
+        entered.resolve()
+        await release.promise
+        return realpath(path)
+      }
+    })
+    const caller = grantCaller('agent:thread-1', principalV1)
+    const invocation = workspaceTransferInvocation(
+      caller,
+      workspace,
+      'download-destination'
+    )
+    const port = service.forOwner('domain.content-space', () => invocation)
+    let parentRelocated = false
+    try {
+      const destination = port.openWorkspaceDownloadDestination({
+        relativePath: 'selected/escaped.bin',
+        maxBytes: 1024
+      })
+      await entered.promise
+      await rename(selectedParent, relocatedParent)
+      parentRelocated = true
+      await symlink(
+        relocatedParent,
+        selectedParent,
+        process.platform === 'win32' ? 'junction' : 'dir'
+      )
+      release.resolve()
+
+      await expect(destination).rejects.toMatchObject({ code: 'destination_unavailable' })
+      await expect(readFile(join(relocatedParent, 'escaped.bin')))
+        .rejects.toMatchObject({ code: 'ENOENT' })
+
+      await rm(selectedParent, { recursive: true, force: true })
+      await rename(relocatedParent, selectedParent)
+      parentRelocated = false
+    } finally {
+      release.resolve()
+      if (parentRelocated) {
+        await rm(selectedParent, { recursive: true, force: true })
+        await rename(relocatedParent, selectedParent).catch(() => undefined)
+      }
+      await service.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('reports a missing delegated Agent resource lease as an authorization failure', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
+    const workspace = join(root, 'workspace')
+    const temporary = join(root, 'temporary')
+    await Promise.all([
+      mkdir(workspace, { recursive: true }),
+      mkdir(temporary, { recursive: true })
+    ])
+    await writeFile(join(workspace, 'README.md'), '# must remain unread\n')
+    const service = createService(temporary, () => principalV1)
+    const caller = grantCaller('agent:thread-1', principalV1)
+    const invocation: HostResourceGrantInvocation = Object.freeze({
+      caller: Object.freeze({
+        ...caller,
+        audience: 'agent',
+        workspaceId: workspace
+      }),
+      actionId: 'content-space.agent-upload-new',
+      invocationId: 'content-space-upload-without-resource-1',
+      effect: 'external-write',
+      approval: 'none',
+      approved: true,
+      scope: 'resource',
+      autonomousWrite: 'resource-authorized'
+    })
+    const port = service.forOwner('domain.content-space', () => invocation)
+    try {
+      await expect(port.openWorkspaceUploadSource({
+        relativePath: 'README.md',
+        maxBytes: 1024
+      })).rejects.toMatchObject({ code: 'principal_changed' })
+    } finally {
+      await service.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps delegated Agent transfer authority bound to its direction and Workspace', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
+    const workspace = join(root, 'workspace')
+    const otherWorkspace = join(root, 'other-workspace')
+    const temporary = join(root, 'temporary')
+    await Promise.all([
+      mkdir(workspace, { recursive: true }),
+      mkdir(otherWorkspace, { recursive: true }),
+      mkdir(temporary, { recursive: true })
+    ])
+    await writeFile(join(workspace, 'README.md'), '# bounded authority\n')
+    const service = createService(temporary, () => principalV1)
+    const caller = grantCaller('agent:thread-1', principalV1)
+    const invocationForDirection = (
+      direction: 'upload-source' | 'download-destination',
+      resourceWorkspace = workspace
+    ): HostResourceGrantInvocation => Object.freeze({
+      caller: Object.freeze({
+        ...caller,
+        audience: 'agent',
+        workspaceId: workspace
+      }),
+      actionId: direction === 'upload-source'
+        ? 'content-space.agent-upload-new'
+        : 'content-space.agent-download',
+      invocationId: `content-space-${direction}-bounded-1`,
+      effect: direction === 'upload-source' ? 'external-write' : 'workspace-write',
+      approval: 'none',
+      approved: true,
+      scope: 'resource',
+      ...(direction === 'upload-source'
+        ? { autonomousWrite: 'resource-authorized' }
+        : {}),
+      authorizedResource: Object.freeze({
+        resourceRef: 'res_content_space_entry',
+        resourceKind: 'content-space.entry',
+        workspaceId: resourceWorkspace,
+        semanticRevision: '1'
+      })
+    })
+    let invocation = invocationForDirection('upload-source')
+    const port = service.forOwner('domain.content-space', () => invocation)
+    try {
+      await expect(port.openWorkspaceDownloadDestination({
+        relativePath: 'README.downloaded.md',
+        maxBytes: 1024
+      })).rejects.toMatchObject({ code: 'principal_changed' })
+      invocation = invocationForDirection('download-destination')
+      await expect(port.openWorkspaceUploadSource({
+        relativePath: 'README.md',
+        maxBytes: 1024
+      })).rejects.toMatchObject({ code: 'principal_changed' })
+      invocation = invocationForDirection('upload-source', otherWorkspace)
+      await expect(port.openWorkspaceUploadSource({
+        relativePath: 'README.md',
+        maxBytes: 1024
+      })).rejects.toMatchObject({ code: 'principal_changed' })
+    } finally {
+      await service.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('mints one-shot Agent transfers only from the active Workspace relative path', async () => {
-    const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const workspace = join(root, 'workspace')
     const outside = join(root, 'outside')
     await Promise.all([
@@ -1006,13 +1773,36 @@ describe('Host-owned file transfers', () => {
     ])
     const service = createService(join(root, 'temporary'), () => principalV1)
     const caller = grantCaller('agent:thread-1', principalV1)
-    let invocation: HostResourceGrantInvocation | undefined = invocationFor(caller, {
-      audience: 'agent',
+    const authorizedResource = Object.freeze({
+      resourceRef: 'res_content_space_entry',
+      resourceKind: 'content-space.entry',
       workspaceId: workspace,
-      effect: 'external-write',
-      approval: 'confirmation',
-      approved: true
+      semanticRevision: '1'
     })
+    const transferInvocation = (
+      direction: 'upload-source' | 'download-destination'
+    ): HostResourceGrantInvocation => Object.freeze({
+      caller: Object.freeze({
+        ...caller,
+        audience: 'agent',
+        workspaceId: workspace
+      }),
+      actionId: direction === 'upload-source'
+        ? 'content-space.agent-upload-new'
+        : 'content-space.agent-download',
+      invocationId: direction === 'upload-source'
+        ? 'content-space-workspace-upload-1'
+        : 'content-space-workspace-download-1',
+      effect: direction === 'upload-source' ? 'external-write' : 'workspace-write',
+      approval: 'none',
+      approved: true,
+      scope: 'resource',
+      ...(direction === 'upload-source'
+        ? { autonomousWrite: 'resource-authorized' }
+        : {}),
+      authorizedResource
+    })
+    let invocation: HostResourceGrantInvocation | undefined = transferInvocation('upload-source')
     const port = service.forOwner('domain.content-space', () => invocation)
     try {
       await Promise.all([
@@ -1028,34 +1818,16 @@ describe('Host-owned file transfers', () => {
         .toBe('workspace bytes')
       await source.close()
 
-      const destination = await port.openWorkspaceDownloadDestination({
-        relativePath: 'download.txt',
-        maxBytes: 1024
-      })
-      await destination.write(new TextEncoder().encode('downloaded bytes'))
-      await destination.commit()
-      await expect(readFile(join(workspace, 'download.txt'), 'utf8'))
-        .resolves.toBe('downloaded bytes')
-
       await expect(port.openWorkspaceUploadSource({
         relativePath: '../outside/secret.txt',
         maxBytes: 1024
       })).rejects.toMatchObject({ code: 'invalid_request' })
-      await expect(port.openWorkspaceDownloadDestination({
-        relativePath: 'download.txt',
-        maxBytes: 1024
-      })).rejects.toMatchObject({ code: 'destination_conflict' })
 
       await symlink(outside, join(workspace, 'escaped'), 'dir')
       await expect(port.openWorkspaceUploadSource({
         relativePath: 'escaped/secret.txt',
         maxBytes: 1024
       })).rejects.toMatchObject({ code: 'source_unavailable' })
-      await expect(port.openWorkspaceDownloadDestination({
-        relativePath: 'escaped/file.txt',
-        maxBytes: 1024
-      })).rejects.toMatchObject({ code: 'destination_unavailable' })
-
       await expect(port.openWorkspaceUploadSource({
         relativePath: 'too-large.bin',
         maxBytes: 1024
@@ -1067,6 +1839,24 @@ describe('Host-owned file transfers', () => {
         maxBytes: 1024,
         signal: cancelled.signal
       })).rejects.toMatchObject({ code: 'cancelled' })
+
+      invocation = transferInvocation('download-destination')
+      const destination = await port.openWorkspaceDownloadDestination({
+        relativePath: 'download.txt',
+        maxBytes: 1024
+      })
+      await destination.write(new TextEncoder().encode('downloaded bytes'))
+      await destination.commit()
+      await expect(readFile(join(workspace, 'download.txt'), 'utf8'))
+        .resolves.toBe('downloaded bytes')
+      await expect(port.openWorkspaceDownloadDestination({
+        relativePath: 'download.txt',
+        maxBytes: 1024
+      })).rejects.toMatchObject({ code: 'destination_conflict' })
+      await expect(port.openWorkspaceDownloadDestination({
+        relativePath: 'escaped/file.txt',
+        maxBytes: 1024
+      })).rejects.toMatchObject({ code: 'destination_unavailable' })
       await expect(port.openWorkspaceDownloadDestination({
         relativePath: 'cancelled.txt',
         maxBytes: 1024,
@@ -1077,7 +1867,7 @@ describe('Host-owned file transfers', () => {
       await expect(port.openWorkspaceUploadSource({
         relativePath: 'upload.txt',
         maxBytes: 1024
-      })).rejects.toMatchObject({ code: 'invalid_request' })
+      })).rejects.toMatchObject({ code: 'principal_changed' })
     } finally {
       await service.dispose()
       await rm(root, { recursive: true, force: true })
@@ -1104,8 +1894,8 @@ function invocationFor(
   context: Readonly<{
     audience?: 'ui' | 'agent' | 'system'
     workspaceId?: string
-    effect?: string
-    approval?: string
+    effect?: HostResourceGrantInvocation['effect']
+    approval?: HostResourceGrantInvocation['approval']
     approved?: boolean
   }> = {}
 ): HostResourceGrantInvocation {
@@ -1117,6 +1907,45 @@ function invocationFor(
       ...(workspaceId ? { workspaceId } : {})
     }),
     ...invocation
+  })
+}
+
+function invocationProviderFor(
+  caller: HostResourceGrantCaller
+): () => HostResourceGrantInvocation {
+  const invocation = invocationFor(caller)
+  return () => invocation
+}
+
+function workspaceTransferInvocation(
+  caller: HostResourceGrantCaller,
+  workspaceId: string,
+  direction: 'upload-source' | 'download-destination',
+  semanticRevision = '1'
+): HostResourceGrantInvocation {
+  return Object.freeze({
+    caller: Object.freeze({
+      ...caller,
+      audience: 'agent' as const,
+      workspaceId
+    }),
+    actionId: direction === 'upload-source'
+      ? 'content-space.agent-upload-new'
+      : 'content-space.agent-download',
+    invocationId: `content-space-${direction}-${semanticRevision}`,
+    effect: direction === 'upload-source' ? 'external-write' : 'workspace-write',
+    approval: 'none',
+    approved: true,
+    scope: 'resource',
+    ...(direction === 'upload-source'
+      ? { autonomousWrite: 'resource-authorized' as const }
+      : {}),
+    authorizedResource: Object.freeze({
+      resourceRef: 'res_content_space_entry',
+      resourceKind: 'content-space.entry',
+      workspaceId,
+      semanticRevision
+    })
   })
 }
 
@@ -1136,6 +1965,13 @@ function requireDownloadHandle(
 
 type TestFileHandlePrototype = {
   close(this: TestFileHandlePrototype): Promise<void>
+  read(
+    this: TestFileHandlePrototype,
+    buffer: Uint8Array,
+    offset: number,
+    length: number,
+    position: number
+  ): Promise<Readonly<{ bytesRead: number; buffer: Uint8Array }>>
   write(
     this: TestFileHandlePrototype,
     buffer: Uint8Array,
@@ -1179,13 +2015,14 @@ function deferred(): Readonly<{ promise: Promise<void>; resolve: () => void }> {
 }
 
 async function expectBlockedCommitNotPublished(
-  change: 'cancelled' | 'principal_changed'
+  change: 'cancelled' | 'principal_changed' | 'invocation_replaced'
 ): Promise<void> {
-  const root = await mkdtemp('/private/tmp/sciforge-file-transfer-')
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
   let currentPrincipal: PrincipalSnapshot | undefined = principalV1
   const service = createService(root, () => currentPrincipal)
   const caller = grantCaller('window:7', principalV1)
-  const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+  let invocation = invocationFor(caller)
+  const port = service.forOwner('domain.content-space', () => invocation)
   const controller = new AbortController()
   const entered = deferred()
   const release = deferred()
@@ -1213,12 +2050,16 @@ async function expectBlockedCommitNotPublished(
     await entered.promise
     if (change === 'cancelled') {
       controller.abort()
-    } else {
+    } else if (change === 'principal_changed') {
       currentPrincipal = principalV2
+    } else {
+      invocation = invocationFor(caller)
     }
     release.resolve()
 
-    await expect(commit).rejects.toMatchObject({ code: change })
+    await expect(commit).rejects.toMatchObject({
+      code: change === 'invocation_replaced' ? 'grant_unavailable' : change
+    })
     await destination.abort()
     await expect(readFile(destinationPath)).rejects.toMatchObject({ code: 'ENOENT' })
     expect((await readdir(root)).some((name) => name.startsWith('.sciforge-download-')))

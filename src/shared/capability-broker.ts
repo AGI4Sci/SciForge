@@ -66,6 +66,14 @@ export const capabilityDescriptorSchema = z.object({
   producedResourceKinds: z.array(z.string().trim().min(1).max(128)).max(64).optional(),
   effect: capabilityEffectSchema,
   approval: capabilityApprovalModeSchema,
+  /**
+   * Allows an Agent external write to rely on an already-issued Broker
+   * resource as its complete authority, without manufacturing a Human
+   * confirmation grant. This policy is deliberately unavailable to global,
+   * workspace, read, or compute capabilities; destructive operations remain
+   * bounded by the exact authorized resource.
+   */
+  autonomousWrite: z.literal('resource-authorized').optional(),
   concurrency: capabilityConcurrencySchema,
   /** Trusted declaration that this UI action may replace the Host Principal. */
   principalTransition: z.literal('host-authority').optional(),
@@ -100,6 +108,36 @@ export const capabilityDescriptorSchema = z.object({
   }
   if (descriptor.effect === 'read' && descriptor.concurrency.idempotency !== 'none') {
     context.addIssue({ code: 'custom', path: ['concurrency', 'idempotency'], message: 'Read capabilities do not use invocation idempotency.' })
+  }
+  if (descriptor.autonomousWrite === 'resource-authorized') {
+    if (descriptor.scope !== 'resource') {
+      context.addIssue({
+        code: 'custom',
+        path: ['autonomousWrite'],
+        message: 'Resource-authorized autonomous writes must be resource-scoped.'
+      })
+    }
+    if (descriptor.effect !== 'external-write' && descriptor.effect !== 'destructive') {
+      context.addIssue({
+        code: 'custom',
+        path: ['autonomousWrite'],
+        message: 'Resource authority can authorize only external or destructive writes.'
+      })
+    }
+    if (descriptor.approval !== 'none') {
+      context.addIssue({
+        code: 'custom',
+        path: ['approval'],
+        message: 'Resource-authorized autonomous writes use no separate approval.'
+      })
+    }
+    if (descriptor.audiences.length !== 1 || descriptor.audiences[0] !== 'agent') {
+      context.addIssue({
+        code: 'custom',
+        path: ['audiences'],
+        message: 'Resource-authorized autonomous writes are Agent-only.'
+      })
+    }
   }
   if (descriptor.effect !== 'read' && descriptor.concurrency.idempotency !== 'required') {
     context.addIssue({ code: 'custom', path: ['concurrency', 'idempotency'], message: 'Non-read capabilities must require idempotency.' })
@@ -141,6 +179,7 @@ export const capabilityDescriptorSchema = z.object({
     descriptor.audiences.includes('agent')
     && (descriptor.effect === 'external-write' || descriptor.effect === 'destructive')
     && descriptor.approval === 'none'
+    && descriptor.autonomousWrite !== 'resource-authorized'
   ) {
     context.addIssue({
       code: 'custom',

@@ -774,10 +774,10 @@ export function ContentSpacePanel({
   const selectedArtifact = selectedFile ? exactArtifactFor(artifact, selectedFile) : undefined
   const displayedCapabilities = selectedFile ? fileCapabilities : navigationCapabilities
   const readyCapabilityCount = displayedCapabilities.filter((state) =>
-    state.readiness !== 'blocked_by_contract'
+    state.readiness === 'production_ready'
   ).length
-  const developmentCapabilityCount = displayedCapabilities.filter((state) =>
-    state.readiness === 'poc_only'
+  const verificationRequiredCount = displayedCapabilities.filter((state) =>
+    state.reasonCode === 'verification_profile_required'
   ).length
 
   return (
@@ -837,14 +837,14 @@ export function ContentSpacePanel({
           {providerInstanceRef && displayedCapabilities.length > 0 && (
             <details className="content-space-readiness">
               <summary>
-                <span className={developmentCapabilityCount > 0
+                <span className={verificationRequiredCount > 0
                   ? 'content-space-status-dot is-development'
                   : 'content-space-status-dot is-ready'} aria-hidden />
                 <span className="content-space-readiness-summary">
                   Provider details · {readyCapabilityCount} of {displayedCapabilities.length} operations available
                 </span>
-                {developmentCapabilityCount > 0 && (
-                  <span className="content-space-readiness-profile">Development</span>
+                {verificationRequiredCount > 0 && (
+                  <span className="content-space-readiness-profile">Verification required</span>
                 )}
                 <ChevronDown className="content-space-readiness-chevron" size={14}
                   strokeWidth={1.8} aria-hidden />
@@ -1116,7 +1116,9 @@ function isContentSpaceInitialResource(
 
 function readinessLabel(state: ContentSpaceCapabilityState): string {
   if (state.readiness === 'production_ready') return 'ready'
-  if (state.readiness === 'poc_only') return 'ready (development)'
+  if (state.reasonCode === 'verification_profile_required') {
+    return 'unavailable (verification required)'
+  }
   return 'unavailable'
 }
 
@@ -1137,7 +1139,7 @@ function isOperationReady(
   operation: ContentSpaceOperation
 ): boolean {
   return capabilities.some((state) =>
-    state.operation === operation && state.readiness !== 'blocked_by_contract'
+    state.operation === operation && state.readiness === 'production_ready'
   )
 }
 

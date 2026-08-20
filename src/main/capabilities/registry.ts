@@ -178,6 +178,7 @@ export function defineCapability<
     ...(options.producedResourceKinds ? { producedResourceKinds: options.producedResourceKinds } : {}),
     effect: options.effect,
     approval: options.approval,
+    ...(options.autonomousWrite ? { autonomousWrite: options.autonomousWrite } : {}),
     concurrency: options.concurrency,
     ...(options.principalTransition ? { principalTransition: options.principalTransition } : {}),
     inputSchema: schemaToWireValue(options.inputSchema, `${options.id} input`),

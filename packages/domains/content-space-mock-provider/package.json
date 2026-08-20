@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-content-space-mock-provider",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -20,7 +20,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@sciforge/domain-content-space": "1.0.0",
+    "@sciforge/domain-content-space": "1.1.0",
     "@sciforge/domain-sdk": "^0.2.1",
     "zod": "^4.4.3"
   },

@@ -181,6 +181,46 @@ describe('Content Space public contract', () => {
   it('accepts only the exact cohesive Provider contract', () => {
     const provider = providerFixture()
     expect(contract.defineContentSpaceProvider(provider)).toBe(provider)
+    const providerWithFeatures = {
+      ...provider,
+      features: {
+        nativeDocuments: {
+          describeOperations: async () => [],
+          execute: async () => ({})
+        },
+        extendedOperations: {
+          describeOperations: async () => [],
+          execute: async () => ({})
+        },
+        administration: {
+          describeOperations: async () => [],
+          bind: async () => ({}) as never
+        }
+      }
+    } as unknown as contract.ContentSpaceProvider
+    expect(contract.defineContentSpaceProvider(providerWithFeatures)).toBe(providerWithFeatures)
+    expect(() => contract.defineContentSpaceProvider({
+      ...provider,
+      executeNativeDocument: async () => ({})
+    } as unknown as contract.ContentSpaceProvider)).toThrow()
+    expect(() => contract.defineContentSpaceProvider({
+      ...provider,
+      features: {
+        nativeDocuments: {
+          describeOperations: async () => [],
+          execute: async () => ({}),
+          rawClient: {}
+        }
+      }
+    } as unknown as contract.ContentSpaceProvider)).toThrow()
+    expect(() => contract.defineContentSpaceProvider({
+      ...provider,
+      features: {
+        administration: {
+          bind: async () => ({}) as never
+        }
+      }
+    } as unknown as contract.ContentSpaceProvider)).toThrow()
     expect(() => contract.defineContentSpaceProvider({
       ...provider,
       rawClient: {}

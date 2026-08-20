@@ -244,6 +244,136 @@ describe('CapabilityRegistry', () => {
     })).toThrow(/Principal transitions/)
   })
 
+  it('allows approval-free Agent writes only under explicit resource authority', async () => {
+    const write = defineCapability({
+      id: 'external.resource-authorized-write',
+      version: '1',
+      title: 'Write an authorized external resource',
+      description: 'Exercises a bounded resource-authorized Agent write.',
+      audiences: ['agent'],
+      scope: 'resource',
+      resourceKinds: ['document'],
+      effect: 'external-write',
+      approval: 'none',
+      autonomousWrite: 'resource-authorized',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ written: z.literal(true) }).strict(),
+      handler: async () => ({ output: { written: true as const }, changed: false })
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([write]))
+    const resource = issueDocument(broker)
+
+    await expect(broker.invoke(agent, {
+      actionId: write.descriptor.id,
+      invocationId: 'resource-authorized-write-1',
+      resource,
+      input: {}
+    })).resolves.toMatchObject({
+      output: { written: true },
+      changed: false,
+      beforeRevision: '1',
+      afterRevision: '1'
+    })
+
+    const remove = defineCapability({
+      id: 'external.resource-authorized-remove',
+      version: '1',
+      title: 'Remove from an authorized external resource',
+      description: 'Exercises a bounded resource-authorized destructive Agent write.',
+      audiences: ['agent'],
+      scope: 'resource',
+      resourceKinds: ['document'],
+      effect: 'destructive',
+      approval: 'none',
+      autonomousWrite: 'resource-authorized',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ removed: z.literal(true) }).strict(),
+      handler: async () => ({ output: { removed: true as const }, changed: false })
+    })
+    broker.registry.register(remove)
+    await expect(broker.invoke(agent, {
+      actionId: remove.descriptor.id,
+      invocationId: 'resource-authorized-remove-1',
+      resource,
+      input: {}
+    })).resolves.toMatchObject({ output: { removed: true }, changed: false })
+
+    const invalidBase = {
+      id: 'external.invalid-autonomous-write',
+      version: '1',
+      title: 'Invalid autonomous write',
+      description: 'Must not broaden autonomous writes beyond one Broker resource.',
+      audiences: ['agent'] as CapabilityAudience[],
+      effect: 'external-write' as const,
+      approval: 'none' as const,
+      autonomousWrite: 'resource-authorized' as const,
+      concurrency: { revision: 'none' as const, idempotency: 'required' as const },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ written: z.literal(true) }).strict(),
+      handler: async () => ({ output: { written: true as const } })
+    }
+    expect(() => defineCapability({ ...invalidBase, scope: 'global' }))
+      .toThrow(/resource-scoped/iu)
+    expect(() => defineCapability({
+      ...invalidBase,
+      scope: 'global',
+      effect: 'destructive'
+    })).toThrow(/resource-scoped/iu)
+  })
+
+  it('projects only the exact Broker-resolved input resource into the active Host lease', async () => {
+    let broker!: CapabilityBroker
+    let activeLease: ReturnType<CapabilityBroker['currentInvocation']>
+    const write = defineCapability({
+      id: 'external.host-resource-lease',
+      version: '1',
+      title: 'Project the authorized resource lease',
+      description: 'Exposes the Host-private active lease only during exact resource dispatch.',
+      audiences: ['agent'],
+      scope: 'resource',
+      resourceKinds: ['document'],
+      effect: 'external-write',
+      approval: 'none',
+      autonomousWrite: 'resource-authorized',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ written: z.literal(true) }).strict(),
+      handler: async () => {
+        activeLease = broker.currentInvocation()
+        return { output: { written: true as const }, changed: false }
+      }
+    })
+    broker = new CapabilityBroker(new CapabilityRegistry([write]))
+    const resource = issueDocument(broker, agent, { semanticRevision: 'lease-revision-1' })
+
+    await broker.invoke(agent, {
+      actionId: write.descriptor.id,
+      invocationId: 'host-resource-lease-1',
+      resource,
+      input: {}
+    })
+
+    expect(activeLease).toMatchObject({
+      actionId: write.descriptor.id,
+      invocationId: 'host-resource-lease-1',
+      effect: 'external-write',
+      approval: 'none',
+      approved: true,
+      scope: 'resource',
+      autonomousWrite: 'resource-authorized',
+      authorizedResource: {
+        resourceRef: expect.stringMatching(/^res_/u),
+        resourceKind: 'document',
+        workspaceId: agent.workspaceId,
+        semanticRevision: 'lease-revision-1'
+      }
+    })
+    expect(Object.isFrozen(activeLease?.authorizedResource)).toBe(true)
+    expect(broker.currentInvocation()).toBeUndefined()
+  })
+
   it('enforces each Host Principal transition descriptor constraint independently', () => {
     const base = {
       id: 'identity.transition-constraint',

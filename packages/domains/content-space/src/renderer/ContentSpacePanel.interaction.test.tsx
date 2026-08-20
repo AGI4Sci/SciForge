@@ -256,11 +256,12 @@ describe('ContentSpacePanel', () => {
     const readiness = mounted.container.querySelector(
       '[aria-label="Content Space Provider readiness"]'
     )
-    expect(readiness?.textContent).toContain('list-containers: ready (development)')
+    expect(readiness?.textContent)
+      .toContain('list-containers: unavailable (verification required)')
     expect(readiness?.closest('details')?.open).toBe(false)
     expect(readiness?.closest('details')?.querySelector('summary')?.textContent)
-      .toContain('2 of 2 operations available')
-    expect(buttonContainingText(mounted.container, 'Development library').disabled).toBe(false)
+      .toContain('0 of 2 operations available')
+    expect(buttonContainingText(mounted.container, 'Development library').disabled).toBe(true)
   })
 
   it('discovers and gates the Provider before observing an initial resource', async () => {

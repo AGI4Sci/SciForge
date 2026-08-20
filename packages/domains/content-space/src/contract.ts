@@ -25,6 +25,8 @@ import {
   providerKindSchema
 } from '@sciforge/domain-sdk/provider-composition'
 
+import type { ContentSpaceProviderFeatures } from './provider-features.js'
+
 export const CONTENT_SPACE_DOMAIN_MODULE_ID = 'sciforge.content-space' as const
 export const CONTENT_SPACE_PROVIDER_CONTRACT_VERSION = '1.0.0' as const
 
@@ -34,6 +36,10 @@ export const ARTIFACT_REFERENCE_KIND = 'content-space.artifact-reference' as con
 export const CONTENT_CONTAINER_RESOURCE_KIND = 'content-space.container' as const
 export const CONTENT_FILE_RESOURCE_KIND = 'content-space.file' as const
 export const ARTIFACT_RESOURCE_KIND = 'content-space.artifact' as const
+export const CONTENT_SPACE_PROVIDER_ADMINISTRATION_RESOURCE_KIND =
+  'content-space.provider-administration' as const
+export const CONTENT_SPACE_FEATURE_SELECTION_RESOURCE_KIND =
+  'content-space.feature-selection' as const
 export const CONTENT_SPACE_PORTABLE_AUTHORITY_RESOLVER_ID =
   'content-space.provider-instance-authority' as const
 export const CONTENT_SPACE_PORTABLE_EXPORT_CONSUMER_MODULE_IDS = Object.freeze([
@@ -55,6 +61,27 @@ export const CONTENT_SPACE_CAPABILITY_IDS = Object.freeze({
   agentCreateFolder: 'content-space.agent-create-folder',
   agentUploadNew: 'content-space.agent-upload-new',
   agentDownload: 'content-space.agent-download',
+  agentNativeDocumentRead: 'content-space.agent-native-document-read',
+  agentNativeDocumentWorkspaceWrite: 'content-space.agent-native-document-workspace-write',
+  agentNativeDocumentWrite: 'content-space.agent-native-document-write',
+  agentNativeDocumentDestructive: 'content-space.agent-native-document-destructive',
+  agentExtendedRead: 'content-space.agent-extended-read',
+  agentExtendedWorkspaceWrite: 'content-space.agent-extended-workspace-write',
+  agentExtendedWrite: 'content-space.agent-extended-write',
+  agentExtendedDestructive: 'content-space.agent-extended-destructive',
+  authorizeFeatureSelection: 'content-space.authorize-feature-selection',
+  authorizeProviderAdministration: 'content-space.authorize-provider-administration',
+  agentAdminListSpaces: 'content-space.agent-admin-list-spaces',
+  agentAdminCreateSpace: 'content-space.agent-admin-create-space',
+  agentAdminObserveSpace: 'content-space.agent-admin-observe-space',
+  agentAdminUpdateSpace: 'content-space.agent-admin-update-space',
+  agentAdminPinSpace: 'content-space.agent-admin-pin-space',
+  agentAdminUnpinSpace: 'content-space.agent-admin-unpin-space',
+  agentAdminOpenRoot: 'content-space.agent-admin-open-root',
+  agentAdminListMembers: 'content-space.agent-admin-list-members',
+  agentAdminAddMember: 'content-space.agent-admin-add-member',
+  agentAdminRemoveMember: 'content-space.agent-admin-remove-member',
+  agentProvisionProject: 'content-space.agent-provision-project',
   resolvePortalTarget: 'content-space.resolve-portal-target',
   openPortalTarget: 'content-space.open-portal-target',
   observeImmutableVersion: 'content-space.observe-immutable-version'
@@ -68,6 +95,7 @@ export const CONTENT_SPACE_LIMITS = Object.freeze({
   maxFileBytes: 1_073_741_824,
   maxUploadBytes: 16 * 1024 * 1024,
   operationDeadlineMs: 30_000,
+  featureOperationDeadlineMs: 240_000,
   maxPortalLifetimeMs: 5 * 60_000
 })
 
@@ -150,6 +178,7 @@ export const contentSpaceCapabilityStateListSchema = z.array(
 }).readonly()
 
 export type ContentSpaceReadiness = z.infer<typeof contentSpaceReadinessSchema>
+export type ContentSpaceReadinessReason = z.infer<typeof contentSpaceReadinessReasonSchema>
 export type ContentSpaceOperation = z.infer<typeof contentSpaceOperationSchema>
 export type ContentSpaceCapabilityState = z.infer<typeof contentSpaceCapabilityStateSchema>
 
@@ -552,6 +581,12 @@ export type ContentSpaceProviderOperationContext = Readonly<{
   invocationId?: string
   deadlineAt: string
   signal?: AbortSignal
+  /**
+   * Non-serializable Host lease guard captured for this exact invocation.
+   * Providers must pass it through their canonical Connector boundary before
+   * every remote dispatch; callers and Provider packages cannot replace it.
+   */
+  assertPrincipalCurrent(): void | Promise<void>
 }>
 export type ContentSpaceProviderWriteContext = ContentSpaceProviderOperationContext & Readonly<{
   invocationId: string
@@ -560,6 +595,8 @@ export type ContentSpaceProviderWriteContext = ContentSpaceProviderOperationCont
 export type ContentSpaceUploadSource = Readonly<{
   name: string
   size: number
+  /** Host-attested SHA-256 when the source crosses the canonical Host transfer boundary. */
+  sha256?: string
   read(input: Readonly<{ offset: number; length: number }>): Promise<Uint8Array>
 }>
 /** Provider may stream bytes only. The service is the sole commit/abort owner. */
@@ -573,6 +610,7 @@ export type ContentSpacePortalTarget = Readonly<{
 
 export type ContentSpaceProvider = Readonly<{
   contractVersion: typeof CONTENT_SPACE_PROVIDER_CONTRACT_VERSION
+  features?: ContentSpaceProviderFeatures
   describeCapabilities(
     context: ContentSpaceProviderOperationContext
   ): Promise<readonly ContentSpaceCapabilityState[]>
@@ -620,7 +658,7 @@ export type ContentSpaceProviderHostPorts = Readonly<{
 }>
 
 export function defineContentSpaceProvider(input: ContentSpaceProvider): ContentSpaceProvider {
-  const expected = [
+  const required = [
     'contractVersion',
     'createFolder',
     'describeCapabilities',
@@ -632,10 +670,15 @@ export function defineContentSpaceProvider(input: ContentSpaceProvider): Content
     'resolvePortalTarget',
     'uploadNewFile'
   ].sort()
-  if (!isRecord(input) || Object.keys(input).sort().join(',') !== expected.join(',') ||
+  const allowed = [...required, 'features'].sort()
+  const keys = isRecord(input) ? Object.keys(input).sort() : []
+  if (!isRecord(input) ||
+    keys.some((key) => !allowed.includes(key)) ||
+    required.some((key) => !keys.includes(key)) ||
     input.contractVersion !== CONTENT_SPACE_PROVIDER_CONTRACT_VERSION ||
-    expected.filter((key) => key !== 'contractVersion')
-      .some((key) => typeof input[key as keyof ContentSpaceProvider] !== 'function')) {
+    required.filter((key) => key !== 'contractVersion')
+      .some((key) => typeof input[key as keyof ContentSpaceProvider] !== 'function') ||
+    (input.features !== undefined && !isContentSpaceProviderFeatures(input.features))) {
     throw new TypeError('ContentSpaceProvider contract is invalid.')
   }
   return Object.freeze(input)
@@ -761,4 +804,21 @@ function parseOwnedEnvelope<Identity>(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isContentSpaceProviderFeatures(value: unknown): value is ContentSpaceProviderFeatures {
+  if (!isRecord(value) || Object.keys(value).some((key) => ![
+    'administration',
+    'extendedOperations',
+    'nativeDocuments'
+  ].includes(key))) return false
+  return optionalExactFunctionPorts(value.nativeDocuments, ['describeOperations', 'execute']) &&
+    optionalExactFunctionPorts(value.extendedOperations, ['describeOperations', 'execute']) &&
+    optionalExactFunctionPorts(value.administration, ['bind', 'describeOperations'])
+}
+
+function optionalExactFunctionPorts(value: unknown, methods: readonly string[]): boolean {
+  return value === undefined || (isRecord(value) &&
+    Object.keys(value).sort().join(',') === [...methods].sort().join(',') &&
+    methods.every((method) => typeof value[method] === 'function'))
 }
