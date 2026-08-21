@@ -49,6 +49,7 @@ type ProjectView = CollaborationStatusSnapshot['projects'][number]
 
 export type CollaborationPanelSession = Readonly<{
   id: string
+  title?: string
   runtimeId?: string
   workspaceRoot?: string
 }>
@@ -448,6 +449,9 @@ export function CollaborationPanel({
       reconcileProjectionLocatorSelection(current, projectionLocators)
     )
   }, [projectionLocators])
+  useEffect(() => {
+    setSessionDisplayName(session.title?.trim() || '')
+  }, [session.id, session.title])
   const selectedProjectionLocator = resolveProjectionLocatorSelection(
     selectedProjectionLocatorKey,
     projectionLocators
@@ -940,6 +944,11 @@ export function CurrentSessionBindingSummary({
       </div>
       <div className="mt-1 text-ds-muted">
         {projection?.remoteDisplay || t('collaborationChooseTopicToBind')}
+      </div>
+      <div className="mt-1 text-ds-muted">
+        {t('collaborationDesktopSession')}: <span className="font-medium text-ds-ink">
+          {session.title?.trim() || t('collaborationUnnamedSession')}
+        </span>
       </div>
       <details className="mt-1 text-ds-faint">
         <summary className="cursor-pointer">{t('collaborationTechnicalDetails')}</summary>
@@ -1490,7 +1499,7 @@ export function ProjectionCard({
         <div className="min-w-0 flex-1">
           <div className="truncate font-semibold">{projection.displayName}</div>
           {current ? <div className="mt-0.5 text-[10px] font-medium text-ds-muted">
-            {t('collaborationCurrentSession')}
+            {t('collaborationCurrentSession')}: {currentSession.title?.trim() || projection.displayName}
           </div> : null}
         </div>
         <StatusPill status={projection.status} />
@@ -1635,7 +1644,7 @@ export function ProjectionCard({
         <InlineConfirmationEditor
           message={t('collaborationRelinkCurrentConfirm', {
             topic: projection.remoteDisplay || projection.displayName,
-            session: currentSession.id
+            session: currentSession.title?.trim() || currentSession.id
           })}
           busy={busy || !currentSession.runtimeId}
           onConfirm={() => {

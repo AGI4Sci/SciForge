@@ -336,7 +336,7 @@ test('makes the current Session binding and occupied Topic visible without expos
   const closed = collaborationProjectionViewSchema.parse({
     ...current, projectionId: 'projection-closed', threadId: 'thread-old', status: 'closed'
   })
-  const session = { id: 'thread-current', runtimeId: 'codex' }
+  const session = { id: 'thread-current', title: '左侧项目 A', runtimeId: 'codex' }
 
   assert.equal(projectionMatchesSession(current, session), true)
   assert.equal(projectionMatchesLocator(current, locator), true)
@@ -349,6 +349,7 @@ test('makes the current Session binding and occupied Topic visible without expos
   )
   assert.match(summary, /data-current-session-binding="bound"/u)
   assert.match(summary, /私人 Channel \/ 项目 A/u)
+  assert.match(summary, /左侧项目 A/u)
   assert.match(summary, /<details/u)
 
   const selector = renderToStaticMarkup(
