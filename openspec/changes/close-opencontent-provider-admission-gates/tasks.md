@@ -42,7 +42,7 @@
   - Native packaged outcomes, not live success: `native-document:create` returned `outcome_unknown` with one unique new `.mdoc` attributable to the attempt; `native-document:read` and `native-document:probe` returned `provider_contract_error`; `native-document:plan` was not executed.
   - Team packaged outcome, not end-to-end Agent success: one `createSpace` invocation reached a remote commit before Agent result delivery failed as `observation_failed` because the returned dynamic root was implicitly observed. No retry was issued. Later canonical read-only panel reconciliation found exactly one human-visible shared root matching the private saved label and confirmed the commit. The delivery defect is fixed, but a post-fix packaged Agent attempt did not dispatch the exact capability.
   - Readiness snapshot: `production_ready` remains zero; exact live evidence does not promote readiness or any sibling operation.
-- [ ] 6.5 Commit the scoped change and push only to the fork branch; do not update or push upstream.
+- [x] 6.5 Commit the scoped change and push only to the fork branch; do not update or push upstream.
 - [x] 6.6 Prove a clean checkout with no OpenContent overlay builds and starts in both source and packaged modes, registers no native supplier feature, and contains no OpenContent packaged resources.
 - [ ] 6.7 Confirm the supplier CAS/version contract and UPDATE-versus-UPGRADE semantics before implementing or admitting same-file mutation.
 - [x] 6.8 While that contract is absent, attempt native `edit` only as a packaged pre-dispatch fail-closed acceptance with zero remote mutation. The packaged request failed closed as `blocked_by_contract` before adapter invocation or supplier process launch, with zero remote mutation.
