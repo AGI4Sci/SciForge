@@ -4,7 +4,11 @@ import type {
 } from '@sciforge/domain-sdk/host'
 import type { AgentRuntimeHost } from './runtime/agent-runtime/host'
 import type { AgentRuntimeEventSubscribeInput } from './runtime/agent-runtime/adapter'
-import type { AgentRuntimeId, AgentRuntimeTurn } from '../shared/agent-runtime-contract'
+import {
+  isAgentRuntimeTerminalTurnState,
+  type AgentRuntimeId,
+  type AgentRuntimeTurn
+} from '../shared/agent-runtime-contract'
 
 export function projectDomainAgentTurnMessages(
   turn: AgentRuntimeTurn
@@ -52,6 +56,12 @@ export async function* subscribeDomainAgentTranscriptMessages(
   }>
 ): AsyncIterable<DomainAgentTranscriptMessageEvent> {
   const seenItemIds = new Set<string>()
+  const bufferedAssistantByTurn = new Map<string, Readonly<{
+    itemId: string
+    text: string
+    sequence: number
+    occurredAt?: string
+  }>>()
   const runtimeId = requireSupportedRuntimeId(input.runtimeId)
   const sourceInput: AgentRuntimeEventSubscribeInput = {
     runtimeId,
@@ -78,11 +88,42 @@ export async function* subscribeDomainAgentTranscriptMessages(
       })
       continue
     }
+    if (event.kind === 'item_snapshot' && event.item.kind === 'assistant_message') {
+      const turnId = event.turnId?.trim() || event.item.turnId?.trim()
+      const text = event.item.text?.trim() || event.item.summary?.trim()
+      if (!turnId || !text || seenItemIds.has(event.item.id)) continue
+      const buffered = bufferedAssistantByTurn.get(turnId)
+      if (buffered && buffered.itemId !== event.item.id) {
+        seenItemIds.add(buffered.itemId)
+        yield Object.freeze({
+          runtimeId: input.runtimeId,
+          threadId: input.threadId,
+          turnId,
+          sequence: buffered.sequence,
+          itemId: buffered.itemId,
+          kind: 'assistant-progress',
+          text: buffered.text,
+          ...(buffered.occurredAt ? { occurredAt: buffered.occurredAt } : {})
+        })
+      }
+      bufferedAssistantByTurn.set(turnId, Object.freeze({
+        itemId: event.item.id,
+        text,
+        sequence: sequence!,
+        ...(event.item.createdAt ? { occurredAt: event.item.createdAt } : {})
+      }))
+      continue
+    }
     if (
       event.kind !== 'turn_lifecycle' ||
-      event.state !== 'completed' ||
       !event.turnId
     ) continue
+    if (event.state !== 'completed' && event.state !== 'success') {
+      if (isAgentRuntimeTerminalTurnState(event.state)) {
+        bufferedAssistantByTurn.delete(event.turnId)
+      }
+      continue
+    }
     const detail = await host.readThreadSnapshot({
       runtimeId,
       threadId: input.threadId
@@ -91,6 +132,8 @@ export async function* subscribeDomainAgentTranscriptMessages(
     const assistantMessages = turn
       ? projectDomainAgentTurnMessages(turn).filter((message) => message.kind !== 'user-message')
       : []
+    const buffered = bufferedAssistantByTurn.get(event.turnId)
+    bufferedAssistantByTurn.delete(event.turnId)
     for (const message of assistantMessages) {
       if (seenItemIds.has(message.itemId)) continue
       seenItemIds.add(message.itemId)
@@ -98,7 +141,7 @@ export async function* subscribeDomainAgentTranscriptMessages(
         ...message,
         runtimeId: input.runtimeId,
         threadId: input.threadId,
-        sequence: sequence!
+        sequence: buffered?.itemId === message.itemId ? buffered.sequence : sequence!
       })
     }
   }

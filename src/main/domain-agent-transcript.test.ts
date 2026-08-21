@@ -34,11 +34,19 @@ describe('domain agent transcript projection', () => {
     })).toEqual([])
   })
 
-  it('streams user-visible progress and final output without deltas or tools', async () => {
+  it('streams completed visible progress before turn completion and keeps the last message final', async () => {
     const events: AgentRuntimeEvent[] = [
       { kind: 'user_message', runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1', itemId: 'user-1', text: 'hello', seq: 4 },
       { kind: 'assistant_delta', runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1', itemId: 'assistant-1', text: 'par', seq: 5 },
-      { kind: 'turn_lifecycle', runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1', state: 'completed', seq: 6 }
+      {
+        kind: 'item_snapshot', runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1', seq: 6,
+        item: { id: 'assistant-progress', turnId: 'turn-1', kind: 'assistant_message', text: 'working' }
+      },
+      {
+        kind: 'item_snapshot', runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1', seq: 7,
+        item: { id: 'assistant-1', turnId: 'turn-1', kind: 'assistant_message', text: 'answer' }
+      },
+      { kind: 'turn_lifecycle', runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1', state: 'completed', seq: 8 }
     ]
     const host = {
       async *subscribeEvents() {
@@ -51,7 +59,7 @@ describe('domain agent transcript projection', () => {
           title: 'Thread',
           updatedAt: '2026-08-15T00:00:00.000Z',
           status: 'completed',
-          latestSeq: 6,
+          latestSeq: 8,
           turns: [{
             id: 'turn-1',
             threadId: 'thread-1',
@@ -81,9 +89,50 @@ describe('domain agent transcript projection', () => {
         itemId: 'assistant-progress', kind: 'assistant-progress', text: 'working'
       },
       {
-        runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1', sequence: 6,
+        runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1', sequence: 7,
         itemId: 'assistant-1', kind: 'assistant-final', text: 'answer'
       }
     ])
+  })
+
+  it('does not publish a sole assistant snapshot before the turn establishes it as final', async () => {
+    let releaseCompletion!: () => void
+    const completion = new Promise<void>((resolve) => { releaseCompletion = resolve })
+    const host = {
+      async *subscribeEvents() {
+        yield {
+          kind: 'item_snapshot', runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1', seq: 1,
+          item: { id: 'assistant-1', turnId: 'turn-1', kind: 'assistant_message', text: 'answer' }
+        } as const
+        await completion
+        yield {
+          kind: 'turn_lifecycle', runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1',
+          state: 'completed', seq: 2
+        } as const
+      },
+      async readThreadSnapshot() {
+        return {
+          id: 'thread-1', runtimeId: 'codex' as const, title: 'Thread',
+          updatedAt: '2026-08-15T00:00:00.000Z', status: 'completed', latestSeq: 2,
+          turns: [{
+            id: 'turn-1', threadId: 'thread-1', status: 'completed' as const,
+            items: [{ id: 'assistant-1', kind: 'assistant_message' as const, text: 'answer' }]
+          }]
+        }
+      }
+    }
+    const iterator = subscribeDomainAgentTranscriptMessages(host, {
+      runtimeId: 'codex', threadId: 'thread-1'
+    })[Symbol.asyncIterator]()
+    const pending = iterator.next()
+    await Promise.resolve()
+    let settled = false
+    void pending.then(() => { settled = true })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(settled).toBe(false)
+    releaseCompletion()
+    await expect(pending).resolves.toMatchObject({
+      value: { itemId: 'assistant-1', kind: 'assistant-final', sequence: 1 }
+    })
   })
 })
