@@ -18731,6 +18731,48 @@ Explicitly renames, pauses, resumes, closes, or relinks a stable projection.
           "expectedRevision"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "restore",
+            "type": "string"
+          },
+          "expectedRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "projectionId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "runtimeId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "threadId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "workspaceRoot": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "projectionId",
+          "runtimeId",
+          "threadId",
+          "expectedRevision"
+        ],
+        "type": "object"
       }
     ]
   },
