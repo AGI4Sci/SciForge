@@ -295,7 +295,7 @@ export const providerLocatorListRequestSchema = z.object({
   protocolVersion: protocolVersionSchema,
   type: z.literal('provider.locator.list'),
   realmId: providerOpaqueIdSchema,
-  container: providerManagedContainerRefSchema,
+  container: providerManagedContainerRefSchema.optional(),
   containerDisplayName: displayNameSchema.optional(),
   query: z.string().trim().max(200).optional(),
   cursor: providerCursorSchema.optional(),
@@ -387,7 +387,7 @@ export const humanEndpointProviderContractSchema = z.object({
     locatorDiscovery: z.boolean(),
     identityChallenge: z.literal(true),
     directMessages: z.literal(true),
-    managedContainers: z.boolean()
+    managedContainers: z.boolean().optional()
   }).strict(),
   onboarding: z.object({
     realmLabel: displayNameSchema,
@@ -409,7 +409,7 @@ export interface HumanEndpointProvider {
   send(request: ProviderSendRequest): Promise<ProviderSendResult>
   listLocators(request: ProviderLocatorListRequest): Promise<ProviderLocatorListResult>
   updateLocator(request: ProviderLocatorMutationRequest): Promise<ProviderLocatorMutationResult>
-  manageContainer(request: ProviderManagedContainerRequest): Promise<ProviderManagedContainerResult>
+  manageContainer?(request: ProviderManagedContainerRequest): Promise<ProviderManagedContainerResult>
   lifecycle(request: ProviderLifecycleRequest): Promise<ProviderLifecycleResult>
   diagnose(): Promise<ProviderDiagnostic>
 }

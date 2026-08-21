@@ -1,13 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import {
-  managedContainerDisplayName,
-  managedContainerEnsureIdempotencyKey
-} from './runtime.js'
-
-test('managed Channel display name matches the Server stable string digest', () => {
-  assert.equal(managedContainerDisplayName('usr_test'), 'sciforge-20d556f4b190')
-})
+import { managedContainerEnsureIdempotencyKey } from './runtime.js'
 
 test('managed Channel retries use a fresh key while one request remains replay-safe', () => {
   const initial = managedContainerEnsureIdempotencyKey('usr_test', 'hep_test')

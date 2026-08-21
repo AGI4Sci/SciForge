@@ -13,8 +13,10 @@ import {
   collaborationEndpointChallengePollResultSchema,
   collaborationEndpointChallengeStartInputSchema,
   collaborationEndpointChallengeStartResultSchema,
-  collaborationManagedContainerManageInputSchema,
   collaborationManagedContainerManageResultSchema,
+  collaborationManagedContainerInspectInputSchema,
+  collaborationManagedContainerProvisionInputSchema,
+  collaborationManagedContainerArchiveInputSchema,
   collaborationPrimaryAgentSelectInputSchema,
   collaborationPrimaryAgentSelectResultSchema,
   collaborationProjectionLinkInputSchema,
@@ -130,10 +132,22 @@ const contracts = Object.freeze({
     inputSchema: collaborationTaskListInputSchema,
     outputSchema: collaborationTaskListResultSchema
   }),
-  managedContainerManage: Object.freeze({
-    actionId: COLLABORATION_CAPABILITY_IDS.managedContainerManage,
+  managedContainerInspect: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.managedContainerInspect,
+    effect: 'read' as const,
+    inputSchema: collaborationManagedContainerInspectInputSchema,
+    outputSchema: collaborationManagedContainerManageResultSchema
+  }),
+  managedContainerProvision: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.managedContainerProvision,
     effect: 'external-write' as const,
-    inputSchema: collaborationManagedContainerManageInputSchema,
+    inputSchema: collaborationManagedContainerProvisionInputSchema,
+    outputSchema: collaborationManagedContainerManageResultSchema
+  }),
+  managedContainerArchive: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.managedContainerArchive,
+    effect: 'destructive' as const,
+    inputSchema: collaborationManagedContainerArchiveInputSchema,
     outputSchema: collaborationManagedContainerManageResultSchema
   })
 })
@@ -195,7 +209,15 @@ export function createCollaborationRendererClient(
       CONFIRMED
     ),
     listTasks: (input = {}) => invoker.invoke(contracts.taskList, input),
-    manageContainer: (input) => invoker.invoke(contracts.managedContainerManage, input, CONFIRMED)
+    manageContainer: (input) => {
+      if (input.action === 'refresh-status' || input.action === 'refresh-locators') {
+        return invoker.invoke(contracts.managedContainerInspect, input)
+      }
+      if (input.action === 'archive') {
+        return invoker.invoke(contracts.managedContainerArchive, input, CONFIRMED)
+      }
+      return invoker.invoke(contracts.managedContainerProvision, input, CONFIRMED)
+    }
   })
 }
 

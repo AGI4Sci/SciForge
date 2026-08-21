@@ -106,6 +106,7 @@ export interface CollaborationRepository extends CollaborationReadRepository {
   completeManagedContainerJob(input: {
     jobId: string
     workerId: string
+    expectedAttemptCount: number
     container: StoredManagedContainer
     expectedContainerRevision: number
     completedAt: string
@@ -113,6 +114,7 @@ export interface CollaborationRepository extends CollaborationReadRepository {
   failManagedContainerJob(input: {
     jobId: string
     workerId: string
+    expectedAttemptCount: number
     safeErrorCode: string
     retryAt?: string
     failedAt: string

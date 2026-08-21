@@ -451,14 +451,28 @@ export class CollaborationService {
       const updated: StoredEndpoint = { ...endpoint, status: input.status, revision: endpoint.revision + 1,
         updatedAt: at, revokedAt: input.status === 'revoked' ? at : endpoint.revokedAt }
       await tx.updateEndpoint(updated, endpoint.revision)
+      const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
       const participant = await tx.getParticipant(actor.userId)
       if (participant?.primaryHumanEndpointId === endpoint.humanEndpointId && input.status !== 'active') {
         const changed = completeParticipant({ ...participant, primaryHumanEndpointId: undefined,
           revision: participant.revision + 1, updatedAt: at })
         await tx.upsertParticipant(changed, participant.revision)
       }
+      if (input.status !== 'active') {
+        notifications.push(...await this.pauseEndpointProjections(tx, endpoint, at, 'human_endpoint_inactive'))
+        const container = await tx.getManagedContainerForOwner(actor.userId, endpoint.provider, endpoint.realmId)
+        if (container?.humanEndpointId === endpoint.humanEndpointId && container.status !== 'archived') {
+          await tx.updateManagedContainer({
+            ...container,
+            status: 'suspended',
+            safeErrorCode: 'human_endpoint_inactive',
+            revision: container.revision + 1,
+            updatedAt: at
+          }, container.revision)
+        }
+      }
       return { response: entityResponse('endpoint.updated', updated), resourceKind: 'human_endpoint',
-        resourceId: endpoint.humanEndpointId }
+        resourceId: endpoint.humanEndpointId, notifications }
     }).then(responseEntity<StoredEndpoint>)
   }
 
@@ -477,6 +491,16 @@ export class CollaborationService {
       if (target.status !== 'active') fail('credential_revoked', 'The target user is not active.')
       const updated: StoredEndpoint = { ...endpoint, userId: target.userId, revision: endpoint.revision + 1, updatedAt: at }
       await tx.updateEndpoint(updated, endpoint.revision)
+      const notifications = await this.pauseEndpointProjections(tx, endpoint, at, 'human_endpoint_transferred')
+      const container = await tx.getManagedContainerForOwner(actor.userId, endpoint.provider, endpoint.realmId)
+      if (container?.humanEndpointId === endpoint.humanEndpointId) {
+        await tx.updateManagedContainer({
+          ...container,
+          ownerUserId: target.userId,
+          revision: container.revision + 1,
+          updatedAt: at
+        }, container.revision)
+      }
       for (const userId of [actor.userId, target.userId]) {
         const participant = await tx.getParticipant(userId)
         if (!participant) continue
@@ -488,7 +512,7 @@ export class CollaborationService {
         await tx.upsertParticipant(changed, participant.revision)
       }
       return { response: entityResponse('endpoint.transferred', updated), resourceKind: 'human_endpoint',
-        resourceId: endpoint.humanEndpointId }
+        resourceId: endpoint.humanEndpointId, notifications }
     }).then(responseEntity<StoredEndpoint>)
   }
 
@@ -736,6 +760,9 @@ export class CollaborationService {
     assertText(input.displayName, 'displayName', 1, 200)
     const allowed = [...new Set([actor.userId, ...input.allowedSenderUserIds])]
     if (allowed.length > 100) fail('validation_failed', 'A shared Session may allow at most 100 users.')
+    if (allowed.length !== 1) {
+      fail('permission_denied', 'A personal managed Channel projection may only authorize its owner.')
+    }
     return this.commit(actor, 'projection.create', input.idempotencyKey, { ...input, allowedSenderUserIds: allowed }, async (tx, at) => {
       await lockProviderLocator(tx, input.locator)
       const agent = required(await tx.getAgent(input.agentId), 'Projection Agent')
@@ -814,6 +841,9 @@ export class CollaborationService {
         ? [...new Set([actor.userId, ...input.allowedSenderUserIds])]
         : projection.allowedSenderUserIds
       if (allowed.length > 100) fail('validation_failed', 'A shared Session may allow at most 100 users.')
+      if (allowed.length !== 1) {
+        fail('permission_denied', 'A personal managed Channel projection may only authorize its owner.')
+      }
       const updated: StoredProjection = { ...projection, locator, locatorRevision,
         displayName: input.displayName ?? projection.displayName, status: input.status ?? projection.status,
         allowedSenderUserIds: allowed, revision: projection.revision + 1, updatedAt: at }
@@ -1613,12 +1643,12 @@ export class CollaborationService {
 
   async ensureManagedContainer(actor: UserActor, input: {
     humanEndpointId: string
-    displayName: string
+    displayName?: string
     policy: StoredManagedContainer['policy']
     idempotencyKey: string
   }): Promise<StoredManagedContainer> {
     const expectedName = `sciforge-${stableDigest(actor.userId).slice(0, 12)}`
-    if (input.displayName !== expectedName) {
+    if (input.displayName !== undefined && input.displayName !== expectedName) {
       fail('validation_failed', 'Managed Channel name must use the server-derived stable user handle.')
     }
     const response = await this.commit(actor, 'managed_container.ensure', input.idempotencyKey, input, async (tx, at) => {
@@ -1712,27 +1742,21 @@ export class CollaborationService {
   }): Promise<StoredManagedContainer> {
     const response = await this.commit(actor, 'managed_container.inspect', input.idempotencyKey, input, async (tx, at) => {
       const current = required(await tx.getManagedContainer(input.managedContainerId), 'Managed container')
-      if (current.ownerUserId !== actor.userId) fail('permission_denied', 'Managed Channel belongs to another user.')
+      await requireManagedContainerOwner(tx, actor.userId, current)
       if (current.revision !== input.expectedRevision) fail('revision_conflict', 'Managed Channel revision changed.')
       if (!current.externalContainerId) fail('validation_failed', 'Managed Channel has not completed initial provisioning.')
-      if (current.status === 'archived') fail('validation_failed', 'Archived managed Channel cannot be inspected.')
-      const updated: StoredManagedContainer = {
-        ...current,
-        status: 'provisioning',
-        safeErrorCode: undefined,
-        revision: current.revision + 1,
-        updatedAt: at
+      if (!['active', 'drifted', 'failed'].includes(current.status)) {
+        fail('invalid_state_transition', 'Managed Channel cannot be inspected during this lifecycle state.')
       }
-      await tx.updateManagedContainer(updated, current.revision)
       await tx.insertManagedContainerJob({
-        jobId: newId('mcj'), managedContainerId: updated.managedContainerId, operation: 'inspect',
-        desiredRevision: updated.revision, state: 'queued', attemptCount: 0, nextAttemptAt: at,
+        jobId: newId('mcj'), managedContainerId: current.managedContainerId, operation: 'inspect',
+        desiredRevision: current.revision, state: 'queued', attemptCount: 0, nextAttemptAt: at,
         createdAt: at, updatedAt: at
       })
       return {
-        response: entityResponse('managed_container.inspect_requested', updated),
+        response: entityResponse('managed_container.inspect_requested', current),
         resourceKind: 'managed_provider_container',
-        resourceId: updated.managedContainerId
+        resourceId: current.managedContainerId
       }
     })
     return responseEntity<StoredManagedContainer>(response)
@@ -1745,10 +1769,12 @@ export class CollaborationService {
   }): Promise<StoredManagedContainer> {
     const response = await this.commit(actor, 'managed_container.reconcile', input.idempotencyKey, input, async (tx, at) => {
       const current = required(await tx.getManagedContainer(input.managedContainerId), 'Managed container')
-      if (current.ownerUserId !== actor.userId) fail('permission_denied', 'Managed Channel belongs to another user.')
+      await requireManagedContainerOwner(tx, actor.userId, current)
       if (current.revision !== input.expectedRevision) fail('revision_conflict', 'Managed Channel revision changed.')
       if (!current.externalContainerId) fail('validation_failed', 'Managed Channel has not completed initial provisioning.')
-      if (current.status === 'archived') fail('validation_failed', 'Archived managed Channel cannot be reconciled.')
+      if (!['drifted', 'failed'].includes(current.status)) {
+        fail('invalid_state_transition', 'Only a drifted or failed managed Channel can be reconciled.')
+      }
       const updated: StoredManagedContainer = {
         ...current,
         status: 'provisioning',
@@ -1775,10 +1801,14 @@ export class CollaborationService {
   }): Promise<StoredManagedContainer> {
     const response = await this.commit(actor, 'managed_container.archive', input.idempotencyKey, input, async (tx, at) => {
       const current = required(await tx.getManagedContainer(input.managedContainerId), 'Managed container')
-      if (current.ownerUserId !== actor.userId) fail('permission_denied', 'Managed Channel belongs to another user.')
+      await requireManagedContainerOwner(tx, actor.userId, current)
       if (current.revision !== input.expectedRevision) fail('revision_conflict', 'Managed Channel revision changed.')
       if (!current.externalContainerId) fail('validation_failed', 'Managed Channel has not completed initial provisioning.')
+      if (!['active', 'drifted'].includes(current.status)) {
+        fail('invalid_state_transition', 'Managed Channel cannot be archived during this lifecycle state.')
+      }
       const projections = await tx.listProjectionsForOwner(actor.userId)
+      const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
       for (const projection of projections) {
         if (
           projection.status === 'active' &&
@@ -1786,13 +1816,19 @@ export class CollaborationService {
           projection.locator.realmId === current.realmId &&
           projection.locator.containerId === current.externalContainerId
         ) {
-          await tx.updateProjection({
+          const changed = {
             ...projection,
             status: 'paused',
             lastErrorCode: 'managed_container_archived',
             revision: projection.revision + 1,
             updatedAt: at
-          }, projection.revision)
+          } satisfies StoredProjection
+          await tx.updateProjection(changed, projection.revision)
+          const message = await this.appendInbox(tx, { kind: 'agent', id: projection.agentId }, 'projection.updated', {
+            protocolVersion: '1.0', type: 'projection.updated', projectionId: projection.projectionId,
+            revision: changed.revision
+          }, at)
+          notifications.push({ recipient: message.recipient, sequence: message.sequence })
         }
       }
       const updated: StoredManagedContainer = {
@@ -1809,7 +1845,7 @@ export class CollaborationService {
         createdAt: at, updatedAt: at
       })
       return { response: entityResponse('managed_container.archive_requested', updated),
-        resourceKind: 'managed_provider_container', resourceId: updated.managedContainerId }
+        resourceKind: 'managed_provider_container', resourceId: updated.managedContainerId, notifications }
     })
     return responseEntity<StoredManagedContainer>(response)
   }
@@ -1833,6 +1869,31 @@ export class CollaborationService {
       outcome: 'rejected', metadata: safeAuditMetadata({ errorCode: error.code }), createdAt: this.timestamp()
     }))
     error.auditRecorded = true
+  }
+
+  private async pauseEndpointProjections(
+    repository: CollaborationTransaction,
+    endpoint: StoredEndpoint,
+    at: string,
+    errorCode: string
+  ): Promise<Array<{ recipient: InboxRecipient; sequence: number }>> {
+    const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
+    for (const projection of await repository.listProjectionsForOwner(endpoint.userId)) {
+      if (projection.humanEndpointId !== endpoint.humanEndpointId || projection.status !== 'active') continue
+      const changed = { ...projection, status: 'paused' as const, lastErrorCode: errorCode,
+        revision: projection.revision + 1, updatedAt: at }
+      await repository.updateProjection(changed, projection.revision)
+      const message = await this.appendInbox(
+        repository,
+        { kind: 'agent', id: projection.agentId },
+        'projection.updated',
+        { protocolVersion: '1.0', type: 'projection.updated', projectionId: projection.projectionId,
+          revision: changed.revision },
+        at
+      )
+      notifications.push({ recipient: message.recipient, sequence: message.sequence })
+    }
+    return notifications
   }
 
   private async appendInbox(
@@ -1918,8 +1979,8 @@ async function requireOwnedManagedLocator(
     endpoint.provider,
     endpoint.realmId
   )
-  if (!container) return
   if (
+    !container ||
     container.humanEndpointId !== endpoint.humanEndpointId ||
     container.status !== 'active' ||
     !container.externalContainerId ||
@@ -1927,6 +1988,27 @@ async function requireOwnedManagedLocator(
   ) {
     fail('permission_denied', 'Projection locator must belong to the authenticated user\'s active managed Channel.')
   }
+}
+
+async function requireManagedContainerOwner(
+  repository: CollaborationReadRepository,
+  ownerUserId: string,
+  container: StoredManagedContainer
+): Promise<StoredEndpoint> {
+  if (container.ownerUserId !== ownerUserId) {
+    fail('permission_denied', 'Managed Channel belongs to another user.')
+  }
+  const endpoint = required(await repository.getEndpoint(container.humanEndpointId), 'Managed Channel endpoint')
+  if (
+    endpoint.userId !== ownerUserId ||
+    endpoint.status !== 'active' ||
+    endpoint.provider !== container.provider ||
+    endpoint.realmId !== container.realmId ||
+    endpoint.providerUserId !== container.ownerProviderUserId
+  ) {
+    fail('permission_denied', 'Managed Channel requires its active verified owner endpoint.')
+  }
+  return endpoint
 }
 
 function actorAuditIdentity(actor: AuthContext): Pick<StoredAuditEvent, 'actorUserId' | 'actorEndpointId' | 'actorAgentId'> {

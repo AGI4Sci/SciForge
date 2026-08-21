@@ -19,7 +19,9 @@ export const COLLABORATION_CAPABILITY_IDS = Object.freeze({
   projectionShare: 'collaboration.projection.share',
   synchronizationRetry: 'collaboration.sync.retry',
   taskList: 'collaboration.task.list',
-  managedContainerManage: 'collaboration.managed-container.manage'
+  managedContainerInspect: 'collaboration.managed-container.inspect',
+  managedContainerProvision: 'collaboration.managed-container.provision',
+  managedContainerArchive: 'collaboration.managed-container.archive'
 } as const)
 
 export const collaborationProviderLocatorFieldSchema = z.object({
@@ -32,6 +34,9 @@ export const collaborationProviderLocatorFieldSchema = z.object({
 export const collaborationProviderOptionSchema = z.object({
   providerKey: idSchema,
   label: displayTextSchema,
+  realmLabel: displayTextSchema,
+  containerLabel: displayTextSchema,
+  topicLabel: displayTextSchema,
   locatorFields: z.array(collaborationProviderLocatorFieldSchema).max(32),
   managedContainers: z.boolean()
 }).strict()
@@ -332,20 +337,37 @@ export const collaborationTaskListResultSchema = z.object({
   tasks: z.array(collaborationTaskViewSchema).max(100_000)
 }).strict()
 
-export const collaborationManagedContainerManageInputSchema = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('ensure'), humanEndpointId: idSchema }).strict(),
-  z.object({ action: z.literal('refresh-locators'), humanEndpointId: idSchema }).strict(),
-  z.object({ action: z.literal('refresh-status') }).strict(),
-  z.object({
+const managedContainerEnsureInputSchema = z.object({ action: z.literal('ensure'), humanEndpointId: idSchema }).strict()
+const managedContainerRefreshLocatorsInputSchema = z.object({
+  action: z.literal('refresh-locators'), humanEndpointId: idSchema
+}).strict()
+const managedContainerRefreshStatusInputSchema = z.object({ action: z.literal('refresh-status') }).strict()
+const managedContainerReconcileInputSchema = z.object({
     action: z.literal('reconcile'),
     managedContainerId: idSchema,
     expectedRevision: z.number().int().positive()
-  }).strict(),
-  z.object({
+  }).strict()
+const managedContainerArchiveInputSchema = z.object({
     action: z.literal('archive'),
     managedContainerId: idSchema,
     expectedRevision: z.number().int().positive()
   }).strict()
+
+export const collaborationManagedContainerInspectInputSchema = z.discriminatedUnion('action', [
+  managedContainerRefreshLocatorsInputSchema,
+  managedContainerRefreshStatusInputSchema
+])
+export const collaborationManagedContainerProvisionInputSchema = z.discriminatedUnion('action', [
+  managedContainerEnsureInputSchema,
+  managedContainerReconcileInputSchema
+])
+export const collaborationManagedContainerArchiveInputSchema = managedContainerArchiveInputSchema
+export const collaborationManagedContainerManageInputSchema = z.discriminatedUnion('action', [
+  managedContainerEnsureInputSchema,
+  managedContainerRefreshLocatorsInputSchema,
+  managedContainerRefreshStatusInputSchema,
+  managedContainerReconcileInputSchema,
+  managedContainerArchiveInputSchema
 ])
 export const collaborationManagedContainerManageResultSchema = z.object({
   managedContainer: managedProviderContainerSchema.nullable(),

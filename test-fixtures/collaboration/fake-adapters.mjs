@@ -491,7 +491,8 @@ export class FakeCollaborationRepository {
 
   async completeManagedContainerJob(input) {
     const job = this.state.managedContainerJobs.get(input.jobId)
-    if (!job || job.state !== 'running' || job.leaseOwner !== input.workerId) throw new Error('fake repository job lease lost')
+    if (!job || job.state !== 'running' || job.leaseOwner !== input.workerId ||
+      job.attemptCount !== input.expectedAttemptCount) throw new Error('fake repository job lease lost')
     revisionUpdate(this.state.managedContainers, input.container.managedContainerId, input.container, input.expectedContainerRevision)
     Object.assign(job, { state: 'succeeded', leaseOwner: undefined, leaseExpiresAt: undefined,
       safeErrorCode: undefined, updatedAt: input.completedAt })
@@ -499,7 +500,8 @@ export class FakeCollaborationRepository {
 
   async failManagedContainerJob(input) {
     const job = this.state.managedContainerJobs.get(input.jobId)
-    if (!job || job.state !== 'running' || job.leaseOwner !== input.workerId) throw new Error('fake repository job lease lost')
+    if (!job || job.state !== 'running' || job.leaseOwner !== input.workerId ||
+      job.attemptCount !== input.expectedAttemptCount) throw new Error('fake repository job lease lost')
     if (input.container) revisionUpdate(this.state.managedContainers, input.container.managedContainerId,
       input.container, input.expectedContainerRevision)
     Object.assign(job, { state: input.retryAt ? 'retry_wait' : 'failed',

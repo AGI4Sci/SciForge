@@ -2377,54 +2377,6 @@ describe('CodexRuntimeService compatibility operations', () => {
     })
   })
 
-  it('renames stored historical threads when the Codex rollout is missing', async () => {
-    const storageRoot = await tempRoot()
-    const threadStore = new CodexThreadStore({ rootDir: storageRoot })
-    await threadStore.upsert({
-      guiThreadId: 'gui-thread-1',
-      codexThreadId: 'codex-thread-missing',
-      workspace: '/tmp/workspace',
-      title: 'Old historical title'
-    })
-    const client = controllableClient()
-    vi.mocked(client.renameThread).mockRejectedValueOnce(
-      new Error('no rollout found for thread id codex-thread-missing')
-    )
-    const service = new CodexRuntimeService({
-      settings: async () => settings(),
-      storageRoot,
-      createClient: () => client
-    })
-
-    await expect(service.renameThread('gui-thread-1', 'Renamed history')).resolves.toEqual({ ok: true })
-
-    expect(client.renameThread).toHaveBeenCalledWith({
-      threadId: 'codex-thread-missing',
-      title: 'Renamed history'
-    })
-    await expect(threadStore.get('gui-thread-1')).resolves.toMatchObject({
-      title: 'Renamed history',
-      titleSource: 'user'
-    })
-  })
-
-  it('does not create a local rename record for an unknown missing Codex thread', async () => {
-    const storageRoot = await tempRoot()
-    const threadStore = new CodexThreadStore({ rootDir: storageRoot })
-    const client = controllableClient()
-    vi.mocked(client.renameThread).mockRejectedValueOnce(
-      new Error('no rollout found for thread id unknown-thread')
-    )
-    const service = new CodexRuntimeService({
-      settings: async () => settings(),
-      storageRoot,
-      createClient: () => client
-    })
-
-    await expect(service.renameThread('unknown-thread', 'Unexpected title')).resolves.toMatchObject({ ok: false })
-    await expect(threadStore.get('unknown-thread')).resolves.toBeNull()
-  })
-
   it('keeps locally archived live Codex threads out of the active list', async () => {
     const storageRoot = await tempRoot()
     const threadStore = new CodexThreadStore({ rootDir: storageRoot })

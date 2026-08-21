@@ -139,11 +139,11 @@ describe('canonical pairing and bidirectional Session commands', () => {
       },
       containerDisplayName: 'sciforge-user123',
       limit: 50
-    }).container.containerId).toBe('123')
+    }).container?.containerId).toBe('123')
     expect(providerLocatorListRequestSchema.safeParse({
       protocolVersion: '1.0', type: 'provider.locator.list',
       realmId: providerIdentityFixture.realmId, limit: 50
-    }).success).toBe(false)
+    }).success).toBe(true)
     expect(providerManagedContainerRequestSchema.safeParse({
       protocolVersion: '1.0', type: 'provider.managed_container.ensure', realmId: 'realm-hong-kong',
       ownerIdentity: providerIdentityFixture, stableKey: 'managed-owner-realm', displayName: 'sciforge-user123',
@@ -312,6 +312,11 @@ describe('provider-neutral contract', () => {
       limits: { maxTextLength: 10_000, maxLocatorDisplayLength: 200 }
     }
     expect(humanEndpointProviderContractSchema.safeParse(contract).success).toBe(true)
+    const { managedContainers: _managedContainers, ...legacyCapabilities } = contract.capabilities
+    expect(humanEndpointProviderContractSchema.parse({
+      ...contract,
+      capabilities: legacyCapabilities
+    }).capabilities.managedContainers).toBeUndefined()
     expect(humanEndpointProviderContractSchema.safeParse({
       ...contract,
       capabilities: { ...contract.capabilities, directMessages: false }

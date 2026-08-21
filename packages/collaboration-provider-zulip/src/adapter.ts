@@ -495,8 +495,10 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
     }
     if (request.type === 'provider.managed_container.archive') {
       const channel = await this.readChannel(request.container.containerId)
+      if (channel.is_archived !== true) {
+        await this.archiveChannel(request.container.containerId)
+      }
       await this.setSubscriptions(channel.name, [], [context.ownerUserId, context.botUserId])
-      await this.updateChannel(request.container.containerId, new URLSearchParams({ is_archived: 'true' }))
       return this.inspectManagedContainer(request.container.containerId, context)
     }
     await this.reconcileManagedContainer(
@@ -731,6 +733,15 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
     })
   }
 
+  private async archiveChannel(containerId: string): Promise<void> {
+    if (!this.provisioningClient) throw new ZulipProviderError('permission_denied', 'Provisioning is unavailable.')
+    await this.provisioningClient.request(`api/v1/streams/${encodeURIComponent(containerId)}`, {
+      method: 'DELETE',
+      schema: zulipUpdateMessageResponseSchema,
+      retry: 'never'
+    })
+  }
+
   async *events(
     request: Extract<ProviderLifecycleRequest, { type: 'provider.lifecycle.start' }>
   ): AsyncIterable<ProviderEvent> {
@@ -802,7 +813,7 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
     if (request.realmId !== this.realmId) {
       throw new ZulipProviderError('invalid_locator', 'Requested realm does not match this Zulip provider.')
     }
-    if (request.container.provider !== 'zulip' || request.container.realmId !== this.realmId) {
+    if (!request.container || request.container.provider !== 'zulip' || request.container.realmId !== this.realmId) {
       throw new ZulipProviderError('invalid_locator', 'Requested managed Channel does not match this Zulip provider.')
     }
     let offset = 0

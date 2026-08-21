@@ -536,7 +536,7 @@ test('renders managed Channel verification and counts only Sessions in the exact
         messageBotCanSend: true, ownerCanCreateTopics: true, memberManagementRestricted: true,
         channelManagementRestricted: true
       },
-      status: 'active',
+      status: 'drifted',
       lastVerifiedAt: '2026-08-20T01:00:00.000Z',
       safeErrorCode: null,
       revision: 3,
@@ -561,6 +561,10 @@ test('renders managed Channel verification and counts only Sessions in the exact
   const html = renderToStaticMarkup(<ManagedChannelSection snapshot={snapshot} busy={false}
     onEnsure={NOOP} onRefreshStatus={NOOP} onRefreshTopics={NOOP} onReconcile={NOOP} onArchive={NOOP} />)
   assert.match(html, /collaborationManagedChannelVerified/u)
+  assert.match(html, /collaborationManagedChannelMemberManagement/u)
+  assert.match(html, /collaborationManagedChannelAdministration/u)
+  assert.match(html, /Fixture IM/u)
+  assert.match(html, /Phone A/u)
   assert.match(html, />1<\/dd>/u)
   assert.match(html, /collaborationManagedChannelRepair/u)
 
@@ -580,6 +584,7 @@ test('renders managed Channel verification and counts only Sessions in the exact
     onEnsure={NOOP} onRefreshStatus={NOOP} onRefreshTopics={NOOP} onReconcile={NOOP} onArchive={NOOP} />)
   assert.match(failedHtml, /collaborationManagedChannelRetry/u)
   assert.doesNotMatch(failedHtml, /collaborationManagedChannelRepair/u)
+  assert.match(failedHtml, />\?</u)
 })
 
 test('keeps locator discovery inside the authenticated user managed container', () => {
@@ -694,7 +699,7 @@ test('keeps the challenge poll handle out of render state and has no provider br
   assert.match(source, /challengeHandleRef = useRef<string \| null>/u)
   assert.doesNotMatch(source, /data-[^=]*(?:challenge|secret|token)/iu)
   assert.doesNotMatch(source, /\bzulip\b/iu)
-  assert.doesNotMatch(source, /promptValue|confirmAction|globalThis\.(?:prompt|confirm)/u)
+  assert.doesNotMatch(source, /promptValue|confirmAction|(?:globalThis|window)\.(?:prompt|confirm)/u)
 })
 
 test('renders accessible controlled editors for projection mutations', () => {
@@ -833,7 +838,10 @@ function statusFixture() {
     providerOptions: [{
       providerKey: 'provider.fixture',
       label: 'Fixture IM',
-        locatorFields: [{
+      realmLabel: 'Realm',
+      containerLabel: 'Channel',
+      topicLabel: 'Topic',
+      locatorFields: [{
         key: 'realm',
         label: 'Realm',
         required: true,

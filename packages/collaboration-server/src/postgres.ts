@@ -206,6 +206,7 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
   async completeManagedContainerJob(input: {
     jobId: string
     workerId: string
+    expectedAttemptCount: number
     container: StoredManagedContainer
     expectedContainerRevision: number
     completedAt: string
@@ -217,8 +218,8 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
         `UPDATE sciforge_collaboration.managed_provider_container_jobs
          SET state = 'succeeded', lease_owner = NULL, lease_expires_at = NULL,
              safe_error_code = NULL, updated_at = $3
-         WHERE job_id = $1 AND state = 'running' AND lease_owner = $2`,
-        [input.jobId, input.workerId, input.completedAt]
+         WHERE job_id = $1 AND state = 'running' AND lease_owner = $2 AND attempt_count = $4`,
+        [input.jobId, input.workerId, input.completedAt, input.expectedAttemptCount]
       )
       if (result.rowCount !== 1) throw new CollaborationServiceError('revision_conflict', 'Managed container job lease was lost.')
       await tx.insertAudit({
@@ -232,6 +233,7 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
   async failManagedContainerJob(input: {
     jobId: string
     workerId: string
+    expectedAttemptCount: number
     safeErrorCode: string
     retryAt?: string
     failedAt: string
@@ -247,9 +249,9 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
         `UPDATE sciforge_collaboration.managed_provider_container_jobs
          SET state = $3, next_attempt_at = COALESCE($4, next_attempt_at),
              lease_owner = NULL, lease_expires_at = NULL, safe_error_code = $5, updated_at = $6
-         WHERE job_id = $1 AND state = 'running' AND lease_owner = $2`,
+         WHERE job_id = $1 AND state = 'running' AND lease_owner = $2 AND attempt_count = $7`,
         [input.jobId, input.workerId, input.retryAt ? 'retry_wait' : 'failed', input.retryAt ?? null,
-          input.safeErrorCode, input.failedAt]
+          input.safeErrorCode, input.failedAt, input.expectedAttemptCount]
       )
       if (result.rowCount !== 1) throw new CollaborationServiceError('revision_conflict', 'Managed container job lease was lost.')
       await tx.insertAudit({

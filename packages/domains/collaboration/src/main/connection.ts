@@ -481,7 +481,10 @@ export class CollaborationConnection {
     this.providerOptions = response.providers.map((provider) => ({
       providerKey: provider.provider,
       label: provider.displayName,
-      managedContainers: provider.capabilities.managedContainers,
+      realmLabel: provider.onboarding.realmLabel,
+      containerLabel: provider.onboarding.containerLabel,
+      topicLabel: provider.onboarding.topicLabel,
+      managedContainers: provider.capabilities.managedContainers === true,
       locatorFields: [{
         key: 'realmId',
         label: 'Organization / realm ID',

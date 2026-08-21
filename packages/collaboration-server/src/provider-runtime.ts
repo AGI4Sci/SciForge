@@ -40,6 +40,7 @@ const MAX_PROVIDER_CONFIG_BYTES = 256 * 1024
 const MAX_SECRET_BYTES = 64 * 1024
 const MAX_HTTP_RESPONSE_BYTES = 16 * 1024 * 1024
 const DEFAULT_OUTBOX_POLL_MS = 1_000
+const MANAGED_CONTAINER_JOB_LEASE_MS = 10 * 60_000
 
 function managedContainerRef(container: StoredManagedContainer) {
   if (!container.externalContainerId) {
@@ -165,12 +166,13 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
       endpoint.provider,
       endpoint.realmId
     )
-    if (
+    const requiresManagedContainer = provider.contract.capabilities.managedContainers === true
+    if (requiresManagedContainer && (
       !container ||
       container.humanEndpointId !== endpoint.humanEndpointId ||
       container.status !== 'active' ||
       !container.externalContainerId
-    ) {
+    )) {
       throw new CollaborationServiceError(
         'permission_denied',
         'Locator discovery requires the authenticated user\'s active managed Channel.'
@@ -180,16 +182,17 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
       protocolVersion: CURRENT_PROTOCOL_VERSION,
       type: 'provider.locator.list',
       realmId: endpoint.realmId,
-      container: managedContainerRef(container),
-      containerDisplayName: container.displayName,
+      ...(container?.externalContainerId
+        ? { container: managedContainerRef(container), containerDisplayName: container.displayName }
+        : {}),
       ...(input.query === undefined ? {} : { query: input.query }),
       ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
       limit: input.limit
     })
     if (result.locators.some((locator) => (
-      locator.provider !== container.provider ||
-      locator.realmId !== container.realmId ||
-      locator.containerId !== container.externalContainerId
+      locator.provider !== endpoint.provider ||
+      locator.realmId !== endpoint.realmId ||
+      (requiresManagedContainer && locator.containerId !== container?.externalContainerId)
     ))) {
       throw new CollaborationServiceError(
         'permission_denied',
@@ -210,9 +213,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
       this.track(this.runEventPump(provider, abortController.signal))
     }
     this.track(this.runOutboxPump(abortController.signal))
-    if ([...this.providers.values()].some((provider) => provider.contract.capabilities.managedContainers)) {
-      this.track(this.runManagedContainerPump(abortController.signal))
-    }
+    this.track(this.runManagedContainerPump(abortController.signal))
   }
 
   async stop(): Promise<void> {
@@ -443,7 +444,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
         const jobs = await this.repository.claimManagedContainerJobs(
           this.managedContainerWorkerId,
           now,
-          new Date(new Date(now).getTime() + 60_000).toISOString(),
+          new Date(new Date(now).getTime() + MANAGED_CONTAINER_JOB_LEASE_MS).toISOString(),
           10
         )
         for (const job of jobs) {
@@ -463,6 +464,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
       await this.repository.failManagedContainerJob({
         jobId: job.jobId,
         workerId: this.managedContainerWorkerId,
+        expectedAttemptCount: job.attemptCount,
         safeErrorCode: 'managed_container_missing',
         failedAt: this.timestamp()
       })
@@ -472,13 +474,23 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
       await this.repository.failManagedContainerJob({
         jobId: job.jobId,
         workerId: this.managedContainerWorkerId,
+        expectedAttemptCount: job.attemptCount,
         safeErrorCode: 'managed_container_job_superseded',
         failedAt: this.timestamp()
       })
       return
     }
+    const endpoint = await this.repository.getEndpoint(current.humanEndpointId)
+    if (
+      !endpoint || endpoint.status !== 'active' || endpoint.userId !== current.ownerUserId ||
+      endpoint.provider !== current.provider || endpoint.realmId !== current.realmId ||
+      endpoint.providerUserId !== current.ownerProviderUserId
+    ) {
+      await this.failManagedContainerJob(job, current, 'managed_container_owner_endpoint_invalid', false)
+      return
+    }
     const provider = this.providers.get(current.provider)
-    if (!provider || !provider.contract.capabilities.managedContainers) {
+    if (!provider || !provider.contract.capabilities.managedContainers || !provider.manageContainer) {
       await this.failManagedContainerJob(job, current, 'managed_container_provider_unavailable', false)
       return
     }
@@ -543,6 +555,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
       await this.repository.completeManagedContainerJob({
         jobId: job.jobId,
         workerId: this.managedContainerWorkerId,
+        expectedAttemptCount: job.attemptCount,
         container: updated,
         expectedContainerRevision: current.revision,
         completedAt
@@ -574,6 +587,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
     await this.repository.failManagedContainerJob({
       jobId: job.jobId,
       workerId: this.managedContainerWorkerId,
+      expectedAttemptCount: job.attemptCount,
       safeErrorCode,
       ...(retryAt ? { retryAt } : {}),
       failedAt,

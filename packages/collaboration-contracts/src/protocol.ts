@@ -392,7 +392,7 @@ export const restRequestSchema = z.discriminatedUnion('type', [
   z.object({ ...protocolEnvelopeShape, type: z.literal('participant.get'), userId: userIdSchema }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('endpoint.catalog.get'), provider: providerIdSchema.optional() }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('endpoint.locator.list'), humanEndpointId: humanEndpointIdSchema, query: z.string().trim().max(200).optional(), cursor: z.string().min(1).max(2_048).optional(), limit: z.number().int().min(1).max(500) }).strict(),
-  z.object({ ...writeCommandShape, type: z.literal('managed_container.ensure'), humanEndpointId: humanEndpointIdSchema, displayName: z.string().trim().min(1).max(200), policy: providerManagedContainerPolicySchema }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('managed_container.ensure'), humanEndpointId: humanEndpointIdSchema, displayName: z.string().trim().min(1).max(200).optional(), policy: providerManagedContainerPolicySchema }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('managed_container.get'), managedContainerId: managedContainerIdSchema }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('managed_container.list') }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('managed_container.inspect'), managedContainerId: managedContainerIdSchema, expectedRevision: revisionSchema }).strict(),

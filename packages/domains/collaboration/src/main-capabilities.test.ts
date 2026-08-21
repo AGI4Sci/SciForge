@@ -128,7 +128,13 @@ test('global collaboration mutations satisfy the production broker contract with
       expectedRevision: 1
     },
     [COLLABORATION_CAPABILITY_IDS.synchronizationRetry]: { scope: 'connection' },
-    [COLLABORATION_CAPABILITY_IDS.managedContainerManage]: { action: 'refresh-status' }
+    [COLLABORATION_CAPABILITY_IDS.managedContainerInspect]: { action: 'refresh-status' },
+    [COLLABORATION_CAPABILITY_IDS.managedContainerProvision]: {
+      action: 'ensure', humanEndpointId: TEST_IDS.humanEndpointId
+    },
+    [COLLABORATION_CAPABILITY_IDS.managedContainerArchive]: {
+      action: 'archive', managedContainerId: 'mco_123456789012', expectedRevision: 1
+    }
   }
   const mutations = definitions.filter((definition) => definition.effect === 'external-write')
 
@@ -144,4 +150,10 @@ test('global collaboration mutations satisfy the production broker contract with
       `${definition.id} must still return its valid UI result`
     )
   }
+  assert.equal(definitions.find(({ id }) => (
+    id === COLLABORATION_CAPABILITY_IDS.managedContainerInspect
+  ))?.effect, 'read')
+  assert.equal(definitions.find(({ id }) => (
+    id === COLLABORATION_CAPABILITY_IDS.managedContainerArchive
+  ))?.effect, 'destructive')
 })

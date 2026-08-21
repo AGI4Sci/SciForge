@@ -829,14 +829,10 @@ export class CodexRuntimeService {
     try {
       const stored = await this.findStoredThread(threadId)
       const { client } = await this.ensureConnectedClient()
-      try {
-        await client.renameThread({
-          threadId: stored?.codexThreadId ?? threadId,
-          title
-        })
-      } catch (error) {
-        if (!stored || !isMissingOrUnmaterializedThreadError(error)) throw error
-      }
+      await client.renameThread({
+        threadId: stored?.codexThreadId ?? threadId,
+        title
+      })
       if (stored) {
         await this.threadStore?.upsert({
           guiThreadId: stored.guiThreadId,

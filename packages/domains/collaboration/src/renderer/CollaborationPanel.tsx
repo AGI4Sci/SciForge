@@ -943,6 +943,7 @@ export function ManagedChannelSection({
   onArchive: (managedContainerId: string, expectedRevision: number) => void
 }>): ReactElement | null {
   const { t } = useTranslation('common')
+  const [archiveConfirmationId, setArchiveConfirmationId] = useState<string | null>(null)
   const eligibleEndpoints = snapshot.participant?.endpoints.filter((endpoint) => (
     endpoint.status === 'active' && snapshot.providerOptions.some((provider) => (
       provider.providerKey === endpoint.providerKey && provider.managedContainers
@@ -971,18 +972,34 @@ export function ManagedChannelSection({
       <div className="space-y-2">
         {snapshot.managedContainers.map((container) => {
           const checks = container.checks
+          const endpoint = snapshot.participant?.endpoints.find((candidate) => (
+            candidate.humanEndpointId === container.humanEndpointId
+          ))
+          const provider = snapshot.providerOptions.find((candidate) => (
+            candidate.providerKey === endpoint?.providerKey
+          ))
+          const mutable = container.status === 'active' || container.status === 'drifted'
+          const checkMark = (value: boolean | undefined): string => value === undefined ? '?' : value ? '✓' : '✕'
           return (
             <div key={container.managedContainerId} className="rounded-md border border-ds-border p-2 text-xs">
               <div className="flex items-center justify-between gap-2">
                 <span className="truncate font-medium">{container.displayName}</span>
                 <span className="text-ds-muted">{container.status}</span>
               </div>
+              <p className="mt-1 text-ds-muted">
+                {provider?.label ?? endpoint?.providerKey ?? container.container?.provider ?? '—'} ·{' '}
+                {endpoint?.displayName ?? container.humanEndpointId} ·{' '}
+                {provider?.realmLabel ?? 'Realm'}: {container.container?.realmId ?? '—'} ·{' '}
+                {provider?.containerLabel ?? 'Channel'}
+              </p>
               <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-ds-muted">
-                <dt>{t('collaborationManagedChannelPrivacy')}</dt><dd>{checks?.private ? '✓' : '—'}</dd>
-                <dt>{t('collaborationManagedChannelHistory')}</dt><dd>{checks?.protectedHistory ? '✓' : '—'}</dd>
-                <dt>{t('collaborationManagedChannelMembers')}</dt><dd>{checks?.exactMembership ? '✓' : '—'}</dd>
-                <dt>{t('collaborationManagedChannelSend')}</dt><dd>{checks?.ownerCanSend && checks.messageBotCanSend ? '✓' : '—'}</dd>
-                <dt>{t('collaborationManagedChannelTopics')}</dt><dd>{checks?.ownerCanCreateTopics ? '✓' : '—'}</dd>
+                <dt>{t('collaborationManagedChannelPrivacy')}</dt><dd>{checkMark(checks?.private)}</dd>
+                <dt>{t('collaborationManagedChannelHistory')}</dt><dd>{checkMark(checks?.protectedHistory)}</dd>
+                <dt>{t('collaborationManagedChannelMembers')}</dt><dd>{checkMark(checks?.exactMembership)}</dd>
+                <dt>{t('collaborationManagedChannelSend')}</dt><dd>{checkMark(checks == null ? undefined : checks.ownerCanSend && checks.messageBotCanSend)}</dd>
+                <dt>{t('collaborationManagedChannelTopics')}</dt><dd>{checkMark(checks?.ownerCanCreateTopics)}</dd>
+                <dt>{t('collaborationManagedChannelMemberManagement')}</dt><dd>{checkMark(checks?.memberManagementRestricted)}</dd>
+                <dt>{t('collaborationManagedChannelAdministration')}</dt><dd>{checkMark(checks?.channelManagementRestricted)}</dd>
                 <dt>{t('collaborationManagedChannelSession')}</dt>
                 <dd>{snapshot.projections.filter((projection) => (
                   projection.humanEndpointId === container.humanEndpointId &&
@@ -1001,23 +1018,34 @@ export function ManagedChannelSection({
                     <RotateCcw className="h-3.5 w-3.5" />{t('collaborationManagedChannelRetry')}
                   </button>
                 ) : null}
-                <button type="button" className={SECONDARY_BUTTON} disabled={busy}
+                <button type="button" className={SECONDARY_BUTTON} disabled={busy || container.status !== 'active'}
                   onClick={() => onRefreshTopics(container.humanEndpointId)}>
                   <RefreshCw className="h-3.5 w-3.5" />{t('collaborationManagedChannelRefreshTopics')}
                 </button>
-                {container.container && container.status !== 'archived' ? (
+                {container.container && (container.status === 'drifted' || container.status === 'failed') ? (
                   <button type="button" className={SECONDARY_BUTTON} disabled={busy}
                     onClick={() => onReconcile(container.managedContainerId, container.revision)}>
                     <RotateCcw className="h-3.5 w-3.5" />{t('collaborationManagedChannelRepair')}
                   </button>
                 ) : null}
-                {container.container && container.status !== 'archived' ? (
+                {container.container && mutable ? (
                   <button type="button" className={SECONDARY_BUTTON} disabled={busy}
-                    onClick={() => onArchive(container.managedContainerId, container.revision)}>
+                    onClick={() => setArchiveConfirmationId(container.managedContainerId)}>
                     <Unlink className="h-3.5 w-3.5" />{t('collaborationManagedChannelArchive')}
                   </button>
                 ) : null}
               </div>
+              {archiveConfirmationId === container.managedContainerId ? (
+                <InlineConfirmationEditor
+                  message={t('collaborationManagedChannelArchiveConfirm')}
+                  busy={busy}
+                  onConfirm={() => {
+                    onArchive(container.managedContainerId, container.revision)
+                    setArchiveConfirmationId(null)
+                  }}
+                  onCancel={() => setArchiveConfirmationId(null)}
+                />
+              ) : null}
             </div>
           )
         })}

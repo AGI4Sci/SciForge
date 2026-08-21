@@ -561,8 +561,10 @@ export class CollaborationRuntime {
     }
     if (input.action === 'refresh-status') {
       const containers = await connection.refreshManagedContainers()
+      const pending = new Map<string, number>()
       for (const container of containers) {
-        if (!container.container || container.status === 'archived') continue
+        if (!container.container || !['active', 'drifted', 'failed'].includes(container.status)) continue
+        pending.set(container.managedContainerId, container.revision)
         await connection.executeAsUser(restRequestSchema.parse({
           protocolVersion: '1.0',
           requestId: collaborationRequestId(),
@@ -572,7 +574,16 @@ export class CollaborationRuntime {
           expectedRevision: container.revision
         }))
       }
-      await connection.refreshManagedContainers()
+      for (let attempt = 0; attempt < 40 && pending.size > 0; attempt += 1) {
+        await delay(250)
+        const refreshed = await connection.refreshManagedContainers()
+        for (const container of refreshed) {
+          const previousRevision = pending.get(container.managedContainerId)
+          if (previousRevision !== undefined && container.revision !== previousRevision) {
+            pending.delete(container.managedContainerId)
+          }
+        }
+      }
       return { managedContainer: null }
     }
     const state = this.store.snapshot()
@@ -587,7 +598,6 @@ export class CollaborationRuntime {
       ))) {
         throw new Error('This endpoint Provider does not offer managed Channels.')
       }
-      const displayName = managedContainerDisplayName(state.user.userId)
       const existing = state.managedContainers.find((container) => (
         container.humanEndpointId === input.humanEndpointId
       ))
@@ -605,7 +615,6 @@ export class CollaborationRuntime {
           retryToken
         ),
         humanEndpointId: input.humanEndpointId,
-        displayName,
         policy: {
           version: 1,
           visibility: 'private',
@@ -848,10 +857,8 @@ function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
-export function managedContainerDisplayName(userId: string): string {
-  // Collaboration Server stableDigest() JSON-encodes scalar values before
-  // hashing. Keep the Desktop request aligned with that server-derived name.
-  return `sciforge-${digest(JSON.stringify(userId)).slice(0, 12)}`
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
 
 export function managedContainerEnsureIdempotencyKey(

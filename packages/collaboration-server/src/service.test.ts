@@ -36,13 +36,58 @@ async function registerAgent(service: CollaborationService, user: UserActor, lab
   return result
 }
 
+async function activateManagedContainer(
+  repository: FakeCollaborationRepository,
+  owner: Awaited<ReturnType<typeof onboard>>,
+  containerId: string
+) {
+  const endpoint = (await repository.getEndpoint(owner.endpointId))!
+  await repository.insertManagedContainer({
+    managedContainerId: `mco_${stableDigest(`${owner.userId}\u0000${containerId}`).slice(0, 12)}`,
+    ownerUserId: owner.userId,
+    humanEndpointId: owner.endpointId,
+    provider: 'zulip',
+    realmId: 'realm-hk',
+    ownerProviderUserId: endpoint.providerUserId,
+    stableKey: `managed-${stableDigest(owner.userId)}`,
+    displayName: `sciforge-${stableDigest(owner.userId).slice(0, 12)}`,
+    externalContainerId: containerId,
+    policy: {
+      version: 1, visibility: 'private', history: 'protected', membership: 'owner_and_message_bot',
+      memberManagement: 'provisioning_service_only', channelManagement: 'provisioning_service_only',
+      ownerCanSend: true, ownerCanCreateTopics: true, messageBotCanSend: true,
+      messageBotCreatesProjectTopics: false
+    },
+    status: 'active', revision: 1, createdAt: at.toISOString(), updatedAt: at.toISOString()
+  })
+}
+
 describe('CollaborationService canonical transactions', () => {
+  it('rejects a handcrafted personal locator when the owner has no managed container', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const authentication = new AuthenticationService(repository, now)
+    const owner = await onboard(service, authentication, 'unmanaged-owner', 'unmanaged-provider-user')
+    const agent = await registerAgent(service, owner.user, 'unmanagedagent')
+
+    await expect(service.createProjection(owner.user, {
+      agentId: agent.agent.agentId,
+      humanEndpointId: owner.endpointId,
+      locator: { type: 'provider_locator', provider: 'zulip', realmId: 'realm-hk',
+        containerId: 'another-users-private-channel', topicId: 'stolen-topic' },
+      displayName: 'Untrusted locator',
+      allowedSenderUserIds: [owner.userId],
+      idempotencyKey: 'idem_projection_without_managed_container'
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+  })
+
   it('restores a closed projection only through the safe paused state', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })
     const authentication = new AuthenticationService(repository, now)
     const owner = await onboard(service, authentication, 'restore-owner', 'restore-provider-user')
     const agent = await registerAgent(service, owner.user, 'restoreagent')
+    await activateManagedContainer(repository, owner, 'private-channel')
     const locator = {
       type: 'provider_locator' as const,
       provider: 'zulip',
@@ -89,9 +134,53 @@ describe('CollaborationService canonical transactions', () => {
     expect(restored).toMatchObject({ status: 'active', revision: paused.revision + 1 })
   })
 
+  it('transfers managed ownership atomically and pauses the previous owner projection', async () => {
+    const repository = new FakeCollaborationRepository()
+    const notifier = new FakeInboxNotifier()
+    const service = new CollaborationService({ repository, notifier, now })
+    const authentication = new AuthenticationService(repository, now)
+    const owner = await onboard(service, authentication, 'transfer-owner', 'transfer-provider-user')
+    const target = await onboard(service, authentication, 'transfer-target', 'target-provider-user')
+    const agent = await registerAgent(service, owner.user, 'transferagent')
+    await activateManagedContainer(repository, owner, 'transfer-channel')
+    const projection = await service.createProjection(owner.user, {
+      agentId: agent.agent.agentId, humanEndpointId: owner.endpointId,
+      locator: { type: 'provider_locator', provider: 'zulip', realmId: 'realm-hk',
+        containerId: 'transfer-channel', topicId: 'transfer-topic' },
+      displayName: 'Transfer topic', allowedSenderUserIds: [owner.userId],
+      idempotencyKey: 'idem_projection_before_endpoint_transfer'
+    })
+    const container = (await service.listManagedContainers(owner.user))[0]!
+    const endpointBeforeTransfer = (await repository.getEndpoint(owner.endpointId))!
+
+    await service.transferEndpoint({ ...owner.user, assurance: 'strong' }, {
+      humanEndpointId: owner.endpointId, targetUserId: target.userId,
+      expectedRevision: endpointBeforeTransfer.revision, idempotencyKey: 'idem_endpoint_transfer_managed_owner'
+    })
+
+    expect(await repository.getProjection(projection.projectionId)).toMatchObject({
+      status: 'paused', lastErrorCode: 'human_endpoint_transferred', revision: projection.revision + 1
+    })
+    expect(await repository.getManagedContainer(container.managedContainerId)).toMatchObject({
+      ownerUserId: target.userId, revision: container.revision + 1
+    })
+    await expect(service.inspectManagedContainer(owner.user, {
+      managedContainerId: container.managedContainerId, expectedRevision: container.revision + 1,
+      idempotencyKey: 'idem_old_owner_inspect_after_transfer'
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+    await expect(service.inspectManagedContainer(target.user, {
+      managedContainerId: container.managedContainerId, expectedRevision: container.revision + 1,
+      idempotencyKey: 'idem_new_owner_inspect_after_transfer'
+    })).resolves.toMatchObject({ ownerUserId: target.userId })
+    expect(notifier.notifications).toContainEqual(expect.objectContaining({
+      recipient: { kind: 'agent', id: agent.agent.agentId }
+    }))
+  })
+
   it('queues exactly one managed Channel ensure job for an owned active endpoint', async () => {
     const repository = new FakeCollaborationRepository()
-    const service = new CollaborationService({ repository, now })
+    const notifier = new FakeInboxNotifier()
+    const service = new CollaborationService({ repository, notifier, now })
     const authentication = new AuthenticationService(repository)
     const owner = await onboard(service, authentication, 'managed-owner', '42')
     const policy = { version: 1 as const, visibility: 'private' as const, history: 'protected' as const,
@@ -168,9 +257,30 @@ describe('CollaborationService canonical transactions', () => {
       expectedRevision: 4,
       idempotencyKey: 'idem_managed_container_inspect_owner'
     })
-    expect(inspected).toMatchObject({ status: 'provisioning', revision: 5 })
+    expect(inspected).toMatchObject({ status: 'active', revision: 4 })
     expect([...repository.state.managedContainerJobs.values()]).toContainEqual(expect.objectContaining({
-      operation: 'inspect', desiredRevision: 5, state: 'queued'
+      operation: 'inspect', desiredRevision: 4, state: 'queued'
+    }))
+    const projection = await service.createProjection(owner.user, {
+      agentId: agent.agent.agentId, humanEndpointId: owner.endpointId,
+      locator: { type: 'provider_locator', provider: 'zulip', realmId: 'realm-hk',
+        containerId: '123', topicId: 'topic-owned' },
+      displayName: 'Owned Topic', allowedSenderUserIds: [owner.userId],
+      idempotencyKey: 'idem_projection_owned_managed_container'
+    })
+    const archived = await service.archiveManagedContainer(owner.user, {
+      managedContainerId: first.managedContainerId, expectedRevision: 4,
+      idempotencyKey: 'idem_managed_container_archive_owner'
+    })
+    expect(archived).toMatchObject({ status: 'suspended', revision: 5 })
+    expect(await repository.getProjection(projection.projectionId)).toMatchObject({
+      status: 'paused', lastErrorCode: 'managed_container_archived', revision: 2
+    })
+    expect([...repository.state.managedContainerJobs.values()]).toContainEqual(expect.objectContaining({
+      operation: 'archive', desiredRevision: 5, state: 'queued'
+    }))
+    expect(notifier.notifications).toContainEqual(expect.objectContaining({
+      recipient: { kind: 'agent', id: agent.agent.agentId }
     }))
 
     const other = await onboard(service, authentication, 'managed-other', '43')
@@ -412,7 +522,7 @@ describe('CollaborationService canonical transactions', () => {
     )
   })
 
-  it('routes a shared personal topic to its fixed Agent once and targets HumanNeeded answers', async () => {
+  it('routes an owner-only personal topic to its fixed Agent once and targets HumanNeeded answers', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })
     const authentication = new AuthenticationService(repository, now)
@@ -423,22 +533,23 @@ describe('CollaborationService canonical transactions', () => {
     const aliceDevice = await authentication.resolveBearer(aliceAgent.deviceCredential!)
     const bobDevice = await authentication.resolveBearer(bobAgent.deviceCredential!)
     if (aliceDevice.kind !== 'agent_device' || bobDevice.kind !== 'agent_device') throw new Error('Expected Agent actors')
+    await activateManagedContainer(repository, alice, 'stream-research')
     const locator = { type: 'provider_locator' as const, provider: 'zulip', realmId: 'realm-hk',
       containerId: 'stream-research', topicId: 'topic-fixed', topicDisplayName: '固定会话' }
     const projection = await service.createProjection(alice.user, { agentId: aliceAgent.agent.agentId,
-      humanEndpointId: alice.endpointId, locator, displayName: '固定会话', allowedSenderUserIds: [alice.userId, bob.userId],
+      humanEndpointId: alice.endpointId, locator, displayName: '固定会话', allowedSenderUserIds: [alice.userId],
       idempotencyKey: 'idem_projection_create_alice' })
-    const first = await service.acceptPersonalProviderMessage(bob.endpoint, { locator,
+    const first = await service.acceptPersonalProviderMessage(alice.endpoint, { locator,
       providerMessageId: 'zulip-message-100', providerEventId: 'zulip-event-100', text: '请继续分析',
       occurredAt: at.toISOString() })
-    const duplicate = await service.acceptPersonalProviderMessage(bob.endpoint, { locator,
+    const duplicate = await service.acceptPersonalProviderMessage(alice.endpoint, { locator,
       providerMessageId: 'zulip-message-100', providerEventId: 'zulip-event-100', text: '请继续分析',
       occurredAt: at.toISOString() })
     expect(duplicate).toEqual(first)
     expect(await repository.pullInbox({ kind: 'agent', id: aliceAgent.agent.agentId }, 0, 20, at.toISOString())).toHaveLength(1)
     expect(await repository.pullInbox({ kind: 'agent', id: bobAgent.agent.agentId }, 0, 20, at.toISOString())).toHaveLength(0)
     expect(projection.agentId).toBe(aliceAgent.agent.agentId)
-    const movedLocator = { ...locator, containerId: 'stream-research-renamed',
+    const movedLocator = { ...locator,
       containerDisplayName: '研究（新）', topicDisplayName: '固定会话（新）' }
     const moved = await service.applyProviderLocatorChange({ previousLocator: locator, currentLocator: movedLocator,
       providerEventId: 'zulip-event-locator-moved-100' })
@@ -452,7 +563,7 @@ describe('CollaborationService canonical transactions', () => {
     expect(replayedMove).toEqual({ kind: 'personal_projection', resourceId: projection.projectionId })
     expect(await service.getProjection(alice.user, projection.projectionId)).toMatchObject({
       projectionId: projection.projectionId, locatorRevision: 2, revision: 2 })
-    await service.acceptPersonalProviderMessage(bob.endpoint, { locator: movedLocator,
+    await service.acceptPersonalProviderMessage(alice.endpoint, { locator: movedLocator,
       providerMessageId: 'zulip-message-101', providerEventId: 'zulip-event-101', text: '在新 Topic 继续',
       occurredAt: at.toISOString() })
     const movedSessionInbox = await repository.pullInbox(
@@ -464,9 +575,9 @@ describe('CollaborationService canonical transactions', () => {
       type: 'projection.updated', projectionId: projection.projectionId, revision: 2 })
     expect(movedSessionInbox[2]?.payload).toMatchObject({
       type: 'personal.message.received', projectionId: projection.projectionId, projectionRevision: 2 })
-    await expect(service.acceptPersonalProviderMessage(bob.endpoint, { locator,
-      providerMessageId: 'zulip-message-102', providerEventId: 'zulip-event-102', text: '旧 Topic 不应路由',
-      occurredAt: at.toISOString() })).rejects.toMatchObject({ code: 'not_found' })
+    await expect(service.acceptPersonalProviderMessage(alice.endpoint, { locator,
+      providerMessageId: 'zulip-message-102', providerEventId: 'zulip-event-102', text: '稳定 ID 仍应路由',
+      occurredAt: at.toISOString() })).resolves.toMatchObject({ projectionId: projection.projectionId })
 
     const project = await service.createProject(alice.user, { displayName: 'Human loop', goal: '定向提问',
       memberUserIds: [alice.userId, bob.userId], coordinatorAgentId: aliceAgent.agent.agentId,

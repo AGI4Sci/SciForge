@@ -108,7 +108,7 @@ function wrapWithDurableProviderServices(
     },
     listLocators: (request) => provider.listLocators(request),
     updateLocator: (request) => provider.updateLocator(request),
-    manageContainer: (request) => provider.manageContainer(request),
+    manageContainer: (request) => provider.manageContainer!(request),
     lifecycle: (request) => provider.lifecycle(request),
     diagnose: () => provider.diagnose()
   }

@@ -88,6 +88,7 @@ describe('ZulipHumanEndpointProvider', () => {
   it('provisions a private protected Channel with a separate least-privilege identity and creates no Topic', async () => {
     const mutations: Array<{ path: string; method: string; body: URLSearchParams }> = []
     let userLookup = 0
+    let archived = false
     const fetch = async (input: string, init?: RequestInit) => {
       const url = new URL(input)
       const method = init?.method ?? 'GET'
@@ -97,7 +98,7 @@ describe('ZulipHumanEndpointProvider', () => {
       if (method !== 'GET') mutations.push({ path: url.pathname, method, body })
       if (url.pathname.endsWith('/api/v1/users/me')) {
         userLookup += 1
-        return userLookup === 1
+        return userLookup % 2 === 1
           ? json({ result: 'success', user_id: 7, email: 'provisioner@example.invalid',
               full_name: 'Provisioner', is_bot: false })
           : json({ result: 'success', user_id: 99, email: 'service-bot@example.invalid',
@@ -118,8 +119,15 @@ describe('ZulipHumanEndpointProvider', () => {
         }, { status: 400 })
       }
       if (url.pathname.endsWith('/api/v1/channels/create')) return json({ result: 'success', id: 123 })
+      if (url.pathname.endsWith('/api/v1/users/me/subscriptions') && method === 'DELETE') {
+        return json({ result: 'success' })
+      }
       if (url.pathname.endsWith('/api/v1/streams/123/members')) {
         return json({ result: 'success', subscribers: [42, 99] })
+      }
+      if (url.pathname.endsWith('/api/v1/streams/123') && method === 'DELETE') {
+        archived = true
+        return json({ result: 'success' })
       }
       if (url.pathname.endsWith('/api/v1/streams/123')) return json({
         result: 'success',
@@ -129,7 +137,7 @@ describe('ZulipHumanEndpointProvider', () => {
           description: 'SciForge managed private Channel.',
           invite_only: true,
           history_public_to_subscribers: false,
-          is_archived: false,
+          is_archived: archived,
           topics_policy: 'disable_empty_topic',
           can_add_subscribers_group: { direct_members: [7], direct_subgroups: [] },
           can_administer_channel_group: { direct_members: [7], direct_subgroups: [] },
@@ -178,6 +186,28 @@ describe('ZulipHumanEndpointProvider', () => {
     assert.equal(create.body.has('topics_policy'), false)
     assert.deepEqual(JSON.parse(create.body.get('subscribers')!), [42, 99])
     assert.equal(mutations.some((entry) => entry.path.endsWith('/api/v1/messages')), false)
+    const archivedResult = await provider.manageContainer!({
+      protocolVersion: '1.0', type: 'provider.managed_container.archive',
+      realmId: 'https://example.invalid/team-chat',
+      ownerIdentity: { type: 'provider_identity', provider: 'zulip',
+        realmId: 'https://example.invalid/team-chat', providerUserId: '42' },
+      container: { type: 'provider_managed_container_ref', provider: 'zulip',
+        realmId: 'https://example.invalid/team-chat', containerId: '123' },
+      policy: { version: 1, visibility: 'private', history: 'protected',
+        membership: 'owner_and_message_bot', memberManagement: 'provisioning_service_only',
+        channelManagement: 'provisioning_service_only', ownerCanSend: true,
+        ownerCanCreateTopics: true, messageBotCanSend: true, messageBotCreatesProjectTopics: false }
+    })
+    assert.equal(archivedResult.status, 'archived')
+    const archiveIndex = mutations.findIndex((entry) => (
+      entry.path.endsWith('/api/v1/streams/123') && entry.method === 'DELETE'
+    ))
+    const unsubscribeIndex = mutations.findIndex((entry) => (
+      entry.path.endsWith('/api/v1/users/me/subscriptions') && entry.method === 'DELETE'
+    ))
+    assert.ok(archiveIndex >= 0)
+    assert.ok(unsubscribeIndex > archiveIndex)
+    assert.equal(mutations.some((entry) => entry.method === 'PATCH' && entry.body.has('is_archived')), false)
   })
   it('accepts the strict Zulip 12.2 register and events response envelopes', async () => {
     const seenPaths: string[] = []
