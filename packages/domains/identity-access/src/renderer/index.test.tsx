@@ -51,23 +51,44 @@ describe('Identity renderer entry', () => {
 })
 
 function rendererHost(toggleGlobalOverlay = vi.fn()): DomainRendererHost {
+  const cloudResource = {
+    token: `cap_${'a'.repeat(24)}`,
+    semanticRevision: 'cloud-1',
+    expiresAt: '2027-08-21T00:00:00.000Z'
+  }
+  const cloudSnapshot = {
+    identity: { state: 'signed-out' },
+    device: { state: 'signed-out' },
+    devices: [],
+    revision: 'cloud-1'
+  }
   return {
     capabilityInvoker: {
-      observe: vi.fn(),
+      observe: vi.fn(async () => ({
+        resource: cloudResource,
+        resourceRef: `res_${'b'.repeat(24)}`,
+        resourceKind: 'identity.cloud-session',
+        semanticRevision: 'cloud-1',
+        observedAt: '2026-08-21T00:00:00.000Z',
+        state: cloudSnapshot
+      } as never)),
       invoke: vi.fn(async (contract) => {
-        if (contract.actionId !== IDENTITY_CAPABILITY_IDS.listAccounts) {
-          throw new Error(`Unexpected action ${contract.actionId}`)
+        if (contract.actionId === IDENTITY_CAPABILITY_IDS.cloudInspect) {
+          return { snapshot: cloudSnapshot, resource: cloudResource } as never
         }
-        return {
-          state: {
-            status: 'available',
-            identityVersion: 0,
-            currentAccount: null,
-            accountCount: 0,
-            firstPromptDismissed: false
-          },
-          accounts: []
-        } as never
+        if (contract.actionId === IDENTITY_CAPABILITY_IDS.listAccounts) {
+          return {
+            state: {
+              status: 'available',
+              identityVersion: 0,
+              currentAccount: null,
+              accountCount: 0,
+              firstPromptDismissed: false
+            },
+            accounts: []
+          } as never
+        }
+        throw new Error(`Unexpected action ${contract.actionId}`)
       })
     },
     openExternal: vi.fn(),

@@ -185,19 +185,6 @@ import {
   registerCapabilityResourceContentScheme
 } from './workspace-preview-asset-protocol'
 import { startDevBrowserBridgeServer, type DevBrowserBridgeServer } from './dev-browser-bridge'
-import { DesktopIdentityService } from './services/desktop-identity-service'
-import { EncryptedDesktopIdentitySessionStore } from './services/desktop-identity-session-store'
-import {
-  createUnavailableCollaborationIdentityClient,
-  resolveDesktopIdentityRuntimeConfig
-} from './services/desktop-identity-runtime-config'
-import { DesktopDeviceService } from './services/desktop-device-service'
-import {
-  HttpCollaborationIdentityClient,
-  type CollaborationIdentityClient
-} from '@sciforge/collaboration-identity'
-import { InMemoryCollaborationIdentityClient } from '@sciforge/collaboration-identity/testing'
-import { LocalCloudIdentityLinkService } from '@sciforge/domain-identity-access/main'
 import { CodexRuntimeService } from './runtime/codex'
 import { APP_USER_MODEL_ID } from '../shared/app-brand'
 import { mainPerformanceMonitor } from './performance-monitor'
@@ -583,13 +570,6 @@ function emitSettingsChanged(settings: AppSettingsV1): void {
   }
   devBrowserBridgeServer?.send('settings:changed', settings)
   mainPerformanceMonitor.sample('main.settings.changed.send', mainPerformanceMonitor.now() - startedAt)
-}
-
-function emitDesktopIdentityEvent(channel: string, payload: unknown): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send(channel, payload)
-  }
-  devBrowserBridgeServer?.send(channel, payload)
 }
 
 function getCodexRuntime(): CodexRuntimeService {
@@ -1159,6 +1139,7 @@ app
     const catalog = createApplicationDomainCatalog({
       getUserDataDir: () => app.getPath('userData'),
       getDeviceId: () => hostDeviceId,
+      getAppVersion: () => app.getVersion(),
       getAppRoot: () => app.getAppPath(),
       getExecutablePath: () => process.execPath,
       isPackaged: () => app.isPackaged,
@@ -1311,92 +1292,6 @@ app
     })
     app.once('will-quit', () => {
       void workspacePlacement.disposeAll()
-    })
-    const identityRuntime = resolveDesktopIdentityRuntimeConfig({
-      isPackaged: app.isPackaged,
-      oidcIssuer: process.env.SCIFORGE_OIDC_ISSUER,
-      cloudBaseUrl: process.env.SCIFORGE_CLOUD_BASE_URL
-    })
-    const collaborationIdentityClient: CollaborationIdentityClient = identityRuntime.mode === 'http'
-      ? new HttpCollaborationIdentityClient({ baseUrl: identityRuntime.cloudBaseUrl })
-      : identityRuntime.mode === 'development-memory'
-        ? new InMemoryCollaborationIdentityClient()
-        : createUnavailableCollaborationIdentityClient(identityRuntime.error)
-    const platformEncryption = createPlatformPackageEncryption({ safeStorage })
-    let localCloudIdentityLinks: LocalCloudIdentityLinkService | null = null
-    let localCloudIdentityError: string | undefined
-    try {
-      localCloudIdentityLinks = new LocalCloudIdentityLinkService(app.getPath('userData'))
-    } catch (error) {
-      localCloudIdentityError = `Local Account cloud linking is unavailable: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-      console.warn('[sciforge identity] failed to open Local Account cloud links:', error)
-    }
-    const identityConfigurationError = [
-      identityRuntime.mode === 'disabled' ? identityRuntime.error : undefined,
-      localCloudIdentityError
-    ].filter((value): value is string => Boolean(value)).join(' ')
-    const desktopIdentity = new DesktopIdentityService({
-      issuer: identityRuntime.issuer,
-      clientId: 'sciforge-desktop',
-      audience: 'sciforge-cloud-api',
-      identityClient: collaborationIdentityClient,
-      sessionStore: new EncryptedDesktopIdentitySessionStore(
-        app.getPath('userData'),
-        platformEncryption
-      ),
-      linkAuthenticatedUser: (user) => {
-        if (!localCloudIdentityLinks) throw new Error(localCloudIdentityError)
-        localCloudIdentityLinks.linkIdentity({
-          cloudUserId: user.userId,
-          oidcIdentityId: user.oidcIdentityId,
-          issuer: user.issuer,
-          subject: user.subject,
-          displayName: user.displayName
-        })
-      },
-      ...(identityConfigurationError ? { configurationError: identityConfigurationError } : {}),
-      openExternal: (url) => shell.openExternal(url)
-    })
-    const desktopDevice = new DesktopDeviceService({
-      identity: desktopIdentity,
-      client: collaborationIdentityClient,
-      installationSeed: hostDeviceId,
-      userDataDir: app.getPath('userData'),
-      encryption: platformEncryption,
-      appVersion: app.getVersion(),
-      linkDevice: (device) => {
-        if (!localCloudIdentityLinks) throw new Error(localCloudIdentityError)
-        localCloudIdentityLinks.linkDevice(
-          device.userId,
-          device.deviceId,
-          device.status
-        )
-      }
-    })
-    const disposeIdentityRendererEvents = desktopIdentity.subscribe((status) => {
-      try {
-        localCloudIdentityLinks?.setAuthenticatedCloudUser(
-          status.state === 'signed-in' ? status.user.userId : null
-        )
-      } catch (error) {
-        console.warn('[sciforge identity] failed to project Desktop login into Principal state:', error)
-      }
-      emitDesktopIdentityEvent('identity:status-changed', status)
-    })
-    const disposeDeviceRendererEvents = desktopDevice.subscribe((status) => {
-      emitDesktopIdentityEvent('identity:device-status-changed', status)
-    })
-    void desktopIdentity.initialize().then((result) => {
-      if (!result.ok) console.warn('[sciforge identity] saved login session was not restored:', result.error)
-    })
-    app.once('will-quit', () => {
-      disposeDeviceRendererEvents()
-      disposeIdentityRendererEvents()
-      desktopDevice.close()
-      desktopIdentity.close()
-      localCloudIdentityLinks?.close()
     })
     const appCapabilityDependencies: AppCapabilityDependencies = {
       controlledProcessService: workspacePlacement,
@@ -1915,8 +1810,6 @@ app
       isTrustedIpcSender: isTrustedMainRendererIpcSender,
       applySettingsPatch,
       getModelAccessStatus: readModelAccessStatus,
-      desktopIdentity,
-      desktopDevice,
       traces: fullTraceStore,
       fileTransfers: {
         isInstalledRendererOwner: (ownerId) => installedDomainPackages.definitions.some(

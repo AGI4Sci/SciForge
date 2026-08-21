@@ -159,13 +159,6 @@ import type {
   ResearchCardUpdateInput
 } from './research-cards'
 import type { DomainExtensionsApi } from './domain-extensions'
-import type {
-  DesktopDeviceActionResult,
-  DesktopDeviceStatus,
-  DesktopDeviceSummary,
-  DesktopIdentityActionResult,
-  DesktopIdentityStatus
-} from './desktop-identity'
 
 export type WorkspacePickResult = { canceled: boolean; path: string | null }
 export type WorkspaceFilePickerFilter = {
@@ -605,19 +598,6 @@ export type SciForgeApi = {
   setSettings: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   onSettingsChanged: (handler: (settings: AppSettingsV1) => void) => () => void
   getModelAccessStatus: () => Promise<ModelAccessStatus>
-  identity: {
-    getStatus: () => Promise<DesktopIdentityStatus>
-    login: () => Promise<DesktopIdentityActionResult>
-    reauthenticate: () => Promise<DesktopIdentityActionResult>
-    logout: () => Promise<DesktopIdentityActionResult>
-    onStatusChanged: (handler: (status: DesktopIdentityStatus) => void) => () => void
-    getDeviceStatus: () => Promise<DesktopDeviceStatus>
-    onDeviceStatusChanged: (handler: (status: DesktopDeviceStatus) => void) => () => void
-    listDevices: () => Promise<readonly DesktopDeviceSummary[]>
-    enrollDevice: () => Promise<DesktopDeviceActionResult>
-    refreshDevices: () => Promise<DesktopDeviceActionResult>
-    revokeDevice: (deviceId: string) => Promise<DesktopDeviceActionResult>
-  }
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
   traces: {
     read: (query?: TraceReadQuery) => Promise<TraceReadResult>

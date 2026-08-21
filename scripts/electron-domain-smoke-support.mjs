@@ -29,6 +29,15 @@ export const IDENTITY_SMOKE_CAPABILITY_IDS = Object.freeze([
   'identity.local.dismiss-first-prompt',
   'identity.local.backup-and-reset'
 ])
+export const CLOUD_IDENTITY_SMOKE_CAPABILITY_IDS = Object.freeze([
+  'identity.cloud.inspect',
+  'identity.cloud.login',
+  'identity.cloud.reauthenticate',
+  'identity.cloud.logout',
+  'identity.cloud.enroll-device',
+  'identity.cloud.refresh-devices',
+  'identity.cloud.revoke-device'
+])
 export const CONTENT_SPACE_SMOKE_CAPABILITY_IDS = Object.freeze([
   'content-space.list-provider-instances',
   'content-space.describe-capabilities',
@@ -44,6 +53,7 @@ export const CONTENT_SPACE_SMOKE_CAPABILITY_IDS = Object.freeze([
 ])
 export const REQUIRED_CAPABILITY_IDS = Object.freeze([
   ...IDENTITY_SMOKE_CAPABILITY_IDS,
+  ...CLOUD_IDENTITY_SMOKE_CAPABILITY_IDS,
   ...CONTENT_SPACE_SMOKE_CAPABILITY_IDS,
   'browser-preview.open',
   'browser-preview.read',
@@ -178,7 +188,9 @@ export async function runElectronDomainSmoke({
   expectedRendererUrl,
   label,
   timeoutMs = DEFAULT_TIMEOUT_MS,
-  loadElectron = loadPlaywrightElectron
+  loadElectron = loadPlaywrightElectron,
+  removeTemporaryDirectory = removeElectronSmokeTemporaryDirectory,
+  reportCleanupError = defaultReportCleanupError
 }) {
   await assertExecutable(executablePath, process.platform)
   const temporaryDirectory = await createElectronSmokeTemporaryDirectory()
@@ -192,6 +204,7 @@ export async function runElectronDomainSmoke({
   let electronApp
   let visualRouterStub
   let interruptedBy
+  let primaryError
   let phase = 'launch'
   const signalHandlers = new Map()
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
@@ -341,16 +354,51 @@ export async function runElectronDomainSmoke({
     return result
   } catch (error) {
     const output = electronApp ? collectBufferedOutput(electronApp.process()).trim() : ''
-    throw new Error(
+    primaryError = new Error(
       `${error instanceof Error ? error.message : String(error)}${output ? `\nElectron output:\n${output}` : ''}`,
       { cause: error }
     )
+    throw primaryError
   } finally {
     for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler)
-    await closeElectron(electronApp)
-    await visualRouterStub?.close()
-    await removeElectronSmokeTemporaryDirectory(temporaryDirectory)
+    await cleanupElectronSmoke({
+      electronApp,
+      visualRouterStub,
+      temporaryDirectory,
+      removeTemporaryDirectory,
+      reportCleanupError,
+      primaryError
+    })
   }
+}
+
+export async function cleanupElectronSmoke({
+  electronApp,
+  visualRouterStub,
+  temporaryDirectory,
+  removeTemporaryDirectory = removeElectronSmokeTemporaryDirectory,
+  reportCleanupError = defaultReportCleanupError,
+  primaryError
+}) {
+  const cleanupErrors = []
+  for (const cleanup of [
+    () => closeElectron(electronApp),
+    () => visualRouterStub?.close(),
+    () => removeTemporaryDirectory(temporaryDirectory)
+  ]) {
+    try {
+      await cleanup()
+    } catch (error) {
+      cleanupErrors.push(error)
+    }
+  }
+  if (cleanupErrors.length === 0) return
+  const cleanupError = new AggregateError(cleanupErrors, 'Electron smoke cleanup failed.')
+  if (primaryError) {
+    reportCleanupError(cleanupError)
+    return
+  }
+  throw cleanupError
 }
 
 export async function createElectronSmokeTemporaryDirectory(
@@ -1064,7 +1112,19 @@ export async function removeElectronSmokeTemporaryDirectory(
   if (dirname(resolvedPath) !== resolve(tmpdir()) || !basename(resolvedPath).startsWith(TEMPORARY_DIRECTORY_PREFIX)) {
     throw new Error(`Refusing to remove unsafe Electron smoke directory: ${resolvedPath}`)
   }
-  await rm(resolvedPath, { recursive: true, force: true })
+  await rm(resolvedPath, electronSmokeRemoveOptions())
+}
+
+export function electronSmokeRemoveOptions(platform = process.platform) {
+  return {
+    recursive: true,
+    force: true,
+    ...(platform === 'win32' ? { maxRetries: 5, retryDelay: 100 } : {})
+  }
+}
+
+function defaultReportCleanupError(error) {
+  console.error(`[electron-domain-smoke cleanup] ${error instanceof Error ? error.message : String(error)}`)
 }
 
 function withTimeout(promise, timeoutMs, message) {

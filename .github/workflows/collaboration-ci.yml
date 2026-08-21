@@ -10,18 +10,23 @@ on:
       - "packages/domain-sdk/**"
       - "infra/keycloak/**"
       - "scripts/collaboration-*.mjs"
+      - "scripts/domain-package-tarball-smoke.test.mjs"
       - "scripts/domain-packages.mjs"
+      - "scripts/fixtures/identity-package-secrets-process.mjs"
       - "scripts/keycloak-*.mjs"
       - "src/main/domain-*.ts"
+      - "src/main/index.ts"
       - "src/main/principal-context*"
+      - "src/main/capabilities/agent-tools*"
+      - "src/main/capabilities/broker*"
       - "src/main/capabilities/identity-principal-transition.integration.test.ts"
+      - "src/main/capabilities/registry*"
       - "src/main/ipc/register-app-ipc-handlers*"
-      - "src/main/services/desktop-device-service*"
-      - "src/main/services/desktop-identity-*"
       - "src/preload/index.ts"
-      - "src/renderer/src/components/chat/DesktopIdentityControl*"
       - "src/renderer/src/components/chat/WorkbenchTopBar*"
-      - "src/shared/desktop-identity.ts"
+      - "src/renderer/src/dev/dev-sciforge-bridge.ts"
+      - "src/renderer/src/lib/capability-client*"
+      - "src/shared/capability-broker.ts"
       - "src/shared/sciforge-api.ts"
       - "package.json"
       - "package-lock.json"
@@ -36,18 +41,23 @@ on:
       - "packages/domain-sdk/**"
       - "infra/keycloak/**"
       - "scripts/collaboration-*.mjs"
+      - "scripts/domain-package-tarball-smoke.test.mjs"
       - "scripts/domain-packages.mjs"
+      - "scripts/fixtures/identity-package-secrets-process.mjs"
       - "scripts/keycloak-*.mjs"
       - "src/main/domain-*.ts"
+      - "src/main/index.ts"
       - "src/main/principal-context*"
+      - "src/main/capabilities/agent-tools*"
+      - "src/main/capabilities/broker*"
       - "src/main/capabilities/identity-principal-transition.integration.test.ts"
+      - "src/main/capabilities/registry*"
       - "src/main/ipc/register-app-ipc-handlers*"
-      - "src/main/services/desktop-device-service*"
-      - "src/main/services/desktop-identity-*"
       - "src/preload/index.ts"
-      - "src/renderer/src/components/chat/DesktopIdentityControl*"
       - "src/renderer/src/components/chat/WorkbenchTopBar*"
-      - "src/shared/desktop-identity.ts"
+      - "src/renderer/src/dev/dev-sciforge-bridge.ts"
+      - "src/renderer/src/lib/capability-client*"
+      - "src/shared/capability-broker.ts"
       - "src/shared/sciforge-api.ts"
       - "package.json"
       - "package-lock.json"
@@ -85,27 +95,42 @@ jobs:
       - name: Run collaboration production-path tests
         run: npm run collaboration:test
 
-      - name: Run identity package tests
+      - name: Run generic capability boundary tests
+        run: |
+          npx vitest run \
+            src/main/capabilities/broker.test.ts \
+            src/main/capabilities/agent-tools.test.ts \
+            src/renderer/src/lib/capability-client.test.ts
+
+      - name: Run identity package and persistence tests
         run: |
           npm --workspace @sciforge/collaboration-identity test
           npm --workspace @sciforge/domain-identity-access test
+          npx vitest run src/main/domain-package-storage.test.ts
 
-      - name: Run Desktop identity integration tests
-        run: >-
-          npx vitest run
-          src/main/principal-context.test.ts
-          src/main/capabilities/identity-principal-transition.integration.test.ts
-          src/main/ipc/register-app-ipc-handlers.test.ts
-          src/main/services/desktop-identity-service.test.ts
-          src/main/services/desktop-device-service.test.ts
-          src/renderer/src/components/chat/DesktopIdentityControl.test.tsx
-          src/renderer/src/components/chat/WorkbenchTopBar.test.ts
+      - name: Run Host identity boundary tests
+        run: |
+          npx vitest run \
+            src/main/ipc/register-app-ipc-handlers.test.ts \
+            src/renderer/src/components/chat/WorkbenchTopBar.test.ts
+
+      - name: Run domain SDK and Principal transition tests
+        run: |
+          npm run domain-sdk:test
+          npx vitest run \
+            src/main/principal-context.test.ts \
+            src/main/capabilities/identity-principal-transition.integration.test.ts
 
       - name: Verify Keycloak realm contract
         run: npm run identity:keycloak:check
 
       - name: Verify generated composition and capabilities
-        run: npm run capability:check
+        run: |
+          npm run domain-packages:generate
+          git diff --exit-code
+          npm run domain-packages:check
+          npm run smoke:domain-packages:tarball
+          npm run capability:check
 
       - name: Build deployable collaboration server
         run: npm --workspace @sciforge/collaboration-server run build

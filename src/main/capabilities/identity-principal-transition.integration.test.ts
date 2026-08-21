@@ -10,13 +10,19 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   IDENTITY_CAPABILITY_IDS,
-  IDENTITY_RESET_CONFIRMATION
+  IDENTITY_RESET_CONFIRMATION,
+  type CloudIdentitySnapshot
 } from '@sciforge/domain-identity-access/contract'
 import {
+  createIdentityCapabilityFactory,
   createDomainMainEntry,
   type IdentityCapabilityFactory
 } from '@sciforge/domain-identity-access/main'
-import type { DomainMainPrincipalProvider } from '@sciforge/domain-sdk/principal'
+import {
+  definePrincipalContextSnapshot,
+  type DomainMainPrincipalProvider,
+  type PrincipalContextSnapshot
+} from '@sciforge/domain-sdk/principal'
 import type { CapabilityJsonValue } from '../../shared/capability-broker'
 import { CapabilityBroker } from './broker'
 import {
@@ -34,6 +40,29 @@ afterEach(() => {
 })
 
 describe('Identity Principal transition Host integration', () => {
+  it('registers every Cloud mutation through the real Host schema as a global authority action', async () => {
+    const fixture = identityBrokerFixture(temporaryRoot('sciforge-identity-schema-'))
+    const descriptors = CLOUD_MUTATION_IDS.map((id) => fixture.definition(id).descriptor)
+
+    expect(descriptors).toHaveLength(6)
+    for (const descriptor of descriptors) {
+      expect(descriptor).toMatchObject({
+        audiences: ['ui'],
+        scope: 'global',
+        resourceKinds: [],
+        effect: 'external-write',
+        principalTransition: 'host-authority',
+        concurrency: { revision: 'none', idempotency: 'required' }
+      })
+    }
+    await expect(fixture.invoke(
+      IDENTITY_CAPABILITY_IDS.cloudLogin,
+      'inactive-cloud-login',
+      {}
+    )).rejects.toMatchObject({ code: 'handler_failed' })
+    fixture.dispose()
+  })
+
   it('executes create, select, and exit through the real Broker transition handshake', async () => {
     const fixture = identityBrokerFixture(temporaryRoot('sciforge-identity-broker-'))
     const alice = await fixture.invoke(IDENTITY_CAPABILITY_IDS.createAccount, 'create-alice', {
@@ -125,12 +154,105 @@ describe('Identity Principal transition Host integration', () => {
     expect(readdirSync(identityDirectory).filter((name) => name.includes('.backup-'))).toHaveLength(1)
     fixture.dispose()
   })
+
+  it('re-issues Cloud resources across Principal transitions and emits only provider changes', async () => {
+    const fixture = cloudIdentityBrokerFixture()
+    const localInspection = await fixture.inspect('inspect-local')
+    const localHandle = cloudHandle(localInspection.output)
+    await expect(fixture.observe(localHandle)).resolves.toMatchObject({
+      state: { identity: { state: 'signed-out' } }
+    })
+
+    const loginRequest = {
+      actionId: IDENTITY_CAPABILITY_IDS.cloudLogin,
+      invocationId: 'cloud-login',
+      input: {}
+    }
+    expect(loginRequest).not.toHaveProperty('resource')
+    expect(loginRequest).not.toHaveProperty('expectedRevision')
+    await expect(fixture.invoke(loginRequest)).resolves.toMatchObject({
+      changed: false,
+      replayed: false,
+      output: { identity: { state: 'signed-in' }, revision: 'cloud-2' }
+    })
+    expect(fixture.handlerResource(IDENTITY_CAPABILITY_IDS.cloudLogin)).toBeUndefined()
+    expect(fixture.events()).toEqual([])
+    await expect(fixture.observe(localHandle)).rejects.toMatchObject({
+      code: 'resource_scope_mismatch'
+    })
+
+    const cloudInspection = await fixture.inspect('inspect-cloud')
+    const cloudHandleValue = cloudHandle(cloudInspection.output)
+    expect(cloudHandleValue.token).not.toBe(localHandle.token)
+    await expect(fixture.observe(cloudHandleValue)).resolves.toMatchObject({
+      state: { identity: { state: 'signed-in' } }
+    })
+    const deliveredEvents: unknown[] = []
+    const unsubscribe = fixture.subscribe((event) => deliveredEvents.push(event))
+
+    const refreshRequest = {
+      actionId: IDENTITY_CAPABILITY_IDS.cloudRefreshDevices,
+      invocationId: 'cloud-refresh',
+      input: {}
+    }
+    await expect(fixture.invoke(refreshRequest)).resolves.toMatchObject({
+      changed: false,
+      output: { revision: 'cloud-3' }
+    })
+    expect(fixture.handlerResource(IDENTITY_CAPABILITY_IDS.cloudRefreshDevices)).toBeUndefined()
+    expect(fixture.events()).toEqual([
+      expect.objectContaining({
+        type: 'resource.changed',
+        origin: 'provider',
+        beforeRevision: 'cloud-2',
+        afterRevision: 'cloud-3'
+      })
+    ])
+    expect(fixture.events()[0]).not.toHaveProperty('actionId')
+    expect(fixture.events()[0]).not.toHaveProperty('invocationId')
+    expect(deliveredEvents).toHaveLength(1)
+
+    await expect(fixture.invoke({
+      actionId: IDENTITY_CAPABILITY_IDS.cloudLogout,
+      invocationId: 'cloud-logout',
+      input: {}
+    })).resolves.toMatchObject({
+      changed: false,
+      output: { identity: { state: 'signed-out' }, revision: 'cloud-4' }
+    })
+    expect(deliveredEvents).toHaveLength(1)
+    expect(deliveredEvents).toEqual([
+      expect.objectContaining({ origin: 'provider' })
+    ])
+    unsubscribe()
+    await expect(fixture.observe(cloudHandleValue)).rejects.toMatchObject({
+      code: 'resource_scope_mismatch'
+    })
+
+    const signedOutInspection = await fixture.inspect('inspect-signed-out')
+    const signedOutHandle = cloudHandle(signedOutInspection.output)
+    expect(signedOutHandle.token).not.toBe(cloudHandleValue.token)
+    await expect(fixture.observe(signedOutHandle)).resolves.toMatchObject({
+      state: { identity: { state: 'signed-out' }, revision: 'cloud-4' }
+    })
+    fixture.dispose()
+  })
 })
+
+const CLOUD_MUTATION_IDS = [
+  IDENTITY_CAPABILITY_IDS.cloudLogin,
+  IDENTITY_CAPABILITY_IDS.cloudReauthenticate,
+  IDENTITY_CAPABILITY_IDS.cloudLogout,
+  IDENTITY_CAPABILITY_IDS.cloudEnrollDevice,
+  IDENTITY_CAPABILITY_IDS.cloudRefreshDevices,
+  IDENTITY_CAPABILITY_IDS.cloudRevokeDevice
+] as const
 
 function identityBrokerFixture(root: string) {
   const entry = createDomainMainEntry({
     getUserDataDir: () => root,
     getDeviceId: () => 'device-integration-1',
+    packageSecrets: memorySecrets(),
     defineCapability: (options) => defineCapability(
       options as DefineCapabilityOptions<z.ZodType, z.ZodType>
     )
@@ -156,6 +278,9 @@ function identityBrokerFixture(root: string) {
   const callerId = 'window:identity-integration'
   return {
     provider,
+    definition: (actionId: string) => definitions.find(
+      (definition) => definition.descriptor.id === actionId
+    )!,
     calls: (actionId: string) => callCounts.get(actionId) ?? 0,
     invoke: (
       actionId: string,
@@ -173,6 +298,182 @@ function identityBrokerFixture(root: string) {
     }),
     dispose: () => {
       for (const contribution of entry.contributions) contribution.onDispose?.()
+    }
+  }
+}
+
+function cloudIdentityBrokerFixture() {
+  const localPrincipal = principalContext(1, 'sciforge.identity-access', 'local-user', 'local-selection')
+  const cloudPrincipal = principalContext(2, 'sciforge-cloud', 'usr_CloudUser000001', 'cloud-authenticated')
+  const signedOutPrincipal = principalContext(3, 'sciforge.identity-access', 'local-user', 'local-selection')
+  let currentPrincipal = localPrincipal
+  let revision = 1
+  let signedIn = false
+  const listeners = new Set<() => void>()
+  const snapshot = (): CloudIdentitySnapshot => signedIn
+    ? signedInCloudSnapshot(revision)
+    : {
+        identity: { state: 'signed-out' },
+        device: { state: 'signed-out' },
+        devices: [],
+        revision: `cloud-${revision}`
+      }
+  const publish = (): CloudIdentitySnapshot => {
+    for (const listener of listeners) listener()
+    return snapshot()
+  }
+  const runtime = {
+    snapshot,
+    semanticRevision: () => `cloud-${revision}`,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    login: async () => {
+      signedIn = true
+      revision = 2
+      currentPrincipal = cloudPrincipal
+      return publish()
+    },
+    reauthenticate: async () => {
+      revision += 1
+      return publish()
+    },
+    logout: async () => {
+      signedIn = false
+      revision += 1
+      currentPrincipal = signedOutPrincipal
+      return publish()
+    },
+    enrollDevice: async () => {
+      revision += 1
+      return publish()
+    },
+    refreshDevices: async () => {
+      revision += 1
+      return publish()
+    },
+    revokeDevice: async () => {
+      revision += 1
+      return publish()
+    }
+  }
+  const handlerResources = new Map<string, unknown>()
+  const factory = createIdentityCapabilityFactory({
+    defineCapability: (options) => defineCapability(
+      options as unknown as DefineCapabilityOptions<z.ZodType, z.ZodType>
+    ),
+    getService: () => ({}) as never,
+    getCloudRuntime: () => runtime as never
+  })
+  const definitions = factory.createDefinitions().map((definition) => ({
+    ...definition,
+    handler: async (...args: Parameters<CapabilityDefinition['handler']>) => {
+      handlerResources.set(definition.descriptor.id, args[1].resource)
+      return await definition.handler(...args)
+    }
+  }))
+  const broker = new CapabilityBroker(new CapabilityRegistry(definitions), {
+    resolveCurrentPrincipalContext: () => currentPrincipal
+  })
+  const caller = {
+    audience: 'ui' as const,
+    callerId: 'window:cloud-identity-integration'
+  }
+  return {
+    inspect: (invocationId: string) => broker.invoke(caller, {
+      actionId: IDENTITY_CAPABILITY_IDS.cloudInspect,
+      invocationId,
+      input: {}
+    }),
+    invoke: (request: Parameters<CapabilityBroker['invoke']>[1]) => broker.invoke(caller, request),
+    observe: (resource: ReturnType<typeof cloudHandle>) => broker.observe(caller, { resource }),
+    subscribe: (listener: Parameters<CapabilityBroker['subscribe']>[1]) =>
+      broker.subscribe(caller, listener),
+    events: () => broker.listEvents(caller),
+    handlerResource: (actionId: string) => handlerResources.get(actionId),
+    dispose: () => listeners.clear()
+  }
+}
+
+function principalContext(
+  identityVersion: number,
+  authority: string,
+  subject: string,
+  assurance: 'local-selection' | 'cloud-authenticated'
+): PrincipalContextSnapshot {
+  return definePrincipalContextSnapshot({
+    identityVersion,
+    principal: {
+      authority,
+      subject,
+      assurance,
+      deviceId: assurance === 'cloud-authenticated'
+        ? 'dev_CloudDevice0001'
+        : 'device-integration-1',
+      identityVersion
+    }
+  })
+}
+
+function signedInCloudSnapshot(revision: number): CloudIdentitySnapshot {
+  const device = {
+    deviceId: 'dev_CloudDevice0001',
+    displayName: 'Integration Desktop',
+    status: 'active' as const,
+    platform: {
+      os: 'windows' as const,
+      arch: 'x64' as const,
+      appVersion: '1.0.0'
+    },
+    activatedAt: '2026-08-21T00:00:00.000Z'
+  }
+  return {
+    identity: {
+      state: 'signed-in',
+      user: {
+        userId: 'usr_CloudUser000001',
+        oidcIdentityId: 'oid_CloudIdent0001',
+        issuer: 'https://login-test.sciforge.cn/realms/SciForge',
+        subject: 'integration-subject',
+        displayName: 'Integration User'
+      },
+      accessTokenExpiresAt: '2026-08-21T01:00:00.000Z'
+    },
+    device: { state: 'active', device },
+    devices: [device],
+    revision: `cloud-${revision}`
+  }
+}
+
+function cloudHandle(output: unknown) {
+  const candidate = output as {
+    resource?: { token?: unknown; semanticRevision?: unknown; expiresAt?: unknown }
+  }
+  if (
+    typeof candidate.resource?.token !== 'string' ||
+    typeof candidate.resource.semanticRevision !== 'string' ||
+    typeof candidate.resource.expiresAt !== 'string'
+  ) {
+    throw new Error('Cloud inspection did not return a resource handle.')
+  }
+  return {
+    token: candidate.resource.token,
+    semanticRevision: candidate.resource.semanticRevision,
+    expiresAt: candidate.resource.expiresAt
+  }
+}
+
+function memorySecrets() {
+  const values = new Map<string, string>()
+  return {
+    has: async (key: string) => values.has(key),
+    read: async (key: string) => values.get(key) ?? null,
+    write: async (key: string, value: string) => {
+      values.set(key, value)
+    },
+    remove: async (key: string) => {
+      values.delete(key)
     }
   }
 }

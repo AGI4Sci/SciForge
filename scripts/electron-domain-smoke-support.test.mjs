@@ -1,19 +1,24 @@
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import { access, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
+  CLOUD_IDENTITY_SMOKE_CAPABILITY_IDS,
   CONTENT_SPACE_SMOKE_CAPABILITY_IDS,
   IDENTITY_SMOKE_CAPABILITY_IDS,
   REQUIRED_CAPABILITY_IDS,
+  cleanupElectronSmoke,
   createElectronSmokeTemporaryDirectory,
   createIdentitySmokeInvocationId,
   createSourceSmokeConfiguration,
+  electronSmokeRemoveOptions,
   locatePackagedExecutable,
   makeExecutableForTest,
   parseSmokeCliOptions,
   removeElectronSmokeTemporaryDirectory,
+  runElectronDomainSmoke,
   validateSmokeResult
 } from './electron-domain-smoke-support.mjs'
 
@@ -30,6 +35,72 @@ test('supervised source smoke keeps its profile inside the owned run directory',
   } finally {
     await rm(runDirectory, { recursive: true, force: true })
   }
+})
+
+test('Windows smoke cleanup uses bounded retries for transient file locks', () => {
+  assert.deepEqual(electronSmokeRemoveOptions('win32'), {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 100
+  })
+  assert.deepEqual(electronSmokeRemoveOptions('linux'), {
+    recursive: true,
+    force: true
+  })
+})
+
+test('smoke preserves a primary first-window failure when cleanup also fails', async () => {
+  const runDirectory = await mkdtemp(join(tmpdir(), 'sciforge-electron-primary-error-'))
+  const executable = join(runDirectory, 'sciforge-test')
+  const previousRunDirectory = process.env.SCIFORGE_E2E_RUN_DIRECTORY
+  const cleanupErrors = []
+  await writeFile(executable, '')
+  await makeExecutableForTest(executable)
+  process.env.SCIFORGE_E2E_RUN_DIRECTORY = runDirectory
+  try {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: 0,
+      signalCode: null,
+      kill: () => true
+    })
+    const primary = new Error('primary first-window failure')
+    const electronApp = {
+      process: () => child,
+      close: async () => undefined,
+      on: () => undefined,
+      firstWindow: async () => { throw primary }
+    }
+    await assert.rejects(runElectronDomainSmoke({
+      executablePath: executable,
+      label: 'test',
+      timeoutMs: 1_000,
+      loadElectron: async () => ({ launch: async () => electronApp }),
+      removeTemporaryDirectory: async () => { throw new Error('cleanup lock failure') },
+      reportCleanupError: (error) => cleanupErrors.push(error)
+    }), (error) => {
+      assert.match(error.message, /primary first-window failure/u)
+      assert.doesNotMatch(error.message, /cleanup lock failure/u)
+      return true
+    })
+    assert.equal(cleanupErrors.length, 1)
+    assert.match(cleanupErrors[0].message, /Electron smoke cleanup failed/u)
+  } finally {
+    if (previousRunDirectory === undefined) delete process.env.SCIFORGE_E2E_RUN_DIRECTORY
+    else process.env.SCIFORGE_E2E_RUN_DIRECTORY = previousRunDirectory
+    await rm(runDirectory, { recursive: true, force: true })
+  }
+})
+
+test('smoke exposes cleanup failure when no primary failure exists', async () => {
+  await assert.rejects(cleanupElectronSmoke({
+    temporaryDirectory: '/tmp/sciforge-cleanup-only',
+    removeTemporaryDirectory: async () => { throw new Error('cleanup-only failure') }
+  }), (error) => {
+    assert.equal(error.message, 'Electron smoke cleanup failed.')
+    assert.match(String(error.errors?.[0]), /cleanup-only failure/u)
+    return true
+  })
 })
 
 test('domain smoke requires every Identity and Content Space capability exactly once', () => {
@@ -56,9 +127,19 @@ test('domain smoke requires every Identity and Content Space capability exactly 
     'content-space.open-portal-target',
     'content-space.observe-immutable-version'
   ])
+  assert.deepEqual(CLOUD_IDENTITY_SMOKE_CAPABILITY_IDS, [
+    'identity.cloud.inspect',
+    'identity.cloud.login',
+    'identity.cloud.reauthenticate',
+    'identity.cloud.logout',
+    'identity.cloud.enroll-device',
+    'identity.cloud.refresh-devices',
+    'identity.cloud.revoke-device'
+  ])
   assert.equal(new Set(REQUIRED_CAPABILITY_IDS).size, REQUIRED_CAPABILITY_IDS.length)
   for (const capabilityId of [
     ...IDENTITY_SMOKE_CAPABILITY_IDS,
+    ...CLOUD_IDENTITY_SMOKE_CAPABILITY_IDS,
     ...CONTENT_SPACE_SMOKE_CAPABILITY_IDS
   ]) {
     assert.equal(REQUIRED_CAPABILITY_IDS.filter((candidate) => candidate === capabilityId).length, 1)

@@ -23,14 +23,30 @@ describe('WorkbenchTopBar toolbar contributions', () => {
     expect(html).not.toContain('Paper Radar')
   })
 
-  it('shows the SciForge Desktop sign-in control', () => {
+  it('does not hard-code a Desktop identity control without a registered action', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       focusedRightPanelMode: null,
       onToggleFocusedRightPanelMode: vi.fn()
     }))
 
-    expect(html).toContain('aria-label="Sign in"')
-    expect(html).toContain('title="Sign in to SciForge with your browser"')
+    expect(html).not.toContain('aria-label="Identity"')
+    expect(html).not.toContain('aria-label="Sign in"')
+  })
+
+  it('renders identity through its registered toolbar contribution', () => {
+    const identityAction = installedRendererContributions.toolbarActions.list()
+      .find(({ id }) => id === 'identity-access.workbench-toolbar-action')
+    expect(identityAction).toBeDefined()
+    const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
+      focusedRightPanelMode: null,
+      onToggleFocusedRightPanelMode: vi.fn(),
+      toolbarActions: [identityAction!],
+      toolbarCommandInvocation: { sessionId: 'thread-1' },
+      onExecuteToolbarCommand: vi.fn()
+    }))
+
+    expect(html).toContain('aria-label="Identity"')
+    expect(html).not.toContain('aria-label="Sign in"')
   })
 
   it('renders and marks a registered toolbar action from its metadata', () => {

@@ -7,8 +7,12 @@ import {
 type CloudIdentityRuntime = {
   activeCloudUserId: string | null
   activeCloudDeviceId: string | null
-  listeners: Set<() => void>
+  listeners: Set<(change: CloudIdentityChange) => void>
 }
+
+type CloudIdentityChange =
+  | Readonly<{ kind: 'committed' }>
+  | Readonly<{ kind: 'storage-failed'; error: unknown }>
 
 const cloudIdentityRuntimes = new Map<string, CloudIdentityRuntime>()
 
@@ -31,17 +35,20 @@ export function activeCloudDeviceId(databasePath: string): string | null {
 
 export function subscribeCloudIdentityChanges(
   databasePath: string,
-  listener: () => void
+  listener: (change: CloudIdentityChange) => void
 ): () => void {
   const runtime = runtimeFor(databasePath)
   runtime.listeners.add(listener)
   return () => runtime.listeners.delete(listener)
 }
 
-function notifyCloudIdentityChanges(databasePath: string): void {
+function notifyCloudIdentityChanges(
+  databasePath: string,
+  change: CloudIdentityChange = { kind: 'committed' }
+): void {
   for (const listener of runtimeFor(databasePath).listeners) {
     try {
-      listener()
+      listener(change)
     } catch {
       // Cloud-link commits remain authoritative even if a projection listener fails.
     }
@@ -85,6 +92,21 @@ export class LocalCloudIdentityLinkService {
     return state
   }
 
+  clearActiveDevice(): IdentityAvailableState {
+    this.#assertOpen()
+    const runtime = runtimeFor(this.#databasePath)
+    if (runtime.activeCloudDeviceId === null) return this.#store.state()
+    runtime.activeCloudDeviceId = null
+    try {
+      const state = this.#store.advanceIdentityVersion()
+      notifyCloudIdentityChanges(this.#databasePath)
+      return state
+    } catch (error) {
+      notifyCloudIdentityChanges(this.#databasePath, { kind: 'storage-failed', error })
+      throw error
+    }
+  }
+
   setAuthenticatedCloudUser(cloudUserId: string | null): IdentityAvailableState {
     this.#assertOpen()
     const runtime = runtimeFor(this.#databasePath)
@@ -109,10 +131,21 @@ export class LocalCloudIdentityLinkService {
     if (this.#closed) return
     this.#closed = true
     const runtime = runtimeFor(this.#databasePath)
+    const authorityWasActive = runtime.activeCloudUserId !== null || runtime.activeCloudDeviceId !== null
     runtime.activeCloudUserId = null
     runtime.activeCloudDeviceId = null
-    notifyCloudIdentityChanges(this.#databasePath)
-    this.#store.close()
+    try {
+      if (authorityWasActive) {
+        try {
+          this.#store.advanceIdentityVersion()
+          notifyCloudIdentityChanges(this.#databasePath)
+        } catch (error) {
+          notifyCloudIdentityChanges(this.#databasePath, { kind: 'storage-failed', error })
+        }
+      }
+    } finally {
+      this.#store.close()
+    }
   }
 
   #assertOpen(): void {

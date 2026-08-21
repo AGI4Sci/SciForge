@@ -43,7 +43,13 @@ export class IdentityService implements DomainMainPrincipalProvider {
     this.initialize()
     this.disposeCloudIdentitySubscription = subscribeCloudIdentityChanges(
       this.databasePath,
-      () => this.refreshCloudIdentityState()
+      (change) => {
+        if (change.kind === 'storage-failed') {
+          this.failClosed(change.error)
+          return
+        }
+        this.refreshCloudIdentityState()
+      }
     )
   }
 

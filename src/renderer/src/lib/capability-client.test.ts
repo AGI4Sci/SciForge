@@ -56,7 +56,9 @@ function transport(output: CapabilityJsonValue) {
     unsubscribe,
     onEvent,
     removeEventListener,
-    emitEvent: (payload: Parameters<NonNullable<typeof eventHandler>>[0]) => eventHandler?.(payload)
+    emitEvent: (payload: unknown) => eventHandler?.(
+      payload as Parameters<NonNullable<typeof eventHandler>>[0]
+    )
   }
 }
 
@@ -315,6 +317,7 @@ describe('RendererCapabilityClient', () => {
       event: {
         id: 'event_abcdefghijklmnopqrst',
         type: 'resource.changed',
+        origin: 'capability',
         occurredAt: '2026-07-22T00:06:00.000Z',
         workspaceId: '/workspace',
         resourceRef: 'res_otherabcdefghijklmnop',
@@ -331,6 +334,7 @@ describe('RendererCapabilityClient', () => {
       event: {
         id: 'event_zyxwvutsrqponmlkjihg',
         type: 'resource.changed',
+        origin: 'capability',
         occurredAt: '2026-07-22T00:07:00.000Z',
         workspaceId: '/workspace',
         resourceRef: 'res_abcdefghijklmnopqrst',
@@ -347,15 +351,79 @@ describe('RendererCapabilityClient', () => {
     expect(listener).toHaveBeenCalledWith({
       resourceRef: 'res_abcdefghijklmnopqrst',
       resourceKind: 'example-resource',
+      origin: 'capability',
       actionId: 'example.compute',
       beforeRevision: 'revision-8',
       afterRevision: 'revision-9',
       changedAt: '2026-07-22T00:07:00.000Z'
     })
 
+    bridge.emitEvent({
+      subscriptionId: '123e4567-e89b-12d3-a456-426614174000',
+      event: {
+        id: 'event_providerabcdefghijkl',
+        type: 'resource.changed',
+        origin: 'provider',
+        occurredAt: '2026-07-22T00:08:00.000Z',
+        workspaceId: '/workspace',
+        resourceRef: 'res_abcdefghijklmnopqrst',
+        resourceStatus: 'live',
+        resourceKind: 'example-resource',
+        beforeRevision: 'revision-9',
+        afterRevision: 'revision-10'
+      }
+    })
+    expect(listener).toHaveBeenCalledTimes(2)
+    expect(listener).toHaveBeenLastCalledWith({
+      resourceRef: 'res_abcdefghijklmnopqrst',
+      resourceKind: 'example-resource',
+      origin: 'provider',
+      beforeRevision: 'revision-9',
+      afterRevision: 'revision-10',
+      changedAt: '2026-07-22T00:08:00.000Z'
+    })
+
     dispose()
     expect(bridge.removeEventListener).toHaveBeenCalledOnce()
     expect(bridge.unsubscribe).toHaveBeenCalledWith('123e4567-e89b-12d3-a456-426614174000')
+  })
+
+  it('rejects change events with missing or contradictory origin attribution', async () => {
+    const bridge = transport(null)
+    const client = new RendererCapabilityClient({ getTransport: () => bridge })
+    const dispose = await client.subscribe('res_abcdefghijklmnopqrst', vi.fn())
+    const baseEvent = {
+      id: 'event_abcdefghijklmnopqrst',
+      type: 'resource.changed',
+      occurredAt: '2026-07-22T00:06:00.000Z',
+      resourceRef: 'res_abcdefghijklmnopqrst',
+      resourceStatus: 'live',
+      resourceKind: 'example-resource',
+      beforeRevision: 'revision-7',
+      afterRevision: 'revision-8'
+    }
+    const emit = (event: unknown) => bridge.emitEvent({
+      subscriptionId: '123e4567-e89b-12d3-a456-426614174000',
+      event
+    })
+
+    expect(() => emit({
+      ...baseEvent,
+      actionId: 'example.compute',
+      invocationId: 'missing-origin'
+    })).toThrow()
+    expect(() => emit({
+      ...baseEvent,
+      origin: 'capability'
+    })).toThrow()
+    expect(() => emit({
+      ...baseEvent,
+      origin: 'provider',
+      actionId: 'example.compute',
+      invocationId: 'forged-provider-invocation'
+    })).toThrow()
+
+    dispose()
   })
 
   it('fails closed when a capability subscription cannot be established', async () => {

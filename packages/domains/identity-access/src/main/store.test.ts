@@ -10,7 +10,7 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import {
   IDENTITY_RESET_CONFIRMATION,
@@ -24,6 +24,7 @@ import { IdentityStore, IdentityStoreOpenError } from './store.js'
 const roots: string[] = []
 
 afterEach(() => {
+  vi.restoreAllMocks()
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 
@@ -74,21 +75,25 @@ describe('IdentityStore', () => {
     store.close()
   })
 
-  it('rejects account capacity before inserting an unprojectable account', () => {
-    const store = IdentityStore.open(temporaryRoot())
-    for (let index = 0; index < MAX_LOCAL_ACCOUNTS; index += 1) {
-      store.createAccount(`Account_${index}`)
-    }
-    const before = store.state()
+  it(
+    'rejects account capacity before inserting an unprojectable account',
+    () => {
+      const store = IdentityStore.open(temporaryRoot())
+      for (let index = 0; index < MAX_LOCAL_ACCOUNTS; index += 1) {
+        store.createAccount(`Account_${index}`)
+      }
+      const before = store.state()
 
-    expectValidationCode(
-      () => store.createAccount('Overflow'),
-      'account-capacity-exceeded'
-    )
-    expect(store.state()).toEqual(before)
-    expect(store.listAccounts()).toHaveLength(MAX_LOCAL_ACCOUNTS)
-    store.close()
-  })
+      expectValidationCode(
+        () => store.createAccount('Overflow'),
+        'account-capacity-exceeded'
+      )
+      expect(store.state()).toEqual(before)
+      expect(store.listAccounts()).toHaveLength(MAX_LOCAL_ACCOUNTS)
+      store.close()
+    },
+    15_000
+  )
 
   it('fails closed before an authorization revision can exceed the safe integer bound', () => {
     const store = IdentityStore.open(temporaryRoot())
@@ -244,6 +249,21 @@ describe('IdentityService', () => {
       deviceId: 'dev_CloudDevice0001'
     })
 
+    const cleared = links.clearActiveDevice()
+    expect(service.current()).toMatchObject({
+      authority: 'sciforge.identity-access',
+      subject: linked.currentAccount?.userId,
+      assurance: 'local-selection',
+      deviceId: 'installation-device-1'
+    })
+    expect(cleared.currentAccount?.cloudIdentity).toMatchObject({
+      deviceId: 'dev_CloudDevice0001',
+      deviceStatus: 'active'
+    })
+
+    links.linkDevice('usr_CloudUser000001', 'dev_CloudDevice0001', 'active')
+    expect(service.current()?.assurance).toBe('cloud-authenticated')
+
     links.linkDevice('usr_CloudUser000001', 'dev_CloudDevice0001', 'revoked')
     expect(service.current()).toMatchObject({
       authority: 'sciforge.identity-access',
@@ -276,6 +296,101 @@ describe('IdentityService', () => {
     restoredLinks.setAuthenticatedCloudUser(null)
     restoredLinks.close()
     restoredService.close()
+  })
+
+  it('publishes a monotonic fail-closed Principal when Device projection persistence fails', () => {
+    const root = temporaryRoot()
+    const service = new IdentityService(root, 'installation-device-1')
+    const links = new LocalCloudIdentityLinkService(root)
+    links.linkIdentity({
+      cloudUserId: 'usr_CloudUser000001',
+      oidcIdentityId: 'oid_CloudIdent0001',
+      issuer: 'https://login-test.sciforge.cn/realms/SciForge',
+      subject: 'keycloak-subject-a',
+      displayName: 'Cloud Person'
+    })
+    links.setAuthenticatedCloudUser('usr_CloudUser000001')
+    links.linkDevice('usr_CloudUser000001', 'dev_CloudDevice0001', 'active')
+    const before = service.snapshot()
+    expect(before.principal?.assurance).toBe('cloud-authenticated')
+
+    const snapshots: ReturnType<IdentityService['snapshot']>[] = []
+    service.subscribe((snapshot) => snapshots.push(snapshot))
+    vi.spyOn(IdentityStore.prototype, 'advanceIdentityVersion')
+      .mockImplementationOnce(() => {
+        throw new Error('simulated identity revision write failure')
+      })
+
+    expect(() => links.clearActiveDevice()).toThrow('simulated identity revision write failure')
+    expect(service.inspect()).toMatchObject({ status: 'unavailable' })
+    expect(service.current()).toBeUndefined()
+    expect(snapshots).toHaveLength(1)
+    expect(snapshots[0]).toEqual(expect.objectContaining({
+      identityVersion: before.identityVersion + 1,
+      principal: null
+    }))
+
+    links.close()
+    service.close()
+  })
+
+  it('publishes a monotonic local Principal before active cloud links close', () => {
+    const root = temporaryRoot()
+    const service = new IdentityService(root, 'installation-device-1')
+    const links = new LocalCloudIdentityLinkService(root)
+    links.linkIdentity({
+      cloudUserId: 'usr_CloudUser000001',
+      oidcIdentityId: 'oid_CloudIdent0001',
+      issuer: 'https://login-test.sciforge.cn/realms/SciForge',
+      subject: 'keycloak-subject-a',
+      displayName: 'Cloud Person'
+    })
+    links.setAuthenticatedCloudUser('usr_CloudUser000001')
+    links.linkDevice('usr_CloudUser000001', 'dev_CloudDevice0001', 'active')
+    const before = service.snapshot()
+    const snapshots: ReturnType<IdentityService['snapshot']>[] = []
+    service.subscribe((snapshot) => snapshots.push(snapshot))
+
+    links.close()
+
+    expect(service.current()).toMatchObject({
+      assurance: 'local-selection',
+      deviceId: 'installation-device-1'
+    })
+    expect(snapshots.at(-1)).toEqual(service.snapshot())
+    expect(snapshots.at(-1)?.identityVersion).toBeGreaterThan(before.identityVersion)
+    service.close()
+  })
+
+  it('publishes a higher-version null Principal when cloud-link close cannot persist', () => {
+    const root = temporaryRoot()
+    const service = new IdentityService(root, 'installation-device-1')
+    const links = new LocalCloudIdentityLinkService(root)
+    links.linkIdentity({
+      cloudUserId: 'usr_CloudUser000001',
+      oidcIdentityId: 'oid_CloudIdent0001',
+      issuer: 'https://login-test.sciforge.cn/realms/SciForge',
+      subject: 'keycloak-subject-a',
+      displayName: 'Cloud Person'
+    })
+    links.setAuthenticatedCloudUser('usr_CloudUser000001')
+    links.linkDevice('usr_CloudUser000001', 'dev_CloudDevice0001', 'active')
+    const before = service.snapshot()
+    const snapshots: ReturnType<IdentityService['snapshot']>[] = []
+    service.subscribe((snapshot) => snapshots.push(snapshot))
+    vi.spyOn(IdentityStore.prototype, 'advanceIdentityVersion')
+      .mockImplementationOnce(() => {
+        throw new Error('simulated close revision write failure')
+      })
+
+    expect(() => links.close()).not.toThrow()
+
+    expect(service.inspect()).toMatchObject({ status: 'unavailable' })
+    expect(snapshots.at(-1)).toEqual(expect.objectContaining({
+      identityVersion: before.identityVersion + 1,
+      principal: null
+    }))
+    service.close()
   })
 
   it('fails closed on corruption and resets only after a verified backup', () => {

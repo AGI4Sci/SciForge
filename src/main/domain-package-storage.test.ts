@@ -1,6 +1,7 @@
+import { spawn } from 'node:child_process'
 import { mkdtemp, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 
@@ -114,6 +115,21 @@ describe('domain package storage', () => {
 
     await storage.secrets.remove('device.credential')
     await expect(storage.secrets.read('device.credential')).resolves.toBeNull()
+  })
+
+  it('restores the identity session and Device key in a separate process', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-identity-secrets-process-'))
+    temporaryDirectories.push(userDataDir)
+
+    const written = await runIdentitySecretsProcess('write', userDataDir)
+    const restored = await runIdentitySecretsProcess('read', userDataDir)
+
+    expect(written).toMatchObject({ ok: true, mode: 'write' })
+    expect(restored).toMatchObject({ ok: true, mode: 'read' })
+    expect(restored.pid).not.toBe(written.pid)
+    const encrypted = await readFile(await storedSecretsPath(userDataDir), 'utf8')
+    expect(encrypted).not.toContain('fixture-refresh-session-cross-process')
+    expect(encrypted).not.toContain('fixture-device-private-key-cross-process')
   })
 
   it('fails closed when operating-system encryption is unavailable', async () => {
@@ -375,3 +391,39 @@ describe('domain package storage', () => {
       .toBe('unavailable')
   })
 })
+
+async function runIdentitySecretsProcess(
+  mode: 'write' | 'read',
+  userDataDir: string
+): Promise<{ ok: true; mode: string; pid: number }> {
+  const fixturePath = resolve('scripts/fixtures/identity-package-secrets-process.mjs')
+  const child = spawn(process.execPath, ['--import', 'tsx', fixturePath, mode, userDataDir], {
+    cwd: process.cwd(),
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  const stdout: Buffer[] = []
+  child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk))
+  child.stderr.resume()
+  const outcome = await new Promise<{ exitCode: number | null; timedOut: boolean }>((resolveExit, reject) => {
+    let timedOut = false
+    const timeout = setTimeout(() => {
+      timedOut = true
+      child.kill('SIGKILL')
+    }, 10_000)
+    child.once('error', (error) => {
+      clearTimeout(timeout)
+      reject(error)
+    })
+    child.once('close', (exitCode) => {
+      clearTimeout(timeout)
+      resolveExit({ exitCode, timedOut })
+    })
+  })
+  if (outcome.timedOut) {
+    throw new Error(`Identity secrets ${mode} process timed out after 10000ms.`)
+  }
+  if (outcome.exitCode !== 0) {
+    throw new Error(`Identity secrets ${mode} process failed with exit code ${outcome.exitCode}.`)
+  }
+  return JSON.parse(Buffer.concat(stdout).toString()) as { ok: true; mode: string; pid: number }
+}

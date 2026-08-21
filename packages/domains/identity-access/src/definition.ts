@@ -19,6 +19,10 @@ export const IDENTITY_PRINCIPAL_PROVIDER_CONTRIBUTION = contributionFor(
   'main',
   'main.principal-provider'
 )
+export const IDENTITY_RUNTIME_LIFECYCLE_CONTRIBUTION = contributionFor(
+  'main',
+  'main.runtime-lifecycle'
+)
 export const IDENTITY_RENDERER_COMMAND_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.command'

@@ -30,7 +30,6 @@ import type {
 import { visibleWorkbenchToolbarActions } from '../../domain-modules/workbench-toolbar-preferences'
 import { useWorkbenchToolbarSettings } from '../../lib/use-workbench-toolbar-settings'
 import { WorkbenchToolbarCustomizer } from './WorkbenchToolbarCustomizer'
-import { DesktopIdentityControl } from './DesktopIdentityControl'
 
 export const RIGHT_PANEL_MODES = [
   'todo',
@@ -421,8 +420,6 @@ export function WorkbenchTopBar({
 
   return (
     <div className="chat-workbench-topbar ds-no-drag -my-1 flex min-w-0 max-w-full flex-nowrap items-center justify-start gap-1 overflow-x-auto px-0.5 py-1">
-      <DesktopIdentityControl />
-
       {guiUpdateAction ? (
         <button
           type="button"

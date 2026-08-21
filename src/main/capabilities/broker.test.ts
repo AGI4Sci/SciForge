@@ -1,11 +1,12 @@
 import { z } from 'zod'
 import { describe, expect, it, vi } from 'vitest'
 import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
-import type {
-  CapabilityAudience,
-  CapabilityCallerContextInput,
-  CapabilityInvocationRequest,
-  CapabilityResourceHandle
+import {
+  capabilityResourceChangeEventSchema,
+  type CapabilityAudience,
+  type CapabilityCallerContextInput,
+  type CapabilityInvocationRequest,
+  type CapabilityResourceHandle
 } from '../../shared/capability-broker'
 import { CapabilityBroker, CapabilityBrokerError } from './broker'
 import {
@@ -120,6 +121,49 @@ function issueDocument(
     })
   })
 }
+
+describe('Capability resource change events', () => {
+  const baseEvent = {
+    id: 'event_abcdefghijklmnopqrstuvwxyz',
+    type: 'resource.changed' as const,
+    occurredAt: '2026-07-22T00:00:00.000Z',
+    resourceRef: 'res_abcdefghijklmnopqrstuvwxyz',
+    resourceKind: 'document',
+    beforeRevision: '1',
+    afterRevision: '2'
+  }
+
+  it('requires an explicit origin and accepts both valid event variants', () => {
+    expect(capabilityResourceChangeEventSchema.safeParse({
+      ...baseEvent,
+      actionId: 'document.annotation-upsert',
+      invocationId: 'missing-origin'
+    }).success).toBe(false)
+    expect(capabilityResourceChangeEventSchema.parse({
+      ...baseEvent,
+      origin: 'capability',
+      actionId: 'document.annotation-upsert',
+      invocationId: 'capability-invocation'
+    })).toMatchObject({ origin: 'capability' })
+    expect(capabilityResourceChangeEventSchema.parse({
+      ...baseEvent,
+      origin: 'provider'
+    })).toMatchObject({ origin: 'provider' })
+  })
+
+  it('keeps provider and capability causes structurally disjoint', () => {
+    expect(capabilityResourceChangeEventSchema.safeParse({
+      ...baseEvent,
+      origin: 'provider',
+      actionId: 'document.annotation-upsert',
+      invocationId: 'forged-provider-invocation'
+    }).success).toBe(false)
+    expect(capabilityResourceChangeEventSchema.safeParse({
+      ...baseEvent,
+      origin: 'capability'
+    }).success).toBe(false)
+  })
+})
 
 describe('CapabilityRegistry', () => {
   it('atomically binds wire metadata, Zod schemas, and one executable handler', () => {
@@ -812,10 +856,12 @@ describe('CapabilityBroker', () => {
 
   it('rejects rebinding one live resource identity to different provider callbacks', () => {
     const broker = new CapabilityBroker(new CapabilityRegistry([readCapability()]))
+    const subscribeChanges = () => () => undefined
     const registration = {
       resourceId: 'stable-document',
       resourceKind: 'document',
       semanticRevision: '1',
+      subscribeChanges,
       observe: async () => ({
         state: { title: 'Stable document' },
         semanticRevision: '1'
@@ -830,9 +876,229 @@ describe('CapabilityBroker', () => {
         semanticRevision: '1'
       })
     })).toThrow(expect.objectContaining({ code: 'resource_registration_conflict' }))
+    expect(() => broker.issueResource(ui, {
+      ...registration,
+      subscribeChanges: () => () => undefined
+    })).toThrow(expect.objectContaining({ code: 'resource_registration_conflict' }))
     expect(broker.describeResourceRef(ui, issued.resourceRef)).toMatchObject({
       resourceId: 'stable-document',
       semanticRevision: '1'
+    })
+  })
+
+  it('publishes validated provider changes and refreshes stale handles without weakening optimistic revisions', async () => {
+    let currentRevision = '1'
+    let notify: ((change: { semanticRevision: string; layoutRevision?: string }) => void) | undefined
+    const unsubscribeProvider = vi.fn()
+    const cleanupErrors: unknown[] = []
+    const subscribeChanges = vi.fn((
+      listener: (change: { semanticRevision: string; layoutRevision?: string }) => void
+    ) => {
+      notify = listener
+      currentRevision = '2'
+      listener({ semanticRevision: currentRevision, layoutRevision: 'layout-2' })
+      return unsubscribeProvider
+    })
+    const dispose = vi.fn(async () => undefined)
+    const broker = new CapabilityBroker(
+      new CapabilityRegistry([mutationCapability()]),
+      { reportCleanupError: (error) => cleanupErrors.push(error) }
+    )
+    const registration = {
+      resourceId: 'provider-push-document',
+      resourceKind: 'document',
+      semanticRevision: '1',
+      subscribeChanges,
+      observe: async () => ({
+        state: { revision: currentRevision },
+        semanticRevision: currentRevision
+      }),
+      dispose
+    }
+    const issued = broker.issueResource(agent, registration)
+    const repeated = broker.issueResource(agent, {
+      ...registration,
+      semanticRevision: currentRevision,
+      layoutRevision: 'layout-2'
+    })
+
+    expect(subscribeChanges).toHaveBeenCalledOnce()
+    expect(repeated.resourceRef).toBe(issued.resourceRef)
+    expect(issued.resource.semanticRevision).toBe('2')
+    expect(broker.describeResourceRef(agent, issued.resourceRef)).toMatchObject({
+      semanticRevision: '2',
+      layoutRevision: 'layout-2'
+    })
+    expect(broker.listEvents(agent)).toHaveLength(1)
+    expect(broker.listEvents(agent)[0]).toMatchObject({
+      origin: 'provider',
+      beforeRevision: '1',
+      afterRevision: '2'
+    })
+    expect(broker.listEvents(agent)[0]).not.toHaveProperty('actionId')
+    expect(broker.listEvents(agent)[0]).not.toHaveProperty('invocationId')
+
+    notify?.({ semanticRevision: '2' })
+    ;(notify as ((change: unknown) => void) | undefined)?.({ semanticRevision: ' ' })
+    expect(broker.listEvents(agent)).toHaveLength(1)
+    expect(cleanupErrors).toHaveLength(1)
+
+    currentRevision = '3'
+    notify?.({ semanticRevision: currentRevision })
+    expect(broker.listEvents(agent)).toHaveLength(2)
+    await expect(broker.invoke(agent, {
+      actionId: 'document.annotation-upsert',
+      invocationId: 'stale-after-provider-change',
+      resource: issued.resource,
+      expectedRevision: '2',
+      input: { text: 'must not commit' }
+    })).rejects.toSatisfy((error) => expectBrokerCode(error, 'revision_conflict'))
+    await expect(broker.observe(agent, { resource: issued.resource })).resolves.toMatchObject({
+      semanticRevision: '3',
+      resource: { semanticRevision: '3' },
+      state: { revision: '3' }
+    })
+
+    await issued.retire({ deferWhileRetained: false })
+    expect(unsubscribeProvider).toHaveBeenCalledOnce()
+    expect(dispose).toHaveBeenCalledOnce()
+    notify?.({ semanticRevision: '4' })
+    expect(broker.listEvents(agent)).toHaveLength(2)
+  })
+
+  it('continues resource retirement when provider change unsubscribe throws', async () => {
+    const cleanupErrors: unknown[] = []
+    const dispose = vi.fn(async () => undefined)
+    const unsubscribeProvider = vi.fn(() => {
+      throw new Error('unsubscribe failed')
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([]), {
+      reportCleanupError: (error) => cleanupErrors.push(error)
+    })
+    const issued = broker.issueResource(agent, {
+      resourceId: 'throwing-provider-unsubscribe',
+      resourceKind: 'document',
+      semanticRevision: '1',
+      subscribeChanges: () => unsubscribeProvider,
+      observe: async () => ({ state: {}, semanticRevision: '1' }),
+      dispose
+    })
+
+    await expect(issued.retire({ deferWhileRetained: false })).resolves.toBeUndefined()
+    expect(unsubscribeProvider).toHaveBeenCalledOnce()
+    expect(dispose).toHaveBeenCalledOnce()
+    expect(cleanupErrors).toEqual([expect.objectContaining({ message: 'unsubscribe failed' })])
+    expect(() => broker.describeResourceRef(agent, issued.resourceRef))
+      .toThrow(expect.objectContaining({ code: 'resource_ref_retired' }))
+  })
+
+  it('retries a failed provider change subscription on the next identical issue', async () => {
+    let revision = '1'
+    let notify: ((change: { semanticRevision: string }) => void) | undefined
+    const unsubscribeProvider = vi.fn()
+    const cleanupErrors: unknown[] = []
+    const subscribeChanges = vi.fn((listener: (change: { semanticRevision: string }) => void) => {
+      if (subscribeChanges.mock.calls.length === 1) {
+        listener({ semanticRevision: 'discarded-before-subscribe-returned' })
+        throw new Error('subscription unavailable')
+      }
+      notify = listener
+      return unsubscribeProvider
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([]), {
+      reportCleanupError: (error) => cleanupErrors.push(error)
+    })
+    const registration = {
+      resourceId: 'retry-provider-subscription',
+      resourceKind: 'document',
+      semanticRevision: revision,
+      subscribeChanges,
+      observe: async () => ({ state: { revision }, semanticRevision: revision })
+    }
+
+    const first = broker.issueResource(agent, registration)
+    expect(subscribeChanges).toHaveBeenCalledOnce()
+    expect(broker.listEvents(agent)).toEqual([])
+    const second = broker.issueResource(agent, registration)
+    const third = broker.issueResource(agent, registration)
+    expect(second.resourceRef).toBe(first.resourceRef)
+    expect(third.resourceRef).toBe(first.resourceRef)
+    expect(subscribeChanges).toHaveBeenCalledTimes(2)
+    expect(cleanupErrors).toEqual([expect.objectContaining({ message: 'subscription unavailable' })])
+
+    revision = '2'
+    notify?.({ semanticRevision: revision })
+    expect(broker.listEvents(agent)).toHaveLength(1)
+    await first.retire({ deferWhileRetained: false })
+    expect(unsubscribeProvider).toHaveBeenCalledOnce()
+  })
+
+  it('does not deliver provider changes after the live Principal lease changes', () => {
+    let currentPrincipal: PrincipalSnapshot | null = principalA
+    let notify: ((change: { semanticRevision: string }) => void) | undefined
+    const broker = new CapabilityBroker(new CapabilityRegistry([]), {
+      resolveCurrentPrincipal: () => currentPrincipal
+    })
+    const issued = broker.issueResource(ui, {
+      resourceId: 'principal-provider-change',
+      resourceKind: 'document',
+      semanticRevision: '1',
+      subscribeChanges: (listener) => {
+        notify = listener
+        return () => undefined
+      },
+      observe: async () => ({ state: {}, semanticRevision: '1' })
+    })
+    const delivered: unknown[] = []
+    const unsubscribe = broker.subscribe(ui, (event) => delivered.push(event))
+
+    currentPrincipal = principalB
+    notify?.({ semanticRevision: '2' })
+    expect(delivered).toEqual([])
+    expect(broker.listEvents(ui, { resourceRef: issued.resourceRef, limit: 50 })).toEqual([])
+    unsubscribe()
+  })
+
+  it('keeps provider state events and the final capability attribution as distinct changes', async () => {
+    let revision = '1'
+    let notify: ((change: { semanticRevision: string }) => void) | undefined
+    const handler = vi.fn(async (input: { text: string }) => {
+      revision = '2'
+      notify?.({ semanticRevision: revision })
+      return {
+        output: { saved: input.text },
+        changed: true,
+        semanticRevision: revision
+      }
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([mutationCapability(handler)]))
+    const issued = broker.issueResource(agent, {
+      resourceId: 'provider-change-during-capability',
+      resourceKind: 'document',
+      semanticRevision: revision,
+      subscribeChanges: (listener) => {
+        notify = listener
+        return () => undefined
+      },
+      observe: async () => ({ state: { revision }, semanticRevision: revision })
+    })
+
+    await expect(broker.invoke(agent, {
+      actionId: 'document.annotation-upsert',
+      invocationId: 'provider-change-during-capability',
+      resource: issued.resource,
+      expectedRevision: '1',
+      input: { text: 'commit once' }
+    })).resolves.toMatchObject({ changed: true, afterRevision: '2' })
+    expect(broker.listEvents(agent).map((event) => event.origin)).toEqual([
+      'provider',
+      'capability'
+    ])
+    expect(broker.listEvents(agent)[1]).toMatchObject({
+      actionId: 'document.annotation-upsert',
+      invocationId: 'provider-change-during-capability',
+      beforeRevision: '1',
+      afterRevision: '2'
     })
   })
 
@@ -1894,12 +2160,15 @@ describe('CapabilityBroker', () => {
     const creatorIssued = new Promise<void>((resolve) => { markCreatorIssued = resolve })
     const observe = vi.fn(async () => ({ state: { adopted: true }, semanticRevision: '1' }))
     const dispose = vi.fn(async () => undefined)
+    const unsubscribeProvider = vi.fn()
+    const subscribeChanges = vi.fn(() => unsubscribeProvider)
     const registration = {
       resourceId: 'concurrent-adoption-resource',
       resourceKind: 'transactional-resource',
       workspaceId: agent.workspaceId,
       semanticRevision: '1',
       observe,
+      subscribeChanges,
       dispose
     }
     let broker!: CapabilityBroker
@@ -1937,15 +2206,18 @@ describe('CapabilityBroker', () => {
     const creatorFailure = expect(creatorTask)
       .rejects.toSatisfy((error) => expectBrokerCode(error, 'handler_failed'))
     await creatorIssued
+    expect(subscribeChanges).not.toHaveBeenCalled()
     await expect(broker.invoke(agent, {
       actionId: capability.descriptor.id,
       invocationId: 'concurrent-adoption-success',
       input: { role: 'adopter' }
     })).resolves.toMatchObject({ output: { ok: true } })
+    expect(subscribeChanges).toHaveBeenCalledOnce()
     releaseCreator?.()
     await creatorFailure
 
     expect(dispose).not.toHaveBeenCalled()
+    expect(unsubscribeProvider).not.toHaveBeenCalled()
     await expect(broker.observe(agent, { resource: adoptedHandle! }))
       .resolves.toMatchObject({ state: { adopted: true } })
   })
@@ -1960,12 +2232,14 @@ describe('CapabilityBroker', () => {
     const creatorIssued = new Promise<void>((resolve) => { markCreatorIssued = resolve })
     const adopterIssued = new Promise<void>((resolve) => { markAdopterIssued = resolve })
     const dispose = vi.fn(async () => undefined)
+    const subscribeChanges = vi.fn(() => vi.fn())
     const registration = {
       resourceId: 'concurrent-rollback-resource',
       resourceKind: 'transactional-resource',
       workspaceId: agent.workspaceId,
       semanticRevision: '1',
       observe: async () => ({ state: {}, semanticRevision: '1' }),
+      subscribeChanges,
       dispose
     }
     const issuedHandles: CapabilityResourceHandle[] = []
@@ -2012,12 +2286,14 @@ describe('CapabilityBroker', () => {
     const adopterFailure = expect(adopterTask)
       .rejects.toSatisfy((error) => expectBrokerCode(error, 'handler_failed'))
     await adopterIssued
+    expect(subscribeChanges).not.toHaveBeenCalled()
 
     releaseCreator?.()
     await creatorFailure
     expect(dispose).not.toHaveBeenCalled()
     releaseAdopter?.()
     await adopterFailure
+    expect(subscribeChanges).not.toHaveBeenCalled()
     expect(dispose).toHaveBeenCalledOnce()
     for (const handle of issuedHandles) {
       await expect(broker.observe(agent, { resource: handle }))

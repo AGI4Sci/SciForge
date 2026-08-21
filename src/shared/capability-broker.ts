@@ -333,7 +333,7 @@ export const capabilityAuditRecordSchema = z.object({
 }).strict()
 export type CapabilityAuditRecord = z.infer<typeof capabilityAuditRecordSchema>
 
-export const capabilityResourceChangeEventSchema = z.object({
+const capabilityResourceChangeEventBaseSchema = z.object({
   id: z.string().regex(/^event_[A-Za-z0-9_-]{20,}$/),
   type: z.literal('resource.changed'),
   occurredAt: z.string().datetime({ offset: true }),
@@ -341,11 +341,24 @@ export const capabilityResourceChangeEventSchema = z.object({
   resourceRef: z.string().regex(/^res_[A-Za-z0-9_-]{20,}$/),
   resourceStatus: z.enum(['live', 'retired']).default('live'),
   resourceKind: z.string().trim().min(1).max(128),
-  actionId: capabilityIdSchema,
-  invocationId: z.string().trim().min(1).max(256),
   beforeRevision: z.string().trim().min(1).max(256),
   afterRevision: z.string().trim().min(1).max(256)
+})
+
+const capabilityMutationResourceChangeEventSchema = capabilityResourceChangeEventBaseSchema.extend({
+  origin: z.literal('capability'),
+  actionId: capabilityIdSchema,
+  invocationId: z.string().trim().min(1).max(256)
 }).strict()
+
+const capabilityProviderResourceChangeEventSchema = capabilityResourceChangeEventBaseSchema.extend({
+  origin: z.literal('provider')
+}).strict()
+
+export const capabilityResourceChangeEventSchema = z.discriminatedUnion('origin', [
+  capabilityMutationResourceChangeEventSchema,
+  capabilityProviderResourceChangeEventSchema
+])
 export type CapabilityResourceChangeEvent = z.infer<typeof capabilityResourceChangeEventSchema>
 
 export const capabilityEventQuerySchema = z.object({

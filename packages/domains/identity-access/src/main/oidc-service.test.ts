@@ -1,8 +1,8 @@
 import { createServer } from 'node:http'
 import { webcrypto } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { DesktopIdentityService } from './desktop-identity-service'
-import type { StoredDesktopIdentitySession } from './desktop-identity-session-store'
+import { DesktopIdentityService } from './oidc-service.js'
+import type { StoredDesktopIdentitySession } from './session-store.js'
 
 const issuer = 'http://127.0.0.1:8080/realms/SciForge'
 const clientId = 'sciforge-desktop'
@@ -162,6 +162,7 @@ async function loginWithAccessTimeClaims(
 }
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.clearAllMocks()
   vi.restoreAllMocks()
 })
@@ -276,6 +277,102 @@ describe('DesktopIdentityService', () => {
     expect(service.getAccessToken()).toBeNull()
     expect(sessionStore.clear).toHaveBeenCalledOnce()
     expect(statusListener).toHaveBeenLastCalledWith({ state: 'signed-out' })
+    service.close()
+  })
+
+  it('serializes an in-flight login save before logout clears the persisted session', async () => {
+    const signer = await createSigner()
+    const port = await unusedPort()
+    const redirectUri = `http://127.0.0.1:${port}/oidc/callback`
+    const now = Date.parse('2026-08-18T12:00:00.000Z')
+    const saveStarted = deferred<void>()
+    const releaseSave = deferred<void>()
+    const persistenceOrder: string[] = []
+    let authorizationUrl: URL | null = null
+    let stored: StoredDesktopIdentitySession | null = null
+    const sessionStore = {
+      load: vi.fn(async () => stored),
+      save: vi.fn(async (next: StoredDesktopIdentitySession) => {
+        persistenceOrder.push('save:start')
+        saveStarted.resolve()
+        await releaseSave.promise
+        stored = next
+        persistenceOrder.push('save:finish')
+      }),
+      clear: vi.fn(async () => {
+        stored = null
+        persistenceOrder.push('clear')
+      }),
+      current: () => stored
+    }
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.endsWith('/.well-known/openid-configuration')) {
+        return Response.json({
+          issuer,
+          authorization_endpoint: `${issuer}/protocol/openid-connect/auth`,
+          token_endpoint: `${issuer}/protocol/openid-connect/token`,
+          jwks_uri: `${issuer}/protocol/openid-connect/certs`
+        })
+      }
+      if (url.endsWith('/protocol/openid-connect/certs')) {
+        return Response.json({ keys: [signer.publicJwk] })
+      }
+      if (url.endsWith('/protocol/openid-connect/token')) {
+        const common = {
+          iss: issuer,
+          sub: 'keycloak-user-123',
+          exp: Math.floor(now / 1000) + 300,
+          iat: Math.floor(now / 1000),
+          nbf: Math.floor(now / 1000),
+          auth_time: Math.floor(now / 1000)
+        }
+        return Response.json({
+          access_token: await signer.sign({ ...common, aud: audience, azp: clientId }),
+          id_token: await signer.sign({
+            ...common,
+            aud: clientId,
+            nonce: authorizationUrl?.searchParams.get('nonce')
+          }),
+          refresh_token: 'refresh-token-from-concurrent-login'
+        })
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    }) as unknown as typeof fetch
+    const service = new DesktopIdentityService({
+      issuer,
+      clientId,
+      audience,
+      identityClient,
+      sessionStore,
+      redirectUri,
+      fetchImpl,
+      now: () => now,
+      openExternal: async (url) => {
+        authorizationUrl = new URL(url)
+        const state = authorizationUrl.searchParams.get('state')
+        await fetch(`${redirectUri}?code=authorization-code&state=${encodeURIComponent(state ?? '')}`)
+      }
+    })
+
+    const login = service.login()
+    await saveStarted.promise
+    let logoutSettled = false
+    const logout = service.logout().finally(() => {
+      logoutSettled = true
+    })
+    await Promise.resolve()
+    expect(logoutSettled).toBe(false)
+
+    releaseSave.resolve()
+    await expect(logout).resolves.toEqual({ ok: true, status: { state: 'signed-out' } })
+    await expect(login).resolves.toEqual({ ok: true, status: { state: 'signed-out' } })
+
+    expect(persistenceOrder).toEqual(['save:start', 'save:finish', 'clear'])
+    expect(sessionStore.current()).toBeNull()
+    expect(sessionStore.save).toHaveBeenCalledOnce()
+    expect(sessionStore.clear).toHaveBeenCalledOnce()
+    expect(service.getStatus()).toEqual({ state: 'signed-out' })
     service.close()
   })
 
@@ -480,6 +577,306 @@ describe('DesktopIdentityService', () => {
     })
     expect(JSON.stringify(sessionStore.current())).not.toContain(issuedAccessToken)
     service.close()
+    expect(sessionStore.current()).toMatchObject({
+      refreshToken: 'refresh-token-after-restart'
+    })
+  })
+
+  it('coalesces concurrent logout calls without cancelling remote revocation or end-session', async () => {
+    const signer = await createSigner()
+    const now = Date.parse('2026-08-18T12:00:00.000Z')
+    const revocationResponse = deferred<Response>()
+    const revocationStarted = deferred<void>()
+    const sessionStore = memorySessionStore({
+      version: 1,
+      issuer,
+      clientId,
+      refreshToken: 'refresh-token-before-logout'
+    })
+    const openExternal = vi.fn(async (_url: string) => undefined)
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.endsWith('/.well-known/openid-configuration')) {
+        return Response.json({
+          issuer,
+          authorization_endpoint: `${issuer}/protocol/openid-connect/auth`,
+          token_endpoint: `${issuer}/protocol/openid-connect/token`,
+          jwks_uri: `${issuer}/protocol/openid-connect/certs`,
+          revocation_endpoint: `${issuer}/protocol/openid-connect/revoke`,
+          end_session_endpoint: `${issuer}/protocol/openid-connect/logout`
+        })
+      }
+      if (url.endsWith('/protocol/openid-connect/certs')) {
+        return Response.json({ keys: [signer.publicJwk] })
+      }
+      if (url.endsWith('/protocol/openid-connect/token')) {
+        const common = {
+          iss: issuer,
+          sub: 'keycloak-user-123',
+          exp: Math.floor(now / 1000) + 300,
+          iat: Math.floor(now / 1000),
+          nbf: Math.floor(now / 1000),
+          auth_time: Math.floor(now / 1000)
+        }
+        return Response.json({
+          access_token: await signer.sign({ ...common, aud: audience, azp: clientId }),
+          id_token: await signer.sign({ ...common, aud: clientId }),
+          refresh_token: 'refresh-token-after-restore'
+        })
+      }
+      if (url.endsWith('/protocol/openid-connect/revoke')) {
+        revocationStarted.resolve()
+        return revocationResponse.promise
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const fetchImpl = fetchMock as unknown as typeof fetch
+    const service = new DesktopIdentityService({
+      issuer,
+      clientId,
+      audience,
+      identityClient,
+      sessionStore,
+      fetchImpl,
+      now: () => now,
+      openExternal
+    })
+    await expect(service.initialize()).resolves.toMatchObject({
+      ok: true,
+      status: { state: 'signed-in' }
+    })
+
+    const firstLogout = service.logout()
+    await revocationStarted.promise
+    const secondLogout = service.logout()
+    expect(secondLogout).toBe(firstLogout)
+    revocationResponse.resolve(new Response(null, { status: 200 }))
+
+    await expect(firstLogout).resolves.toEqual({ ok: true, status: { state: 'signed-out' } })
+    await expect(secondLogout).resolves.toEqual({ ok: true, status: { state: 'signed-out' } })
+    expect(sessionStore.clear).toHaveBeenCalledOnce()
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/revoke'))).toHaveLength(1)
+    expect(openExternal).toHaveBeenCalledOnce()
+    expect(String(openExternal.mock.calls[0]?.[0])).toContain('/protocol/openid-connect/logout')
+    service.close()
+  })
+
+  it('discards a deferred refresh after logout without restoring credentials or timers', async () => {
+    vi.useFakeTimers()
+    const refreshResponse = deferred<Response>()
+    const refreshStarted = deferred<void>()
+    const sessionStore = memorySessionStore({
+      version: 1,
+      issuer,
+      clientId,
+      refreshToken: 'refresh-token-before-logout'
+    })
+    const linkAuthenticatedUser = vi.fn()
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.endsWith('/.well-known/openid-configuration')) {
+        return Response.json({
+          issuer,
+          authorization_endpoint: `${issuer}/protocol/openid-connect/auth`,
+          token_endpoint: `${issuer}/protocol/openid-connect/token`,
+          jwks_uri: `${issuer}/protocol/openid-connect/certs`
+        })
+      }
+      if (url.endsWith('/protocol/openid-connect/token')) {
+        refreshStarted.resolve()
+        return refreshResponse.promise
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    }) as unknown as typeof fetch
+    const service = new DesktopIdentityService({
+      issuer,
+      clientId,
+      audience,
+      identityClient,
+      sessionStore,
+      fetchImpl,
+      linkAuthenticatedUser,
+      openExternal: vi.fn()
+    })
+
+    const initialization = service.initialize()
+    await refreshStarted.promise
+    await expect(service.logout()).resolves.toEqual({
+      ok: true,
+      status: { state: 'signed-out' }
+    })
+    refreshResponse.resolve(Response.json({
+      access_token: 'stale-access-token',
+      refresh_token: 'rotated-refresh-token'
+    }))
+
+    await expect(initialization).resolves.toEqual({
+      ok: true,
+      status: { state: 'signed-out' }
+    })
+    expect(service.getStatus()).toEqual({ state: 'signed-out' })
+    expect(sessionStore.clear).toHaveBeenCalledOnce()
+    expect(sessionStore.save).not.toHaveBeenCalled()
+    expect(linkAuthenticatedUser).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+    service.close()
+  })
+
+  it('discards a deferred refresh after close without late persistence or publication', async () => {
+    vi.useFakeTimers()
+    const refreshResponse = deferred<Response>()
+    const refreshStarted = deferred<void>()
+    const sessionStore = memorySessionStore({
+      version: 1,
+      issuer,
+      clientId,
+      refreshToken: 'refresh-token-before-close'
+    })
+    const linkAuthenticatedUser = vi.fn()
+    const listener = vi.fn()
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.endsWith('/.well-known/openid-configuration')) {
+        return Response.json({
+          issuer,
+          authorization_endpoint: `${issuer}/protocol/openid-connect/auth`,
+          token_endpoint: `${issuer}/protocol/openid-connect/token`,
+          jwks_uri: `${issuer}/protocol/openid-connect/certs`
+        })
+      }
+      if (url.endsWith('/protocol/openid-connect/token')) {
+        refreshStarted.resolve()
+        return refreshResponse.promise
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    }) as unknown as typeof fetch
+    const service = new DesktopIdentityService({
+      issuer,
+      clientId,
+      audience,
+      identityClient,
+      sessionStore,
+      fetchImpl,
+      linkAuthenticatedUser,
+      openExternal: vi.fn()
+    })
+    service.subscribe(listener)
+
+    const initialization = service.initialize()
+    await refreshStarted.promise
+    service.close()
+    refreshResponse.resolve(Response.json({
+      access_token: 'stale-access-token',
+      refresh_token: 'rotated-refresh-token'
+    }))
+
+    await expect(initialization).resolves.toEqual({
+      ok: true,
+      status: { state: 'signed-out' }
+    })
+    expect(sessionStore.save).not.toHaveBeenCalled()
+    expect(linkAuthenticatedUser).not.toHaveBeenCalled()
+    expect(listener).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each(['logout', 'close'] as const)(
+    'discards a deferred authorization-code exchange after %s',
+    async (action) => {
+      const port = await unusedPort()
+      const redirectUri = `http://127.0.0.1:${port}/oidc/callback`
+      const tokenResponse = deferred<Response>()
+      const tokenExchangeStarted = deferred<void>()
+      const sessionStore = memorySessionStore()
+      const linkAuthenticatedUser = vi.fn()
+      const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+        const url = String(input)
+        if (url.endsWith('/.well-known/openid-configuration')) {
+          return Response.json({
+            issuer,
+            authorization_endpoint: `${issuer}/protocol/openid-connect/auth`,
+            token_endpoint: `${issuer}/protocol/openid-connect/token`,
+            jwks_uri: `${issuer}/protocol/openid-connect/certs`
+          })
+        }
+        if (url.endsWith('/protocol/openid-connect/token')) {
+          tokenExchangeStarted.resolve()
+          return tokenResponse.promise
+        }
+        throw new Error(`Unexpected request: ${url}`)
+      }) as unknown as typeof fetch
+      const service = new DesktopIdentityService({
+        issuer,
+        clientId,
+        audience,
+        identityClient,
+        sessionStore,
+        redirectUri,
+        fetchImpl,
+        linkAuthenticatedUser,
+        openExternal: async (url) => {
+          const authorizationUrl = new URL(url)
+          const state = authorizationUrl.searchParams.get('state')
+          await fetch(`${redirectUri}?code=authorization-code&state=${encodeURIComponent(state ?? '')}`)
+        }
+      })
+
+      const login = service.login()
+      await tokenExchangeStarted.promise
+      if (action === 'logout') await service.logout()
+      else service.close()
+      tokenResponse.resolve(Response.json({
+        access_token: 'stale-access-token',
+        id_token: 'stale-id-token',
+        refresh_token: 'stale-refresh-token'
+      }))
+
+      await expect(login).resolves.toEqual({
+        ok: true,
+        status: { state: 'signed-out' }
+      })
+      expect(service.getStatus()).toEqual({ state: 'signed-out' })
+      expect(sessionStore.save).not.toHaveBeenCalled()
+      expect(linkAuthenticatedUser).not.toHaveBeenCalled()
+      if (action === 'logout') expect(sessionStore.clear).toHaveBeenCalledOnce()
+      if (action === 'logout') service.close()
+    }
+  )
+
+  it('discards a deferred restore after close before creating credentials or network work', async () => {
+    const storedSession = deferred<StoredDesktopIdentitySession | null>()
+    const sessionStore = memorySessionStore()
+    sessionStore.load.mockImplementationOnce(() => storedSession.promise)
+    const fetchImpl = vi.fn() as unknown as typeof fetch
+    const linkAuthenticatedUser = vi.fn()
+    const service = new DesktopIdentityService({
+      issuer,
+      clientId,
+      audience,
+      identityClient,
+      sessionStore,
+      fetchImpl,
+      linkAuthenticatedUser,
+      openExternal: vi.fn()
+    })
+
+    const initialization = service.initialize()
+    expect(sessionStore.load).toHaveBeenCalledOnce()
+    service.close()
+    storedSession.resolve({
+      version: 1,
+      issuer,
+      clientId,
+      refreshToken: 'refresh-token-after-close'
+    })
+
+    await expect(initialization).resolves.toEqual({
+      ok: true,
+      status: { state: 'signed-out' }
+    })
+    expect(fetchImpl).not.toHaveBeenCalled()
+    expect(sessionStore.save).not.toHaveBeenCalled()
+    expect(linkAuthenticatedUser).not.toHaveBeenCalled()
   })
 
   it('rejects a provider that cannot be reached without opening a browser', async () => {
@@ -517,3 +914,13 @@ describe('DesktopIdentityService', () => {
     })).toThrow('must use HTTPS')
   })
 })
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}

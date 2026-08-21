@@ -10,12 +10,12 @@ import type {
   DesktopIdentityErrorCode,
   DesktopIdentityStatus,
   DesktopIdentityUser
-} from '../../shared/desktop-identity'
+} from '../contract.js'
 import {
   DesktopIdentitySessionStoreError,
   type DesktopIdentitySessionStore,
   type StoredDesktopIdentitySession
-} from './desktop-identity-session-store'
+} from './session-store.js'
 
 const DEFAULT_REDIRECT_URI = 'http://127.0.0.1:43110/oidc/callback'
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000
@@ -24,7 +24,7 @@ const REFRESH_RETRY_MS = 30 * 1000
 const MAX_TIMER_MS = 2_147_483_647
 const CLOCK_TOLERANCE_SECONDS = 60
 
-type DesktopIdentityServiceOptions = {
+export type DesktopIdentityServiceOptions = {
   issuer: string | null
   clientId: string
   audience: string
@@ -76,6 +76,16 @@ type SessionCredentials = {
   refreshToken: string
   idToken?: string
 }
+
+type SessionOperation = Readonly<{
+  generation: number
+  promise: Promise<DesktopIdentityActionResult>
+}>
+
+type ActiveLoginCallback = Readonly<{
+  generation: number
+  close: () => void
+}>
 
 class DesktopIdentityError extends Error {
   constructor(
@@ -416,9 +426,13 @@ export class DesktopIdentityService {
   private status: DesktopIdentityStatus = { state: 'signed-out' }
   private accessToken: string | null = null
   private credentials: SessionCredentials | null = null
-  private loginPromise: Promise<DesktopIdentityActionResult> | null = null
-  private initializePromise: Promise<DesktopIdentityActionResult> | null = null
-  private refreshPromise: Promise<DesktopIdentityActionResult> | null = null
+  private loginOperation: SessionOperation | null = null
+  private initializeOperation: SessionOperation | null = null
+  private refreshOperation: SessionOperation | null = null
+  private logoutOperation: SessionOperation | null = null
+  private activeLoginCallback: ActiveLoginCallback | null = null
+  private sessionGeneration = 1
+  private sessionPersistence: Promise<void> = Promise.resolve()
   private refreshTimer: ReturnType<typeof setTimeout> | null = null
   private closed = false
   private readonly listeners = new Set<DesktopIdentityStatusListener>()
@@ -459,11 +473,21 @@ export class DesktopIdentityService {
   }
 
   initialize(): Promise<DesktopIdentityActionResult> {
-    if (this.initializePromise) return this.initializePromise
-    this.initializePromise = this.restoreSession().finally(() => {
-      this.initializePromise = null
+    if (this.logoutOperation) {
+      return this.logoutOperation.promise.then(() => this.initialize())
+    }
+    const generation = this.sessionGeneration
+    if (!this.isSessionOperationCurrent(generation)) {
+      return Promise.resolve(this.currentSessionResult())
+    }
+    if (this.initializeOperation?.generation === generation) {
+      return this.initializeOperation.promise
+    }
+    const promise = this.restoreSession(generation).finally(() => {
+      if (this.initializeOperation?.promise === promise) this.initializeOperation = null
     })
-    return this.initializePromise
+    this.initializeOperation = { generation, promise }
+    return promise
   }
 
   login(): Promise<DesktopIdentityActionResult> {
@@ -474,22 +498,34 @@ export class DesktopIdentityService {
     return this.beginInteractiveLogin(true)
   }
 
-  async logout(): Promise<DesktopIdentityActionResult> {
+  logout(): Promise<DesktopIdentityActionResult> {
+    if (this.logoutOperation) return this.logoutOperation.promise
+    const promise = this.performLogout().finally(() => {
+      if (this.logoutOperation?.promise === promise) this.logoutOperation = null
+    })
+    this.logoutOperation = { generation: this.sessionGeneration, promise }
+    return promise
+  }
+
+  private async performLogout(): Promise<DesktopIdentityActionResult> {
     const credentials = this.credentials
+    const generation = this.invalidateSessionOperations()
     this.credentials = null
     this.setSession({ state: 'signed-out' }, null, true)
 
     let localFailure: DesktopIdentityError | null = null
     try {
-      await this.options.sessionStore.clear()
+      await this.enqueueSessionPersistence(() => this.options.sessionStore.clear())
     } catch (error) {
       localFailure = this.normalizeError(error)
     }
+    if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
 
     let remoteFailure: DesktopIdentityError | null = null
     if (credentials && this.issuer) {
       try {
         const discovery = await this.readDiscovery()
+        if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
         if (discovery.revocationEndpoint) {
           const response = await this.fetchImpl(discovery.revocationEndpoint, {
             method: 'POST',
@@ -500,6 +536,7 @@ export class DesktopIdentityService {
               token_type_hint: 'refresh_token'
             })
           })
+          if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
           if (!response.ok) {
             throw new DesktopIdentityError(
               'OIDC_LOGOUT_FAILED',
@@ -508,10 +545,12 @@ export class DesktopIdentityService {
           }
         }
         if (discovery.endSessionEndpoint) {
+          if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
           const endSession = new URL(discovery.endSessionEndpoint)
           endSession.searchParams.set('client_id', this.options.clientId)
           if (credentials.idToken) endSession.searchParams.set('id_token_hint', credentials.idToken)
           await this.options.openExternal(endSession.toString())
+          if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
         }
       } catch (error) {
         const normalized = this.normalizeError(error)
@@ -524,8 +563,8 @@ export class DesktopIdentityService {
   }
 
   close(): void {
+    this.invalidateSessionOperations()
     this.closed = true
-    this.clearRefreshTimer()
     this.listeners.clear()
     this.accessToken = null
     this.credentials = null
@@ -533,34 +572,50 @@ export class DesktopIdentityService {
   }
 
   private beginInteractiveLogin(forceReauthentication: boolean): Promise<DesktopIdentityActionResult> {
-    if (this.loginPromise) return this.loginPromise
-    this.loginPromise = this.performLogin(forceReauthentication).finally(() => {
-      this.loginPromise = null
+    if (this.logoutOperation) {
+      return this.logoutOperation.promise.then(() => this.beginInteractiveLogin(forceReauthentication))
+    }
+    const generation = this.sessionGeneration
+    if (!this.isSessionOperationCurrent(generation)) {
+      return Promise.resolve(this.currentSessionResult())
+    }
+    if (this.loginOperation?.generation === generation) return this.loginOperation.promise
+    const promise = this.performLogin(forceReauthentication, generation).finally(() => {
+      if (this.loginOperation?.promise === promise) this.loginOperation = null
     })
-    return this.loginPromise
+    this.loginOperation = { generation, promise }
+    return promise
   }
 
-  private async restoreSession(): Promise<DesktopIdentityActionResult> {
+  private async restoreSession(generation: number): Promise<DesktopIdentityActionResult> {
     try {
       this.assertConfigured()
       const stored = await this.options.sessionStore.load()
+      if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       if (!stored) return { ok: true, status: this.status }
       if (stored.issuer !== this.issuer || stored.clientId !== this.options.clientId) {
-        await this.options.sessionStore.clear()
+        await this.enqueueSessionPersistence(() => this.options.sessionStore.clear())
+        if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
         return { ok: true, status: this.status }
       }
+      if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       this.credentials = {
         refreshToken: stored.refreshToken,
         ...(stored.idToken ? { idToken: stored.idToken } : {})
       }
-      return await this.refreshSession()
+      return await this.refreshSession(generation)
     } catch (error) {
+      if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       return this.failure(this.normalizeError(error))
     }
   }
 
-  private async performLogin(forceReauthentication: boolean): Promise<DesktopIdentityActionResult> {
+  private async performLogin(
+    forceReauthentication: boolean,
+    generation: number
+  ): Promise<DesktopIdentityActionResult> {
     let callbackServer: Awaited<ReturnType<typeof startCallbackServer>> | null = null
+    let activeCallback: ActiveLoginCallback | null = null
     const expectedUserId = forceReauthentication && this.status.state === 'signed-in'
       ? this.status.user.userId
       : null
@@ -570,11 +625,15 @@ export class DesktopIdentityService {
         return { ok: true, status: this.status }
       }
       const discovery = await this.readDiscovery()
+      if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       const codeVerifier = base64Url(randomBytes(32))
       const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
       const state = base64Url(randomBytes(24))
       const nonce = base64Url(randomBytes(24))
       callbackServer = await startCallbackServer(this.redirectUri, state)
+      if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
+      activeCallback = { generation, close: callbackServer.close }
+      this.activeLoginCallback = activeCallback
 
       const authorizationUrl = new URL(discovery.authorizationEndpoint)
       const authorizationParameters: Record<string, string> = {
@@ -593,33 +652,47 @@ export class DesktopIdentityService {
       }
       authorizationUrl.search = new URLSearchParams(authorizationParameters).toString()
       await this.options.openExternal(authorizationUrl.toString())
+      if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
 
-      const tokens = await this.exchangeCode(discovery, await callbackServer.code, codeVerifier)
+      const code = await callbackServer.code
+      if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
+      const tokens = await this.exchangeCode(discovery, code, codeVerifier)
+      if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       const verified = await this.verifyLoginTokens(discovery, tokens, nonce)
+      if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       const currentUser = await this.readCurrentUser(tokens.accessToken, verified)
+      if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       if (expectedUserId && currentUser.userId !== expectedUserId) {
         throw new DesktopIdentityError(
           'OIDC_REAUTH_USER_MISMATCH',
           'Reauthentication completed for a different SciForge user.'
         )
       }
-      await this.activateSession(tokens, verified, currentUser)
+      const activated = await this.activateSession(tokens, verified, currentUser, generation)
+      if (!activated) return this.currentSessionResult()
       return { ok: true, status: this.status }
     } catch (error) {
-      callbackServer?.close()
+      if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       return this.failure(this.normalizeError(error))
+    } finally {
+      callbackServer?.close()
+      if (this.activeLoginCallback === activeCallback) this.activeLoginCallback = null
     }
   }
 
-  private refreshSession(): Promise<DesktopIdentityActionResult> {
-    if (this.refreshPromise) return this.refreshPromise
-    this.refreshPromise = this.performRefresh().finally(() => {
-      this.refreshPromise = null
+  private refreshSession(generation = this.sessionGeneration): Promise<DesktopIdentityActionResult> {
+    if (!this.isSessionOperationCurrent(generation)) {
+      return Promise.resolve(this.currentSessionResult())
+    }
+    if (this.refreshOperation?.generation === generation) return this.refreshOperation.promise
+    const promise = this.performRefresh(generation).finally(() => {
+      if (this.refreshOperation?.promise === promise) this.refreshOperation = null
     })
-    return this.refreshPromise
+    this.refreshOperation = { generation, promise }
+    return promise
   }
 
-  private async performRefresh(): Promise<DesktopIdentityActionResult> {
+  private async performRefresh(generation: number): Promise<DesktopIdentityActionResult> {
     const credentials = this.credentials
     if (!credentials) {
       return this.failure(new DesktopIdentityError('OIDC_SESSION_EXPIRED', 'The saved login session has expired.'))
@@ -627,27 +700,34 @@ export class DesktopIdentityService {
     try {
       this.assertConfigured()
       const discovery = await this.readDiscovery()
+      if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       const tokens = await this.refreshTokens(discovery, credentials.refreshToken)
+      if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       const verified = await this.verifyRefreshedTokens(discovery, tokens)
+      if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       const currentUser = await this.readCurrentUser(tokens.accessToken, verified)
-      await this.activateSession({
+      if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
+      const activated = await this.activateSession({
         ...tokens,
         refreshToken: tokens.refreshToken ?? credentials.refreshToken,
         idToken: tokens.idToken ?? credentials.idToken
-      }, verified, currentUser)
+      }, verified, currentUser, generation)
+      if (!activated) return this.currentSessionResult()
       return { ok: true, status: this.status }
     } catch (error) {
+      if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       const normalized = this.normalizeError(error)
       if (
         normalized.code === 'OIDC_PROVIDER_UNAVAILABLE' ||
         normalized.code === 'SCIFORGE_CLOUD_UNAVAILABLE'
       ) {
-        this.scheduleRefreshRetry()
+        this.scheduleRefreshRetry(generation)
         return this.failure(normalized)
       }
       this.credentials = null
       this.setSession({ state: 'signed-out' }, null)
-      await this.options.sessionStore.clear().catch(() => undefined)
+      await this.enqueueSessionPersistence(() => this.options.sessionStore.clear()).catch(() => undefined)
+      if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       return this.failure(normalized)
     }
   }
@@ -655,8 +735,10 @@ export class DesktopIdentityService {
   private async activateSession(
     tokens: TokenResponse,
     verified: VerifiedTokens,
-    currentUser: MeResponse
-  ): Promise<void> {
+    currentUser: MeResponse,
+    generation: number
+  ): Promise<boolean> {
+    if (!this.isSessionOperationCurrent(generation)) return false
     if (!tokens.refreshToken) {
       throw new DesktopIdentityError(
         'OIDC_LOGIN_FAILED',
@@ -672,14 +754,19 @@ export class DesktopIdentityService {
     }
     const status = statusFromClaims(verified.accessClaims, verified.idClaims, currentUser)
     if (status.state === 'signed-in') {
+      if (!this.isSessionOperationCurrent(generation)) return false
       await this.options.linkAuthenticatedUser?.(status.user)
+      if (!this.isSessionOperationCurrent(generation)) return false
     }
-    await this.options.sessionStore.save(stored)
+    if (!this.isSessionOperationCurrent(generation)) return false
+    await this.enqueueSessionPersistence(() => this.options.sessionStore.save(stored))
+    if (!this.isSessionOperationCurrent(generation)) return false
     this.credentials = {
       refreshToken: stored.refreshToken,
       ...(stored.idToken ? { idToken: stored.idToken } : {})
     }
     this.setSession(status, tokens.accessToken, true)
+    return true
   }
 
   private async readCurrentUser(accessToken: string, verified: VerifiedTokens): Promise<MeResponse> {
@@ -930,21 +1017,23 @@ export class DesktopIdentityService {
   }
 
   private scheduleRefresh(expiresAt: string): void {
+    if (this.closed) return
+    const generation = this.sessionGeneration
     const remaining = Date.parse(expiresAt) - this.now()
     const delay = Math.max(0, remaining - REFRESH_LEEWAY_MS)
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = null
-      void this.refreshSession()
+      if (this.isSessionOperationCurrent(generation)) void this.refreshSession(generation)
     }, Math.min(delay, MAX_TIMER_MS))
     this.refreshTimer.unref?.()
   }
 
-  private scheduleRefreshRetry(): void {
-    if (!this.credentials || this.closed) return
+  private scheduleRefreshRetry(generation: number): void {
+    if (!this.credentials || !this.isSessionOperationCurrent(generation)) return
     this.clearRefreshTimer()
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = null
-      void this.refreshSession()
+      if (this.isSessionOperationCurrent(generation)) void this.refreshSession(generation)
     }, REFRESH_RETRY_MS)
     this.refreshTimer.unref?.()
   }
@@ -953,6 +1042,32 @@ export class DesktopIdentityService {
     if (this.refreshTimer === null) return
     clearTimeout(this.refreshTimer)
     this.refreshTimer = null
+  }
+
+  private isSessionOperationCurrent(generation: number): boolean {
+    return !this.closed && generation === this.sessionGeneration
+  }
+
+  private currentSessionResult(): DesktopIdentityActionResult {
+    return { ok: true, status: this.status }
+  }
+
+  private enqueueSessionPersistence(operation: () => Promise<void>): Promise<void> {
+    const result = this.sessionPersistence.then(operation)
+    this.sessionPersistence = result.catch(() => undefined)
+    return result
+  }
+
+  private invalidateSessionOperations(): number {
+    this.sessionGeneration += 1
+    this.clearRefreshTimer()
+    const activeCallback = this.activeLoginCallback
+    this.activeLoginCallback = null
+    activeCallback?.close()
+    this.loginOperation = null
+    this.initializeOperation = null
+    this.refreshOperation = null
+    return this.sessionGeneration
   }
 }
 

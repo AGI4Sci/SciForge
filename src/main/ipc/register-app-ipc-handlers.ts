@@ -196,8 +196,6 @@ import type {
 } from '../runtime/agent-runtime/adapter'
 import type { JsonSettingsStore } from '../settings-store'
 import type { ScheduleRuntime } from '../schedule-runtime'
-import type { DesktopIdentityService } from '../services/desktop-identity-service'
-import type { DesktopDeviceService } from '../services/desktop-device-service'
 import {
   expandHomePath,
   listEditorsResult,
@@ -292,8 +290,6 @@ export type RegisterAppIpcHandlersOptions = {
   isTrustedIpcSender: (event: IpcMainInvokeEvent) => boolean
   applySettingsPatch: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   getModelAccessStatus: (settings: AppSettingsV1) => Promise<ModelAccessStatus>
-  desktopIdentity: Pick<DesktopIdentityService, 'getStatus' | 'login' | 'reauthenticate' | 'logout'>
-  desktopDevice: Pick<DesktopDeviceService, 'getStatus' | 'listDevices' | 'ensureRegistered' | 'refresh' | 'revoke'>
   traces?: {
     read: (query?: TraceReadQuery) => Promise<TraceReadResult>
     summaries: (query?: TraceSummaryQuery) => Promise<TraceSummary[]>
@@ -474,8 +470,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     getMainWindow,
     applySettingsPatch,
     getModelAccessStatus,
-    desktopIdentity,
-    desktopDevice,
     traces,
     extensions,
     fileTransfers,
@@ -827,22 +821,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
 
   handleInvoke('settings:get', async () => store.load())
   handleInvoke('modelAccess:status', async () => getModelAccessStatus(await store.load()))
-  handleInvoke('identity:status', async () => desktopIdentity.getStatus())
-  handleInvoke('identity:login', async () => desktopIdentity.login())
-  handleInvoke('identity:reauthenticate', async () => desktopIdentity.reauthenticate())
-  handleInvoke('identity:logout', async () => desktopIdentity.logout())
-  handleInvoke('identity:device-status', async () => desktopDevice.getStatus())
-  handleInvoke('identity:device-list', async () => desktopDevice.listDevices())
-  handleInvoke('identity:device-enroll', async () => desktopDevice.ensureRegistered())
-  handleInvoke('identity:device-refresh', async () => desktopDevice.refresh())
-  handleInvoke('identity:device-revoke', async (_, payload: unknown) => {
-    const input = parseIpcPayload(
-      'identity:device-revoke',
-      z.object({ deviceId: z.string().trim().min(3).max(128) }).strict(),
-      payload
-    )
-    return desktopDevice.revoke(input.deviceId)
-  })
   handleInvoke('settings:set', async (_, partial: unknown) =>
     applySettingsPatch(
       parseIpcPayload('settings:set', settingsPatchSchema, partial) as AppSettingsPatch

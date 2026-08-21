@@ -886,6 +886,8 @@ export type DomainMainHost = Readonly<{
   getUserDataDir: () => string
   /** Stable opaque Host installation identity; introduced in Host API 1.3. */
   getDeviceId?: () => string
+  /** Canonical application version reported by the Host runtime; introduced in Host API 1.4. */
+  getAppVersion?: () => string
   /** Application root used to resolve trusted bundled process entries. */
   getAppRoot?: () => string
   /** Executable used to launch trusted bundled Node process entries. */
@@ -934,14 +936,23 @@ export type DomainRendererCapabilityObservation<TState> = Readonly<{
   state: TState
 }>
 
-export type DomainRendererCapabilityChange = Readonly<{
+type DomainRendererCapabilityChangeBase = Readonly<{
   resourceRef: string
   resourceKind: string
-  actionId: string
   beforeRevision: string
   afterRevision: string
   changedAt: string
 }>
+
+export type DomainRendererCapabilityChange =
+  | Readonly<DomainRendererCapabilityChangeBase & {
+      origin: 'capability'
+      actionId: string
+    }>
+  | Readonly<DomainRendererCapabilityChangeBase & {
+      origin: 'provider'
+      actionId?: never
+    }>
 
 export type DomainRendererCapabilityChangeDisposer = () => void
 

@@ -176,19 +176,6 @@ function createApi(): SciForgeApi {
         onChannel('remoteWorkspace:snapshot-changed', handler)
     },
     getModelAccessStatus: () => invoke('modelAccess:status'),
-    identity: {
-      getStatus: () => invoke('identity:status'),
-      login: () => invoke('identity:login'),
-      reauthenticate: () => invoke('identity:reauthenticate'),
-      logout: () => invoke('identity:logout'),
-      onStatusChanged: (handler) => onChannel('identity:status-changed', handler),
-      getDeviceStatus: () => invoke('identity:device-status'),
-      onDeviceStatusChanged: (handler) => onChannel('identity:device-status-changed', handler),
-      listDevices: () => invoke('identity:device-list'),
-      enrollDevice: () => invoke('identity:device-enroll'),
-      refreshDevices: () => invoke('identity:device-refresh'),
-      revokeDevice: (deviceId) => invoke('identity:device-revoke', { deviceId })
-    },
     fetchUpstreamModels: () => invoke('upstream:models'),
     traces: {
       read: (query) => invoke('traces:read', query ?? {}),

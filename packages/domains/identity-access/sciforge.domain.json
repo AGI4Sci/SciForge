@@ -11,7 +11,7 @@
     "displayName": "Identity and Access",
     "version": "1.0.0",
     "hostApi": {
-      "minimum": "1.3.0",
+      "minimum": "1.4.0",
       "maximumExclusive": "2.0.0"
     },
     "priority": 900
@@ -20,11 +20,11 @@
     "identity-access.workbench-toolbar-action": {
       "location": "workbench.topbar",
       "commandId": "identity-access.open-account",
-      "label": "Local Account"
+      "label": "Identity"
     },
     "identity-access.account-overlay": {
       "location": "workbench.global-overlay",
-      "title": "Local Account"
+      "title": "Identity"
     }
   },
   "entrypoints": [
@@ -40,6 +40,11 @@
         {
           "id": "identity-access.principal-provider",
           "kind": "main.principal-provider",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.runtime-lifecycle",
+          "kind": "main.runtime-lifecycle",
           "priority": 900
         }
       ]
