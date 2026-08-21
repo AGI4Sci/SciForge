@@ -51,6 +51,7 @@ import { CollaborationSettingsService } from './settings.js'
 import {
   CollaborationLocalStore,
   FileCollaborationStateBackend,
+  type CollaborationLocalProjection,
   type CollaborationStateBackend
 } from './store.js'
 import { CollaborationTaskAdapter } from './task-adapter.js'
@@ -176,9 +177,11 @@ export class CollaborationRuntime {
 
     const disposeTurnEvents = context.turnEvents.subscribe(async (event) => {
       if (event.kind !== 'after-turn' || !('turnId' in event) || !event.turnId) return
-      const matching = this.store.snapshot().projections.filter((projection) => (
-        projection.runtimeId === event.runtimeId && projection.threadId === event.threadId
-      ))
+      const matching = activeProjectionBindingsForSession(
+        this.store.snapshot().projections,
+        event.runtimeId,
+        event.threadId
+      )
       if (matching.length !== 1) return
       const thread = await context.agentThreads.read({
         runtimeId: event.runtimeId,
@@ -783,6 +786,18 @@ export class CollaborationRuntime {
 
 export function collaborationStatePath(userDataDir: string): string {
   return join(userDataDir, 'domains', 'collaboration', 'state.json')
+}
+
+export function activeProjectionBindingsForSession(
+  projections: readonly CollaborationLocalProjection[],
+  runtimeId: string,
+  threadId: string
+): CollaborationLocalProjection[] {
+  return projections.filter((projection) => (
+    projection.projection.status === 'active' &&
+    projection.runtimeId === runtimeId &&
+    projection.threadId === threadId
+  ))
 }
 
 function requireProjectionResponse(response: RestResponse): RemoteSessionProjection {

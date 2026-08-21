@@ -1110,10 +1110,11 @@ export function CurrentSessionBindingSummary({
     <div className="mb-3 rounded-md border border-ds-border bg-ds-hover p-2.5 text-xs"
       data-current-session-binding={projection ? 'bound' : 'unbound'}>
       <div className="flex items-center gap-2 font-semibold">
-        {projection ? <Smartphone className="h-3.5 w-3.5" /> : <Monitor className="h-3.5 w-3.5" />}
+        <Monitor className="h-3.5 w-3.5" />
         {t('collaborationCurrentDesktopSession')}: {sessionName}
       </div>
-      <div className="mt-1 text-ds-muted">
+      <div className="mt-1 flex items-center gap-2 font-semibold">
+        <Smartphone className="h-3.5 w-3.5" />
         {t('collaborationPhoneLocation')}: {projection?.remoteDisplay || t('collaborationChooseTopicToBind')}
       </div>
       <div className="mt-1 flex items-center gap-2 text-ds-muted">
