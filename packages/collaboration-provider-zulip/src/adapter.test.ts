@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import { describe, it } from 'node:test'
-import { createZulipHumanEndpointProvider } from './adapter.js'
+import { createZulipHumanEndpointProvider, formatZulipOutboundContent } from './adapter.js'
 import type { ZulipDeliveryLedger, ZulipDeliveryRecord } from './delivery.js'
 import { ZulipProviderError } from './errors.js'
 import { createZulipLocator } from './locator.js'
@@ -42,6 +42,20 @@ class MemoryLedger implements ZulipDeliveryLedger {
     this.records.set(record.idempotencyKey, record)
   }
 }
+
+it('renders provider-neutral collapsible progress as a Zulip spoiler without breaking inner code fences', () => {
+  assert.equal(
+    formatZulipOutboundContent('处理中', { disposition: 'collapsible', summary: '中间进展' }),
+    '```spoiler 中间进展\n处理中\n```'
+  )
+  assert.equal(
+    formatZulipOutboundContent('```ts\nconst ready = true\n```', {
+      disposition: 'collapsible',
+      summary: '中间进展'
+    }),
+    '````spoiler 中间进展\n```ts\nconst ready = true\n```\n````'
+  )
+})
 
 function json(value: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(value), {

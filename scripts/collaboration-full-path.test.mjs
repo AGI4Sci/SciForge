@@ -196,7 +196,10 @@ test('10.2 canonical Fake provider → server → fixed desktop Session → serv
   assert.equal(provider.outbound.length, 1)
   assert.equal(provider.outbound[0].type, 'projection.message.outbound')
   assert.equal(provider.outbound[0].projectionId, projection.projectionId)
-  assert.equal(provider.outbound[0].text, '【SciForge Agent】\nAgent 回复返回手机')
+  assert.equal(
+    provider.outbound[0].text,
+    '【SciForge Agent · 最终报告】\nAgent 回复返回手机'
+  )
 
   await coordinator.mirrorDesktopEvent({
     runtimeId: 'codex',

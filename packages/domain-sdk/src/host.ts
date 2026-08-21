@@ -234,11 +234,16 @@ export type DomainAgentThreadTurn = Readonly<{
   artifacts: readonly unknown[]
 }>
 
-/** Append-only user/final-assistant projection of one canonical runtime item. */
+/**
+ * Append-only projection of user-visible runtime messages.
+ *
+ * Assistant progress contains only explicit assistant commentary. Reasoning,
+ * tool details, and other runtime artifacts never cross this boundary.
+ */
 export type DomainAgentTranscriptMessage = Readonly<{
   itemId: string
   turnId?: string
-  kind: 'user-message' | 'assistant-message'
+  kind: 'user-message' | 'assistant-progress' | 'assistant-final'
   text: string
   occurredAt?: string
 }>
@@ -385,8 +390,9 @@ export type DomainMainAgentThreadsHost = Readonly<{
     threadId: string
   }>) => Promise<DomainAgentThreadDetail>
   /**
-   * Streams accepted user messages and final assistant messages only. The Host
-   * suppresses deltas and repeated snapshots for the same canonical item.
+   * Streams accepted user messages, completed user-visible assistant progress,
+   * and the final assistant message. The Host suppresses deltas, reasoning,
+   * tool details, and repeated snapshots for the same canonical item.
    */
   subscribeMessages: (
     input: DomainAgentTranscriptSubscribeInput

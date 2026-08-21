@@ -1032,7 +1032,10 @@ function outboundRequest(
     type: 'provider.send.message',
     locator: locator.data,
     clientMessageId: message.messageId,
-    text
+    text,
+    ...(payload.type === 'projection.message.outbound' && payload.kind === 'assistant_progress'
+      ? { presentation: { disposition: 'collapsible' as const, summary: '中间进展' } }
+      : {})
   }
 }
 

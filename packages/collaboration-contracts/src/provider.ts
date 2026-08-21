@@ -235,12 +235,18 @@ export const providerEventSchema = z.discriminatedUnion('type', [
 ])
 export type ProviderEvent = z.infer<typeof providerEventSchema>
 
+const providerMessagePresentationSchema = z.object({
+  disposition: z.literal('collapsible'),
+  summary: z.string().trim().min(1).max(120)
+}).strict()
+
 const providerLocatorMessageSendRequestSchema = z.object({
   protocolVersion: protocolVersionSchema,
   type: z.literal('provider.send.message'),
   locator: providerLocatorSchema,
   clientMessageId: providerOpaqueIdSchema,
-  text: nonEmptyTextSchema
+  text: nonEmptyTextSchema,
+  presentation: providerMessagePresentationSchema.optional()
 }).strict()
 
 const providerDirectMessageSendRequestSchema = z.object({
@@ -248,7 +254,8 @@ const providerDirectMessageSendRequestSchema = z.object({
   type: z.literal('provider.send.message'),
   recipient: providerDirectRecipientSchema,
   clientMessageId: providerOpaqueIdSchema,
-  text: nonEmptyTextSchema
+  text: nonEmptyTextSchema,
+  presentation: providerMessagePresentationSchema.optional()
 }).strict()
 
 export const providerSendRequestSchema = z.union([

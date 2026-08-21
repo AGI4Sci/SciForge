@@ -1208,7 +1208,7 @@ export class CollaborationService {
     projectionRevision: number
     localItemId: string
     localTurnId?: string
-    kind: 'user_message' | 'assistant_final' | 'system_status'
+    kind: 'user_message' | 'assistant_progress' | 'assistant_final' | 'system_status'
     text: string
     occurredAt: string
     idempotencyKey: string

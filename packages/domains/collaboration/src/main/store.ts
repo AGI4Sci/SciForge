@@ -45,7 +45,7 @@ export const collaborationQueueItemSchema = z.object({
   sequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   direction: z.enum(['inbound', 'outbound']),
   origin: z.enum(['desktop', 'human-endpoint', 'agent', 'system']),
-  kind: z.enum(['user-message', 'assistant-reply', 'system-status']),
+  kind: z.enum(['user-message', 'assistant-progress', 'assistant-reply', 'system-status']),
   senderUserId: userIdSchema.optional(),
   senderHumanEndpointId: endpointIdSchema.optional(),
   providerMessageId: providerMessageIdSchema.optional(),
@@ -78,8 +78,8 @@ export const collaborationQueueItemSchema = z.object({
       message: 'Human endpoint inbound messages require exact endpoint and provider message identity.'
     })
   }
-  if (item.kind === 'assistant-reply' && item.direction !== 'outbound') {
-    context.addIssue({ code: 'custom', path: ['direction'], message: 'Assistant replies are outbound.' })
+  if ((item.kind === 'assistant-progress' || item.kind === 'assistant-reply') && item.direction !== 'outbound') {
+    context.addIssue({ code: 'custom', path: ['direction'], message: 'Assistant messages are outbound.' })
   }
   const terminal = ['completed', 'failed', 'ignored'].includes(item.state)
   if (terminal !== (item.completedAt !== undefined)) {

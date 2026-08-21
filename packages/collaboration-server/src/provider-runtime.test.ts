@@ -850,6 +850,7 @@ describe('provider runtime', () => {
         protocolVersion: CURRENT_PROTOCOL_VERSION,
         type: 'projection.message.outbound',
         locator: LOCATOR,
+        kind: 'assistant_progress',
         text: '桌面消息'
       }),
       inboxMessage(2, 'msg-2', 'provider.notification.outbound', {
@@ -901,6 +902,13 @@ describe('provider runtime', () => {
 
     expect(provider.sendRequests.map((request) => request.clientMessageId)).toEqual(['msg-1', 'msg-1', 'msg-2'])
     expect(provider.sendRequests.map((request) => request.text)).toEqual(['桌面消息', '桌面消息', '需要你的决定'])
+    expect(provider.sendRequests.map((request) => (
+      'presentation' in request ? request.presentation : undefined
+    ))).toEqual([
+      { disposition: 'collapsible', summary: '中间进展' },
+      { disposition: 'collapsible', summary: '中间进展' },
+      undefined
+    ])
     expect(acknowledgements).toEqual([1, 2])
     expect(provider.sendRequests).toHaveLength(sendsAfterDelivery)
   })
@@ -1027,7 +1035,7 @@ describe('provider runtime', () => {
       providerMessageId: '31415',
       sentAt: '2026-08-15T00:00:01.000Z'
     }
-    const provider = new FakeProvider([], [], [retryable, succeeded])
+    const provider = new FakeProvider([], [], undefined, [retryable, succeeded])
     const ledger = new FakeRuntimeStore()
     let ackedSequence = 0
     ledger.pendingEndpointIds = () => ackedSequence ? [] : ['hep_1']
@@ -1081,7 +1089,7 @@ describe('provider runtime', () => {
       clientMessageId: 'msg-approval-update-terminal', retryable: false,
       providerErrorCode: 'message_not_editable', safeMessage: 'The provider rejected the edit.'
     }
-    const provider = new FakeProvider([], [], [failed])
+    const provider = new FakeProvider([], [], undefined, [failed])
     const ledger = new FakeRuntimeStore()
     let ackedSequence = 0
     let fallbackCount = 0

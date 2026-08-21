@@ -1071,15 +1071,19 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
       })
     }
     try {
+      const content = formatZulipOutboundContent(
+        request.text,
+        'presentation' in request ? request.presentation : undefined
+      )
       const result = 'recipient' in request
         ? await this.sendDirectMessage({
             recipient: request.recipient,
-            content: request.text,
+            content,
             idempotencyKey: request.clientMessageId
           })
         : await this.sendMessage({
             locator: request.locator as ZulipLocator,
-            content: request.text,
+            content,
             idempotencyKey: request.clientMessageId
           })
       return providerSendResultSchema.parse({
@@ -1599,6 +1603,19 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
       ...(detail === undefined ? {} : { detail: redactZulipDiagnostic(detail) })
     })
   }
+}
+
+export function formatZulipOutboundContent(
+  text: string,
+  presentation?: Readonly<{ disposition: 'collapsible'; summary: string }>
+): string {
+  if (!presentation) return text
+  const longestBacktickRun = Math.max(
+    0,
+    ...[...text.matchAll(/`+/gu)].map((match) => match[0].length)
+  )
+  const fence = '`'.repeat(Math.max(3, longestBacktickRun + 1))
+  return `${fence}spoiler ${presentation.summary.trim()}\n${text}\n${fence}`
 }
 
 export function createZulipHumanEndpointProvider(

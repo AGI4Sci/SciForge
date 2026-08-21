@@ -138,13 +138,15 @@ Channel 只隔离普通未授权用户，不是端到端加密。Channel 内所�
 projection 同时只运行一个 turn，后到消息可见地排队；不同 projection 可以并行。
 
 手机中由 Generic Bot 发送的投影文本会增加来源前缀：Desktop 用户文本显示为“【电脑端】”，Agent
-最终回复显示为“【SciForge Agent】”。手机用户本人发送的消息仍使用 Zulip 原生用户身份。Desktop
+可见的阶段性说明显示为“【SciForge Agent · 中间进展】”，最终回复显示为“【SciForge Agent · 最终报告】”。
+中间进展使用 Zulip 原生可折叠 spoiler，默认只显示“中间进展”标题；最终报告保持直接展开。手机用户
+本人发送的消息仍使用 Zulip 原生用户身份。Desktop
 收到手机消息时会显示“手机 Zulip · Channel / Topic”来源标签。来源标签只用于展示；身份验证、权限
 和路由始终使用结构化 User、Endpoint、Projection 与 locator，不解析这些文字前缀。
 
-桌面发消息时，本地 Session 先接受消息，再将同一逻辑 user message 和最终 assistant reply 投影到
-手机。首期仅同步 append-only 文本、明确状态和最终回复，不同步流式 token、编辑、删除、reaction、
-附件或完整工具日志。
+桌面发消息时，本地 Session 先接受消息，再将同一逻辑 user message、明确的 assistant 中间进展和最终
+assistant reply 投影到手机。只同步 Agent 明确对用户可见的 append-only 文本；不会把模型推理、流式
+token、原始工具日志、敏感命令参数、编辑、删除、reaction 或附件投影到手机。
 
 如果网络超时，不要复制消息反复发送。系统会用 provider message ID、逻辑消息 ID 和 receipt 对账后
 重试；“队列与恢复”会显示尝试次数和终态。
@@ -166,9 +168,15 @@ HumanNeeded 必须指定 targetUserId，只投递给该用户的 active 手机�
 标识不变，只把 `<answer>` 替换为自己的答案并从收到通知的同一 Topic 发送；不要手工猜测 request ID
 或 revision，也不要让其他成员转发代答。
 
-手机和 Agent 同属一名用户，不代表手机拥有本机高风险批准权。文件写入、命令执行、外部发布和
-凭据使用仍走本地唯一 Capability Broker。没有显式 remote-approval policy 时，手机只会看到“等待
-桌面批准”。
+手机和 Agent 同属一名用户，不代表手机自动拥有本机高风险批准权。文件写入、命令执行、外部发布和
+凭据使用始终由本地唯一 Capability Broker 持有最终状态。只有 Broker 明确标记为可远程一次性审批的
+请求，才会在原 Channel / Topic 收到短期审批卡片；默认策略为不可远程审批。
+
+审批时只能在原 Topic 严格回复卡片给出的 `1 AP1-…`（仅本次允许）或 `2 AP1-…`（仅本次拒绝）。
+裸 `1`、`2`、`yes`、`allow`、`deny` 和普通 Bot 私聊都不会形成审批。短期编号只能使用一次且默认
+5 分钟过期；Server 还会核对已认证发送者、Endpoint、Topic locator、Projection、固定 Session、turn
+和 capability request。卡片终态会更新为已允许、已拒绝、已过期或需回到 Desktop 处理；消息更新失败
+只会走持久重试或追加安全通知，不会重复执行决定。
 
 ## 9. 断线与恢复
 
@@ -188,6 +196,9 @@ HumanNeeded 必须指定 targetUserId，只投递给该用户的 active 手机�
 3. 确认最终 Agent 回复只在原 Topic 出现一次。
 4. 从桌面同一 Session 再发送一条唯一标记，确认手机看到 user message 和最终回复。
 5. 让桌面暂时离线，手机再发一条消息；重新上线后确认只执行一次且顺序正确。
-6. 触发一项需要桌面批准的测试能力，确认手机不能越过本地批准。
+6. 触发一项测试 policy 明确允许远程一次性审批的无副作用能力，确认只有原 Topic 中带完整短期编号的
+   owner 回复可以决定；再确认默认不可远程审批的能力仍要求回到 Desktop。
+7. 触发一个包含可见中间进展的测试 turn，确认中间进展默认折叠、最终报告直接显示，且手机端没有模型
+   推理或原始工具日志。
 
 验收时不要使用真实密码、API key、token、私钥、敏感文件内容或破坏性命令。

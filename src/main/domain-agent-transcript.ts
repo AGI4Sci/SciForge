@@ -25,16 +25,17 @@ export function projectDomainAgentTurnMessages(
     }))
   }
   if (turn.status === 'completed' || turn.status === 'success') {
-    const finalAssistant = [...(turn.items ?? [])].reverse().find((item) =>
+    const assistantItems = (turn.items ?? []).filter((item) =>
       item.kind === 'assistant_message' && Boolean(item.text?.trim() || item.summary?.trim())
     )
-    if (finalAssistant) {
+    const finalIndex = assistantItems.length - 1
+    for (const [index, item] of assistantItems.entries()) {
       messages.push(Object.freeze({
-        itemId: finalAssistant.id,
+        itemId: item.id,
         turnId: turn.id,
-        kind: 'assistant-message',
-        text: finalAssistant.text?.trim() || finalAssistant.summary?.trim() || '',
-        ...(finalAssistant.createdAt ? { occurredAt: finalAssistant.createdAt } : {})
+        kind: index === finalIndex ? 'assistant-final' : 'assistant-progress',
+        text: item.text?.trim() || item.summary?.trim() || '',
+        ...(item.createdAt ? { occurredAt: item.createdAt } : {})
       }))
     }
   }
@@ -87,17 +88,19 @@ export async function* subscribeDomainAgentTranscriptMessages(
       threadId: input.threadId
     })
     const turn = detail.turns.find((candidate) => candidate.id === event.turnId)
-    const finalAssistant = turn
-      ? projectDomainAgentTurnMessages(turn).find((message) => message.kind === 'assistant-message')
-      : undefined
-    if (!finalAssistant || seenItemIds.has(finalAssistant.itemId)) continue
-    seenItemIds.add(finalAssistant.itemId)
-    yield Object.freeze({
-      ...finalAssistant,
-      runtimeId: input.runtimeId,
-      threadId: input.threadId,
-      sequence: sequence!
-    })
+    const assistantMessages = turn
+      ? projectDomainAgentTurnMessages(turn).filter((message) => message.kind !== 'user-message')
+      : []
+    for (const message of assistantMessages) {
+      if (seenItemIds.has(message.itemId)) continue
+      seenItemIds.add(message.itemId)
+      yield Object.freeze({
+        ...message,
+        runtimeId: input.runtimeId,
+        threadId: input.threadId,
+        sequence: sequence!
+      })
+    }
   }
 }
 

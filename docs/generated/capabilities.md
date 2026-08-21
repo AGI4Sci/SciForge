@@ -20575,6 +20575,7 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
             "kind": {
               "enum": [
                 "user-message",
+                "assistant-progress",
                 "assistant-reply",
                 "system-status"
               ],

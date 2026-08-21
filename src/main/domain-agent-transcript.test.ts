@@ -7,20 +7,21 @@ import {
 import type { AgentRuntimeEvent } from '../shared/agent-runtime-contract'
 
 describe('domain agent transcript projection', () => {
-  it('projects accepted user text and only the final completed assistant reply', () => {
+  it('projects accepted user text, visible progress, and the final completed assistant reply', () => {
     expect(projectDomainAgentTurnMessages({
       id: 'turn-1',
       threadId: 'thread-1',
       status: 'completed',
       items: [
         { id: 'user-1', kind: 'user_message', text: ' question ' },
-        { id: 'assistant-draft', kind: 'assistant_message', text: 'draft' },
+        { id: 'assistant-draft', kind: 'assistant_message', text: 'progress update' },
         { id: 'tool-1', kind: 'tool', text: 'private tool log' },
         { id: 'assistant-final', kind: 'assistant_message', text: ' final answer ' }
       ]
     })).toEqual([
       { itemId: 'user-1', turnId: 'turn-1', kind: 'user-message', text: 'question' },
-      { itemId: 'assistant-final', turnId: 'turn-1', kind: 'assistant-message', text: 'final answer' }
+      { itemId: 'assistant-draft', turnId: 'turn-1', kind: 'assistant-progress', text: 'progress update' },
+      { itemId: 'assistant-final', turnId: 'turn-1', kind: 'assistant-final', text: 'final answer' }
     ])
   })
 
@@ -33,7 +34,7 @@ describe('domain agent transcript projection', () => {
     })).toEqual([])
   })
 
-  it('streams one user item and one terminal assistant item without deltas or tools', async () => {
+  it('streams user-visible progress and final output without deltas or tools', async () => {
     const events: AgentRuntimeEvent[] = [
       { kind: 'user_message', runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1', itemId: 'user-1', text: 'hello', seq: 4 },
       { kind: 'assistant_delta', runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1', itemId: 'assistant-1', text: 'par', seq: 5 },
@@ -55,7 +56,10 @@ describe('domain agent transcript projection', () => {
             id: 'turn-1',
             threadId: 'thread-1',
             status: 'completed' as const,
-            items: [{ id: 'assistant-1', kind: 'assistant_message' as const, text: 'answer' }]
+            items: [
+              { id: 'assistant-progress', kind: 'assistant_message' as const, text: 'working' },
+              { id: 'assistant-1', kind: 'assistant_message' as const, text: 'answer' }
+            ]
           }]
         }
       }
@@ -74,7 +78,11 @@ describe('domain agent transcript projection', () => {
       },
       {
         runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1', sequence: 6,
-        itemId: 'assistant-1', kind: 'assistant-message', text: 'answer'
+        itemId: 'assistant-progress', kind: 'assistant-progress', text: 'working'
+      },
+      {
+        runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1', sequence: 6,
+        itemId: 'assistant-1', kind: 'assistant-final', text: 'answer'
       }
     ])
   })
