@@ -37,6 +37,58 @@ async function registerAgent(service: CollaborationService, user: UserActor, lab
 }
 
 describe('CollaborationService canonical transactions', () => {
+  it('restores a closed projection only through the safe paused state', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const authentication = new AuthenticationService(repository, now)
+    const owner = await onboard(service, authentication, 'restore-owner', 'restore-provider-user')
+    const agent = await registerAgent(service, owner.user, 'restoreagent')
+    const locator = {
+      type: 'provider_locator' as const,
+      provider: 'zulip',
+      realmId: 'realm-hk',
+      containerId: 'private-channel',
+      topicId: 'topic-22'
+    }
+    const created = await service.createProjection(owner.user, {
+      agentId: agent.agent.agentId,
+      humanEndpointId: owner.endpointId,
+      locator,
+      displayName: 'Topic 22',
+      allowedSenderUserIds: [owner.userId],
+      idempotencyKey: 'idem_projection_restore_create'
+    })
+    const closed = await service.updateProjection(owner.user, {
+      projectionId: created.projectionId,
+      expectedRevision: created.revision,
+      status: 'closed',
+      idempotencyKey: 'idem_projection_restore_close'
+    })
+
+    await expect(service.updateProjection(owner.user, {
+      projectionId: closed.projectionId,
+      expectedRevision: closed.revision,
+      status: 'active',
+      idempotencyKey: 'idem_projection_restore_direct_active'
+    })).rejects.toMatchObject({ code: 'invalid_state_transition' })
+
+    const paused = await service.updateProjection(owner.user, {
+      projectionId: closed.projectionId,
+      expectedRevision: closed.revision,
+      status: 'paused',
+      idempotencyKey: 'idem_projection_restore_pause'
+    })
+    expect(paused).toMatchObject({ status: 'paused', revision: closed.revision + 1 })
+
+    const restored = await service.updateProjection(owner.user, {
+      projectionId: paused.projectionId,
+      expectedRevision: paused.revision,
+      status: 'active',
+      idempotencyKey: 'idem_projection_restore_activate'
+    })
+    expect(restored).toMatchObject({ status: 'active', revision: paused.revision + 1 })
+  })
+
   it('queues exactly one managed Channel ensure job for an owned active endpoint', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })

@@ -775,7 +775,17 @@ export class CollaborationService {
       const projection = required(await tx.getProjection(input.projectionId), 'Projection')
       if (projection.ownerUserId !== actor.userId) fail('permission_denied', 'Only the projection owner may update it.')
       expectRevision(projection.revision, input.expectedRevision)
-      if (projection.status === 'closed') fail('invalid_state_transition', 'A closed projection cannot be reopened or retargeted.')
+      if (
+        projection.status === 'closed' &&
+        (
+          input.status !== 'paused' ||
+          input.displayName !== undefined ||
+          input.locator !== undefined ||
+          input.allowedSenderUserIds !== undefined
+        )
+      ) {
+        fail('invalid_state_transition', 'A closed projection can only be restored to paused before reactivation.')
+      }
       if (input.displayName) assertText(input.displayName, 'displayName', 1, 200)
       let locator = projection.locator
       let locatorRevision = projection.locatorRevision

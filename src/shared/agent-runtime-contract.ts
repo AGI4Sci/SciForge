@@ -1333,6 +1333,7 @@ export type AgentRuntimeEvent =
       itemId: string
       text: string
       displayText?: string
+      meta?: Record<string, unknown>
     })
   | (AgentRuntimeBaseEvent & {
       kind: 'assistant_delta'

@@ -285,6 +285,14 @@ export const collaborationProjectionUpdateInputSchema = z.discriminatedUnion('ac
     threadId: idSchema,
     workspaceRoot: z.string().min(1).max(4_096).optional(),
     expectedRevision: z.number().int().nonnegative()
+  }).strict(),
+  z.object({
+    action: z.literal('restore'),
+    projectionId: idSchema,
+    runtimeId: idSchema,
+    threadId: idSchema,
+    workspaceRoot: z.string().min(1).max(4_096).optional(),
+    expectedRevision: z.number().int().nonnegative()
   }).strict()
 ])
 export const collaborationProjectionUpdateResultSchema = z.object({

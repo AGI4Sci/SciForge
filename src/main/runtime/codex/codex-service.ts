@@ -1027,7 +1027,8 @@ export class CodexRuntimeService {
           text: payload.text,
           ...(modelDisplayText?.trim() && modelDisplayText.trim() !== payload.text.trim()
             ? { displayText: modelDisplayText.trim() }
-            : {})
+            : {}),
+          ...(payload.metadata ? { metadata: payload.metadata } : {})
         }
       })
       if (userEvent) this.broadcastEvent(userEvent.event)
@@ -3539,7 +3540,8 @@ function storedEventsToBlocks(events: CodexStoredEvent[]): CodexChatBlock[] {
         createdAt: event.userMessage.createdAt ?? item.createdAt,
         ...(turnId ? { turnId } : {}),
         text: event.userMessage.text,
-        ...(event.userMessage.displayText ? { displayText: event.userMessage.displayText } : {})
+        ...(event.userMessage.displayText ? { displayText: event.userMessage.displayText } : {}),
+        ...(event.userMessage.metadata ? { meta: event.userMessage.metadata } : {})
       })
     }
     if (event.deltas) {

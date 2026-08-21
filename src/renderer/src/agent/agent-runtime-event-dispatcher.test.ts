@@ -699,6 +699,10 @@ describe('agent runtime event dispatcher', () => {
         itemId: 'user-1',
         text: 'expanded prompt',
         displayText: 'short prompt',
+        meta: {
+          source: 'collaboration.remote-session-projection',
+          sourceLabel: '手机 Zulip · 私人 Channel / Topic 22'
+        },
         createdAt: '2026-06-11T00:00:00.000Z'
       },
       sink
@@ -710,7 +714,11 @@ describe('agent runtime event dispatcher', () => {
       turnId: 'turn-1',
       createdAt: '2026-06-11T00:00:00.000Z',
       text: 'expanded prompt',
-      meta: { displayText: 'short prompt' }
+      meta: {
+        displayText: 'short prompt',
+        source: 'collaboration.remote-session-projection',
+        sourceLabel: '手机 Zulip · 私人 Channel / Topic 22'
+      }
     })
     expect(sink.onTurnComplete).toHaveBeenCalled()
   })

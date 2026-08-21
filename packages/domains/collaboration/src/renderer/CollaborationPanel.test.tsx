@@ -309,12 +309,49 @@ test('shows stable Session mapping, explicit owner, sharing, status, and every l
     'collaborationRename',
     'collaborationPause',
     'collaborationClose',
-    'collaborationRelink',
     'collaborationSaveAllowlist',
     'collaborationRetry'
   ]) {
     assert.match(html, new RegExp(action, 'u'))
   }
+  assert.doesNotMatch(html, /collaborationRelink/u)
+
+  const paused = renderToStaticMarkup(
+    <ProjectionCard
+      projection={{ ...projection, status: 'paused', lastError: undefined }}
+      currentSession={{ id: 'thread-current', runtimeId: 'codex' }}
+      busy={false}
+      onUpdate={NOOP}
+      onShare={NOOP}
+      onRetry={NOOP}
+    />
+  )
+  assert.match(paused, /collaborationRelink/u)
+
+  const closed = renderToStaticMarkup(
+    <ProjectionCard
+      projection={{ ...projection, status: 'closed', lastError: undefined }}
+      currentSession={{ id: 'thread-current', runtimeId: 'codex' }}
+      busy={false}
+      onUpdate={NOOP}
+      onShare={NOOP}
+      onRetry={NOOP}
+    />
+  )
+  assert.match(closed, /collaborationRestoreToCurrent/u)
+
+  const occupied = renderToStaticMarkup(
+    <ProjectionCard
+      projection={{ ...projection, status: 'closed', lastError: undefined }}
+      currentSession={{ id: 'thread-current', runtimeId: 'codex' }}
+      currentSessionOccupied
+      busy={false}
+      onUpdate={NOOP}
+      onShare={NOOP}
+      onRetry={NOOP}
+    />
+  )
+  assert.doesNotMatch(occupied, /collaborationRestoreToCurrent|collaborationRelink/u)
 })
 
 test('makes the current Session binding and occupied Topic visible without exposing IDs by default', () => {
@@ -356,8 +393,68 @@ test('makes the current Session binding and occupied Topic visible without expos
     <ProjectionLocatorSelector locators={[locator]} projections={[current]} session={session}
       selectedKey="" busy={false} onSelect={NOOP} />
   )
-  assert.match(selector, /disabled=""/u)
+  assert.doesNotMatch(selector, /<option[^>]+disabled/u)
   assert.match(selector, /collaborationBoundToCurrentSession/u)
+})
+
+test('keeps a Topic bound to another Session selectable for explicit relink', () => {
+  const locator = {
+    type: 'provider_locator' as const,
+    provider: 'provider.fixture',
+    realmId: 'realm-cn',
+    containerId: 'private-channel',
+    topicId: 'topic-22',
+    containerDisplayName: '私人 Channel',
+    topicDisplayName: 'Topic 22'
+  }
+  const projection = collaborationProjectionViewSchema.parse({
+    projectionId: 'projection-topic-22', ownerUserId: 'user-a', agentId: 'agent-a',
+    agentOwnerUserId: 'user-a', humanEndpointId: 'endpoint-a', runtimeId: 'codex',
+    threadId: 'thread-old', displayName: '旧 Session', remoteDisplay: '私人 Channel / Topic 22',
+    remoteLocator: locator, status: 'active', allowUserIds: [], revision: 3, queueDepth: 0
+  })
+  const html = renderToStaticMarkup(
+    <ProjectionLocatorSelector
+      locators={[locator]}
+      projections={[projection]}
+      session={{ id: 'thread-current', title: '当前 Session', runtimeId: 'codex' }}
+      selectedKey={projectionLocatorKey(locator)}
+      busy={false}
+      onSelect={NOOP}
+    />
+  )
+  assert.match(html, /Topic 22 — collaborationBoundToSession/u)
+  assert.doesNotMatch(html, /<option[^>]+disabled/u)
+})
+
+test('shows a closed Topic as restorable instead of unbound', () => {
+  const locator = {
+    type: 'provider_locator' as const,
+    provider: 'provider.fixture',
+    realmId: 'realm-cn',
+    containerId: 'private-channel',
+    topicId: 'topic-22',
+    containerDisplayName: '私人 Channel',
+    topicDisplayName: 'Topic 22'
+  }
+  const projection = collaborationProjectionViewSchema.parse({
+    projectionId: 'projection-topic-22', ownerUserId: 'user-a', agentId: 'agent-a',
+    agentOwnerUserId: 'user-a', humanEndpointId: 'endpoint-a', runtimeId: 'codex',
+    threadId: 'thread-old', displayName: 'Topic 22', remoteDisplay: '私人 Channel / Topic 22',
+    remoteLocator: locator, status: 'closed', allowUserIds: [], revision: 4, queueDepth: 0
+  })
+  const html = renderToStaticMarkup(
+    <ProjectionLocatorSelector
+      locators={[locator]}
+      projections={[projection]}
+      session={{ id: 'thread-current', title: '当前 Session', runtimeId: 'codex' }}
+      selectedKey={projectionLocatorKey(locator)}
+      busy={false}
+      onSelect={NOOP}
+    />
+  )
+  assert.match(html, /Topic 22 — collaborationClosedTopic/u)
+  assert.doesNotMatch(html, /collaborationUnboundTopic/u)
 })
 
 test('renders managed Channel verification and counts only Sessions in the exact Channel', () => {

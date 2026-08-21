@@ -104,14 +104,20 @@ export function projectionMatchesLocator(
   projection: CollaborationProjectionView,
   locator: ProjectionLocator
 ): boolean {
+  return projection.status !== 'closed' && projectionLocatorIdentityMatches(projection, locator)
+}
+
+function projectionLocatorIdentityMatches(
+  projection: CollaborationProjectionView,
+  locator: ProjectionLocator
+): boolean {
   const remote = projection.remoteLocator
   return Boolean(
     remote &&
     remote.provider === locator.provider &&
     remote.realmId === locator.realmId &&
     remote.containerId === locator.containerId &&
-    remote.topicId === locator.topicId &&
-    projection.status !== 'closed'
+    remote.topicId === locator.topicId
   )
 }
 
@@ -258,6 +264,7 @@ export function CollaborationPanel({
   const [agentDisplayName, setAgentDisplayName] = useState('')
   const [sessionDisplayName, setSessionDisplayName] = useState('')
   const [selectedProjectionLocatorKey, setSelectedProjectionLocatorKey] = useState('')
+  const [confirmSelectedRelink, setConfirmSelectedRelink] = useState(false)
   const [pairing, setPairing] = useState<PairingDisplay | null>(null)
   // The stable poll handle is deliberately kept out of React state, rendered
   // diagnostics, and snapshots. Only the short-lived code intended for the
@@ -452,6 +459,9 @@ export function CollaborationPanel({
   useEffect(() => {
     setSessionDisplayName(session.title?.trim() || '')
   }, [session.id, session.title])
+  useEffect(() => {
+    setConfirmSelectedRelink(false)
+  }, [selectedProjectionLocatorKey, session.id])
   const selectedProjectionLocator = resolveProjectionLocatorSelection(
     selectedProjectionLocatorKey,
     projectionLocators
@@ -462,6 +472,12 @@ export function CollaborationPanel({
   const selectedLocatorProjection = selectedProjectionLocator
     ? snapshot?.projections.find((projection) =>
         projectionMatchesLocator(projection, selectedProjectionLocator)
+      )
+    : undefined
+  const selectedClosedProjection = selectedProjectionLocator
+    ? snapshot?.projections.find((projection) =>
+        projection.status === 'closed' &&
+        projectionLocatorIdentityMatches(projection, selectedProjectionLocator)
       )
     : undefined
   const orderedProjections = useMemo(
@@ -476,7 +492,8 @@ export function CollaborationPanel({
     sessionDisplayName.trim() &&
     session.runtimeId &&
     !currentSessionProjection &&
-    !selectedLocatorProjection
+    !selectedLocatorProjection &&
+    !selectedClosedProjection
   )
 
   const linkSession = useCallback(async (mode: 'existing' | 'new'): Promise<void> => {
@@ -510,6 +527,23 @@ export function CollaborationPanel({
     session,
     sessionDisplayName
   ])
+
+  const relinkSelectedTopic = useCallback(async (): Promise<void> => {
+    if (!selectedClosedProjection || !session.runtimeId) return
+    const runtimeId = session.runtimeId
+    const succeeded = await runAction(
+      `projection-restore-${selectedClosedProjection.projectionId}`,
+      () => client.updateProjection({
+        action: 'restore',
+        projectionId: selectedClosedProjection.projectionId,
+        runtimeId,
+        threadId: session.id,
+        ...(session.workspaceRoot ? { workspaceRoot: session.workspaceRoot } : {}),
+        expectedRevision: selectedClosedProjection.revision
+      })
+    )
+    if (succeeded) setConfirmSelectedRelink(false)
+  }, [client, runAction, selectedClosedProjection, session])
 
   if (loading && !snapshot) {
     return (
@@ -677,11 +711,39 @@ export function CollaborationPanel({
                   onSelect={setSelectedProjectionLocatorKey}
                 />
                 {selectedLocatorProjection ? (
-                  <p className="mb-3 rounded bg-ds-hover p-2 text-xs text-ds-muted" role="alert">
-                    {t('collaborationTopicAlreadyBound', {
+                  <div className="mb-3 rounded bg-ds-hover p-2 text-xs text-ds-muted" role="alert">
+                    <p>{t('collaborationTopicAlreadyBound', {
                       name: selectedLocatorProjection.displayName
-                    })}
-                  </p>
+                    })}</p>
+                  </div>
+                ) : null}
+                {selectedClosedProjection ? (
+                  <div className="mb-3 rounded bg-ds-hover p-2 text-xs text-ds-muted" role="alert">
+                    <p>{t('collaborationTopicClosed', {
+                      name: selectedClosedProjection.displayName
+                    })}</p>
+                    {!confirmSelectedRelink ? (
+                      <button
+                        type="button"
+                        className={`${PRIMARY_BUTTON} mt-2`}
+                        disabled={busyKey !== null || !session.runtimeId}
+                        onClick={() => setConfirmSelectedRelink(true)}
+                      >
+                        <Link2 className="h-3.5 w-3.5" />
+                        {t('collaborationRelink')}
+                      </button>
+                    ) : (
+                      <InlineConfirmationEditor
+                        message={t('collaborationRelinkCurrentConfirm', {
+                          topic: selectedClosedProjection.remoteDisplay || selectedClosedProjection.displayName,
+                          session: session.title?.trim() || session.id
+                        })}
+                        busy={busyKey !== null || !session.runtimeId}
+                        onConfirm={() => void relinkSelectedTopic()}
+                        onCancel={() => setConfirmSelectedRelink(false)}
+                      />
+                    )}
+                  </div>
                 ) : null}
                 <p className="mb-3 text-xs text-ds-muted">
                   {t('collaborationExistingHistoryNotice')}
@@ -720,6 +782,7 @@ export function CollaborationPanel({
                         ? participant.displayName
                         : undefined}
                       current={projectionMatchesSession(projection, session)}
+                      currentSessionOccupied={Boolean(currentSessionProjection)}
                       currentSession={session}
                       busy={busyKey !== null}
                       onUpdate={(input) => void runAction(
@@ -909,13 +972,18 @@ export function ProjectionLocatorSelector({
           const container = item.containerDisplayName || item.containerId
           const topic = item.topicDisplayName || item.topicId
           const binding = projections.find((projection) => projectionMatchesLocator(projection, item))
+          const closed = projections.find((projection) => (
+            projection.status === 'closed' && projectionLocatorIdentityMatches(projection, item)
+          ))
           const suffix = binding
             ? projectionMatchesSession(binding, session)
               ? t('collaborationBoundToCurrentSession')
               : t('collaborationBoundToSession', { name: binding.displayName })
-            : t('collaborationUnboundTopic')
+            : closed
+              ? t('collaborationClosedTopic')
+              : t('collaborationUnboundTopic')
           return (
-            <option key={key} value={key} disabled={Boolean(binding)}>
+            <option key={key} value={key}>
               {container} / {topic} — {suffix}
             </option>
           )
@@ -1431,12 +1499,14 @@ type ProjectionCardProps = Readonly<{
   agentName?: string
   ownerName?: string
   current?: boolean
+  currentSessionOccupied?: boolean
   currentSession: CollaborationPanelSession
   busy: boolean
   onUpdate: (input:
     | Readonly<{ action: 'rename'; projectionId: string; displayName: string; expectedRevision: number }>
     | Readonly<{ action: 'pause' | 'resume' | 'close'; projectionId: string; expectedRevision: number }>
     | Readonly<{ action: 'relink'; projectionId: string; runtimeId: string; threadId: string; workspaceRoot?: string; expectedRevision: number }>
+    | Readonly<{ action: 'restore'; projectionId: string; runtimeId: string; threadId: string; workspaceRoot?: string; expectedRevision: number }>
   ) => void
   onShare: (allowUserIds: string[]) => void
   onRetry: () => void
@@ -1447,6 +1517,7 @@ export function ProjectionCard({
   agentName,
   ownerName,
   current = false,
+  currentSessionOccupied = false,
   currentSession,
   busy,
   onUpdate,
@@ -1583,15 +1654,19 @@ export function ProjectionCard({
             {t('collaborationClose')}
           </button>
         ) : null}
-        <button
-          type="button"
-          className={SECONDARY_BUTTON}
-          disabled={busy}
-          onClick={() => openEditor('relink')}
-        >
-          <Link2 className="h-3.5 w-3.5" />
-          {t('collaborationRelink')}
-        </button>
+        {!current && !currentSessionOccupied && ['paused', 'closed'].includes(projection.status) ? (
+          <button
+            type="button"
+            className={SECONDARY_BUTTON}
+            disabled={busy}
+            onClick={() => openEditor('relink')}
+          >
+            <Link2 className="h-3.5 w-3.5" />
+            {projection.status === 'closed'
+              ? t('collaborationRestoreToCurrent')
+              : t('collaborationRelink')}
+          </button>
+        ) : null}
         {(projection.status === 'error' || projection.lastError) ? (
           <button type="button" className={PRIMARY_BUTTON} disabled={busy} onClick={onRetry}>
             <RotateCcw className="h-3.5 w-3.5" />
@@ -1650,7 +1725,7 @@ export function ProjectionCard({
           onConfirm={() => {
             if (!currentSession.runtimeId) return
             onUpdate({
-              action: 'relink',
+              action: projection.status === 'closed' ? 'restore' : 'relink',
               ...updateBase,
               runtimeId: currentSession.runtimeId,
               threadId: currentSession.id,

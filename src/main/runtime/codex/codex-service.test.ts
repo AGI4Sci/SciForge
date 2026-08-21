@@ -4069,7 +4069,11 @@ process.stdout.write(JSON.stringify({
       service.startTurn({
         threadId: 'thread-1',
         text: 'expanded runtime prompt',
-        displayText: 'short user prompt'
+        displayText: 'short user prompt',
+        metadata: {
+          source: 'collaboration.remote-session-projection',
+          sourceLabel: '手机 Zulip · 私人 Channel / Topic 22'
+        }
       })
     ).resolves.toMatchObject({
       ok: true,
@@ -4093,7 +4097,11 @@ process.stdout.write(JSON.stringify({
     expect(events.at(-1)?.event.userMessage).toMatchObject({
       itemId: 'user-1',
       text: 'expanded runtime prompt',
-      displayText: 'short user prompt'
+      displayText: 'short user prompt',
+      metadata: {
+        source: 'collaboration.remote-session-projection',
+        sourceLabel: '手机 Zulip · 私人 Channel / Topic 22'
+      }
     })
     await expect(service.readThreadPage('thread-1')).resolves.toMatchObject({
       ok: true,
@@ -4103,7 +4111,11 @@ process.stdout.write(JSON.stringify({
             kind: 'user',
             id: 'user-1',
             text: 'expanded runtime prompt',
-            displayText: 'short user prompt'
+            displayText: 'short user prompt',
+            meta: {
+              source: 'collaboration.remote-session-projection',
+              sourceLabel: '手机 Zulip · 私人 Channel / Topic 22'
+            }
           })
         ]
       })

@@ -422,7 +422,52 @@ export class CollaborationRuntime {
     ))
     if (!local) throw new Error('Projection was not found.')
     if (local.projection.revision !== input.expectedRevision) throw new Error('Projection revision is stale.')
-    if (input.action === 'relink') {
+    if (input.action === 'relink' || input.action === 'restore') {
+      const occupied = this.store.snapshot().projections.some((candidate) => (
+        candidate.projection.projectionId !== input.projectionId &&
+        candidate.projection.status !== 'closed' &&
+        candidate.runtimeId === input.runtimeId &&
+        candidate.threadId === input.threadId
+      ))
+      if (occupied) throw new Error('This local Session already has an active remote projection.')
+      if (input.action === 'restore') {
+        if (local.projection.status !== 'closed') throw new Error('Only a closed projection can be restored.')
+        const pausedResponse = await this.requireConnection().executeAsUser(restRequestSchema.parse({
+          protocolVersion: '1.0',
+          requestId: collaborationRequestId(),
+          type: 'projection.update',
+          idempotencyKey: `idem_projection.restore.${digest(`${input.projectionId}\u0000${input.expectedRevision}`).slice(0, 48)}`,
+          projectionId: input.projectionId,
+          expectedRevision: input.expectedRevision,
+          status: 'paused'
+        }))
+        const paused = requireProjectionResponse(pausedResponse)
+        await this.replaceProjection(paused)
+        await this.store.transact((draft) => {
+          const target = draft.projections.find((candidate) => (
+            candidate.projection.projectionId === input.projectionId
+          ))!
+          target.runtimeId = input.runtimeId
+          target.threadId = input.threadId
+          target.workspaceRoot = input.workspaceRoot
+          target.bindingMode = 'existing'
+          target.lastError = undefined
+        })
+        const activeResponse = await this.requireConnection().executeAsUser(restRequestSchema.parse({
+          protocolVersion: '1.0',
+          requestId: collaborationRequestId(),
+          type: 'projection.update',
+          idempotencyKey: `idem_projection.restore.activate.${digest(`${input.projectionId}\u0000${paused.revision}`).slice(0, 48)}`,
+          projectionId: input.projectionId,
+          expectedRevision: paused.revision,
+          status: 'active'
+        }))
+        const active = requireProjectionResponse(activeResponse)
+        await this.replaceProjection(active)
+        await this.requireProjections().recover()
+        await this.reconcileProjectionTranscript(input.projectionId)
+        return this.projectionView(active)
+      }
       if (local.projection.status !== 'paused') throw new Error('Pause a projection before relinking it.')
       await this.store.transact((draft) => {
         const target = draft.projections.find((candidate) => (
