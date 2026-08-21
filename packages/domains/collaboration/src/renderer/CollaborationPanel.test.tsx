@@ -12,6 +12,7 @@ import {
   buildAgentRegistrationInput,
   buildEndpointChallengeInput,
   buildProjectionLinkInput,
+  CurrentSessionBindingSummary,
   ExplicitError,
   InlineConfirmationEditor,
   InlineTextActionEditor,
@@ -25,6 +26,9 @@ import {
   RecoverySection,
   SessionDisplayNameField,
   nextPairingPollDelayMilliseconds,
+  orderProjectionsForSession,
+  projectionMatchesLocator,
+  projectionMatchesSession,
   projectionLocatorKey,
   reconcileProjectionLocatorSelection,
   writePairingCommandToClipboard
@@ -282,6 +286,7 @@ test('shows stable Session mapping, explicit owner, sharing, status, and every l
   const html = renderToStaticMarkup(
     <ProjectionCard
       projection={projection}
+      currentSession={{ id: 'thread-current', runtimeId: 'codex' }}
       agentName="Laptop A"
       ownerName="Researcher A"
       busy={false}
@@ -310,6 +315,48 @@ test('shows stable Session mapping, explicit owner, sharing, status, and every l
   ]) {
     assert.match(html, new RegExp(action, 'u'))
   }
+})
+
+test('makes the current Session binding and occupied Topic visible without exposing IDs by default', () => {
+  const locator = {
+    type: 'provider_locator' as const,
+    provider: 'provider.fixture',
+    realmId: 'realm-a',
+    containerId: 'private-a',
+    topicId: 'topic-a',
+    containerDisplayName: '私人 Channel',
+    topicDisplayName: '项目 A'
+  }
+  const current = collaborationProjectionViewSchema.parse({
+    projectionId: 'projection-current', ownerUserId: 'user-a', agentId: 'agent-a',
+    agentOwnerUserId: 'user-a', humanEndpointId: 'endpoint-a', runtimeId: 'codex',
+    threadId: 'thread-current', displayName: '项目 A 映射', remoteDisplay: '私人 Channel / 项目 A',
+    remoteLocator: locator, status: 'active', allowUserIds: [], revision: 1, queueDepth: 0
+  })
+  const closed = collaborationProjectionViewSchema.parse({
+    ...current, projectionId: 'projection-closed', threadId: 'thread-old', status: 'closed'
+  })
+  const session = { id: 'thread-current', runtimeId: 'codex' }
+
+  assert.equal(projectionMatchesSession(current, session), true)
+  assert.equal(projectionMatchesLocator(current, locator), true)
+  assert.deepEqual(orderProjectionsForSession([closed, current], session).map((item) => item.projectionId), [
+    'projection-current', 'projection-closed'
+  ])
+
+  const summary = renderToStaticMarkup(
+    <CurrentSessionBindingSummary session={session} projection={current} />
+  )
+  assert.match(summary, /data-current-session-binding="bound"/u)
+  assert.match(summary, /私人 Channel \/ 项目 A/u)
+  assert.match(summary, /<details/u)
+
+  const selector = renderToStaticMarkup(
+    <ProjectionLocatorSelector locators={[locator]} projections={[current]} session={session}
+      selectedKey="" busy={false} onSelect={NOOP} />
+  )
+  assert.match(selector, /disabled=""/u)
+  assert.match(selector, /collaborationBoundToCurrentSession/u)
 })
 
 test('renders managed Channel verification and counts only Sessions in the exact Channel', () => {
@@ -522,6 +569,8 @@ test('requires an explicit Topic choice and links the selected opaque locator', 
   const html = renderToStaticMarkup(
     <ProjectionLocatorSelector
       locators={locators}
+      projections={[]}
+      session={{ id: 'thread-a', runtimeId: 'codex' }}
       selectedKey={selectedKey}
       busy={false}
       onSelect={NOOP}
@@ -529,7 +578,7 @@ test('requires an explicit Topic choice and links the selected opaque locator', 
   )
   assert.match(html, /协作空间 \/ 第一个主题/u)
   assert.match(html, /协作空间 \/ 第二个主题/u)
-  assert.match(html, /第二个主题<\/option>/u)
+  assert.match(html, /第二个主题 — collaborationUnboundTopic<\/option>/u)
 })
 
 test('keeps locator selection across display-name refreshes without changing identity', () => {

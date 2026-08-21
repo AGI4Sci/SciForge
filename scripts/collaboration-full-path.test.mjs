@@ -169,7 +169,7 @@ test('10.2 canonical Fake provider → server → fixed desktop Session → serv
   assert.equal(provider.outbound.length, 1)
   assert.equal(provider.outbound[0].type, 'projection.message.outbound')
   assert.equal(provider.outbound[0].projectionId, projection.projectionId)
-  assert.equal(provider.outbound[0].text, 'Agent 回复返回手机')
+  assert.equal(provider.outbound[0].text, '【SciForge Agent】\nAgent 回复返回手机')
 
   await coordinator.mirrorDesktopEvent({
     runtimeId: 'codex',
@@ -188,6 +188,6 @@ test('10.2 canonical Fake provider → server → fixed desktop Session → serv
   await desktopDelivery.drain()
   assert.equal(provider.outbound.length, 2)
   assert.equal(provider.outbound[1].kind, 'user_message')
-  assert.equal(provider.outbound[1].text, '桌面消息也同步到手机')
+  assert.equal(provider.outbound[1].text, '【电脑端】\n桌面消息也同步到手机')
   assert.equal(agentExecution.requests.length, 1)
 })

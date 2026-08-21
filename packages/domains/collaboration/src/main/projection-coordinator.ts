@@ -45,6 +45,20 @@ export type ProjectionCloudOutbox = Readonly<{
   ): Promise<void>
 }>
 
+export function projectedOutboundText(
+  kind: 'user-message' | 'assistant-reply',
+  text: string
+): string {
+  const prefix = kind === 'user-message' ? '【电脑端】' : '【SciForge Agent】'
+  return text.startsWith(prefix) ? text : `${prefix}\n${text}`
+}
+
+function remoteSourceLabel(projection: RemoteSessionProjection): string {
+  const container = projection.locator.containerDisplayName || projection.locator.containerId
+  const topic = projection.locator.topicDisplayName || projection.locator.topicId
+  return `手机 Zulip · ${container} / ${topic}`
+}
+
 export type ProjectionCoordinatorOptions = Readonly<{
   store: CollaborationLocalStore
   agentExecution: DomainMainAgentExecutionHost
@@ -313,7 +327,7 @@ export class ProjectionCoordinator {
         localItemId: queued.item.localItemId!,
         ...(queued.item.turnId ? { localTurnId: queued.item.turnId } : {}),
         kind: queued.item.kind === 'user-message' ? 'user_message' : 'assistant_final',
-        text: queued.item.text,
+        text: projectedOutboundText(queued.item.kind as 'user-message' | 'assistant-reply', queued.item.text),
         occurredAt: queued.item.createdAt
       }, outboundIdempotencyKey(queued.item.queueItemId))
     } catch (error) {
@@ -437,6 +451,7 @@ export class ProjectionCoordinator {
         prompt: current.item.text,
         metadata: {
           source: 'collaboration.remote-session-projection',
+          sourceLabel: remoteSourceLabel(current.projection.projection),
           projectionId: current.item.projectionId,
           senderUserId: current.item.senderUserId!,
           senderHumanEndpointId: current.item.senderHumanEndpointId!,

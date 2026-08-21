@@ -87,6 +87,47 @@ export function resolveProjectionLocatorSelection(
   return locators.find((item) => projectionLocatorKey(item) === selectedKey)
 }
 
+export function projectionMatchesSession(
+  projection: CollaborationProjectionView,
+  session: CollaborationPanelSession
+): boolean {
+  return Boolean(
+    session.runtimeId &&
+    projection.runtimeId === session.runtimeId &&
+    projection.threadId === session.id &&
+    projection.status !== 'closed'
+  )
+}
+
+export function projectionMatchesLocator(
+  projection: CollaborationProjectionView,
+  locator: ProjectionLocator
+): boolean {
+  const remote = projection.remoteLocator
+  return Boolean(
+    remote &&
+    remote.provider === locator.provider &&
+    remote.realmId === locator.realmId &&
+    remote.containerId === locator.containerId &&
+    remote.topicId === locator.topicId &&
+    projection.status !== 'closed'
+  )
+}
+
+export function orderProjectionsForSession(
+  projections: readonly CollaborationProjectionView[],
+  session: CollaborationPanelSession
+): CollaborationProjectionView[] {
+  return [...projections].sort((left, right) => {
+    const rank = (projection: CollaborationProjectionView): number => {
+      if (projectionMatchesSession(projection, session)) return 0
+      if (projection.status !== 'closed') return 1
+      return 2
+    }
+    return rank(left) - rank(right)
+  })
+}
+
 export function buildProjectionLinkInput(input: Readonly<{
   mode: 'existing' | 'new'
   selectedLocatorKey: string
@@ -208,6 +249,7 @@ export function CollaborationPanel({
   const [loading, setLoading] = useState(true)
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null)
   const [baseUrl, setBaseUrl] = useState('')
   const [selectedProviderKey, setSelectedProviderKey] = useState('')
   const [locator, setLocator] = useState<Record<string, string>>({})
@@ -263,9 +305,11 @@ export function CollaborationPanel({
   ): Promise<boolean> => {
     setBusyKey(key)
     setActionError(null)
+    setActionSuccess(null)
     try {
       await action()
       if (options.refresh !== false) await refresh()
+      setActionSuccess(t('collaborationActionSucceeded'))
       return true
     } catch (error) {
       setActionError(errorMessage(error, t('collaborationActionFailed')))
@@ -408,13 +452,27 @@ export function CollaborationPanel({
     selectedProjectionLocatorKey,
     projectionLocators
   )
+  const currentSessionProjection = snapshot?.projections.find((projection) =>
+    projectionMatchesSession(projection, session)
+  )
+  const selectedLocatorProjection = selectedProjectionLocator
+    ? snapshot?.projections.find((projection) =>
+        projectionMatchesLocator(projection, selectedProjectionLocator)
+      )
+    : undefined
+  const orderedProjections = useMemo(
+    () => orderProjectionsForSession(snapshot?.projections ?? [], session),
+    [session, snapshot?.projections]
+  )
   const canLink = Boolean(
     participant?.userId &&
     primaryAgent &&
     primaryEndpoint &&
     selectedProjectionLocator &&
     sessionDisplayName.trim() &&
-    session.runtimeId
+    session.runtimeId &&
+    !currentSessionProjection &&
+    !selectedLocatorProjection
   )
 
   const linkSession = useCallback(async (mode: 'existing' | 'new'): Promise<void> => {
@@ -492,6 +550,12 @@ export function CollaborationPanel({
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
         {actionError ? (
           <ExplicitError message={actionError} />
+        ) : null}
+        {actionSuccess ? (
+          <p className="rounded-md border border-ds-border bg-ds-hover p-2 text-xs text-ds-ink"
+            role="status" aria-live="polite">
+            {actionSuccess}
+          </p>
         ) : null}
 
         {snapshot ? (
@@ -590,18 +654,35 @@ export function CollaborationPanel({
               <p className="mb-3 text-xs text-ds-muted">
                 {t('collaborationNoProjectRequired')}
               </p>
-              <SessionDisplayNameField
-                value={sessionDisplayName}
-                disabled={busyKey !== null}
-                onChange={setSessionDisplayName}
+              <CurrentSessionBindingSummary
+                session={session}
+                projection={currentSessionProjection}
               />
-              <ProjectionLocatorSelector
-                locators={projectionLocators}
-                selectedKey={selectedProjectionLocatorKey}
-                busy={busyKey !== null}
-                onSelect={setSelectedProjectionLocatorKey}
-              />
-              <div className="mb-3 flex flex-wrap gap-2">
+              {!currentSessionProjection ? <>
+                <SessionDisplayNameField
+                  value={sessionDisplayName}
+                  disabled={busyKey !== null}
+                  onChange={setSessionDisplayName}
+                />
+                <ProjectionLocatorSelector
+                  locators={projectionLocators}
+                  projections={snapshot.projections}
+                  session={session}
+                  selectedKey={selectedProjectionLocatorKey}
+                  busy={busyKey !== null}
+                  onSelect={setSelectedProjectionLocatorKey}
+                />
+                {selectedLocatorProjection ? (
+                  <p className="mb-3 rounded bg-ds-hover p-2 text-xs text-ds-muted" role="alert">
+                    {t('collaborationTopicAlreadyBound', {
+                      name: selectedLocatorProjection.displayName
+                    })}
+                  </p>
+                ) : null}
+                <p className="mb-3 text-xs text-ds-muted">
+                  {t('collaborationExistingHistoryNotice')}
+                </p>
+                <div className="mb-3 flex flex-wrap gap-2">
                 <button
                   type="button"
                   className={PRIMARY_BUTTON}
@@ -620,10 +701,11 @@ export function CollaborationPanel({
                   <Plus className="h-3.5 w-3.5" />
                   {t('collaborationCreateNew')}
                 </button>
-              </div>
+                </div>
+              </> : null}
               {snapshot.projections.length ? (
                 <div className="space-y-2">
-                  {snapshot.projections.map((projection) => (
+                  {orderedProjections.map((projection) => (
                     <ProjectionCard
                       key={projection.projectionId}
                       projection={projection}
@@ -633,6 +715,8 @@ export function CollaborationPanel({
                       ownerName={projection.agentOwnerUserId === participant?.userId
                         ? participant.displayName
                         : undefined}
+                      current={projectionMatchesSession(projection, session)}
+                      currentSession={session}
                       busy={busyKey !== null}
                       onUpdate={(input) => void runAction(
                         `projection-${input.action}-${projection.projectionId}`,
@@ -784,11 +868,15 @@ export function ManagedChannelSection({
 
 export function ProjectionLocatorSelector({
   locators,
+  projections,
+  session,
   selectedKey,
   busy,
   onSelect
 }: Readonly<{
   locators: readonly ProjectionLocator[]
+  projections: readonly CollaborationProjectionView[]
+  session: CollaborationPanelSession
   selectedKey: string
   busy: boolean
   onSelect: (key: string) => void
@@ -816,14 +904,48 @@ export function ProjectionLocatorSelector({
           const key = projectionLocatorKey(item)
           const container = item.containerDisplayName || item.containerId
           const topic = item.topicDisplayName || item.topicId
+          const binding = projections.find((projection) => projectionMatchesLocator(projection, item))
+          const suffix = binding
+            ? projectionMatchesSession(binding, session)
+              ? t('collaborationBoundToCurrentSession')
+              : t('collaborationBoundToSession', { name: binding.displayName })
+            : t('collaborationUnboundTopic')
           return (
-            <option key={key} value={key}>
-              {container} / {topic}
+            <option key={key} value={key} disabled={Boolean(binding)}>
+              {container} / {topic} — {suffix}
             </option>
           )
         })}
       </select>
     </label>
+  )
+}
+
+export function CurrentSessionBindingSummary({
+  session,
+  projection
+}: Readonly<{
+  session: CollaborationPanelSession
+  projection?: CollaborationProjectionView
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  return (
+    <div className="mb-3 rounded-md border border-ds-border bg-ds-hover p-2.5 text-xs"
+      data-current-session-binding={projection ? 'bound' : 'unbound'}>
+      <div className="flex items-center gap-2 font-semibold">
+        {projection ? <Smartphone className="h-3.5 w-3.5" /> : <Monitor className="h-3.5 w-3.5" />}
+        {projection
+          ? t('collaborationCurrentSessionBound')
+          : t('collaborationCurrentSessionUnbound')}
+      </div>
+      <div className="mt-1 text-ds-muted">
+        {projection?.remoteDisplay || t('collaborationChooseTopicToBind')}
+      </div>
+      <details className="mt-1 text-ds-faint">
+        <summary className="cursor-pointer">{t('collaborationTechnicalDetails')}</summary>
+        <code className="mt-1 block break-all">{session.runtimeId || '—'}/{session.id}</code>
+      </details>
+    </div>
   )
 }
 
@@ -1299,6 +1421,8 @@ type ProjectionCardProps = Readonly<{
   projection: CollaborationProjectionView
   agentName?: string
   ownerName?: string
+  current?: boolean
+  currentSession: CollaborationPanelSession
   busy: boolean
   onUpdate: (input:
     | Readonly<{ action: 'rename'; projectionId: string; displayName: string; expectedRevision: number }>
@@ -1313,6 +1437,8 @@ export function ProjectionCard({
   projection,
   agentName,
   ownerName,
+  current = false,
+  currentSession,
   busy,
   onUpdate,
   onShare,
@@ -1353,16 +1479,19 @@ export function ProjectionCard({
   }
   return (
     <article
-      className="rounded-md border border-ds-border p-2.5 text-xs"
+      className={`rounded-md border p-2.5 text-xs ${current ? 'border-ds-ink bg-ds-hover' : 'border-ds-border'}`}
       data-projection-id={projection.projectionId}
       data-projection-status={projection.status}
       data-execution-agent={projection.agentId}
       data-execution-owner={projection.agentOwnerUserId}
+      data-current-session={current}
     >
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="truncate font-semibold">{projection.displayName}</div>
-          <code className="text-[10px] text-ds-faint">{projection.projectionId}</code>
+          {current ? <div className="mt-0.5 text-[10px] font-medium text-ds-muted">
+            {t('collaborationCurrentSession')}
+          </div> : null}
         </div>
         <StatusPill status={projection.status} />
       </div>
@@ -1372,10 +1501,6 @@ export function ProjectionCard({
           <dd className="font-medium text-ds-ink">
             {ownerName || projection.agentOwnerUserId} · {agentName || projection.agentId}
           </dd>
-        </div>
-        <div className="flex gap-1">
-          <dt>Session:</dt>
-          <dd>{projection.runtimeId}/{projection.threadId || 'pending'}</dd>
         </div>
         <div className="flex gap-1">
           <dt>{t('collaborationTopic')}:</dt>
@@ -1396,6 +1521,11 @@ export function ProjectionCard({
             : t('collaborationOwnerOnly')}</dd>
         </div>
       </dl>
+      <details className="mt-2 text-ds-faint">
+        <summary className="cursor-pointer">{t('collaborationTechnicalDetails')}</summary>
+        <code className="mt-1 block break-all">{projection.projectionId}</code>
+        <code className="mt-1 block break-all">{projection.runtimeId}/{projection.threadId || 'pending'}</code>
+      </details>
       {projection.allowUserIds.length ? (
         <p className="mt-2 rounded bg-ds-hover p-2 text-ds-muted">
           {t('collaborationSharedExecutionNotice')}
@@ -1425,6 +1555,7 @@ export function ProjectionCard({
           <button
             type="button"
             className={SECONDARY_BUTTON}
+            title={t('collaborationPauseHint')}
             disabled={busy || projection.status === 'linking'}
             onClick={() => onUpdate({ action: 'pause', ...updateBase })}
           >
@@ -1447,18 +1578,10 @@ export function ProjectionCard({
           type="button"
           className={SECONDARY_BUTTON}
           disabled={busy}
-          onClick={() => openEditor('relink', projection.threadId)}
+          onClick={() => openEditor('relink')}
         >
           <Link2 className="h-3.5 w-3.5" />
           {t('collaborationRelink')}
-        </button>
-        <button
-          type="button"
-          className={SECONDARY_BUTTON}
-          disabled={busy || projection.status === 'closed'}
-          onClick={() => openEditor('allowlist', projection.allowUserIds.join(', '))}
-        >
-          {t('collaborationSaveAllowlist')}
         </button>
         {(projection.status === 'error' || projection.lastError) ? (
           <button type="button" className={PRIMARY_BUTTON} disabled={busy} onClick={onRetry}>
@@ -1467,21 +1590,31 @@ export function ProjectionCard({
           </button>
         ) : null}
       </div>
-      {editor && editor !== 'close' ? (
+      {projection.status !== 'closed' ? (
+        <details className="mt-2 text-xs text-ds-muted">
+          <summary className="cursor-pointer">{t('collaborationAdvancedPermissions')}</summary>
+          <p className="mt-1">{t('collaborationAllowlistAdvancedNotice')}</p>
+          <button
+            type="button"
+            className={`${SECONDARY_BUTTON} mt-2`}
+            disabled={busy}
+            onClick={() => openEditor('allowlist', projection.allowUserIds.join(', '))}
+          >
+            {t('collaborationSaveAllowlist')}
+          </button>
+        </details>
+      ) : null}
+      {editor && editor !== 'close' && editor !== 'relink' ? (
         <InlineTextActionEditor
           label={editor === 'rename'
             ? t('collaborationRenameSessionLabel')
-            : editor === 'relink'
-              ? t('collaborationRelinkPrompt')
-              : t('collaborationAllowlistPrompt')}
+            : t('collaborationAllowlistPrompt')}
           value={editorValue}
           allowEmpty={editor === 'allowlist'}
           busy={busy}
           submitLabel={editor === 'rename'
             ? t('collaborationRename')
-            : editor === 'relink'
-              ? t('collaborationRelink')
-              : t('collaborationSaveAllowlist')}
+            : t('collaborationSaveAllowlist')}
           onChange={setEditorValue}
           onSubmit={submitEditor}
           onCancel={() => setEditor(null)}
@@ -1493,6 +1626,27 @@ export function ProjectionCard({
           busy={busy}
           onConfirm={() => {
             onUpdate({ action: 'close', ...updateBase })
+            setEditor(null)
+          }}
+          onCancel={() => setEditor(null)}
+        />
+      ) : null}
+      {editor === 'relink' ? (
+        <InlineConfirmationEditor
+          message={t('collaborationRelinkCurrentConfirm', {
+            topic: projection.remoteDisplay || projection.displayName,
+            session: currentSession.id
+          })}
+          busy={busy || !currentSession.runtimeId}
+          onConfirm={() => {
+            if (!currentSession.runtimeId) return
+            onUpdate({
+              action: 'relink',
+              ...updateBase,
+              runtimeId: currentSession.runtimeId,
+              threadId: currentSession.id,
+              ...(currentSession.workspaceRoot ? { workspaceRoot: currentSession.workspaceRoot } : {})
+            })
             setEditor(null)
           }}
           onCancel={() => setEditor(null)}
@@ -1775,6 +1929,21 @@ function SectionTitle({ icon, children }: Readonly<{
 }
 
 function StatusPill({ status }: Readonly<{ status: string }>): ReactElement {
+  const { t } = useTranslation('common')
+  const labels: Readonly<Record<string, string>> = {
+    active: t('collaborationStatusActive'),
+    paused: t('collaborationStatusPaused'),
+    closed: t('collaborationStatusClosed'),
+    linking: t('collaborationStatusLinking'),
+    error: t('collaborationStatusError'),
+    connected: t('collaborationStatusConnected'),
+    connecting: t('collaborationStatusConnecting'),
+    completed: t('collaborationStatusCompleted'),
+    failed: t('collaborationStatusFailed'),
+    online: t('collaborationStatusOnline'),
+    offline: t('collaborationStatusOffline'),
+    running: t('collaborationStatusRunning')
+  }
   return (
     <span
       className="inline-flex shrink-0 items-center gap-1 rounded-full border border-ds-border bg-ds-card px-1.5 py-0.5 text-[10px] font-medium text-ds-muted"
@@ -1787,7 +1956,7 @@ function StatusPill({ status }: Readonly<{ status: string }>): ReactElement {
           : status === 'error' || status === 'failed'
             ? <AlertTriangle className="h-3 w-3" />
             : <CircleDot className="h-3 w-3" />}
-      {status}
+      {labels[status] || status}
     </span>
   )
 }
