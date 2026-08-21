@@ -37,6 +37,21 @@ test('Desktop and Web clients require authorization code with S256 PKCE', async 
       mapper.config['included.client.audience'] === 'sciforge-cloud-api' &&
       mapper.config['access.token.claim'] === 'true'
     )))
+
+    const nbfMappers = client.protocolMappers.filter(
+      (mapper) => mapper.config?.['claim.name'] === 'nbf'
+    )
+    assert.equal(nbfMappers.length, 1)
+    assert.equal(nbfMappers[0].name, 'sciforge-access-token-not-before')
+    assert.equal(nbfMappers[0].protocol, 'openid-connect')
+    assert.equal(nbfMappers[0].protocolMapper, 'oidc-usersessionmodel-note-mapper')
+    assert.equal(nbfMappers[0].config['user.session.note'], 'AUTH_TIME')
+    assert.equal(nbfMappers[0].config['jsonType.label'], 'long')
+    assert.equal(nbfMappers[0].config['access.token.claim'], 'true')
+    assert.equal(nbfMappers[0].config['id.token.claim'], 'false')
+    assert.equal(nbfMappers[0].config['userinfo.token.claim'], 'false')
+    assert.equal(nbfMappers[0].config['introspection.token.claim'], 'true')
+    assert.doesNotMatch(nbfMappers[0].protocolMapper, /(?:hardcoded|script)/iu)
   }
 
   const desktop = value.clients.find((candidate) => candidate.clientId === 'sciforge-desktop')

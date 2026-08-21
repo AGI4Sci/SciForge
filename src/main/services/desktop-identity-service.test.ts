@@ -82,6 +82,85 @@ async function createSigner() {
   }
 }
 
+function withoutClaim(
+  claims: Record<string, unknown>,
+  claim: string
+): Record<string, unknown> {
+  const next = { ...claims }
+  delete next[claim]
+  return next
+}
+
+async function loginWithAccessTimeClaims(
+  mutateClaims: (claims: Record<string, unknown>) => Record<string, unknown>
+) {
+  const signer = await createSigner()
+  const port = await unusedPort()
+  const redirectUri = `http://127.0.0.1:${port}/oidc/callback`
+  const now = Date.parse('2026-08-18T12:00:00.000Z')
+  const nowSeconds = Math.floor(now / 1000)
+  let nonce = ''
+  const sessionStore = memorySessionStore()
+  const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+    const url = String(input)
+    if (url.endsWith('/.well-known/openid-configuration')) {
+      return Response.json({
+        issuer,
+        authorization_endpoint: `${issuer}/protocol/openid-connect/auth`,
+        token_endpoint: `${issuer}/protocol/openid-connect/token`,
+        jwks_uri: `${issuer}/protocol/openid-connect/certs`
+      })
+    }
+    if (url.endsWith('/protocol/openid-connect/certs')) {
+      return Response.json({ keys: [signer.publicJwk] })
+    }
+    if (url.endsWith('/protocol/openid-connect/token')) {
+      const common = {
+        iss: issuer,
+        sub: 'keycloak-user-123',
+        exp: nowSeconds + 300,
+        iat: nowSeconds,
+        nbf: nowSeconds,
+        auth_time: nowSeconds
+      }
+      return Response.json({
+        access_token: await signer.sign(mutateClaims({
+          ...common,
+          aud: audience,
+          azp: clientId
+        })),
+        id_token: await signer.sign({
+          ...common,
+          aud: clientId,
+          nonce
+        }),
+        refresh_token: 'refresh-token'
+      })
+    }
+    throw new Error(`Unexpected request: ${url}`)
+  }) as unknown as typeof fetch
+  const service = new DesktopIdentityService({
+    issuer,
+    clientId,
+    audience,
+    identityClient,
+    sessionStore,
+    redirectUri,
+    fetchImpl,
+    now: () => now,
+    openExternal: async (url) => {
+      const authorizationUrl = new URL(url)
+      nonce = authorizationUrl.searchParams.get('nonce') ?? ''
+      const state = authorizationUrl.searchParams.get('state')
+      await fetch(`${redirectUri}?code=authorization-code&state=${encodeURIComponent(state ?? '')}`)
+    }
+  })
+
+  const result = await service.login()
+  service.close()
+  return result
+}
+
 afterEach(() => {
   vi.clearAllMocks()
   vi.restoreAllMocks()
@@ -153,6 +232,7 @@ describe('DesktopIdentityService', () => {
       now: () => now,
       openExternal: async (url) => {
         authorizationUrl = new URL(url)
+        expect(authorizationUrl.searchParams.get('scope')).toBe('openid profile email')
         const state = authorizationUrl.searchParams.get('state')
         await fetch(`${redirectUri}?code=authorization-code&state=${encodeURIComponent(state ?? '')}`)
       }
@@ -197,6 +277,136 @@ describe('DesktopIdentityService', () => {
     expect(sessionStore.clear).toHaveBeenCalledOnce()
     expect(statusListener).toHaveBeenLastCalledWith({ state: 'signed-out' })
     service.close()
+  })
+
+  it('fails closed when the interactive token response omits a refresh token', async () => {
+    const port = await unusedPort()
+    const redirectUri = `http://127.0.0.1:${port}/oidc/callback`
+    const sessionStore = memorySessionStore()
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.endsWith('/.well-known/openid-configuration')) {
+        return Response.json({
+          issuer,
+          authorization_endpoint: `${issuer}/protocol/openid-connect/auth`,
+          token_endpoint: `${issuer}/protocol/openid-connect/token`,
+          jwks_uri: `${issuer}/protocol/openid-connect/certs`
+        })
+      }
+      if (url.endsWith('/protocol/openid-connect/token')) {
+        return Response.json({
+          access_token: 'unsigned-access-token',
+          id_token: 'unsigned-id-token'
+        })
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    }) as unknown as typeof fetch
+    const service = new DesktopIdentityService({
+      issuer,
+      clientId,
+      audience,
+      identityClient,
+      sessionStore,
+      redirectUri,
+      fetchImpl,
+      openExternal: async (url) => {
+        const authorizationUrl = new URL(url)
+        const state = authorizationUrl.searchParams.get('state')
+        await fetch(`${redirectUri}?code=authorization-code&state=${encodeURIComponent(state ?? '')}`)
+      }
+    })
+
+    const result = await service.login()
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'OIDC_LOGIN_FAILED' },
+      status: { state: 'signed-out' }
+    })
+    expect(sessionStore.save).not.toHaveBeenCalled()
+    expect(sessionStore.current()).toBeNull()
+    service.close()
+  })
+
+  it.each([
+    {
+      name: 'missing iat',
+      mutate: (claims: Record<string, unknown>) => withoutClaim(claims, 'iat'),
+      message: 'The access token iat claim is missing or invalid.'
+    },
+    {
+      name: 'missing nbf',
+      mutate: (claims: Record<string, unknown>) => withoutClaim(claims, 'nbf'),
+      message: 'The access token nbf claim is missing or invalid.'
+    },
+    {
+      name: 'missing auth_time',
+      mutate: (claims: Record<string, unknown>) => withoutClaim(claims, 'auth_time'),
+      message: 'The access token auth_time claim is missing or invalid.'
+    },
+    {
+      name: 'missing exp',
+      mutate: (claims: Record<string, unknown>) => withoutClaim(claims, 'exp'),
+      message: 'The token exp claim is missing or invalid.'
+    },
+    {
+      name: 'future nbf',
+      mutate: (claims: Record<string, unknown>) => ({
+        ...claims,
+        nbf: Number(claims.iat) + 61
+      }),
+      message: 'The access token nbf claim is in the future.'
+    },
+    {
+      name: 'future iat',
+      mutate: (claims: Record<string, unknown>) => ({
+        ...claims,
+        iat: Number(claims.iat) + 61
+      }),
+      message: 'The access token iat claim is in the future.'
+    },
+    {
+      name: 'future auth_time',
+      mutate: (claims: Record<string, unknown>) => ({
+        ...claims,
+        auth_time: Number(claims.iat) + 61
+      }),
+      message: 'The access token auth_time claim is in the future.'
+    },
+    {
+      name: 'exp at nbf',
+      mutate: (claims: Record<string, unknown>) => ({
+        ...claims,
+        nbf: Number(claims.iat) + 30,
+        exp: Number(claims.iat) + 30
+      }),
+      message: 'The access token expires at or before its nbf claim.'
+    },
+    {
+      name: 'exp at iat',
+      mutate: (claims: Record<string, unknown>) => ({
+        ...claims,
+        iat: Number(claims.iat) + 30,
+        exp: Number(claims.iat) + 30
+      }),
+      message: 'The access token expires at or before its iat claim.'
+    },
+    {
+      name: 'auth_time after iat',
+      mutate: (claims: Record<string, unknown>) => ({
+        ...claims,
+        auth_time: Number(claims.iat) + 30
+      }),
+      message: 'The access token auth_time claim is after its iat claim.'
+    }
+  ])('reports $name without exposing claim values', async ({ mutate, message }) => {
+    const result = await loginWithAccessTimeClaims(mutate)
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'OIDC_TOKEN_INVALID', message },
+      status: { state: 'signed-out' }
+    })
   })
 
   it('restores a saved refresh session and persists refresh-token rotation without storing the access token', async () => {

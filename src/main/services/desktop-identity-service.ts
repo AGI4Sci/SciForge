@@ -170,7 +170,11 @@ function assertCommonClaims(
   if (!readString(claims.sub)) {
     throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The token is missing its subject.')
   }
-  if (typeof claims.exp !== 'number' || claims.exp * 1000 <= now) {
+  const expiresAt = numericDate(claims.exp)
+  if (expiresAt === null) {
+    throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The token exp claim is missing or invalid.')
+  }
+  if (expiresAt * 1000 <= now) {
     throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The token has expired.')
   }
 }
@@ -192,19 +196,35 @@ function assertAccessTokenClaims(
   const expiresAt = numericDate(claims.exp)
   const nowSeconds = Math.floor(now / 1000)
   const latestAllowed = nowSeconds + CLOCK_TOLERANCE_SECONDS
-  if (
-    issuedAt === null ||
-    notBefore === null ||
-    authTime === null ||
-    expiresAt === null ||
-    notBefore > latestAllowed ||
-    issuedAt > latestAllowed ||
-    authTime > latestAllowed ||
-    expiresAt <= notBefore ||
-    expiresAt <= issuedAt ||
-    authTime > issuedAt
-  ) {
-    throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The access token time claims are invalid.')
+  if (issuedAt === null) {
+    throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The access token iat claim is missing or invalid.')
+  }
+  if (notBefore === null) {
+    throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The access token nbf claim is missing or invalid.')
+  }
+  if (authTime === null) {
+    throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The access token auth_time claim is missing or invalid.')
+  }
+  if (expiresAt === null) {
+    throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The access token exp claim is missing or invalid.')
+  }
+  if (notBefore > latestAllowed) {
+    throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The access token nbf claim is in the future.')
+  }
+  if (issuedAt > latestAllowed) {
+    throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The access token iat claim is in the future.')
+  }
+  if (authTime > latestAllowed) {
+    throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The access token auth_time claim is in the future.')
+  }
+  if (expiresAt <= notBefore) {
+    throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The access token expires at or before its nbf claim.')
+  }
+  if (expiresAt <= issuedAt) {
+    throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The access token expires at or before its iat claim.')
+  }
+  if (authTime > issuedAt) {
+    throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The access token auth_time claim is after its iat claim.')
   }
 }
 
@@ -561,7 +581,7 @@ export class DesktopIdentityService {
         client_id: this.options.clientId,
         redirect_uri: this.redirectUri,
         response_type: 'code',
-        scope: 'openid profile email offline_access',
+        scope: 'openid profile email',
         code_challenge: codeChallenge,
         code_challenge_method: 'S256',
         state,

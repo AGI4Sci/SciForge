@@ -92,6 +92,50 @@ describe('DesktopIdentityControl', () => {
     expect(stopIdentity).toHaveBeenCalledOnce()
     expect(stopDevice).toHaveBeenCalledOnce()
   })
+
+  it('shows a signed-in device enrollment error in the account menu', async () => {
+    const message = 'This installation belongs to another user.'
+    const identity = {
+      getStatus: vi.fn(async () => signedInStatus()),
+      login: vi.fn(),
+      reauthenticate: vi.fn(),
+      logout: vi.fn(),
+      onStatusChanged: vi.fn(() => () => undefined),
+      getDeviceStatus: vi.fn(async (): Promise<DesktopDeviceStatus> => ({ state: 'not-enrolled' })),
+      onDeviceStatusChanged: vi.fn(() => () => undefined),
+      listDevices: vi.fn(),
+      enrollDevice: vi.fn(async () => ({
+        ok: false as const,
+        status: { state: 'error' as const, message },
+        devices: [],
+        message
+      })),
+      refreshDevices: vi.fn(),
+      revokeDevice: vi.fn()
+    }
+    Object.assign(window, {
+      sciforge: { identity } as unknown as SciForgeApi
+    })
+
+    await act(async () => {
+      root = createRoot(container!)
+      root.render(createElement(DesktopIdentityControl))
+    })
+
+    const accountButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Signed in as Cloud Person"]'
+    )
+    expect(accountButton).not.toBeNull()
+    await act(async () => accountButton?.click())
+
+    const registerButton = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.includes('Register this Desktop'))
+    expect(registerButton).toBeDefined()
+    await act(async () => registerButton?.click())
+
+    expect(identity.enrollDevice).toHaveBeenCalledOnce()
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe(message)
+  })
 })
 
 function signedInStatus(): DesktopIdentityStatus {

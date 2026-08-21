@@ -289,6 +289,11 @@ export function DesktopIdentityControl(): ReactElement {
             <span>{t('desktopDeviceRegister')}</span>
           </button>
         )}
+        {error ? (
+          <p role="alert" className="mt-2 whitespace-pre-wrap break-words text-[11px] text-red-600 dark:text-red-300">
+            {error}
+          </p>
+        ) : null}
       </div>
       <button
         type="button"
