@@ -16,6 +16,7 @@ import {
   providerDiagnosticSchema,
   providerDirectRecipientSchema,
   providerEventSchema,
+  providerLocatorListRequestSchema,
   providerManagedContainerRequestSchema,
   providerManagedContainerResultSchema,
   providerSendRequestSchema
@@ -126,6 +127,23 @@ describe('canonical pairing and bidirectional Session commands', () => {
         channelManagementRestricted: true },
       safeIssueCodes: [], observedAt: TEST_TIMESTAMP
     }).status).toBe('active')
+    expect(providerLocatorListRequestSchema.parse({
+      protocolVersion: '1.0',
+      type: 'provider.locator.list',
+      realmId: providerIdentityFixture.realmId,
+      container: {
+        type: 'provider_managed_container_ref',
+        provider: providerIdentityFixture.provider,
+        realmId: providerIdentityFixture.realmId,
+        containerId: '123'
+      },
+      containerDisplayName: 'sciforge-user123',
+      limit: 50
+    }).container.containerId).toBe('123')
+    expect(providerLocatorListRequestSchema.safeParse({
+      protocolVersion: '1.0', type: 'provider.locator.list',
+      realmId: providerIdentityFixture.realmId, limit: 50
+    }).success).toBe(false)
     expect(providerManagedContainerRequestSchema.safeParse({
       protocolVersion: '1.0', type: 'provider.managed_container.ensure', realmId: 'realm-hong-kong',
       ownerIdentity: providerIdentityFixture, stableKey: 'managed-owner-realm', displayName: 'sciforge-user123',

@@ -96,6 +96,7 @@ type ProviderRuntimeRepository = Pick<CollaborationRepository,
   | 'getEndpoint'
   | 'getInboxCursor'
   | 'getManagedContainer'
+  | 'getManagedContainerForOwner'
   | 'claimManagedContainerJobs'
   | 'completeManagedContainerJob'
   | 'failManagedContainerJob'
@@ -159,14 +160,42 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
     }
     const provider = this.providers.get(endpoint.provider)
     if (!provider) throw new CollaborationServiceError('resource_offline', 'The endpoint provider is not installed or configured.')
+    const container = await this.repository.getManagedContainerForOwner(
+      input.actor.userId,
+      endpoint.provider,
+      endpoint.realmId
+    )
+    if (
+      !container ||
+      container.humanEndpointId !== endpoint.humanEndpointId ||
+      container.status !== 'active' ||
+      !container.externalContainerId
+    ) {
+      throw new CollaborationServiceError(
+        'permission_denied',
+        'Locator discovery requires the authenticated user\'s active managed Channel.'
+      )
+    }
     const result = await provider.listLocators({
       protocolVersion: CURRENT_PROTOCOL_VERSION,
       type: 'provider.locator.list',
       realmId: endpoint.realmId,
+      container: managedContainerRef(container),
+      containerDisplayName: container.displayName,
       ...(input.query === undefined ? {} : { query: input.query }),
       ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
       limit: input.limit
     })
+    if (result.locators.some((locator) => (
+      locator.provider !== container.provider ||
+      locator.realmId !== container.realmId ||
+      locator.containerId !== container.externalContainerId
+    ))) {
+      throw new CollaborationServiceError(
+        'permission_denied',
+        'Provider locator discovery returned a target outside the authenticated user\'s managed Channel.'
+      )
+    }
     return {
       locators: result.locators,
       ...(result.nextCursor === undefined ? {} : { nextCursor: result.nextCursor })

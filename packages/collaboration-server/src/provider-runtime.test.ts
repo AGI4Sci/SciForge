@@ -8,7 +8,9 @@ import {
   type ProviderSendRequest,
   type ProviderSendResult,
   type ProviderManagedContainerRequest,
-  type ProviderManagedContainerResult
+  type ProviderManagedContainerResult,
+  type ProviderLocatorListRequest,
+  type ProviderLocatorListResult
 } from '@sciforge/collaboration-contracts'
 import { describe, expect, it } from 'vitest'
 import { FakeCollaborationRepository } from '../../../test-fixtures/collaboration/fake-adapters.mjs'
@@ -27,7 +29,69 @@ const LOCATOR = {
   topicDisplayName: '固定 Session'
 }
 
+function managedContainerPolicy() {
+  return {
+    version: 1 as const, visibility: 'private' as const, history: 'protected' as const,
+    membership: 'owner_and_message_bot' as const, memberManagement: 'provisioning_service_only' as const,
+    channelManagement: 'provisioning_service_only' as const, ownerCanSend: true as const,
+    ownerCanCreateTopics: true as const, messageBotCanSend: true as const,
+    messageBotCreatesProjectTopics: false as const
+  }
+}
+
 describe('provider runtime', () => {
+  it('scopes locator discovery to the authenticated owner managed Channel', async () => {
+    const repository = new FakeCollaborationRepository()
+    const at = '2026-08-15T00:00:00.000Z'
+    await repository.insertEndpoint({
+      humanEndpointId: 'hep_123456789012', userId: 'usr_123456789012', provider: 'fake', realmId: 'realm-1',
+      providerUserId: '42', displayName: 'Owner endpoint', assurance: 'verified', status: 'active',
+      revision: 1, verifiedAt: at, updatedAt: at
+    })
+    await repository.insertManagedContainer({
+      managedContainerId: 'mco_123456789012', ownerUserId: 'usr_123456789012',
+      humanEndpointId: 'hep_123456789012', provider: 'fake', realmId: 'realm-1', ownerProviderUserId: '42',
+      stableKey: 'managed-owner-realm', displayName: 'sciforge-owner', externalContainerId: 'owner-channel',
+      policy: managedContainerPolicy(), status: 'active', revision: 2, createdAt: at, updatedAt: at
+    })
+    await repository.insertManagedContainer({
+      managedContainerId: 'mco_123456789013', ownerUserId: 'usr_123456789013',
+      humanEndpointId: 'hep_123456789013', provider: 'fake', realmId: 'realm-1', ownerProviderUserId: '43',
+      stableKey: 'managed-other-realm', displayName: 'sciforge-other', externalContainerId: 'other-channel',
+      policy: managedContainerPolicy(), status: 'active', revision: 2, createdAt: at, updatedAt: at
+    })
+    const provider = new FakeProvider([])
+    const runtime = new DefaultCollaborationProviderRuntime({
+      providers: [provider], store: new FakeRuntimeStore(), repository,
+      authentication: { resolveProviderIdentity: async () => { throw new Error('not used') } },
+      service: emptyService()
+    })
+
+    await expect(runtime.listLocators({
+      actor: { kind: 'user', actorKey: 'user:usr_123456789012', userId: 'usr_123456789012',
+        credentialId: 'credential-owner', assurance: 'verified' },
+      humanEndpointId: 'hep_123456789012', limit: 50
+    })).resolves.toEqual({ locators: [] })
+
+    expect(provider.locatorListRequests).toHaveLength(1)
+    expect(provider.locatorListRequests[0]).toMatchObject({
+      container: { containerId: 'owner-channel' },
+      containerDisplayName: 'sciforge-owner'
+    })
+    expect(JSON.stringify(provider.locatorListRequests)).not.toContain('other-channel')
+
+    provider.locatorListResult = {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      type: 'provider.locator.page',
+      locators: [{ ...LOCATOR, containerId: 'other-channel' }]
+    }
+    await expect(runtime.listLocators({
+      actor: { kind: 'user', actorKey: 'user:usr_123456789012', userId: 'usr_123456789012',
+        credentialId: 'credential-owner', assurance: 'verified' },
+      humanEndpointId: 'hep_123456789012', limit: 50
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+  })
+
   it('claims and completes a durable managed Channel provisioning job', async () => {
     const repository = new FakeCollaborationRepository()
     const at = '2026-08-15T00:00:00.000Z'
@@ -892,6 +956,12 @@ class FakeProvider implements HumanEndpointProvider {
 
   readonly sendRequests: ProviderSendRequest[] = []
   readonly managedContainerRequests: ProviderManagedContainerRequest[] = []
+  readonly locatorListRequests: ProviderLocatorListRequest[] = []
+  locatorListResult: ProviderLocatorListResult = {
+    protocolVersion: CURRENT_PROTOCOL_VERSION,
+    type: 'provider.locator.page',
+    locators: []
+  }
   diagnoseCalls = 0
 
   constructor(
@@ -940,7 +1010,10 @@ class FakeProvider implements HumanEndpointProvider {
     if (!result) throw new Error('No fake provider send result is configured.')
     return result
   }
-  async listLocators(): Promise<never> { throw new Error('not used') }
+  async listLocators(request: ProviderLocatorListRequest): Promise<ProviderLocatorListResult> {
+    this.locatorListRequests.push(request)
+    return this.locatorListResult
+  }
   async updateLocator(): Promise<never> { throw new Error('not used') }
   async manageContainer(request: ProviderManagedContainerRequest): Promise<ProviderManagedContainerResult> {
     this.managedContainerRequests.push(request)

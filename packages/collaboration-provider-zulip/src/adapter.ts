@@ -802,6 +802,9 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
     if (request.realmId !== this.realmId) {
       throw new ZulipProviderError('invalid_locator', 'Requested realm does not match this Zulip provider.')
     }
+    if (request.container.provider !== 'zulip' || request.container.realmId !== this.realmId) {
+      throw new ZulipProviderError('invalid_locator', 'Requested managed Channel does not match this Zulip provider.')
+    }
     let offset = 0
     if (request.cursor) {
       const decoded = Buffer.from(request.cursor, 'base64url').toString('utf8')
@@ -812,32 +815,33 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
     }
     const query = request.query?.normalize('NFC').trim().toLocaleLowerCase('und') ?? ''
     const discovered: ProviderLocator[] = []
-    for (const stream of await this.listStreams()) {
-      for (const topic of await this.listTopics(stream.id)) {
-        if (query && !`${stream.name}\n${topic.name}`.normalize('NFC').toLocaleLowerCase('und').includes(query)) {
-          continue
-        }
-        const coordinates = {
-          provider: 'zulip' as const,
-          realmId: this.realmId,
-          containerId: stream.id,
-          topicDisplayName: topic.name
-        }
-        const existing = await this.resolveStableLocator(coordinates)
-          .catch((error) => {
-            if (isZulipProviderError(error) && error.code === 'locator_missing') return undefined
-            throw error
-          })
-        discovered.push(existing ?? {
-          type: 'provider_locator',
-          provider: 'zulip',
-          realmId: this.realmId,
-          containerId: stream.id,
-          topicId: stableDiscoveredTopicId(this.realmId, stream.id, topic.name),
-          containerDisplayName: stream.name.slice(0, 200),
-          topicDisplayName: topic.name.slice(0, 200)
-        })
+    const containerId = request.container.containerId
+    for (const topic of await this.listTopics(containerId)) {
+      if (query && !`${request.containerDisplayName ?? ''}\n${topic.name}`.normalize('NFC').toLocaleLowerCase('und').includes(query)) {
+        continue
       }
+      const coordinates = {
+        provider: 'zulip' as const,
+        realmId: this.realmId,
+        containerId,
+        topicDisplayName: topic.name
+      }
+      const existing = await this.resolveStableLocator(coordinates)
+        .catch((error) => {
+          if (isZulipProviderError(error) && error.code === 'locator_missing') return undefined
+          throw error
+        })
+      discovered.push(existing ?? {
+        type: 'provider_locator',
+        provider: 'zulip',
+        realmId: this.realmId,
+        containerId,
+        topicId: stableDiscoveredTopicId(this.realmId, containerId, topic.name),
+        ...(request.containerDisplayName
+          ? { containerDisplayName: request.containerDisplayName.slice(0, 200) }
+          : {}),
+        topicDisplayName: topic.name.slice(0, 200)
+      })
     }
     const locators = discovered.slice(offset, offset + request.limit)
     const nextOffset = offset + locators.length

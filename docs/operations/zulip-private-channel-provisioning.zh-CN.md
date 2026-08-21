@@ -80,8 +80,11 @@ Collaboration → `healthz`/`readyz` → 自动化冒烟 → 单用户真实验�
   只接管标记匹配的 Channel；同名但标记不匹配时失败关闭，不猜测归属。
 - `inspect` 只核验；`reconcile` 才修复成员或权限漂移。安全错误只保存稳定代码，不保存 API 响应正文。
 - 归档前 Server 暂停该 Channel 下所有 active Projection；Provider 移除两名成员并归档 Channel。
+- Topic discovery 由 Server 根据已认证 User、其 active Endpoint 和该 User 唯一的受管容器确定范围；Provider
+  只读取这个明确 container ID 下的 Topic，不得先枚举 Generic Bot 的全部订阅 Channel。Provider 返回的每个
+  locator 还必须由 Server 复核 provider、realm 和 container ID，跨用户或跨容器结果失败关闭。
 - Topic discovery 必须翻页到游标耗尽后才原子替换本地列表。Topic 的稳定 locator ID，而不是显示名，决定
-  Projection；rename/move 不改变已绑定 runtimeId/threadId。
+  Projection；rename 不改变已绑定 runtimeId/threadId。受管私人 Channel 的 Topic 不支持移动到其他 Channel。
 
 ## staging 验收
 

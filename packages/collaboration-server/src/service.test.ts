@@ -148,6 +148,18 @@ describe('CollaborationService canonical transactions', () => {
       revision: 4,
       updatedAt: at.toISOString()
     })
+    const agent = await registerAgent(service, owner.user, 'managedagent')
+    await expect(service.createProjection(owner.user, {
+      agentId: agent.agent.agentId,
+      humanEndpointId: owner.endpointId,
+      locator: {
+        type: 'provider_locator', provider: 'zulip', realmId: 'realm-hk',
+        containerId: 'another-users-private-channel', topicId: 'topic-cross-user'
+      },
+      displayName: 'Cross-user locator',
+      allowedSenderUserIds: [owner.userId],
+      idempotencyKey: 'idem_projection_cross_user_container'
+    })).rejects.toMatchObject({ code: 'permission_denied' })
     const replayed = await service.ensureManagedContainer(owner.user, input)
     expect(replayed).toMatchObject({ status: 'active', revision: 4 })
 

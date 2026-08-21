@@ -295,6 +295,8 @@ export const providerLocatorListRequestSchema = z.object({
   protocolVersion: protocolVersionSchema,
   type: z.literal('provider.locator.list'),
   realmId: providerOpaqueIdSchema,
+  container: providerManagedContainerRefSchema,
+  containerDisplayName: displayNameSchema.optional(),
   query: z.string().trim().max(200).optional(),
   cursor: providerCursorSchema.optional(),
   limit: z.number().int().min(1).max(500)

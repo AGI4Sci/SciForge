@@ -33,7 +33,7 @@ import type {
   StoredHumanAnswer,
   TaskStatus
 } from './model.js'
-import type { CollaborationRepository, CollaborationTransaction } from './repository.js'
+import type { CollaborationReadRepository, CollaborationRepository, CollaborationTransaction } from './repository.js'
 
 export type InboxAvailabilityNotifier = {
   notifyInboxAvailable(recipient: InboxRecipient, latestSequence: number): void | Promise<void>
@@ -745,6 +745,7 @@ export class CollaborationService {
       if (endpoint.provider !== input.locator.provider || endpoint.realmId !== input.locator.realmId) {
         fail('validation_failed', 'Projection locator must use the bound endpoint provider and realm.')
       }
+      await requireOwnedManagedLocator(tx, actor.userId, endpoint, input.locator)
       for (const userId of allowed) required(await tx.getUser(userId), 'Allowed sender')
       if (await tx.getProjectionByLocator(input.locator.provider, input.locator.realmId, input.locator.containerId, input.locator.topicId)) {
         fail('identity_conflict', 'This provider locator already resolves to a personal Session projection.')
@@ -796,6 +797,7 @@ export class CollaborationService {
         if (endpoint.provider !== input.locator.provider || endpoint.realmId !== input.locator.realmId) {
           fail('validation_failed', 'Updated locator must remain in the verified endpoint provider realm.')
         }
+        await requireOwnedManagedLocator(tx, actor.userId, endpoint, input.locator)
         const otherProjection = await tx.getProjectionByLocator(input.locator.provider, input.locator.realmId,
           input.locator.containerId, input.locator.topicId)
         if (otherProjection && otherProjection.projectionId !== projection.projectionId) {
@@ -943,6 +945,8 @@ export class CollaborationService {
           fail('identity_conflict', 'The new locator already belongs to another collaboration target.')
         }
         if (projection.status === 'closed') fail('invalid_state_transition', 'A closed projection cannot move.')
+        const endpoint = required(await tx.getEndpoint(projection.humanEndpointId), 'Projection endpoint')
+        await requireOwnedManagedLocator(tx, projection.ownerUserId, endpoint, input.currentLocator)
         const updated: StoredProjection = { ...projection, locator: input.currentLocator,
           locatorRevision: projection.locatorRevision + 1, revision: projection.revision + 1,
           lastErrorCode: undefined, updatedAt: at }
@@ -1901,6 +1905,28 @@ export class CollaborationService {
   }
 
   private timestamp(): string { return this.now().toISOString() }
+}
+
+async function requireOwnedManagedLocator(
+  repository: CollaborationReadRepository,
+  ownerUserId: string,
+  endpoint: StoredEndpoint,
+  locator: ProviderLocatorValue
+): Promise<void> {
+  const container = await repository.getManagedContainerForOwner(
+    ownerUserId,
+    endpoint.provider,
+    endpoint.realmId
+  )
+  if (!container) return
+  if (
+    container.humanEndpointId !== endpoint.humanEndpointId ||
+    container.status !== 'active' ||
+    !container.externalContainerId ||
+    locator.containerId !== container.externalContainerId
+  ) {
+    fail('permission_denied', 'Projection locator must belong to the authenticated user\'s active managed Channel.')
+  }
 }
 
 function actorAuditIdentity(actor: AuthContext): Pick<StoredAuditEvent, 'actorUserId' | 'actorEndpointId' | 'actorAgentId'> {

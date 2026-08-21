@@ -487,6 +487,7 @@ describe('ZulipHumanEndpointProvider', () => {
 
   it('keeps an unbound Chinese topic discovery locator stable as new messages arrive', async () => {
     let latestMessageId = 100
+    const requestedPaths: string[] = []
     const provider = createZulipHumanEndpointProvider({
       realmUrl: 'https://chat.example.invalid/team',
       botEmail: 'service-bot@example.invalid'
@@ -500,6 +501,7 @@ describe('ZulipHumanEndpointProvider', () => {
       verifyIdentity: rejectIdentity,
       fetch: async (input) => {
         const pathname = new URL(input).pathname
+        requestedPaths.push(pathname)
         if (pathname === '/team/api/v1/users/me/subscriptions') {
           return json({
             result: 'success',
@@ -549,6 +551,13 @@ describe('ZulipHumanEndpointProvider', () => {
       protocolVersion: '1.0' as const,
       type: 'provider.locator.list' as const,
       realmId: provider.realmId,
+      container: {
+        type: 'provider_managed_container_ref' as const,
+        provider: 'zulip',
+        realmId: provider.realmId,
+        containerId: '12'
+      },
+      containerDisplayName: '研究协作',
       limit: 50
     }
 
@@ -560,6 +569,11 @@ describe('ZulipHumanEndpointProvider', () => {
     assert.equal(after.locators.length, 1)
     assert.equal(before.locators[0]?.topicId, after.locators[0]?.topicId)
     assert.equal(before.locators[0]?.topicDisplayName, '蛋白质结构')
+    assert.equal(requestedPaths.includes('/team/api/v1/users/me/subscriptions'), false)
+    assert.deepEqual(requestedPaths, [
+      '/team/api/v1/users/me/12/topics',
+      '/team/api/v1/users/me/12/topics'
+    ])
   })
 
   it('keeps one stable topic identity across a real-shape external rename, move, and following message', async () => {
