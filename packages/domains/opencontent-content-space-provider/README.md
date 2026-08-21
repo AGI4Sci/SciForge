@@ -41,6 +41,13 @@ not imply Agent eligibility.
   account identifiers remain adapter-private.
 - `updateFileVersion` is `blocked_by_contract`: the supplier exposes neither an
   exact expected version identity nor an atomic compare-and-update operation.
+  A receipt-verified static characterization of pinned attachment `1.0.1` and
+  the public offline SDK confirmed that the current request carries no atomic
+  expected-state field, returns `FileVerId` only after the operation, uses
+  `UPDATE` in the CLI (including an automatic same-name `610` retry), and still
+  conflicts with the SDK overview's `UPGRADE` spelling. This negative snapshot
+  evidence keeps mutation blocked; it is not a future supplier guarantee or a
+  readiness promotion.
 - All ten hash-bound native-document mutations, including `edit`, are
   `blocked_by_contract`: a read, probe, plan receipt, write-time re-read, or
   post-write digest cannot replace an atomic Provider-side `baseHash`

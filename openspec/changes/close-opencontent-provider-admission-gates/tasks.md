@@ -44,5 +44,8 @@
   - Readiness snapshot: `production_ready` remains zero; exact live evidence does not promote readiness or any sibling operation.
 - [x] 6.5 Commit the scoped change and push only to the fork branch; do not update or push upstream.
 - [x] 6.6 Prove a clean checkout with no OpenContent overlay builds and starts in both source and packaged modes, registers no native supplier feature, and contains no OpenContent packaged resources.
-- [ ] 6.7 Confirm the supplier CAS/version contract and UPDATE-versus-UPGRADE semantics before implementing or admitting same-file mutation.
+- [x] 6.7 Confirm the supplier CAS/version contract and UPDATE-versus-UPGRADE semantics before implementing or admitting same-file mutation.
+  - Confirmed negatively for the current pinned snapshot by no-network static characterization: the receipt-verified `opencontent-attachment-assets` version `1.0.1` update documentation and CLI expose no expected immutable version, revision, `baseHash`, or `If-Match` input; `FileVerId`/`fileVerId` is response-only.
+  - The pinned CLI sends `UPDATE` and automatically retries a same-name `610`/`ExistedFileId` result as `UPDATE`, while the public offline SDK overview says `UPGRADE` and its detailed request table says `UPDATE`. The current contract is therefore absent and the spelling remains conflicted, not frozen.
+  - No two-account mutation was dispatched: without an atomic expected-state field it would test last-writer behavior rather than CAS. `updateFileVersion` and every hash-bound native mutation remain `blocked_by_contract`; this snapshot result is neither a future supplier guarantee nor a readiness promotion.
 - [x] 6.8 While that contract is absent, attempt native `edit` only as a packaged pre-dispatch fail-closed acceptance with zero remote mutation. The packaged request failed closed as `blocked_by_contract` before adapter invocation or supplier process launch, with zero remote mutation.

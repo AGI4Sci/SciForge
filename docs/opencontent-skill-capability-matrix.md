@@ -348,6 +348,23 @@ creates a new version or replaces current state, response version identity, and 
 error. SciForge must then pin that single contract and reject the other spelling; aliases and
 read-before-write emulation are not accepted.
 
+A no-network static characterization on 2026-08-21 confirmed the negative result for the current
+pinned snapshot. SciForge first verified the optional `opencontent-attachment-assets` receipt at
+version `1.0.1` (43 files; inventory SHA-256
+`a9f1e10344bced1ab0c8cc7717703c73be07317d990877890f0e837464a4cf03`) and then read only its
+receipt-covered `references/transfer.md` and `cli/bin/oc.js`; it also read the public offline SDK
+snapshot (SHA-256 `d39492835c823f64d8a4283dcf3a279be64fa05bc5e277cdf53ea010cab92a76`). The documented and
+implemented update inputs contain `fileId`, `fileModel`, and `strategy`, but no expected immutable
+version, revision, `baseHash`, or `If-Match` precondition. `FileVerId`/`fileVerId` is response-only.
+The attachment CLI sends `UPDATE`, and a same-name `610` response carrying `ExistedFileId` causes
+it to retry automatically as `UPDATE`; the SDK overview still says `UPGRADE` while its detailed
+request table says `UPDATE`.
+
+This resolves the current snapshot only as **contract absent and spelling conflicted**. It is not a
+supplier guarantee for another version, live CAS evidence, or production promotion. Because the
+request has no atomic expected-state field, a two-account write race would test last-writer behavior
+rather than CAS and was not dispatched. Same-file mutation therefore remains blocked.
+
 Native `edit` is subject to the same rule: a local plan receipt, one-time token, probe, `baseHash`
 check, write-time re-read, or post-write digest does not prove atomic Provider comparison.
 
