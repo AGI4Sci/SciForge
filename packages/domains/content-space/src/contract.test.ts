@@ -174,6 +174,52 @@ describe('Content Space public contract', () => {
     }).readiness).toBe('production_ready')
   })
 
+  it('admits a verification profile only for exact PoC verification evidence', () => {
+    expect(contract.contentSpaceAdmittedCapabilityStateSchema.parse({
+      operation: 'list-containers',
+      readiness: 'poc_only',
+      reasonCode: 'verification_profile_required',
+      admission: {
+        status: 'admitted',
+        reasonCode: 'verification_profile_admitted'
+      }
+    }).admission.status).toBe('admitted')
+    expect(() => contract.contentSpaceAdmittedCapabilityStateSchema.parse({
+      operation: 'list-containers',
+      readiness: 'poc_only',
+      reasonCode: 'provider_contract_missing',
+      admission: {
+        status: 'admitted',
+        reasonCode: 'verification_profile_admitted'
+      }
+    })).toThrow()
+  })
+
+  it('accepts only opaque token-free external binding evidence', () => {
+    const attestation = {
+      providerInstanceRef: 'provider-instance-a',
+      principal: {
+        authority: 'sciforge.identity-access',
+        subject: 'principal-a',
+        assurance: 'local-selection',
+        deviceId: 'device-a',
+        identityVersion: 1
+      },
+      externalSubject: 'a'.repeat(64),
+      bindingRevision: 'b'.repeat(64)
+    }
+    expect(contract.contentSpaceExternalBindingAttestationSchema.parse(attestation))
+      .toEqual(attestation)
+    expect(() => contract.contentSpaceExternalBindingAttestationSchema.parse({
+      ...attestation,
+      connectionId: 'private-connection'
+    })).toThrow()
+    expect(() => contract.contentSpaceExternalBindingAttestationSchema.parse({
+      ...attestation,
+      externalSubject: 'provider-user-42'
+    })).toThrow()
+  })
+
   it('does not expose a caller-controlled ArtifactReference issuer', () => {
     expect(contract).not.toHaveProperty('issueArtifactReference')
   })
@@ -227,7 +273,7 @@ describe('Content Space public contract', () => {
     } as typeof provider)).toThrow()
     expect(() => contract.defineContentSpaceProvider({
       ...provider,
-      contractVersion: '2.0.0'
+      contractVersion: '1.0.0'
     } as unknown as typeof provider)).toThrow()
   })
 
@@ -256,6 +302,7 @@ describe('Content Space public contract', () => {
 function providerFixture(): contract.ContentSpaceProvider {
   return {
     contractVersion: contract.CONTENT_SPACE_PROVIDER_CONTRACT_VERSION,
+    attestExternalBinding: async () => undefined,
     describeCapabilities: async () => [],
     listContainers: async ({ context }) => ({
       providerInstanceRef: context.providerInstanceRef,

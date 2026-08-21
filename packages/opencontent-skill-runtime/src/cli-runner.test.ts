@@ -224,7 +224,21 @@ describe('OpenContent CLI runner seam', () => {
       },
       processPort: { run }
     })
-    for (const command of ['docflow-last-delivery', 'docflow-failure-list', 'POST']) {
+    for (const command of [
+      'docflow-last-delivery',
+      'docflow-failure-list',
+      'docflow-update',
+      'docflow-insert',
+      'docflow-edit',
+      'docflow-undo',
+      'docflow-redo',
+      'docflow-comment-create',
+      'docflow-comment-reply',
+      'docflow-comment-solve',
+      'docflow-comment-reopen',
+      'docflow-comment-delete',
+      'POST'
+    ]) {
       await expect(runner.invoke({
         invocationId: 'invocation_rejected_command_a',
         command,

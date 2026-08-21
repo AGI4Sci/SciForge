@@ -110,17 +110,11 @@ function verifyPackagedInternalRuntimes(context) {
   )
 }
 
-function verifyOfficialPublicReleaseComposition() {
-  const mode = process.env.SCIFORGE_PUBLIC_RELEASE
-  if (mode === undefined) return
-  if (mode !== '1') {
-    throw new Error(
-      '[public-release] SCIFORGE_PUBLIC_RELEASE must be exactly 1 when configured.'
-    )
-  }
-  publicReleaseGuard.assertPublicReleaseCompositionEmpty(
-    internalRuntimePackaging.internalRuntimeComposition
-  )
+async function verifyOfficialPublicReleaseComposition() {
+  await publicReleaseGuard.runConfiguredPublicReleaseGuard({
+    createComposition: () =>
+      internalRuntimePackaging.internalRuntimeComposition
+  })
 }
 
 function maybeAdhocSignMacApp(context) {
@@ -166,7 +160,7 @@ function ensureNodePtyHelpersExecutable(context) {
 }
 
 async function afterPack(context) {
-  verifyOfficialPublicReleaseComposition()
+  await verifyOfficialPublicReleaseComposition()
   validateBundledReleaseRuntimes(context)
   pruneUnrelatedNativeRuntimeDependencies(context)
   validateNativeRuntimeDependencies(context)

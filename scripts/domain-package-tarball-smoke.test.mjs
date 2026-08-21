@@ -13,12 +13,14 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
 import { promisify } from 'node:util'
 import test from 'node:test'
 
 const run = promisify(execFile)
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+const typescriptCompiler = createRequire(import.meta.url).resolve('typescript/bin/tsc')
 const targetPackageDirectories = Object.freeze([
   'packages/domain-sdk',
   'packages/domains/artifact-versions',
@@ -257,8 +259,8 @@ test('publishable domain packages resolve every public export from independent t
     assert.equal(artifactPackage.version, '1.1.0')
     assert.equal(artifactManifest.module.version, '1.1.0')
     assert.equal(artifactPackage.dependencies['@sciforge/domain-sdk'], '^0.2.0')
-    assert.equal(contentPackage.version, '1.1.0')
-    assert.equal(contentManifest.module.version, '1.1.0')
+    assert.equal(contentPackage.version, '2.0.0')
+    assert.equal(contentManifest.module.version, '2.0.0')
     assert.equal(contentManifest.module.hostApi.minimum, '1.3.0')
     assert.equal(contentPackage.dependencies['@sciforge/domain-sdk'], '^0.2.1')
     assert.equal(contentMockPackage.version, '1.0.1')
@@ -266,7 +268,7 @@ test('publishable domain packages resolve every public export from independent t
     assert.equal(contentMockManifest.module.hostApi.minimum, '1.3.0')
     assert.equal(
       contentMockPackage.dependencies['@sciforge/domain-content-space'],
-      '1.1.0'
+      '2.0.0'
     )
     assert.equal(contentMockPackage.dependencies['@sciforge/domain-sdk'], '^0.2.1')
     assert.equal(identityPackage.version, '1.1.0')
@@ -292,6 +294,18 @@ test('publishable domain packages resolve every public export from independent t
     assert.equal(
       openContentConnector.dependencies['@sciforge/internal-runtime-integrity'],
       internalRuntimeIntegrity.version
+    )
+    assert.equal(
+      Object.keys(openContentConnector.exports).some((subpath) => subpath.includes('facade')),
+      false,
+      'OpenContent Connector must keep facade construction package-private'
+    )
+    assert.equal(
+      Object.values(openContentConnector.exports).some((target) =>
+        JSON.stringify(target).includes('/main/team-administration.')
+      ),
+      false,
+      'OpenContent Connector must keep credential-bearing Team transport package-private'
     )
     assert.deepEqual(internalRuntimeIntegrity.exports['.'], {
       types: './src/index.ts',
@@ -357,10 +371,68 @@ test('publishable domain packages resolve every public export from independent t
         const loaded = await import(specifier)
         assert.equal(typeof loaded, 'object', \`Expected module namespace for \${specifier}\`)
       }
+      const openContentConnectorMain = await import(
+        '@sciforge/domain-opencontent-connector/main'
+      )
+      assert.equal(
+        'createOpenContentContentSpaceFacade' in openContentConnectorMain,
+        false,
+        'OpenContent Connector main must not expose raw facade construction'
+      )
+      assert.equal(
+        'createOpenContentTeamAdministration' in openContentConnectorMain ||
+          'bindOpenContentTeamAdministration' in openContentConnectorMain,
+        false,
+        'OpenContent Connector main must not expose credential-bearing Team transport'
+      )
       const require = createRequire(import.meta.url)
       const integrity = require('@sciforge/internal-runtime-integrity')
       assert.equal(typeof integrity.verifyInstalledInternalOverlaySync, 'function')
     `)
+    const typeBoundary = join(installation, 'opencontent-public-boundary.mts')
+    await writeFile(typeBoundary, `
+      import type {
+        OpenContentBoundTeamAdministration
+      } from '@sciforge/domain-opencontent-connector/team-administration-contract'
+
+      // @ts-expect-error Credential-bearing administration is Connector-main private.
+      import type { OpenContentTeamAdministration } from '@sciforge/domain-opencontent-connector/team-administration-contract'
+
+      // @ts-expect-error The public main entrypoint does not publish raw administration.
+      import type { OpenContentTeamAdministration as MainOpenContentTeamAdministration } from '@sciforge/domain-opencontent-connector/main'
+
+      declare const listTeamsInput:
+        Parameters<OpenContentBoundTeamAdministration['listTeams']>[0]
+      // @ts-expect-error Provider-facing Team administration never accepts a Token.
+      listTeamsInput.token
+    `)
+    const typeBoundaryConfig = join(installation, 'tsconfig.json')
+    await writeFile(typeBoundaryConfig, JSON.stringify({
+      compilerOptions: {
+        target: 'ES2023',
+        module: 'NodeNext',
+        moduleResolution: 'NodeNext',
+        strict: true,
+        skipLibCheck: true,
+        noEmit: true,
+        types: ['node'],
+        typeRoots: [join(repositoryRoot, 'node_modules', '@types')]
+      },
+      files: [typeBoundary]
+    }))
+    try {
+      await run(process.execPath, [typescriptCompiler, '--project', typeBoundaryConfig], {
+        cwd: installation,
+        maxBuffer: 4 * 1024 * 1024
+      })
+    } catch (error) {
+      throw new Error(
+        `Packed OpenContent public type boundary failed:\n${String(
+          error.stdout || error.stderr || error
+        )}`,
+        { cause: error }
+      )
+    }
     await run(process.execPath, [
       '--import',
       import.meta.resolve('tsx'),

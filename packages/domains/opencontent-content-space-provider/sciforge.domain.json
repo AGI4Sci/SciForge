@@ -6,7 +6,7 @@
   "module": {
     "id": "sciforge.opencontent-content-space-provider",
     "displayName": "OpenContent Content Space Provider",
-    "version": "1.1.0",
+    "version": "2.0.0",
     "hostApi": { "minimum": "1.4.0", "maximumExclusive": "2.0.0" },
     "priority": 270
   },

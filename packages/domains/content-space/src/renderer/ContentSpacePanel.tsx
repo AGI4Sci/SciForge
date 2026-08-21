@@ -44,7 +44,7 @@ import {
   type ContentSpaceEntrySummary,
   type ContentSpaceError,
   type ContentSpaceOperation,
-  type ContentSpaceCapabilityState,
+  type ContentSpaceAdmittedCapabilityState,
   type ContentSpaceResult,
   type ContentSpaceTransferProgress
 } from '../contract.js'
@@ -87,10 +87,10 @@ export function ContentSpacePanel({
   const [providerInstanceRef, setProviderInstanceRef] = useState('')
   const [providerDiscoveryReady, setProviderDiscoveryReady] = useState(false)
   const [navigationCapabilities, setNavigationCapabilities] = useState<
-    readonly ContentSpaceCapabilityState[]
+    readonly ContentSpaceAdmittedCapabilityState[]
   >([])
   const [fileCapabilities, setFileCapabilities] = useState<
-    readonly ContentSpaceCapabilityState[]
+    readonly ContentSpaceAdmittedCapabilityState[]
   >([])
   const [containers, setContainers] = useState<readonly ContentSpaceContainerSummary[]>([])
   const [containerCursor, setContainerCursor] = useState<string>()
@@ -222,7 +222,7 @@ export function ContentSpacePanel({
       const states = unwrap(result).items
       setNavigationCapabilities(states)
       const listState = states.find(({ operation }) => operation === 'list-containers')
-      if (!listState || listState.readiness === 'blocked_by_contract') {
+      if (!listState || listState.admission.status !== 'admitted') {
         setStatus('This Provider cannot list Content Space containers yet.')
         return
       }
@@ -774,10 +774,11 @@ export function ContentSpacePanel({
   const selectedArtifact = selectedFile ? exactArtifactFor(artifact, selectedFile) : undefined
   const displayedCapabilities = selectedFile ? fileCapabilities : navigationCapabilities
   const readyCapabilityCount = displayedCapabilities.filter((state) =>
-    state.readiness === 'production_ready'
+    state.admission.status === 'admitted'
   ).length
   const verificationRequiredCount = displayedCapabilities.filter((state) =>
-    state.reasonCode === 'verification_profile_required'
+    state.admission.status === 'blocked' &&
+      state.admission.reasonCode === 'verification_profile_required'
   ).length
 
   return (
@@ -852,7 +853,8 @@ export function ContentSpacePanel({
               <ul aria-label="Content Space Provider readiness">
                 {displayedCapabilities.map((state) => (
                   <li key={state.operation} data-operation={state.operation}
-                    data-readiness={state.readiness}>
+                    data-readiness={state.readiness}
+                    data-admission={state.admission.status}>
                     <span className="content-space-capability-name">{state.operation}: </span>
                     <span className={`content-space-capability-state is-${state.readiness}`}>
                       {readinessLabel(state)}
@@ -930,7 +932,7 @@ export function ContentSpacePanel({
               {containers.map((container) => (
                 <button type="button" key={container.reference.containerId}
                   onClick={() => openContainer(container.reference)}
-                  disabled={busy || !isOperationReady(navigationCapabilities, 'list-entries')}
+                  disabled={busy}
                   className="content-space-library-row">
                   <span className="content-space-library-node" aria-hidden />
                   <span className="content-space-library-icon" data-scope={container.scope}
@@ -1114,12 +1116,24 @@ function isContentSpaceInitialResource(
     resource?.kind === ARTIFACT_RESOURCE_KIND
 }
 
-function readinessLabel(state: ContentSpaceCapabilityState): string {
-  if (state.readiness === 'production_ready') return 'ready'
-  if (state.reasonCode === 'verification_profile_required') {
-    return 'unavailable (verification required)'
+function readinessLabel(state: ContentSpaceAdmittedCapabilityState): string {
+  if (state.admission.status === 'admitted') {
+    return state.readiness === 'production_ready'
+      ? 'ready'
+      : 'PoC (verification profile admitted)'
   }
-  return 'unavailable'
+  if (state.admission.reasonCode === 'verification_profile_required') {
+    return state.readiness === 'poc_only'
+      ? 'PoC unavailable (verification required)'
+      : 'unavailable (verification required)'
+  }
+  if (state.admission.reasonCode === 'platform_gate_blocked') {
+    return 'unavailable (Host platform gate)'
+  }
+  if (state.admission.reasonCode === 'resource_capability_missing') {
+    return 'unavailable (resource gate)'
+  }
+  return state.readiness === 'poc_only' ? 'PoC unavailable' : 'unavailable'
 }
 
 function providerAccessLabel(state: ContentSpaceProviderAccessState): string {
@@ -1135,11 +1149,11 @@ function unwrap<Value>(result: ContentSpaceResult<Value>): Value {
 }
 
 function isOperationReady(
-  capabilities: readonly ContentSpaceCapabilityState[],
+  capabilities: readonly ContentSpaceAdmittedCapabilityState[],
   operation: ContentSpaceOperation
 ): boolean {
   return capabilities.some((state) =>
-    state.operation === operation && state.readiness === 'production_ready'
+    state.operation === operation && state.admission.status === 'admitted'
   )
 }
 

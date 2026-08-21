@@ -1882,6 +1882,12 @@ describe('AgentRuntimeHost', () => {
       'This includes authorization operations that establish the initial Broker resource.'
     )
     expect(dispatched?.text).toContain(
+      'When an exact capability ID is already supplied, pass it unchanged as `capabilityId` with `includeSchema=true` and `limit=1`.'
+    )
+    expect(dispatched?.text).toContain(
+      'Do not replace that exact lookup with text, scope, effect, resource-kind, or provider-family filters.'
+    )
+    expect(dispatched?.text).toContain(
       'A missing component resourceRef blocks only observation or operations that depend on that current UI resource; it does not block discovery of global native operations that are independent of the current UI resource.'
     )
     expect(dispatched?.text).not.toContain(

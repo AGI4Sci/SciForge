@@ -171,6 +171,7 @@ function contribution(
 function providerFixture(providerInstanceRef: string): ContentSpaceProvider {
   return defineContentSpaceProvider({
     contractVersion: CONTENT_SPACE_PROVIDER_CONTRACT_VERSION,
+    attestExternalBinding: async () => undefined,
     describeCapabilities: async () => [],
     listContainers: async ({ context }) => ({
       providerInstanceRef: context.providerInstanceRef,

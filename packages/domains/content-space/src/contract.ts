@@ -19,7 +19,10 @@ import {
   type PortableResourceReferenceCodec,
   type PortableResourceReferenceEnvelope
 } from '@sciforge/domain-sdk/portable-resource-references'
-import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
+import {
+  principalSnapshotSchema,
+  type PrincipalSnapshot
+} from '@sciforge/domain-sdk/principal'
 import {
   providerInstanceRefSchema,
   providerKindSchema
@@ -28,7 +31,7 @@ import {
 import type { ContentSpaceProviderFeatures } from './provider-features.js'
 
 export const CONTENT_SPACE_DOMAIN_MODULE_ID = 'sciforge.content-space' as const
-export const CONTENT_SPACE_PROVIDER_CONTRACT_VERSION = '1.0.0' as const
+export const CONTENT_SPACE_PROVIDER_CONTRACT_VERSION = '2.0.0' as const
 
 export const CONTENT_CONTAINER_REFERENCE_KIND = 'content-space.container-reference' as const
 export const CONTENT_FILE_REFERENCE_KIND = 'content-space.file-reference' as const
@@ -145,6 +148,23 @@ export const contentSpaceReadinessReasonSchema = z.enum([
   'platform_gate_blocked',
   'audience_policy_blocked'
 ])
+export const contentSpaceCapabilityAdmissionSchema = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('admitted'),
+    reasonCode: z.enum(['production_ready', 'verification_profile_admitted'])
+  }).strict().readonly(),
+  z.object({
+    status: z.literal('blocked'),
+    reasonCode: z.enum([
+      'verification_profile_required',
+      'provider_contract_missing',
+      'instance_policy_blocked',
+      'resource_capability_missing',
+      'platform_gate_blocked',
+      'audience_policy_blocked'
+    ])
+  }).strict().readonly()
+])
 export const contentSpaceCapabilityStateSchema = z.object({
   operation: contentSpaceOperationSchema,
   readiness: contentSpaceReadinessSchema,
@@ -175,11 +195,63 @@ export const contentSpaceCapabilityStateListSchema = z.array(
     seen.add(state.operation)
   }
 }).readonly()
+export const contentSpaceAdmittedCapabilityStateSchema = z.object({
+  operation: contentSpaceOperationSchema,
+  readiness: contentSpaceReadinessSchema,
+  reasonCode: contentSpaceReadinessReasonSchema,
+  admission: contentSpaceCapabilityAdmissionSchema
+}).strict().superRefine((state, context) => {
+  const available = state.reasonCode === 'available'
+  const ready = state.readiness === 'production_ready'
+  if (available !== ready) {
+    context.addIssue({
+      code: 'custom',
+      path: ['reasonCode'],
+      message: 'Only production-ready operations may use the available reason.'
+    })
+  }
+  if (state.admission.status === 'admitted' &&
+    state.admission.reasonCode === 'production_ready' && !ready) {
+    context.addIssue({
+      code: 'custom',
+      path: ['admission', 'reasonCode'],
+      message: 'Only production-ready evidence may use production-ready admission.'
+    })
+  }
+  if (state.admission.status === 'admitted' &&
+    state.admission.reasonCode === 'verification_profile_admitted' &&
+    (state.readiness !== 'poc_only' ||
+      state.reasonCode !== 'verification_profile_required')) {
+    context.addIssue({
+      code: 'custom',
+      path: ['admission', 'reasonCode'],
+      message: 'Only exact PoC verification-required evidence may be admitted by a profile.'
+    })
+  }
+}).readonly()
+export const contentSpaceAdmittedCapabilityStateListSchema = z.array(
+  contentSpaceAdmittedCapabilityStateSchema
+).max(8).superRefine((states, context) => {
+  const seen = new Set<string>()
+  for (const [index, state] of states.entries()) {
+    if (seen.has(state.operation)) {
+      context.addIssue({
+        code: 'custom',
+        path: [index, 'operation'],
+        message: `Operation ${state.operation} is duplicated.`
+      })
+    }
+    seen.add(state.operation)
+  }
+}).readonly()
 
 export type ContentSpaceReadiness = z.infer<typeof contentSpaceReadinessSchema>
 export type ContentSpaceReadinessReason = z.infer<typeof contentSpaceReadinessReasonSchema>
 export type ContentSpaceOperation = z.infer<typeof contentSpaceOperationSchema>
 export type ContentSpaceCapabilityState = z.infer<typeof contentSpaceCapabilityStateSchema>
+export type ContentSpaceAdmittedCapabilityState = z.infer<
+  typeof contentSpaceAdmittedCapabilityStateSchema
+>
 
 export const contentSpaceErrorCodeSchema = z.enum([
   'invalid_input',
@@ -358,14 +430,18 @@ export const contentSpaceEntryPageSchema = z.object({
     .max(CONTENT_SPACE_LIMITS.maxPageItems).readonly(),
   nextCursor: z.string().trim().min(1).max(256).optional()
 }).strict().readonly()
-export const contentSpaceEntryObservationSchema = z.object({
+export const contentSpaceProviderEntryObservationSchema = z.object({
   entry: contentSpaceEntrySummarySchema,
   capabilities: contentSpaceCapabilityStateListSchema
+}).strict().readonly()
+export const contentSpaceEntryObservationSchema = z.object({
+  entry: contentSpaceEntrySummarySchema,
+  capabilities: contentSpaceAdmittedCapabilityStateListSchema
 }).strict().readonly()
 export const contentSpacePortableResourceStateSchema = z.object({
   reference: contentEntryReferenceSchema,
   entry: contentSpaceEntrySummarySchema,
-  capabilities: contentSpaceCapabilityStateListSchema
+  capabilities: contentSpaceAdmittedCapabilityStateListSchema
 }).strict().readonly()
 
 export type ContentSpaceContainerSummary = z.infer<typeof contentSpaceContainerSummarySchema>
@@ -373,6 +449,9 @@ export type ContentSpaceEntrySummary = z.infer<typeof contentSpaceEntrySummarySc
 export type ContentSpaceContainerPage = z.infer<typeof contentSpaceContainerPageSchema>
 export type ContentSpaceEntryPage = z.infer<typeof contentSpaceEntryPageSchema>
 export type ContentSpaceEntryObservation = z.infer<typeof contentSpaceEntryObservationSchema>
+export type ContentSpaceProviderEntryObservation = z.infer<
+  typeof contentSpaceProviderEntryObservationSchema
+>
 
 export const createFolderReceiptSchema = z.object({
   invocationId: contentSpaceInvocationIdSchema,
@@ -467,7 +546,7 @@ export const contentSpaceAgentRootCandidatePageSchema = z.object({
   nextCursor: z.string().trim().min(1).max(256).optional()
 }).strict().readonly()
 export const contentSpaceCapabilityListSchema = z.object({
-  items: contentSpaceCapabilityStateListSchema
+  items: contentSpaceAdmittedCapabilityStateListSchema
 }).strict().readonly()
 export const contentSpaceListContainersInputSchema = z.object({
   providerInstanceRef: providerInstanceRefSchema,
@@ -574,9 +653,27 @@ export const immutableVersionObservationResultSchema = contentSpaceResultSchema(
   immutableVersionObservationSchema
 )
 
+export const opaqueExternalBindingValueSchema = z.string().regex(/^[a-f0-9]{64}$/u)
+
+/**
+ * Provider-authenticated, token-free evidence for one exact local connection binding.
+ * Neither value is a credential, Provider resource reference, or portable authority.
+ */
+export const contentSpaceExternalBindingAttestationSchema = z.object({
+  providerInstanceRef: providerInstanceRefSchema,
+  principal: principalSnapshotSchema,
+  externalSubject: opaqueExternalBindingValueSchema,
+  bindingRevision: opaqueExternalBindingValueSchema
+}).strict().readonly()
+export type ContentSpaceExternalBindingAttestation = z.infer<
+  typeof contentSpaceExternalBindingAttestationSchema
+>
+
 export type ContentSpaceProviderOperationContext = Readonly<{
   principal: PrincipalSnapshot
   providerInstanceRef: string
+  /** Service-installed expectation that the Connector must recheck before remote dispatch. */
+  expectedExternalBinding?: ContentSpaceExternalBindingAttestation
   invocationId?: string
   deadlineAt: string
   signal?: AbortSignal
@@ -610,6 +707,9 @@ export type ContentSpacePortalTarget = Readonly<{
 export type ContentSpaceProvider = Readonly<{
   contractVersion: typeof CONTENT_SPACE_PROVIDER_CONTRACT_VERSION
   features?: ContentSpaceProviderFeatures
+  attestExternalBinding(
+    context: ContentSpaceProviderOperationContext
+  ): Promise<ContentSpaceExternalBindingAttestation | undefined>
   describeCapabilities(
     context: ContentSpaceProviderOperationContext
   ): Promise<readonly ContentSpaceCapabilityState[]>
@@ -625,7 +725,7 @@ export type ContentSpaceProvider = Readonly<{
   observeEntry(input: Readonly<{
     context: ContentSpaceProviderOperationContext
     reference: ContentEntryReference
-  }>): Promise<ContentSpaceEntryObservation>
+  }>): Promise<ContentSpaceProviderEntryObservation>
   createFolder(input: Readonly<{
     context: ContentSpaceProviderWriteContext
     parent: ContentContainerReference
@@ -658,6 +758,7 @@ export type ContentSpaceProviderHostPorts = Readonly<{
 
 export function defineContentSpaceProvider(input: ContentSpaceProvider): ContentSpaceProvider {
   const required = [
+    'attestExternalBinding',
     'contractVersion',
     'createFolder',
     'describeCapabilities',

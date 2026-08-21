@@ -18,9 +18,15 @@ import {
   type ContentSpaceProviderFactoryRuntimeValue
 } from '@sciforge/domain-sdk/provider-composition'
 import {
+  CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION,
+  CONTENT_SPACE_ADMINISTRATION_OPERATIONS,
+  defineContentSpaceAdministrationPort
+} from '@sciforge/domain-content-space/administration-contract'
+import {
   CONTENT_SPACE_CAPABILITY_IDS,
   CONTENT_SPACE_DOMAIN_MODULE_ID,
   defineContentSpaceProvider,
+  toPortableContentContainerReference,
   type ContentSpaceProvider
 } from '@sciforge/domain-content-space/contract'
 import {
@@ -41,6 +47,10 @@ import { createDomainMainEntry as createMockProviderMainEntry } from
   '@sciforge/domain-content-space-mock-provider/main'
 
 import { CapabilityBroker } from './broker'
+import {
+  CAPABILITY_AGENT_TOOL_NAMES,
+  createCapabilityAgentToolSurface
+} from './agent-tools'
 import { CapabilityRegistry, defineCapability, type CapabilityDefinition } from './registry'
 import { HostFileTransferService } from '../modules/file-transfer'
 
@@ -116,6 +126,277 @@ describe('Content Space Agent discovery integration', () => {
         scope: 'global',
         limit: 20
       }).map((definition) => definition.id)).not.toContain(id)
+    }
+  })
+
+  it('uses one approved Provider administration resource for observe, list, and create', async () => {
+    const host = Object.freeze({
+      getUserDataDir: () => '/private/tmp/sciforge-content-space-administration-integration',
+      defineCapability
+    }) as unknown as DomainMainHost
+    const contentEntry = createDomainMainEntry(host)
+    const providerEntry = createMockProviderMainEntry(host)
+    const createdRoot = toPortableContentContainerReference({
+      providerInstanceRef: LOCAL_MOCK_PROVIDER_INSTANCE_REF,
+      containerId: 'mock_root'
+    })
+    const listSpaces = vi.fn(async () => Object.freeze({ items: Object.freeze([]) }))
+    const createSpace = vi.fn(async (input: Readonly<{
+      label: string
+      contentOwnerUserId: string
+    }>) => Object.freeze({
+      root: createdRoot,
+      label: input.label,
+      contentOwnerUserId: input.contentOwnerUserId,
+      pinned: false,
+      revision: 'revision:1'
+    }))
+    const unusedAdministrationOperation = vi.fn(async () => {
+      throw new Error('Unexpected Provider administration operation.')
+    })
+    const administration = defineContentSpaceAdministrationPort({
+      contractVersion: CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION,
+      listSpaces,
+      createSpace,
+      observeSpace: unusedAdministrationOperation,
+      updateSpace: unusedAdministrationOperation,
+      pinSpace: unusedAdministrationOperation,
+      unpinSpace: unusedAdministrationOperation,
+      openRoot: unusedAdministrationOperation,
+      listMembers: unusedAdministrationOperation,
+      addMember: unusedAdministrationOperation,
+      removeMember: unusedAdministrationOperation
+    })
+    const bind = vi.fn(async () => Object.freeze({ administration }))
+    const providerExtensions = projectMainExtensions(providerEntry).map((extension) => {
+      const candidate = extension.value as Partial<
+        ContentSpaceProviderFactoryRuntimeValue<ContentSpaceProvider, unknown>
+      >
+      if (candidate.location !== MAIN_CONTENT_SPACE_PROVIDER_FACTORY_LOCATION ||
+        !candidate.createProvider || !candidate.contractVersion || !candidate.providerKind) {
+        return extension
+      }
+      const original = candidate as ContentSpaceProviderFactoryRuntimeValue<
+        ContentSpaceProvider,
+        unknown
+      >
+      return Object.freeze({
+        ...extension,
+        value: defineContentSpaceProviderFactory<ContentSpaceProvider, unknown>({
+          contractVersion: original.contractVersion,
+          providerKind: original.providerKind,
+          createProvider: async (hostView) => {
+            const provider = await original.createProvider(hostView)
+            return defineContentSpaceProvider({
+              ...provider,
+              features: Object.freeze({
+                ...provider.features,
+                administration: Object.freeze({
+                  describeOperations: () => Object.freeze(
+                    CONTENT_SPACE_ADMINISTRATION_OPERATIONS.map((operation) => Object.freeze({
+                      operation,
+                      readiness: 'production_ready' as const,
+                      reasonCode: 'available' as const
+                    }))
+                  ),
+                  bind
+                })
+              })
+            })
+          }
+        })
+      })
+    })
+    const lifecycle = contribution<DomainMainRuntimeLifecycleContribution>(
+      contentEntry,
+      CONTENT_SPACE_RUNTIME_LIFECYCLE_CONTRIBUTION.id
+    )
+    const factory = contribution<Readonly<{
+      createDefinitions(): readonly CapabilityDefinition[]
+    }>>(contentEntry, CONTENT_SPACE_CAPABILITY_FACTORY_CONTRIBUTION.id)
+    const dispose = await lifecycle.activate({
+      contributions: contributionHost(providerExtensions)
+    } as unknown as Parameters<DomainMainRuntimeLifecycleContribution['activate']>[0])
+
+    try {
+      const broker = new CapabilityBroker(
+        new CapabilityRegistry(factory.createDefinitions()),
+        { resolveCurrentPrincipal: () => principal }
+      )
+      const authorizationInvocationId = 'content_space_authorize_administration_0001'
+      const caller = {
+        audience: 'agent' as const,
+        callerId: 'agent:content-space-administration-integration',
+        workspaceId: '/workspace',
+        approvals: [{
+          actionId: CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration,
+          invocationId: authorizationInvocationId,
+            mode: 'confirmation' as const
+        }]
+      }
+      const authorized = await broker.invoke(caller, {
+        actionId: CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration,
+        invocationId: authorizationInvocationId,
+        input: { providerInstanceRef: LOCAL_MOCK_PROVIDER_INSTANCE_REF }
+      }, { signal: new AbortController().signal })
+
+      expect(authorized).toMatchObject({
+        output: {
+          ok: true,
+          value: {
+            providerInstanceRef: LOCAL_MOCK_PROVIDER_INSTANCE_REF,
+            resource: { token: expect.stringMatching(/^cap_/u) }
+          }
+        },
+        changed: false
+      })
+      expect(bind).not.toHaveBeenCalled()
+
+      const resource = successValue<{ resource: NonNullable<typeof authorized.resource> }>(
+        authorized.output
+      ).resource
+      await expect(broker.observe(caller, { resource })).resolves.toMatchObject({
+        semanticRevision: resource.semanticRevision,
+        state: { providerInstanceRef: LOCAL_MOCK_PROVIDER_INSTANCE_REF }
+      })
+
+      const listed = await broker.invoke(caller, {
+        actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminListSpaces,
+        resource,
+        input: { page: { limit: 20 } }
+      })
+      expect(listed).toMatchObject({
+        output: { ok: true, value: { items: [] } },
+        changed: false
+      })
+
+      const created = await broker.invoke(caller, {
+        actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace,
+        invocationId: 'content_space_administration_create_0002',
+        resource,
+        input: { label: 'Research Team' }
+      }, { signal: new AbortController().signal })
+      expect(created).toMatchObject({
+        output: {
+          ok: true,
+          value: {
+            space: { root: createdRoot, label: 'Research Team' },
+            resource: { token: expect.stringMatching(/^cap_/u) }
+          }
+        },
+        changed: true
+      })
+      expect(createSpace).toHaveBeenCalledOnce()
+      expect(createSpace).toHaveBeenCalledWith({
+        label: 'Research Team',
+        contentOwnerUserId: principal.subject
+      })
+      expect(bind).toHaveBeenLastCalledWith(expect.objectContaining({
+        invocationId: 'content_space_administration_create_0002'
+      }))
+
+      createSpace.mockClear()
+      const surface = createCapabilityAgentToolSurface({
+        broker,
+        resolveCaller: () => ({
+          audience: 'agent' as const,
+          callerId: 'agent:content-space-administration-integration',
+          workspaceId: '/workspace'
+        }),
+        requestApproval: async () => 'allowed' as const
+      })
+      const toolContext = (callId: string) => Object.freeze({
+        requestId: callId,
+        runtimeId: 'runtime:content-space-administration-integration',
+        threadId: 'thread:content-space-administration-integration',
+        turnId: 'turn:content-space-administration-integration',
+        callId,
+        workspaceId: '/workspace'
+      })
+      const operationRef = async (capabilityId: string, callId: string): Promise<string> => {
+        const discovered = await surface.call({
+          name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+          arguments: { capabilityId, includeSchema: true },
+          context: toolContext(callId)
+        })
+        if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover ||
+          discovered.value.length !== 1) {
+          throw new Error(`Expected one discovered operation for ${capabilityId}.`)
+        }
+        return discovered.value[0]!.operationRef
+      }
+
+      const authorizeRef = await operationRef(
+        CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration,
+        'call:discover-authorize'
+      )
+      const agentAuthorized = await surface.call({
+        name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+        arguments: {
+          operationRef: authorizeRef,
+          input: { providerInstanceRef: LOCAL_MOCK_PROVIDER_INSTANCE_REF }
+        },
+        context: toolContext('call:authorize')
+      }, { signal: new AbortController().signal })
+      if (agentAuthorized.tool !== CAPABILITY_AGENT_TOOL_NAMES.invoke) {
+        throw new Error('Expected an Agent authorization invocation.')
+      }
+      const administrationResourceRef = successValue<{
+        resourceRef: string
+      }>(agentAuthorized.value.output).resourceRef
+
+      await expect(surface.call({
+        name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+        arguments: { resourceRef: administrationResourceRef },
+        context: toolContext('call:observe')
+      })).resolves.toMatchObject({
+        value: {
+          resourceRef: administrationResourceRef,
+          state: { providerInstanceRef: LOCAL_MOCK_PROVIDER_INSTANCE_REF }
+        }
+      })
+
+      const listRef = await operationRef(
+        CONTENT_SPACE_CAPABILITY_IDS.agentAdminListSpaces,
+        'call:discover-list'
+      )
+      await expect(surface.call({
+        name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+        arguments: {
+          operationRef: listRef,
+          resourceRef: administrationResourceRef,
+          input: { page: { limit: 20 } }
+        },
+        context: toolContext('call:list')
+      })).resolves.toMatchObject({
+        value: { output: { ok: true, value: { items: [] } }, changed: false }
+      })
+
+      const createRef = await operationRef(
+        CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace,
+        'call:discover-create'
+      )
+      await expect(surface.call({
+        name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+        arguments: {
+          operationRef: createRef,
+          resourceRef: administrationResourceRef,
+          input: { label: 'Agent Research Team' }
+        },
+        context: toolContext('call:create')
+      }, { signal: new AbortController().signal })).resolves.toMatchObject({
+        value: {
+          output: { ok: true, value: { space: { label: 'Agent Research Team' } } },
+          changed: true
+        }
+      })
+      expect(createSpace).toHaveBeenCalledOnce()
+      expect(createSpace).toHaveBeenCalledWith({
+        label: 'Agent Research Team',
+        contentOwnerUserId: principal.subject
+      })
+    } finally {
+      if (typeof dispose === 'function') await dispose()
     }
   })
 

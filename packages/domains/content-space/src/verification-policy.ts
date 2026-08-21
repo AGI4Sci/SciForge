@@ -12,6 +12,8 @@ import {
   contentContainerReferenceSchema,
   contentFileReferenceSchema,
   contentSpaceOperationSchema,
+  opaqueExternalBindingValueSchema,
+  type ContentSpaceExternalBindingAttestation,
   type ContentContainerReference,
   type ContentFileReference,
   type ContentSpaceReadinessReason
@@ -31,7 +33,7 @@ import {
   nativeDocumentOperationEffect
 } from './provider-features.js'
 
-export const CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION = '1.0.0' as const
+export const CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION = '2.0.0' as const
 export const CONTENT_SPACE_VERIFICATION_PROFILE_MAX_VALIDITY_MS = 24 * 60 * 60 * 1_000
 export const MAIN_CONTENT_SPACE_VERIFICATION_PROFILE_LOCATION =
   'main.content-space-verification-profile' as const
@@ -84,6 +86,11 @@ export const contentSpaceVerificationTransferLimitsSchema = z.object({
   maxDownloadBytes: z.number().int().min(0).max(CONTENT_SPACE_LIMITS.maxFileBytes)
 }).strict().readonly()
 
+const verificationExternalBindingSchema = z.object({
+  externalSubject: opaqueExternalBindingValueSchema,
+  bindingRevision: opaqueExternalBindingValueSchema
+}).strict().readonly()
+
 export const contentSpaceVerificationProfileSchema = z.object({
   profileId: verificationProfileIdSchema,
   providerInstanceRef: providerInstanceRefSchema,
@@ -92,6 +99,7 @@ export const contentSpaceVerificationProfileSchema = z.object({
   authority: contentSpaceVerificationAuthoritySchema,
   operation: verificationOperationSchema,
   transferLimits: contentSpaceVerificationTransferLimitsSchema,
+  externalBinding: verificationExternalBindingSchema.optional(),
   validFrom: z.string().datetime({ offset: true }),
   expiresAt: z.string().datetime({ offset: true })
 }).strict().superRefine((profile, context) => {
@@ -115,7 +123,7 @@ export const contentSpaceVerificationProfileSchema = z.object({
       message: 'Verification profile validity must be positive and no longer than 24 hours.'
     })
   }
-  if (!profileSafeWithoutProviderBindingAttestation(profile)) {
+  if (!profile.externalBinding && !profileSafeWithoutProviderBindingAttestation(profile)) {
     context.addIssue({
       code: 'custom',
       path: ['operation'],
@@ -181,6 +189,7 @@ export type ContentSpaceVerificationAdmission = Readonly<{
   authority: ContentSpaceVerificationAuthority
   operation: ContentSpaceVerificationOperation
   transferLimits: ContentSpaceVerificationTransferLimits
+  externalBinding?: ContentSpaceExternalBindingAttestation
   now: Date
 }>
 
@@ -209,7 +218,32 @@ export function contentSpaceVerificationPolicyAdmits(
     !admission.audience || !Number.isFinite(admission.now.getTime())) return false
 
   return policy.profiles.some((profile) =>
-    profile.providerInstanceRef === admission.providerInstanceRef &&
+    sameVerificationProfileFacts(profile, admission) &&
+    sameExternalBinding(profile.externalBinding, admission.externalBinding, admission)
+  )
+}
+
+/**
+ * Reports whether a matching static profile requires live Provider binding evidence.
+ * This is only a preflight hint; it never admits an invocation.
+ */
+export function contentSpaceVerificationPolicyRequiresExternalBinding(
+  policy: ContentSpaceVerificationPolicy | undefined,
+  admission: ContentSpaceVerificationAdmission
+): boolean {
+  if (!policy || admission.state.readiness !== 'poc_only' ||
+    admission.state.reasonCode !== 'verification_profile_required' ||
+    !admission.audience || !Number.isFinite(admission.now.getTime())) return false
+  return policy.profiles.some((profile) =>
+    profile.externalBinding !== undefined && sameVerificationProfileFacts(profile, admission)
+  )
+}
+
+function sameVerificationProfileFacts(
+  profile: ContentSpaceVerificationProfile,
+  admission: ContentSpaceVerificationAdmission
+): boolean {
+  return profile.providerInstanceRef === admission.providerInstanceRef &&
     profile.audience === admission.audience &&
     samePrincipalSnapshot(profile.principal, admission.principal) &&
     sameVerificationAuthority(profile.authority, admission.authority) &&
@@ -219,7 +253,19 @@ export function contentSpaceVerificationPolicyAdmits(
     profile.transferLimits.maxDownloadBytes === admission.transferLimits.maxDownloadBytes &&
     admission.now.getTime() >= Date.parse(profile.validFrom) &&
     admission.now.getTime() < Date.parse(profile.expiresAt)
-  )
+}
+
+function sameExternalBinding(
+  expected: ContentSpaceVerificationProfile['externalBinding'],
+  actual: ContentSpaceExternalBindingAttestation | undefined,
+  admission: ContentSpaceVerificationAdmission
+): boolean {
+  if (!expected) return true
+  if (!actual) return false
+  return actual.providerInstanceRef === admission.providerInstanceRef &&
+    samePrincipalSnapshot(actual.principal, admission.principal) &&
+    actual.externalSubject === expected.externalSubject &&
+    actual.bindingRevision === expected.bindingRevision
 }
 
 function sameVerificationAuthority(

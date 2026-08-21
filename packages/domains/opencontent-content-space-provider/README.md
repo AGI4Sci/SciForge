@@ -16,25 +16,29 @@ and the selected Provider Instance. The external OpenContent account is not a Sc
 ## Current readiness
 
 Composition of this adapter is not production admission or live verification.
-The current matrix has zero `live_verified` and zero `production_ready`
-operations, and an `implemented` adapter path does not imply Agent eligibility.
+The authoritative capability matrix records a limited exact packaged-live
+ordinary-operation subset; every verified operation remains `poc_only`, no
+native-document operation has a live-success claim, and `production_ready`
+remains zero. An `implemented` adapter path or successful sibling operation does
+not imply Agent eligibility.
 
 - The six ordinary file operations, all ten Team Administration operations,
   ten safely contract-shaped native-document operations, and 53 extended
   operations are `poc_only` / `verification_profile_required` when their
   required runtime is installed. The default product composition cannot
   execute them.
-- A separately reviewed package-owned Content Space profile can admit only one
+- Provider-declared readiness and current invocation admission remain separate.
+  A separately reviewed package-owned Content Space profile can admit only one
   exact PoC invocation matching the Provider Instance, complete Host Principal
-  snapshot and assurance, authority, operation, audience, zero transfer limits,
-  and a validity window of at most 24 hours. Host assurance is not an external
-  OpenContent account class. The Connector currently supplies no attested
-  external account subject or opaque binding revision, so provider-instance
-  profiles are limited to the read-only `list-containers` bootstrap and exact
-  Broker-bound content-root profiles are limited to reads. Mutation and
-  administration profiles remain inadmissible until that attestation exists.
-  A profile does not promote readiness and cannot be selected or widened by a
-  caller or ordinary configuration.
+  snapshot and assurance, authority, operation, audience, bounded transfer
+  maxima, and validity window. Admission does not promote readiness.
+- Provider-scoped operations, mutations, Administration, and non-zero transfers
+  additionally require a v2 Provider Binding Attestation. This adapter obtains
+  the token-free attestation from the Connector, maps it to the provider-neutral
+  contract, and passes the exact expectation back through every Connector
+  business call. The Connector reauthenticates and recomputes it immediately
+  before dispatch, closing the admission-to-dispatch rebind window. Raw external
+  account identifiers remain adapter-private.
 - `updateFileVersion` is `blocked_by_contract`: the supplier exposes neither an
   exact expected version identity nor an atomic compare-and-update operation.
 - All ten hash-bound native-document mutations, including `edit`, are
@@ -53,5 +57,14 @@ operations, and an `implemented` adapter path does not imply Agent eligibility.
   Cloud Collaboration must also supply typed Task file intents and exact
   Task-turn resource injection and retirement.
 
+Agent `createSpace` capability input does not contain an owner. The Content
+Space Broker injects the current Principal as `contentOwnerUserId`, and this
+adapter permits creation only when that identity maps to the authenticated
+current OpenContent session. The created object is a shared Content Container
+(an OpenContent Team), not the Content Space bounded context and not a Project
+binding.
+
 The authoritative operation inventory is
-[the OpenContent capability matrix](../../../docs/opencontent-skill-capability-matrix.md).
+[the OpenContent capability matrix](../../../docs/opencontent-skill-capability-matrix.md),
+and the complete module flow is in the
+[Content Space architecture guide](../../../docs/content-space-architecture.md).

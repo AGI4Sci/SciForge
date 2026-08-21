@@ -88,69 +88,60 @@ export const openContentTeamRootSchema = z.object({
 
 export type OpenContentTeamRoot = z.infer<typeof openContentTeamRootSchema>
 
-type OpenContentRequest = Readonly<{
-  token: string
+type OpenContentBoundRequest = Readonly<{
   signal?: AbortSignal
 }>
 
-export type OpenContentTeamAdministration = Readonly<{
-  listTeams(input: OpenContentRequest & Readonly<{
+export type OpenContentBoundTeamAdministration = Readonly<{
+  listTeams(input: OpenContentBoundRequest & Readonly<{
     pageNumber: number
     pageSize: number
     teamType?: 0 | 1 | 2 | 3
     keyword?: string
   }>): Promise<OpenContentTeamPage>
-  createTeam(input: OpenContentRequest & Readonly<{
+  createTeam(input: OpenContentBoundRequest & Readonly<{
     name: string
     icon?: string
     remark?: string
   }>): Promise<void>
-  observeTeam(input: OpenContentRequest & Readonly<{
+  observeTeam(input: OpenContentBoundRequest & Readonly<{
     teamId: OpenContentTeamId
   }>): Promise<OpenContentTeam>
-  editTeam(input: OpenContentRequest & Readonly<{
+  editTeam(input: OpenContentBoundRequest & Readonly<{
     teamId: OpenContentTeamId
     folderId: OpenContentFolderId
     name: string
     icon?: string
     remark?: string
   }>): Promise<void>
-  stickTeam(input: OpenContentRequest & Readonly<{
+  stickTeam(input: OpenContentBoundRequest & Readonly<{
     teamId: OpenContentTeamId
   }>): Promise<void>
-  unstickTeam(input: OpenContentRequest & Readonly<{
+  unstickTeam(input: OpenContentBoundRequest & Readonly<{
     teamId: OpenContentTeamId
   }>): Promise<void>
-  listTeamUsers(input: OpenContentRequest & Readonly<{
+  listTeamUsers(input: OpenContentBoundRequest & Readonly<{
     teamId: OpenContentTeamId
     pageNumber: number
     pageSize: number
   }>): Promise<OpenContentTeamUserPage>
-  addTeamUsers(input: OpenContentRequest & z.output<typeof openContentTeamUserMutationSchema>): Promise<void>
-  removeTeamUsers(input: OpenContentRequest & z.output<typeof openContentTeamUserMutationSchema>): Promise<void>
-  resolveTeamRoot(input: OpenContentRequest & Readonly<{
+  addTeamUsers(input: OpenContentBoundRequest & z.output<
+    typeof openContentTeamUserMutationSchema
+  >): Promise<void>
+  removeTeamUsers(input: OpenContentBoundRequest & z.output<
+    typeof openContentTeamUserMutationSchema
+  >): Promise<void>
+  resolveTeamRoot(input: OpenContentBoundRequest & Readonly<{
     teamId: OpenContentTeamId
     folderId: OpenContentFolderId
   }>): Promise<OpenContentTeamRoot>
-  setTeamUserRole(input: OpenContentRequest & Readonly<{
+  setTeamUserRole(input: OpenContentBoundRequest & Readonly<{
     teamId: OpenContentTeamId
     identityIds: readonly OpenContentIdentityId[]
     userType: 2 | 3 | 4
   }>): Promise<void>
-  transferTeamOwner(input: OpenContentRequest & Readonly<{
+  transferTeamOwner(input: OpenContentBoundRequest & Readonly<{
     teamId: OpenContentTeamId
     ownerIdentityId: OpenContentIdentityId
   }>): Promise<void>
-}>
-
-type BindOpenContentTeamOperation<Operation> = Operation extends (
-  input: infer Input
-) => infer Result
-  ? (input: Omit<Input, 'token'>) => Result
-  : never
-
-export type OpenContentBoundTeamAdministration = Readonly<{
-  [Operation in keyof OpenContentTeamAdministration]: BindOpenContentTeamOperation<
-  OpenContentTeamAdministration[Operation]
-  >
 }>

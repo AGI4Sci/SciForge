@@ -17,9 +17,24 @@ import {
   openContentTeamUserPageSchema,
   openContentTeamUserSchema,
   openContentTeamUserTypeSchema,
-  type OpenContentBoundTeamAdministration,
-  type OpenContentTeamAdministration
+  type OpenContentBoundTeamAdministration
 } from '../team-administration-contract.js'
+
+type OpenContentRequest = Readonly<{
+  token: string
+}>
+
+type AddOpenContentCredential<Operation> = Operation extends (
+  input: infer Input
+) => infer Result
+  ? (input: Input & OpenContentRequest) => Result
+  : never
+
+export type OpenContentTeamAdministration = Readonly<{
+  [Operation in keyof OpenContentBoundTeamAdministration]: AddOpenContentCredential<
+    OpenContentBoundTeamAdministration[Operation]
+  >
+}>
 
 const MAX_RESPONSE_BYTES = 1_000_000
 const REQUEST_TIMEOUT_MS = 15_000

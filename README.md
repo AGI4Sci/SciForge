@@ -182,6 +182,7 @@ npm run build
 | [香港 ECS 协作服务运维](./docs/operations/zulip-aliyun-deployment.zh-CN.md) | 生产部署、systemd、Nginx、备份、升级与回滚 |
 | [Runtime contract](./docs/agent-runtime-contract.md) | Codex、Claude Code 与 GUI 的统一适配边界 |
 | [Remote Workspace](./docs/remote-workspace.zh-CN.md) | VPN/SSH、远端目录、本地 UI、网络出口与科学预览 |
+| [Content Space 架构](./docs/content-space-architecture.md) | Provider-neutral 术语、模块所有权、唯一 Broker → Provider → Connector 调用链、readiness/admission 与 OpenContent operation matrix |
 | [OpenContent 附件分发边界](./docs/opencontent-attachment-distribution.md) | OpenContent 公开集成与仅限内部供应商附件的精确拆分 |
 | [架构说明](./DESIGN.md) | Agent runtime、GUI 与服务边界 |
 | [Context Map](./CONTEXT-MAP.md) | Identity、Cloud Collaboration、Content Space、Shared Documents 与 Provider Integration 的权威边界 |

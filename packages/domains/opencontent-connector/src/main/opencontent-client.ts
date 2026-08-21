@@ -7,9 +7,7 @@ import {
 import { z } from 'zod'
 
 import {
-  OpenContentConnectorError,
-  openContentAuthenticatedSessionSchema,
-  type OpenContentAuthenticatedSession
+  OpenContentConnectorError
 } from '../contract.js'
 
 const MAX_RESPONSE_BYTES = 1_000_000
@@ -18,6 +16,22 @@ const TRANSFER_TIMEOUT_MS = 60_000
 const UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024
 const MAX_UPLOAD_BYTES = 16 * 1024 * 1024
 const MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
+
+const openContentExternalAccountSchema = z.object({
+  id: z.string().trim().min(1).max(256),
+  identityId: z.number().int().nonnegative().safe(),
+  account: z.string().trim().min(1).max(256),
+  name: z.string().trim().min(1).max(256),
+  topPersonalFolderId: z.string().regex(/^\d+$/u)
+}).strict().readonly()
+
+const openContentAuthenticatedSessionSchema = z.object({
+  token: z.string().trim().min(16).max(4096),
+  account: openContentExternalAccountSchema
+}).strict().readonly()
+
+type OpenContentExternalAccount = z.infer<typeof openContentExternalAccountSchema>
+type OpenContentAuthenticatedSession = z.infer<typeof openContentAuthenticatedSessionSchema>
 
 const publicKeyResponseSchema = z.object({
   result: z.number().int(),
@@ -190,6 +204,11 @@ export type OpenContentClient = Readonly<{
     signal?: AbortSignal
     assertPrincipalCurrent(): void | Promise<void>
   }>): Promise<boolean>
+  observeCurrentExternalAccount(input: Readonly<{
+    token: string
+    signal?: AbortSignal
+    assertPrincipalCurrent(): void | Promise<void>
+  }>): Promise<OpenContentExternalAccount>
   listRootFolders(input: Readonly<{
     token: string
     teamPage: number
@@ -342,6 +361,30 @@ export function createOpenContentClient(options: Readonly<{
     })
   }
 
+  const observeCurrentExternalAccount: OpenContentClient['observeCurrentExternalAccount'] =
+    async (rawInput) => {
+      const input = parseClientInput(currentAccountRequestSchema, rawInput)
+      const response = await requestJson({
+        baseUrl,
+        fetchImplementation,
+        path: '/flatsdk/api/services/User/GetUserInfoByToken',
+        method: 'POST',
+        body: { token: input.token },
+        signal: rawInput.signal,
+        assertPrincipalCurrent: input.assertPrincipalCurrent
+      })
+      const envelope = parseProviderResponse(
+        externalAccountResponseSchema,
+        response,
+        'provider_contract_violation'
+      )
+      requireBusinessSuccess(envelope.result, 'reauthentication_required')
+      return Object.freeze({
+        ...envelope.data,
+        topPersonalFolderId: String(envelope.data.topPersonalFolderId)
+      })
+    }
+
   return Object.freeze({
     isTokenValid: async (input) => {
       const response = await requestJson({
@@ -361,6 +404,7 @@ export function createOpenContentClient(options: Readonly<{
       requireBusinessSuccess(envelope.result, 'reauthentication_required')
       return envelope.data
     },
+    observeCurrentExternalAccount,
     authenticateExistingAccount: async (rawInput) => {
       const input = parseClientInput(enrollmentInputSchema, rawInput)
       const publicKeyResponse = await requestJson({
@@ -420,27 +464,14 @@ export function createOpenContentClient(options: Readonly<{
       requireBusinessSuccess(validityEnvelope.result, 'reauthentication_required')
       if (!validityEnvelope.data) throw connectorError('reauthentication_required')
 
-      const accountResponse = await requestJson({
-        baseUrl,
-        fetchImplementation,
-        path: '/flatsdk/api/services/User/GetUserInfoByToken',
-        method: 'POST',
-        body: { token },
+      const account = await observeCurrentExternalAccount({
+        token,
         signal: rawInput.signal,
         assertPrincipalCurrent: input.assertPrincipalCurrent
       })
-      const accountEnvelope = parseProviderResponse(
-        externalAccountResponseSchema,
-        accountResponse,
-        'provider_contract_violation'
-      )
-      requireBusinessSuccess(accountEnvelope.result, 'reauthentication_required')
       return Object.freeze(openContentAuthenticatedSessionSchema.parse({
         token,
-        account: {
-          ...accountEnvelope.data,
-          topPersonalFolderId: String(accountEnvelope.data.topPersonalFolderId)
-        }
+        account
       }))
     },
     listRootFolders: async (rawInput) => {
@@ -872,6 +903,12 @@ const principalAssertionSchema = z.custom<() => void | Promise<void>>(
 const enrollmentInputSchema = z.object({
   username: z.string().trim().min(1).max(256),
   password: z.string().min(1).max(4096),
+  signal: z.instanceof(AbortSignal).optional(),
+  assertPrincipalCurrent: principalAssertionSchema
+}).strict()
+
+const currentAccountRequestSchema = z.object({
+  token: z.string().trim().min(16).max(4096),
   signal: z.instanceof(AbortSignal).optional(),
   assertPrincipalCurrent: principalAssertionSchema
 }).strict()

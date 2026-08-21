@@ -76,7 +76,7 @@ done
 
 export SCIFORGE_PUBLIC_RELEASE=1
 node "${ROOT}/scripts/public-release-guard.cjs" \
-  || die "Official public releases must not include internal runtime composition."
+  || die "Official public releases require safe public runtime and domain composition."
 
 build_mac_arch() {
   local arch="$1"

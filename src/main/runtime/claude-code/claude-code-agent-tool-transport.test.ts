@@ -178,6 +178,7 @@ function unusedBroker() {
   return {
     discover: async () => [],
     observe: async () => { throw new Error('unused') },
+    describeResourceHandle: () => { throw new Error('unused') },
     bindResourceRef: async () => { throw new Error('unused') },
     invoke: async () => { throw new Error('unused') },
     listEvents: async () => []

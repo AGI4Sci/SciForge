@@ -11,7 +11,7 @@ import {
   type ContentSpacePageRequest
 } from './contract.js'
 
-export const CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION = '1.0.0' as const
+export const CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION = '2.0.0' as const
 export const PROJECT_CONTENT_SPACE_PROVISIONING_CONTRACT_VERSION = '1.0.0' as const
 
 export const CONTENT_SPACE_ADMINISTRATION_OPERATIONS = Object.freeze([
@@ -77,7 +77,7 @@ const consumerResourceIdSchema = z.string()
   .max(256)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u)
 
-const idempotencyKeySchema = z.string()
+const projectProvisioningIdempotencyKeySchema = z.string()
   .trim()
   .min(16)
   .max(128)
@@ -96,7 +96,7 @@ export const projectContentSpaceProvisioningIntentSchema = z.object({
     })
     .readonly(),
   intentRevision: z.number().int().positive(),
-  idempotencyKey: idempotencyKeySchema
+  idempotencyKey: projectProvisioningIdempotencyKeySchema
 }).strict().readonly()
 
 export type ProjectContentSpaceProvisioningIntent = z.infer<
@@ -198,10 +198,18 @@ export const contentSpaceAdministrationListSpacesInputSchema = z.object({
   page: contentSpacePageRequestSchema
 }).strict().readonly()
 
+const administrationCreateSpaceInputShape = Object.freeze({
+  label: projectLabelSchema
+})
+
+/** Agent business input omits owner and invocation identity; Broker context supplies both. */
+export const contentSpaceAgentAdministrationCreateSpaceInputSchema = z.object({
+  ...administrationCreateSpaceInputShape
+}).strict().readonly()
+
 export const contentSpaceAdministrationCreateSpaceInputSchema = z.object({
-  label: projectLabelSchema,
-  contentOwnerUserId: consumerResourceIdSchema,
-  idempotencyKey: idempotencyKeySchema
+  ...administrationCreateSpaceInputShape,
+  contentOwnerUserId: consumerResourceIdSchema
 }).strict().readonly()
 
 export const contentSpaceAdministrationObserveSpaceInputSchema = z.object({
@@ -211,14 +219,12 @@ export const contentSpaceAdministrationObserveSpaceInputSchema = z.object({
 export const contentSpaceAdministrationUpdateSpaceInputSchema = z.object({
   root: portableContentContainerReferenceEnvelopeSchema,
   expectedRevision: administrationRevisionSchema,
-  label: projectLabelSchema,
-  idempotencyKey: idempotencyKeySchema
+  label: projectLabelSchema
 }).strict().readonly()
 
 const contentSpaceAdministrationRootMutationInputSchema = z.object({
   root: portableContentContainerReferenceEnvelopeSchema,
-  expectedRevision: administrationRevisionSchema,
-  idempotencyKey: idempotencyKeySchema
+  expectedRevision: administrationRevisionSchema
 }).strict().readonly()
 
 export const contentSpaceAdministrationPinSpaceInputSchema =
@@ -262,8 +268,7 @@ export const contentSpaceAdministrationListMembersInputSchema = z.object({
 const contentSpaceAdministrationMemberMutationInputSchema = z.object({
   root: portableContentContainerReferenceEnvelopeSchema,
   contentUserId: consumerResourceIdSchema,
-  expectedRevision: administrationRevisionSchema,
-  idempotencyKey: idempotencyKeySchema
+  expectedRevision: administrationRevisionSchema
 }).strict().readonly()
 
 export const contentSpaceAdministrationAddMemberInputSchema =

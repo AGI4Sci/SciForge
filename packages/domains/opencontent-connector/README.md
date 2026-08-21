@@ -29,5 +29,29 @@ migrated. Its Token is never used for `opencontent-edoc2-demo`; the connector
 retains cleanup metadata until the owning current Principal can delete the old
 credential from secure storage.
 
+## Provider binding attestation
+
+The Connector is the authority for the current node-local OpenContent
+Connection. It can issue a token-free v2 binding attestation containing the
+exact Provider Instance and complete Principal plus two opaque SHA-256 values:
+one identifies the authenticated external subject and one identifies the local
+Connection revision. Raw external account identifiers, credentials, and the
+Connection ID do not cross the facade as admission input or portable authority.
+The public Team-administration contract likewise exposes only bounded DTOs,
+schemas, constants, and a token-free bound interface. Credential-bearing
+requests, sessions, transport construction, and binding stay package-private to
+the Connector main process and are not exported from the public `./main` entry.
+
+An attestation observed during Content Space admission is not sufficient by
+itself. The pinned Provider passes that exact expected attestation back through
+the same Connector facade for every business operation. Immediately before
+remote dispatch, the Connector revalidates the Host Principal, authenticates
+the actual current session, observes the current external account, recomputes
+the opaque values, and requires an exact match. Unbind, rebind, credential
+replacement, account change, or Connection-revision drift fails before the
+Provider operation or private Runtime subprocess.
+
 See the [attachment distribution boundary](../../../docs/opencontent-attachment-distribution.md)
-for installation, integrity, packaging, and public-release rules.
+for installation, integrity, packaging, and public-release rules, and the
+[Content Space architecture guide](../../../docs/content-space-architecture.md)
+for the complete call chain.

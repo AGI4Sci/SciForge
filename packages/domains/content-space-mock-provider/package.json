@@ -20,7 +20,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@sciforge/domain-content-space": "1.1.0",
+    "@sciforge/domain-content-space": "2.0.0",
     "@sciforge/domain-sdk": "^0.2.1",
     "zod": "^4.4.3"
   },

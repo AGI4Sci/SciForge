@@ -11,22 +11,12 @@ describe('DocFlow native document adapter', () => {
     expect(DOCFLOW_NATIVE_DOCUMENT_COMMANDS).toEqual([
       'docflow-create',
       'docflow-read',
-      'docflow-update',
-      'docflow-insert',
       'docflow-probe',
       'docflow-plan',
-      'docflow-edit',
-      'docflow-undo',
-      'docflow-redo',
       'docflow-image-upload',
       'docflow-image-download',
-      'docflow-comment-create',
       'docflow-comment-list',
       'docflow-comment-get',
-      'docflow-comment-reply',
-      'docflow-comment-solve',
-      'docflow-comment-reopen',
-      'docflow-comment-delete',
       'docflow-import',
       'docflow-export'
     ])
@@ -61,6 +51,34 @@ describe('DocFlow native document adapter', () => {
         path: '/tmp/caller-controlled.html'
       }]
     })).rejects.toThrow()
+    await expect(adapter.execute({
+      invocationId: 'invocation_docflow_adapter_edit',
+      command: 'docflow-edit',
+      args: { fileId: 'file_a', baseHash: 'a'.repeat(64) },
+      dataFiles: [{
+        role: 'edit-plan',
+        encoding: 'managed',
+        token: `ocdf_${'p'.repeat(32)}`
+      }]
+    })).rejects.toThrow()
+    for (const command of [
+      'docflow-update',
+      'docflow-insert',
+      'docflow-undo',
+      'docflow-redo',
+      'docflow-comment-create',
+      'docflow-comment-reply',
+      'docflow-comment-solve',
+      'docflow-comment-reopen',
+      'docflow-comment-delete'
+    ]) {
+      await expect(adapter.execute({
+        invocationId: `invocation_blocked_${command}`,
+        command,
+        args: {},
+        dataFiles: []
+      })).rejects.toThrow()
+    }
     expect(transport.invoke).not.toHaveBeenCalled()
   })
 
@@ -127,89 +145,6 @@ describe('DocFlow native document adapter', () => {
     expect(invoke).toHaveBeenCalledTimes(1)
     expect(invoke).toHaveBeenCalledWith(invocation)
     expect(JSON.stringify(invoke.mock.calls[0]?.[0])).not.toMatch(/filePath|argv|env|token/iu)
-  })
-
-  it('returns a non-retryable conflict for a document hash mismatch without replaying', async () => {
-    const expectedHash = 'a'.repeat(64)
-    const actualHash = 'b'.repeat(64)
-    const invocation = {
-      invocationId: 'invocation_docflow_edit_conflict',
-      command: 'docflow-edit' as const,
-      args: { fileId: 'file_a', baseHash: expectedHash },
-      dataFiles: [{
-        role: 'edit-plan' as const,
-        encoding: 'managed' as const,
-        token: `ocdf_${'p'.repeat(32)}`
-      }]
-    }
-    const invoke = vi.fn().mockResolvedValue({
-      protocol: 'docflow-command-result:v1',
-      command: 'docflow-edit',
-      ok: false,
-      error: {
-        code: 'DOCFLOW_DOCUMENT_HASH_MISMATCH',
-        message: 'The document hash no longer matches the plan.',
-        stage: 'validation',
-        dispatched: false,
-        expectedHash,
-        actualHash
-      }
-    })
-    const adapter = createDocflowNativeDocumentAdapter({ invoke })
-
-    await expect(adapter.execute(invocation)).resolves.toMatchObject({
-      protocol: 'docflowNativeDocumentReceipt:v1',
-      invocationId: invocation.invocationId,
-      command: invocation.command,
-      attemptCount: 1,
-      outcome: 'conflict',
-      error: {
-        code: 'conflict',
-        reason: 'hash_mismatch',
-        retry: 'never',
-        expectedHash,
-        actualHash
-      }
-    })
-    expect(invoke).toHaveBeenCalledTimes(1)
-  })
-
-  it('returns outcome_unknown for an uncertain comment commit without replaying', async () => {
-    const invocation = {
-      invocationId: 'invocation_docflow_comment_unknown',
-      command: 'docflow-comment-create' as const,
-      args: {
-        fileId: 'file_a',
-        target: { kind: 'text' as const, targetText: 'Review target' },
-        body: 'Please review.'
-      },
-      dataFiles: []
-    }
-    const invoke = vi.fn().mockResolvedValue({
-      protocol: 'docflow-command-result:v1',
-      command: 'docflow-comment-create',
-      ok: false,
-      error: {
-        code: 'DOCFLOW_COMMENT_COMMIT_UNKNOWN',
-        message: 'The comment request was sent but its outcome is unknown.',
-        stage: 'write',
-        dispatched: true
-      }
-    })
-    const adapter = createDocflowNativeDocumentAdapter({ invoke })
-
-    await expect(adapter.execute(invocation)).resolves.toMatchObject({
-      invocationId: invocation.invocationId,
-      command: invocation.command,
-      attemptCount: 1,
-      outcome: 'outcome_unknown',
-      error: {
-        code: 'outcome_unknown',
-        stage: 'comment_commit',
-        retry: 'never'
-      }
-    })
-    expect(invoke).toHaveBeenCalledTimes(1)
   })
 
   it('carries export and image-download destinations only as runner-managed streams', async () => {

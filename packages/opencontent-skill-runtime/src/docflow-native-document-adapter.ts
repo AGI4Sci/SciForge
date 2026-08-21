@@ -3,22 +3,12 @@ import { z } from 'zod'
 export const DOCFLOW_NATIVE_DOCUMENT_COMMANDS = Object.freeze([
   'docflow-create',
   'docflow-read',
-  'docflow-update',
-  'docflow-insert',
   'docflow-probe',
   'docflow-plan',
-  'docflow-edit',
-  'docflow-undo',
-  'docflow-redo',
   'docflow-image-upload',
   'docflow-image-download',
-  'docflow-comment-create',
   'docflow-comment-list',
   'docflow-comment-get',
-  'docflow-comment-reply',
-  'docflow-comment-solve',
-  'docflow-comment-reopen',
-  'docflow-comment-delete',
   'docflow-import',
   'docflow-export'
 ] as const)
@@ -46,7 +36,6 @@ export const docflowDataFileRoleSchema = z.enum([
   'content',
   'operations',
   'probe-template',
-  'edit-plan',
   'source',
   'image',
   'destination'
@@ -56,7 +45,6 @@ const docflowInputDataFileRoleSchema = z.enum([
   'content',
   'operations',
   'probe-template',
-  'edit-plan',
   'source',
   'image'
 ])
@@ -91,7 +79,7 @@ export const docflowDataFileSchema = z.discriminatedUnion('encoding', [
     content: z.string().max(24 * 1024 * 1024).regex(/^[A-Za-z0-9+/]*={0,2}$/u)
   }).strict().readonly(),
   z.object({
-    role: z.enum(['probe-template', 'edit-plan']),
+    role: z.literal('probe-template'),
     encoding: z.literal('managed'),
     token: z.string().regex(/^ocdf_[A-Za-z0-9_-]{32,128}$/u)
   }).strict().readonly(),
@@ -115,24 +103,6 @@ const referenceSchema = z.object({
   systemId: z.literal('ecm').optional(),
   description: z.string().trim().min(1).max(1_024).optional()
 }).strict().readonly()
-
-const commentTargetSchema = z.discriminatedUnion('kind', [
-  z.object({
-    kind: z.literal('text'),
-    targetText: z.string().min(1).max(100_000),
-    occurrence: z.number().int().min(1).max(100_000).optional()
-  }).strict().readonly(),
-  z.object({
-    kind: z.literal('range'),
-    startText: z.string().min(1).max(100_000),
-    endText: z.string().min(1).max(100_000)
-  }).strict().readonly(),
-  z.object({
-    kind: z.literal('component'),
-    targetComponent: z.string().trim().min(1).max(256),
-    occurrence: z.number().int().min(1).max(100_000).optional()
-  }).strict().readonly()
-])
 
 export const docflowCanonicalEditOperationSchema = z.enum([
   'locate',
@@ -236,39 +206,15 @@ const commandInvocationSchemas = [
   invocationSchema('docflow-read', z.object({
     fileId: resourceIdSchema
   }).strict().readonly()),
-  invocationSchema('docflow-update', z.object({
-    fileId: resourceIdSchema,
-    references: z.array(referenceSchema).max(8).readonly()
-  }).strict().readonly()),
-  invocationSchema('docflow-insert', z.object({
-    fileId: resourceIdSchema,
-    position: z.enum(['start', 'end']),
-    references: z.array(referenceSchema).max(8).readonly()
-  }).strict().readonly()),
   invocationSchema('docflow-probe', probeArgsSchema),
   invocationSchema('docflow-plan', z.object({
     fileId: resourceIdSchema,
     baseHash: documentHashSchema
   }).strict().readonly()),
-  invocationSchema('docflow-edit', z.object({
-    fileId: resourceIdSchema,
-    baseHash: documentHashSchema
-  }).strict().readonly()),
-  invocationSchema('docflow-undo', z.object({
-    fileId: resourceIdSchema
-  }).strict().readonly()),
-  invocationSchema('docflow-redo', z.object({
-    fileId: resourceIdSchema
-  }).strict().readonly()),
   invocationSchema('docflow-image-upload', imageUploadArgsSchema),
   invocationSchema('docflow-image-download', z.object({
     fileId: resourceIdSchema,
     position: z.number().int().min(1).max(100_000)
-  }).strict().readonly()),
-  invocationSchema('docflow-comment-create', z.object({
-    fileId: resourceIdSchema,
-    target: commentTargetSchema,
-    body: z.string().trim().min(1).max(16_384)
   }).strict().readonly()),
   invocationSchema('docflow-comment-list', z.object({
     fileId: resourceIdSchema,
@@ -278,18 +224,6 @@ const commandInvocationSchemas = [
     fileId: resourceIdSchema,
     commentId: resourceIdSchema
   }).strict().readonly()),
-  invocationSchema('docflow-comment-reply', z.object({
-    fileId: resourceIdSchema,
-    commentId: resourceIdSchema,
-    body: z.string().trim().min(1).max(16_384)
-  }).strict().readonly()),
-  ...(['solve', 'reopen', 'delete'] as const).map((action) => invocationSchema(
-    `docflow-comment-${action}`,
-    z.object({
-      fileId: resourceIdSchema,
-      commentId: resourceIdSchema
-    }).strict().readonly()
-  )),
   invocationSchema('docflow-import', z.object({
     folderId: resourceIdSchema.optional()
   }).strict().readonly()),
@@ -319,7 +253,7 @@ export const docflowCommandInvocationSchema = z.union(commandInvocationSchemas)
       if (file.role === 'operations' && file.encoding !== 'json') {
         context.addIssue({ code: 'custom', path: ['dataFiles', index, 'encoding'], message: 'Edit operations must be JSON data.' })
       }
-      if ((file.role === 'probe-template' || file.role === 'edit-plan') && file.encoding !== 'managed') {
+      if (file.role === 'probe-template' && file.encoding !== 'managed') {
         context.addIssue({ code: 'custom', path: ['dataFiles', index, 'encoding'], message: 'Plans and templates require a runner-managed token.' })
       }
       if (file.role === 'image' && (file.encoding !== 'base64' || !file.mediaType.startsWith('image/'))) {
@@ -342,13 +276,9 @@ function expectedDataFileRoles(
 ): readonly z.infer<typeof docflowDataFileRoleSchema>[] {
   switch (invocation.command) {
     case 'docflow-create':
-    case 'docflow-update':
-    case 'docflow-insert':
       return ['content']
     case 'docflow-plan':
       return ['probe-template', 'operations']
-    case 'docflow-edit':
-      return ['edit-plan']
     case 'docflow-image-upload':
       return (invocation.args as { source?: unknown }).source === 'data-file'
         ? ['image']
@@ -393,7 +323,7 @@ export const docflowStructuredDeliverySchema = z.object({
 }).readonly()
 
 export const docflowManagedDataFileSchema = z.object({
-  role: z.enum(['probe-template', 'edit-plan']),
+  role: z.literal('probe-template'),
   token: z.string().regex(/^ocdf_[A-Za-z0-9_-]{32,128}$/u),
   name: safeDataFileNameSchema,
   mediaType: z.literal('application/json')
@@ -405,7 +335,7 @@ const docflowTransportSuccessSchema = z.object({
   ok: z.literal(true),
   json: z.record(z.string(), z.json()),
   structuredDeliveryItems: z.array(docflowStructuredDeliverySchema).max(1).readonly(),
-  managedDataFiles: z.array(docflowManagedDataFileSchema).max(2).readonly()
+  managedDataFiles: z.array(docflowManagedDataFileSchema).max(1).readonly()
 }).strict().readonly()
 
 const docflowTransportErrorSchema = z.object({
@@ -446,7 +376,7 @@ export const docflowNativeDocumentSuccessReceiptSchema = z.object({
   outcome: z.literal('succeeded'),
   json: z.record(z.string(), z.json()),
   structuredDeliveryItems: z.array(docflowStructuredDeliverySchema).max(1).readonly(),
-  managedDataFiles: z.array(docflowManagedDataFileSchema).max(2).readonly()
+  managedDataFiles: z.array(docflowManagedDataFileSchema).max(1).readonly()
 }).strict().readonly()
 
 const receiptBaseShape = {
@@ -474,7 +404,7 @@ export const docflowNativeDocumentOutcomeUnknownReceiptSchema = z.object({
   outcome: z.literal('outcome_unknown'),
   error: z.object({
     code: z.literal('outcome_unknown'),
-    stage: z.enum(['write', 'publish', 'verify', 'comment_commit']),
+    stage: z.enum(['write', 'publish', 'verify']),
     message: z.string().trim().min(1).max(512),
     retry: z.literal('never')
   }).strict().readonly()
@@ -606,34 +536,14 @@ const HASH_CONFLICT_CODES = new Set([
 
 const WRITE_COMMANDS = new Set<DocflowCommand>([
   'docflow-create',
-  'docflow-update',
-  'docflow-insert',
-  'docflow-edit',
-  'docflow-undo',
-  'docflow-redo',
   'docflow-image-upload',
   'docflow-image-download',
-  'docflow-comment-create',
-  'docflow-comment-reply',
-  'docflow-comment-solve',
-  'docflow-comment-reopen',
-  'docflow-comment-delete',
   'docflow-import',
   'docflow-export'
 ])
 
 const DELIVERY_COMMANDS = new Set<DocflowCommand>([
   'docflow-create',
-  'docflow-update',
-  'docflow-insert',
-  'docflow-edit',
-  'docflow-undo',
-  'docflow-redo',
-  'docflow-comment-create',
-  'docflow-comment-reply',
-  'docflow-comment-solve',
-  'docflow-comment-reopen',
-  'docflow-comment-delete',
   'docflow-import'
 ])
 
@@ -668,9 +578,6 @@ function mapTransportFailure(
       }
     }))
   }
-  if (error.code === 'DOCFLOW_COMMENT_COMMIT_UNKNOWN') {
-    return outcomeUnknownReceipt(invocation, 'comment_commit', error.message)
-  }
   if (error.code === 'DOCFLOW_POSTCOMMIT_VERIFY_FAILED') {
     return outcomeUnknownReceipt(invocation, 'verify', error.message)
   }
@@ -688,7 +595,7 @@ function mapTransportFailure(
 
 function outcomeUnknownReceipt(
   invocation: DocflowCommandInvocation,
-  stage: 'write' | 'publish' | 'verify' | 'comment_commit',
+  stage: 'write' | 'publish' | 'verify',
   message: string
 ): DocflowNativeDocumentReceipt {
   return Object.freeze(docflowNativeDocumentOutcomeUnknownReceiptSchema.parse({

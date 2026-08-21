@@ -12,7 +12,8 @@ import {
 import { toPortableContentContainerReference } from '@sciforge/domain-content-space/contract'
 import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 import {
-  OpenContentConnectorError
+  OpenContentConnectorError,
+  type OpenContentExternalBindingAttestation
 } from '@sciforge/domain-opencontent-connector/contract'
 import {
   OPENCONTENT_TEAM_MUTATION_SIZE_MAX,
@@ -49,6 +50,7 @@ class OwnerSynchronizationRequiredError extends OpenContentConnectorError {
 export type OpenContentProjectProvisioningContext = Readonly<{
   principal: PrincipalSnapshot
   providerInstanceRef: string
+  expectedBindingAttestation?: OpenContentExternalBindingAttestation
   signal?: AbortSignal
   assertPrincipalCurrent(): void | Promise<void>
 }>

@@ -38,8 +38,11 @@ artifacts.
 
 ## Runtime behavior with and without the attachment
 
-Installing an attachment changes runtime inventory, not production admission. OpenContent currently
-has zero `live_verified` and zero `production_ready` operations:
+Installing an attachment changes runtime inventory, not per-operation live evidence, readiness, or
+production admission. The exact packaged outcomes are maintained only in the
+[OpenContent capability matrix](./opencontent-skill-capability-matrix.md); the currently verified
+ordinary-operation subset remains `poc_only`, no native-document operation has a live-success claim,
+and OpenContent has zero `production_ready` operations:
 
 - Provider discovery can enumerate the installed Provider Instance but admits no Provider business
   operation;
@@ -59,18 +62,26 @@ version observation is also blocked, so OpenContent cannot issue an `ArtifactRef
 
 A PoC invocation requires a separately reviewed package-owned Content Space profile that matches
 the exact Provider Instance, complete Host Principal snapshot and assurance, authority, operation,
-audience, zero upload/download limits, and validity window of at most 24 hours. Host assurance is
-not an external Provider account class, and the Connector currently supplies no attested external
-account subject or opaque binding revision. Until it does, Provider Instance authority admits only
-the read-only `list-containers` bootstrap, exact Broker-bound content-root authority admits only
-reads, and mutation/administration profiles fail composition. The default composition installs no
-active profile, and caller input, renderer/Agent state, ordinary configuration, or attachment
-presence cannot install or widen one.
+audience, bounded upload/download maxima, and validity window of at most 24 hours. The matched byte
+maxima are enforced for the invocation. Provider-scoped operations, mutations, administration, and
+non-zero transfers additionally require a v2 Provider Binding Attestation containing the exact
+Provider Instance and Principal plus an opaque external subject and opaque Connection revision.
+
+Content Space obtains the attestation only through the pinned Provider. Immediately before each
+business dispatch, the Provider passes the exact expectation to the Connector, which reauthenticates
+the actual current session and requires a recomputed exact match; unbind/rebind drift therefore fails
+before supplier dispatch. The attestation is token-free and non-portable, and raw account identifiers
+do not enter caller input. Zero-transfer `list-containers` bootstrap and exact-root reads remain the
+only operations profile-safe without it. The default composition installs no active profile, and
+caller input, renderer/Agent state, ordinary configuration, or attachment presence cannot install
+or widen one.
 
 The overlay does not create a second Agent tool, transport, authorization path, or Provider
-contract. The precise readiness matrix and live-promotion evidence are maintained in the
+contract. The precise readiness matrix and packaged evidence are maintained in the
 [OpenContent Skill Capability Matrix](./opencontent-skill-capability-matrix.md), and the governing
 architecture decision is [ADR-0030](./adr/0030-activate-provider-native-documents-through-content-space.md).
+The complete module boundary and canonical call chain are in the
+[Content Space architecture guide](./content-space-architecture.md).
 
 ## Installation and resolution contract
 

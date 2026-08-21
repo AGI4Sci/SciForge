@@ -567,6 +567,27 @@ export class CapabilityBroker {
     }
   }
 
+  /**
+   * Projects one already authorized handle to its opaque resource reference
+   * without invoking the provider observer.
+   */
+  describeResourceHandle(
+    rawCaller: CapabilityCallerContextInput,
+    rawHandle: CapabilityResourceHandle
+  ): Readonly<{
+    resourceRef: string
+    resourceKind: string
+    semanticRevision: string
+  }> {
+    const caller = this.#hostResourceCaller(rawCaller)
+    const { state } = this.#resolveHandle(caller, rawHandle)
+    return Object.freeze({
+      resourceRef: state.resourceRef,
+      resourceKind: state.resourceKind,
+      semanticRevision: state.semanticRevision
+    })
+  }
+
   async observe(
     rawCaller: CapabilityCallerContextInput,
     rawRequest: CapabilityObserveRequest,

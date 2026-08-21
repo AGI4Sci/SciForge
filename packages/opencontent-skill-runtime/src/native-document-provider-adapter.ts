@@ -80,13 +80,6 @@ type ProbeState = Readonly<{
   templateToken: string
 }>
 
-type PlanState = Readonly<{
-  providerInstanceRef: string
-  fileId: string
-  baseHash: string
-  planToken: string
-}>
-
 type PrincipalBoundState<Value> = Readonly<{
   value: Value
   principalBinding: string
@@ -98,9 +91,7 @@ type ManagedStateStore<Value> = Readonly<{
   reservations: Set<symbol>
 }>
 
-type ManagedStateReservation =
-  | Readonly<{ kind: 'probe'; token: symbol }>
-  | Readonly<{ kind: 'plan'; token: symbol }>
+type ManagedStateReservation = Readonly<{ kind: 'probe'; token: symbol }>
 
 export type NativeDocumentProviderAdapterBinding = Readonly<{
   owner: OpenContentSkillRuntimeOwner | unknown
@@ -163,6 +154,7 @@ const MANAGED_STATE_CAPACITY = 2_048
 const NON_ATOMIC_HASH_BOUND_OPERATIONS = Object.freeze([
   'update',
   'insert',
+  'edit',
   'undo',
   'redo',
   'comment-create',
@@ -277,13 +269,10 @@ function consumeManagedState<Value>(
 
 function releaseManagedStateReservation(
   reservation: ManagedStateReservation | undefined,
-  probeStates: ManagedStateStore<ProbeState>,
-  planStates: ManagedStateStore<PlanState>
+  probeStates: ManagedStateStore<ProbeState>
 ): void {
   if (reservation?.kind === 'probe') {
     probeStates.reservations.delete(reservation.token)
-  } else if (reservation?.kind === 'plan') {
-    planStates.reservations.delete(reservation.token)
   }
 }
 
@@ -319,7 +308,6 @@ export function createNativeDocumentProviderAdapter(
   }
 
   const probeStates = createManagedStateStore<ProbeState>()
-  const planStates = createManagedStateStore<PlanState>()
 
   return Object.freeze({
     async execute(input: FeatureInput): Promise<ContentSpaceProviderNativeDocumentReceipt> {
@@ -358,7 +346,6 @@ export function createNativeDocumentProviderAdapter(
         request,
         invocationId,
         probeStates,
-        planStates,
         boundPrincipal,
         Date.now()
       )
@@ -398,7 +385,6 @@ export function createNativeDocumentProviderAdapter(
 
         const enriched = await enrichDocumentWriteReceipt(
           binding.docflow,
-          input,
           request,
           base,
           docflowReceipt
@@ -411,7 +397,6 @@ export function createNativeDocumentProviderAdapter(
           request,
           enriched.receipt,
           probeStates,
-          planStates,
           boundPrincipal,
           prepared.reservation,
           Date.now()
@@ -419,8 +404,7 @@ export function createNativeDocumentProviderAdapter(
       } finally {
         releaseManagedStateReservation(
           prepared.reservation,
-          probeStates,
-          planStates
+          probeStates
         )
       }
     }
@@ -429,8 +413,7 @@ export function createNativeDocumentProviderAdapter(
 
 async function enrichDocumentWriteReceipt(
   docflow: DocflowNativeDocumentAdapter,
-  input: FeatureInput,
-  request: SanitizedNativeDocumentRequest,
+  request: NonHashBoundRequest,
   base: ReceiptBase,
   receipt: Extract<DocflowNativeDocumentReceipt, { outcome: 'succeeded' }>
 ): Promise<
@@ -443,7 +426,7 @@ async function enrichDocumentWriteReceipt(
     receipt: ContentSpaceProviderNativeDocumentReceipt
   }>
 > {
-  if (!['create', 'edit', 'import'].includes(request.operation)) {
+  if (!['create', 'import'].includes(request.operation)) {
     return { success: true, receipt }
   }
   const hasHash = nativeDocumentHashSchema.safeParse(receipt.json.documentHash).success
@@ -452,9 +435,7 @@ async function enrichDocumentWriteReceipt(
   ).success
   if (hasHash && hasRevision) return { success: true, receipt }
 
-  const fileId = request.operation === 'edit'
-    ? request.document.reference.fileId
-    : receipt.json.fileId ?? receipt.structuredDeliveryItems[0]?.businessIdentity
+  const fileId = receipt.json.fileId ?? receipt.structuredDeliveryItems[0]?.businessIdentity
   if (typeof fileId !== 'string' || fileId.length === 0) {
     return {
       success: false,
@@ -633,7 +614,6 @@ async function prepareInvocation(
   request: NonHashBoundRequest,
   invocationId: string,
   probeStates: ManagedStateStore<ProbeState>,
-  planStates: ManagedStateStore<PlanState>,
   boundPrincipal: string,
   now: number
 ): Promise<PreparedInvocation> {
@@ -715,14 +695,6 @@ async function prepareInvocation(
           receipt: contractViolation(base, operations.message)
         }
       }
-      const token = reserveManagedState(planStates, now)
-      if (!token) {
-        return {
-          success: false,
-          receipt: managedStateCapacityReceipt(base)
-        }
-      }
-      reservation = Object.freeze({ kind: 'plan' as const, token })
       consumeManagedState(
         probeStates,
         request.probeReceiptId,
@@ -753,54 +725,6 @@ async function prepareInvocation(
             }
           }
         ]
-      }
-      break
-    }
-    case 'edit': {
-      const state = readManagedState(
-        planStates,
-        request.planReceiptId,
-        boundPrincipal,
-        now
-      )
-      if (!state) {
-        return {
-          success: false,
-          receipt: stalePlanReceipt(base, request.baseHash)
-        }
-      }
-      if (state.providerInstanceRef !== request.document.reference.providerInstanceRef ||
-        state.fileId !== request.document.reference.fileId ||
-        state.baseHash !== request.baseHash) {
-        return {
-          success: false,
-          receipt: conflictReceipt(
-            base,
-            'stale_plan',
-            'The plan receipt is bound to another document or document hash.',
-            state.baseHash,
-            request.baseHash
-          )
-        }
-      }
-      consumeManagedState(
-        planStates,
-        request.planReceiptId,
-        boundPrincipal,
-        now
-      )
-      rawInvocation = {
-        invocationId,
-        command: 'docflow-edit',
-        args: {
-          fileId: request.document.reference.fileId,
-          baseHash: request.baseHash
-        },
-        dataFiles: [{
-          role: 'edit-plan',
-          encoding: 'managed',
-          token: state.planToken
-        }]
       }
       break
     }
@@ -939,7 +863,7 @@ async function prepareInvocation(
       ...(reservation ? { reservation } : {})
     }
   }
-  releaseManagedStateReservation(reservation, probeStates, planStates)
+  releaseManagedStateReservation(reservation, probeStates)
   return {
         success: false,
         receipt: contractViolation(
@@ -1280,10 +1204,9 @@ function requestBaseHash(request: SanitizedNativeDocumentRequest): string | unde
 function normalizeSuccessReceipt(
   base: ReceiptBase,
   input: FeatureInput,
-  request: SanitizedNativeDocumentRequest,
+  request: NonHashBoundRequest,
   receipt: Extract<DocflowNativeDocumentReceipt, { outcome: 'succeeded' }>,
   probeStates: ManagedStateStore<ProbeState>,
-  planStates: ManagedStateStore<PlanState>,
   boundPrincipal: string,
   reservation: ManagedStateReservation | undefined,
   now: number
@@ -1387,26 +1310,7 @@ function normalizeSuccessReceipt(
       if (baseHash !== request.baseHash) {
         return postDispatchProofGap(base, 'CLI output baseDocumentHash does not match request.baseHash.')
       }
-      const plan = receipt.managedDataFiles.filter((item) => item.role === 'edit-plan')
-      if (plan.length !== 1) {
-        return postDispatchProofGap(base, 'DocFlow receipt requires one managedDataFiles[role=edit-plan].')
-      }
-      const planReceiptId = opaqueReceiptId('plan', base.invocationId, plan[0]!.token)
-      if (reservation?.kind !== 'plan' || !commitManagedState(
-        planStates,
-        reservation.token,
-        planReceiptId,
-        Object.freeze({
-          providerInstanceRef: request.document.reference.providerInstanceRef,
-          fileId: request.document.reference.fileId,
-          baseHash: request.baseHash,
-          planToken: plan[0]!.token
-        }),
-        boundPrincipal,
-        now
-      )) {
-        return contractViolation(base, 'The plan receipt state reservation is unavailable.')
-      }
+      const planReceiptId = opaqueReceiptId('plan', base.invocationId, request.baseHash)
       return successReceipt(base, {
         kind: 'plan',
         document: request.document,
@@ -1452,32 +1356,6 @@ function normalizeSuccessReceipt(
         kind: 'comment',
         document: request.document,
         comment: comment.data
-      })
-    }
-    case 'edit':
-    case 'update':
-    case 'insert':
-    case 'undo':
-    case 'redo':
-    case 'comment-create':
-    case 'comment-reply':
-    case 'comment-solve':
-    case 'comment-reopen':
-    case 'comment-delete': {
-      const documentHash = requiredHash(base, json, 'json.documentHash')
-      if (!documentHash.success) return documentHash.receipt
-      const revisionId = requiredRevision(base, json)
-      if (!revisionId.success) return revisionId.receipt
-      const deliveryIdentity = requiredDeliveryIdentity(base, json, receipt)
-      if (!deliveryIdentity.success) return deliveryIdentity.receipt
-      if (deliveryIdentity.value !== request.document.reference.fileId) {
-        return postDispatchProofGap(base, 'CLI delivery fileId does not match the requested document.')
-      }
-      return successReceipt(base, {
-        kind: 'document',
-        document: request.document,
-        documentHash: documentHash.value,
-        revisionId: revisionId.value
       })
     }
     case 'image-download':
@@ -1669,7 +1547,7 @@ function managedStateCapacityReceipt(
   return failureReceipt(
     base,
     'provider_unavailable',
-    'The bounded native-document receipt registry is full; wait for pending plans to expire.'
+    'The bounded native-document receipt registry is full; wait for pending probes to expire.'
   )
 }
 

@@ -14,7 +14,7 @@ import {
   CONTENT_FILE_RESOURCE_KIND,
   type ContentContainerReference,
   type ContentFileReference,
-  type ContentSpaceCapabilityState,
+  type ContentSpaceAdmittedCapabilityState,
   type ContentSpaceOperation,
   type ContentSpaceResult
 } from '../contract.js'
@@ -224,30 +224,73 @@ describe('ContentSpacePanel', () => {
     )
   })
 
-  it('admits trusted development-profile operations without presenting them as production-ready', async () => {
+  it('enters an exact-root profile after provider-scoped discovery admits only list-containers', async () => {
+    const listContainers = vi.fn(async () => ok({
+      providerInstanceRef: providerOne,
+      items: [{
+        reference: rootReference,
+        scope: 'personal' as const,
+        label: 'Development library'
+      }]
+    }))
+    const rootCapabilities: readonly ContentSpaceAdmittedCapabilityState[] = [
+      {
+        operation: 'observe-entry',
+        readiness: 'poc_only',
+        reasonCode: 'verification_profile_required',
+        admission: {
+          status: 'admitted',
+          reasonCode: 'verification_profile_admitted'
+        }
+      },
+      {
+        operation: 'list-entries',
+        readiness: 'poc_only',
+        reasonCode: 'verification_profile_required',
+        admission: {
+          status: 'admitted',
+          reasonCode: 'verification_profile_admitted'
+        }
+      }
+    ]
+    const observeEntry = vi.fn(async (reference: ContentContainerReference) => ok({
+      entry: {
+        kind: 'container' as const,
+        reference,
+        label: 'Development library'
+      },
+      capabilities: rootCapabilities
+    })) satisfies ContentSpaceCapabilityClient['observeEntry']
+    const listEntries = vi.fn(async ({ parent }) => ok({
+      parent,
+      items: []
+    })) satisfies ContentSpaceCapabilityClient['listEntries']
     const mounted = await mountPanel(panelClient({
       describeCapabilities: async () => ok({
         items: [
           {
             operation: 'list-containers',
             readiness: 'poc_only',
-            reasonCode: 'verification_profile_required'
+            reasonCode: 'verification_profile_required',
+            admission: {
+              status: 'admitted',
+              reasonCode: 'verification_profile_admitted'
+            }
           },
           {
             operation: 'list-entries',
             readiness: 'poc_only',
-            reasonCode: 'verification_profile_required'
+            reasonCode: 'verification_profile_required',
+            admission: {
+              status: 'blocked',
+              reasonCode: 'verification_profile_required'
+            }
           }
         ]
       }),
-      listContainers: async () => ok({
-        providerInstanceRef: providerOne,
-        items: [{
-          reference: rootReference,
-          scope: 'personal',
-          label: 'Development library'
-        }]
-      })
+      listContainers,
+      observeEntry,
+      listEntries
     }))
 
     await selectProvider(mounted.container, providerOne)
@@ -257,11 +300,113 @@ describe('ContentSpacePanel', () => {
       '[aria-label="Content Space Provider readiness"]'
     )
     expect(readiness?.textContent)
-      .toContain('list-containers: unavailable (verification required)')
+      .toContain('list-containers: PoC (verification profile admitted)')
     expect(readiness?.closest('details')?.open).toBe(false)
     expect(readiness?.closest('details')?.querySelector('summary')?.textContent)
-      .toContain('0 of 2 operations available')
-    expect(buttonContainingText(mounted.container, 'Development library').disabled).toBe(true)
+      .toContain('1 of 2 operations available')
+    expect(listContainers).toHaveBeenCalledOnce()
+    const library = buttonContainingText(mounted.container, 'Development library')
+    expect(library.disabled).toBe(false)
+
+    await click(library)
+
+    expect(observeEntry).toHaveBeenCalledWith(rootReference, {
+      signal: expect.any(AbortSignal)
+    })
+    expect(listEntries).toHaveBeenCalledWith({
+      parent: rootReference,
+      page: { limit: 50 }
+    }, { signal: expect.any(AbortSignal) })
+    expect(mounted.container.textContent).toContain('Current folder')
+    expect(mounted.container.querySelector('[role="alert"]')).toBeNull()
+  })
+
+  it('shows an exact-root admission failure without bypassing observation', async () => {
+    const observeEntry = vi.fn(async () => ({
+      ok: false as const,
+      error: {
+        code: 'blocked_by_contract' as const,
+        message: 'Exact root verification is required.',
+        retry: 'never' as const
+      }
+    })) satisfies ContentSpaceCapabilityClient['observeEntry']
+    const listEntries = vi.fn(panelClient().listEntries)
+    const mounted = await mountPanel(panelClient({
+      describeCapabilities: async () => ok({
+        items: [
+          {
+            operation: 'list-containers',
+            readiness: 'poc_only',
+            reasonCode: 'verification_profile_required',
+            admission: {
+              status: 'admitted',
+              reasonCode: 'verification_profile_admitted'
+            }
+          },
+          {
+            operation: 'list-entries',
+            readiness: 'poc_only',
+            reasonCode: 'verification_profile_required',
+            admission: {
+              status: 'blocked',
+              reasonCode: 'verification_profile_required'
+            }
+          }
+        ]
+      }),
+      listContainers: async () => ok({
+        providerInstanceRef: providerOne,
+        items: [{
+          reference: rootReference,
+          scope: 'personal' as const,
+          label: 'Development library'
+        }]
+      }),
+      observeEntry,
+      listEntries
+    }))
+
+    await selectProvider(mounted.container, providerOne)
+    await click(buttonContainingText(mounted.container, 'Development library'))
+
+    expect(observeEntry).toHaveBeenCalledWith(rootReference, {
+      signal: expect.any(AbortSignal)
+    })
+    expect(listEntries).not.toHaveBeenCalled()
+    expect(mounted.container.querySelector('[role="alert"]')?.textContent)
+      .toContain('Exact root verification is required.')
+  })
+
+  it('does not list containers when PoC evidence has no current admission', async () => {
+    const listContainers = vi.fn(panelClient().listContainers)
+    const mounted = await mountPanel(panelClient({
+      describeCapabilities: async () => ok({
+        items: [{
+          operation: 'list-containers',
+          readiness: 'poc_only',
+          reasonCode: 'verification_profile_required',
+          admission: {
+            status: 'blocked',
+            reasonCode: 'verification_profile_required'
+          }
+        }]
+      }),
+      listContainers
+    }))
+
+    await selectProvider(mounted.container, providerOne)
+    await settleReact()
+
+    const readiness = mounted.container.querySelector(
+      '[aria-label="Content Space Provider readiness"]'
+    )
+    expect(readiness?.textContent)
+      .toContain('list-containers: PoC unavailable (verification required)')
+    expect(readiness?.closest('details')?.querySelector('summary')?.textContent)
+      .toContain('0 of 1 operations available')
+    expect(mounted.container.textContent)
+      .toContain('This Provider cannot list Content Space containers yet.')
+    expect(listContainers).not.toHaveBeenCalled()
   })
 
   it('discovers and gates the Provider before observing an initial resource', async () => {
@@ -904,11 +1049,15 @@ function fileTransfers(): DomainRendererFileTransferHost & Readonly<{
 
 function readyCapabilities(
   ...operations: readonly ContentSpaceOperation[]
-): readonly ContentSpaceCapabilityState[] {
+): readonly ContentSpaceAdmittedCapabilityState[] {
   return operations.map((operation) => Object.freeze({
     operation,
     readiness: 'production_ready' as const,
-    reasonCode: 'available' as const
+    reasonCode: 'available' as const,
+    admission: Object.freeze({
+      status: 'admitted' as const,
+      reasonCode: 'production_ready' as const
+    })
   }))
 }
 

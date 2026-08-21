@@ -56,17 +56,24 @@ The package must not:
 - bypass the Capability Broker, Host Principal, Provider Connection, resource
   grants, file-transfer ports, or durable audit policy.
 
-Per-operation readiness, capability authorization, effect classification,
-resource targeting, and write orchestration belong exclusively to the
-provider-neutral Content Space Broker/core. This package defines no parallel
-policy, proposal, or apply layer; it accepts only an already-admitted typed
-Provider request and returns typed, bounded delivery. A resource grant is
-necessary but never sufficient: dispatch additionally requires exact
-`production_ready` / `available`, or a generic trusted Content Space
-verification policy that matches every required fact for one `poc_only`
-invocation. Such a policy lives outside this runtime and can never admit
-`blocked_by_contract`. Once readiness/admission and the resource checks pass, a
-resource-scoped write needs no second confirmation.
+Per-operation readiness, invocation admission, capability authorization, effect
+classification, resource targeting, and write orchestration belong exclusively
+to the provider-neutral Content Space Broker/core. This package defines no
+parallel policy, proposal, or apply layer; it accepts only an already-admitted
+typed Provider request and returns typed, bounded delivery. Readiness remains
+descriptive (`poc_only`, `blocked_by_contract`, or `production_ready`) even when
+one exact verification invocation is admitted. The trusted static profile,
+Broker authority, enforced transfer maxima, and any required v2 Provider Binding
+Attestation are evaluated outside this runtime; `blocked_by_contract` is never
+admissible.
+
+For supplier-backed dispatch, the Provider passes the exact expected token-free
+binding attestation through the Connector-owned runtime context. The Connector
+reauthenticates the actual current session and recomputes the opaque external
+subject and Connection revision immediately before the private subprocess is
+started. This runtime cannot mint, select, widen, persist, or waive that
+attestation. Once admission and exact resource checks pass, a resource-scoped
+write needs no second confirmation.
 
 Resource targets and grants are validated by the Content core feature before
 adapter dispatch. The Connector runner does not accept or synthesize Broker

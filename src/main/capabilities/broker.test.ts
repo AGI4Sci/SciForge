@@ -636,6 +636,35 @@ describe('CapabilityBroker', () => {
       .toThrow(expect.objectContaining({ code: 'resource_ref_retired' }))
   })
 
+  it('projects an authorized handle to its opaque reference without observing provider state', () => {
+    const observe = vi.fn(async () => ({ state: { title: 'Paper' }, semanticRevision: '1' }))
+    const broker = new CapabilityBroker(new CapabilityRegistry())
+    const issued = broker.issueResource(agent, {
+      resourceId: 'local-handle-projection',
+      resourceKind: 'document',
+      workspaceId: agent.workspaceId,
+      audiences: ['agent'],
+      semanticRevision: '1',
+      observe
+    })
+
+    expect(broker.describeResourceHandle(agent, issued.resource)).toEqual({
+      resourceRef: issued.resourceRef,
+      resourceKind: 'document',
+      semanticRevision: '1'
+    })
+    expect(observe).not.toHaveBeenCalled()
+    expect(() => broker.describeResourceHandle(
+      { ...agent, workspaceId: 'workspace-2' },
+      issued.resource
+    )).toThrow(expect.objectContaining({ code: 'resource_scope_mismatch' }))
+    expect(() => broker.describeResourceHandle(agent, {
+      ...issued.resource,
+      token: `cap_${'f'.repeat(32)}`
+    })).toThrow(expect.objectContaining({ code: 'invalid_resource_handle' }))
+    expect(observe).not.toHaveBeenCalled()
+  })
+
   it('gives long-running handlers a Host-only live Principal reauthorization closure', async () => {
     let currentPrincipal: PrincipalSnapshot | null = principalA
     let release: (() => void) | undefined

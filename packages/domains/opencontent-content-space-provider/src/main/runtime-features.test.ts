@@ -28,8 +28,8 @@ const teamRoot = Object.freeze({
   providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
   containerId: 'team-root-guid'
 })
-const teamId = openContentTeamIdSchema.parse(19)
-const folderId = openContentFolderIdSchema.parse(2213)
+const teamId = openContentTeamIdSchema.parse(9000019)
+const folderId = openContentFolderIdSchema.parse(9002213)
 const currentIdentityId = openContentIdentityIdSchema.parse(42)
 const memberIdentityId = openContentIdentityIdSchema.parse(84)
 const ownerIdentityId = openContentIdentityIdSchema.parse(91)
@@ -182,6 +182,12 @@ function facadeFixture(
   useTeamAdministration: OpenContentContentSpaceFacade['useTeamAdministration']
 ): OpenContentContentSpaceFacade {
   return {
+    attestExternalBinding: vi.fn(async ({ principal: currentPrincipal, providerInstanceRef }) => ({
+      providerInstanceRef,
+      principal: currentPrincipal,
+      externalSubject: 'a'.repeat(64),
+      bindingRevision: 'b'.repeat(64)
+    })),
     useTeamAdministration,
     listRootFolders: vi.fn(),
     listFolderEntries: vi.fn(),

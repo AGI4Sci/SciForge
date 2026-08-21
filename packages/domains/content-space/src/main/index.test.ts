@@ -1238,7 +1238,8 @@ describe('Content Space main composition', () => {
       label: input.label,
       revision: 'revision:2'
     }))
-    const administration = administrationPortFixture({ updateSpace })
+    const createSpace = vi.fn(async () => summary)
+    const administration = administrationPortFixture({ createSpace, updateSpace })
     const bind = vi.fn(async () => Object.freeze({
       administration
     }))
@@ -1276,14 +1277,16 @@ describe('Content Space main composition', () => {
     expect(describeOperations).toHaveBeenCalledOnce()
 
     let rootRegistration: any
-    const created = await definition(
+    const createCapability = definition(
       definitions,
       CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace
-    ).handler({
+    )
+    expect(createCapability.inputSchema.safeParse({ label: 'Research Team' }).success).toBe(true)
+    expect(createCapability.inputSchema.safeParse({
       label: 'Research Team',
-      contentOwnerUserId: 'user:owner',
       idempotencyKey: 'idem_create_space_0001'
-    }, capabilityContext(undefined, 'agent', {
+    }).success).toBe(false)
+    const created = await createCapability.handler({ label: 'Research Team' }, capabilityContext(undefined, 'agent', {
       callerId: 'agent:administration',
       workspaceId: '/workspace',
       resource: {
@@ -1307,6 +1310,13 @@ describe('Content Space main composition', () => {
       resourceKind: CONTENT_CONTAINER_RESOURCE_KIND,
       workspaceId: '/workspace'
     })
+    expect(createSpace).toHaveBeenCalledWith({
+      label: 'Research Team',
+      contentOwnerUserId: principal.subject
+    })
+    expect(bind).toHaveBeenLastCalledWith(expect.objectContaining({
+      invocationId: 'invocation_content_space_main_0001'
+    }))
 
     const updateCapability = definition(
       definitions,
@@ -1315,14 +1325,17 @@ describe('Content Space main composition', () => {
     expect(updateCapability.inputSchema.safeParse({
       expectedRevision: 'revision:1',
       label: 'Renamed Team',
-      contentOwnerUserId: 'user:new-owner',
-      idempotencyKey: 'idem_update_space_owner_0001'
+      contentOwnerUserId: 'user:new-owner'
+    }).success).toBe(false)
+    expect(updateCapability.inputSchema.safeParse({
+      expectedRevision: 'revision:1',
+      label: 'Renamed Team',
+      idempotencyKey: 'idem_update_space_0001'
     }).success).toBe(false)
 
     const updated = await updateCapability.handler({
       expectedRevision: 'revision:1',
-      label: 'Renamed Team',
-      idempotencyKey: 'idem_update_space_0001'
+      label: 'Renamed Team'
     }, capabilityContext(undefined, 'agent', {
       callerId: 'agent:administration',
       workspaceId: '/workspace',
@@ -1337,10 +1350,11 @@ describe('Content Space main composition', () => {
       changed: true,
       semanticRevision: expect.any(String)
     })
-    expect(updateSpace).toHaveBeenCalledWith(expect.objectContaining({
+    expect(updateSpace).toHaveBeenCalledWith({
       root: portableRoot,
+      expectedRevision: 'revision:1',
       label: 'Renamed Team'
-    }))
+    })
     expect(bind).toHaveBeenCalledWith(expect.objectContaining({
       providerInstanceRef: PROVIDER_INSTANCE_REF,
       principal
@@ -2227,6 +2241,7 @@ function providerFixture(overrides: Partial<ContentSpaceProvider> = {}): Content
   }))
   return defineContentSpaceProvider({
     contractVersion: CONTENT_SPACE_PROVIDER_CONTRACT_VERSION,
+    attestExternalBinding: async () => undefined,
     describeCapabilities: async () => ready,
     listContainers: async ({ context }) => ({
       providerInstanceRef: context.providerInstanceRef,

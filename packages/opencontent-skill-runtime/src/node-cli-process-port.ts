@@ -6,7 +6,6 @@ import {
   mkdtemp,
   open,
   readFile,
-  readdir,
   realpath,
   rm,
   stat,
@@ -110,18 +109,8 @@ const MUTATION_COMMANDS = new Set<OpenContentCliCommand>([
   'docflow-import',
   'docflow-export',
   'docflow-create',
-  'docflow-update',
-  'docflow-insert',
-  'docflow-edit',
-  'docflow-undo',
-  'docflow-redo',
   'docflow-image-upload',
   'docflow-image-download',
-  'docflow-comment-create',
-  'docflow-comment-reply',
-  'docflow-comment-solve',
-  'docflow-comment-reopen',
-  'docflow-comment-delete'
 ])
 
 const FORBIDDEN_CALLER_PATH_KEYS = new Set([
@@ -151,17 +140,12 @@ const SCRUBBED_RESULT_PATH_KEYS = new Set([
   'templateFile'
 ])
 
-type ManagedRole = 'probe-template' | 'edit-plan'
+type ManagedRole = 'probe-template'
 type ManagedEntry = Readonly<{
   role: ManagedRole
   name: string
   mediaType: 'application/json'
   bytes: Uint8Array
-  sidecars: readonly Readonly<{
-    kind: 'docflow-plan-receipt'
-    name: string
-    bytes: Uint8Array
-  }>[]
   expiresAt: number
 }>
 
@@ -603,7 +587,6 @@ async function materializeInvocation(input: Readonly<{
     if (file.encoding === 'managed') {
       const entry = consumeManaged(input.managed, file.token, file.role, input.now())
       await writeFile(path, entry.bytes, { flag: 'wx', mode: 0o600 })
-      await materializeManagedSidecars(entry, input.invocationRoot)
     } else if (file.encoding === 'managed-stream' && file.role === 'source') {
       await materializeSource(file as SourceFile, path, input)
     } else {
@@ -616,7 +599,7 @@ async function materializeInvocation(input: Readonly<{
 
   let planOutput: string | undefined
   if (input.invocation.command === 'docflow-plan') {
-    planOutput = join(outputsRoot, 'edit-plan.json')
+    planOutput = join(outputsRoot, 'document-plan.json')
     args.planFile = planOutput
     knownPaths.push(planOutput)
   }
@@ -642,9 +625,7 @@ function normalizeDocflowArgs(command: string, args: Record<string, unknown>): v
     }))
     delete args.references
   }
-  if (command === 'docflow-comment-create') {
-    flattenDocflowCommentCreateArgs(args)
-  } else if (args.target !== undefined) {
+  if (args.target !== undefined) {
     args.target = JSON.stringify(args.target)
   }
   if (args.targets !== undefined) args.targets = JSON.stringify(args.targets)
@@ -652,39 +633,7 @@ function normalizeDocflowArgs(command: string, args: Record<string, unknown>): v
   delete args.baseHash
 
   if (command === 'docflow-image-upload') delete args.source
-  if (command === 'docflow-comment-reply') {
-    args.text = args.body
-    delete args.body
-  }
   if (command === 'docflow-comment-list' && args.status === 'open') args.status = 'normal'
-}
-
-function flattenDocflowCommentCreateArgs(args: Record<string, unknown>): void {
-  const target = asRecord(args.target)
-  args.comment = args.body
-  delete args.body
-  delete args.target
-
-  switch (target?.kind) {
-    case 'text':
-      args.targetText = target.targetText
-      if (target.occurrence !== undefined) args.occurrence = target.occurrence
-      return
-    case 'range':
-      args.startText = target.startText
-      args.endText = target.endText
-      return
-    case 'component':
-      args.targetComponent = target.targetComponent
-      if (target.occurrence !== undefined) args.occurrence = target.occurrence
-      return
-    default:
-      throw new OpenContentCliProcessError({
-        code: 'invalid-input',
-        message: 'The DocFlow comment target is invalid.',
-        dispatched: false
-      })
-  }
 }
 
 function mapInputRole(
@@ -707,9 +656,6 @@ function mapInputRole(
       return
     case 'probe-template':
       args.templateFile = path
-      return
-    case 'edit-plan':
-      args.planFile = path
       return
     default:
       throw new OpenContentCliProcessError({
@@ -993,18 +939,13 @@ async function captureOutputs(input: Readonly<{
   }
   if (input.invocation.command === 'docflow-plan') {
     if (input.materialized.planOutput === undefined || parsedRecord?.canApply !== true) {
-      throw protocolError(input.invocation.command, 'DocFlow did not produce an applicable managed plan.')
+      throw protocolError(input.invocation.command, 'DocFlow did not produce an applicable plan.')
     }
-    const descriptor = await captureManagedPath(
-      input.managed,
+    await validateDisposablePlan(
       input.invocationRoot,
       input.materialized.planOutput,
-      'edit-plan',
-      'edit-plan.json',
-      input.now(),
-      await capturePlanReceipt(input.invocationRoot)
+      input.invocation.command
     )
-    managedDataFiles.push(descriptor)
   }
 
   if (input.materialized.destination !== undefined) {
@@ -1046,8 +987,7 @@ async function captureManagedPath(
   candidate: string,
   role: ManagedRole,
   name: string,
-  now: number,
-  sidecars: ManagedEntry['sidecars'] = []
+  now: number
 ): Promise<Readonly<{ role: ManagedRole; token: string; name: string; mediaType: 'application/json' }>> {
   purgeExpired(managed, now)
   const path = await confinedFile(invocationRoot, candidate)
@@ -1074,7 +1014,6 @@ async function captureManagedPath(
     name,
     mediaType: 'application/json' as const,
     bytes,
-    sidecars: Object.freeze([...sidecars]),
     expiresAt: now + MANAGED_TOKEN_TTL_MS
   })
   const retainedBytes = managedEntryBytes(entry)
@@ -1092,92 +1031,21 @@ async function captureManagedPath(
   return Object.freeze({ role, token, name, mediaType: 'application/json' })
 }
 
-async function capturePlanReceipt(
-  invocationRoot: string
-): Promise<ManagedEntry['sidecars']> {
-  const receiptRoot = join(
-    invocationRoot,
-    'runtime',
-    'outputs',
-    'docflow-plan-receipts'
-  )
-  let names: string[]
-  try {
-    names = await readdir(receiptRoot)
-  } catch {
-    throw new OpenContentCliProcessError({
-      code: 'provider-contract-violation',
-      message: 'DocFlow did not produce its one-use preflight receipt.',
-      dispatched: true
-    })
-  }
-  const receiptNames = names.filter((name) => /^[a-f0-9]{64}\.json$/u.test(name))
-  if (receiptNames.length !== 1 || names.length !== 1) {
-    throw new OpenContentCliProcessError({
-      code: 'provider-contract-violation',
-      message: 'DocFlow produced an invalid preflight receipt set.',
-      dispatched: true
-    })
-  }
-  const name = receiptNames[0]
-  const path = await confinedFile(invocationRoot, join(receiptRoot, name))
-  const info = await stat(path)
-  if (info.size > 64 * 1024) {
-    throw new OpenContentCliProcessError({
-      code: 'provider-contract-violation',
-      message: 'The DocFlow preflight receipt exceeds its size limit.',
-      dispatched: true
-    })
-  }
-  const bytes = await readFile(path)
-  try {
-    JSON.parse(bytes.toString('utf8'))
-  } catch {
-    throw new OpenContentCliProcessError({
-      code: 'provider-contract-violation',
-      message: 'The DocFlow preflight receipt is not valid JSON.',
-      dispatched: true
-    })
-  }
-  return Object.freeze([Object.freeze({
-    kind: 'docflow-plan-receipt' as const,
-    name,
-    bytes
-  })])
-}
-
-async function materializeManagedSidecars(
-  entry: ManagedEntry,
-  invocationRoot: string
+async function validateDisposablePlan(
+  invocationRoot: string,
+  candidate: string,
+  command: OpenContentCliCommand
 ): Promise<void> {
-  if (entry.sidecars.length === 0) return
-  if (entry.role !== 'edit-plan' || entry.sidecars.length !== 1) {
-    throw new OpenContentCliProcessError({
-      code: 'invalid-input',
-      message: 'The managed DocFlow sidecar set is invalid.',
-      dispatched: false
-    })
+  const path = await confinedFile(invocationRoot, candidate)
+  const info = await stat(path)
+  if (info.size > MAX_MANAGED_JSON_BYTES) {
+    throw protocolError(command, 'The DocFlow plan exceeds its size limit.')
   }
-  const sidecar = entry.sidecars[0]
-  if (sidecar.kind !== 'docflow-plan-receipt' ||
-      !/^[a-f0-9]{64}\.json$/u.test(sidecar.name)) {
-    throw new OpenContentCliProcessError({
-      code: 'invalid-input',
-      message: 'The managed DocFlow preflight receipt is invalid.',
-      dispatched: false
-    })
+  try {
+    JSON.parse(await readFile(path, 'utf8'))
+  } catch {
+    throw protocolError(command, 'The DocFlow plan is not valid JSON.')
   }
-  const root = join(
-    invocationRoot,
-    'runtime',
-    'outputs',
-    'docflow-plan-receipts'
-  )
-  await mkdir(root, { recursive: true, mode: 0o700 })
-  await writeFile(join(root, sidecar.name), sidecar.bytes, {
-    flag: 'wx',
-    mode: 0o600
-  })
 }
 
 async function deliverOutput(
@@ -1553,8 +1421,5 @@ function clearManaged(managed: ManagedStore): void {
 }
 
 function managedEntryBytes(entry: ManagedEntry): number {
-  return entry.bytes.byteLength + entry.sidecars.reduce(
-    (total, sidecar) => total + sidecar.bytes.byteLength,
-    0
-  )
+  return entry.bytes.byteLength
 }

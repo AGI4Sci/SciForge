@@ -4,6 +4,21 @@ import * as administration from './administration-contract.js'
 import { toPortableContentContainerReference } from './contract.js'
 
 describe('Content Space administration contract', () => {
+  it('keeps the Agent create input authority- and invocation-free because Broker context supplies both', () => {
+    expect(administration.CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION).toBe('2.0.0')
+    const input = { label: 'Research Team' }
+    expect(administration.contentSpaceAgentAdministrationCreateSpaceInputSchema.parse(input))
+      .toEqual(input)
+    expect(() => administration.contentSpaceAgentAdministrationCreateSpaceInputSchema.parse({
+      ...input,
+      idempotencyKey: 'idem_create_space_0001'
+    })).toThrow()
+    expect(() => administration.contentSpaceAgentAdministrationCreateSpaceInputSchema.parse({
+      ...input,
+      contentOwnerUserId: 'caller-selected-owner'
+    })).toThrow()
+  })
+
   it('validates exact per-operation administration readiness without implicit promotion', () => {
     expect(administration.CONTENT_SPACE_ADMINISTRATION_OPERATIONS).toHaveLength(11)
     const exactStates = administration.CONTENT_SPACE_ADMINISTRATION_OPERATIONS.map((operation) => ({
@@ -136,25 +151,21 @@ describe('Content Space administration contract', () => {
 
     await expect(port.createSpace({
       label: 'New research space',
-      contentOwnerUserId: 'user-owner',
-      idempotencyKey: 'idem_space.create.1'
+      contentOwnerUserId: 'user-owner'
     })).resolves.toMatchObject({ root, label: 'New research space' })
     await expect(port.observeSpace({ root })).resolves.toMatchObject({ root })
     await expect(port.updateSpace({
       root,
       expectedRevision: 'revision-1',
-      label: 'Renamed research space',
-      idempotencyKey: 'idem_space.update.1'
+      label: 'Renamed research space'
     })).resolves.toMatchObject({ label: 'Renamed research space' })
     await expect(port.pinSpace({
       root,
-      expectedRevision: 'revision-2',
-      idempotencyKey: 'idem_space.pin.1'
+      expectedRevision: 'revision-2'
     })).resolves.toMatchObject({ pinned: true })
     await expect(port.unpinSpace({
       root,
-      expectedRevision: 'revision-3',
-      idempotencyKey: 'idem_space.unpin.1'
+      expectedRevision: 'revision-3'
     })).resolves.toMatchObject({ pinned: false })
     await expect(port.openRoot({ root })).resolves.toEqual({
       root,
@@ -162,15 +173,13 @@ describe('Content Space administration contract', () => {
     })
     expect(() => administration.contentSpaceAdministrationUpdateSpaceInputSchema.parse({
       root,
-      expectedRevision: 'revision-1',
-      idempotencyKey: 'idem_space.update.empty'
+      expectedRevision: 'revision-1'
     })).toThrow()
     expect(() => administration.contentSpaceAdministrationUpdateSpaceInputSchema.parse({
       root,
       expectedRevision: 'revision-1',
       label: 'Renamed research space',
-      contentOwnerUserId: 'user-new-owner',
-      idempotencyKey: 'idem_space.update.owner'
+      contentOwnerUserId: 'user-new-owner'
     })).toThrow()
   })
 
@@ -188,14 +197,12 @@ describe('Content Space administration contract', () => {
     await expect(port.addMember({
       root,
       contentUserId: 'user-member-b',
-      expectedRevision: 'revision-1',
-      idempotencyKey: 'idem_member.add.1'
+      expectedRevision: 'revision-1'
     })).resolves.toMatchObject({ contentUserId: 'user-member-b', role: 'internal' })
     await expect(port.removeMember({
       root,
       contentUserId: 'user-member-a',
-      expectedRevision: 'revision-2',
-      idempotencyKey: 'idem_member.remove.1'
+      expectedRevision: 'revision-2'
     })).resolves.toEqual({
       root,
       contentUserId: 'user-member-a',
@@ -206,9 +213,41 @@ describe('Content Space administration contract', () => {
       root,
       contentUserId: 'user-member-c',
       expectedRevision: 'revision-3',
-      idempotencyKey: 'idem_member.add.raw',
       providerMemberId: 'provider-member-c'
     })).toThrow()
+  })
+
+  it('rejects caller-supplied idempotency from every ordinary administration write', () => {
+    const root = toPortableContentContainerReference({
+      providerInstanceRef: 'provider-instance-a',
+      containerId: 'shared-root-a'
+    })
+    const legacyKey = { idempotencyKey: 'idem_legacy_business_payload_0001' }
+    const cases = [
+      [administration.contentSpaceAdministrationCreateSpaceInputSchema, {
+        label: 'Research Team', contentOwnerUserId: 'user-owner'
+      }],
+      [administration.contentSpaceAdministrationUpdateSpaceInputSchema, {
+        root, expectedRevision: 'revision-1', label: 'Renamed Team'
+      }],
+      [administration.contentSpaceAdministrationPinSpaceInputSchema, {
+        root, expectedRevision: 'revision-1'
+      }],
+      [administration.contentSpaceAdministrationUnpinSpaceInputSchema, {
+        root, expectedRevision: 'revision-1'
+      }],
+      [administration.contentSpaceAdministrationAddMemberInputSchema, {
+        root, contentUserId: 'user-member', expectedRevision: 'revision-1'
+      }],
+      [administration.contentSpaceAdministrationRemoveMemberInputSchema, {
+        root, contentUserId: 'user-member', expectedRevision: 'revision-1'
+      }]
+    ] as const
+
+    for (const [schema, input] of cases) {
+      expect(schema.safeParse(input).success).toBe(true)
+      expect(schema.safeParse({ ...input, ...legacyKey }).success).toBe(false)
+    }
   })
 
   it('keeps all four provider-neutral Team roles and rejects the removed member alias', () => {

@@ -28,6 +28,7 @@ import {
   toPortableContentContainerReference,
   type ContentEntryReference,
   type ContentSpaceCapabilityState,
+  type ContentSpaceExternalBindingAttestation,
   type ContentSpaceProvider,
   type ContentSpaceProviderHostPorts
 } from '../contract.js'
@@ -83,6 +84,12 @@ const principal = Object.freeze({
   assurance: 'local-selection' as const,
   deviceId: 'content-space-service-test-device',
   identityVersion: 1
+})
+const externalBinding: ContentSpaceExternalBindingAttestation = Object.freeze({
+  providerInstanceRef: PROVIDER_INSTANCE_REF,
+  principal,
+  externalSubject: 'a'.repeat(64),
+  bindingRevision: 'b'.repeat(64)
 })
 const operations = Object.freeze([
   'list-containers',
@@ -140,8 +147,7 @@ describe('ContentSpaceService', () => {
       operation: 'create-space',
       request: {
         label: 'Research Team',
-        contentOwnerUserId: 'user:owner',
-        idempotencyKey: 'idem_create_space_0001'
+        contentOwnerUserId: 'user:owner'
       }
     }, {
       ...writeCall(),
@@ -279,6 +285,55 @@ describe('ContentSpaceService', () => {
       audience: 'agent',
       reauthorizedPrincipal: { ...principal, identityVersion: 2 }
     })).rejects.toMatchObject({ detail: { code: 'blocked_by_contract' } })
+  })
+
+  it('reports Provider PoC evidence separately from exact current UI admission', async () => {
+    const now = new Date('2026-08-21T01:00:00.000Z')
+    const provider = providerFixture({
+      describeCapabilities: async () => operations.map((operation) => ({
+        operation,
+        readiness: operation === 'list-containers' ? 'poc_only' : 'blocked_by_contract',
+        reasonCode: operation === 'list-containers'
+          ? 'verification_profile_required'
+          : 'provider_contract_missing'
+      }))
+    })
+    const service = serviceFor(provider, {
+      verificationPolicy: {
+        contractVersion: CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
+        profiles: [{
+          profileId: 'fixture-ui-list-containers',
+          providerInstanceRef: PROVIDER_INSTANCE_REF,
+          principal,
+          audience: 'ui',
+          authority: {
+            kind: 'provider-instance',
+            providerInstanceRef: PROVIDER_INSTANCE_REF
+          },
+          operation: { family: 'ordinary', operation: 'list-containers' },
+          transferLimits: { maxUploadBytes: 0, maxDownloadBytes: 0 },
+          validFrom: '2026-08-21T00:00:00.000Z',
+          expiresAt: '2026-08-21T02:00:00.000Z'
+        }]
+      },
+      now: () => now
+    })
+
+    const described = await service.describeCapabilities(PROVIDER_INSTANCE_REF, {
+      ...readCall(),
+      audience: 'ui'
+    })
+
+    expect(described.items.find(({ operation }) => operation === 'list-containers'))
+      .toEqual({
+        operation: 'list-containers',
+        readiness: 'poc_only',
+        reasonCode: 'verification_profile_required',
+        admission: {
+          status: 'admitted',
+          reasonCode: 'verification_profile_admitted'
+        }
+      })
   })
 
   it('admits an exact Broker verification binding and rejects a different target', async () => {
@@ -471,8 +526,9 @@ describe('ContentSpaceService', () => {
     const described = await service.describeCapabilities(PROVIDER_INSTANCE_REF, readCall())
     for (const operation of ['upload-new', 'download', 'portal-target'] as const) {
       expect(described.items.find((state) => state.operation === operation)).toMatchObject({
-        readiness: 'blocked_by_contract',
-        reasonCode: 'platform_gate_blocked'
+        readiness: 'production_ready',
+        reasonCode: 'available',
+        admission: { status: 'blocked', reasonCode: 'platform_gate_blocked' }
       })
     }
     const openSource = vi.fn()
@@ -532,8 +588,9 @@ describe('ContentSpaceService', () => {
     const described = await service.describeCapabilities(PROVIDER_INSTANCE_REF, readCall())
     expect(described.items.find(({ operation }) => operation === 'create-folder'))
       .toMatchObject({
-        readiness: 'blocked_by_contract',
-        reasonCode: 'provider_contract_missing'
+        readiness: 'production_ready',
+        reasonCode: 'available',
+        admission: { status: 'blocked', reasonCode: 'resource_capability_missing' }
       })
     await expect(service.createFolder({ parent: ROOT, name: 'Blocked' }, writeCall()))
       .rejects.toMatchObject({ detail: { code: 'blocked_by_contract' } })
@@ -691,6 +748,130 @@ describe('ContentSpaceService', () => {
       openSource: blockedOpen
     }, writeCall())).rejects.toMatchObject({ detail: { code: 'blocked_by_contract' } })
     expect(blockedOpen).not.toHaveBeenCalled()
+  })
+
+  it('rechecks an exact external binding before opening a PoC upload source', async () => {
+    const now = new Date('2026-08-21T01:00:00.000Z')
+    const pocCapabilities = readyCapabilities.map((state) =>
+      ['upload-new', 'observe-entry'].includes(state.operation)
+        ? Object.freeze({
+            operation: state.operation,
+            readiness: 'poc_only' as const,
+            reasonCode: 'verification_profile_required' as const
+          })
+        : state
+    )
+    const profiles = [
+      {
+        profileId: 'fixture-upload-new',
+        providerInstanceRef: PROVIDER_INSTANCE_REF,
+        principal,
+        audience: 'agent' as const,
+        authority: { kind: 'content-root' as const, root: ROOT },
+        operation: { family: 'ordinary' as const, operation: 'upload-new' as const },
+        transferLimits: { maxUploadBytes: CONTENT_SPACE_LIMITS.maxUploadBytes, maxDownloadBytes: 0 },
+        externalBinding: {
+          externalSubject: externalBinding.externalSubject,
+          bindingRevision: externalBinding.bindingRevision
+        },
+        validFrom: '2026-08-21T00:00:00.000Z',
+        expiresAt: '2026-08-21T02:00:00.000Z'
+      },
+      {
+        profileId: 'fixture-upload-observation',
+        providerInstanceRef: PROVIDER_INSTANCE_REF,
+        principal,
+        audience: 'agent' as const,
+        authority: { kind: 'content-root' as const, root: ROOT },
+        operation: { family: 'ordinary' as const, operation: 'observe-entry' as const },
+        transferLimits: { maxUploadBytes: 0, maxDownloadBytes: 0 },
+        validFrom: '2026-08-21T00:00:00.000Z',
+        expiresAt: '2026-08-21T02:00:00.000Z'
+      }
+    ]
+    const openSource = vi.fn(async () => ({
+      name: 'acceptance.txt',
+      size: 1,
+      read: async () => new Uint8Array([1]),
+      close: async () => undefined
+    }))
+    const uploadNewFile = vi.fn<ContentSpaceProvider['uploadNewFile']>(async ({
+      context,
+      parent,
+      name,
+      source
+    }) => {
+      expect(context.expectedExternalBinding).toEqual(externalBinding)
+      return {
+        invocationId: context.invocationId,
+        parent,
+        name,
+        sourceSize: source.size,
+        reference: { providerInstanceRef: PROVIDER_INSTANCE_REF, fileId: 'uploaded' }
+      }
+    })
+    const attestExternalBinding = vi.fn(async () => externalBinding)
+    const provider = providerFixture({
+      attestExternalBinding,
+      describeCapabilities: async () => pocCapabilities,
+      observeEntry: async ({ reference }) => ({
+        ...observationFor(reference),
+        capabilities: pocCapabilities
+      }),
+      uploadNewFile
+    })
+    const service = serviceFor(provider, {
+      verificationPolicy: {
+        contractVersion: CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
+        profiles
+      },
+      now: () => now
+    })
+
+    await expect(service.uploadNewFile({ parent: ROOT, name: 'acceptance.txt', openSource }, {
+      ...writeCall(),
+      audience: 'agent'
+    })).resolves.toMatchObject({ sourceSize: 1 })
+    expect(attestExternalBinding).toHaveBeenCalledOnce()
+    expect(openSource).toHaveBeenCalledOnce()
+    expect(uploadNewFile).toHaveBeenCalledOnce()
+
+    const blockedOpenSource = vi.fn(async () => ({
+      name: 'blocked.txt',
+      size: 1,
+      read: async () => new Uint8Array([1]),
+      close: async () => undefined
+    }))
+    const blockedUpload = vi.fn<ContentSpaceProvider['uploadNewFile']>(async () => {
+      throw new Error('must not dispatch')
+    })
+    const wrongBinding = serviceFor(providerFixture({
+      attestExternalBinding: async () => ({
+        ...externalBinding,
+        bindingRevision: 'c'.repeat(64)
+      }),
+      describeCapabilities: async () => pocCapabilities,
+      observeEntry: async ({ reference }) => ({
+        ...observationFor(reference),
+        capabilities: pocCapabilities
+      }),
+      uploadNewFile: blockedUpload
+    }), {
+      verificationPolicy: {
+        contractVersion: CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
+        profiles
+      },
+      now: () => now
+    })
+    await expect(wrongBinding.uploadNewFile({
+      parent: ROOT,
+      name: 'blocked.txt',
+      openSource: blockedOpenSource
+    }, { ...writeCall(), audience: 'agent' })).rejects.toMatchObject({
+      detail: { code: 'blocked_by_contract' }
+    })
+    expect(blockedOpenSource).not.toHaveBeenCalled()
+    expect(blockedUpload).not.toHaveBeenCalled()
   })
 
   it('bounds Host upload-source and download-destination acquisition within the total lease', async () => {
@@ -943,8 +1124,9 @@ describe('ContentSpaceService', () => {
     expect(observation.capabilities.find(({ operation }) => operation === 'download'))
       .toEqual({
         operation: 'download',
-        readiness: 'blocked_by_contract',
-        reasonCode: 'instance_policy_blocked'
+        readiness: 'production_ready',
+        reasonCode: 'available',
+        admission: { status: 'blocked', reasonCode: 'instance_policy_blocked' }
       })
   })
 
@@ -2020,6 +2202,7 @@ function providerFixture(
 ): ContentSpaceProvider {
   const provider: ContentSpaceProvider = {
     contractVersion: CONTENT_SPACE_PROVIDER_CONTRACT_VERSION,
+    attestExternalBinding: async () => undefined,
     describeCapabilities: async () => readyCapabilities,
     listContainers: async ({ context }) => ({
       providerInstanceRef: context.providerInstanceRef,

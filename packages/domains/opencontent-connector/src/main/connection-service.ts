@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 import { z } from 'zod'
 
@@ -16,8 +16,10 @@ import {
 
 import {
   OpenContentConnectorError,
+  openContentExternalBindingAttestationSchema,
   openContentConnectionStatusSchema,
-  type OpenContentConnectionStatus
+  type OpenContentConnectionStatus,
+  type OpenContentExternalBindingAttestation
 } from '../contract.js'
 import type { OpenContentClient } from './opencontent-client.js'
 
@@ -89,10 +91,17 @@ export type OpenContentConnectionService = Readonly<{
     signal?: AbortSignal
     assertPrincipalCurrent(): void | Promise<void>
   }>): Promise<OpenContentConnectionStatus>
+  attestExternalBinding(input: Readonly<{
+    principal: PrincipalSnapshot
+    providerInstanceRef: string
+    assertPrincipalCurrent(): void | Promise<void>
+    signal?: AbortSignal
+  }>): Promise<OpenContentExternalBindingAttestation>
   useCurrentToken<T>(
     input: Readonly<{
       principal: PrincipalSnapshot
       providerInstanceRef: string
+      expectedBindingAttestation?: OpenContentExternalBindingAttestation
       assertPrincipalCurrent(): void | Promise<void>
       signal?: AbortSignal
     }>,
@@ -102,12 +111,14 @@ export type OpenContentConnectionService = Readonly<{
     input: Readonly<{
       principal: PrincipalSnapshot
       providerInstanceRef: string
+      expectedBindingAttestation?: OpenContentExternalBindingAttestation
       assertPrincipalCurrent(): void | Promise<void>
       signal?: AbortSignal
     }>,
     operation: (session: Readonly<{
       token: string
       externalIdentityId: number
+      bindingAttestation: OpenContentExternalBindingAttestation
     }>) => T | Promise<T>
   ): Promise<T>
   unbind(input: Readonly<{
@@ -347,9 +358,32 @@ export function createOpenContentConnectionService(options: Readonly<{
           })
           await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
           if (!valid) throw reauthenticationRequired()
+          const observedAccount = await options.client.observeCurrentExternalAccount({
+            token,
+            signal: input.signal,
+            assertPrincipalCurrent: input.assertPrincipalCurrent
+          })
+          await assertOpenContentPrincipalCurrent(input.assertPrincipalCurrent)
+          if (!sameExternalAccount(connection.externalAccount, observedAccount)) {
+            throw reauthenticationRequired()
+          }
+          const bindingAttestation = createExternalBindingAttestation({
+            providerInstanceRef,
+            principal: input.principal,
+            connectionId: connection.connectionId,
+            externalAccount: observedAccount
+          })
+          if (
+            input.expectedBindingAttestation !== undefined &&
+            !sameExternalBindingAttestation(
+              input.expectedBindingAttestation,
+              bindingAttestation
+            )
+          ) throw bindingAttestationMismatch()
           return operation(Object.freeze({
             token,
-            externalIdentityId: connection.externalAccount.identityId
+            externalIdentityId: observedAccount.identityId,
+            bindingAttestation
           }))
         })
       })
@@ -380,8 +414,13 @@ export function createOpenContentConnectionService(options: Readonly<{
       return operation(token)
     })
 
+  const attestExternalBinding: OpenContentConnectionService['attestExternalBinding'] = (
+    input
+  ) => useCurrentSession(input, ({ bindingAttestation }) => bindingAttestation)
+
   return Object.freeze({
     status,
+    attestExternalBinding,
     useCurrentToken,
     useCurrentSession,
     unbind: (input) => serialize(async () => {
@@ -640,6 +679,70 @@ function stablePrincipal(principal: PrincipalSnapshot): ConnectionRecord['princi
   })
 }
 
+function sameExternalAccount(
+  stored: ConnectionRecord['externalAccount'],
+  observed: Readonly<{
+    id: string
+    identityId: number
+    account: string
+    name: string
+  }>
+): boolean {
+  return stored.id === observed.id &&
+    stored.identityId === observed.identityId &&
+    stored.account === observed.account &&
+    stored.name === observed.name
+}
+
+const EXTERNAL_SUBJECT_DIGEST_DOMAIN =
+  'sciforge.opencontent.external-binding-subject.v1' as const
+const BINDING_REVISION_DIGEST_DOMAIN =
+  'sciforge.opencontent.external-binding-revision.v1' as const
+
+function createExternalBindingAttestation(input: Readonly<{
+  providerInstanceRef: string
+  principal: PrincipalSnapshot
+  connectionId: string
+  externalAccount: Readonly<{ id: string; identityId: number }>
+}>): OpenContentExternalBindingAttestation {
+  const externalSubject = digestBindingParts([
+    EXTERNAL_SUBJECT_DIGEST_DOMAIN,
+    input.providerInstanceRef,
+    input.externalAccount.id,
+    String(input.externalAccount.identityId)
+  ])
+  return Object.freeze(openContentExternalBindingAttestationSchema.parse({
+    providerInstanceRef: input.providerInstanceRef,
+    principal: input.principal,
+    externalSubject,
+    bindingRevision: digestBindingParts([
+      BINDING_REVISION_DIGEST_DOMAIN,
+      input.connectionId,
+      externalSubject
+    ])
+  }))
+}
+
+function digestBindingParts(parts: readonly string[]): string {
+  return createHash('sha256').update(JSON.stringify(parts), 'utf8').digest('hex')
+}
+
+function sameExternalBindingAttestation(
+  rawExpected: OpenContentExternalBindingAttestation,
+  actual: OpenContentExternalBindingAttestation
+): boolean {
+  const expected = openContentExternalBindingAttestationSchema.safeParse(rawExpected)
+  if (!expected.success) return false
+  return expected.data.providerInstanceRef === actual.providerInstanceRef &&
+    expected.data.externalSubject === actual.externalSubject &&
+    expected.data.bindingRevision === actual.bindingRevision &&
+    expected.data.principal.authority === actual.principal.authority &&
+    expected.data.principal.subject === actual.principal.subject &&
+    expected.data.principal.assurance === actual.principal.assurance &&
+    expected.data.principal.deviceId === actual.principal.deviceId &&
+    expected.data.principal.identityVersion === actual.principal.identityVersion
+}
+
 /**
  * Converts the Host-owned lease assertion into the Connector's bounded error
  * vocabulary without retaining or exposing Host identity diagnostics.
@@ -672,6 +775,13 @@ function reauthenticationRequired(): OpenContentConnectorError {
   return new OpenContentConnectorError(
     'reauthentication_required',
     'The OpenContent connection must be authenticated again.'
+  )
+}
+
+function bindingAttestationMismatch(): OpenContentConnectorError {
+  return new OpenContentConnectorError(
+    'unauthorized',
+    'The expected OpenContent external binding is no longer current.'
   )
 }
 

@@ -21,8 +21,193 @@ const principal = Object.freeze({
   identityVersion: 1
 })
 const assertPrincipalCurrent = () => undefined
+const externalBinding = Object.freeze({
+  providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+  principal,
+  externalSubject: 'a'.repeat(64),
+  bindingRevision: 'b'.repeat(64)
+})
 
 describe('OpenContent Content Space Provider', () => {
+  it('maps the exact Provider Instance and complete Principal through facade v3 attestation', async () => {
+    const attestation = Object.freeze({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      principal,
+      externalSubject: 'a'.repeat(64),
+      bindingRevision: 'b'.repeat(64)
+    })
+    const attestExternalBinding = vi.fn(async () => attestation)
+    const provider = createOpenContentContentSpaceProvider({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: facadeFixture({ attestExternalBinding })
+    })
+    const context = {
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      deadlineAt: new Date(Date.now() + 10_000).toISOString(),
+      signal: new AbortController().signal,
+      assertPrincipalCurrent
+    }
+
+    await expect(provider.attestExternalBinding(context)).resolves.toEqual(attestation)
+    expect(attestExternalBinding).toHaveBeenCalledWith({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      signal: context.signal,
+      assertPrincipalCurrent
+    })
+  })
+
+  it.each([
+    ['another Provider Instance', {
+      providerInstanceRef: 'opencontent-other-instance',
+      principal,
+      externalSubject: 'a'.repeat(64),
+      bindingRevision: 'b'.repeat(64)
+    }],
+    ['a different Principal lease', {
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      principal: { ...principal, identityVersion: principal.identityVersion + 1 },
+      externalSubject: 'a'.repeat(64),
+      bindingRevision: 'b'.repeat(64)
+    }],
+    ['a malformed attestation', {
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      principal,
+      externalSubject: 'not-a-digest',
+      bindingRevision: 'b'.repeat(64),
+      unexpected: true
+    }]
+  ])('fails closed when facade v3 returns %s', async (_label, rawAttestation) => {
+    const attestExternalBinding = vi.fn(async () => rawAttestation) as unknown as
+      OpenContentContentSpaceFacade['attestExternalBinding']
+    const provider = createOpenContentContentSpaceProvider({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: facadeFixture({ attestExternalBinding })
+    })
+
+    await expect(provider.attestExternalBinding({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      deadlineAt: new Date(Date.now() + 10_000).toISOString(),
+      signal: new AbortController().signal,
+      assertPrincipalCurrent
+    })).rejects.toMatchObject({
+      detail: { code: 'provider_contract_violation', retry: 'never' }
+    })
+  })
+
+  it('forwards one exact Content Space binding expectation to every ordinary facade call', async () => {
+    const listRootFolders = vi.fn<OpenContentContentSpaceFacade['listRootFolders']>()
+      .mockResolvedValue({
+        roots: [{
+          source: 'personal-root',
+          folderGuid: 'ordinary-root-guid',
+          label: 'Personal library'
+        }]
+      })
+    const listFolderEntries = vi.fn<OpenContentContentSpaceFacade['listFolderEntries']>()
+      .mockResolvedValue({ parentFolderGuid: 'ordinary-root-guid', entries: [] })
+    const observeEntry = vi.fn<OpenContentContentSpaceFacade['observeEntry']>()
+      .mockResolvedValue({
+        kind: 'container',
+        folderGuid: 'ordinary-root-guid',
+        label: 'Personal library'
+      })
+    const createFolder = vi.fn<OpenContentContentSpaceFacade['createFolder']>()
+      .mockResolvedValue({ folderGuid: 'created-folder-guid' })
+    const uploadNewFile = vi.fn<OpenContentContentSpaceFacade['uploadNewFile']>()
+      .mockResolvedValue({ fileGuid: 'uploaded-file-guid' })
+    const downloadFile = vi.fn<OpenContentContentSpaceFacade['downloadFile']>()
+      .mockResolvedValue({ bytesWritten: 0 })
+    const provider = createOpenContentContentSpaceProvider({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: facadeFixture({
+        listRootFolders,
+        listFolderEntries,
+        observeEntry,
+        createFolder,
+        uploadNewFile,
+        downloadFile
+      })
+    })
+    const signal = new AbortController().signal
+    const context = {
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      expectedExternalBinding: externalBinding,
+      invocationId: 'invocation_binding_propagation_0001',
+      deadlineAt: new Date(Date.now() + 10_000).toISOString(),
+      signal,
+      assertPrincipalCurrent
+    }
+    const root = {
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      containerId: 'ordinary-root-guid'
+    }
+
+    await provider.listContainers({ context, page: { limit: 20 } })
+    await provider.listEntries({ context, parent: root, page: { limit: 20 } })
+    await provider.observeEntry({ context, reference: root })
+    await provider.createFolder({ context, parent: root, name: 'Experiment' })
+    await provider.uploadNewFile({
+      context,
+      parent: root,
+      name: 'result.txt',
+      source: { name: 'result.txt', size: 0, read: async () => new Uint8Array() }
+    })
+    await provider.downloadFile({
+      context,
+      reference: {
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+        fileId: 'uploaded-file-guid'
+      },
+      destination: { write: async () => undefined }
+    })
+
+    for (const facadeCall of [
+      listRootFolders,
+      listFolderEntries,
+      observeEntry,
+      createFolder,
+      uploadNewFile,
+      downloadFile
+    ]) {
+      expect(facadeCall).toHaveBeenCalledWith(expect.objectContaining({
+        principal,
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+        expectedBindingAttestation: externalBinding,
+        assertPrincipalCurrent
+      }))
+    }
+  })
+
+  it('keeps an ordinary safe read usable without inventing a binding expectation', async () => {
+    const listFolderEntries = vi.fn<OpenContentContentSpaceFacade['listFolderEntries']>()
+      .mockResolvedValue({ parentFolderGuid: 'ordinary-root-guid', entries: [] })
+    const provider = createOpenContentContentSpaceProvider({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: facadeFixture({ listFolderEntries })
+    })
+
+    await expect(provider.listEntries({
+      context: {
+        principal,
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+        deadlineAt: new Date(Date.now() + 10_000).toISOString(),
+        signal: new AbortController().signal,
+        assertPrincipalCurrent
+      },
+      parent: {
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+        containerId: 'ordinary-root-guid'
+      },
+      page: { limit: 20 }
+    })).resolves.toMatchObject({ items: [] })
+    expect(listFolderEntries.mock.calls[0]?.[0])
+      .not.toHaveProperty('expectedBindingAttestation')
+  })
+
   it('declares unverified administration operations PoC-only and Project provisioning blocked', async () => {
     const useTeamAdministration = vi.fn(async () => {
       throw new Error('Administration readiness must not open a remote session.')
@@ -782,6 +967,12 @@ function facadeFixture(
       throw new Error('Team administration is outside this provider test.')
     }
   return {
+    attestExternalBinding: async (input) => Object.freeze({
+      providerInstanceRef: input.providerInstanceRef,
+      principal: input.principal,
+      externalSubject: 'a'.repeat(64),
+      bindingRevision: 'b'.repeat(64)
+    }),
     useTeamAdministration,
     listRootFolders: vi.fn(),
     listFolderEntries: vi.fn(),

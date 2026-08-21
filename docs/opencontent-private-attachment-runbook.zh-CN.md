@@ -23,10 +23,14 @@
 | Project Content Directory provisioning | `provision-project` 为 blocked；仅保留 dormant provider-neutral port，无普通 Agent 入口 | 同左 |
 | native-document | 不注册 | 20 项候选：10 项 PoC；含 `edit` 在内的 10 项 hash-bound mutation 阻断 |
 | extended operations | Team 治理 2 项 PoC；其余 52 项因缺附件阻断 | 53 项 PoC；`updateFileVersion` 阻断 |
-| Artifact Reference | `observeImmutableVersion` 阻断 | `observeImmutableVersion` 阻断 |
+| `ArtifactReference` | `observeImmutableVersion` 阻断 | `observeImmutableVersion` 阻断 |
 | Team 删除 | 不存在 | 不存在 |
 
-安装附件不会自动安装 PoC 验证策略。PoC 操作只有在经过单独评审的 Content Space trusted verification policy 精确匹配 Provider Instance、完整 Host Principal snapshot（含 assurance）、authority（Provider Instance 或个人/团队 content root）、operation、audience、upload/download 限额和最长 24 小时的有效窗口时，才能通过正式能力链执行。Host assurance 不是外部 OpenContent 账号类别；Connector 尚未提供经过证明的外部账号 subject 与 opaque binding revision，因此当前策略不能据此放行 mutation 或 Administration。调用参数、Renderer、Agent、prompt、Task、普通环境变量/配置、文件类型、附件存在或相邻操作成功都不能启用或扩大该策略；`blocked_by_contract` 永远不能被策略放行。
+安装附件不会自动安装 PoC 验证策略。Provider 声明的 readiness 只描述逐操作证据；本次 invocation admission 另行核对当前 Principal、Broker authority、audience、platform、transfer limit 和静态 verification profile。即使一次 PoC 调用获准，其 readiness 仍是 `poc_only`，不会变成 `production_ready`。
+
+PoC 操作只有在经过单独评审的静态 profile 精确匹配 Provider Instance、完整 Host Principal snapshot（含 assurance）、authority（Provider Instance 或个人/团队 content root）、operation、audience、可执行的 upload/download 最大字节数和最长 24 小时的有效窗口时，才能通过正式能力链执行。Provider-scoped 操作、mutation、Administration 或非零 transfer 还必须匹配 v2 Provider Binding Attestation：精确 Provider Instance 与 Principal，以及不暴露原始账号标识的 opaque external subject 和 opaque binding revision。Content Space 先通过 pinned Provider 取得并匹配证明；每次业务 dispatch 前，Provider 再把精确期望传给 Connector，由 Connector 对真实当前 session 重新认证、重新计算并精确比较。解绑、重绑、凭据替换、外部账号变化或 revision 漂移都会在业务调用前 fail closed。
+
+调用参数、Renderer、Agent、prompt、Task、普通环境变量/配置、文件类型、附件存在或相邻操作成功都不能启用或扩大 profile；`blocked_by_contract` 永远不能被 profile 放行。Host assurance 不是外部 OpenContent 账号类别，binding attestation 也不是 credential 或 portable authority。
 
 ## 3. 安装前准备
 
@@ -136,7 +140,7 @@ start electron app
 附件只提供 Runtime 资产，不包含任何成员的 Token、API Key、Cookie 或登录状态。每位成员必须使用自己的 OpenContent 账号完成连接。
 
 1. 打开 SciForge。
-2. 通过应用内 OpenContent 连接流程配置自己的站点与账号。
+2. 通过应用内 OpenContent 连接流程配置自己的账号；Provider Instance 对应的站点由 Connector 的可信静态配置固定，不接受调用方 endpoint。
 3. 确认 Provider Instance `opencontent-edoc2-demo` 可发现。
 4. 若提示重新认证，先完成认证，再执行能力发现或文件操作。
 
@@ -146,10 +150,10 @@ Connector 内置的 `edoc2-test1-verification` 只是把测试 Provider Instance
 
 ## 7. 安装后的静态与发现验收
 
-普通团队成员安装 overlay 后，只验证组成和 readiness，不绕过准入执行 Provider 操作：
+普通团队成员安装 overlay 后，只验证 composition、声明的 readiness 与当前 admission，不绕过准入执行 Provider 操作：
 
 1. 确认 Provider Instance `opencontent-edoc2-demo` 可发现；
-2. 读取 Content Space capability description；
+2. 读取 Content Space capability description，分别核对声明的 readiness 与本次 admission；
 3. 核对普通文件 6 项和 Team Administration 10 项均为
    `poc_only / verification_profile_required`；
 4. 已安装附件时，核对 native-document 共 20 项，其中 10 项 PoC、含 `edit` 在内
@@ -158,7 +162,7 @@ Connector 内置的 `edoc2-test1-verification` 只是把测试 Provider Instance
 5. 核对 `observeImmutableVersion` 阻断、无 `ArtifactReference`；
 6. 核对不存在 Team 删除和 `content-space.agent-provision-project` 能力。
 
-默认 composition 没有 active verification profile，因此对 PoC 操作返回 unavailable 是预期结果。不要通过修改请求、Renderer 状态、环境变量、配置文件或 readiness 文本尝试启用它们。
+默认 composition 没有 active verification profile，因此 PoC readiness 保持可见而 admission 为 blocked 是预期结果。不要通过修改请求、Renderer 状态、环境变量、配置文件或 readiness 文本尝试启用它们。
 
 ## 8. 受控 packaged 真实验收
 
@@ -169,10 +173,15 @@ Connector 内置的 `edoc2-test1-verification` 只是把测试 Provider Instance
 - 最小权限的明确外部账号类别，以及权限/撤权负向测试账号；
 - 唯一命名、可清理或明确保留的测试资源；
 - 经评审并由可信 composition 安装的精确 verification policy；
+- 对 Provider-scoped、mutation、Administration 或非零 transfer，profile 中包含与当前 Connection 精确匹配的 opaque Provider Binding Attestation；
 - 当前 packaged SciForge 应用和已验证 overlay；
 - 写入限额、有效期、停止条件和凭据外的证据保存位置。
 
-验收必须只走 packaged 应用的唯一 Broker → Content Space → Provider → Connector 路径。不得用直连 API/CLI、供应商脚本、source-only Electron、mock 或临时 `production_ready` 值代替。每个操作单独记录 build/commit、Provider Instance/tenant、完整当前 Principal snapshot、外部账号类别、authority/root、operation、audience、策略身份与有效期、请求摘要、invocation/receipt、时间、结果和 postcondition。一个操作或一个 root 的成功不能批量晋升相邻操作或另一账号类别。
+验收必须只走 packaged 应用的唯一 Renderer/Agent → Broker → Content Space → pinned Provider → Connector 路径；native/extended 操作继续从 Connector 进入 public Runtime，再使用已验证 private overlay，不能形成第二条 Agent/鉴权路径。不得用直连 API/CLI、供应商脚本、source-only Electron、mock 或临时 `production_ready` 值代替。
+
+每个操作单独记录 build/commit、Provider Instance、完整当前 Principal snapshot、authority/root、operation、audience、profile 身份与有效期、实际 enforce 的 transfer limits、需要时的 opaque binding attestation、请求摘要、invocation/receipt、时间、结果和 postcondition。证据不得保存 credential、原始外部账号标识或敏感 root 标识。还必须证明 Connector 在业务 dispatch 前重新核对了同一 binding；一次成功只证明该 invocation，不会改写 readiness，也不能批量晋升相邻操作、另一 root 或另一 binding。
+
+Agent 创建共享 Content Container（OpenContent Team）时，输入只能包含 label 和 idempotency key，不能提交 owner。Broker 的 current Principal 注入 owner，Provider 必须证明它映射到当前认证的 OpenContent session；不能把 Agent、自填成员、Coordinator 或任意 Provider 用户当成 owner。这条普通 Administration 路径也不是 Project Content Directory provisioning。
 
 普通文件闭环还必须满足：上传只创建新文件且使用 Workspace 相对路径；下载只写入不存在的新目标；collision 必须 fail closed；取消、超时或 `outcome_unknown` 后不得盲目重试外部写入，必须先观察 Provider 状态。权限验收必须包含错误 Principal/root、撤权和最小权限行为。
 
@@ -189,9 +198,9 @@ Connector 内置的 `edoc2-test1-verification` 只是把测试 Provider Instance
 
 本地 probe、plan receipt、pre-read、写前复读、one-time token 或 post-write digest 都不是原子 CAS。供应商离线文档一处写 `UPGRADE`、另一处写 `UPDATE`；必须书面冻结唯一 wire enum、endpoint、请求字段、是否创建新版本、返回版本 identity 和 conflict error，随后由 SciForge pin 住并拒绝另一拼写，不能增加 alias 或“先读后写”兼容路径。
 
-### 8.2 Artifact Reference
+### 8.2 `ArtifactReference`
 
-只有同时证明稳定 immutable version identity、接受该 identity 的 version-specific retrieval、提交新版本后旧字节仍可逐字节取回、明确 retention/deletion 合同、稳定 missing/retired 行为，并在 packaged 正式路径完成 exact digest 校验后，才能考虑开启 `observeImmutableVersion`。file ID、latest version number、digest 或本地副本都不足以生成 `ArtifactReference`；Artifact Reference 本身也不携带权限，解析时仍使用当前 Principal 的 Provider connection 和当前授权。
+只有同时证明稳定 immutable version identity、接受该 identity 的 version-specific retrieval、提交新版本后旧字节仍可逐字节取回、明确 retention/deletion 合同、稳定 missing/retired 行为，并在 packaged 正式路径完成 exact digest 校验后，才能考虑开启 `observeImmutableVersion`。file ID、latest version number、digest 或本地副本都不足以生成 `ArtifactReference`；`ArtifactReference` 本身也不携带权限，解析时仍使用当前 Principal 的 Provider Connection 和当前授权。
 
 完整逐操作晋升证据见 [OpenContent Skill 能力矩阵](./opencontent-skill-capability-matrix.md#evidence-required-for-promotion)。
 
@@ -250,7 +259,11 @@ npm run verify:internal-runtimes
 
 ### 9.9 PoC 操作返回 unavailable
 
-默认 composition 没有 active verification profile，这是预期的 fail-closed 行为。普通用户不能通过设置环境变量、修改 capability 请求或重装附件来开启 PoC。只有验收负责人可以部署经过评审且精确限定的 trusted verification policy；如果该条件不具备，停止真实调用，仅完成静态与发现验收。
+默认 composition 没有 active verification profile，这是预期的 fail-closed 行为。确认 capability 输出中 readiness 仍为 `poc_only`、admission 为 blocked；不要把 blocked admission 误写成 `blocked_by_contract`。普通用户不能通过设置环境变量、修改 capability 请求或重装附件来开启 PoC。只有验收负责人可以部署经过评审且精确限定的 trusted verification policy；如果该条件不具备，停止真实调用，仅完成静态与发现验收。
+
+### 9.10 调用在 admission 后报告 binding 不再匹配
+
+这通常表示 Connection 在准入与业务 dispatch 之间发生解绑、重绑、凭据替换、外部账号变化或 revision 漂移。不要复用旧 invocation、旧 profile 或旧 Broker resource，也不要重试外部写入。先由当前 Principal 重新完成连接验收，再生成并评审新的短时静态 profile；原始账号标识和 credential 不得进入 profile 或故障记录。
 
 ## 10. 更新附件版本
 
@@ -293,7 +306,9 @@ OpenContent Connector、Provider、SciForge 自研 Runtime、SDK 文档和能力
 - [ ] `npm run verify:internal-runtimes` 通过，且没有执行 overlay 自带脚本。
 - [ ] `npm run dev` 正常启动 Electron。
 - [ ] 已使用个人账号配置 OpenContent 连接。
-- [ ] 静态/发现验收确认 0 项 production/live、普通/Admin 为 PoC、native 10 PoC + 10 blocked、extended 53 PoC + 1 blocked、无 Team 删除。
+- [ ] 静态/发现验收分别显示 readiness 与 admission，并确认 0 项 production/live、普通/Admin 为 PoC、native 10 PoC + 10 blocked、extended 53 PoC + 1 blocked、无 Team 删除。
+- [ ] 受控 mutation/Admin/non-zero transfer 使用 v2 opaque binding attestation，且 Connector 在业务 dispatch 前重新核对；证据中没有原始账号、credential 或敏感 root。
+- [ ] Agent 创建共享 root 的输入不含 owner；owner 仅由 Broker current Principal 注入并由 Provider 对当前 session 验证。
 - [ ] `edit`、`updateFileVersion`、immutable observation 和 `ArtifactReference` 均保持阻断。
 - [ ] 不存在通用 Agent Project provisioning 入口；provider-neutral port 仅 dormant。
 - [ ] 未将私有附件、private lock 记录或内部构建产物加入公开提交。
@@ -301,5 +316,6 @@ OpenContent Connector、Provider、SciForge 自研 Runtime、SDK 文档和能力
 ## 相关文档
 
 - [OpenContent 附件分发边界](./opencontent-attachment-distribution.md)
+- [Content Space 架构与唯一调用链](./content-space-architecture.md)
 - [OpenContent Skill 能力矩阵](./opencontent-skill-capability-matrix.md)
 - [ADR-0030：通过 Content Space 激活 Provider Native Documents](./adr/0030-activate-provider-native-documents-through-content-space.md)

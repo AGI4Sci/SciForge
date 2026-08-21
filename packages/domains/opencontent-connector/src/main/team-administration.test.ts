@@ -32,20 +32,20 @@ describe('OpenContent Team administration transport', () => {
           pageSize: 2,
           totalCount: 3,
           teamList: [{
-            teamId: 19,
-            folderId: 2213,
+            teamId: 9000019,
+            folderId: 9002213,
             teamName: 'SciForge-MVP-alpha',
             teamStatus: 1,
-            teamOwner: 42,
+            teamOwner: 9000042,
             permission: 15,
             teamType: 2,
             isStick: true
           }, {
             teamId: 20,
-            folderId: 2214,
+            folderId: 9002214,
             teamName: 'SciForge-MVP-beta',
             teamStatus: 1,
-            teamOwner: 42,
+            teamOwner: 9000042,
             permission: 15,
             teamType: 2,
             isStick: false
@@ -71,19 +71,19 @@ describe('OpenContent Team administration transport', () => {
       pageSize: 2,
       totalCount: 3,
       teams: [{
-        teamId: 19,
-        folderId: 2213,
+        teamId: 9000019,
+        folderId: 9002213,
         name: 'SciForge-MVP-alpha',
-        ownerIdentityId: 42,
+        ownerIdentityId: 9000042,
         status: 1,
         permission: 15,
         teamType: 2,
         isStuck: true
       }, {
         teamId: 20,
-        folderId: 2214,
+        folderId: 9002214,
         name: 'SciForge-MVP-beta',
-        ownerIdentityId: 42,
+        ownerIdentityId: 9000042,
         status: 1,
         permission: 15,
         teamType: 2,
@@ -139,7 +139,7 @@ describe('OpenContent Team administration transport', () => {
       token,
       assertPrincipalCurrent
     )
-    const teamId = openContentTeamIdSchema.parse(19)
+    const teamId = openContentTeamIdSchema.parse(9000019)
 
     await bound.stickTeam({ teamId })
     principalIsCurrent = false
@@ -206,11 +206,11 @@ describe('OpenContent Team administration transport', () => {
           result: 0,
           msg: '',
           data: {
-            teamId: 19,
-            folderId: 2213,
+            teamId: 9000019,
+            folderId: 9002213,
             teamName: 'SciForge-MVP-alpha',
             teamStatus: 1,
-            teamOwner: 42,
+            teamOwner: 9000042,
             permission: 15,
             teamType: 2,
             isStick: false
@@ -223,13 +223,13 @@ describe('OpenContent Team administration transport', () => {
       baseUrl: 'https://opencontent.invalid',
       fetch
     })
-    const teamId = openContentTeamIdSchema.parse(19)
-    const folderId = openContentFolderIdSchema.parse(2213)
+    const teamId = openContentTeamIdSchema.parse(9000019)
+    const folderId = openContentFolderIdSchema.parse(9002213)
 
     await expect(administration.observeTeam({ token, teamId })).resolves.toMatchObject({
-      teamId: 19,
-      folderId: 2213,
-      ownerIdentityId: 42
+      teamId: 9000019,
+      folderId: 9002213,
+      ownerIdentityId: 9000042
     })
     await administration.editTeam({
       token,
@@ -243,22 +243,22 @@ describe('OpenContent Team administration transport', () => {
 
     expect(requests).toEqual([{
       path: '/flatsdk/api/services/Team/GetTeamById',
-      body: { token, teamId: 19 }
+      body: { token, teamId: 9000019 }
     }, {
       path: '/flatsdk/api/services/Team/EditTeamInfo',
       body: {
         token,
-        teamId: 19,
-        folderId: 2213,
+        teamId: 9000019,
+        folderId: 9002213,
         teamName: 'SciForge-MVP-renamed',
         teamRemark: 'Project team'
       }
     }, {
       path: '/flatsdk/api/services/Team/StickTeam',
-      body: { token, teamId: 19 }
+      body: { token, teamId: 9000019 }
     }, {
       path: '/flatsdk/api/services/Team/UnStickTeam',
-      body: { token, teamId: 19 }
+      body: { token, teamId: 9000019 }
     }])
   })
 
@@ -277,11 +277,11 @@ describe('OpenContent Team administration transport', () => {
             pageSize: 2,
             totalCount: 3,
             list: [{
-              identityId: 42,
+              identityId: 9000042,
               userType: 1,
               name: 'Creator'
             }, {
-              identityId: 41,
+              identityId: 9000041,
               userType: 3,
               name: 'Member A',
               account: 'member-a'
@@ -295,9 +295,9 @@ describe('OpenContent Team administration transport', () => {
       baseUrl: 'https://opencontent.invalid',
       fetch
     })
-    const teamId = openContentTeamIdSchema.parse(19)
-    const memberA = openContentIdentityIdSchema.parse(41)
-    const memberB = openContentIdentityIdSchema.parse(43)
+    const teamId = openContentTeamIdSchema.parse(9000019)
+    const memberA = openContentIdentityIdSchema.parse(9000041)
+    const memberB = openContentIdentityIdSchema.parse(9000043)
 
     await expect(administration.listTeamUsers({
       token,
@@ -308,8 +308,8 @@ describe('OpenContent Team administration transport', () => {
       pageNumber: 1,
       pageSize: 2,
       totalCount: 3,
-      users: [{ identityId: 42, userType: 1, displayName: 'Creator' }, {
-        identityId: 41,
+      users: [{ identityId: 9000042, userType: 1, displayName: 'Creator' }, {
+        identityId: 9000041,
         userType: 3,
         displayName: 'Member A',
         account: 'member-a'
@@ -331,8 +331,8 @@ describe('OpenContent Team administration transport', () => {
       path: '/flatsdk/api/services/Team/SaveTeamUserList',
       body: {
         token,
-        teamId: 19,
-        addUserInfo: [{ userId: 41, userType: 3 }, { userId: 43, userType: 3 }],
+        teamId: 9000019,
+        addUserInfo: [{ userId: 9000041, userType: 3 }, { userId: 9000043, userType: 3 }],
         updateUserInfo: [],
         deleteUserInfo: []
       }
@@ -340,10 +340,10 @@ describe('OpenContent Team administration transport', () => {
       path: '/flatsdk/api/services/Team/SaveTeamUserList',
       body: {
         token,
-        teamId: 19,
+        teamId: 9000019,
         addUserInfo: [],
         updateUserInfo: [],
-        deleteUserInfo: [43]
+        deleteUserInfo: [9000043]
       }
     }])
   })
@@ -354,11 +354,11 @@ describe('OpenContent Team administration transport', () => {
         result: 0,
         msg: '',
         data: {
-          id: 2213,
-          folderGuid: '7031fd44-2a4a-4c3c-9c74-121104b4324a',
+          id: 9002213,
+          folderGuid: '11111111-2222-4333-8444-555555555555',
           parentFolderId: 0,
           folderType: 1,
-          teamId: 19,
+          teamId: 9000019,
           permission: 15,
           childFolderCount: 0,
           childFileCount: 0
@@ -368,8 +368,8 @@ describe('OpenContent Team administration transport', () => {
         result: 0,
         msg: '',
         data: {
-          id: 2213,
-          folderGuid: '7031fd44-2a4a-4c3c-9c74-121104b4324a',
+          id: 9002213,
+          folderGuid: '11111111-2222-4333-8444-555555555555',
           parentFolderId: 0,
           folderType: 1,
           teamId: 99,
@@ -382,14 +382,14 @@ describe('OpenContent Team administration transport', () => {
       baseUrl: 'https://opencontent.invalid',
       fetch
     })
-    const teamId = openContentTeamIdSchema.parse(19)
-    const folderId = openContentFolderIdSchema.parse(2213)
+    const teamId = openContentTeamIdSchema.parse(9000019)
+    const folderId = openContentFolderIdSchema.parse(9002213)
 
     await expect(administration.resolveTeamRoot({ token, teamId, folderId }))
       .resolves.toEqual({
-        teamId: 19,
-        folderId: 2213,
-        folderGuid: '7031fd44-2a4a-4c3c-9c74-121104b4324a'
+        teamId: 9000019,
+        folderId: 9002213,
+        folderGuid: '11111111-2222-4333-8444-555555555555'
       })
     await expect(administration.resolveTeamRoot({ token, teamId, folderId }))
       .rejects.toMatchObject({ code: 'provider_contract_violation' })
@@ -408,8 +408,8 @@ describe('OpenContent Team administration transport', () => {
       baseUrl: 'https://opencontent.invalid',
       fetch
     })
-    const teamId = openContentTeamIdSchema.parse(19)
-    const identityId = openContentIdentityIdSchema.parse(41)
+    const teamId = openContentTeamIdSchema.parse(9000019)
+    const identityId = openContentIdentityIdSchema.parse(9000041)
 
     await administration.setTeamUserRole({
       token,
@@ -425,10 +425,10 @@ describe('OpenContent Team administration transport', () => {
 
     expect(requests).toEqual([{
       path: '/flatsdk/api/services/Team/SetTeamUserRole',
-      body: { token, teamId: 19, userIds: [41], userType: 2 }
+      body: { token, teamId: 9000019, userIds: [9000041], userType: 2 }
     }, {
       path: '/flatsdk/api/services/Team/EditTeamOwner',
-      body: { token, teamId: 19, userId: 41 }
+      body: { token, teamId: 9000019, userId: 9000041 }
     }])
   })
 })

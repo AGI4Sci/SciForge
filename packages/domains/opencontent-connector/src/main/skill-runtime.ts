@@ -111,6 +111,7 @@ export function createOpenContentSkillRuntimeSession(options: Readonly<{
       return options.connections.useCurrentSession({
         principal: input.principal,
         providerInstanceRef: input.providerInstanceRef,
+        expectedBindingAttestation: input.expectedBindingAttestation,
         assertPrincipalCurrent,
         signal: input.signal
       }, async ({ token }) => {

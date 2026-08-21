@@ -14,6 +14,10 @@ import {
 } from '@sciforge/domain-opencontent-connector/contract'
 
 import { createOpenContentAdministrationFeature } from './administration.js'
+import {
+  fromOpenContentExternalBinding,
+  toOpenContentExpectedBinding
+} from './external-binding.js'
 import type { OpenContentIdentityBindingPort } from './identity-binding.js'
 import { createOpenContentRuntimeFeatures } from './runtime-features.js'
 
@@ -64,6 +68,20 @@ export function createOpenContentContentSpaceProvider(input: Readonly<{
       }),
       ...runtimeFeatures
     }),
+    attestExternalBinding: async (context) => {
+      assertInstance(context.providerInstanceRef, providerInstanceRef)
+      try {
+        const binding = await input.facade.attestExternalBinding({
+          principal: context.principal,
+          providerInstanceRef: context.providerInstanceRef,
+          signal: context.signal,
+          assertPrincipalCurrent: context.assertPrincipalCurrent
+        })
+        return fromOpenContentExternalBinding(binding, context)
+      } catch (error) {
+        throw mapProviderError(error)
+      }
+    },
     describeCapabilities: async (context) => {
       assertInstance(context.providerInstanceRef, providerInstanceRef)
       return OPERATIONS.map((operation) => capabilityState(
@@ -84,6 +102,7 @@ export function createOpenContentContentSpaceProvider(input: Readonly<{
           result = await input.facade.listRootFolders({
             principal: context.principal,
             providerInstanceRef: context.providerInstanceRef,
+            ...toOpenContentExpectedBinding(context),
             teamPage: teamPage?.page ?? 1,
             teamPageSize: teamPage?.pageSize ?? Math.min(page.limit, 100),
             includePersonal: teamPage === undefined,
@@ -163,6 +182,7 @@ export function createOpenContentContentSpaceProvider(input: Readonly<{
           const result = await input.facade.listFolderEntries({
             principal: context.principal,
             providerInstanceRef: context.providerInstanceRef,
+            ...toOpenContentExpectedBinding(context),
             parentFolderGuid: parent.containerId,
             page: providerPage.page,
             pageSize: providerPage.pageSize,
@@ -238,6 +258,7 @@ export function createOpenContentContentSpaceProvider(input: Readonly<{
           ? {
               principal: context.principal,
               providerInstanceRef: context.providerInstanceRef,
+              ...toOpenContentExpectedBinding(context),
               kind: 'container',
               resourceGuid: reference.containerId,
               signal: context.signal,
@@ -246,6 +267,7 @@ export function createOpenContentContentSpaceProvider(input: Readonly<{
           : {
               principal: context.principal,
               providerInstanceRef: context.providerInstanceRef,
+              ...toOpenContentExpectedBinding(context),
               kind: 'file',
               resourceGuid: reference.fileId,
               signal: context.signal,
@@ -290,6 +312,7 @@ export function createOpenContentContentSpaceProvider(input: Readonly<{
         const created = await input.facade.createFolder({
           principal: context.principal,
           providerInstanceRef: context.providerInstanceRef,
+          ...toOpenContentExpectedBinding(context),
           parentFolderGuid: parent.containerId,
           name,
           signal: context.signal,
@@ -316,6 +339,7 @@ export function createOpenContentContentSpaceProvider(input: Readonly<{
         const uploaded = await input.facade.uploadNewFile({
           principal: context.principal,
           providerInstanceRef: context.providerInstanceRef,
+          ...toOpenContentExpectedBinding(context),
           parentFolderGuid: parent.containerId,
           name,
           size: source.size,
@@ -344,6 +368,7 @@ export function createOpenContentContentSpaceProvider(input: Readonly<{
         const downloaded = await input.facade.downloadFile({
           principal: context.principal,
           providerInstanceRef: context.providerInstanceRef,
+          ...toOpenContentExpectedBinding(context),
           fileGuid: reference.fileId,
           write: destination.write,
           signal: context.signal,

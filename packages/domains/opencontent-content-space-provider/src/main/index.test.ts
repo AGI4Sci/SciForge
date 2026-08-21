@@ -37,6 +37,12 @@ describe('OpenContent Content Space Provider factory', () => {
         }
       })
     const facade: OpenContentContentSpaceFacade = {
+      attestExternalBinding: async (input) => Object.freeze({
+        providerInstanceRef: input.providerInstanceRef,
+        principal: input.principal,
+        externalSubject: 'a'.repeat(64),
+        bindingRevision: 'b'.repeat(64)
+      }),
       useTeamAdministration,
       listRootFolders: vi.fn(),
       listFolderEntries: vi.fn(),
@@ -94,7 +100,7 @@ describe('OpenContent Content Space Provider factory', () => {
     })
 
     expect(acquireFacade).toHaveBeenCalledOnce()
-    expect(binding?.administration.contractVersion).toBe('1.0.0')
+    expect(binding?.administration.contractVersion).toBe('2.0.0')
     expect(binding?.projectProvisioning?.contractVersion).toBe('1.0.0')
   })
 

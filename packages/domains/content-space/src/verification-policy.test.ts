@@ -21,6 +21,10 @@ const root = Object.freeze({
   providerInstanceRef: PROVIDER_INSTANCE_REF,
   containerId: 'verified-root'
 })
+const externalBinding = Object.freeze({
+  externalSubject: 'a'.repeat(64),
+  bindingRevision: 'b'.repeat(64)
+})
 
 describe('Content Space verification policy', () => {
   it('permits only list-containers bootstrap or exact root-scoped reads without Provider binding attestation', () => {
@@ -135,12 +139,63 @@ describe('Content Space verification policy', () => {
       expect(contentSpaceVerificationPolicyAdmits(policy, mismatch)).toBe(false)
     }
   })
+
+  it('admits unsafe PoC operations only with the exact Provider binding attestation', () => {
+    const uploadProfile = profile({
+      authority: { kind: 'content-root', root },
+      operation: { family: 'ordinary', operation: 'upload-new' },
+      transferLimits: { maxUploadBytes: 16 * 1024 * 1024, maxDownloadBytes: 0 },
+      externalBinding
+    })
+    expect(contentSpaceVerificationProfileSchema.parse(uploadProfile)).toEqual(uploadProfile)
+    const policy = defineContentSpaceVerificationPolicy({
+      contractVersion: CONTENT_SPACE_VERIFICATION_POLICY_CONTRACT_VERSION,
+      profiles: [uploadProfile]
+    })
+    const exact: ContentSpaceVerificationAdmission = {
+      state: { readiness: 'poc_only', reasonCode: 'verification_profile_required' },
+      providerInstanceRef: PROVIDER_INSTANCE_REF,
+      principal,
+      audience: 'agent',
+      authority: uploadProfile.authority,
+      operation: uploadProfile.operation,
+      transferLimits: uploadProfile.transferLimits,
+      externalBinding: {
+        providerInstanceRef: PROVIDER_INSTANCE_REF,
+        principal,
+        ...externalBinding
+      },
+      now: new Date('2026-08-21T00:30:00.000Z')
+    }
+
+    expect(contentSpaceVerificationPolicyAdmits(policy, exact)).toBe(true)
+    expect(contentSpaceVerificationPolicyAdmits(policy, {
+      ...exact,
+      externalBinding: undefined
+    })).toBe(false)
+    expect(contentSpaceVerificationPolicyAdmits(policy, {
+      ...exact,
+      externalBinding: { ...exact.externalBinding!, externalSubject: 'c'.repeat(64) }
+    })).toBe(false)
+    expect(contentSpaceVerificationPolicyAdmits(policy, {
+      ...exact,
+      externalBinding: { ...exact.externalBinding!, bindingRevision: 'd'.repeat(64) }
+    })).toBe(false)
+    expect(contentSpaceVerificationPolicyAdmits(policy, {
+      ...exact,
+      externalBinding: {
+        ...exact.externalBinding!,
+        principal: { ...principal, identityVersion: principal.identityVersion + 1 }
+      }
+    })).toBe(false)
+  })
 })
 
 function profile(input: Readonly<{
   authority: ContentSpaceVerificationProfile['authority']
   operation: ContentSpaceVerificationProfile['operation']
   transferLimits?: ContentSpaceVerificationProfile['transferLimits']
+  externalBinding?: ContentSpaceVerificationProfile['externalBinding']
 }>): ContentSpaceVerificationProfile {
   return {
     profileId: `profile-${input.operation.family}-${input.operation.operation}`.toLowerCase(),
@@ -150,6 +205,7 @@ function profile(input: Readonly<{
     authority: input.authority,
     operation: input.operation,
     transferLimits: input.transferLimits ?? { maxUploadBytes: 0, maxDownloadBytes: 0 },
+    ...(input.externalBinding ? { externalBinding: input.externalBinding } : {}),
     validFrom: '2026-08-21T00:00:00.000Z',
     expiresAt: '2026-08-21T01:00:00.000Z'
   }

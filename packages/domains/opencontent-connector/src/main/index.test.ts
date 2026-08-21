@@ -6,6 +6,7 @@ import {
   OPENCONTENT_CONNECTION_CAPABILITY_IDS,
   OPENCONTENT_PROVIDER_INSTANCE_REF,
   OpenContentConnectorError,
+  openContentExternalBindingAttestationSchema,
   openContentConnectionStatusSchema,
   openContentUnbindOutputSchema
 } from '../contract.js'
@@ -16,15 +17,16 @@ import {
 import {
   OPENCONTENT_EDOC2_TEST1_VERIFICATION_PROFILE,
   createOpenContentCapabilityFactory,
-  createOpenContentContentSpaceFacade,
   type OpenContentCapabilityOptions
 } from './index.js'
+import * as openContentMainModule from './index.js'
+import { createOpenContentContentSpaceFacade } from './facade.js'
 import type { OpenContentConnectionService } from './connection-service.js'
 import type { OpenContentClient } from './opencontent-client.js'
 import type {
-  OpenContentBoundTeamAdministration,
-  OpenContentTeamAdministration
+  OpenContentBoundTeamAdministration
 } from '../team-administration-contract.js'
+import type { OpenContentTeamAdministration } from './team-administration.js'
 
 const principal = Object.freeze({
   authority: 'sciforge.local-account',
@@ -33,10 +35,20 @@ const principal = Object.freeze({
   deviceId: 'device-1',
   identityVersion: 4
 })
+const bindingAttestation = Object.freeze({
+  providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+  principal,
+  externalSubject: 'a'.repeat(64),
+  bindingRevision: 'b'.repeat(64)
+})
 
 describe('OpenContent connection capabilities', () => {
-  it('keeps the v2 internal facade version aligned with its manifest contract', () => {
-    expect(OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION).toBe('2.0.0')
+  it('does not expose raw facade construction from the public main entrypoint', () => {
+    expect(openContentMainModule).not.toHaveProperty('createOpenContentContentSpaceFacade')
+  })
+
+  it('keeps the v3 internal facade version aligned with its manifest contract', () => {
+    expect(OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION).toBe('3.0.0')
     expect(OPENCONTENT_INTERNAL_SERVICE_DESCRIPTOR_CONTRACT).toMatchObject({
       serviceId: 'opencontent.content-space',
       contractVersion: OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION
@@ -222,6 +234,10 @@ describe('OpenContent connection capabilities', () => {
       remoteRevocation: 'unsupported',
       token: canary
     }).success).toBe(false)
+    expect(openContentExternalBindingAttestationSchema.safeParse({
+      ...bindingAttestation,
+      token: canary
+    }).success).toBe(false)
   })
 })
 
@@ -234,6 +250,7 @@ describe('OpenContent main-only Content Space facade', () => {
     })
 
     expect(facade.useSkillRuntime).toBeUndefined()
+    expect(facade.attestExternalBinding).toBeTypeOf('function')
     expect(facade.useTeamAdministration).toBeTypeOf('function')
     expect(facade.listRootFolders).toBeTypeOf('function')
     expect(facade.uploadNewFile).toBeTypeOf('function')
@@ -244,7 +261,11 @@ describe('OpenContent main-only Content Space facade', () => {
     const rawAdministration = teamAdministration()
     const connections = connectionService()
     vi.mocked(connections.useCurrentSession).mockImplementation(async (_input, operation) => (
-      operation(Object.freeze({ token: tokenCanary, externalIdentityId: 41 }))
+      operation(Object.freeze({
+        token: tokenCanary,
+        externalIdentityId: 9000041,
+        bindingAttestation
+      }))
     ))
     const facade = createOpenContentContentSpaceFacade({
       client: {} as OpenContentClient,
@@ -263,11 +284,12 @@ describe('OpenContent main-only Content Space facade', () => {
     const result = await facade.useTeamAdministration({
       principal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      expectedBindingAttestation: bindingAttestation,
       signal: new AbortController().signal,
       assertPrincipalCurrent: () => undefined
     }, async (session) => {
       retainedAdministration = session.administration
-      expect(session.externalIdentityId).toBe(41)
+      expect(session.externalIdentityId).toBe(9000041)
       expect(session).not.toHaveProperty('token')
       expect(session.administration).not.toHaveProperty('token')
       await session.administration.listTeams({ pageNumber: 1, pageSize: 100 })
@@ -275,6 +297,10 @@ describe('OpenContent main-only Content Space facade', () => {
     })
 
     expect(result).toBe('completed')
+    expect(connections.useCurrentSession).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedBindingAttestation: bindingAttestation }),
+      expect.any(Function)
+    )
     expect(rawAdministration.listTeams).toHaveBeenCalledWith({
       pageNumber: 1,
       pageSize: 100,
@@ -283,6 +309,26 @@ describe('OpenContent main-only Content Space facade', () => {
     await expect(retainedAdministration!.listTeams({ pageNumber: 1, pageSize: 100 }))
       .rejects.toMatchObject({ code: 'unauthorized' })
     expect(rawAdministration.listTeams).toHaveBeenCalledOnce()
+  })
+
+  it('exposes only the token-free external binding attestation from the current session', async () => {
+    const connections = connectionService()
+    const facade = createOpenContentContentSpaceFacade({
+      client: {} as OpenContentClient,
+      connections,
+      teamAdministration: teamAdministration()
+    })
+
+    await expect(facade.attestExternalBinding({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    })).resolves.toEqual(bindingAttestation)
+    expect(connections.attestExternalBinding).toHaveBeenCalledWith(expect.objectContaining({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
+    }))
+    expect(JSON.stringify(bindingAttestation)).not.toMatch(/token|connectionId|identityId/u)
   })
 
   it('passes the live Principal assertion into ordinary invocation-scoped client requests', async () => {
@@ -304,6 +350,7 @@ describe('OpenContent main-only Content Space facade', () => {
     await expect(facade.listFolderEntries({
       principal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      expectedBindingAttestation: bindingAttestation,
       parentFolderGuid: 'folder-guid',
       page: 1,
       pageSize: 20,
@@ -313,6 +360,10 @@ describe('OpenContent main-only Content Space facade', () => {
     expect(listFolderEntries).toHaveBeenCalledWith(expect.objectContaining({
       assertPrincipalCurrent
     }))
+    expect(connections.useCurrentToken).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedBindingAttestation: bindingAttestation }),
+      expect.any(Function)
+    )
     expect(assertPrincipalCurrent).toHaveBeenCalledOnce()
   })
 })
@@ -327,6 +378,7 @@ function capabilityDefinitions(connections: OpenContentConnectionService) {
 function connectionService(): OpenContentConnectionService {
   return {
     status: vi.fn(async () => ({ state: 'disconnected' as const })),
+    attestExternalBinding: vi.fn(async () => bindingAttestation),
     bindExistingAccount: vi.fn(async () => ({
       state: 'connected' as const,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,

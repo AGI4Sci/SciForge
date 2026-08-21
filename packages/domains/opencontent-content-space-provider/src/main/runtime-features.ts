@@ -47,6 +47,7 @@ import {
 } from '@sciforge/domain-opencontent-connector/team-administration-contract'
 
 import { domainPackageDefinition } from '../definition.js'
+import { toOpenContentExpectedBinding } from './external-binding.js'
 
 const ADAPTER_OWNER = Object.freeze({
   role: 'adapter-owner' as const,
@@ -270,6 +271,7 @@ function featureSessionContext(
   return Object.freeze({
     principal: execution.context.principal,
     providerInstanceRef,
+    ...toOpenContentExpectedBinding(execution.context),
     invocationId: invocationId.data,
     deadlineAt: execution.context.deadlineAt,
     signal: execution.context.signal,
@@ -292,6 +294,9 @@ function createTeamGovernance(input: Readonly<{
   ) => input.facade.useTeamAdministration({
     principal: input.session.principal,
     providerInstanceRef: input.session.providerInstanceRef,
+    ...(input.session.expectedBindingAttestation === undefined
+      ? {}
+      : { expectedBindingAttestation: input.session.expectedBindingAttestation }),
     signal: input.session.signal,
     assertPrincipalCurrent: input.session.assertPrincipalCurrent
   }, operation)

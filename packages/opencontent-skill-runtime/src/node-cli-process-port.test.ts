@@ -36,13 +36,23 @@ afterEach(async () => {
 describe('Node OpenContent CLI process port', () => {
   it('keeps the 86-command snapshot inventory separate from the admitted adapter union', async () => {
     expect(OPENCONTENT_CLI_COMMANDS).toHaveLength(86)
-    expect(OPENCONTENT_CLI_ADMITTED_COMMANDS).toHaveLength(72)
+    expect(OPENCONTENT_CLI_ADMITTED_COMMANDS).toHaveLength(62)
     for (const excluded of [
       'docflow-last-delivery',
       'docflow-failure-list',
       'docflow-failure-get',
       'docflow-failure-prune',
       'docflow-failure-recovery',
+      'docflow-update',
+      'docflow-insert',
+      'docflow-edit',
+      'docflow-undo',
+      'docflow-redo',
+      'docflow-comment-create',
+      'docflow-comment-reply',
+      'docflow-comment-solve',
+      'docflow-comment-reopen',
+      'docflow-comment-delete',
       'team-create',
       'create-folder'
     ]) {
@@ -60,6 +70,25 @@ describe('Node OpenContent CLI process port', () => {
       args: {},
       dataFiles: []
     } as never, fixture.entrypoint))).rejects.toThrow()
+    for (const command of [
+      'docflow-update',
+      'docflow-insert',
+      'docflow-edit',
+      'docflow-undo',
+      'docflow-redo',
+      'docflow-comment-create',
+      'docflow-comment-reply',
+      'docflow-comment-solve',
+      'docflow-comment-reopen',
+      'docflow-comment-delete'
+    ]) {
+      await expect(port.run(request({
+        invocationId: `invocation_blocked_${command}`,
+        command,
+        args: {},
+        dataFiles: []
+      } as never, fixture.entrypoint))).rejects.toThrow()
+    }
     expect(await readdir(fixture.invocationsRoot)).toEqual([])
   })
 
@@ -174,47 +203,6 @@ describe('Node OpenContent CLI process port', () => {
     expect(await readdir(fixture.invocationsRoot)).toEqual([])
   })
 
-  it('flattens each DocFlow comment selector into the fixed CLI argument contract', async () => {
-    const fixture = await createFixture()
-    const port = createNodeOpenContentCliProcessPort({
-      trustedEntrypoint: fixture.entrypoint,
-      temporaryRoot: fixture.invocationsRoot
-    })
-    const cases = [{
-      invocationId: 'invocation_comment_text_a',
-      target: { kind: 'text' as const, targetText: 'Review target', occurrence: 2 },
-      expected: { targetText: 'Review target', occurrence: 2 }
-    }, {
-      invocationId: 'invocation_comment_range_a',
-      target: { kind: 'range' as const, startText: 'Range start', endText: 'Range end' },
-      expected: { startText: 'Range start', endText: 'Range end' }
-    }, {
-      invocationId: 'invocation_comment_component_a',
-      target: { kind: 'component' as const, targetComponent: 'ParagraphComponent', occurrence: 3 },
-      expected: { targetComponent: 'ParagraphComponent', occurrence: 3 }
-    }] as const
-
-    for (const commentCase of cases) {
-      const result = await port.run(request({
-        invocationId: commentCase.invocationId,
-        command: 'docflow-comment-create',
-        args: {
-          fileId: 'document-a',
-          target: commentCase.target,
-          body: 'Please review this selection.'
-        },
-        dataFiles: []
-      }, fixture.entrypoint)) as Record<string, any>
-
-      expect(result.json.args).toEqual({
-        fileId: 'document-a',
-        comment: 'Please review this selection.',
-        ...commentCase.expected
-      })
-    }
-    expect(await readdir(fixture.invocationsRoot)).toEqual([])
-  })
-
   it('streams extended uploads into a runner-owned source file', async () => {
     const fixture = await createFixture()
     const port = createNodeOpenContentCliProcessPort({
@@ -310,7 +298,7 @@ describe('Node OpenContent CLI process port', () => {
     expect(await readdir(fixture.invocationsRoot)).toEqual([])
   })
 
-  it('issues one-use opaque probe and plan tokens across private directories', async () => {
+  it('uses a one-use probe token for a read-only plan without retaining an executable plan', async () => {
     const fixture = await createFixture()
     const port = createNodeOpenContentCliProcessPort({
       trustedEntrypoint: fixture.entrypoint,
@@ -349,21 +337,12 @@ describe('Node OpenContent CLI process port', () => {
       ]
     }
     const plan = await port.run(request(planInvocation, fixture.entrypoint)) as Record<string, any>
-    const planToken = plan.managedDataFiles[0].token as string
-    expect(planToken).toMatch(/^ocdf_/u)
+    expect(plan.managedDataFiles).toEqual([])
     expect(JSON.stringify(plan)).not.toContain('planFile')
 
     await expect(port.run(request(planInvocation, fixture.entrypoint)))
       .rejects.toMatchObject({ code: 'invalid-input', dispatched: false })
 
-    const edit = await port.run(request({
-      invocationId: 'invocation_doc_edit_a',
-      command: 'docflow-edit',
-      args: { fileId: 'file-a', baseHash: 'a'.repeat(64) },
-      dataFiles: [{ role: 'edit-plan', encoding: 'managed', token: planToken }]
-    }, fixture.entrypoint)) as Record<string, any>
-    expect(edit.structuredDeliveryItems).toHaveLength(1)
-    expect(edit.json.preflightReceiptRestored).toBe(true)
     expect(await readdir(fixture.invocationsRoot)).toEqual([])
   })
 
@@ -434,7 +413,7 @@ describe('Node OpenContent CLI process port', () => {
       ]
     }, fixture.entrypoint)) as Record<string, any>
 
-    expect(plan.managedDataFiles).toHaveLength(1)
+    expect(plan.managedDataFiles).toEqual([])
     expect(await readdir(fixture.invocationsRoot)).toEqual([])
   })
 
@@ -537,77 +516,6 @@ describe('Node OpenContent CLI process port', () => {
     expect(await readdir(fixture.invocationsRoot)).toEqual([])
   })
 
-  it('counts plan-receipt sidecars against the managed-token byte cap', async () => {
-    const fixture = await createFixture()
-    const port = createNodeOpenContentCliProcessPort({
-      trustedEntrypoint: fixture.entrypoint,
-      temporaryRoot: fixture.invocationsRoot,
-      managedTokenLimits: {
-        maxEntries: 2_048,
-        maxBytes: 128
-      }
-    })
-    const probe = await port.run(request({
-      invocationId: 'invocation_managed_sidecar_probe_a',
-      command: 'docflow-probe',
-      args: {
-        fileId: 'file-a',
-        target: { text: 'Hello' },
-        view: 'target',
-        operation: 'replaceText',
-        include: ['nodes', 'text']
-      },
-      dataFiles: []
-    }, fixture.entrypoint)) as Record<string, any>
-    const probeToken = probe.managedDataFiles[0].token as string
-
-    let failure: unknown
-    try {
-      await port.run(request({
-        invocationId: 'invocation_managed_sidecar_plan_a',
-        command: 'docflow-plan',
-        args: { fileId: 'file-a', baseHash: 'a'.repeat(64) },
-        dataFiles: [
-          { role: 'probe-template', encoding: 'managed', token: probeToken },
-          {
-            role: 'operations',
-            encoding: 'json',
-            name: 'operations.json',
-            mediaType: 'application/json',
-            content: { operations: [{ op: 'replaceText' }] }
-          }
-        ]
-      }, fixture.entrypoint))
-    } catch (error) {
-      failure = error
-    }
-
-    expect(failure).toMatchObject({
-      code: 'provider-contract-violation',
-      dispatched: true
-    })
-    const serialized = serializeFailure(failure)
-    expect(serialized).not.toContain(probeToken)
-    expect(serialized).not.toContain(fixture.invocationsRoot)
-    expect(serialized).not.toContain('ocdf_')
-
-    const accepted = await port.run(request({
-      invocationId: 'invocation_managed_sidecar_recovery_a',
-      command: 'docflow-probe',
-      args: {
-        fileId: 'file-b',
-        target: { text: 'World' },
-        view: 'target',
-        operation: 'replaceText',
-        include: ['nodes', 'text']
-      },
-      dataFiles: []
-    }, fixture.entrypoint)) as Record<string, any>
-
-    expect(accepted.managedDataFiles).toHaveLength(1)
-    expect(await readdir(fixture.invocationsRoot)).toEqual([])
-  })
-
   it('releases managed-token entry and byte capacity on dispose', async () => {
     const fixture = await createFixture()
     const port = createNodeOpenContentCliProcessPort({
@@ -688,14 +596,7 @@ describe('Node OpenContent CLI process port', () => {
         }
       ]
     }, fixture.entrypoint)) as Record<string, any>
-    const planToken = plan.managedDataFiles[0].token as string
-
-    await port.run(request({
-      invocationId: 'invocation_managed_consume_edit_a',
-      command: 'docflow-edit',
-      args: { fileId: 'file-a', baseHash: 'a'.repeat(64) },
-      dataFiles: [{ role: 'edit-plan', encoding: 'managed', token: planToken }]
-    }, fixture.entrypoint))
+    expect(plan.managedDataFiles).toEqual([])
 
     const nextProbe = await port.run(request({
       invocationId: 'invocation_managed_consume_next_probe_a',
@@ -1380,35 +1281,7 @@ if (params.mode === 'hang') {
   const template = JSON.parse(fs.readFileSync(params.templateFile, 'utf8'))
   const operations = JSON.parse(fs.readFileSync(params.operationsFile, 'utf8'))
   fs.writeFileSync(params.planFile, JSON.stringify({ ...template, ...operations }))
-  const receiptRoot = path.resolve(__dirname, '..', '..', 'outputs', 'docflow-plan-receipts')
-  fs.mkdirSync(receiptRoot, { recursive: true })
-  fs.writeFileSync(path.join(receiptRoot, '${'b'.repeat(64)}.json'), JSON.stringify({
-    schemaVersion: 1,
-    createdAt: new Date().toISOString(),
-    fileId: params.fileId,
-    operationId: template.operationId,
-    planHash: 'sha256:${'b'.repeat(64)}'
-  }))
   send({ canApply: true, operationCount: operations.operations.length, planFile: params.planFile })
-} else if (command === 'docflow-edit') {
-  JSON.parse(fs.readFileSync(params.planFile, 'utf8'))
-  const receiptRoot = path.resolve(__dirname, '..', '..', 'outputs', 'docflow-plan-receipts')
-  const preflightReceiptRestored = fs.readdirSync(receiptRoot).length === 1
-  send({
-    fileId: 'document-a',
-    preflightReceiptRestored,
-    structuredDeliveryItems: [{
-      protocol: 'docflowCard:v1',
-      outcome: 'succeeded',
-      businessIdentity: 'document-a',
-      payload: {
-        projectId: 'document-a',
-        name: 'A document.mdoc',
-        accessUrl: 'https://provider.invalid/document-a',
-        updateTime: '2026-08-20T00:00:00.000Z'
-      }
-    }]
-  })
 } else {
   send({ command, args: params })
 }

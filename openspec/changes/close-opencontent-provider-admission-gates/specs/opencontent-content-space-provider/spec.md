@@ -2,59 +2,49 @@
 
 ### Requirement: Development readiness is trusted and operation-specific
 
-Every implemented OpenContent operation without packaged live evidence SHALL declare `poc_only` with `verification_profile_required`; implementation, private attachment presence, mock tests, historical direct API probes, or a successful sibling operation SHALL NOT make it `production_ready`. An operation MAY execute for verification only when the generic Content Space trusted verification policy matches the exact Provider Instance, complete Host Principal/assurance, permitted authority, operation, audience, zero limits, and validity period. Host assurance SHALL NOT be treated as an external OpenContent account class. Because the Connector currently supplies no attested external account subject or opaque binding revision, Provider Instance authority MAY admit only the read-only `list-containers` bootstrap, exact Broker-bound content-root authority MAY admit only reads, and mutation/administration profiles SHALL fail composition. Operations lacking an atomic mutation, immutable retrieval, portal, or other required Provider contract SHALL remain `blocked_by_contract` and SHALL NOT be admitted by a verification policy. Production promotion SHALL be a separate per-operation evidence-backed code and documentation change.
+Every implemented, contract-complete OpenContent operation SHALL remain `poc_only` with `verification_profile_required` until that exact operation is promoted by a separate evidence-backed code and documentation change. Packaged canonical live verification is per-operation evidence only and SHALL NOT by itself change readiness or create a `production_ready` operation. Implementation, attachment presence, mock tests, historical direct API probes, or a successful sibling operation SHALL NOT make an operation `production_ready`. Operations lacking an atomic mutation, immutable retrieval, portal, identity mapping, or other required Provider contract SHALL remain `blocked_by_contract` and SHALL NOT be admitted by a verification profile.
+
+A package-owned trusted Content Space verification profile MAY admit only one exact `poc_only` invocation matching the Provider Instance, complete Host Principal snapshot and assurance, Broker authority, operation, audience, validity period, and bounded transfer limits. Those limits SHALL be enforced as the actual execution maxima. Provider-scoped operations, mutation, administration, and non-zero transfers SHALL also match a current provider-neutral Provider binding attestation containing the exact Provider Instance, an opaque external subject reference, and an opaque binding revision. Immediately before business dispatch, the Provider SHALL require the Connector to match those opaque values against the actual current session; bind, unbind, credential replacement, external-account change, or binding-revision change SHALL invalidate the admission. Host assurance SHALL not stand in for an external OpenContent account class, and no raw external account identifier SHALL enter caller input or portable authority.
 
 #### Scenario: Installed attachment exposes implemented operations
 
-- **WHEN** a valid private attachment contributes native-document or extended operation adapters without packaged live evidence
-- **THEN** safely shaped operations SHALL remain `poc_only`, contract-incomplete operations SHALL remain `blocked_by_contract`, and no operation SHALL be bulk-promoted by attachment presence
+- **WHEN** a valid private attachment contributes native-document or extended operation adapters
+- **THEN** contract-complete operations SHALL remain `poc_only` until separately promoted, contract-incomplete operations SHALL remain `blocked_by_contract`, and no operation SHALL be bulk-promoted by attachment presence or packaged live evidence
 
 #### Scenario: One operation passes packaged verification
 
-- **WHEN** a single exact operation succeeds under the trusted verification policy
-- **THEN** sibling operations SHALL retain their prior readiness until each has separate evidence and review
+- **WHEN** a single exact operation succeeds through the packaged canonical path under the trusted verification policy
+- **THEN** only that exact operation's sanitized evidence record SHALL be marked `live_verified`; `live_verified` SHALL NOT be treated as a readiness state, that operation SHALL remain `poc_only`, sibling evidence and readiness SHALL remain unchanged, and no `production_ready` state SHALL be inferred without a separate promotion change
 
 #### Scenario: Listing is proven but upload schema is not
 
-- **WHEN** listing succeeds but upload lacks its own packaged live evidence or trusted verification-policy match
-- **THEN** upload SHALL remain unavailable even though listing succeeds
+- **WHEN** the UI or Agent requests upload
+- **THEN** upload SHALL retain its own declared readiness and SHALL remain unavailable unless its exact profile, binding attestation, authority, and enforced transfer limit all match, even though listing succeeds
 
 #### Scenario: Connector account is rebound under the same Host Principal
 
-- **WHEN** OpenContent credentials or external account binding can change without a Connector-attested opaque binding revision
-- **THEN** a Host Principal match SHALL NOT admit mutation, administration, or Provider-scoped operations other than the zero-transfer `list-containers` bootstrap
+- **WHEN** the external OpenContent subject or opaque binding revision changes after a verification profile was composed
+- **THEN** the Provider SHALL fail before the requested Connector business operation and SHALL NOT reuse the Host Principal match as account authority
 
 ### Requirement: Project binding, Shared Documents, and artifacts remain separate
 
-This adapter SHALL NOT own ProjectContentSpaceBinding, Project lifecycle, authoritative Project owner or membership, Task file intents, Task execution identity, Shared Documents, or ArtifactReference issuance without immutable-version proof. It MAY implement the provider-neutral Project Content Space provisioning port, but no generic Agent capability SHALL expose that port before the Project-owning context supplies the authoritative binding and verified identity mappings. Project archival/deletion SHALL never trigger Provider deletion.
+This adapter SHALL NOT own ProjectContentSpaceBinding, Project lifecycle, authoritative Project owner or membership, Task file intents or execution identity, Shared Documents, or provider-neutral DocumentProvider semantics. It MAY implement the provider-neutral Project Content Space provisioning port, but `provision-project` SHALL remain `blocked_by_contract` and no generic Agent capability SHALL expose the port before a Project-owning context supplies an authoritative binding, desired owner/member set, and verified identity mappings. It also SHALL NOT issue an ArtifactReference except under the separate immutable retention and retrieval proof requirement. Project archival/deletion SHALL never trigger Provider deletion.
 
-#### Scenario: Change 1 completes before Project binding
+#### Scenario: Existing-account integration runs before Project binding
 
-- **WHEN** no Project Content Space Binding contract is installed
-- **THEN** existing-account Content Space composition SHALL remain complete, provisioning SHALL remain dormant, and no Agent SHALL synthesize Project authority
-
-#### Scenario: Change 1 completes before Change 2
-
-- **WHEN** no Project Content Space Binding contract is installed
-- **THEN** existing-account binding and personal/team file operations SHALL remain complete without a generic Agent Project provisioning entrypoint
-
-#### Scenario: Version and digest are observed without immutable retrieval proof
-
-- **WHEN** OpenContent returns a version-like identifier or digest but cannot prove immutable retention and version-specific retrieval
-- **THEN** the result SHALL remain a mutable Content File Reference and no Artifact Reference SHALL be issued
-
-## ADDED Requirements
+- **WHEN** no Project binding contract is installed
+- **THEN** existing-account binding and personal/Team operations SHALL remain independently composed, provisioning SHALL remain dormant, and no Agent SHALL synthesize Project authority
 
 ### Requirement: Same-file mutation requires Provider-atomic preconditions
 
-Any OpenContent same-file or hash-bound mutation SHALL remain `blocked_by_contract` unless the Provider performs one atomic compare-and-mutate operation against an exact expected immutable version, revision, or content hash and proves conflict caused zero mutation. A local probe, plan receipt, pre-read, write-time re-read, one-shot token, post-write digest, or retry suppression SHALL NOT substitute for the Provider-atomic precondition.
+`updateFileVersion` and every hash-bound native-document mutation, including `edit`, SHALL remain `blocked_by_contract` unless OpenContent freezes and proves one Provider-side atomic compare-and-mutate operation carrying the exact expected immutable version, revision, or `baseHash`. A local probe, plan receipt, pre-read, write-time re-read, post-write digest, one-shot token, retry suppression, or read followed by upload SHALL NOT emulate CAS. A stale precondition SHALL return a deterministic conflict and prove that no file bytes, native-document state, metadata, version, or partial side effect changed. The exact same-file operation name and semantics, including `UPDATE` versus `UPGRADE`, SHALL be resolved with the supplier before implementation or promotion; aliases SHALL NOT be accepted.
 
-#### Scenario: Native edit checks the hash before an unconditioned write
+#### Scenario: Native edit validates baseHash before an unconditional write
 
-- **WHEN** `edit` verifies a plan and current hash before issuing a write that has no atomic expected-version/hash precondition
-- **THEN** `edit` SHALL remain blocked before supplier invocation
+- **WHEN** the adapter validates probe/plan evidence and current content before invoking a supplier mutation with no atomic `baseHash` precondition
+- **THEN** `edit` SHALL fail before supplier invocation because the remaining check/write race violates the Provider contract
 
-#### Scenario: File-version update lacks exact CAS
+#### Scenario: File-version update has no exact CAS
 
-- **WHEN** `updateFileVersion` has no verified expected-version compare-and-update contract
-- **THEN** it SHALL fail closed before Provider invocation and SHALL NOT emulate CAS with read followed by upload
+- **WHEN** the supplier upload contract exposes no exact expected-version compare-and-update transaction
+- **THEN** `updateFileVersion` SHALL fail closed before Provider invocation and SHALL NOT perform a pre-read followed by upload

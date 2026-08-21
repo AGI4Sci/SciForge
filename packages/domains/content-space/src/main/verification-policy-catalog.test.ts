@@ -44,7 +44,7 @@ describe('Content Space verification profile composition', () => {
       contribution('fixture.drifted', declared, drifted)
     ]))).toThrow(/drifted/u)
     expect(() => composeContentSpaceVerificationPolicy(host([
-      contribution('fixture.version', declared, declared, '2.0.0')
+      contribution('fixture.version', declared, declared, '1.0.0')
     ]))).toThrow(/metadata/u)
     expect(() => composeContentSpaceVerificationPolicy(host([
       contribution('fixture.invalid', {

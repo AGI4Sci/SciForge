@@ -46,15 +46,18 @@ import {
   artifactReferenceSchema,
   contentContainerReferenceSchema,
   contentFileReferenceSchema,
+  contentSpaceAdmittedCapabilityStateListSchema,
   contentSpaceCapabilityListSchema,
   contentSpaceCapabilityStateListSchema,
   contentSpaceContainerPageSchema,
   contentSpaceEntryNameSchema,
   contentSpaceEntryObservationSchema,
   contentSpaceEntryPageSchema,
+  contentSpaceExternalBindingAttestationSchema,
   contentSpaceImmutableVersionProofSchema,
   contentSpaceInvocationIdSchema,
   contentSpacePageRequestSchema,
+  contentSpaceProviderEntryObservationSchema,
   contentSpaceProviderImmutableVersionObservationSchema,
   contentSpaceProviderInstanceListSchema,
   createFolderReceiptSchema,
@@ -109,6 +112,7 @@ import {
 import { ContentSpaceProviderCatalog } from './provider-catalog.js'
 import {
   contentSpaceVerificationPolicyAdmits,
+  contentSpaceVerificationPolicyRequiresExternalBinding,
   defineContentSpaceVerificationPolicy,
   type ContentSpaceVerificationAuthority,
   type ContentSpaceVerificationOperation,
@@ -213,7 +217,7 @@ export class ContentSpaceService {
       call.assertPrincipalCurrent
     )
     return parseOutput(contentSpaceCapabilityListSchema, {
-      items: await this.#describe(provider, context, call.assertPrincipalCurrent)
+      items: await this.#describe(provider, context, call)
     })
   }
 
@@ -233,7 +237,7 @@ export class ContentSpaceService {
       fail('invalid_target', 'The native-document request does not match Broker authority.')
     }
     const effect = nativeDocumentOperationEffect(request.operation)
-    const { provider, context } = await this.#featureInvocation(
+    let { provider, context } = await this.#featureInvocation(
       target.primary.providerInstanceRef,
       effect,
       call
@@ -253,19 +257,24 @@ export class ContentSpaceService {
     const operationState = operationStates.find((candidate) =>
       candidate.operation === request.operation
     )
-    if (!operationState || !this.#operationAdmitted(
-      operationState,
-      context,
-      call,
-      { family: 'native-document', operation: request.operation },
-      verificationAuthorityForTarget(target),
-      nativeDocumentTransferLimits(request.operation)
-    )) {
+    const admittedContext = operationState
+      ? await this.#admittedContext(
+          provider,
+          operationState,
+          context,
+          call,
+          { family: 'native-document', operation: request.operation },
+          verificationAuthorityForTarget(target),
+          nativeDocumentTransferLimits(request.operation)
+        )
+      : undefined
+    if (!admittedContext) {
       fail(
         'blocked_by_contract',
         `Native-document operation ${request.operation} is unavailable.`
       )
     }
+    context = admittedContext
 
     const prepared = await this.#prepareNativeDocumentTransfer(
       request,
@@ -375,7 +384,7 @@ export class ContentSpaceService {
     }
 
     const effect = extendedOperationEffect(input.operation)
-    const { provider, context } = await this.#featureInvocation(
+    let { provider, context } = await this.#featureInvocation(
       providerInstanceRef,
       effect,
       call
@@ -395,19 +404,24 @@ export class ContentSpaceService {
     const operationState = operationStates.find((candidate) =>
       candidate.operation === input.operation
     )
-    if (!operationState || !this.#operationAdmitted(
-      operationState,
-      context,
-      call,
-      { family: 'extended', operation: input.operation },
-      verificationAuthorityForTarget(target),
-      extendedOperationTransferLimits(input.operation)
-    )) {
+    const admittedContext = operationState
+      ? await this.#admittedContext(
+          provider,
+          operationState,
+          context,
+          call,
+          { family: 'extended', operation: input.operation },
+          verificationAuthorityForTarget(target),
+          extendedOperationTransferLimits(input.operation)
+        )
+      : undefined
+    if (!admittedContext) {
       fail(
         'blocked_by_contract',
         `Extended Content Space operation ${input.operation} is unavailable.`
       )
     }
+    context = admittedContext
     const prepared = await this.#prepareExtendedOperationTransfer(
       input.operation,
       request,
@@ -495,15 +509,23 @@ export class ContentSpaceService {
         call.assertPrincipalCurrent
       )
     )
-    if (!operationStates.some((state) => state.operation !== 'provision-project' &&
-      this.#operationAdmitted(
+    let operationAvailable = false
+    for (const state of operationStates) {
+      if (state.operation === 'provision-project') continue
+      if (await this.#admittedContext(
+        provider,
         state,
         context,
         call,
         { family: 'administration', operation: state.operation },
         providerVerificationAuthority(parsedProvider),
         NO_VERIFICATION_TRANSFERS
-      ))) {
+      )) {
+        operationAvailable = true
+        break
+      }
+    }
+    if (!operationAvailable) {
       fail('blocked_by_contract', 'Provider administration has no available Agent operation.')
     }
     return Object.freeze({ providerInstanceRef: parsedProvider })
@@ -522,7 +544,7 @@ export class ContentSpaceService {
     const request = parseAdministrationRequest(input.operation, input.request)
     assertAdministrationTarget(input.operation, request, target)
     const effect = administrationOperationEffect(input.operation)
-    const { provider, context } = await this.#featureInvocation(
+    let { provider, context } = await this.#featureInvocation(
       providerInstanceRef,
       effect,
       call
@@ -542,19 +564,24 @@ export class ContentSpaceService {
     const operationState = operationStates.find((candidate) =>
       candidate.operation === input.operation
     )
-    if (!operationState || !this.#operationAdmitted(
-      operationState,
-      context,
-      call,
-      { family: 'administration', operation: input.operation },
-      verificationAuthorityForTarget(target),
-      NO_VERIFICATION_TRANSFERS
-    )) {
+    const admittedContext = operationState
+      ? await this.#admittedContext(
+          provider,
+          operationState,
+          context,
+          call,
+          { family: 'administration', operation: input.operation },
+          verificationAuthorityForTarget(target),
+          NO_VERIFICATION_TRANSFERS
+        )
+      : undefined
+    if (!admittedContext) {
       fail(
         'blocked_by_contract',
         `Content Space administration operation ${input.operation} is unavailable.`
       )
     }
+    context = admittedContext
     let bound: Awaited<ReturnType<typeof feature.bind>>
     try {
       bound = await boundedProviderCall(
@@ -602,7 +629,7 @@ export class ContentSpaceService {
     call: ContentSpaceServiceCallContext
   ) {
     const page = parseInput(contentSpacePageRequestSchema, input.page)
-    const { provider, context } = await this.#authorizedProvider(
+    let { provider, context } = await this.#authorizedProvider(
       input.providerInstanceRef,
       'list-containers',
       call,
@@ -632,13 +659,13 @@ export class ContentSpaceService {
   ) {
     const parent = parseInput(contentContainerReferenceSchema, input.parent)
     const page = parseInput(contentSpacePageRequestSchema, input.page)
-    const { provider, context } = await this.#authorizedProvider(
+    let { provider, context } = await this.#authorizedProvider(
       parent.providerInstanceRef,
       'list-entries',
       call,
       callVerificationAuthority(call, parent)
     )
-    await this.#assertResourceReady(
+    context = await this.#assertResourceReady(
       provider,
       context,
       parent,
@@ -693,7 +720,7 @@ export class ContentSpaceService {
       provider,
       context,
       reference,
-      call.assertPrincipalCurrent,
+      call,
       capabilities
     )
   }
@@ -704,13 +731,13 @@ export class ContentSpaceService {
   ) {
     const parent = parseInput(contentContainerReferenceSchema, input.parent)
     const name = parseInput(contentSpaceEntryNameSchema, input.name)
-    const { provider, context } = await this.#authorizedWriteProvider(
+    let { provider, context } = await this.#authorizedWriteProvider(
       parent.providerInstanceRef,
       'create-folder',
       call,
       callVerificationAuthority(call, parent)
     )
-    await this.#assertResourceReady(
+    context = await this.#assertResourceReady(
       provider,
       context,
       parent,
@@ -745,13 +772,13 @@ export class ContentSpaceService {
   ) {
     const parent = parseInput(contentContainerReferenceSchema, input.parent)
     const name = parseInput(contentSpaceEntryNameSchema, input.name)
-    const { provider, context } = await this.#authorizedWriteProvider(
+    let { provider, context } = await this.#authorizedWriteProvider(
       parent.providerInstanceRef,
       'upload-new',
       call,
       callVerificationAuthority(call, parent)
     )
-    await this.#assertResourceReady(
+    context = await this.#assertResourceReady(
       provider,
       context,
       parent,
@@ -853,7 +880,7 @@ export class ContentSpaceService {
     call: ContentSpaceServiceWriteCallContext
   ): Promise<DownloadReceipt> {
     const reference = parseInput(zDownloadReference, input.reference)
-    const { provider, context } = await this.#authorizedWriteProvider(
+    let { provider, context } = await this.#authorizedWriteProvider(
       reference.providerInstanceRef,
       'download',
       call,
@@ -867,7 +894,7 @@ export class ContentSpaceService {
         call.assertPrincipalCurrent
       )
     }
-    await this.#assertResourceReady(
+    context = await this.#assertResourceReady(
       provider,
       context,
       reference,
@@ -1009,7 +1036,7 @@ export class ContentSpaceService {
     call: ContentSpaceServiceCallContext
   ) {
     const reference = parseInput(zContentEntryReference, rawReference)
-    const { provider, context } = await this.#authorizedProvider(
+    let { provider, context } = await this.#authorizedProvider(
       reference.providerInstanceRef,
       'portal-target',
       call,
@@ -1023,7 +1050,7 @@ export class ContentSpaceService {
         call.assertPrincipalCurrent
       )
     }
-    await this.#assertResourceReady(
+    context = await this.#assertResourceReady(
       provider,
       context,
       reference,
@@ -1080,13 +1107,13 @@ export class ContentSpaceService {
     call: ContentSpaceServiceCallContext
   ) {
     const reference = parseInput(contentFileReferenceSchema, rawReference)
-    const { provider, context } = await this.#authorizedProvider(
+    let { provider, context } = await this.#authorizedProvider(
       reference.providerInstanceRef,
       'observe-immutable-version',
       call,
       callVerificationAuthority(call, reference)
     )
-    await this.#assertResourceReady(
+    context = await this.#assertResourceReady(
       provider,
       context,
       reference,
@@ -1405,7 +1432,7 @@ export class ContentSpaceService {
       providerInstanceRef: artifact.providerInstanceRef,
       fileId: artifact.fileId
     })
-    const capabilities = await this.#describe(
+    const capabilities = await this.#providerCapabilities(
       provider,
       context,
       assertPrincipalCurrent
@@ -1447,18 +1474,25 @@ export class ContentSpaceService {
     provider: ContentSpaceProvider,
     context: ContentSpaceProviderOperationContext,
     reference: ContentEntryReference,
-    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent'],
+    call: ContentSpaceServiceCallContext,
     globalCapabilities?: readonly z.infer<
-      typeof contentSpaceCapabilityStateListSchema
+      typeof contentSpaceAdmittedCapabilityStateListSchema
     >[number][]
   ) {
-    const output = parseOutput(contentSpaceEntryObservationSchema, await boundedProviderCall(
+    const output = parseOutput(contentSpaceProviderEntryObservationSchema, await boundedProviderCall(
       () => provider.observeEntry({ context, reference }),
       context.signal,
-      assertPrincipalCurrent
+      call.assertPrincipalCurrent
     ))
     assertObservationBinding(reference, output.entry.reference)
-    const resourceCapabilities = this.#effectiveCapabilities(output.capabilities, false)
+    const resourceCapabilities = await this.#admittedCapabilities(
+      provider,
+      output.capabilities,
+      context,
+      call,
+      callVerificationAuthority(call, reference),
+      false
+    )
     return contentSpaceEntryObservationSchema.parse({
       ...output,
       capabilities: globalCapabilities
@@ -1466,28 +1500,30 @@ export class ContentSpaceService {
             const globalState = globalCapabilities.find((candidate) =>
               candidate.operation === state.operation
             )
-            return globalState && operationReady(globalState)
+            return globalState?.admission.status === 'admitted'
               ? state
               : Object.freeze({
-                  operation: state.operation,
-                  readiness: 'blocked_by_contract' as const,
-                  reasonCode: globalState?.reasonCode ?? 'provider_contract_missing'
+                  ...state,
+                  admission: globalState?.admission ?? Object.freeze({
+                    status: 'blocked' as const,
+                    reasonCode: 'resource_capability_missing' as const
+                  })
                 })
           })
         : resourceCapabilities
     })
   }
 
-  async #assertResourceReady(
+  async #assertResourceReady<Context extends ContentSpaceProviderOperationContext>(
     provider: ContentSpaceProvider,
-    context: ContentSpaceProviderOperationContext,
+    context: Context,
     reference: ContentEntryReference,
     operation: ContentSpaceOperation,
     call: ContentSpaceServiceCallContext,
     authority: ContentSpaceVerificationAuthority
-  ): Promise<void> {
+  ): Promise<Context> {
     const observation = parseOutput(
-      contentSpaceEntryObservationSchema,
+      contentSpaceProviderEntryObservationSchema,
       await boundedProviderCall(
         () => provider.observeEntry({ context, reference }),
         context.signal,
@@ -1498,16 +1534,21 @@ export class ContentSpaceService {
     const state = observation.capabilities.find((candidate) =>
       candidate.operation === operation
     )
-    if (!state || !this.#operationAdmitted(
-      state,
-      context,
-      call,
-      { family: 'ordinary', operation },
-      authority,
-      ordinaryOperationTransferLimits(operation)
-    )) {
+    const admittedContext = state
+      ? await this.#admittedContext(
+          provider,
+          state,
+          context,
+          call,
+          { family: 'ordinary', operation },
+          authority,
+          ordinaryOperationTransferLimits(operation)
+        )
+      : undefined
+    if (!admittedContext) {
       fail('blocked_by_contract', `Content Space resource operation ${operation} is unavailable.`)
     }
+    return admittedContext
   }
 
   async #authorizedProvider(
@@ -1519,10 +1560,10 @@ export class ContentSpaceService {
     provider: ContentSpaceProvider
     context: ContentSpaceProviderOperationContext
     capabilities: readonly z.infer<
-      typeof contentSpaceCapabilityStateListSchema
+      typeof contentSpaceAdmittedCapabilityStateListSchema
     >[number][]
   }>> {
-    const context = this.#operationContext(providerInstanceRef, call)
+    let context = this.#operationContext(providerInstanceRef, call)
     const provider = await this.#providerForCall(
       providerInstanceRef,
       context,
@@ -1540,35 +1581,52 @@ export class ContentSpaceService {
       fail('blocked_by_contract', `Content Space operation ${operation} is Host-gated.`)
     }
     const state = providerCapabilities.find((candidate) => candidate.operation === operation)
-    if (!state || !this.#operationAdmitted(
-      state,
-      context,
-      call,
-      { family: 'ordinary', operation },
-      authority,
-      ordinaryOperationTransferLimits(operation)
-    )) {
+    const admittedContext = state
+      ? await this.#admittedContext(
+          provider,
+          state,
+          context,
+          call,
+          { family: 'ordinary', operation },
+          authority,
+          ordinaryOperationTransferLimits(operation)
+        )
+      : undefined
+    if (!admittedContext) {
       fail('blocked_by_contract', `Content Space operation ${operation} is unavailable.`)
     }
+    context = admittedContext
     if (operationRequiresObservation(operation)) {
       const observationState = providerCapabilities.find((candidate) =>
         candidate.operation === 'observe-entry'
       )
-      if (!observationState || !this.#operationAdmitted(
-        observationState,
-        context,
-        call,
-        { family: 'ordinary', operation: 'observe-entry' },
-        authority,
-        NO_VERIFICATION_TRANSFERS
-      )) {
+      const observationContext = observationState
+        ? await this.#admittedContext(
+            provider,
+            observationState,
+            context,
+            call,
+            { family: 'ordinary', operation: 'observe-entry' },
+            authority,
+            NO_VERIFICATION_TRANSFERS
+          )
+        : undefined
+      if (!observationContext) {
         fail('blocked_by_contract', 'Content Space observation is unavailable.')
       }
+      context = observationContext
     }
     return Object.freeze({
       provider,
       context,
-      capabilities: this.#effectiveCapabilities(providerCapabilities, true)
+      capabilities: await this.#admittedCapabilities(
+        provider,
+        providerCapabilities,
+        context,
+        call,
+        authority,
+        true
+      )
     })
   }
 
@@ -1605,10 +1663,14 @@ export class ContentSpaceService {
   async #describe(
     provider: ContentSpaceProvider,
     context: ContentSpaceProviderOperationContext,
-    assertPrincipalCurrent: ContentSpaceServiceCallContext['assertPrincipalCurrent']
+    call: ContentSpaceServiceCallContext
   ) {
-    return this.#effectiveCapabilities(
-      await this.#providerCapabilities(provider, context, assertPrincipalCurrent),
+    return this.#admittedCapabilities(
+      provider,
+      await this.#providerCapabilities(provider, context, call.assertPrincipalCurrent),
+      context,
+      call,
+      providerVerificationAuthority(context.providerInstanceRef),
       true
     )
   }
@@ -1628,19 +1690,22 @@ export class ContentSpaceService {
     )
   }
 
-  #operationAdmitted(
+  async #admittedContext<Context extends ContentSpaceProviderOperationContext>(
+    provider: ContentSpaceProvider,
     state: Readonly<{
       readiness: 'poc_only' | 'blocked_by_contract' | 'production_ready'
       reasonCode: ContentSpaceReadinessReason
     }>,
-    context: ContentSpaceProviderOperationContext,
+    context: Context,
     call: ContentSpaceServiceCallContext,
     operation: ContentSpaceVerificationOperation,
     authority: ContentSpaceVerificationAuthority,
     transferLimits: ContentSpaceVerificationTransferLimits
-  ): boolean {
-    if (operationReady(state)) return true
-    return contentSpaceVerificationPolicyAdmits(this.#verificationPolicy, {
+  ): Promise<Context | undefined> {
+    if (operationReady(state)) return context
+    if (state.readiness !== 'poc_only' ||
+      state.reasonCode !== 'verification_profile_required') return undefined
+    const admission = {
       state,
       providerInstanceRef: context.providerInstanceRef,
       principal: context.principal,
@@ -1648,52 +1713,161 @@ export class ContentSpaceService {
       authority,
       operation,
       transferLimits,
+      ...(context.expectedExternalBinding
+        ? { externalBinding: context.expectedExternalBinding }
+        : {}),
       now: this.#now()
+    }
+    if (contentSpaceVerificationPolicyAdmits(this.#verificationPolicy, admission)) {
+      return context
+    }
+    if (context.expectedExternalBinding ||
+      !contentSpaceVerificationPolicyRequiresExternalBinding(
+        this.#verificationPolicy,
+        admission
+      )) return undefined
+
+    const rawAttestation = await boundedProviderCall(
+      () => provider.attestExternalBinding(context),
+      context.signal,
+      call.assertPrincipalCurrent
+    )
+    if (rawAttestation === undefined) return undefined
+    const externalBinding = parseOutput(
+      contentSpaceExternalBindingAttestationSchema,
+      rawAttestation
+    )
+    const boundContext = Object.freeze({
+      ...context,
+      expectedExternalBinding: externalBinding
+    }) as Context
+    return contentSpaceVerificationPolicyAdmits(this.#verificationPolicy, {
+      ...admission,
+      externalBinding
     })
+      ? boundContext
+      : undefined
   }
 
-  #effectiveCapabilities(
+  async #admittedCapabilities(
+    provider: ContentSpaceProvider,
     states: readonly z.infer<typeof contentSpaceCapabilityStateListSchema>[number][],
+    context: ContentSpaceProviderOperationContext,
+    call: ContentSpaceServiceCallContext,
+    authority: ContentSpaceVerificationAuthority,
     requireObservationGate: boolean
   ) {
+    const admittedStates: Array<
+      z.input<typeof contentSpaceAdmittedCapabilityStateListSchema>[number]
+    > = []
+    let boundContext = context
+    let observationAdmission: z.input<
+      typeof contentSpaceAdmittedCapabilityStateListSchema
+    >[number]['admission'] | undefined
     const observationState = states.find((state) => state.operation === 'observe-entry')
-    const observationReady = observationState
-      ? operationReady(observationState)
-      : false
-    return contentSpaceCapabilityStateListSchema.parse(states.map((state) => {
-      const pocBlocked = state.readiness === 'poc_only'
-      const observationBlocked = requireObservationGate && !observationReady && [
-        'list-entries',
-        'create-folder',
-        'upload-new',
-        'download',
-        'portal-target',
-        'observe-immutable-version'
-      ].includes(state.operation)
-      const platformBlocked =
+    if (observationState) {
+      const result = await this.#ordinaryAdmission(
+        provider,
+        observationState,
+        boundContext,
+        call,
+        authority
+      )
+      boundContext = result.context
+      observationAdmission = result.admission
+    }
+    for (const state of states) {
+      const result = state === observationState && observationAdmission
+        ? { context: boundContext, admission: observationAdmission }
+        : await this.#ordinaryAdmission(provider, state, boundContext, call, authority)
+      boundContext = result.context
+      const providerAdmission = result.admission
+      const platformBlocked = state.readiness !== 'blocked_by_contract' && (
         (!this.#platform.fileTransfers &&
           (state.operation === 'upload-new' || state.operation === 'download')) ||
         (!this.#platform.externalNavigation && state.operation === 'portal-target')
-      return platformBlocked
-        ? Object.freeze({
-            operation: state.operation,
-            readiness: 'blocked_by_contract' as const,
-            reasonCode: 'platform_gate_blocked' as const
-          })
-        : observationBlocked
+      )
+      const observationBlocked = requireObservationGate &&
+        providerAdmission.status === 'admitted' &&
+        operationRequiresObservation(state.operation) &&
+        observationAdmission?.status !== 'admitted'
+      admittedStates.push(Object.freeze({
+        ...state,
+        admission: platformBlocked
           ? Object.freeze({
-              operation: state.operation,
-              readiness: 'blocked_by_contract' as const,
-              reasonCode: observationState?.reasonCode ?? 'provider_contract_missing'
+              status: 'blocked' as const,
+              reasonCode: 'platform_gate_blocked' as const
             })
-          : pocBlocked
+          : observationBlocked
             ? Object.freeze({
-                operation: state.operation,
-                readiness: 'blocked_by_contract' as const,
-                reasonCode: state.reasonCode
+                status: 'blocked' as const,
+                reasonCode: 'resource_capability_missing' as const
               })
-            : state
-    }))
+            : providerAdmission
+      }))
+    }
+    return contentSpaceAdmittedCapabilityStateListSchema.parse(admittedStates)
+  }
+
+  async #ordinaryAdmission(
+    provider: ContentSpaceProvider,
+    state: z.infer<typeof contentSpaceCapabilityStateListSchema>[number],
+    context: ContentSpaceProviderOperationContext,
+    call: ContentSpaceServiceCallContext,
+    authority: ContentSpaceVerificationAuthority
+  ): Promise<Readonly<{
+    context: ContentSpaceProviderOperationContext
+    admission: z.input<typeof contentSpaceAdmittedCapabilityStateListSchema>[number]['admission']
+  }>> {
+    const admittedContext = await this.#admittedContext(
+      provider,
+      state,
+      context,
+      call,
+      { family: 'ordinary', operation: state.operation },
+      authority,
+      ordinaryOperationTransferLimits(state.operation)
+    )
+    if (admittedContext && state.readiness === 'production_ready') {
+      return Object.freeze({
+        context: admittedContext,
+        admission: Object.freeze({
+        status: 'admitted' as const,
+        reasonCode: 'production_ready' as const
+        })
+      })
+    }
+    if (state.readiness === 'blocked_by_contract') {
+      return Object.freeze({
+        context,
+        admission: Object.freeze({
+          status: 'blocked' as const,
+          reasonCode: state.reasonCode === 'available'
+            ? 'provider_contract_missing' as const
+            : state.reasonCode
+        })
+      })
+    }
+    if (admittedContext) {
+      return Object.freeze({
+        context: admittedContext,
+        admission: Object.freeze({
+          status: 'admitted' as const,
+          reasonCode: 'verification_profile_admitted' as const
+        })
+      })
+    }
+    return Object.freeze({
+      context,
+      admission: Object.freeze({
+        status: 'blocked' as const,
+        reasonCode: call.audience
+          ? state.reasonCode === 'available'
+            ? 'provider_contract_missing' as const
+            : state.reasonCode
+          : 'audience_policy_blocked' as const
+      })
+    })
   }
 
   #provider(providerInstanceRef: string): Promise<ContentSpaceProvider> {

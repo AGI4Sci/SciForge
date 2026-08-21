@@ -65,11 +65,17 @@ const document = Object.freeze({
   resourceType: 'native_document' as const,
   reference: file
 })
+const staleExternalBinding = Object.freeze({
+  providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+  principal,
+  externalSubject: 'c'.repeat(64),
+  bindingRevision: 'd'.repeat(64)
+})
 const assetFixture = createAssetFixture()
 afterAll(() => assetFixture.dispose())
 
 describe('composed OpenContent runtime features', () => {
-  it('runs native, extended, and administration reads/writes through one v2 facade', async () => {
+  it('runs native, extended, and administration reads/writes through one v3 facade', async () => {
     const observedPrivateRequests: unknown[] = []
     const fetchImplementation = providerFetch()
     const internalServices = inMemoryInternalServices()
@@ -319,6 +325,62 @@ describe('composed OpenContent runtime features', () => {
     expect(processRun).not.toHaveBeenCalled()
   })
 
+  it('stops ordinary, CLI, Team, and Project business calls when the expected binding is stale', async () => {
+    const businessRequests: string[] = []
+    const internalServices = inMemoryInternalServices()
+    const processRun = vi.fn()
+    createConnectorMainEntry(connectorHost(internalServices, connectionSettings()), {
+      fetch: providerFetch(businessRequests),
+      skillRuntime: { processPort: { run: processRun } }
+    })
+    const provider = composedProvider(internalServices)
+    const signal = new AbortController().signal
+    const context = {
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      expectedExternalBinding: staleExternalBinding,
+      invocationId: 'invocation_stale_binding_0001',
+      deadlineAt: DEADLINE,
+      signal,
+      assertPrincipalCurrent: () => undefined
+    }
+
+    await expect(provider.listContainers({ context, page: { limit: 20 } }))
+      .rejects.toMatchObject({ detail: { code: 'unauthorized' } })
+    await expect(requiredNativeFeature(provider).execute(nativeInput({
+      effect: 'read',
+      signal,
+      invocationId: 'invocation_stale_binding_0002',
+      operation: 'read',
+      request: { operation: 'read', document },
+      primary: file,
+      expectedExternalBinding: staleExternalBinding
+    }))).resolves.toMatchObject({ outcome: 'failed', error: { code: 'unauthorized' } })
+    await expect(requiredExtendedFeature(provider).execute(extendedInput({
+      effect: 'read',
+      signal,
+      invocationId: 'invocation_stale_binding_0003',
+      operation: 'getEntryInfo',
+      request: { reference: file },
+      expectedExternalBinding: staleExternalBinding
+    }))).resolves.toMatchObject({ ok: false, error: { code: 'unauthorized' } })
+
+    const binding = await provider.features!.administration!.bind(context)
+    await expect(binding.administration.listSpaces({ page: { limit: 10 } }))
+      .rejects.toMatchObject({ detail: { code: 'unauthorized' } })
+    await expect(binding.projectProvisioning!.provisionProjectContentSpace({
+      projectId: 'project-stale-binding',
+      projectLabel: 'Stale binding project',
+      contentOwnerUserId: principal.subject,
+      contentMemberUserIds: [],
+      intentRevision: 1,
+      idempotencyKey: 'idem_project.stale-binding.0001'
+    })).rejects.toMatchObject({ code: 'unauthorized' })
+
+    expect(processRun).not.toHaveBeenCalled()
+    expect(businessRequests).toEqual([])
+  })
+
   it('blocks a hash-bound write before any DocFlow process invocation', async () => {
     const internalServices = inMemoryInternalServices()
     const processRun = vi.fn()
@@ -497,6 +559,7 @@ function nativeInput(input: Readonly<{
   primary: typeof root | typeof file
   contextProviderInstanceRef?: string
   assertPrincipalCurrent?: () => void | Promise<void>
+  expectedExternalBinding?: typeof staleExternalBinding
 }>): Parameters<ContentSpaceNativeDocumentExecutor['execute']>[0] {
   return {
     effect: input.effect,
@@ -506,6 +569,9 @@ function nativeInput(input: Readonly<{
       invocationId: input.invocationId,
       deadlineAt: DEADLINE,
       signal: input.signal,
+      ...(input.expectedExternalBinding === undefined
+        ? {}
+        : { expectedExternalBinding: input.expectedExternalBinding }),
       assertPrincipalCurrent: input.assertPrincipalCurrent ?? (() => undefined)
     },
     target: {
@@ -525,6 +591,7 @@ function extendedInput(input: Readonly<{
   invocationId: string
   operation: 'getEntryInfo' | 'renameEntry'
   request: unknown
+  expectedExternalBinding?: typeof staleExternalBinding
 }>): Parameters<ContentSpaceExtendedOperationsExecutor['execute']>[0] {
   return {
     effect: input.effect,
@@ -534,6 +601,9 @@ function extendedInput(input: Readonly<{
       invocationId: input.invocationId,
       deadlineAt: DEADLINE,
       signal: input.signal,
+      ...(input.expectedExternalBinding === undefined
+        ? {}
+        : { expectedExternalBinding: input.expectedExternalBinding }),
       assertPrincipalCurrent: () => undefined
     },
     target: { kind: 'content', root, primary: file, authorized: [file] },
@@ -748,7 +818,7 @@ function inMemoryInternalServices(): NonNullable<DomainMainHost['internalService
   })
 }
 
-function providerFetch(): typeof fetch {
+function providerFetch(businessRequests: string[] = []): typeof fetch {
   return vi.fn(async (rawUrl, init) => {
     const url = new URL(typeof rawUrl === 'string' ? rawUrl : rawUrl.toString())
     const body = init?.body === undefined ? undefined : JSON.parse(String(init.body)) as unknown
@@ -756,7 +826,22 @@ function providerFetch(): typeof fetch {
       expect(url.searchParams.get('token')).toBe(SYSTEM_USER_TOKEN)
       return jsonResponse({ result: 0, msg: '', data: true })
     }
+    if (url.pathname.endsWith('/User/GetUserInfoByToken')) {
+      expect(body).toEqual({ token: SYSTEM_USER_TOKEN })
+      return jsonResponse({
+        result: 0,
+        msg: '',
+        data: {
+          id: 'external-account-42',
+          identityId: 42,
+          account: 'content-owner',
+          name: 'Content Owner',
+          topPersonalFolderId: 1001
+        }
+      })
+    }
     if (url.pathname.endsWith('/Team/GetMyTeamList')) {
+      businessRequests.push(url.pathname)
       expect(body).toMatchObject({ token: SYSTEM_USER_TOKEN, pageNum: 1, pageSize: 100 })
       return jsonResponse({
         result: 0,
@@ -778,6 +863,7 @@ function providerFetch(): typeof fetch {
       })
     }
     if (url.pathname.endsWith('/DocList/GetFolderInfoById')) {
+      businessRequests.push(url.pathname)
       expect(body).toMatchObject({ token: SYSTEM_USER_TOKEN, folderId: 8 })
       return jsonResponse({
         result: 0,
@@ -803,6 +889,19 @@ function providerGovernanceFetch(): Readonly<{
     const body = jsonBody(init?.body)
     if (url.pathname.endsWith('/Auth/CheckUserTokenValidity')) {
       return jsonResponse({ result: 0, msg: '', data: true })
+    }
+    if (url.pathname.endsWith('/User/GetUserInfoByToken')) {
+      return jsonResponse({
+        result: 0,
+        msg: '',
+        data: {
+          id: 'external-account-42',
+          identityId: 42,
+          account: 'content-owner',
+          name: 'Content Owner',
+          topPersonalFolderId: 1001
+        }
+      })
     }
     if (url.pathname.endsWith('/Team/GetMyTeamList')) {
       return jsonResponse({

@@ -398,7 +398,7 @@ describe('OpenContent client enrollment', () => {
     let releaseGuard!: () => void
     const guardPending = new Promise<void>((resolve) => { releaseGuard = resolve })
     const fetch = vi.fn(async () => jsonResponse(
-      emptyFolderChildren('team-folder-guid', 2213, 1, 20)
+      emptyFolderChildren('team-folder-guid', 9002213, 1, 20)
     ))
     const client = createOpenContentClient({ baseUrl: 'https://opencontent.invalid', fetch })
 
@@ -475,11 +475,11 @@ describe('OpenContent client enrollment', () => {
       result: 0,
       msg: '',
       data: {
-        folderId: 2213,
-        thisFolder: { id: 2213, folderGuid: 'team-folder-guid', permission: 7 },
+        folderId: 9002213,
+        thisFolder: { id: 9002213, folderGuid: 'team-folder-guid', permission: 7 },
         docListInfo: {
           foldersInfo: [{
-            id: 2214,
+            id: 9002214,
             folderGuid: 'foreign-folder-guid',
             name: 'Foreign folder',
             parentFolderId: 9999,
@@ -665,11 +665,11 @@ describe('OpenContent client enrollment', () => {
         return jsonResponse({
           result: 0,
           msg: '',
-          data: { id: 2213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
         })
       }
       if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
-        return jsonResponse(emptyFolderChildren('team-folder-guid', 2213, 1, 100))
+        return jsonResponse(emptyFolderChildren('team-folder-guid', 9002213, 1, 100))
       }
       throw new Error(`A Principal change must stop request ${url.pathname}`)
     })
@@ -709,11 +709,11 @@ describe('OpenContent client enrollment', () => {
         return jsonResponse({
           result: 0,
           msg: '',
-          data: { id: 2213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
         })
       }
       if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
-        const response = emptyFolderChildren('team-folder-guid', 2213, 1, 100)
+        const response = emptyFolderChildren('team-folder-guid', 9002213, 1, 100)
         response.data.docListInfo.settings.totalCount = 101
         principalCurrent = false
         return jsonResponse(response)
@@ -748,11 +748,11 @@ describe('OpenContent client enrollment', () => {
         return jsonResponse({
           result: 0,
           msg: '',
-          data: { id: 2213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
         })
       }
       if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
-        return jsonResponse(emptyFolderChildren('team-folder-guid', 2213, 1, 100))
+        return jsonResponse(emptyFolderChildren('team-folder-guid', 9002213, 1, 100))
       }
       if (url.pathname.endsWith('/flatsdk/api/services/TemplateCreate/CreateFolder')) {
         return jsonResponse({ result: 0, data: { id: 3317, name: 'Experiment' } })
@@ -766,7 +766,7 @@ describe('OpenContent client enrollment', () => {
             folderGuid: 'wrong-parent-folder-guid',
             parentFolderId: 9999,
             folderType: 2,
-            teamId: 19,
+            teamId: 9000019,
             permission: 7,
             childFolderCount: 0,
             childFileCount: 0
@@ -795,11 +795,11 @@ describe('OpenContent client enrollment', () => {
         return jsonResponse({
           result: 0,
           msg: '',
-          data: { id: 2213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
         })
       }
       if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
-        return jsonResponse(emptyFolderChildren('team-folder-guid', 2213, 1, 100))
+        return jsonResponse(emptyFolderChildren('team-folder-guid', 9002213, 1, 100))
       }
       if (url.pathname.endsWith('/flatsdk/api/services/TemplateCreate/CreateFolder')) {
         throw new Error('connection closed after request dispatch')
@@ -829,11 +829,11 @@ describe('OpenContent client enrollment', () => {
         return jsonResponse({
           result: 0,
           msg: '',
-          data: { id: 2213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
         })
       }
       if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
-        return jsonResponse(emptyFolderChildren('team-folder-guid', 2213, 1, 100))
+        return jsonResponse(emptyFolderChildren('team-folder-guid', 9002213, 1, 100))
       }
       if (url.pathname.endsWith('/flatsdk/api/services/TemplateCreate/CreateFolder')) {
         principalCurrent = false
@@ -868,11 +868,11 @@ describe('OpenContent client enrollment', () => {
         return jsonResponse({
           result: 0,
           msg: '',
-          data: { id: 2213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
         })
       }
       if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
-        return jsonResponse(emptyFolderChildren('team-folder-guid', 2213, 1, 100))
+        return jsonResponse(emptyFolderChildren('team-folder-guid', 9002213, 1, 100))
       }
       if (url.pathname.endsWith('/flatsdk/api/services/TemplateCreate/CreateFolder')) {
         return jsonResponse({ result: 7, data: null })
@@ -897,11 +897,11 @@ describe('OpenContent client enrollment', () => {
         return jsonResponse({
           result: 0,
           msg: '',
-          data: { id: 2213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
         })
       }
       if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
-        return jsonResponse(emptyFolderChildren('team-folder-guid', 2213, 1, 100))
+        return jsonResponse(emptyFolderChildren('team-folder-guid', 9002213, 1, 100))
       }
       if (url.pathname.endsWith('/flatsdk/api/services/TemplateCreate/CreateFolder')) {
         return jsonResponse({ result: 0, data: null })
@@ -1003,19 +1003,19 @@ describe('OpenContent client enrollment', () => {
         return jsonResponse({
           result: 0,
           msg: '',
-          data: { id: 2213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
         })
       }
       if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
-        return jsonResponse(emptyFolderChildren('team-folder-guid', 2213, 1, 100))
+        return jsonResponse(emptyFolderChildren('team-folder-guid', 9002213, 1, 100))
       }
       if (url.pathname.endsWith('/flatsdk/api/services/Transport/Upload/CheckAndCreateDocInfo')) {
         return jsonResponse({
           result: 0,
           data: {
-            FileId: 10802,
+            FileId: 9010802,
             FileVerId: 11670,
-            ParentFolderId: 2213,
+            ParentFolderId: 9002213,
             RegionHash: 'fixture-region-hash',
             RegionId: 1,
             RegionType: 1,
@@ -1066,15 +1066,15 @@ describe('OpenContent client enrollment', () => {
         return jsonResponse({
           result: 0,
           msg: '',
-          data: { id: 2213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
         })
       }
       if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
-        const response = emptyFolderChildren('team-folder-guid', 2213, 1, 100, [{
-          id: 10802,
+        const response = emptyFolderChildren('team-folder-guid', 9002213, 1, 100, [{
+          id: 9010802,
           fileGuid: 'existing-file-guid',
           name: 'result.txt',
-          parentFolderId: 2213,
+          parentFolderId: 9002213,
           size: 7,
           permission: 7
         }])
@@ -1108,19 +1108,19 @@ describe('OpenContent client enrollment', () => {
         return jsonResponse({
           result: 0,
           msg: '',
-          data: { id: 2213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
+          data: { id: 9002213, folderGuid: 'team-folder-guid', name: 'Team', permission: 7 }
         })
       }
       if (url.pathname.endsWith('/flatsdk/api/services/DocList/GetFolderChildren')) {
-        return jsonResponse(emptyFolderChildren('team-folder-guid', 2213, 1, 100))
+        return jsonResponse(emptyFolderChildren('team-folder-guid', 9002213, 1, 100))
       }
       if (url.pathname.endsWith('/flatsdk/api/services/Transport/Upload/CheckAndCreateDocInfo')) {
         return jsonResponse({
           result: 0,
           data: {
-            FileId: 10802,
+            FileId: 9010802,
             FileVerId: 11670,
-            ParentFolderId: 2213,
+            ParentFolderId: 9002213,
             RegionHash: 'fixture-region-hash',
             RegionId: 1,
             RegionType: 1,
@@ -1144,7 +1144,7 @@ describe('OpenContent client enrollment', () => {
           result: 0,
           msg: '',
           data: {
-            fileId: 10802,
+            fileId: 9010802,
             fileGuid: 'wrong-parent-file-guid',
             fileName: 'result.txt',
             parentFolderId: 9999,

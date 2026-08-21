@@ -109,7 +109,7 @@ function successReceipt(
     json: Extract<DocflowNativeDocumentReceipt, { outcome: 'succeeded' }>['json']
     delivery?: readonly [ReturnType<typeof delivery>]
     managed?: readonly {
-      role: 'probe-template' | 'edit-plan'
+      role: 'probe-template'
       token: string
       name: string
       mediaType: 'application/json'
@@ -153,8 +153,7 @@ function source(name: string, bytes: Uint8Array) {
 
 function canonicalPlanningReceipt(
   invocation: DocflowCommandInvocation,
-  probeToken: string,
-  planToken: string
+  probeToken: string
 ): DocflowNativeDocumentReceipt | undefined {
   if (invocation.command === 'docflow-probe') {
     return successReceipt(invocation, {
@@ -182,47 +181,10 @@ function canonicalPlanningReceipt(
         success: true,
         canApply: true,
         baseDocumentHash: BASE_HASH
-      },
-      managed: [{
-        role: 'edit-plan',
-        token: planToken,
-        name: 'edit-plan.json',
-        mediaType: 'application/json'
-      }]
+      }
     })
   }
   return undefined
-}
-
-async function establishEditPlan(
-  adapter: ReturnType<typeof createNativeDocumentProviderAdapter>,
-  suffix: string
-): Promise<string> {
-  const selector = { kind: 'text' as const, text: 'Old text', occurrence: 1 }
-  const probe = await adapter.execute(featureInput('probe', {
-    operation: 'probe',
-    document: DOCUMENT,
-    selector,
-    requestedCapability: 'replace_text'
-  }, { invocationId: `invocation_native_probe_${suffix}` }))
-  if (probe.outcome !== 'succeeded' || probe.result.kind !== 'probe') {
-    throw new Error('Expected a successful probe fixture.')
-  }
-  const plan = await adapter.execute(featureInput('plan', {
-    operation: 'plan',
-    document: DOCUMENT,
-    probeReceiptId: probe.result.probeReceiptId,
-    baseHash: BASE_HASH,
-    changes: [{
-      kind: 'replace_text',
-      target: selector,
-      value: 'New text'
-    }]
-  }, { invocationId: `invocation_native_plan_${suffix}` }))
-  if (plan.outcome !== 'succeeded' || plan.result.kind !== 'plan') {
-    throw new Error('Expected a successful plan fixture.')
-  }
-  return plan.result.planReceiptId
 }
 
 describe('native-document Content Space provider adapter', () => {
@@ -447,7 +409,7 @@ describe('native-document Content Space provider adapter', () => {
     }
   })
 
-  it('fails the nine non-atomic direct mutations closed before any DocFlow invocation', async () => {
+  it('fails all ten non-atomic hash-bound mutations closed before any DocFlow invocation', async () => {
     const hashBoundCases: readonly Readonly<{
       operation: FeatureInput['operation']
       request: unknown
@@ -459,6 +421,10 @@ describe('native-document Content Space provider adapter', () => {
       {
         operation: 'insert',
         request: { operation: 'insert', document: DOCUMENT, baseHash: BASE_HASH, position: 'end', content: { encoding: 'json', value: { type: 'paragraph' } } }
+      },
+      {
+        operation: 'edit',
+        request: { operation: 'edit', document: DOCUMENT, planReceiptId: 'plan_untrusted', baseHash: BASE_HASH }
       },
       { operation: 'undo', request: { operation: 'undo', document: DOCUMENT, baseHash: BASE_HASH } },
       { operation: 'redo', request: { operation: 'redo', document: DOCUMENT, baseHash: BASE_HASH } },
@@ -567,66 +533,12 @@ describe('native-document Content Space provider adapter', () => {
     expect(destination.write).toHaveBeenCalledTimes(2)
   })
 
-  it('executes the canonical probe-plan-edit chain once through runner-managed tokens', async () => {
+  it('keeps probe and plan as a read-only analysis chain while edit fails closed', async () => {
     const probeToken = `ocdf_${'p'.repeat(32)}`
-    const planToken = `ocdf_${'e'.repeat(32)}`
     const selector = { kind: 'text' as const, text: 'Old text', occurrence: 1 }
     const execute = vi.fn(async (raw: unknown) => {
       const invocation = docflowCommandInvocationSchema.parse(raw)
-      if (invocation.command === 'docflow-probe') {
-        return successReceipt(invocation, {
-          json: {
-            success: true,
-            documentHash: BASE_HASH,
-            capabilities: { supported: true },
-            selection: {
-              editTarget: { targetText: 'Old text', occurrence: 1 },
-              range: { start: 0, end: 8, unit: 'utf16' },
-              oldText: 'Old text'
-            }
-          },
-          managed: [{
-            role: 'probe-template',
-            token: probeToken,
-            name: 'probe-template.json',
-            mediaType: 'application/json'
-          }]
-        })
-      }
-      if (invocation.command === 'docflow-plan') {
-        return successReceipt(invocation, {
-          json: {
-            success: true,
-            canApply: true,
-            baseDocumentHash: BASE_HASH
-          },
-          managed: [{
-            role: 'edit-plan',
-            token: planToken,
-            name: 'edit-plan.json',
-            mediaType: 'application/json'
-          }]
-        })
-      }
-      if (invocation.command === 'docflow-edit') {
-        return successReceipt(invocation, {
-          json: {
-            success: true,
-            fileId: FILE.fileId
-          },
-          delivery: [delivery()]
-        })
-      }
-      if (invocation.command === 'docflow-read') {
-        return successReceipt(invocation, {
-          json: {
-            documentHash: NEXT_HASH,
-            revisionId: 'revision-two',
-            content: { type: 'doc', children: [] }
-          }
-        })
-      }
-      return failureReceipt(invocation)
+      return canonicalPlanningReceipt(invocation, probeToken) ?? failureReceipt(invocation)
     })
     const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
 
@@ -700,99 +612,6 @@ describe('native-document Content Space provider adapter', () => {
       ]
     })
 
-    const driftedReceipt = await adapter.execute(featureInput('edit', {
-      operation: 'edit',
-      document: DOCUMENT,
-      planReceiptId: `${plan.result.planReceiptId}-drift`,
-      baseHash: BASE_HASH
-    }, { invocationId: 'invocation_native_edit_drift_0001' }))
-    expect(driftedReceipt).toMatchObject({
-      outcome: 'conflict',
-      error: { code: 'conflict', reason: 'stale_plan', retry: 'never' }
-    })
-
-    const driftedHash = await adapter.execute(featureInput('edit', {
-      operation: 'edit',
-      document: DOCUMENT,
-      planReceiptId: plan.result.planReceiptId,
-      baseHash: NEXT_HASH
-    }, { invocationId: 'invocation_native_edit_hash_0001' }))
-    expect(driftedHash).toMatchObject({
-      outcome: 'conflict',
-      error: {
-        code: 'conflict',
-        reason: 'stale_plan',
-        expectedHash: BASE_HASH,
-        actualHash: NEXT_HASH,
-        retry: 'never'
-      }
-    })
-
-    const otherFile = Object.freeze({
-      providerInstanceRef: PROVIDER_INSTANCE_REF,
-      fileId: 'document-two'
-    })
-    const otherDocument = Object.freeze({
-      resourceType: 'native_document' as const,
-      reference: otherFile
-    })
-    const otherTargetInput = featureInput('edit', {
-      operation: 'edit',
-      document: otherDocument,
-      planReceiptId: plan.result.planReceiptId,
-      baseHash: BASE_HASH
-    }, { invocationId: 'invocation_native_edit_document_0001' })
-    const driftedDocument = await adapter.execute({
-      ...otherTargetInput,
-      target: {
-        ...otherTargetInput.target,
-        primary: otherFile,
-        authorized: [otherFile]
-      }
-    })
-    expect(driftedDocument).toMatchObject({
-      outcome: 'conflict',
-      error: { code: 'conflict', reason: 'stale_plan', retry: 'never' }
-    })
-
-    const otherProvider = 'provider-instance-beta'
-    const otherProviderRoot = Object.freeze({
-      providerInstanceRef: otherProvider,
-      containerId: ROOT.containerId
-    })
-    const otherProviderFile = Object.freeze({
-      providerInstanceRef: otherProvider,
-      fileId: FILE.fileId
-    })
-    const otherProviderDocument = Object.freeze({
-      resourceType: 'native_document' as const,
-      reference: otherProviderFile
-    })
-    const otherProviderInput = featureInput('edit', {
-      operation: 'edit',
-      document: otherProviderDocument,
-      planReceiptId: plan.result.planReceiptId,
-      baseHash: BASE_HASH
-    }, { invocationId: 'invocation_native_edit_provider_0001' })
-    const driftedProvider = await adapter.execute({
-      ...otherProviderInput,
-      context: {
-        ...otherProviderInput.context,
-        providerInstanceRef: otherProvider
-      },
-      target: {
-        ...otherProviderInput.target,
-        root: otherProviderRoot,
-        primary: otherProviderFile,
-        authorized: [otherProviderFile]
-      }
-    } as FeatureInput)
-    expect(driftedProvider).toMatchObject({
-      outcome: 'conflict',
-      error: { code: 'conflict', reason: 'stale_plan', retry: 'never' }
-    })
-    expect(execute).toHaveBeenCalledTimes(2)
-
     const edit = await adapter.execute(featureInput('edit', {
       operation: 'edit',
       document: DOCUMENT,
@@ -800,38 +619,10 @@ describe('native-document Content Space provider adapter', () => {
       baseHash: BASE_HASH
     }, { invocationId: 'invocation_native_edit_0001' }))
     expect(edit).toMatchObject({
-      outcome: 'succeeded',
-      result: {
-        kind: 'document',
-        document: DOCUMENT,
-        documentHash: NEXT_HASH,
-        revisionId: 'revision-two'
-      }
+      outcome: 'failed',
+      error: { code: 'unsupported', retry: 'never' }
     })
-    expect(execute.mock.calls[2]?.[0]).toEqual({
-      invocationId: 'invocation_native_edit_0001',
-      command: 'docflow-edit',
-      args: { fileId: FILE.fileId, baseHash: BASE_HASH },
-      dataFiles: [{ role: 'edit-plan', encoding: 'managed', token: planToken }]
-    })
-    expect(execute.mock.calls[3]?.[0]).toMatchObject({
-      command: 'docflow-read',
-      args: { fileId: FILE.fileId },
-      dataFiles: []
-    })
-
-    const replay = await adapter.execute(featureInput('edit', {
-      operation: 'edit',
-      document: DOCUMENT,
-      planReceiptId: plan.result.planReceiptId,
-      baseHash: BASE_HASH
-    }, { invocationId: 'invocation_native_edit_replay_0001' }))
-    expect(replay).toMatchObject({
-      outcome: 'conflict',
-      error: { code: 'conflict', reason: 'stale_plan', retry: 'never' }
-    })
-    expect(JSON.stringify(execute.mock.calls)).not.toMatch(/(?:\/tmp\/|planFile|templateFile|argv|env|executable)/u)
-    expect(execute).toHaveBeenCalledTimes(4)
+    expect(execute).toHaveBeenCalledTimes(2)
   })
 
   it('rejects a stale or foreign managed chain before invoking DocFlow', async () => {
@@ -861,15 +652,14 @@ describe('native-document Content Space provider adapter', () => {
     expect(execute).not.toHaveBeenCalled()
   })
 
-  it('expires probe and plan receipts after the runner-managed ten-minute lifetime', async () => {
+  it('expires probe receipts after the runner-managed ten-minute lifetime', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-08-20T00:00:00.000Z'))
     try {
       const probeToken = `ocdf_${'p'.repeat(32)}`
-      const planToken = `ocdf_${'e'.repeat(32)}`
       const execute = vi.fn(async (raw: unknown) => {
         const invocation = docflowCommandInvocationSchema.parse(raw)
-        return canonicalPlanningReceipt(invocation, probeToken, planToken) ?? failureReceipt(invocation)
+        return canonicalPlanningReceipt(invocation, probeToken) ?? failureReceipt(invocation)
       })
       const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
       const selector = { kind: 'text' as const, text: 'Old text', occurrence: 1 }
@@ -896,32 +686,16 @@ describe('native-document Content Space provider adapter', () => {
         error: { code: 'conflict', reason: 'stale_plan', retry: 'never' }
       })
       expect(execute).toHaveBeenCalledOnce()
-
-      const planReceiptId = await establishEditPlan(adapter, 'expiring-plan')
-      expect(execute).toHaveBeenCalledTimes(3)
-      vi.advanceTimersByTime(10 * 60 * 1_000 + 1)
-      const expiredPlan = await adapter.execute(featureInput('edit', {
-        operation: 'edit',
-        document: DOCUMENT,
-        planReceiptId,
-        baseHash: BASE_HASH
-      }, { invocationId: 'invocation_native_edit_expired' }))
-      expect(expiredPlan).toMatchObject({
-        outcome: 'conflict',
-        error: { code: 'conflict', reason: 'stale_plan', retry: 'never' }
-      })
-      expect(execute).toHaveBeenCalledTimes(3)
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('binds managed probe and plan receipts to the exact Principal snapshot', async () => {
+  it('binds managed probe receipts to the exact Principal snapshot', async () => {
     const probeToken = `ocdf_${'p'.repeat(32)}`
-    const planToken = `ocdf_${'e'.repeat(32)}`
     const execute = vi.fn(async (raw: unknown) => {
       const invocation = docflowCommandInvocationSchema.parse(raw)
-      return canonicalPlanningReceipt(invocation, probeToken, planToken) ?? failureReceipt(invocation)
+      return canonicalPlanningReceipt(invocation, probeToken) ?? failureReceipt(invocation)
     })
     const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
     const selector = { kind: 'text' as const, text: 'Old text', occurrence: 1 }
@@ -953,27 +727,6 @@ describe('native-document Content Space provider adapter', () => {
       error: { code: 'conflict', reason: 'stale_plan', retry: 'never' }
     })
     expect(execute).toHaveBeenCalledOnce()
-
-    const planReceiptId = await establishEditPlan(adapter, 'principal-bound')
-    const input = featureInput('edit', {
-      operation: 'edit',
-      document: DOCUMENT,
-      planReceiptId,
-      baseHash: BASE_HASH
-    }, { invocationId: 'invocation_native_edit_other_principal' })
-
-    const result = await adapter.execute({
-      ...input,
-      context: {
-        ...input.context,
-        principal: { ...PRINCIPAL, identityVersion: PRINCIPAL.identityVersion + 1 }
-      }
-    } as FeatureInput)
-    expect(result).toMatchObject({
-      outcome: 'conflict',
-      error: { code: 'conflict', reason: 'stale_plan', retry: 'never' }
-    })
-    expect(execute).toHaveBeenCalledTimes(3)
   })
 
   it('bounds pending managed receipts and purges expired entries before dispatch', async () => {
@@ -1031,143 +784,6 @@ describe('native-document Content Space provider adapter', () => {
       vi.useRealTimers()
     }
   }, 20_000)
-
-  it('bounds pending plan receipts and purges them before creating another plan', async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-08-20T00:00:00.000Z'))
-    try {
-      let probeIndex = 0
-      let planIndex = 0
-      const execute = vi.fn(async (raw: unknown) => {
-        const invocation = docflowCommandInvocationSchema.parse(raw)
-        if (invocation.command === 'docflow-probe') {
-          probeIndex += 1
-          return canonicalPlanningReceipt(
-            invocation,
-            `ocdf_p${String(probeIndex).padStart(31, '0')}`,
-            `ocdf_e${'0'.repeat(31)}`
-          )!
-        }
-        if (invocation.command === 'docflow-plan') {
-          planIndex += 1
-          return canonicalPlanningReceipt(
-            invocation,
-            `ocdf_p${'0'.repeat(31)}`,
-            `ocdf_e${String(planIndex).padStart(31, '0')}`
-          )!
-        }
-        return failureReceipt(invocation)
-      })
-      const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
-      for (let index = 0; index < 2_048; index += 1) {
-        await establishEditPlan(adapter, `capacity-plan-${String(index).padStart(4, '0')}`)
-      }
-      expect(execute).toHaveBeenCalledTimes(4_096)
-
-      const selector = { kind: 'text' as const, text: 'Old text', occurrence: 1 }
-      const probe = await adapter.execute(featureInput('probe', {
-        operation: 'probe',
-        document: DOCUMENT,
-        selector,
-        requestedCapability: 'replace_text'
-      }, { invocationId: 'invocation_native_plan_capacity_probe' }))
-      if (probe.outcome !== 'succeeded' || probe.result.kind !== 'probe') {
-        throw new Error('Expected a successful probe fixture.')
-      }
-      const overflow = await adapter.execute(featureInput('plan', {
-        operation: 'plan',
-        document: DOCUMENT,
-        probeReceiptId: probe.result.probeReceiptId,
-        baseHash: BASE_HASH,
-        changes: [{ kind: 'replace_text', target: selector, value: 'New text' }]
-      }, { invocationId: 'invocation_native_plan_capacity_overflow' }))
-      expect(overflow).toMatchObject({
-        outcome: 'failed',
-        error: { code: 'provider_unavailable', retry: 'never' }
-      })
-      expect(execute).toHaveBeenCalledTimes(4_097)
-
-      vi.advanceTimersByTime(10 * 60 * 1_000 + 1)
-      await establishEditPlan(adapter, 'capacity-plan-after-purge')
-      expect(execute).toHaveBeenCalledTimes(4_099)
-    } finally {
-      vi.useRealTimers()
-    }
-  }, 30_000)
-
-  it.each([
-    ['principal revalidation rejection', 'throw', 'outcome_unknown'],
-    ['transport outcome uncertainty', 'outcome-unknown', 'outcome_unknown'],
-    ['a proved provider rejection', 'failed', 'failed']
-  ] as const)('consumes the edit plan before %s and never replays the write', async (
-    _label,
-    failure,
-    expectedOutcome
-  ) => {
-    const probeToken = `ocdf_${'p'.repeat(32)}`
-    const planToken = `ocdf_${'e'.repeat(32)}`
-    const execute = vi.fn(async (raw: unknown) => {
-      const invocation = docflowCommandInvocationSchema.parse(raw)
-      const planning = canonicalPlanningReceipt(invocation, probeToken, planToken)
-      if (planning) return planning
-      if (invocation.command !== 'docflow-edit') return failureReceipt(invocation)
-      if (failure === 'throw') {
-        throw Object.assign(new Error('The Principal lease changed before dispatch.'), {
-          code: 'unauthorized'
-        })
-      }
-      if (failure === 'failed') return failureReceipt(invocation)
-      return {
-        protocol: DOCFLOW_NATIVE_DOCUMENT_RECEIPT_PROTOCOL,
-        invocationId: invocation.invocationId,
-        command: invocation.command,
-        attemptCount: 1,
-        outcome: 'outcome_unknown',
-        error: {
-          code: 'outcome_unknown',
-          stage: 'write',
-          message: 'Dispatch may have reached OpenContent.',
-          retry: 'never'
-        }
-      } satisfies DocflowNativeDocumentReceipt
-    })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
-    const planReceiptId = await establishEditPlan(adapter, failure)
-    const request = {
-      operation: 'edit' as const,
-      document: DOCUMENT,
-      planReceiptId,
-      baseHash: BASE_HASH
-    }
-
-    const result = await adapter.execute(featureInput('edit', request, {
-      invocationId: `invocation_native_edit_${failure}`
-    }))
-    expect(result).toMatchObject(expectedOutcome === 'outcome_unknown'
-      ? {
-          outcome: 'outcome_unknown',
-          error: { code: 'outcome_unknown', stage: 'write', retry: 'never' }
-        }
-      : {
-          outcome: 'failed',
-          error: { code: 'provider_unavailable', retry: 'never' }
-        })
-    expect(execute.mock.calls[2]?.[0]).toEqual({
-      invocationId: `invocation_native_edit_${failure}`,
-      command: 'docflow-edit',
-      args: { fileId: FILE.fileId, baseHash: BASE_HASH },
-      dataFiles: [{ role: 'edit-plan', encoding: 'managed', token: planToken }]
-    })
-
-    const replay = await adapter.execute(featureInput('edit', request, {
-      invocationId: `invocation_native_replay_${failure}`
-    }))
-    expect(replay).toMatchObject({
-      outcome: 'conflict',
-      error: { code: 'conflict', reason: 'stale_plan', retry: 'never' }
-    })
-    expect(execute).toHaveBeenCalledTimes(3)
-  })
 
   it('returns outcome_unknown when a successful write and its single readback still lack a document hash', async () => {
     const execute = vi.fn(async (raw: unknown) => {
@@ -1306,49 +922,6 @@ describe('native-document Content Space provider adapter', () => {
       error: { code: 'outcome_unknown', stage: 'verify', retry: 'never' }
     })
     expect(execute).toHaveBeenCalledOnce()
-  })
-
-  it('returns outcome_unknown and consumes the plan when edit readback cannot prove success', async () => {
-    const probeToken = `ocdf_${'p'.repeat(32)}`
-    const planToken = `ocdf_${'e'.repeat(32)}`
-    const execute = vi.fn(async (raw: unknown) => {
-      const invocation = docflowCommandInvocationSchema.parse(raw)
-      const planning = canonicalPlanningReceipt(invocation, probeToken, planToken)
-      if (planning) return planning
-      if (invocation.command === 'docflow-edit') {
-        return successReceipt(invocation, {
-          json: { success: true, fileId: FILE.fileId },
-          delivery: [delivery()]
-        })
-      }
-      return failureReceipt(invocation)
-    })
-    const adapter = createNativeDocumentProviderAdapter({ owner: ADAPTER_OWNER, docflow: { execute } })
-    const planReceiptId = await establishEditPlan(adapter, 'readback-failure')
-    const request = {
-      operation: 'edit' as const,
-      document: DOCUMENT,
-      planReceiptId,
-      baseHash: BASE_HASH
-    }
-
-    const receipt = await adapter.execute(featureInput('edit', request, {
-      invocationId: 'invocation_native_edit_readback_failure'
-    }))
-    expect(receipt).toMatchObject({
-      outcome: 'outcome_unknown',
-      error: { code: 'outcome_unknown', stage: 'verify', retry: 'never' }
-    })
-    expect(execute).toHaveBeenCalledTimes(4)
-
-    const replay = await adapter.execute(featureInput('edit', request, {
-      invocationId: 'invocation_native_edit_readback_replay'
-    }))
-    expect(replay).toMatchObject({
-      outcome: 'conflict',
-      error: { code: 'conflict', reason: 'stale_plan', retry: 'never' }
-    })
-    expect(execute).toHaveBeenCalledTimes(4)
   })
 
   it('maps conflict and outcome_unknown without replaying', async () => {

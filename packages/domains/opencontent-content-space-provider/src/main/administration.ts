@@ -44,6 +44,7 @@ import {
   createCurrentPrincipalOpenContentIdentityBinding,
   type OpenContentIdentityBindingPort
 } from './identity-binding.js'
+import { toOpenContentExpectedBinding } from './external-binding.js'
 import { createOpenContentProjectProvisioning } from './project-provisioning.js'
 
 const MAX_PAGES = 10_000
@@ -95,6 +96,7 @@ export function createOpenContentAdministrationFeature(options: Readonly<{
         projectProvisioning: provisioning.bindProjectProvisioningPort({
           principal: context.principal,
           providerInstanceRef: context.providerInstanceRef,
+          ...toOpenContentExpectedBinding(context),
           signal: context.signal,
           assertPrincipalCurrent: context.assertPrincipalCurrent
         })
@@ -117,6 +119,7 @@ function createBoundAdministrationPort(options: Readonly<{
       return await options.facade.useTeamAdministration({
         principal: options.context.principal,
         providerInstanceRef: options.context.providerInstanceRef,
+        ...toOpenContentExpectedBinding(options.context),
         signal: options.context.signal,
         assertPrincipalCurrent: options.context.assertPrincipalCurrent
       }, operation)

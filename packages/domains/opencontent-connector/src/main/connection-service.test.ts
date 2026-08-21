@@ -220,7 +220,7 @@ describe('OpenContent connection service', () => {
         retiredCredentialIds: ['connection-retired'],
         externalAccount: {
           id: 'external-user-a',
-          identityId: 41,
+          identityId: 9000041,
           account: 'fixture-user-a',
           name: 'Fixture User A'
         },
@@ -288,7 +288,7 @@ describe('OpenContent connection service', () => {
         token: 'first-opaque-token',
         account: {
           id: 'external-user-a',
-          identityId: 41,
+          identityId: 9000041,
           account: 'fixture-user-a',
           name: 'Fixture User A',
           topPersonalFolderId: '1001'
@@ -298,7 +298,7 @@ describe('OpenContent connection service', () => {
         token: 'second-opaque-token',
         account: {
           id: 'external-user-b',
-          identityId: 42,
+          identityId: 9000042,
           account: 'fixture-user-b',
           name: 'Fixture User B',
           topPersonalFolderId: '1002'
@@ -312,6 +312,7 @@ describe('OpenContent connection service', () => {
       client: {
         authenticateExistingAccount,
         isTokenValid: async () => true,
+        observeCurrentExternalAccount: async () => fixtureExternalAccount('external-user-b'),
         listRootFolders: async () => ({ roots: [] }),
         listFolderEntries: async ({ parentFolderGuid }) => ({
           parentFolderGuid,
@@ -540,13 +541,14 @@ describe('OpenContent connection service', () => {
           token: 'bound-opaque-token',
           account: {
             id: 'external-user-a',
-            identityId: 41,
+            identityId: 9000041,
             account: 'fixture-user-a',
             name: 'Fixture User A',
             topPersonalFolderId: '1001'
           }
         }),
         isTokenValid: async () => true,
+        observeCurrentExternalAccount: async () => fixtureExternalAccount('external-user-a'),
         listRootFolders: async () => ({ roots: [] }),
         listFolderEntries: async ({ parentFolderGuid }) => ({
           parentFolderGuid,
@@ -634,9 +636,181 @@ describe('OpenContent connection service', () => {
 
     expect(observed).toEqual({
       token: 'bound-opaque-token',
-      externalIdentityId: 41,
+      externalIdentityId: 9000041,
+      bindingAttestation: {
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+        principal,
+        externalSubject: expect.stringMatching(/^[0-9a-f]{64}$/u),
+        bindingRevision: expect.stringMatching(/^[0-9a-f]{64}$/u)
+      },
       frozen: true
     })
+  })
+
+  it('attests the exact Principal and rotates only the binding revision on same-account rebind', async () => {
+    let sequence = 0
+    const authenticateExistingAccount = vi.fn<OpenContentClient['authenticateExistingAccount']>()
+      .mockResolvedValue(authenticatedSession('external-user-a', 'fixture-user-a'))
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings: inMemorySettings(),
+      credentials: inMemoryCredentials(),
+      client: stubClient({ authenticateExistingAccount }),
+      createConnectionId: () => `connection-${++sequence}`
+    })
+    const bind = () => service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-a',
+      password: 'fixture-password',
+      assertPrincipalCurrent: () => undefined
+    })
+
+    await bind()
+    const first = await service.attestExternalBinding({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    })
+    await bind()
+    const rebound = await service.attestExternalBinding({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    })
+
+    expect(first).toEqual({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      principal,
+      externalSubject: expect.stringMatching(/^[0-9a-f]{64}$/u),
+      bindingRevision: expect.stringMatching(/^[0-9a-f]{64}$/u)
+    })
+    expect(Object.isFrozen(first)).toBe(true)
+    expect(rebound.externalSubject).toBe(first.externalSubject)
+    expect(rebound.bindingRevision).not.toBe(first.bindingRevision)
+    expect(JSON.stringify([first, rebound])).not.toMatch(
+      /external-user-a|fixture-user-a|connection-[12]|"identityId"/u
+    )
+  })
+
+  it('rejects a superseded binding attestation before the protected operation', async () => {
+    let sequence = 0
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings: inMemorySettings(),
+      credentials: inMemoryCredentials(),
+      client: stubClient(),
+      createConnectionId: () => `connection-${++sequence}`
+    })
+    const bind = () => service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-a',
+      password: 'fixture-password',
+      assertPrincipalCurrent: () => undefined
+    })
+    await bind()
+    const attestation = await service.attestExternalBinding({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    })
+    await expect(service.useCurrentSession({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      expectedBindingAttestation: attestation,
+      assertPrincipalCurrent: () => undefined
+    }, async () => 'admitted')).resolves.toBe('admitted')
+
+    await bind()
+    const operation = vi.fn(async () => 'must not run')
+    await expect(service.useCurrentSession({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      expectedBindingAttestation: attestation,
+      assertPrincipalCurrent: () => undefined
+    }, operation)).rejects.toMatchObject({ code: 'unauthorized' })
+    expect(operation).not.toHaveBeenCalled()
+  })
+
+  it('requires every external binding attestation field to match exactly', async () => {
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings: inMemorySettings(),
+      credentials: inMemoryCredentials(),
+      client: stubClient(),
+      createConnectionId: () => 'connection-current'
+    })
+    await service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-a',
+      password: 'fixture-password',
+      assertPrincipalCurrent: () => undefined
+    })
+    const attestation = await service.attestExternalBinding({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    })
+    const mismatches = [
+      { ...attestation, providerInstanceRef: 'opencontent-other-instance' },
+      { ...attestation, principal: { ...principal, identityVersion: 2 } },
+      { ...attestation, externalSubject: 'c'.repeat(64) },
+      { ...attestation, bindingRevision: 'd'.repeat(64) }
+    ]
+
+    for (const expectedBindingAttestation of mismatches) {
+      const operation = vi.fn(async () => 'must not run')
+      await expect(service.useCurrentSession({
+        principal,
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+        expectedBindingAttestation,
+        assertPrincipalCurrent: () => undefined
+      }, operation)).rejects.toMatchObject({ code: 'unauthorized' })
+      expect(operation).not.toHaveBeenCalled()
+    }
+  })
+
+  it('rejects a valid Token whose provider-authenticated account no longer matches the binding', async () => {
+    const observeCurrentExternalAccount = vi.fn<
+      OpenContentClient['observeCurrentExternalAccount']
+    >().mockResolvedValue({
+      id: 'external-user-a',
+      identityId: 9000041,
+      account: 'fixture-user-a',
+      name: 'Changed Provider Name',
+      topPersonalFolderId: '1001'
+    })
+    const operation = vi.fn(async () => 'must not run')
+    const service = createOpenContentConnectionService({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      settings: inMemorySettings(),
+      credentials: inMemoryCredentials(),
+      client: stubClient({ observeCurrentExternalAccount }),
+      createConnectionId: () => 'connection-current'
+    })
+    await service.bindExistingAccount({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      username: 'fixture-user-a',
+      password: 'fixture-password',
+      assertPrincipalCurrent: () => undefined
+    })
+
+    await expect(service.useCurrentSession({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    }, operation)).rejects.toMatchObject({ code: 'reauthentication_required' })
+
+    expect(observeCurrentExternalAccount).toHaveBeenCalledTimes(1)
+    expect(operation).not.toHaveBeenCalled()
+    await expect(service.status({
+      principal,
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      assertPrincipalCurrent: () => undefined
+    })).resolves.toMatchObject({ state: 'reauthentication_required' })
   })
 
   it('does not let a rebind replace the account during an active atomic session', async () => {
@@ -689,9 +863,9 @@ describe('OpenContent connection service', () => {
     expect(rebindCompleted).toBe(false)
 
     releaseSession()
-    await expect(activeSession).resolves.toBe(41)
+    await expect(activeSession).resolves.toBe(9000041)
     await expect(rebind).resolves.toMatchObject({
-      externalAccount: { identityId: 42 }
+      externalAccount: { identityId: 9000042 }
     })
   })
 
@@ -709,13 +883,14 @@ describe('OpenContent connection service', () => {
           token: 'bound-opaque-token',
           account: {
             id: 'external-user-a',
-            identityId: 41,
+            identityId: 9000041,
             account: 'fixture-user-a',
             name: 'Fixture User A',
             topPersonalFolderId: '1001'
           }
         }),
         isTokenValid,
+        observeCurrentExternalAccount: async () => fixtureExternalAccount('external-user-a'),
         listRootFolders: async () => ({ roots: [] }),
         listFolderEntries: async ({ parentFolderGuid }) => ({
           parentFolderGuid,
@@ -765,13 +940,17 @@ describe('OpenContent connection service', () => {
           token: 'bound-opaque-token',
           account: {
             id: 'external-user-a',
-            identityId: 41,
+            identityId: 9000041,
             account: 'fixture-user-a',
             name: 'Fixture User A',
             topPersonalFolderId: '1001'
           }
         }),
         isTokenValid: async () => true,
+        observeCurrentExternalAccount: async () => authenticatedSession(
+          'external-user-a',
+          'fixture-user-a'
+        ).account,
         listRootFolders: async () => ({ roots: [] }),
         listFolderEntries: async ({ parentFolderGuid }) => ({
           parentFolderGuid,
@@ -906,13 +1085,14 @@ function stubClient(
       token: 'bound-opaque-token',
       account: {
         id: 'external-user-a',
-        identityId: 41,
+        identityId: 9000041,
         account: 'fixture-user-a',
         name: 'Fixture User A',
         topPersonalFolderId: '1001'
       }
     }),
     isTokenValid: async () => true,
+    observeCurrentExternalAccount: async () => fixtureExternalAccount('external-user-a'),
     listRootFolders: async () => ({ roots: [] }),
     listFolderEntries: async ({ parentFolderGuid }) => ({ parentFolderGuid, entries: [] }),
     observeEntry: async ({ kind, resourceGuid }) => kind === 'container'
@@ -930,11 +1110,22 @@ function authenticatedSession(id: string, account: string) {
     token: `opaque-token-${id}`,
     account: Object.freeze({
       id,
-      identityId: id === 'external-user-a' ? 41 : 42,
+      identityId: id === 'external-user-a' ? 9000041 : 9000042,
       account,
-      name: account,
+      name: id === 'external-user-a' ? 'Fixture User A' : 'Fixture User B',
       topPersonalFolderId: id === 'external-user-a' ? '1001' : '1002'
     })
+  })
+}
+
+function fixtureExternalAccount(id: 'external-user-a' | 'external-user-b') {
+  const account = id === 'external-user-a' ? 'fixture-user-a' : 'fixture-user-b'
+  return Object.freeze({
+    id,
+    identityId: id === 'external-user-a' ? 9000041 : 9000042,
+    account,
+    name: id === 'external-user-a' ? 'Fixture User A' : 'Fixture User B',
+    topPersonalFolderId: id === 'external-user-a' ? '1001' : '1002'
   })
 }
 

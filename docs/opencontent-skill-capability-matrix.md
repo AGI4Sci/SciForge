@@ -2,7 +2,7 @@
 
 Audit date: 2026-08-21
 
-This inventory maps every admitted supplier command to a
+This inventory maps every reviewed supplier command to a
 provider-neutral SciForge contract. It is evidence, not runtime configuration and not permission
 to invoke the supplier CLI or its raw HTTP passthrough.
 
@@ -11,16 +11,20 @@ runtime are public source. The original supplier attachment, its extracted files
 distribution metadata are not published; see the
 [attachment distribution boundary](./opencontent-attachment-distribution.md).
 
-Matrix status is deliberately singular and conservative. It records contract and adapter evidence,
-not `Content Space Capability Readiness`; in particular, `implemented` never means
-`production_ready` or `live_verified`:
+Inventory status is deliberately singular and conservative. It records contract and adapter
+evidence, not `Content Space Capability Readiness` and not packaged live evidence; in particular,
+`implemented` never means `production_ready` or `live_verified`:
 
 - `contract_verified`: a closed typed SciForge request/result/error contract exists; no runtime or live claim.
-- `implemented`: the canonical SciForge runtime path exists, but this audit does not claim a current live pass.
+- `implemented`: the canonical SciForge runtime path exists; the inventory label itself makes no live claim.
 - `blocked_by_contract`: a typed operation or adapter path may exist, but the Provider lacks the exact safe contract required for dispatch.
 - `deferred`: the consumer integration is intentionally outside this delivery even though related lower-level contracts exist.
-- `live_verified`: the canonical packaged SciForge path passed current live acceptance. No row currently has this status.
 - `intentionally_excluded`: the command is not admitted to the public capability surface.
+
+Packaged live evidence is tracked separately in the exact-operation ledger below. `live_verified`
+means only that the recorded operation and scope passed the current packaged canonical path; it is
+not a readiness state, does not apply to a composite inventory row, and does not spread to a sibling
+operation, authority, audience, or Provider binding.
 
 The contracts are provider-neutral. Supplier IDs, URLs, numeric member types, permission bitmasks,
 CLI argument strings, and arbitrary request payloads are adapter-private translations.
@@ -28,9 +32,13 @@ CLI argument strings, and arbitrary request payloads are adapter-private transla
 ## Current dispatch readiness
 
 The public contracts enumerate exactly **20 native-document operations** and **54 extended
-operations**. OpenContent currently has **zero** `production_ready` / `available` and **zero**
-`live_verified` operations. Runtime availability is intentionally different from the inventory
-status above:
+operations**. OpenContent currently has **zero** `production_ready` operations. The exact-operation
+ledger below records the limited packaged canonical live evidence; every `live_verified` operation
+still declares `poc_only` / `verification_profile_required`. Runtime availability is intentionally
+different from inventory status. Provider-declared readiness (`poc_only`, `blocked_by_contract`, or
+`production_ready`) records evidence; current invocation admission independently reports whether
+the exact caller, Principal, authority, audience, platform and verification facts may execute now.
+An admitted verification invocation remains `poc_only`.
 
 | Installation | `poc_only` / `verification_profile_required` | Blocked, dormant, or omitted |
 |---|---|---|
@@ -48,7 +56,7 @@ readiness. It is not an OpenContent business-operation pass and does not promote
 ### Trusted verification admission
 
 `poc_only` remains unavailable in the default product composition. A separately reviewed generic
-Content Space verification policy may admit an invocation only when all of these trusted facts
+Content Space verification profile may admit an invocation only when all of these trusted facts
 match exactly:
 
 - exact Provider Instance;
@@ -56,18 +64,29 @@ match exactly:
   version); Host assurance is not an external OpenContent account class;
 - exact authority (Provider Instance or authorized personal/shared root);
 - exact operation ID and audience;
-- zero upload/download limits and an unexpired validity window no longer than 24 hours.
+- bounded upload/download maxima and an unexpired validity window no longer than 24 hours; and
+- for Provider-scoped operations, mutations, administration, or non-zero transfers, the exact
+  expected Provider Binding Attestation.
 
-The Connector currently supplies no attested external account subject or opaque binding revision.
-Until it does, Provider Instance authority can admit only the read-only `list-containers`
-bootstrap; exact Broker-bound content-root authority can admit only read operations; and mutation
-or administration profiles fail composition. Observing an external account or tenant during a
-test does not make it a policy-bound fact.
+The v2 Provider Binding Attestation is token-free, non-portable evidence for the exact Provider
+Instance and complete Principal plus an opaque external subject and opaque Connection revision.
+Content Space obtains it only from the pinned Provider and matches it against the static profile.
+It then carries the exact expectation in-process; immediately before business dispatch, the
+Provider passes it through the canonical Connector boundary. The Connector reauthenticates the
+actual current session, observes the current external subject, recomputes both opaque values, and
+requires an exact match. Unbind, rebind, credential replacement, account change, or revision drift
+therefore fails before the Provider business operation. Raw external account identifiers do not
+enter capability input or portable authority.
 
-The policy is supplied by trusted service composition, narrows only that invocation, and leaves
+Without an attestation, only zero-transfer `list-containers` bootstrap and zero-transfer reads on
+an exact Broker-authoritative content root are profile-safe. The matched upload/download maxima
+are enforced during the actual invocation; they are not compared as descriptive metadata and they
+do not widen the global Content Space bounds.
+
+The profile is supplied by trusted service composition, narrows only that invocation, and leaves
 the Provider declaration as `poc_only`. Caller payloads, renderer state, Agent requests, prompts,
 Tasks, filenames, MIME types, ordinary environment/configuration, attachment presence, or a
-successful sibling operation cannot install, select, or widen it. A verification policy can never
+successful sibling operation cannot install, select, or widen it. A verification profile can never
 admit `blocked_by_contract`.
 
 When one operation depends on another gated operation, such as observation before a bounded file
@@ -83,8 +102,8 @@ Host/Broker capabilities are therefore recorded explicitly before the command ma
 | Installed Provider discovery | `content-space.list-provider-instances` | implemented | Returns trusted Provider Instance references only; it does not infer a Provider from a label or prompt. |
 | Personal/shared root selection | `content-space.list-agent-root-candidates` / `content-space.authorize-agent-root` | implemented | Candidate labels are non-authorizing; authorization re-enumerates live state and issues one exact Broker root resource. |
 | Personal-library file loop | `content-space.agent-list-entries` / `content-space.agent-create-folder` / `content-space.agent-upload-new` / `content-space.agent-download` | implemented | Uses the Provider-resolved personal root, bounded pages, no magic numeric folder ID, and no implicit overwrite. |
-| Shared/Team-library file loop | `content-space.agent-list-entries` / `content-space.agent-create-folder` / `content-space.agent-upload-new` / `content-space.agent-download` | implemented | Uses the Team's real root container reference; Team identity and root folder identity remain distinct. |
-| Team administration | `content-space.authorize-provider-administration` plus `content-space.agent-admin-*` | implemented | All ten operations are PoC-only. The Host issues one scoped grant and gates each exact operation before Provider binding; Team deletion is absent. |
+| Shared Content Container / OpenContent Team file loop | `content-space.agent-list-entries` / `content-space.agent-create-folder` / `content-space.agent-upload-new` / `content-space.agent-download` | implemented | Uses the Team's real Content Container root reference; Team identity and root folder identity remain distinct. |
+| Shared-root / Team administration | `content-space.authorize-provider-administration` plus `content-space.agent-admin-*` | implemented | All ten operations are PoC-only. The Host issues one scoped Broker resource and gates each exact operation. Agent shared-root creation accepts no owner; the Broker current Principal supplies it and the Provider checks it against the authenticated external session. Team deletion is absent. |
 | Project Content Directory provisioning | `ProjectContentSpaceProvisioningPort` | blocked_by_contract / dormant | No `content-space.agent-provision-project` capability exists. Provider operation `provision-project` is `blocked_by_contract / provider_contract_missing`; a future Project-owning consumer must supply an authoritative Project Content Space Binding and verified identity mappings before it invokes the provider-neutral port. Ordinary Agents cannot author owner or membership intent. |
 | Cloud Task handoff | — | deferred | No Task-specific Content Space port exists. Cloud Collaboration must first own the Project Content Space Binding, typed Task file intents, and exact Task-turn resource injection and retirement. |
 | Immutable artifact proof | `content-space.observe-immutable-version` | blocked_by_contract | OpenContent does not prove immutable retention plus version-specific retrieval. A file identity, version number, or digest cannot by itself authorize an `ArtifactReference`. |
@@ -170,7 +189,7 @@ Provider only a managed byte stream.
 
 | Supplier command | Provider-neutral SciForge operation | Status | Notes |
 |---|---|---|---|
-| `team-create` | `content-space-administration.createSpace` | implemented | Creates a shared content space through the canonical administration port. |
+| `team-create` | `content-space-administration.createSpace` | implemented | Creates a shared Content Container through the canonical administration port. Agent input cannot choose the owner; Broker authority injects the current Principal. |
 | `team-list` | `content-space-administration.listSpaces` | implemented | Does not expose supplier team IDs. |
 | `team-edit` | `content-space-administration.updateSpace` | implemented | Label update is revision-bound; owner transfer has one separate canonical operation below. |
 | `team-stick` | `content-space-administration.pinSpace` | implemented | Provider-neutral pinned state. |
@@ -234,12 +253,49 @@ does not claim a separate DocumentProvider or any live-tenant verification.
 | `oc <METHOD> <url> ...` raw API passthrough | — | intentionally_excluded | No raw/generic provider request capability is admitted. |
 | Undocumented CLI subcommands or bundled scripts | — | intentionally_excluded | Not part of the reviewed command inventory. |
 
-## Current evidence summary
+## Current packaged canonical evidence
 
-- `live_verified`: **0**. Live status requires a fresh packaged-app acceptance run through the canonical Broker/domain path.
+This is the sole public live-evidence ledger. It intentionally stores no environment-specific
+Provider, Principal, account, root, resource, profile, or binding identifiers. Each row is scoped to
+the exact operation and abstract authority class shown; it does not verify a composite workflow or
+any sibling operation.
+
+| Exact operation | Sanitized packaged outcome | Evidence | Declared readiness |
+|---|---|---|---|
+| `list-containers` | Personal-root bootstrap completed through the canonical packaged path with a zero-transfer result. | `live_verified` | `poc_only` / `verification_profile_required` |
+| `observe-entry` | Observation completed against the exact authorized personal-root scope with zero transfer. | `live_verified` | `poc_only` / `verification_profile_required` |
+| `list-entries` | A bounded listing completed against the exact authorized personal-root scope. | `live_verified` | `poc_only` / `verification_profile_required` |
+| `upload-new` | The physical packaged UI completed a bounded 157-byte new-file upload; required pre-dispatch re-attestation matched and a refresh observed the new entry. | `live_verified` | `poc_only` / `verification_profile_required` |
+| `download` | A bounded download completed from the exact authorized personal-root scope through the canonical packaged path. | `live_verified` | `poc_only` / `verification_profile_required` |
+
+The re-attestation result above is path and safety evidence for `upload-new`; it is not a separate
+OpenContent business operation. OpenContent still has **zero** `production_ready` operations.
+
+### Native-document packaged outcomes
+
+These outcomes are acceptance evidence, but none is a native-document live success and none is
+`live_verified`:
+
+| Exact operation | Sanitized packaged outcome | Evidence classification | Declared readiness |
+|---|---|---|---|
+| `native-document:create` | Returned `outcome_unknown`; one unique new `.mdoc` was observed and was attributable to the attempt, but the typed outcome remained uncertain. | not `live_verified` | `poc_only` / `verification_profile_required` |
+| `native-document:read` | Returned `provider_contract_error`. | not `live_verified` | `poc_only` / `verification_profile_required` |
+| `native-document:probe` | Returned `provider_contract_error`. | not `live_verified` | `poc_only` / `verification_profile_required` |
+| `native-document:plan` | Not executed; no packaged live evidence was produced. | not `live_verified` | `poc_only` / `verification_profile_required` |
+| `native-document:edit` | Failed closed before adapter invocation or supplier process launch, with zero remote mutation. | packaged pre-dispatch fail-closed evidence; not `live_verified` | `blocked_by_contract` |
+
+### Team-administration packaged outcome
+
+| Exact operation | Sanitized packaged outcome | Evidence classification | Declared readiness |
+|---|---|---|---|
+| `content-space-administration.createSpace` | One packaged Agent invocation traversed Broker → Content Space → Provider → Connector and the Provider returned after the remote create committed. Agent result delivery then failed as `observation_failed` because the returned dynamic root was implicitly observed. No retry was issued. A later canonical, read-only Content Space panel reconciliation matched the saved private label to exactly one human-visible shared root, confirming the commit. The delivery defect is fixed, but a post-fix packaged Agent attempt did not dispatch the exact capability, so no end-to-end Agent success is claimed. | remote-commit and read-only reconciliation evidence; not `live_verified` | `poc_only` / `verification_profile_required` |
+
+### Readiness and remaining evidence
+
 - `implemented` records a canonical typed path only; it does not imply `production_ready`, executable PoC policy, Agent eligibility, or live acceptance.
+- Readiness remains descriptive evidence even when an exact invocation is admitted. Admission additionally requires current Broker authority and, for unsafe/provider-scoped operations, a v2 binding attestation rechecked by the Connector before business dispatch.
 - Same-file update and all ten hash-bound native-document mutations, including `edit`, remain `blocked_by_contract` until the Provider exposes an atomic exact-version/hash compare-and-mutate contract.
-- Immutable-version observation remains blocked, so OpenContent results remain live Content File References or native-document receipts rather than `ArtifactReference` values.
+- Immutable-version observation remains blocked, so OpenContent results remain live `ContentFileReference` values or native-document receipts rather than `ArtifactReference` values.
 - The provider-neutral Project provisioning port remains dormant and no generic Agent provisioning capability exists. Cloud Task handoff remains deferred until Cloud Collaboration supplies the binding, typed file intents, and Task-turn resource lifecycle; Content Space exposes no Task port.
 - Extended rows marked `implemented` have a canonical typed adapter and Content Space dispatch path only. A resource grant cannot promote their readiness.
 - Team member role change and owner transfer use the typed Team Administration delegate. Team deletion remains not-supported.
@@ -254,11 +310,12 @@ Every promotion record must include:
 
 - the exact SciForge commit, packaged application identity, platform, public Runtime version, and
   private overlay identity/digest when used;
-- the exact Provider Instance and observed external tenant/account, complete Host Principal
-  snapshot (including assurance), authority/root, operation ID, audience, verification-policy
-  identity, limits, and validity window; the record must state that no Connector-attested external
-  subject/binding revision exists today rather than equating Host assurance with account class;
-- a run through the packaged Broker → Content Space → Provider → Connector path, with the canonical
+- the exact Provider Instance, complete Host Principal snapshot (including assurance),
+  authority/root, operation ID, audience, verification-profile identity, enforced limits, validity
+  window, and opaque Provider Binding Attestation when required; raw credentials and external
+  account identifiers must remain outside the record;
+- a run through the packaged Broker → Content Space → pinned Provider → Connector path, including
+  pre-dispatch Connector re-attestation, with the canonical
   request digest, invocation/receipt identity, timestamp, bounded result, and postcondition;
 - least-privilege authorization and relevant negative evidence, including wrong Principal/root,
   revocation, collisions, cancellation/deadline, ambiguous outcomes, and no blind retry after a
@@ -294,7 +351,7 @@ read-before-write emulation are not accepted.
 Native `edit` is subject to the same rule: a local plan receipt, one-time token, probe, `baseHash`
 check, write-time re-read, or post-write digest does not prove atomic Provider comparison.
 
-### Immutable Artifact Reference evidence
+### Immutable `ArtifactReference` evidence
 
 `observeImmutableVersion` and `ArtifactReference` issuance stay blocked until OpenContent proves:
 
@@ -306,5 +363,5 @@ check, write-time re-read, or post-write digest does not prove atomic Provider c
 - packaged-path digest verification of the exact retrieved version under the current Principal.
 
 A file ID, latest-version number, response digest, or locally retained bytes is insufficient.
-Artifact references remain non-authorizing and must still resolve through the current Principal's
+`ArtifactReference` values remain non-authorizing and must still resolve through the current Principal's
 Provider connection and authorization.

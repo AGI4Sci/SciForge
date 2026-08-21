@@ -3,6 +3,8 @@
 - [x] 1.1 Add failing Provider characterization tests for `poc_only` ordinary, administration, native, and extended operations and for blocked native `edit`.
 - [x] 1.2 Downgrade unverified OpenContent operations per operation, keep contract-incomplete operations blocked, and preserve `updateFileVersion` fail-closed before Provider invocation.
 - [x] 1.3 Add a generic trusted Content Space verification-policy contract, strict package-owned static `main.extension` composition, and service/Broker admission tests proving default failure, exact-match read/bootstrap admission, Provider-binding fail-closed behavior, and rejection of caller-controlled widening.
+- [x] 1.4 Add Provider-authenticated opaque external-subject/binding-revision evidence, bind it to the exact Principal and Provider Instance, and require the Connector to recheck the expected binding in the current session before every admitted remote business dispatch.
+- [x] 1.5 Separate Provider-declared readiness evidence from current invocation admission in Content Space outputs and renderer behavior without promoting `poc_only` operations.
 
 ## 2. Project Authority Boundary
 
@@ -22,6 +24,7 @@
 - [x] 4.2 Require trusted overlay installation evidence before source activation and packaging, and reject changed, extra, missing, escaping, wrong-version, or unreceipted resources.
 - [x] 4.3 Add provider-neutral public Mac/Windows release guards that stop when internal runtime composition is non-empty before signing or upload.
 - [x] 4.4 Verify clean public checkout and installed-overlay source/package flows remain deterministic and do not modify the public lockfile.
+- [x] 4.5 Reject active Content Space verification-profile packages from every official public release path before build/sign/upload and again after packaging.
 
 ## 5. Documentation and Evidence
 
@@ -34,5 +37,12 @@
 - [x] 6.1 Run focused Content Space, OpenContent Provider/Connector/runtime, internal packaging, release, and boundary tests plus package/root typechecks and changed-file lint.
 - [x] 6.2 Build and smoke source Electron with and without an overlay, then build and inspect a packaged application through the canonical runtime path.
 - [x] 6.3 Run full regression, OpenSpec strict validation, domain composition freshness, capability governance, and final diff/secret/private-asset audits.
-- [ ] 6.4 Obtain the OpenContent test tenant, personal/shared roots, least-privilege accounts, and supplier CAS/version contract; run packaged Broker → Content Space → Provider → Connector live acceptance and promote only separately proven operations.
-- [x] 6.5 Commit the scoped change and push only to the fork branch; do not update or push upstream.
+- [x] 6.4 Use disposable static verification-profile composition to run packaged Broker → Content Space → Provider → Connector live acceptance for root discovery, bounded upload/download, native-document skill use, and Team creation; record each exact outcome without promoting readiness.
+  - Completed packaged canonical live evidence: `list-containers`, `observe-entry`, `list-entries`, `upload-new`, and `download` are `live_verified`; each remains `poc_only` / `verification_profile_required`.
+  - Native packaged outcomes, not live success: `native-document:create` returned `outcome_unknown` with one unique new `.mdoc` attributable to the attempt; `native-document:read` and `native-document:probe` returned `provider_contract_error`; `native-document:plan` was not executed.
+  - Team packaged outcome, not end-to-end Agent success: one `createSpace` invocation reached a remote commit before Agent result delivery failed as `observation_failed` because the returned dynamic root was implicitly observed. No retry was issued. Later canonical read-only panel reconciliation found exactly one human-visible shared root matching the private saved label and confirmed the commit. The delivery defect is fixed, but a post-fix packaged Agent attempt did not dispatch the exact capability.
+  - Readiness snapshot: `production_ready` remains zero; exact live evidence does not promote readiness or any sibling operation.
+- [ ] 6.5 Commit the scoped change and push only to the fork branch; do not update or push upstream.
+- [x] 6.6 Prove a clean checkout with no OpenContent overlay builds and starts in both source and packaged modes, registers no native supplier feature, and contains no OpenContent packaged resources.
+- [ ] 6.7 Confirm the supplier CAS/version contract and UPDATE-versus-UPGRADE semantics before implementing or admitting same-file mutation.
+- [x] 6.8 While that contract is absent, attempt native `edit` only as a packaged pre-dispatch fail-closed acceptance with zero remote mutation. The packaged request failed closed as `blocked_by_contract` before adapter invocation or supplier process launch, with zero remote mutation.

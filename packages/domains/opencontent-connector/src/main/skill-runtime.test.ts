@@ -39,6 +39,12 @@ const principal = Object.freeze({
   deviceId: 'opencontent-skill-runtime-test',
   identityVersion: 1
 })
+const bindingAttestation = Object.freeze({
+  providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+  principal,
+  externalSubject: 'a'.repeat(64),
+  bindingRevision: 'b'.repeat(64)
+})
 const assetFixture = createAssetFixture()
 afterAll(() => assetFixture.dispose())
 
@@ -228,6 +234,7 @@ describe('OpenContent main-only skill runtime session', () => {
     const output = await session.useSkillRuntime({
       principal,
       providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      expectedBindingAttestation: bindingAttestation,
       invocationId: 'invocation_skill_runtime_0001',
       deadlineAt: new Date(Date.now() + 10_000).toISOString(),
       signal: new AbortController().signal,
@@ -243,6 +250,10 @@ describe('OpenContent main-only skill runtime session', () => {
     })
 
     expect(output).toMatchObject({ command: 'docflow-read', ok: true })
+    expect(connections.useCurrentSession).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedBindingAttestation: bindingAttestation }),
+      expect.any(Function)
+    )
     expect(run).toHaveBeenCalledOnce()
     expect(run.mock.calls[0]?.[0].connectionMaterial).toEqual({
       site: 'https://provider.invalid',
@@ -330,11 +341,13 @@ describe('OpenContent main-only skill runtime session', () => {
 function connectionService(token: string): OpenContentConnectionService {
   return {
     status: vi.fn(),
+    attestExternalBinding: vi.fn(async () => bindingAttestation),
     bindExistingAccount: vi.fn(),
     useCurrentToken: vi.fn(),
     useCurrentSession: vi.fn(async (_input, operation) => operation({
       token,
-      externalIdentityId: 42
+      externalIdentityId: 42,
+      bindingAttestation
     })),
     unbind: vi.fn()
   }

@@ -19,10 +19,10 @@ import {
 } from './project-provisioning.js'
 import { createCurrentPrincipalOpenContentIdentityBinding } from './identity-binding.js'
 
-const teamId = openContentTeamIdSchema.parse(19)
-const folderId = openContentFolderIdSchema.parse(2213)
+const teamId = openContentTeamIdSchema.parse(9000019)
+const folderId = openContentFolderIdSchema.parse(9002213)
 const ownerIdentityId = openContentIdentityIdSchema.parse(42)
-const memberAIdentityId = openContentIdentityIdSchema.parse(41)
+const memberAIdentityId = openContentIdentityIdSchema.parse(9000041)
 const memberBIdentityId = openContentIdentityIdSchema.parse(43)
 const staleMemberIdentityId = openContentIdentityIdSchema.parse(45)
 
@@ -124,7 +124,7 @@ describe('OpenContent Project Content Space provisioning', () => {
       resolveTeamRoot: vi.fn().mockResolvedValue({
         teamId,
         folderId,
-        folderGuid: '7031fd44-2a4a-4c3c-9c74-121104b4324a'
+        folderGuid: '11111111-2222-4333-8444-555555555555'
       })
     })
     const useTeamAdministration = vi.fn(async (_context, operation) => operation({
@@ -156,7 +156,7 @@ describe('OpenContent Project Content Space provisioning', () => {
         status: 'ready',
         root: toPortableContentContainerReference({
           providerInstanceRef: 'opencontent-test',
-          containerId: '7031fd44-2a4a-4c3c-9c74-121104b4324a'
+          containerId: '11111111-2222-4333-8444-555555555555'
         }),
         contentOwnerUserId: 'user-owner',
         members: [{ contentUserId: 'user-member-a', status: 'ready' }, {
@@ -164,16 +164,16 @@ describe('OpenContent Project Content Space provisioning', () => {
         }]
       },
       team: {
-        teamId: 19,
-        folderId: 2213,
+        teamId: 9000019,
+        folderId: 9002213,
         name: teamName,
         ownerIdentityId: 42,
         created: true
       },
       root: {
-        teamId: 19,
-        folderId: 2213,
-        folderGuid: '7031fd44-2a4a-4c3c-9c74-121104b4324a'
+        teamId: 9000019,
+        folderId: 9002213,
+        folderGuid: '11111111-2222-4333-8444-555555555555'
       },
       reconciliation: {
         addedIdentityIds: [43],

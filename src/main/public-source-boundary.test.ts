@@ -1,4 +1,6 @@
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { basename, dirname, extname, join, posix, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
@@ -11,6 +13,15 @@ type BoundaryViolation = Readonly<{
 }>
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+const require = createRequire(import.meta.url)
+const {
+  findContentSpaceVerificationProfileContributions
+} = require('../../scripts/public-release-guard.cjs') as Readonly<{
+  findContentSpaceVerificationProfileContributions(
+    definitions: readonly Record<string, unknown>[],
+    options?: Readonly<{ includeDevelopmentOnly?: boolean }>
+  ): readonly Readonly<{ packageName: string; contributionId: string }>[]
+}>
 const rootPackagePath = join(repositoryRoot, 'package.json')
 const packageLockPath = join(repositoryRoot, 'package-lock.json')
 const privatePackagePrefix = ['@sciforge', 'internal'].join('-') + '/'
@@ -251,6 +262,17 @@ function formatViolations(violations: readonly BoundaryViolation[]): string {
     .join('\n')
 }
 
+function trackedDomainPackageDefinitions(): readonly Record<string, unknown>[] {
+  return execFileSync('git', ['ls-files', '-z', 'packages/domains'], {
+    cwd: repositoryRoot,
+    encoding: 'utf8'
+  })
+    .split('\0')
+    .filter((path) => path.endsWith('/sciforge.domain.json'))
+    .sort()
+    .map((path) => JSON.parse(readFileSync(join(repositoryRoot, path), 'utf8')) as Record<string, unknown>)
+}
+
 describe('public source boundary', () => {
   it('normalizes portable workspace paths before enforcing the internal boundary', () => {
     const internalVariants = [
@@ -286,5 +308,16 @@ describe('public source boundary', () => {
       packages?: Record<string, { workspaces?: unknown }>
     }
     expect(packageLock.packages?.['']?.workspaces).toEqual(rootManifest.workspaces)
+  })
+
+  it('keeps Principal, external binding, and root verification profiles out of tracked public packages', () => {
+    const findings = findContentSpaceVerificationProfileContributions(
+      trackedDomainPackageDefinitions(),
+      { includeDevelopmentOnly: true }
+    )
+
+    expect(findings.map(({ packageName, contributionId }) =>
+      `${packageName}:${contributionId}`
+    ).join('\n')).toBe('')
   })
 })

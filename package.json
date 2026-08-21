@@ -48,7 +48,7 @@
     "packages/workers/ppt-master"
   ],
   "scripts": {
-    "prebuild": "npm run capability:check",
+    "prebuild": "node ./scripts/public-release-prebuild.cjs && npm run capability:check",
     "dev": "node ./scripts/dev-bootstrap.mjs",
     "build": "npm run build:agent-support && electron-vite build",
     "build:execution-governance": "npm --workspace @sciforge/execution-governance run build",

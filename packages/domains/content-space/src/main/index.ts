@@ -87,6 +87,7 @@ import {
 } from '../contract.js'
 import {
   contentSpaceAdministrationAddMemberInputSchema,
+  contentSpaceAgentAdministrationCreateSpaceInputSchema,
   contentSpaceAdministrationCreateSpaceInputSchema,
   contentSpaceAdministrationListMembersInputSchema,
   contentSpaceAdministrationListSpacesInputSchema,
@@ -1353,7 +1354,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
               resource: issueAgentAdministrationResource(context, providerInstanceRef)
             })
           },
-          () => Object.freeze({ changed: true })
+          () => Object.freeze({ changed: false })
         )
       }),
       define({
@@ -1394,7 +1395,7 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
         approval: 'none',
         autonomousWrite: 'resource-authorized',
         concurrency: { revision: 'none', idempotency: 'required' },
-        inputSchema: contentSpaceAdministrationCreateSpaceInputSchema,
+        inputSchema: contentSpaceAgentAdministrationCreateSpaceInputSchema,
         outputSchema: contentSpaceResultSchema(AGENT_ADMINISTRATION_CREATE_SPACE_SCHEMA),
         handler: async (input, context) => {
           const record = requireAgentAdministrationResource(context)
@@ -1404,7 +1405,10 @@ function createContentSpaceCapabilityFactory<CapabilityDefinition>(options: Read
                 await executeAgentAdministration(
                   administrationTarget(record),
                   'create-space',
-                  input,
+                  Object.freeze({
+                    ...input,
+                    contentOwnerUserId: record.principal.subject
+                  }),
                   'external-write',
                   context
                 )
@@ -2040,13 +2044,11 @@ const AGENT_ADMINISTRATION_CREATE_SPACE_SCHEMA = z.object({
 
 const AGENT_ADMINISTRATION_UPDATE_SPACE_INPUT_SCHEMA = z.object({
   expectedRevision: administrationUpdateShape.expectedRevision,
-  label: administrationUpdateShape.label,
-  idempotencyKey: administrationUpdateShape.idempotencyKey
+  label: administrationUpdateShape.label
 }).strict().readonly()
 
 const AGENT_ADMINISTRATION_ROOT_MUTATION_INPUT_SCHEMA = z.object({
-  expectedRevision: administrationRootMutationShape.expectedRevision,
-  idempotencyKey: administrationRootMutationShape.idempotencyKey
+  expectedRevision: administrationRootMutationShape.expectedRevision
 }).strict().readonly()
 
 const AGENT_ADMINISTRATION_LIST_MEMBERS_INPUT_SCHEMA = z.object({
@@ -2055,8 +2057,7 @@ const AGENT_ADMINISTRATION_LIST_MEMBERS_INPUT_SCHEMA = z.object({
 
 const AGENT_ADMINISTRATION_MEMBER_MUTATION_INPUT_SCHEMA = z.object({
   contentUserId: administrationMemberMutationShape.contentUserId,
-  expectedRevision: administrationMemberMutationShape.expectedRevision,
-  idempotencyKey: administrationMemberMutationShape.idempotencyKey
+  expectedRevision: administrationMemberMutationShape.expectedRevision
 }).strict().readonly()
 
 async function issueExtendedPortalTarget(

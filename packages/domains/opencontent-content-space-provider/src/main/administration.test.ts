@@ -37,13 +37,19 @@ const context: ContentSpaceProviderOperationContext = Object.freeze({
   deadlineAt: new Date(Date.now() + 10_000).toISOString(),
   assertPrincipalCurrent: vi.fn()
 })
-const teamId = openContentTeamIdSchema.parse(19)
-const folderId = openContentFolderIdSchema.parse(2213)
+const teamId = openContentTeamIdSchema.parse(9000019)
+const folderId = openContentFolderIdSchema.parse(9002213)
 const ownerIdentityId = openContentIdentityIdSchema.parse(42)
 const memberIdentityId = openContentIdentityIdSchema.parse(43)
 const managerIdentityId = openContentIdentityIdSchema.parse(44)
 const externalIdentityId = openContentIdentityIdSchema.parse(45)
-const rootGuid = '7031fd44-2a4a-4c3c-9c74-121104b4324a'
+const rootGuid = '11111111-2222-4333-8444-555555555555'
+const externalBinding = Object.freeze({
+  providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+  principal,
+  externalSubject: 'a'.repeat(64),
+  bindingRevision: 'b'.repeat(64)
+})
 
 describe('OpenContent provider-neutral administration adapter', () => {
   it('declares ten unverified operations PoC-only and Project provisioning blocked', async () => {
@@ -120,6 +126,30 @@ describe('OpenContent provider-neutral administration adapter', () => {
     )
   })
 
+  it('forwards the exact Content Space binding expectation when a bound Team port opens a session', async () => {
+    const harness = teamHarness()
+    const useTeamAdministration = teamSession(harness.administration)
+    const feature = createOpenContentAdministrationFeature({
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+      facade: facadeFixture(useTeamAdministration),
+      identities: identityBindings()
+    })
+    const boundContext = Object.freeze({ ...context, expectedExternalBinding: externalBinding })
+    const binding = await feature.bind(boundContext)
+
+    await binding.administration.listSpaces({ page: { limit: 20 } })
+
+    expect(useTeamAdministration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principal,
+        providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
+        expectedBindingAttestation: externalBinding,
+        assertPrincipalCurrent: context.assertPrincipalCurrent
+      }),
+      expect.any(Function)
+    )
+  })
+
   it('lists, observes, opens, edits, pins, and unpins a Team by its portable root', async () => {
     const harness = teamHarness()
     const administration = (await createFeature(harness).bind(context)).administration
@@ -144,8 +174,7 @@ describe('OpenContent provider-neutral administration adapter', () => {
     const edited = await administration.updateSpace({
       root,
       expectedRevision: observed.revision,
-      label: 'Renamed Team',
-      idempotencyKey: 'idem_team.rename.0001'
+      label: 'Renamed Team'
     })
     expect(edited.label).toBe('Renamed Team')
     expect(harness.editTeam).toHaveBeenCalledWith({
@@ -155,14 +184,12 @@ describe('OpenContent provider-neutral administration adapter', () => {
     })
     const pinned = await administration.pinSpace({
       root,
-      expectedRevision: edited.revision,
-      idempotencyKey: 'idem_team.pin.000001'
+      expectedRevision: edited.revision
     })
     expect(pinned.pinned).toBe(true)
     const unpinned = await administration.unpinSpace({
       root,
-      expectedRevision: pinned.revision,
-      idempotencyKey: 'idem_team.unpin.0001'
+      expectedRevision: pinned.revision
     })
     expect(unpinned.pinned).toBe(false)
     expect(harness.stickTeam).toHaveBeenCalledOnce()
@@ -177,8 +204,7 @@ describe('OpenContent provider-neutral administration adapter', () => {
     await expect(administration.updateSpace({
       root,
       expectedRevision: 'oc_00000000000000000000000000000000',
-      label: 'Must not write',
-      idempotencyKey: 'idem_team.conflict.01'
+      label: 'Must not write'
     })).rejects.toMatchObject({
       detail: { code: 'conflict', retry: 'after-human-action' }
     })
@@ -201,8 +227,7 @@ describe('OpenContent provider-neutral administration adapter', () => {
       root: space.root,
       expectedRevision: space.revision,
       label: 'Renamed Without Owner Transfer',
-      contentOwnerUserId: 'content-new-owner',
-      idempotencyKey: 'idem_team.owner.0001'
+      contentOwnerUserId: 'content-new-owner'
     })).resolves.toMatchObject({
       label: 'Renamed Without Owner Transfer',
       contentOwnerUserId: 'content-owner'
@@ -216,8 +241,7 @@ describe('OpenContent provider-neutral administration adapter', () => {
 
     await expect(administration.createSpace({
       label: 'New Research Team',
-      contentOwnerUserId: principal.subject,
-      idempotencyKey: 'idem_team.create.0001'
+      contentOwnerUserId: principal.subject
     })).resolves.toMatchObject({
       label: 'New Research Team',
       contentOwnerUserId: principal.subject,
@@ -228,8 +252,7 @@ describe('OpenContent provider-neutral administration adapter', () => {
 
     await administration.createSpace({
       label: 'New Research Team',
-      contentOwnerUserId: principal.subject,
-      idempotencyKey: 'idem_team.create.0001'
+      contentOwnerUserId: principal.subject
     })
     expect(harness.createTeam).toHaveBeenCalledOnce()
   })
@@ -244,8 +267,7 @@ describe('OpenContent provider-neutral administration adapter', () => {
 
     const error = await administration.createSpace({
       label: 'Foreign Team',
-      contentOwnerUserId: 'unbound-cloud-user',
-      idempotencyKey: 'idem_team.create.0002'
+      contentOwnerUserId: 'unbound-cloud-user'
     }).catch((caught: unknown) => caught)
     expect(error).toBeInstanceOf(ContentSpaceOperationError)
     expect(error).toMatchObject({
@@ -286,8 +308,7 @@ describe('OpenContent provider-neutral administration adapter', () => {
     await expect(administration.addMember({
       root: space.root,
       contentUserId: 'content-member',
-      expectedRevision: space.revision,
-      idempotencyKey: 'idem_team.member.add1'
+      expectedRevision: space.revision
     })).resolves.toMatchObject({ contentUserId: 'content-member', role: 'internal' })
     expect(harness.addTeamUsers).toHaveBeenCalledWith({
       teamId,
@@ -296,8 +317,7 @@ describe('OpenContent provider-neutral administration adapter', () => {
     await expect(administration.removeMember({
       root: space.root,
       contentUserId: 'content-member',
-      expectedRevision: space.revision,
-      idempotencyKey: 'idem_team.member.del1'
+      expectedRevision: space.revision
     })).resolves.toMatchObject({ contentUserId: 'content-member', removed: true })
     expect(harness.removeTeamUsers).toHaveBeenCalledWith({
       teamId,
@@ -361,8 +381,7 @@ describe('OpenContent provider-neutral administration adapter', () => {
     await expect(administration.addMember({
       root: space.root,
       contentUserId: 'content-manager',
-      expectedRevision: space.revision,
-      idempotencyKey: 'idem_team.manager.add1'
+      expectedRevision: space.revision
     })).rejects.toMatchObject({
       detail: { code: 'conflict', retry: 'after-human-action' }
     })
@@ -392,6 +411,12 @@ function facadeFixture(
   useTeamAdministration: OpenContentContentSpaceFacade['useTeamAdministration']
 ): OpenContentContentSpaceFacade {
   return {
+    attestExternalBinding: async (input) => Object.freeze({
+      providerInstanceRef: input.providerInstanceRef,
+      principal: input.principal,
+      externalSubject: 'a'.repeat(64),
+      bindingRevision: 'b'.repeat(64)
+    }),
     useTeamAdministration,
     listRootFolders: vi.fn(),
     listFolderEntries: vi.fn(),

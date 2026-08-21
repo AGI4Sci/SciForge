@@ -11,23 +11,26 @@ Documents, or OpenContent-specific behavior.
 ## Readiness and boundaries
 
 Standard composition registers a Provider and its declared operation families;
-it does not make an operation `production_ready` or `live_verified`. Content
-Space checks exact per-operation readiness independently of resource authority,
-so a Broker resource alone never makes an operation executable.
+it does not make an operation `production_ready` or `live_verified`. Provider
+readiness is descriptive evidence; current invocation admission separately
+evaluates the Principal, Broker authority, audience, platform, transfer and
+verification facts. An admitted PoC invocation remains `poc_only`.
 
 A package-owned `main.content-space-verification-profile` extension may
 contribute one static, separately reviewed verification profile. Manifest and
-runtime values must match exactly, and invalid, drifting, or duplicate profiles
-fail composition; the default composition installs no profile. Each profile
-binds one Provider Instance, the complete Host Principal snapshot (including
-its assurance), exact authority and operation, audience, zero upload/download
-limits, and a validity window of at most 24 hours. Host assurance is not an
-external Provider account class. The Connector currently supplies no attested
-external account subject or opaque binding revision, so provider-instance
-authority can admit only the read-only `list-containers` bootstrap and exact
-Broker-bound content-root authority can admit only read operations. Mutation
-and administration profiles fail composition until such binding attestation
-exists. A profile only narrows one `poc_only` invocation, cannot admit
+runtime values must match exactly, and invalid, drifting, duplicate, or unsafe
+profiles fail composition; the default composition installs no profile. Each
+profile binds one Provider Instance, the complete Host Principal snapshot
+(including assurance), exact authority and operation, audience, bounded
+upload/download maxima, and a validity window of at most 24 hours. The matched
+maxima are enforced for the invocation. Provider-scoped operations, mutations,
+administration, and non-zero transfers additionally require an exact v2
+Provider Binding Attestation from the pinned Provider. The attestation binds the
+Provider Instance and Principal to an opaque external subject and opaque
+Connection revision; the Provider must pass the exact expectation to its
+Connector for immediate pre-dispatch re-attestation. Zero-transfer
+`list-containers` bootstrap and exact-root reads are the only profiles safe
+without it. A profile only narrows one `poc_only` invocation, cannot admit
 `blocked_by_contract`, and cannot be installed or widened by caller input,
 renderer state, Agent requests, prompts, Tasks, ordinary
 environment/configuration, package presence, or a successful sibling
@@ -50,5 +53,6 @@ only a future Project-owning consumer with an authoritative binding and
 verified identity mappings may invoke it.
 
 See [the Content Space glossary](../../../docs/contexts/content-space/CONTEXT.md),
+[the architecture and canonical call chain](../../../docs/content-space-architecture.md),
 [ADR-0030](../../../docs/adr/0030-activate-provider-native-documents-through-content-space.md),
 and [the OpenContent capability matrix](../../../docs/opencontent-skill-capability-matrix.md).

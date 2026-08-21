@@ -1,5 +1,8 @@
 import { z } from 'zod'
-import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
+import {
+  principalSnapshotSchema,
+  type PrincipalSnapshot
+} from '@sciforge/domain-sdk/principal'
 import type {
   OpenContentCliCommandTransport
 } from '@sciforge/opencontent-skill-runtime/main-contract'
@@ -12,7 +15,20 @@ import type {
 export const OPENCONTENT_PROVIDER_KIND = 'opencontent' as const
 export const OPENCONTENT_PROVIDER_INSTANCE_REF = 'opencontent-edoc2-demo' as const
 export const OPENCONTENT_CONTENT_SPACE_SERVICE_ID = 'opencontent.content-space' as const
-export const OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION = '2.0.0' as const
+export const OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION = '3.0.0' as const
+
+const openContentBindingDigestSchema = z.string().regex(/^[0-9a-f]{64}$/u)
+
+export const openContentExternalBindingAttestationSchema = z.object({
+  providerInstanceRef: z.string().trim().min(3).max(256),
+  principal: principalSnapshotSchema,
+  externalSubject: openContentBindingDigestSchema,
+  bindingRevision: openContentBindingDigestSchema
+}).strict().readonly()
+
+export type OpenContentExternalBindingAttestation = z.infer<
+  typeof openContentExternalBindingAttestationSchema
+>
 
 export const OPENCONTENT_CONNECTION_CAPABILITY_IDS = Object.freeze({
   status: 'opencontent.connection.status',
@@ -35,24 +51,6 @@ const openContentUnbindSuccessOutputSchema = z.object({
   state: z.literal('disconnected'),
   remoteRevocation: z.literal('unsupported')
 }).strict().readonly()
-
-export const openContentExternalAccountSchema = z.object({
-  id: z.string().trim().min(1).max(256),
-  identityId: z.number().int().nonnegative().safe(),
-  account: z.string().trim().min(1).max(256),
-  name: z.string().trim().min(1).max(256),
-  topPersonalFolderId: z.string().regex(/^\d+$/u)
-}).strict().readonly()
-
-export const openContentAuthenticatedSessionSchema = z.object({
-  token: z.string().trim().min(16).max(4096),
-  account: openContentExternalAccountSchema
-}).strict().readonly()
-
-export type OpenContentExternalAccount = z.infer<typeof openContentExternalAccountSchema>
-export type OpenContentAuthenticatedSession = z.infer<
-  typeof openContentAuthenticatedSessionSchema
->
 
 const openContentExternalAccountSummarySchema = z.object({
   id: z.string().trim().min(1).max(256),
@@ -137,6 +135,7 @@ export type OpenContentSkillRuntimeTransport = OpenContentCliCommandTransport
 export type OpenContentSkillRuntimeContext = Readonly<{
   principal: PrincipalSnapshot
   providerInstanceRef: string
+  expectedBindingAttestation?: OpenContentExternalBindingAttestation
   invocationId: string
   deadlineAt: string
   signal: AbortSignal
@@ -144,6 +143,12 @@ export type OpenContentSkillRuntimeContext = Readonly<{
 }>
 
 export type OpenContentContentSpaceFacade = Readonly<{
+  attestExternalBinding(input: Readonly<{
+    principal: PrincipalSnapshot
+    providerInstanceRef: string
+    signal?: AbortSignal
+    assertPrincipalCurrent(): void | Promise<void>
+  }>): Promise<OpenContentExternalBindingAttestation>
   useSkillRuntime?: <T>(
     input: OpenContentSkillRuntimeContext,
     operation: (transport: OpenContentSkillRuntimeTransport) => T | Promise<T>
@@ -152,6 +157,7 @@ export type OpenContentContentSpaceFacade = Readonly<{
     input: Readonly<{
       principal: PrincipalSnapshot
       providerInstanceRef: string
+      expectedBindingAttestation?: OpenContentExternalBindingAttestation
       signal?: AbortSignal
       assertPrincipalCurrent(): void | Promise<void>
     }>,
@@ -163,6 +169,7 @@ export type OpenContentContentSpaceFacade = Readonly<{
   listRootFolders(input: Readonly<{
     principal: PrincipalSnapshot
     providerInstanceRef: string
+    expectedBindingAttestation?: OpenContentExternalBindingAttestation
     teamPage: number
     teamPageSize: number
     includePersonal?: boolean
@@ -180,6 +187,7 @@ export type OpenContentContentSpaceFacade = Readonly<{
   listFolderEntries(input: Readonly<{
     principal: PrincipalSnapshot
     providerInstanceRef: string
+    expectedBindingAttestation?: OpenContentExternalBindingAttestation
     parentFolderGuid: string
     page: number
     pageSize: number
@@ -196,6 +204,7 @@ export type OpenContentContentSpaceFacade = Readonly<{
   observeEntry(input: Readonly<{
     principal: PrincipalSnapshot
     providerInstanceRef: string
+    expectedBindingAttestation?: OpenContentExternalBindingAttestation
     kind: 'container' | 'file'
     resourceGuid: string
     signal?: AbortSignal
@@ -207,6 +216,7 @@ export type OpenContentContentSpaceFacade = Readonly<{
   createFolder(input: Readonly<{
     principal: PrincipalSnapshot
     providerInstanceRef: string
+    expectedBindingAttestation?: OpenContentExternalBindingAttestation
     parentFolderGuid: string
     name: string
     signal: AbortSignal
@@ -215,6 +225,7 @@ export type OpenContentContentSpaceFacade = Readonly<{
   uploadNewFile(input: Readonly<{
     principal: PrincipalSnapshot
     providerInstanceRef: string
+    expectedBindingAttestation?: OpenContentExternalBindingAttestation
     parentFolderGuid: string
     name: string
     size: number
@@ -225,6 +236,7 @@ export type OpenContentContentSpaceFacade = Readonly<{
   downloadFile(input: Readonly<{
     principal: PrincipalSnapshot
     providerInstanceRef: string
+    expectedBindingAttestation?: OpenContentExternalBindingAttestation
     fileGuid: string
     write(chunk: Uint8Array): Promise<void>
     signal: AbortSignal
