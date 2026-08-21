@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { IDENTITY_RESET_CONFIRMATION } from '../contract.js'
 import { CloudIdentitySection } from './CloudIdentitySection.js'
@@ -12,9 +12,11 @@ export function IdentityAccountOverlay(props: Readonly<{
   const { t } = useTranslation('identity')
   const snapshot = useSyncExternalStore(props.projection.subscribe, props.projection.getSnapshot)
   const [username, setUsername] = useState('')
+  const [pendingUsername, setPendingUsername] = useState<string | null>(null)
   const [renameUserId, setRenameUserId] = useState<string | null>(null)
   const [resetText, setResetText] = useState('')
   const [backupPath, setBackupPath] = useState<string | null>(null)
+  const creatingAccount = useRef(false)
   const availableState = snapshot.state?.status === 'available' ? snapshot.state : null
 
   useEffect(() => {
@@ -86,11 +88,8 @@ export function IdentityAccountOverlay(props: Readonly<{
               className="mt-5 flex gap-2"
               onSubmit={(event) => {
                 event.preventDefault()
-                if (!username.trim() || !globalThis.confirm(t('createConfirmation'))) return
-                run(async () => {
-                  await props.projection.createAccount(username)
-                  setUsername('')
-                })
+                if (!username.trim() || snapshot.loading || pendingUsername !== null) return
+                setPendingUsername(username)
               }}
             >
               <label className="sr-only" htmlFor="identity-new-username">{t('username')}</label>
@@ -99,13 +98,60 @@ export function IdentityAccountOverlay(props: Readonly<{
                 className="min-w-0 flex-1 rounded border border-border bg-background px-3 py-2 text-sm"
                 value={username}
                 maxLength={128}
+                disabled={snapshot.loading || pendingUsername !== null}
                 placeholder={t('username')}
                 onChange={(event) => setUsername(event.target.value)}
               />
-              <button type="submit" className="rounded bg-primary px-3 py-2 text-sm text-primary-foreground">
+              <button
+                type="submit"
+                className="rounded bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50"
+                disabled={!username.trim() || snapshot.loading || pendingUsername !== null}
+              >
                 {t('create')}
               </button>
             </form>
+
+            {pendingUsername !== null ? (
+              <div
+                className="mt-3 rounded-lg border border-border bg-muted/40 p-3"
+                role="group"
+                aria-label={t('createConfirmation')}
+              >
+                <p className="text-sm">{t('createConfirmation')}</p>
+                <p className="mt-1 break-words text-sm font-medium">{pendingUsername}</p>
+                <div className="mt-3 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    className="rounded border border-border px-3 py-2 text-sm disabled:opacity-50"
+                    disabled={snapshot.loading}
+                    onClick={() => setPendingUsername(null)}
+                  >
+                    {t('cancel')}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50"
+                    disabled={snapshot.loading}
+                    onClick={() => {
+                      if (creatingAccount.current) return
+                      creatingAccount.current = true
+                      const confirmedUsername = pendingUsername
+                      run(async () => {
+                        try {
+                          await props.projection.createAccount(confirmedUsername)
+                          setUsername('')
+                          setPendingUsername(null)
+                        } finally {
+                          creatingAccount.current = false
+                        }
+                      })
+                    }}
+                  >
+                    {t('confirmCreation')}
+                  </button>
+                </div>
+              </div>
+            ) : null}
 
             <ul className="mt-4 space-y-2">
               {snapshot.accounts.map((account) => (

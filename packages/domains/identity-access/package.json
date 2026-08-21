@@ -33,6 +33,10 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "happy-dom": "^20.11.2",
+    "i18next": "^25.4.2",
+    "react-dom": "^19.0.0",
     "typescript": "^5.8.2",
     "vitest": "^4.1.7"
   }

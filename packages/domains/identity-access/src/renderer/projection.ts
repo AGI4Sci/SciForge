@@ -153,14 +153,26 @@ export class IdentityRendererProjection {
 
   private async mutate(operation: () => Promise<IdentityUiState>): Promise<void> {
     this.set({ ...this.snapshotValue, loading: true, error: null })
+    let state: IdentityUiState
     try {
-      const state = await operation()
+      state = await operation()
+    } catch (error) {
+      this.setError(error)
+      throw error
+    }
+    this.set({
+      ...this.snapshotValue,
+      loading: true,
+      state,
+      accounts: accountsAfterMutation(this.snapshotValue.accounts, state),
+      error: null
+    })
+    try {
       const listed = await this.client.listAccounts()
       this.acceptList({ ...listed, state }, false)
       await this.reloadCloud()
     } catch (error) {
       this.setError(error)
-      throw error
     }
   }
 
@@ -312,4 +324,16 @@ export class IdentityRendererProjection {
     this.snapshotValue = Object.freeze(snapshot)
     for (const listener of this.listeners) listener()
   }
+}
+
+function accountsAfterMutation(
+  accounts: readonly LocalAccount[],
+  state: IdentityUiState
+): readonly LocalAccount[] {
+  if (state.status !== 'available') return Object.freeze([])
+  const current = state.currentAccount
+  if (!current) return accounts
+  const existingIndex = accounts.findIndex((account) => account.userId === current.userId)
+  if (existingIndex < 0) return Object.freeze([...accounts, current])
+  return Object.freeze(accounts.map((account, index) => index === existingIndex ? current : account))
 }
