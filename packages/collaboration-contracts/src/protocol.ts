@@ -20,6 +20,7 @@ import {
   providerMessageIdSchema,
   providerOpaqueIdSchema,
   receiptIdSchema,
+  remoteApprovalIdSchema,
   requestIdSchema,
   revisionSchema,
   runtimeIdSchema,
@@ -56,6 +57,10 @@ import {
   providerLocatorSchema,
   providerManagedContainerPolicySchema
 } from './provider.js'
+import {
+  remoteApprovalDecisionSchema,
+  remoteCapabilityApprovalSchema
+} from './remote-approval.js'
 
 export const PAIRING_BIND_CODE_VERSION = 'SF1' as const
 export const pairingBindCodeSchema = z.string().regex(/^SF1\.[a-f0-9]{32}\.[A-Za-z0-9_-]{12}$/u)
@@ -149,6 +154,19 @@ export const projectEndpointUpdatedPayloadSchema = z.object({
 export type ProjectEndpointUpdatedPayload = z.infer<typeof projectEndpointUpdatedPayloadSchema>
 
 export const agentInboxPayloadSchema = z.discriminatedUnion('type', [
+  z.object({
+    ...agentInboxEnvelopeShape,
+    type: z.literal('capability.approval.decision'),
+    remoteApprovalId: remoteApprovalIdSchema,
+    desktopApprovalId: providerOpaqueIdSchema,
+    projectionId: projectionIdSchema,
+    runtimeId: runtimeIdSchema,
+    threadId: threadIdSchema,
+    turnId: runtimeTurnIdSchema,
+    capabilityRequestId: providerOpaqueIdSchema,
+    decisionId: providerOpaqueIdSchema,
+    decision: remoteApprovalDecisionSchema
+  }).strict(),
   personalMessageReceivedPayloadSchema,
   taskOfferedPayloadSchema,
   projectionUpdatedPayloadSchema,
@@ -374,6 +392,33 @@ const writeCommandShape = {
 } as const
 
 export const restRequestSchema = z.discriminatedUnion('type', [
+  z.object({
+    ...writeCommandShape,
+    type: z.literal('capability.approval.create'),
+    projectionId: projectionIdSchema,
+    runtimeId: runtimeIdSchema,
+    threadId: threadIdSchema,
+    turnId: runtimeTurnIdSchema,
+    capabilityRequestId: providerOpaqueIdSchema,
+    desktopApprovalId: providerOpaqueIdSchema,
+    safeSummary: z.string().trim().min(1).max(500),
+    effect: z.enum(['workspace-write', 'external-write', 'destructive']),
+    remoteEligible: z.boolean(),
+    expiresAt: timestampSchema
+  }).strict(),
+  z.object({
+    ...writeCommandShape,
+    type: z.literal('capability.approval.result'),
+    remoteApprovalId: remoteApprovalIdSchema,
+    decisionId: providerOpaqueIdSchema,
+    outcome: z.enum(['applied', 'already_terminal', 'not_pending', 'not_eligible'])
+  }).strict(),
+  z.object({
+    ...writeCommandShape,
+    type: z.literal('capability.approval.withdraw'),
+    remoteApprovalId: remoteApprovalIdSchema,
+    desktopApprovalId: providerOpaqueIdSchema
+  }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('pairing.begin'), provider: providerIdSchema, realmId: providerOpaqueIdSchema, requestedDisplayName: z.string().trim().min(1).max(200) }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('pairing.verify'), providerEventId: providerOpaqueIdSchema, challengeCode: z.string().min(8).max(128), provider: providerIdSchema, realmId: providerOpaqueIdSchema, providerUserId: providerOpaqueIdSchema, displayName: z.string().trim().min(1).max(200), assurance: assuranceLevelSchema.exclude(['basic']) }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('pairing.redeem'), pollSecret: z.string().min(32).max(512) }).strict(),
@@ -426,6 +471,7 @@ export const restRequestSchema = z.discriminatedUnion('type', [
 export type RestRequest = z.infer<typeof restRequestSchema>
 
 export const restEntitySchema = z.union([
+  remoteCapabilityApprovalSchema,
   userPrincipalSchema,
   humanEndpointBindingSchema,
   managedProviderContainerSchema,
@@ -444,6 +490,12 @@ export const restEntitySchema = z.union([
 export type RestEntity = z.infer<typeof restEntitySchema>
 
 export const restResponseSchema = z.discriminatedUnion('type', [
+  z.object({
+    protocolVersion: protocolVersionSchema,
+    type: z.literal('capability.approval.created'),
+    requestId: requestIdSchema,
+    approval: remoteCapabilityApprovalSchema
+  }).strict(),
   z.object({ protocolVersion: protocolVersionSchema, type: z.literal('pairing.begun'), requestId: requestIdSchema, challengeId: z.string().regex(/^chl_[A-Za-z0-9]{12,64}$/u), challengeCode: z.string().min(8).max(128), pollSecret: z.string().min(32).max(512), expiresAt: timestampSchema }).strict(),
   z.object({ protocolVersion: protocolVersionSchema, type: z.literal('pairing.pending'), requestId: requestIdSchema, challengeId: z.string().regex(/^chl_[A-Za-z0-9]{12,64}$/u), retryAfterSeconds: z.number().int().min(1).max(300) }).strict(),
   z.object({ protocolVersion: protocolVersionSchema, type: z.literal('pairing.verified'), requestId: requestIdSchema, userId: userIdSchema, humanEndpointId: humanEndpointIdSchema, userCredential: z.string().min(32).max(2_048) }).strict(),

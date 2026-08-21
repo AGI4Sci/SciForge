@@ -1267,6 +1267,120 @@ describe('ZulipHumanEndpointProvider', () => {
     )
   })
 
+  it('updates only the referenced Zulip Bot message through the provider-neutral update contract', async () => {
+    const requests: Array<{ path: string; method: string; body: URLSearchParams }> = []
+    const provider = createZulipHumanEndpointProvider({
+      realmUrl: 'https://chat.example.invalid',
+      botEmail: 'service-bot@example.invalid'
+    }, {
+      resolveCredential: async () => ({ apiKey: randomUUID() }),
+      deliveryLedger: new MemoryLedger(),
+      reconcileDelivery: async () => ({ status: 'not_sent' }),
+      resolveLocator,
+      verifyIdentity: rejectIdentity,
+      fetch: async (url, init) => {
+        requests.push({
+          path: new URL(url).pathname,
+          method: init?.method ?? 'GET',
+          body: new URLSearchParams(String(init?.body ?? ''))
+        })
+        return json({ result: 'success', msg: '' })
+      }
+    })
+    const result = await provider.updateMessage({
+      protocolVersion: '1.0',
+      type: 'provider.update.message',
+      locator: {
+        type: 'provider_locator',
+        provider: 'zulip',
+        realmId: provider.realmId,
+        containerId: '12',
+        topicId: 'stable-12-蛋白质结构',
+        topicDisplayName: '蛋白质结构'
+      },
+      providerMessageId: '31415',
+      clientMessageId: 'approval-card-update-fixture',
+      text: '本次权限审批已处理。'
+    })
+    assert.equal(result.type, 'provider.send.succeeded')
+    assert.equal(requests.length, 1)
+    assert.equal(requests[0]?.path.endsWith('/api/v1/messages/31415'), true)
+    assert.equal(requests[0]?.method, 'PATCH')
+    assert.equal(requests[0]?.body.get('content'), '本次权限审批已处理。')
+  })
+
+  it('accepts only an exact Topic-scoped 1/2 plus AP1 approval command', async () => {
+    const fixtureReference = `AP1-${'A'.repeat(20)}`
+    const messages = [
+      ` 1 ${fixtureReference.toLowerCase()} `,
+      `2 ${fixtureReference}`,
+      '1',
+      '2',
+      'y',
+      'yes',
+      `allow ${fixtureReference}`,
+      `1 AP1-${'0'.repeat(20)}`
+    ]
+    const provider = createZulipHumanEndpointProvider({
+      realmUrl: 'https://chat.example.invalid',
+      botEmail: 'service-bot@example.invalid'
+    }, {
+      resolveCredential: async () => ({ apiKey: randomUUID() }),
+      deliveryLedger: new MemoryLedger(),
+      reconcileDelivery: async () => ({ status: 'not_sent' }),
+      resolveLocator,
+      verifyIdentity: rejectIdentity,
+      fetch: async () => json({
+        result: 'success',
+        msg: '',
+        queue_id: 'queue-remote-approval',
+        last_event_id: 200,
+        events: messages.map((content, index) => ({
+          id: 201 + index,
+          type: 'message',
+          message: rawMessage({
+            id: 2_000 + index,
+            senderId: 42,
+            senderEmail: 'human@example.invalid',
+            senderName: '研究员甲',
+            content
+          })
+        }))
+      })
+    })
+
+    const result = await provider.registerEventQueue()
+    assert.equal(result.events[0]?.type, 'provider.remote_approval.responded')
+    assert.equal(result.events[1]?.type, 'provider.remote_approval.responded')
+    if (result.events[0]?.type !== 'provider.remote_approval.responded') assert.fail('expected approval')
+    if (result.events[1]?.type !== 'provider.remote_approval.responded') assert.fail('expected approval')
+    assert.equal(result.events[0].decision, 'allow_once')
+    assert.equal(result.events[1].decision, 'deny_once')
+    assert.equal(result.events[0].approvalReference, fixtureReference)
+    assert.equal(result.events[0].identity.providerUserId, '42')
+    assert.ok(result.events.slice(2).every((event) => event.type === 'provider.message.created'))
+  })
+
+  it('never treats an approval-shaped private message as a remote approval', async () => {
+    const fixtureReference = `AP1-${'B'.repeat(20)}`
+    const provider = createZulipHumanEndpointProvider({
+      realmUrl: 'https://chat.example.invalid', botEmail: 'service-bot@example.invalid'
+    }, {
+      resolveCredential: async () => ({ apiKey: randomUUID() }),
+      deliveryLedger: new MemoryLedger(), reconcileDelivery: async () => ({ status: 'not_sent' }),
+      resolveLocator, verifyIdentity: rejectIdentity,
+      fetch: async () => json({
+        result: 'success', msg: '', queue_id: 'queue-private-approval', last_event_id: 300,
+        events: [{ id: 301, type: 'message', message: rawMessage({
+          id: 3_000, senderId: 42, senderEmail: 'human@example.invalid', senderName: '研究员甲',
+          content: `1 ${fixtureReference}`, messageType: 'private'
+        }) }]
+      })
+    })
+    const result = await provider.registerEventQueue()
+    assert.equal(result.events.length, 0)
+  })
+
   it('fails closed when locator resolution is ambiguous', async () => {
     const provider = createZulipHumanEndpointProvider({
       realmUrl: 'https://chat.example.invalid',

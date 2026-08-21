@@ -959,6 +959,112 @@ describe('AgentRuntimeHost', () => {
     await rm(root, { recursive: true, force: true })
   })
 
+  it('keeps remote Allow fail-closed and applies one exact eligible Allow or owner Deny through the canonical Broker', async () => {
+    const thread = {
+      id: 'remote-approval-thread',
+      runtimeId: 'codex' as const,
+      title: 'Remote approval',
+      updatedAt: '2026-08-20T00:00:00.000Z'
+    }
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [fakeAdapter('codex', thread)]
+    })
+    const published: Array<{ approvalId: string; remoteEligible: boolean; safeSummary: string; state: string }> = []
+    const dispose = host.subscribeRemoteCapabilityApprovals((approval) => {
+      published.push({
+        approvalId: approval.approvalId,
+        remoteEligible: approval.remoteEligible,
+        safeSummary: approval.safeSummary,
+        state: approval.state
+      })
+    })
+    const desktopOnly = host.requestCapabilityApproval({
+      context: {
+        requestId: 'request-desktop-only',
+        runtimeId: 'codex',
+        threadId: thread.id,
+        turnId: 'turn-desktop-only',
+        callId: 'call-desktop-only'
+      },
+      actionId: 'fixture.external.write',
+      invocationId: 'invocation-desktop-only',
+      mode: 'confirmation',
+      title: 'Sensitive fixture',
+      description: 'Desktop only.',
+      effect: 'external-write',
+      input: { secret: 'must-not-publish' }
+    })
+    const first = published[0]!
+    expect(first.remoteEligible).toBe(false)
+    expect(first.safeSummary).toBe('Sensitive fixture')
+    expect(JSON.stringify(published)).not.toContain('must-not-publish')
+    await expect(host.decideRemoteCapabilityApproval({
+      approvalId: first.approvalId,
+      runtimeId: 'codex',
+      threadId: thread.id,
+      turnId: 'turn-desktop-only',
+      capabilityRequestId: 'invocation-desktop-only',
+      decisionId: 'remote-decision-allow-rejected',
+      decision: 'allow_once'
+    })).resolves.toBe('not_eligible')
+    await expect(host.decideRemoteCapabilityApproval({
+      approvalId: first.approvalId,
+      runtimeId: 'codex',
+      threadId: thread.id,
+      turnId: 'turn-desktop-only',
+      capabilityRequestId: 'invocation-desktop-only',
+      decisionId: 'remote-decision-deny',
+      decision: 'deny_once'
+    })).resolves.toBe('applied')
+    await expect(desktopOnly).resolves.toBe('denied')
+
+    const eligible = host.requestCapabilityApproval({
+      context: {
+        requestId: 'request-eligible',
+        runtimeId: 'codex',
+        threadId: thread.id,
+        turnId: 'turn-eligible',
+        callId: 'call-eligible'
+      },
+      actionId: 'fixture.workspace.write',
+      invocationId: 'invocation-eligible',
+      mode: 'confirmation',
+      title: 'Eligible fixture',
+      description: 'Fixture only.',
+      effect: 'workspace-write',
+      input: { path: 'redacted' },
+      remoteApproval: {
+        eligible: true,
+        safeSummary: '写入脱敏测试结果'
+      }
+    })
+    const second = published.find((approval) => approval.safeSummary === '写入脱敏测试结果')!
+    await expect(host.decideRemoteCapabilityApproval({
+      approvalId: second.approvalId,
+      runtimeId: 'codex',
+      threadId: thread.id,
+      turnId: 'wrong-turn',
+      capabilityRequestId: 'invocation-eligible',
+      decisionId: 'remote-decision-wrong-turn',
+      decision: 'allow_once'
+    })).resolves.toBe('not_pending')
+    const exactDecision = {
+      approvalId: second.approvalId,
+      runtimeId: 'codex' as const,
+      threadId: thread.id,
+      turnId: 'turn-eligible',
+      capabilityRequestId: 'invocation-eligible',
+      decisionId: 'remote-decision-eligible',
+      decision: 'allow_once' as const
+    }
+    await expect(host.decideRemoteCapabilityApproval(exactDecision)).resolves.toBe('applied')
+    await expect(host.decideRemoteCapabilityApproval(exactDecision)).resolves.toBe('already_terminal')
+    await expect(eligible).resolves.toBe('allowed')
+    dispose()
+    host.dispose()
+  })
+
   it('cancels pending capability confirmations on abort, terminal turns, and disposal', async () => {
     const thread = {
       id: 'claude-thread',

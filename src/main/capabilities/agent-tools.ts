@@ -90,6 +90,12 @@ export type CapabilityAgentApprovalRequest = Readonly<{
   input: CapabilityJsonValue
   resourceRef?: string
   resourceLabel?: string
+  /** Host-trusted remote policy. Omission is a fail-closed desktop-only request. */
+  remoteApproval?: Readonly<{
+    eligible: boolean
+    safeSummary: string
+    ttlMs?: number
+  }>
 }>
 
 export type CapabilityAgentApprovalDecision = 'allowed' | 'denied' | 'cancelled'

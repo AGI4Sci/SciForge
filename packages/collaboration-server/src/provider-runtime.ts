@@ -16,6 +16,7 @@ import {
   type ProviderEvent,
   type ProviderLocator,
   type ProviderSendRequest,
+  type ProviderUpdateMessageRequest,
   type ProviderVerifyIdentityRequest,
   type ProviderVerifyIdentityResult
 } from '@sciforge/collaboration-contracts'
@@ -91,6 +92,10 @@ type ProviderRuntimeService = Pick<CollaborationService,
   | 'pullInbox'
   | 'ackInboxMessage'
   | 'recordRejectedBoundary'
+  | 'decideRemoteCapabilityApproval'
+  | 'confirmRemoteApprovalCard'
+  | 'enqueueRemoteApprovalFallback'
+  | 'expireRemoteCapabilityApprovals'
 >
 
 type ProviderRuntimeRepository = Pick<CollaborationRepository,
@@ -296,6 +301,8 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
         })
       } else if (event.type === 'provider.human_answer.responded') {
         await this.handleHumanAnswerResponded(event, claimEventId)
+      } else if (event.type === 'provider.remote_approval.responded') {
+        await this.handleRemoteApprovalResponded(event, claimEventId)
       } else if (event.type === 'provider.locator.changed') {
         await this.service.applyProviderLocatorChange({ previousLocator: event.previousLocator,
           currentLocator: event.currentLocator, providerEventId: claimEventId })
@@ -417,9 +424,27 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
     })
   }
 
+  private async handleRemoteApprovalResponded(
+    event: Extract<ProviderEvent, { type: 'provider.remote_approval.responded' }>,
+    claimEventId: string
+  ): Promise<void> {
+    const actor = await this.authentication.resolveProviderIdentity(
+      event.identity.provider,
+      event.identity.realmId,
+      event.identity.providerUserId
+    )
+    await this.service.decideRemoteCapabilityApproval(actor, {
+      approvalReference: event.approvalReference,
+      decision: event.decision,
+      sourceLocator: event.locator,
+      providerEventId: claimEventId
+    })
+  }
+
   private async runOutboxPump(signal: AbortSignal): Promise<void> {
     while (!signal.aborted) {
       try {
+        await this.service.expireRemoteCapabilityApprovals()
         const endpointIds = await this.store.listPendingEndpointIds()
         for (const endpointId of endpointIds) {
           if (signal.aborted) break
@@ -628,12 +653,45 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
       }
       const result = prior?.result.type === 'provider.send.succeeded'
         ? prior.result
-        : providerSendResultSchema.parse(await provider.send(request))
+        : providerSendResultSchema.parse(await (
+            request.type === 'provider.update.message'
+              ? provider.updateMessage?.(request) ?? Promise.resolve({
+                  protocolVersion: CURRENT_PROTOCOL_VERSION,
+                  type: 'provider.send.failed' as const,
+                  clientMessageId: request.clientMessageId,
+                  retryable: false,
+                  providerErrorCode: 'operation_unsupported',
+                  safeMessage: 'The provider cannot update messages.'
+                })
+              : provider.send(request)
+          ))
       const persisted = await this.store.readDelivery(endpoint.provider, request.clientMessageId)
       if (!persisted || (prior && persisted.attemptCount === prior.attemptCount && result.type === 'provider.send.failed')) {
         await this.store.recordDelivery(endpoint.provider, request.clientMessageId, result)
       }
       if (result.type === 'provider.send.succeeded' || !result.retryable) {
+        if (
+          result.type === 'provider.send.succeeded'
+          && message.messageType === 'provider.notification.outbound'
+          && typeof message.payload.remoteApprovalId === 'string'
+        ) {
+          await this.service.confirmRemoteApprovalCard(
+            message.payload.remoteApprovalId,
+            result.providerMessageId
+          )
+        }
+        if (
+          result.type === 'provider.send.failed'
+          && request.type === 'provider.update.message'
+          && typeof message.payload.remoteApprovalId === 'string'
+          && typeof message.payload.fallbackText === 'string'
+        ) {
+          await this.service.enqueueRemoteApprovalFallback({
+            remoteApprovalId: message.payload.remoteApprovalId,
+            locator: request.locator,
+            text: message.payload.fallbackText
+          })
+        }
         await this.ackDeliveredMessage(actor, message)
         continue
       }
@@ -917,8 +975,28 @@ async function providerHttp(request: HumanEndpointProviderHttpRequest): Promise<
   }
 }
 
-function outboundRequest(message: StoredInboxMessage, maxTextLength: number): ProviderSendRequest | undefined {
+function outboundRequest(
+  message: StoredInboxMessage,
+  maxTextLength: number
+): ProviderSendRequest | ProviderUpdateMessageRequest | undefined {
   const payload = message.payload
+  if (
+    message.messageType === 'provider.message.update.outbound'
+    && payload.type === 'provider.message.update.outbound'
+    && typeof payload.providerMessageId === 'string'
+    && typeof payload.text === 'string'
+  ) {
+    const locator = providerLocatorSchema.safeParse(payload.locator)
+    if (!locator.success) return undefined
+    return {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      type: 'provider.update.message',
+      locator: locator.data,
+      providerMessageId: payload.providerMessageId,
+      clientMessageId: message.messageId,
+      text: payload.text
+    }
+  }
   if (message.messageType === 'provider.command.result.outbound' &&
       payload.type === 'provider.command.result.outbound' && typeof payload.text === 'string') {
     const recipient = providerDirectRecipientSchema.safeParse(payload.recipient)
@@ -967,6 +1045,7 @@ function eventRealmId(event: ProviderEvent): string | undefined {
     case 'provider.challenge.responded':
     case 'provider.challenge.invalid':
     case 'provider.human_answer.responded': return event.identity.realmId
+    case 'provider.remote_approval.responded': return event.identity.realmId
     case 'provider.locator.changed': return event.currentLocator.realmId
     case 'provider.lifecycle.changed': return undefined
   }
@@ -979,6 +1058,7 @@ function eventDedupeKey(event: ProviderEvent): string {
     case 'provider.message.deleted':
     case 'provider.message.reaction':
     case 'provider.human_answer.responded': return event.providerMessageId
+    case 'provider.remote_approval.responded': return event.providerMessageId
     case 'provider.locator.changed':
     case 'provider.challenge.responded':
     case 'provider.challenge.invalid':

@@ -17,6 +17,7 @@ import type {
   DomainExecutionEventV1
 } from './reproducibility.js'
 import type { DomainMainPowerHost } from './power.js'
+import type { DomainMainRemoteCapabilityApprovalHost } from './remote-approval.js'
 import type { DomainMainPortableResourceReferencesHost } from './portable-resource-references.js'
 import type {
   PrincipalContextSnapshot,
@@ -47,6 +48,7 @@ export * from './agent-execution.js'
 export * from './external-navigation.js'
 export * from './file-transfer.js'
 export * from './power.js'
+export * from './remote-approval.js'
 export * from './portable-resource-references.js'
 export * from './package-storage.js'
 export * from './renderer-contributions.js'
@@ -461,6 +463,7 @@ export type DomainMainRuntimeLifecycleHost = Readonly<{
   agentThreads: DomainMainAgentThreadsHost
   turnEvents?: DomainMainTurnLifecycleEventsHost
   agentExecution?: DomainMainAgentExecutionHost
+  remoteCapabilityApprovals?: DomainMainRemoteCapabilityApprovalHost
   power?: DomainMainPowerHost
   capabilities: DomainMainSystemCapabilityInvoker
   modelAccess: DomainMainModelAccessHost

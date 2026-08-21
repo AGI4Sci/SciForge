@@ -48,6 +48,7 @@ import {
   localProjectionFromRemote
 } from './projection-coordinator.js'
 import { CollaborationSettingsService } from './settings.js'
+import { RemoteApprovalCoordinator } from './remote-approval-coordinator.js'
 import {
   CollaborationLocalStore,
   FileCollaborationStateBackend,
@@ -120,8 +121,22 @@ export class CollaborationRuntime {
       now: this.options.now
     })
     let tasks!: CollaborationTaskAdapter
+    const remoteApprovals = context.remoteCapabilityApprovals
+      ? new RemoteApprovalCoordinator({
+          store: this.store,
+          outbox,
+          host: context.remoteCapabilityApprovals,
+          localAgentId: () => this.localAgentIdentity,
+          now: this.options.now
+        })
+      : null
     const inboxHandler: CollaborationInboxHandler = {
       handle: async (message) => {
+        if (message.payload.type === 'capability.approval.decision') {
+          if (!remoteApprovals) throw new Error('Remote capability approval Host is unavailable.')
+          await remoteApprovals.handleInbox(message)
+          return
+        }
         if (message.payload.type === 'personal.message.received') {
           await projections.acceptPersonalInbox(message)
           return
@@ -197,6 +212,7 @@ export class CollaborationRuntime {
         messages: turn.messages
       })
     })
+    const disposeRemoteApprovals = remoteApprovals?.subscribe() ?? (() => undefined)
 
     await this.reconcileTranscriptSnapshots()
     await projections.recover()
@@ -208,6 +224,7 @@ export class CollaborationRuntime {
 
     return async () => {
       await disposeTurnEvents()
+      disposeRemoteApprovals()
       await this.dispose()
     }
   }

@@ -24,7 +24,8 @@ import type {
   StoredHumanRequest,
   StoredHumanAnswer,
   StoredManagedContainer,
-  StoredManagedContainerJob
+  StoredManagedContainerJob,
+  StoredRemoteCapabilityApproval
 } from './model.js'
 import type {
   CollaborationReadRepository,
@@ -149,6 +150,13 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
   }
   getHumanRequest(id: string): Promise<StoredHumanRequest | null> { return this.read().getHumanRequest(id) }
   getHumanAnswerForRequest(id: string): Promise<StoredHumanAnswer | null> { return this.read().getHumanAnswerForRequest(id) }
+  getRemoteApproval(id: string): Promise<StoredRemoteCapabilityApproval | null> { return this.read().getRemoteApproval(id) }
+  getRemoteApprovalByReferenceDigest(digest: string): Promise<StoredRemoteCapabilityApproval | null> {
+    return this.read().getRemoteApprovalByReferenceDigest(digest)
+  }
+  listExpiredRemoteApprovals(now: string, limit: number): Promise<StoredRemoteCapabilityApproval[]> {
+    return this.read().listExpiredRemoteApprovals(now, limit)
+  }
   getProject(projectId: string): Promise<StoredProject | null> { return this.read().getProject(projectId) }
   listActiveProjectsForCoordinator(agentId: string): Promise<StoredProject[]> {
     return this.read().listActiveProjectsForCoordinator(agentId)
@@ -401,6 +409,32 @@ class PostgresReadRepository implements CollaborationReadRepository {
   async getHumanAnswerForRequest(humanRequestId: string): Promise<StoredHumanAnswer | null> {
     const result = await this.sql.query(`SELECT * FROM sciforge_collaboration.human_answers WHERE human_request_id=$1`, [humanRequestId])
     return result.rows[0] ? mapHumanAnswer(result.rows[0]) : null
+  }
+
+  async getRemoteApproval(remoteApprovalId: string): Promise<StoredRemoteCapabilityApproval | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.remote_capability_approvals WHERE remote_approval_id=$1`,
+      [remoteApprovalId]
+    )
+    return result.rows[0] ? mapRemoteApproval(result.rows[0]) : null
+  }
+
+  async getRemoteApprovalByReferenceDigest(referenceDigest: string): Promise<StoredRemoteCapabilityApproval | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.remote_capability_approvals WHERE reference_digest=$1`,
+      [referenceDigest]
+    )
+    return result.rows[0] ? mapRemoteApproval(result.rows[0]) : null
+  }
+
+  async listExpiredRemoteApprovals(now: string, limit: number): Promise<StoredRemoteCapabilityApproval[]> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.remote_capability_approvals
+       WHERE status='pending' AND expires_at <= $1
+       ORDER BY expires_at, remote_approval_id LIMIT $2`,
+      [now, limit]
+    )
+    return result.rows.map(mapRemoteApproval)
   }
 
   async getProject(projectId: string): Promise<StoredProject | null> {
@@ -834,6 +868,33 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     )
   }
 
+  async insertRemoteApproval(approval: StoredRemoteCapabilityApproval): Promise<void> {
+    await this.sql.query(
+      `INSERT INTO sciforge_collaboration.remote_capability_approvals
+       (remote_approval_id,owner_user_id,agent_id,projection_id,locator,locator_revision,runtime_id,thread_id,
+        turn_id,capability_request_id,desktop_approval_id,reference_digest,safe_summary,effect,remote_eligible,
+        status,provider_card_message_id,decision_event_id,decision_id,revision,expires_at,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+      [approval.remoteApprovalId, approval.ownerUserId, approval.agentId, approval.projectionId, approval.locator,
+        approval.locatorRevision, approval.runtimeId, approval.threadId, approval.turnId,
+        approval.capabilityRequestId, approval.desktopApprovalId, approval.referenceDigest, approval.safeSummary,
+        approval.effect, approval.remoteEligible, approval.status, approval.providerCardMessageId,
+        approval.decisionEventId, approval.decisionId, approval.revision, approval.expiresAt,
+        approval.createdAt, approval.updatedAt]
+    )
+  }
+
+  async updateRemoteApproval(approval: StoredRemoteCapabilityApproval, expectedRevision: number): Promise<void> {
+    const result = await this.sql.query(
+      `UPDATE sciforge_collaboration.remote_capability_approvals
+       SET status=$2,provider_card_message_id=$3,decision_event_id=$4,decision_id=$5,revision=$6,updated_at=$7
+       WHERE remote_approval_id=$1 AND revision=$8`,
+      [approval.remoteApprovalId, approval.status, approval.providerCardMessageId, approval.decisionEventId,
+        approval.decisionId, approval.revision, approval.updatedAt, expectedRevision]
+    )
+    expectRevision(result.rowCount)
+  }
+
   async insertProject(project: StoredProject, members: StoredProjectMember[]): Promise<void> {
     await this.sql.query(
       `INSERT INTO sciforge_collaboration.projects
@@ -1112,6 +1173,34 @@ function mapManagedContainerJob(row: SqlRow): StoredManagedContainerJob {
     leaseOwner: optionalString(row, 'lease_owner'),
     leaseExpiresAt: optionalIso(row.lease_expires_at),
     safeErrorCode: optionalString(row, 'safe_error_code'),
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at)
+  }
+}
+
+function mapRemoteApproval(row: SqlRow): StoredRemoteCapabilityApproval {
+  return {
+    remoteApprovalId: string(row, 'remote_approval_id'),
+    ownerUserId: string(row, 'owner_user_id'),
+    agentId: string(row, 'agent_id'),
+    projectionId: string(row, 'projection_id'),
+    locator: jsonRecord(row.locator) as StoredRemoteCapabilityApproval['locator'],
+    locatorRevision: number(row.locator_revision),
+    runtimeId: string(row, 'runtime_id'),
+    threadId: string(row, 'thread_id'),
+    turnId: string(row, 'turn_id'),
+    capabilityRequestId: string(row, 'capability_request_id'),
+    desktopApprovalId: string(row, 'desktop_approval_id'),
+    referenceDigest: string(row, 'reference_digest'),
+    safeSummary: string(row, 'safe_summary'),
+    effect: string(row, 'effect') as StoredRemoteCapabilityApproval['effect'],
+    remoteEligible: Boolean(row.remote_eligible),
+    status: string(row, 'status') as StoredRemoteCapabilityApproval['status'],
+    providerCardMessageId: optionalString(row, 'provider_card_message_id'),
+    decisionEventId: optionalString(row, 'decision_event_id'),
+    decisionId: optionalString(row, 'decision_id'),
+    revision: number(row.revision),
+    expiresAt: iso(row.expires_at),
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at)
   }

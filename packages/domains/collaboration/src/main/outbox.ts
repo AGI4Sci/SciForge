@@ -140,15 +140,42 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
       try {
         const response = await client.execute(request, { value: secret })
         if (response.type === 'rest.error') throw new Error(response.error.message)
-        if (response.type !== 'rest.receipt') {
-          throw new Error(`Cloud write returned unexpected ${response.type}.`)
-        }
+        const expectedResponse = request.type === 'capability.approval.create'
+          ? response.type === 'capability.approval.created'
+          : request.type === 'capability.approval.result' || request.type === 'capability.approval.withdraw'
+            ? response.type === 'rest.entity' && response.entity.type === 'remote_capability_approval'
+            : response.type === 'rest.receipt'
+        if (!expectedResponse) throw new Error(`Cloud write returned unexpected ${response.type}.`)
         const deliveredAt = this.now().toISOString()
         await this.options.store.transact((draft) => {
           const entry = requireOutbox(draft.outbox, next.outboxId)
           entry.state = 'delivered'
           entry.updatedAt = deliveredAt
           entry.deliveredAt = deliveredAt
+          if (
+            request.type === 'capability.approval.create'
+            && response.type === 'capability.approval.created'
+          ) {
+            const approval = draft.remoteApprovals.find((candidate) => (
+              candidate.desktopApprovalId === request.desktopApprovalId
+            ))
+            if (approval) {
+              approval.remoteApprovalId = response.approval.remoteApprovalId
+              approval.state = 'pending'
+              approval.updatedAt = deliveredAt
+            }
+            return
+          }
+          if (request.type === 'capability.approval.result' || request.type === 'capability.approval.withdraw') {
+            const approval = draft.remoteApprovals.find((candidate) => (
+              candidate.remoteApprovalId === request.remoteApprovalId
+            ))
+            if (approval) {
+              approval.state = 'completed'
+              approval.updatedAt = deliveredAt
+            }
+            return
+          }
           if (request.type !== 'projection.message.publish') return
           const receipt = draft.receipts.find((candidate) => (
             candidate.localItemId === request.localItemId &&
@@ -158,7 +185,8 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
           receipt.status = 'delivered'
           receipt.updatedAt = deliveredAt
           if (
-            response.receipt.type === 'projection.message.receipt' &&
+            response.type === 'rest.receipt'
+            && response.receipt.type === 'projection.message.receipt' &&
             response.receipt.providerMessageId
           ) {
             receipt.remoteMessageId = response.receipt.providerMessageId

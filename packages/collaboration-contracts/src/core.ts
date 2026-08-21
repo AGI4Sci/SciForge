@@ -48,6 +48,7 @@ export const localItemIdSchema = opaqueId('lit')
 export const turnIdSchema = opaqueId('trn')
 export const installationIdSchema = opaqueId('ins')
 export const managedContainerIdSchema = opaqueId('mco')
+export const remoteApprovalIdSchema = opaqueId('rap')
 
 export type UserId = z.infer<typeof userIdSchema>
 export type HumanEndpointId = z.infer<typeof humanEndpointIdSchema>
@@ -66,6 +67,7 @@ export type HumanAnswerId = z.infer<typeof humanAnswerIdSchema>
 export type ChallengeId = z.infer<typeof challengeIdSchema>
 export type RequestId = z.infer<typeof requestIdSchema>
 export type InstallationId = z.infer<typeof installationIdSchema>
+export type RemoteApprovalId = z.infer<typeof remoteApprovalIdSchema>
 
 export const revisionSchema = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
 export const expectedRevisionSchema = revisionSchema

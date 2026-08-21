@@ -21,6 +21,7 @@
     "./power": "./src/power.ts",
     "./portable-resource-references": "./src/portable-resource-references.ts",
     "./principal": "./src/principal.ts",
+    "./remote-approval": "./src/remote-approval.ts",
     "./provider-composition": "./src/provider-composition.ts",
     "./reproducibility": "./src/reproducibility.ts",
     "./renderer": "./src/renderer.ts",

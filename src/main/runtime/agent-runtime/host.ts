@@ -3,6 +3,8 @@ import path from 'node:path'
 import type {
   DomainMainAfterTurnEvent,
   DomainMainBeforeTurnEvent,
+  DomainRemoteCapabilityApproval,
+  DomainRemoteCapabilityApprovalDecision,
   DomainMainTurnLifecycleEvent,
   DomainTurnArtifactEvent
 } from '@sciforge/domain-sdk/host'
@@ -220,6 +222,10 @@ type CapabilityApprovalRecord = {
   actionId: string
   invocationId: string
   approvalId: string
+  capabilityRequestId: string
+  remoteEligible: boolean
+  safeSummary: string
+  expiresAt: string
   requestedEvent: Extract<AgentRuntimeEvent, { kind: 'approval_requested' }>
   event: Extract<AgentRuntimeEvent, { kind: 'approval_requested' | 'approval_resolved' }>
   resolve?: (decision: CapabilityAgentApprovalDecision) => void
@@ -295,6 +301,9 @@ export class AgentRuntimeHost {
   private readonly capabilityApprovals = new Map<string, CapabilityApprovalRecord>()
   private readonly capabilityApprovalOrder: string[] = []
   private readonly capabilityApprovalSubscribers = new Map<string, Set<CapabilityApprovalSubscriber>>()
+  private readonly remoteCapabilityApprovalSubscribers = new Set<
+    (approval: DomainRemoteCapabilityApproval) => void | Promise<void>
+  >()
   private readonly governance = new RuntimeGovernanceSupervisor()
   private readonly executionIntegrity = new RuntimeExecutionIntegrityGuard()
   private readonly subagentToolBridge: AgentRuntimeSubagentToolBridge | null
@@ -1755,6 +1764,8 @@ export class AgentRuntimeHost {
 
     const approvalId = `capability-approval-${randomUUID()}`
     const createdAt = new Date().toISOString()
+    const ttlMs = Math.max(1_000, Math.min(request.remoteApproval?.ttlMs ?? 5 * 60_000, 5 * 60_000))
+    const expiresAt = new Date(Date.parse(createdAt) + ttlMs).toISOString()
     const inputPreview = capabilityApprovalInputPreview(request)
     const event: Extract<AgentRuntimeEvent, { kind: 'approval_requested' }> = {
       kind: 'approval_requested',
@@ -1788,6 +1799,10 @@ export class AgentRuntimeHost {
         actionId: request.actionId,
         invocationId: request.invocationId,
         approvalId,
+        capabilityRequestId: request.invocationId,
+        remoteEligible: request.remoteApproval?.eligible === true,
+        safeSummary: (request.remoteApproval?.safeSummary ?? request.title).trim().slice(0, 500),
+        expiresAt,
         requestedEvent: event,
         event,
         resolve
@@ -1803,8 +1818,45 @@ export class AgentRuntimeHost {
       this.capabilityApprovalOrder.push(approvalId)
       this.subagentToolBridge?.suspendChildExecutionDeadline(runtimeId, threadId, approvalId)
       this.publishCapabilityApprovalEvent(record, event)
+      this.publishRemoteCapabilityApproval(record)
       this.pruneCapabilityApprovalHistory()
     })
+  }
+
+  subscribeRemoteCapabilityApprovals(
+    listener: (approval: DomainRemoteCapabilityApproval) => void | Promise<void>
+  ): () => void {
+    this.remoteCapabilityApprovalSubscribers.add(listener)
+    for (const approvalId of this.capabilityApprovalOrder) {
+      const record = this.capabilityApprovals.get(approvalId)
+      if (record?.resolve) void listener(this.remoteCapabilityApproval(record))
+    }
+    return () => { this.remoteCapabilityApprovalSubscribers.delete(listener) }
+  }
+
+  async decideRemoteCapabilityApproval(
+    input: DomainRemoteCapabilityApprovalDecision
+  ): Promise<'applied' | 'already_terminal' | 'not_pending' | 'not_eligible'> {
+    const record = this.capabilityApprovals.get(input.approvalId)
+    if (!record) return 'not_pending'
+    if (!record.resolve) return 'already_terminal'
+    if (
+      record.runtimeId !== input.runtimeId
+      || record.threadId !== input.threadId
+      || record.turnId !== input.turnId
+      || record.capabilityRequestId !== input.capabilityRequestId
+    ) return 'not_pending'
+    if (!record.remoteEligible && input.decision === 'allow_once') return 'not_eligible'
+    if (record.expiresAt <= new Date().toISOString()) {
+      this.settleCapabilityApproval(record, 'cancelled', 'Remote capability approval expired.')
+      return 'not_pending'
+    }
+    this.settleCapabilityApproval(
+      record,
+      input.decision === 'allow_once' ? 'allowed' : 'denied',
+      `Remote capability confirmation ${input.decision}.`
+    )
+    return 'applied'
   }
 
   cancelCapabilityApprovalTurn(identity: AgentRuntimeToolTurnIdentity, reason = 'turn_cancelled'): number {
@@ -1837,6 +1889,7 @@ export class AgentRuntimeHost {
       for (const subscriber of subscribers) subscriber.close()
     }
     this.capabilityApprovalSubscribers.clear()
+    this.remoteCapabilityApprovalSubscribers.clear()
     this.capabilityApprovals.clear()
     this.capabilityApprovalOrder.splice(0)
   }
@@ -3434,6 +3487,32 @@ export class AgentRuntimeHost {
     void this.options.services?.trace?.observeEvent(record.runtimeId, event).catch(() => undefined)
   }
 
+  private remoteCapabilityApproval(record: CapabilityApprovalRecord): DomainRemoteCapabilityApproval {
+    return Object.freeze({
+      approvalId: record.approvalId,
+      runtimeId: record.runtimeId,
+      threadId: record.threadId,
+      turnId: record.turnId,
+      capabilityRequestId: record.capabilityRequestId,
+      actionId: record.actionId,
+      invocationId: record.invocationId,
+      safeSummary: record.safeSummary,
+      effect: record.requestedEvent.meta?.effect as DomainRemoteCapabilityApproval['effect'],
+      remoteEligible: record.remoteEligible,
+      createdAt: record.requestedEvent.createdAt ?? new Date().toISOString(),
+      expiresAt: record.expiresAt,
+      state: record.resolve ? 'pending' : record.event.kind === 'approval_resolved'
+        ? record.event.decision === 'allowed' ? 'approved'
+          : record.event.decision === 'denied' ? 'denied' : 'cancelled'
+        : 'cancelled'
+    })
+  }
+
+  private publishRemoteCapabilityApproval(record: CapabilityApprovalRecord): void {
+    const approval = this.remoteCapabilityApproval(record)
+    for (const listener of this.remoteCapabilityApprovalSubscribers) void listener(approval)
+  }
+
   private settleCapabilityApproval(
     record: CapabilityApprovalRecord,
     decision: CapabilityAgentApprovalDecision,
@@ -3461,6 +3540,7 @@ export class AgentRuntimeHost {
       message,
       createdAt: new Date().toISOString()
     })
+    this.publishRemoteCapabilityApproval(record)
     resolve(decision)
     this.pruneCapabilityApprovalHistory()
   }
