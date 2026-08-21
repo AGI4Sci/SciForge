@@ -149,7 +149,7 @@ test('publishable domain packages resolve every public export from independent t
 
     await run(npm, [
       'install',
-      '--offline',
+      '--prefer-offline',
       '--ignore-scripts',
       '--omit=peer',
       '--no-package-lock',
