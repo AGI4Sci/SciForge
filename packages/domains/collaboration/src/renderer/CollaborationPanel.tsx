@@ -46,6 +46,7 @@ type EndpointView = ParticipantView['endpoints'][number]
 type ProjectionLocator = EndpointView['projectionLocators'][number]
 type AgentView = ParticipantView['agents'][number]
 type ProjectView = CollaborationStatusSnapshot['projects'][number]
+type ManagedContainerView = CollaborationStatusSnapshot['managedContainers'][number]
 
 export type CollaborationPanelSession = Readonly<{
   id: string
@@ -107,6 +108,37 @@ export function projectionMatchesLocator(
   return projection.status !== 'closed' && projectionLocatorIdentityMatches(projection, locator)
 }
 
+export function filterProjectionLocatorsForManagedContainer(
+  locators: readonly ProjectionLocator[],
+  managedContainers: readonly ManagedContainerView[],
+  humanEndpointId?: string
+): ProjectionLocator[] {
+  const managed = managedContainers.find((container) => (
+    container.humanEndpointId === humanEndpointId &&
+    container.status !== 'archived' &&
+    container.container
+  ))
+  if (!managed?.container) return []
+  return locators.filter((locator) => (
+    locator.provider === managed.container?.provider &&
+    locator.realmId === managed.container.realmId &&
+    locator.containerId === managed.container.containerId
+  ))
+}
+
+export function projectionTopicDisplayName(
+  projection: CollaborationProjectionView
+): string {
+  const remoteTopic = projection.remoteLocator?.topicDisplayName?.trim()
+  if (remoteTopic) return remoteTopic
+  const remoteDisplay = projection.remoteDisplay?.trim()
+  if (remoteDisplay) {
+    const segments = remoteDisplay.split('/').map((segment) => segment.trim()).filter(Boolean)
+    if (segments.length) return segments.at(-1)!
+  }
+  return projection.displayName
+}
+
 function projectionLocatorIdentityMatches(
   projection: CollaborationProjectionView,
   locator: ProjectionLocator
@@ -133,6 +165,24 @@ export function orderProjectionsForSession(
     }
     return rank(left) - rank(right)
   })
+}
+
+export function groupProjectionsForSession(
+  projections: readonly CollaborationProjectionView[],
+  session: CollaborationPanelSession
+): Readonly<{
+  current?: CollaborationProjectionView
+  other: CollaborationProjectionView[]
+  closed: CollaborationProjectionView[]
+}> {
+  const current = projections.find((projection) => projectionMatchesSession(projection, session))
+  return {
+    ...(current ? { current } : {}),
+    other: projections.filter((projection) => (
+      projection.status !== 'closed' && projection.projectionId !== current?.projectionId
+    )),
+    closed: projections.filter((projection) => projection.status === 'closed')
+  }
 }
 
 export function buildProjectionLinkInput(input: Readonly<{
@@ -262,7 +312,6 @@ export function CollaborationPanel({
   const [locator, setLocator] = useState<Record<string, string>>({})
   const [participantDisplayName, setParticipantDisplayName] = useState('')
   const [agentDisplayName, setAgentDisplayName] = useState('')
-  const [sessionDisplayName, setSessionDisplayName] = useState('')
   const [selectedProjectionLocatorKey, setSelectedProjectionLocatorKey] = useState('')
   const [confirmSelectedRelink, setConfirmSelectedRelink] = useState(false)
   const [pairing, setPairing] = useState<PairingDisplay | null>(null)
@@ -448,8 +497,12 @@ export function CollaborationPanel({
     humanEndpointId === participant.primaryHumanEndpointId
   )
   const projectionLocators = useMemo(
-    () => primaryEndpoint?.projectionLocators ?? [],
-    [primaryEndpoint]
+    () => filterProjectionLocatorsForManagedContainer(
+      primaryEndpoint?.projectionLocators ?? [],
+      snapshot?.managedContainers ?? [],
+      primaryEndpoint?.humanEndpointId
+    ),
+    [primaryEndpoint, snapshot?.managedContainers]
   )
   useEffect(() => {
     setSelectedProjectionLocatorKey((current) =>
@@ -457,18 +510,17 @@ export function CollaborationPanel({
     )
   }, [projectionLocators])
   useEffect(() => {
-    setSessionDisplayName(session.title?.trim() || '')
-  }, [session.id, session.title])
-  useEffect(() => {
     setConfirmSelectedRelink(false)
   }, [selectedProjectionLocatorKey, session.id])
   const selectedProjectionLocator = resolveProjectionLocatorSelection(
     selectedProjectionLocatorKey,
     projectionLocators
   )
-  const currentSessionProjection = snapshot?.projections.find((projection) =>
-    projectionMatchesSession(projection, session)
+  const groupedProjections = useMemo(
+    () => groupProjectionsForSession(snapshot?.projections ?? [], session),
+    [session, snapshot?.projections]
   )
+  const currentSessionProjection = groupedProjections.current
   const selectedLocatorProjection = selectedProjectionLocator
     ? snapshot?.projections.find((projection) =>
         projectionMatchesLocator(projection, selectedProjectionLocator)
@@ -480,16 +532,11 @@ export function CollaborationPanel({
         projectionLocatorIdentityMatches(projection, selectedProjectionLocator)
       )
     : undefined
-  const orderedProjections = useMemo(
-    () => orderProjectionsForSession(snapshot?.projections ?? [], session),
-    [session, snapshot?.projections]
-  )
   const canLink = Boolean(
     participant?.userId &&
     primaryAgent &&
     primaryEndpoint &&
     selectedProjectionLocator &&
-    sessionDisplayName.trim() &&
     session.runtimeId &&
     !currentSessionProjection &&
     !selectedLocatorProjection &&
@@ -512,7 +559,7 @@ export function CollaborationPanel({
       runtimeId: session.runtimeId,
       threadId: session.id,
       ...(session.workspaceRoot ? { workspaceRoot: session.workspaceRoot } : {}),
-      displayName: sessionDisplayName.trim()
+      displayName: session.title?.trim() || session.id
     })
     if (!input) return
     await runAction(`projection-${mode}`, () => client.linkProjection(input))
@@ -524,8 +571,7 @@ export function CollaborationPanel({
     projectionLocators,
     runAction,
     selectedProjectionLocatorKey,
-    session,
-    sessionDisplayName
+    session
   ])
 
   const relinkSelectedTopic = useCallback(async (): Promise<void> => {
@@ -695,13 +741,40 @@ export function CollaborationPanel({
               <CurrentSessionBindingSummary
                 session={session}
                 projection={currentSessionProjection}
+                busy={busyKey !== null}
+                onPause={currentSessionProjection ? () => void runAction(
+                  `projection-pause-${currentSessionProjection.projectionId}`,
+                  () => client.updateProjection({
+                    action: 'pause',
+                    projectionId: currentSessionProjection.projectionId,
+                    expectedRevision: currentSessionProjection.revision
+                  })
+                ) : undefined}
+                onResume={currentSessionProjection ? () => void runAction(
+                  `projection-resume-${currentSessionProjection.projectionId}`,
+                  () => client.updateProjection({
+                    action: 'resume',
+                    projectionId: currentSessionProjection.projectionId,
+                    expectedRevision: currentSessionProjection.revision
+                  })
+                ) : undefined}
+                onClose={currentSessionProjection ? () => void runAction(
+                  `projection-close-${currentSessionProjection.projectionId}`,
+                  () => client.updateProjection({
+                    action: 'close',
+                    projectionId: currentSessionProjection.projectionId,
+                    expectedRevision: currentSessionProjection.revision
+                  })
+                ) : undefined}
+                onRetry={currentSessionProjection ? () => void runAction(
+                  `projection-retry-${currentSessionProjection.projectionId}`,
+                  () => client.retrySynchronization({
+                    scope: 'projection',
+                    id: currentSessionProjection.projectionId
+                  })
+                ) : undefined}
               />
               {!currentSessionProjection ? <>
-                <SessionDisplayNameField
-                  value={sessionDisplayName}
-                  disabled={busyKey !== null}
-                  onChange={setSessionDisplayName}
-                />
                 <ProjectionLocatorSelector
                   locators={projectionLocators}
                   projections={snapshot.projections}
@@ -720,7 +793,7 @@ export function CollaborationPanel({
                 {selectedClosedProjection ? (
                   <div className="mb-3 rounded bg-ds-hover p-2 text-xs text-ds-muted" role="alert">
                     <p>{t('collaborationTopicClosed', {
-                      name: selectedClosedProjection.displayName
+                      name: projectionTopicDisplayName(selectedClosedProjection)
                     })}</p>
                     {!confirmSelectedRelink ? (
                       <button
@@ -769,33 +842,23 @@ export function CollaborationPanel({
                 </button>
                 </div>
               </> : null}
-              {snapshot.projections.length ? (
-                <div className="space-y-2">
-                  {orderedProjections.map((projection) => (
+              {groupedProjections.other.length ? (
+                <ProjectionGroup
+                  kind="other"
+                  label={t('collaborationOtherSessionMappings', {
+                    count: groupedProjections.other.length
+                  })}
+                >
+                  {groupedProjections.other.map((projection) => (
                     <ProjectionCard
                       key={projection.projectionId}
                       projection={projection}
-                      agentName={participant?.agents.find(({ agentId }) =>
-                        agentId === projection.agentId
-                      )?.displayName}
-                      ownerName={projection.agentOwnerUserId === participant?.userId
-                        ? participant.displayName
-                        : undefined}
-                      current={projectionMatchesSession(projection, session)}
                       currentSessionOccupied={Boolean(currentSessionProjection)}
                       currentSession={session}
                       busy={busyKey !== null}
                       onUpdate={(input) => void runAction(
                         `projection-${input.action}-${projection.projectionId}`,
                         () => client.updateProjection(input)
-                      )}
-                      onShare={(allowUserIds) => void runAction(
-                        `projection-share-${projection.projectionId}`,
-                        () => client.shareProjection({
-                          projectionId: projection.projectionId,
-                          allowUserIds,
-                          expectedRevision: projection.revision
-                        })
                       )}
                       onRetry={() => void runAction(
                         `projection-retry-${projection.projectionId}`,
@@ -806,10 +869,40 @@ export function CollaborationPanel({
                       )}
                     />
                   ))}
-                </div>
-              ) : (
+                </ProjectionGroup>
+              ) : null}
+              {groupedProjections.closed.length ? (
+                <ProjectionGroup
+                  kind="closed"
+                  label={t('collaborationClosedSessionMappings', {
+                    count: groupedProjections.closed.length
+                  })}
+                >
+                  {groupedProjections.closed.map((projection) => (
+                    <ProjectionCard
+                      key={projection.projectionId}
+                      projection={projection}
+                      currentSessionOccupied={Boolean(currentSessionProjection)}
+                      currentSession={session}
+                      busy={busyKey !== null}
+                      onUpdate={(input) => void runAction(
+                        `projection-${input.action}-${projection.projectionId}`,
+                        () => client.updateProjection(input)
+                      )}
+                      onRetry={() => void runAction(
+                        `projection-retry-${projection.projectionId}`,
+                        () => client.retrySynchronization({
+                          scope: 'projection',
+                          id: projection.projectionId
+                        })
+                      )}
+                    />
+                  ))}
+                </ProjectionGroup>
+              ) : null}
+              {!snapshot.projections.length ? (
                 <EmptyState>{t('collaborationNoProjections')}</EmptyState>
-              )}
+              ) : null}
             </section>
 
             <ProjectsSection projects={snapshot.projects} participant={participant} />
@@ -995,60 +1088,106 @@ export function ProjectionLocatorSelector({
 
 export function CurrentSessionBindingSummary({
   session,
-  projection
+  projection,
+  busy = false,
+  onPause,
+  onResume,
+  onClose,
+  onRetry
 }: Readonly<{
   session: CollaborationPanelSession
   projection?: CollaborationProjectionView
+  busy?: boolean
+  onPause?: () => void
+  onResume?: () => void
+  onClose?: () => void
+  onRetry?: () => void
 }>): ReactElement {
   const { t } = useTranslation('common')
+  const [confirmClose, setConfirmClose] = useState(false)
+  const sessionName = session.title?.trim() || t('collaborationUnnamedSession')
   return (
     <div className="mb-3 rounded-md border border-ds-border bg-ds-hover p-2.5 text-xs"
       data-current-session-binding={projection ? 'bound' : 'unbound'}>
       <div className="flex items-center gap-2 font-semibold">
         {projection ? <Smartphone className="h-3.5 w-3.5" /> : <Monitor className="h-3.5 w-3.5" />}
-        {projection
-          ? t('collaborationCurrentSessionBound')
-          : t('collaborationCurrentSessionUnbound')}
+        {t('collaborationCurrentDesktopSession')}: {sessionName}
       </div>
       <div className="mt-1 text-ds-muted">
-        {projection?.remoteDisplay || t('collaborationChooseTopicToBind')}
+        {t('collaborationPhoneLocation')}: {projection?.remoteDisplay || t('collaborationChooseTopicToBind')}
       </div>
-      <div className="mt-1 text-ds-muted">
-        {t('collaborationDesktopSession')}: <span className="font-medium text-ds-ink">
-          {session.title?.trim() || t('collaborationUnnamedSession')}
-        </span>
+      <div className="mt-1 flex items-center gap-2 text-ds-muted">
+        <span>{t('collaborationMappingStatus')}:</span>
+        {projection ? <StatusPill status={projection.status} /> : <span>—</span>}
       </div>
-      <details className="mt-1 text-ds-faint">
-        <summary className="cursor-pointer">{t('collaborationTechnicalDetails')}</summary>
-        <code className="mt-1 block break-all">{session.runtimeId || '—'}/{session.id}</code>
-      </details>
+      {projection ? (
+        <>
+          <p className="mt-2 rounded bg-ds-card p-2 text-ds-muted">
+            {t('collaborationPersonalControlOnly')}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {projection.status === 'paused' ? (
+              <button type="button" className={SECONDARY_BUTTON} disabled={busy} onClick={onResume}>
+                <Play className="h-3.5 w-3.5" />
+                {t('collaborationResume')}
+              </button>
+            ) : (
+              <button type="button" className={SECONDARY_BUTTON} disabled={busy} onClick={onPause}>
+                <Pause className="h-3.5 w-3.5" />
+                {t('collaborationPause')}
+              </button>
+            )}
+            <button type="button" className={SECONDARY_BUTTON} disabled={busy}
+              onClick={() => setConfirmClose(true)}>
+              <X className="h-3.5 w-3.5" />
+              {t('collaborationClose')}
+            </button>
+            {(projection.status === 'error' || projection.lastError) ? (
+              <button type="button" className={PRIMARY_BUTTON} disabled={busy} onClick={onRetry}>
+                <RotateCcw className="h-3.5 w-3.5" />
+                {t('collaborationRetry')}
+              </button>
+            ) : null}
+          </div>
+          {confirmClose ? (
+            <InlineConfirmationEditor
+              message={t('collaborationCloseConfirm', {
+                name: projectionTopicDisplayName(projection)
+              })}
+              busy={busy}
+              onConfirm={() => {
+                onClose?.()
+                setConfirmClose(false)
+              }}
+              onCancel={() => setConfirmClose(false)}
+            />
+          ) : null}
+          <ProjectionTechnicalDetails projection={projection} />
+        </>
+      ) : null}
     </div>
   )
 }
 
-export function SessionDisplayNameField({
-  value,
-  disabled,
-  onChange
+export function ProjectionGroup({
+  kind,
+  label,
+  children
 }: Readonly<{
-  value: string
-  disabled: boolean
-  onChange: (value: string) => void
+  kind: 'other' | 'closed'
+  label: ReactNode
+  children: ReactNode
 }>): ReactElement {
-  const { t } = useTranslation('common')
   return (
-    <label className="mb-3 block text-xs text-ds-muted">
-      <span className="mb-1 block">{t('collaborationSessionDisplayName')}</span>
-      <input
-        className={INPUT}
-        data-collaboration-session-name="true"
-        required
-        disabled={disabled}
-        value={value}
-        placeholder={t('collaborationSessionDisplayNamePlaceholder')}
-        onChange={(event) => onChange(event.currentTarget.value)}
-      />
-    </label>
+    <details className="mt-2 rounded-md border border-ds-border"
+      data-projection-group={kind}>
+      <summary className="cursor-pointer px-2.5 py-2 text-xs font-semibold">
+        {label}
+      </summary>
+      <div className="space-y-2 border-t border-ds-border p-2">
+        {children}
+      </div>
+    </details>
   )
 }
 
@@ -1496,9 +1635,6 @@ export function PairingCopyFeedback({ state }: Readonly<{
 
 type ProjectionCardProps = Readonly<{
   projection: CollaborationProjectionView
-  agentName?: string
-  ownerName?: string
-  current?: boolean
   currentSessionOccupied?: boolean
   currentSession: CollaborationPanelSession
   busy: boolean
@@ -1508,119 +1644,71 @@ type ProjectionCardProps = Readonly<{
     | Readonly<{ action: 'relink'; projectionId: string; runtimeId: string; threadId: string; workspaceRoot?: string; expectedRevision: number }>
     | Readonly<{ action: 'restore'; projectionId: string; runtimeId: string; threadId: string; workspaceRoot?: string; expectedRevision: number }>
   ) => void
-  onShare: (allowUserIds: string[]) => void
   onRetry: () => void
 }>
 
+function ProjectionTechnicalDetails({ projection }: Readonly<{
+  projection: CollaborationProjectionView
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  return (
+    <details className="mt-2 text-ds-faint">
+      <summary className="cursor-pointer">{t('collaborationTechnicalDetails')}</summary>
+      <dl className="mt-1 grid gap-1">
+        <div>
+          <dt>{t('collaborationSync')}:</dt>
+          <dd>{projection.lastSynchronizedAt ? formatDate(projection.lastSynchronizedAt) : '—'}</dd>
+        </div>
+        <div>
+          <dt>{t('collaborationQueued')}:</dt>
+          <dd>{projection.queueDepth}</dd>
+        </div>
+      </dl>
+      <code className="mt-1 block break-all">{projection.projectionId}</code>
+      <code className="mt-1 block break-all">{projection.runtimeId}/{projection.threadId || 'pending'}</code>
+    </details>
+  )
+}
+
 export function ProjectionCard({
   projection,
-  agentName,
-  ownerName,
-  current = false,
   currentSessionOccupied = false,
   currentSession,
   busy,
   onUpdate,
-  onShare,
   onRetry
 }: ProjectionCardProps): ReactElement {
   const { t } = useTranslation('common')
-  const [editor, setEditor] = useState<'rename' | 'relink' | 'allowlist' | 'close' | null>(null)
-  const [editorValue, setEditorValue] = useState('')
+  const [editor, setEditor] = useState<'relink' | 'close' | null>(null)
   const updateBase = {
     projectionId: projection.projectionId,
     expectedRevision: projection.revision
   } as const
   const openEditor = (
-    next: 'rename' | 'relink' | 'allowlist' | 'close',
-    value = ''
+    next: 'relink' | 'close'
   ): void => {
-    setEditorValue(value)
     setEditor(next)
-  }
-  const submitEditor = (): void => {
-    const value = editorValue.trim()
-    if (editor === 'rename' && value) {
-      onUpdate({ action: 'rename', ...updateBase, displayName: value })
-    } else if (editor === 'relink' && value) {
-      onUpdate({
-        action: 'relink',
-        ...updateBase,
-        runtimeId: projection.runtimeId,
-        threadId: value,
-        ...(projection.workspaceRoot ? { workspaceRoot: projection.workspaceRoot } : {})
-      })
-    } else if (editor === 'allowlist') {
-      onShare([...new Set(editorValue.split(',').map((item) => item.trim()).filter(Boolean))])
-    } else {
-      return
-    }
-    setEditor(null)
   }
   return (
     <article
-      className={`rounded-md border p-2.5 text-xs ${current ? 'border-ds-ink bg-ds-hover' : 'border-ds-border'}`}
+      className="rounded-md border border-ds-border p-2.5 text-xs"
       data-projection-id={projection.projectionId}
       data-projection-status={projection.status}
-      data-execution-agent={projection.agentId}
-      data-execution-owner={projection.agentOwnerUserId}
-      data-current-session={current}
     >
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
-          <div className="truncate font-semibold">{projection.displayName}</div>
-          {current ? <div className="mt-0.5 text-[10px] font-medium text-ds-muted">
-            {t('collaborationCurrentSession')}: {currentSession.title?.trim() || projection.displayName}
-          </div> : null}
+          <div className="truncate font-semibold">{projectionTopicDisplayName(projection)}</div>
+          <div className="mt-0.5 text-[10px] font-medium text-ds-muted">
+            {t('collaborationDesktopSession')}: {projection.displayName}
+          </div>
         </div>
         <StatusPill status={projection.status} />
       </div>
-      <dl className="mt-2 grid gap-1 text-ds-muted">
-        <div className="flex gap-1">
-          <dt>{t('collaborationOwner')}:</dt>
-          <dd className="font-medium text-ds-ink">
-            {ownerName || projection.agentOwnerUserId} · {agentName || projection.agentId}
-          </dd>
-        </div>
-        <div className="flex gap-1">
-          <dt>{t('collaborationTopic')}:</dt>
-          <dd>{projection.remoteDisplay || '—'}</dd>
-        </div>
-        <div className="flex gap-1">
-          <dt>{t('collaborationSync')}:</dt>
-          <dd>{projection.lastSynchronizedAt ? formatDate(projection.lastSynchronizedAt) : '—'}</dd>
-        </div>
-        <div className="flex gap-1">
-          <dt>{t('collaborationQueued')}:</dt>
-          <dd>{projection.queueDepth}</dd>
-        </div>
-        <div className="flex gap-1">
-          <dt>{t('collaborationSharedWith')}:</dt>
-          <dd>{projection.allowUserIds.length
-            ? projection.allowUserIds.join(', ')
-            : t('collaborationOwnerOnly')}</dd>
-        </div>
-      </dl>
-      <details className="mt-2 text-ds-faint">
-        <summary className="cursor-pointer">{t('collaborationTechnicalDetails')}</summary>
-        <code className="mt-1 block break-all">{projection.projectionId}</code>
-        <code className="mt-1 block break-all">{projection.runtimeId}/{projection.threadId || 'pending'}</code>
-      </details>
-      {projection.allowUserIds.length ? (
-        <p className="mt-2 rounded bg-ds-hover p-2 text-ds-muted">
-          {t('collaborationSharedExecutionNotice')}
-        </p>
-      ) : null}
+      <p className="mt-2 rounded bg-ds-hover p-2 text-ds-muted">
+        {t('collaborationPersonalControlOnly')}
+      </p>
       {projection.lastError ? <ExplicitError message={projection.lastError} compact /> : null}
       <div className="mt-2 flex flex-wrap gap-1.5">
-        <button
-          type="button"
-          className={SECONDARY_BUTTON}
-          disabled={busy || ['closed', 'linking'].includes(projection.status)}
-          onClick={() => openEditor('rename', projection.displayName)}
-        >
-          {t('collaborationRename')}
-        </button>
         {projection.status === 'paused' ? (
           <button
             type="button"
@@ -1654,7 +1742,7 @@ export function ProjectionCard({
             {t('collaborationClose')}
           </button>
         ) : null}
-        {!current && !currentSessionOccupied && ['paused', 'closed'].includes(projection.status) ? (
+        {!currentSessionOccupied && ['paused', 'closed'].includes(projection.status) ? (
           <button
             type="button"
             className={SECONDARY_BUTTON}
@@ -1674,36 +1762,7 @@ export function ProjectionCard({
           </button>
         ) : null}
       </div>
-      {projection.status !== 'closed' ? (
-        <details className="mt-2 text-xs text-ds-muted">
-          <summary className="cursor-pointer">{t('collaborationAdvancedPermissions')}</summary>
-          <p className="mt-1">{t('collaborationAllowlistAdvancedNotice')}</p>
-          <button
-            type="button"
-            className={`${SECONDARY_BUTTON} mt-2`}
-            disabled={busy}
-            onClick={() => openEditor('allowlist', projection.allowUserIds.join(', '))}
-          >
-            {t('collaborationSaveAllowlist')}
-          </button>
-        </details>
-      ) : null}
-      {editor && editor !== 'close' && editor !== 'relink' ? (
-        <InlineTextActionEditor
-          label={editor === 'rename'
-            ? t('collaborationRenameSessionLabel')
-            : t('collaborationAllowlistPrompt')}
-          value={editorValue}
-          allowEmpty={editor === 'allowlist'}
-          busy={busy}
-          submitLabel={editor === 'rename'
-            ? t('collaborationRename')
-            : t('collaborationSaveAllowlist')}
-          onChange={setEditorValue}
-          onSubmit={submitEditor}
-          onCancel={() => setEditor(null)}
-        />
-      ) : null}
+      <ProjectionTechnicalDetails projection={projection} />
       {editor === 'close' ? (
         <InlineConfirmationEditor
           message={t('collaborationCloseConfirm', { name: projection.displayName })}
