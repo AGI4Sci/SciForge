@@ -1355,7 +1355,7 @@ describe('CapabilityAgentToolSurface', () => {
       remoteApproval: {
         eligible: true,
         safeSummary: 'Write workspace result',
-        ttlMs: 5 * 60_000
+        ttlMs: 4 * 60_000 + 30_000
       }
     }), expect.any(Object))
   })

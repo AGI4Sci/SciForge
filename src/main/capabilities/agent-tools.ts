@@ -935,7 +935,10 @@ function remoteApprovalPolicy(
   return {
     eligible: true,
     safeSummary: descriptor.title,
-    ttlMs: 5 * 60_000
+    // The Collaboration Server enforces a five-minute upper bound from its
+    // own clock. Leave transport and clock-skew headroom so an otherwise
+    // valid request cannot cross that boundary before it is persisted.
+    ttlMs: 4 * 60_000 + 30_000
   }
 }
 
